@@ -63,9 +63,17 @@ export interface AgentModelCatalogCache {
   };
 }
 
-/** Load the host-wide last-known-good catalogues, seeding Pi on first use. */
-export async function getAgentModelCatalogCache(): Promise<AgentModelCatalogCache> {
-  return invoke<AgentModelCatalogCache>("get_agent_model_catalog_cache");
+/**
+ * Load the host-wide last-known-good catalogues, seeding Pi on first use. With
+ * `seed`, the backend also downloads every enabled platform's missing catalogue
+ * before answering, so only a caller that can wait in the background asks for it.
+ */
+export async function getAgentModelCatalogCache(
+  options: { seed?: boolean } = {},
+): Promise<AgentModelCatalogCache> {
+  return options.seed
+    ? invoke<AgentModelCatalogCache>("get_agent_model_catalog_cache", { seed: true })
+    : invoke<AgentModelCatalogCache>("get_agent_model_catalog_cache");
 }
 
 /** Discover Pi models without requiring an environment or persistent bridge. */
@@ -106,7 +114,7 @@ export async function refreshHostAgentModelCatalog(
 /** Backend-normalized model catalogue consumed by the provider-neutral composer. */
 export async function getNativeAgentModelCatalog(
   environmentId: string,
-  ensureAgent?: "cursor" | "grok" | "pi",
+  ensureAgent?: AgentPlatform,
 ): Promise<import("@orkestrator/protocol/native-agent").AgentModel[]> {
   if (!ensureAgent) {
     return invoke("get_native_agent_model_catalog", { environmentId });

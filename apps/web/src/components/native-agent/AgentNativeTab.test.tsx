@@ -565,7 +565,10 @@ function seedUnassignedDefaultCatalog() {
 }
 
 async function expectUnassignedPicker(platform: "claude" | "codex", modelLabel: string) {
-  await waitFor(() => expect(getNativeAgentModelCatalogMock).toHaveBeenCalledWith("env-1"));
+  // Claude and Codex are asked for by name so a fresh install downloads them.
+  await waitFor(() =>
+    expect(getNativeAgentModelCatalogMock.mock.calls.some(([env]) => env === "env-1")).toBe(true),
+  );
   expect(await screen.findByTitle(/Choose model/)).toBeTruthy();
   await waitFor(() => {
     expect(document.querySelector(`[data-native-model-platform='${platform}']`)).toBeTruthy();
@@ -3031,7 +3034,9 @@ describe("AgentNativeTab", () => {
 
     render(<AgentNativeTab tabId="tab-cached-models" data={{ environmentId: "env-1" }} isActive />);
 
-    await waitFor(() => expect(getNativeAgentModelCatalogMock).toHaveBeenCalledWith("env-1"));
+    await waitFor(() =>
+      expect(getNativeAgentModelCatalogMock).toHaveBeenCalledWith("env-1", "opencode"),
+    );
     const picker = await screen.findByTitle(/Choose model/);
     fireEvent.pointerDown(picker);
     fireEvent.click(screen.getByRole("button", { name: "opencode models" }));

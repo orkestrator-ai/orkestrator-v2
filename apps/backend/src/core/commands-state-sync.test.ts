@@ -1,3 +1,4 @@
+import { __testing as __seedTesting } from "./host-model-catalog-seed.js";
 import { describe, expect, mock, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
@@ -706,9 +707,9 @@ describe("native agent model catalogue command", () => {
       await expect(
         invoke("get_native_agent_model_catalog", {
           environmentId: "e1",
-          ensureAgent: "claude",
+          ensureAgent: "bogus",
         }),
-      ).rejects.toThrow("ensureAgent must be one of: cursor, grok, pi");
+      ).rejects.toThrow("ensureAgent must be one of: claude, codex, opencode, cursor, grok, pi");
     });
   });
 
@@ -724,6 +725,59 @@ describe("native agent model catalogue command", () => {
 
       expect(awaitReady).not.toHaveBeenCalled();
     });
+  });
+
+  test("downloads a missing Claude catalogue on first use and then serves it from the cache", async () => {
+    __seedTesting.reset();
+    const refresh = mock(async () => ({
+      agent: "claude" as const,
+      models: [{ id: "sonnet", name: "Sonnet", resolvedModel: "claude-sonnet" }],
+    }));
+    await withCommands(
+      async (invoke, storage, _dataDir, commands) => {
+        const awaitReady = mock(async () => ({ status: "ready" as const }));
+        commands.set("await_bridge_ready", awaitReady);
+
+        const first = (await invoke("get_native_agent_model_catalog", {
+          environmentId: "e1",
+          ensureAgent: "claude",
+        })) as { models: { platform: string; id: string }[]; status: string };
+        expect(first.status).toBe("ready");
+        expect(first.models.some((m) => m.platform === "claude" && m.id === "sonnet")).toBe(true);
+        expect((await storage.getAgentModelCatalogCache()).claude?.models).toHaveLength(1);
+
+        await invoke("get_native_agent_model_catalog", {
+          environmentId: "e1",
+          ensureAgent: "claude",
+        });
+        expect(refresh).toHaveBeenCalledTimes(1);
+        // The host-wide probe is used, not an environment bridge.
+        expect(awaitReady).not.toHaveBeenCalled();
+      },
+      { modelCatalogRefresh: refresh as never },
+    );
+  });
+
+  test("reports a failed Claude first-use download so the picker can retry", async () => {
+    __seedTesting.reset();
+    const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+    const refresh = mock(async () => {
+      throw new Error("not signed in");
+    });
+    try {
+      await withCommands(
+        async (invoke) => {
+          const result = (await invoke("get_native_agent_model_catalog", {
+            environmentId: "e1",
+            ensureAgent: "claude",
+          })) as { status: string };
+          expect(result.status).toBe("failed");
+        },
+        { modelCatalogRefresh: refresh as never },
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   test("records why a first-use bridge did not become ready", async () => {

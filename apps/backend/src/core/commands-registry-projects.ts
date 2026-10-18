@@ -70,6 +70,11 @@ import {
   addExistingProject,
   createProjectFromScratch,
 } from "./commands-helpers.js";
+import {
+  persistHostCatalog,
+  seedEnabledHostModelCatalogs,
+  seedHostModelCatalogIfMissing,
+} from "./host-model-catalog-seed.js";
 import { listGitHubCloneAccounts, listGitHubCloneRepositories } from "./github-clone-browser.js";
 
 /**
@@ -496,41 +501,19 @@ export function registerProjectCommands(
       throw new Error(`Project not found: ${projectId}`);
     }
     const catalog = await refreshHostModelCatalog(context, agent);
-
-    if (catalog.agent === "claude") {
-      await context.storage.cacheAgentModelCatalog("claude", catalog.models);
-    } else if (catalog.agent === "codex") {
-      await context.storage.cacheAgentModelCatalog("codex", asCachedCodexModels(catalog.models));
-    } else if (catalog.agent === "cursor" || catalog.agent === "grok" || catalog.agent === "pi") {
-      await context.storage.cacheAgentModelCatalog(catalog.agent, catalog.models);
-    } else {
-      if (!projectId) throw new Error("OpenCode refresh requires a project target");
-      const discoveredModels = catalog.models.map((model) => ({
-        id: model.id,
-        name: model.label,
-        provider: model.id.split("/")[0] || "opencode",
-        variants: model.reasoning?.map((option) => option.id).filter((id) => id !== "default"),
-        ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
-        ...(typeof model.supportsImageInput === "boolean"
-          ? { supportsImageInput: model.supportsImageInput }
-          : {}),
-      }));
-      // Host discovery deliberately runs outside the worktree trust boundary,
-      // so it cannot see repository-defined providers. Augment the existing
-      // project snapshot instead of narrowing it to host-only configuration.
-      const existingModels =
-        (await context.storage.getOpenCodeModelCatalog(projectId))?.models ?? [];
-      const mergedModels = new Map(existingModels.map((model) => [model.id, model]));
-      for (const model of discoveredModels) {
-        mergedModels.set(model.id, model);
-      }
-      await context.storage.cacheOpenCodeModelCatalog(projectId, Array.from(mergedModels.values()));
-    }
+    await persistHostCatalog(context, catalog, projectId);
 
     return { agent: catalog.agent, modelCount: catalog.models.length };
   });
   register("get_agent_model_catalog_cache", async (args, context) => {
-    assertOnlyKeys(args, [], "arguments");
+    assertOnlyKeys(args, ["seed"], "arguments");
+    // Only the application's own startup asks for this: it waits here in the
+    // background (the renderer bounds its wait and keeps the promise live) so a
+    // first launch downloads every enabled platform's list. Other readers, such
+    // as the control surface, must get the cache as it stands.
+    if (args.seed === true) {
+      await seedEnabledHostModelCatalogs(context, refreshHostModelCatalog).catch(() => undefined);
+    }
     let cache = await context.storage.getAgentModelCatalogCache();
     if (!cache.pi?.models.length) {
       const config = await context.storage.loadConfig();
@@ -560,14 +543,17 @@ export function registerProjectCommands(
     const ensureAgent = args.ensureAgent;
     if (
       ensureAgent !== undefined &&
+      ensureAgent !== "claude" &&
+      ensureAgent !== "codex" &&
+      ensureAgent !== "opencode" &&
       ensureAgent !== "cursor" &&
       ensureAgent !== "grok" &&
       ensureAgent !== "pi"
     ) {
-      throw new Error("ensureAgent must be one of: cursor, grok, pi");
+      throw new Error("ensureAgent must be one of: claude, codex, opencode, cursor, grok, pi");
     }
     const environment = await storage.getEnvironment(id);
-    const cache = await storage.getAgentModelCatalogCache();
+    let cache = await storage.getAgentModelCatalogCache();
     if (!environment) {
       const coordinator = await resolveCoordinatorRuntime(storage, id);
       if (coordinator.status === "not-coordinator") {
@@ -634,7 +620,24 @@ export function registerProjectCommands(
     // first-use branch consumes it; a read served from the durable cache is
     // unaffected.
     let firstUseDeadline: number | null = null;
-    if (ensureAgent && !cache[ensureAgent]?.models.length) {
+    // Claude, Codex and OpenCode are not seeded through a per-environment
+    // bridge here: Claude and Codex catalogues are host-wide, and OpenCode's is
+    // cached per project from the same host-level probe. A fresh installation
+    // downloads them through the short-lived host probe the Settings refresh
+    // uses. A host that is not signed in yet simply stays empty and is retried
+    // once it is.
+    let seedFailed = false;
+    const hostSeeded =
+      ensureAgent === "claude" || ensureAgent === "codex" || ensureAgent === "opencode";
+    if (hostSeeded) {
+      seedFailed = !(await seedHostModelCatalogIfMissing(
+        context,
+        ensureAgent,
+        refreshHostModelCatalog,
+        { projectId: environment.projectId },
+      ));
+      cache = await storage.getAgentModelCatalogCache();
+    } else if (ensureAgent && !cache[ensureAgent]?.models.length) {
       // The empty-tab picker is the first consumer on a fresh installation, so
       // there may be neither a live bridge nor a durable last-known-good list.
       // Start only the platform the user is trying to select; eagerly starting
@@ -812,12 +815,16 @@ export function registerProjectCommands(
       ...(piModels.length > 0 ? piModels : (cache.pi?.models ?? [])),
     ];
     if (!ensureAgent) return result;
-    const ensuredFetch = { cursor: cursorFetch, grok: grokFetch, pi: piFetch }[ensureAgent];
+    const ensuredStatus = hostSeeded
+      ? seedFailed
+        ? "failed"
+        : "ok"
+      : { cursor: cursorFetch, grok: grokFetch, pi: piFetch }[ensureAgent].status;
     return {
       models: result,
       status: result.some((model) => model.platform === ensureAgent)
         ? ("ready" as const)
-        : ensuredFetch.status === "ok"
+        : ensuredStatus === "ok"
           ? ("empty" as const)
           : ("failed" as const),
     };

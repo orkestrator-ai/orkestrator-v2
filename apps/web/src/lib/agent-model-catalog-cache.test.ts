@@ -27,6 +27,12 @@ describe("hydrateAgentModelCatalogCache", () => {
     invokeMock.mockReset();
   });
 
+  test("asks the backend to download missing catalogues only when seeding", async () => {
+    invokeMock.mockResolvedValue({ schemaVersion: 1 });
+    await hydrateAgentModelCatalogCache({ seed: true });
+    expect(invokeMock).toHaveBeenCalledWith("get_agent_model_catalog_cache", { seed: true });
+  });
+
   test("hydrates every shared model store from the persisted backend cache", async () => {
     const claudeModels: ClaudeModel[] = [
       {

@@ -2842,6 +2842,30 @@ describe("persisted session routes", () => {
 
   // --- GET /session/:id ---
   describe("GET /session/:id", () => {
+    test("reports a restart interruption only beside the failure it explains", async () => {
+      const restored = {
+        id: "s-1",
+        title: "Restored",
+        status: "error" as "error" | "idle",
+        error: "Claude restarted before this turn finished",
+        interruption: "restart" as const,
+        createdAt: new Date("2026-01-01"),
+        lastActivity: new Date("2026-01-01"),
+      };
+      mockGetSession.mockImplementation(() => restored as ReturnType<typeof mockGetSession>);
+
+      expect(await jsonBody(await app.request("/session/s-1"))).toMatchObject({
+        status: "error",
+        error: "Claude restarted before this turn finished",
+        interruption: "restart",
+      });
+
+      // A stale field on a session that is no longer failed explains nothing.
+      restored.status = "idle";
+      expect(await jsonBody(await app.request("/session/s-1"))).not.toHaveProperty("interruption");
+      mockGetSession.mockImplementation(defaultGetSession);
+    });
+
     test("hydrates persisted lifecycle state before serving the authoritative snapshot", async () => {
       const persisted = {
         id: "s-1",

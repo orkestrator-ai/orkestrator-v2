@@ -93,6 +93,22 @@ evidence. This file only points at it.
    dismisses it with a locator handler. Pass the workspace package version in
    development, or skip the reminder for agent-test profiles.
 
+4. **MCP editor writes reach host provider homes from an agent-test
+   profile.** Authorizing the Codex or OpenCode credential source points the
+   backend's `CODEX_HOME` and XDG directories at the host's real ones
+   (`createBackendProcessEnvironment` in
+   `apps/desktop/electron/backend-process.ts`), so a backend-user MCP save in
+   such a profile edits the host's own `~/.codex/config.toml` or
+   `~/.config/opencode/opencode.json(c)`, and a Codex project-trust grant
+   would too. The live MCP apply record
+   ([mcp-management.md](mcp-management.md#live-apply-record-2026-10-18))
+   avoided it by leaving both sources unauthorized and seeding an access-only
+   Codex token and the OpenCode API key into the profile by hand. Give
+   those providers an isolated home with a credential snapshot (as Grok and
+   Cursor already have), or make the MCP editor refuse host-home sources in
+   an agent-test profile. A Codex snapshot must not carry a refresh token the
+   copy could rotate.
+
 ### Qualification: checks with no other home
 
 - **Electron terminal input resume.** Re-run `mise run test:agent:electron` for

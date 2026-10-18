@@ -199,8 +199,13 @@ export async function evidenceShowsSave(
   return !!now && now.landed && now.digest === digest;
 }
 
+/**
+ * The Claude bridge keeps a session's CLI open between messages (an idle
+ * window, 10 minutes by default) as well as while background work runs, so
+ * "background work" alone would misdescribe the usual case.
+ */
 export const STILL_LOADED_REASON =
-  "This session's Claude process is still running background work, so the removed server stays loaded and its tools are refused. Stop the session, or let that work finish, to unload it.";
+  "This session's Claude process is still open, so the removed server stays loaded and its tools are refused. It closes once the session has been idle for a while (10 minutes by default) with no background work left; stop the session to unload it now.";
 
 /** The server a removal or rename takes away, which must not still be loaded. */
 function removedServer(stored: StoredOperation): string | undefined {

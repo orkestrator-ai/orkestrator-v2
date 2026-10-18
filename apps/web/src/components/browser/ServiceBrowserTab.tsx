@@ -116,6 +116,15 @@ function useEnvironmentServices(environmentId: string, isActive: boolean) {
   };
 }
 
+/** A tab's app-relative path and the view navigation it was chosen against. */
+interface PreviewRoute {
+  path: string;
+  basis?: number;
+}
+
+/** Recent persisted paths whose basis is remembered (see `persistedBases`). */
+const PERSISTED_BASES_MAX = 32;
+
 /** Replace this tab's durable target. The pane store persists and merges it. */
 function useRetarget(tabId: string, environmentId: string) {
   const updateTabBrowserUrl = usePaneLayoutStore((state) => state.updateTabBrowserUrl);
@@ -157,7 +166,27 @@ function ServicePreview({
   const service =
     services.find((candidate) => candidate.definition.serviceId === serviceRef.serviceId) ?? null;
   const nativeBrowserPreview = hasNativeBrowserPreview();
-  const [path, setPath] = useState(serviceRef.path);
+  // `basis` is the view navigation the path was chosen against (see
+  // `BrowserPreviewAttachInput.navigationBasis`): main never navigates the
+  // view to a path chosen before its latest navigation, which is what keeps a
+  // routine re-attach from undoing a link, a redirect or Back.
+  const [route, setRouteState] = useState<PreviewRoute>(() => ({ path: serviceRef.path }));
+  const path = route.path;
+  // Event handlers compare against the latest route, not a render's closure.
+  const routeRef = useRef(route);
+  const setRoute = useCallback((next: PreviewRoute) => {
+    routeRef.current = next;
+    setRouteState(next);
+  }, []);
+  const viewNavigation = useRef<number | undefined>(undefined);
+  /** A path the user or another client asked for, against the latest view navigation. */
+  const setPath = useCallback(
+    (next: string) => setRoute({ path: next, basis: viewNavigation.current }),
+    [setRoute],
+  );
+  // The basis of each path this tab persisted, so a late echo of its own
+  // earlier write is never mistaken for another client's request.
+  const persistedBases = useRef(new Map<string, number | undefined>());
   const [address, setAddress] = useState("");
   const [nativeState, setNativeState] = useState<BrowserPreviewState | null>(null);
   const [transport, setTransport] = useState<BrowserPreviewTransportState | null>(null);
@@ -216,8 +245,15 @@ function ServicePreview({
       locallyPersistedPath.current = null;
       return;
     }
+    if (persistedBases.current.has(serviceRef.path)) {
+      // The layout store can re-apply an older save of this tab after a newer
+      // one. That path keeps the basis it was written with, so it navigates
+      // only if the view has not moved since.
+      setRoute({ path: serviceRef.path, basis: persistedBases.current.get(serviceRef.path) ?? 0 });
+      return;
+    }
     setPath(serviceRef.path);
-  }, [serviceRef.path]);
+  }, [serviceRef.path, setPath, setRoute]);
 
   const displayUrl = service ? serviceDisplayUrl(service.definition, path) : path;
   useEffect(() => setAddress(displayUrl), [displayUrl]);
@@ -226,6 +262,13 @@ function ServicePreview({
     (nextPath: string) => {
       if (nextPath === serviceRef.path) return;
       locallyPersistedPath.current = nextPath;
+      const bases = persistedBases.current;
+      bases.delete(nextPath);
+      bases.set(
+        nextPath,
+        routeRef.current.path === nextPath ? routeRef.current.basis : viewNavigation.current,
+      );
+      if (bases.size > PERSISTED_BASES_MAX) bases.delete(bases.keys().next().value!);
       retarget(formatPreviewServiceUri({ ...serviceRef, path: nextPath }));
     },
     [retarget, serviceRef],
@@ -269,12 +312,14 @@ function ServicePreview({
       if (state.service && !isCurrentService(state.service, serviceRef)) return;
       setNativeState(state);
       if (state.transport) setTransport(state.transport);
-      if (state.service && state.service.path !== path) {
-        setPath(state.service.path);
+      const navigation = state.service?.navigation;
+      if (navigation !== undefined) viewNavigation.current = navigation;
+      if (state.service && state.service.path !== routeRef.current.path) {
+        setRoute({ path: state.service.path, basis: navigation });
         persistPath(state.service.path);
       }
     },
-    [path, persistPath, serviceRef, tabId],
+    [persistPath, serviceRef, setRoute, tabId],
   );
 
   useEffect(() => {
@@ -336,7 +381,13 @@ function ServicePreview({
           isActive && !hasBlockingOverlay && dialog === null && !annotations.previewHidden;
         const attach =
           mode === "desktop-tunnel" && attachTarget
-            ? attachBrowserPreview({ tabId, service: attachTarget, bounds, visible })
+            ? attachBrowserPreview({
+                tabId,
+                service: attachTarget,
+                ...(route.basis === undefined ? {} : { navigationBasis: route.basis }),
+                bounds,
+                visible,
+              })
             : attachBrowserPreview({ tabId, url: compatibilityUrl!.iframeUrl, bounds, visible });
         void attach
           .then((state) => {
@@ -457,7 +508,16 @@ function ServicePreview({
         setAttachError(previewErrorFromUnknown(error)?.message ?? errorMessage(error));
       }
     },
-    [address, mode, persistPath, retarget, service, serviceRef, stopAnnotationForPageChange],
+    [
+      address,
+      mode,
+      persistPath,
+      retarget,
+      service,
+      serviceRef,
+      setPath,
+      stopAnnotationForPageChange,
+    ],
   );
 
   const retry = useCallback(async () => {

@@ -199,6 +199,7 @@ describe("service previews in BrowserPreviewManager", () => {
       serviceId: "svc_aaaaaaaa",
       path: "/app?x=1",
       displayUrl: "http://localhost:3000/app?x=1",
+      navigation: 0,
     });
     expect(state.transport).toEqual({ mode: "desktop-tunnel", state: "ready" });
   });
@@ -226,6 +227,96 @@ describe("service previews in BrowserPreviewManager", () => {
     });
     expect(views[0]!.webContents.loadURL).toHaveBeenLastCalledWith("http://127.0.0.1:41001/b");
     expect(views).toHaveLength(1);
+  });
+
+  test("without a basis, a stale renderer path never undoes the view's own navigation", async () => {
+    const { manager, views } = harness();
+    const attach = (path: string) =>
+      manager.attach({
+        tabId: "tab",
+        service: service("svc_aaaaaaaa", path),
+        bounds,
+        visible: true,
+      });
+    await attach("/a");
+    const contents = views[0]!.webContents;
+    // The page navigates itself (a link, a redirect or Back).
+    contents.url = "http://127.0.0.1:41001/b";
+    contents.emit("did-navigate", {}, contents.url);
+    // A bounds sync sent before the renderer applied that state.
+    const stale = await attach("/a");
+    expect(contents.loadURL).toHaveBeenCalledTimes(1);
+    expect(stale.service?.path).toBe("/b");
+    // The renderer catches up, then asks for a new path, then for the old one again.
+    await attach("/b");
+    expect(contents.loadURL).toHaveBeenCalledTimes(1);
+    await attach("/c");
+    expect(contents.loadURL).toHaveBeenLastCalledWith("http://127.0.0.1:41001/c");
+    await attach("/a");
+    expect(contents.loadURL).toHaveBeenLastCalledWith("http://127.0.0.1:41001/a");
+    expect(contents.loadURL).toHaveBeenCalledTimes(3);
+  });
+
+  test("a path chosen against an older navigation never navigates the view", async () => {
+    const { manager, views } = harness();
+    const attach = (path: string, navigationBasis: number) =>
+      manager.attach({
+        tabId: "tab",
+        service: service("svc_aaaaaaaa", path),
+        navigationBasis,
+        bounds,
+        visible: true,
+      });
+    const first = await attach("/", 0);
+    expect(first.service?.navigation).toBe(0);
+    const contents = views[0]!.webContents;
+    contents.url = "http://127.0.0.1:41001/";
+    contents.emit("did-navigate", {}, contents.url);
+    // A link, then Back: the renderer's attach for the link's path was sent
+    // before it saw Back, so it arrives first-time-requested but stale.
+    contents.url = "http://127.0.0.1:41001/next";
+    contents.emit("did-navigate", {}, contents.url);
+    contents.url = "http://127.0.0.1:41001/";
+    contents.emit("did-navigate", {}, contents.url);
+    const stale = await attach("/next", 2);
+    expect(contents.loadURL).toHaveBeenCalledTimes(1);
+    expect(stale.service).toMatchObject({ path: "/", navigation: 3 });
+    // The same path chosen against the latest navigation is a request.
+    await attach("/next", 3);
+    expect(contents.loadURL).toHaveBeenLastCalledWith("http://127.0.0.1:41001/next");
+    expect(contents.loadURL).toHaveBeenCalledTimes(2);
+  });
+
+  test("Back makes an earlier renderer path stale before the history entry commits", async () => {
+    const { manager, views } = harness();
+    const attach = (path: string, navigationBasis: number) =>
+      manager.attach({
+        tabId: "tab",
+        service: service("svc_aaaaaaaa", path),
+        navigationBasis,
+        bounds,
+        visible: true,
+      });
+    await attach("/a", 0);
+    const contents = views[0]!.webContents;
+    contents.url = "http://127.0.0.1:41001/a";
+    contents.emit("did-navigate", {}, contents.url);
+    contents.url = "http://127.0.0.1:41001/b";
+    contents.emit("did-navigate", {}, contents.url);
+    await attach("/b", 2);
+    const goBack = mock(() => undefined);
+    Object.assign(contents.navigationHistory, {
+      canGoBack: () => true,
+      getActiveIndex: () => 1,
+      getEntryAtIndex: () => ({ url: "http://127.0.0.1:41001/a" }),
+      goBack,
+    });
+    const back = manager.goBack("tab");
+    expect(goBack).toHaveBeenCalled();
+    expect(back.service?.navigation).toBe(3);
+    // A bounds sync the renderer sent before it saw Back.
+    await attach("/b", 2);
+    expect(contents.loadURL).toHaveBeenCalledTimes(1);
   });
 
   test("switching service replaces the view so partitions never mix", async () => {

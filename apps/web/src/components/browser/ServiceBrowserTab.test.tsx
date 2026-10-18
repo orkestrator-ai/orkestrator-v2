@@ -246,6 +246,94 @@ describe("service browser tabs", () => {
     expect(tabUrl()).not.toContain("127.0.0.1");
   });
 
+  test("attaches each path with the view navigation it was chosen against", async () => {
+    const { browserPreview, emitState } = installBackend({
+      capabilities: fixturePreviewCapabilities(),
+      services: [fixturePreviewService()],
+    });
+    seedTab(serviceUri("/start"));
+    renderTab();
+    await waitFor(() => expect(browserPreview.attach).toHaveBeenCalled());
+    // Nothing reported yet: older-main behaviour, no basis.
+    expect(browserPreview.attach.mock.calls.at(-1)![0]).not.toHaveProperty("navigationBasis");
+
+    // The page navigated itself: its path is followed with that navigation's basis.
+    emitState({
+      tabId: "browser-1",
+      url: "http://127.0.0.1:41000/next",
+      loading: false,
+      canGoBack: true,
+      canGoForward: false,
+      error: null,
+      service: {
+        serviceId: FIXTURE_SERVICE_ID,
+        path: "/next",
+        displayUrl: "http://localhost:3000/next",
+        navigation: 3,
+      },
+    });
+    await waitFor(() =>
+      expect(browserPreview.attach.mock.calls.at(-1)![0]).toMatchObject({
+        service: { path: "/next" },
+        navigationBasis: 3,
+      }),
+    );
+
+    // A path the user asks for is chosen against the latest navigation seen.
+    const address = screen.getByLabelText("Browser address") as HTMLInputElement;
+    fireEvent.change(address, { target: { value: "/typed" } });
+    fireEvent.submit(address.closest("form")!);
+    await waitFor(() =>
+      expect(browserPreview.attach.mock.calls.at(-1)![0]).toMatchObject({
+        service: { path: "/typed" },
+        navigationBasis: 3,
+      }),
+    );
+  });
+
+  test("a late echo of the tab's own earlier save keeps that save's basis", async () => {
+    const { browserPreview, emitState } = installBackend({
+      capabilities: fixturePreviewCapabilities(),
+      services: [fixturePreviewService()],
+    });
+    seedTab(serviceUri("/start"));
+    renderTab();
+    await waitFor(() => expect(browserPreview.attach).toHaveBeenCalled());
+    const viewAt = (path: string, navigation: number) =>
+      emitState({
+        tabId: "browser-1",
+        url: `http://127.0.0.1:41000${path}`,
+        loading: false,
+        canGoBack: true,
+        canGoForward: false,
+        error: null,
+        service: {
+          serviceId: FIXTURE_SERVICE_ID,
+          path,
+          displayUrl: `http://localhost:3000${path}`,
+          navigation,
+        },
+      });
+    // A link, then Back, each persisted by the tab.
+    viewAt("/next", 3);
+    viewAt("/start", 4);
+    await waitFor(() => expect(tabUrl()).toBe(serviceUri("/start")));
+    // The layout store re-applies the older save.
+    act(() =>
+      usePaneLayoutStore
+        .getState()
+        .updateTabBrowserUrl("browser-1", serviceUri("/next"), FIXTURE_ENVIRONMENT_ID, [], -1),
+    );
+    // It is attached against the navigation it was saved at, so main treats
+    // it as stale instead of undoing Back.
+    await waitFor(() =>
+      expect(browserPreview.attach.mock.calls.at(-1)![0]).toMatchObject({
+        service: { path: "/next" },
+        navigationBasis: 3,
+      }),
+    );
+  });
+
   test("counts notes for the logical service route and opens a note's page only on request", async () => {
     installBackend({
       capabilities: fixturePreviewCapabilities(),

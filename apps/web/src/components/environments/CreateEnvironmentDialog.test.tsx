@@ -82,6 +82,7 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
     expect(screen.getByRole("group", { name: "Reasoning", hidden: true })).toBeTruthy();
     const speed = screen.getByRole("group", { name: "Speed mode", hidden: true });
     fireEvent.click(within(speed).getByRole("menuitemradio", { name: /Fast/, hidden: true }));
+    act(() => fireEvent.keyDown(document.body, { key: "Escape" }));
 
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
     await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));

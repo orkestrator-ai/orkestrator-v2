@@ -1432,12 +1432,16 @@ esac
       const expectedWorktreePath = expectedManagedWorktreePath(context, projectName, branch);
       const updateEnvironment = context.storage.updateEnvironment as ReturnType<typeof mock>;
       const originalImplementation = updateEnvironment.getMockImplementation();
+      let rejectedWorktreePath: unknown;
       updateEnvironment.mockImplementation(
         async (environmentId: string, update: Record<string, unknown>) => {
           // `createLocalWorktree` has already succeeded at this point, so the
           // compensation under test is the one in `startEnvironmentOnce`, not the
-          // one inside worktree creation.
-          if (update.worktreePath === expectedWorktreePath) {
+          // one inside worktree creation. Fail whichever path is persisted and
+          // compare it below: matching on the expected path made a different
+          // spelling of the root skip the failure and the start succeed.
+          if (rejectedWorktreePath === undefined && update.worktreePath !== undefined) {
+            rejectedWorktreePath = update.worktreePath;
             throw new Error("storage unavailable at /private/user/path");
           }
           return originalImplementation!(environmentId, update);
@@ -1450,6 +1454,7 @@ esac
           commands.get("start_environment")?.({ environmentId: environment.id }, context),
         ).rejects.toThrow("storage unavailable");
 
+        expect(rejectedWorktreePath).toBe(expectedWorktreePath);
         expect(environment.status).toBe("error");
         expect(environment.worktreePath).toBeUndefined();
         expect(environment.lifecycleError).not.toContain("/private/user/path");

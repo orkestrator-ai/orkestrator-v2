@@ -1048,7 +1048,12 @@ test.describe("live transcript paging", () => {
           .getByTestId("multi-review-inspector")
           .getByRole("button", { name: new RegExp(`^Open Reviewer ${index + 1} transcript`) })
           .click();
-        await expect(page.getByText(/· Read only$/).first()).toBeVisible({ timeout: 30_000 });
+        await expect(
+          page
+            .getByText(/· Read only$/)
+            .filter({ visible: true })
+            .first(),
+        ).toBeVisible({ timeout: 30_000 });
         const list = scroller(page);
         await expect(list).toBeVisible({ timeout: 30_000 });
         const label = `reviewer-${index + 1}`;

@@ -57,10 +57,10 @@ it reaches. Some rules of thumb:
 | Score | Meaning | Items |
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
-| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 23 |
-| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 256 |
-| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 277 |
-| **Total** | | **557** |
+| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 22 |
+| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 257 |
+| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 278 |
+| **Total** | | **558** |
 
 ## Very high
 
@@ -99,7 +99,7 @@ it reaches. Some rules of thumb:
 
 ### CLI and slash commands (high)
 
-- [ ] Re-run CLI credential-free, container and live Claude, Codex and OpenCode matrices at current main ([cli-qualification.md](cli-qualification.md), qualification)
+- [x] Re-run CLI credential-free, container and live Claude, Codex and OpenCode matrices at current main ([cli-qualification.md](cli-qualification.md), qualification)
 - [x] Verify whether a new Claude tab shows legacy `BUILTIN_COMMANDS` rows in the picker before its first query ([slash-command-catalogue.md](slash-command-catalogue.md), verify)
 - [x] Run live slash-command probes for every provider at current pins in a disposable isolated profile ([slash-command-qualification.md](slash-command-qualification.md), qualification)
 - [x] Run the inactive-environment slash-command browser scenario, including restarts at dispatch boundaries ([slash-command-qualification.md](slash-command-qualification.md), qualification)
@@ -245,11 +245,13 @@ it reaches. Some rules of thumb:
 - [ ] Verify CLI `run retry` of a typed-command prompt replays with the same intent ([cli-command-surface.md](cli-command-surface.md), verify)
 - [ ] Decide whether CLI prompt text defaults to literal instead of typed slash-command intent ([cli-command-surface.md](cli-command-surface.md), decision)
 - [ ] Make Pi, Cursor and Grok CLI-qualifiable by targeting a running profile or bundling their bridges ([cli-qualification.md](cli-qualification.md))
+- [ ] Settle a local CLI exec as failed when its launcher exited before the worker existed, instead of pending until the wait expires ([cli-qualification.md](cli-qualification.md))
+- [ ] Keep `session start --wait` waiting by request key when admission outlasts the CLI's 60 s request timeout ([cli-qualification.md](cli-qualification.md))
 - [ ] Run the live CLI `live-session` scenario for Pi, Cursor and Grok, local and container ([cli-qualification.md](cli-qualification.md), qualification)
-- [ ] Qualify the CLI on macOS: packed install, config directory, profile discovery and Docker Desktop matrix ([cli-qualification.md](cli-qualification.md), qualification)
+- [ ] Qualify the CLI on macOS: packed install, config directory and profile discovery ([cli-qualification.md](cli-qualification.md), qualification)
 - [ ] Check CLI-started question and approval cards in the browser for providers other than Claude ([cli-qualification.md](cli-qualification.md), qualification)
 - [ ] Add a CLI scenario with a foreign-owner Docker decoy and assert no fallback or mutation ([cli-qualification.md](cli-qualification.md), qualification)
-- [ ] Verify the CLI credential-free scenario matrix still passes at `2459b05c` ([cli-qualification.md](cli-qualification.md), verify)
+- [x] Verify the CLI credential-free scenario matrix still passes at `2459b05c` ([cli-qualification.md](cli-qualification.md), verify)
 - [ ] Retire the legacy slash catalogue routes and stop the old-bridge 404 fallback showing guessed rows ([slash-command-catalogue.md](slash-command-catalogue.md))
 - [ ] Label UI-dependent Pi extension commands unavailable or return a bounded unsupported-interaction result ([slash-command-catalogue.md](slash-command-catalogue.md))
 - [ ] Check slash picker source groups, keyboard order and catalogue refresh on Claude, Pi and Grok in a browser ([slash-command-catalogue.md](slash-command-catalogue.md), qualification)
@@ -604,6 +606,7 @@ it reaches. Some rules of thumb:
 - [ ] Add opt-in CLI backend auto-start with process ownership and data-directory exclusivity ([cli-command-surface.md](cli-command-surface.md))
 - [ ] Replace manual gateway invoke setup in `browser-gateway.spec.ts` with CLI commands where shorter ([cli-command-surface.md](cli-command-surface.md))
 - [ ] Measure CLI scenario start-up time, failure latency, flake rate, cleanup failures and token cost ([cli-qualification.md](cli-qualification.md), qualification)
+- [ ] Record the resolved provider model of each live CLI scenario run in its manifest ([cli-qualification.md](cli-qualification.md))
 - [ ] Support Claude session-changing commands by adopting the new conversation, or keep them unavailable ([slash-command-catalogue.md](slash-command-catalogue.md))
 - [ ] Build a policy-reviewed executor for Codex inline-shell templates, or keep them unavailable ([slash-command-catalogue.md](slash-command-catalogue.md))
 - [ ] Add further Orkestrator slash shortcuts beyond `/steer` and `/compact` with qualified semantics ([slash-command-catalogue.md](slash-command-catalogue.md))
@@ -880,7 +883,7 @@ it reaches. Some rules of thumb:
 | [web-annotation-extensions.md](web-annotation-extensions.md) |  |  |  | 11 | 11 |
 | **CLI and slash commands** | | | | | |
 | [cli-command-surface.md](cli-command-surface.md) |  |  | 6 | 7 | 13 |
-| [cli-qualification.md](cli-qualification.md) |  | 1 | 6 | 1 | 8 |
+| [cli-qualification.md](cli-qualification.md) |  |  | 7 | 2 | 9 |
 | [slash-command-catalogue.md](slash-command-catalogue.md) |  |  | 5 | 6 | 11 |
 | [slash-command-qualification.md](slash-command-qualification.md) |  |  | 4 | 4 | 8 |
 | **Containers and environments** | | | | | |

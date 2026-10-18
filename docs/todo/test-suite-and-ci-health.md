@@ -12,7 +12,7 @@ reliably green on `main`, and nothing requires it to be.
 
 ## Current state
 
-- **CI.** `.github/workflows/lint.yml` runs on pushes to `main` and on pull
+- **CI.** `.github/workflows/ci.yml` runs on pushes to `main` and on pull
   requests, with three jobs: "oxfmt and oxlint", "Typecheck", and "Unit and
   integration tests". `validate-bun-runtime.yml` builds the bundled Bun per
   platform and runs the container smoke. A failing group prints its output
@@ -160,7 +160,7 @@ reliably green on `main`, and nothing requires it to be.
 
 1. **Confirm `main` stays green, then apply the approved ruleset.** Every
    failure the completed CI runs have shown so far is fixed, registered or
-   mitigated (see Current state). Once `main` passes three `lint.yml` runs in a
+   mitigated (see Current state). Once `main` passes three `CI` runs in a
    row, create the ruleset below with
    `gh api -X POST repos/orkestrator-ai/orkestrator-v2/rulesets --input <file>`,
    then check it with `gh api repos/{owner}/{repo}/rulesets`. If a run fails
@@ -195,12 +195,12 @@ reliably green on `main`, and nothing requires it to be.
    }
    ```
 
-   - The three contexts are the `lint.yml` job names, reported by
+   - The three contexts are the `ci.yml` job names, reported by
      `github-actions` (app 15368), as checked on `7ccb193e`. `actor_id` 5 is
      the repository Admin role.
    - Strict up-to-date checks stay off at first: about 226 pull requests a
      month and a 12-minute test job would serialise merges. Revisit with a
-     merge queue, which needs a `merge_group:` trigger in `lint.yml`.
+     merge queue, which needs a `merge_group:` trigger in `ci.yml`.
    - Repository admins may bypass, because version bumps are pushed to `main`
      directly (44 such pushes since 2026-09-15). Moving them to pull requests
      would allow pull-request-only bypass.
@@ -395,3 +395,18 @@ reliably green on `main`, and nothing requires it to be.
 - `docs/reviews/2026-09-15-fable-review.md` (residuals: branch protection and
   red CI, desktop test gaps, and pointers for `NET_ADMIN` and the renderer
   sandbox)
+
+## CLI matrices second main merge validation (2026-10-18)
+
+Merged `origin/main` at `c85ab60a` into branch baseline `9467f965`. Formatting, lint, typechecking, backend and renderer build tasks, all local Markdown link targets, and eight production public-site browser cases passed. The full non-iOS suite exited 1 after 1132.1 seconds: root/support passed 3084 tests with one skip; every workspace package except backend passed; backend reported 9081 passed, 41 skipped and 11 failed across 9133 tests. Claude's one bridge fixture race passed its unchanged owner; all other bridges and protocol regeneration passed.
+
+Focused backend reruns passed the orphan-age, terminal-history, skill-scan, capability-version, environment-status, retaining-close, startup-readiness and observation-baseline owners. Coordinator bound-discard still timed out after the aggregate with late SQLite fixture errors (56 passed, one failed across its file and the baseline owner). Details are in flaky-test cases 0151, 0165, 0177, 0212, 0213, 0385, 0441 and 0442. No test skip, assertion, timeout or implementation was changed for this validation.
+
+`mise run test:browser` reported 339 passed, 80 skipped and 13 failed. The nine unchanged owners rerun with one worker reported 96 passed, 15 skipped and three failed: both canvas viewports timed out, and mobile diff-viewer Monaco was absent. The seven other owners passed. Commands and bounded failure evidence are in cases 0173, 0174, 0254 and 0382. The public-site task ran separately after the component command short-circuited and passed all eight cases.
+
+The isolated browser run selected 61 cases and reported 27 passed, 32 skipped and two failed. The gateway-only rerun on a fresh credential-free profile selected 20 cases and reported 13 passed, five skipped and two failed. The first run's narrow host-picker failure passed in the rerun, but these gateway assertions remain unresolved:
+
+- `persisted diff baselines keep Files, the badge and diff tabs aligned after background changes and reload` (`browser-gateway.spec.ts:2182`): the `vs <tip>` header was absent at its five-second deadline in both runs.
+- `signed-out Codex recovery and account reads survive reload and environment switches` (`browser-gateway.spec.ts:880`): the exact `Sign in to Codex` button was absent at its 60-second deadline in the owning-file rerun. It passed in the aggregate, but the whole owner did not pass; no new flake classification is made here.
+
+Exact isolated/gateway commands, profile names and evidence paths are in case 0224. Both disposable profiles were stopped and reset. Docker lifecycle, Electron main/preload and iOS code were unchanged, so those scenario suites were omitted. Credentialed live-provider suites retain their explicit opt-ins and were not enabled; the credential-free inactive/reload paths were exercised.

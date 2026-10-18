@@ -15,7 +15,11 @@ import {
   WORKFLOW_RESULT_KINDS,
   workflowResultToolName,
 } from "@orkestrator/protocol/workflow-results";
-import { AgentToolsServer, consumeAgentMailRateLimit } from "./agent-tools.js";
+import {
+  AgentToolsServer,
+  consumeAgentMailRateLimit,
+  dropInheritedAgentToolConnection,
+} from "./agent-tools.js";
 import { StorageService } from "./storage.js";
 import { seedUnreadableStore } from "./storage-test-support.js";
 import { WorkflowResultService } from "./workflow-result-service.js";
@@ -49,6 +53,19 @@ const ALL_AGENT_TOOL_NAMES = [
   "update_ticket",
   "add_ticket_comment",
 ];
+describe("dropInheritedAgentToolConnection", () => {
+  test("forgets only the inherited agent tool connection", () => {
+    const env: NodeJS.ProcessEnv = {
+      ORKESTRATOR_AGENT_MCP_URL: "http://127.0.0.1:1/mcp",
+      ORKESTRATOR_AGENT_MCP_TOKEN: "parent-token",
+      ORKESTRATOR_PARENT_PID: "1",
+      PATH: "/usr/bin",
+    };
+    dropInheritedAgentToolConnection(env);
+    expect(env).toEqual({ ORKESTRATOR_PARENT_PID: "1", PATH: "/usr/bin" });
+  });
+});
+
 describe("agent Kanban tools", () => {
   let dataDir: string;
   let storage: StorageService;

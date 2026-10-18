@@ -17,9 +17,10 @@ mise run lint:fix       # apply the auto-fixable subset
 mise run check          # format:check && lint && typecheck
 ```
 
-`.github/workflows/lint.yml` runs `format:check` and `lint` on every pull
-request. The lint step uses `if: ${{ !cancelled() }}` so a formatting failure
-does not hide lint output — one push reports both.
+The `CI` workflow (`.github/workflows/ci.yml`) runs `format:check` and `lint`
+on every pull request, alongside the typecheck and test jobs. The lint step
+uses `if: ${{ !cancelled() }}` so a formatting failure does not hide lint
+output — one push reports both.
 
 ## What is excluded, and why
 

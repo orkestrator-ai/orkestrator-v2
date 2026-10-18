@@ -476,6 +476,16 @@ owned test servers; no isolated application profile was created.
 - **Evidence:** `orkestrator-test-run.iFuHsy/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory. Backend reported 9025 passed, 41 skipped and 17 failed across 9083 tests, with 12 errors between tests.
 - **Assessment:** confirmed intermittent recurrence; no implementation, assertion, timeout or skip in these owners changed. Shared-host contention remains a hypothesis.
 
+## CLI matrices main merge recurrence — 2026-10-18
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`, macOS arm64 and Bun 1.4.3; workspace/root/bridges/protocol used 4/1/2/1 worker slots alongside component browser validation.
+- **Failure:** `project coordinator > bound discard confirmations refuse stale, sequencer, nested, and failed switches` exceeded its 5000 ms deadline (5119.51 ms).
+- **Owning-file rerun:** `mise run test:logged -- --name merge-coordinator-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures` passed unchanged (52 tests, 32.4 seconds logged).
+- **Evidence:** `orkestrator-test-run.qE7Fuy/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
+- **Assessment:** the equivalent isolated pass confirms intermittence; no implementation, assertion, timeout or skip changed.
+
+Aggregate result: exit 1 after 664.7 seconds logged. Backend reported 9046 passed, 41 skipped and this one failure across 9088 tests; all other workspace packages passed. The root group reported 3054 passed, one skipped and one failed: the incoming index duplicated cases 0381/0382 in the environmental and resolved sections. Removing those four duplicate rows fixed the contract (`merge-final-index`, exit 0, 0.8 seconds). The Codex bridge timeout also passed its equivalent isolated owner; its recurrence is recorded in 0210. Formatting, lint, typechecking, local documentation links and all eight public-site production smoke tests passed. The component browser limitation is recorded in 0173. Additional Electron, Docker, iOS and CLI scenario suites were omitted because the incoming merge changes public-site UI, Settings copy and browser-task configuration.
+
 ### Recurrence (2026-10-18)
 
 - **Command:** `mise run test:logged -- --name mcpq-full -- mise run test` on branch `qualify-mcp-inactive-apply-9ec53f801117` (MCP settings and agent-testing changes only), on a heavily loaded host with several other worktrees' suites and live profiles running.
@@ -504,3 +514,15 @@ The GNU-tool PATH run of `mise run test:logged -- --name merge-full -- mise run 
 Evidence: aggregate `orkestrator-test-run.yluX61/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; isolated `orkestrator-test-run.lye2h4/merge-unit-owner-coordinator-service.log.gz`, below the host temporary directory. This observation does not independently establish a flake; coordinator validation remains unresolved. No implementation, assertion, timeout or skip changed.
 
 **Post-aggregate owning-file rerun (same merge, 2026-10-18):** after the full suite finished, `mise run test:logged -- --name merge-post-suite-coordinator-service -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures` passed unchanged, exit 0, in 24.2 seconds logged. Together with the aggregate failure this confirms an intermittent recurrence; the earlier isolated failure is retained above. No implementation, assertion, timeout or skip changed.
+
+## CLI matrices second main merge observation — 2026-10-18
+
+- **Original command:** `mise run test:logged -- --name merge2-tests -- mise run test`, merging `origin/main` at `c85ab60a` into `9467f965`; macOS arm64 and Bun 1.4.3; workspace/root/bridges/protocol reservations 4/1/2/1 alongside component and isolated browser validation.
+- **Failure:** `bound discard confirmations refuse stale, sequencer, nested, and failed switches` exceeded 5000 ms (5164.00 ms).
+- **Owning-file rerun:** `mise run test:logged -- --name merge2-coordinator-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures` also failed (49 passed, three failed, three between-test errors; 60.1 seconds logged). `Git status permits confirmed dirty branch switches and detects external context changes` timed out at 5254.10 ms, bound-discard at 5302.62 ms, and `fetch force, fast-forward sync, remote switching, and divergence stay safe` at 5290.90 ms. Late work hit `SQLITE_IOERR_VNODE` and the nested-confirmation assertion after timed-out fixture cleanup.
+- **Evidence:** `orkestrator-test-run.0J1rem/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and `orkestrator-test-run.Ulte8S/merge2-coordinator-owner.log.gz` below the host temporary directory.
+- **Assessment:** this observation remains unresolved because the unchanged owning file failed too. No coordinator implementation, assertion, timeout or skip changed.
+
+Aggregate result: `merge2-tests` exited 1 after 1132.1 seconds logged. Backend reported 9081 passed, 41 skipped and 11 failed across 9133 tests in 485 files (1118.57 seconds). Every other workspace package passed; root/support passed 3084 tests with one skip, and protocol regeneration passed. Evidence: `orkestrator-test-run.0J1rem/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
+
+After the full aggregate ended, `mise run test:logged -- --name merge2-after-aggregate-owners -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts ./tests/recurring-baseline.test.ts --parallel=1 --only-failures` reported 56 passed, one failed and one between-test error across 57 tests (56.0 seconds logged). All five unchanged recurring-baseline tests passed; coordinator bound-discard still timed out (5279.64 ms), with late `SQLITE_IOERR_VNODE`. Evidence: `orkestrator-test-run.zR2pum/merge2-after-aggregate-owners.log.gz` below the host temporary directory. This confirms intermittence for the baseline case while leaving the coordinator observation unresolved.

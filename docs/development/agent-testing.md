@@ -420,12 +420,18 @@ and uses the host's Claude and Codex credentials:
 ```bash
 mise run dev:test --profile qa-paging --fixture --credential-source claude --credential-source codex --agent-platforms claude,codex
 # In a second terminal, one case at a time or both:
+ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS=900000 \
 ORKESTRATOR_AGENT_TEST_PROFILE=qa-paging ORKESTRATOR_AGENT_TEST_LIVE_TRANSCRIPT_PAGING=1 \
   mise run test:logged -- --name transcript-paging-live -- mise run test:agent:browser -- \
   e2e/agent-testing/transcript-paging-live.spec.ts
 mise run dev:stop --profile qa-paging
 mise run dev:reset --profile qa-paging
 ```
+
+The silence-watchdog override applies only to this deliberate long-running
+qualification: a real provider can keep advancing through the trail for more
+than five minutes before Playwright reports a result. It leaves the runner's
+normal configuration unchanged.
 
 Each case lays a trail of files in a fresh environment; every file names the
 next under a random name, so the agent has to read them one at a time. The

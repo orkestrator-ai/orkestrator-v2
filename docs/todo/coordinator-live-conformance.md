@@ -1,18 +1,20 @@
 # Coordinator live conformance
 
-Checked against `main` at `9da80451` (2026-10-17).
+Checked against `main` at `68dc1c8d` (2026-10-18).
 
 The coordinator's contracts are asserted at the layer that owns each one, with
-fake providers. The opt-in live suite now shows whether a real provider keeps
-the read-only boundary. What no test shows yet is that delegation stays
-asynchronous, and that worker and peer mail wake their recipients with no user
-action on every qualified platform. The code items below are the rest of that suite
-and what its first runs found. Everything else here is qualification.
+fake providers. The opt-in live suite now shows, per real provider, that the
+read-only boundary holds, that delegation stays asynchronous, and that worker
+mail flows between a coordinator and its workers with nobody answering
+anything. Its first full runs passed on Claude, Codex, OpenCode and Cursor; Pi
+and Grok had no usable login on this host. What is still unproven live is peer
+mail, status wakes, mail tiles and the Cursor/Grok identity checks below.
 
 ## Current state
 
-- The live suite exists and runs the read-only scenario only.
-  `mise run test:agent:coordinator [--credential-source <platform>]…`
+- The live suite runs three scenarios per platform: `read-only`, `async` and
+  `family` (`--scenario` narrows a run).
+  `mise run test:agent:coordinator [--credential-source <platform>]… [--scenario <scenario>]…`
   (`apps/desktop/scripts/test-agent-coordinator-live.ts`) starts one disposable
   `dev:test --fixture` profile per platform and runs
   `e2e/agent-testing/coordinator-live.spec.ts` in it. The profile is authorized
@@ -20,7 +22,9 @@ and what its first runs found. Everything else here is qualification.
   `playwright.coordinator.config.ts`. The platform list
   (`COORDINATOR_LIVE_PLATFORMS`), the prompt, the report parser, transcript
   extraction, the turn watch, the sign-in classification, the tree digest and
-  the per-platform verdicts are in `apps/desktop/scripts/dev/coordinator-live.ts`,
+  the per-platform verdicts are in `apps/desktop/scripts/dev/coordinator-live.ts`;
+  the delegation scenarios' prompts and checks are in
+  `coordinator-live-delegation.ts`;
   and the per-platform profile loop is in `coordinator-live-runner.ts`, each
   with unit tests beside it. The runner runs in an IPC-owned supervisor
   (`owner-supervisor.ts`, shared with `test:agent:browser:isolated`), so an
@@ -70,22 +74,22 @@ and what its first runs found. Everything else here is qualification.
 
 ### Code
 
-1. **Async scenario** (for every platform with `delegation`):
-   1. A coordinator prompt reports running, then idle.
-   2. `launch_environment` returns `delivery: "async"` before any worker
-      activity.
-   3. A user prompt queued while the coordinator is running is dispatched
-      before pending mail.
-   4. Two mid-turn worker messages stay held; `working → idle` injects one
-      carrier and no system notice.
-   5. A silent worker produces exactly one system notice.
-   6. Four identical `read_messages` calls return the page with `repeatedRead`.
-
-   Add it as a second case per platform in `coordinator-live.spec.ts`. The
-   runner, the profiles and the opt-in already carry it. The summary file is
-   per platform (`<profile>/coordinator/<platform>.json`) with one verdict, so
-   either give it a per-scenario verdict or write one file per scenario, and
-   teach `coordinatorLiveVerdict` to combine them.
+1. **Async scenario.** Done (2026-10-18), with the worker-mail family
+   scenario beside it. Each platform now runs `read-only`, `async` and
+   `family` cases, writes one summary per scenario
+   (`<profile>/coordinator/<platform>-<scenario>.json`), and
+   `coordinatorLiveVerdict` combines them: failed when any scenario failed or
+   wrote no summary, passed when all passed, skipped otherwise. The async case
+   checks, by name: running then idle; `delivery: "async"` on both launches;
+   no `sleep`, `read_messages`, `get_message_status` or `list_environments`
+   in the delegating turn, which ends with its reporter still running; a
+   prompt queued while the coordinator is busy *and* the report is pending
+   runs before that report; the reporter's progress is seen held, its two
+   messages arrive in one carrier with no notice; a silent worker yields one
+   notice; one wake per delegation; the fourth or fifth identical
+   `read_messages` carries `repeatedRead`; nothing reached the harness. How
+   it gets there is in [`agent-testing.md`](../development/agent-testing.md#live-coordinator-suite)
+   and under "Constraints and rationale" below.
 2. **Tie qualification to the suite.** Extend `coordinator-providers.test.ts`
    or `coordinator-conformance.test.ts` so that every `enforced` platform must
    also be on the live suite's platform list. A platform may not move to
@@ -144,15 +148,24 @@ and what its first runs found. Everything else here is qualification.
 
 ### Verify
 
-- **Cursor reports `network` denied without attempting the fetch.** The first
-  signed-in live read-only run on Cursor (2026-10-17, branch
-  `fix-pi-login-in-agent-test-profiles-379ebff75838`) reported create, edit,
-  shell and commit `unavailable` and `launch_job` and `network` `denied`, with
-  three tool calls and an unchanged checkout. No call in the transcript named
-  `example.com`, so the suite failed the network step. Find out whether Cursor's
-  hosted fetch is hidden from the model under the coordinator's named denies
-  (`unavailable` would then be the honest answer), or whether the model skipped
-  the call. As with Codex item 3, decide whether that counts as exercised.
+- **Cursor reports `network` denied without attempting the fetch.** Resolved
+  (2026-10-18): Cursor's hosted fetch is hidden from the model under the
+  coordinator's named denies, so `unavailable` is the honest answer, and
+  passing runs give exactly that (no fetch call, `network: unavailable`).
+  The earlier `denied` was the model mislabelling a step it had no tool for.
+  That mislabelling is intermittent: of four Cursor read-only runs on
+  2026-10-18, two passed and two failed with `denied` claims and no matching
+  call (once for create, edit, shell, commit and network; once for network
+  alone), with the same four tool calls each time and the checkout unchanged.
+  A `denied` without a call still fails, because it claims an attempt nobody
+  made; whether to re-prompt Cursor is the follow-up below.
+
+- **Cursor's read-only labels** (medium, decision). Half of Cursor's
+  read-only runs claim `denied` for steps it has no tool for, without a call
+  (see the item above). Options: add a line to the prompt that a step with no
+  tool is `unavailable` even when the instructions describe it as refused;
+  or accept it as model noise and rerun. Do not accept a `denied` without a
+  call: the transcript check is what keeps a skipped attempt from passing.
 
 - **Claude coordinator permission mode.** `coordinator.md` says Claude runs
   with `permissionMode: dontAsk`. A live coordinator session reports
@@ -167,34 +180,59 @@ Live runs need credentials and an isolated profile; see
 [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md)
 for prerequisites and how to batch them with other provider runs.
 
-- **Read-only and async scenarios** on Claude (macOS and Linux), Codex, Pi,
-  OpenCode and Cursor, and on Grok with the safety level set to admit
-  `advisory`. Record whether Codex reaches for `sleep` and whether any
-  coordinator polls `list_environments`; both feed decisions in
-  [coordinator-read-only-adapters.md](coordinator-read-only-adapters.md) and
-  [coordinator-consistency-gaps.md](coordinator-consistency-gaps.md). The
-  read-only half is one command, `mise run test:agent:coordinator`. Its first
-  full run on macOS (2026-10-16, branch
-  `overnight-coordinator-live-suite-8d5312b0d429`):
+- **Read-only, async and worker-mail family scenarios.** Run on macOS on
+  2026-10-18 (branch `qualify-coordinator-live-six-platforms-fb2b4a53344d`,
+  merged with `main` at `68dc1c8d`), one disposable profile per platform,
+  default messaging settings, Grok at `advisory`. Pins as in
+  `packages/toolchain/src/manifest.ts` (Codex 0.162.1, Grok 1.0.52). Evidence
+  is `output/agent-testing/<profile>/coordinator/<platform>-<scenario>.json`
+  (local, ignored).
 
-  | Platform | Read-only result |
-  | --- | --- |
-  | Claude (macOS) | Passed. Write and Edit unavailable. Shell, commit and network refused by the hook. `launch_job` on the project home refused. Canary and `list_tickets` read back.. Passed again 2026-10-17 with web research off. |
-  | Codex | Failed: hosted `web_search` reached the network, and create, edit and shell were reported denied with no call (Code item 3). Commit and `launch_job` refused, checkout unchanged, canaries read back. Re-run 2026-10-17 on `31d0fb06` with web research off: network passed (no hosted search; `curl` refused), and create, edit and shell still failed for want of a transcript call. Re-run on `9da80451` reading the rollout too: passed. The three calls were made and refused; Codex just emits no item for a sandbox refusal (Code item 3). With the bridge showing refused cells (2026-10-17, branch `fix-codex-phantom-denials-8bdb8d15d820`): passed twice from the transcript alone, with 3 and then 4 `exec` rows, all counted. Passed again after review with the single-call cell rule and the one-mutation-per-cell prompt line. |
-  | Pi | Skipped: `needs-auth`, because the profile seeded no Pi login. Re-run 2026-10-17 with the host `auth.json` shared: still `needs-auth`, because this host's Pi `auth.json` holds no provider (`{}`). Needs a host with a Pi login. |
-  | OpenCode | Passed. Every mutation unavailable, checkout unchanged, canaries read back. |
-  | Cursor | Skipped: `signed-out`, because the profile could not see the host's Orkestrator-stored Cursor key. Re-run 2026-10-17 with the key snapshot: signed in and ran the turn. Failed: `network` reported denied with no fetch call (Verify). Create, edit, shell and commit unavailable, `launch_job` denied, checkout unchanged. |
-  | Grok (`advisory`) | Failed: the turn ended after the denied `write`, with no report. Checkout unchanged. Fixed since by the policy-denial continuation (see Constraints and rationale); needs a re-run. |
+  | Platform | Read-only | Async | Family |
+  | --- | --- | --- | --- |
+  | Claude (macOS) | Passed | Passed | Passed |
+  | Codex | Passed | Passed | Passed |
+  | OpenCode | Passed | Passed | Passed |
+  | Cursor | Passed twice, failed twice (see Verify) | Passed twice | Passed twice |
+  | Pi | Skipped: `needs-auth`, the host `auth.json` holds no provider | Skipped (same) | Skipped (same) |
+  | Grok (`advisory`) | Skipped: the host Grok is signed out (`401: Grok Build isn't signed in`) | Skipped (same) | Skipped (same) |
 
-  Claude on Linux has not run. No coordinator used `sleep` or polled
-  `list_environments` in these single-turn runs, but nothing in the read-only
-  turn invites either; that evidence needs the async scenario.
-- **Worker-mail family scenario**, once per qualified platform, with default
-  messaging settings. Launch two workers; both report; the coordinator follows
-  up with one by environment id; that worker replies; ten more alternating
-  messages follow. Expect zero user actions and no `stored` or
-  `inject_failed` placements in the family. Include one follow-up sent while
-  the worker is busy, which must join its open delegation and produce one wake.
+  - Claude passed all three at 01:23 UTC, on the suite before the worker gates
+    (below), so its busy follow-up was checked only as "delegation open". Two
+    reruns on the final suite (17:10 and 17:17 UTC) stopped at the first turn on
+    `429 · This request would exceed your account's rate limit`: the host's
+    Claude account is shared with every other environment on this host. Rerun
+    when the limit has reset (follow-up below).
+  - Codex first failed async and family because both workers' turns ended on
+    `400: The 'gpt-5.4' model is not supported when using Codex with a ChatGPT
+    account`. Fixed (Constraints and rationale); then passed all three.
+  - OpenCode first failed: the coordinator answered that `launch_environment`
+    and `get_launch_options` "are not available in this session", and a
+    second coordinator in the same profile failed to create its session.
+    Fixed (Constraints and rationale). Its read-only `launch_job` now comes
+    back `denied` (refused by the scoped invoker) instead of `unavailable`,
+    which is the same bug's footprint in the earlier "passes".
+  - Family on Codex and OpenCode: 16 family messages, all `injected`; six
+    pings asked and answered by environment id alone; the follow-up to the
+    second worker was seen `pending-inject` while that worker's turn ran, then
+    `injected`, and its report and reply reached the coordinator in one
+    carrier under one delegation; nothing reached the harness. Async on all
+    four: the queued prompt ran before the pending report, with the report
+    seen pending while the coordinator was busy and the prompt queued.
+  - No coordinator ran `sleep` or called `list_environments` in any async or
+    family run; the only `read_messages` calls were the poll turn's five.
+    Recorded in [coordinator-read-only-adapters.md](coordinator-read-only-adapters.md)
+    and [coordinator-consistency-gaps.md](coordinator-consistency-gaps.md).
+  - Earlier read-only history: first full run 2026-10-16 (Claude and OpenCode
+    passed; Codex failed on hosted search and phantom denials, both fixed;
+    Pi and Cursor skipped; Grok ended on its first denial, fixed by the
+    policy-denial continuation). Claude on Linux has not run.
+- **Worker-mail family scenario**: covered by the `family` column above.
+- **Re-runs still owed** (medium): Claude on the final suite once its
+  account rate limit resets (its pass predates the mid-turn follow-up gate);
+  Pi and Grok once the host has a Pi provider login and a signed-in Grok; and
+  Claude on Linux, which has never run. One command each:
+  `mise run test:agent:coordinator --credential-source <platform>`.
 - **Peer scenario** between two ordinary environments with Wake peers turned
   on: ten alternating messages and zero user actions.
 - **Grok mail approvals** on the pinned Grok build: with a worker on an `ask`
@@ -423,6 +461,50 @@ is the truth, and this file is the backlog.
     harness's.
   - The Pi catalogue probe follows the bridge's policy, so its catalogue
     matches what an environment can run.
+
+- **The delegation scenarios hold workers on gate files** (2026-10-18). A
+  worker parked in a shell loop on a file the harness owns is still in its
+  turn, so the harness, not model latency, decides what is true when its mail
+  moves. The async reporter sends its progress, waits, sends its report,
+  waits again, and only then ends its turn: the harness opens the second gate
+  once the coordinator is busy with a prompt queued behind it, so "queued
+  prompt before pending mail" is exercised rather than passing because the
+  queue had nothing to overtake. The second family worker reports only after
+  the coordinator's follow-up is seen held for it mid-turn, so the busy case
+  is a busy worker and not a follow-up delivered before its first turn. The
+  alternatives were to rely on timing (the first Codex run never overlapped)
+  or to make the coordinator wait inside a turn, which is what the suite
+  forbids. Cost: each scenario prompt carries a shell loop, which Orkestrator
+  tools' arguments must not count as the coordinator sleeping, so `sleep` is
+  counted only outside Control MCP tools.
+- **One carrier is judged from the coordinator's transcript.** A message's
+  `injectRequestId` is assigned per message at send time
+  (`mail-inject-<id>`) and a batch dispatches under its first message's id, so
+  it cannot say which messages shared a carrier. Each carrier is one user row
+  holding the ids it delivered; a bridge that does not echo it falls back to
+  messages injected within 5 seconds of each other.
+- **A launched worker's inherited Codex default may fall back** (fixed
+  2026-10-18). The startup prompt dispatched the settings' model as if the
+  launch had named it, so `ensureSession` never offered it to
+  `resolveDefaultModel`, and every Codex worker a coordinator launched on a
+  ChatGPT login ran the shipped `gpt-5.4` and failed with HTTP 400. The
+  startup dispatch now marks a settings model `modelSource: "default"` and an
+  `initialAgentModel` explicit (`native-agent-service-reconciliation.ts`;
+  test "the initial prompt's Codex model"). Writing the substitute into the
+  settings was rejected: the settings keep the user's choice.
+- **An OpenCode coordinator keeps its Control MCP credential** (fixed
+  2026-10-18). A healthy-server reuse and every status read re-reconciled the
+  server's `orkestrator` MCP entry with the tab Agent Tools connection, and for
+  a coordinator runtime (a synthesized environment on the project checkout)
+  that replaced its scoped Control MCP credential, leaving mail and ticket
+  tools but no delegation tools. Reconciliation now reuses the connection the
+  server was launched with (`openCodeLaunchAgentToolConnections`), and never
+  falls back to a tab credential for a coordinator. A coordinator's server is
+  also not ready until that entry is connected: it was scheduled and not
+  awaited, so a first turn could reach a session without its tools; startup
+  now waits and fails visibly (`retryable`) if it will not connect. Ordinary
+  environments keep the unawaited entry, because their ticket tools are
+  optional. Test: `commands-servers-coordinator-opencode.test.ts`.
 
 ## Open questions
 

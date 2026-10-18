@@ -70,7 +70,9 @@ dispatcher if queue and wake work.
 2. **Poll guard for `list_environments`.** Extend the same revision-based
    counter and budget to `list_environments`, but only if live runs in
    [coordinator-live-conformance.md](coordinator-live-conformance.md) show
-   coordinators polling it.
+   coordinators polling it. Live evidence on 2026-10-18: no coordinator called
+   `list_environments` in the async or worker-mail family scenarios on Claude,
+   Codex, OpenCode or Cursor.
 3. **Unused conversations.** When a new conversation is created, auto-close an
    unassigned conversation whose draft is empty, so the 16-conversation limit
    cannot be filled with unused composers.

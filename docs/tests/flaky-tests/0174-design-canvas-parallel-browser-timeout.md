@@ -107,3 +107,13 @@ one worker and separate output directories: `e2e/AgentUsage.spec.ts` in 27.5 s
 `mise run test:logged -- --name <label> -- bunx playwright test --config e2e/playwright.config.ts <owning-file> --workers=1 --output=<directory>`.
 These ENOENT failures were caused by the overlapping validation commands,
 not evidence of intermittent product behavior.
+
+
+## Landing-page main merge recurrence — 2026-10-18
+
+`ORKESTRATOR_E2E_PORT=49295 ORKESTRATOR_PUBLIC_E2E_PORT=49296 mise run test:logged -- --name merge-browser-isolated-ports -- mise run test:browser` reported 303 passed, 80 skipped and 49 failed with nine workers alongside other host validation. This owner failed in:
+
+- `canvas edits, script isolation, missed events, conflict and reload`
+- `canvas edits, script isolation, missed events, conflict and reload`
+
+All 21 failing owners, including this unchanged file, passed with one worker in 428.8 seconds (exit 0). The complete rerun command, individual failure messages and evidence paths are in [0382](0382-component-browser-parallel-load.md). No timeout, assertion, skip or owning source changed.

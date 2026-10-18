@@ -446,3 +446,23 @@ contract assertions. Bridge and protocol-lockfile groups passed. Electron,
 Docker and iOS scenario suites were omitted because the change covers the
 public client's pre-connection flow and Settings copy. Playwright stopped all
 owned test servers; no isolated application profile was created.
+
+
+## Landing-page main merge recurrence — 2026-10-18
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test` with the testing guide's GNU-tool PATH prefix; workspace/root/bridges/protocol groups used 4/1/2/1 slots and backend used two isolated workers. Other worktrees and browser suites were active.
+- **Owning-file failures:**
+
+- project coordinator > Git status permits confirmed dirty branch switches and detects external context changes [5283.80ms]
+- project coordinator > bound discard confirmations refuse stale, sequencer, nested, and failed switches [5548.50ms]
+- project coordinator > discards an unborn HEAD and a dirty remote-tracking switch [5735.17ms]
+- project coordinator > fetch covers every configured remote and a dirty submodule needs enhanced confirmation [5613.85ms]
+- project coordinator > fetch force, fast-forward sync, remote switching, and divergence stay safe [5372.44ms]
+- project coordinator > launch bases refresh main with a wildcard tracking ref [5276.40ms]
+- project coordinator > launch bases refresh main with a absent tracking ref [5371.28ms]
+- project coordinator > launch bases refresh main with a stale tracking ref [5526.76ms]
+- project coordinator > base discovery deduplicates slow fetches and cools down each branch after failure [5896.93ms]
+
+- **Owning-file rerun:** `mise run test:logged -- --name merge-15f6cd-backend-owners -- bun test --cwd apps/backend ./src/core/review-validation-worker.test.ts ./src/core/environment-move.test.ts ./src/core/coordinator-service.test.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures` passed all four unchanged files with one worker, exit 0, in 121.2 seconds.
+- **Evidence:** `orkestrator-test-run.iFuHsy/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory. Backend reported 9025 passed, 41 skipped and 17 failed across 9083 tests, with 12 errors between tests.
+- **Assessment:** confirmed intermittent recurrence; no implementation, assertion, timeout or skip in these owners changed. Shared-host contention remains a hypothesis.

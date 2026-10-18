@@ -1,3 +1,4 @@
+import { PlanUsageFixture } from "./PlanUsageFixture";
 import { useState } from "react";
 import { GlobalSettings } from "../../apps/web/src/components/settings/GlobalSettings";
 import { useConfigStore } from "../../apps/web/src/stores/configStore";
@@ -39,6 +40,7 @@ function installGlobalSettingsFixture() {
 
 export function GlobalSettingsFixture() {
   useState(installGlobalSettingsFixture);
+  if (new URLSearchParams(window.location.search).has("plan-usage")) return <PlanUsageFixture />;
   return (
     <main className="p-4">
       <GlobalSettings activeSection="claude" />

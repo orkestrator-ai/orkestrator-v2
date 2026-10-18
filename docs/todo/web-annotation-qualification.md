@@ -1,6 +1,6 @@
 # Web annotation qualification
 
-Checked against `main` at `31d0fb06` (2026-10-17).
+Checked against `main` at `a5d338c1` (2026-10-18).
 
 Web-page annotations shipped in #845 (`964d71f4`, 2026-09-25). They have
 unit, contract and component tests, plus two real-stack specs on Linux. No
@@ -50,7 +50,10 @@ that names what was actually tested.
   It takes the provider from `ORKESTRATOR_AGENT_TEST_ANNOTATION_AGENT` (default
   `codex`) and the profile from `ORKESTRATOR_AGENT_TEST_PROFILE` (default
   `codex-qa`). It waits for `awaiting-review` and checks the source change with
-  `annotation-app/verify-change.ts`.
+  `annotation-app/verify-change.ts`. Since 2026-10-18 a request parked on a
+  rejected dispatch ends the test at once: a sign-in rejection is a skip that
+  names the reason (`isSignInError`), any other rejection is a failure. The
+  test also prints a progress line each minute while it waits.
 - There is no Docker annotation spec. `test:agent:docker` greps for
   `'Docker fixture'`, and no annotation test title matches. Container
   materialization is covered only with a fake container call
@@ -111,9 +114,14 @@ Test code the runs below depend on.
 - Done 2026-10-17 on macOS (see "Runs on 2026-10-17"): re-run
   `mise run test:agent:electron` and `mise run test:agent:browser:isolated` on
   current main and record them with the sign-off template below.
-- Run the live implement test once for each provider in `AGENT_PLATFORMS`:
-  claude, codex, cursor, grok, opencode and pi. Record skipped providers and
-  missing credentials explicitly. A skipped provider is not a passing one.
+- Done 2026-10-18 (see "Runs on 2026-10-18"): the live implement test ran once
+  for each provider in `AGENT_PLATFORMS`. Claude, Codex, Cursor and OpenCode
+  passed; Grok and Pi were skipped for missing credentials, recorded with
+  their reasons.
+- Re-run the live implement test for Grok and Pi once the host has a usable
+  login for each (Grok: `grok login` on the host; Pi: a provider in
+  `~/.pi/agent/auth.json`). A skipped provider is not a passing one. Grok last
+  passed on 2026-10-15 (437 s); Pi has never run.
 - Remote backend: connect the desktop to a backend on another host, capture,
   and confirm that `web_annotation_asset_stage` and materialization in the
   remote workspace both work.
@@ -190,6 +198,109 @@ Capability matrix and known limitations:
 Migration and rollback verification:
 Reviewer / date:
 ```
+
+### Runs on 2026-10-18 (macOS)
+
+Live implement test, once per provider. It is not a milestone sign-off.
+
+```text
+Milestone / PR / commit: live implement per provider; main a5d338c1, branch
+  qualify-annotation-live-implement-0330a0bacc01 (spec and harness changes below)
+Implemented scope and remaining deferrals: spec skips signed-out providers with
+  the reason; Grok snapshots carry no refresh token; results.json is redacted
+Platforms, providers, and client versions exercised: macOS 27.0 (arm64),
+  Playwright 1.64.0, browser gateway client; claude 2.1.296, codex 0.162.1,
+  opencode 1.19.0, @cursor/sdk 1.0.37, grok 1.0.52, pi 1.2.0 (all seeded from
+  the host install at their pins)
+Logged commands and results: tables below
+Real workflow and inactive-environment evidence: none new
+Fault-injection boundaries exercised: none new
+Capability matrix and known limitations: Grok and Pi not qualified at this commit
+Migration and rollback verification: not run
+Reviewer / date: Claude (worker agent), 2026-10-18; awaiting human review
+```
+
+One disposable profile, `qa-annot-live-0330`, started with
+`mise run dev:test --profile qa-annot-live-0330 --fixture` (every credential
+source and platform, the defaults). Bridges were rebuilt first. Each provider
+was run with:
+
+```bash
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-annot-live-0330 \
+ORKESTRATOR_AGENT_TEST_RUN_ID=annot-live-<agent> \
+ORKESTRATOR_AGENT_TEST_LIVE_ANNOTATIONS=1 \
+ORKESTRATOR_AGENT_TEST_ANNOTATION_AGENT=<agent> \
+mise run test:logged -- --name annot-live-<agent> -- mise run test:agent:browser -- \
+  e2e/agent-testing/web-annotations-gateway.spec.ts --grep 'live agent'
+```
+
+| Provider | Result |
+| --- | --- |
+| claude | Pass: `awaiting-review`, test 28 s, `verify-change.ts` 8/8 (unchanged spec at `a5d338c1`) |
+| codex | Pass: `awaiting-review`, test 57 s, 8/8 (unchanged spec) |
+| opencode | Pass: `awaiting-review`, test 47 s, 8/8 (unchanged spec) |
+| cursor | Pass: `awaiting-review` after 100 s, 8/8. On 2026-10-15 Cursor had no credential; the host now has an Orkestrator Cursor key |
+| grok | Skipped, no usable credential: "Grok Build isn't signed in. Run grok login in a terminal to keep working." The skip came 6 s into the test. A first attempt was dispatched and still running at 517 s when the profile was stopped from outside (the session that supervised it ended). That attempt spent the host's Grok refresh token (below), so Grok could not be re-run |
+| pi | Skipped, no usable credential: "Pi has no signed-in model provider. Sign in with /login in a Pi terminal tab, or set the provider's API key." The host `~/.pi/agent/auth.json` has no providers. The skip came 8 s into the test |
+
+Findings:
+
+- **The profile spent the host's Grok refresh token (fixed in the harness).**
+  The host access token had expired on 2026-10-16. Grok's log in the isolated
+  home (`data/agent-credentials/home/.grok/logs/unified.jsonl`) shows the first
+  profile start refreshing successfully with the copied refresh token
+  (00:51Z, `oidc try_refresh_pure succeeded`). After a restart re-copied the
+  host file, the refresh failed (01:14Z, `oidc try_refresh_pure terminal
+  error`), and Grok `cleared credentials after permanent refresh failure`.
+  The host file itself was never written (`~/.grok/auth.json` still dated
+  2026-10-16 07:02), but it now holds a spent refresh token, so the host
+  needs `grok login`. `seedAgentTestProviderCredentials` now publishes only
+  `restrictGrokAuthSnapshot`'s output: refresh tokens blanked, expired or
+  unparseable logins dropped. When nothing usable remains, the launcher warns
+  ("Grok is signed out in this profile: …") and seeds nothing. Containers
+  copy the same file with its refresh token: follow-up 5 in
+  [container-network-and-credential-isolation.md](container-network-and-credential-isolation.md).
+- **`results.json` kept the gateway cookie (fixed).** Playwright's JSON
+  reporter writes after global teardown, so the sanitizer never saw
+  `results.json`. A request that failed when the backend went away left
+  `orkestrator_gateway_auth=<value>` in its call log (the trace and
+  `error-context.md` were redacted). A last reporter
+  (`e2e/agent-testing/artifact-sanitizing-reporter.ts`) now sanitizes the
+  tree in `onExit`, for the browser and coordinator configs. Checked with a
+  throwaway failing probe: the header reads `[REDACTED]`. The affected local
+  artifact was sanitized; the cookie's backend was already gone.
+- **A signed-out provider used to hang the test for 14 minutes.** Its
+  request stays `queued` with `blockedReason: "dispatch-rejected"` and the
+  sign-in reason, which was not a state the poll waited for. The test now
+  skips (sign-in) or fails (anything else) on the first poll that sees it.
+  `isSignInError` (`apps/desktop/scripts/dev/coordinator-live.ts`) did not
+  recognise "isn't signed in" (Claude and Grok) or "no signed-in model
+  provider" (Pi), so the coordinator live suite would have counted those as
+  failures too; both are matched now, with the bridges' exact messages under
+  test.
+- **Signed-out behaviour is safe.** Cursor (2026-10-15), Grok and Pi requests
+  to a signed-out provider settle in `queued` with the sign-in reason within
+  seconds, on the request card. Nothing ran, nothing was written outside the
+  workspace, and nothing was lost.
+
+Default decision: unchanged. Annotations stay enabled by default. The
+evidence is four of six providers passing on current `main` and safe,
+visible holds for the two without a login. None of the revisit triggers
+appeared (duplicate execution, lost data, a write outside the workspace).
+
+Validation of the change (commit `50c26708`):
+
+| Command | Result |
+| --- | --- |
+| Live implement for claude, codex, opencode and cursor again on the final commit | All four pass: `awaiting-review` after 20, 35, 30 and 120 s, 8/8 each |
+| `web-annotations-gateway.spec.ts` without the live opt-in | 2 passed, 1 skipped (the live case, as designed) |
+| `profile-io.test.ts` and `lifecycle.test.ts`; `coordinator-live.test.ts` | 46 passed; 46 passed |
+| Throwaway failing probe through the browser config | `results.json` call log shows `orkestrator_gateway_auth=[REDACTED]` |
+| `mise run check`, e2e and desktop typechecks | Pass |
+| `mise run test` | Codex protocol group passed; the other three failed only on load timeouts in files this change does not touch, each passing alone: known flakes 0165, 0178 and 0180 (0180 also failed once in three runs alone, as recorded), reopened 0093, and new flakes [0460](../tests/flaky-tests/0460-tab-teardown-hanging-delete-elapsed-bound.md) and [0461](../tests/flaky-tests/0461-coordinator-fetch-remotes-submodule-timeout.md) |
+
+The profile was stopped and reset afterwards (`dev:reset`: 0 containers,
+disposable state removed). The host `~/.grok/auth.json` was never written.
 
 ### Runs on 2026-10-17 (macOS)
 
@@ -455,6 +566,7 @@ stated:
 - The spec waits up to 14 minutes for a live request but prints nothing while
   it polls, so `test:logged` kills a run after five quiet minutes. Set
   `ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS` above 840000 for slow providers.
+  (Fixed 2026-10-18: it prints a progress line each minute.)
 - An implement request moves to `awaiting-review` whenever the turn ends
   without a recorded failure, even when nothing changed. A request to a
   signed-out provider waits in `queued` with the sign-in reason rather than
@@ -506,7 +618,9 @@ Partial evidence only; no milestone was signed off. Linux (Wayland, display
   Web annotations or `ORKESTRATOR_WEB_ANNOTATIONS_MODE` rolls it back. Holding
   dispatch for providers without a live run was rejected: before 2026-10-15
   that meant all six. Revisit if a live run shows duplicate execution, lost
-  data or a write outside the workspace.
+  data or a write outside the workspace. Rechecked 2026-10-18 at `a5d338c1`:
+  Claude, Codex, Cursor and OpenCode pass; Grok and Pi had no login and held
+  safely in `queued` with the reason; no trigger appeared.
 - Rollback must stop new operations while keeping reads, spool recovery and
   reconciliation of requests already sent. `web-annotation-rollout.ts` already
   behaves this way; any rollout test must keep it.

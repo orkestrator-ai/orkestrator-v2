@@ -818,7 +818,7 @@ const SIGNED_OUT: ReadonlySet<NativeAgentAuthState> = new Set([
  * being mistaken for a missing credential.
  */
 const SIGN_IN_ERROR =
-  /\b((not|isn['’]t|aren['’]t) (signed|logged) in|sign[ -]?in required|signed[ -]out|log[ -]?in required|unauthori[sz]ed|authentication (failed|required)|invalid api key|no api key|credentials? (missing|not found|expired))\b/i;
+  /\b((not|isn['’]t|aren['’]t) (signed|logged) in|no signed[ -]in|sign[ -]?in required|signed[ -]out|log[ -]?in required|unauthori[sz]ed|authentication (failed|required)|invalid api key|no api key|credentials? (missing|not found|expired))\b/i;
 
 export function isSignInError(message: string): boolean {
   return SIGN_IN_ERROR.test(message);

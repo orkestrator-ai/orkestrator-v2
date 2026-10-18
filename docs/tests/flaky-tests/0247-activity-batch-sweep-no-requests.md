@@ -99,3 +99,11 @@ Recorded evidence only; no test changed.
 - **Owning-file rerun:** `mise run test:logged -- --name activity-batch-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/native-agent-service-activity-batch.test.ts --parallel=1 --only-failures` passed unchanged (exit 0) in 0.3 seconds.
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.nN9Z1G/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - This matches the existing aggregate-only empty-request symptom. The host-load/port hypothesis remains unconfirmed; no implementation, assertion, timeout or skip changed.
+
+## Design live-cycle review recurrence — 2026-10-18
+
+- **Original command:** `mise run test:logged -- --name review-full -- mise run test`.
+- **Failure:** `a failing batch route is bypassed for one sweep only` failed at line 239 in the unchanged owning file. Backend reported 9017 passed, 41 skipped and one failed.
+- **Owning-file rerun:** `mise run test:logged -- --name review-activity-batch-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/native-agent-service-activity-batch.test.ts --parallel=1 --only-failures` passed unchanged in 0.5 seconds.
+- **Evidence:** `orkestrator-test-run.yzrbXX/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory.
+- **Assessment:** the owning-file pass establishes intermittence; the cause remains unconfirmed. No source, assertion, deadline or skip changed.

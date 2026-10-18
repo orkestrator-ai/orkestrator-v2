@@ -544,8 +544,11 @@ export async function configureClaudeSession(
 export async function gracefulInterruptClaudeSession(
   sessionId: string,
 ): Promise<{ interrupted: boolean; stillQueued: string[] }> {
-  const control = sessions.get(sessionId)?.queryControl;
-  if (!control?.interrupt) return { interrupted: false, stillQueued: [] };
+  const session = sessions.get(sessionId);
+  const control = session?.queryControl;
+  if (!session || !control?.interrupt) return { interrupted: false, stillQueued: [] };
+  // Before the request: the CLI can answer it with the turn's result first.
+  session.interruptRequestedGeneration = session.latestTurnGeneration;
   try {
     const receipt = await control.interrupt();
     return { interrupted: true, stillQueued: receipt?.still_queued ?? [] };

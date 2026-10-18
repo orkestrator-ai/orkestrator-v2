@@ -625,16 +625,27 @@ export function envWithManagedBinaries(
 }
 
 // Prefer the bun binary bundled with the app (binaries/ -> bin/ in resources)
-// so the local bridge servers do not depend on a host-installed bun. Falls back
-// to a PATH lookup in dev / if the bundled binary is missing.
-export function resolveBunBinary(context: CommandContext): string {
+// so the local bridge servers do not depend on a host-installed bun. Without
+// one (the published CLI's `serve`, dev), use the Bun running this backend: a
+// PATH lookup can land on a version-manager shim, which callers that spawn
+// from `/` (exec control) cannot resolve. `bun` on PATH is the last resort.
+export function resolveBunBinary(
+  context: CommandContext,
+  runtime: { execPath: string; bun: boolean } = {
+    execPath: process.execPath,
+    bun: Boolean(process.versions.bun),
+  },
+): string {
   const candidates = [
     ...(context.toolchainBinDir ? [path.join(context.toolchainBinDir, "bun")] : []),
     path.join(context.resourceRoot, "bin", "bun"),
     path.join(context.appRoot, "binaries", "bun"),
     path.join(context.appRoot, "bin", "bun"),
   ].map((candidate) => path.resolve(candidate));
-  return candidates.find((candidate) => existsSync(candidate)) ?? "bun";
+  return (
+    candidates.find((candidate) => existsSync(candidate)) ??
+    (runtime.bun && path.isAbsolute(runtime.execPath) ? runtime.execPath : "bun")
+  );
 }
 
 export async function generateEnvironmentNameWithCodexExec(

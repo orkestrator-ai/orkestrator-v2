@@ -308,6 +308,11 @@ export function finalizeTurn(turn: TurnState): void {
     diagnostics,
   } = turn;
   turn.queryEnded = true;
+  // A lost transport may never produce a result to consume the stop request.
+  // An old turn finishing must leave a newer turn's request intact.
+  if (session.interruptRequestedGeneration === turnGeneration) {
+    session.interruptRequestedGeneration = undefined;
+  }
   diagnostics?.close();
   flushDebugLogs();
   abortController.signal.removeEventListener("abort", turn.observeAbort);

@@ -178,3 +178,7 @@ mise run test:logged -- --name login-environment-commands-owner -- bun test --cw
 Evidence: `orkestrator-test-run.rIDYEp/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log`
 (compressed when the aggregate finishes) in the host temporary directory.
 No implementation, assertion, timeout or skip was changed.
+
+## Design live-cycle second main merge — 2026-10-18
+
+The GNU-tool PATH `merge-full` aggregate (workspace/root/bridges/protocol reservations 4/1/2/1, alongside browser validation) timed out non-404 remote deletion (5251.01 ms), deletion without a PR URL (5292.57 ms), and retaining ownership after a server could not be reaped (8706.36 ms; case 0226). The unchanged owning file passed `mise run test:logged -- --name merge-unit-owner-commands-registry-environments -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-registry-environments.test.ts --parallel=1 --only-failures`, exit 0, in 30.9 seconds logged. Aggregate evidence: `orkestrator-test-run.yluX61/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory. Confirmed intermittent recurrence; no implementation, assertion, timeout or skip changed.

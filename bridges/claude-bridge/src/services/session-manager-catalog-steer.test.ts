@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import type { PromptOptions } from "../types/index.js";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { createHash } from "node:crypto";
 import {
@@ -252,10 +253,10 @@ describe("Claude steer journal and transcript", () => {
     parent_tool_use_id: null,
   });
 
-  async function startSteerTurn(title: string) {
+  async function startSteerTurn(title: string, options?: PromptOptions) {
     const session = createSession(title);
     track(session.id);
-    const prompt = sendPrompt(session.id, "Write the plan");
+    const prompt = sendPrompt(session.id, "Write the plan", options);
     const call = await nextQueryCall();
     const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
     const first = await input.next();
@@ -407,6 +408,109 @@ describe("Claude steer journal and transcript", () => {
     await waitFor(() => turn.session.messages.some((m) => m.content === "partial reply"));
     expect(turn.session.status).toBe("running");
     await turn.finish(["surviving-steer"]);
+  });
+
+  // The frame CLI 2.1.296 sends when Stop (or Escape) lands before any text
+  // streamed. Found by the live design cycle: it surfaced as a turn failure.
+  const stoppedBeforeText = {
+    subtype: "error_during_execution",
+    is_error: true,
+    errors: ["[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=null"],
+    terminal_reason: "aborted_streaming",
+  };
+
+  for (const terminalReason of ["aborted_streaming", "aborted_tools"]) {
+    for (const streamed of [false, true]) {
+      test(`a matching user stop (${terminalReason}, streamed=${streamed}) settles without failure`, async () => {
+        queryControlOverrides.interrupt = async () => ({ still_queued: [] });
+        const turn = await startSteerTurn("Requested stop");
+        if (streamed) {
+          callText(turn.call, "partial", "partial reply");
+          await waitFor(() =>
+            turn.session.messages.some((message) => message.content === "partial reply"),
+          );
+        }
+        expect(await gracefulInterruptClaudeSession(turn.session.id)).toEqual({
+          interrupted: true,
+          stillQueued: [],
+        });
+        expect(turn.session.interruptRequestedGeneration).toBe(turn.session.latestTurnGeneration);
+        const messages = await turn.finish([turn.promptUuid], 0, {
+          ...stoppedBeforeText,
+          terminal_reason: terminalReason,
+        });
+        expect(turn.session.error).toBeUndefined();
+        expect(turn.session.interruptRequestedGeneration).toBeUndefined();
+        expect(messages.map((message) => message.content)).toEqual(
+          streamed ? ["Write the plan", "partial reply"] : ["Write the plan"],
+        );
+      });
+    }
+  }
+
+  test("a normal result after a stop consumes the request too", async () => {
+    queryControlOverrides.interrupt = async () => ({ still_queued: [] });
+    const turn = await startSteerTurn("Completion won stop race");
+    await gracefulInterruptClaudeSession(turn.session.id);
+    await turn.finish([turn.promptUuid]);
+    expect(turn.session.interruptRequestedGeneration).toBeUndefined();
+  });
+
+  for (const offset of [-1, 1]) {
+    test(`a stop for another generation (${offset}) cannot suppress an aborted result`, async () => {
+      const turn = await startSteerTurn("Generation isolation");
+      const requested = turn.session.latestTurnGeneration! + offset;
+      turn.session.interruptRequestedGeneration = requested;
+      turn.result([turn.promptUuid], 0, stoppedBeforeText);
+      await expect(turn.prompt).rejects.toThrow("[ede_diagnostic]");
+      expect(turn.session.status).toBe("error");
+      expect(turn.session.interruptRequestedGeneration).toBe(requested);
+      turn.call.finish();
+    });
+  }
+
+  test("a matching stop cannot turn a structured-output abort into success", async () => {
+    queryControlOverrides.interrupt = async () => ({ still_queued: [] });
+    const turn = await startSteerTurn("Structured stop", {
+      requestId: "structured-stop",
+      outputSchema: { type: "object" },
+    });
+    await gracefulInterruptClaudeSession(turn.session.id);
+    turn.result([turn.promptUuid], 0, stoppedBeforeText);
+    await expect(turn.prompt).rejects.toThrow("[ede_diagnostic]");
+    expect(turn.session.status).toBe("error");
+    expect(turn.session.structuredOutput).toMatchObject({
+      ok: false,
+      requestId: "structured-stop",
+      error: { code: "provider_error" },
+    });
+    expect(turn.session.interruptRequestedGeneration).toBeUndefined();
+    turn.call.finish();
+  });
+
+  test("a stopped turn losing its transport clears its request before a later turn", async () => {
+    queryControlOverrides.interrupt = async () => ({ still_queued: [] });
+    const turn = await startSteerTurn("Transport lost after stop");
+    await gracefulInterruptClaudeSession(turn.session.id);
+    turn.call.fail(new Error("Transport lost"));
+    await expect(turn.prompt).rejects.toThrow("Transport lost");
+    expect(turn.session.interruptRequestedGeneration).toBeUndefined();
+    const generation = turn.session.latestTurnGeneration!;
+    const laterPrompt = sendPrompt(turn.session.id, "A later turn");
+    const laterCall = await nextQueryCall();
+    expect(turn.session.latestTurnGeneration).toBeGreaterThan(generation);
+    laterCall.push({ type: "result", ...stoppedBeforeText });
+    await expect(laterPrompt).rejects.toThrow("[ede_diagnostic]");
+    expect(turn.session.status).toBe("error");
+    laterCall.finish();
+  });
+
+  test("an aborted result nobody asked to stop is still a failure", async () => {
+    const turn = await startSteerTurn("Unrequested abort");
+    turn.result([turn.promptUuid], 0, stoppedBeforeText);
+    await expect(turn.prompt).rejects.toThrow("[ede_diagnostic]");
+    expect(turn.session.status).toBe("error");
+    turn.call.finish();
   });
 
   test("aborting with an unanswered steer closes input and publishes terminal state", async () => {

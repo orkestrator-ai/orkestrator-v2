@@ -4,6 +4,7 @@ import process from "node:process";
 import { OrkestratorBackend } from "./core/index.js";
 import { APP_VERSION } from "./core/constants.js";
 import { fixPath } from "./core/fix-path.js";
+import { dropInheritedAgentToolConnection } from "./core/agent-tools.js";
 import { PreviewPublicationManager } from "./preview-publication.js";
 import { OrkestratorGateway } from "./gateway.js";
 import { createManagedWebClient } from "./managed-web-client.js";
@@ -31,6 +32,7 @@ assertSupportedPlatform();
 // supervisor treats as the app itself.
 installFatalRejectionGuard({ label: "[Backend]" });
 fixPath();
+dropInheritedAgentToolConnection();
 // Capture this before startup awaits. If Electron dies while the backend is
 // initializing, reading process.ppid later would see init and lose the only
 // identity that lets the orphan watchdog recognize the transition.

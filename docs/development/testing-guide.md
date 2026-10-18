@@ -53,6 +53,23 @@ behind a running profile. `tests/unit/playwright-spec-loading.test.ts` lists
 every Playwright config under Node in `mise run test`, so such an import fails
 there first.
 
+### Public-site smoke tests
+
+`mise run test:browser` also runs `e2e/public-site/` against a fresh production
+build of the public client. To run only that smoke flow:
+
+```bash
+mise run test:logged -- --name public-browser -- \
+  bunx playwright test --config e2e/public-site/playwright.config.ts
+```
+
+It checks landing-page login, deferred connection-screen loading, direct loads
+and reloads of `/connect`, the home link, and install-command clipboard feedback
+at desktop and narrow widths. This pre-connection flow needs no backend,
+credentials, or isolated application profile. The server is owned and stopped
+by Playwright; `ORKESTRATOR_PUBLIC_E2E_PORT` overrides its default port 4423.
+Authenticated renderer flows still use isolated profiles as described below.
+
 ### Native browser controls
 
 `e2e/AgentLaunchDialog.spec.ts` uses Google Chrome to exercise the native

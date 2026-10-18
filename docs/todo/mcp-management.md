@@ -264,16 +264,16 @@ qualification, not renewed evidence for the SSE cell.
 
 | Provider · scope | Add | Edit (A, B) | Rename (new / old) | Remove (A, B) | Busy | Restart and restore | Apply outcome |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Claude · user `~/.claude.json` | reached | reached v2 both | answers / fails | fails both | yes | reached after bridge restart | `pending-next-turn` → `applied` per tab after its turn |
+| Claude · user `~/.claude.json` | reached | reached v2 both | answers / fails | fails both | unverified | reached after bridge restart | `pending-next-turn` → `applied` per tab after its turn |
 | Claude · private local `projects[<worktree>]` | reached | reached v2 both | answers / fails | fails both | — | — | same |
 | Claude · project `.mcp.json` | reached | reached v2 both | answers / fails | fails both | — | — | same |
 | Claude · SSE in `.mcp.json` (written outside the editor) | reached after a bridge restart (the CLI loads its own files only at launch) | — | — | unverified: probe ran after restart, so an empty server log did not qualify the warm hook | — | — | `restart-required` with the still-loaded reason on the warm tab, `pending-next-turn` on the idle one |
-| Codex · user `config.toml` | reached | reached v2 both | answers / fails | fails both | yes | reached after app-server restart | `queued` → reload → `pending-next-turn` (never `applied`, by design) |
+| Codex · user `config.toml` | reached | reached v2 both | answers / fails | fails both | unverified | reached after app-server restart | `queued` → reload → `pending-next-turn` (never `applied`, by design) |
 | Codex · project `.codex/config.toml` (trusted) | reached | reached v2 both | answers / fails | fails both | — | — | same |
-| OpenCode · user `opencode.jsonc` | reached after restart | reached v2 both after restart | answers / unverified (model substituted the new name's tool) | still callable before the restart; fails both after it | yes | reached | `restart-required` throughout, truthfully; nothing reaches a session without a restart |
+| OpenCode · user `opencode.jsonc` | reached after restart | reached v2 both after restart | answers / unverified (model substituted the new name's tool) | still callable before the restart; fails both after it | unverified | reached | `restart-required` throughout, truthfully; nothing reaches a session without a restart |
 | OpenCode · project `opencode.json` | same | same | same | same | — | — | same |
-| Cursor · user `~/.cursor/mcp.json` | reached | reached v2 both | answers / fails | fails both | yes | reached after bridge restart | `pending-next-turn` → `applied` per tab after its turn |
-| Cursor · project `.cursor/mcp.json`, project resources on | reached | reached v2 both | answers / fails | fails both | yes | reached | before the fix: `excluded` and `blocked-policy` although the session ran the server; after it: `pending-next-turn` → `applied` |
+| Cursor · user `~/.cursor/mcp.json` | reached | reached v2 both | answers / fails | fails both | unverified | reached after bridge restart | `pending-next-turn` → `applied` per tab after its turn |
+| Cursor · project `.cursor/mcp.json`, project resources on | reached | reached v2 both | answers / fails | fails both | unverified | reached | before the fix: `excluded` and `blocked-policy` although the session ran the server; after it: `pending-next-turn` → `applied` |
 | Grok · user and project | skipped: no current Grok login (below) | | | | | | |
 | Pi · user and project | skipped: no Pi provider sign-in (below) | | | | | | |
 

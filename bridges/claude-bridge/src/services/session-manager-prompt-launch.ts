@@ -24,6 +24,7 @@ import {
   recordMcpConfigRevision,
 } from "./session-manager-prompt-query.js";
 import { createClaudeRuntimeTurn } from "./session-manager-prompt-runtime-turn.js";
+import { syncTurnInFlightMark } from "./session-manager-turn-interruption.js";
 import type { PromptTestHooks, TurnState } from "./session-manager-prompt-turn.js";
 import {
   disarmClaudeRuntimeIdleDetach,
@@ -137,6 +138,8 @@ function endClaudeRuntime(
     turn.runtimeEnded(turn === failedTurn && failure ? { error: failure.error } : undefined);
   }
   if (orphanedForeground) releaseOrphanedForeground(runtime, failure?.error);
+  // Nothing this process ran can still be owed once it has ended.
+  syncTurnInFlightMark(session);
 }
 
 /** Hand back a foreground no waiting prompt can settle; see `endClaudeRuntime`. */
@@ -317,6 +320,8 @@ function markQueryStarted(turn: TurnState, testHooks: PromptTestHooks | undefine
   );
   session.finishTurnInputIfSettled = turn.finishTurnInputForThisTurn;
   turn.queryStarted = true;
+  // From here a restart cuts the turn short rather than losing it unsent.
+  syncTurnInFlightMark(session);
   testHooks?.onQueryStarted?.();
   // One control read per turn, off the message path, so the inventory a
   // selected command is validated against is the session's own.

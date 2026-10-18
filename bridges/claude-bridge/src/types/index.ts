@@ -471,6 +471,17 @@ export interface SessionState {
   createdAt: Date;
   lastActivity: Date;
   error?: string;
+  /**
+   * Set beside `status: "error"` when a bridge restart cut the last turn short:
+   * the rollout is intact and a new prompt continues it. Cleared when the next
+   * turn starts. See `session-manager-turn-interruption.ts`.
+   */
+  interruption?: "restart";
+  /**
+   * Whether this process believes the preferences file holds a turn-in-flight
+   * mark for the session, so the mark is written and cleared once per edge.
+   */
+  turnInFlightMarked?: boolean;
   /** SDK session ID returned from Claude Agent SDK - used for resume */
   sdkSessionId?: string;
   /** Session initialization data (MCP servers, plugins, etc.) */

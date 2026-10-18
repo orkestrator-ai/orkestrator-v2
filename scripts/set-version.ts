@@ -12,8 +12,9 @@
  * builds that commit.
  *
  * The suffix picks the update channel, as for every release command: none is
- * Stable, `-beta` Beta and `-alpha` Unstable. The version must be newer than
- * the current one, because a published version can never be reused.
+ * Stable, `-beta` Beta and `-alpha` Unstable. A new target must be newer than
+ * the current version. Retrying the same target repairs lockfiles after an
+ * interrupted run; every manifest must already match that target.
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -47,7 +48,7 @@ function fail(message: string): never {
   throw new Error(message);
 }
 
-/** The version to set, without a leading `v`; refuses one no channel ships or that is not newer. */
+/** The version to set, without a leading `v`; refuses one no channel ships or that is older. */
 export function targetVersion(input: string | undefined, current: string): string {
   if (!input) fail("usage: release:version -- <version>, for example 2.23.0 or 2.23.0-beta");
   const version = input.replace(/^v/, "");
@@ -56,7 +57,7 @@ export function targetVersion(input: string | undefined, current: string): strin
       `${version} is not a release version. Use no suffix (Stable), -beta or -alpha (Unstable), optionally numbered like -beta.2.`,
     );
   }
-  if (Bun.semver.order(version, current) <= 0) {
+  if (Bun.semver.order(version, current) < 0) {
     fail(`${version} is not newer than the current version ${current}.`);
   }
   return version;
@@ -94,6 +95,13 @@ export function setVersion(args: string[], runtime: SetVersionRuntime = defaultR
   const read = (manifest: string) => readFileSync(path.join(runtime.root, manifest), "utf8");
   const current = (JSON.parse(read("package.json")) as { version: string }).version;
   const version = targetVersion(args[0], current);
+  if (
+    version === current &&
+    VERSIONED_MANIFESTS.some(
+      (manifest) => (JSON.parse(read(manifest)) as { version?: string }).version !== version,
+    )
+  )
+    fail("Cannot retry a version bump unless every manifest already matches the target");
   const channel = CHANNEL_NAMES[hostUpdateChannelOfVersion(version)!];
   runtime.log(`Setting ${current} → ${version} (${channel} channel).`);
 
@@ -116,7 +124,7 @@ export function setVersion(args: string[], runtime: SetVersionRuntime = defaultR
   for (const directory of LOCKFILE_DIRECTORIES) {
     runtime.run(["bun", "install", "--frozen-lockfile"], path.join(runtime.root, directory));
   }
-  runtime.run(["bun", "test", "tests/unit/version-drift.test.ts"], runtime.root);
+  runtime.run(["bun", "test", "./tests/unit/version-drift.test.ts", "--parallel=1"], runtime.root);
 
   runtime.log(
     `\nVersion set to ${version}. Commit the manifests and lockfiles and merge them through a pull request,\n` +

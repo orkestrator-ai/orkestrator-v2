@@ -38,8 +38,10 @@ Each suffix also names the release's updater feed (`latest-mac.yml`,
 
    It writes every manifest listed in `AGENTS.md`, regenerates and verifies
    both lockfiles with the pinned Bun, and runs the version drift test. It
-   refuses a suffix no channel ships and a version that is not newer than the
-   current one.
+   refuses a suffix no channel ships and versions older than the current one.
+   If a lockfile step fails after the manifests are written, rerun the same
+   target to repeat the install and verification steps. A same-target retry
+   requires every manifest to already match.
 2. **On the Mac** (Apple Silicon), check out `main` at the merge commit:
 
    ```bash
@@ -107,9 +109,9 @@ the base config's ad-hoc signing (`mise run package:mac`) is local-only.
 | macOS arm64 | `orkestrator-v2-mac-arm64.dmg` (and a `.zip` the updater uses) | `<channel>-mac.yml` | Yes |
 | Linux x64 | `orkestrator-v2-linux-x86_64.AppImage` | `<channel>-linux.yml` | Yes |
 | Linux arm64 | `orkestrator-v2-linux-arm64.AppImage` | `<channel>-linux-arm64.yml` | Yes |
+| Arch / Omarchy | `orkestrator-v2-linux-x64.pacman` | | No: reinstall to update |
 
 `<channel>` is `latest`, `beta` or `alpha`.
-| Arch / Omarchy | `orkestrator-v2-linux-x64.pacman` | | No: reinstall to update |
 
 Filenames carry no version so the website can link a stable URL, for example
 `https://github.com/orkestrator-ai/orkestrator-v2/releases/latest/download/orkestrator-v2-mac-arm64.dmg`.

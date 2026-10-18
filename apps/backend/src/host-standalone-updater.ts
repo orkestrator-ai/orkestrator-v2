@@ -2,6 +2,8 @@ import {
   HOST_UPDATE_CHANNEL_TAGS,
   HOST_UPDATE_RESTART_DELAY_MS,
   hostUpdateChannelsReceived,
+  hostUpdateChannelOfVersion,
+  type HostUpdateChannel,
   isHostIdle,
   isHostVersion,
   type HostMaintenanceSnapshot,
@@ -95,8 +97,10 @@ export function createStandaloneUpdater(options: StandaloneUpdaterOptions) {
   let timers: Array<ReturnType<typeof setTimeout>> = [];
   let unsubscribe: (() => void) | null = null;
 
-  async function latestVersion(): Promise<string> {
-    const channel = service.updateChannel();
+  let channel = service.updateChannel();
+  let channelGeneration = 0;
+
+  async function latestVersion(channel: HostUpdateChannel): Promise<string> {
     const response = await fetchImpl(`${registry}/${STANDALONE_PACKAGE}`, {
       headers: { accept: "application/vnd.npm.install-v1+json" },
       signal: AbortSignal.timeout(30_000),
@@ -117,11 +121,15 @@ export function createStandaloneUpdater(options: StandaloneUpdaterOptions) {
   }
 
   async function check(checkRequestId?: string): Promise<void> {
+    const generation = channelGeneration;
+    const checkedChannel = service.updateChannel();
     const checkedAt = new Date(now()).toISOString();
     try {
-      const latest = await latestVersion();
+      const latest = await latestVersion(checkedChannel);
+      if (generation !== channelGeneration || checkedChannel !== service.updateChannel()) return;
       service.report({
         type: "check",
+        channel: checkedChannel,
         latestVersion: latest,
         updateAvailable: isNewerVersion(latest, options.currentVersion),
         checkedAt,
@@ -129,8 +137,10 @@ export function createStandaloneUpdater(options: StandaloneUpdaterOptions) {
         ...(checkRequestId ? { checkRequestId } : {}),
       });
     } catch (error) {
+      if (generation !== channelGeneration || checkedChannel !== service.updateChannel()) return;
       service.report({
         type: "check",
+        channel: checkedChannel,
         latestVersion: null,
         updateAvailable: null,
         checkedAt,
@@ -156,7 +166,12 @@ export function createStandaloneUpdater(options: StandaloneUpdaterOptions) {
       const config = readServiceConfig(layout);
       if (!config) throw new Error(`${layout.serviceFile} is missing; reinstall the service`);
       report({ state: "downloading", progressPercent: 0 });
-      const target = job.requestedVersion ?? (await latestVersion());
+      const selectedChannel = service.updateChannel();
+      const target = job.requestedVersion ?? (await latestVersion(selectedChannel));
+      const targetChannel = hostUpdateChannelOfVersion(target);
+      if (!targetChannel || !hostUpdateChannelsReceived(selectedChannel).includes(targetChannel)) {
+        throw new Error(`${target} is not available on the ${selectedChannel} channel`);
+      }
       if (!isNewerVersion(target, options.currentVersion)) {
         report({
           state: "failed",
@@ -211,6 +226,10 @@ export function createStandaloneUpdater(options: StandaloneUpdaterOptions) {
   }
 
   function reconcile(snapshot: HostMaintenanceSnapshot): void {
+    if (channel !== snapshot.updateChannel) {
+      channel = snapshot.updateChannel;
+      channelGeneration += 1;
+    }
     const request = snapshot.checkRequest;
     if (request && request.id !== handledCheckId) {
       handledCheckId = request.id;

@@ -463,3 +463,67 @@ test("readiness settlement cannot finish a new job admitted during startup or on
   service.markReady();
   expect(service.job(job.id)?.state).toBe("requested");
 });
+
+test("late release pins are fenced across channel switches and subsequent checks", async () => {
+  const completions: Array<() => void> = [];
+  const service = new HostMaintenanceService({
+    dataDir,
+    updater: "standalone",
+    version: "2.21.0",
+    emit: () => undefined,
+    onCheck: (version, isCurrent) => {
+      completions.push(() => {
+        if (version && isCurrent()) service.setNextRelease({ version, tools: { claude: version } });
+      });
+    },
+  });
+  service.init();
+  service.markReady();
+  try {
+    service.setUpdateChannel("unstable");
+    service.report({
+      type: "check",
+      latestVersion: "2.24.0-alpha",
+      updateAvailable: true,
+      checkedAt: new Date().toISOString(),
+      error: null,
+    });
+    await Promise.resolve();
+    service.setUpdateChannel("stable");
+    service.report({
+      type: "check",
+      latestVersion: "2.23.0",
+      updateAvailable: true,
+      checkedAt: new Date().toISOString(),
+      error: null,
+    });
+    await Promise.resolve();
+    completions[1]!();
+    completions[0]!();
+    expect(service.snapshot().nextRelease?.version).toBe("2.23.0");
+    service.setUpdateChannel("unstable");
+    completions[0]!();
+    expect(service.snapshot().nextRelease).toBeNull();
+  } finally {
+    service.close();
+  }
+});
+
+test("late executor reports cannot replace a channel result after its request settled", () => {
+  const { service } = create();
+  const old = service.requestCheck().checkRequest!.id;
+  const current = service.setUpdateChannel("beta").checkRequest!.id;
+  const report = {
+    type: "check" as const,
+    latestVersion: "2.24.0-beta",
+    updateAvailable: true,
+    checkedAt: new Date().toISOString(),
+    error: null,
+  };
+  service.report({ ...report, channel: "beta", checkRequestId: current });
+  const expected = service.snapshot();
+  service.report({ ...report, latestVersion: "2.23.0", channel: "stable", checkRequestId: old });
+  service.report({ ...report, latestVersion: "2.23.0", channel: "stable" });
+  service.report({ ...report, latestVersion: "2.23.0", checkRequestId: old });
+  expect(service.snapshot()).toEqual(expected);
+});

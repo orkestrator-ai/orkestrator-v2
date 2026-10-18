@@ -277,6 +277,8 @@ export type HostUpdaterReport =
       error: string | null;
       /** The check request this answers, when it answers one. */
       checkRequestId?: string;
+      /** Channel whose registry/feed was queried. */
+      channel?: HostUpdateChannel;
     }
   | {
       type: "job";
@@ -338,6 +340,7 @@ export function parseHostUpdaterReport(value: unknown): HostUpdaterReport | null
     if (value.latestVersion !== null && !isHostVersion(value.latestVersion)) return null;
     if (value.updateAvailable !== null && typeof value.updateAvailable !== "boolean") return null;
     if (value.checkRequestId !== undefined && !isId(value.checkRequestId)) return null;
+    if (value.channel !== undefined && !isHostUpdateChannel(value.channel)) return null;
     return {
       type: "check",
       latestVersion: value.latestVersion,
@@ -345,6 +348,7 @@ export function parseHostUpdaterReport(value: unknown): HostUpdaterReport | null
       checkedAt: value.checkedAt,
       error: boundedText(value.error, HOST_MAINTENANCE_LIMITS.errorMaxChars),
       ...(value.checkRequestId !== undefined ? { checkRequestId: value.checkRequestId } : {}),
+      ...(value.channel !== undefined ? { channel: value.channel } : {}),
     };
   }
   if (value.type === "job") {

@@ -95,6 +95,7 @@ export function createHostUpdateExecutor(options: {
   let handledCheckId: string | null = null;
   let pendingCheckId: string | null = null;
   let lastCheck: UpdateCheckReport | null = null;
+  let updateChannel: HostMaintenanceSnapshot["updateChannel"] | null = null;
   let handledJobId: string | null = null;
   let revision = -1;
   let ready = false;
@@ -139,6 +140,7 @@ export function createHostUpdateExecutor(options: {
     pendingCheckId = null;
     void send({
       type: "check",
+      ...(report.channel ? { channel: report.channel } : {}),
       latestVersion: report.latestVersion,
       updateAvailable: report.updateAvailable,
       checkedAt: report.checkedAt,
@@ -269,7 +271,11 @@ export function createHostUpdateExecutor(options: {
     if (!started || !ready || snapshot.revision < revision) return;
     revision = snapshot.revision;
     // Before the check request: switching channels asks for a check on the new one.
-    if (isHostUpdateChannel(snapshot.updateChannel)) engine.setChannel?.(snapshot.updateChannel);
+    if (isHostUpdateChannel(snapshot.updateChannel)) {
+      if (updateChannel !== snapshot.updateChannel) lastCheck = null;
+      updateChannel = snapshot.updateChannel;
+      engine.setChannel?.(snapshot.updateChannel);
+    }
     const request = snapshot.checkRequest;
     if (request && request.id !== handledCheckId) {
       handledCheckId = request.id;

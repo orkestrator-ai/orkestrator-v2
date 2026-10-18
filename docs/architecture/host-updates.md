@@ -58,7 +58,7 @@ Real-release qualification is still open in
     `start_host_toolchain_repair`, `start_host_image_update`,
     `set_host_gh_channel`, `set_host_update_channel`
   - public actions: `host.status`, `host.update.check`, `host.update.apply`,
-    `host.update.cancel`, `host.toolchain.repair`, `host.image.update`,
+    `host.update.cancel`, `host.update.channel`, `host.toolchain.repair`, `host.image.update`,
     `host.gh.update`
 
   `host.update.apply` requires `confirm: true`. The CLI passes it only with
@@ -73,12 +73,18 @@ map to them). A channel also installs every more stable channel's releases.
 
 - **Default.** On its first start, a host records the channel of the release it
   runs, so a beta install that later updates to a stable release stays on Beta.
-- **Switching.** `set_host_update_channel` is refused with `busy` while an
+- **Switching.** `orkestrator host update channel stable|beta|unstable` uses
+  `host.update.channel`; `host status` prints the selected channel.
+  `set_host_update_channel` is refused with `busy` while an
   update job is active. It drops the last check and the next release's pins.
   When the host can update, it also files a check request, so the executor
   checks the new channel at once.
 - **Desktop.** The executor passes the channel from every snapshot to the
-  app's updater before it handles that snapshot's check request.
+  app's updater before it handles that snapshot's check request. Checks and
+  downloads are serialized; a channel switch waits for an old operation, then
+  queries the new channel and acknowledges only that result. The GitHub
+  provider sorts public releases by version before applying channel filters,
+  so publication order cannot hide a newer eligible prerelease.
 - **Standalone.** A check reads the npm dist-tags of the channel and every
   more stable one (`latest`, `beta`, `alpha`) and takes the newest. Each
   release moves only its own tag, so a stable release newer than the last beta

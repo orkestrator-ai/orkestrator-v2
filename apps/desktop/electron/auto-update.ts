@@ -22,6 +22,7 @@ export type UpdateCheckResult = {
 
 /** What one check found, reported whether or not anyone asked for it. */
 export type UpdateCheckReport = {
+  channel?: HostUpdateChannel;
   latestVersion: string | null;
   updateAvailable: boolean | null;
   checkedAt: string;
@@ -134,6 +135,8 @@ export function createAutoUpdateController(options: AutoUpdateOptions): AutoUpda
   let manualCheck = false;
   let checkInFlight: Promise<UpdateCheckResult | null> | null = null;
   let readinessRevision = 0;
+  let channelGeneration = 0;
+  let inFlightGeneration = 0;
   let initialTimer: NodeJS.Timeout | null = null;
   let intervalTimer: NodeJS.Timeout | null = null;
   // While a remote request stages an update, its countdown replaces the prompt.
@@ -154,6 +157,12 @@ export function createAutoUpdateController(options: AutoUpdateOptions): AutoUpda
   function applyChannel(next: HostUpdateChannel): void {
     if (channel === next) return;
     channel = next;
+    channelGeneration += 1;
+    // Do not mutate a provider while its previous check/download is using it.
+    if (!checkInFlight) configureChannel(next);
+  }
+
+  function configureChannel(next: HostUpdateChannel): void {
     updater.channel = HOST_UPDATE_CHANNEL_TAGS[next];
     updater.allowPrerelease = next !== "stable";
     // Setting a channel allows downgrades. Moving to a more stable channel
@@ -214,30 +223,36 @@ export function createAutoUpdateController(options: AutoUpdateOptions): AutoUpda
 
   function reportCheck(report: Omit<UpdateCheckReport, "checkedAt">): void {
     try {
-      options.onCheckResult?.({ ...report, checkedAt: new Date().toISOString() });
+      options.onCheckResult?.({
+        ...report,
+        channel: channel!,
+        checkedAt: new Date().toISOString(),
+      });
     } catch (error) {
       log.warn("[Updater] Reporting a check failed:", error);
     }
   }
 
-  async function performCheck(): Promise<UpdateCheckResult | null> {
+  async function performCheck(generation: number): Promise<UpdateCheckResult | null> {
     let result: UpdateCheckResult | null;
     try {
       result = await updater.checkForUpdates();
     } catch (error) {
       log.warn("[Updater] Update check failed:", error);
-      reportCheck({
-        latestVersion: null,
-        updateAvailable: null,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      if (generation === channelGeneration)
+        reportCheck({
+          latestVersion: null,
+          updateAvailable: null,
+          error: error instanceof Error ? error.message : String(error),
+        });
       throw error;
     }
-    reportCheck({
-      latestVersion: result?.updateInfo?.version ?? null,
-      updateAvailable: result?.isUpdateAvailable ?? false,
-      error: null,
-    });
+    if (generation === channelGeneration)
+      reportCheck({
+        latestVersion: result?.updateInfo?.version ?? null,
+        updateAvailable: result?.isUpdateAvailable ?? false,
+        error: null,
+      });
     // Observe the separate promise immediately, even for background checks.
     // The error event alone does not consume a rejected download promise.
     try {
@@ -247,18 +262,30 @@ export function createAutoUpdateController(options: AutoUpdateOptions): AutoUpda
       log.warn("[Updater] Update download or staging failed:", error);
       throw new UpdateDownloadError(error);
     }
-    if (downloadedVersion) offerRestart(downloadedVersion);
+    if (generation === channelGeneration && downloadedVersion) offerRestart(downloadedVersion);
     return result;
   }
 
-  function check(): Promise<UpdateCheckResult | null> {
-    // Hold the operation through download/staging so a menu click and a timer
-    // cannot start competing downloads or misreport an in-flight update.
-    if (remoteReserved && !checkInFlight) return Promise.resolve(null);
-    checkInFlight ??= performCheck().finally(() => {
-      checkInFlight = null;
-    });
-    return checkInFlight;
+  async function check(): Promise<UpdateCheckResult | null> {
+    // Serialize downloads, but never answer a channel switch with an old check.
+    // Even old failures must finish before configuring and querying the new feed.
+    while (true) {
+      if (remoteReserved && !checkInFlight) return null;
+      if (!checkInFlight) {
+        configureChannel(channel!);
+        inFlightGeneration = channelGeneration;
+        checkInFlight = performCheck(inFlightGeneration).finally(() => {
+          checkInFlight = null;
+        });
+      }
+      const generation = inFlightGeneration;
+      try {
+        const result = await checkInFlight;
+        if (generation === channelGeneration) return result;
+      } catch (error) {
+        if (generation === channelGeneration) throw error;
+      }
+    }
   }
 
   return {

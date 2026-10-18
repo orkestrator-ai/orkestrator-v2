@@ -160,6 +160,7 @@ not advertise at its version before sending it.
 | `run cancel/output` | `run.cancel/output` | exec worker control | process / read |
 | `run receipts` | local | private local receipts | none |
 | `host status` | `host.status` | `HostMaintenanceService` detailed snapshot (impact, tools, image) | read |
+| `host update channel stable/beta/unstable` | `host.update.channel` | persisted channel and a fresh check; refused while updating | metadata |
 | `host update check [--wait]` | `host.update.check` | check request answered by the host's updater | metadata |
 | `host update apply --yes [--release V] [--when-idle [--max-wait D]] [--wait]` | `host.update.apply` | update job applied by the desktop app or the standalone self-updater; see [host-updates.md](host-updates.md) | process (restarts the host's app or service) |
 | `host update cancel` | `host.update.cancel` | cancels the job before its restart | metadata |

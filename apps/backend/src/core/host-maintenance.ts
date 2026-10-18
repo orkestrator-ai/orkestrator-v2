@@ -253,6 +253,7 @@ function bounded(text: string): string {
 export class HostMaintenanceService {
   private storage: StorageDatabase | null = null;
   private executorReady: boolean;
+  private releaseSelectionRevision = 0;
   private initialized = false;
   private readinessSettled = false;
   private startupJobId: string | null = null;
@@ -273,7 +274,7 @@ export class HostMaintenanceService {
       /** Read once at startup; the standalone launcher writes it after a rollback. */
       rollbackEvidence?: () => HostRollbackEvidence | null;
       /** Called after every check report, for example to fetch the release's pins. */
-      onCheck?: (latestVersion: string | null) => void;
+      onCheck?: (latestVersion: string | null, isCurrent: () => boolean) => void;
     },
   ) {
     this.now = options.now ?? Date.now;
@@ -676,7 +677,14 @@ export class HostMaintenanceService {
       return this.update(() => true);
     }
     if (report.type === "check") {
-      queueMicrotask(() => this.options.onCheck?.(report.latestVersion));
+      const pending = this.load().checkRequest;
+      if (report.channel && report.channel !== this.updateChannel()) return this.snapshot();
+      if (report.checkRequestId && report.checkRequestId !== pending?.id) return this.snapshot();
+      const selection = ++this.releaseSelectionRevision;
+      const isCurrent = () => selection === this.releaseSelectionRevision;
+      queueMicrotask(() => {
+        if (isCurrent()) this.options.onCheck?.(report.latestVersion, isCurrent);
+      });
       return this.update((document) => {
         document.lastCheck = {
           latestVersion: report.latestVersion,
@@ -761,6 +769,7 @@ export class HostMaintenanceService {
         busy = true;
         return false;
       }
+      this.releaseSelectionRevision += 1;
       document.updateChannel = channel;
       document.lastCheck = null;
       document.nextRelease = null;

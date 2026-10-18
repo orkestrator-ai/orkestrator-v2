@@ -194,6 +194,13 @@ export function ensureReleaseTag(
         `tag ${tag} on origin is on ${remoteCommit.slice(0, 8)}, not HEAD (${head.slice(0, 8)}). Check out the tagged commit.`,
       );
     }
+    if (!local) {
+      // Fetch the actual tag object (including annotations), without forcing refs.
+      runCommand(["git", "fetch", "--quiet", "origin", `refs/tags/${tag}:refs/tags/${tag}`]);
+      if (captureOutput(["git", "rev-parse", `${tag}^{commit}`]) !== head) {
+        fail(`tag ${tag} changed on origin while fetching; refusing to release`);
+      }
+    }
     return;
   }
   captureOutput(["git", "fetch", "--quiet", "origin", "main"]);
@@ -496,8 +503,8 @@ function publish(runtime: ReleaseRuntime, options: { npm: boolean }): void {
  * Turns every published alpha older than `tag` back into a draft.
  *
  * Beta and Unstable hosts find releases through GitHub's releases feed, which
- * lists only the newest ten or so. Unstable takes the feed's first entry, but
- * Beta skips alphas, so a run of alphas after the last beta or stable would
+ * lists only the newest ten or so. Both select the greatest eligible version,
+ * and Beta skips alphas, so a run of alphas after the last beta or stable would
  * push every release Beta accepts off the feed. With one alpha published at a
  * time, it never can. Drafts keep their tag and assets (and npm and the
  * container image keep the version); they only leave the feed. The new alpha

@@ -944,6 +944,14 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
       input: schema({}),
       examples: [{}],
     },
+    "host.update.channel": {
+      capability: "host",
+      confirmation: "never",
+      input: schema({ channel: { type: "string", enum: ["stable", "beta", "unstable"] } }, [
+        "channel",
+      ]),
+      examples: [{ channel: "stable" }, { channel: "beta" }, { channel: "unstable" }],
+    },
     "host.update.check": {
       capability: "host",
       confirmation: "never",

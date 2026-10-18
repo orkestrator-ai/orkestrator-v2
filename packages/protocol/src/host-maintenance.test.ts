@@ -84,3 +84,16 @@ test("a channel receives its own releases and every more stable channel's", () =
   expect(hostUpdateChannelsReceived("beta")).toEqual(["stable", "beta"]);
   expect(hostUpdateChannelsReceived("unstable")).toEqual(["stable", "beta", "unstable"]);
 });
+
+test("check reports preserve a valid channel and reject an unknown one", () => {
+  const report = {
+    type: "check",
+    latestVersion: "2.23.0",
+    updateAvailable: true,
+    checkedAt: "2026-10-16T12:00:00.000Z",
+    error: null,
+    channel: "beta",
+  } as const;
+  expect(parseHostUpdaterReport(report)).toEqual(report);
+  expect(parseHostUpdaterReport({ ...report, channel: "canary" })).toBeNull();
+});

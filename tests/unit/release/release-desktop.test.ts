@@ -55,7 +55,11 @@ function harness(
   });
   const capture = mock((command: string[]) => {
     if (command[0] === "gh" && command[2] === "download") return "minimumSystemVersion: '22.0.0'\n";
-    if (command[0] === "gh" && isReleaseList(command) && command.at(-1)?.includes("select(.draft == false)")) {
+    if (
+      command[0] === "gh" &&
+      isReleaseList(command) &&
+      command.at(-1)?.includes("select(.draft == false)")
+    ) {
       return published.map((release) => JSON.stringify(release)).join("\n");
     }
     if (command[0] === "gh" && isReleaseList(command)) return listing(releases);
@@ -190,6 +194,34 @@ describe("release tagging", () => {
     expect(() => ensureReleaseTag(tag, second.capture, second.run)).not.toThrow();
   });
 
+  test.each(["lightweight", "annotated"])(
+    "a second machine builds and publishes with only a remote %s tag",
+    (kind) => {
+      const git = gitFixture();
+      git.capture(
+        kind === "annotated"
+          ? ["git", "tag", "-a", tag, "-m", "annotated release"]
+          : ["git", "tag", tag],
+      );
+      git.capture(["git", "push", "origin", tag]);
+      const object = git.capture(["git", "rev-parse", `refs/tags/${tag}`]);
+      git.capture(["git", "tag", "-d", tag]);
+      const { runtime, run, capture } = harness();
+      const original = capture.getMockImplementation()!;
+      runtime.capture = (command) =>
+        command[0] === "git" ? git.capture(command) : original(command);
+      const running = run.getMockImplementation()!;
+      run.mockImplementation((command, env) => {
+        if (command[0] === "git") git.run(command);
+        else running(command, env);
+      });
+      runDesktopRelease(["build"], runtime);
+      expect(git.capture(["git", "rev-parse", `refs/tags/${tag}`])).toBe(object);
+      runDesktopRelease(["publish"], runtime);
+      expect(run).toHaveBeenCalledWith(["mise", "run", "publish:cli"]);
+    },
+  );
+
   test("refuses to tag a commit that is not on origin/main", () => {
     const { capture, run } = gitFixture();
     capture(["git", "push", "origin", "HEAD:main"]);
@@ -312,14 +344,20 @@ describe("release channels", () => {
   test.each(["v2.23.0", "v2.23.0-beta"])("publishing %s hides no alpha", (releaseTag) => {
     const { runtime, run, capture } = harness(
       { releaseTag: () => releaseTag },
-      [{ id: 100, draft: true, assets: assetsFor(releaseTag.includes("beta") ? "beta" : "latest") }],
+      [
+        {
+          id: 100,
+          draft: true,
+          assets: assetsFor(releaseTag.includes("beta") ? "beta" : "latest"),
+        },
+      ],
       [{ id: 90, tag: "v2.22.0-alpha" }],
     );
     runDesktopRelease(["publish", "--skip-npm"], runtime);
     expect(run.mock.calls.map(([command]) => command[2])).toEqual(["edit"]);
-    expect(capture.mock.calls.some(([command]) => command.at(-1)?.includes("select(.draft == false)"))).toBe(
-      false,
-    );
+    expect(
+      capture.mock.calls.some(([command]) => command.at(-1)?.includes("select(.draft == false)")),
+    ).toBe(false);
   });
 
   test("an alpha that cannot be hidden only warns: the new alpha is already public", () => {

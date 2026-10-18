@@ -41,8 +41,10 @@ on:
       - "scripts/verify-packaged-backend.ts"
   workflow_dispatch:
 
+# Only pull request runs supersede each other. Pushes and manual runs need
+# unique groups so a newer pending run cannot replace an older one.
 concurrency:
-  group: validate-bun-runtime-${{ github.ref }}
+  group: validate-bun-runtime-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:

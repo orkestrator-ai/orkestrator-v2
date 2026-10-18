@@ -230,6 +230,15 @@ Findings that are not defects:
   made 130 sequential reads in 16 rows (low effort) and 23 rows (medium);
   logged as Code item 4.
 
+Validation: `mise run check` passed; the new `useHeldTranscriptPlace` tests,
+the `useVirtuosoScrollState` guard test, and the native and reviewer tab
+suites passed. Full `mise run test` before and after merging `origin/main`
+failed only on flakes whose owning files pass alone:
+[0480](../tests/flaky-tests/0480-coordinator-fetch-remotes-submodule-timeout.md)
+(new), a [0180](../tests/flaky-tests/0180-worktree-tracked-edit-cache-hit.md)
+recurrence and [0481](../tests/flaky-tests/0481-pty-resize-before-stty.md)
+(new); web passed 7,963 with 0 failures.
+
 Not run here: the Multi Review case with a Claude reviewer completing after
 the fixes (the host's Claude account was rate-limited, 429, from about 17:30;
 the earlier Claude-and-Codex runs settled `ready` and passed every reviewer

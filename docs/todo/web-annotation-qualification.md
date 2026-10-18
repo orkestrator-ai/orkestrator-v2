@@ -288,9 +288,19 @@ evidence is four of six providers passing on current `main` and safe,
 visible holds for the two without a login. None of the revisit triggers
 appeared (duplicate execution, lost data, a write outside the workspace).
 
-Other checks for this change: `mise run check`, the owning unit files and one
-`mise run test` (results in the commit). The profile was stopped and reset
-afterwards.
+Validation of the change (commit `50c26708`):
+
+| Command | Result |
+| --- | --- |
+| Live implement for claude, codex, opencode and cursor again on the final commit | All four pass: `awaiting-review` after 20, 35, 30 and 120 s, 8/8 each |
+| `web-annotations-gateway.spec.ts` without the live opt-in | 2 passed, 1 skipped (the live case, as designed) |
+| `profile-io.test.ts` and `lifecycle.test.ts`; `coordinator-live.test.ts` | 46 passed; 46 passed |
+| Throwaway failing probe through the browser config | `results.json` call log shows `orkestrator_gateway_auth=[REDACTED]` |
+| `mise run check`, e2e and desktop typechecks | Pass |
+| `mise run test` | Codex protocol group passed; the other three failed only on load timeouts in files this change does not touch, each passing alone: known flakes 0165, 0178 and 0180 (0180 also failed once in three runs alone, as recorded), reopened 0093, and new flakes [0460](../tests/flaky-tests/0460-tab-teardown-hanging-delete-elapsed-bound.md) and [0461](../tests/flaky-tests/0461-coordinator-fetch-remotes-submodule-timeout.md) |
+
+The profile was stopped and reset afterwards (`dev:reset`: 0 containers,
+disposable state removed). The host `~/.grok/auth.json` was never written.
 
 ### Runs on 2026-10-17 (macOS)
 

@@ -198,3 +198,13 @@ cache-invalidation hypothesis remains unconfirmed.
 The final `mise run test:logged -- --name final-full-tests -- mise run test`
 passed all four groups (exit 0, 841.2 seconds including queue waits), with
 the owning test unchanged.
+
+## Recurrence on 2026-10-18
+
+`mise run test:logged -- --name full-suite -- mise run test` on branch
+`qualify-annotation-live-implement-0330a0bacc01` (`50c26708`, a dev:test
+harness, e2e and docs change) on a heavily loaded macOS host. Evidence is in
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.Zq7Cut/`. The cache-hit assertion (expected 1, received 0) failed in the
+backend package, and again in one of three runs of the owning file alone
+(`bun test src/core/worktree-snapshots-git.test.ts` from `apps/backend`:
+4 passed, 3/1, 4 passed).

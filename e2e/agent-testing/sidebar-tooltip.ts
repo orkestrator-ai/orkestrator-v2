@@ -13,7 +13,9 @@ export async function dismissSidebarTooltip(page: Page, projectName: string): Pr
   if (!(await page.getByRole("tooltip").first().isVisible())) return;
   const toggle = page
     .getByRole("button", {
-      name: new RegExp(`^(Expand|Collapse) project ${projectName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`),
+      name: new RegExp(
+        `^(Expand|Collapse) project ${projectName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
+      ),
     })
     .first();
   await toggle.focus();

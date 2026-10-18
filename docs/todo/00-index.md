@@ -587,6 +587,7 @@ it reaches. Some rules of thumb:
 ### CLI and slash commands (low)
 
 - [ ] Answer Claude's dispatch probe for a request id an earlier bridge process claimed, so a lost command resolves its card without a Retry ([slash-command-qualification.md](slash-command-qualification.md))
+- [ ] Make the inactive slash-command scenario's outage drop the event stream, not just fail new requests ([slash-command-qualification.md](slash-command-qualification.md))
 - [ ] Add tracked cascade removal to CLI `project remove` that deletes child environments ([cli-command-surface.md](cli-command-surface.md))
 - [ ] Add a local-only project initialiser (git init, no remote) for the CLI ([cli-command-surface.md](cli-command-surface.md))
 - [ ] Add optional JSONL event-stream following over the gateway SSE for CLI transcripts ([cli-command-surface.md](cli-command-surface.md))

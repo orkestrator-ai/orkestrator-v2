@@ -428,3 +428,10 @@ Aggregate command, worker configuration, counts and evidence are recorded in [02
 - **Failure:** `project coordinator > bound discard confirmations refuse stale, sequencer, nested, and failed switches` exceeded its 5000 ms deadline at 5129.20 ms, with a late `SQLITE_IOERR_VNODE` during asynchronous persistence after fixture cleanup.
 - **Owning-file rerun:** `mise run test:logged -- --name merge-coordinator-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 11.6 seconds).
 - **Assessment:** the unchanged isolated pass confirms intermittence; shared-host contention remains a hypothesis. No owning implementation, assertion, timeout or skip changed.
+
+### Recurrence (2026-10-18)
+
+- **Command:** `mise run test:logged -- --name mcpq-full -- mise run test` on branch `qualify-mcp-inactive-apply-9ec53f801117` (MCP settings and agent-testing changes only), on a heavily loaded host with several other worktrees' suites and live profiles running.
+- **Failure:** the same test exceeded its 5000 ms deadline at 5145.54 ms; backend reported two failed tests (this one and 0150's cluster).
+- **Owning-file rerun:** `bun test src/core/coordinator-service.test.ts` from `apps/backend` passed unchanged (52 pass, 0 fail, 15.6 s).
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.O8FSrv/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.

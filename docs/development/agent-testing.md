@@ -410,6 +410,34 @@ leaves the profile running under a detached launcher, so stop it with
 longer reports `testProject` afterwards; the spec falls back to the profile's
 seeded copy.
 
+### Live MCP apply in an inactive environment
+
+`e2e/agent-testing/mcp-apply-inactive.spec.ts` saves and applies MCP server
+changes for a Claude session while its environment is busy or inactive, then
+checks the apply outcome, the tool the model can actually call, the settings
+view and the agent panel. It covers a dropped event stream, a hard reload, a
+bridge restart (a new runtime generation), a removal, and a backend-user file
+shared by two environments. It needs the live-MCP opt-in and Claude credentials:
+
+```bash
+mise run dev:test --profile qa-mcp-inactive --fixture --credential-source claude --agent-platforms claude
+# In a second terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-mcp-inactive ORKESTRATOR_AGENT_TEST_LIVE_MCP=1 \
+  mise run test:logged -- --name mcp-inactive -- mise run test:agent:browser -- \
+  e2e/agent-testing/mcp-apply-inactive.spec.ts
+```
+
+It writes only the disposable environment's `.mcp.json` and the profile's
+isolated `~/.claude.json`, and its fixture server lives under
+`output/agent-testing/<profile>/`. Do not add Codex to this scenario's
+credential sources for a user-scope edit: with the Codex credential source a
+profile uses the host's `CODEX_HOME`, so a Codex user-scope save would write
+the operator's own `config.toml`. Set
+`ORKESTRATOR_AGENT_TEST_MCP_OLDER_CLAUDE_BRIDGE` to the `dist` folder of a
+Claude bridge built before the `mcpConfigReporting` marker to add the
+older-bridge step. That step swaps the build in only while it starts the
+environment's bridge, then restores the current one.
+
 ### Live close retention
 
 `e2e/agent-testing/close-retention-live.spec.ts` checks, with real providers
@@ -668,6 +696,19 @@ Reload once more after returning and verify the same result again. Do not accept
 a result that works only while the initiating component stays mounted: live
 SSE/IPC events are incremental hints, and the check must prove a missed event
 can be recovered.
+
+Two traps when scripting this path:
+
+- **Escape is Stop.** While a turn runs, Escape stops it if the chat tab's
+  composer has focus or nothing has (`useEscapeToStop`). A test that presses
+  Escape to close a tooltip right after Send stops its own turn, and Claude
+  reports that as an SDK `ede_diagnostic` result. Use
+  `dismissSidebarTooltip` (`e2e/agent-testing/sidebar-tooltip.ts`).
+- **Offline is not a dropped stream.** `context.setOffline(true)` fails new
+  requests but leaves the open event stream connected, so events still arrive
+  and nothing reconnects. To drop the stream, also call `window.stop()` in the
+  page while offline; the gateway client then reconnects and replays from its
+  cursor once back online.
 
 For each failure record profile and commit, automated commands, route used,
 reproduction steps, expected and actual results, severity, and evidence paths.

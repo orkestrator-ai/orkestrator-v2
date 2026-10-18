@@ -78,6 +78,49 @@ reliably green on `main`, and nothing requires it to be.
   agent tab and coordinator with live state and counts` compared two
   snapshots whose `generatedAt` stamps could differ by a millisecond (23 of
   300 reruns failed). It now ignores only the stamp.
+- **Worktree persist-failure test (fixed 2026-10-18).** `Electron backend
+  environment lifecycle commands > removes a newly created worktree and its
+  branch when persisting them fails`
+  (`apps/backend/tests/commands-registry-environments.test.ts`) failed with
+  "Received promise that resolved" on some runs, never on a commit boundary.
+  The cause was the test, not the product. Since #955 (2026-10-13) the start
+  path stores the canonical worktree root (`validateWorktreeLocation`, then
+  `realpath`), but the storage mock failed only an update whose `worktreePath`
+  equalled `path.join(context.worktreeDir, …)` spelled as given. The fixture
+  root is `ORKESTRATOR_WORKTREE_DIR`, else `os.tmpdir()`. The
+  `tests/setup-node.ts` preload makes the first canonical. A bare
+  `bun test <file>` from `apps/backend` loaded no preload, so the root was the
+  shell's `ORKESTRATOR_WORKTREE_DIR` or a temp directory under a symlink
+  (macOS `/tmp`, `/var/folders/…`). The mock then never fired, the start
+  succeeded, and the outcome depended on the shell. The product compensation
+  was correct throughout: it removes the worktree and branch it created, by
+  the path it created.
+  - **Fix.** The mock fails the first update that persists any worktree path,
+    and the test asserts that path equals the expected one, so a mismatch
+    reads as a path diff. `expectedManagedWorktreePath`
+    (`apps/backend/tests/command-fixtures.ts`) canonicalizes the root as
+    production does. `apps/backend/bunfig.toml` now preloads
+    `tests/setup-node.ts`, so a bare run gets the suite's isolated worktree
+    root and Git config instead of writing under a shell-exported root.
+  - **Evidence** (Bun 1.4.3, macOS, branch from `a5d338c1`). Before: the
+    bare single-test run failed deterministically (root `/tmp/…`, worktree
+    created under `/private/tmp/…`); the same run with
+    `--preload ../../tests/setup-node.ts` passed. After, with only the test
+    change: 3 of 3 bare runs passed. After the full change: 20 of 20
+    sequential bare runs, 8 of 8 concurrent bare runs, 3 of 3 with
+    `TMPDIR=$(getconf DARWIN_USER_TEMP_DIR)`, and the whole owning file 3 of
+    3 (`bun test --preload ../../tests/setup-node.ts
+    tests/commands-registry-environments.test.ts --parallel=1
+    --only-failures`, 68 of 68, 31–41 s). A probe confirmed a bare run
+    overrides an inherited `ORKESTRATOR_WORKTREE_DIR`, and that a preload
+    named in both `bunfig.toml` and `--preload` is evaluated once.
+    `mise run check` passed, and one full `mise run test` passed every
+    group (workspace 406.4 s, root 220.3 s, bridges 115.2 s, exit 0).
+  - **Not reproduced.** The 2026-10-17 report also saw it fail in the
+    Grok-trust build's full `mise run test`, where the preload makes the
+    root canonical. That run's command and environment were not recorded,
+    and no in-tree path with the preload produces a different spelling. A
+    recurrence now fails on the path assertion, which names both paths.
 - **Ownership guard.** `tests/unit/test-suite-ownership.test.ts` derives owners
   from `buildConcurrentGroups` (`scripts/test-all.ts`) and the package test
   selectors. It also rejects root tests that import backend or desktop
@@ -226,22 +269,6 @@ reliably green on `main`, and nothing requires it to be.
    [service-preview-rollout.md](service-preview-rollout.md) evidence log). Stop
    the group from a fixture teardown or a worker-exit hook as well, and bound
    the `close()` wait.
-10. **A backend environment test fails on `main` on some runs.**
-    `Electron backend environment lifecycle commands > removes a newly created
-    worktree and its branch when persisting them fails`
-    (`apps/backend/tests/commands-registry-environments.test.ts:1409`; first
-    reported as line 1451) expects `start_environment` to reject with "storage
-    unavailable", but the promise resolves. On 2026-10-17 it failed alone on a
-    clean `origin/main` at `9da80451`, and in the Grok-trust build's full
-    `mise run test`. Later the same day it passed, run alone from
-    `apps/backend` with `bun test tests/commands-registry-environments.test.ts
-    -t "removes a newly created worktree and its branch"`, on clean detached
-    checkouts of `9da80451` (one run) and `origin/main` at `607d12e2` (three
-    runs), and on that branch merged with `607d12e2`, both alone and in the
-    full suite. So it depends on something outside the tree (host tools on
-    `PATH`, or Git or filesystem state), not on a commit. Find what makes the
-    start path stop surfacing the persistence failure, then fix the code or the
-    test.
 
 ### Qualification
 
@@ -368,3 +395,18 @@ reliably green on `main`, and nothing requires it to be.
 - `docs/reviews/2026-09-15-fable-review.md` (residuals: branch protection and
   red CI, desktop test gaps, and pointers for `NET_ADMIN` and the renderer
   sandbox)
+
+## CLI matrices second main merge validation (2026-10-18)
+
+Merged `origin/main` at `c85ab60a` into branch baseline `9467f965`. Formatting, lint, typechecking, backend and renderer build tasks, all local Markdown link targets, and eight production public-site browser cases passed. The full non-iOS suite exited 1 after 1132.1 seconds: root/support passed 3084 tests with one skip; every workspace package except backend passed; backend reported 9081 passed, 41 skipped and 11 failed across 9133 tests. Claude's one bridge fixture race passed its unchanged owner; all other bridges and protocol regeneration passed.
+
+Focused backend reruns passed the orphan-age, terminal-history, skill-scan, capability-version, environment-status, retaining-close, startup-readiness and observation-baseline owners. Coordinator bound-discard still timed out after the aggregate with late SQLite fixture errors (56 passed, one failed across its file and the baseline owner). Details are in flaky-test cases 0151, 0165, 0177, 0212, 0213, 0385, 0441 and 0442. No test skip, assertion, timeout or implementation was changed for this validation.
+
+`mise run test:browser` reported 339 passed, 80 skipped and 13 failed. The nine unchanged owners rerun with one worker reported 96 passed, 15 skipped and three failed: both canvas viewports timed out, and mobile diff-viewer Monaco was absent. The seven other owners passed. Commands and bounded failure evidence are in cases 0173, 0174, 0254 and 0382. The public-site task ran separately after the component command short-circuited and passed all eight cases.
+
+The isolated browser run selected 61 cases and reported 27 passed, 32 skipped and two failed. The gateway-only rerun on a fresh credential-free profile selected 20 cases and reported 13 passed, five skipped and two failed. The first run's narrow host-picker failure passed in the rerun, but these gateway assertions remain unresolved:
+
+- `persisted diff baselines keep Files, the badge and diff tabs aligned after background changes and reload` (`browser-gateway.spec.ts:2182`): the `vs <tip>` header was absent at its five-second deadline in both runs.
+- `signed-out Codex recovery and account reads survive reload and environment switches` (`browser-gateway.spec.ts:880`): the exact `Sign in to Codex` button was absent at its 60-second deadline in the owning-file rerun. It passed in the aggregate, but the whole owner did not pass; no new flake classification is made here.
+
+Exact isolated/gateway commands, profile names and evidence paths are in case 0224. Both disposable profiles were stopped and reset. Docker lifecycle, Electron main/preload and iOS code were unchanged, so those scenario suites were omitted. Credentialed live-provider suites retain their explicit opt-ins and were not enabled; the credential-free inactive/reload paths were exercised.

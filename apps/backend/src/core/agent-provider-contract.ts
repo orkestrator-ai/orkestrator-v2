@@ -80,8 +80,8 @@ export interface ProviderSessionObservation {
   /**
    * Set beside `status: "error"` when the provider itself stopped the turn
    * partway, not the model: `restart` means a provider restart cut it short
-   * and the same session can continue it. Only the Codex bridge reports one
-   * today; an unknown value is dropped, so that turn fails as before.
+   * and the same session can continue it. The Codex and Claude bridges report
+   * one; an unknown value is dropped, so that turn fails as before.
    */
   interruption?: ProviderTurnInterruption;
 }

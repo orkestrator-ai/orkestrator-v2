@@ -109,3 +109,7 @@ All 21 failing owners, including this unchanged file, passed with one worker in 
 - **Evidence:** `orkestrator-test-run.lReU9r/merge-browser.log.gz` and `orkestrator-test-run.WoFi5z/merge-diff-owner.log.gz` under the host temporary directory.
 - **Assessment:** unresolved validation limitation, matching the earlier public landing-page review observation; this occurrence does not establish intermittence. No diff-viewer implementation, assertion, timeout or skip changed.
 - **Public-site validation:** the component failure short-circuited the combined task, so `ORKESTRATOR_PUBLIC_E2E_PORT=49372 mise run test:logged -- --name merge-public-browser -- bunx playwright test --config e2e/public-site/playwright.config.ts` ran separately and passed all eight production smoke cases (28.9 seconds logged), including desktop/mobile login, reload, lazy loading and clipboard feedback. Playwright stopped its owned servers; no application profile was created.
+
+## CLI matrices second main merge — 2026-10-18
+
+The aggregate desktop breakpoint-switching case failed to find `.monaco-diff-editor`; the one-worker owning-file rerun passed that case but failed the mobile editor check. This observation remains unresolved because the whole unchanged owner did not pass. Full commands, 339-pass/80-skip/13-failure aggregate and 96-pass/15-skip/three-failure focused counts, and evidence paths are in [0382](0382-component-browser-parallel-load.md). No implementation, assertion, timeout or skip changed.

@@ -57,10 +57,10 @@ it reaches. Some rules of thumb:
 | Score | Meaning | Items |
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
-| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 24 |
-| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 253 |
-| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 276 |
-| **Total** | | **554** |
+| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 22 |
+| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 256 |
+| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 278 |
+| **Total** | | **557** |
 
 ## Very high
 
@@ -125,9 +125,9 @@ it reaches. Some rules of thumb:
 ### MCP (high)
 
 - [x] Close MCP apply-path gaps: runtime generations, bridge versions, external edits and the 64-runtime cap ([mcp-management.md](mcp-management.md))
-- [ ] Run live MCP apply probes for every provider, proving a call to a removed tool actually fails ([mcp-management.md](mcp-management.md), qualification)
-- [ ] Fill the MCP provider completion matrix for every writable scope and lifecycle case ([mcp-management.md](mcp-management.md), qualification)
-- [ ] Qualify MCP apply for inactive environments across reload, dropped streams and bridge generation changes ([mcp-management.md](mcp-management.md), qualification)
+- [ ] Re-qualify live MCP apply probes for every provider, proving a call to a removed tool actually fails ([mcp-management.md](mcp-management.md), qualification)
+- [ ] Complete the MCP provider matrix under the corrected checks for every writable scope and lifecycle case ([mcp-management.md](mcp-management.md), qualification)
+- [x] Qualify MCP apply for inactive environments across reload, dropped streams and bridge generation changes ([mcp-management.md](mcp-management.md), qualification)
 
 ### Agent engines and provider SDKs (high)
 
@@ -161,7 +161,7 @@ it reaches. Some rules of thumb:
 - [x] Run the real-stack Multi Review inactive-environment cycle with restart, reload and bridge interruption ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), qualification)
 - [x] Run the Multi Review browser and agent-browser suites for the #833 launcher and reviewer tab ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), qualification)
 - [x] Continue a Multi Review reviewer whose turn a backend restart cut short, instead of failing it ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md))
-- [ ] Report a Claude turn a restart cut short as `interruption: "restart"`, so Multi Review continues it instead of failing ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md))
+- [x] Report a Claude turn a restart cut short as `interruption: "restart"`, so Multi Review continues it instead of failing ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md))
 - [ ] Compare full and compact consolidation on real providers over the corpus for recall and provenance ([multi-review-panel-value.md](multi-review-panel-value.md), qualification)
 
 ### Coordinator and agent mail (high)
@@ -182,13 +182,14 @@ it reaches. Some rules of thumb:
 
 ### Cross-cutting (high)
 
-- [ ] Fix `removes a newly created worktree and its branch when persisting them fails`, which has failed alone on a clean `main` on some runs ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
+- [x] Fix `removes a newly created worktree and its branch when persisting them fails`, which has failed alone on a clean `main` on some runs ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
 - [x] Make the desktop app wait (bounded) for the backend to exit before `quitAndInstall` and on every quit ([remote-host-upgrades.md](remote-host-upgrades.md))
 - [x] Qualify Codex sub-agent cards on a fixture profile: one card per child, recovery after reload and restart ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md), qualification)
 - [x] Decide and implement a renderer-backend skew guard for raw OpenCode envelopes from older backends ([mixed-version-compatibility.md](mixed-version-compatibility.md))
 - [x] Fix flake 0166 (OpenCode probe deadline), which recurred on 2026-10-15 ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
 - [x] Keep split panes mounted across the mobile breakpoint through stable per-pane hosts ([mobile-layout-gaps.md](mobile-layout-gaps.md))
 - [x] Move the environment settings dialog out of the drawer row so it is usable on mobile ([mobile-layout-gaps.md](mobile-layout-gaps.md))
+- [ ] Keep MCP editor writes in an agent-test profile out of the host's Codex and OpenCode homes when those credential sources are authorized ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md))
 
 ## Medium
 
@@ -313,17 +314,20 @@ it reaches. Some rules of thumb:
 
 - [x] Update Pi terminal MCP and sign-in capabilities for Pi 1.2.0's built-in CLI MCP extension ([mcp-management.md](mcp-management.md))
 - [ ] Implement OpenCode MCP application with `applied` evidence and trace how its OAuth completes ([mcp-management.md](mcp-management.md))
-- [ ] Prove Codex reload reaches existing threads, add thread-level evidence, and page `mcpServerStatus/list` ([mcp-management.md](mcp-management.md))
+- [ ] Rerun the inactive-environment MCP spec in full mode to prove tool calls after an edit, a removal, an older bridge and a shared save ([mcp-management.md](mcp-management.md), qualification)
+- [ ] Qualify the process-wide inactive MCP apply variant across two Codex or two OpenCode sessions, in a profile with a disposable `CODEX_HOME` ([mcp-management.md](mcp-management.md), qualification)
+- [ ] Add thread-level Codex MCP apply evidence and page `mcpServerStatus/list`; reload reaching existing threads is proven live ([mcp-management.md](mcp-management.md))
 - [ ] Join saved MCP entries to live rows by native name plus target and runtime identity ([mcp-management.md](mcp-management.md))
 - [ ] Make the Grok project-trust verdict match Grok: worktrees of trusted repositories, no cover across a git root, and sessions that run with the gate off ([mcp-management.md](mcp-management.md))
 - [ ] Redact runtime MCP `error` strings in `normalizeMcp`, not just bound their length ([mcp-management.md](mcp-management.md))
+- [ ] Run the live MCP apply probe for Grok and Pi once the host has a current Grok login and a Pi provider sign-in ([mcp-management.md](mcp-management.md), qualification)
 - [ ] Re-derive OpenCode and Grok MCP source and precedence rules from the current pinned binaries ([mcp-management.md](mcp-management.md), qualification)
 - [ ] Run a real-browser MCP editor pass after the dialog-layer fix and consider an agent-testing MCP spec ([mcp-management.md](mcp-management.md), qualification)
 - [ ] Qualify the read-only container MCP catalogue and remote-browser paths on the Docker real stack ([mcp-management.md](mcp-management.md), qualification)
 - [ ] Decide whether to keep or narrow the all-on MCP management rollout once the matrix is filled ([mcp-management.md](mcp-management.md), qualification)
 - [ ] Verify when running Claude account sessions see editor writes; warn that account-home servers are overwritten ([mcp-management.md](mcp-management.md), verify)
 - [x] Decide which Pi disable spelling the editor writes and whether to migrate `disabled: true` entries ([mcp-management.md](mcp-management.md), decision)
-- [ ] Treat a host Pi project `mcp.json` as loaded when the environment's execution policy turns project resources on ([mcp-management.md](mcp-management.md))
+- [x] Treat a host Pi project `mcp.json` as loaded when the environment's execution policy turns project resources on ([mcp-management.md](mcp-management.md))
 - [ ] Build a durable per-environment MCP overlay and enable container MCP writes ([mcp-environment-delivery.md](mcp-environment-delivery.md))
 - [ ] Stage `~/.cursor/mcp.json` into containers and retire Cursor's `blocked-policy` delivery branch ([mcp-environment-delivery.md](mcp-environment-delivery.md))
 - [ ] Show MCP execution location and allowlist warnings; gate container or remote sign-in on callback reachability ([mcp-environment-delivery.md](mcp-environment-delivery.md))
@@ -437,6 +441,7 @@ it reaches. Some rules of thumb:
 - [ ] Run a mixed real-provider Multi Review panel at 8 to 32 reviewers, recording caps, latency and RSS ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), qualification)
 - [x] Give Multi Review preparation and consolidation the one result-reminder turn reviewers get ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md))
 - [ ] Give Build Pipeline's consolidation and stage turns the restart continuation and result reminder ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md))
+- [ ] Qualify live that a Multi Review reviewer whose Claude Code process is killed (bridge up) completes after the restart continuation ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), qualification)
 - [x] Count Multi Review fence checks per pass at 8 to 32 reviewers, before and after the per-row fix ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), verify)
 - [x] Decide whether Multi Review fence reads need the cross-process mutation lease at all ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), decision)
 - [ ] Add a content-free reviewer overlap metric from `reviewSourceIds` per run and reviewer position ([multi-review-panel-value.md](multi-review-panel-value.md))
@@ -589,6 +594,7 @@ it reaches. Some rules of thumb:
 ### CLI and slash commands (low)
 
 - [ ] Answer Claude's dispatch probe for a request id an earlier bridge process claimed, so a lost command resolves its card without a Retry ([slash-command-qualification.md](slash-command-qualification.md))
+- [ ] Make the inactive slash-command scenario's outage drop the event stream, not just fail new requests ([slash-command-qualification.md](slash-command-qualification.md))
 - [ ] Add tracked cascade removal to CLI `project remove` that deletes child environments ([cli-command-surface.md](cli-command-surface.md))
 - [ ] Add a local-only project initialiser (git init, no remote) for the CLI ([cli-command-surface.md](cli-command-surface.md))
 - [ ] Add optional JSONL event-stream following over the gateway SSE for CLI transcripts ([cli-command-surface.md](cli-command-surface.md))
@@ -652,6 +658,7 @@ it reaches. Some rules of thumb:
 ### MCP (low)
 
 - [ ] Implement per-session Grok ACP MCP application and document its collision rules ([mcp-management.md](mcp-management.md))
+- [ ] Stop telling a #838-era Claude bridge's runtime that the change "cannot be confirmed until the environment restarts" when its first query confirms it ([mcp-management.md](mcp-management.md))
 - [ ] Re-check external MCP edits for OpenCode, container and post-reload Codex runtimes, which no pass polls ([mcp-management.md](mcp-management.md))
 - [ ] Stop Claude's no-control MCP fallback collapsing server status to connected or failed ([mcp-management.md](mcp-management.md))
 - [ ] Replace the count-only MCP metric tiles for Claude and OpenCode in `AgentInfoButton` ([mcp-management.md](mcp-management.md))
@@ -875,7 +882,7 @@ it reaches. Some rules of thumb:
 | [cli-command-surface.md](cli-command-surface.md) |  |  | 6 | 7 | 13 |
 | [cli-qualification.md](cli-qualification.md) |  |  | 7 | 2 | 9 |
 | [slash-command-catalogue.md](slash-command-catalogue.md) |  |  | 5 | 6 | 11 |
-| [slash-command-qualification.md](slash-command-qualification.md) |  |  | 4 | 3 | 7 |
+| [slash-command-qualification.md](slash-command-qualification.md) |  |  | 4 | 4 | 8 |
 | **Containers and environments** | | | | | |
 | [container-platform-qualification.md](container-platform-qualification.md) |  |  | 12 | 2 | 14 |
 | [container-rebuild-state-preservation.md](container-rebuild-state-preservation.md) |  |  | 2 | 2 | 4 |
@@ -888,7 +895,7 @@ it reaches. Some rules of thumb:
 | [design-operation-recovery-edges.md](design-operation-recovery-edges.md) |  |  | 1 | 2 | 3 |
 | [design-agent-conversation-links.md](design-agent-conversation-links.md) |  |  | 5 | 3 | 8 |
 | **MCP** | | | | | |
-| [mcp-management.md](mcp-management.md) |  | 3 | 11 | 7 | 21 |
+| [mcp-management.md](mcp-management.md) |  | 2 | 13 | 8 | 23 |
 | [mcp-environment-delivery.md](mcp-environment-delivery.md) |  |  | 4 | 10 | 14 |
 | [control-mcp-voice-surface.md](control-mcp-voice-surface.md) |  |  | 9 |  | 9 |
 | **Agent engines and provider SDKs** | | | | | |
@@ -907,7 +914,7 @@ it reaches. Some rules of thumb:
 | [client-reconnect-and-freshness.md](client-reconnect-and-freshness.md) |  |  | 6 | 2 | 8 |
 | [recurring-work-qualification.md](recurring-work-qualification.md) |  | 4 | 9 | 19 | 32 |
 | **Multi Review** | | | | | |
-| [multi-review-scale-and-cost.md](multi-review-scale-and-cost.md) |  | 1 | 6 | 8 | 15 |
+| [multi-review-scale-and-cost.md](multi-review-scale-and-cost.md) |  |  | 7 | 8 | 15 |
 | [multi-review-panel-value.md](multi-review-panel-value.md) |  | 1 | 4 | 5 | 10 |
 | [multi-review-flow-graph.md](multi-review-flow-graph.md) |  |  |  |  | 0 |
 | **Coordinator and agent mail** | | | | | |
@@ -921,9 +928,9 @@ it reaches. Some rules of thumb:
 | [backend-core-domain-folders.md](backend-core-domain-folders.md) |  |  | 4 | 3 | 7 |
 | [backend-runtime-state-ownership.md](backend-runtime-state-ownership.md) |  |  | 4 | 3 | 7 |
 | **Cross-cutting** | | | | | |
-| [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md) |  |  | 10 | 5 | 15 |
+| [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md) |  | 1 | 10 | 5 | 16 |
 | [mixed-version-compatibility.md](mixed-version-compatibility.md) |  |  | 2 | 3 | 5 |
-| [test-suite-and-ci-health.md](test-suite-and-ci-health.md) | 1 | 1 | 4 | 13 | 19 |
+| [test-suite-and-ci-health.md](test-suite-and-ci-health.md) | 1 |  | 4 | 13 | 18 |
 | [mobile-layout-gaps.md](mobile-layout-gaps.md) |  |  | 1 | 4 | 5 |
 | [dependency-upgrades.md](dependency-upgrades.md) |  |  | 3 | 7 | 10 |
 | [remote-host-upgrades.md](remote-host-upgrades.md) |  |  | 3 | 2 | 5 |

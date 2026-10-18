@@ -61,6 +61,7 @@ import type { StorageService } from "./storage.js";
 import type { AgentToolConnection } from "./agent-tools.js";
 import type { WorkflowResultService } from "./workflow-result-service.js";
 import { WorkflowResultRollout } from "./workflow-result-rollout.js";
+import { ProviderUnreachableError } from "./agent-provider-contract.js";
 import {
   AmbiguousPromptDispatchError,
   ProviderDispatchPreparationError,
@@ -3692,7 +3693,34 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       : workflow.phase === "consolidating"
         ? consolidationModel(workflow)
         : workflow.fixModel;
-    const provider = await this.provider(workflow, selection);
+    let provider: BuildPipelineProvider;
+    try {
+      provider = await this.provider(workflow, selection);
+    } catch (error) {
+      const request = workflow.activeRequest;
+      const session = coordinating ? reviewSession(workflow) : workflow.fixSession;
+      if (
+        session &&
+        request &&
+        (request.state === "sent" || request.state === "dispatching") &&
+        (error instanceof ProviderUnreachableError ||
+          (typeof error === "object" &&
+            error !== null &&
+            "retryable" in error &&
+            error.retryable === true))
+      ) {
+        await this.recordUnavailableStep(
+          workflow,
+          token,
+          request,
+          stepModelLabel(request.kind),
+          selection.agent,
+          error,
+        );
+        return;
+      }
+      throw error;
+    }
     await this.assertFence(workflow.id, token);
     let session = coordinating ? reviewSession(workflow) : workflow.fixSession;
     // Consolidation only merges the reviewer reports, so it gains nothing from
@@ -3960,14 +3988,40 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       delete request.continuationPrompt;
       await this.save(workflow, token);
     }
-    await this.resolveUnattendedInteractions(workflow, token, provider, session.providerSessionId);
     // Read as data so the terminal-failure branch below fires whether or not
     // the provider explained itself, and can report the explanation when it did.
-    const observation = await readProviderStatus(
-      provider,
-      session.providerSessionId,
-      request.requestId,
-    );
+    let observation: Awaited<ReturnType<typeof readProviderStatus>>;
+    try {
+      await this.resolveUnattendedInteractions(
+        workflow,
+        token,
+        provider,
+        session.providerSessionId,
+      );
+      observation = await readProviderStatus(
+        provider,
+        session.providerSessionId,
+        request.requestId,
+      );
+    } catch (error) {
+      if (!(error instanceof ProviderUnreachableError)) throw error;
+      // A bridge that cannot be reached is an observation fault, not the
+      // step's, exactly as for a reviewer: keep the request and drop the
+      // cached connection, so the next pass reconnects (which restarts a local
+      // bridge that died) and reads the turn's own outcome, a restart
+      // interruption included. The idle-poll bound still ends a bridge that
+      // never comes back.
+      await this.evictUnreachableProvider(workflow, selection, provider);
+      await this.recordUnavailableStep(
+        workflow,
+        token,
+        request,
+        modelLabel,
+        selection.agent,
+        error,
+      );
+      return;
+    }
     const { status, error: statusDetail } = observation;
     await this.assertFence(workflow.id, token);
     if (status === "idle" && observation.turnSettled === false) return;
@@ -4368,6 +4422,30 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       await this.options.workflowResults?.close(previousRequestId, "superseded");
     }
     await this.save(workflow, token);
+  }
+
+  /** Startup backoff and failed status reads spend the same persisted budget. */
+  private async recordUnavailableStep(
+    workflow: MultiReviewWorkflow,
+    token: string,
+    request: NonNullable<MultiReviewWorkflow["activeRequest"]>,
+    modelLabel: string,
+    agent: string,
+    error: unknown,
+  ): Promise<void> {
+    const scope = `${request.requestId}\0idle`;
+    if (!this.countPoll(workflow.id, scope)) return;
+    request.idleResultPolls = Math.min((request.idleResultPolls ?? 0) + 1, MAX_IDLE_RESULT_POLLS);
+    await this.save(workflow, token);
+    if (
+      request.idleResultPolls >= MAX_IDLE_RESULT_POLLS ||
+      this.pollsExhausted(workflow.id, scope, request.idleResultPolls, MAX_IDLE_RESULT_POLLS)
+    ) {
+      throw new Error(
+        `The ${modelLabel} model's ${agent} provider stayed unreachable: ${errorMessage(error)}`,
+        { cause: error },
+      );
+    }
   }
 
   /**

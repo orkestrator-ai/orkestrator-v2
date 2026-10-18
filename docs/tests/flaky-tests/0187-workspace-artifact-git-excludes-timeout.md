@@ -154,3 +154,13 @@ Aggregate command, worker configuration, counts and evidence are recorded in [02
 The first cleanup-owner rerun, `mise run test:logged -- --name merge-cleanup-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures`, timed out `injects workspace artifact git excludes into local worktrees before status reads` at 5032.53 ms, followed by a late fixture-cleanup rejection (54 passed, one failed, one error; 40.61 seconds). Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.TCtpzn/merge-cleanup-owner.log.gz`.
 
 The unchanged owning file then passed `mise run test:logged -- --name merge-cleanup-post-workspace -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures` after workspace validation ended (exit 0, 28.4 seconds). This confirms intermittence; host contention remains a hypothesis. No implementation, assertion, timeout or skip changed.
+
+
+## MCP live apply review follow-up — 2026-10-18
+
+- **Original command:** `mise run test:logged -- --name committed-full-tests -- mise run test`, Bun 1.4.3 on macOS arm64, with other worktrees sharing the host. Workspace/root/bridges/protocol reserved 4/1/2/1 slots; backend used two isolated Bun workers. Workspace admission waited 132.5 seconds.
+- **Failure:** `Electron backend command registry > injects workspace artifact git excludes into local worktrees before status reads` in `apps/backend/tests/commands-integration.test.ts` exceeded its 5000 ms deadline at 5012.10 ms.
+- **Suite counts:** backend 9066 passed, 41 skipped and one failed across 9108 tests in 481 files (354.40 seconds). Aggregate exited 1 after 513.4 seconds; the other failures were existing README expectations in the install-script and Markdown round-trip tests. Bridges and the Codex protocol check passed. The preceding aggregate passed the backend package unchanged.
+- **Isolated rerun:** `mise run test:logged -- --name backend-fixture-owning-file -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 13.9 seconds logged).
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.hcFAOW/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer artifact `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.5zrcnt/committed-full-tests.log.gz`.
+- **Assessment:** the isolated pass confirms intermittence for this occurrence. Shared-host contention remains a hypothesis. No owning implementation, assertion, deadline or skip changed.

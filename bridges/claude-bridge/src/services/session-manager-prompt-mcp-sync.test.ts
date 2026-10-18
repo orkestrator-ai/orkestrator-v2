@@ -320,9 +320,16 @@ describe("refusing a stale server's tools", () => {
     expect(await call("mcp__alpha__probe")).toEqual({});
     // The runtime's state is read at each call, not captured at launch.
     mcp.stale.add("alpha");
-    expect(await call("mcp__alpha__probe")).toMatchObject({
+    const denied = await call("mcp__alpha__probe");
+    expect(denied).toMatchObject({
       hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny" },
     });
+    // A warm CLI holds the server between messages, not only background work.
+    const reason = (denied as { hookSpecificOutput?: { permissionDecisionReason?: string } })
+      .hookSpecificOutput?.permissionDecisionReason;
+    expect(reason).toContain('"alpha"');
+    expect(reason).toContain("idle period");
+    expect(reason).not.toContain("background work");
     expect(await call("mcp__keep__probe")).toEqual({});
   });
 });

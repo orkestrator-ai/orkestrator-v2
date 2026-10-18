@@ -64,6 +64,10 @@ const AGENT_TEST_SAFE_ENV_NAMES = new Set([
   "ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK",
   "ORKESTRATOR_NATIVE_OBSERVATION_SHARING",
   "ORKESTRATOR_RECURRING_METRICS",
+  // Service-preview transport overrides (`PreviewRuntime.effectiveSettings`),
+  // so an isolated profile can qualify the tunnel and relay. Policy only.
+  "ORKESTRATOR_PREVIEW_RELAY",
+  "ORKESTRATOR_PREVIEW_TRANSPORT",
   // Browser queueing fixtures use a private scheduler within the outer review
   // reservation. These carry capacity/path settings, never credentials.
   "ORKESTRATOR_TEST_SCHEDULER_DIR",

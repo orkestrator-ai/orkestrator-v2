@@ -99,3 +99,22 @@ No assertion, timeout or skip changed.
 - **Assessment:** the isolated pass confirms an intermittent recurrence. Shared-host contention remains a hypothesis. The conflict resolution changes documentation only; no source, assertion, timeout or skip changed.
 
 Final aggregate: exit 1 after 1252.7 seconds logged. Backend passed 8964 tests with 41 skipped and no failures; all other workspace packages except desktop passed. Bridges and the Codex protocol check passed. The only failed cases were this runtime-staging timeout and the desktop fixture-digest timeout (0178/0258).
+
+## Recurrence on 2026-10-18
+
+`mise run test:logged -- --name full-test -- mise run test` on branch `qualify-coordinator-live-six-platforms-fb2b4a53344d`, on a host at load average 36–69 with several live
+suites running in other environments. Failed at 5072.95 ms. Workspace and root
+artifacts:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.UQLOD6/`.
+The unchanged owning file passed alone (48 pass, 2.3 s, after failing twice more at 5.0 s while load was 69).
+
+## Recurrence during real-Electron service-preview qualification (2026-10-18)
+
+- **Command:** `mise run test:logged -- --name full-tests -- mise run test` on
+  a macOS arm64 host shared with other live-test worktrees (load average
+  around 30), on branch `qualify-preview-electron-tunnel-c6ca4deaffee`.
+- **Failure:** the same test timed out at 5 s; the follow-on
+  `git rev-parse exited 128: Unable to read current working directory` came
+  from the timed-out test's removed fixture directory.
+- **Isolated rerun:** `mise run test:logged -- --name coordinator-live-alone -- bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./scripts/dev/coordinator-live.test.ts --parallel=1`
+  passed in 2.1 s. The owning file was unchanged on the branch.

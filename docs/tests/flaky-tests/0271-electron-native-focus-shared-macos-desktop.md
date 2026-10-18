@@ -51,3 +51,25 @@ This remains an environmental failure, not a confirmed flake. Evidence is in
 `output/agent-testing/electron-smoke/electron/` and
 `output/agent-testing/pi-credential-electron-rerun/electron/` in this worktree.
 The credential-specific desktop and backend startup tests pass separately.
+
+
+## Update-channel review recurrence, 2026-10-18
+
+`mise run test:logged -- --name electron-scenarios -- mise run test:agent:electron`
+reported 11 passed, one skipped and three failed (356.8 seconds). The
+independent-window and terminal-resume cases stopped at the unchanged
+five-second profile-title assertion, receiving `Orkestrator AI`; the
+remote-nickname case and its worker teardown timed out after 120 seconds.
+
+An owning-spec rerun with
+`ORKESTRATOR_AGENT_TEST_RUN_ID=updater-electron-owners mise run test:logged -- --name electron-owners -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts electron-main.spec.ts terminal-input-resume-electron.spec.ts --workers=1`
+reported three passed, one skipped and one failed (54.8 seconds). The
+independent-window case still failed the startup-title check; remote nicknames
+and terminal resume passed. No timeout or assertion changed. The persistent
+startup failure remains an environmental validation limitation, not a
+confirmed flake.
+
+Logs: `orkestrator-test-run.Fgjzng/electron-scenarios.log.gz` and
+`orkestrator-test-run.qtInGv/electron-owners.log.gz` under the host temporary
+directory. Traces are under `output/agent-testing/electron-smoke/electron/`
+and `output/agent-testing/updater-electron-owners/electron/`.

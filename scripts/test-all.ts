@@ -104,6 +104,12 @@ export const MAX_FAILURE_REPORTS = 25;
 /** Lines of the failing task's own output kept before each `(fail)` line. */
 export const FAILURE_REPORT_CONTEXT_LINES = 40;
 const MAX_FAILURE_REPORT_LINE_CHARS = 2_000;
+/**
+ * Longest line the console tail prints. One 179 KB line (a reporter's JSON in
+ * an assertion message) cut the GitHub Actions log off there, hiding the
+ * failure reports and summary after it. The full line stays in the group log.
+ */
+export const MAX_CONSOLE_TAIL_LINE_CHARS = 2_000;
 /** Turbo's per-task prefix, such as `@orkestrator/web:test:workspace: `. */
 const TASK_PREFIX = /^(@?[\w./-]+:[\w:-]+: )/;
 const ANSI_ESCAPE = /\u001b\[[0-9;]*m/g;
@@ -166,6 +172,17 @@ export class FailureReportCollector {
     }
     this.recent.set(bucket, context);
   }
+}
+
+export function boundConsoleLines(text: string): string {
+  return text
+    .split("\n")
+    .map((line) =>
+      line.length > MAX_CONSOLE_TAIL_LINE_CHARS
+        ? `${line.slice(0, MAX_CONSOLE_TAIL_LINE_CHARS)}… [${line.length - MAX_CONSOLE_TAIL_LINE_CHARS} more characters in the group log]`
+        : line,
+    )
+    .join("\n");
 }
 
 /**
@@ -530,8 +547,9 @@ export function defaultRunGroup(group: TestGroup, env: NodeJS.ProcessEnv): Promi
       failures.finish();
       resolve({
         status: outputLimitExceeded || timeoutReason || errors.length > 0 ? 1 : childStatus,
-        output:
+        output: boundConsoleLines(
           `${outputTail.toString("utf8")}${errors.length ? `\n${errors.join("\n")}` : ""}`.trim(),
+        ),
         failureReports: failures.reports,
         omittedFailureReports: failures.omitted,
         logPath,
@@ -816,6 +834,10 @@ export function buildConcurrentGroups(
         "test",
         "./tests",
         "./e2e/agent-testing/artifact-sanitizer.test.ts",
+        "./e2e/agent-testing/design-live-usage.test.ts",
+        "./e2e/agent-testing/design-live-heartbeat.test.ts",
+        "./e2e/agent-testing/mcp-apply-live-support.test.ts",
+        "./e2e/agent-testing/mcp-apply-live-safety.test.ts",
         "./scripts/opencode-live-compatibility-probe.test.ts",
         "./test-fixtures/agent-project/server.test.ts",
         "--only-failures",

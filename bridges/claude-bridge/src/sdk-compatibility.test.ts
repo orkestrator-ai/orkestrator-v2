@@ -286,6 +286,61 @@ describe("Claude Agent SDK runtime compatibility", () => {
     }
   }, 15_000);
 
+  // The bridge continues a turn whose CLI was killed under it
+  // (`killedClaudeProcessSignal`), and reads that from two fields the SDK
+  // attaches to its exit error but does not document.
+  test("classifies a CLI killed mid-turn by its signal", async () => {
+    const packageRoot = join(import.meta.dir, "..");
+    const fixtureDir = await mkdtemp(join(tmpdir(), "claude-sdk-killed-contract-"));
+    const executable = join(fixtureDir, "fake-claude");
+    await copyFile(join(import.meta.dir, "testing", "fake-killed-cli.ts"), executable);
+    await chmod(executable, 0o755);
+
+    try {
+      for (const signal of ["SIGKILL", "SIGTERM"]) {
+        const probe = Bun.spawn(
+          [
+            process.execPath,
+            "-e",
+            `
+              import { query } from "@anthropic-ai/claude-agent-sdk";
+              const request = query({
+                prompt: "Run the killed-process contract",
+                options: { pathToClaudeCodeExecutable: process.env.CLAUDE_SDK_CONTRACT_EXECUTABLE },
+              });
+              let caught;
+              try {
+                for await (const _message of request) {}
+              } catch (error) {
+                caught = { errorClass: error.errorClass, signal: error.signal };
+              }
+              console.log(JSON.stringify(caught ?? null));
+            `,
+          ],
+          {
+            cwd: packageRoot,
+            env: {
+              ...process.env,
+              CLAUDE_SDK_CONTRACT_EXECUTABLE: executable,
+              CLAUDE_SDK_CONTRACT_SIGNAL: signal,
+            },
+            stdout: "pipe",
+            stderr: "pipe",
+          },
+        );
+        const [stdout, stderr, exitCode] = await Promise.all([
+          new Response(probe.stdout).text(),
+          new Response(probe.stderr).text(),
+          probe.exited,
+        ]);
+        expect(exitCode, stderr).toBe(0);
+        expect(JSON.parse(stdout)).toEqual({ errorClass: "process_killed_by_signal", signal });
+      }
+    } finally {
+      await rm(fixtureDir, { recursive: true, force: true });
+    }
+  }, 20_000);
+
   test("keeps streaming input open across a result while a background process runs", async () => {
     const packageRoot = join(import.meta.dir, "..");
     const fixtureDir = await mkdtemp(join(tmpdir(), "claude-sdk-background-contract-"));

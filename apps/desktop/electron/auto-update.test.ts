@@ -1,3 +1,9 @@
+import {
+  HOST_MAINTENANCE_EVENT,
+  type HostUpdaterReport,
+} from "@orkestrator/protocol/host-maintenance";
+import { hostMaintenanceSnapshotFixture } from "@orkestrator/protocol/testing/host-maintenance-fixtures";
+import { createHostUpdateExecutor } from "./host-update-executor.js";
 import { afterEach, describe, expect, jest, mock, spyOn, test } from "bun:test";
 import {
   DISABLE_AUTO_UPDATE_ENV,
@@ -46,12 +52,23 @@ describe("isAutoUpdateSupported", () => {
 function createHarness(
   checkResult: UpdateCheckResult | Error | null = {},
   prepareForInstall?: () => Promise<void>,
+  currentVersion = "2.19.9",
 ) {
   const listeners = new Map<string, (arg: never) => void>();
+  let channel: string | null = null;
   const updater: UpdaterLike = {
     autoDownload: false,
     autoInstallOnAppQuit: false,
     allowPrerelease: true,
+    allowDowngrade: false,
+    // Like electron-updater, setting a channel allows downgrades.
+    get channel() {
+      return channel;
+    },
+    set channel(value) {
+      channel = value;
+      updater.allowDowngrade = true;
+    },
     on: ((event: string, listener: (arg: never) => void) => {
       listeners.set(event, listener);
     }) as UpdaterLike["on"],
@@ -70,7 +87,7 @@ function createHarness(
   const controller = createAutoUpdateController({
     updater,
     productName: "Orkestrator AI",
-    currentVersion: "2.19.9",
+    currentVersion,
     getWindow: () => null,
     showMessageBox,
     log,
@@ -87,6 +104,41 @@ describe("createAutoUpdateController", () => {
     expect(updater.autoDownload).toBe(true);
     expect(updater.autoInstallOnAppQuit).toBe(true);
     expect(updater.allowPrerelease).toBe(false);
+    expect(updater.channel).toBe("latest");
+    expect(updater.allowDowngrade).toBe(false);
+  });
+
+  test("starts on the channel of the running release", () => {
+    expect(createHarness({}, undefined, "2.23.0-beta").updater).toMatchObject({
+      channel: "beta",
+      allowPrerelease: true,
+    });
+    expect(createHarness({}, undefined, "2.24.0-alpha.2").updater).toMatchObject({
+      channel: "alpha",
+      allowPrerelease: true,
+    });
+  });
+
+  test("follows a channel change without ever allowing a downgrade", () => {
+    const { updater, controller } = createHarness();
+    controller.setChannel("unstable");
+    expect(updater).toMatchObject({
+      channel: "alpha",
+      allowPrerelease: true,
+      allowDowngrade: false,
+    });
+    controller.setChannel("beta");
+    expect(updater).toMatchObject({
+      channel: "beta",
+      allowPrerelease: true,
+      allowDowngrade: false,
+    });
+    controller.setChannel("stable");
+    expect(updater).toMatchObject({
+      channel: "latest",
+      allowPrerelease: false,
+      allowDowngrade: false,
+    });
   });
 
   test("restarts only when the user chooses Restart Now", async () => {
@@ -473,3 +525,72 @@ test("the updater cannot spawn the replacement until install preparation finishe
   expect(await install).toBe(true);
   expect(harness.updater.quitAndInstall).toHaveBeenCalledWith(true, true);
 });
+
+test.each(["metadata", "download", "failure"] as const)(
+  "channel switch during %s queries the new feed before answering its request",
+  async (phase) => {
+    const metadata = deferred<UpdateCheckResult>();
+    const download = deferred<string[]>();
+    const beta = deferred<UpdateCheckResult>();
+    const harness = createHarness();
+    const queried: Array<string | null> = [];
+    let queries = 0;
+    spyOn(harness.updater, "checkForUpdates").mockImplementation(() => {
+      queried.push(harness.updater.channel);
+      return ++queries === 1 ? metadata.promise : beta.promise;
+    });
+    let current = hostMaintenanceSnapshotFixture({ updateChannel: "stable" });
+    const reports: HostUpdaterReport[] = [];
+    const executor = createHostUpdateExecutor({
+      channel: {
+        snapshot: async () => current,
+        report: async (report) => {
+          reports.push(report);
+          return current;
+        },
+      },
+      engine: harness.controller,
+      confirmRestart: async () => "postpone",
+    });
+    harness.onCheckResult.mockImplementation((report) => {
+      executor.reportCheck(report);
+      return undefined;
+    });
+    await executor.start();
+    const old = harness.controller.checkSilently();
+    if (phase === "download") {
+      metadata.resolve({
+        isUpdateAvailable: true,
+        updateInfo: { version: "2.23.0" },
+        downloadPromise: download.promise,
+      });
+      await flush();
+    }
+    reports.length = 0;
+    current = {
+      ...current,
+      revision: current.revision + 1,
+      updateChannel: "beta",
+      checkRequest: { id: "switch-beta", requestedAt: new Date().toISOString() },
+    };
+    executor.handleEvent(HOST_MAINTENANCE_EVENT, current);
+    await flush();
+    expect(queried).toEqual(["latest"]);
+    if (phase === "download") download.resolve([]);
+    else if (phase === "failure") metadata.reject(new Error("old feed failed"));
+    else metadata.resolve({ isUpdateAvailable: false, updateInfo: { version: "2.23.0" } });
+    await flush();
+    expect(queried).toEqual(["latest", "beta"]);
+    expect(reports.filter((report) => report.type === "check")).toEqual([]);
+    beta.resolve({ isUpdateAvailable: true, updateInfo: { version: "2.24.0-beta" } });
+    await old;
+    await flush();
+    expect(reports.filter((report) => report.type === "check")).toEqual([
+      expect.objectContaining({
+        checkRequestId: "switch-beta",
+        latestVersion: "2.24.0-beta",
+        error: null,
+      }),
+    ]);
+  },
+);

@@ -9,6 +9,7 @@ Any client of a backend can maintain the computer running that backend:
 From there it can:
 - check for and install an Orkestrator update, now or once the host is idle,
   and cancel it before the restart;
+- choose the host's update channel (Stable, Beta or Unstable);
 - repair the pinned agent toolchain;
 - switch `gh` to its newest release;
 - pull the release container image.
@@ -26,6 +27,7 @@ Real-release qualification is still open in
   - the latest dependency task of each kind
   - the pins the next release brings
   - the `gh` channel
+  - the update channel
 
   Every change bumps a revision and emits `host-maintenance-updated` with the
   snapshot. Shared types are in
@@ -54,14 +56,42 @@ Real-release qualification is still open in
   - renderer commands: `get_host_maintenance`, `get_host_restart_impact`,
     `request_host_update_check`, `request_host_update`, `cancel_host_update`,
     `start_host_toolchain_repair`, `start_host_image_update`,
-    `set_host_gh_channel`
+    `set_host_gh_channel`, `set_host_update_channel`
   - public actions: `host.status`, `host.update.check`, `host.update.apply`,
-    `host.update.cancel`, `host.toolchain.repair`, `host.image.update`,
+    `host.update.cancel`, `host.update.channel`, `host.toolchain.repair`, `host.image.update`,
     `host.gh.update`
 
   `host.update.apply` requires `confirm: true`. The CLI passes it only with
   `--yes`. `host.gh.update` is in the `always`-confirm class. The `host`
   capability must never be granted to a Control MCP credential.
+
+## The update channel
+
+`updateChannel` is `stable`, `beta` or `unstable`
+([releasing.md](../development/releasing.md#update-channels) has how releases
+map to them). A channel also installs every more stable channel's releases.
+
+- **Default.** On its first start, a host records the channel of the release it
+  runs, so a beta install that later updates to a stable release stays on Beta.
+- **Switching.** `orkestrator host update channel stable|beta|unstable` uses
+  `host.update.channel`; `host status` prints the selected channel.
+  `set_host_update_channel` is refused with `busy` while an
+  update job is active. It drops the last check and the next release's pins.
+  When the host can update, it also files a check request, so the executor
+  checks the new channel at once.
+- **Desktop.** The executor passes the channel from every snapshot to the
+  app's updater before it handles that snapshot's check request. Checks and
+  downloads are serialized; a channel switch waits for an old operation, then
+  queries the new channel and acknowledges only that result. The GitHub
+  provider sorts public releases by version before applying channel filters,
+  so publication order cannot hide a newer eligible prerelease.
+- **Standalone.** A check reads the npm dist-tags of the channel and every
+  more stable one (`latest`, `beta`, `alpha`) and takes the newest. Each
+  release moves only its own tag, so a stable release newer than the last beta
+  still reaches Beta.
+- **No downgrades.** Neither executor installs an older version, so moving to
+  a more stable channel keeps the running version until that channel
+  overtakes it.
 
 ## An update
 
@@ -225,7 +255,7 @@ The launcher works like this:
 **Settings → Updates** ([`UpdatesSettings.tsx`](../../apps/web/src/components/settings/UpdatesSettings.tsx),
 [`HostDependencySettings.tsx`](../../apps/web/src/components/settings/HostDependencySettings.tsx))
 shows:
-- the running and newest versions, and the updater;
+- the running and newest versions, the update channel, and the updater;
 - the job, with Cancel;
 - the confirmation, with the restart impact and the wait-until-idle choice;
 - the tools table, with the next release's pins and Repair;

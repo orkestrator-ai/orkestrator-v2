@@ -183,7 +183,14 @@ function ImageReadPreview({
 }
 
 /** Render a single message part based on its type */
-export function MessagePart({
+export function MessagePart(props: Parameters<typeof MessagePartContent>[0]) {
+  const part = props.part;
+  const id = part.type === "tool-invocation" ? (part.toolUseId ?? part.sourcePartId) : undefined;
+  const content = <MessagePartContent {...props} />;
+  return id ? <div data-transcript-part-id={id}>{content}</div> : content;
+}
+
+function MessagePartContent({
   part,
   showTextCopy = true,
   truncateUserPrompt = false,

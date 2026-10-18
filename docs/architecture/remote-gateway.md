@@ -56,8 +56,8 @@ as mixed content.
    and save. The app keeps its existing backend, allows the hosted Orkestrator
    origins, and publishes it through Tailscale Serve.
 3. Copy the HTTPS backend address and gateway token from that panel.
-4. Open [https://www.orkestrator.dev](https://www.orkestrator.dev) on the same
-   tailnet.
+4. Open [https://www.orkestrator.dev/connect](https://www.orkestrator.dev/connect)
+   on the same tailnet.
 5. Enter the HTTPS origin as **Backend address** and the token as **Gateway
    token**, then **Connect directly**. Do not add a path, query string, or
    token to the URL.

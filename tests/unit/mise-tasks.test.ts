@@ -281,8 +281,8 @@ describe("mise task surface", () => {
 
   test("CI validates the task definitions themselves", () => {
     // Everything above checks that names resolve. Only mise can tell whether a
-    // definition is well-formed, so the lint workflow has to keep asking it.
-    expect(read(".github/workflows/lint.yml")).toContain("mise tasks validate");
+    // definition is well-formed, so the CI workflow has to keep asking it.
+    expect(read(".github/workflows/ci.yml")).toContain("mise tasks validate");
   });
 });
 

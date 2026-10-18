@@ -40,6 +40,21 @@ export const ORKESTRATOR_AGENT_MCP_URL_ENV = "ORKESTRATOR_AGENT_MCP_URL";
 export const ORKESTRATOR_AGENT_MCP_TOKEN_ENV = "ORKESTRATOR_AGENT_MCP_TOKEN";
 export const ORKESTRATOR_AGENT_MCP_SERVER_NAME = "orkestrator";
 
+/**
+ * Forget an agent tool connection this backend inherited rather than issued.
+ *
+ * A backend started from inside an agent session (a CLI scenario, an agent's
+ * `dev:test` profile) inherits that session's URL and token. Bridges, exec
+ * workers and catalogue probes all spread `process.env`, so without this every
+ * agent of the nested backend could act as the parent tab on the parent
+ * Orkestrator's tickets and mail. A backend only ever hands out connections
+ * it issued itself.
+ */
+export function dropInheritedAgentToolConnection(env: NodeJS.ProcessEnv = process.env): void {
+  delete env[ORKESTRATOR_AGENT_MCP_URL_ENV];
+  delete env[ORKESTRATOR_AGENT_MCP_TOKEN_ENV];
+}
+
 export type AgentToolConnection = {
   design?: boolean;
   url: string;

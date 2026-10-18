@@ -1,5 +1,9 @@
 import {
+  HOST_UPDATE_CHANNEL_TAGS,
   HOST_UPDATE_RESTART_DELAY_MS,
+  hostUpdateChannelsReceived,
+  hostUpdateChannelOfVersion,
+  type HostUpdateChannel,
   isHostIdle,
   isHostVersion,
   type HostMaintenanceSnapshot,
@@ -27,13 +31,15 @@ import type { HostMaintenanceService } from "./core/host-maintenance.js";
  * The executor of a standalone backend installed with `orkestrator service
  * install`: it updates itself.
  *
- * A check asks the npm registry for the `latest` dist-tag. An update installs
- * that release beside the running one (Bun verifies the registry integrity),
- * smoke-runs it, installs its pinned toolchain before any downtime, waits for
- * the host to be idle when asked, counts down, then switches `current`, marks
- * the restart and shuts this backend down. The launcher starts the new
- * release; if it never becomes ready the launcher rolls back, and the restored
- * backend reports the job failed from the launcher's evidence.
+ * A check asks the npm registry for the dist-tags of the host's update channel
+ * and every more stable one (`latest`, `beta`, `alpha`), and takes the newest
+ * of them. An update installs that release beside the running one (Bun
+ * verifies the registry integrity), smoke-runs it, installs its pinned
+ * toolchain before any downtime, waits for the host to be idle when asked,
+ * counts down, then switches `current`, marks the restart and shuts this
+ * backend down. The launcher starts the new release; if it never becomes ready
+ * the launcher rolls back, and the restored backend reports the job failed
+ * from the launcher's evidence.
  */
 
 type JobReport = Extract<HostUpdaterReport, { type: "job" }>;
@@ -91,24 +97,39 @@ export function createStandaloneUpdater(options: StandaloneUpdaterOptions) {
   let timers: Array<ReturnType<typeof setTimeout>> = [];
   let unsubscribe: (() => void) | null = null;
 
-  async function latestVersion(): Promise<string> {
+  let channel = service.updateChannel();
+  let channelGeneration = 0;
+
+  async function latestVersion(channel: HostUpdateChannel): Promise<string> {
     const response = await fetchImpl(`${registry}/${STANDALONE_PACKAGE}`, {
       headers: { accept: "application/vnd.npm.install-v1+json" },
       signal: AbortSignal.timeout(30_000),
     });
     if (!response.ok) throw new Error(`The npm registry answered HTTP ${response.status}`);
-    const metadata = (await response.json()) as { "dist-tags"?: { latest?: unknown } };
-    const latest = metadata["dist-tags"]?.latest;
-    if (!isHostVersion(latest)) throw new Error("The npm registry reported no latest release");
-    return latest;
+    const metadata = (await response.json()) as { "dist-tags"?: Record<string, unknown> };
+    // A tag is only moved by its own channel's releases, so a stable release
+    // newer than the last beta is found under `latest`, not `beta`.
+    const newest = hostUpdateChannelsReceived(channel)
+      .map((received) => metadata["dist-tags"]?.[HOST_UPDATE_CHANNEL_TAGS[received]])
+      .filter(isHostVersion)
+      .reduce<string | null>(
+        (best, version) => (best === null || isNewerVersion(version, best) ? version : best),
+        null,
+      );
+    if (!newest) throw new Error(`The npm registry reported no ${channel} release`);
+    return newest;
   }
 
   async function check(checkRequestId?: string): Promise<void> {
+    const generation = channelGeneration;
+    const checkedChannel = service.updateChannel();
     const checkedAt = new Date(now()).toISOString();
     try {
-      const latest = await latestVersion();
+      const latest = await latestVersion(checkedChannel);
+      if (generation !== channelGeneration || checkedChannel !== service.updateChannel()) return;
       service.report({
         type: "check",
+        channel: checkedChannel,
         latestVersion: latest,
         updateAvailable: isNewerVersion(latest, options.currentVersion),
         checkedAt,
@@ -116,8 +137,10 @@ export function createStandaloneUpdater(options: StandaloneUpdaterOptions) {
         ...(checkRequestId ? { checkRequestId } : {}),
       });
     } catch (error) {
+      if (generation !== channelGeneration || checkedChannel !== service.updateChannel()) return;
       service.report({
         type: "check",
+        channel: checkedChannel,
         latestVersion: null,
         updateAvailable: null,
         checkedAt,
@@ -143,7 +166,12 @@ export function createStandaloneUpdater(options: StandaloneUpdaterOptions) {
       const config = readServiceConfig(layout);
       if (!config) throw new Error(`${layout.serviceFile} is missing; reinstall the service`);
       report({ state: "downloading", progressPercent: 0 });
-      const target = job.requestedVersion ?? (await latestVersion());
+      const selectedChannel = service.updateChannel();
+      const target = job.requestedVersion ?? (await latestVersion(selectedChannel));
+      const targetChannel = hostUpdateChannelOfVersion(target);
+      if (!targetChannel || !hostUpdateChannelsReceived(selectedChannel).includes(targetChannel)) {
+        throw new Error(`${target} is not available on the ${selectedChannel} channel`);
+      }
       if (!isNewerVersion(target, options.currentVersion)) {
         report({
           state: "failed",
@@ -198,6 +226,10 @@ export function createStandaloneUpdater(options: StandaloneUpdaterOptions) {
   }
 
   function reconcile(snapshot: HostMaintenanceSnapshot): void {
+    if (channel !== snapshot.updateChannel) {
+      channel = snapshot.updateChannel;
+      channelGeneration += 1;
+    }
     const request = snapshot.checkRequest;
     if (request && request.id !== handledCheckId) {
       handledCheckId = request.id;

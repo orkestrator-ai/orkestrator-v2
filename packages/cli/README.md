@@ -146,5 +146,10 @@ fixture project/environment lifecycle through the installed client, confirms
 only one backend ran, and stops it. It needs network access, which is why it is
 a publish gate rather than part of `mise run test`.
 
+The npm dist-tag follows the version's update channel: `2.23.0` publishes as
+`latest`, `2.23.0-beta` as `beta` and `2.23.0-alpha` as `alpha`, so
+`bunx orkestrator` only ever gets a stable release. Try a prerelease with
+`bunx orkestrator@beta` or `bunx orkestrator@alpha`.
+
 `dist/client.js` is the client bundle the launcher imports first; it must stay
 free of backend imports so client commands never initialize a service.

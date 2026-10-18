@@ -411,6 +411,14 @@ export const PUBLIC_ACTIONS = {
     milestone: "D",
     summary: "Read the host's Orkestrator version, its updater, the last check and the update job.",
   },
+  "host.update.channel": {
+    version: 1,
+    mutation: true,
+    effects: ["metadata"],
+    observation: "receipt",
+    milestone: "D",
+    summary: "Choose the host update channel and request a fresh check.",
+  },
   "host.update.check": {
     version: 1,
     mutation: true,

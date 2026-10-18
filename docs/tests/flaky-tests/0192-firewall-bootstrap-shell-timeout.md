@@ -95,3 +95,16 @@ aggregate-load timeouts.
 - **Owning-file rerun:** `mise run test:logged -- --name merge-firewall-isolated -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` passed unchanged (exit 0) in 9.7 seconds.
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.IG0vGk/root-and-agent-support-tests.log.gz`.
 - **Assessment:** the isolated pass confirms intermittence; root cause remains unconfirmed. No assertion, timeout or skip changed.
+
+## Worktree persistence main merge recurrence — 2026-10-18
+
+- **Original command:** the testing guide's GNU-tool PATH with `mise run test:logged -- --name merge-full-tests -- mise run test`; workspace/root/bridge/protocol reservations of 4/1/2/1 slots, with one isolated root worker on the shared macOS host.
+- **Failures:** `policy 3 allowlist  EXAMPLE.COM:443/tcp  chooses blocked HTTPS probe example.net` exceeded five seconds (5028.54 ms); `GitHub ranges come from a fresh backend seed, else live, else this container's cache` also timed out (5085.98 ms).
+- **Root counts:** 3050 passed, one skipped, four failed across 140 files (909.82 seconds executing). The other failures were Pi runtime staging and a missing README installer URL, restored in this merge.
+- **Owning-file rerun:** the same GNU-tool PATH with `mise run test:logged -- --name merge-firewall-alone -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` passed unchanged, exit 0, 12.7 seconds logged.
+- **Evidence:** `orkestrator-test-run.IqZNat/root-and-agent-support-tests.log.gz` below the platform temporary directory.
+- **Assessment:** confirmed intermittent fixture timeouts; host contention remains an unconfirmed hypothesis. No assertion, timeout or skip changed.
+
+## Agent-mail main merge recurrence — 2026-10-19
+
+The final root/support run with all GNU prerequisites timed out this case at 5004.45 ms. The unchanged complete owning file then passed sequentially with the flake-index contract owner (35.6 seconds, exit 0). Exact commands, counts and evidence are in [0500](0500-agent-mail-main-merge-validation.md). No implementation, assertion, skip or timeout changed.

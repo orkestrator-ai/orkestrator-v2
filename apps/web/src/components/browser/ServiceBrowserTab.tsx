@@ -60,6 +60,7 @@ import {
   type DiagnosisAction,
 } from "@/lib/preview-service-display";
 import { cn } from "@/lib/utils";
+import { createUuid } from "@/lib/uuid";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { ensurePreviewServiceSync, usePreviewServiceStore } from "@/stores/previewServiceStore";
@@ -116,11 +117,21 @@ function useEnvironmentServices(environmentId: string, isActive: boolean) {
   };
 }
 
+/** A tab's app-relative path and the view navigation it was chosen against. */
+interface PreviewRoute {
+  path: string;
+  basis?: number;
+}
+
+/** Recent local writes whose navigation basis is remembered. */
+const PERSISTED_BASES_MAX = 32;
+
 /** Replace this tab's durable target. The pane store persists and merges it. */
 function useRetarget(tabId: string, environmentId: string) {
   const updateTabBrowserUrl = usePaneLayoutStore((state) => state.updateTabBrowserUrl);
   return useCallback(
-    (value: string) => updateTabBrowserUrl(tabId, value, environmentId, [], -1),
+    (value: string, navigationRequestId?: string) =>
+      updateTabBrowserUrl(tabId, value, environmentId, [], -1, navigationRequestId),
     [environmentId, tabId, updateTabBrowserUrl],
   );
 }
@@ -157,7 +168,28 @@ function ServicePreview({
   const service =
     services.find((candidate) => candidate.definition.serviceId === serviceRef.serviceId) ?? null;
   const nativeBrowserPreview = hasNativeBrowserPreview();
-  const [path, setPath] = useState(serviceRef.path);
+  // `basis` is the view navigation the path was chosen against (see
+  // `BrowserPreviewAttachInput.navigationBasis`): main never navigates the
+  // view to a path chosen before its latest navigation, which is what keeps a
+  // routine re-attach from undoing a link, a redirect or Back.
+  const [route, setRouteState] = useState<PreviewRoute>(() => ({ path: serviceRef.path }));
+  const path = route.path;
+  // Event handlers compare against the latest route, not a render's closure.
+  const routeRef = useRef(route);
+  const setRoute = useCallback((next: PreviewRoute) => {
+    routeRef.current = next;
+    setRouteState(next);
+  }, []);
+  const viewNavigation = useRef<number | undefined>(undefined);
+  /** A path the user or another client asked for, against the latest view navigation. */
+  const setPath = useCallback(
+    (next: string) => setRoute({ path: next, basis: viewNavigation.current }),
+    [setRoute],
+  );
+  // Match acknowledgements by write identity, never by a previously visited
+  // path: another client can intentionally request that same path again.
+  const [writerId] = useState(() => createUuid());
+  const persistedBases = useRef(new Map<string, number | undefined>());
   const [address, setAddress] = useState("");
   const [nativeState, setNativeState] = useState<BrowserPreviewState | null>(null);
   const [transport, setTransport] = useState<BrowserPreviewTransportState | null>(null);
@@ -166,7 +198,7 @@ function ServicePreview({
   const [busy, setBusy] = useState(false);
   const [dialog, setDialog] = useState<null | "register" | "edit" | "settings">(null);
   const [iframeRevision, setIframeRevision] = useState(0);
-  const locallyPersistedPath = useRef<string | null>(null);
+  const locallyPersistedRequest = useRef<string | null>(null);
   const previewHostRef = useRef<HTMLDivElement | null>(null);
   const addressInputRef = useRef<HTMLInputElement | null>(null);
   const nativeAttachedRef = useRef(false);
@@ -212,12 +244,19 @@ function ServicePreview({
 
   // Follow the durable path when another client (or an undo) changes it.
   useEffect(() => {
-    if (locallyPersistedPath.current === serviceRef.path) {
-      locallyPersistedPath.current = null;
+    const requestId = data.navigationRequestId;
+    if (requestId && locallyPersistedRequest.current === requestId) {
+      locallyPersistedRequest.current = null;
+      return;
+    }
+    if (requestId?.startsWith(`${writerId}:`)) {
+      // Only our own write can reuse its historical basis. An evicted write
+      // (or one made before the first view event) fails closed with basis zero.
+      setRoute({ path: serviceRef.path, basis: persistedBases.current.get(requestId) ?? 0 });
       return;
     }
     setPath(serviceRef.path);
-  }, [serviceRef.path]);
+  }, [data.navigationRequestId, serviceRef.path, setPath, setRoute, writerId]);
 
   const displayUrl = service ? serviceDisplayUrl(service.definition, path) : path;
   useEffect(() => setAddress(displayUrl), [displayUrl]);
@@ -225,10 +264,17 @@ function ServicePreview({
   const persistPath = useCallback(
     (nextPath: string) => {
       if (nextPath === serviceRef.path) return;
-      locallyPersistedPath.current = nextPath;
-      retarget(formatPreviewServiceUri({ ...serviceRef, path: nextPath }));
+      const requestId = `${writerId}:${createUuid()}`;
+      locallyPersistedRequest.current = requestId;
+      const bases = persistedBases.current;
+      bases.set(
+        requestId,
+        routeRef.current.path === nextPath ? routeRef.current.basis : viewNavigation.current,
+      );
+      if (bases.size > PERSISTED_BASES_MAX) bases.delete(bases.keys().next().value!);
+      retarget(formatPreviewServiceUri({ ...serviceRef, path: nextPath }), requestId);
     },
-    [retarget, serviceRef],
+    [retarget, serviceRef, writerId],
   );
 
   // Only ever invoked by an explicit user action in the annotations panel.
@@ -269,12 +315,14 @@ function ServicePreview({
       if (state.service && !isCurrentService(state.service, serviceRef)) return;
       setNativeState(state);
       if (state.transport) setTransport(state.transport);
-      if (state.service && state.service.path !== path) {
-        setPath(state.service.path);
+      const navigation = state.service?.navigation;
+      if (navigation !== undefined) viewNavigation.current = navigation;
+      if (state.service && state.service.path !== routeRef.current.path) {
+        setRoute({ path: state.service.path, basis: navigation });
         persistPath(state.service.path);
       }
     },
-    [path, persistPath, serviceRef, tabId],
+    [persistPath, serviceRef, setRoute, tabId],
   );
 
   useEffect(() => {
@@ -336,7 +384,13 @@ function ServicePreview({
           isActive && !hasBlockingOverlay && dialog === null && !annotations.previewHidden;
         const attach =
           mode === "desktop-tunnel" && attachTarget
-            ? attachBrowserPreview({ tabId, service: attachTarget, bounds, visible })
+            ? attachBrowserPreview({
+                tabId,
+                service: attachTarget,
+                ...(route.basis === undefined ? {} : { navigationBasis: route.basis }),
+                bounds,
+                visible,
+              })
             : attachBrowserPreview({ tabId, url: compatibilityUrl!.iframeUrl, bounds, visible });
         void attach
           .then((state) => {
@@ -385,6 +439,7 @@ function ServicePreview({
     isActive,
     mode,
     nativeBrowserPreview,
+    route.basis,
     tabId,
   ]);
   /* oxlint-enable react-hooks/exhaustive-deps */
@@ -457,7 +512,16 @@ function ServicePreview({
         setAttachError(previewErrorFromUnknown(error)?.message ?? errorMessage(error));
       }
     },
-    [address, mode, persistPath, retarget, service, serviceRef, stopAnnotationForPageChange],
+    [
+      address,
+      mode,
+      persistPath,
+      retarget,
+      service,
+      serviceRef,
+      setPath,
+      stopAnnotationForPageChange,
+    ],
   );
 
   const retry = useCallback(async () => {

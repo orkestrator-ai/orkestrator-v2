@@ -33,6 +33,7 @@ import {
   releaseQueryControl,
 } from "./session-manager-background-tasks.js";
 import { appendInterruptedNotice } from "./session-manager-messages.js";
+import { syncTurnInFlightMark } from "./session-manager-turn-interruption.js";
 type SessionActivity = core.SessionActivity;
 type PromptDispatchHandle = core.PromptDispatchHandle;
 /**
@@ -566,6 +567,7 @@ export function abortSession(sessionId: string): boolean {
     session.activity = undefined;
     session.thinkingTokens = undefined;
     releaseQueryControl(session);
+    syncTurnInFlightMark(session, { stopped: true });
 
     cleanupPendingInteractions(sessionId);
     // The stop is part of the conversation: without a row the transcript just

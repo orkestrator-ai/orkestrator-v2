@@ -168,7 +168,8 @@ describe("monorepo orchestration scripts", () => {
 
     expect(tasks["smoke:cli"]?.run).toBe("bun run --cwd packages/cli smoke:pack");
     expect(tasks["publish:cli"]?.run).toContain("mise run smoke:cli");
-    expect(tasks["publish:cli"]?.run).toContain("bun publish --cwd packages/cli --access public");
+    // The publish script picks the dist-tag from the version's update channel.
+    expect(tasks["publish:cli"]?.run).toContain("bun scripts/publish-cli.ts");
     // The smoke script must verify the runtime dependencies actually resolve
     // from the installed layout, not just that the backend boots.
     expect(read("packages/cli/scripts/smoke-packed.ts")).toContain(
@@ -317,7 +318,9 @@ describe("monorepo orchestration scripts", () => {
     // stack through their own configs and whose tests need Bun types the shared
     // project deliberately does not load.
     const playwright = read("e2e/playwright.config.ts");
-    expect(playwright).toContain('testIgnore: ["agent-testing/**", "preview/**"]');
+    expect(playwright).toContain(
+      'testIgnore: ["agent-testing/**", "preview/**", "public-site/**"]',
+    );
 
     const shared = JSON.parse(read("e2e/tsconfig.json")) as { exclude?: string[] };
     expect(shared.exclude).toContain("agent-testing");

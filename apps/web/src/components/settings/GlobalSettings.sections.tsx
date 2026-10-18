@@ -1994,7 +1994,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
 
         <p className="text-xs leading-relaxed text-muted-foreground/70">
           When enabled, enter the HTTPS address shown above and this gateway token at
-          www.orkestrator.dev. Both devices must be on the same tailnet.
+          www.orkestrator.dev/connect. Both devices must be on the same tailnet.
         </p>
       </div>
     );

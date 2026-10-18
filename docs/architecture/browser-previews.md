@@ -118,6 +118,16 @@ The client never names a host, port, or container.
   remote preview cannot reach services on the user's own machine.
 - Close codes: 4401 unauthenticated, 4403 forbidden, 4409 generation changed,
   4410 revoked, 4429 capacity.
+- The view owns its path. A link, a redirect or Back moves the view first, and
+  the tab learns the new path from a state event. Every state carries
+  `service.navigation`, a per-view count of main-frame navigations (a history
+  move counts the moment it starts). The renderer sends each attach with the
+  count its path was chosen against (`navigationBasis`), and main navigates
+  the view only for a path chosen against its latest navigation. A bounds or
+  visibility re-attach still carrying the previous path, or a late echo of the
+  tab's own earlier save, therefore never undoes a navigation. Renderers that
+  send no basis fall back to navigating only for a path they have not already
+  asked for.
 
 HTTPS upstream services are not carried by the desktop tunnel. They need the
 private origin.

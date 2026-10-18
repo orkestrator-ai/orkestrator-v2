@@ -91,6 +91,10 @@ import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { ReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 import { useVirtuosoScrollState } from "../../apps/web/src/hooks/useVirtuosoScrollState";
 
+const TranscriptPagingFixture = lazy(async () => ({
+  default: (await import("./TranscriptPagingFixture")).TranscriptPagingFixture,
+}));
+
 const NativeHeldSendFixture = lazy(async () => ({
   default: (await import("./NativeHeldSendFixture")).NativeHeldSendFixture,
 }));
@@ -1775,6 +1779,12 @@ function fixtureForPath() {
   if (window.location.pathname === "/workspace-bar-height") {
     return <WorkspaceBarHeightFixture />;
   }
+  if (window.location.pathname === "/transcript-paging")
+    return (
+      <Suspense fallback={null}>
+        <TranscriptPagingFixture />
+      </Suspense>
+    );
   if (window.location.pathname === "/virtuoso-follow") return <VirtuosoFollowFixture />;
   if (window.location.pathname === "/agent-usage") return <AgentUsageFixture />;
   if (window.location.pathname === "/background-task-outcome")

@@ -221,3 +221,13 @@ describe("synthetic approval-mode retention", () => {
     },
   );
 });
+
+describe("interrupt request cleanup", () => {
+  test.each([false, true])("finalization clears only its own generation (newer=%s)", (newer) => {
+    const turn = preparedTurn();
+    const requested = turn.turnGeneration + (newer ? 1 : 0);
+    turn.session.interruptRequestedGeneration = requested;
+    finalizeTurn(turn);
+    expect(turn.session.interruptRequestedGeneration).toBe(newer ? requested : undefined);
+  });
+});

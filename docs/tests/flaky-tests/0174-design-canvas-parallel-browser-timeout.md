@@ -83,9 +83,52 @@ case at 30000 ms (335 passed, 80 skipped, five failures across 420 cases).
 then passed the owning file in 27.2 seconds. Browser reruns ran sequentially.
 Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.iMEuX0/browser.log.gz`.
 
+
+## Public landing-page review recurrence — 2026-10-18
+
+The desktop `canvas edits, script isolation, missed events, conflict and reload`
+case timed out after 30000 ms in `mise run test:logged -- --name browser -- mise run test:browser`
+(nine workers, alongside the full unit suite and other worktrees on macOS arm64).
+The component run finished with 339 passed, 80 skipped and 11 failed; nine
+failures were trace-file ENOENT errors caused by an overlapping rerun sharing
+its output directory, separate from the Monaco and canvas timeouts.
+Evidence: `orkestrator-test-run.OwH8yL/browser.log.gz` under the host temporary directory.
+
+`ORKESTRATOR_E2E_PORT=1443 mise run test:logged -- --name canvas-browser-rerun -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts --workers=1 --output=output/playwright/canvas-rerun`
+passed both unchanged viewport cases (27.2 seconds logged). This confirms
+intermittence for the canvas timeout. Shared-host contention remains a hypothesis;
+no canvas source, assertion, timeout, or skip changed.
+
+The two files affected by the artifact collision also passed unchanged with
+one worker and separate output directories: `e2e/AgentUsage.spec.ts` in 27.5 s
+(`--output=output/playwright/usage-rerun`) and
+`e2e/BackgroundTaskOutcome.spec.ts` in 43.5 s
+(`--output=output/playwright/background-rerun`). Both used
+`mise run test:logged -- --name <label> -- bunx playwright test --config e2e/playwright.config.ts <owning-file> --workers=1 --output=<directory>`.
+These ENOENT failures were caused by the overlapping validation commands,
+not evidence of intermittent product behavior.
+
+
+## Landing-page main merge recurrence — 2026-10-18
+
+`ORKESTRATOR_E2E_PORT=49295 ORKESTRATOR_PUBLIC_E2E_PORT=49296 mise run test:logged -- --name merge-browser-isolated-ports -- mise run test:browser` reported 303 passed, 80 skipped and 49 failed with nine workers alongside other host validation. This owner failed in:
+
+- `canvas edits, script isolation, missed events, conflict and reload`
+- `canvas edits, script isolation, missed events, conflict and reload`
+
+All 21 failing owners, including this unchanged file, passed with one worker in 428.8 seconds (exit 0). The complete rerun command, individual failure messages and evidence paths are in [0382](0382-component-browser-parallel-load.md). No timeout, assertion, skip or owning source changed.
+
+## CLI matrices second main merge — 2026-10-18
+
+The desktop canvas case timed out at 30 seconds in the aggregate, and both mobile and desktop canvas cases timed out in the unchanged one-worker owner. This observation remains unresolved. Full commands, 339-pass/80-skip/13-failure aggregate and 96-pass/15-skip/three-failure focused counts, and evidence paths are in [0382](0382-component-browser-parallel-load.md). No implementation, assertion, timeout or skip changed.
+
 ## Agent-mail review validation recurrence — 2026-10-19
 
 - `mise run test:logged -- --name browser -- mise run test:browser` timed out both unchanged viewport cases in the five-worker run alongside repository and isolated-browser validation (346 passed, 80 skipped, six failed in 7.5 minutes).
 - The unchanged owning file passed alone: `mise run test:logged -- --name browser-design-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts --workers=1 --output output/playwright/mail-review-design` (exit 0, 19.2 seconds). Browser owner reruns ran sequentially.
 - Evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.xmUT5O/browser.log.gz`.
 - No timeout, assertion or skip changed. Host contention is a possible contributor, not an established cause.
+
+## Agent-mail main merge recurrence — 2026-10-19
+
+The aggregate failed this owner and its unchanged owning file passed with one worker. Exact commands, symptoms, counts, timings and bounded evidence are recorded in [0500](0500-agent-mail-main-merge-validation.md). No implementation, assertion, timeout or skip changed.

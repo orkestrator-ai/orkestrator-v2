@@ -32,3 +32,18 @@ other workspace package passed; aggregate exit 1 after 852.0 seconds.
 - **Failure:** the case exceeded its 5000 ms deadline at 5121.09 ms.
 - **Owning-file rerun:** `bun test --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts` passed unchanged (37 passed, 31.6 seconds).
 - **Assessment:** a second isolated pass; no move implementation, assertion, timeout or skip changed.
+
+
+## Landing-page main merge recurrence — 2026-10-18
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test` with the testing guide's GNU-tool PATH prefix; workspace/root/bridges/protocol groups used 4/1/2/1 slots and backend used two isolated workers. Other worktrees and browser suites were active.
+- **Owning-file failures:**
+
+- move_environment > moves a worktree with nested submodules (same disk) [5257.74ms]
+- move_environment > moves a worktree with nested submodules (copy) [5212.07ms]
+- move_environment > a failed submodule re-link restores the original checkout [5426.36ms]
+- restart recovery re-links submodules of an adopted or abandoned copy [5141.01ms]
+
+- **Owning-file rerun:** `mise run test:logged -- --name merge-15f6cd-backend-owners -- bun test --cwd apps/backend ./src/core/review-validation-worker.test.ts ./src/core/environment-move.test.ts ./src/core/coordinator-service.test.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures` passed all four unchanged files with one worker, exit 0, in 121.2 seconds.
+- **Evidence:** `orkestrator-test-run.iFuHsy/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory. Backend reported 9025 passed, 41 skipped and 17 failed across 9083 tests, with 12 errors between tests.
+- **Assessment:** confirmed intermittent recurrence; no implementation, assertion, timeout or skip in these owners changed. Shared-host contention remains a hypothesis.

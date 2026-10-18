@@ -370,6 +370,8 @@ export function isPipelineTranscriptReference(
 }
 
 export interface PipelineSession {
+  /** One durable continuation after a provider restart cut the turn short. */
+  restartContinuationSent?: boolean;
   phase: PipelineSessionPhase;
   /**
    * The harness this session was created on.
@@ -1098,6 +1100,8 @@ function isPipelineSession(value: unknown): value is PipelineSession {
       (typeof value.fixWorktreeFingerprintAtStart === "string" &&
         /^[0-9a-f]{64}$/i.test(value.fixWorktreeFingerprintAtStart))) &&
     (value.structuredWaitStartedAt === undefined || isIsoDate(value.structuredWaitStartedAt)) &&
+    (value.restartContinuationSent === undefined ||
+      typeof value.restartContinuationSent === "boolean") &&
     (value.structuredReportRepairAttempts === undefined ||
       isNonNegativeInteger(value.structuredReportRepairAttempts)) &&
     (value.interactionSummary === undefined ||

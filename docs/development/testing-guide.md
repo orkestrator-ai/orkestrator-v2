@@ -53,6 +53,23 @@ behind a running profile. `tests/unit/playwright-spec-loading.test.ts` lists
 every Playwright config under Node in `mise run test`, so such an import fails
 there first.
 
+### Public-site smoke tests
+
+`mise run test:browser` also runs `e2e/public-site/` against a fresh production
+build of the public client. To run only that smoke flow:
+
+```bash
+mise run test:logged -- --name public-browser -- \
+  bunx playwright test --config e2e/public-site/playwright.config.ts
+```
+
+It checks landing-page login, deferred connection-screen loading, direct loads
+and reloads of `/connect`, the home link, and install-command clipboard feedback
+at desktop and narrow widths. This pre-connection flow needs no backend,
+credentials, or isolated application profile. The server is owned and stopped
+by Playwright; `ORKESTRATOR_PUBLIC_E2E_PORT` overrides its default port 4423.
+Authenticated renderer flows still use isolated profiles as described below.
+
 ### Native browser controls
 
 `e2e/AgentLaunchDialog.spec.ts` uses Google Chrome to exercise the native
@@ -241,6 +258,14 @@ ORKESTRATOR_TEST_PREVIEW_VITE_DIR=/tmp/preview-vite \
 ORKESTRATOR_PREVIEW_BENCH=1 mise run test:logged -- --name preview-bench -- \
   bun test --cwd apps/backend ./src/preview-bench.test.ts --parallel=1
 ```
+
+The real Electron window with the desktop tunnel on needs no variable: it is
+`e2e/agent-testing/service-preview-electron.spec.ts`, part of
+`mise run test:agent:electron`. It launches Electron on a disposable
+agent-test profile with `ORKESTRATOR_PREVIEW_TRANSPORT=1` (agent-test backends
+keep that variable and `ORKESTRATOR_PREVIEW_RELAY`) and two preview-app
+fixtures. Run it alone with
+`bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts service-preview-electron.spec.ts`.
 
 Record results in the evidence log of
 [service-preview-rollout.md](../todo/service-preview-rollout.md#evidence-log).
@@ -438,7 +463,9 @@ also keeps Bun's report for every failing test it sees, wherever it appeared.
 That report is the `(fail)` line plus the preceding error, expectation and
 stack lines. Context comes only from lines with the same Turbo task prefix,
 because streamed tasks interleave. These reports print under `--- Failing tests
-in <group> ---` after the tail. On GitHub Actions, `lint.yml` points
+in <group> ---` after the tail, and every tail line is capped at 2,000
+characters: one longer line once cut the GitHub Actions log off before the
+reports. On GitHub Actions, `ci.yml` points
 `ORKESTRATOR_TEST_LOG_DIR` at the runner's temporary directory and uploads the
 compressed logs as the `test-logs-<run>-<attempt>` artifact when the job fails.
 
@@ -713,8 +740,12 @@ Turbo runs each package script from that package's directory, and Bun reads
 root. Backend, desktop, package and bridge test scripts therefore name the
 Node-only preload explicitly with `--preload ../../tests/setup-node.ts`.
 Dropping it is not a silent no-op: it is what sets `CODEX_BRIDGE_NO_SERVER`,
-isolates the git configuration, and installs the bounded diagnostics, so
-without it the codex bridge suite binds a real port and fails.
+isolates the git configuration and the worktree root, and installs the bounded
+diagnostics, so without it the codex bridge suite binds a real port and fails.
+`apps/backend/bunfig.toml` names the same preload, so a bare `bun test <file>`
+from `apps/backend` is isolated too; Bun loads a preload named in both places
+once. Without it a backend test fell back to `ORKESTRATOR_WORKTREE_DIR` from
+the shell, or to a non-canonical `os.tmpdir()` such as macOS `/tmp`.
 
 The runner also keeps Bun timing profiles in a private temporary directory
 keyed by the Git common directory and worktree path. Bun updates these files after each aggregate

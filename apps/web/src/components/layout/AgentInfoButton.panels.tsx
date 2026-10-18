@@ -1197,6 +1197,9 @@ export function UsagePanel({
         {usage.cacheReadTokens !== undefined ? (
           <Metric label="Cache read" value={formatTokenCount(usage.cacheReadTokens)} />
         ) : null}
+        {usage.cacheWriteTokens !== undefined ? (
+          <Metric label="Cache write" value={formatTokenCount(usage.cacheWriteTokens)} />
+        ) : null}
         {usage.reasoningTokens !== undefined ? (
           <Metric label="Reasoning" value={formatTokenCount(usage.reasoningTokens)} />
         ) : null}

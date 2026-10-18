@@ -463,7 +463,9 @@ also keeps Bun's report for every failing test it sees, wherever it appeared.
 That report is the `(fail)` line plus the preceding error, expectation and
 stack lines. Context comes only from lines with the same Turbo task prefix,
 because streamed tasks interleave. These reports print under `--- Failing tests
-in <group> ---` after the tail. On GitHub Actions, `lint.yml` points
+in <group> ---` after the tail, and every tail line is capped at 2,000
+characters: one longer line once cut the GitHub Actions log off before the
+reports. On GitHub Actions, `ci.yml` points
 `ORKESTRATOR_TEST_LOG_DIR` at the runner's temporary directory and uploads the
 compressed logs as the `test-logs-<run>-<attempt>` artifact when the job fails.
 

@@ -88,6 +88,21 @@ restricted containers no longer need `NET_ADMIN` can the sudo grants shrink or
    or `no-new-privileges` be reconsidered.
 4. Optional: change mode in place (restricted to full and back) instead of
    requiring a rebuild.
+5. Stop containers spending the host's Grok refresh token (high). The
+   entrypoint copies host `~/.grok/auth.json` into container state, refresh
+   token included (`docker/entrypoint.sh`, Grok import). xAI refresh tokens
+   are single-use: on 2026-10-18 an agent-test profile holding the same kind
+   of copy refreshed once, after which the next copy of the host file failed
+   its refresh and Grok cleared the login
+   ([web-annotation-qualification.md](web-annotation-qualification.md), "Runs
+   on 2026-10-18"). A container whose copy refreshes first therefore signs the
+   host (and every other container) out, and a host refresh leaves the
+   container's copy stale. The agent-test harness now blanks the refresh token
+   (`restrictGrokAuthSnapshot`); containers need their own answer, such as an
+   access-token-only copy refreshed from the host on start, or Grok's own
+   API-key mode. Check Codex and Claude container imports for the same
+   pattern. Done when a Grok container that runs past the host access token's
+   expiry leaves the host login working.
 
 ### Qualification
 

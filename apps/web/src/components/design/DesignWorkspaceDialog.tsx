@@ -33,6 +33,7 @@ import {
   designApi,
   designBackendKey,
   failureOf,
+  getCapabilities,
   importDesignDocument,
   importDesignHostFile,
 } from "@/lib/design-client";
@@ -295,12 +296,22 @@ export function DesignWorkspaceDialog({
     const originPaneId = usePaneLayoutStore
       .getState()
       .environments.get(environmentId)?.activePaneId;
-    const sessions = view?.protocol === "v2" && view.capabilities?.sessions;
     const images = withAgent ? briefImages : [];
     setBusy(true);
     setError(null);
     setRecovery(null);
     try {
+      // Readiness also probes the renderer, so it can still be loading when
+      // Create is pressed. Session support does not depend on the renderer:
+      // read it directly rather than silently leave the agent unlinked.
+      const sessions = view
+        ? view.protocol === "v2" && Boolean(view.capabilities?.sessions)
+        : withAgent &&
+          (await getCapabilities().then(
+            (capabilities) => Boolean(capabilities?.sessions),
+            () => false,
+          ));
+      if (launchScope !== scopeRef.current) return;
       const result = await launchDesignWorkspace({
         name,
         agent: withAgent ? agent : null,

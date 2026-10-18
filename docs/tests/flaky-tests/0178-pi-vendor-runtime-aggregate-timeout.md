@@ -626,6 +626,33 @@ The unchanged owning file passed alone with
 Host load was about 47 with other validation active. Resource contention remains
 an unconfirmed hypothesis; no timeout or assertion changed.
 
+## Recurrence on 2026-10-18
+
+`mise run test:logged -- --name full-suite -- mise run test` on branch
+`qualify-annotation-live-implement-0330a0bacc01` (`50c26708`, a dev:test
+harness, e2e and docs change) on a heavily loaded macOS host. Evidence is in
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.Zq7Cut/`. Thirty-second timeout (30,006 ms) in the root group. The unchanged
+owning file passed alone (`bun test tests/unit/pi-bridge-vendor.test.ts`,
+4 passed, 20.5 s).
+
+## Main merge validation — 2026-10-18
+
+- **Command:** `mise run test:logged -- --name merge-full-suite -- mise run test`, aggregate reservations 4/1/2/1; one worker for the owning package/group.
+- **Observation:** 30,083.20 ms timeout; owning file passed unchanged in 26.5 s.
+- **Owning-file rerun:** `mise run test:logged -- --name merge-root-rerun-pi-bridge-vendor -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` (exit 0).
+- **Evidence:** `orkestrator-test-run.LitzDV/root-and-agent-support-tests.log.gz`; root group had 3051 passed, 1 skipped and 4 failed, including the separate README installer-link regression; Codex group had 2227 passed and 4 failed.
+- **Assessment:** Confirmed recurrence; no implementation, assertion, skip or timeout changed.
+
+**Recurrence (2026-10-18, qualify-design-live-cycle):** `mise run test:logged -- --name full-test-merged -- mise run test` on the design branch merged with `origin/main` at `68dc1c8d` hit the same 30,000 ms timeout while other workers loaded the host. `mise run test:logged -- --name pi-vendor -- bun test tests/unit/pi-bridge-vendor.test.ts` then passed unchanged (exit 0, 14.1 seconds). Nothing in the owning file or its implementation changed.
+
+- **Design live-cycle review recurrence (2026-10-18):** the aggregate
+  `mise run test:logged -- --name review-full -- mise run test` timed out
+  the unchanged staging case at 30 seconds on the shared host.
+  `mise run test:logged -- --name review-pi-vendor-rerun -- bun test
+  ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed
+  the owning file unchanged in 20.7 seconds. No timeout, skip, or assertion
+  was changed.
+
 ## Worktree persistence main merge observation — 2026-10-18
 
 - **Original command:** the testing guide's GNU-tool PATH with `mise run test:logged -- --name merge-full-tests -- mise run test`; workspace/root/bridge/protocol reservations of 4/1/2/1 slots on the shared macOS host.
@@ -633,7 +660,6 @@ an unconfirmed hypothesis; no timeout or assertion changed.
 - **Owning-file rerun:** `mise run test:logged -- --name merge-pi-vendor-alone -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures`, with the same GNU-tool PATH, also timed out at 30001.41 ms (three passed, one failed; exit 1, 30.8 seconds logged).
 - **Evidence:** `orkestrator-test-run.IqZNat/root-and-agent-support-tests.log.gz`; isolated `orkestrator-test-run.Ys2WeB/merge-pi-vendor-alone.log.gz`, below the platform temporary directory.
 - **Assessment:** this occurrence does not independently establish a flake. Runtime staging remains an unresolved validation limitation; no implementation, assertion, timeout or skip changed.
-
 
 ## Public landing-page review validation — 2026-10-18
 
@@ -667,3 +693,20 @@ passed all eight cases. Bridge and protocol-lockfile groups passed.
 `mise run test:logged -- --name merge-tests -- mise run test` timed out staging the SDK at 30013.72 ms (root: 3083 passed, one skipped, one failed). The unchanged owning file also timed out at 30000.24 ms with `mise run test:logged -- --name merge-pi-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` (three passed, one failed, exit 1 in 33.1 seconds). Evidence: `orkestrator-test-run.ItrRrn/root-and-agent-support-tests.log.gz` and `orkestrator-test-run.ancRNi/merge-pi-owner.log.gz` below the host temporary directory. This occurrence does not independently establish a flake; runtime staging remains unresolved. No implementation, assertion, timeout or skip changed.
 
 The warm aggregate `mise run test:logged -- --name merge-tests-warm -- mise run test` passed runtime staging. Workspace, bridges and protocol passed; root reported 3083 passed, one skipped and one failure from a malformed index link introduced while recording validation. That link was corrected and `mise run test:logged -- --name merge-flake-index-final -- bun test ./tests/unit/flaky-tests-index.test.ts --parallel=1 --only-failures` passed (exit 0, 0.1 seconds). The warm aggregate exited 1 in 320.7 seconds; evidence is in `orkestrator-test-run.u9t34x/`. This does not replace the failed isolated staging observation above.
+
+## Design live-cycle second main merge — 2026-10-18
+
+- **Original command:** `mise run test:logged -- --name merge-full -- mise run test`, with the testing guide's GNU-tool PATH, merging `origin/main` at `c85ab60a` into pre-merge HEAD `0ee3569b`.
+- **Workers:** workspace/root/bridges/protocol reservations of 4/1/2/1 workers, alongside browser validation on the shared macOS host.
+- **Failure:** `loads Pi's supported SDK from the staged runtime closure` exceeded 30000 ms (30004.80 ms). Root/support reported 3091 passed, one skipped and one failed across 3093 tests in 144 files (894.27 s).
+- **Owning-file rerun:** `mise run test:logged -- --name merge-pi-vendor-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` also timed out at 30000.12 ms (three passed, one failed; exit 1, 35.3 s logged).
+- **Evidence:** `orkestrator-test-run.yluX61/root-and-agent-support-tests.log.gz`; isolated `orkestrator-test-run.O3xMWd/merge-pi-vendor-owner.log.gz`, below the host temporary directory.
+- **Assessment:** this observation does not independently establish a flake. Pi runtime staging remains an unresolved validation limitation; no implementation, assertion, timeout or skip changed.
+
+**Post-aggregate owning-file rerun (same merge, 2026-10-18):** after the full suite finished, `mise run test:logged -- --name merge-post-suite-pi-bridge-vendor -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed unchanged, exit 0, in 27.9 seconds logged. Together with the aggregate failure this confirms an intermittent recurrence; the earlier isolated failure is retained above. No implementation, assertion, timeout or skip changed.
+
+## Electron preview second main merge — 2026-10-18
+
+`mise run test:logged -- --name merge2-full-tests -- mise run test` merged `origin/main` at `f51c7252` into pre-merge HEAD `390667ce`. It ran alongside the component/public-site browser suite and other host work. Workspace, bridges and protocol passed; root reported 3096 passed, one skipped and the staged-runtime timeout at 30004.42 ms. Aggregate exit 1 in 443.0 seconds. The unchanged owning file then passed with `mise run test:logged -- --name merge2-pi-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` (exit 0, 7.4 seconds). Evidence: `orkestrator-test-run.BefiWd/root-and-agent-support-tests.log.gz` below the host temporary directory. This confirms an intermittent recurrence; no implementation, assertion, timeout or skip changed.
+
+The second-merge warm aggregate (`merge2-warm-tests`) passed the root/support group in 172.1 seconds. Its sole failure was the unrelated Claude fixture recorded in [0473](0473-claude-status-plan-fixture-directory-race.md), which passed its own isolated rerun.

@@ -15,3 +15,10 @@
 Concurrent fixture I/O is a possible cause, not a confirmed diagnosis. The
 OpenCode auth-status change does not touch skill scanning. No test deadline,
 assertion or skip was changed.
+
+## CLI matrices second main merge — 2026-10-18
+
+Original command: `mise run test:logged -- --name merge2-tests -- mise run test`, workspace/root/bridges/protocol reservations 4/1/2/1 alongside component and isolated browser validation. The same skill-bound test hook timed out (8071.13 ms). Its unchanged owner passed in the four-file one-worker `merge2-late-backend-owners` rerun (exact command and overall 163-pass/one-failure result in 0442).
+Aggregate result: `merge2-tests` exited 1 after 1132.1 seconds logged. Backend reported 9081 passed, 41 skipped and 11 failed across 9133 tests in 485 files (1118.57 seconds). Every other workspace package passed; root/support passed 3084 tests with one skip, and protocol regeneration passed. Evidence: `orkestrator-test-run.0J1rem/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
+
+The unchanged owner pass confirms intermittence. No implementation, assertion, timeout or skip changed.

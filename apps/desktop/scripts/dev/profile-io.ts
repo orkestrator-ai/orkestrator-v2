@@ -478,14 +478,61 @@ export async function seedInstalledAgentToolchains(
   return { seeded, failed };
 }
 
+/** A Grok access token this close to expiry is not worth handing over. */
+const GROK_SNAPSHOT_MIN_VALIDITY_MS = 60_000;
+
+/**
+ * Reduce a copy of the host's Grok `auth.json` to what an isolated profile
+ * may hold: each login's access token, with its refresh token blanked.
+ *
+ * xAI refresh tokens are single-use. A profile that refreshes with the host's
+ * token spends it, and the host's own Grok then fails its next refresh and
+ * clears the login (observed with Grok 1.0.52 on 2026-10-18). Without a
+ * refresh token, a profile whose access token expires is signed out on its
+ * own copy only, and the host login is never touched. Logins that have
+ * already expired, or whose shape is unknown, are dropped rather than copied.
+ */
+export function restrictGrokAuthSnapshot(
+  text: string,
+  nowMs = Date.now(),
+): { text: string } | { withheld: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { withheld: "the host Grok auth.json is not valid JSON" };
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { withheld: "the host Grok auth.json has an unknown shape" };
+  }
+  const kept: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(parsed)) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const login = { ...(entry as Record<string, unknown>) };
+    if ("expires_at" in login) {
+      const expiresAt = typeof login.expires_at === "string" ? Date.parse(login.expires_at) : NaN;
+      if (!(expiresAt - nowMs >= GROK_SNAPSHOT_MIN_VALIDITY_MS)) continue;
+    }
+    if ("refresh_token" in login) login.refresh_token = "";
+    kept[key] = login;
+  }
+  if (Object.keys(kept).length === 0) {
+    return {
+      withheld:
+        "the host Grok login has expired and the profile may not refresh it; run grok on the host (grok login if it is signed out there), then restart the profile",
+    };
+  }
+  return { text: JSON.stringify(kept) };
+}
+
 /**
  * Copy the provider logins an isolated profile cannot point at, re-read on
  * every start so a refreshed or removed host login wins.
  *
  * Grok has no documented home-directory override, so an isolated local test
  * cannot point only Grok at the host home. Copy just its credential into the
- * private profile instead; sessions, prompts, logs, and the rest of HOME stay
- * isolated.
+ * private profile instead, reduced by `restrictGrokAuthSnapshot`; sessions,
+ * prompts, logs, and the rest of HOME stay isolated.
  *
  * Cursor's login is Orkestrator's own, in the production data directory: the
  * stored key in `config.json`, else the key minted by the in-app sign-in. Only
@@ -495,7 +542,7 @@ export async function seedInstalledAgentToolchains(
  */
 export async function seedAgentTestProviderCredentials(
   profile: RuntimeProfile,
-  options: ModelCacheSeedOptions = {},
+  options: ModelCacheSeedOptions & { warn?: (message: string) => void; nowMs?: number } = {},
 ): Promise<string[]> {
   const roots = options.roots ?? defaultRuntimeProfileRoots();
   const grokDestination = path.join(
@@ -505,21 +552,59 @@ export async function seedAgentTestProviderCredentials(
     ".grok",
     "auth.json",
   );
+  // The host copy lands beside the destination, where Grok never reads, and
+  // only its restricted form is published under the name Grok loads.
+  const grokHostCopy = `${grokDestination}.host-copy`;
   const seeded = profile.credentialSources.includes("grok")
     ? await seedBoundedFiles(
         [
           {
             label: "grok/auth.json",
             source: path.join(roots.homeDir, ".grok", "auth.json"),
-            destination: grokDestination,
+            destination: grokHostCopy,
             replace: true,
           },
         ],
         options,
       )
     : [];
+  let withheld: string | undefined;
+  const temporary = `${grokDestination}.${process.pid}.${Date.now()}.tmp`;
+  if (seeded.includes("grok/auth.json")) {
+    const restricted = await readFile(grokHostCopy, "utf8")
+      .then((text) => restrictGrokAuthSnapshot(text, options.nowMs))
+      .catch(() => ({ withheld: "the host Grok auth.json could not be read back" }));
+    if ("text" in restricted) {
+      try {
+        await writeFile(temporary, restricted.text, { mode: 0o600, flag: "wx" });
+        await rename(temporary, grokDestination);
+      } catch {
+        // Optional provider state must not prevent the profile from starting.
+        // Do not include filesystem errors, which can contain credential data.
+        withheld = "the restricted Grok snapshot could not be published";
+      } finally {
+        await rm(temporary, { force: true }).catch(() => {
+          withheld ??= "the temporary Grok snapshot could not be removed";
+        });
+      }
+    } else {
+      withheld = restricted.withheld;
+    }
+  }
+  await rm(grokHostCopy, { force: true }).catch(() => {
+    withheld ??= "the host Grok snapshot copy could not be removed";
+  });
+  if (withheld && seeded.includes("grok/auth.json")) {
+    seeded.splice(seeded.indexOf("grok/auth.json"), 1);
+  }
   // An absent or failed refresh must not leave a previous account signed in.
-  if (!seeded.includes("grok/auth.json")) await rm(grokDestination, { force: true });
+  if (!seeded.includes("grok/auth.json")) {
+    await rm(grokDestination, { force: true }).catch(() => {
+      withheld =
+        "the previous Grok snapshot could not be removed; reset the profile before using Grok";
+    });
+  }
+  if (withheld) options.warn?.(`Could not seed Grok credentials in this profile: ${withheld}.`);
   if (await seedAgentTestCursorCredential(profile, roots)) seeded.push(CURSOR_SNAPSHOT_LABEL);
   return seeded;
 }

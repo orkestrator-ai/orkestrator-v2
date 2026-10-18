@@ -795,7 +795,7 @@ describe("ProviderMcpSettings", () => {
     offline = true;
     await emitMcpChanged();
     expect(await screen.findByText("Failed to fetch")).toBeTruthy();
-    expect(screen.queryByText("docs-new")).toBeNull();
+    expectDomAbsent(screen.queryByText("docs-new"), "refreshed row before reconnecting");
 
     offline = false;
     await act(async () => window.dispatchEvent(new Event("online")));

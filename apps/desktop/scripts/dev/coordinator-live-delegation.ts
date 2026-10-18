@@ -323,45 +323,70 @@ export function isCarrierText(text: string): boolean {
 // Mail evidence
 
 /**
- * Delivered messages injected within this long of each other, with no echoed
- * carrier row to say otherwise, are taken to be one carrier. A second carrier
- * waits for the turn the first one started, which is far longer.
- */
-const CARRIER_CLUSTER_MS = 5_000;
-
-/**
- * How many carriers delivered these messages.
- *
- * Not `injectRequestId`: it is assigned per message at send time, and a batch
- * dispatches under its first message's id while the others keep their own.
- * The coordinator's transcript is the evidence: each carrier is one user row
- * holding the message ids it delivered. A bridge that does not echo the
- * carrier leaves the store's `injectedAt`, clustered by
- * {@link CARRIER_CLUSTER_MS}.
+ * Counts authoritative transcript carrier rows. Missing echoes leave the count
+ * unverified (null): neither per-message injectRequestId nor nearby injection
+ * timestamps identify the dispatch which carried a batch.
  */
 export function carrierCount(
   messages: readonly DelegationMailMessage[],
   userTexts: readonly string[],
-): number {
+): number | null {
   const delivered = messages.filter((message) => message.placement === "injected");
-  if (delivered.length === 0) return 0;
   const rows = new Set<number>();
-  const unechoed: DelegationMailMessage[] = [];
   for (const message of delivered) {
-    const row = userTexts.findIndex((text) => isCarrierText(text) && text.includes(message.id));
-    if (row >= 0) rows.add(row);
-    else unechoed.push(message);
+    const matching = userTexts.flatMap((text, index) =>
+      isCarrierText(text) && text.includes(message.id) ? [index] : [],
+    );
+    if (matching.length === 0) return null;
+    for (const row of matching) rows.add(row);
   }
-  const times = unechoed
-    .map((message) => (message.injectedAt ? Date.parse(message.injectedAt) : Number.NaN))
-    .toSorted((a, b) => a - b);
-  let clusters = 0;
-  let last = Number.NEGATIVE_INFINITY;
-  for (const time of times) {
-    if (!Number.isFinite(time) || time - last > CARRIER_CLUSTER_MS) clusters += 1;
-    last = time;
+  return rows.size;
+}
+
+/** Decode only structured MCP results, never text mentioning the guard field. */
+function repeatedReadResult(text: string): boolean {
+  const decode = (value: unknown, depth: number): boolean => {
+    if (depth > 4) return false;
+    if (typeof value === "string") {
+      try {
+        return decode(JSON.parse(value), depth + 1);
+      } catch {
+        return false;
+      }
+    }
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const result = value as Record<string, unknown>;
+    if (result.isError === true || result.error !== undefined) return false;
+    if (result.repeatedRead === true) return true;
+    if (Array.isArray(result.content)) {
+      return result.content.some(
+        (block) => block?.type === "text" && decode(block.text, depth + 1),
+      );
+    }
+    return result.structuredContent !== undefined && decode(result.structuredContent, depth + 1);
+  };
+  return decode(text, 0);
+}
+
+function canonicalArguments(text: string): string | null {
+  const sort = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(sort);
+    if (value && typeof value === "object")
+      return Object.fromEntries(
+        Object.entries(value)
+          .toSorted(([a], [b]) => a.localeCompare(b))
+          .map(([key, item]) => [key, sort(item)]),
+      );
+    return value;
+  };
+  try {
+    const value: unknown = JSON.parse(text);
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? JSON.stringify(sort(value))
+      : null;
+  } catch {
+    return null;
   }
-  return rows.size + clusters;
 }
 
 function fromWorker(message: DelegationMailMessage, environmentId: string): boolean {
@@ -445,6 +470,8 @@ export interface AsyncScenarioInput {
   delegations: readonly DelegationRecord[];
   /** `read_messages` results of the poll turn, in call order. */
   pollResults: readonly string[];
+  /** Calls from the poll turn only, aligned with pollResults. */
+  pollCalls: readonly ReadOnlyToolCall[];
   pollReport?: { repeatedRead: boolean } | { error: string };
   escapedInteractions: readonly AgentInteractionKind[];
   /** Interactions that reached the harness from a worker. */
@@ -659,13 +686,21 @@ export function evaluateAsyncScenario(input: AsyncScenarioInput): CoordinatorLiv
   );
 
   // 6. Identical reads answered with repeatedRead.
-  const repeatedAt = input.pollResults.findIndex((result) => result.includes("repeatedRead"));
+  const repeatedAt = input.pollResults.findIndex(repeatedReadResult);
+  const pollCalls = orkestratorToolCalls(input.pollCalls, "read_messages");
+  const pollArgs = pollCalls.map((call) => canonicalArguments(call.args));
+  const identical =
+    pollArgs.length === input.pollResults.length &&
+    pollArgs.length === 5 &&
+    pollArgs[0] !== null &&
+    pollArgs.every((args) => args === pollArgs[0]) &&
+    pollCalls.every((call) => call.state === "succeeded");
   const reported = input.pollReport && !("error" in input.pollReport) ? input.pollReport : null;
   checks.push(
     check(
       "repeated-read-guard",
-      input.pollResults.length >= 4 && repeatedAt >= 3 && repeatedAt <= 4,
-      `${input.pollResults.length} read_messages calls, first repeatedRead at call ${repeatedAt + 1}; agent reported ${
+      identical && repeatedAt >= 3 && repeatedAt <= 4,
+      `${input.pollResults.length} read_messages calls, identical arguments ${identical}, first repeatedRead at call ${repeatedAt + 1}; agent reported ${
         reported
           ? String(reported.repeatedRead)
           : ((input.pollReport as { error?: string } | undefined)?.error ?? "nothing")
@@ -825,14 +860,43 @@ export function evaluateFamilyScenario(input: FamilyScenarioInput): CoordinatorL
       `${byEnvironmentOnly} send_message calls to the first worker by environment id alone, ${pings.length} delivered`,
     ),
   );
+  // Distinct requests/replies, ordered by persisted message creation times.
+  // Equal or absent timestamps do not establish the causal exchange.
+  let previousReply = Number.NEGATIVE_INFINITY;
+  const used = new Set<string>();
+  const alternating = expectedPings.every((body) => {
+    const requests = pings.filter((message) => message.body?.includes(body));
+    const replies = oneReports.filter((message) => message.body?.includes(body));
+    if (requests.length !== 1 || replies.length !== 1) return false;
+    const request = requests[0]!;
+    const reply = replies[0]!;
+    const requestedAt = Date.parse(request.createdAt);
+    const repliedAt = Date.parse(reply.createdAt);
+    if (
+      used.has(request.id) ||
+      used.has(reply.id) ||
+      request.placement !== "injected" ||
+      reply.placement !== "injected" ||
+      !Number.isFinite(requestedAt) ||
+      !Number.isFinite(repliedAt) ||
+      requestedAt <= previousReply ||
+      repliedAt <= requestedAt
+    )
+      return false;
+    used.add(request.id);
+    used.add(reply.id);
+    previousReply = repliedAt;
+    return true;
+  });
   const exchanged = pingsAsked + pingsAnswered;
   checks.push(
     check(
       "ten-more-alternating",
       pingsAsked === FAMILY_PING_COUNT &&
         pingsAnswered === FAMILY_PING_COUNT &&
+        alternating &&
         input.assistantText.includes(FAMILY_DONE_MARKER),
-      `${pingsAsked} asked and ${pingsAnswered} answered of ${FAMILY_PING_COUNT} (${Math.max(0, exchanged - 2)} after the first follow-up and reply); done line ${input.assistantText.includes(FAMILY_DONE_MARKER)}`,
+      `${pingsAsked} asked and ${pingsAnswered} answered; alternating ${alternating}; of ${FAMILY_PING_COUNT} (${Math.max(0, exchanged - 2)} after the first follow-up and reply); done line ${input.assistantText.includes(FAMILY_DONE_MARKER)}`,
     ),
   );
 

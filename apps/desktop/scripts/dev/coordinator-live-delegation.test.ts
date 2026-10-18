@@ -300,6 +300,11 @@ function passingAsync(): AsyncScenarioInput {
     mail: [progress, report, silentNotice],
     observations,
     delegations: [completed(REPORTER, "report"), completed(SILENT, "notice")],
+    pollCalls: Array.from({ length: 5 }, () => ({
+      name: "read_messages",
+      args: '{"environmentId":"coordinator","tabId":"tab-1"}',
+      state: "succeeded" as const,
+    })),
     pollResults: ["{}", "{}", "{}", '{"messages":[],"repeatedRead":true}', "{}"],
     pollReport: { repeatedRead: true },
     escapedInteractions: [],
@@ -371,7 +376,10 @@ describe("async scenario", () => {
     const noCarrierRows = input.messages.filter(
       (message) => !isCarrierText(String(message.content)),
     );
-    expect(failedChecks(evaluateAsyncScenario({ ...input, messages: noCarrierRows }))).toEqual([]);
+    expect(failedChecks(evaluateAsyncScenario({ ...input, messages: noCarrierRows }))).toEqual([
+      "held-then-one-carrier",
+      "one-wake-per-delegation",
+    ]);
     const earlyInjection = {
       ...input,
       messages: noCarrierRows,
@@ -381,7 +389,11 @@ describe("async scenario", () => {
         silentNotice,
       ],
     };
-    expect(failedChecks(evaluateAsyncScenario(earlyInjection))).toEqual(["queued-before-mail"]);
+    expect(failedChecks(evaluateAsyncScenario(earlyInjection))).toEqual([
+      "queued-before-mail",
+      "held-then-one-carrier",
+      "one-wake-per-delegation",
+    ]);
   });
 
   test("two carriers, a leak while running, or a reporter notice fail the hold", () => {
@@ -412,13 +424,13 @@ describe("async scenario", () => {
     ).toEqual(["held-then-one-carrier", "one-wake-per-delegation"]);
   });
 
-  test("carriers are counted from echoed rows, else by injection time", () => {
+  test("carrier count is unverified without complete echoed rows", () => {
     const rows = [`<orkestrator-peer-message> ${progress.id} ${report.id}`];
     expect(carrierCount([progress, report], rows)).toBe(1);
-    expect(carrierCount([progress, report], [])).toBe(1);
+    expect(carrierCount([progress, report], [])).toBeNull();
     expect(
       carrierCount([progress, { ...report, injectedAt: "2026-10-18T00:02:30.000Z" }], []),
-    ).toBe(2);
+    ).toBeNull();
     // Mail not yet delivered was carried by nothing.
     expect(carrierCount([{ ...progress, placement: "pending-inject" }], rows)).toBe(0);
   });
@@ -448,6 +460,73 @@ describe("async scenario", () => {
         }),
       ),
     ).toEqual(["repeated-read-guard"]);
+  });
+
+  test("nearby unechoed deliveries cannot certify a single carrier", () => {
+    const input = passingAsync();
+    const mail = input.mail.map((message) =>
+      message.id === report.id
+        ? {
+            ...message,
+            injectRequestId: "distinct-dispatch",
+            injectedAt: "2026-10-18T00:01:34.000Z",
+          }
+        : message,
+    );
+    const messages = input.messages.filter(
+      (message) => !String(message.content).includes("<orkestrator-peer-message"),
+    );
+    expect(failedChecks(evaluateAsyncScenario({ ...input, mail, messages }))).toContain(
+      "held-then-one-carrier",
+    );
+    expect(failedChecks(evaluateAsyncScenario({ ...input, mail, messages }))).toContain(
+      "one-wake-per-delegation",
+    );
+    expect(carrierCount(mail, [])).toBeNull();
+  });
+
+  test("false flags, error mentions and changed read arguments cannot qualify", () => {
+    const input = passingAsync();
+    for (const result of [
+      '{"repeatedRead":false}',
+      "error: repeatedRead",
+      JSON.stringify({
+        isError: true,
+        content: [{ type: "text", text: JSON.stringify({ repeatedRead: true }) }],
+      }),
+    ]) {
+      const pollResults = ["{}", "{}", "{}", result, "{}"];
+      expect(failedChecks(evaluateAsyncScenario({ ...input, pollResults }))).toEqual([
+        "repeated-read-guard",
+      ]);
+    }
+    const pollCalls = input.pollCalls.map((call, index) =>
+      index === 2 ? { ...call, args: '{"tabId":"different"}' } : call,
+    );
+    expect(failedChecks(evaluateAsyncScenario({ ...input, pollCalls }))).toEqual([
+      "repeated-read-guard",
+    ]);
+    const envelope = JSON.stringify({
+      content: [{ type: "text", text: JSON.stringify({ repeatedRead: true }) }],
+    });
+    expect(
+      failedChecks(
+        evaluateAsyncScenario({ ...input, pollResults: ["{}", "{}", "{}", envelope, "{}"] }),
+      ),
+    ).toEqual([]);
+    // Key order is immaterial; the parsed arguments must agree.
+    expect(
+      failedChecks(
+        evaluateAsyncScenario({
+          ...input,
+          pollCalls: input.pollCalls.map((call, index) =>
+            index === 1
+              ? { ...call, args: '{"tabId":"tab-1","environmentId":"coordinator"}' }
+              : call,
+          ),
+        }),
+      ),
+    ).toEqual([]);
   });
 
   test("an approval from a worker is a user action", () => {
@@ -499,7 +578,14 @@ function familyMessage(
 ): DelegationMailMessage {
   return {
     id,
-    createdAt: "2026-10-18T00:00:00.000Z",
+    createdAt: new Date(
+      Date.parse("2026-10-18T00:00:00.000Z") +
+        (id.startsWith("ping-")
+          ? Number(id.slice(5)) * 2000
+          : id.startsWith("pong-")
+            ? Number(id.slice(5)) * 2000 + 1000
+            : 0),
+    ).toISOString(),
     from,
     toEnvironmentId: to,
     toTabId: to === COORDINATOR ? "tab-1" : "startup-agent",
@@ -613,6 +699,7 @@ describe("family scenario", () => {
         message.id === "pong-3" ? { ...message, placement } : message,
       );
       expect(failedChecks(evaluateFamilyScenario({ ...input, mail }))).toEqual([
+        "ten-more-alternating",
         "no-stored-or-failed",
       ]);
     }
@@ -654,6 +741,39 @@ describe("family scenario", () => {
     expect(
       checks.find((item) => item.name === "busy-follow-up-joins-delegation")?.detail,
     ).toContain("pending-inject while idle");
+  });
+
+  test("batched requests and a single reply containing all tokens fail alternation", () => {
+    const input = passingFamily();
+    const batched = input.mail.map((message) => ({
+      ...message,
+      createdAt: message.id.startsWith("ping-") ? "2026-10-18T00:00:01.000Z" : message.createdAt,
+    }));
+    expect(failedChecks(evaluateFamilyScenario({ ...input, mail: batched }))).toContain(
+      "ten-more-alternating",
+    );
+    const oneReply = input.mail
+      .filter((message) => !message.id.startsWith("pong-") || message.id === "pong-6")
+      .map((message) =>
+        message.id === "pong-6"
+          ? {
+              ...message,
+              body: Array.from({ length: FAMILY_PING_COUNT }, (_, i) => family.ping(i + 1)).join(
+                " ",
+              ),
+            }
+          : message,
+      );
+    expect(failedChecks(evaluateFamilyScenario({ ...input, mail: oneReply }))).toContain(
+      "ten-more-alternating",
+    );
+    const sameTime = input.mail.map((message) => ({
+      ...message,
+      createdAt: "2026-10-18T00:00:00.000Z",
+    }));
+    expect(failedChecks(evaluateFamilyScenario({ ...input, mail: sameTime }))).toContain(
+      "ten-more-alternating",
+    );
   });
 
   test("a short exchange, a tab-addressed follow-up or a second prompt fail", () => {

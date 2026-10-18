@@ -481,8 +481,9 @@ is the truth, and this file is the backlog.
   `injectRequestId` is assigned per message at send time
   (`mail-inject-<id>`) and a batch dispatches under its first message's id, so
   it cannot say which messages shared a carrier. Each carrier is one user row
-  holding the ids it delivered; a bridge that does not echo it falls back to
-  messages injected within 5 seconds of each other.
+  holding the ids it delivered. Missing carrier rows leave the count
+  unverified and fail the single-carrier check. Nearby `injectedAt` timestamps
+  cannot distinguish a shared carrier from separate deliveries.
 - **A launched worker's inherited Codex default may fall back** (fixed
   2026-10-18). The startup prompt dispatched the settings' model as if the
   launch had named it, so `ensureSession` never offered it to

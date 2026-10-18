@@ -79,13 +79,9 @@ import {
   type CoordinatorTurnProjection,
   type ReadOnlyProbe,
   type ToolDetails,
-  type TurnAnswer,
 } from "../../apps/desktop/scripts/dev/coordinator-live";
 import {
-  FAMILY_DONE_MARKER,
-  asyncBusyPrompt,
   asyncPollPrompt,
-  asyncQueuedPrompt,
   asyncScenarioPrompt,
   asyncWorkerNames,
   carrierCount,
@@ -95,14 +91,22 @@ import {
   evaluateFamilyScenario,
   familyScenarioPrompt,
   familyWorkerNames,
-  orkestratorToolCalls,
   parseAsyncPollReport,
   transcriptUserTexts,
   type DelegationMailMessage,
-  type DelegationObservation,
   type DelegationProbe,
   type DelegationRecord,
 } from "../../apps/desktop/scripts/dev/coordinator-live-delegation";
+import { coordinatorLiveBudgets } from "../../apps/desktop/scripts/dev/coordinator-live-budgets";
+import {
+  createDelegationWatch,
+  removeLaunchedEnvironments,
+  runCoordinatorCleanup,
+} from "../../apps/desktop/scripts/dev/coordinator-live-observer";
+import {
+  deliverAsyncReport,
+  finishFamilyExchange,
+} from "../../apps/desktop/scripts/dev/coordinator-live-orchestration";
 
 type Status = {
   status: string;
@@ -121,8 +125,8 @@ const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "codex-qa";
 const runId = process.env.ORKESTRATOR_AGENT_TEST_RUN_ID ?? profile;
 const LIVE = process.env[COORDINATOR_LIVE_OPT_IN_ENV] === "1";
-const TURN_TIMEOUT_MS =
-  Number(process.env.ORKESTRATOR_AGENT_TEST_COORDINATOR_TURN_TIMEOUT_MS) || 600_000;
+const budgets = coordinatorLiveBudgets();
+const TURN_TIMEOUT_MS = budgets.turn;
 const POLL_INTERVAL_MS = 2_000;
 /**
  * A live turn prints nothing for minutes. `test:logged` kills a command after
@@ -393,36 +397,10 @@ async function runCase(
     }
     throw error;
   } finally {
-    for (const step of cleanup.toReversed()) await step().catch(() => undefined);
+    await runCoordinatorCleanup(cleanup, summary);
     summary.durationMs = Date.now() - started;
     await writeSummary(summary);
   }
-}
-
-/**
- * Stops and deletes every environment the case's coordinator launched, found
- * by being absent before the case started. Registered before the first turn,
- * so a failed case still removes its workers.
- */
-async function removeLaunchedEnvironments(
-  invoke: Invoke,
-  projectId: string,
-  cleanup: Array<() => Promise<unknown>>,
-): Promise<void> {
-  const existing = new Set(
-    (await invoke<Array<{ id: string }>>("get_environments", { projectId })).map(
-      (environment) => environment.id,
-    ),
-  );
-  cleanup.push(async () => {
-    for (const environment of await invoke<Array<{ id: string }>>("get_environments", {
-      projectId,
-    })) {
-      if (existing.has(environment.id)) continue;
-      await invoke("stop_environment", { environmentId: environment.id }).catch(() => undefined);
-      await invoke("delete_environment", { environmentId: environment.id });
-    }
-  });
 }
 
 /**
@@ -547,260 +525,6 @@ async function readOnlyCase(input: {
 // ---------------------------------------------------------------------------
 // Delegation scenarios: the harness watches, and answers nothing
 
-type MailboxPage = { messages?: DelegationMailMessage[] };
-type EnvironmentRow = { id: string; name?: string };
-
-/**
- * Watches one coordinator and every worker it launched while a delegation
- * scenario runs. Each `observe()` reads the coordinator's turn, the workers'
- * turns, the coordinator's delegations, every family mailbox and the
- * coordinator's prompt queue, denies (or cancels) any interaction that
- * reached the harness and records its kind, and appends the observation.
- */
-function createDelegationWatch(
-  invoke: Invoke,
-  coordinator: CoordinatorCase,
-  summary: CoordinatorLivePlatformSummary,
-) {
-  const { identity, conversation, projectId } = coordinator;
-  const coordinatorMailbox = { environmentId: identity.environmentId, tabId: conversation.tabId };
-  const queueKey = `${identity.agent}\0${identity.logicalSessionKey}`;
-  const observations: DelegationObservation[] = [];
-  const coordinatorTurn = createTurnWatch();
-  const workerTurns = new Map<string, ReturnType<typeof createTurnWatch>>();
-  const workerPhases = new Map<string, string>();
-  /** A worker turn that failed, by environment: the scenario cannot go on. */
-  const workerErrors = new Map<string, string>();
-  const names = new Map<string, string>();
-  let projection: Projection | null = null;
-
-  const workerIdentity = (environmentId: string): SessionIdentity => ({
-    environmentId,
-    agent: identity.agent,
-    logicalSessionKey: `env-${environmentId}:startup-agent`,
-  });
-  const answer = async (target: SessionIdentity, answers: TurnAnswer[]) => {
-    for (const item of answers) {
-      await invoke("resolve_native_agent_interaction", {
-        ...target,
-        interactionId: item.interactionId,
-        resolution: {
-          version: AGENT_INTERACTION_CONTRACT_VERSION,
-          ...item,
-          resolvedAt: Date.now(),
-        },
-      }).catch(() => undefined);
-    }
-  };
-  const mailbox = async (environmentId: string, tabId: string) =>
-    (
-      await invoke<MailboxPage>("get_agent_mail_mailbox", {
-        environmentId,
-        tabId,
-        limit: 200,
-      }).catch(() => ({ messages: [] }) as MailboxPage)
-    ).messages ?? [];
-
-  const watch = {
-    observations,
-    coordinatorMailbox,
-    /** Environment ids of the workers this conversation launched, in launch order. */
-    workers: [] as string[],
-    projection: () => projection,
-    workerName: (environmentId: string) => names.get(environmentId),
-    workerPhase: (environmentId: string) => workerPhases.get(environmentId) ?? "unknown",
-    escaped: () => coordinatorTurn.escapedInteractions(),
-    workerEscaped: () => [...workerTurns.values()].flatMap((turn) => turn.escapedInteractions()),
-    async observe(): Promise<DelegationObservation> {
-      // Independent reads run together: on a loaded host one pass is several
-      // seconds, and a short window (a report pending while the coordinator is
-      // busy) must not fall between two passes.
-      const [nextProjection, snapshot, queue] = await Promise.all([
-        invoke<Projection | null>("get_native_agent_projection", {
-          ...identity,
-          messageLimit: 200,
-        }),
-        invoke<CoordinatorSnapshot>("get_project_coordinator", { projectId }),
-        invoke<{ messages?: unknown[] } | null>("get_prompt_queue", { queueKey }).catch(() => null),
-      ]);
-      projection = nextProjection;
-      const { answers } = coordinatorTurn.observe(projection);
-      await answer(identity, answers);
-
-      const associations = snapshot.workflows.filter(
-        (workflow) =>
-          workflow.kind === "environment" && workflow.conversationId === conversation.id,
-      );
-      for (const association of associations) {
-        if (!watch.workers.includes(association.resourceId))
-          watch.workers.push(association.resourceId);
-      }
-      if (watch.workers.some((id) => !names.has(id))) {
-        for (const environment of await invoke<EnvironmentRow[]>("get_environments", {
-          projectId,
-        })) {
-          if (environment.name) names.set(environment.id, environment.name);
-        }
-      }
-      const delegations: DelegationRecord[] = associations.flatMap((association) =>
-        association.delegation
-          ? [{ environmentId: association.resourceId, ...association.delegation }]
-          : [],
-      );
-
-      const [coordinatorMail, ...workerReads] = await Promise.all([
-        mailbox(coordinatorMailbox.environmentId, coordinatorMailbox.tabId),
-        ...watch.workers.map(async (worker) => {
-          const target = workerIdentity(worker);
-          const [workerMail, workerProjection] = await Promise.all([
-            mailbox(worker, "startup-agent"),
-            invoke<Projection | null>("get_native_agent_projection", {
-              ...target,
-              messageLimit: 20,
-            }).catch(() => null),
-          ]);
-          return { worker, target, workerMail, workerProjection };
-        }),
-      ]);
-      const mail = [...coordinatorMail];
-      const phases: Record<string, string> = {};
-      for (const { worker, target, workerMail, workerProjection } of workerReads) {
-        mail.push(...workerMail);
-        if (workerProjection) {
-          workerPhases.set(worker, workerProjection.turn.phase);
-          phases[worker] = workerProjection.turn.phase;
-          if (workerProjection.turn.phase === "error") {
-            workerErrors.set(
-              worker,
-              (workerProjection.turn.error ?? "no error text").slice(0, 300),
-            );
-          }
-        }
-        const turn = workerTurns.get(worker) ?? createTurnWatch();
-        workerTurns.set(worker, turn);
-        await answer(target, turn.observe(workerProjection).answers);
-      }
-      const observation: DelegationObservation = {
-        at: Date.now(),
-        coordinatorPhase: projection?.turn.phase ?? "idle",
-        queueLength: queue?.messages?.length ?? 0,
-        workerPhases: phases,
-        delegations,
-        mail: mail.map(({ body: _body, ...summaryOnly }) => summaryOnly),
-      };
-      observations.push(observation);
-      const escaped = [...watch.escaped(), ...watch.workerEscaped()];
-      if (escaped.length > 0) summary.escapedInteractions = escaped;
-      return observation;
-    },
-    /**
-     * Observe until `done` holds, failing with `label` at the deadline. Prints
-     * a progress line every minute so `test:logged`'s watchdog stays quiet.
-     */
-    async until(
-      label: string,
-      done: (observation: DelegationObservation) => boolean,
-      timeoutMs = DELEGATION_STEP_TIMEOUT_MS,
-    ): Promise<DelegationObservation> {
-      const started = Date.now();
-      let nextHeartbeat = started + HEARTBEAT_MS;
-      for (;;) {
-        const observation = await watch.observe();
-        if (done(observation)) return observation;
-        const [failedWorker, workerError] = [...workerErrors][0] ?? [];
-        if (failedWorker) {
-          throw new Error(
-            `${identity.agent}: worker ${watch.workerName(failedWorker) ?? failedWorker} failed its turn while waiting for ${label}: ${workerError}`,
-          );
-        }
-        const now = Date.now();
-        if (now - started >= timeoutMs) {
-          throw new Error(
-            `${identity.agent}: timed out after ${Math.round((now - started) / 1_000)}s waiting for ${label} (coordinator ${observation.coordinatorPhase}, workers ${watch.workers.map((id) => watch.workerPhase(id)).join("/") || "none"})`,
-          );
-        }
-        if (now >= nextHeartbeat) {
-          console.log(
-            `[coordinator-live] ${identity.agent}: waiting for ${label} for ${Math.round((now - started) / 1_000)}s (coordinator ${observation.coordinatorPhase}, ${watch.workers.length} workers)`,
-          );
-          nextHeartbeat = now + HEARTBEAT_MS;
-        }
-        await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
-      }
-    },
-    /** The coordinator idle for two reads in a row, after it was seen working. */
-    async coordinatorSettled(label: string, timeoutMs?: number): Promise<void> {
-      let idleReads = 0;
-      await watch.until(
-        label,
-        (observation) => {
-          idleReads = observation.coordinatorPhase === "idle" ? idleReads + 1 : 0;
-          if (observation.coordinatorPhase === "error") {
-            throw new Error(
-              `the ${identity.agent} coordinator turn failed: ${projection?.turn.error ?? "no error text"}`,
-            );
-          }
-          return idleReads >= 2 && observation.queueLength === 0;
-        },
-        timeoutMs,
-      );
-    },
-    /** Full mail state with bodies, which the evaluation reads and never records. */
-    async mailWithBodies(): Promise<DelegationMailMessage[]> {
-      const latest = observations.at(-1)?.mail ?? [];
-      return Promise.all(
-        latest.map(async (message) => {
-          const full = await invoke<{ body?: string } | null>("get_agent_mail_message", {
-            environmentId: message.toEnvironmentId,
-            tabId: message.toTabId,
-            messageId: message.id,
-          }).catch(() => null);
-          return typeof full?.body === "string" ? { ...message, body: full.body } : message;
-        }),
-      );
-    },
-    /** Tool rows' output, fetched from behind each row's detail reference. */
-    async toolOutputs(
-      tool: string,
-      messages: readonly CoordinatorTranscriptMessage[],
-    ): Promise<string[]> {
-      const outputs: string[] = [];
-      const visit = async (value: unknown, depth: number): Promise<void> => {
-        if (depth > 8) return;
-        if (Array.isArray(value)) {
-          for (const item of value) await visit(item, depth + 1);
-          return;
-        }
-        if (!value || typeof value !== "object") return;
-        const record = value as Record<string, unknown>;
-        if (
-          typeof record.toolName === "string" &&
-          orkestratorToolCalls([{ name: record.toolName, args: "", state: "unknown" }], tool)
-            .length > 0
-        ) {
-          let text = typeof record.toolOutput === "string" ? record.toolOutput : "";
-          if (!text && typeof record.detailRef === "string") {
-            const details = await invoke<ToolDetails | null>("get_native_agent_tool_details", {
-              ...identity,
-              detailRef: record.detailRef,
-            }).catch(() => null);
-            text = `${details?.toolOutput ?? ""}${details?.toolError ?? ""}`;
-          }
-          outputs.push(text);
-        }
-        for (const field of ["childTools", "subagentActions"])
-          await visit(record[field], depth + 1);
-      };
-      for (const message of messages) await visit(message.parts, 0);
-      return outputs;
-    },
-  };
-  return watch;
-}
-
-const DELEGATION_STEP_TIMEOUT_MS =
-  Number(process.env.ORKESTRATOR_AGENT_TEST_COORDINATOR_STEP_TIMEOUT_MS) || 600_000;
-
 function recordChecks(
   summary: CoordinatorLivePlatformSummary,
   checks: CoordinatorLiveCheck[],
@@ -862,7 +586,8 @@ function mailCountsObserved(
   return {
     messagesToCoordinator: toCoordinator.length,
     noticesToCoordinator: toCoordinator.filter((message) => message.from.kind === "system").length,
-    coordinatorCarriers: carrierCount(toCoordinator, transcriptUserTexts(messages)),
+    // -1 records an unverified count; nearby timestamps cannot prove batching.
+    coordinatorCarriers: carrierCount(toCoordinator, transcriptUserTexts(messages)) ?? -1,
     ...coordinatorWaitCounts(transcriptToolCalls(messages)),
   };
 }
@@ -922,6 +647,7 @@ async function asyncCase(input: {
 
   let queuedAccepted = false;
   let pollResults: string[] = [];
+  let pollCalls: ReturnType<typeof transcriptToolCalls> = [];
   let pollReport: ReturnType<typeof parseAsyncPollReport> | undefined;
   if (reporter && silent) {
     // 5. The silent worker's notice is handled, and the progress message is held.
@@ -940,47 +666,7 @@ async function asyncCase(input: {
       },
     );
 
-    // 3. Busy coordinator, queued prompt, pending report. The reporter sends
-    // its report first and parks again, so once the finish gate opens it has
-    // only to end its turn while the busy turn runs.
-    await writeFile(probe.gatePath, "open\n", { mode: 0o600 });
-    await watch.until("the reporter's held report", (observation) => {
-      const reports = observation.mail.filter(fromReporter);
-      return reports.length >= 2 && reports.every((message) => message.placement === "inject-held");
-    });
-    const rowsBefore = watch.projection()?.messages.length ?? 0;
-    await invoke("dispatch_native_agent_intent", {
-      ...identity,
-      prompt: asyncBusyPrompt(probe, projectId),
-      requestId: randomUUID(),
-      mode: "build",
-    });
-    await watch.until(
-      "the busy turn to start",
-      (observation) =>
-        observation.coordinatorPhase !== "idle" ||
-        (watch.projection()?.messages.length ?? 0) > rowsBefore,
-    );
-    await invoke("enqueue_prompt_queue_message", {
-      queueKey: `${platform}\0${identity.logicalSessionKey}`,
-      environmentId: identity.environmentId,
-      message: { id: randomUUID(), text: asyncQueuedPrompt(probe), mode: "build" },
-    });
-    queuedAccepted = true;
-    await writeFile(probe.finishGatePath, "open\n", { mode: 0o600 });
-
-    // 4. The report: held until the reporter's turn ends, then one carrier.
-    let settledReads = 0;
-    await watch.until("the reporter's report to be delivered", (observation) => {
-      const reports = observation.mail.filter(fromReporter);
-      const delivered =
-        reports.length >= 2 && reports.every((message) => message.placement === "injected");
-      settledReads =
-        delivered && observation.coordinatorPhase === "idle" && observation.queueLength === 0
-          ? settledReads + 1
-          : 0;
-      return settledReads >= 2;
-    });
+    queuedAccepted = await deliverAsyncReport({ coordinator, watch, probe, fromReporter });
 
     // 6. The poll turn.
     const poll = await coordinatorTurn(
@@ -990,6 +676,7 @@ async function asyncCase(input: {
       asyncPollPrompt(watch.coordinatorMailbox),
     );
     const pollMessages = (watch.projection()?.messages ?? []).slice(poll.rowsBefore);
+    pollCalls = transcriptToolCalls(pollMessages);
     pollResults = await watch.toolOutputs("read_messages", pollMessages);
     pollReport = parseAsyncPollReport(transcriptAssistantText(pollMessages));
   }
@@ -1022,6 +709,7 @@ async function asyncCase(input: {
     observations: watch.observations,
     delegations,
     pollResults,
+    pollCalls,
     ...(pollReport ? { pollReport } : {}),
     escapedInteractions: watch.escaped(),
     workerInteractions: watch.workerEscaped(),
@@ -1075,50 +763,7 @@ async function familyCase(input: {
   let finished: string | undefined;
   try {
     await coordinatorTurn(watch, coordinator, "the delegating turn", familyScenarioPrompt(probe));
-    // The second worker is parked on its gate inside its first turn. Its
-    // report waits until the coordinator's follow-up is seen held for it
-    // there, so the follow-up is the busy case rather than an early prompt.
-    const two = () => watch.workers.find((id) => watch.workerName(id) === names.two);
-    await watch
-      .until("the follow-up to reach the busy second worker", (observation) => {
-        const id = two();
-        const phase = id ? observation.workerPhases?.[id] : undefined;
-        return (
-          id !== undefined &&
-          phase !== undefined &&
-          phase !== "idle" &&
-          observation.mail.some(
-            (message) =>
-              message.toEnvironmentId === id &&
-              message.from.kind === "coordinator" &&
-              message.placement !== "injected",
-          )
-        );
-      })
-      .finally(() => writeFile(probe.gatePath, "open\n", { mode: 0o600 }));
-    let quietReads = 0;
-    await watch.until(
-      "the family exchange to finish",
-      (observation) => {
-        const done = transcriptAssistantText(watch.projection()?.messages ?? []).includes(
-          FAMILY_DONE_MARKER,
-        );
-        const busyWorkers = watch.workers.some((id) => {
-          const phase = watch.workerPhase(id);
-          return phase !== "idle" && phase !== "unknown";
-        });
-        const pending = observation.mail.some(
-          (message) =>
-            message.placement === "pending-inject" || message.placement === "inject-held",
-        );
-        quietReads =
-          done && observation.coordinatorPhase === "idle" && !busyWorkers && !pending
-            ? quietReads + 1
-            : 0;
-        return quietReads >= 2;
-      },
-      FAMILY_TIMEOUT_MS,
-    );
+    await finishFamilyExchange(watch, probe, names.two);
   } catch (error) {
     finished = error instanceof Error ? error.message.slice(0, 500) : String(error);
   }
@@ -1168,10 +813,6 @@ async function familyCase(input: {
   expect(failures, `${platform}: the worker-mail family scenario`).toEqual([]);
 }
 
-/** The whole family exchange: about twenty turns across three agents. */
-const FAMILY_TIMEOUT_MS =
-  Number(process.env.ORKESTRATOR_AGENT_TEST_COORDINATOR_FAMILY_TIMEOUT_MS) || 2_100_000;
-
 test.describe("live coordinator", () => {
   test.skip(
     !LIVE,
@@ -1187,7 +828,7 @@ test.describe("live coordinator", () => {
       test(`read-only boundary holds on ${platform}: every mutation is refused, the checkout is unchanged and discovery returns`, async ({
         page,
       }) => {
-        test.setTimeout(TURN_TIMEOUT_MS + 240_000);
+        test.setTimeout(budgets.tests["read-only"]);
         page.setDefaultTimeout(30_000);
         await runCase(entry, "read-only", async ({ summary, skip, cleanup }) => {
           // The network step tests the coordinator's whole `network` denial, so
@@ -1220,7 +861,7 @@ test.describe("live coordinator", () => {
       test(`delegation on ${platform} is asynchronous: async launch, queued prompt before mail, one carrier, one silent-worker notice, repeated reads refused`, async ({
         page,
       }) => {
-        test.setTimeout(DELEGATION_STEP_TIMEOUT_MS * 6 + 240_000);
+        test.setTimeout(budgets.tests.async);
         page.setDefaultTimeout(30_000);
         await runCase(entry, "async", async ({ summary, skip, cleanup }) => {
           const coordinator = await startCoordinatorCase({
@@ -1240,7 +881,7 @@ test.describe("live coordinator", () => {
       test(`worker mail on ${platform} needs nobody: two reports, a follow-up by environment id, ten more alternating messages and a busy follow-up joining its delegation`, async ({
         page,
       }) => {
-        test.setTimeout(DELEGATION_STEP_TIMEOUT_MS * 4 + 240_000);
+        test.setTimeout(budgets.tests.family);
         page.setDefaultTimeout(30_000);
         await runCase(entry, "family", async ({ summary, skip, cleanup }) => {
           const coordinator = await startCoordinatorCase({

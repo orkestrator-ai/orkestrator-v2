@@ -232,3 +232,22 @@ suites running in other environments. Failed at 231.49 ms, an assertion rather t
 artifacts:
 `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.UQLOD6/`.
 The unchanged owning file passed alone (4 pass, 1.4 s).
+
+
+## Live coordinator review-fix validation — 2026-10-18
+
+- **Aggregate:** `mise run test:logged -- --name coordinator-full-suite -- mise run test`
+  on `qualify-coordinator-live-six-platforms-fb2b4a53344d`, macOS arm64, Bun 1.4.3.
+  Backend used two isolated workers alongside the other aggregate groups and
+  another worktree's validation. The workspace group exited 1 after 363.7 s;
+  backend reported 9045 passed, 41 skipped, two failed and one between-tests
+  error. Every other workspace package, root/support, bridges and protocol
+  lockfile validation passed.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.MUMuwG/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Failure:** the tracked-edit cache-hit assertion at line 139 expected 1
+  and received 0 (105.32 ms). The preceding modified-file assertion passed.
+- **Owning-file rerun:** `mise run test:logged -- --name worktree-cache-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures`
+  passed unchanged, exit 0, in 0.4 s.
+- **Assessment:** confirmed intermittent recurrence; the existing
+  invalidation hypothesis remains unconfirmed. No watcher implementation,
+  assertion, timeout or skip changed.

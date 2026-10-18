@@ -14,6 +14,7 @@ import {
   type CoordinatorLiveScenario,
   type CoordinatorLiveSuiteEntry,
 } from "./coordinator-live.js";
+import { coordinatorLiveRunnerTimeout } from "./coordinator-live-budgets.js";
 import { runIsolatedBrowser } from "./isolated-browser.js";
 
 const repositoryRoot = path.resolve(import.meta.dir, "../../../..");
@@ -40,16 +41,6 @@ export interface CoordinatorLiveRunOptions {
 }
 
 /**
- * How long one platform's Playwright run may take. A read-only case is one
- * turn; a delegation case launches real workers and waits for their mail.
- */
-const SCENARIO_TEST_BUDGET_MS: Record<CoordinatorLiveScenario, number> = {
-  "read-only": 1_200_000,
-  async: 1_800_000,
-  family: 2_700_000,
-};
-
-/**
  * One disposable `dev:test --fixture` profile per platform, authorized for
  * that platform's host credential alone, runs the live coordinator spec and is
  * stopped and reset afterwards. Each profile's name is also its run id
@@ -65,8 +56,7 @@ export async function runCoordinatorLive(options: CoordinatorLiveRunOptions): Pr
   const runId = options.runId ?? `qa-coordinator-${new Date().toISOString().replace(/[:.]/g, "-")}`;
   const scenarios = options.scenarios ?? COORDINATOR_LIVE_SCENARIOS;
   const testTimeoutMs =
-    options.testTimeoutMs ??
-    scenarios.reduce((total, scenario) => total + SCENARIO_TEST_BUDGET_MS[scenario], 0);
+    options.testTimeoutMs ?? coordinatorLiveRunnerTimeout(scenarios, options.env ?? process.env);
   const { exitCode, results } = await runCoordinatorLiveSuite({
     platforms: options.platforms,
     scenarios,

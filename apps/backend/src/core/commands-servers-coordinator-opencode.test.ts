@@ -6,7 +6,11 @@ import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import { BackendRuntime } from "./backend-runtime.js";
 import type { CommandContext } from "./commands-context.js";
 import { stopLocalServerUnlocked } from "./commands-local-server-lifecycle.js";
-import { readLocalServerStatus, startLocalServerUnlocked } from "./commands-servers.js";
+import {
+  cancelAllOpenCodeAgentToolsConfigurations,
+  readLocalServerStatus,
+  startLocalServerUnlocked,
+} from "./commands-servers.js";
 import { __testing as commandTesting } from "./commands-testing.js";
 import { CoordinatorService } from "./coordinator-service.js";
 import { runCommand } from "./shell.js";
@@ -144,6 +148,21 @@ process.on("SIGTERM", () => process.exit(0));
     // ticket tools but none of its delegation tools.
     expect(new Set(urls)).toEqual(new Set([SCOPED_URL]));
     expect(tabConnection).not.toHaveBeenCalled();
+  });
+
+  test("reconciliation without a recorded launch connection never falls back to tab tools", async () => {
+    const { context, runtimeId, tabConnection } = await coordinatorContext();
+    await startLocalServerUnlocked(runtimeId, context, "opencode");
+    expect(await posted()).toEqual([SCOPED_URL]);
+    // Keep the healthy child but lose the in-memory launch connection and memo.
+    cancelAllOpenCodeAgentToolsConfigurations();
+    commandTesting.setOpenCodeAgentToolsMemoWindowsMs(0, 0);
+    const reused = await startLocalServerUnlocked(runtimeId, context, "opencode");
+    expect(reused.wasRunning).toBe(true);
+    await readLocalServerStatus(runtimeId, context, "opencode");
+    expect(tabConnection).not.toHaveBeenCalled();
+    expect(await posted()).toEqual([SCOPED_URL]);
+    expect(commandTesting.openCodeAgentToolsConfigurationCount()).toBe(0);
   });
 
   test("a coordinator whose Control MCP will not connect fails to start", async () => {

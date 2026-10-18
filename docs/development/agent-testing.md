@@ -588,17 +588,22 @@ coordinator or a worker is denied (or cancelled) and fails the case.
    a shell loop for a gate file the harness owns. Its progress message must be
    seen `inject-held` (`delegation-running`) and never delivered while its
    delegation runs.
-3. The harness sends a *busy* turn (three Orkestrator reads), queues a prompt
-   behind it (`enqueue_prompt_queue_message`, as the composer does) and opens
-   the gate. The reporter sends its report and ends, so the report is pending
-   while the coordinator is busy and a user prompt is queued. The case requires
+3. The harness opens the report gate and waits for both reporter messages to
+   be held, then sends a *busy* turn (three Orkestrator reads), queues a prompt
+   behind it (`enqueue_prompt_queue_message`, as the composer does), and opens
+   the finish gate. The reporter ends, so the report is pending while the
+   coordinator is busy and a user prompt is queued. The case requires
    an observation of exactly that state, and the queued prompt must run before
    the reporter's carrier (by transcript row, or by the queue draining before
    the report's `injectedAt` where a bridge does not echo the carrier).
-4. Both reporter messages must arrive in one carrier (`injectRequestId`), with
-   no notice about the reporter; each delegation wakes the coordinator once.
+4. Both reporter messages must arrive in one echoed transcript carrier row,
+   identified by the message ids it contains, with no notice about the reporter;
+   each delegation wakes the coordinator once. Without complete carrier rows the
+   count stays unverified and the check fails. Neither per-message
+   `injectRequestId` nor nearby `injectedAt` timestamps prove a shared carrier.
 5. A last turn calls `read_messages` five times with identical arguments; the
-   fourth or fifth result must carry `repeatedRead`.
+   fourth or fifth structured result must carry `repeatedRead: true`. The tool
+   call evidence must show five successful reads with identical arguments.
 
 The `family` case sends one prompt and then only watches, for up to 35 minutes
 (`ORKESTRATOR_AGENT_TEST_COORDINATOR_FAMILY_TIMEOUT_MS`). The coordinator
@@ -608,16 +613,27 @@ coordinator then pings the first worker by environment id until six pings have
 been answered (two messages, then ten more alternating). It passes when
 messaging is at its defaults, both reports arrived, the busy follow-up joined
 the open delegation (one delegation, one carrier carrying the report and the
-reply), every ping was asked and answered, no family message is `stored` or
-`inject_failed`, and nothing reached the harness.
+reply), each ping has a distinct delivered request and reply, ordered by
+persisted creation timestamps with each reply before the next request, no family
+message is `stored` or `inject_failed`, and nothing reached the harness.
 
 Each scenario step waits at most
 `ORKESTRATOR_AGENT_TEST_COORDINATOR_STEP_TIMEOUT_MS` (default 600000). Workers
 the coordinator launched are stopped and deleted when the case ends. The
 summary records each named check with a bounded, content-free detail (counts,
 placements, phases) and the observed counts: messages, notices and carriers
-to the coordinator, and its `sleep`, `list_environments`, `read_messages` and
-`get_message_status` calls across the run.
+to the coordinator (a carrier count of -1 means unverified), and its `sleep`,
+`list_environments`, `read_messages` and `get_message_status` calls across the run.
+Playwright timeouts cover the sum of each scenario's wait budgets plus four
+minutes for setup and cleanup. The profile runner uses those same timeouts and
+adds two minutes per selected scenario for process overhead. Both honor the
+step, turn and family timeout environment overrides.
+
+Credential-free tests in `coordinator-live-observer.test.ts` exercise the same
+observer and gate/queue orchestration as the live spec, including completion
+and mail injection between reads, queue overlap, poll output collection and
+cleanup after a worker deletion fails. Evaluator and runner tests cover
+negative evidence and deadline relationships.
 
 To run the spec against a profile you started yourself, set the opt-in and
 optionally narrow the platforms and scenarios

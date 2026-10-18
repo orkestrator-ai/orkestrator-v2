@@ -1,3 +1,7 @@
+import {
+  coordinatorLiveBudgets,
+  coordinatorLiveRunnerTimeout,
+} from "./coordinator-live-budgets.js";
 import { afterEach, expect, test } from "bun:test";
 import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -271,3 +275,30 @@ test.each(["SIGTERM", "SIGKILL"] as const)(
   },
   15000,
 );
+
+test("runner budgets cover selected Playwright timeouts, underlying waits and cleanup margin", () => {
+  for (const env of [
+    {},
+    {
+      ORKESTRATOR_AGENT_TEST_COORDINATOR_TURN_TIMEOUT_MS: "900000",
+      ORKESTRATOR_AGENT_TEST_COORDINATOR_STEP_TIMEOUT_MS: "1200000",
+      ORKESTRATOR_AGENT_TEST_COORDINATOR_FAMILY_TIMEOUT_MS: "3000000",
+    },
+  ]) {
+    const budgets = coordinatorLiveBudgets(env);
+    expect(budgets.waits.async).toBe(7 * budgets.step);
+    expect(budgets.waits.family).toBe(2 * budgets.step + budgets.family);
+    const all = ["read-only", "async", "family"] as const;
+    for (const scenario of all) {
+      expect(budgets.tests[scenario]).toBeGreaterThanOrEqual(
+        budgets.waits[scenario] + budgets.overhead,
+      );
+      expect(coordinatorLiveRunnerTimeout([scenario], env)).toBeGreaterThanOrEqual(
+        budgets.tests[scenario] + budgets.processMargin,
+      );
+    }
+    expect(coordinatorLiveRunnerTimeout(all, env)).toBe(
+      all.reduce((sum, scenario) => sum + budgets.tests[scenario] + budgets.processMargin, 0),
+    );
+  }
+});

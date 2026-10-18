@@ -243,3 +243,12 @@ an additional flaky classification or resolve the existing issue.
 Evidence: `orkestrator-test-run.SROwT8/login-isolated-browser.log.gz` in the
 host temporary directory and
 `output/agent-testing/qa-browser-bdfd649e-0a6/browser/`.
+
+
+## Landing-page main merge observation — 2026-10-18
+
+- **Original command:** `mise run test:logged -- --name merge-real-stack -- mise run test:agent:browser:isolated`, credential-free Codex fixture `qa-browser-e5113038-5d8`, one Playwright worker. The narrow host-picker case found a disabled selector at its five-second deadline. The overall runner reached its 900-second test deadline while later attachment cases were running, then stopped and reset the profile.
+- **Owning-file rerun:** on a fresh `dev:test --profile merge-15f6cd-gateway --fixture --no-agent-credentials --agent-platforms codex` profile, `ORKESTRATOR_AGENT_TEST_PROFILE=merge-15f6cd-gateway ORKESTRATOR_AGENT_TEST_RUN_ID=merge-15f6cd-gateway-rerun mise run test:logged -- --name merge-15f6cd-gateway-owner -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/browser-gateway.spec.ts --workers=1` reported 13 passed, 6 skipped and 1 failed in 177.6 seconds.
+- **Rerun failure:** the same narrow case could not click `Repository settings` after `Open tools`: the button was unstable, then hidden, until the 15000 ms deadline (`browser-gateway.spec.ts:238`).
+- **Evidence:** `orkestrator-test-run.ZDtnJp/merge-real-stack.log.gz` and `orkestrator-test-run.ru93zY/merge-15f6cd-gateway-owner.log.gz` below the host temporary directory; Playwright evidence under `output/agent-testing/merge-15f6cd-gateway-rerun/browser/`.
+- **Disposition:** reproduced in the owning file, so this observation does not independently establish a flake. The narrow tools-popover path remains an unresolved validation limitation. No gateway source, assertion, timeout or skip changed. Both disposable profiles were stopped and reset.

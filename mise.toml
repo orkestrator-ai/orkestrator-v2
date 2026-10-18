@@ -210,8 +210,8 @@ raw_args = true
 run = "bun scripts/run-logged.ts"
 
 [tasks."test:browser"]
-description = "Run the component browser suite"
-run = "bunx tsc --noEmit -p e2e/tsconfig.json && bunx playwright test --config e2e/playwright.config.ts"
+description = "Run the component and public-site browser suites"
+run = "bunx tsc --noEmit -p e2e/tsconfig.json && bunx playwright test --config e2e/playwright.config.ts && bunx playwright test --config e2e/public-site/playwright.config.ts"
 
 [tasks."test:agent:browser"]
 description = "Run browser agent tests against an already-running profile (use test:agent:browser:isolated for one-shot validation)"

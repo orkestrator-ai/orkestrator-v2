@@ -4,6 +4,7 @@ import {
   claudeModelWeeklyWindow,
   claudePlanWindowFromKind,
   claudePlanWindowFromLabel,
+  stalePlanUsageSnapshot,
 } from "./plan-usage.js";
 
 describe("Claude window identities", () => {
@@ -61,5 +62,37 @@ describe("Claude window identities", () => {
     expect(claudePlanWindowFromKind("weekly_scoped")).toBeUndefined();
     expect(claudePlanWindowFromKind("weekly_scoped", " ")).toBeUndefined();
     expect(claudePlanWindowFromKind("unknown", "Opus")).toBeUndefined();
+  });
+});
+
+describe("stalePlanUsageSnapshot", () => {
+  test("keeps the reading's time and empties windows that have reset since", () => {
+    const now = Date.parse("2026-10-18T12:00:00.000Z");
+    const stale = stalePlanUsageSnapshot(
+      {
+        platform: "claude",
+        status: "ok",
+        plan: "max",
+        windows: [
+          { window: "five_hour", usedPercent: 80, resetsAt: "2026-10-18T11:00:00.000Z" },
+          { window: "seven_day", usedPercent: 40, resetsAt: "2026-10-20T00:00:00.000Z" },
+        ],
+        fetchedAt: "2026-10-18T09:00:00.000Z",
+      },
+      now,
+      "Rate limited.",
+    );
+    expect(stale).toEqual({
+      platform: "claude",
+      status: "ok",
+      plan: "max",
+      windows: [
+        { window: "five_hour", usedPercent: 0 },
+        { window: "seven_day", usedPercent: 40, resetsAt: "2026-10-20T00:00:00.000Z" },
+      ],
+      message: "Rate limited.",
+      stale: true,
+      fetchedAt: "2026-10-18T09:00:00.000Z",
+    });
   });
 });

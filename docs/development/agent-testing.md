@@ -452,11 +452,14 @@ own store, so a duplicated or lost prompt fails there.
 ### Live coordinator suite
 
 The live coordinator suite checks that a real provider keeps the coordinator's
-read-only boundary. It runs as one command and owns its profiles:
+read-only boundary (`read-only`), that delegation never waits inside a turn
+(`async`), and that worker mail flows with nobody's help (`family`). It runs as
+one command and owns its profiles:
 
 ```bash
-mise run test:agent:coordinator                              # every platform on the list
+mise run test:agent:coordinator                              # every platform and scenario
 mise run test:agent:coordinator --credential-source codex    # one platform; repeatable
+mise run test:agent:coordinator --scenario async             # one scenario; repeatable
 ```
 
 For each platform in turn (Claude, Codex, Pi, OpenCode, Cursor, Grok), the
@@ -551,8 +554,11 @@ will not start, a platform the coordinator does not offer, and a turn that does
 not finish within `ORKESTRATOR_AGENT_TEST_COORDINATOR_TURN_TIMEOUT_MS` (default
 600000).
 
-Each platform writes `output/agent-testing/<profile>/coordinator/<platform>.json`
-with the verdict, the reason, the tier, both digests and any changed paths, the
+Each platform writes one summary per scenario,
+`output/agent-testing/<profile>/coordinator/<platform>-<scenario>.json`, and the
+platform's verdict combines them: failed when any scenario failed or wrote no
+summary, passed when every scenario passed, skipped otherwise. The read-only
+summary has the verdict, the reason, the tier, both digests and any changed paths, the
 reported outcomes, the tool names and normalized states, and the kinds of any
 interactions that escaped the policy. The run writes `output/agent-testing/qa-coordinator-<time>/summary.json`.
 Neither contains prompts, file contents or tool output; Playwright traces kept
@@ -566,8 +572,56 @@ mise run test:logged -- --name coordinator-live -- \
   mise run test:agent:coordinator --credential-source claude
 ```
 
+The `async` case launches two real workers on the fixture project through the
+coordinator and watches the coordinator's turns, its delegations
+(`get_project_coordinator`), every family mailbox and the coordinator's prompt
+queue every two seconds. It answers nothing: an approval or question from the
+coordinator or a worker is denied (or cancelled) and fails the case.
+
+1. One turn asks the coordinator to launch a *reporter* and a *silent* worker
+   and end. The turn must be seen running, then idle; both `launch_environment`
+   results must carry `delivery: "async"`; the turn must make no `sleep`,
+   `read_messages`, `get_message_status` or `list_environments` call; and the
+   reporter's delegation must still be running when it ends.
+2. The silent worker finishes without mail and must produce exactly one
+   workflow notice. The reporter sends one progress message and then waits in
+   a shell loop for a gate file the harness owns. Its progress message must be
+   seen `inject-held` (`delegation-running`) and never delivered while its
+   delegation runs.
+3. The harness sends a *busy* turn (three Orkestrator reads), queues a prompt
+   behind it (`enqueue_prompt_queue_message`, as the composer does) and opens
+   the gate. The reporter sends its report and ends, so the report is pending
+   while the coordinator is busy and a user prompt is queued. The case requires
+   an observation of exactly that state, and the queued prompt must run before
+   the reporter's carrier (by transcript row, or by the queue draining before
+   the report's `injectedAt` where a bridge does not echo the carrier).
+4. Both reporter messages must arrive in one carrier (`injectRequestId`), with
+   no notice about the reporter; each delegation wakes the coordinator once.
+5. A last turn calls `read_messages` five times with identical arguments; the
+   fourth or fifth result must carry `repeatedRead`.
+
+The `family` case sends one prompt and then only watches, for up to 35 minutes
+(`ORKESTRATOR_AGENT_TEST_COORDINATOR_FAMILY_TIMEOUT_MS`). The coordinator
+launches two workers and, in the same turn, follows the second one up by
+environment id while it is still on its first request; both report; the
+coordinator then pings the first worker by environment id until six pings have
+been answered (two messages, then ten more alternating). It passes when
+messaging is at its defaults, both reports arrived, the busy follow-up joined
+the open delegation (one delegation, one carrier carrying the report and the
+reply), every ping was asked and answered, no family message is `stored` or
+`inject_failed`, and nothing reached the harness.
+
+Each scenario step waits at most
+`ORKESTRATOR_AGENT_TEST_COORDINATOR_STEP_TIMEOUT_MS` (default 600000). Workers
+the coordinator launched are stopped and deleted when the case ends. The
+summary records each named check with a bounded, content-free detail (counts,
+placements, phases) and the observed counts: messages, notices and carriers
+to the coordinator, and its `sleep`, `list_environments`, `read_messages` and
+`get_message_status` calls across the run.
+
 To run the spec against a profile you started yourself, set the opt-in and
-optionally narrow the platforms. Each case closes the main conversation an
+optionally narrow the platforms and scenarios
+(`ORKESTRATOR_AGENT_TEST_COORDINATOR_SCENARIOS=async,family`). Each case closes the main conversation an
 earlier case assigned and leaves the project home environment in place:
 
 ```bash

@@ -4,10 +4,14 @@ import path from "node:path";
 import {
   COORDINATOR_LIVE_OPT_IN_ENV,
   COORDINATOR_LIVE_PLATFORMS_ENV,
+  COORDINATOR_LIVE_SCENARIOS,
+  COORDINATOR_LIVE_SCENARIOS_ENV,
   coordinatorLiveSummaryFile,
   parseCoordinatorLivePlatformSummary,
   runCoordinatorLiveSuite,
   type CoordinatorLivePlatform,
+  type CoordinatorLivePlatformSummary,
+  type CoordinatorLiveScenario,
   type CoordinatorLiveSuiteEntry,
 } from "./coordinator-live.js";
 import { runIsolatedBrowser } from "./isolated-browser.js";
@@ -22,6 +26,8 @@ export const COORDINATOR_LIVE_ROOT_ENV = "ORKESTRATOR_AGENT_TEST_COORDINATOR_ROO
 
 export interface CoordinatorLiveRunOptions {
   platforms: readonly CoordinatorLivePlatform[];
+  /** Absent runs every scenario. */
+  scenarios?: readonly CoordinatorLiveScenario[];
   signal: AbortSignal;
   /** The repository the profiles run in and the artifacts are written to. */
   root?: string;
@@ -32,6 +38,16 @@ export interface CoordinatorLiveRunOptions {
   testTimeoutMs?: number;
   cleanupTimeoutMs?: number;
 }
+
+/**
+ * How long one platform's Playwright run may take. A read-only case is one
+ * turn; a delegation case launches real workers and waits for their mail.
+ */
+const SCENARIO_TEST_BUDGET_MS: Record<CoordinatorLiveScenario, number> = {
+  "read-only": 1_200_000,
+  async: 1_800_000,
+  family: 2_700_000,
+};
 
 /**
  * One disposable `dev:test --fixture` profile per platform, authorized for
@@ -47,8 +63,13 @@ export async function runCoordinatorLive(options: CoordinatorLiveRunOptions): Pr
 }> {
   const root = options.root ?? repositoryRoot;
   const runId = options.runId ?? `qa-coordinator-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+  const scenarios = options.scenarios ?? COORDINATOR_LIVE_SCENARIOS;
+  const testTimeoutMs =
+    options.testTimeoutMs ??
+    scenarios.reduce((total, scenario) => total + SCENARIO_TEST_BUDGET_MS[scenario], 0);
   const { exitCode, results } = await runCoordinatorLiveSuite({
     platforms: options.platforms,
+    scenarios,
     signal: options.signal,
     log: options.log,
     async runPlatform(entry) {
@@ -65,6 +86,7 @@ export async function runCoordinatorLive(options: CoordinatorLiveRunOptions): Pr
             env: {
               [COORDINATOR_LIVE_OPT_IN_ENV]: "1",
               [COORDINATOR_LIVE_PLATFORMS_ENV]: entry.platform,
+              [COORDINATOR_LIVE_SCENARIOS_ENV]: scenarios.join(","),
             },
           },
           signal: options.signal,
@@ -72,7 +94,7 @@ export async function runCoordinatorLive(options: CoordinatorLiveRunOptions): Pr
           ...(options.env ? { env: options.env } : {}),
           // A first run may download a toolchain the host lacks.
           startupTimeoutMs: options.startupTimeoutMs ?? 300_000,
-          testTimeoutMs: options.testTimeoutMs ?? 1_200_000,
+          testTimeoutMs,
           ...(options.cleanupTimeoutMs ? { cleanupTimeoutMs: options.cleanupTimeoutMs } : {}),
         });
       } catch (caught) {
@@ -80,12 +102,20 @@ export async function runCoordinatorLive(options: CoordinatorLiveRunOptions): Pr
       }
       // Read even after an error: the spec may have recorded why before the
       // profile failed underneath it.
-      const summary = parseCoordinatorLivePlatformSummary(
-        await readFile(coordinatorLiveSummaryFile(root, profile, entry.platform), "utf8")
-          .then((text) => JSON.parse(text) as unknown)
-          .catch(() => null),
-      );
-      return { profile, exitCode: code, summary, ...(error ? { error } : {}) };
+      const summaries: Partial<
+        Record<CoordinatorLiveScenario, CoordinatorLivePlatformSummary | null>
+      > = {};
+      for (const scenario of scenarios) {
+        summaries[scenario] = parseCoordinatorLivePlatformSummary(
+          await readFile(
+            coordinatorLiveSummaryFile(root, profile, entry.platform, scenario),
+            "utf8",
+          )
+            .then((text) => JSON.parse(text) as unknown)
+            .catch(() => null),
+        );
+      }
+      return { profile, exitCode: code, summaries, ...(error ? { error } : {}) };
     },
   });
 

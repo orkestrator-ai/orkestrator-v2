@@ -47,11 +47,21 @@
 import { expect, test, type Page } from "@playwright/test";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import {
+  dispatchProbeTurn,
+  hasRunningSleep,
   judgeProbe,
   parseProbeLog,
   PROBE_SERVER_NAME,
@@ -61,6 +71,8 @@ import {
   type ProbeExpectation,
   type ProbeVerdict,
 } from "./mcp-apply-live-support";
+
+import { grantCodexProjectTrust, writeRefusal } from "./mcp-apply-live-safety";
 
 type Platform = "claude" | "codex" | "opencode" | "cursor" | "grok" | "pi";
 type Status = {
@@ -178,7 +190,7 @@ async function signIn(page: Page, status: Status): Promise<Invoke> {
   return async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
     const invokeResponse = await page.request.post(
       new URL("/__orkestrator/invoke", status.browserUrl!).href,
-      { data: { command, args }, timeout: 120_000 },
+      { data: { command, args }, timeout: Math.max(240_000, TURN_TIMEOUT_MS) },
     );
     if (!invokeResponse.ok()) {
       throw new Error(`${command}: ${(await invokeResponse.text()).slice(0, 1_000)}`);
@@ -204,7 +216,9 @@ function toolRows(messages: readonly Message[]): string[] {
       const name = [part.toolName, part.tool, part.name, part.server].find(
         (value) => typeof value === "string",
       );
-      const state = [part.state, part.status].find((value) => typeof value === "string");
+      const state = [part.toolState, part.state, part.status].find(
+        (value) => typeof value === "string",
+      );
       rows.push(`${part.type}:${String(name ?? "?")}:${String(state ?? "?")}`.slice(0, 160));
     }
   }
@@ -215,22 +229,6 @@ function signedOut(value: unknown): boolean {
   return /sign(ed)? ?(in|out)|not authenticated|unauthori[sz]ed|needs? auth|log ?in|expired|credential|api key/i.test(
     typeof value === "string" ? value : JSON.stringify(value ?? ""),
   );
-}
-
-/**
- * Only sources inside the test worktree or the profile's own data directory
- * may be written. `~` is the backend's HOME, which an agent-test profile
- * isolates under its data directory.
- */
-function writeRefusal(source: Source, dataDir: string, flavor: string | undefined): string | null {
-  const shown = source.displayPath;
-  if (shown.startsWith("<worktree>")) return null;
-  if (shown.startsWith("~/")) {
-    return flavor === "agent-test" ? null : "the backend HOME is not isolated in this profile";
-  }
-  const resolved = path.resolve(shown.split(" → ")[0]!);
-  if (resolved.startsWith(`${path.resolve(dataDir)}${path.sep}`)) return null;
-  return `resolves outside the profile (${shown}); writing it would change a host provider home`;
 }
 
 interface StepRecord {
@@ -382,6 +380,8 @@ test.describe("live MCP apply", () => {
           .worktreePath;
         expect(worktree, "the environment has a worktree").toBeTruthy();
 
+        const boundary = { dataDir, worktree: worktree!, flavor: status.flavor };
+
         const tabs = ["A", "B"].map((name) => `mcpq-${platform}-${name.toLowerCase()}`);
         const model = MODELS.get(platform);
         if (model) summary.model = model;
@@ -434,20 +434,7 @@ test.describe("live MCP apply", () => {
             targetId: target!.targetId,
           });
           const user = snapshot.sources.find((source) => source.scope === "backend-user");
-          if (
-            user &&
-            !user.displayPath.startsWith("~") &&
-            !writeRefusal(user, dataDir, status.flavor)
-          ) {
-            const file = user.displayPath;
-            mkdirSync(path.dirname(file), { recursive: true });
-            const previous = existsSync(file) ? readFileSync(file, "utf8") : "";
-            writeFileSync(
-              file,
-              `${previous}${previous && !previous.endsWith("\n") ? "\n" : ""}[projects.${JSON.stringify(worktree)}]\ntrust_level = "trusted"\n`,
-              { mode: 0o600 },
-            );
-          }
+          if (user) grantCodexProjectTrust(user, boundary);
         }
 
         for (const tab of tabs) {
@@ -476,17 +463,17 @@ test.describe("live MCP apply", () => {
           const before = await projection(tab);
           const previous = new Set((before?.messages ?? []).map((message) => message.id));
           const promptKey = prompt.slice(0, 120);
-          // A session still finishing its previous turn refuses a new one;
-          // try again with a fresh id, as a user pressing Send again would.
-          let dispatch: { outcome: string; error?: string } = { outcome: "rejected" };
-          for (let attempt = 0; attempt < 12; attempt += 1) {
-            dispatch = await call<{ outcome: string; error?: string }>(
-              "dispatch_native_agent_intent",
-              { ...identity(tab), prompt, requestId: randomUUID(), mode: "build" },
-            );
-            if (dispatch.outcome !== "rejected") break;
-            await new Promise((resolve) => setTimeout(resolve, 5_000));
-          }
+          const dispatch = await dispatchProbeTurn(
+            (requestId) =>
+              call<{ outcome: string; error?: string }>("dispatch_native_agent_intent", {
+                ...identity(tab),
+                prompt,
+                requestId,
+                mode: "build",
+              }),
+            randomUUID,
+            () => new Promise((resolve) => setTimeout(resolve, 5_000)),
+          );
           const dispatchNote =
             dispatch.outcome === "accepted"
               ? undefined
@@ -538,7 +525,7 @@ test.describe("live MCP apply", () => {
                   interactions,
                 };
               }
-              if (dispatch.outcome === "rejected") {
+              if (dispatch.outcome !== "accepted") {
                 return { reply: "", error: dispatchNote, fresh, interactions };
               }
               if (idleReads >= 2 && replied) {
@@ -559,8 +546,16 @@ test.describe("live MCP apply", () => {
               await new Promise((resolve) => setTimeout(resolve, 1_500));
             }
           };
-          if (options.waitForSettle === false) return { settle };
-          return { settle, result: await settle() };
+          // Observe immediately, including approvals while a busy turn runs.
+          // All callers share the same waiter and interaction responses.
+          const result = settle().catch((error: unknown) => ({
+            reply: "",
+            error: error instanceof Error ? error.message : String(error),
+            fresh: [] as Message[],
+            interactions: [] as string[],
+          }));
+          if (options.waitForSettle === false) return { settle: () => result };
+          return { settle: () => result, result: await result };
         };
 
         // A first turn per tab, so each has a provider session for apply to
@@ -599,6 +594,7 @@ test.describe("live MCP apply", () => {
             reply: outcome.reply,
             expect: expectation,
             toolRows: rows,
+            turnError: outcome.error,
           });
           const record = {
             tab: tab.endsWith("-a") ? "A" : "B",
@@ -728,7 +724,7 @@ test.describe("live MCP apply", () => {
 
         /**
          * Save, settle and probe one step. A runtime left `restart-required`
-         * is restarted first, as the outcome tells a user to.
+         * is restarted first unless this step must qualify the warm runtime.
          */
         const step = async (
           scope: ScopeRecord,
@@ -738,23 +734,50 @@ test.describe("live MCP apply", () => {
           options: {
             busyTab?: string;
             probeBeforeRestart?: { tab: string; server: string };
+            keepWarm?: boolean;
           } = {},
         ) => {
           const record: StepRecord = { step: name, probes: [] };
           scope.steps.push(record);
           let busy: Awaited<ReturnType<typeof runTurn>> | null = null;
           if (options.busyTab) {
+            const marker = path.join(scratch, `busy-${randomUUID()}`);
             busy = await runTurn(
               options.busyTab,
-              "Use your shell tool to run the command `sleep 25` once, in the foreground (not as a background task), and wait for it to finish. Then reply with exactly BUSY-DONE. Do not use any other tool.",
+              `Use your shell tool to run the command \`printf started > '${marker}'; sleep 45\` once, in the foreground (not as a background task), and wait for it to finish. Then reply with exactly BUSY-DONE. Do not use any other tool.`,
               { waitForSettle: false },
             );
             const deadline = Date.now() + 60_000;
+            let running = false;
             while (Date.now() < deadline) {
-              if ((await projection(options.busyTab))?.turn.phase !== "idle") break;
-              await new Promise((resolve) => setTimeout(resolve, 500));
+              const current = await projection(options.busyTab);
+              if (
+                existsSync(marker) &&
+                Date.now() - statSync(marker).mtimeMs < 15_000 &&
+                current &&
+                !["idle", "error"].includes(current.turn.phase) &&
+                hasRunningSleep(current.messages, marker)
+              ) {
+                running = true;
+                break;
+              }
+              await new Promise((resolve) => setTimeout(resolve, 250));
             }
+            if (!running) {
+              record.note = "busy setup failed: no running foreground shell sleep was observed";
+              summary.failures.push(`${scope.scope} ${name}: ${record.note}`);
+              await busy.settle();
+              return { record, entryId: null as string | null };
+            }
+            record.note = "observed the running foreground shell sleep before saving";
           }
+          const warmIdentity = options.keepWarm ? await projection(probes[0]!.tab) : null;
+          const warmBridge = options.keepWarm
+            ? await call<{ running: boolean; pid: number | null }>(
+                `get_local_${platform}_server_status`,
+                { environmentId },
+              )
+            : null;
           let result: MutationResult;
           try {
             result = await mutate(operation);
@@ -784,9 +807,22 @@ test.describe("live MCP apply", () => {
               : `the busy turn did not finish normally: ${outcome.error ?? outcome.reply.slice(0, 200)}`;
             if (!finished) summary.failures.push(`${scope.scope} ${name}: ${record.note}`);
           }
-          let settled = await settleOperation(result.operation.operationId);
+          const settled = await settleOperation(result.operation.operationId);
           record.operation.settled = operationRuntimes(settled);
-          if (settled.apply.runtimes.some((runtime) => runtime.state === "restart-required")) {
+          if (options.keepWarm) {
+            const warmRuntime = settled.apply.runtimes.find((runtime) =>
+              runtime.label.endsWith(` · ${probes[0]!.tab}`),
+            );
+            // A live SSE client cannot unload this entry. Require the warm
+            // runtime's restart-required outcome, but judge before any restart.
+            if (warmRuntime?.state !== "restart-required") {
+              summary.failures.push(
+                `${scope.scope} ${name}: warm runtime did not report restart-required`,
+              );
+            }
+          } else if (
+            settled.apply.runtimes.some((runtime) => runtime.state === "restart-required")
+          ) {
             if (options.probeBeforeRestart) {
               record.probes.push(
                 await probe(
@@ -809,8 +845,26 @@ test.describe("live MCP apply", () => {
               );
             }
           }
+          if (options.keepWarm) {
+            const after = await projection(probes[0]!.tab);
+            const bridge = await call<{ running: boolean; pid: number | null }>(
+              `get_local_${platform}_server_status`,
+              { environmentId },
+            );
+            if (
+              !warmBridge?.running ||
+              !warmBridge.pid ||
+              !bridge.running ||
+              bridge.pid !== warmBridge.pid ||
+              !warmIdentity?.sessionId ||
+              after?.sessionId !== warmIdentity.sessionId
+            ) {
+              summary.failures.push(
+                `${scope.scope} ${name}: bridge generation or warm session changed during the stale-server probe`,
+              );
+            }
+          }
           record.operation.afterEvidence = await evidence(result.operation.operationId);
-          settled = await readOperation(result.operation.operationId);
           return { record, entryId: result.entryId };
         };
 
@@ -821,7 +875,7 @@ test.describe("live MCP apply", () => {
           if (
             !source?.writable ||
             !PROBE_SERVER_NAME.test(definition.name) ||
-            writeRefusal(source, dataDir, status.flavor)
+            writeRefusal(source, boundary)
           ) {
             continue;
           }
@@ -860,7 +914,7 @@ test.describe("live MCP apply", () => {
             scope.skipped = `not writable: ${source.readOnlyReason ?? "no reason given"}`;
             continue;
           }
-          const refusal = writeRefusal(source, dataDir, status.flavor);
+          const refusal = writeRefusal(source, boundary);
           if (refusal) {
             scope.skipped = refusal;
             continue;
@@ -1024,6 +1078,9 @@ test.describe("live MCP apply", () => {
           if (!outcome.verdict.passed) {
             loaded.note =
               "the new CLI did not load the SSE entry, so the stale-server hook could not be exercised";
+            summary.failures.push(
+              `claude-sse initial load: ${outcome.verdict.reason ?? loaded.note}`,
+            );
           } else {
             const entry = await findEntry(project!.sourceId, server);
             await step(
@@ -1035,6 +1092,7 @@ test.describe("live MCP apply", () => {
                 expectedRevision: entry.source.revision,
               },
               [{ tab: tabA, server, expect: { reach: false } }],
+              { keepWarm: true },
             );
           }
         }

@@ -20,12 +20,15 @@ is Grok-only. The rules in [`bridges/AGENTS.md`](../AGENTS.md) and the root
   with native helpers, and a login needs no environment and no session.
 - The credential lives in Orkestrator's data directory, not the SDK's default
   `~/.cursor/sdk/auth.json`, so a container can be handed exactly one file.
-- Project settings (`.cursor/`) are read inside containers and not on the host,
-  so cloning a repository is not enough to run its code on the user's machine.
+- Project settings (`.cursor/`) load only when the resolved environment
+  execution policy enables project resources, on both host and container runs.
+  Host project resources are off by default; enabling them permits repository
+  configuration to start MCP processes on the host.
 - The Orkestrator Agent MCP server is injected from a per-tab `agentMcp`
   body or, as fallback, `ORKESTRATOR_AGENT_MCP_URL` /
   `ORKESTRATOR_AGENT_MCP_TOKEN` as `AgentOptions.mcpServers.orkestrator`
-  (`src/mcp.ts`). Host runs still do not load a repo's `.cursor/mcp.json`.
+  (`src/mcp.ts`). A repo's `.cursor/mcp.json` loads on the host only when
+  the resolved environment policy enables project resources.
   Native Cursor mail is on (`{canPull,canSend,canInject}=true`). A rotated
   tab token detaches and re-attaches the SDK agent; the bearer is never
   persisted.

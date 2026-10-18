@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
+  dispatchProbeTurn,
+  hasRunningSleep,
   judgeProbe,
   parseProbeLog,
   probePrompt,
@@ -98,7 +100,7 @@ describe("mcp apply live support", () => {
         expect: { reach: false },
         toolRows: ["tool-invocation:mqu0_beta_probe:?"],
       }),
-    ).toMatchObject({ reached: true, substitutedBy: "mqu0_beta", passed: true });
+    ).toMatchObject({ reached: true, substitutedBy: "mqu0_beta", passed: false });
     expect(
       judgeProbe({
         ...input,
@@ -139,7 +141,7 @@ describe("mcp apply live support", () => {
     expect(verdict).toMatchObject({ reached: false, replyHasResult: false, passed: false });
   });
 
-  test("a removed server passes only when its process never logged the call", () => {
+  test("a removed server needs an unavailable reply and no logged call", () => {
     const events = parseProbeLog(log);
     expect(
       judgeProbe({
@@ -159,6 +161,136 @@ describe("mcp apply live support", () => {
         expect: { reach: false },
       }),
     ).toMatchObject({ reached: true, passed: false });
+  });
+
+  test.each(["dispatch rejected", "provider error", "no reply within 240s"])(
+    "negative probes cannot pass when the turn fails: %s",
+    (turnError) => {
+      for (const reply of ["", PROBE_UNAVAILABLE]) {
+        expect(
+          judgeProbe({
+            events: [],
+            server: "mqu0_alpha",
+            nonce: "N2",
+            reply,
+            expect: { reach: false },
+            turnError,
+          }),
+        ).toMatchObject({ passed: false, reason: `probe turn failed: ${turnError}` });
+      }
+    },
+  );
+
+  test.each(["", "done", `I could not call it: ${PROBE_UNAVAILABLE}`])(
+    "silence or an invalid negative reply cannot qualify removal: %s",
+    (reply) =>
+      expect(
+        judgeProbe({
+          events: [],
+          server: "mqu0_alpha",
+          nonce: "N2",
+          reply,
+          expect: { reach: false },
+        }).passed,
+      ).toBe(false),
+  );
+
+  test("a beta substitution cannot qualify removal even if both names remain exposed", () => {
+    const events = parseProbeLog(log);
+    events.push({ event: "call", label: "mqu0_beta", tag: "v1", nonce: "N2", pid: 11, at: "t2" });
+    expect(
+      judgeProbe({
+        events,
+        server: "mqu0_alpha",
+        nonce: "N2",
+        reply: probeResult("mqu0_beta", "v1", "N2"),
+        toolRows: ["tool:mcp__mqu0_beta__probe:success"],
+        expect: { reach: false },
+      }),
+    ).toMatchObject({ passed: false, substitutedBy: "mqu0_beta" });
+    expect(
+      judgeProbe({
+        events: [],
+        server: "mqu0_alpha",
+        nonce: "N2",
+        reply: PROBE_UNAVAILABLE,
+        toolRows: ["tool:mcp__mqu0_beta__probe:failure"],
+        expect: { reach: false },
+      }).passed,
+    ).toBe(false);
+  });
+
+  test("busy setup requires this run's pending foreground shell command", () => {
+    const part = {
+      toolName: "bash",
+      toolState: "pending",
+      toolArgs: { command: "printf started > '/tmp/busy-unique'; sleep 45" },
+    };
+    expect(hasRunningSleep([{ parts: [part] }], "/tmp/busy-unique")).toBe(true);
+    for (const changed of [
+      { ...part, toolState: "success" },
+      { ...part, toolName: "read" },
+      { ...part, toolArgs: { command: "sleep 45" } },
+      { ...part, toolArgs: { ...part.toolArgs, run_in_background: true } },
+    ])
+      expect(hasRunningSleep([{ parts: [changed] }], "/tmp/busy-unique")).toBe(false);
+    expect(hasRunningSleep([{ parts: [part] }], "/tmp/another-run")).toBe(false);
+    expect(hasRunningSleep([], "/tmp/busy-unique")).toBe(false);
+  });
+
+  test.each(["Timeout 240000ms exceeded", "cursor bridge is unavailable"])(
+    "transport retries preserve the request key: %s",
+    async (message) => {
+      const keys: string[] = [];
+      let issued = 0;
+      const result = await dispatchProbeTurn(
+        async (key) => {
+          keys.push(key);
+          if (keys.length === 1) throw new Error(message);
+          return { outcome: "accepted" };
+        },
+        () => `key-${++issued}`,
+        async () => {},
+      );
+      expect(result.outcome).toBe("accepted");
+      expect(keys).toEqual(["key-1", "key-1"]);
+      expect(issued).toBe(1);
+    },
+  );
+
+  test("explicit rejections may retry under a new key and remain failures after exhaustion", async () => {
+    let calls = 0;
+    const keys: string[] = [];
+    const result = await dispatchProbeTurn(
+      async (key) => {
+        keys.push(key);
+        return { outcome: "rejected", error: "busy" };
+      },
+      () => `key-${++calls}`,
+      async () => {},
+    );
+    expect(result.outcome).toBe("rejected");
+    expect(new Set(keys).size).toBe(12);
+  });
+
+  test("transport retries are bounded and authentication errors propagate immediately", async () => {
+    for (const [message, expectedCalls] of [
+      ["timeout", 3],
+      ["not authenticated", 1],
+    ] as const) {
+      let calls = 0;
+      await expect(
+        dispatchProbeTurn(
+          async () => {
+            calls++;
+            throw new Error(message);
+          },
+          () => "key",
+          async () => {},
+        ),
+      ).rejects.toThrow(message);
+      expect(calls).toBe(expectedCalls);
+    }
   });
 
   test("the prompt is the same for both expectations and names the fallback", () => {

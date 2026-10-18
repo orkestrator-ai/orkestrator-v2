@@ -108,34 +108,25 @@ export function judgeProbe(input: {
   expect: ProbeExpectation;
   /** Tool rows of the turn, as `type:name:state`; names only. */
   toolRows?: readonly string[];
+  /** Dispatch failures, provider errors and timeouts are never reachability evidence. */
+  turnError?: string;
 }): ProbeVerdict {
   const call = input.events.find((event) => event.event === "call" && event.nonce === input.nonce);
   const reached = call !== undefined;
   const answeredBy = call ? { label: call.label, tag: call.tag, pid: call.pid } : undefined;
-  const replyUnavailable = input.reply.includes(PROBE_UNAVAILABLE);
+  const replyUnavailable = input.reply.trim() === PROBE_UNAVAILABLE;
   const replyHasResult =
     call !== undefined && input.reply.includes(probeResult(call.label, call.tag, input.nonce));
   const named = probeServersInToolRows(input.toolRows ?? []);
   const substitutedBy = named.length > 0 && !named.includes(input.server) ? named[0] : undefined;
-  if (!input.expect.reach) {
-    // A call the model made through another server's tool does not show the
-    // removed name was still offered; the tool rows say which tool ran.
-    const removedAnswered = reached && !substitutedBy;
-    return {
-      reached,
-      ...(answeredBy ? { answeredBy } : {}),
-      replyHasResult,
-      replyUnavailable,
-      ...(substitutedBy ? { substitutedBy } : {}),
-      passed: !removedAnswered,
-      ...(removedAnswered
-        ? { reason: `the removed server "${call!.label}" (${call!.tag}) still answered the call` }
-        : {}),
-    };
-  }
   let reason: string | undefined;
-  if (!call) reason = "no server logged a call with this nonce";
+  if (input.turnError !== undefined) reason = `probe turn failed: ${input.turnError}`;
   else if (substitutedBy) reason = `the model called "${substitutedBy}" instead`;
+  else if (!input.expect.reach) {
+    if (call) reason = `the removed server "${call.label}" (${call.tag}) still answered the call`;
+    else if (!replyUnavailable)
+      reason = "the settled turn did not report the tool unavailable or refused";
+  } else if (!call) reason = "no server logged a call with this nonce";
   else if (call.label !== (input.expect.label ?? input.server))
     reason = `server "${call.label}" answered instead of "${input.expect.label ?? input.server}"`;
   else if (call.tag !== input.expect.tag)
@@ -150,6 +141,50 @@ export function judgeProbe(input: {
     passed: reason === undefined,
     ...(reason ? { reason } : {}),
   };
+}
+
+/** A pending foreground sleep with this run's unique marker, never an earlier tool row. */
+export function hasRunningSleep(messages: readonly { parts?: unknown }[], marker: string): boolean {
+  return messages.some(
+    (message) =>
+      Array.isArray(message.parts) &&
+      message.parts.some((part: Record<string, unknown>) => {
+        const name = String(part.toolName ?? part.tool ?? part.name ?? "");
+        const state = part.toolState ?? part.state ?? part.status;
+        const args = JSON.stringify(part.toolArgs ?? part.input ?? part.args ?? {});
+        return (
+          /^(bash|shell|exec_command|run_shell_command|execute|terminal)$/i.test(name) &&
+          ["pending", "running", "in-progress"].includes(String(state)) &&
+          args.includes(marker) &&
+          /sleep 45/.test(args) &&
+          !/run_in_background["\s:]+true/.test(args)
+        );
+      }),
+  );
+}
+
+/** Retry ambiguous transport failures with the same request key; only a rejection permits a new key. */
+export async function dispatchProbeTurn(
+  dispatch: (requestId: string) => Promise<{ outcome: string; error?: string }>,
+  newId: () => string,
+  pause: () => Promise<void>,
+): Promise<{ outcome: string; error?: string }> {
+  let requestId = newId();
+  let result: { outcome: string; error?: string } = { outcome: "rejected" };
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    try {
+      result = await dispatch(requestId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (attempt >= 2 || !/timeout|timed out|unavailable/i.test(message)) throw error;
+      await pause();
+      continue;
+    }
+    if (result.outcome !== "rejected") return result;
+    requestId = newId();
+    await pause();
+  }
+  return result;
 }
 
 /** Apply states that are still moving; anything else is an outcome. */

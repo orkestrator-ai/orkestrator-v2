@@ -249,19 +249,28 @@ changed Claude wording is covered by unit tests.
 
 ### Completion matrix
 
-"Reached" and "fails" are from the probe server's log. "Busy" is the edit
-saved and applied while tab A ran a 25-second shell command; in every
-provider that turn finished normally and nothing was interrupted.
+These are historical observations from the original harness, not complete
+qualification under the corrected checks. Negative results need a successfully
+settled turn with an explicit unavailable reply; provider errors, silence and
+substituted tools do not prove removal. The original busy check established only
+an active turn, not a running shell command, so every Busy cell below is
+unverified. The corrected harness waits for a unique shell marker and its
+pending foreground tool row before saving. The Claude SSE removal must be
+rerun without restarting the bridge; the original helper restarted first.
+A run of the corrected SSE case in the disposable `mcp-review-fixes` profile
+failed during warm-up on "Claude ended the turn on an API error", before any
+probe ran (`output/agent-testing/mcp-review-fixes-sse/`). It is a failed
+qualification, not renewed evidence for the SSE cell.
 
 | Provider · scope | Add | Edit (A, B) | Rename (new / old) | Remove (A, B) | Busy | Restart and restore | Apply outcome |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Claude · user `~/.claude.json` | reached | reached v2 both | answers / fails | fails both | yes | reached after bridge restart | `pending-next-turn` → `applied` per tab after its turn |
 | Claude · private local `projects[<worktree>]` | reached | reached v2 both | answers / fails | fails both | — | — | same |
 | Claude · project `.mcp.json` | reached | reached v2 both | answers / fails | fails both | — | — | same |
-| Claude · SSE in `.mcp.json` (written outside the editor) | reached after a bridge restart (the CLI loads its own files only at launch) | — | — | the model's call was refused by the stale-server hook; the server logged nothing | — | — | `restart-required` with the still-loaded reason on the warm tab, `pending-next-turn` on the idle one |
+| Claude · SSE in `.mcp.json` (written outside the editor) | reached after a bridge restart (the CLI loads its own files only at launch) | — | — | unverified: probe ran after restart, so an empty server log did not qualify the warm hook | — | — | `restart-required` with the still-loaded reason on the warm tab, `pending-next-turn` on the idle one |
 | Codex · user `config.toml` | reached | reached v2 both | answers / fails | fails both | yes | reached after app-server restart | `queued` → reload → `pending-next-turn` (never `applied`, by design) |
 | Codex · project `.codex/config.toml` (trusted) | reached | reached v2 both | answers / fails | fails both | — | — | same |
-| OpenCode · user `opencode.jsonc` | reached after restart | reached v2 both after restart | answers / old name not called (the model called the new name's tool instead) | still callable before the restart; fails both after it | yes | reached | `restart-required` throughout, truthfully; nothing reaches a session without a restart |
+| OpenCode · user `opencode.jsonc` | reached after restart | reached v2 both after restart | answers / unverified (model substituted the new name's tool) | still callable before the restart; fails both after it | yes | reached | `restart-required` throughout, truthfully; nothing reaches a session without a restart |
 | OpenCode · project `opencode.json` | same | same | same | same | — | — | same |
 | Cursor · user `~/.cursor/mcp.json` | reached | reached v2 both | answers / fails | fails both | yes | reached after bridge restart | `pending-next-turn` → `applied` per tab after its turn |
 | Cursor · project `.cursor/mcp.json`, project resources on | reached | reached v2 both | answers / fails | fails both | yes | reached | before the fix: `excluded` and `blocked-policy` although the session ran the server; after it: `pending-next-turn` → `applied` |
@@ -290,14 +299,16 @@ probe servers need no authentication, so no sign-in flow was exercised.
   targets now carry the resolved policy, both sources are `allowed` when it
   turns project resources on, and a session whose own policy is off stays
   `blocked-policy`. Re-run live for Cursor; Pi is covered by
-  `service-apply-scope.test.ts` and the Pi bridge's own policy check
+  `service-apply-scope.test.ts`, host-on catalogue/bridge parity fixtures in
+  `pi-mcp-parity.test.ts`, and the Pi bridge's own policy check
   (`mcp.ts`), since Pi could not run.
 - **Fixed: the Claude still-loaded wording.** The `restart-required` reason
   and the stale-server hook said the CLI was "still running background
   work". Since #1055 a CLI also stays open between messages for its idle
-  window (10 minutes by default), which is what held the SSE server in this
-  run. Both now say the process is still open and closes after an idle
-  period or when the session is stopped.
+  window (10 minutes by default). The original SSE removal result did not
+  establish hook enforcement because the harness restarted before probing.
+  Both now say the process is still open and closes after an idle period or
+  when the session is stopped.
 - **Codex reload reaches existing threads.** Both idle threads saw every
   change at their next turn without a restart (code item 3 is narrowed to
   evidence and paging).

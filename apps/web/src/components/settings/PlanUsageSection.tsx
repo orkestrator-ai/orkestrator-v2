@@ -3,8 +3,19 @@ import { AlertCircle, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AccountQuotaList } from "@/components/layout/AgentInfoButton.panels";
 import { getPlanUsage } from "@/lib/backend";
+import { formatRelativeTime } from "@/lib/format-relative-time";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+
+/** Says how old a stale reading is and why a fresh one could not be made. */
+export function StalePlanUsageNote({ snapshot }: { snapshot: PlanUsageSnapshot }) {
+  return (
+    <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground/70">
+      Last known usage, as of {formatRelativeTime(snapshot.fetchedAt)}.
+      {snapshot.message ? ` ${snapshot.message}` : null}
+    </p>
+  );
+}
 
 /**
  * Provider plan/quota shown at the top of a platform's settings pane.
@@ -108,7 +119,9 @@ export function PlanUsageSection({
         ) : windows.length > 0 ? (
           <>
             <AccountQuotaList account={windows} />
-            {snapshot ? (
+            {snapshot?.stale ? (
+              <StalePlanUsageNote snapshot={snapshot} />
+            ) : snapshot ? (
               <p className="mt-3 text-[10px] text-muted-foreground/70">
                 Updated {new Date(snapshot.fetchedAt).toLocaleTimeString()}
               </p>

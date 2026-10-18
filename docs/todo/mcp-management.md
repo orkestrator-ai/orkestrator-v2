@@ -1,6 +1,7 @@
 # MCP management
 
-Checked against `main` at `2459b05c` (2026-10-15).
+Checked against `main` at `2459b05c` (2026-10-15); inactive-environment
+qualification against `a5d338c1` (2026-10-18).
 
 The MCP server editor ([`mcp-management.md`](../architecture/mcp-management.md))
 reads and writes each agent platform's own MCP files and reports saved state,
@@ -154,14 +155,14 @@ Use temporary homes and harmless fixture servers; never the operator's files.
   writable scope record: durable add, edit, rename and remove; actual tools
   after apply; two sessions or a busy session; restart and restore; the auth
   limitation. An unsupported cell gets an explicit reason, not a pass.
-- **Inactive environment.** Keep environment A's provider busy and save and
-  apply an edit; work continues. Switch to B, return after the safe boundary,
-  then check revision, apply outcome, actual tools and controls. Repeat after
-  a browser reload, with a dropped event stream and with a bridge generation
-  change (the outcome must name the newer run). Also leave a pre-marker
-  bridge running across a backend upgrade and confirm the older-bridge
-  outcome. Add a shared-user variant across two environments and a
-  process-wide variant across two Codex or two OpenCode sessions.
+- **Inactive environment.** Claude ran on 2026-10-18 with the live spec
+  `e2e/agent-testing/mcp-apply-inactive.spec.ts`; see
+  [the record](#qualification-record-inactive-environment-2026-10-18) for what
+  passed and what the provider's rate limit left unrun. Still open: the
+  process-wide variant across two Codex or two OpenCode sessions. It needs a
+  profile whose Codex home is disposable: with the Codex credential source an
+  agent-test profile uses the host's `CODEX_HOME`, so a user-scope save there
+  would write the operator's own `config.toml`.
 - **Real browser.** The live-panel link from a running session; a full pass
   after the dialog-layer fix (2026-09-24 confirmed it only by raising the
   layer); conflict recovery and secret replacement at desktop and narrow
@@ -173,6 +174,97 @@ Use temporary homes and harmless fixture servers; never the operator's files.
   browser showing correct backend paths and operation recovery.
 - **Release decision.** Keep or narrow the all-on rollout default once the
   matrix is filled.
+
+## Qualification record: inactive environment (2026-10-18)
+
+Run on branch `qualify-mcp-inactive-apply-9ec53f801117` (from `a5d338c1`),
+Claude CLI 2.1.296 / Agent SDK 0.3.296, in the disposable profile
+`qa-mcp-inactive-0430`:
+
+```bash
+mise run dev:test --profile qa-mcp-inactive-0430 --fixture \
+  --credential-source claude --credential-source codex --agent-platforms claude,codex
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-mcp-inactive-0430 ORKESTRATOR_AGENT_TEST_LIVE_MCP=1 \
+  ORKESTRATOR_AGENT_TEST_MCP_OLDER_CLAUDE_BRIDGE=<pre-marker claude-bridge dist> \
+  mise run test:agent:browser -- e2e/agent-testing/mcp-apply-inactive.spec.ts
+```
+
+The spec creates two local environments (A and B, project resources on,
+approvals auto) with one Claude tab each. Every edit goes to A's worktree
+`.mcp.json` or the profile's isolated `~/.claude.json`; the fixture MCP server
+is a script under `output/agent-testing/<profile>/` whose one tool answers
+with a nonce that exists only in its arguments, and a marker file counts
+every call. Codex credentials were seeded only for host onboarding; no Codex
+turn ran and no Codex file was written. The pre-marker bridge was built from
+`65077337` (the commit before #1025) in a temporary worktree.
+
+### What passed on the real stack
+
+- **Busy save and apply** (runs 3, 4 and 5). With A's turn running, save and
+  apply of a new project server answered `pending-next-turn` with a 16-character
+  generation, planned only A's runtime, and the turn kept running through the
+  save and a switch to B and finished with its reply. 25 s after it ended the
+  runtime was still `pending-next-turn`: a query that started before the save
+  is not taken as evidence.
+- **Next turn while inactive, with the event stream cut** (run 5). With the
+  settings view open on A, the browser went offline and `window.stop()` cut
+  the event stream (the page logged the drop and retried every 3 s). A turn
+  sent to A meanwhile made the runtime `applied` with "The session's latest
+  message started with the saved configuration." against the planned
+  generation; the model called the tool exactly once and replied with the
+  nonce. Back online the page reconnected and, with no Refresh click, the
+  card read "Saved and loaded".
+- **Hard reload, backend half** (run 5). After a reload the card still read
+  "Saved and loaded", the source revision equalled the operation's saved
+  revision, the server was effective, and the file held the saved arguments.
+  The run then stopped on a test bug (the agent panel's backdrop covered the
+  sidebar; `closeSettings` now closes it too), before the transcript, composer
+  and live-panel checks.
+
+### Defects found and fixed
+
+- **The test stopped its own turns** (runs 1 and 2). The shared sidebar
+  helper pressed Escape to close a tooltip right after Send, and Escape is
+  Stop for the visible chat tab (`useEscapeToStop`); Claude reported the
+  stopped stream as `[ede_diagnostic] result_type=user`. A diagnostic run saw
+  the browser send `stop_native_agent_session` at the switch. This was flake
+  0273, now resolved: `dismissSidebarTooltip` sends Escape only from the
+  sidebar toggle, in the five live specs that navigated this way.
+- **The agent panel's link lost its environment.** "Manage saved MCP
+  servers…" sometimes opened the backend user instead of the session's
+  environment. `ProviderMcpSettings` cleared the link's intent inside a
+  `useMemo` during render; the settings page is lazy, so a discarded first
+  render consumed it and the retry found nothing. The intent is now read
+  during render and cleared after commit (regression test renders the section
+  beside a component that suspends once).
+- **A refresh lost offline was never repeated** (runs 3 and 4).
+  `context.setOffline` leaves an open event stream connected, so the change
+  event still arrived, but the re-read it triggered failed and nothing retried
+  it: the view kept "not loaded until the session's next message" after the
+  backend said `applied`. The MCP settings hooks now also re-read when the
+  browser reports it is back `online` (regression test).
+
+### Not run: the provider's rate limit
+
+From run 6 on, every Claude request from the profile was refused with
+`API Error: Request rejected (429) · This request would exceed your account's
+rate limit`, including a one-line prompt sent through the `orkestrator` CLI.
+The same machine's other Claude login answered normally, so the limit is on
+the host login the profile seeds (shared with the other environments of this
+batch). Seven retries between 17:50 and 19:40 all hit it, so these steps of the
+spec have not passed live yet:
+
+- after the reload: A's transcript and composer controls, the live panel
+  listing the server, and the deep link from A's own panel;
+- a bridge restart between the save and the next turn (`applied` must name a
+  newer generation with "A newer run of this session…");
+- a removal while the stream survives an outage (the `online` re-read);
+- the pre-marker bridge (`pending-next-turn` with the older-bridge reason
+  before a query, then `applied` after one);
+- the backend-user file shared by A and B (both runtimes `applied`, each with
+  its own generation).
+
+Rerun the command above once the login is no longer limited.
 
 ## Constraints and rationale
 

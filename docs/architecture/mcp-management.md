@@ -489,9 +489,14 @@ After a save `targetIds` names the saving target and every target that reads the
 file (other providers sharing it, and every environment for a user file); past
 256 ids it is `[]`, meaning all. The live agent info panel re-reads its
 projection on this event while it is open.
-The settings section re-reads its snapshot on mount, on that event and on event
-stream reconnect, and drops responses for a target the user has switched away
-from. Drafts live only in the open dialog and are never persisted.
+The settings section re-reads its snapshot on mount, on that event, on event
+stream reconnect and when the browser comes back online (an event can arrive
+on a stream that survived an outage while its re-read fails), and drops
+responses for a target the user has switched away from. A link from an agent's
+info panel names the provider and environment; the section reads that intent
+during render and clears it only after it mounts, so a render React discards
+(the settings page is lazy) cannot lose it. Drafts live only in the open
+dialog and are never persisted.
 
 ## Verification status
 
@@ -509,13 +514,15 @@ worktrees; nothing reads or writes the operator's configuration):
 | Bridges | Pi `mcp.test.ts`, `mcp-config.test.ts`, `mcp-config-upstream.test.ts`, `mcp-lifecycle.test.ts`, `agent-session.test.ts`, `http.test.ts`; Cursor `agent-session.test.ts`, `agent-session-mcp-reattach.test.ts`, `http.test.ts`, `persistence.test.ts`; Claude `mcp-config-scope.test.ts`, `session-manager-prompt-mcp.test.ts`, `runtime-health-body.test.ts`; ACP `acp-mcp-inventory.test.ts`; Codex `mcp-reload-route.test.ts`, `process-supervisor.test.ts` |
 | UI | `mcp-draft.test.ts`, `mcp-local-validation.test.ts`, `ProviderMcpSettings.test.tsx`, `McpEditorFlows.test.tsx`, `McpEntryFlows.test.tsx`, `McpStatusAndStates.test.tsx`, `AgentInfoMcpSection.test.tsx`, `FullscreenSettingsLayout.test.tsx`, `ActionBar.test.tsx` — focus return, keyboard-only flows, conflict reload, discard prompt, rollout gate, empty/offline/partial states |
 | Container reader | Manual smoke against a throwaway container: ok, absent, oversized, offline, shell-metacharacter path |
+| Inactive environment (live) | 2026-10-18, `e2e/agent-testing/mcp-apply-inactive.spec.ts` with a real Claude session (CLI 2.1.296): save and apply during a running turn (turn uninterrupted, `pending-next-turn` held after it), the next turn while inactive with the page's event stream cut (`applied` on the planned generation, tool called once, settings view caught up on reconnect), and the backend half of a hard reload. The bridge-restart, removal, pre-marker bridge and shared-user steps were blocked by a provider rate limit; see the todo record. |
 | Real browser | 2026-09-24, `dev:test` profile `agent-mcp-settings-qa` with the fixture project, Playwright at 1440×900 and 390×844: section and pickers for all six platforms, Control MCP kept separate, add → edit → rename → remove of a Claude project-scope server in a fixture worktree (previews named the worktree path and the execution warning; the file ended `{"mcpServers": {}}`), keyboard open/Escape with focus return, reload rehydration, discard prompt on a dirty target switch, platform-settings deep link. Found that every MCP dialog rendered behind the fullscreen settings layer (default `z-50` under `z-[60]`); fixed with the fullscreen dialog layers and pinned by `McpEditorFlows.test.tsx`; the fix was confirmed in that browser session by raising the layer, not by a second full pass. The agent-panel link was not exercised (no live session in the fixture). Operator MCP files were hashed before and after and were unchanged. |
 
 Not yet verified (plan steps 01 and 14): live probes against the pinned vendor
 binaries — that Codex's reload changes an existing thread's tools at its next
 turn, OpenCode/Grok pick changes up on restart, Cursor's SDK re-reads
 `~/.cursor/mcp.json` on resume, and that removed servers' tools are gone after
-apply — plus real-browser, inactive-environment and container QA. Until those
+apply — plus real-browser and container QA, and the inactive-environment
+steps listed as not run in the todo record. Until those
 are recorded, treat `pending-next-turn` / `restart-required` as the backend's
 plan; `applied` is observed adoption per the evidence rule above.
 

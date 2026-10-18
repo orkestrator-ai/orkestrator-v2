@@ -190,13 +190,17 @@ Published desktop releases and the in-app updater are described in [`docs/develo
 
 ### Standalone backend and hosted client
 
-To install Bun when needed and start the backend service:
+Open [`orkestrator.dev`](https://www.orkestrator.dev) and select **Log in**, or connect directly at [`orkestrator.dev/connect`](https://www.orkestrator.dev/connect).
+
+To install Bun if needed and start the published backend without cloning the repository:
 
 ```bash
-curl -fsSL https://orkestrator.dev/install.sh | bash
+curl -fsSL https://orkestrator.dev/install.sh | \
+  bash -s -- --tailscale-serve \
+  --allowed-origins https://orkestrator.dev,https://www.orkestrator.dev
 ```
 
-[`orkestrator.dev`](https://www.orkestrator.dev) connects your browser directly to your backend. See the [CLI guide](packages/cli/README.md) for service options and Tailscale Serve setup.
+The hosted client connects your browser directly to your backend. See the [CLI guide](packages/cli/README.md) for service options and Tailscale Serve setup.
 
 Remote browser access (Tailscale, `mise run start:web`, `mise run start:web-public`) is documented in [`docs/architecture/remote-gateway.md`](docs/architecture/remote-gateway.md). The gateway binds Tailscale addresses by default and requires a token.
 

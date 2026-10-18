@@ -1,6 +1,6 @@
 # Plan usage reload times out in the aggregate browser suite
 
-- **ID:** 0381
+- **ID:** 0383
 - **Status:** open
 - **Date observed:** 2026-10-18
 - **Test:** `stale platform and account quotas retain their timestamp and explanation after reload`

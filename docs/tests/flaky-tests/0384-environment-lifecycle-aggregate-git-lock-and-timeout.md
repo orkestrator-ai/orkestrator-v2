@@ -1,6 +1,6 @@
 # Environment lifecycle Git lock and deletion timeout in the aggregate
 
-- **ID:** 0382
+- **ID:** 0384
 - **Status:** open
 - **Date observed:** 2026-10-18
 - **File:** `apps/backend/tests/commands-registry-environments.test.ts`

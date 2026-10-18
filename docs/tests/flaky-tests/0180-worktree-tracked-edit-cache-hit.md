@@ -206,3 +206,13 @@ the owning test unchanged.
 - **Isolated rerun:** `mise run test:logged -- --name baseline-worktree-git -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures` passed unchanged, exit 0, in 0.6 s.
 - **Evidence:** `orkestrator-test-run.BopZMS/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - **Disposition:** Confirmed recurrence; no watcher implementation, assertion, timeout or skip changed.
+
+## Recurrence after merging main into the real-Electron preview branch (2026-10-18)
+
+- **Command:** `mise run test:logged -- --name full-tests-merged -- mise run test`
+  on branch `qualify-preview-electron-tunnel-c6ca4deaffee` after merging
+  `origin/main` at `68dc1c8d`, on a macOS arm64 host shared with other
+  live-test worktrees.
+- **Failure:** the same test failed in the backend workspace group (135.8 ms).
+- **Isolated rerun:** `bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1`
+  passed 4/4. The owning file was unchanged on the branch.

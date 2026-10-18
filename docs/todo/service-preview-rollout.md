@@ -468,7 +468,14 @@ This replaces the 2026-09-23 file lists as the current baseline.
   known aggregate timeouts
   [0258](../tests/flaky-tests/0258-coordinator-fixture-digest-aggregate-timeout.md)
   and [0178](../tests/flaky-tests/0178-pi-vendor-runtime-aggregate-timeout.md),
-  both of which passed alone. The second full run passed (323 s).
+  both of which passed alone. The second full run passed (323 s). After
+  merging `main` at `68dc1c8d`, `mise run check` passed and the full run
+  failed only on flake [0180](../tests/flaky-tests/0180-worktree-tracked-edit-cache-hit.md)
+  (passed alone) and on two tests broken on `main` itself by the README
+  rewrite (#1077): `tiptap-extensions.test.ts` "accepts the repository
+  Markdown files that previously failed" and `tests/unit/install-script.test.ts`
+  "is served at the URL both READMEs tell users to pipe into bash". Both fail
+  alone against `main`'s README, which this branch does not touch.
 - Not run (still listed under Qualification): windows on different backends
   and a connection switch, clipboard, asserted overlays, HMR reattach,
   keyboard and narrow viewport. Noticed but out of scope: dev and agent-test

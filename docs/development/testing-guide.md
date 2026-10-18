@@ -455,7 +455,9 @@ also keeps Bun's report for every failing test it sees, wherever it appeared.
 That report is the `(fail)` line plus the preceding error, expectation and
 stack lines. Context comes only from lines with the same Turbo task prefix,
 because streamed tasks interleave. These reports print under `--- Failing tests
-in <group> ---` after the tail. On GitHub Actions, `lint.yml` points
+in <group> ---` after the tail, and every tail line is capped at 2,000
+characters: one longer line once cut the GitHub Actions log off before the
+reports. On GitHub Actions, `ci.yml` points
 `ORKESTRATOR_TEST_LOG_DIR` at the runner's temporary directory and uploads the
 compressed logs as the `test-logs-<run>-<attempt>` artifact when the job fails.
 
@@ -730,8 +732,12 @@ Turbo runs each package script from that package's directory, and Bun reads
 root. Backend, desktop, package and bridge test scripts therefore name the
 Node-only preload explicitly with `--preload ../../tests/setup-node.ts`.
 Dropping it is not a silent no-op: it is what sets `CODEX_BRIDGE_NO_SERVER`,
-isolates the git configuration, and installs the bounded diagnostics, so
-without it the codex bridge suite binds a real port and fails.
+isolates the git configuration and the worktree root, and installs the bounded
+diagnostics, so without it the codex bridge suite binds a real port and fails.
+`apps/backend/bunfig.toml` names the same preload, so a bare `bun test <file>`
+from `apps/backend` is isolated too; Bun loads a preload named in both places
+once. Without it a backend test fell back to `ORKESTRATOR_WORKTREE_DIR` from
+the shell, or to a non-canonical `os.tmpdir()` such as macOS `/tmp`.
 
 The runner also keeps Bun timing profiles in a private temporary directory
 keyed by the Git common directory and worktree path. Bun updates these files after each aggregate

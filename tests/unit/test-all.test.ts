@@ -17,6 +17,7 @@ import {
   IOS_GROUP_TIMEOUT_MS,
   main,
   MAX_AGGREGATE_TEST_WORKERS,
+  MAX_CONSOLE_TAIL_LINE_CHARS,
   MAX_FAILURE_REPORTS,
   MAX_GROUP_OUTPUT_TAIL_BYTES,
   MIN_AGGREGATE_TEST_WORKERS,
@@ -222,6 +223,8 @@ describe("scripts/test-all.ts", () => {
     expect(rootGroup.args).toContain("--parallel=1");
     expect(rootGroup.args.slice(0, 2)).toEqual(["test", "./tests"]);
     expect(rootGroup.args).toContain("./e2e/agent-testing/artifact-sanitizer.test.ts");
+    expect(rootGroup.args).toContain("./e2e/agent-testing/mcp-apply-live-support.test.ts");
+    expect(rootGroup.args).toContain("./e2e/agent-testing/mcp-apply-live-safety.test.ts");
     expect(rootGroup.args).toContain("./scripts/opencode-live-compatibility-probe.test.ts");
     expect(rootGroup.args).toContain("./test-fixtures/agent-project/server.test.ts");
     expect(workspaceGroup.args).toContain("--filter=@orkestrator/desktop");
@@ -703,6 +706,32 @@ describe("scripts/test-all.ts", () => {
       "error: expect(received).toBe(expected)\n(fail) suite > lost case [1.00ms]",
     ]);
     if (result.logPath) await rm(path.dirname(result.logPath), { recursive: true, force: true });
+  });
+
+  test("default runner caps each tail line so one huge line cannot hide the summary", async () => {
+    const result = await defaultRunGroup(
+      {
+        name: "huge line fixture",
+        command: process.execPath,
+        args: [
+          "-e",
+          `process.stdout.write("x".repeat(${MAX_CONSOLE_TAIL_LINE_CHARS + 500}) + "\\nafter\\n"); process.exitCode = 1;`,
+        ],
+      },
+      isolatedRunnerEnvironment(),
+    );
+
+    const lines = result.output?.split("\n") ?? [];
+    expect(lines[0]).toBe(
+      `${"x".repeat(MAX_CONSOLE_TAIL_LINE_CHARS)}… [500 more characters in the group log]`,
+    );
+    expect(lines[1]).toBe("after");
+    if (result.logPath) {
+      expect((await readFile(result.logPath, "utf8")).split("\n")[0]).toHaveLength(
+        MAX_CONSOLE_TAIL_LINE_CHARS + 500,
+      );
+      await rm(path.dirname(result.logPath), { recursive: true, force: true });
+    }
   });
 
   test("default runner converts spawn errors into a failed result", async () => {

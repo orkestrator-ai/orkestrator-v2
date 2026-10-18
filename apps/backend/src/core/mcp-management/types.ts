@@ -57,6 +57,12 @@ export interface TargetContextInfo {
   containerId?: string;
   /** Environment is a coordinator/review runtime with project resources excluded. */
   environmentStatus?: string;
+  /**
+   * Whether the environment's interactive sessions load project resources,
+   * from its resolved execution policy. Host Cursor and Pi sessions load their
+   * project MCP file only when this is on.
+   */
+  projectResources?: boolean;
 }
 
 /** A native configuration source a target can see. Backend-only: carries a path. */

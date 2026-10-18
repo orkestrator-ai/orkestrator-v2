@@ -76,6 +76,7 @@ import {
   localCursorCredentialFingerprints,
   openCodeAgentToolsConfigurations,
   configuredOpenCodeAgentTools,
+  openCodeLaunchAgentToolConnections,
   BRIDGE_TOKEN_PATTERN,
   localServerEnvironmentOperations,
   localServerUnresponsiveSince,
@@ -857,12 +858,13 @@ export function scheduleOpenCodeAgentToolsConfiguration(
   password: string,
   connection: AgentToolConnection,
   directory: string,
-): void {
+): Promise<OpenCodeAgentToolsState> {
   const fingerprint = openCodeAgentToolsFingerprint(port, password, connection, directory);
+  const outcome = () => openCodeAgentToolsState(key);
   const recorded = configuredOpenCodeAgentTools.get(key);
   if (recorded?.fingerprint === fingerprint) {
     if (Date.now() - recorded.at < openCodeAgentToolsMemoWindowMs(recorded.state)) {
-      return;
+      return Promise.resolve(outcome());
     }
   } else if (recorded) {
     // The outcome map always describes the current generation, so a status read
@@ -871,7 +873,7 @@ export function scheduleOpenCodeAgentToolsConfiguration(
   }
 
   const current = openCodeAgentToolsConfigurations.get(key);
-  if (current?.fingerprint === fingerprint) return;
+  if (current?.fingerprint === fingerprint) return current.task.then(outcome);
   current?.controller.abort();
 
   const controller = new AbortController();
@@ -919,6 +921,26 @@ export function scheduleOpenCodeAgentToolsConfiguration(
       openCodeAgentToolsConfigurations.delete(key);
     }
   });
+  return task.then(outcome);
+}
+
+/**
+ * The connection a live local OpenCode server's Orkestrator MCP entry is kept
+ * on: the one it was launched with. Only an ordinary environment launched
+ * before that was recorded falls back to its Agent Tools connection. A
+ * coordinator runtime never does: its entry is the scoped Control MCP
+ * credential, and swapping in a tab credential would leave it with mail and
+ * ticket tools but none of its delegation tools.
+ */
+function openCodeReconcileConnection(
+  environmentId: string,
+  env: Pick<Environment, "id" | "projectId">,
+  context: CommandContext,
+): AgentToolConnection | undefined {
+  const launched = openCodeLaunchAgentToolConnections.get(`local:${environmentId}`);
+  if (launched) return launched;
+  if (coordinatorIdFromRuntimeId(environmentId)) return undefined;
+  return context.agentTools?.connection(env.id, env.projectId, "host");
 }
 
 export function resetOpenCodeAgentToolsTuning(): void {
@@ -945,6 +967,7 @@ export function cancelAllOpenCodeAgentToolsConfigurations(): void {
   }
   openCodeAgentToolsConfigurations.clear();
   configuredOpenCodeAgentTools.clear();
+  openCodeLaunchAgentToolConnections.clear();
 }
 
 // Child-scoped launch authority; weak keys release exited process records.
@@ -1018,12 +1041,16 @@ export async function startLocalServerUnlocked(
       const health = await confirmRunningServerHealth(port, healthHeaders, isAlive);
       if (health.healthy) {
         localServerUnresponsiveSince.delete(key);
-        if (kind === "opencode" && env?.worktreePath && context.agentTools) {
-          scheduleOpenCodeAgentToolsConfiguration(
+        const reconcileConnection =
+          kind === "opencode" && env?.worktreePath
+            ? openCodeReconcileConnection(environmentId, env, context)
+            : undefined;
+        if (reconcileConnection && env?.worktreePath) {
+          void scheduleOpenCodeAgentToolsConfiguration(
             `local:${environmentId}`,
             port,
             authToken,
-            context.agentTools.connection(env.id, env.projectId, "host"),
+            reconcileConnection,
             env.worktreePath,
           );
         }
@@ -1482,13 +1509,23 @@ export async function startLocalServerUnlocked(
         : undefined,
     );
     if (kind === "opencode" && authToken && agentToolConnection) {
-      scheduleOpenCodeAgentToolsConfiguration(
+      openCodeLaunchAgentToolConnections.set(`local:${environmentId}`, agentToolConnection);
+      const configured = scheduleOpenCodeAgentToolsConfiguration(
         `local:${environmentId}`,
         port,
         authToken,
         agentToolConnection,
         environment.worktreePath,
       );
+      // Ticket tools are optional for an ordinary chat, which must not wait on
+      // them. Every coordinator action is a Control MCP tool, so its server is
+      // not ready until they are connected; a first turn sent sooner told the
+      // user its delegation tools did not exist.
+      if (coordinatorId && (await configured) !== "connected") {
+        throw retryableBridgeStartupError(
+          "The OpenCode coordinator could not connect its Orkestrator tools",
+        );
+      }
     }
     if (coordinatorId) {
       await context.storage.mutateCoordinatorWorkspace(environment.projectId, (workspace) =>
@@ -1994,20 +2031,16 @@ export async function readLocalServerStatus(
   const persistedPid = env?.[pidField];
   const pid = typeof persistedPid === "number" ? persistedPid : undefined;
   const authToken = localBridgeTokens(kind)?.get(environmentId);
-  if (
-    kind === "opencode" &&
-    child &&
-    !child.killed &&
-    port &&
-    authToken &&
-    env?.worktreePath &&
-    context.agentTools
-  ) {
-    scheduleOpenCodeAgentToolsConfiguration(
+  const reconcileConnection =
+    kind === "opencode" && child && !child.killed && port && authToken && env?.worktreePath
+      ? openCodeReconcileConnection(environmentId, env, context)
+      : undefined;
+  if (reconcileConnection && port && authToken && env?.worktreePath) {
+    void scheduleOpenCodeAgentToolsConfiguration(
       `local:${environmentId}`,
       port,
       authToken,
-      context.agentTools.connection(env.id, env.projectId, "host"),
+      reconcileConnection,
       env.worktreePath,
     );
   }

@@ -13,6 +13,7 @@ import {
   LOCAL_SERVER_KINDS,
   LOCAL_SERVER_SHUTDOWN_GRACE_MS,
   configuredOpenCodeAgentTools,
+  openCodeLaunchAgentToolConnections,
   environmentBaselineTasks,
   localClaudeBridgeTokens,
   localCodexBridgeTokens,
@@ -252,6 +253,7 @@ export function cancelOpenCodeAgentToolsConfiguration(key: string): void {
   openCodeAgentToolsConfigurations.get(key)?.controller.abort();
   openCodeAgentToolsConfigurations.delete(key);
   configuredOpenCodeAgentTools.delete(key);
+  openCodeLaunchAgentToolConnections.delete(key);
 }
 
 export function aggregateRejectedResults(

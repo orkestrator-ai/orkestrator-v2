@@ -1015,7 +1015,7 @@ test.describe("live transcript paging", () => {
           // Back to the Multi Review pane tab before opening the next reviewer.
           await page
             .locator('[aria-roledescription="sortable"]')
-            .filter({ hasText: /^Multi Review$/ })
+            .filter({ has: page.getByRole("button", { name: /^Close Multi Review\b/ }) })
             .first()
             .click();
         }

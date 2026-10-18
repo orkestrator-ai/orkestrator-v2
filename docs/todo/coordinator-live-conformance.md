@@ -198,8 +198,8 @@ for prerequisites and how to batch them with other provider runs.
   | Grok (`advisory`) | Skipped: the host Grok is signed out (`401: Grok Build isn't signed in`) | Skipped (same) | Skipped (same) |
 
   - Claude passed all three at 01:23 UTC, on the suite before the worker gates
-    (below), so its busy follow-up was checked only as "delegation open". Two
-    reruns on the final suite (17:10 and 17:17 UTC) stopped at the first turn on
+    (below), so its busy follow-up was checked only as "delegation open". Three
+    reruns on the final suite (17:10, 17:17 and 17:41 UTC) stopped at the first turn on
     `429 · This request would exceed your account's rate limit`: the host's
     Claude account is shared with every other environment on this host. Rerun
     when the limit has reset (follow-up below).

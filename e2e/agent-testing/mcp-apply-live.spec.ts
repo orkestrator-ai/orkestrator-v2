@@ -195,6 +195,22 @@ function textOf(message: Message): string {
   return typeof message.content === "string" ? message.content : "";
 }
 
+function toolRows(messages: readonly Message[]): string[] {
+  const rows: string[] = [];
+  for (const message of messages) {
+    if (!Array.isArray(message.parts)) continue;
+    for (const part of message.parts as Array<Record<string, unknown>>) {
+      if (typeof part?.type !== "string" || !/tool|mcp/i.test(part.type)) continue;
+      const name = [part.toolName, part.tool, part.name, part.server].find(
+        (value) => typeof value === "string",
+      );
+      const state = [part.state, part.status].find((value) => typeof value === "string");
+      rows.push(`${part.type}:${String(name ?? "?")}:${String(state ?? "?")}`.slice(0, 160));
+    }
+  }
+  return rows.slice(-12);
+}
+
 function signedOut(value: unknown): boolean {
   return /sign(ed)? ?(in|out)|not authenticated|unauthori[sz]ed|needs? auth|log ?in|expired|credential|api key/i.test(
     typeof value === "string" ? value : JSON.stringify(value ?? ""),
@@ -239,6 +255,7 @@ interface StepRecord {
     turnError?: string;
     toolMentions?: number;
     interactions?: string[];
+    toolRows?: string[];
   }>;
   note?: string;
 }
@@ -572,6 +589,10 @@ test.describe("live MCP apply", () => {
               JSON.stringify(message.parts ?? message.content ?? "").includes(server),
             ).length,
             ...(outcome.interactions.length > 0 ? { interactions: outcome.interactions } : {}),
+            // Which tools the turn tried, by name and state only (no
+            // arguments or output), so a call that never reached a server
+            // shows whether it was refused, failed or never attempted.
+            ...(verdict.passed ? {} : { toolRows: toolRows(outcome.fresh) }),
           };
           return record;
         };

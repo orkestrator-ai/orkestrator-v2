@@ -53,9 +53,12 @@ export const PROBE_UNAVAILABLE = "MCPQ-UNAVAILABLE";
 export function probePrompt(server: string, nonce: string): string {
   return [
     `Call the MCP tool named "probe" that belongs to the MCP server named "${server}", exactly once, with the argument nonce set to "${nonce}".`,
+    // Code-mode Codex models reach MCP tools only from a code cell, and a
+    // model offered a way out takes it without looking (codex 0.162.1).
+    "Look for it in your complete tool list first, including tools reachable only through tool search or from code (such as ALL_TOOLS and tools.* in a code cell).",
     "Then reply with only the exact text that tool returned.",
-    `If no tool named "probe" from an MCP server named "${server}" is available to you, or the call fails or is refused, do not call anything else and reply with exactly ${PROBE_UNAVAILABLE}.`,
-    "Do not use any other tool, and do not call a probe tool of any other server.",
+    `If no such tool exists, or the call fails or is refused, reply with exactly ${PROBE_UNAVAILABLE}.`,
+    "Do not call any other MCP tool, and do not call a probe tool of any other server.",
   ].join(" ");
 }
 

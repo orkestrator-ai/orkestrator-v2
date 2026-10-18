@@ -60,7 +60,11 @@ import {
   workflowResultToolName,
   type WorkflowResultKind,
 } from "@orkestrator/protocol/workflow-results";
-import { lastAssistantText, missingWorkflowResultMessage } from "./workflow-result-missing.js";
+import {
+  lastAssistantText,
+  missingWorkflowResultMessage,
+  workflowRestartContinuationPrompt,
+} from "./workflow-result-missing.js";
 import type { AgentToolConnection } from "./agent-tools.js";
 import type { WorkflowResultService } from "./workflow-result-service.js";
 import {
@@ -701,7 +705,7 @@ export class BuildPipelineReviewFanout {
     if (consolidation.state === "prepared") {
       // Build the prompt while dispatch is still unjournaled. A schema repair
       // re-sends an already-answered prompt with the same reviewer evidence.
-      let prompt = consolidation.schemaRepairPrompt;
+      let prompt = consolidation.continuationPrompt ?? consolidation.schemaRepairPrompt;
       if (!prompt) {
         prompt = createReviewConsolidationPrompt({
           targetBranch,
@@ -785,6 +789,7 @@ export class BuildPipelineReviewFanout {
         throw error;
       }
       consolidation.state = "sent";
+      delete consolidation.continuationPrompt;
       session.status = "running";
       await this.save(pipeline);
     }
@@ -792,6 +797,7 @@ export class BuildPipelineReviewFanout {
       // Dispatch acceptance is ambiguous after a crash. The stable request id
       // makes provider reconciliation authoritative; never send it twice.
       consolidation.state = "sent";
+      delete consolidation.continuationPrompt;
       await this.save(pipeline);
     }
 
@@ -805,6 +811,7 @@ export class BuildPipelineReviewFanout {
       error: statusDetail,
       turnSettled,
       backgroundWorkLive,
+      interruption,
     } = await readProviderStatus(
       provider,
       consolidation.providerSessionId,
@@ -847,7 +854,8 @@ export class BuildPipelineReviewFanout {
         "The consolidation session stayed blocked without a resolvable interaction",
       );
     }
-    if (status === "error" || status === "missing") {
+    const restartInterrupted = status === "error" && interruption === "restart";
+    if ((status === "error" && !restartInterrupted) || status === "missing") {
       return {
         kind: "failed",
         error:
@@ -866,6 +874,37 @@ export class BuildPipelineReviewFanout {
             consolidation.providerSessionId,
             consolidation.requestId,
           );
+    if (restartInterrupted && result?.ok !== true) {
+      if (consolidation.restartContinuationSent) {
+        return {
+          kind: "failed",
+          error: `The consolidation session failed: ${statusDetail ?? "interrupted again"}`,
+        };
+      }
+      const previousRequestId = consolidation.requestId;
+      consolidation.requestId = randomUUID();
+      consolidation.state = "prepared";
+      consolidation.createdAt = reviewFanoutNowIso();
+      consolidation.restartContinuationSent = true;
+      consolidation.continuationPrompt = workflowRestartContinuationPrompt({
+        workLabel: "consolidation",
+        resultLabel: "consolidated report",
+        ...(consolidation.resultTransport === "tool-v1"
+          ? { toolName: workflowResultToolName("consolidated-review") }
+          : {}),
+      });
+      delete consolidation.schemaRepairPrompt;
+      delete consolidation.idleResultPolls;
+      delete consolidation.progressDigest;
+      delete consolidation.stalledSince;
+      consolidation.progressAt = consolidation.createdAt;
+      if (consolidation.resultTransport === "tool-v1") consolidation.resultSubmission = "preparing";
+      await this.save(pipeline);
+      if (consolidation.resultTransport === "tool-v1") {
+        await this.deps.workflowResults?.close(previousRequestId, "superseded");
+      }
+      return { kind: "working" };
+    }
     if (!result) {
       if (backgroundWorkLive) {
         if (consolidation.idleResultPolls !== undefined) {

@@ -57,10 +57,10 @@ it reaches. Some rules of thumb:
 | Score | Meaning | Items |
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
-| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 24 |
-| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 252 |
+| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 22 |
+| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 253 |
 | Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 275 |
-| **Total** | | **552** |
+| **Total** | | **551** |
 
 ## Very high
 
@@ -161,7 +161,7 @@ it reaches. Some rules of thumb:
 - [x] Run the real-stack Multi Review inactive-environment cycle with restart, reload and bridge interruption ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), qualification)
 - [x] Run the Multi Review browser and agent-browser suites for the #833 launcher and reviewer tab ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), qualification)
 - [x] Continue a Multi Review reviewer whose turn a backend restart cut short, instead of failing it ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md))
-- [ ] Report a Claude turn a restart cut short as `interruption: "restart"`, so Multi Review continues it instead of failing ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md))
+- [x] Report a Claude turn a restart cut short as `interruption: "restart"`, so Multi Review continues it instead of failing ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md))
 - [ ] Compare full and compact consolidation on real providers over the corpus for recall and provenance ([multi-review-panel-value.md](multi-review-panel-value.md), qualification)
 
 ### Coordinator and agent mail (high)
@@ -182,7 +182,7 @@ it reaches. Some rules of thumb:
 
 ### Cross-cutting (high)
 
-- [ ] Fix `removes a newly created worktree and its branch when persisting them fails`, which has failed alone on a clean `main` on some runs ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
+- [x] Fix `removes a newly created worktree and its branch when persisting them fails`, which has failed alone on a clean `main` on some runs ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
 - [x] Make the desktop app wait (bounded) for the backend to exit before `quitAndInstall` and on every quit ([remote-host-upgrades.md](remote-host-upgrades.md))
 - [x] Qualify Codex sub-agent cards on a fixture profile: one card per child, recovery after reload and restart ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md), qualification)
 - [x] Decide and implement a renderer-backend skew guard for raw OpenCode envelopes from older backends ([mixed-version-compatibility.md](mixed-version-compatibility.md))
@@ -437,6 +437,7 @@ it reaches. Some rules of thumb:
 - [ ] Run a mixed real-provider Multi Review panel at 8 to 32 reviewers, recording caps, latency and RSS ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), qualification)
 - [x] Give Multi Review preparation and consolidation the one result-reminder turn reviewers get ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md))
 - [ ] Give Build Pipeline's consolidation and stage turns the restart continuation and result reminder ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md))
+- [ ] Qualify live that a Multi Review reviewer whose Claude Code process is killed (bridge up) completes after the restart continuation ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), qualification)
 - [x] Count Multi Review fence checks per pass at 8 to 32 reviewers, before and after the per-row fix ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), verify)
 - [x] Decide whether Multi Review fence reads need the cross-process mutation lease at all ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), decision)
 - [ ] Add a content-free reviewer overlap metric from `reviewSourceIds` per run and reviewer position ([multi-review-panel-value.md](multi-review-panel-value.md))
@@ -906,7 +907,7 @@ it reaches. Some rules of thumb:
 | [client-reconnect-and-freshness.md](client-reconnect-and-freshness.md) |  |  | 6 | 2 | 8 |
 | [recurring-work-qualification.md](recurring-work-qualification.md) |  | 4 | 9 | 19 | 32 |
 | **Multi Review** | | | | | |
-| [multi-review-scale-and-cost.md](multi-review-scale-and-cost.md) |  | 1 | 6 | 8 | 15 |
+| [multi-review-scale-and-cost.md](multi-review-scale-and-cost.md) |  |  | 7 | 8 | 15 |
 | [multi-review-panel-value.md](multi-review-panel-value.md) |  | 1 | 4 | 5 | 10 |
 | [multi-review-flow-graph.md](multi-review-flow-graph.md) |  |  |  |  | 0 |
 | **Coordinator and agent mail** | | | | | |
@@ -922,7 +923,7 @@ it reaches. Some rules of thumb:
 | **Cross-cutting** | | | | | |
 | [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md) |  | 1 | 10 | 5 | 16 |
 | [mixed-version-compatibility.md](mixed-version-compatibility.md) |  |  | 2 | 3 | 5 |
-| [test-suite-and-ci-health.md](test-suite-and-ci-health.md) | 1 | 1 | 4 | 13 | 19 |
+| [test-suite-and-ci-health.md](test-suite-and-ci-health.md) | 1 |  | 4 | 13 | 18 |
 | [mobile-layout-gaps.md](mobile-layout-gaps.md) |  |  | 1 | 4 | 5 |
 | [dependency-upgrades.md](dependency-upgrades.md) |  |  | 3 | 7 | 10 |
 | [remote-host-upgrades.md](remote-host-upgrades.md) |  |  | 3 | 2 | 5 |

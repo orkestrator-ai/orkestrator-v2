@@ -53,6 +53,23 @@ behind a running profile. `tests/unit/playwright-spec-loading.test.ts` lists
 every Playwright config under Node in `mise run test`, so such an import fails
 there first.
 
+### Public-site smoke tests
+
+`mise run test:browser` also runs `e2e/public-site/` against a fresh production
+build of the public client. To run only that smoke flow:
+
+```bash
+mise run test:logged -- --name public-browser -- \
+  bunx playwright test --config e2e/public-site/playwright.config.ts
+```
+
+It checks landing-page login, deferred connection-screen loading, direct loads
+and reloads of `/connect`, the home link, and install-command clipboard feedback
+at desktop and narrow widths. This pre-connection flow needs no backend,
+credentials, or isolated application profile. The server is owned and stopped
+by Playwright; `ORKESTRATOR_PUBLIC_E2E_PORT` overrides its default port 4423.
+Authenticated renderer flows still use isolated profiles as described below.
+
 ### Native browser controls
 
 `e2e/AgentLaunchDialog.spec.ts` uses Google Chrome to exercise the native
@@ -713,8 +730,12 @@ Turbo runs each package script from that package's directory, and Bun reads
 root. Backend, desktop, package and bridge test scripts therefore name the
 Node-only preload explicitly with `--preload ../../tests/setup-node.ts`.
 Dropping it is not a silent no-op: it is what sets `CODEX_BRIDGE_NO_SERVER`,
-isolates the git configuration, and installs the bounded diagnostics, so
-without it the codex bridge suite binds a real port and fails.
+isolates the git configuration and the worktree root, and installs the bounded
+diagnostics, so without it the codex bridge suite binds a real port and fails.
+`apps/backend/bunfig.toml` names the same preload, so a bare `bun test <file>`
+from `apps/backend` is isolated too; Bun loads a preload named in both places
+once. Without it a backend test fell back to `ORKESTRATOR_WORKTREE_DIR` from
+the shell, or to a non-canonical `os.tmpdir()` such as macOS `/tmp`.
 
 The runner also keeps Bun timing profiles in a private temporary directory
 keyed by the Git common directory and worktree path. Bun updates these files after each aggregate

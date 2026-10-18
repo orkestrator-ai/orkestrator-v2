@@ -411,12 +411,11 @@ tab, on return and again after a reload: the graph's node states, the
 inspector's transcript tail, the controls and the reviewer's read-only tab.
 The reviewer transcript read must not be the compatibility fallback, and a
 repeated read with its source token must answer `unchanged`. After a restart
-the Codex reviewer must complete, because the runner continues a Codex turn the
-restart cut short. The Claude reviewer, after a restart or a killed bridge, may
-either complete or fail with a stated reason, since Claude reports no
-interruption yet. The case records each reviewer's outcome as a Playwright
-annotation in `results.json`. After a killed bridge the Codex peer must
-complete. If preparation fails before any
+both reviewers must complete, because both bridges report a turn the restart
+cut short and the runner continues it once. After a killed Claude bridge the
+Claude reviewer must complete the same way, and the Codex peer must complete.
+The case records each reviewer's outcome as a Playwright annotation in
+`results.json`. If preparation fails before any
 reviewer starts, the case restarts that step once and records it. Each case
 cancels its review and deletes its environments in cleanup. The restart case
 leaves the profile running under a detached launcher, so stop it with

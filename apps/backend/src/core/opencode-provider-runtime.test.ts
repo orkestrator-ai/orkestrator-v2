@@ -1206,7 +1206,7 @@ describe("OpenCode provider runtime", () => {
     const signInRequired = {
       state: "authentication-required",
       message: OPENCODE_SIGN_IN_REQUIRED_MESSAGE,
-      signIn: { kind: "terminal", hint: "Open a terminal and run opencode auth login." },
+      signIn: { kind: "terminal", hint: "Sign a provider in from Settings → OpenCode." },
     } as const;
 
     test("reports sign-in required when no allowed provider is connected", async () => {

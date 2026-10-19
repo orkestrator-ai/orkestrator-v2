@@ -12,27 +12,28 @@ const MAX_OPENCODE_AUTH_PROVIDERS = 128;
 const MAX_OPENCODE_HINT_PROVIDERS = 8;
 
 /**
- * OpenCode signs a provider in with its own CLI (`opencode auth login`, an
- * alias of `providers login`), and the running server picks the credential up
- * without a restart. Orkestrator's OpenCode settings cannot connect one.
+ * OpenCode signs a provider in through Settings → OpenCode, which drives the
+ * bundled server's own auth routes (`opencode-provider-login.ts`). The `opencode`
+ * on a user's PATH may be another major version that keeps its logins
+ * elsewhere, so the hints point at Settings rather than the CLI.
  */
 export const OPENCODE_SIGN_IN_REQUIRED_MESSAGE =
-  "OpenCode has no connected model provider. Run opencode auth login in a terminal to connect one.";
-export const OPENCODE_SIGN_IN_COMMAND_HINT = "Open a terminal and run opencode auth login.";
+  "OpenCode has no connected model provider. Sign one in from Settings → OpenCode.";
+export const OPENCODE_SIGN_IN_COMMAND_HINT = "Sign a provider in from Settings → OpenCode.";
 
 /** Names the allowlisted providers to connect, when the allowlist is narrow enough to list. */
 function openCodeSignInHint(
   allowedProviders: readonly string[],
   known: ReadonlyArray<{ id: string; label: string }>,
 ): string {
-  const fallback = "Connect a provider with opencode auth login in a terminal.";
+  const fallback = "Sign a provider in from Settings → OpenCode.";
   if (allowedProviders.length === 0 || allowedProviders.length > MAX_OPENCODE_HINT_PROVIDERS) {
     return fallback;
   }
   const labels = allowedProviders.map(
     (id) => known.find((provider) => provider.id.trim().toLowerCase() === id)?.label ?? id,
   );
-  return `Connect ${labels.length === 1 ? labels[0] : `one of ${labels.join(", ")}`} with opencode auth login in a terminal.`;
+  return `Sign ${labels.length === 1 ? labels[0] : `one of ${labels.join(", ")}`} in from Settings → OpenCode.`;
 }
 
 /** SDK-backed discovery and account operations that are independent of session rendering. */

@@ -73,3 +73,69 @@ Formatting, lint, typechecking, all-package build validation, frozen dependency 
 ## Isolated real-stack browser result
 
 With the GNU-tool PATH prefix, `mise run test:logged -- --name merge-isolated-browser -- mise run test:agent:browser:isolated` passed (483.1 seconds logged). Disposable profile `qa-browser-e6f68738-fb9` reported 29 passed and 35 skipped, with no failures or flaky retries. This includes agent-mail inactive-recipient rehydration, reload, local environment and design persistence paths. The runner completed its stop/reset lifecycle successfully; no disposable profile was deliberately retained. Results: `output/agent-testing/qa-browser-e6f68738-fb9/browser/results.json`.
+
+## OpenCode provider sign-in review validation — 2026-10-19
+
+`mise run test:logged -- --name browser -- mise run test:browser` ran the
+component browser suite with nine workers: 358 passed, 80 skipped and two
+failed (186.1 seconds logged). Both failures were the already unresolved
+native branch suggestion selection in `e2e/AgentLaunchDialog.spec.ts:7`:
+`rel` remained in the field at both viewport sizes. Evidence:
+`orkestrator-test-run.LkxPMr/browser.log.gz` below the host temporary directory.
+
+`ORKESTRATOR_E2E_PORT=1438 mise run test:logged -- --name native-branch-isolated -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentLaunchDialog.spec.ts --workers=1`
+repeated both failures in the unchanged owning spec (two passed, two failed,
+20.8 seconds logged). Evidence:
+`orkestrator-test-run.IkwAiX/native-branch-isolated.log.gz`. This remains
+unresolved native selection validation, not a confirmed flake. The independent
+public production smoke suite passed all eight cases under
+`mise run test:logged -- --name public-browser -- bunx playwright test --config e2e/public-site/playwright.config.ts`
+(exit 0, 11.3 seconds).
+
+The default aggregate also exposed two copy-fixture Python startup failures
+and an overlong drift-path validation failure caused by a hanging inherited
+`python3` shim. With the guide's GNU-tool PATH and
+`/opt/homebrew/bin:/usr/bin` preceding the inherited shim, unchanged owners
+passed: `root-owners` (Pi staging and `tests/unit/migrate-copy.test.ts`, 10.6
+seconds) and `validation-worker-owner`
+(`apps/backend/src/core/review-validation-worker.test.ts`, Node preload,
+`--parallel=1 --only-failures`, 43.2 seconds). These changed-environment reruns
+are tooling evidence, not newly confirmed flakes. See [0178](0178-pi-vendor-runtime-aggregate-timeout.md)
+for the separately passing Pi owner and [0473](0473-claude-status-plan-fixture-directory-race.md)
+for the Claude fixture result with the matching Node preload.
+
+The initial aggregate finished in 477.0 seconds with 9149 backend tests passed,
+41 skipped, three failed and one error. Its other Python-dependent failures
+were the SSH controlling-terminal fixture (`apps/backend/src/core/shell.test.ts`)
+and generated blocking-hook fixture (`apps/backend/tests/tmux-commands.test.ts`).
+Both unchanged owners passed together with the explicit tool PATH under
+`mise run test:logged -- --name python-fixture-owners -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/shell.test.ts ./tests/tmux-commands.test.ts --parallel=1 --only-failures`
+(exit 0, 18.8 seconds). The new OpenCode tests passed, as did the corrected DOM
+absence assertion's owner and the diagnostic contract. Formatting, lint and
+all-package typechecking passed through `mise run check`.
+
+The final complete run,
+`mise run test:logged -- --name full-suite-final -- mise run test`, used the
+explicit GNU-tool and Python PATH above and passed every group (exit 0,
+391.5 seconds logged). This includes all workspace packages, root/support,
+every bridge, and protocol regeneration. No test timeout or skip was changed.
+The separate component-browser native branch-picker limitation remains as
+recorded above. Live-provider OAuth, Electron, Docker and iOS scenario suites
+were not exercised for this change.
+
+
+## OpenCode sign-in subsequent main merge — 2026-10-19
+
+Merged `origin/main` at `cd443028` into pre-merge HEAD `d897a4eb`. With the testing guide's GNU-tool PATH and `/opt/homebrew/bin:/usr/bin` ahead of ambient shims, `ORKESTRATOR_E2E_PORT=21587 ORKESTRATOR_PUBLIC_E2E_PORT=24587 mise run test:logged -- --name merge-browser -- mise run test:browser` reported 358 passed, 80 skipped and two failed with nine workers (3.3 minutes). Both failures were the unchanged native branch-suggestion case in `e2e/AgentLaunchDialog.spec.ts:7`: the input remained `rel` instead of `release/2.0` at the 5000 ms deadline.
+
+`ORKESTRATOR_E2E_PORT=21587 mise run test:logged -- --name merge-native-branch-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentLaunchDialog.spec.ts --workers=1` repeated both failures (two passed, two failed; exit 1, 23.5 seconds logged). This remains unresolved validation, not a newly confirmed flake. The merge changes neither the owning spec nor the native branch input. No assertion, timeout or skip changed. Evidence: `orkestrator-test-run.v8zw5c/merge-browser.log.gz` and `orkestrator-test-run.3MyQp0/merge-native-branch-owner.log.gz` below the host temporary directory.
+
+The separately invoked public-site production smoke suite passed (exit 0, 12.2 seconds): `ORKESTRATOR_PUBLIC_E2E_PORT=24587 mise run test:logged -- --name merge-public-browser -- bunx playwright test --config e2e/public-site/playwright.config.ts`. All merged picker-related browser cases passed in the complete component run.
+
+
+The first non-iOS aggregate (`merge-tests`) exited 1 in 492.1 seconds. The Codex fake-process, nested-submodule move and test-ownership timeouts each passed unchanged in their owning-file reruns; see [0210](0210-fake-codex-process-timeout.md), [0248](0248-move-restart-recovery-submodule-timeout.md) and [0502](0502-test-suite-ownership-git-timeout.md). A deterministic merged-registry capacity failure in `apps/backend/tests/gateway-support-extra.test.ts` (654 registered commands, capacity 653 after reserved labels) also reproduced alone. The bounded metric entry limit was raised from 656 to 657, and the unchanged 25-test owner passed (`merge-gateway-budget-fixed`, 0.4 seconds). No assertion or skip was changed. Aggregate evidence: `orkestrator-test-run.tW4jss/`; failed owner evidence: `orkestrator-test-run.KwFMmx/`, both below the host temporary directory.
+
+The real-stack `mise run test:logged -- --name merge-isolated-browser -- mise run test:agent:browser:isolated` passed (exit 0, 489.1 seconds including startup/cleanup): 29 passed, 36 skipped, no failures or flaky retries. Profile `qa-browser-35f1aa69-c90` was stopped/reset by the one-shot runner. Results are in `output/agent-testing/qa-browser-35f1aa69-c90/browser/results.json`. Credentialed provider scenarios retained their opt-ins. Electron, Docker lifecycle, CLI scenarios and iOS suites were omitted because this merge does not change those areas.
+
+
+After the metrics-capacity correction, `merge-final-format`, `merge-final-lint`, `merge-final-typecheck` and `merge-final-build` passed. `mise run test:logged -- --name merge-final-tests -- mise run test`, with the same explicit tool PATH, finished in 608.1 seconds logged (including 84.5 seconds waiting for an earlier cancelled run's reservation). Root/support, every bridge, protocol regeneration and every workspace package except backend passed. Backend had 9166 passed, 41 skipped and two failures: [0180](0180-worktree-tracked-edit-cache-hit.md) and [0503](0503-backend-resource-event-aggregate-timeout.md); both unchanged owning files passed alone in 0.5 and 0.4 seconds respectively. The merged-registry budget regression passed unchanged after the production limit correction. Evidence: `orkestrator-test-run.cM59au/` and outer `orkestrator-test-run.NdOLPH/`, below the host temporary directory. The earlier native branch-suggestion browser failures remain unresolved; no test assertion, timeout or skip was changed.

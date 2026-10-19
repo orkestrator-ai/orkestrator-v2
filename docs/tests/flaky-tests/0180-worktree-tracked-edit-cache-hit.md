@@ -287,3 +287,12 @@ The unchanged owning file passed alone (4 pass, 1.4 s).
 - **Failure:** the same test failed in the backend workspace group (135.8 ms).
 - **Isolated rerun:** `bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1`
   passed 4/4. The owning file was unchanged on the branch.
+
+
+## OpenCode sign-in main merge — 2026-10-19
+
+- **Original command:** the testing guide's GNU-tool PATH with `/opt/homebrew/bin:/usr/bin` ahead of ambient shims, `mise run test:logged -- --name merge-final-tests -- mise run test`, merging `cd443028` into `d897a4eb`. Workspace/root/bridges/protocol reserved 4/1/2/1 slots; backend used two isolated workers.
+- **Failure:** the tracked-edit cache-hit assertion at line 139 expected 1 and received 0 (991.71 ms). Backend reported 9166 passed, 41 skipped and two failed across 9209 tests in 491 files (471.65 seconds). The other failure was the resource-event timeout in [0503](0503-backend-resource-event-aggregate-timeout.md). Every other workspace package, root/support, bridge and protocol check passed. Aggregate exit 1 in 608.1 seconds logged, including 84.5 seconds waiting for the workspace reservation.
+- **Owning-file rerun:** the same PATH with `mise run test:logged -- --name merge-final-owner-worktree-snapshots -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 0.5 seconds logged).
+- **Evidence:** `orkestrator-test-run.cM59au/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and outer `orkestrator-test-run.NdOLPH/merge-final-tests.log.gz` below the host temporary directory.
+- **Assessment:** confirmed intermittent recurrence. The invalidation-timing hypothesis remains unconfirmed; no implementation, assertion, timeout or skip changed.

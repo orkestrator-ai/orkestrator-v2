@@ -8,6 +8,7 @@ import {
   applyActiveAgentAccountEnvironment,
   applyCoordinatorClaudeAccount,
   localBridgeIsOnActiveAccount,
+  markLocalBridgesForLoginRefresh,
 } from "./agent-accounts-active.js";
 import type { CommandContext } from "./commands-context.js";
 import * as commandFiles from "./commands-files.js";
@@ -15,7 +16,9 @@ import {
   localAgentAccountIds,
   localAgentAccountTokenExpiry,
   loginlessLocalBridges,
+  staleLoginLocalBridges,
 } from "./agent-account-bridge-state.js";
+import { localServerProcesses } from "./commands-runtime-state.js";
 import { prepareCoordinatorClaudeHome } from "./commands-servers.js";
 import { StorageService } from "./storage.js";
 
@@ -290,6 +293,25 @@ describe("localBridgeIsOnActiveAccount", () => {
     expect(await localBridgeIsOnActiveAccount(key, "codex", "env-1", context)).toBe(true);
     // Other platforms have no accounts.
     expect(await localBridgeIsOnActiveAccount("pi:env-1", "pi", "env-1", context)).toBe(true);
+  });
+
+  test("replaces an idle OpenCode server once a provider login changed", async () => {
+    const key = "opencode:env-1";
+    localServerProcesses.set(key, {} as never);
+    localServerProcesses.set("codex:env-1", {} as never);
+    try {
+      expect(await localBridgeIsOnActiveAccount(key, "opencode", "env-1", context)).toBe(true);
+      markLocalBridgesForLoginRefresh("opencode");
+      expect(staleLoginLocalBridges.has("codex:env-1")).toBe(false);
+      liveWork = true;
+      expect(await localBridgeIsOnActiveAccount(key, "opencode", "env-1", context)).toBe(true);
+      liveWork = false;
+      expect(await localBridgeIsOnActiveAccount(key, "opencode", "env-1", context)).toBe(false);
+    } finally {
+      localServerProcesses.delete(key);
+      localServerProcesses.delete("codex:env-1");
+      staleLoginLocalBridges.clear();
+    }
   });
 
   test("keeps a near-expiry token until a fresher one is available or it expires", async () => {

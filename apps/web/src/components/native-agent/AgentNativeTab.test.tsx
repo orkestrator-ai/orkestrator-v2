@@ -1676,6 +1676,68 @@ describe("AgentNativeTab", () => {
     expect(getNativeAgentAuthStatusMock).not.toHaveBeenCalled();
   });
 
+  test("sends a local OpenCode tab to Settings rather than the CLI on PATH", async () => {
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input as never)),
+      readiness: {
+        state: "authentication-required" as const,
+        message: "OpenCode has no connected model provider. Sign one in from Settings → OpenCode.",
+        signIn: {
+          kind: "terminal" as const,
+          hint: "Sign OpenCode Go in from Settings → OpenCode.",
+        },
+      },
+    }));
+    const createTab = mock(() => true);
+    render(
+      <TerminalProvider>
+        <TerminalTabHarness createTab={createTab}>
+          <AgentNativeTab
+            tabId="tab-opencode-auth-required"
+            data={{ ...identity("opencode"), containerId: undefined, isLocal: true }}
+            isActive
+          />
+        </TerminalTabHarness>
+      </TerminalProvider>,
+    );
+
+    expect(await screen.findByText("Sign OpenCode Go in from Settings → OpenCode.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Sign in from a terminal" }) === null).toBe(true);
+    expect(screen.getByRole("button", { name: "Open OpenCode settings" })).toBeTruthy();
+    expect(createTab).not.toHaveBeenCalled();
+  });
+
+  test("opens OpenCode container sign-in in its terminal", async () => {
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input as never)),
+      readiness: {
+        state: "authentication-required" as const,
+        message: "OpenCode needs a provider login.",
+        signIn: { kind: "terminal" as const },
+      },
+    }));
+    const createTab = mock(() => true);
+    render(
+      <TerminalProvider>
+        <TerminalTabHarness createTab={createTab}>
+          <AgentNativeTab
+            tabId="container-opencode-login"
+            data={{ ...identity("opencode"), containerId: "container-opencode", isLocal: false }}
+            isActive
+          />
+        </TerminalTabHarness>
+      </TerminalProvider>,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Sign in from a terminal" }));
+    expect(createTab).toHaveBeenCalledWith("plain", {
+      displayTitle: "OpenCode sign-in",
+      initialCommands: ["opencode auth login"],
+    });
+    expect(
+      screen.getByText(/A sign-in made in this container lasts until it restarts/),
+    ).toBeTruthy();
+  });
+
   test("terminal login clears authoritative readiness while away and survives a renderer reload", async () => {
     const locked = {
       state: "authentication-required" as const,

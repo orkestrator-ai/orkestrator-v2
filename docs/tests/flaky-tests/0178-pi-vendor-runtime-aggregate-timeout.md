@@ -782,6 +782,29 @@ The second-merge warm aggregate (`merge2-warm-tests`) passed the root/support gr
 
 The aggregate failed this owner and its unchanged owning file passed with one worker. Exact commands, symptoms, counts, timings and bounded evidence are recorded in [0500](0500-agent-mail-main-merge-validation.md). No implementation, assertion, timeout or skip changed.
 
+## OpenCode provider sign-in review recurrence — 2026-10-19
+
+`mise run test:logged -- --name full-suite -- mise run test` reserved 4/1/2/1
+workspace/root/bridge/protocol slots while the nine-worker component browser
+suite was active. Runtime staging timed out at 30001.06 ms. Root/support
+reported 3143 passed, one skipped and four failed; the other failures were two
+Python-shim fixture startup failures and a newly added DOM absence assertion
+that was corrected and verified with its owner and diagnostic-contract tests.
+Evidence: `orkestrator-test-run.ImZy3W/root-and-agent-support-tests.log.gz`
+below the host temporary directory.
+
+With the testing guide's GNU-tool PATH and `/opt/homebrew/bin:/usr/bin` ahead
+of the inherited Python shim,
+`mise run test:logged -- --name pi-vendor-isolated -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures`
+passed the unchanged owning file alone (exit 0, 6.7 seconds). The separate
+`root-owners` invocation also passed it alongside the copy owner (10.6 seconds).
+No Pi implementation, assertion, skip or timeout changed. Host contention
+remains an unconfirmed explanation.
+
+The final `full-suite-final` aggregate with that explicit PATH passed all four
+groups (391.5 seconds logged); root/support passed in 192.4 seconds. No staging
+implementation, assertion or timeout changed.
+
 ## Queued-steer main merge validation — 2026-10-19
 
 The recurrence, owning-file results and remaining limitations are recorded in

@@ -151,6 +151,15 @@ The test passed alone (`bun test --preload ../../tests/setup-node.ts tests/comma
 - **Evidence:** `orkestrator-test-run.4BSigl/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and outer `orkestrator-test-run.EJfRvy/merge2-full-warm.log.gz`, below the host temporary directory.
 - **Assessment:** confirmed intermittent recurrence. Shared-host contention remains a hypothesis; no implementation, assertion, deadline or skip changed.
 
+## Keep-open picker agent-mail main merge — 2026-10-19
+
+- **Original command:** the testing guide's macOS GNU-tool PATH prefix with `mise run test:logged -- --name merge-tests -- mise run test`, merging `origin/main` at `ef52cca4` into pre-merge HEAD `75e79aaf`. Workspace/root/bridges/protocol reserved 4/1/2/1 worker slots; backend used two isolated workers alongside component and isolated-browser validation.
+- **Failure:** `Electron backend environment lifecycle commands > retains the environment and process ownership when deletion cannot reap a server` exceeded 5000 ms at 6773.23 ms.
+- **Aggregate result:** exit 1 after 524.9 seconds logged. Backend reported 9124 passed, 41 skipped, two failed and one between-test error across 9167 tests in 489 files (430.57 seconds). Every other workspace package, root/support, bridges and protocol regeneration passed.
+- **Owning-file rerun:** the same GNU-tool PATH with `mise run test:logged -- --name merge-backend-owners -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts ./tests/commands-registry-environments.test.ts --parallel=1 --only-failures` passed both unchanged owning files sequentially (exit 0, 26.7 seconds logged).
+- **Evidence:** `orkestrator-test-run.EYsTWK/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and outer `orkestrator-test-run.MSInPe/merge-tests.log.gz`, below the host temporary directory.
+- **Assessment:** confirmed intermittent recurrence. Shared-host contention remains a hypothesis; no implementation, assertion, timeout or skip changed.
+
 ## Queued-steer recovery validation recurrence — 2026-10-19
 
 - **Revision:** `1ad88982`, branch `queued-prompt-steering-3970ea85ceea-r1`.

@@ -77,9 +77,9 @@ describe("FeatureBuildFields build step speed", () => {
     fireEvent.click(within(speed).getByRole("menuitemradio", { name: /Fast/, hidden: true }));
     expect(latest?.build.fastMode).toBe(true);
 
-    // Reasoning and speed live on the same picker, so a reasoning edit that
-    // rebuilds the row instead of extending it silently reverts to Normal.
-    await openBuildPicker();
+    // Reasoning and speed live on the same picker, which stays open between
+    // choices, so a reasoning edit that rebuilds the row instead of extending
+    // it silently reverts to Normal.
     const reasoning = screen.getByRole("group", { name: "Reasoning", hidden: true });
     fireEvent.click(within(reasoning).getByRole("menuitemradio", { name: "High", hidden: true }));
 
@@ -94,7 +94,6 @@ describe("FeatureBuildFields build step speed", () => {
     const reasoning = screen.getByRole("group", { name: "Reasoning", hidden: true });
     fireEvent.click(within(reasoning).getByRole("menuitemradio", { name: "High", hidden: true }));
 
-    await openBuildPicker();
     const speed = screen.getByRole("group", { name: "Speed mode", hidden: true });
     fireEvent.click(within(speed).getByRole("menuitemradio", { name: /Fast/, hidden: true }));
 

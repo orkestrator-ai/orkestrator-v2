@@ -36,6 +36,10 @@ test("short mobile viewports keep every picker view reachable", async ({ page },
   await lastReasoning.scrollIntoViewIfNeeded();
   await expect(lastReasoning).toBeInViewport();
   await lastReasoning.click();
+  await expect(lastReasoning).toBeChecked();
+  await expect(picker).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(picker).toBeHidden();
   await expect(page.getByTitle("Choose model, reasoning, and speed")).toHaveAccessibleName(
     /Fixture effort 12/,
   );
@@ -97,6 +101,10 @@ test("desktop picker scrolls model and reasoning columns independently", async (
   expect(lastItemLayout.itemTop).toBeGreaterThanOrEqual(lastItemLayout.listTop);
   expect(lastItemLayout.itemBottom).toBeLessThanOrEqual(lastItemLayout.listBottom);
   await lastReasoning.click();
+  await expect(lastReasoning).toBeChecked();
+  await expect(picker).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(picker).toBeHidden();
   await expect(page.getByTitle("Choose model, reasoning, and speed")).toHaveAccessibleName(
     /Fixture effort 12/,
   );

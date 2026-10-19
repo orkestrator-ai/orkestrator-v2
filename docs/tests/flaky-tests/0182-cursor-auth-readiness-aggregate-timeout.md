@@ -160,3 +160,10 @@ mise run test:logged -- --name cursor-http-rerun-node -- bun test --cwd bridges/
 ```
 
 No Cursor implementation, timeout, assertion or skip changed.
+
+## Queued-steer further main merge — 2026-10-19
+
+The ten-second readiness timeout recurred; the unchanged HTTP owning file
+passed alone in 2.3 seconds. Commands and aggregate evidence are recorded in
+[0501](0501-queued-steer-main-merge-validation.md). No implementation, assertion,
+timeout or skip changed.

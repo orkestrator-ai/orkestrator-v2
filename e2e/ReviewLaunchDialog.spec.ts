@@ -84,13 +84,14 @@ test("one picker chooses the provider, the model, and the reasoning effort", asy
     .getByRole("group", { name: "Models" })
     .getByRole("menuitemradio", { name: /Codex Review/ })
     .click();
-  await expect(trigger).toContainText("Codex Review");
-
-  await trigger.click();
+  await expect(page.getByRole("menuitemradio", { name: /Codex Review/ })).toBeChecked();
   await page
     .getByRole("group", { name: "Reasoning" })
     .getByRole("menuitemradio", { name: "High" })
     .click();
+  await expect(page.getByRole("menuitemradio", { name: "High" })).toBeChecked();
+  await page.keyboard.press("Escape");
+  await expect(trigger).toContainText("Codex Review");
   await expect(trigger).toContainText("High");
 
   await page.getByRole("button", { name: "Start review" }).click();
@@ -190,6 +191,11 @@ test("chooses a provider, a model and an effort with the keyboard alone", async 
   const codexModel = page.getByRole("menuitemradio", { name: /Codex Review/ });
   await expect(codexModel).toBeFocused();
   await page.keyboard.press("Enter");
+  await expect(codexModel).toBeChecked();
+  await expect(codexModel).toBeFocused();
+  await expect(page.locator("[data-native-model-picker]")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(trigger).toBeFocused();
   await expect(trigger).toContainText("Codex Review");
 
   // Closing and reopening the picker restores the currently selected provider.
@@ -208,7 +214,13 @@ test("chooses a provider, a model and an effort with the keyboard alone", async 
   await expect(reasoning.getByRole("menuitemradio", { name: "Medium" })).toBeFocused();
   await page.keyboard.press("ArrowDown");
   await expect(reasoning.getByRole("menuitemradio", { name: "High" })).toBeFocused();
-  await page.keyboard.press("Enter");
+  await page.keyboard.press("Space");
+  await expect(reasoning.getByRole("menuitemradio", { name: "High" })).toBeFocused();
+  await expect(page.getByRole("menuitemradio", { name: "High" })).toBeChecked();
+  await expect(page.locator("[data-native-model-picker]")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(trigger).toBeFocused();
+  await expect(trigger).toContainText("Codex Review");
   await expect(trigger).toContainText("High");
 
   await page.getByRole("button", { name: "Start review" }).click();
@@ -229,11 +241,12 @@ test("the phone layout reaches every choice through its drill-in views", async (
   await expect(page.getByRole("group", { name: "Models" })).toHaveCount(0);
   await page.getByRole("button", { name: "codex models" }).click();
   await page.getByRole("menuitemradio", { name: /Codex Review/ }).click();
-  await expect(trigger).toContainText("Codex Review");
-
-  await trigger.click();
+  await expect(page.getByRole("menuitemradio", { name: /Codex Review/ })).toBeChecked();
   await page.locator("[data-native-mobile-reasoning-trigger]").click();
   await page.getByRole("menuitemradio", { name: "High" }).click();
+  await expect(page.getByRole("menuitemradio", { name: "High" })).toBeChecked();
+  await page.keyboard.press("Escape");
+  await expect(trigger).toContainText("Codex Review");
   await expect(trigger).toContainText("High");
 
   await page.getByRole("button", { name: "Start review" }).click();

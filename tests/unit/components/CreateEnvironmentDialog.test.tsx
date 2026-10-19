@@ -122,11 +122,13 @@ async function selectAgentModel(name: string | RegExp) {
     fireEvent.click(screen.getByRole("button", { name: `${platform} models` }));
   }
   fireEvent.click(await screen.findByRole("menuitemradio", { name }));
+  fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
 }
 
 async function selectReasoning(name: string) {
   openAgentModelPicker();
   fireEvent.click(await screen.findByRole("menuitemradio", { name }));
+  fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
 }
 
 describe("resolveAgentDefaults", () => {
@@ -1111,6 +1113,7 @@ describe("resolveAgentDefaults", () => {
     expect(screen.getByRole("menuitemradio", { name: /Cursor Grok 4\.6/ })).toBeTruthy();
     expect(screen.getByRole("menuitemradio", { name: /Composer 2\.5/ })).toBeTruthy();
     fireEvent.click(screen.getByRole("menuitemradio", { name: "High" }));
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
     await waitFor(() => {
@@ -1654,6 +1657,7 @@ describe("resolveAgentDefaults", () => {
     fireEvent.click(await screen.findByRole("button", { name: "opencode models" }));
     expect(await screen.findByRole("menuitemradio", { name: /Model A/ })).toBeTruthy();
     fireEvent.click(await screen.findByRole("menuitemradio", { name: /Model B/ }));
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
     await waitFor(() =>
       expect(onCreate).toHaveBeenCalledWith(
@@ -1736,6 +1740,7 @@ describe("resolveAgentDefaults", () => {
     });
     fireEvent.click(await screen.findByRole("button", { name: "opencode models" }));
     fireEvent.click(await screen.findByRole("menuitemradio", { name: /Durable Model B/ }));
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     expect(getAgentModelPicker().textContent).toContain("Durable Model B");
     expect(getAgentModelPicker().textContent).toContain("Default");
 
@@ -1874,6 +1879,7 @@ describe("resolveAgentDefaults", () => {
     openAgentModelPicker();
     fireEvent.click(screen.getByRole("button", { name: "Favorite models" }));
     fireEvent.click(await screen.findByRole("menuitemradio", { name: /Codex Favorite/ }));
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
 
     await waitFor(() => {
       expect(getAgentModelPicker().textContent).toContain("Codex Favorite");
@@ -2147,6 +2153,7 @@ describe("resolveAgentDefaults", () => {
     expect(configuredOption).toBeTruthy();
     expect(screen.getByRole("menuitemradio", { name: /Cached Model/ })).toBeTruthy();
     fireEvent.click(configuredOption);
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
     await waitFor(() =>

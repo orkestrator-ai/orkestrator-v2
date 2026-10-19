@@ -124,3 +124,42 @@ No implementation, assertion, timeout or skip changed. Group evidence is in
 `orkestrator-test-run.5HRXgC/`; outer evidence is in
 `orkestrator-test-run.nXPXGK/merge-full-warm.log.gz`, below the host temporary
 directory.
+
+## Further main merge at 12fbde62 — 2026-10-19
+
+Merged `origin/main` at `12fbde62` into pre-merge HEAD `a4c61333`. The 32
+changed paths contain the model picker's keep-open behavior, its consumer and
+browser tests, and validation records. Conflicts in the index and cases
+0165, 0224 and 0226 retained both branches' evidence. No implementation,
+assertion, timeout or skip was changed for validation.
+
+All checks used the logged wrapper. `merge2-format`, `merge2-lint`,
+`merge2-typecheck` and `merge2-renderer-build` passed. Lint found no warnings
+in this merge's changed files. `merge2-browser` passed the complete component
+and public-site task (155.8 s), using private fixture ports 21424 and 24425.
+
+The full suite's Cursor authentication case
+[0182](0182-cursor-auth-readiness-aggregate-timeout.md) exceeded its ten-second
+deadline at 10004.17 ms.
+`mise run test:logged -- --name merge2-cursor-http-owner -- bun test --cwd bridges/cursor-bridge --preload ../../tests/setup-node.ts ./src/http.test.ts --parallel=1 --only-failures`
+passed the unchanged owning file (exit 0, 2.3 s), confirming an intermittent
+recurrence. Shared-host contention remains a hypothesis.
+
+With the testing guide's GNU-tool PATH prefix,
+`mise run test:logged -- --name merge2-full -- mise run test` finished in
+397.3 s (exit 1). Workspace packages, root/support and protocol regeneration
+passed. The Cursor authentication timeout above was the only failure across
+all four groups; every other bridge passed. Group evidence is in
+`orkestrator-test-run.orT1WG/` and outer evidence in
+`orkestrator-test-run.rcRHlZ/merge2-full.log.gz`, below the host temporary
+directory. The owning-file pass confirms intermittence without changing any
+assertion, deadline or skip.
+
+`mise run test:logged -- --name merge2-agent-browser -- mise run test:agent:browser:isolated`
+passed in 429.9 s, including disposable profile startup and cleanup. Profile
+`qa-browser-1beb44c3-c3d` was stopped and reset by the one-shot runner. Results
+are under `output/agent-testing/qa-browser-1beb44c3-c3d/browser/results.json`.
+
+Electron, CLI, Docker and iOS scenario suites were omitted for this further
+merge because those areas did not change. Credentialed live-provider tests
+retained their opt-ins.

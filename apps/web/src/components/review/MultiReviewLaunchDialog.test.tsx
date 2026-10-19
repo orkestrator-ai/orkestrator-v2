@@ -45,6 +45,11 @@ function setFavorites(favoriteModels: AgentModelRef[]) {
 afterEach(cleanup);
 beforeEach(() => setFavorites([]));
 
+/** The picker stays open after a choice, so helpers dismiss it explicitly. */
+function closePicker() {
+  fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+}
+
 /** Opens `row`'s picker, switches to the favourites view, and picks a model. */
 function chooseFavorite(row: string, name: RegExp) {
   fireEvent.pointerDown(screen.getByRole("button", { name: `${row} model` }));
@@ -52,6 +57,7 @@ function chooseFavorite(row: string, name: RegExp) {
   fireEvent.click(
     within(screen.getByRole("group", { name: "Models" })).getByRole("menuitemradio", { name }),
   );
+  closePicker();
 }
 
 /** Opens `row`'s picker and chooses a Fast/Normal option. */
@@ -60,6 +66,7 @@ function chooseSpeed(row: string, name: RegExp) {
   fireEvent.click(
     within(screen.getByRole("group", { name: "Speed mode" })).getByRole("menuitemradio", { name }),
   );
+  closePicker();
 }
 
 describe("MultiReviewLaunchDialog speed", () => {

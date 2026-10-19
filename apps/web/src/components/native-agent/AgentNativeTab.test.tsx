@@ -2384,6 +2384,8 @@ describe("AgentNativeTab", () => {
       getNativeAgentData(root.tabs.find((tab) => tab.id === tabId)!)?.platform,
     ).toBeUndefined();
 
+    // The picker stays open after a choice; dismiss it to reach the composer.
+    fireEvent.keyDown(document.body, { key: "Escape" });
     const input = await screen.findByRole("textbox");
     fireEvent.input(input, { target: { textContent: "Use Claude instead" } });
     fireEvent.click(screen.getByRole("button", { name: "Start agent" }));

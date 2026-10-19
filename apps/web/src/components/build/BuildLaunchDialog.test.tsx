@@ -102,6 +102,11 @@ function openPicker(step: string) {
   fireEvent.pointerDown(picker(step), { button: 0, ctrlKey: false });
 }
 
+/** The picker stays open after a choice, so helpers dismiss it explicitly. */
+function closePicker() {
+  fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+}
+
 function chooseVisibleModel(step: string, name: RegExp) {
   openPicker(step);
   const modelGroup = screen.getByRole("group", { name: "Models" });
@@ -109,6 +114,7 @@ function chooseVisibleModel(step: string, name: RegExp) {
     fireEvent.click(screen.getByRole("button", { name: "claude models" }));
   }
   fireEvent.click(within(modelGroup).getByRole("menuitemradio", { name }));
+  closePicker();
 }
 
 function chooseFavorite(step: (typeof STEP_LABELS)[number], name: RegExp) {
@@ -117,6 +123,7 @@ function chooseFavorite(step: (typeof STEP_LABELS)[number], name: RegExp) {
   fireEvent.click(
     within(screen.getByRole("group", { name: "Models" })).getByRole("menuitemradio", { name }),
   );
+  closePicker();
 }
 
 function chooseReasoning(step: (typeof STEP_LABELS)[number], name: RegExp) {
@@ -124,12 +131,13 @@ function chooseReasoning(step: (typeof STEP_LABELS)[number], name: RegExp) {
   fireEvent.click(
     within(screen.getByRole("group", { name: "Reasoning" })).getByRole("menuitemradio", { name }),
   );
+  closePicker();
 }
 
 function choosePlatform(step: (typeof STEP_LABELS)[number], platform: string) {
   openPicker(step);
   fireEvent.click(screen.getByRole("button", { name: `${platform} models` }));
-  fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+  closePicker();
 }
 
 function chooseSpeed(step: (typeof STEP_LABELS)[number], name: RegExp) {
@@ -137,6 +145,7 @@ function chooseSpeed(step: (typeof STEP_LABELS)[number], name: RegExp) {
   fireEvent.click(
     within(screen.getByRole("group", { name: "Speed mode" })).getByRole("menuitemradio", { name }),
   );
+  closePicker();
 }
 
 function submit() {

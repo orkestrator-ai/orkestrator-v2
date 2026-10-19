@@ -302,3 +302,14 @@ Final aggregate counts: backend 9085 passed, 41 skipped and two failed across 91
 - **Isolated rerun:** `mise run test:logged -- --name merge2-integration-warm-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures`, with the same GNU-tool PATH, passed the unchanged owning file (exit 0, 24.4 seconds).
 - **Evidence:** `orkestrator-test-run.4BSigl/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and outer `orkestrator-test-run.EJfRvy/merge2-full-warm.log.gz`, below the host temporary directory.
 - **Assessment:** confirmed intermittent recurrence. Shared-host contention remains a hypothesis; no implementation, assertion, deadline or skip changed.
+
+## Keep-open picker main merge — 2026-10-19
+
+- **Original command:** the testing guide's macOS GNU-tool PATH with `mise run test:logged -- --name merge-tests -- mise run test`, merging `origin/main` at `d28f0d63` into `24d4ac1c`. Workspace/root/bridges/protocol reserved 4/1/2/1 slots; backend used two isolated workers alongside browser validation.
+- **Failure:** `persists safe cleanup failure details and permits a backend deletion retry` exceeded the 5000 ms deadline at 6160.02 ms.
+- **Suite counts:** backend reported 9113 passed, 41 skipped and two failed across 9156 tests in 486 files (339.59 seconds). The aggregate exited 1 after 399.9 seconds; desktop also had a dependency-install prerequisite failure and Claude had the fixture race in 0385. Root/support and protocol passed.
+- **Owning-file rerun:** the same GNU-tool PATH with `mise run test:logged -- --name merge-backend-commands-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures` passed the unchanged file, exit 0, in 15.8 seconds logged.
+- **Evidence:** `orkestrator-test-run.4pe57b/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
+- **Assessment:** confirmed intermittent recurrence. Shared-host contention remains a hypothesis; no backend implementation, assertion, timeout or skip changed.
+
+The subsequent full run, `mise run test:logged -- --name merge-tests-installed -- mise run test`, passed all four groups unchanged (exit 0, 266.7 seconds logged).

@@ -445,7 +445,9 @@ mock.module("@/components/chat/FileMentionMenu", () => ({
 mock.module("react-virtuoso", () => ({
   ...realReactVirtuosoSnapshot,
   Virtuoso: forwardRef<any, any>((props, ref) => {
-    lastVirtuosoProps = props;
+    useEffect(() => {
+      lastVirtuosoProps = props;
+    }, [props]);
     const scrollerRef = useReactRef<HTMLDivElement>(null);
 
     useImperativeHandle(
@@ -2310,6 +2312,7 @@ describe("ClaudeTmuxChatTab", () => {
     const fableOption = await screen.findByText("Fable");
     await act(async () => {
       fireEvent.click(fableOption);
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
       await Promise.resolve();
     });
 
@@ -2346,6 +2349,7 @@ describe("ClaudeTmuxChatTab", () => {
 
     await act(async () => {
       fireEvent.click(defaultOption!);
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
       await Promise.resolve();
     });
 
@@ -2381,6 +2385,7 @@ describe("ClaudeTmuxChatTab", () => {
     const haikuOption = await screen.findByText("Haiku");
     await act(async () => {
       fireEvent.click(haikuOption);
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     });
     fireEvent.click(screen.getByRole("button", { name: "Start fresh" }));
 
@@ -2641,6 +2646,7 @@ describe("ClaudeTmuxChatTab", () => {
     const haikuOption = await screen.findByText("Haiku");
     await act(async () => {
       fireEvent.click(haikuOption);
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
       await Promise.resolve();
     });
 
@@ -2681,6 +2687,7 @@ describe("ClaudeTmuxChatTab", () => {
     const haikuOption = await screen.findByText("Haiku");
     await act(async () => {
       fireEvent.click(haikuOption);
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
       await Promise.resolve();
     });
 
@@ -2722,6 +2729,7 @@ describe("ClaudeTmuxChatTab", () => {
     const fableOption = await screen.findByText("Fable");
     await act(async () => {
       fireEvent.click(fableOption);
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
       await Promise.resolve();
     });
 
@@ -2769,6 +2777,7 @@ describe("ClaudeTmuxChatTab", () => {
     const fableOption = await screen.findByText("Fable");
     await act(async () => {
       fireEvent.click(fableOption);
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
       await Promise.resolve();
     });
 
@@ -2796,6 +2805,7 @@ describe("ClaudeTmuxChatTab", () => {
     const maxOption = await screen.findByText("Max");
     await act(async () => {
       fireEvent.click(maxOption);
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Start fresh" }));
@@ -2975,6 +2985,7 @@ describe("ClaudeTmuxChatTab", () => {
     const lowOption = await screen.findByText("Low");
     await act(async () => {
       fireEvent.click(lowOption);
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
       await Promise.resolve();
     });
 
@@ -3005,6 +3016,7 @@ describe("ClaudeTmuxChatTab", () => {
     const lowOption = await screen.findByText("Low");
     await act(async () => {
       fireEvent.click(lowOption);
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
       await Promise.resolve();
     });
 
@@ -3051,6 +3063,7 @@ describe("ClaudeTmuxChatTab", () => {
 
     await act(async () => {
       fireEvent.click(fastItem);
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
       await Promise.resolve();
     });
 
@@ -3106,6 +3119,7 @@ describe("ClaudeTmuxChatTab", () => {
         name: /^Normal Standard speed/,
       }),
     );
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     await waitFor(() => {
       expect(switchFastModeMock).toHaveBeenCalledWith("tab-1", false, "env-1");
     });
@@ -3187,8 +3201,10 @@ describe("ClaudeTmuxChatTab", () => {
         name: /^Fast Lower latency/,
       }),
     );
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     fireEvent.pointerDown(screen.getByRole("button", { name: /Default.*⚡/ }));
     fireEvent.click(await screen.findByText("Haiku"));
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     fireEvent.click(screen.getByRole("button", { name: "Start fresh" }));
 
     await waitFor(() => {
@@ -3279,6 +3295,7 @@ describe("ClaudeTmuxChatTab", () => {
           name: /^Fast Lower latency/,
         }),
       );
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
       await Promise.resolve();
     });
 
@@ -3332,6 +3349,7 @@ describe("ClaudeTmuxChatTab", () => {
           name: /^Fast Lower latency/,
         }),
       );
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
       await Promise.resolve();
     });
     await waitFor(() => expect(screen.getByRole("button", { name: /⚡/ })).toBeTruthy());
@@ -3339,6 +3357,7 @@ describe("ClaudeTmuxChatTab", () => {
     fireEvent.pointerDown(screen.getByRole("button", { name: /Default.*⚡/ }));
     await act(async () => {
       fireEvent.click(await screen.findByText("Sonnet"));
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
       await Promise.resolve();
     });
 
@@ -3389,11 +3408,13 @@ describe("ClaudeTmuxChatTab", () => {
           name: /^Fast Lower latency/,
         }),
       );
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
       await Promise.resolve();
     });
     fireEvent.pointerDown(screen.getByRole("button", { name: /Default.*⚡/ }));
     await act(async () => {
       fireEvent.click(await screen.findByText("Sonnet"));
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
       await Promise.resolve();
     });
 
@@ -3443,11 +3464,13 @@ describe("ClaudeTmuxChatTab", () => {
           name: /^Fast Lower latency/,
         }),
       );
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
       await Promise.resolve();
     });
     fireEvent.pointerDown(screen.getByRole("button", { name: /Default.*⚡/ }));
     await act(async () => {
       fireEvent.click(await screen.findByText("Sonnet"));
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
       await Promise.resolve();
     });
 
@@ -3494,6 +3517,7 @@ describe("ClaudeTmuxChatTab", () => {
     const haikuOption = await screen.findByText("Haiku");
     await act(async () => {
       fireEvent.click(haikuOption);
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     });
 
     expect(screen.queryByRole("button", { name: /\(High\)/ }) === null).toBe(true);
@@ -3544,6 +3568,7 @@ describe("ClaudeTmuxChatTab", () => {
     const xhighOption = await screen.findByText("Extra High");
     await act(async () => {
       fireEvent.click(xhighOption);
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     });
     expect(screen.getByRole("button", { name: /\(Extra High\)/ })).toBeTruthy();
 
@@ -3553,6 +3578,7 @@ describe("ClaudeTmuxChatTab", () => {
     const sonnetOption = await screen.findByText("Sonnet");
     await act(async () => {
       fireEvent.click(sonnetOption);
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     });
 
     expect(screen.getByRole("button", { name: /\(High\)/ })).toBeTruthy();
@@ -3755,6 +3781,7 @@ describe("ClaudeTmuxChatTab", () => {
     const miniOption = await screen.findByText("Mini");
     await act(async () => {
       fireEvent.click(miniOption);
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     });
 
     // "high" isn't in Mini's level list, so the stored preference snaps to

@@ -14,6 +14,16 @@
 - **Hypothesis:** a snapshot request remains in flight when the test disposes its request context; parallel load may widen the teardown race. Not established.
 - **Changes:** recorded evidence only; no test, timeout, assertion or skip changed.
 
+## Keep-open picker coverage validation — 2026-10-18
+
+- **Original command:** `mise run test:logged -- --name picker-browser -- mise run test:browser`, alongside the full repository suite on macOS.
+- **Workers:** nine Playwright workers.
+- **Failure:** the mobile paused-question case raised `apiRequestContext.fetch: Target page, context or browser has been closed` from the route callback at line 107 during teardown.
+- **Suite counts:** 351 passed, 80 skipped, one failed across 432 cases (144.8 seconds logged). All picker cases passed.
+- **Owning-file rerun:** `mise run test:logged -- --name claude-interactions-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/ClaudeInteractions.spec.ts --workers=1 --output=output/playwright/claude-interactions-owner` passed unchanged (19.5 seconds logged).
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.fPWiLQ/picker-browser.log.gz`.
+- **Assessment:** confirmed intermittent recurrence; no Claude implementation, assertion, timeout or skip changed. The public-site smoke suite, which the component failure prevented from starting, passed separately.
+
 ## Transcript-paging final validation — 2026-10-18
 
 The desktop variant repeated the same request-context disposal during

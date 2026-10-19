@@ -40,6 +40,16 @@ The aggregate finished in 419.7 seconds with only the bridge group failing. Clau
 
 The subsequent warm run, `mise run test:logged -- --name refresh-full-warm -- mise run test`, passed all four groups unchanged (exit 0, 322.1 seconds logged). The isolated design-browser task and credential-free CLI scenario matrix also passed; no test skip, assertion or timeout changed.
 
+## Keep-open picker main merge — 2026-10-19
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`, with the testing guide's GNU-tool PATH prefix, merging `origin/main` at `d28f0d63` into `24d4ac1c`. Workspace/root/bridges/protocol reserved 4/1/2/1 slots alongside browser validation.
+- **Failure:** `plan approval flow > keeps plan mode enabled when an approved exit cannot be persisted` failed before its assertion because writing `.claude` raised `EISDIR` (`session-manager-interactions.test.ts:863`, 2.29 ms). Claude reported 1575 passed, five skipped and one failed across 1581 tests in 74 files (57.86 seconds); the other four bridge packages passed.
+- **Owning-file rerun:** `mise run test:logged -- --name merge-claude-interactions-owner -- bun test --cwd bridges/claude-bridge --preload ../../tests/setup-node.ts ./src/services/session-manager-interactions.test.ts --parallel=1 --only-failures` passed unchanged, exit 0, in 0.1 seconds logged.
+- **Evidence:** `orkestrator-test-run.4pe57b/bridges.log.gz` below the host temporary directory after aggregate completion.
+- **Assessment:** confirmed intermittent recurrence of the existing fixture-directory symptom. No bridge implementation, assertion, timeout or skip changed.
+
+The subsequent installed-dependency aggregate, `mise run test:logged -- --name merge-tests-installed -- mise run test`, passed all four groups unchanged (exit 0, 266.7 seconds logged).
+
 ## Agent-mail main merge recurrence — 2026-10-19
 
 The aggregate failed this owner and its unchanged owning file passed with one worker. Exact commands, symptoms, counts, timings and bounded evidence are recorded in [0500](0500-agent-mail-main-merge-validation.md). No implementation, assertion, timeout or skip changed.

@@ -42,6 +42,8 @@ test("compose controls stay reachable in a narrow viewport", async ({ page }, te
   await picker.click();
   await page.locator("[data-native-mobile-speed-trigger]").click();
   await page.getByRole("menuitemradio", { name: /^Fast/ }).click();
+  await expect(page.getByRole("menuitemradio", { name: /^Fast/ })).toBeChecked();
+  await page.keyboard.press("Escape");
   await expect(picker).toHaveAccessibleName(/High ⚡/);
 
   await page.getByRole("button", { name: "+123 queued" }).click();

@@ -52,3 +52,7 @@ Both unchanged owning files passed sequentially with one worker in 35.4 seconds.
 Commands and the aggregate evidence path are recorded in
 [0173](0173-diff-viewer-parallel-monaco-startup.md#async-question-prefix-review-recurrence--2026-10-18).
 No assertion, timeout or skip changed.
+
+## Agent-mail main merge recurrence — 2026-10-19
+
+The aggregate failed this owner and its unchanged owning file passed with one worker. Exact commands, symptoms, counts, timings and bounded evidence are recorded in [0500](0500-agent-mail-main-merge-validation.md). No implementation, assertion, timeout or skip changed.

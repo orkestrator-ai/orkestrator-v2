@@ -45,7 +45,7 @@ import {
   useProjectStore,
 } from "@/stores/projectStore";
 import { useSessionStore } from "@/stores/sessionStore";
-import { useAgentMailStore } from "@/stores/agentMailStore";
+import { refreshObservedAgentMailMailboxes, useAgentMailStore } from "@/stores/agentMailStore";
 import type { ResourceManifestKind } from "@orkestrator/protocol/resource-events";
 
 /**
@@ -122,15 +122,7 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
     if (!disposed) {
       const store = useAgentMailStore.getState();
       store.setSummary(snapshot);
-      const addresses = Array.from(
-        new Map(
-          Array.from(store.sent.values()).map(({ environmentId, tabId }) => [
-            `${environmentId}\0${tabId}`,
-            { environmentId, tabId },
-          ]),
-        ).values(),
-      );
-      if (addresses.length > 0) await store.refreshMailboxes(addresses);
+      await refreshObservedAgentMailMailboxes();
     }
   };
 

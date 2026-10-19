@@ -39,3 +39,7 @@ Aggregate result: `merge2-tests` exited 1 after 1132.1 seconds logged. Backend r
 The aggregate finished in 419.7 seconds with only the bridge group failing. Claude reported 1575 passed, five skipped and one failed across 1581 tests in 74 files (39.22 seconds); all other bridges, every workspace package, root/support and protocol regeneration passed.
 
 The subsequent warm run, `mise run test:logged -- --name refresh-full-warm -- mise run test`, passed all four groups unchanged (exit 0, 322.1 seconds logged). The isolated design-browser task and credential-free CLI scenario matrix also passed; no test skip, assertion or timeout changed.
+
+## Agent-mail main merge recurrence — 2026-10-19
+
+The aggregate failed this owner and its unchanged owning file passed with one worker. Exact commands, symptoms, counts, timings and bounded evidence are recorded in [0500](0500-agent-mail-main-merge-validation.md). No implementation, assertion, timeout or skip changed.

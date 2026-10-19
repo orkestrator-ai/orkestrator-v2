@@ -752,3 +752,7 @@ The warm aggregate `mise run test:logged -- --name merge-tests-warm -- mise run 
 `mise run test:logged -- --name merge2-full-tests -- mise run test` merged `origin/main` at `f51c7252` into pre-merge HEAD `390667ce`. It ran alongside the component/public-site browser suite and other host work. Workspace, bridges and protocol passed; root reported 3096 passed, one skipped and the staged-runtime timeout at 30004.42 ms. Aggregate exit 1 in 443.0 seconds. The unchanged owning file then passed with `mise run test:logged -- --name merge2-pi-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` (exit 0, 7.4 seconds). Evidence: `orkestrator-test-run.BefiWd/root-and-agent-support-tests.log.gz` below the host temporary directory. This confirms an intermittent recurrence; no implementation, assertion, timeout or skip changed.
 
 The second-merge warm aggregate (`merge2-warm-tests`) passed the root/support group in 172.1 seconds. Its sole failure was the unrelated Claude fixture recorded in [0473](0473-claude-status-plan-fixture-directory-race.md), which passed its own isolated rerun.
+
+## Agent-mail main merge recurrence — 2026-10-19
+
+The aggregate failed this owner and its unchanged owning file passed with one worker. Exact commands, symptoms, counts, timings and bounded evidence are recorded in [0500](0500-agent-mail-main-merge-validation.md). No implementation, assertion, timeout or skip changed.

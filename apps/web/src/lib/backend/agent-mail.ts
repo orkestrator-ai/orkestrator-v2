@@ -1,6 +1,9 @@
 import { invoke } from "@/lib/native/backend";
+import { AGENT_MAIL_MAX_MESSAGES_PER_MAILBOX } from "@orkestrator/protocol/agent-mail";
 import type { AgentRegistrySnapshot } from "@orkestrator/protocol/agent-registry";
 import type {
+  AgentMailConversation,
+  AgentMailConversationList,
   AgentMailMailboxSnapshot,
   AgentMailMailboxBatchSnapshot,
   AgentMailInboxSnapshot,
@@ -42,7 +45,12 @@ export function getAgentMailMailbox(
   tabId: string,
   unreadOnly = false,
 ): Promise<AgentMailMailboxSnapshot> {
-  return invoke("get_agent_mail_mailbox", { environmentId, tabId, unreadOnly });
+  return invoke("get_agent_mail_mailbox", {
+    environmentId,
+    tabId,
+    unreadOnly,
+    limit: AGENT_MAIL_MAX_MESSAGES_PER_MAILBOX,
+  });
 }
 
 export function getAgentMailMessage(
@@ -51,6 +59,30 @@ export function getAgentMailMessage(
   messageId: string,
 ): Promise<AgentMailMessage> {
   return invoke("get_agent_mail_message", { environmentId, tabId, messageId });
+}
+
+/** Every pair that has exchanged mail, or only one participant's. */
+export function listAgentMailConversations(
+  participant?: string,
+): Promise<AgentMailConversationList> {
+  return invoke("list_agent_mail_conversations", participant ? { participant } : {});
+}
+
+/** The messages between two participants, oldest first. */
+export function getAgentMailConversation(
+  a: string,
+  b: string,
+  limit?: number,
+): Promise<AgentMailConversation> {
+  return invoke("get_agent_mail_conversation", { a, b, ...(limit ? { limit } : {}) });
+}
+
+export function markAgentMailConversationSeen(
+  a: string,
+  b: string,
+  messageIds: string[],
+): Promise<{ marked: number }> {
+  return invoke("mark_agent_mail_conversation_seen", { a, b, messageIds });
 }
 
 export function sendAgentMail(input: {

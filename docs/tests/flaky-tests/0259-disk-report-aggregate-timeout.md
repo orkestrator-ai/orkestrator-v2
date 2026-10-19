@@ -50,3 +50,7 @@
 - **Isolated rerun:** `mise run test:logged -- --name disk-report-rerun -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 2.1 s).
 - **Evidence:** `orkestrator-test-run.BopZMS/root-and-agent-support-tests.log.gz`.
 - **Disposition:** Confirmed recurrence; no assertion, timeout or skip changed.
+
+## Agent-mail main merge recurrence — 2026-10-19
+
+The aggregate failed this owner and its unchanged owning file passed with one worker. Exact commands, symptoms, counts, timings and bounded evidence are recorded in [0500](0500-agent-mail-main-merge-validation.md). No implementation, assertion, timeout or skip changed.

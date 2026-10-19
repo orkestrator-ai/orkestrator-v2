@@ -29,7 +29,7 @@ import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { StackedEyes } from "@/components/review/MultiReviewLaunchDialog";
 import { useFileDirtyStore } from "@/stores";
-import { openAgentMailForTab } from "@/components/agent-mail/AgentMailButton";
+import { openAgentMailForTab } from "@/components/agent-mail/agent-mail-ui";
 import { agentMailCapabilities, resolveTabDisplayName } from "@orkestrator/protocol/agent-mail";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { getAllLeaves, usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -356,29 +356,8 @@ export function DraggableTab({
       <ContextMenuContent>
         {owningEnvironmentId && messagingEnabled && mailCapabilities.canPull && (
           <>
-            <ContextMenuItem
-              onClick={() =>
-                openAgentMailForTab(
-                  owningEnvironmentId,
-                  tab.id,
-                  "compose",
-                  tooltipAnchorRef.current,
-                )
-              }
-            >
-              Message this tab…
-            </ContextMenuItem>
-            <ContextMenuItem
-              onClick={() =>
-                openAgentMailForTab(
-                  owningEnvironmentId,
-                  tab.id,
-                  "settings",
-                  tooltipAnchorRef.current,
-                )
-              }
-            >
-              Inbox settings…
+            <ContextMenuItem onClick={() => openAgentMailForTab(owningEnvironmentId, tab.id)}>
+              Messages…
             </ContextMenuItem>
             <ContextMenuSeparator />
           </>

@@ -141,3 +141,14 @@ diff editor at its five-second startup deadline. Evidence:
 `ORKESTRATOR_E2E_PORT=18473 mise run test:logged -- --name browser-failed-owners -- bunx playwright test --config e2e/playwright.config.ts e2e/DiffViewerMobile.spec.ts e2e/PaneBreakpoint.spec.ts --workers=1`
 passed both unchanged owning files sequentially (35.4 seconds logged). This
 confirms intermittence; no assertion, timeout or skip changed.
+
+## Agent-mail review validation recurrence — 2026-10-19
+
+- `mise run test:logged -- --name browser -- mise run test:browser` ran five browser workers alongside repository and isolated-browser validation. The mobile header and new-file cases did not find `.monaco-diff-editor` within five seconds. The suite finished with 346 passed, 80 skipped and six failed in 7.5 minutes.
+- The unchanged owning file passed alone: `mise run test:logged -- --name browser-diff-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/DiffViewerMobile.spec.ts --workers=1 --output output/playwright/mail-review-diff` (exit 0, 18.6 seconds).
+- Evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.xmUT5O/browser.log.gz`.
+- No timeout, assertion or skip changed. Host load was high; causality remains unconfirmed.
+
+## Agent-mail main merge recurrence — 2026-10-19
+
+The aggregate failed this owner and its unchanged owning file passed with one worker. Exact commands, symptoms, counts, timings and bounded evidence are recorded in [0500](0500-agent-mail-main-merge-validation.md). No implementation, assertion, timeout or skip changed.

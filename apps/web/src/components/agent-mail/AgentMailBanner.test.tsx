@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type {
   AgentMailMailboxSnapshot,
   AgentMailMessageSummary,
@@ -106,8 +106,9 @@ describe("AgentMailBanner", () => {
     install("stored", { policy: "off" });
     render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     expect(screen.getByText("1 message in inbox · pull only")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Open inbox" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Switch to deliver when idle" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Deliver now" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "View" }));
+    expect(useAgentMailStore.getState().panel).toEqual({ focus: mailboxId });
   });
 
   test("rehydrates its authoritative summary even when cached state has a revision", async () => {

@@ -781,3 +781,9 @@ The second-merge warm aggregate (`merge2-warm-tests`) passed the root/support gr
 ## Agent-mail main merge recurrence — 2026-10-19
 
 The aggregate failed this owner and its unchanged owning file passed with one worker. Exact commands, symptoms, counts, timings and bounded evidence are recorded in [0500](0500-agent-mail-main-merge-validation.md). No implementation, assertion, timeout or skip changed.
+
+## Queued-steer main merge validation — 2026-10-19
+
+The recurrence, owning-file results and remaining limitations are recorded in
+[0501](0501-queued-steer-main-merge-validation.md). No owning implementation,
+assertion, timeout or skip was changed for validation.

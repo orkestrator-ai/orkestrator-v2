@@ -199,3 +199,23 @@ describe("NativeQueueScheduling", () => {
     scheduling.stop();
   });
 });
+
+// A separate blocked item cannot suppress recovery of a manual steer receipt.
+test("steer reservations remain due beside a parked queue rejection", () => {
+  const parked = queue("codex\0env-env-1:tab", {
+    inFlight: {
+      message: { id: "steer", text: "instruction" },
+      requestId: "steer",
+      reservedAt: new Date().toISOString(),
+      steer: true,
+    },
+    dispatchError: {
+      requestId: "other",
+      messageId: "other",
+      messageFingerprint: "0".repeat(64),
+      message: "Rejected",
+      failedAt: new Date().toISOString(),
+    },
+  });
+  expect(nativeQueueObligation(parked)).toBe("in-flight");
+});

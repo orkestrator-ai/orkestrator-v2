@@ -742,6 +742,15 @@ export async function updateNativeAgentControls<TMessage = unknown>(input: {
   return invoke("update_native_agent_controls", input);
 }
 
+export async function steerNativeAgentQueuedPrompt(input: {
+  environmentId: string;
+  agent: NativeAgentClientPlatform;
+  logicalSessionKey: string;
+  messageId: string;
+}): Promise<NativeAgentSessionActionOutcome | null> {
+  return invoke("steer_native_agent_queued_prompt", input);
+}
+
 export async function performNativeAgentSessionAction(input: {
   environmentId: string;
   agent: NativeAgentClientPlatform;

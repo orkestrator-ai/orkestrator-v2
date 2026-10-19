@@ -827,6 +827,7 @@ export function isPersistedPromptQueue(
       (isRecord(value.inFlight) &&
         Object.hasOwn(value.inFlight, "message") &&
         isNonBlankString(value.inFlight.requestId) &&
+        (value.inFlight.steer === undefined || value.inFlight.steer === true) &&
         typeof value.inFlight.reservedAt === "string" &&
         Number.isFinite(Date.parse(value.inFlight.reservedAt)) &&
         (value.inFlight.submittingAt === undefined ||
@@ -1015,6 +1016,11 @@ export function isPersistedNativeAgentSession(
         isNonBlankString(value.pendingSteer.expectedRunId) &&
         Buffer.byteLength(value.pendingSteer.expectedRunId, "utf8") <= 512 &&
         (value.pendingSteer.state === "prepared" || value.pendingSteer.state === "unknown") &&
+        (value.pendingSteer.sourceQueue === undefined || value.pendingSteer.sourceQueue === true) &&
+        (value.pendingSteer.queueSettlement === undefined ||
+          (value.pendingSteer.sourceQueue === true &&
+            typeof value.pendingSteer.queueSettlement === "string" &&
+            ["applied", "restore", "discard"].includes(value.pendingSteer.queueSettlement))) &&
         typeof value.pendingSteer.createdAt === "string" &&
         Number.isFinite(Date.parse(value.pendingSteer.createdAt)) &&
         (() => {

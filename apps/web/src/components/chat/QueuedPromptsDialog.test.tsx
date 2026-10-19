@@ -14,6 +14,58 @@ const messages = [
 ];
 
 describe("QueuedPromptsDialog", () => {
+  test("shows Steer only when a handler and eligible item are present", () => {
+    const props = {
+      open: true,
+      onOpenChange: () => {},
+      messages,
+      onEdit: () => {},
+      onMove: () => {},
+      onRemove: () => {},
+    };
+    const view = render(<QueuedPromptsDialog {...props} />);
+    expect(screen.queryByRole("button", { name: "Steer" }) === null).toBe(true);
+    view.rerender(<QueuedPromptsDialog {...props} onSteer={() => {}} canSteer={() => false} />);
+    expect(screen.queryByRole("button", { name: "Steer" }) === null).toBe(true);
+    view.rerender(
+      <QueuedPromptsDialog {...props} onSteer={() => {}} canSteer={(item) => item.id === "two"} />,
+    );
+    expect(screen.getAllByRole("button", { name: "Steer" }).length).toBe(1);
+  });
+
+  test("labels in-flight steering and blocks competing queue actions", async () => {
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const steer = mock(() => pending);
+    const remove = mock(() => {});
+    render(
+      <QueuedPromptsDialog
+        open
+        onOpenChange={() => {}}
+        messages={messages}
+        onSteer={steer}
+        onEdit={() => {}}
+        onMove={() => {}}
+        onRemove={remove}
+      />,
+    );
+    fireEvent.click(screen.getAllByRole("button", { name: "Steer" })[0]!);
+    const busy = await screen.findByRole("button", { name: "Steering…" });
+    expect(busy.getAttribute("aria-busy")).toBe("true");
+    expect(busy.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(screen.getAllByTitle("Remove queued prompt")[1]!);
+    fireEvent.click(screen.getByRole("button", { name: "Steer" }));
+    expect(steer).toHaveBeenCalledTimes(1);
+    expect(remove).not.toHaveBeenCalled();
+    await act(async () => {
+      release();
+      await pending;
+    });
+    expect(screen.getAllByRole("button", { name: "Steer" }).length).toBe(2);
+  });
+
   test("shows the empty state", () => {
     render(
       <QueuedPromptsDialog
@@ -351,6 +403,11 @@ describe("QueuedPromptsDialog web annotation requests", () => {
     render(<QueuedPromptsDialog {...(props as Parameters<typeof QueuedPromptsDialog>[0])} />);
     return props;
   }
+
+  test("never offers annotations for steering even with a permissive gate", () => {
+    renderDialog({ onSteer: () => {}, canSteer: () => true });
+    expect(screen.getAllByRole("button", { name: "Steer" }).length).toBe(2);
+  });
 
   test("renders the item distinctly and never offers it for editing", () => {
     const props = renderDialog();

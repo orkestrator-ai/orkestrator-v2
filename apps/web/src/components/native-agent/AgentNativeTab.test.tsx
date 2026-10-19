@@ -1,3 +1,4 @@
+import { nativeAgentSteerRejectionMessage } from "@orkestrator/protocol/native-agent";
 /**
  * Contract suite for the single pane-level native agent tab.
  *
@@ -201,8 +202,17 @@ const performNativeAgentSessionActionMock = mock(
     outcome: "applied" as const,
   }),
 );
+const steerNativeAgentQueuedPromptMock = mock(
+  async (_input: {
+    agent: string;
+    messageId: string;
+  }): Promise<
+    import("@orkestrator/protocol/native-agent").NativeAgentSessionActionOutcome | null
+  > => ({ outcome: "applied" }),
+);
 const enqueuePromptQueueMessageMock = mock(async () => {});
 const removePromptQueueMessageMock = mock(async () => {});
+const requeuePromptQueueMessageMock = mock(async (..._args: unknown[]) => {});
 const movePromptQueueMessageMock = mock(async () => {});
 const dismissNativeAgentSuggestedPromptMock = mock(async () =>
   getNativeAgentProjectionMock({ agent: "claude", environmentId: "env-1" }),
@@ -400,8 +410,10 @@ mock.module("@/lib/backend", () => ({
   saveComposeDraft: saveComposeDraftMock,
   deleteComposeDraft: deleteComposeDraftMock,
   performNativeAgentSessionAction: performNativeAgentSessionActionMock,
+  steerNativeAgentQueuedPrompt: steerNativeAgentQueuedPromptMock,
   enqueuePromptQueueMessage: enqueuePromptQueueMessageMock,
   removePromptQueueMessage: removePromptQueueMessageMock,
+  requeuePromptQueueMessage: requeuePromptQueueMessageMock,
   movePromptQueueMessage: movePromptQueueMessageMock,
   dismissNativeAgentSuggestedPrompt: dismissNativeAgentSuggestedPromptMock,
   updateNativeAgentControls: updateNativeAgentControlsMock,
@@ -490,8 +502,11 @@ afterEach(() => {
   stopNativeAgentSessionMock.mockClear();
   stopNativeAgentBackgroundTaskMock.mockClear();
   performNativeAgentSessionActionMock.mockClear();
+  steerNativeAgentQueuedPromptMock.mockReset();
+  steerNativeAgentQueuedPromptMock.mockResolvedValue({ outcome: "applied" });
   enqueuePromptQueueMessageMock.mockClear();
   removePromptQueueMessageMock.mockClear();
+  requeuePromptQueueMessageMock.mockClear();
   movePromptQueueMessageMock.mockClear();
   dismissNativeAgentSuggestedPromptMock.mockClear();
   updateNativeAgentControlsMock.mockClear();
@@ -9369,6 +9384,144 @@ describe("AgentNativeTab", () => {
       expect(enqueuePromptQueueMessageMock).not.toHaveBeenCalled();
       expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
     });
+
+    test("steers a queued prompt through one backend handoff", async () => {
+      const queued = { id: "queued-1", text: "also update the README", mode: "build" };
+      seedProjection({ phase: "running", actions: { steer: true }, queue: { items: [queued] } });
+      render(<AgentNativeTab tabId="tab-queue-steer" data={identity("codex")} isActive />);
+      fireEvent.click(await screen.findByTitle("View queued prompts"));
+      fireEvent.click(await screen.findByRole("button", { name: "Steer" }));
+      await waitFor(() => expect(steerNativeAgentQueuedPromptMock).toHaveBeenCalledTimes(1));
+      expect(steerNativeAgentQueuedPromptMock.mock.calls[0]?.[0]).toMatchObject({
+        agent: "codex",
+        messageId: queued.id,
+      });
+      expect(removePromptQueueMessageMock).not.toHaveBeenCalled();
+      expect(performNativeAgentSessionActionMock).not.toHaveBeenCalled();
+      expect(requeuePromptQueueMessageMock).not.toHaveBeenCalled();
+    });
+
+    for (const outcome of [
+      "idle",
+      "mismatch",
+      "steer-not-recorded",
+      "steer-history-unavailable",
+      "steer-capacity-exceeded",
+      "thrown",
+      "gone",
+      "unknown",
+    ] as const) {
+      test(`queued steer reports ${outcome} without renderer queue mutations`, async () => {
+        seedProjection({
+          phase: "running",
+          actions: { steer: true },
+          queue: { items: [{ id: "queued-1", text: "also update the README" }] },
+        });
+        if (outcome === "thrown")
+          steerNativeAgentQueuedPromptMock.mockRejectedValueOnce(new Error("Response lost"));
+        else
+          steerNativeAgentQueuedPromptMock.mockResolvedValueOnce(
+            outcome === "gone"
+              ? null
+              : outcome.startsWith("steer-")
+                ? {
+                    outcome: "rejected",
+                    reason: outcome as "steer-not-recorded",
+                    requestId: "queued-1",
+                  }
+                : { outcome: outcome as "idle" | "mismatch" | "unknown", requestId: "queued-1" },
+          );
+        render(<AgentNativeTab tabId={`tab-queue-${outcome}`} data={identity("codex")} isActive />);
+        fireEvent.click(await screen.findByTitle("View queued prompts"));
+        fireEvent.click(await screen.findByRole("button", { name: "Steer" }));
+        if (outcome === "unknown") {
+          await waitFor(() => expect(screen.queryByRole("dialog") === null).toBe(true));
+        } else {
+          const text = (await screen.findByRole("alert")).textContent ?? "";
+          if (outcome === "mismatch") expect(text).toContain("turn moved on");
+          if (outcome === "idle") expect(text).toContain("finished the turn");
+          if (outcome === "gone") expect(text).toContain("already left the queue");
+          if (outcome === "thrown") expect(text).toContain("Response lost");
+          if (outcome.startsWith("steer-")) {
+            expect(text).toContain(
+              nativeAgentSteerRejectionMessage({ reason: outcome as "steer-not-recorded" }),
+            );
+            expect(text).toContain("returned to the queue");
+          }
+        }
+        expect(removePromptQueueMessageMock).not.toHaveBeenCalled();
+        expect(requeuePromptQueueMessageMock).not.toHaveBeenCalled();
+      });
+    }
+
+    test("offers steer only for text prompts while a steerable turn runs", async () => {
+      seedProjection({
+        phase: "running",
+        actions: { steer: true },
+        queue: {
+          items: [
+            {
+              id: "queued-1",
+              text: "look at this",
+              attachments: [{ id: "a", type: "image", path: "/tmp/shot.png" }],
+            },
+          ],
+        },
+      });
+      const view = render(
+        <AgentNativeTab tabId="tab-queue-steer-gate" data={identity("codex")} isActive />,
+      );
+      fireEvent.click(await screen.findByTitle("View queued prompts"));
+      await screen.findByTitle("Click to edit this message");
+      expect(screen.queryByRole("button", { name: "Steer" }) === null).toBe(true);
+      view.unmount();
+
+      seedProjection({
+        phase: "idle",
+        actions: { steer: true },
+        queue: { items: [{ id: "queued-2", text: "plain text" }] },
+      });
+      render(
+        <AgentNativeTab tabId="tab-queue-steer-idle-gate" data={identity("codex")} isActive />,
+      );
+      fireEvent.click(await screen.findByTitle("View queued prompts"));
+      await screen.findByTitle("Click to edit this message");
+      expect(screen.queryByRole("button", { name: "Steer" }) === null).toBe(true);
+    });
+
+    for (const gate of ["command", "async-answer", "parked"] as const) {
+      test(`does not offer queued steer for ${gate}`, async () => {
+        seedProjection({
+          phase: "running",
+          actions: { steer: true },
+          queue: {
+            items: [
+              {
+                id:
+                  gate === "async-answer" ? nativeAsyncQuestionRequestId("question-1") : "queued-1",
+                text: "queued text",
+                ...(gate === "command" ? { command: { name: "review" } } : {}),
+              },
+            ],
+          },
+          ...(gate === "parked"
+            ? {
+                recoverableDispatch: {
+                  requestId: "other-steer",
+                  createdAt: new Date().toISOString(),
+                  status: "action-required" as const,
+                },
+              }
+            : {}),
+        });
+        render(
+          <AgentNativeTab tabId={`tab-steer-gate-${gate}`} data={identity("codex")} isActive />,
+        );
+        fireEvent.click(await screen.findByTitle("View queued prompts"));
+        await screen.findByTitle("Click to edit this message");
+        expect(screen.queryByRole("button", { name: "Steer" }) === null).toBe(true);
+      });
+    }
 
     test("queues an async-question answer with stable identity and composer settings", async () => {
       renderVirtualizedMessages = true;

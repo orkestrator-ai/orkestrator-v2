@@ -15,6 +15,7 @@ import type {
   NativeAgentModelSubstitution,
   NativeAgentSessionProjection,
   NativeAgentSessionAction,
+  NativeAgentSessionActionOutcome,
   NativeAgentToolDetails,
   NativeAgentViewIdentity,
   NativeAgentDiscoveryView,
@@ -52,6 +53,7 @@ import {
   refreshNativeAgentCommands,
   refreshNativeAgentModels,
   removePromptQueueMessage,
+  steerNativeAgentQueuedPrompt,
   resolveNativeAgentInteraction,
   holdNativeAgentInteraction,
   resumeNativeAgentSession,
@@ -3069,6 +3071,18 @@ export function useNativeAgentSession<TMessage = unknown>({
     },
     [environmentId, queueKey, refresh],
   );
+  // Ownership and recovery live in the backend; a lost renderer response must
+  // never restore a possibly delivered prompt or abandon its durable source.
+  const steerQueued = useCallback(
+    async (messageId: string): Promise<NativeAgentSessionActionOutcome | null> => {
+      try {
+        return await steerNativeAgentQueuedPrompt({ ...identity, messageId });
+      } finally {
+        await refresh();
+      }
+    },
+    [identity, refresh],
+  );
   const moveQueued = useCallback(
     async (messageId: string, direction: "up" | "down") => {
       await movePromptQueueMessage(queueKey, environmentId, messageId, direction);
@@ -3460,6 +3474,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     holdInteraction,
     enqueue,
     removeQueued,
+    steerQueued,
     moveQueued,
     retryQueue,
     retryRecoverableDispatch,

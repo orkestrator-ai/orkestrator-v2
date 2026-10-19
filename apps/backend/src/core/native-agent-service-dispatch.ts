@@ -279,7 +279,7 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
     const session = await this.storage.getNativeAgentSession(key);
     const discarded =
       session?.pendingSteer?.requestId === input.requestId
-        ? await this.storage.clearPendingNativeAgentSteer(key, input.requestId)
+        ? await this.storage.clearPendingNativeAgentSteer(key, input.requestId, true)
         : await this.storage.clearPendingNativeAgentDispatch(key, input.requestId);
     if (discarded) {
       void this.refreshProjection(input, true).catch(() => undefined);
@@ -362,22 +362,19 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
     resolved?: NativeAgentRuntimeProvider,
   ): Promise<"dispatched" | "absent" | undefined> {
     try {
+      await this.storage.recoverPromptQueueSteer(key, requestId);
+      const session = await this.storage.getNativeAgentSession(key);
+      if (session?.pendingSteer?.requestId !== requestId) {
+        return session?.dispatchedRequestIds?.includes(requestId) ? "dispatched" : undefined;
+      }
       const provider = resolved ?? (await this.provider(input));
       if (!provider.steerStatus) return undefined;
-      const session = await this.storage.getNativeAgentSession(key);
-      if (session?.pendingSteer?.requestId !== requestId) return undefined;
-      const status = await provider.steerStatus(session.providerSessionId, requestId);
-      if (status === "dispatched") {
-        if (!(await this.storage.confirmNativeAgentSteer(key, requestId))) return undefined;
+      const status = await this.storage.reconcileNativeAgentSteer(key, requestId, () =>
+        provider.steerStatus!(session.providerSessionId, requestId),
+      );
+      if (status === "dispatched")
         await this.acknowledgeQueuedAsyncQuestionAnswer(input, requestId);
-        return "dispatched";
-      }
-      if (status === "absent") {
-        return (await this.storage.clearPendingNativeAgentSteer(key, requestId))
-          ? "absent"
-          : undefined;
-      }
-      return undefined;
+      return status;
     } catch {
       return undefined;
     }
@@ -463,6 +460,18 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
       if (settlement === "dispatched") {
         this.invalidateProjection(key);
         return { outcome: "accepted", requestId: input.requestId };
+      }
+      if (
+        settlement === "absent" ||
+        !(await this.storage.getNativeAgentSession(key))?.pendingSteer
+      ) {
+        this.invalidateProjection(key);
+        return {
+          outcome: "rejected",
+          error: pendingSteer.sourceQueue
+            ? "The steering instruction was not delivered. The prompt was returned to the queue."
+            : "The steering instruction was not delivered.",
+        };
       }
       const outcome = await this.dispatchPersistedSteer(
         resolved.provider,
@@ -914,6 +923,62 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
     );
   }
 
+  /** One renderer request transfers a queue item into the backend-owned receipt. */
+  async steerQueuedPrompt(
+    input: NativeAgentProjectionInput & { messageId: string },
+  ): Promise<NativeAgentSessionActionOutcome | null> {
+    this.assertProjectionInput(input);
+    if (!nonBlank(input.messageId)) throw new Error("Queued message ID must not be blank");
+    const resolved = await this.resolveProjectionSession(input);
+    if (!resolved) throw new Error("Native agent session was not found");
+    const queueKey = `${input.agent}\0${input.logicalSessionKey}`;
+    const queue = await this.storage.getPromptQueue(queueKey);
+    if (queue?.inFlight?.steer) {
+      await this.storage.recoverPromptQueueSteer(resolved.key, queue.inFlight.requestId);
+      const latest = await this.storage.getNativeAgentSession(resolved.key);
+      const item = queue.inFlight.message as { id?: string };
+      if (
+        item.id === input.messageId &&
+        latest?.pendingSteer?.requestId === queue.inFlight.requestId
+      ) {
+        return { outcome: "unknown", requestId: queue.inFlight.requestId };
+      }
+      // A lost applied response can be replayed without another provider call.
+      if (
+        item.id === input.messageId &&
+        latest?.dispatchedRequestIds?.includes(queue.inFlight.requestId)
+      )
+        return { outcome: "applied", requestId: queue.inFlight.requestId };
+    }
+    if (
+      !resolved.provider.performSessionAction ||
+      !resolved.provider.activeSteerRun ||
+      !resolved.provider.steerSupported ||
+      !resolved.provider.steerStatus ||
+      !nativeCapabilities(input.agent).actions?.steer
+    )
+      throw new Error(`${input.agent} does not support reliable steering`);
+    if (!(await resolved.provider.steerSupported(resolved.session.providerSessionId)))
+      throw new Error(`${input.agent} bridge does not support reliable steering`);
+    const active = await resolved.provider.activeSteerRun(resolved.session.providerSessionId);
+    if (active.state === "idle") return { outcome: "idle" };
+    if (active.state !== "running") throw new Error("The active turn is not ready to steer");
+    const pending = await this.storage.reservePromptQueueSteer(
+      resolved.key,
+      input.messageId,
+      active.runId,
+    );
+    if (!pending) return null;
+    const outcome = await this.dispatchPersistedSteer(
+      resolved.provider,
+      resolved.session.providerSessionId,
+      resolved.key,
+      pending,
+    );
+    this.invalidateProjection(resolved.key);
+    return outcome;
+  }
+
   private async performProjectionSteer(
     input: NativeAgentProjectionInput,
     resolved: {
@@ -940,6 +1005,8 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
       throw new PendingNativeAgentDispatchError(resolved.session.pendingDispatch.requestId);
     }
     if (resolved.session.pendingSteer) {
+      if (resolved.session.pendingSteer.requestId !== requestId)
+        throw new Error(PARKED_DISPATCH_CONFLICT_MESSAGE);
       this.scheduleAmbiguousSteerSettle(
         input,
         resolved.key,
@@ -1006,8 +1073,10 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
     }
     try {
       const session = await this.storage.getNativeAgentSession(key);
-      if (!session || session.providerSessionId !== providerSessionId)
+      if (!session || session.providerSessionId !== providerSessionId) {
+        await this.storage.clearPendingNativeAgentSteer(key, pending.requestId);
         return { outcome: "mismatch" };
+      }
       return await this.withSessionMutationFence(
         {
           environmentId: session.environmentId,

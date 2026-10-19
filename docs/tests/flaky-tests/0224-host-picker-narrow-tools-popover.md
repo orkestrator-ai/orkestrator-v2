@@ -317,3 +317,9 @@ The component/public-site browser task passed separately (`merge2-browser`, exit
 - **Owner result:** the narrow picker repeated the same hidden-button failure. Separately, `project Home retains background work and unread attention beneath the board` reached the 120000 ms test deadline waiting for the fixture project button at line 424, before its background-work assertions. That Home case passed in the full isolated run; this owner failure is an unresolved observation and does not establish a new flake classification.
 - **Evidence:** `orkestrator-test-run.YIyNdG/merge-agent-browser-installed.log.gz` and `orkestrator-test-run.VCmB1X/merge-gateway-owner.log.gz` below the host temporary directory; browser results/traces under `output/agent-testing/qa-browser-21ee1ef6-070/browser/` and `output/agent-testing/merge-gateway-owner-20261019/browser/`.
 - **Cleanup and disposition:** both profiles were stopped and reset; explicit owner `dev:stop` and `dev:reset` exited 0. Gateway validation remains non-green. No implementation, assertion, timeout or skip changed. The full repository suite passed separately (`merge-tests-installed`, 266.7 seconds), as did builds, typechecking, component/public-site browser checks and credential-free CLI scenarios.
+
+## Queued-steer main merge validation — 2026-10-19
+
+The recurrence, owning-file results and remaining limitations are recorded in
+[0501](0501-queued-steer-main-merge-validation.md). No owning implementation,
+assertion, timeout or skip was changed for validation.

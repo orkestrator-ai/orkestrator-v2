@@ -1474,9 +1474,7 @@ test("agent mail rehydrates after an inactive recipient is opened and the page r
     await expect(page.getByText("1 message in inbox · pull only")).toBeVisible({
       timeout: 15_000,
     });
-    await expect(
-      page.getByRole("button", { name: "Agent inbox, 1 unseen", exact: true }),
-    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "Agent messages", exact: true })).toBeVisible();
 
     await page.reload();
     const expandAfterReload = page.getByRole("button", {
@@ -1488,10 +1486,65 @@ test("agent mail rehydrates after an inactive recipient is opened and the page r
     await expect(page.getByText("1 message in inbox · pull only")).toBeVisible({
       timeout: 15_000,
     });
-    await expect(
-      page.getByRole("button", { name: "Agent inbox, 1 unseen", exact: true }),
-    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "Agent messages", exact: true })).toBeVisible();
+    // A committed send whose response is lost must retain its draft and retry
+    // key across both list navigation and closing the panel.
+    const openConversation = async () => {
+      await page.getByRole("button", { name: "Agent messages", exact: true }).click();
+      await page.getByTestId("agent-mail-conversation-row").first().click();
+    };
+    await openConversation();
+    const panel = page.getByTestId("agent-mail-panel");
+    await panel.getByPlaceholder("Subject (optional)").fill("Retry receipt");
+    await panel.locator("textarea").fill("A draft retained across panel navigation.");
+    await panel.getByRole("button", { name: "Back to conversations" }).click();
+    await panel.getByRole("button", { name: "Close", exact: true }).click();
+    await openConversation();
+    await expect(panel.locator("textarea")).toHaveValue(
+      "A draft retained across panel navigation.",
+    );
+    await expect(panel.getByPlaceholder("Subject (optional)")).toHaveValue("Retry receipt");
+    let lost = false;
+    const requestIds: string[] = [];
+    await page.route("**/__orkestrator/invoke", async (route) => {
+      const request = route.request().postDataJSON() as {
+        command?: string;
+        args?: { requestId?: string };
+      };
+      if (request.command !== "send_agent_mail") return route.continue();
+      requestIds.push(request.args?.requestId ?? "");
+      if (lost) return route.continue();
+      lost = true;
+      await route.fetch();
+      await route.abort("failed");
+    });
+    await panel.getByRole("button", { name: "Send", exact: true }).click();
+    await expect(page.getByText("Message was not sent", { exact: true })).toBeVisible();
+    await panel.getByRole("button", { name: "Close", exact: true }).click();
+    await page.getByText(sender.name, { exact: true }).first().click();
+    await page.getByText(recipient.name, { exact: true }).first().click();
     await page.setViewportSize({ width: 390, height: 844 });
+    await openConversation();
+    await expect(panel.locator("textarea")).toHaveValue(
+      "A draft retained across panel navigation.",
+    );
+    await panel.getByRole("button", { name: "Send", exact: true }).click();
+    await expect(panel.locator("textarea")).toHaveValue("");
+    expect(requestIds).toHaveLength(2);
+    expect(requestIds[0]).toBeTruthy();
+    expect(requestIds[1]).toBe(requestIds[0]);
+    const sentMailbox = await invoke<{ messages: Array<{ subject?: string }> }>(
+      "get_agent_mail_mailbox",
+      {
+        environmentId: recipient.id,
+        tabId: recipientTabId,
+      },
+    );
+    expect(sentMailbox.messages.filter(({ subject }) => subject === "Retry receipt")).toHaveLength(
+      1,
+    );
+    await page.unroute("**/__orkestrator/invoke");
+    await panel.getByRole("button", { name: "Close", exact: true }).click();
     const deliverNow = page.getByRole("button", { name: "Deliver now", exact: true });
     await expect(deliverNow).toBeVisible();
     const bounds = await deliverNow.boundingBox();

@@ -262,10 +262,10 @@ export class OrkestratorBackend {
       version: APP_VERSION,
       emit: (event, payload) => options.emit(event, payload),
       rollbackEvidence: options.hostRollbackEvidence,
-      onCheck: (latestVersion) => {
+      onCheck: (latestVersion, isCurrent) => {
         if (!latestVersion || latestVersion === APP_VERSION) return;
         void fetchReleasePins(latestVersion).then((pins) => {
-          if (pins) this.hostMaintenance.setNextRelease(pins);
+          if (pins && isCurrent()) this.hostMaintenance.setNextRelease(pins);
         });
       },
     });

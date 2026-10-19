@@ -131,6 +131,25 @@ The test passed alone (`bun test --preload ../../tests/setup-node.ts tests/comma
 - **Owning-file rerun:** `mise run test:logged -- --name merge-lifecycle-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-registry-environments.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 24.1 seconds).
 - **Assessment:** the isolated pass confirms intermittence. Shared-host contention remains a hypothesis. No owning implementation, assertion, timeout or skip changed.
 
+## Further main merge at f51c7252 — 2026-10-18
+
+- **Original command:** the testing guide's GNU-tool PATH prefix, then `mise run test:logged -- --name refresh-main-tests -- mise run test`, merging `f51c7252` into `17c19221`.
+- **Workers:** workspace/root/bridges/protocol reservations 4/1/2/1; backend used two isolated Bun workers alongside targeted browser and CLI validation on the shared host.
+- **Failure:** `Electron backend environment lifecycle commands > retains the environment and process ownership when deletion cannot reap a server` exceeded its 5000 ms deadline at 5992.96 ms. The coordinator timeouts also produced late fixture errors after their deadlines.
+- **Suite counts:** backend 9088 passed, 41 skipped and four failed across 9133 tests in 485 files (385.41 s); every other workspace package, root/support, bridges and protocol passed. Aggregate exited 1 after 445.1 s.
+- **Owning-file rerun:** after the aggregate, the same GNU-tool PATH with `mise run test:logged -- --name refresh-main-owner-deletion -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-registry-environments.test.ts --parallel=1 --only-failures` passed the unchanged file, exit 0, in 15.3 s. The three owning files ran sequentially.
+- **Evidence:** `orkestrator-test-run.AP1Ws9/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory; outer log `orkestrator-test-run.TVK3dv/refresh-main-tests.log.gz`.
+- **Assessment:** confirmed intermittent recurrence; shared-host contention remains a hypothesis. No implementation, assertion, timeout or skip changed.
+
+
+## Upgrade-channel second main merge warm run — 2026-10-18
+
+- **Original command:** the testing guide's macOS GNU-tool PATH with `mise run test:logged -- --name merge2-full-warm -- mise run test`, merging `origin/main` at `62c5c696` into `129e3887`. Workspace/root/bridges/protocol reserved 4/1/2/1 slots; backend used two isolated workers alongside Electron validation on the shared host.
+- **Failure:** `Electron backend environment lifecycle commands > retains the environment and process ownership when deletion cannot reap a server` in `apps/backend/tests/commands-registry-environments.test.ts` exceeded 5000 ms at 6378.81 ms.
+- **Suite counts:** backend 9109 passed, 41 skipped and six failed across 9156 tests in 486 files (579.33 seconds). Every other workspace package, root/support, bridges and protocol regeneration passed; aggregate exit 1 after 596.4 seconds.
+- **Isolated rerun:** `mise run test:logged -- --name merge2-environment-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-registry-environments.test.ts --parallel=1 --only-failures`, with the same GNU-tool PATH, passed the unchanged owning file (exit 0, 27.3 seconds).
+- **Evidence:** `orkestrator-test-run.4BSigl/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and outer `orkestrator-test-run.EJfRvy/merge2-full-warm.log.gz`, below the host temporary directory.
+- **Assessment:** confirmed intermittent recurrence. Shared-host contention remains a hypothesis; no implementation, assertion, deadline or skip changed.
 
 ## Queued-steer recovery validation recurrence — 2026-10-19
 
@@ -141,3 +160,9 @@ The test passed alone (`bun test --preload ../../tests/setup-node.ts tests/comma
 - **Isolated rerun:** `mise run test:logged -- --name environment-timeout-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-registry-environments.test.ts --parallel=1 --only-failures` passed the unchanged owning file, exit 0 (13.9 seconds logged).
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.JzdYLc/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer run `orkestrator-test-run.MYt5Tx/queued-steer-handoff-full.log.gz` under the same temporary root.
 - **Assessment:** owning-file passes confirm recurrence of the existing flakes. Shared-host contention remains a hypothesis. No owning implementation, assertion, timeout or skip was changed; the queued-steer regression tests passed.
+
+## Queued-steer main merge validation — 2026-10-19
+
+The recurrence, owning-file results and remaining limitations are recorded in
+[0501](0501-queued-steer-main-merge-validation.md). No owning implementation,
+assertion, timeout or skip was changed for validation.

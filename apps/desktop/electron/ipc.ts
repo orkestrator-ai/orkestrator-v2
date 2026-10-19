@@ -394,7 +394,10 @@ export function registerMainIpc({
     if (!value || typeof value !== "object" || Array.isArray(value)) {
       throw new Error("Expected browser preview attachment details");
     }
-    const { tabId, url, service, bounds, visible } = value as Record<string, unknown>;
+    const { tabId, url, service, navigationBasis, bounds, visible } = value as Record<
+      string,
+      unknown
+    >;
     if (typeof visible !== "boolean") {
       throw new Error("Expected a browser preview URL and visibility");
     }
@@ -402,6 +405,10 @@ export function registerMainIpc({
       return previews(event).attach({
         tabId: browserPreviewTabId(tabId),
         service: browserPreviewServiceTarget(service),
+        // A malformed basis is dropped, which keeps the older-renderer rule.
+        ...(Number.isSafeInteger(navigationBasis) && (navigationBasis as number) >= 0
+          ? { navigationBasis: navigationBasis as number }
+          : {}),
         bounds: browserPreviewBounds(bounds),
         visible,
       });

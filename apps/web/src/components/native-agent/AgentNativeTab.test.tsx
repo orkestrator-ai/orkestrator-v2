@@ -23,6 +23,7 @@ import type {
 } from "@orkestrator/protocol/native-agent";
 import { nativeAsyncQuestionRequestId } from "@orkestrator/protocol/native-agent";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
+import * as scrollState from "@/hooks/useVirtuosoScrollState";
 import * as realBackend from "@/lib/backend";
 import * as realPaneLayoutPersistence from "@/lib/pane-layout-persistence";
 import { useConfigStore } from "@/stores/configStore";
@@ -10072,6 +10073,50 @@ describe("AgentNativeTab", () => {
         promptSuggestions: true,
       });
     });
+
+    for (const merged of [false, true]) {
+      test(`restores the native reader after a ${merged ? "same-minute merged" : "separate row"} history page`, async () => {
+        const originalHook = scrollState.useVirtuosoScrollState;
+        const scrollToIndex = mock((_index: number) => true);
+        const spy = spyOn(scrollState, "useVirtuosoScrollState").mockImplementation((options) => ({
+          ...originalHook(options),
+          scrollToIndex,
+        }));
+        try {
+          const row = (id: string): NativeMessage => ({
+            id,
+            role: "assistant",
+            content: merged ? "" : id,
+            createdAt: "2026-10-18T01:33:20.000Z",
+            parts: merged
+              ? [
+                  {
+                    type: "tool-invocation",
+                    content: "Read",
+                    toolName: "Read",
+                    toolUseId: `call-${id}`,
+                    toolArgs: { file_path: `${id}.txt` },
+                    toolState: "success",
+                  },
+                ]
+              : [{ type: "text", content: id }],
+          });
+          getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+            ...(await defaultProjection(input)),
+            messageWindow: { limit: input.messageLimit ?? 512, truncated: true },
+            messages:
+              (input.messageLimit ?? 0) > 512 ? [row("earlier"), row("held")] : [row("held")],
+          }));
+          render(
+            <AgentNativeTab tabId={`tab-held-page-${merged}`} data={identity("claude")} isActive />,
+          );
+          fireEvent.click(await screen.findByRole("button", { name: "Load earlier messages" }));
+          await waitFor(() => expect(scrollToIndex).toHaveBeenCalledWith(merged ? 0 : 1));
+        } finally {
+          spy.mockRestore();
+        }
+      });
+    }
 
     test("offers to load earlier messages when the transcript is windowed", async () => {
       seedProjection({ messageWindow: { limit: 512, truncated: true } });

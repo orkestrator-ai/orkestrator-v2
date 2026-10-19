@@ -62,6 +62,7 @@ import {
   useVirtuosoScrollState,
   clearPersistedVirtuosoState,
 } from "@/hooks/useVirtuosoScrollState";
+import { useHeldTranscriptPlace, useRestoreHeldPlace } from "@/hooks/useHeldTranscriptPlace";
 import {
   adoptNativeAgentSession,
   beginNativeAgentSignIn,
@@ -825,6 +826,9 @@ export function SharedNativeAgentController({
       (transcriptAvailability === "current" || transcriptAvailability === "empty"),
     scrollToIndex,
   });
+  // Load earlier messages keeps the reader on the row they were reading.
+  const loadEarlierPlace = useHeldTranscriptPlace();
+  useRestoreHeldPlace(loadEarlierPlace, messages, scrollToIndex);
   const latestAssistantMessage = [...normalizedMessages]
     .reverse()
     .find((message) => message.role === "assistant");
@@ -2667,7 +2671,10 @@ export function SharedNativeAgentController({
                 size="sm"
                 variant="outline"
                 disabled={loadingEarlier}
-                onClick={() => {
+                onClick={(event) => {
+                  loadEarlierPlace.hold(
+                    event.currentTarget.closest<HTMLElement>("[data-virtuoso-scroller]"),
+                  );
                   setLoadingEarlier(true);
                   void loadEarlierMessages()
                     .catch((error) =>

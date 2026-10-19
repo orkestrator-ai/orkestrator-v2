@@ -2,6 +2,7 @@ import type {
   HostMaintenanceSnapshot,
   HostRestartImpact,
   HostTask,
+  HostUpdateChannel,
   HostUpdateDrain,
   HostUpdateJob,
 } from "@orkestrator/protocol/host-maintenance";
@@ -51,6 +52,13 @@ export async function startHostToolchainRepair(): Promise<HostTask> {
 /** Pulls the release container image matching the backend. */
 export async function startHostImageUpdate(): Promise<HostTask> {
   return invoke<HostTask>("start_host_image_update");
+}
+
+/** Switches which Orkestrator releases the host updates to; the host checks again. */
+export async function setHostUpdateChannel(
+  channel: HostUpdateChannel,
+): Promise<HostMaintenanceSnapshot> {
+  return invoke<HostMaintenanceSnapshot>("set_host_update_channel", { channel });
 }
 
 /** Switches the host's gh between its pin and the newest upstream release. */

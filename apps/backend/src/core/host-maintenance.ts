@@ -6,7 +6,9 @@ import {
   HOST_TASK_KINDS,
   HOST_UPDATE_IDLE_WAIT,
   HOST_UPDATE_JOB_STATES,
+  hostUpdateChannelOfVersion,
   isActiveHostUpdateJob,
+  isHostUpdateChannel,
   isHostVersion,
   type HostImageStatus,
   type HostMaintenanceSnapshot,
@@ -15,6 +17,7 @@ import {
   type HostTask,
   type HostTaskKind,
   type HostToolStatus,
+  type HostUpdateChannel,
   type HostUpdateDrain,
   type HostUpdateJob,
   type HostUpdateJobState,
@@ -60,6 +63,8 @@ interface HostMaintenanceDocument {
   tasks: Partial<Record<HostTaskKind, HostTask>>;
   nextRelease: HostReleasePins | null;
   ghChannel: "pinned" | "latest";
+  /** Null until {@link HostMaintenanceService.init} records the running version's channel. */
+  updateChannel: HostUpdateChannel | null;
   /** Public outcomes pinned until their receipts durably settle; admission is bounded. */
   retained: Record<string, HostTask | HostUpdateJob>;
 }
@@ -155,6 +160,7 @@ function normalizeDocument(value: unknown): HostMaintenanceDocument {
     tasks: {},
     nextRelease: null,
     ghChannel: "pinned",
+    updateChannel: null,
     retained: {},
   };
   if (!isRecord(value) || value.version !== 1) return empty;
@@ -211,6 +217,7 @@ function normalizeDocument(value: unknown): HostMaintenanceDocument {
     tasks,
     nextRelease,
     ghChannel: value.ghChannel === "latest" ? "latest" : "pinned",
+    updateChannel: isHostUpdateChannel(value.updateChannel) ? value.updateChannel : null,
     retained: isRecord(value.retained)
       ? Object.fromEntries(
           Object.entries(value.retained).flatMap(([id, entry]) => {
@@ -246,6 +253,7 @@ function bounded(text: string): string {
 export class HostMaintenanceService {
   private storage: StorageDatabase | null = null;
   private executorReady: boolean;
+  private releaseSelectionRevision = 0;
   private initialized = false;
   private readinessSettled = false;
   private startupJobId: string | null = null;
@@ -266,7 +274,7 @@ export class HostMaintenanceService {
       /** Read once at startup; the standalone launcher writes it after a rollback. */
       rollbackEvidence?: () => HostRollbackEvidence | null;
       /** Called after every check report, for example to fetch the release's pins. */
-      onCheck?: (latestVersion: string | null) => void;
+      onCheck?: (latestVersion: string | null, isCurrent: () => boolean) => void;
     },
   ) {
     this.now = options.now ?? Date.now;
@@ -337,16 +345,29 @@ export class HostMaintenanceService {
     return new Date(this.now()).toISOString();
   }
 
+  /** The channel a host that never chose one follows: the running release's. */
+  private get defaultUpdateChannel(): HostUpdateChannel {
+    return hostUpdateChannelOfVersion(this.options.version) ?? "stable";
+  }
+
   /**
    * Settles work the previous process left in progress. Installing restarts
    * this backend; update settlement waits for markReady. Dependency tasks the restart cut
    * short fail and can be started again.
+   *
+   * A host that never chose an update channel is pinned to the one its first
+   * release came from, so a beta install that updates to a stable release
+   * stays on Beta.
    */
   init(): void {
     if (this.initialized) return;
     this.update((document) => {
       this.startupJobId = document.job?.id ?? null;
       let changed = false;
+      if (document.updateChannel === null) {
+        document.updateChannel = this.defaultUpdateChannel;
+        changed = true;
+      }
       const at = this.iso();
       for (const kind of HOST_TASK_KINDS) {
         const task = document.tasks[kind];
@@ -478,6 +499,7 @@ export class HostMaintenanceService {
       tasks: document.tasks,
       nextRelease,
       ghChannel: document.ghChannel,
+      updateChannel: document.updateChannel ?? this.defaultUpdateChannel,
     };
   }
 
@@ -655,7 +677,14 @@ export class HostMaintenanceService {
       return this.update(() => true);
     }
     if (report.type === "check") {
-      queueMicrotask(() => this.options.onCheck?.(report.latestVersion));
+      const pending = this.load().checkRequest;
+      if (report.channel && report.channel !== this.updateChannel()) return this.snapshot();
+      if (report.checkRequestId && report.checkRequestId !== pending?.id) return this.snapshot();
+      const selection = ++this.releaseSelectionRevision;
+      const isCurrent = () => selection === this.releaseSelectionRevision;
+      queueMicrotask(() => {
+        if (isCurrent()) this.options.onCheck?.(report.latestVersion, isCurrent);
+      });
       return this.update((document) => {
         document.lastCheck = {
           latestVersion: report.latestVersion,
@@ -717,6 +746,46 @@ export class HostMaintenanceService {
 
   ghChannel(): "pinned" | "latest" {
     return this.load().ghChannel;
+  }
+
+  updateChannel(): HostUpdateChannel {
+    return this.load().updateChannel ?? this.defaultUpdateChannel;
+  }
+
+  /**
+   * Switches the releases this host updates to. The last check answered for
+   * the old channel, so it is dropped and, when the host can update, a new
+   * check is requested. Refused while an update is in progress: its release
+   * was chosen from the old channel.
+   */
+  setUpdateChannel(channel: HostUpdateChannel): HostMaintenanceSnapshot {
+    if (!isHostUpdateChannel(channel)) {
+      throw new HostMaintenanceError("invalid-input", "channel must be stable, beta or unstable");
+    }
+    let busy = false;
+    const snapshot = this.update((document) => {
+      if ((document.updateChannel ?? this.defaultUpdateChannel) === channel) return false;
+      if (document.job && isActiveHostUpdateJob(document.job)) {
+        busy = true;
+        return false;
+      }
+      this.releaseSelectionRevision += 1;
+      document.updateChannel = channel;
+      document.lastCheck = null;
+      document.nextRelease = null;
+      document.checkRequest =
+        this.options.updater !== "none" && this.executorReady
+          ? { id: this.newId(), requestedAt: this.iso() }
+          : null;
+      return true;
+    });
+    if (busy) {
+      throw new HostMaintenanceError(
+        "busy",
+        "Wait for the update in progress to finish before changing the update channel",
+      );
+    }
+    return snapshot;
   }
 
   /** Starts a dependency task; one of each kind runs at a time. */

@@ -533,6 +533,46 @@ describe("main IPC registration", () => {
     ).rejects.toThrow("Expected a browser preview URL and visibility");
   });
 
+  test("passes a service attach's navigation basis through and drops a malformed one", async () => {
+    const harness = createHarness();
+    const bounds = { x: 0, y: 0, width: 640, height: 480 };
+    const service = {
+      backendInstanceId: "bk_backend_1",
+      environmentId: "env-1",
+      serviceId: "svc_aaaaaaaa",
+      path: "/next",
+    };
+    await harness.invoke("orkestrator:browser-preview:attach", {
+      tabId: "browser-1",
+      service,
+      navigationBasis: 4,
+      bounds,
+      visible: true,
+    });
+    expect(harness.browserPreviews.attach).toHaveBeenLastCalledWith({
+      tabId: "browser-1",
+      service,
+      navigationBasis: 4,
+      bounds,
+      visible: true,
+    });
+    for (const navigationBasis of [-1, 1.5, "4", null]) {
+      await harness.invoke("orkestrator:browser-preview:attach", {
+        tabId: "browser-1",
+        service,
+        navigationBasis,
+        bounds,
+        visible: true,
+      });
+      expect(harness.browserPreviews.attach).toHaveBeenLastCalledWith({
+        tabId: "browser-1",
+        service,
+        bounds,
+        visible: true,
+      });
+    }
+  });
+
   test("routes trusted capture channels and removes the legacy annotation channels", async () => {
     const harness = createHarness();
     for (const legacy of ["annotation-start", "annotation-status", "annotation-cancel"]) {

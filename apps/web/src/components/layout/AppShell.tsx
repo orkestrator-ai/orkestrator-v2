@@ -22,6 +22,7 @@ import { MOBILE_SHELL_MEDIA_QUERY, MobileAppShellLayout } from "./MobileAppShell
 import { getApplicationTitle } from "@/lib/application-title";
 import { AgentInfoButton } from "./AgentInfoButton";
 import { AgentMailButton } from "@/components/agent-mail/AgentMailButton";
+import { AgentMailPanel } from "@/components/agent-mail/AgentMailPanel";
 import { SystemUsageIndicator } from "./SystemUsageIndicator";
 import { HostPark, HostSlot } from "./HostSlot";
 import { AppDialogHost } from "./AppDialogHost";
@@ -114,6 +115,7 @@ export function AppShell({ children }: AppShellProps) {
       <OpenFileDialog />
       {/* Outside both layouts, so a dialog outlives the drawer that requested it. */}
       <AppDialogHost />
+      <AgentMailPanel />
       <HostPark parkRef={contentParkRef} />
       {isMobile ? (
         <MobileAppShellLayout

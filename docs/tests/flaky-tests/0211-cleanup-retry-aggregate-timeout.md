@@ -277,6 +277,12 @@ Final aggregate exited 1 after 477.8 seconds. Backend reported 8978 passed, 41 s
 - **Evidence:** `orkestrator-test-run.iFuHsy/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory. Backend reported 9025 passed, 41 skipped and 17 failed across 9083 tests, with 12 errors between tests.
 - **Assessment:** confirmed intermittent recurrence; no implementation, assertion, timeout or skip in these owners changed. Shared-host contention remains a hypothesis.
 
+## Transcript-paging main merge — 2026-10-18
+
+The testing guide's GNU-tool PATH prefix followed by `mise run test:logged -- --name merge-tests -- mise run test` repeated the 5000 ms deadline at 5930.48 ms. Workspace/root/bridges/protocol reserved 4/1/2/1 slots; backend used two isolated workers alongside browser validation and other worktrees. The same PATH prefix with `mise run test:logged -- --name merge-cleanup-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures` passed the unchanged owner, exit 0, in 26.4 s. Evidence: `orkestrator-test-run.Yk2l1H/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory. No source, assertion, timeout or skip changed.
+
+Final aggregate counts: backend 9085 passed, 41 skipped and two failed across 9128 tests in 483 files (502.39 s). The aggregate exited 1 after 1473.5 s including queue time. The other backend failure is recorded in 0165; bridges and protocol passed.
+
 ## README regression-test main merge recurrence — 2026-10-18
 
 - **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`, merging `origin/main` at `f51c7252` into `bdaee060`; Bun 1.4.3 on macOS arm64. Workspace/root/bridges/protocol reserved 4/1/2/1 slots; backend used two isolated workers, alongside browser validation and other host work.
@@ -286,3 +292,13 @@ Final aggregate exited 1 after 477.8 seconds. Backend reported 8978 passed, 41 s
 - **Evidence:** `orkestrator-test-run.wmdv2p/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
 - **Assessment:** the unchanged owning-file pass confirms an intermittent recurrence. Shared-host contention remains a hypothesis; no implementation, assertion, timeout or skip changed.
 - **Warm full-suite validation:** `mise run test:logged -- --name merge-tests-warm -- mise run test` passed all four groups, exit 0, in 339.7 seconds logged.
+
+
+## Upgrade-channel second main merge warm run — 2026-10-18
+
+- **Original command:** the testing guide's macOS GNU-tool PATH with `mise run test:logged -- --name merge2-full-warm -- mise run test`, merging `origin/main` at `62c5c696` into `129e3887`. Workspace/root/bridges/protocol reserved 4/1/2/1 slots; backend used two isolated workers alongside Electron validation on the shared host.
+- **Failure:** `Electron backend command registry > persists safe cleanup failure details and permits a backend deletion retry` in `apps/backend/tests/commands-integration.test.ts` exceeded 5000 ms at 6645.41 ms.
+- **Suite counts:** backend 9109 passed, 41 skipped and six failed across 9156 tests in 486 files (579.33 seconds). Every other workspace package, root/support, bridges and protocol regeneration passed; aggregate exit 1 after 596.4 seconds.
+- **Isolated rerun:** `mise run test:logged -- --name merge2-integration-warm-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures`, with the same GNU-tool PATH, passed the unchanged owning file (exit 0, 24.4 seconds).
+- **Evidence:** `orkestrator-test-run.4BSigl/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and outer `orkestrator-test-run.EJfRvy/merge2-full-warm.log.gz`, below the host temporary directory.
+- **Assessment:** confirmed intermittent recurrence. Shared-host contention remains a hypothesis; no implementation, assertion, deadline or skip changed.

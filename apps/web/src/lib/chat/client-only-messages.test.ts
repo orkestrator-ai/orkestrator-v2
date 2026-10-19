@@ -154,6 +154,8 @@ describe("client-only optimistic messages", () => {
       sender: "Codex 1 · worker",
       subject: "Done",
       body: "First report",
+      // Sender and recipient, so the tile can open their conversation.
+      participants: ["worker\0startup-agent", "coordinator:c:v\0coordinator-v"],
     });
     expect(rows[1]!.peerMail).toMatchObject({
       kind: "notice",

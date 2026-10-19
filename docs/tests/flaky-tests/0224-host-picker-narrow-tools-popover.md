@@ -244,6 +244,23 @@ Evidence: `orkestrator-test-run.SROwT8/login-isolated-browser.log.gz` in the
 host temporary directory and
 `output/agent-testing/qa-browser-bdfd649e-0a6/browser/`.
 
+## Preview path provenance validation — 2026-10-18
+
+`mise run test:logged -- --name isolated-browser -- mise run test:agent:browser:isolated`
+(profile `qa-browser-41627cc5-72a`, one worker) reported 26 passed, 25 skipped
+and three failed in 649.4 s logged. The narrow host picker again timed out
+clicking `Repository settings` after 15000 ms. The other failures were local
+move cleanup at the 120-second test deadline and the 390px host-maintenance
+fixture's project-drawer click. Evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.YMsYVb/isolated-browser.log.gz`.
+
+The unchanged owning file on fresh profile `preview-path-layout-recheck`:
+`ORKESTRATOR_AGENT_TEST_PROFILE=preview-path-layout-recheck ORKESTRATOR_AGENT_TEST_RUN_ID=preview-path-layout-recheck mise run test:logged -- --name gateway-rerun -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/browser-gateway.spec.ts --workers=1`
+reported 13 passed, six skipped and one failed in 144.7 s. Only the same narrow
+host-picker click failed; both other cases passed. This owning-file result
+does not establish new flaky classifications. Evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.ULvAuU/gateway-rerun.log.gz`.
+Both disposable profiles were stopped and reset. No assertion or timeout changed.
 
 ## Landing-page main merge observation — 2026-10-18
 
@@ -263,6 +280,12 @@ host temporary directory and
 - **Evidence:** `orkestrator-test-run.9diLAg/merge-agent-browser.log.gz` and `orkestrator-test-run.zvqJO1/merge-gateway-owner.log.gz` below the host temporary directory; browser artifacts under `output/agent-testing/qa-browser-be78767f-df2/browser/` and `output/agent-testing/merge-mcp-gateway-1018-rerun/browser/`.
 - **Disposition:** this occurrence fails in isolation too and does not establish a new flake classification or resolve issue 0224. No picker implementation, assertion, timeout or skip changed. The owning-file profile was stopped and reset.
 
+## Transcript-paging main merge — 2026-10-18
+
+`mise run test:logged -- --name merge-agent-browser -- mise run test:agent:browser:isolated` reproduced the disabled SSH socket selection at `browser-gateway.spec.ts:302` in the narrow case (5000 ms). The one-worker credential-free Codex suite ran alongside component tests, the non-iOS aggregate and other worktrees. It later reached its test deadline before completing (933.4 s including startup/cleanup); the other reported failures are recorded in 0484.
+
+The complete unchanged owning file passed against fresh credential-free profile `merge-paging-gateway-owner-1018`: `ORKESTRATOR_AGENT_TEST_PROFILE=merge-paging-gateway-owner-1018 ORKESTRATOR_AGENT_TEST_RUN_ID=merge-paging-gateway-owner-1018 mise run test:logged -- --name merge-gateway-owner -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/browser-gateway.spec.ts --workers=1` (14 passed, six skipped; exit 0 in 199.5 s logged). Both profiles were stopped and reset. Evidence: `orkestrator-test-run.h4wMTk/merge-agent-browser.log.gz` below the host temporary directory; Playwright statistics under `output/agent-testing/merge-paging-gateway-owner-1018/browser/results.json`. No implementation, assertion, timeout or skip changed.
+
 ## CLI matrices second main merge observation — 2026-10-18
 
 - **Original command:** `mise run test:logged -- --name merge2-isolated-browser -- mise run test:agent:browser:isolated`, credential-free profile `qa-browser-57ff09b9-afe`, one worker.
@@ -271,3 +294,24 @@ host temporary directory and
 - **Result:** the narrow picker case passed unchanged, but the whole owner reported 13 passed, five skipped and two failed (407.2 seconds logged): signed-out Codex lacked the `Sign in to Codex` button at 60000 ms, and the persisted diff-baseline `vs <tip>` header was absent at 5000 ms. Those remain validation limitations, not newly confirmed flakes.
 - **Evidence:** `orkestrator-test-run.eQ9vnb/merge2-isolated-browser.log.gz` and `orkestrator-test-run.iQOZTp/merge2-gateway-owner.log.gz` below the host temporary directory; artifacts under `output/agent-testing/<profile>/browser/` for the two profiles named above.
 - **Cleanup:** both profiles were stopped and reset by their owning runners; no live launcher or retained profile state. No implementation, assertion, timeout or skip changed.
+
+## Electron preview second main merge — 2026-10-18
+
+`mise run test:logged -- --name merge2-isolated-browser -- mise run test:agent:browser:isolated` used credential-free profile `qa-browser-42db909f-bde`, one worker. It reported 28 passed, 33 opt-in skips and one failed (exit 1, 484.6 seconds including setup and cleanup). The narrow picker again could not click `Repository settings` after `Open tools`: the button was unstable, then hidden, until the 15000 ms deadline at `browser-gateway.spec.ts:238`. Evidence: `orkestrator-test-run.DoYcml/merge2-isolated-browser.log.gz` below the host temporary directory. The supervisor stopped and reset the profile. The owner was not rerun for this occurrence, so this does not independently establish a new flake classification. No picker implementation, assertion, timeout or skip changed.
+
+The component/public-site browser task passed separately (`merge2-browser`, exit 0, 135.0 seconds), as did credential-free CLI scenarios (`merge2-cli-scenarios`, exit 0, 23.6 seconds). Credentialed provider and separate Electron, Docker and iOS scenario suites were omitted; the incoming product changes were covered by the ordinary full suite, component browser and isolated browser flows.
+
+
+## Upgrade-channel second main merge — 2026-10-18
+
+- **Original command:** `mise run test:logged -- --name merge2-isolated-browser -- mise run test:agent:browser:isolated`, credential-free Codex profile `qa-browser-75aa6285-358`, one worker. Result: 28 passed, 35 skipped and one failed (exit 1, 430.1 seconds including lifecycle). The narrow host-picker case timed out clicking `Repository settings` at line 238 after 15000 ms; the target became unstable and then hidden.
+- **Owning-file rerun:** fresh credential-free profile `qa-merge2-gateway-129e`, started with `mise run dev:test --profile qa-merge2-gateway-129e --fixture --no-agent-credentials --agent-platforms codex`. `ORKESTRATOR_AGENT_TEST_PROFILE=qa-merge2-gateway-129e ORKESTRATOR_AGENT_TEST_RUN_ID=merge2-gateway-owner ORKESTRATOR_AGENT_TEST_DOCKER=0 ORKESTRATOR_AGENT_TEST_REVIEW=0 mise run test:logged -- --name merge2-gateway-owner -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts browser-gateway.spec.ts --workers=1` reported 13 passed, six skipped and one failed (exit 1, 228.0 seconds).
+- **Owner result:** the narrow host-picker case passed unchanged. The persisted diff-baseline case at line 2091 instead failed its five-second `vs <tip>` title visibility assertion at line 2182. This is the existing observation tracked by 0494; it is not a new confirmed flaky classification because the owning file did not pass as a whole.
+- **Evidence:** `orkestrator-test-run.IadNvo/merge2-isolated-browser.log.gz` and `orkestrator-test-run.HrHKpb/merge2-gateway-owner.log.gz` under the host temporary directory; browser traces under `output/agent-testing/qa-browser-75aa6285-358/browser/` and `output/agent-testing/merge2-gateway-owner/browser/`.
+- **Cleanup and disposition:** the one-shot supervisor stopped/reset its profile. The owning-file profile was stopped and reset with `dev:stop` and `dev:reset`, both exit 0; its foreground launcher then exited 143 as requested. Gateway validation remains non-green. No implementation, assertion, deadline or skip changed.
+
+## Queued-steer main merge validation — 2026-10-19
+
+The recurrence, owning-file results and remaining limitations are recorded in
+[0501](0501-queued-steer-main-merge-validation.md). No owning implementation,
+assertion, timeout or skip was changed for validation.

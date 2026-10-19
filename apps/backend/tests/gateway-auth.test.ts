@@ -387,6 +387,7 @@ describe("remote gateway", () => {
       tasks: {},
       nextRelease: null,
       ghChannel: "pinned" as const,
+      updateChannel: "stable" as const,
     };
     const report = mock((_report: unknown) => snapshot);
     const { info } = await startGateway({

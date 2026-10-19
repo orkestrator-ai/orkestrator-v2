@@ -1,12 +1,14 @@
 # Service preview rollout
 
-Checked against `main` at `2459b05c` (2026-10-15).
+Checked against `main` at `2459b05c` (2026-10-15); real-Electron run against
+`a5d338c1` (2026-10-18).
 
 Service previews shipped in #831 (`4f02156b`). Each previewed application gets
 a backend-owned service identity, carried by a desktop tunnel, private HTTPS
 origins or an optional container relay. Every new transport ships off by
-default. The only real-stack evidence is a single-machine Linux and Chromium
-run from 2026-09-23. This file covers four things: the platform runs each
+default. Real-stack evidence is single-machine only: Linux and Chromium
+(2026-09-23), macOS re-baselines (2026-10-17), and a real Electron window with
+the desktop tunnel on (2026-10-18). This file covers four things: the platform runs each
 transport needs before it is advertised or enabled, the criteria for flipping
 defaults, the later retirement of the legacy loopback route and its shared
 partitions, and the evidence log where run results are now recorded.
@@ -51,33 +53,34 @@ partitions, and the evidence log where run results are now recorded.
   throwaway CA). Its config has no `projects`, and sibling isolation checks
   only localStorage and cookies. The opt-in Docker, relay, Vite and benchmark
   suites are listed in [`testing-guide.md`](../development/testing-guide.md)
-  §"Opt-in preview checks". They have no mise task and do not run in CI. No
-  real-Electron spec opens a service preview: `testMatch` in
-  `e2e/agent-testing/playwright.electron.config.ts` lists only
-  `electron-main`, `web-annotations-electron` and
-  `terminal-input-resume-electron`. All of these suites, and every preview unit
-  file, were re-baselined on 2026-10-17 at `31d0fb06` (see the evidence log).
+  §"Opt-in preview checks". They have no mise task and do not run in CI. All
+  of these suites, and every preview unit file, were re-baselined on
+  2026-10-17 at `31d0fb06` (see the evidence log).
+  `e2e/agent-testing/service-preview-electron.spec.ts` (in
+  `mise run test:agent:electron`, so not in CI either) opens two worktree
+  services in the real Electron window with `ORKESTRATOR_PREVIEW_TRANSPORT=1`
+  on a disposable agent-test profile. Agent-test backends keep that variable
+  and `ORKESTRATOR_PREVIEW_RELAY` (`AGENT_TEST_SAFE_ENV_NAMES` in
+  `apps/desktop/electron/backend-process.ts`); before 2026-10-18 they were
+  stripped, so the override silently did nothing in an isolated profile.
 
 ## Outstanding work
 
 ### Code
 
-1. A real-Electron service-preview spec under `e2e/agent-testing/` (for example
-   `service-preview-electron.spec.ts`), reusing the Electron harness and
-   `test-fixtures/preview-app`. Add it to `testMatch` in
-   `playwright.electron.config.ts`.
-2. A hostile service-worker route in `test-fixtures/preview-app/server.ts`
-   that registers a worker intercepting `/__orkestrator_preview/session`.
-3. Relay fault tests for an oversized frame (handled in
+1. A hostile service-worker route in `test-fixtures/preview-app/server.ts`
+   that registers a worker intercepting `/__orkestrator_preview/session`. The
+   fixture's benign `/sw.js` (2026-10-18) is the starting point.
+2. Relay fault tests for an oversized frame (handled in
    `EnvironmentRelay.onData`) and a protocol-version mismatch (the relay
    script exits). Stdin errors, a silent relay and a wrong nonce are already
    covered.
-4. Optional: Playwright `firefox` and `webkit` projects in
+3. Optional: Playwright `firefox` and `webkit` projects in
    `playwright.preview.config.ts`, as early signal only (not Safari or iOS
    evidence). Optional: new mise tasks for the opt-in suites (for example
    `test:preview:docker` and `test:preview:browser`), with `testing-guide.md`
    updated to use them.
-5. Partition retention. Electron has to own this, because the backend knows
+4. Partition retention. Electron has to own this, because the backend knows
    nothing about client partitions.
    - Clear a service's partition when its definition is removed or its
      environment deleted. Reconcile against the `tombstones` that
@@ -89,19 +92,36 @@ partitions, and the evidence log where run results are now recorded.
    - Once legacy URL tabs are retired, set a retention window for the shared
      window/connection partitions, then clean up only partitions this install
      created.
-6. Optional: when a legacy URL tab's port maps unambiguously to a current
+5. Optional: when a legacy URL tab's port maps unambiguously to a current
    service in the same environment and generation, offer "Open as service".
    Keep ambiguous tabs as they are, with "Choose service". Never infer
    ownership from the port alone or from which environment is active.
-7. After the support window (see Open questions), remove compatibility mode
+6. After the support window (see Open questions), remove compatibility mode
    from `ServiceBrowserTab` and retire the legacy route and its rewrite
    helpers, as a separate reviewed change.
-8. Reword the comments that cite deleted plan steps or the old evidence log:
+7. Reword the comments that cite deleted plan steps or the old evidence log:
    `PREVIEW_LIMITS` (`packages/protocol/src/preview-services.ts`),
    `preview-header-policy.ts`, and in `apps/backend/src/`
    `core/preview-access.ts`, `core/preview-target-resolver.ts`,
    `core/preview-readiness.ts`, `core/preview-docker.test.ts` and
    `preview-bench.test.ts`.
+8. Verify whether legacy URL tabs (`BrowserTab`, `attachUrl` in
+   `browser-preview-manager.ts`) have the stale-path bug fixed for service
+   tabs on 2026-10-18: `attachUrl` loads whenever the attach URL differs from
+   the view's current URL, and the renderer re-attaches on every resize and
+   scroll, so a re-attach sent before the renderer saw a link, a redirect or
+   Back may undo it. Reproduce in the real window (link, then Back, then a
+   resize) before changing anything; the fix would mirror `navigationBasis`.
+9. Verify why the pane-layout store re-applies an older saved `browserData.url`
+   of a tab after a newer local save. On 2026-10-18 a service tab saved `/`
+   then `/app/next` and its `serviceRef.path` later returned to `/`.
+   `ServiceBrowserTab` now treats an echo of its own earlier save as stale
+   (`persistedBases`), but other tab types may follow such echoes. Check
+   whether save acknowledgements or layout events are applied out of order in
+   `paneLayoutStore.ts`.
+10. Name service tabs after their service in the tab strip. Every browser tab
+    is "Browser N" (`DraggableTab.tsx`), so two service tabs can only be told
+    apart by opening them.
 
 ### Qualification
 
@@ -109,16 +129,21 @@ Each run gates a default or an advertisement. Record every run in the evidence
 log below.
 
 - Real Electron window. Gates the desktop tunnel default. Run in an isolated
-  profile with `ORKESTRATOR_PREVIEW_TRANSPORT=1`, through code item 1 and
-  `mise run test:agent:electron`, or by hand. Cover:
-  - no cookie, localStorage, IndexedDB or service-worker crossing between two
-    services, or between windows on different backends;
-  - ingress header injection for HTTP and WS;
-  - zoom, overlays, DevTools, annotations, screenshots, clipboard and history
-    after reattach;
-  - hide or unmount during HMR, then reattach;
-  - renderer crash and reload, and a connection switch;
-  - stable resource counts over repeated open, hide and close;
+  profile with `ORKESTRATOR_PREVIEW_TRANSPORT=1` through
+  `service-preview-electron.spec.ts` (`mise run test:agent:electron`). Passed
+  on 2026-10-18 (see the evidence log): no cookie, localStorage, IndexedDB or
+  service-worker crossing between two services; credentialed ingress and
+  header injection for HTTP, WS and worker-originated fetches; hide and
+  reattach and a renderer reload without reloading the page; history, app
+  zoom (bounds on the host at 80, 100 and 125 %), DevTools, screenshots and an
+  annotation capture after reattach; preview renderer crash and reload; stable
+  resource counts over repeated open, hide and close, and release after the
+  retirement lease. Still to cover:
+  - no crossing between windows on different backends, and a connection
+    switch (both need a second backend connection in the spec);
+  - clipboard, and overlays hiding a service view (observed with a startup
+    dialog on 2026-10-18, not asserted);
+  - hide or unmount during HMR, then reattach (needs the Vite fixture);
   - keyboard and narrow-viewport use of the picker, service dialog and
     diagnostics.
 - Two-machine tailnet. Gates remote desktop previews by default. No runbook
@@ -146,7 +171,7 @@ log below.
   and the exec relay). That run used Docker-assigned host ports, not
   Orkestrator's Auto mapping (`hostPort: 0`). Windows and Auto mappings are
   still open.
-- Hostile service worker (needs code item 2). Bootstrap and re-bootstrap with
+- Hostile service worker (needs code item 1). Bootstrap and re-bootstrap with
   the worker installed. The documented outcome is that re-sign-in is blocked
   until site data is cleared, and that no other service and no control
   authority is ever reached.
@@ -169,7 +194,7 @@ log below.
 ### Enabling defaults
 
 - Desktop tunnel: change `DEFAULT_PREVIEW_SETTINGS.transport` to `true` only
-  after the real-Electron and two-machine runs pass and an observation window
+  after the remaining real-Electron cases and the two-machine run pass and an observation window
   with error and resource thresholds is recorded here. An absence of
   complaints is not a metric.
 - Publication cannot be a default: it needs an operator-provided domain,
@@ -362,9 +387,105 @@ This replaces the 2026-09-23 file lists as the current baseline.
   [test-suite-and-ci-health.md](test-suite-and-ci-health.md). Throwaway PKI and
   preview harness directories were removed by the suites. The Keychain item
   created by the probe was deleted.
-- Not run: real Electron service preview (code item 1 does not exist yet), two
+- Not run: real Electron service preview (the spec did not exist yet), two
   machines, Firefox, Safari and iOS, Docker Desktop on Windows, Auto
   mappings, real private DNS and certificates, a hostile service worker.
+
+2026-10-18, real Electron window with the desktop tunnel on, branch
+`qualify-preview-electron-tunnel-c6ca4deaffee` from `main` at `a5d338c1`.
+
+| Item | Version |
+| --- | --- |
+| Host | macOS 27.0 (26A425, arm64), one machine shared with other live-test worktrees (load average 23 to 56) |
+| Bun / Node (mise) | 1.4.3 / 22.23.1 |
+| Electron / Playwright | 44.7.0 / 1.64.0 |
+| Profile | agent-test `service-preview-smoke` under a `mkdtemp` root, mock keychain, no provider credentials, removed by the spec |
+| Services | two `test-fixtures/preview-app` servers (`svc-a`, `svc-b`) on loopback, registered as `worktree` services of a local fixture environment |
+
+- Effective capabilities: `transport` on through `ORKESTRATOR_PREVIEW_TRANSPORT=1`
+  (stored setting still off, asserted), relay and publication off. The first
+  attempt showed the variable never reached an agent-test backend: it was not
+  in `AGENT_TEST_SAFE_ENV_NAMES`. Fixed, with a test in
+  `apps/desktop/tests/backend-process.test.ts`; `ORKESTRATOR_PREVIEW_RELAY` is
+  kept too.
+- Commands: `bunx playwright test --config
+  e2e/agent-testing/playwright.electron.config.ts service-preview-electron.spec.ts`
+  (bridges rebuilt first), then `mise run test:logged -- --name agent-electron
+  -- mise run test:agent:electron`.
+- Results: 7 of 7 tests passed in each of 5 consecutive final runs (45 s to
+  2.2 min each) and inside the full Electron suite. Before the fixes below,
+  the history test failed in about one run in four.
+  - Ingress: the view loads `http://127.0.0.1:<ingress>/`, never the fixture
+    port, in a `persist:orkestrator-preview-svc-*` partition. The fixture saw
+    `Host: localhost:<port>` and no `x-orkestrator-preview-ingress`,
+    `Authorization` or Orkestrator cookie. Raw HTTP and WebSocket requests to
+    the ingress without the credential, or with a forged one, got 403
+    `forbidden`. A legacy (shared-partition) tab pointed at the ingress
+    reached nothing.
+  - WebSocket: `fixture.v1` was negotiated, hello and echo crossed the tunnel,
+    and the upgrade reached the fixture with `Origin: http://localhost:<port>`
+    and no ingress header.
+  - Isolation: a cookie, localStorage, an IndexedDB database and a service
+    worker set in `svc-a` were all absent from `svc-b` (`/sw/marker` 404 there).
+    A reload of `svc-a` served through its worker reached the fixture with the
+    worker's fetches credentialed by the partition hook.
+  - Hide and reattach through the real renderer (two service tabs), and a
+    renderer reload: the view was reused and the page never reloaded.
+  - History: Back and Forward after an in-page navigation, with a 1.5 s settle
+    to catch any bounce. This exposed the stale-path bug (see "A service view
+    owns its path" below). It was fixed in main and the renderer, with tests in
+    `browser-preview-service.test.ts`, `main-ipc.test.ts` and
+    `ServiceBrowserTab.test.tsx`.
+  - App zoom 125, 80 and 100 %: the view's bounds equal the preview host rect
+    times the host zoom within 1.5 DIP. Then DevTools opened and closed, a
+    `capturePage` gave 1059×777 non-empty pixels, and an annotation capture
+    recorded `{ kind: "service", serviceId }` and route `/app/next` with no
+    ingress URL.
+  - `forcefullyCrashRenderer`: the tab showed "Preview renderer stopped", and
+    **Reload preview** recovered the page through the tunnel.
+  - Resources over 8 open, hide and close cycles: web contents 4 before and
+    after, attachments 2 before and after (2 issued over the whole run),
+    fixture sockets 3 (pool bound 6). After closing every holder and the
+    30-second lease: 0 attachments, 0 fixture sockets, ingress closed.
+- Spec fixes during the run: a startup dialog ("Continue Without GitHub CLI")
+  hides native views, and `dismissStartupDialogs` runs only before a locator
+  action or assertion, never during main-process polls. The visibility polls
+  now give it one on every read. The same cause fits flake
+  [0272](../tests/flaky-tests/0272-annotation-home-reload-native-view.md); its
+  Home test got the same change.
+- Full Electron suite on the loaded host: the service-preview spec passed 7/7.
+  `electron-main.spec.ts` (two tests) and `terminal-input-resume-electron.spec.ts`
+  failed their 5-second window-title checks at launch, and the annotation Home
+  test failed as in 0272, all at load average 34 to 56 and again alone. At
+  load 12 to 17 the two title specs passed alone with `main`'s product code
+  and with this branch's, so the title checks are recorded as flake
+  [0470](../tests/flaky-tests/0470-electron-launch-title-timeout-under-load.md).
+  With the 0272 change the annotation spec passed 10/10 twice alone. A second
+  full run (`ORKESTRATOR_AGENT_TEST_RUN_ID=svc-preview-c6ca-suite2`) had 21
+  passed, 1 skipped (the Linux Wayland case) and 0 failed, in 2.7 min.
+- Repository checks: `mise run check` passed. The first full `mise run test`
+  failed only on a case-file status format in this change (fixed) and the
+  known aggregate timeouts
+  [0258](../tests/flaky-tests/0258-coordinator-fixture-digest-aggregate-timeout.md)
+  and [0178](../tests/flaky-tests/0178-pi-vendor-runtime-aggregate-timeout.md),
+  both of which passed alone. The second full run passed (323 s). After
+  merging `main` at `68dc1c8d`, `mise run check` passed and the full run
+  failed only on flake [0180](../tests/flaky-tests/0180-worktree-tracked-edit-cache-hit.md)
+  (passed alone) and on two tests broken on `main` itself by the README
+  rewrite (#1077): `tiptap-extensions.test.ts` "accepts the repository
+  Markdown files that previously failed" and `tests/unit/install-script.test.ts`
+  "is served at the URL both READMEs tell users to pipe into bash". Both fail
+  alone against `main`'s README, which this branch does not touch.
+- Not run (still listed under Qualification): windows on different backends
+  and a connection switch, clipboard, asserted overlays, HMR reattach,
+  keyboard and narrow viewport. Noticed but out of scope: dev and agent-test
+  profiles report Electron's 44.7.0 to the backend, so a version reminder
+  shows (already tracked in
+  [test-suite-and-ci-health.md](test-suite-and-ci-health.md)).
+- Cleanup: the spec removes its temporary root (profile, fixture repository,
+  worktree) and stops Electron, the backend, its Vite group and both
+  fixtures. No containers were used. No leftover process or temp root was
+  found after an interrupted run.
 
 ## Constraints and rationale
 
@@ -419,6 +540,25 @@ This replaces the 2026-09-23 file lists as the current baseline.
   Progress polling on `writableLength`
   was rejected because Node coalesces queued writes into one `writev`, so
   progress shows only when the whole batch completes.
+- A service view owns its path (2026-10-18). The renderer learns in-page
+  navigation from state events, so a re-attach it sent before it applied one
+  carried the previous path, and main reloaded that path: Back, a link or a
+  redirect could be undone by a routine bounds sync, and the view could bounce
+  between two paths. Each state now carries `service.navigation`, and each
+  attach the `navigationBasis` its path was chosen against; main navigates
+  only for a path chosen against its latest navigation, and counts a history
+  move when it starts, not when it commits. Rejected options:
+  - Comparing only against the last path the renderer asked for: a catch-up
+    attach for a link's path can be sent before the renderer sees Back, so it
+    looks like a new request (seen in the live run).
+  - Keeping the renderer's path in a ref and re-reading it on each sync: the
+    attach and the state event still cross in flight.
+  - Separate navigate and bounds channels: a larger protocol change for the
+    same outcome, and older renderers would still need a fallback.
+  Cost: a path the user asks for while the page is navigating on its own can
+  be dropped, because the page navigated last; the renderer then shows the
+  view's path. Older renderers that send no basis keep the
+  "only a path not already asked for" rule.
 - Mixed versions: old clients show service URIs unchanged and refuse them
   (`browser-address.test.ts`). Pre-#831 backends reject Auto mappings
   (`hostPort: 0`).

@@ -565,6 +565,7 @@ describe("reconcilePersistedLayout", () => {
             type: "browser",
             browserData: {
               url: "http://localhost:3000/app",
+              navigationRequestId: "writer:request",
               history: ["http://localhost:3000/", "http://localhost:3000/app"],
               historyIndex: 1,
             },
@@ -584,6 +585,7 @@ describe("reconcilePersistedLayout", () => {
           type: "browser",
           browserData: {
             url: "http://localhost:3000/app",
+            navigationRequestId: "writer:request",
             history: ["http://localhost:3000/", "http://localhost:3000/app"],
             historyIndex: 1,
           },

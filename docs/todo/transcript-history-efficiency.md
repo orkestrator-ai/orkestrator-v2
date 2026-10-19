@@ -69,7 +69,8 @@ qualification that was never run.
   incrementally, so a tail update no longer re-encodes retained history.
   Retained history is still a flat array (`historyMessagesRef` in
   `useNativeAgentSession.ts`), and display arrays are re-joined on every
-  install.
+  install. Load earlier messages holds the reader's row in both the native
+  and the reviewer tab (`useHeldTranscriptPlace.ts`).
 - Measurement. `scripts/efficiency/` runs workloads `a` to `j` through
   `mise run efficiency:baseline` (usage and method:
   [efficiency-harness.md](../development/efficiency-harness.md)).
@@ -113,10 +114,20 @@ qualification that was never run.
    (`apps/backend/src/core/http-bridge-progressive.ts`) at the same time: a
    bridge that predates `/transcript` is read through its whole `/messages`
    body and trimmed afterwards.
+4. Give Codex a per-response row boundary. The bridge infers a model response
+   from a reasoning or agent-message item after a tool call
+   (`TurnAccumulator.opensModelStep`), so responses that are only a tool call
+   share one row. In the 2026-10-18 live run a GPT-6-Luna (low) reviewer made
+   130 sequential reads in 16 rows, and 23 at medium effort; only an explicit
+   one-sentence note per step gave it 139 rows. A long tool-only run therefore
+   grows rows that the window and paging cannot split, against the row
+   invariant in `AGENTS.md`. Find a boundary app-server reports (a response or
+   step identity on items), or bound the calls one row may hold, and keep the
+   rollout reload splitting at the same place.
 
 ### Deferred until measured
 
-4. Frontend retained-history structure, only if browser profiling at an 8 MiB
+5. Frontend retained-history structure, only if browser profiling at an 8 MiB
    retained history shows material long tasks or input latency:
    - keep retained pages as immutable entries separate from the live window,
      and assemble display arrays only when membership, order or an entry
@@ -125,10 +136,10 @@ qualification that was never run.
      `nativeAgentProjectionStore.ts` and `useNativeAgentSession.ts`;
    - derive search and annotation indexes by revision.
    Add no worker until repeated work is gone and transfer cost is measured.
-5. Bridge-to-backend part deltas. Bridges still send whole lightweight summary
+6. Bridge-to-backend part deltas. Bridges still send whole lightweight summary
    snapshots on change; patches cover only the backend-to-client hop. Measure
    that hop's bytes and CPU before designing an incremental bridge protocol.
-6. Per-message provider revisions. `native-agent-projection-entries.ts` still
+7. Per-message provider revisions. `native-agent-projection-entries.ts` still
    walks each provider row once per changed read to compare it with its kept
    copy (read-only, no encoding). Removing the walk needs a trustworthy
    per-message revision from every bridge.
@@ -140,10 +151,11 @@ credentials and platforms CI lacks, batch with
 [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md).
 
 - A live Grok/ACP session through v2 summary, detail and page.
-- Live history paging, and the reviewer "Load earlier messages" control, on a
-  session longer than the 100-message live window.
-- A live multi-review run: progress probes, reviewer summary windows, detail
-  expansion and pages, including real-browser scroll anchoring.
+- Re-run the Claude native case of `transcript-paging-live.spec.ts` with the
+  held-place fixes. Claude's tool-only rows coalesce into tall per-minute
+  blocks, the case that first lost the place and then pinned the list to the
+  tail; the fixes were proved live on Codex and in unit tests, but every Claude
+  attempt after them hit the account's 429 rate limit.
 - Claude inactive-tab and background-task runs against content-revision tokens.
 - A Cursor run long enough to reach the producer trim thresholds while its
   environment is inactive; return and check the bounded window, sub-agent
@@ -155,10 +167,84 @@ credentials and platforms CI lacks, batch with
   only where the wrapper changes.
 - Browser long-task, input-latency and heap/RSS profiling at an 8 MiB
   retained history, including hidden and resumed documents. This is the gate
-  for item 4.
+  for item 5.
 - Activity-sweep p50/p95 for 1, 10 and 100 sessions against real bridges.
 - Re-measure display-tail cost and the maximum checkpoint age with workload
   `d` now that tails are SQLite rows.
+
+## Qualification results (2026-10-18)
+
+Live history paging past the 100-message window and a live Multi Review, run
+on `a5d338c1` plus this change on a loaded macOS arm64 host. Profile
+`qa-paging-c2fa` (`dev:test --fixture --credential-source claude
+--credential-source codex --agent-platforms claude,codex`), with toolchains
+seeded from the host: Claude 2.1.296 and Codex 0.162.1. Models: Claude Haiku
+(`claude-haiku-5-5`) and Codex GPT-6-Luna (low). The spec is
+`e2e/agent-testing/transcript-paging-live.spec.ts`; how to run it is in
+[agent-testing.md](../development/agent-testing.md#live-transcript-paging).
+Content-free measurements are the Playwright annotations in
+`output/agent-testing/qa-paging-c2fa*/browser/results.json`.
+
+To push a transcript past the window, each case lays a trail of files whose
+names chain to each other, so the agent must read them one per step. The stop
+each tool call read places every row, so the checks need no model prose.
+
+| Scenario | Result |
+| --- | --- |
+| Native Claude, 150 stops: backend window and paging | Pass (4 runs). 152 rows; the live window held 100 and reported `truncated`, `omittedMessages: 52` and `canLoadEarlier`. Following the cursor in 40-message pages took 2 chained pages (12 + 40) to the first prompt, with `complete: true`, one `historyEpoch`, no duplicate row ids and all 150 stops in order. |
+| Native Claude: browser **Load earlier messages** | Live tab: the rows that aged out of the window were already retained, so the click had nothing new to fetch and retired. After a reload it loaded stops 1 to 51 and the oldest row was the prompt, but the reader's row was pushed down 761 px (rows were short enough to keep it on screen) and later, with the first fix, the list jumped to the bottom. Both fixed below. The run with all fixes could not complete: from about 17:30 every Claude turn ended in a 429 rate-limit error (8 attempts to 19:38). |
+| Native Codex, 150 stops (`ORKESTRATOR_AGENT_TEST_PAGING_NATIVE_PLATFORM=codex`) | Pass with the fixes. 152 rows, pages 12 + 40, all stops in order. After a reload the click kept the reader's row on screen: it moved from index 0 to 103 and the list scrolled to 17,169 px instead of staying at the top. A loaded tool row expanded to its deferred output. |
+| Multi Review, end to end after the fixes (`ORKESTRATOR_AGENT_TEST_PAGING_FIRST_REVIEWER=codex`: two Codex reviewers, medium and low, while Claude was rate-limited) | Pass (9.2 min). Settled `ready` with no stall. The long reviewer had 138 rows: a 100-row tail and one 38-row page to its prompt, all 130 stops in order. In the reviewer tab, Load earlier messages moved the reader's row from index 0 to 74 and kept it on screen; the oldest row was the prompt and a loaded tool row expanded. |
+| Multi Review progress probes | Pass. No reviewer was ever reported stalled. Probes run once per 60 s interval (`DEFAULT_PROGRESS_PROBE_INTERVAL_MS`): a Codex reviewer running 219 to 221 s showed 3 or 4 distinct progress clocks; a Claude reviewer running 48 to 100 s showed 1 or 2 (a baseline, then one move); a Codex reviewer running 247 s showed 5. |
+| Multi Review reviewer window, pages and conditional read | Pass (Codex reviewer). 139 rows: a 100-row summary tail (`truncated`, no fallback), a repeated read with its source token answered `unchanged` with no messages, and one cursor page of 39 rows reached the prompt (`complete`, same epoch) with all 130 stops in order. |
+| Multi Review reviewer tab **Load earlier messages** | Pass. The reader's row went from index 5 to index 81 and stayed on screen, the oldest row after loading is the prompt, and a tool row from the loaded page expanded to its output. The run then failed on a spec selector for returning to the Multi Review tab (fixed; it is needed only when two reviewers are long). |
+| Multi Review detail expansion through the API | Not exercised. Every Codex tool body fitted the 4 KiB inline summary limit, so the paged history carried no `detailRef`; expansion was checked in the browser instead. |
+
+Fixed in this change:
+
+- **The native tab lost the reader's place on Load earlier messages.** The
+  list keeps its offset when rows are prepended, so a page pushed the reader's
+  row down by the page's height. The tab now holds the place the reviewer tab
+  already held. Both use `HeldTranscriptPlace`
+  (`apps/web/src/hooks/useHeldTranscriptPlace.ts`).
+- **Held places were lost when same-minute rows merged.** Display rows
+  coalesce consecutive tool-only rows from the same minute
+  (`coalesceAdjacentToolMessages`), and the block takes its first row's id. A
+  page ending in the same minute as the tail's first row merged into it and
+  renamed it, so an id-only anchor (the reviewer tab's, before) found nothing.
+  A held place now also matches the block's last source row.
+- **A jump to a row after a prepend could pin the reader to the tail.**
+  Virtuoso caches row sizes by index, so the first jump after a prepend uses
+  stale sizes and can clamp at the bottom; reaching the bottom re-engaged
+  stick-to-bottom, and growth pinning held the list there. While an explicit
+  `scrollToIndex` and its corrections run, reaching the bottom no longer
+  re-engages stick (`useVirtuosoScrollState.ts`).
+
+Findings that are not defects:
+
+- A Claude reviewer runs under `READ_ONLY_TURN_POLICY` with
+  `projectResources: false`, so it never loads `CLAUDE.md`. With the trail
+  protocol in an `AGENTS.md` that was part of the change, Haiku still reviewed
+  without walking it (0 stops in 3 runs). The long reviewer is the Codex one.
+- Codex infers its row boundary. Without a message between steps, GPT-6-Luna
+  made 130 sequential reads in 16 rows (low effort) and 23 rows (medium);
+  logged as Code item 4.
+
+Validation: `mise run check` passed; the new `useHeldTranscriptPlace` tests,
+the `useVirtuosoScrollState` guard test, and the native and reviewer tab
+suites passed. Full `mise run test` before and after merging `origin/main`
+failed only on flakes whose owning files pass alone:
+[0480](../tests/flaky-tests/0480-coordinator-fetch-remotes-submodule-timeout.md)
+(new), a [0180](../tests/flaky-tests/0180-worktree-tracked-edit-cache-hit.md)
+recurrence and [0481](../tests/flaky-tests/0481-pty-resize-before-stty.md)
+(new); web passed 7,963 with 0 failures.
+
+Not run here: the Multi Review case with a Claude reviewer completing after
+the fixes (the host's Claude account was rate-limited, 429, from about 17:30;
+the earlier Claude-and-Codex runs settled `ready` and passed every reviewer
+check except the reviewer-tab selector), a real-browser check of the Claude
+native case after the last fix (logged below), and other providers. The profile was stopped and
+reset afterwards.
 
 ## Constraints and rationale
 
@@ -217,7 +303,7 @@ credentials and platforms CI lacks, batch with
 
 ## Open questions
 
-- Do items 4, 5 and 6 justify their complexity once profiling exists?
+- Do items 5, 6 and 7 justify their complexity once profiling exists?
 
 ## Needs verification
 

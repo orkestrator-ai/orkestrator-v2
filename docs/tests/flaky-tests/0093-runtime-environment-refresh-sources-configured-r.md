@@ -38,3 +38,7 @@ did not hold.
 - **Owning-file rerun:** `mise run test:logged -- --name merge-rerun-runtime-env -- bun test --cwd bridges/codex-bridge ./src/runtime-env.test.ts --parallel=1 --only-failures` (exit 0).
 - **Evidence:** `orkestrator-test-run.LitzDV/bridges.log.gz`; root group had 3051 passed, 1 skipped and 4 failed, including the separate README installer-link regression; Codex group had 2227 passed and 4 failed.
 - **Assessment:** Confirmed recurrence; no implementation, assertion, skip or timeout changed.
+
+## Agent-mail main merge recurrence — 2026-10-19
+
+The aggregate failed this owner and its unchanged owning file passed with one worker. Exact commands, symptoms, counts, timings and bounded evidence are recorded in [0500](0500-agent-mail-main-merge-validation.md). No implementation, assertion, timeout or skip changed.

@@ -26,6 +26,7 @@ export default defineConfig({
     "slash-command-inactive.spec.ts",
     "mcp-apply-inactive.spec.ts",
     "multi-review-live.spec.ts",
+    "transcript-paging-live.spec.ts",
     "mcp-apply-live.spec.ts",
   ],
   fullyParallel: false,

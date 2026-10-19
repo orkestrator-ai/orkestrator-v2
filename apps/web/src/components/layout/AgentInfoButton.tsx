@@ -70,7 +70,7 @@ import {
   type AgentPlatform,
 } from "@orkestrator/protocol/agent-platforms";
 import { agentMailCapabilities } from "@orkestrator/protocol/agent-mail";
-import { openAgentMailForTab } from "@/components/agent-mail/AgentMailButton";
+import { openAgentMailForTab } from "@/components/agent-mail/agent-mail-ui";
 import { AgentInfoMcpSection } from "./AgentInfoMcpSection";
 
 interface AgentInfoButtonProps {
@@ -853,30 +853,10 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                     variant="outline"
                     onClick={() => {
                       close();
-                      openAgentMailForTab(
-                        activeSession.environmentId,
-                        activeTab.id,
-                        "compose",
-                        triggerRef.current,
-                      );
+                      openAgentMailForTab(activeSession.environmentId, activeTab.id);
                     }}
                   >
-                    Message this tab…
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => {
-                      close();
-                      openAgentMailForTab(
-                        activeSession.environmentId,
-                        activeTab.id,
-                        "settings",
-                        triggerRef.current,
-                      );
-                    }}
-                  >
-                    Inbox settings…
+                    Messages…
                   </Button>
                 </div>
               ) : null}

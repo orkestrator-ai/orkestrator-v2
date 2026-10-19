@@ -188,6 +188,8 @@ mise run package:linux    # Unpacked Linux app under XDG_DATA_HOME
 
 Published desktop releases and the in-app updater are described in [`docs/development/releasing.md`](docs/development/releasing.md). Container images are published to `ghcr.io/orkestrator-ai/orkestrator-v2`.
 
+`mise run release:desktop` creates and pushes the version tag that triggers container publishing; the tag must match the root `package.json` version.
+
 ### Standalone backend and hosted client
 
 Open [`orkestrator.dev`](https://www.orkestrator.dev) and select **Log in**, or connect directly at [`orkestrator.dev/connect`](https://www.orkestrator.dev/connect).

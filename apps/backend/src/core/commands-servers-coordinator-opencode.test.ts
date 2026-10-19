@@ -14,6 +14,8 @@ import {
 import { __testing as commandTesting } from "./commands-testing.js";
 import { CoordinatorService } from "./coordinator-service.js";
 import { runCommand } from "./shell.js";
+import { createOpenCodeProviderLogin } from "./opencode-provider-login.js";
+import { staleLoginLocalBridges } from "./agent-account-bridge-state.js";
 import { createProject, StorageService } from "./storage.js";
 
 /**
@@ -41,17 +43,37 @@ describe("Coordinator OpenCode server", () => {
     await runCommand("git", ["commit", "-m", "initial"], { cwd: checkout });
     await fs.mkdir(path.join(root, "managed-bin"));
     await fs.writeFile(path.join(root, "mode"), "ok\n");
+    await fs.writeFile(path.join(root, "login.json"), JSON.stringify({ key: "before" }));
     await fs.writeFile(
       path.join(root, "managed-bin", "opencode"),
       `#!${process.execPath}
 const fs = require("node:fs");
 const root = ${JSON.stringify(root)};
 const port = Number(process.argv[process.argv.indexOf("--port") + 1]);
+const login = JSON.parse(fs.readFileSync(root + "/login.json", "utf8"));
+let finishWork;
 Bun.serve({
   port,
   hostname: "127.0.0.1",
   async fetch(request) {
     const url = new URL(request.url);
+    if (url.pathname === "/auth/openai" && request.method === "PUT") {
+      fs.writeFileSync(root + "/login.json", JSON.stringify(await request.json()));
+      return Response.json(true);
+    }
+    if (url.pathname === "/auth/openai" && request.method === "DELETE") {
+      fs.writeFileSync(root + "/login.json", "{}");
+      return Response.json(true);
+    }
+    if (url.pathname === "/provider") return Response.json({ connected: ["openai"], all: [{ id: "openai", name: "OpenAI", source: "config", options: { timeout: 1000 } }] });
+    if (url.pathname === "/provider/auth") return Response.json({});
+    if (url.pathname === "/work") return Response.json({ pending: Boolean(finishWork) });
+    if (url.pathname === "/release") { finishWork?.(); finishWork = undefined; return Response.json(true); }
+    if (url.pathname === "/session/test/prompt" && request.method === "POST") {
+      const input = await request.json();
+      if (input.hold) await new Promise((resolve) => { finishWork = resolve; });
+      return Response.json({ credentialVersion: login.key });
+    }
     if (url.pathname === "/mcp" && request.method === "POST") {
       const body = await request.json();
       fs.appendFileSync(root + "/mcp-posts.jsonl", JSON.stringify({ url: body.config.url }) + "\\n");
@@ -79,6 +101,7 @@ process.on("SIGTERM", () => process.exit(0));
       cleanup = null;
     }
     commandTesting.resetLocalServerLifecycle();
+    staleLoginLocalBridges.clear();
     await fs.rm(root, { recursive: true, force: true });
   });
 
@@ -149,6 +172,81 @@ process.on("SIGTERM", () => process.exit(0));
     expect(new Set(urls)).toEqual(new Set([SCOPED_URL]));
     expect(tabConnection).not.toHaveBeenCalled();
   });
+
+  test("a credential save preserves active work and the next idle prompt uses the replacement server", async () => {
+    const { context, runtimeId } = await coordinatorContext();
+    let liveWork = true;
+    context.nativeAgents = {
+      hasObservedLiveWork: async () => liveWork,
+    } as unknown as CommandContext["nativeAgents"];
+    const original = await startLocalServerUnlocked(runtimeId, context, "opencode");
+    const prompt = async (port: number, hold = false) => {
+      const response = await fetch(`http://127.0.0.1:${port}/session/test/prompt`, {
+        method: "POST",
+        body: JSON.stringify({ hold }),
+      });
+      return response.json();
+    };
+    expect(await prompt(original.port)).toEqual({ credentialVersion: "before" });
+    const runningPrompt = prompt(original.port, true);
+    // Attach a handler immediately: a killed server must fail this test, never reject unhandled.
+    const outcome = runningPrompt.then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const work = (await fetch(`http://127.0.0.1:${original.port}/work`).then((response) =>
+        response.json(),
+      )) as { pending: boolean };
+      if (work.pending) break;
+      if (attempt === 99) throw new Error("The fixture prompt did not start");
+      await Bun.sleep(10);
+    }
+    // The production sign-in runner uses the hermetic fixture binary and its own private server.
+    await createOpenCodeProviderLogin().setApiKey(context, "openai", "after");
+    expect(staleLoginLocalBridges.has(`opencode:${runtimeId}`)).toBe(true);
+    const active = await startLocalServerUnlocked(runtimeId, context, "opencode");
+    expect(active.wasRunning).toBe(true);
+    expect(active.pid).toBe(original.pid);
+    expect(await prompt(active.port)).toEqual({ credentialVersion: "before" });
+    await fetch(`http://127.0.0.1:${original.port}/release`);
+    expect(await outcome).toEqual({ value: { credentialVersion: "before" } });
+    liveWork = false;
+    const idle = await startLocalServerUnlocked(runtimeId, context, "opencode");
+    expect(idle.wasRunning).toBe(false);
+    expect(idle.pid).not.toBe(original.pid);
+    expect(staleLoginLocalBridges.has(`opencode:${runtimeId}`)).toBe(false);
+    expect(await prompt(idle.port)).toEqual({ credentialVersion: "after" });
+  });
+
+  test.each(["api", "oauth"])(
+    "removes a configured provider's hidden %s login while keeping its configuration connection",
+    async (type) => {
+      const { context } = await coordinatorContext();
+      await fs.writeFile(
+        path.join(root, "login.json"),
+        JSON.stringify(
+          type === "api"
+            ? { type, key: "fixture-key" }
+            : { type, access: "fixture-access", refresh: "fixture-refresh" },
+        ),
+      );
+      const login = createOpenCodeProviderLogin();
+      expect((await login.listProviders(context)).providers[0]).toMatchObject({
+        id: "openai",
+        connected: true,
+        canRemoveStoredLogin: true,
+      });
+      await login.signOut(context, "openai");
+      expect(JSON.parse(await fs.readFile(path.join(root, "login.json"), "utf8"))).toEqual({});
+      expect((await login.listProviders(context)).providers[0]).toMatchObject({
+        id: "openai",
+        connected: true,
+        storedLogin: false,
+        canRemoveStoredLogin: true,
+      });
+    },
+  );
 
   test("reconciliation without a recorded launch connection never falls back to tab tools", async () => {
     const { context, runtimeId, tabConnection } = await coordinatorContext();

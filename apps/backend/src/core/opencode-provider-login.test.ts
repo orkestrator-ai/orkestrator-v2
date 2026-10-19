@@ -175,6 +175,43 @@ describe("normalizeOpenCodeProviderAuth", () => {
     expect(anthropic).toMatchObject({ connected: false, storedLogin: false });
   });
 
+  test("accepts object-shaped connected entries and rejects invalid ids", () => {
+    const snapshot = normalizeOpenCodeProviderAuth(
+      {
+        connected: [{ id: " openai " }, " opencode-go ", { id: "../escape" }, { id: " " }],
+        all: providerList.all,
+      },
+      authMethods,
+      [],
+    );
+    expect(snapshot.providers.find((provider) => provider.id === "openai")).toMatchObject({
+      connected: true,
+      storedLogin: true,
+    });
+    expect(snapshot.providers.find((provider) => provider.id === "opencode-go")).toMatchObject({
+      connected: true,
+      storedLogin: true,
+    });
+  });
+
+  test("allows explicit removal when configuration masks stored API or OAuth credentials", () => {
+    for (const auth of [
+      { type: "api", key: SECRET_KEY },
+      { type: "oauth", access: SECRET_KEY },
+    ]) {
+      const snapshot = normalizeOpenCodeProviderAuth(
+        {
+          connected: ["openai"],
+          all: [{ id: "openai", source: "config", options: { timeout: 1000 }, auth }],
+        },
+        authMethods,
+        [],
+      );
+      expect(snapshot.providers[0]).toMatchObject({ connected: true, canRemoveStoredLogin: true });
+      expectNoCanary(snapshot, "configured provider");
+    }
+  });
+
   test("keeps OpenCode's sign-in prompts, including conditional ones", () => {
     const snapshot = normalizeOpenCodeProviderAuth(
       { connected: [], all: [{ id: "github-copilot", name: "GitHub Copilot" }] },
@@ -257,6 +294,115 @@ describe("OpenCode provider login", () => {
     expect(onLoginChanged).toHaveBeenCalledTimes(1);
   });
 
+  test.each(["save", "remove", "oauth"] as const)(
+    "a pending save excludes %s across login instances through server shutdown",
+    async (other) => {
+      const write = deferred<void>();
+      const stop = deferred<void>();
+      const store = new Map([["openai", "old"]]);
+      const first = harness({
+        createClient: (() => ({
+          auth: {
+            set: async () => {
+              const updated = new Map(store);
+              await write.promise;
+              updated.set("opencode-go", "new");
+              store.clear();
+              for (const [id, value] of updated) store.set(id, value);
+              return { data: true };
+            },
+          },
+        })) as unknown as typeof createOpencodeClient,
+        withServer: async (_context, use) => {
+          try {
+            return await use({ baseUrl: "http://127.0.0.1:1", directory: "/probe", headers: {} });
+          } finally {
+            await stop.promise;
+          }
+        },
+      });
+      const second = harness({
+        createClient: (() => ({
+          auth: {
+            set: async () => {
+              store.set("anthropic", "second");
+              return { data: true };
+            },
+            remove: async () => {
+              store.delete("openai");
+              return { data: true };
+            },
+          },
+        })) as unknown as typeof createOpencodeClient,
+      });
+      const saving = first.login.setApiKey(context, "opencode-go", "new");
+      const attempt = async () => {
+        if (other === "save") await second.login.setApiKey(context, "anthropic", "second");
+        else if (other === "remove") await second.login.signOut(context, "openai");
+        else second.login.startOAuth(context, { providerId: "openai", method: 0 });
+      };
+      await expect(attempt()).rejects.toThrow("Another OpenCode sign-in");
+      write.resolve();
+      await Promise.resolve();
+      await expect(attempt()).rejects.toThrow("Another OpenCode sign-in");
+      expect(second.servers).toEqual([]);
+      stop.resolve();
+      await saving;
+      if (other === "oauth") {
+        const oauth = harness();
+        oauth.login.startOAuth(context, { providerId: "openai", method: 0 });
+        await until(() => openCodeProviderLoginProgress().state === "succeeded");
+      } else await attempt();
+      expect(store.get("opencode-go")).toBe("new");
+      expect(store.get("openai")).toBe(other === "remove" ? undefined : "old");
+      if (other === "save") expect(store.get("anthropic")).toBe("second");
+    },
+  );
+
+  test("removal reserves the slot, including failed server shutdown", async () => {
+    const stop = deferred<void>();
+    const { login } = harness({
+      withServer: async () => {
+        await stop.promise;
+        throw new Error("server failed");
+      },
+    });
+    const removal = login.signOut(context, "openai").catch((error: unknown) => error);
+    await expect(harness().login.setApiKey(context, "openai", "new")).rejects.toThrow(
+      "Another OpenCode sign-in",
+    );
+    stop.resolve();
+    expect(await removal).toMatchObject({ message: "server failed" });
+    await harness().login.setApiKey(context, "openai", "new");
+  });
+
+  test("cancellation holds admission until the OAuth server has stopped", async () => {
+    const stop = deferred<void>();
+    const { login } = harness({
+      callback: (_input, signal) =>
+        new Promise((_resolve, reject) =>
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true }),
+        ),
+      withServer: async (_context, use) => {
+        try {
+          return await use({ baseUrl: "http://127.0.0.1:1", directory: "/probe", headers: {} });
+        } finally {
+          await stop.promise;
+        }
+      },
+    });
+    login.startOAuth(context, { providerId: "openai", method: 0 });
+    await until(() => Boolean(openCodeProviderLoginProgress().url));
+    login.cancel();
+    await expect(login.signOut(context, "openai")).rejects.toThrow("Another OpenCode sign-in");
+    expect(() => login.startOAuth(context, { providerId: "openai", method: 0 })).toThrow(
+      "Another OpenCode sign-in",
+    );
+    stop.resolve();
+    await until(() => openCodeProviderLoginProgress().state === "idle");
+    await harness().login.signOut(context, "openai");
+  });
+
   test("runs an automatic OAuth sign-in to completion", async () => {
     const approved = deferred<unknown>();
     const { login, calls, servers, onLoginChanged } = harness({
@@ -310,7 +456,7 @@ describe("OpenCode provider login", () => {
     login.startOAuth(context, { providerId: "poe", method: 0, inputs: { region: "eu" } });
     await until(() => openCodeProviderLoginProgress().needsCode === true);
     expect(() => login.submitCode("   ")).toThrow("Enter the sign-in code");
-    login.submitCode(` ${AUTH_SECRET_CANARIES.oauthCode} `);
+    expect(login.submitCode(` ${AUTH_SECRET_CANARIES.oauthCode} `).codeSubmitted).toBe(true);
     await until(() => openCodeProviderLoginProgress().state === "succeeded");
     expect(calls).toEqual([
       { route: "authorize", input: { providerID: "poe", method: 0, inputs: { region: "eu" } } },
@@ -332,7 +478,7 @@ describe("OpenCode provider login", () => {
     const { operationId } = login.startOAuth(context, { providerId: "openai", method: 0 });
     await until(() => openCodeProviderLoginProgress().url !== undefined);
     expect(login.cancel("another-operation").state).toBe("pending");
-    expect(login.cancel(operationId)).toEqual({ state: "idle" });
+    expect(login.cancel(operationId).state).toBe("pending");
     await until(() => servers.length === 2);
     expect(openCodeProviderLoginProgress()).toEqual({ state: "idle" });
     expect(onLoginChanged).not.toHaveBeenCalled();

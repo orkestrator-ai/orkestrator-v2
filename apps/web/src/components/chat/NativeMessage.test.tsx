@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { useEffect, useState } from "react";
 import { cleanup, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import {
@@ -23,6 +23,7 @@ import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore
 import { buildDesignAgentPrompt } from "@/components/design/design-launch";
 import { mockWriteText } from "../../../../../tests/mocks/clipboard";
 import { invoke } from "@/lib/native/backend";
+import * as nativeBackend from "@/lib/native/backend";
 import {
   mockToastError as toastErrorMock,
   mockToastSuccess as toastSuccessMock,
@@ -6980,5 +6981,78 @@ describe("NativeMessage shell command changes", () => {
       <NativeMessage message={makeMessage([command({ additions: 0, deletions: 0, files: [] })])} />,
     );
     expect(screen.queryByTestId("command-change-stats") === null).toBe(true);
+  });
+});
+
+describe("OpenCode error-row authentication recovery", () => {
+  afterEach(cleanup);
+
+  test.each([undefined, "container-1"])(
+    "passes container %s through the recovery form",
+    async (containerId) => {
+      const invokeSpy = spyOn(nativeBackend, "invoke").mockImplementation((async (
+        command: string,
+      ) => {
+        if (command === "list_opencode_provider_auth") return { providers: [] };
+        if (command === "get_opencode_provider_login") return { state: "idle" };
+        return undefined;
+      }) as typeof nativeBackend.invoke);
+      try {
+        const content = "Model request failed (HTTP 401): Invalid API key";
+        render(
+          <NativeMessage
+            platform="opencode"
+            containerId={containerId}
+            message={makeMessage([], {
+              id: `${ERROR_MESSAGE_PREFIX}openai-failure`,
+              content,
+              modelId: "openai/gpt-test",
+            })}
+          />,
+        );
+        fireEvent.click(screen.getByRole("button", { name: "Sign in to openai again" }));
+        fireEvent.change(await screen.findByLabelText("openai API key"), {
+          target: { value: "replacement" },
+        });
+        fireEvent.click(screen.getByRole("button", { name: "Save key" }));
+        expect(
+          await screen.findByText(
+            containerId ? /restart it before resending/ : /Resend your message to continue/,
+          ),
+        ).toBeTruthy();
+      } finally {
+        invokeSpy.mockRestore();
+      }
+    },
+  );
+
+  test.each([
+    {
+      platform: "claude" as const,
+      id: `${ERROR_MESSAGE_PREFIX}other-platform`,
+      content: "Model request failed (HTTP 401): Invalid API key",
+    },
+    {
+      platform: "opencode" as const,
+      id: `${ERROR_MESSAGE_PREFIX}rate-limit`,
+      content: "Model request failed (HTTP 429): API key rate limit",
+    },
+    {
+      platform: "opencode" as const,
+      id: "assistant-prose",
+      content: "Model request failed (HTTP 401): Invalid API key",
+    },
+  ])("does not offer recovery for $id", ({ platform, id, content }) => {
+    render(
+      <NativeMessage
+        platform={platform}
+        message={makeMessage([{ type: "text", content }], {
+          id,
+          content,
+          modelId: "openai/gpt-test",
+        })}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Sign in to openai again" }) === null).toBe(true);
   });
 });

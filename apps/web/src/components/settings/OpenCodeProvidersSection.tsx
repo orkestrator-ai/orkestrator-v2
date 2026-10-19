@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertCircle, Check, Loader2, LogOut, PlugZap, RefreshCw, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useOpenCodeProviderLogin } from "@/hooks/useOpenCodeProviderLogin";
 import { OpenCodeProviderSignIn } from "@/components/opencode/OpenCodeProviderSignIn";
 import { listOpenCodeProviderAuth, removeOpenCodeProviderLogin } from "@/lib/backend";
 import type {
@@ -71,7 +72,9 @@ function ProviderRow({
         <div className="flex items-center gap-1.5">
           {confirmingSignOut ? (
             <>
-              <span className="text-xs text-muted-foreground">Remove this login?</span>
+              <span className="text-xs text-muted-foreground">
+                {provider.canRemoveStoredLogin ? "Remove any stored login?" : "Remove this login?"}
+              </span>
               <Button
                 type="button"
                 size="sm"
@@ -82,7 +85,7 @@ function ProviderRow({
                   onSignOut();
                 }}
               >
-                Sign out
+                {provider.canRemoveStoredLogin ? "Remove stored login" : "Sign out"}
               </Button>
               <Button
                 type="button"
@@ -105,13 +108,17 @@ function ProviderRow({
               >
                 {provider.connected ? "Sign in again" : "Sign in"}
               </Button>
-              {provider.storedLogin ? (
+              {provider.storedLogin || provider.canRemoveStoredLogin ? (
                 <Button
                   type="button"
                   size="sm"
                   variant="ghost"
                   className="text-muted-foreground"
-                  aria-label={`Sign out of ${provider.label}`}
+                  aria-label={
+                    provider.canRemoveStoredLogin
+                      ? `Remove stored login for ${provider.label}`
+                      : `Sign out of ${provider.label}`
+                  }
                   disabled={busy}
                   onClick={() => setConfirmingSignOut(true)}
                 >
@@ -164,12 +171,20 @@ export function OpenCodeProvidersSection() {
     void read();
   }, [read]);
 
+  const login = useOpenCodeProviderLogin(undefined, () => void load());
+  const pendingProviderId =
+    login.progress.state === "pending" ? login.progress.providerId : undefined;
+
   const listed = useMemo(
     () =>
       (snapshot?.providers ?? []).filter(
-        (provider) => provider.connected || provider.allowed || provider.id === expanded,
+        (provider) =>
+          provider.connected ||
+          provider.allowed ||
+          provider.id === expanded ||
+          provider.id === pendingProviderId,
       ),
-    [snapshot, expanded],
+    [snapshot, expanded, pendingProviderId],
   );
   const matches = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -199,7 +214,11 @@ export function OpenCodeProvidersSection() {
     setNotice(null);
     try {
       await removeOpenCodeProviderLogin(provider.id);
-      setNotice(`Signed out of ${provider.label}.`);
+      setNotice(
+        provider.canRemoveStoredLogin
+          ? `Removed any stored login for ${provider.label}. Environment or configuration credentials may keep it connected.`
+          : `Signed out of ${provider.label}.`,
+      );
       await load();
     } catch (cause) {
       setError(messageOf(cause));
@@ -240,6 +259,18 @@ export function OpenCodeProvidersSection() {
         </Button>
       </div>
 
+      {pendingProviderId ? (
+        <div
+          role="status"
+          className="space-y-2 rounded-md border border-border/60 bg-muted/30 p-3 text-xs"
+        >
+          <p>Sign-in to {login.progress.providerLabel ?? pendingProviderId} is in progress.</p>
+          <Button type="button" size="sm" variant="ghost" onClick={() => void login.cancel()}>
+            Cancel sign-in to {login.progress.providerLabel ?? pendingProviderId}
+          </Button>
+        </div>
+      ) : null}
+      {login.error ? <p className="text-xs text-destructive">{login.error}</p> : null}
       {notice ? (
         <p role="status" className="flex items-center gap-2 text-xs text-emerald-400">
           <Check className="h-3.5 w-3.5" />
@@ -268,8 +299,8 @@ export function OpenCodeProvidersSection() {
                 <ProviderRow
                   key={provider.id}
                   provider={provider}
-                  expanded={expanded === provider.id}
-                  busy={busy}
+                  expanded={expanded === provider.id || pendingProviderId === provider.id}
+                  busy={busy || Boolean(pendingProviderId)}
                   onToggle={() => toggle(provider)}
                   onSignedIn={() => signedIn(provider)}
                   onSignOut={() => void signOut(provider)}
@@ -300,6 +331,7 @@ export function OpenCodeProvidersSection() {
                     <button
                       type="button"
                       className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-xs hover:bg-muted/50"
+                      disabled={Boolean(pendingProviderId)}
                       onClick={() => {
                         setQuery("");
                         setNotice(null);

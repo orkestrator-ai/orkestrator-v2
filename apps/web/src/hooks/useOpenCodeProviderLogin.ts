@@ -3,6 +3,7 @@ import {
   cancelOpenCodeProviderLogin,
   getOpenCodeProviderLogin,
   startOpenCodeProviderLogin,
+  submitOpenCodeProviderLoginCode,
 } from "@/lib/backend";
 import type { OpenCodeProviderLoginProgress } from "@orkestrator/protocol/opencode-provider-auth";
 
@@ -13,19 +14,16 @@ function messageOf(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
-/**
- * One provider's OAuth sign-in, as the backend runs it. The sign-in outlives
- * the component, so a remount picks a running one back up; a sign-in for
- * another provider reads as idle here.
- */
-export function useOpenCodeProviderLogin(providerId: string, onSucceeded?: () => void) {
-  const [progress, setProgress] = useState<OpenCodeProviderLoginProgress>(IDLE);
+/** Observe the backend-owned operation, including another provider's pending login.
+ * Without a provider id, watch all operations for the Settings section. */
+export function useOpenCodeProviderLogin(providerId?: string, onSucceeded?: () => void) {
+  const [observed, setObserved] = useState<OpenCodeProviderLoginProgress>(IDLE);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const current = useRef(IDLE);
   const epoch = useRef(0);
   const onSucceededRef = useRef(onSucceeded);
-  const pending = progress.state === "pending";
+  const pending = observed.state === "pending";
 
   useEffect(() => {
     onSucceededRef.current = onSucceeded;
@@ -33,27 +31,34 @@ export function useOpenCodeProviderLogin(providerId: string, onSucceeded?: () =>
 
   const adopt = useCallback(
     (next: OpenCodeProviderLoginProgress) => {
-      if (next.providerId !== providerId) next = IDLE;
       const previous = current.current;
-      current.current = next;
-      setProgress(next);
-      setError(next.state === "failed" ? (next.error ?? "The sign-in did not complete") : null);
+      // A read captured before code submission may arrive after its response.
       if (
-        next.state === "succeeded" &&
-        previous.state === "pending" &&
-        previous.operationId === next.operationId
+        previous.operationId === next.operationId &&
+        previous.codeSubmitted &&
+        next.state === "pending"
       ) {
-        onSucceededRef.current?.();
+        next = { ...next, codeSubmitted: true };
       }
+      current.current = next;
+      setObserved(next);
+      const matches = !providerId || next.providerId === providerId;
+      setError(
+        matches && next.state === "failed" ? (next.error ?? "The sign-in did not complete") : null,
+      );
+      if (
+        matches &&
+        next.state === "succeeded" &&
+        ((previous.state === "pending" && previous.operationId === next.operationId) ||
+          (!providerId && previous.operationId !== next.operationId))
+      )
+        onSucceededRef.current?.();
     },
     [providerId],
   );
 
   useEffect(() => {
     const version = ++epoch.current;
-    // Only a sign-in still running is resumed; a finished one belongs to
-    // whichever view started it. Each view is mounted for one provider, so
-    // there is no earlier provider's state to clear first.
     void getOpenCodeProviderLogin()
       .then((existing) => {
         if (epoch.current === version && existing.state === "pending") adopt(existing);
@@ -65,33 +70,30 @@ export function useOpenCodeProviderLogin(providerId: string, onSucceeded?: () =>
   }, [adopt]);
 
   useEffect(() => {
-    if (!pending) return;
+    if (!pending && providerId) return;
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
-    const version = epoch.current;
     const poll = async () => {
+      const version = epoch.current;
       try {
         const next = await getOpenCodeProviderLogin();
         if (active && epoch.current === version) adopt(next);
       } catch {
-        /* Retry transient read failures while pending. */
+        /* Retry transient read failures while observing backend state. */
       }
-      if (active && epoch.current === version && current.current.state === "pending") {
-        timer = setTimeout(() => void poll(), POLL_INTERVAL_MS);
-      }
+      if (active) timer = setTimeout(() => void poll(), POLL_INTERVAL_MS);
     };
     timer = setTimeout(() => void poll(), POLL_INTERVAL_MS);
     return () => {
       active = false;
       clearTimeout(timer);
     };
-  }, [pending, adopt]);
+  }, [pending, providerId, adopt]);
 
   const start = useCallback(
     async (input: { providerLabel?: string; method: number; inputs?: Record<string, string> }) => {
+      if (!providerId || starting || current.current.state === "pending") return;
       const version = ++epoch.current;
-      current.current = IDLE;
-      setProgress(IDLE);
       setError(null);
       setStarting(true);
       try {
@@ -103,15 +105,13 @@ export function useOpenCodeProviderLogin(providerId: string, onSucceeded?: () =>
         if (epoch.current === version) setStarting(false);
       }
     },
-    [adopt, providerId],
+    [adopt, providerId, starting],
   );
 
   const cancel = useCallback(async () => {
     const operationId = current.current.operationId;
-    if (!operationId) return;
+    if (!operationId || current.current.state !== "pending") return;
     const version = ++epoch.current;
-    current.current = IDLE;
-    setProgress(IDLE);
     setError(null);
     try {
       const next = await cancelOpenCodeProviderLogin(operationId);
@@ -121,5 +121,24 @@ export function useOpenCodeProviderLogin(providerId: string, onSucceeded?: () =>
     }
   }, [adopt]);
 
-  return { progress, error, starting, start, cancel, reportError: setError };
+  const submitCode = useCallback(
+    async (code: string) => {
+      const version = ++epoch.current;
+      const next = await submitOpenCodeProviderLoginCode(code);
+      if (epoch.current === version) adopt(next);
+    },
+    [adopt],
+  );
+
+  const matches = !providerId || observed.providerId === providerId;
+  return {
+    progress: matches ? observed : IDLE,
+    otherPending: !matches && pending ? observed : undefined,
+    error,
+    starting,
+    start,
+    cancel,
+    submitCode,
+    reportError: setError,
+  };
 }

@@ -203,8 +203,8 @@ export function normalizeOpenCodeProviderAuth(
   const methods = asRecord(authMethods) ?? {};
   const connected = new Set(
     (Array.isArray(list?.connected) ? list.connected : []).flatMap((candidate) => {
-      const id = nonEmptyString(candidate)?.trim();
-      return id ? [id] : [];
+      const id = (nonEmptyString(candidate) ?? nonEmptyString(asRecord(candidate)?.id))?.trim();
+      return id && PROVIDER_ID_PATTERN.test(id) ? [id] : [];
     }),
   );
   const seen = new Set<string>();
@@ -220,9 +220,11 @@ export function normalizeOpenCodeProviderAuth(
           id,
           label: bounded(provider?.name, MAX_LABEL_LENGTH) ?? id,
           connected: isConnected,
-          // `api` is a key in OpenCode's store and `custom` a plugin's OAuth
-          // login there; `env` and `config` come from outside it.
+          // Configuration takes precedence over stored-login source labels.
+          // The public API has no credential-presence read, so configured
+          // providers also offer an explicit remove-stored-login action.
           storedLogin: isConnected && (provider?.source === "api" || provider?.source === "custom"),
+          ...(provider?.source === "config" ? { canRemoveStoredLogin: true } : {}),
           allowed:
             allowedProviders.length > 0 && isSelectableOpenCodeProvider(id, allowedProviders),
           methods: normalizeMethods(methods[id]),
@@ -261,9 +263,11 @@ interface LoginOperation {
   progress: OpenCodeProviderLoginProgress;
   controller: AbortController;
   submitCode?: (code: string) => void;
+  cancelled?: boolean;
 }
 
 let current: LoginOperation | undefined;
+let mutation: symbol | undefined;
 let listFlight: Promise<OpenCodeProviderAuthSnapshot> | undefined;
 
 function snapshotProgress(): OpenCodeProviderLoginProgress {
@@ -274,10 +278,17 @@ export function openCodeProviderLoginProgress(): OpenCodeProviderLoginProgress {
   return snapshotProgress();
 }
 
-function assertNoLoginRunning(): void {
-  if (current?.progress.state === "pending") {
-    throw new Error("Another OpenCode sign-in is in progress. Finish or cancel it first.");
+function reserveMutation(): () => void {
+  if (mutation) {
+    throw new Error(
+      "Another OpenCode sign-in is in progress or a login change is finishing. Finish or cancel it first.",
+    );
   }
+  const reservation = Symbol();
+  mutation = reservation;
+  return () => {
+    if (mutation === reservation) mutation = undefined;
+  };
 }
 
 export function createOpenCodeProviderLogin(
@@ -319,31 +330,39 @@ export function createOpenCodeProviderLogin(
     if (!trimmed) throw new Error("Enter an API key");
     if (trimmed.length > MAX_OPENCODE_API_KEY_LENGTH) throw new Error("The API key is too long");
     const inputs = validateInputs(metadata);
-    assertNoLoginRunning();
-    await dependencies.withServer(context, async (server) => {
-      const response = await signInClient(dependencies, server).auth.set(
-        {
-          providerID: id,
-          auth: { type: "api", key: trimmed, ...(inputs ? { metadata: inputs } : {}) },
-        },
-        { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) },
-      );
-      assertResponse(response, "Saving the API key");
-    });
-    dependencies.onLoginChanged();
+    const release = reserveMutation();
+    try {
+      await dependencies.withServer(context, async (server) => {
+        const response = await signInClient(dependencies, server).auth.set(
+          {
+            providerID: id,
+            auth: { type: "api", key: trimmed, ...(inputs ? { metadata: inputs } : {}) },
+          },
+          { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) },
+        );
+        assertResponse(response, "Saving the API key");
+      });
+      dependencies.onLoginChanged();
+    } finally {
+      release();
+    }
   }
 
   async function signOut(context: CommandContext, providerId: string): Promise<void> {
     const id = assertOpenCodeProviderId(providerId);
-    assertNoLoginRunning();
-    await dependencies.withServer(context, async (server) => {
-      const response = await signInClient(dependencies, server).auth.remove(
-        { providerID: id },
-        { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) },
-      );
-      assertResponse(response, "Signing out");
-    });
-    dependencies.onLoginChanged();
+    const release = reserveMutation();
+    try {
+      await dependencies.withServer(context, async (server) => {
+        const response = await signInClient(dependencies, server).auth.remove(
+          { providerID: id },
+          { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) },
+        );
+        assertResponse(response, "Signing out");
+      });
+      dependencies.onLoginChanged();
+    } finally {
+      release();
+    }
   }
 
   /**
@@ -369,7 +388,7 @@ export function createOpenCodeProviderLogin(
       throw new Error("Invalid sign-in method");
     }
     const inputs = validateInputs(input.inputs);
-    assertNoLoginRunning();
+    const release = reserveMutation();
     const controller = new AbortController();
     const operation: LoginOperation = {
       controller,
@@ -389,7 +408,12 @@ export function createOpenCodeProviderLogin(
 
     const finish = (update: Partial<OpenCodeProviderLoginProgress>) => {
       clearTimeout(deadline);
+      release();
       if (current !== operation || operation.progress.state !== "pending") return;
+      if (operation.cancelled) {
+        current = undefined;
+        return;
+      }
       const {
         url: _url,
         userCode: _code,
@@ -468,6 +492,7 @@ export function createOpenCodeProviderLogin(
     }
     const submit = current.submitCode;
     current.submitCode = undefined;
+    current.progress = { ...current.progress, codeSubmitted: true };
     submit(trimmed);
     return snapshotProgress();
   }
@@ -477,11 +502,10 @@ export function createOpenCodeProviderLogin(
       current?.progress.state === "pending" &&
       (!operationId || current.progress.operationId === operationId)
     ) {
-      // Idle at once: the private server is stopped in the background, and a
-      // new sign-in starts its own.
-      const cancelled = current;
-      current = undefined;
-      cancelled.controller.abort(new Error("Sign-in cancelled."));
+      // Keep the reservation and pending snapshot until the server stops.
+      current.cancelled = true;
+      current.submitCode = undefined;
+      current.controller.abort(new Error("Sign-in cancelled."));
     }
     return snapshotProgress();
   }
@@ -495,6 +519,7 @@ export const __testing = {
   reset(): void {
     current?.controller.abort(new Error("reset"));
     current = undefined;
+    mutation = undefined;
     listFlight = undefined;
   },
 };

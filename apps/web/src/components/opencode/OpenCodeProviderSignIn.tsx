@@ -11,12 +11,9 @@ import { Check, Copy, ExternalLink, KeyRound, Loader2, LogIn } from "lucide-reac
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useOpenCodeProviderLogin } from "@/hooks/useOpenCodeProviderLogin";
+import { isRemoteGatewayConnection } from "@/lib/gateway-url";
 import { writeText } from "@/lib/native/clipboard";
-import {
-  openInBrowser,
-  setOpenCodeProviderApiKey,
-  submitOpenCodeProviderLoginCode,
-} from "@/lib/backend";
+import { openInBrowser, setOpenCodeProviderApiKey } from "@/lib/backend";
 import type {
   OpenCodeProviderAuthEntry,
   OpenCodeProviderAuthMethod,
@@ -87,7 +84,18 @@ export function OpenCodeProviderSignIn({
   onSignedIn: () => void;
   onCancel?: () => void;
 }) {
-  const [methodIndex, setMethodIndex] = useState(provider.methods[0]?.index ?? 0);
+  const remote = isRemoteGatewayConnection();
+  const [methodIndex, setMethodIndex] = useState(
+    () =>
+      (remote
+        ? provider.methods.find(
+            (method) => method.type === "oauth" && /headless|device|code/i.test(method.label),
+          )
+        : undefined
+      )?.index ??
+      provider.methods[0]?.index ??
+      0,
+  );
   const [values, setValues] = useState<Record<string, string>>({});
   const [apiKey, setApiKey] = useState("");
   const [saving, setSaving] = useState(false);
@@ -146,7 +154,7 @@ export function OpenCodeProviderSignIn({
   const submitCode = async () => {
     setSubmittingCode(true);
     try {
-      await submitOpenCodeProviderLoginCode(code);
+      await login.submitCode(code);
       setCode("");
     } catch (cause) {
       login.reportError(messageOf(cause));
@@ -154,6 +162,21 @@ export function OpenCodeProviderSignIn({
       setSubmittingCode(false);
     }
   };
+
+  if (login.otherPending) {
+    return (
+      <div className="space-y-2 text-xs text-muted-foreground">
+        <p>
+          Sign-in to {login.otherPending.providerLabel ?? login.otherPending.providerId} is in
+          progress.
+        </p>
+        <Button type="button" size="sm" variant="ghost" onClick={() => void login.cancel()}>
+          Cancel sign-in
+        </Button>
+        {error ? <p className="text-destructive">{error}</p> : null}
+      </div>
+    );
+  }
 
   if (!method) {
     return (
@@ -289,6 +312,13 @@ export function OpenCodeProviderSignIn({
             </Button>
           ))}
         </div>
+      ) : null}
+
+      {remote && method.type === "oauth" ? (
+        <p className="text-xs text-muted-foreground">
+          Browser loopback sign-in must be completed on the backend machine. For a remote
+          connection, use a headless or device-code method when available.
+        </p>
       ) : null}
 
       {prompts.map((prompt) => (

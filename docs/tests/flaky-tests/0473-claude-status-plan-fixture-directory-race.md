@@ -19,3 +19,26 @@ The warm aggregate exited 1 in 307.7 seconds; workspace, root/support and protoc
 `mise run test:logged -- --name merge3-final-tests -- mise run test`, merging `origin/main` at `a2b36d1d` into `84e228d7`, repeated the same EISDIR fixture setup failure (1.26 ms). The bridge implementation and owning file were unchanged by this follow-up. `mise run test:logged -- --name merge3-claude-system-owner -- bun test --cwd bridges/claude-bridge --preload ../../tests/setup-node.ts ./src/services/session-manager-system-events.test.ts --parallel=1 --only-failures` passed unchanged. Evidence: `orkestrator-test-run.QGIBq2/bridges.log.gz` below the host temporary directory. No implementation, assertion, timeout or skip changed.
 
 The follow-up aggregate completed in 297.4 seconds (exit 1). Workspace, root/support and protocol groups passed; this fixture was its sole failure. The unchanged owner rerun passed in 0.2 seconds. Formatting, lint, typechecking, the production build, Markdown round-trip tests and the final index contract also passed.
+
+## OpenCode provider sign-in review observation — 2026-10-19
+
+`mise run test:logged -- --name full-suite -- mise run test` repeated the
+EISDIR fixture setup failure at line 270 (14.20 ms), with 4/1/2/1 reserved
+workspace/root/bridge/protocol slots. Claude reported 1575 passed, five skipped
+and one failed. Evidence: `orkestrator-test-run.ImZy3W/bridges.log.gz` below
+the host temporary directory.
+
+The unchanged owning file passed without the Node preload under
+`mise run test:logged -- --name claude-system-events-isolated -- bun test --cwd bridges/claude-bridge ./src/services/session-manager-system-events.test.ts --parallel=1 --only-failures`
+(exit 0, 0.1 seconds). That invocation did not match the aggregate preload.
+The matching rerun,
+`mise run test:logged -- --name claude-system-events-node-isolated -- bun test --cwd bridges/claude-bridge --preload ../../tests/setup-node.ts ./src/services/session-manager-system-events.test.ts --parallel=1 --only-failures`,
+also failed with EISDIR (41 passed, one failed, 0.1 seconds). Evidence:
+`orkestrator-test-run.ZLIgt6/claude-system-events-node-isolated.log.gz`.
+This occurrence therefore does not independently establish a flake. No Claude
+implementation, fixture, assertion, timeout or skip changed.
+
+The final `full-suite-final` aggregate with the explicit GNU-tool/Python PATH
+passed every group (391.5 seconds logged), including the unchanged Claude
+fixture in the bridge group (80.0 seconds). This successful warm execution
+does not resolve the fixture race.

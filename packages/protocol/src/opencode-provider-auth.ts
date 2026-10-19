@@ -41,10 +41,11 @@ export interface OpenCodeProviderAuthEntry {
   connected: boolean;
   /**
    * The login is in OpenCode's own store, so it can be replaced or signed out
-   * here. A provider connected by an environment variable or configuration is
-   * not.
+   * here. Configuration can obscure this indicator; see canRemoveStoredLogin.
    */
   storedLogin: boolean;
+  /** Source precedence hides credential presence; allow explicit removal without claiming a stored login exists. */
+  canRemoveStoredLogin?: boolean;
   /** Listed in Settings → OpenCode → Model Providers. */
   allowed: boolean;
   methods: OpenCodeProviderAuthMethod[];

@@ -73,3 +73,52 @@ Formatting, lint, typechecking, all-package build validation, frozen dependency 
 ## Isolated real-stack browser result
 
 With the GNU-tool PATH prefix, `mise run test:logged -- --name merge-isolated-browser -- mise run test:agent:browser:isolated` passed (483.1 seconds logged). Disposable profile `qa-browser-e6f68738-fb9` reported 29 passed and 35 skipped, with no failures or flaky retries. This includes agent-mail inactive-recipient rehydration, reload, local environment and design persistence paths. The runner completed its stop/reset lifecycle successfully; no disposable profile was deliberately retained. Results: `output/agent-testing/qa-browser-e6f68738-fb9/browser/results.json`.
+
+## OpenCode provider sign-in review validation — 2026-10-19
+
+`mise run test:logged -- --name browser -- mise run test:browser` ran the
+component browser suite with nine workers: 358 passed, 80 skipped and two
+failed (186.1 seconds logged). Both failures were the already unresolved
+native branch suggestion selection in `e2e/AgentLaunchDialog.spec.ts:7`:
+`rel` remained in the field at both viewport sizes. Evidence:
+`orkestrator-test-run.LkxPMr/browser.log.gz` below the host temporary directory.
+
+`ORKESTRATOR_E2E_PORT=1438 mise run test:logged -- --name native-branch-isolated -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentLaunchDialog.spec.ts --workers=1`
+repeated both failures in the unchanged owning spec (two passed, two failed,
+20.8 seconds logged). Evidence:
+`orkestrator-test-run.IkwAiX/native-branch-isolated.log.gz`. This remains
+unresolved native selection validation, not a confirmed flake. The independent
+public production smoke suite passed all eight cases under
+`mise run test:logged -- --name public-browser -- bunx playwright test --config e2e/public-site/playwright.config.ts`
+(exit 0, 11.3 seconds).
+
+The default aggregate also exposed two copy-fixture Python startup failures
+and an overlong drift-path validation failure caused by a hanging inherited
+`python3` shim. With the guide's GNU-tool PATH and
+`/opt/homebrew/bin:/usr/bin` preceding the inherited shim, unchanged owners
+passed: `root-owners` (Pi staging and `tests/unit/migrate-copy.test.ts`, 10.6
+seconds) and `validation-worker-owner`
+(`apps/backend/src/core/review-validation-worker.test.ts`, Node preload,
+`--parallel=1 --only-failures`, 43.2 seconds). These changed-environment reruns
+are tooling evidence, not newly confirmed flakes. See [0178](0178-pi-vendor-runtime-aggregate-timeout.md)
+for the separately passing Pi owner and [0473](0473-claude-status-plan-fixture-directory-race.md)
+for the Claude fixture result with the matching Node preload.
+
+The initial aggregate finished in 477.0 seconds with 9149 backend tests passed,
+41 skipped, three failed and one error. Its other Python-dependent failures
+were the SSH controlling-terminal fixture (`apps/backend/src/core/shell.test.ts`)
+and generated blocking-hook fixture (`apps/backend/tests/tmux-commands.test.ts`).
+Both unchanged owners passed together with the explicit tool PATH under
+`mise run test:logged -- --name python-fixture-owners -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/shell.test.ts ./tests/tmux-commands.test.ts --parallel=1 --only-failures`
+(exit 0, 18.8 seconds). The new OpenCode tests passed, as did the corrected DOM
+absence assertion's owner and the diagnostic contract. Formatting, lint and
+all-package typechecking passed through `mise run check`.
+
+The final complete run,
+`mise run test:logged -- --name full-suite-final -- mise run test`, used the
+explicit GNU-tool and Python PATH above and passed every group (exit 0,
+391.5 seconds logged). This includes all workspace packages, root/support,
+every bridge, and protocol regeneration. No test timeout or skip was changed.
+The separate component-browser native branch-picker limitation remains as
+recorded above. Live-provider OAuth, Electron, Docker and iOS scenario suites
+were not exercised for this change.

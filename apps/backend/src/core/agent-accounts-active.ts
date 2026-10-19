@@ -98,6 +98,13 @@ export async function localBridgeIsOnActiveAccount(
   environmentId: string,
   context: CommandContext,
 ): Promise<boolean> {
+  if (kind === "opencode") {
+    // OpenCode has no accounts, but a server keeps the provider credentials it
+    // loaded until restarted, so a provider signed in from the app since
+    // launch moves it over once idle.
+    if (!staleLoginLocalBridges.has(key)) return true;
+    return (await context.nativeAgents?.hasObservedLiveWork(environmentId, kind)) === true;
+  }
   if (kind !== "claude" && kind !== "codex") return true;
   const launchedWith = localAgentAccountIds.get(key) ?? DEFAULT_AGENT_ACCOUNT_ID;
   const active = await resolveActiveAgentAccount(context, kind);
@@ -136,10 +143,11 @@ export async function localBridgeIsOnActiveAccount(
 const TOKEN_REPLACEMENT_LEAD_MS = 5 * 60_000;
 
 /**
- * The platform's login was renewed. Every live local bridge may hold the old
- * one, so each is replaced the next time it is used while idle.
+ * The platform's login was renewed (for OpenCode, any provider login changed).
+ * Every live local bridge may hold the old one, so each is replaced the next
+ * time it is used while idle.
  */
-export function markLocalBridgesForLoginRefresh(platform: AgentAccountPlatform): void {
+export function markLocalBridgesForLoginRefresh(platform: AgentAccountPlatform | "opencode"): void {
   for (const key of localServerProcesses.keys()) {
     if (key.startsWith(`${platform}:`)) staleLoginLocalBridges.add(key);
   }

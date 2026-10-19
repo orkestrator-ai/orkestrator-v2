@@ -1026,7 +1026,8 @@ export async function startLocalServerUnlocked(
     } else if (!credentialMatches) {
       replaceReason = "Cursor credentials changed";
     } else if (!accountMatches) {
-      replaceReason = "the active agent account changed";
+      replaceReason =
+        kind === "opencode" ? "a provider login changed" : "the active agent account changed";
     } else if (!workingDirectoryMatches) {
       replaceReason = "worktree path changed";
     } else if (!port) {

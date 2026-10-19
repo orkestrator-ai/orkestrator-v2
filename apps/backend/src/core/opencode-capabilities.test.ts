@@ -97,7 +97,7 @@ describe("OpenCodeCapabilities.authStatus", () => {
       "opencode-go",
     ]);
     expect(status.signIn?.hint).toBe(
-      "Connect one of OpenCode Go, anthropic with opencode auth login in a terminal.",
+      "Sign one of OpenCode Go, anthropic in from Settings → OpenCode.",
     );
   });
 
@@ -105,7 +105,7 @@ describe("OpenCodeCapabilities.authStatus", () => {
     const status = await capabilities(providerList([]), ["opencode-go"]).authStatus();
 
     expect(status.state).toBe("needs-auth");
-    expect(status.signIn?.hint).toBe("Connect OpenCode Go with opencode auth login in a terminal.");
+    expect(status.signIn?.hint).toBe("Sign OpenCode Go in from Settings → OpenCode.");
   });
 
   test("accepts object-shaped connected entries alongside strings and invalid entries", async () => {
@@ -147,7 +147,7 @@ describe("OpenCodeCapabilities.authStatus", () => {
     const status = await capabilities(providerList([]), allowed).authStatus();
 
     expect(status.state).toBe("needs-auth");
-    expect(status.signIn?.hint).toBe("Connect a provider with opencode auth login in a terminal.");
+    expect(status.signIn?.hint).toBe("Sign a provider in from Settings → OpenCode.");
   });
 
   test("names all eight providers at the hint limit", async () => {
@@ -155,7 +155,7 @@ describe("OpenCodeCapabilities.authStatus", () => {
     const status = await capabilities(providerList([]), allowed).authStatus();
 
     expect(status.signIn?.hint).toBe(
-      "Connect one of Provider 0, Provider 1, Provider 2, Provider 3, Provider 4, Provider 5, Provider 6, Provider 7 with opencode auth login in a terminal.",
+      "Sign one of Provider 0, Provider 1, Provider 2, Provider 3, Provider 4, Provider 5, Provider 6, Provider 7 in from Settings → OpenCode.",
     );
   });
 
@@ -172,7 +172,7 @@ describe("OpenCodeCapabilities.authStatus", () => {
     expect(status.providers).toEqual([
       { id: "OpenCode-Go", label: "OpenCode Go", state: "signed-in" },
     ]);
-    expect(status.signIn?.hint).toBe("Connect OpenCode Go with opencode auth login in a terminal.");
+    expect(status.signIn?.hint).toBe("Sign OpenCode Go in from Settings → OpenCode.");
   });
 
   test("is signed in when the connected selectable provider is absent from all", async () => {
@@ -182,6 +182,6 @@ describe("OpenCodeCapabilities.authStatus", () => {
 
     expect(status.state).toBe("signed-in");
     expect(status.providers).toEqual([]);
-    expect(status.signIn?.hint).toBe("Connect opencode-go with opencode auth login in a terminal.");
+    expect(status.signIn?.hint).toBe("Sign opencode-go in from Settings → OpenCode.");
   });
 });

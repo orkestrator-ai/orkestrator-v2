@@ -4,7 +4,14 @@ import {
 } from "@orkestrator/protocol/agent-accounts";
 
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
-import { asNonBlankString, asRequiredBoolean, assertOnlyKeys } from "./commands-helpers.js";
+import {
+  asNonBlankString,
+  asOptionalString,
+  asRecord,
+  asRequiredBoolean,
+  assertOnlyKeys,
+  asString,
+} from "./commands-helpers.js";
 import {
   agentAccountLoginProgress,
   cancelAgentAccountLogin,
@@ -16,6 +23,7 @@ import {
   startAgentAccountLogin,
   submitAgentAccountLoginCode,
 } from "./agent-accounts.js";
+import { openCodeProviderLogin, openCodeProviderLoginProgress } from "./opencode-provider-login.js";
 
 function asAccountPlatform(value: unknown): AgentAccountPlatform {
   const platform = asNonBlankString(value, "platform");
@@ -99,6 +107,68 @@ export function registerAgentAccountCommands(
   register("cancel_agent_account_login", async (args) => {
     assertOnlyKeys(args, ["operationId"], "arguments");
     return cancelAgentAccountLogin(
+      args.operationId === undefined
+        ? undefined
+        : asNonBlankString(args.operationId, "operationId"),
+    );
+  });
+}
+
+/** OpenCode's per-provider sign-in details, as typed by the user. */
+function asOpenCodeAuthInputs(value: unknown, name: string): Record<string, string> | undefined {
+  if (value === undefined) return undefined;
+  const record = asRecord(value, name);
+  return Object.fromEntries(
+    Object.entries(record).map(([key, input]) => [key, asString(input, `${name}.${key}`)]),
+  );
+}
+
+/**
+ * OpenCode provider logins. OpenCode keeps one login per model provider in
+ * the host's own store, so these sign a provider in, replace or remove its
+ * login; there are no accounts to switch. Nothing returns a credential, and
+ * an API key passes straight through to OpenCode.
+ */
+export function registerOpenCodeProviderLoginCommands(register: CommandRegistrar): void {
+  register("list_opencode_provider_auth", async (args, context) => {
+    assertOnlyKeys(args, [], "arguments");
+    return openCodeProviderLogin.listProviders(context);
+  });
+  register("set_opencode_provider_api_key", async (args, context) => {
+    assertOnlyKeys(args, ["providerId", "key", "metadata"], "arguments");
+    await openCodeProviderLogin.setApiKey(
+      context,
+      asNonBlankString(args.providerId, "providerId"),
+      asString(args.key, "key"),
+      asOpenCodeAuthInputs(args.metadata, "metadata"),
+    );
+  });
+  register("remove_opencode_provider_login", async (args, context) => {
+    assertOnlyKeys(args, ["providerId"], "arguments");
+    await openCodeProviderLogin.signOut(context, asNonBlankString(args.providerId, "providerId"));
+  });
+  /** Split into start, poll, code and cancel like the account sign-in. */
+  register("start_opencode_provider_login", async (args, context) => {
+    assertOnlyKeys(args, ["providerId", "providerLabel", "method", "inputs"], "arguments");
+    if (typeof args.method !== "number") throw new Error("Expected method to be a number");
+    return openCodeProviderLogin.startOAuth(context, {
+      providerId: asNonBlankString(args.providerId, "providerId"),
+      providerLabel: asOptionalString(args.providerLabel),
+      method: args.method,
+      inputs: asOpenCodeAuthInputs(args.inputs, "inputs"),
+    });
+  });
+  register("get_opencode_provider_login", async (args) => {
+    assertOnlyKeys(args, [], "arguments");
+    return openCodeProviderLoginProgress();
+  });
+  register("submit_opencode_provider_login_code", async (args) => {
+    assertOnlyKeys(args, ["code"], "arguments");
+    return openCodeProviderLogin.submitCode(asNonBlankString(args.code, "code"));
+  });
+  register("cancel_opencode_provider_login", async (args) => {
+    assertOnlyKeys(args, ["operationId"], "arguments");
+    return openCodeProviderLogin.cancel(
       args.operationId === undefined
         ? undefined
         : asNonBlankString(args.operationId, "operationId"),

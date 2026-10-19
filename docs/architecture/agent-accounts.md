@@ -3,7 +3,10 @@
 Status: Living — `apps/backend/src/core/agent-accounts*.ts`,
 `apps/backend/src/core/agent-account-bridge-state.ts`,
 `packages/protocol/src/agent-accounts.ts`,
-`apps/web/src/components/settings/AgentAccountsSection.tsx`.
+`apps/web/src/components/settings/AgentAccountsSection.tsx`;
+`apps/backend/src/core/opencode-provider-login.ts`,
+`packages/protocol/src/opencode-provider-auth.ts`,
+`apps/web/src/components/settings/OpenCodeProvidersSection.tsx`.
 
 Claude and Codex can each hold more than one login. The user sees each
 account's plan usage and picks which one agents run on. Switching is global
@@ -195,8 +198,10 @@ the tab without a send.
   without a login is deferred (no agent, empty `acpSessionId`) until the first
   attach or prompt after one exists.
 - OpenCode's own `opencode` provider is connected with no login, so the default
-  allowlist never locks. `opencode auth login` reaches the running server
-  without a restart.
+  allowlist never locks. A local tab sends the user to Settings → OpenCode
+  rather than a terminal (see [OpenCode provider sign-in](#opencode-provider-sign-in)).
+  OpenCode cannot tell an expired key from a valid one, so that stays a turn
+  error, which offers the provider's sign-in inside its row.
 - Background work never sees the banner. A bridge refusing a prompt for a
   missing login answers 401 with `kind: "authentication-required"`, and the
   backend passes that message through unwrapped on every platform.
@@ -217,6 +222,57 @@ device code (`deviceCode: true`, sent to the bridge as
 Otherwise it keeps the browser flow. The tab banner keeps the code visible
 beside the sign-in link, and the panel's code toast stays until a read finds
 the account signed in. Bridges without a device flow ignore the body.
+
+## OpenCode provider sign-in
+
+OpenCode has no accounts. It keeps one login per model provider (OpenCode Go,
+OpenAI, …) in the host's own store, `~/.local/share/opencode/auth.json` for
+the bundled 1.x, which every local environment's server shares. Settings →
+OpenCode → Provider Sign-in lists the providers and signs each in, replaces its
+login or signs it out (`OpenCodeProvidersSection`).
+
+Each operation starts a private server from the bundled binary in the
+model-catalogue probe directory (`withHostOpenCodeServer`) and calls its own
+auth routes (`opencode-provider-login.ts`):
+
+- **List:** `provider.list` and `provider.auth`, read field by field. A
+  provider without sign-in methods takes an API key. `storedLogin` means the
+  login is in OpenCode's store (`source` `api`, or `custom` for a plugin's
+  OAuth login); one from an environment variable or configuration cannot be
+  signed out here.
+- **API key:** `auth.set` with `{ type: "api", key }`. The key goes straight
+  through; nothing in Orkestrator stores, returns or logs it. A method's
+  prompts (an account id, say) are sent as `metadata`.
+- **OAuth:** `provider.oauth.authorize` returns the link and OpenCode's
+  instruction text (a device code is lifted out of it for a copy button).
+  `auto` methods then wait in `provider.oauth.callback` until the user
+  approves; `code` methods wait for the pasted code first. The renderer polls
+  `get_opencode_provider_login`, like the account sign-in. One sign-in runs at
+  a time and is given 16 minutes. The callback is sent without Bun's
+  five-minute fetch idle timeout, and the private server lives until it
+  settles. A browser method whose callback is a loopback (ChatGPT's browser
+  sign-in) only completes when the browser is on the backend's machine; the
+  headless method works from anywhere.
+- **Sign out:** `auth.remove`.
+
+OpenCode reads a provider's credentials once per directory instance and keeps
+them until the instance is disposed: a key replaced in the store is not used by
+a running server, though a newly connected provider is listed. After every
+change, `markLocalBridgesForLoginRefresh("opencode")` flags each live local
+OpenCode server, and `localBridgeIsOnActiveAccount` has the next
+`start_local_opencode_server_cmd` replace it once idle, as for a renewed Claude
+login. A container copies `auth.json` in when it starts, so it needs a
+restart.
+
+An OpenCode model request refused with HTTP 401 (or a 403 or OpenCode's own
+auth error that says so) gets the failed provider's sign-in inside its error
+row (`OpenCodeAuthRecoveryAction`). The inline error row carries the failed
+message's `providerID/modelID` as `modelId` for this
+(`openCodeCredentialFailureProvider`).
+
+The CLI on the user's PATH is not used: it may be OpenCode 2.x, which keeps
+its logins in its database and never writes `auth.json`. See
+[opencode-v2.md](../todo/opencode-v2.md) for what moves with 2.x.
 
 ## Credentials in auth answers
 

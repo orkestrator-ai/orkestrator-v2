@@ -381,7 +381,7 @@ it reaches. Some rules of thumb:
 - [ ] Emit the `auth` notice from Claude `auth_status` and Codex `authRecoveryStarted|Completed` ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md))
 - [ ] Point Claude's needs-auth state at the backend `claude auth login` flow instead of the terminal hint ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md))
 - [ ] Add a session-free settings auth card per enabled platform, built from `NativeAgentAuthStatus` ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md))
-- [ ] Add OpenCode in-app sign-in: API keys via a secret-input interaction, OAuth via `provider.oauth.*` ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md))
+- [x] Add OpenCode in-app sign-in: API keys and OAuth through the bundled server's auth routes ([agent-accounts.md](../architecture/agent-accounts.md#opencode-provider-sign-in))
 - [ ] Reconcile the active account when a container agent terminal opens, or say in the UI that it lags ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md))
 - [ ] Show each auth state from fixtures in the per-session card and, later, the settings card ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md), qualification)
 - [ ] Run a Codex sign-out then sign-in round trip on a fixture profile with Codex credentials ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md), qualification)

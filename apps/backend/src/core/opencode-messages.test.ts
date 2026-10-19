@@ -152,6 +152,18 @@ describe("normalizeOpenCodeInlineError", () => {
     });
   });
 
+  test("names the failed message's provider and model, for the sign-in action", () => {
+    const message = failed({
+      name: "APIError",
+      data: { message: "This API key has expired.", statusCode: 401 },
+    });
+    Object.assign(message.info, { providerID: "opencode-go", modelID: "deepseek-v4-pro" });
+    expect(normalizeOpenCodeInlineError(message)).toMatchObject({
+      content: "Model request failed (HTTP 401): This API key has expired.",
+      modelId: "opencode-go/deepseek-v4-pro",
+    });
+  });
+
   test("explains a provider refusing a tool's JSON Schema", () => {
     expect(
       normalizeOpenCodeInlineError(

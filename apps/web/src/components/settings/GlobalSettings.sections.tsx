@@ -98,6 +98,7 @@ import { MultiReviewDefaultsEditor } from "./agent/MultiReviewDefaultsEditor";
 import { AgentPlatformPane } from "./agent/AgentPlatformPane";
 import { PlanUsageSection } from "./PlanUsageSection";
 import { AgentAccountsSection } from "./AgentAccountsSection";
+import { OpenCodeProvidersSection } from "./OpenCodeProvidersSection";
 import { isAgentAccountPlatform } from "@orkestrator/protocol/agent-accounts";
 import { useProjectModelCatalog } from "@/hooks/useBuildLaunchOptions";
 import { useProjectStore, useUIStore } from "@/stores";
@@ -609,6 +610,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
       ) : (PLAN_USAGE_PLATFORMS as readonly AgentPlatform[]).includes(platform) ? (
         <PlanUsageSection key={platform} platform={platform} reloadToken={planUsageRefreshToken} />
       ) : null}
+      {platform === "opencode" ? <OpenCodeProvidersSection /> : null}
       <AgentPlatformPane
         platform={platform}
         tier={agentSettings}

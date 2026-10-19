@@ -40,3 +40,41 @@ describe("account login argument validation", () => {
     },
   );
 });
+
+describe("OpenCode provider login argument validation", () => {
+  const registry = createCommandRegistry();
+  const context = {} as CommandContext;
+
+  test("refuses unexpected fields and non-string sign-in details before any work", async () => {
+    await expect(
+      registry.get("set_opencode_provider_api_key")!(
+        { providerId: "opencode-go", key: "k", extra: true },
+        context,
+      ),
+    ).rejects.toThrow("Unexpected arguments field: extra");
+    await expect(
+      registry.get("set_opencode_provider_api_key")!(
+        { providerId: "opencode-go", key: "k", metadata: { accountId: 1 } },
+        context,
+      ),
+    ).rejects.toThrow("metadata.accountId");
+    await expect(
+      registry.get("start_opencode_provider_login")!(
+        { providerId: "openai", method: "0" },
+        context,
+      ),
+    ).rejects.toThrow("Expected method to be a number");
+    await expect(
+      registry.get("remove_opencode_provider_login")!({ providerId: " " }, context),
+    ).rejects.toThrow("providerId");
+  });
+
+  test("reads an idle login without a server", async () => {
+    expect(await registry.get("get_opencode_provider_login")!({}, context)).toEqual({
+      state: "idle",
+    });
+    expect(await registry.get("cancel_opencode_provider_login")!({}, context)).toEqual({
+      state: "idle",
+    });
+  });
+});

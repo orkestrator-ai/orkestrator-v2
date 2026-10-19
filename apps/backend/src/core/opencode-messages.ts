@@ -570,6 +570,8 @@ export function normalizeOpenCodeInlineError(value: unknown): Record<string, unk
       .filter((candidate): candidate is number => typeof candidate === "number")
       .map(openCodeIsoTimestamp)
       .find((candidate) => candidate !== undefined) ?? OPEN_CODE_UNKNOWN_CREATED_AT;
+  const providerId = nonEmptyString(info.providerID);
+  const modelId = nonEmptyString(info.modelID);
   return {
     // `error-opencode-<id>`: rendered as an error alert, not an assistant reply.
     id: providerInlineErrorMessageId("opencode", messageId),
@@ -577,6 +579,8 @@ export function normalizeOpenCodeInlineError(value: unknown): Record<string, unk
     content,
     parts: [{ type: "text", content }],
     createdAt,
+    // Names the provider a credential failure came from, for the sign-in card.
+    ...(modelId ? { modelId: providerId ? `${providerId}/${modelId}` : modelId } : {}),
   };
 }
 

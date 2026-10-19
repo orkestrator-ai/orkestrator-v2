@@ -6,6 +6,8 @@ import { MessageErrorAlert, MessageShell } from "@/components/chat/MessageShell"
 import { MessageCopyButton } from "@/components/chat/MessageCopyButton";
 import { ClaudeAuthRecoveryCard } from "@/components/claude/ClaudeAuthRecoveryCard";
 import { isClaudeAuthenticationFailureMessage } from "@/lib/claude-auth";
+import { OpenCodeAuthRecoveryAction } from "@/components/opencode/OpenCodeAuthRecoveryAction";
+import { openCodeCredentialFailureProvider } from "@/lib/opencode-auth";
 import { formatElapsed } from "@/lib/format-elapsed";
 import {
   type NativeMessage as NativeMessageType,
@@ -82,6 +84,8 @@ export const NativeMessage = memo(function NativeMessage({
   const isSystem = message.role === "system" || message.id.startsWith(SYSTEM_MESSAGE_PREFIX);
   const isPeerMail = message.id.startsWith(PEER_MAIL_MESSAGE_PREFIX);
   const isClaudeAuthError = platform === "claude" && isClaudeAuthenticationFailureMessage(message);
+  const openCodeAuthProvider =
+    platform === "opencode" ? openCodeCredentialFailureProvider(message) : undefined;
   const isContinuation =
     !isUser &&
     !isSystem &&
@@ -161,7 +165,18 @@ export const NativeMessage = memo(function NativeMessage({
   // Render error messages with special styling
   if (isError) {
     return (
-      <MessageErrorAlert content={message.content} timestampLabel={formatTime(message.createdAt)} />
+      <MessageErrorAlert
+        content={message.content}
+        timestampLabel={formatTime(message.createdAt)}
+        action={
+          openCodeAuthProvider ? (
+            <OpenCodeAuthRecoveryAction
+              providerId={openCodeAuthProvider}
+              containerId={containerId}
+            />
+          ) : undefined
+        }
+      />
     );
   }
 

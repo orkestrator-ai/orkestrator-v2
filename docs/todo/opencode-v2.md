@@ -325,6 +325,13 @@ Before any 2.x pin reaches production:
     `/api/integration`. The container entrypoint copies `auth.json` into a fresh
     data directory, which imports on first start, but later host credential
     changes would not propagate.
+  - In-app provider sign-in (`opencode-provider-login.ts`) calls 1.x's
+    `PUT|DELETE /auth/{providerID}`, `GET /provider/auth` and
+    `/provider/{id}/oauth/{authorize,callback}`, which write `auth.json`. It
+    has to move to `/api/credential` and `/api/integration` with 2.x. A user
+    who already runs 2.x as their own CLI signs in there, and 1.x never sees
+    it: that is how an expired `opencode-go` key in `auth.json` kept failing
+    in the app while the 2.x CLI worked.
   - CLI: `serve` flags are `--hostname`, `--port`, `--cors`, `--service` and
     `--stdio`. `serve --pure` is gone. The npm bin also installs an `opencode2`
     alias.

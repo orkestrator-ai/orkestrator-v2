@@ -355,8 +355,8 @@ per-bridge environment overrides that predate the execution policy.
 - [mcp-management.md](mcp-management.md) (MCP OAuth and `mcp-url` sign-in).
 - [coordinator-read-only-adapters.md](coordinator-read-only-adapters.md)
   (coordinator safety tiers, `coordinator-providers.ts`).
-- [agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md) (secret input
-  for OpenCode API keys reuses this contract).
+- [agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md) (provider
+  sign-in and readiness).
 - [provider-sdk-adoption-backlog.md](provider-sdk-adoption-backlog.md)
   (deferred Claude pending-permission re-arm and MCP permission provenance).
 - [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md)

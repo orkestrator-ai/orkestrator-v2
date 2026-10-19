@@ -8,8 +8,8 @@ should show in the tab, not as a spawn failure. Claude and Codex can also hold
 more than one login, switched globally per platform. The status type, the
 bridge routes, the per-session account card and multi-account switching all
 exist, and every platform reports a missing login before a send. Still
-missing: the turn-time `auth` notice, a session-free settings card, OpenCode
-sign-in and Codex sign-in cancel. A handful of account-switching gaps remain,
+missing: the turn-time `auth` notice, a session-free settings card and Codex
+sign-in cancel. A handful of account-switching gaps remain,
 mostly inside containers. How accounts work is in
 [agent-accounts.md](../architecture/agent-accounts.md).
 
@@ -37,13 +37,16 @@ mostly inside containers. How accounts work is in
     login stays out by design. A prompt whose model's provider is signed out
     is refused (401) before Pi is asked, and a turn Pi ends on a failed
     response, such as an expired OAuth refresh, fails with Pi's error.
-  - OpenCode: per-provider state with `signIn.kind: "terminal"` and an
-    `opencode auth login` hint.
+  - OpenCode: per-provider state with `signIn.kind: "terminal"` and a hint
+    naming Settings → OpenCode, where the provider sign-in runs
+    (`opencode-provider-login.ts`). A local tab offers that settings pane
+    instead of a terminal, because the `opencode` on PATH may be 2.x.
 - Renderer:
   - The per-session account card with sign-in and sign-out is in Agent Info
     (`AgentInfoButton.tsx`).
   - The settings pane has `AgentAccountsSection.tsx` (Claude and Codex
-    accounts) and `CursorSdkSignIn.tsx`. Nothing in settings reads
+    accounts), `OpenCodeProvidersSection.tsx` (OpenCode provider logins) and
+    `CursorSdkSignIn.tsx`. Nothing in settings reads
     `NativeAgentAuthStatus` without a session.
 - Prompt admission: every platform reports a confirmed missing login as
   `readiness: { state: "authentication-required", message, signIn }`
@@ -51,7 +54,9 @@ mostly inside containers. How accounts work is in
   [agent-accounts.md](../architecture/agent-accounts.md#sign-in-readiness). An
   expired login is not detectable ahead of a turn on Claude, Pi, Grok or
   OpenCode and stays a turn error. The tab offers in-tab sign-in, a terminal
-  tab running the login command, or Claude's `ClaudeAuthRecoveryCard`.
+  tab running the login command, or Claude's `ClaudeAuthRecoveryCard`. An
+  OpenCode model request refused with HTTP 401 offers the provider's sign-in
+  inside its error row (`OpenCodeAuthRecoveryAction`).
   `HttpBridgeProvider` passes any bridge's 401
   `kind: "authentication-required"` refusal through unwrapped.
 - Turn-time auth: `NativeAgentNotice { kind: "auth" }` is defined, and the tab
@@ -92,17 +97,9 @@ mostly inside containers. How accounts work is in
    session, from `NativeAgentAuthStatus`. For Claude and Codex it should sit
    with `AgentAccountsSection` rather than duplicate it, and Cursor's
    `CursorSdkSignIn` becomes that platform's card.
-4. **OpenCode in-app sign-in.** `beginSignIn` per provider:
-   - API key through `client.auth.set`, collected as a secret-input interaction
-     (see [agent-interactions-and-permissions.md](agent-interactions-and-permissions.md)),
-     never a renderer form;
-   - OAuth through `provider.oauth.authorize`, returning the URL, then
-     `provider.oauth.callback`.
-
-   Neither is called today.
-5. **Codex cancel.** Send `account/login/cancel` when an in-tab sign-in is
+4. **Codex cancel.** Send `account/login/cancel` when an in-tab sign-in is
    abandoned. Nothing calls it today.
-6. **Scrub bridge output before the debug log.** `commands-servers.ts`
+5. **Scrub bridge output before the debug log.** `commands-servers.ts`
    forwards local bridge stdout and stderr unchanged to `console.debug` and
    `console.error`. With Debug logging on, `application-logging.ts` writes that
    output to `<dataDir>/logs` with no redaction. No bridge prints auth data

@@ -946,7 +946,11 @@ export function SharedNativeAgentController({
   // the environment's terminal is local for a local tab, inside the container
   // otherwise.
   const createTerminalTab = useOptionalTerminalContext()?.createTab ?? null;
-  const terminalSignInCommand = agentTerminalSignInCommand(platform);
+  // A local OpenCode tab signs in from Settings instead: the `opencode` on the
+  // user's PATH may be another major version that keeps its logins where the
+  // bundled server never looks.
+  const terminalSignInCommand =
+    platform === "opencode" && !data.containerId ? undefined : agentTerminalSignInCommand(platform);
   const openTerminalSignIn = useCallback(() => {
     if (!terminalSignInCommand) return;
     createTerminalTab?.("plain", {

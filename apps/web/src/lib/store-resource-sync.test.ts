@@ -204,6 +204,55 @@ afterEach(() => {
 });
 
 describe("agent-mail binding", () => {
+  test("authoritative resync repairs cached transcript metadata after missing mailbox events", async () => {
+    detach?.();
+    const mailboxId = "env-1\0tab-1";
+    useConfigStore.getState().updateGlobalConfig({
+      agentMessaging: {
+        ...useConfigStore.getState().config.global.agentMessaging!,
+        enabled: true,
+      },
+    });
+    useAgentMailStore.setState({
+      mailboxes: new Map([
+        [
+          mailboxId,
+          {
+            descriptor: { mailboxId, environmentId: "env-1", tabId: "tab-1" },
+            messages: [],
+            revision: 1,
+          } as never,
+        ],
+      ]),
+    });
+    const refreshMailboxes = mock(async () => undefined);
+    useAgentMailStore.setState({ refreshMailboxes });
+    detach = startTestStoreResourceSync({
+      getAgentMailSummary: async () => ({
+        revision: 2,
+        mailboxes: [
+          {
+            mailboxId,
+            projectId: "project-1",
+            environmentId: "env-1",
+            tabId: "tab-1",
+            revision: 2,
+            unreadCount: 0,
+            userUnseenCount: 0,
+            agentUnackedCount: 0,
+            pendingInjectCount: 0,
+            failedInjectCount: 0,
+          },
+        ],
+      }),
+    });
+    // Cursor expiry requests an authoritative resync; no mailbox event is replayed.
+    requestResourceResync();
+    await waitForState(() => refreshMailboxes.mock.calls.length === 1, "observed mailbox resync");
+    expect(refreshMailboxes).toHaveBeenCalledWith([{ environmentId: "env-1", tabId: "tab-1" }]);
+    expect(useAgentMailStore.getState().sent.size).toBe(0);
+  });
+
   test("adopts authoritative summaries only while messaging is enabled", async () => {
     detach?.();
     const getAgentMailSummary = mock(async () => ({

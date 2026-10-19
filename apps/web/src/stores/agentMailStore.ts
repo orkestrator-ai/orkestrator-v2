@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { AGENT_MAIL_MAX_MAILBOXES } from "@orkestrator/protocol/agent-mail";
 import type {
   AgentMailMailboxSnapshot,
   AgentMailMessage,
@@ -13,8 +14,36 @@ import {
   getAgentMailSummary,
 } from "@/lib/backend";
 
+/**
+ * What the messages panel shows. Absent `conversation` is the list: every
+ * pair, or only `focus`'s. A conversation is its two participant keys
+ * (`agentMailParticipantKey`).
+ */
+export interface AgentMailPanelState {
+  focus?: string;
+  conversation?: [string, string];
+}
+
+export interface AgentMailDraft {
+  subject: string;
+  body: string;
+  sending: boolean;
+  attempts: Record<string, string>;
+}
+export const EMPTY_AGENT_MAIL_DRAFT: AgentMailDraft = {
+  subject: "",
+  body: "",
+  sending: false,
+  attempts: {},
+};
+
 interface AgentMailState {
+  drafts: Map<string, AgentMailDraft>;
+  updateDraft: (key: string, patch: Partial<AgentMailDraft>) => void;
   revision: number;
+  panel: AgentMailPanelState | null;
+  openPanel: (panel: AgentMailPanelState) => void;
+  closePanel: () => void;
   summary: Map<string, AgentMailSummaryEntry>;
   mailboxes: Map<string, AgentMailMailboxSnapshot>;
   bodies: Map<string, AgentMailMessage>;
@@ -83,22 +112,36 @@ function adoptMailbox(
   return { mailboxes, bodies, sent, failedSent };
 }
 
-async function refreshTrackedSentMailboxes(): Promise<void> {
-  const addresses = Array.from(useAgentMailStore.getState().sent.values()).map(
-    ({ environmentId, tabId }) => ({ environmentId, tabId }),
-  );
-  if (addresses.length === 0) return;
-  const unique = Array.from(
-    new Map(
-      addresses.map((address) => [`${address.environmentId}\0${address.tabId}`, address]),
-    ).values(),
-  );
-  const snapshot = await getAgentMailMailboxes(unique);
-  useAgentMailStore.getState().setMailboxes(snapshot.mailboxes);
+/** Reconcile cached transcript mailboxes as well as locally sent mail after missed events. */
+export async function refreshObservedAgentMailMailboxes(): Promise<void> {
+  const store = useAgentMailStore.getState();
+  const addresses = new Map<string, { environmentId: string; tabId: string }>();
+  for (const { environmentId, tabId } of store.sent.values())
+    addresses.set(`${environmentId}\0${tabId}`, { environmentId, tabId });
+  for (const [id, mailbox] of store.mailboxes) {
+    const entry = store.summary.get(id);
+    if (entry && entry.revision > mailbox.revision)
+      addresses.set(id, {
+        environmentId: mailbox.descriptor.environmentId,
+        tabId: mailbox.descriptor.tabId,
+      });
+  }
+  if (addresses.size) await store.refreshMailboxes(Array.from(addresses.values()));
 }
 
 export const useAgentMailStore = create<AgentMailState>()((set) => ({
   revision: 0,
+  panel: null,
+  drafts: new Map(),
+  updateDraft: (key, patch) =>
+    set((state) => ({
+      drafts: new Map(state.drafts).set(key, {
+        ...(state.drafts.get(key) ?? EMPTY_AGENT_MAIL_DRAFT),
+        ...patch,
+      }),
+    })),
+  openPanel: (panel) => set({ panel }),
+  closePanel: () => set({ panel: null }),
   summary: new Map(),
   mailboxes: new Map(),
   bodies: new Map(),
@@ -143,15 +186,21 @@ export const useAgentMailStore = create<AgentMailState>()((set) => ({
       for (const message of mailbox.messages) bodies.delete(message.id);
       return { mailboxes, bodies };
     }),
-  clear: () =>
+  clear: () => {
+    requestedMailboxes.clear();
+    pendingMailboxes.clear();
+    mailboxGeneration += 1;
     set({
+      panel: null,
+      drafts: new Map(),
       revision: 0,
       summary: new Map(),
       mailboxes: new Map(),
       bodies: new Map(),
       sent: new Map(),
       failedSent: new Map(),
-    }),
+    });
+  },
   trackSent: (message) =>
     set((state) => {
       const sent = new Map(state.sent);
@@ -167,22 +216,64 @@ export const useAgentMailStore = create<AgentMailState>()((set) => ({
     }),
   clearFailedSent: () => set({ failedSent: new Map() }),
   refreshSummary: async () => {
+    const generation = mailboxGeneration;
     const snapshot = await getAgentMailSummary();
-    if (!snapshot) return;
+    if (!snapshot || generation !== mailboxGeneration) return;
     useAgentMailStore.getState().setSummary(snapshot);
-    await refreshTrackedSentMailboxes();
+    await refreshObservedAgentMailMailboxes();
   },
   refreshMailbox: async (environmentId, tabId) => {
+    const generation = mailboxGeneration;
     const snapshot = await getAgentMailMailbox(environmentId, tabId);
-    useAgentMailStore.getState().setMailbox(snapshot);
+    if (generation === mailboxGeneration) useAgentMailStore.getState().setMailbox(snapshot);
   },
   refreshMailboxes: async (addresses) => {
-    const snapshot = await getAgentMailMailboxes(addresses);
-    useAgentMailStore.getState().setMailboxes(snapshot.mailboxes);
+    const generation = mailboxGeneration;
+    for (let offset = 0; offset < addresses.length; offset += AGENT_MAIL_MAX_MAILBOXES) {
+      const snapshot = await getAgentMailMailboxes(
+        addresses.slice(offset, offset + AGENT_MAIL_MAX_MAILBOXES),
+      );
+      if (generation !== mailboxGeneration) return;
+      useAgentMailStore.getState().setMailboxes(snapshot.mailboxes);
+    }
   },
   refreshInbox: async () => {
+    const generation = mailboxGeneration;
     const snapshot = await getAgentMailInboxSnapshot();
-    useAgentMailStore.getState().adoptInbox(snapshot);
+    if (generation === mailboxGeneration) useAgentMailStore.getState().adoptInbox(snapshot);
     return snapshot;
   },
 }));
+
+let mailboxGeneration = 0;
+const requestedMailboxes = new Set<string>();
+const pendingMailboxes = new Map<string, { environmentId: string; tabId: string }>();
+
+/**
+ * Load a mailbox a transcript names, so its tile can show the recipient's name
+ * and the message's live delivery state. Each mailbox is asked for once, and
+ * every request made in the same tick goes out as one batch; resource events
+ * keep loaded mailboxes current after that.
+ */
+export function requestAgentMailMailbox(environmentId: string, tabId: string): void {
+  const mailboxId = `${environmentId}\0${tabId}`;
+  if (requestedMailboxes.has(mailboxId) || useAgentMailStore.getState().mailboxes.has(mailboxId))
+    return;
+  requestedMailboxes.add(mailboxId);
+  pendingMailboxes.set(mailboxId, { environmentId, tabId });
+  if (pendingMailboxes.size > 1) return;
+  queueMicrotask(() => {
+    const batch = Array.from(pendingMailboxes.values());
+    pendingMailboxes.clear();
+    if (batch.length === 0) return;
+    const generation = mailboxGeneration;
+    void useAgentMailStore
+      .getState()
+      .refreshMailboxes(batch)
+      .catch(() => {
+        if (generation !== mailboxGeneration) return;
+        for (const address of batch)
+          requestedMailboxes.delete(`${address.environmentId}\0${address.tabId}`);
+      });
+  });
+}

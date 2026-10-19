@@ -36,7 +36,7 @@ MCP token.
 | Sent status | Read placement and both receipt states for mail this tab sent (`get_message_status`) |
 | Idle inject | When policy allows, the store drains pending mail into a new user turn as a tagged carrier |
 | Presence gate | Inject only when the recipient is idle (or an unprompted “cold” native tab) |
-| User inbox | Global compose/read UI, per-tab banner, mute and inject-policy overrides |
+| User inbox | Messages panel (conversations, compose), per-tab banner, mute and inject-policy overrides |
 | Routed wake | Coordinator ↔ the workers it created, and peer ↔ peer, wake the recipient even when the default inject policy is off (see [Routes](#routes)) |
 
 A carrier the recipient cannot acknowledge is not a usable delivery channel:
@@ -381,13 +381,23 @@ policy is. Mute, explicit Off, pause, hop budget, and `canInject` still apply.
 
 | Surface | Location | Notes |
 | --- | --- | --- |
-| Transcript | `MailTile` (`apps/web/src/components/chat/`) | Each injected message is a collapsed tile: an icon for its kind or notice tone, sender, subject and about three clamped lines of the body. The header is a button (`aria-expanded`); clicking it, or the clipped preview, expands the Markdown body, and the choice survives remounts and paging for the session. A batched prompt becomes one tile per message |
+| Transcript, delivered mail | `MailTile` (`apps/web/src/components/chat/`) | Each injected message is a collapsed tile: an icon for its kind or notice tone, sender, subject and about three clamped lines of the body. The header is a button (`aria-expanded`); clicking it, or the clipped preview, expands the Markdown body, and the choice survives remounts and paging for the session. A batched prompt becomes one tile per message |
+| Transcript, sent and read mail | `MailToolPart` (`apps/web/src/components/chat/`) | `send_message`, `reply_message`, `read_message` and a coordinator's `get_message` calls render as mail tiles, not tool rows, and stay out of the collapsed tool group (`agentMailToolCall`, `apps/web/src/lib/chat/agent-mail-tool-call.ts`). A sent tile shows the recipient and its live delivery state from the recipient's mailbox; a read tile is where pull-only mail enters the transcript. Every tile with both participants known opens their conversation |
+| Messages panel | `AgentMailPanel` (`apps/web/src/components/agent-mail/`) | A right-hand sheet. The list is one row per pair that has exchanged mail (`list_agent_mail_conversations`), those needing the person first; a conversation is both directions between two participants, oldest first (`get_agent_mail_conversation`), with retry, resume, deliver-now and discard on the messages that need them. The person composes only in their own conversation with a tab. Opening a conversation marks it seen (`mark_agent_mail_conversation_seen`) |
+| Title-bar button | `AgentMailButton` | Opens the panel. Its badge counts `attentionCount`: failed and budget-held deliveries and unseen external or cross-project mail (`agentMailNeedsAttention`), not the agents' own traffic |
+| Per-tab banner | `AgentMailBanner` | Pending, failed, pull-only, budget or hourly-limit held; retry / resume / deliver now / discard, and View opens the tab's conversations |
+| Tab menu, Agent info | `DraggableTab`, `AgentInfoButton` | One "Messages…" entry when `canPull`: the panel focused on the tab, with its delivery policy and mutes |
 | Settings | Settings → Messaging | `enabled`, `paused`, `allowCrossProject`, `wakePeers`, `autonomousWakeBudget`, `hourlyWakeLimit`, `coordinatorStatusWakes` (`off` / `settled` / `stages`), `defaultInjectPolicy` (`off` / `idle`), `retentionDays` |
-| Global inbox | `AgentMailButton` | Compose, sent, seen; destinations filtered to `canPull` |
-| Per-tab banner | `AgentMailBanner` | Pending, failed, pull-only, budget or hourly-limit held; retry / resume / discard |
-| Tab menu | `DraggableTab` | “Message this tab” / inbox settings when `canPull` |
-| Agent info | `AgentInfoButton` | Mail section when `canPull` |
 | Per-mailbox policy | `mute_agent_mail` | `inject`: inherit / off / idle; inbound and outbound mute |
+
+**Conversations.** A participant is a mailbox id (`agentMailParticipantKey`), so
+history survives a tab's session being replaced, or a fixed key for the person
+(`user`), external clients (`external`) and a project's workflows
+(`system:<projectId>`). Mail is filed only in its recipient's mailbox, so a
+conversation is A's mail from B plus B's mail from A
+(`apps/backend/src/core/agent-mail-conversations.ts`). It is bounded by the
+same retention and per-mailbox limits as everything else; a closed tab keeps
+its name from the messages it sent.
 
 Default inject policy is **off**. Idle delivery can start a billable turn,
 including on a tab that has never been prompted, so it is opt-in per
@@ -604,8 +614,9 @@ capability row says so.
 | Control MCP mail | `apps/backend/src/core/control-mcp-server.ts` |
 | Delegation = MCP ∧ inject | `apps/backend/src/core/coordinator-providers.ts` |
 | UI commands | `apps/backend/src/core/commands-registry-mail.ts` |
-| Settings / inbox / banner | `apps/web/src/components/settings/MessagingSettings.tsx`, `apps/web/src/components/agent-mail/` |
-| Transcript tiles | `apps/web/src/lib/chat/client-only-messages.ts` (carrier → rows), `apps/web/src/components/chat/MailTile.tsx` |
+| Conversations (pairs) | `apps/backend/src/core/agent-mail-conversations.ts` |
+| Settings / panel / banner | `apps/web/src/components/settings/MessagingSettings.tsx`, `apps/web/src/components/agent-mail/` |
+| Transcript tiles | `apps/web/src/lib/chat/client-only-messages.ts` (carrier → rows), `apps/web/src/lib/chat/agent-mail-tool-call.ts` (mail tool calls), `apps/web/src/components/chat/MailTile.tsx`, `MailToolPart.tsx` |
 | Main / side coordinator, respawn | `apps/backend/src/core/coordinator-service.ts`, `packages/protocol/src/coordinator.ts` |
 | Coordinator status wakes | `apps/backend/src/core/coordinator-status-wakes.ts` |
 | Multi-actor scenarios | `apps/backend/src/core/agent-mail-scenarios.test.ts` on `agent-mail-world-test-support.ts` |

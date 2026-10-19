@@ -15,13 +15,19 @@ import {
   CircleX,
   Info,
   Mail,
+  MessagesSquare,
   Network,
+  Send,
   ShieldAlert,
   UserRound,
 } from "lucide-react";
 import type { Components } from "react-markdown";
 import type { AgentMailKind, AgentMailNoticeTone } from "@orkestrator/protocol/agent-mail";
 import { mailMarkdownComponents } from "@/components/agent-mail/mail-markdown-components";
+import {
+  AGENT_MAIL_STATUS_TONE_CLASS,
+  openAgentMailConversation,
+} from "@/components/agent-mail/agent-mail-ui";
 import { useMessagePartExpansion } from "@/lib/chat/message-part-expansion";
 import type { PeerMailPresentation } from "@/lib/chat/native-message-types";
 import { cn } from "@/lib/utils";
@@ -33,9 +39,12 @@ import { MessageMarkdown } from "./MessageMarkdown";
  * reports. A notice without structured facts (written before they existed)
  * reads as plain news.
  */
-export type MailTileTone = Exclude<AgentMailKind, "notice"> | AgentMailNoticeTone;
+export type MailTileTone = Exclude<AgentMailKind, "notice"> | AgentMailNoticeTone | "sent";
 
-export function mailTileTone(mail: Pick<PeerMailPresentation, "kind" | "notice">): MailTileTone {
+export function mailTileTone(
+  mail: Pick<PeerMailPresentation, "kind" | "notice" | "direction">,
+): MailTileTone {
+  if (mail.direction === "out") return "sent";
   if (mail.kind !== "notice") return mail.kind;
   return mail.notice?.tone ?? "info";
 }
@@ -44,6 +53,12 @@ const TONES: Record<
   MailTileTone,
   { icon: ComponentType<{ className?: string }>; label: string; frame: string; accent: string }
 > = {
+  sent: {
+    icon: Send,
+    label: "Message sent",
+    frame: "border-border/60 bg-muted/20",
+    accent: "text-foreground/80",
+  },
   message: {
     icon: Mail,
     label: "Agent message",
@@ -148,6 +163,7 @@ export const MailTile = memo(function MailTile({
   // A notice that predates structured facts keeps a neutral bell rather than
   // claiming an outcome it cannot know.
   const Icon = mail.kind === "notice" && !mail.notice ? Bell : style.icon;
+  const participants = mail.participants;
 
   // Fade the clipped edge only when the clamp actually hides something; a
   // one-line message should read as complete, not cut off.
@@ -172,34 +188,60 @@ export const MailTile = memo(function MailTile({
       data-expanded={open ? "true" : "false"}
     >
       <div className={cn("mx-auto min-w-0 max-w-3xl rounded-lg border", style.frame)}>
-        <button
-          type="button"
-          aria-expanded={open}
-          aria-controls={bodyId}
-          onClick={() => setOpen(!open)}
-          className="flex w-full min-w-0 items-start gap-2 rounded-lg px-2.5 pt-2 pb-1.5 text-left transition-colors hover:bg-foreground/[0.03] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <Icon className={cn("mt-0.5 size-4 shrink-0", style.accent)} aria-hidden="true" />
-          <span className="sr-only">{style.label}: </span>
-          <span className="flex min-w-0 flex-1 flex-col gap-0.5 @sm:flex-row @sm:items-baseline @sm:gap-1.5">
-            <span className={cn("truncate text-xs font-medium", style.accent)}>{mail.sender}</span>
-            {mail.subject ? (
-              <span className="min-w-0 truncate text-xs text-foreground/85">{mail.subject}</span>
-            ) : null}
-          </span>
-          {timestampLabel ? (
-            <span className="mt-px shrink-0 text-[10px] tabular-nums text-muted-foreground">
-              {timestampLabel}
+        <div className="flex min-w-0 items-start">
+          <button
+            type="button"
+            aria-expanded={open}
+            aria-controls={bodyId}
+            onClick={() => setOpen(!open)}
+            className="flex min-w-0 flex-1 items-start gap-2 rounded-lg px-2.5 pt-2 pb-1.5 text-left transition-colors hover:bg-foreground/[0.03] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <Icon className={cn("mt-0.5 size-4 shrink-0", style.accent)} aria-hidden="true" />
+            <span className="sr-only">{style.label}: </span>
+            <span className="flex min-w-0 flex-1 flex-col gap-0.5 @sm:flex-row @sm:items-baseline @sm:gap-1.5">
+              <span className={cn("truncate text-xs font-medium", style.accent)}>
+                {mail.sender}
+              </span>
+              {mail.subject ? (
+                <span className="min-w-0 truncate text-xs text-foreground/85">{mail.subject}</span>
+              ) : null}
             </span>
+            {mail.status ? (
+              <span
+                data-mail-status={mail.status.tone}
+                className={cn(
+                  "mt-px shrink-0 rounded px-1.5 text-[10px] leading-4",
+                  AGENT_MAIL_STATUS_TONE_CLASS[mail.status.tone],
+                )}
+              >
+                {mail.status.label}
+              </span>
+            ) : null}
+            {timestampLabel ? (
+              <span className="mt-px shrink-0 text-[10px] tabular-nums text-muted-foreground">
+                {timestampLabel}
+              </span>
+            ) : null}
+            <ChevronRight
+              aria-hidden="true"
+              className={cn(
+                "mt-0.5 size-3.5 shrink-0 text-muted-foreground transition-transform",
+                open && "rotate-90",
+              )}
+            />
+          </button>
+          {participants ? (
+            <button
+              type="button"
+              aria-label="Open conversation"
+              title="Open conversation"
+              onClick={() => openAgentMailConversation(participants[0], participants[1])}
+              className="mt-1 mr-1.5 shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-foreground/[0.05] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <MessagesSquare className="size-3.5" aria-hidden="true" />
+            </button>
           ) : null}
-          <ChevronRight
-            aria-hidden="true"
-            className={cn(
-              "mt-0.5 size-3.5 shrink-0 text-muted-foreground transition-transform",
-              open && "rotate-90",
-            )}
-          />
-        </button>
+        </div>
         {/*
           Collapsed, the clipped body is a pointer target for expanding and is
           inert: its links cannot be reached by Tab or a stray click while most

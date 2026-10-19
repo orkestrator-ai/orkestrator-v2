@@ -39,3 +39,7 @@ mise run test:logged -- --name claude-interactions-alone -- bunx playwright test
 
 Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.19DYL2/committed-browser-suite.log.gz`.
 No interaction test, timeout, assertion or product behavior changed.
+
+## Agent-mail main merge recurrence — 2026-10-19
+
+The aggregate failed this owner and its unchanged owning file passed with one worker. Exact commands, symptoms, counts, timings and bounded evidence are recorded in [0500](0500-agent-mail-main-merge-validation.md). No implementation, assertion, timeout or skip changed.

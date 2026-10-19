@@ -131,3 +131,14 @@ The desktop canvas case timed out at 30 seconds in the aggregate, and both mobil
 - **Uncontended runs:** `origin/main` alone passed the full browser suite (360 passed, 80 skipped, 2.4m), and passed the owning file with `--repeat-each=12 --workers=12` (24 passed, 46.9 s). The branch owning file passed alone (two passed, 12.4 s).
 - **Evidence:** `/tmp/ork-main-repro.X5W2/ab-main.log.gz` and `/tmp/ork-main-repro.X5W2/ab-branch.log.gz`.
 - **Disposition:** the timeout reproduces on unchanged `origin/main` under the same contention. The branch changes only the agent model picker, which this fixture does not render. No canvas source, assertion, timeout, or skip changed.
+
+## Agent-mail review validation recurrence — 2026-10-19
+
+- `mise run test:logged -- --name browser -- mise run test:browser` timed out both unchanged viewport cases in the five-worker run alongside repository and isolated-browser validation (346 passed, 80 skipped, six failed in 7.5 minutes).
+- The unchanged owning file passed alone: `mise run test:logged -- --name browser-design-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts --workers=1 --output output/playwright/mail-review-design` (exit 0, 19.2 seconds). Browser owner reruns ran sequentially.
+- Evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.xmUT5O/browser.log.gz`.
+- No timeout, assertion or skip changed. Host contention is a possible contributor, not an established cause.
+
+## Agent-mail main merge recurrence — 2026-10-19
+
+The aggregate failed this owner and its unchanged owning file passed with one worker. Exact commands, symptoms, counts, timings and bounded evidence are recorded in [0500](0500-agent-mail-main-merge-validation.md). No implementation, assertion, timeout or skip changed.

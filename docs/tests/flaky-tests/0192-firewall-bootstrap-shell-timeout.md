@@ -104,3 +104,7 @@ aggregate-load timeouts.
 - **Owning-file rerun:** the same GNU-tool PATH with `mise run test:logged -- --name merge-firewall-alone -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` passed unchanged, exit 0, 12.7 seconds logged.
 - **Evidence:** `orkestrator-test-run.IqZNat/root-and-agent-support-tests.log.gz` below the platform temporary directory.
 - **Assessment:** confirmed intermittent fixture timeouts; host contention remains an unconfirmed hypothesis. No assertion, timeout or skip changed.
+
+## Agent-mail main merge recurrence — 2026-10-19
+
+The final root/support run with all GNU prerequisites timed out this case at 5004.45 ms. The unchanged complete owning file then passed sequentially with the flake-index contract owner (35.6 seconds, exit 0). Exact commands, counts and evidence are in [0500](0500-agent-mail-main-merge-validation.md). No implementation, assertion, skip or timeout changed.

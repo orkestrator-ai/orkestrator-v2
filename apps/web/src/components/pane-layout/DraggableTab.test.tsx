@@ -75,7 +75,6 @@ mock.module("@dnd-kit/utilities", () => ({
 }));
 
 const { DraggableTab } = await import("./DraggableTab");
-const { AgentMailButton } = await import("../agent-mail/AgentMailButton");
 
 afterAll(() => {
   mock.module("@dnd-kit/sortable", () => realSortableSnapshot);
@@ -923,7 +922,8 @@ describe("DraggableTab tooltip and context menu structure", () => {
     expect(onRefresh).toHaveBeenCalledTimes(1);
   });
 
-  test("shows mail context actions only while agent messaging is enabled", () => {
+  test("shows the mail context action only while agent messaging is enabled", () => {
+    useAgentMailStore.setState(useAgentMailStore.getInitialState());
     const tab: TabInfo = {
       id: "tab-claude",
       type: "agent-native",
@@ -934,8 +934,7 @@ describe("DraggableTab tooltip and context menu structure", () => {
     useConfigStore.setState({ config });
     const view = renderTab(tab);
     fireEvent.contextMenu(screen.getByText("Claude 1"));
-    expect(screen.queryByText("Message this tab…") === null).toBe(true);
-    expect(screen.queryByText("Inbox settings…") === null).toBe(true);
+    expect(screen.queryByText("Messages…") === null).toBe(true);
 
     config.global.agentMessaging.enabled = true;
     useConfigStore.setState({ config: structuredClone(config) });
@@ -950,68 +949,9 @@ describe("DraggableTab tooltip and context menu structure", () => {
       />,
     );
     fireEvent.contextMenu(screen.getByText("Claude 1"));
-    const openEvents: Array<{
-      environmentId: string;
-      tabId: string;
-      mode: string;
-      restoreFocusTo?: HTMLElement | null;
-    }> = [];
-    const recordOpenEvent = (event: Event) => {
-      openEvents.push((event as CustomEvent).detail);
-    };
-    window.addEventListener("orkestrator:open-agent-mail", recordOpenEvent);
-    const messageAction = screen.getByText("Message this tab…");
-    expect(messageAction).toBeTruthy();
-    expect(screen.getByText("Inbox settings…")).toBeTruthy();
-    fireEvent.click(messageAction);
-    fireEvent.contextMenu(screen.getByText("Claude 1"));
-    fireEvent.click(screen.getByText("Inbox settings…"));
-    window.removeEventListener("orkestrator:open-agent-mail", recordOpenEvent);
-    expect(openEvents.map(({ restoreFocusTo: _restoreFocusTo, ...detail }) => detail)).toEqual([
-      { environmentId: "env-1", tabId: "tab-claude", mode: "compose" },
-      { environmentId: "env-1", tabId: "tab-claude", mode: "settings" },
-    ]);
-    for (const event of openEvents) {
-      expect(event.restoreFocusTo?.contains(screen.getByText("Claude 1"))).toBe(true);
-    }
-  });
-
-  test("opens the global composer from the tab context menu", async () => {
-    const config = structuredClone(useConfigStore.getInitialState().config);
-    config.global.agentMessaging = { ...config.global.agentMessaging!, enabled: true };
-    useConfigStore.setState({ config });
-    useAgentMailStore.setState(useAgentMailStore.getInitialState());
-    useAgentMailStore.setState({
-      refreshInbox: mock(async () => ({
-        revision: 0,
-        directory: [],
-        mailboxes: [],
-        summary: { revision: 0, mailboxes: [] },
-      })),
-    });
-    const tab: TabInfo = {
-      id: "tab-claude",
-      type: "agent-native",
-      nativeAgentData: { platform: "claude", environmentId: "env-1" },
-    };
-    render(
-      <>
-        <AgentMailButton />
-        <DraggableTab
-          tab={tab}
-          paneId="pane-1"
-          index={0}
-          isActive={false}
-          canClose
-          onSelect={() => {}}
-        />
-      </>,
-    );
-
-    fireEvent.contextMenu(screen.getByText("Claude 1"));
-    fireEvent.click(screen.getByText("Message this tab…"));
-
-    expect(await screen.findByPlaceholderText("Markdown message")).toBeTruthy();
+    fireEvent.click(screen.getByText("Messages…"));
+    // The panel opens on this tab's conversations.
+    expect(useAgentMailStore.getState().panel).toEqual({ focus: "env-1\0tab-claude" });
   });
 
   test("hides the file tooltip again on mouse leave", async () => {

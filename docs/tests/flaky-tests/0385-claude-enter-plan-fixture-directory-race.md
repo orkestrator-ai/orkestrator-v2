@@ -49,3 +49,7 @@ The subsequent warm run, `mise run test:logged -- --name refresh-full-warm -- mi
 - **Assessment:** confirmed intermittent recurrence of the existing fixture-directory symptom. No bridge implementation, assertion, timeout or skip changed.
 
 The subsequent installed-dependency aggregate, `mise run test:logged -- --name merge-tests-installed -- mise run test`, passed all four groups unchanged (exit 0, 266.7 seconds logged).
+
+## Agent-mail main merge recurrence — 2026-10-19
+
+The aggregate failed this owner and its unchanged owning file passed with one worker. Exact commands, symptoms, counts, timings and bounded evidence are recorded in [0500](0500-agent-mail-main-merge-validation.md). No implementation, assertion, timeout or skip changed.

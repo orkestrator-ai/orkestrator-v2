@@ -747,6 +747,31 @@ The warm aggregate `mise run test:logged -- --name merge-tests-warm -- mise run 
 
 **Post-aggregate owning-file rerun (same merge, 2026-10-18):** after the full suite finished, `mise run test:logged -- --name merge-post-suite-pi-bridge-vendor -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed unchanged, exit 0, in 27.9 seconds logged. Together with the aggregate failure this confirms an intermittent recurrence; the earlier isolated failure is retained above. No implementation, assertion, timeout or skip changed.
 
+
+## Keep-open model picker review fixes — 2026-10-18
+
+- **Original command:** `mise run test:logged -- --name all-tests -- mise run test`, with workspace/root/bridges/protocol reservations of 4/1/2/1 workers.
+- **Failure:** the unchanged staged SDK test exceeded 30000 ms (30000.02 ms). Root/support reported 3094 passed, one skipped and three failed across 3098 tests; the other two were stale picker-dismissal assumptions in `ClaudeTmuxChatTab.test.tsx`, corrected in this change and passing in the owning-file rerun.
+- **Owning-file rerun:** `mise run test:logged -- --name pi-vendor-alone -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` also timed out at 30000.69 ms (three passed, one failed; 31.4 seconds logged).
+- **Evidence:** `orkestrator-test-run.7ZSgrV/root-and-agent-support-tests.log.gz` and `orkestrator-test-run.uEiHkR/pi-vendor-alone.log.gz` below the host temporary directory.
+- **Assessment:** this observation does not independently establish a flake because the unchanged owning file also failed alone. Runtime staging remains an unresolved validation limitation. No Pi implementation, assertion, timeout or skip changed.
+
+The completed aggregate passed its workspace, bridge and protocol groups. After
+correcting the two tmux consumer cases, the final root/support rerun
+(`mise run test:logged -- --name root-tests-final -- bun test ./tests ./e2e/agent-testing/artifact-sanitizer.test.ts ./e2e/agent-testing/design-live-usage.test.ts ./e2e/agent-testing/design-live-heartbeat.test.ts ./e2e/agent-testing/mcp-apply-live-support.test.ts ./e2e/agent-testing/mcp-apply-live-safety.test.ts ./scripts/opencode-live-compatibility-probe.test.ts ./test-fixtures/agent-project/server.test.ts --parallel=2 --only-failures`)
+reported 3096 passed, one skipped and only the Pi staging timeout (30001.81 ms),
+in 106.4 seconds. Evidence: `orkestrator-test-run.Tq9Hli/root-tests-final.log.gz`.
+All picker-related failures cleared; Pi staging remains unresolved.
+
+## Keep-open picker coverage follow-up — 2026-10-18
+
+- **Original command:** `mise run test:logged -- --name picker-full -- mise run test`, alongside component-browser validation on macOS.
+- **Workers:** workspace/root/bridges/protocol reservations of 4/1/2/1 workers.
+- **Failure:** the staged SDK case exceeded 30000 ms (30000.58 ms). Root/support reported 3096 passed, one skipped and one failed across 3098 tests in 146 files (266.47 seconds). All picker consumer tests passed.
+- **Owning-file rerun:** `mise run test:logged -- --name picker-pi-vendor-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed unchanged after the aggregate finished (17.7 seconds logged).
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.4ekCm8/root-and-agent-support-tests.log.gz`.
+- **Assessment:** confirmed intermittent recurrence. The aggregate passed its workspace, bridge and protocol groups and finished in 456.5 seconds. No Pi implementation, assertion, timeout or skip changed.
+
 ## Electron preview second main merge — 2026-10-18
 
 `mise run test:logged -- --name merge2-full-tests -- mise run test` merged `origin/main` at `f51c7252` into pre-merge HEAD `390667ce`. It ran alongside the component/public-site browser suite and other host work. Workspace, bridges and protocol passed; root reported 3096 passed, one skipped and the staged-runtime timeout at 30004.42 ms. Aggregate exit 1 in 443.0 seconds. The unchanged owning file then passed with `mise run test:logged -- --name merge2-pi-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` (exit 0, 7.4 seconds). Evidence: `orkestrator-test-run.BefiWd/root-and-agent-support-tests.log.gz` below the host temporary directory. This confirms an intermittent recurrence; no implementation, assertion, timeout or skip changed.
@@ -779,3 +804,9 @@ remains an unconfirmed explanation.
 The final `full-suite-final` aggregate with that explicit PATH passed all four
 groups (391.5 seconds logged); root/support passed in 192.4 seconds. No staging
 implementation, assertion or timeout changed.
+
+## Queued-steer main merge validation — 2026-10-19
+
+The recurrence, owning-file results and remaining limitations are recorded in
+[0501](0501-queued-steer-main-merge-validation.md). No owning implementation,
+assertion, timeout or skip was changed for validation.

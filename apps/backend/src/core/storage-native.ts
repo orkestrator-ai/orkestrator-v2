@@ -7,6 +7,7 @@ import {
   MAX_PERSISTED_NATIVE_AGENT_PENDING_DISPATCH_BYTES,
   MAX_PERSISTED_NATIVE_AGENT_PENDING_STEER_BYTES,
   NATIVE_AGENT_SESSION_VERSION,
+  createHash,
   PendingNativeAgentDispatchError,
   PendingNativeAgentSteerError,
   isAgentInteractionResolutionJournal,
@@ -86,6 +87,7 @@ type ResourceChangeListener = shared.ResourceChangeListener;
 import { StorageReviews } from "./storage-reviews.ts";
 import {
   isNativeAgentSteerRejectedOutcome,
+  nativeAsyncQuestionItemId,
   type NativeAgentSessionActionOutcome,
 } from "@orkestrator/protocol/native-agent";
 import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
@@ -1091,6 +1093,207 @@ export abstract class StorageNative extends StorageReviews {
     });
   }
 
+  /** Reserve under the session lock before publishing a durable steer record.
+   * Lock order is session, then queue. A crash between the two writes leaves
+   * an unsent reservation that recoverPromptQueueSteer restores.
+   */
+  async reservePromptQueueSteer(
+    key: string,
+    messageId: string,
+    expectedRunId: string,
+  ): Promise<PersistedNativeAgentPendingSteer | null> {
+    return this.enqueueNativeAgentSessionMutation(key, async () => {
+      const loaded = await this.loadNativeAgentSessions();
+      this.assertReadableNativeAgentSession(loaded, key);
+      const session = loaded.sessions[key];
+      if (!session) throw new Error("Native agent session was not found");
+      if (session.pendingDispatch)
+        throw new PendingNativeAgentDispatchError(session.pendingDispatch.requestId);
+      if (session.pendingSteer)
+        throw new PendingNativeAgentSteerError(session.pendingSteer.requestId);
+      return this.enqueuePromptQueueMutation(async () => {
+        const queues = await this.loadPromptQueues();
+        const queueKey = `${session.agent}\0${session.logicalSessionKey}`;
+        const queue = queues[queueKey];
+        if (!queue || queue.environmentId !== session.environmentId) return null;
+        if (queue.inFlight || queue.outstandingClaim)
+          throw new Error("A queued prompt is already being delivered; refresh before steering");
+        const index = queue.messages.findIndex((item) => isRecord(item) && item.id === messageId);
+        const message = queue.messages[index];
+        if (!isRecord(message)) return null;
+        const requestId = isNonBlankString(message.requestId) ? message.requestId : messageId;
+        if (
+          message.command !== undefined ||
+          message.origin !== undefined ||
+          nativeAsyncQuestionItemId(messageId) ||
+          nativeAsyncQuestionItemId(requestId) ||
+          (Array.isArray(message.attachments) && message.attachments.length > 0)
+        ) {
+          throw new Error("This queued item cannot be steered");
+        }
+        if (
+          !isNonBlankString(message.text) ||
+          Buffer.byteLength(message.text, "utf8") > 64 * 1024 ||
+          Buffer.byteLength(requestId, "utf8") > 512
+        )
+          throw new Error("Queued steering text or identity is invalid");
+        if (session.dispatchedRequestIds?.includes(requestId)) {
+          throw new Error("This queued request was already delivered; refresh before steering");
+        }
+        const pending: PersistedNativeAgentPendingSteer = {
+          requestId,
+          text: message.text.trim(),
+          inputDigest: createHash("sha256").update(message.text.trim()).digest("hex"),
+          expectedRunId,
+          state: "prepared",
+          sourceQueue: true,
+          createdAt: nowIso(),
+        };
+        queues[queueKey] = {
+          ...queue,
+          messages: queue.messages.filter((_, i) => i !== index),
+          inFlight: { message, requestId, reservedAt: nowIso(), steer: true },
+          updatedAt: nowIso(),
+          revision: queue.revision + 1,
+        };
+        await this.saveSensitiveJson(this.promptQueuesFile(), queues);
+        await this.saveNativeAgentSession(key, {
+          ...session,
+          pendingSteer: pending,
+          updatedAt: nowIso(),
+        });
+        this.announce("prompt-queue", session.environmentId);
+        return pending;
+      });
+    });
+  }
+
+  /** Called with the session lock. Persist a terminal intent before touching
+   * the source, so restart/retry can finish even an explicit discard exactly once.
+   */
+  private async finishQueuedSteer(
+    session: PersistedNativeAgentSession,
+    settlement: "applied" | "restore" | "discard",
+  ): Promise<void> {
+    const pending = session.pendingSteer;
+    if (!pending?.sourceQueue) return;
+    await this.saveNativeAgentSession(session.key, {
+      ...session,
+      pendingSteer: { ...pending, queueSettlement: settlement },
+    });
+    await this.settlePromptQueueSteerSource(session, pending.requestId, settlement);
+  }
+
+  private async settlePromptQueueSteerSource(
+    session: PersistedNativeAgentSession,
+    requestId: string,
+    settlement: "applied" | "restore" | "discard",
+  ): Promise<void> {
+    await this.enqueuePromptQueueMutation(async () => {
+      const queues = await this.loadPromptQueues();
+      const queueKey = `${session.agent}\0${session.logicalSessionKey}`;
+      const queue = queues[queueKey];
+      if (
+        !queue?.inFlight?.steer ||
+        queue.inFlight.requestId !== requestId ||
+        queue.environmentId !== session.environmentId
+      )
+        return;
+      const { inFlight, ...rest } = queue;
+      queues[queueKey] = {
+        ...rest,
+        messages:
+          settlement === "restore"
+            ? [
+                inFlight.message,
+                ...queue.messages.filter(
+                  (item) =>
+                    !isRecord(item) ||
+                    !isRecord(inFlight.message) ||
+                    item.id !== inFlight.message.id,
+                ),
+              ]
+            : queue.messages,
+        updatedAt: nowIso(),
+        revision: queue.revision + 1,
+      };
+      await this.saveSensitiveJson(this.promptQueuesFile(), queues);
+      this.announce("prompt-queue", session.environmentId);
+    });
+  }
+
+  private async completePendingSteer(
+    session: PersistedNativeAgentSession,
+    settlement: "applied" | "restore" | "discard",
+  ): Promise<void> {
+    const requestId = session.pendingSteer!.requestId;
+    await this.finishQueuedSteer(session, settlement);
+    const saved = {
+      ...session,
+      pendingSteer: undefined,
+      ...(settlement === "applied"
+        ? {
+            dispatchedRequestIds: [
+              ...(session.dispatchedRequestIds ?? []).filter((id) => id !== requestId).slice(-999),
+              requestId,
+            ],
+          }
+        : {}),
+      updatedAt: nowIso(),
+    };
+    await this.saveNativeAgentSession(session.key, saved);
+    await this.scrubPendingNativeAgentSteerBackups(session.key, requestId);
+    this.announceNativeAgentRecord(saved);
+  }
+
+  /** The journal read shares dispatch's lock: an absent answer read before a
+   * concurrent send must never clear that send's newer ambiguous receipt.
+   */
+  async reconcileNativeAgentSteer(
+    key: string,
+    requestId: string,
+    readStatus: () => Promise<"dispatched" | "absent" | "unknown">,
+  ): Promise<"dispatched" | "absent" | undefined> {
+    return this.enqueueNativeAgentSessionMutation(key, async () => {
+      const loaded = await this.loadNativeAgentSessions();
+      this.assertReadableNativeAgentSession(loaded, key);
+      const session = loaded.sessions[key];
+      if (!session || session.pendingSteer?.requestId !== requestId) return undefined;
+      if (session.pendingSteer.queueSettlement) {
+        const settlement = session.pendingSteer.queueSettlement;
+        await this.completePendingSteer(session, settlement);
+        return settlement === "applied" ? "dispatched" : "absent";
+      }
+      const status = await readStatus();
+      if (status === "unknown") return undefined;
+      await this.completePendingSteer(session, status === "dispatched" ? "applied" : "restore");
+      return status;
+    });
+  }
+
+  /** No provider calls: recover an interrupted transfer/settlement under the
+   * same lock as dispatch. A live pending receipt always keeps its source reserved.
+   */
+  async recoverPromptQueueSteer(key: string, requestId: string): Promise<void> {
+    await this.enqueueNativeAgentSessionMutation(key, async () => {
+      const loaded = await this.loadNativeAgentSessions();
+      this.assertReadableNativeAgentSession(loaded, key);
+      const session = loaded.sessions[key];
+      if (!session) return;
+      if (session.pendingSteer?.requestId === requestId) {
+        const settlement = session.pendingSteer.queueSettlement;
+        if (!settlement) return;
+        await this.completePendingSteer(session, settlement);
+        return;
+      }
+      await this.settlePromptQueueSteerSource(
+        session,
+        requestId,
+        session.dispatchedRequestIds?.includes(requestId) ? "applied" : "restore",
+      );
+    });
+  }
+
   /**
    * Persist one backend-owned steering identity across the provider boundary.
    *
@@ -1139,6 +1342,11 @@ export abstract class StorageNative extends StorageReviews {
       if (session.dispatchedRequestIds?.includes(pendingSteer.requestId) && !session.pendingSteer) {
         return { outcome: "applied" };
       }
+      if (pendingSteer.sourceQueue && session.pendingSteer?.requestId !== pendingSteer.requestId)
+        return { outcome: "mismatch" };
+      if (session.pendingSteer?.queueSettlement) {
+        throw new Error("Queued steering settlement is pending; refresh before retrying");
+      }
       if (session.pendingSteer) {
         if (session.pendingSteer.requestId !== pendingSteer.requestId) {
           throw new PendingNativeAgentSteerError(session.pendingSteer.requestId);
@@ -1160,6 +1368,7 @@ export abstract class StorageNative extends StorageReviews {
         await this.saveNativeAgentSession(key, sessions[key]);
       }
 
+      pendingSteer = session.pendingSteer ?? pendingSteer;
       let outcome: NativeAgentSessionActionOutcome;
       try {
         outcome = await dispatch(session);
@@ -1187,21 +1396,10 @@ export abstract class StorageNative extends StorageReviews {
         return { ...outcome, requestId: pendingSteer.requestId };
       }
 
-      sessions[key] = {
-        ...session,
-        pendingSteer: undefined,
-        ...(outcome.outcome === "applied"
-          ? {
-              dispatchedRequestIds: session.dispatchedRequestIds?.includes(pendingSteer.requestId)
-                ? session.dispatchedRequestIds
-                : [...(session.dispatchedRequestIds ?? []).slice(-999), pendingSteer.requestId],
-            }
-          : {}),
-        updatedAt: nowIso(),
-      };
-      await this.saveNativeAgentSession(key, sessions[key]);
-      await this.scrubPendingNativeAgentSteerBackups(key, pendingSteer.requestId);
-      this.announceNativeAgentRecord(sessions[key]!);
+      await this.completePendingSteer(
+        session,
+        outcome.outcome === "applied" ? "applied" : "restore",
+      );
       return outcome;
     });
   }
@@ -1218,22 +1416,16 @@ export abstract class StorageNative extends StorageReviews {
       if (!session || session.pendingSteer?.requestId !== requestId) {
         return false;
       }
-      sessions[key] = {
-        ...session,
-        pendingSteer: undefined,
-        dispatchedRequestIds: session.dispatchedRequestIds?.includes(requestId)
-          ? session.dispatchedRequestIds
-          : [...(session.dispatchedRequestIds ?? []).slice(-999), requestId],
-        updatedAt: nowIso(),
-      };
-      await this.saveNativeAgentSession(key, sessions[key]);
-      await this.scrubPendingNativeAgentSteerBackups(key, requestId);
-      this.announceNativeAgentRecord(sessions[key]!);
+      await this.completePendingSteer(session, "applied");
       return true;
     });
   }
 
-  async clearPendingNativeAgentSteer(key: string, requestId: string): Promise<boolean> {
+  async clearPendingNativeAgentSteer(
+    key: string,
+    requestId: string,
+    discard = false,
+  ): Promise<boolean> {
     if (!isNonBlankString(key) || !isNonBlankString(requestId)) {
       throw new Error("Native agent steer identity must not be blank");
     }
@@ -1245,10 +1437,7 @@ export abstract class StorageNative extends StorageReviews {
       if (!session || session.pendingSteer?.requestId !== requestId) {
         return false;
       }
-      sessions[key] = { ...session, pendingSteer: undefined, updatedAt: nowIso() };
-      await this.saveNativeAgentSession(key, sessions[key]);
-      await this.scrubPendingNativeAgentSteerBackups(key, requestId);
-      this.announceNativeAgentRecord(sessions[key]!);
+      await this.completePendingSteer(session, discard ? "discard" : "restore");
       return true;
     });
   }

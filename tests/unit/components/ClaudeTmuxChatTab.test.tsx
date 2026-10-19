@@ -489,7 +489,9 @@ mock.module("@/components/chat/FileMentionMenu", () => ({
 mock.module("react-virtuoso", () => ({
   ...realReactVirtuosoSnapshot,
   Virtuoso: forwardRef<any, any>((props, ref) => {
-    lastVirtuosoProps = props;
+    useEffect(() => {
+      lastVirtuosoProps = props;
+    }, [props]);
     const scrollerRef = useReactRef<HTMLDivElement>(null);
 
     useImperativeHandle(
@@ -2656,6 +2658,7 @@ Running 1 Explore agent...
           name: /^Fast Lower latency/,
         }),
       );
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
       await Promise.resolve();
     });
     fireEvent.click(screen.getByRole("button", { name: "Start fresh" }));
@@ -2709,6 +2712,7 @@ Running 1 Explore agent...
           name: /^Fast Lower latency/,
         }),
       );
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
       await Promise.resolve();
     });
 

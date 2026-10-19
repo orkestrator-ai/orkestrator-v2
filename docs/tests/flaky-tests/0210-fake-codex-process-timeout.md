@@ -84,3 +84,14 @@ Aggregate result: exit 1 after 664.7 seconds logged. Codex bridge reported 2230 
 - **Owning-file rerun:** `mise run test:logged -- --name codex-fake-process-node-recheck -- bun test --cwd bridges/codex-bridge --preload ../../tests/setup-node.ts ./src/testing/fake-codex-app-server.test.ts --parallel=1 --only-failures` passed unchanged (0.2 seconds logged).
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.LC3ZRI/bridges.log.gz` (compressed when the aggregate completes).
 - **Assessment:** confirmed recurrence; no implementation, assertion, timeout or skip changed.
+
+
+## OpenCode sign-in main merge — 2026-10-19
+
+- **Scope:** `origin/main` at `cd443028` merged into pre-merge HEAD `d897a4eb`; no Codex bridge source or test changed.
+- **Original command:** the testing guide's macOS GNU-tool PATH prefix with `/opt/homebrew/bin:/usr/bin` ahead of ambient shims, `mise run test:logged -- --name merge-tests -- mise run test`. Workspace/root/bridges/protocol reserved 4/1/2/1 slots alongside component and isolated-stack browser validation.
+- **Failure:** `fake Codex app-server process > reports its version and rejects unsupported invocations` exceeded 5000 ms (5000.00 ms) in `bridges/codex-bridge/src/testing/fake-codex-app-server.test.ts`.
+- **Owning-file rerun:** the same PATH with `mise run test:logged -- --name merge-codex-fake-owner -- bun test --cwd bridges/codex-bridge --preload ../../tests/setup-node.ts ./src/testing/fake-codex-app-server.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 0.2 seconds logged).
+- **Suite counts:** Codex reported 2230 passed, 34 skipped and one failed across 2265 tests in 82 files (49.00 seconds). The other four bridge packages passed; the bridge group finished in 164.5 seconds.
+- **Evidence:** `orkestrator-test-run.tW4jss/bridges.log.gz` below the host temporary directory after aggregate completion.
+- **Assessment:** confirmed intermittent recurrence. Concurrent subprocess load is a hypothesis; no implementation, assertion, timeout or skip changed.

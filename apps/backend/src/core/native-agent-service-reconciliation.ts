@@ -891,7 +891,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
     const queueKey = `${agent}\0${logicalSessionKey}`;
     const queue = await this.storage.getPromptQueue(queueKey);
     this.queueScheduling?.note(queue, queueKey);
-    if (!queue || queue.dispatchError) return;
+    if (!queue || (queue.dispatchError && !queue.inFlight?.steer)) return;
     if (queue.inFlight === undefined && queue.messages.length === 0) return;
     await this.drainPromptQueue(queueKey);
   }
@@ -908,7 +908,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
           return (
             BUILD_PIPELINE_AGENTS.includes(agent as BuildPipelineAgent) &&
             (queue.messages.length > 0 || queue.inFlight !== undefined) &&
-            queue.dispatchError === undefined &&
+            (queue.inFlight?.steer || queue.dispatchError === undefined) &&
             (this.queueRetryAt.get(queue.queueKey) ?? 0) <= now
           );
         })
@@ -1033,7 +1033,21 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
     }
     const queue = await this.storage.getPromptQueue(queueKey);
     this.queueScheduling?.note(queue, queueKey);
-    if (!queue || queue.dispatchError) return;
+    if (!queue) return;
+    if (queue.inFlight?.steer) {
+      const key = nativeAgentSessionStorageKey(queue.environmentId, agent, logicalSessionKey);
+      await this.storage.recoverPromptQueueSteer(key, queue.inFlight.requestId);
+      const session = await this.storage.getNativeAgentSession(key);
+      if (session?.pendingSteer?.requestId === queue.inFlight.requestId) {
+        await this.settleAmbiguousSteer(
+          { environmentId: queue.environmentId, agent, logicalSessionKey },
+          key,
+          queue.inFlight.requestId,
+        );
+      }
+      return;
+    }
+    if (queue.dispatchError) return;
     if (queue.inFlight === undefined && queue.messages.length === 0) return;
     const environment = await this.assertEnvironmentLive(queue.environmentId);
     // The launch path has always required this; so must the drain path. A

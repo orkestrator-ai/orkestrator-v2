@@ -24,3 +24,14 @@
 The same shape as 0165: several real Git operations inside one five-second
 budget. Keep open until a recurrence shows whether it needs an explicit
 timeout or a cheaper fixture.
+
+
+## Queued-steer recovery validation recurrence — 2026-10-19
+
+- **Revision:** `1ad88982`, branch `queued-prompt-steering-3970ea85ceea-r1`.
+- **Original command:** `mise run test:logged -- --name queued-steer-handoff-full -- mise run test`, Bun 1.4.3 on macOS arm64. Workspace/root/bridges/protocol reserved 4/1/2/1 slots; backend used two isolated workers alongside another worktree's validation.
+- **Failure:** the indexed test exceeded its 5000 ms deadline at 5227.61 ms. Coordinator timeouts were followed by two between-test errors from late Git work after fixture cleanup.
+- **Suite result:** backend reported 9105 passed, 41 skipped, three failed and two between-test errors across 9149 tests in 486 files (339.43 seconds). Every other workspace package, root/support, bridges and protocol regeneration passed. Aggregate exit 1 after 498.4 seconds, including the workspace resource wait.
+- **Isolated rerun:** `mise run test:logged -- --name coordinator-timeout-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures` passed the unchanged owning file, exit 0 (10.3 seconds logged).
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.JzdYLc/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer run `orkestrator-test-run.MYt5Tx/queued-steer-handoff-full.log.gz` under the same temporary root.
+- **Assessment:** owning-file passes confirm recurrence of the existing flakes. Shared-host contention remains a hypothesis. No owning implementation, assertion, timeout or skip was changed; the queued-steer regression tests passed.

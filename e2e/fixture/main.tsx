@@ -133,6 +133,9 @@ const CloseRetentionFixture = lazy(async () => ({
 const PaneBreakpointFixture = lazy(async () => ({
   default: (await import("./PaneBreakpointFixture")).PaneBreakpointFixture,
 }));
+const SetupRecoveryFixture = lazy(async () => ({
+  default: (await import("./SetupRecoveryFixture")).SetupRecoveryFixture,
+}));
 
 const EnvironmentSettingsDrawerFixture = lazy(async () => ({
   default: (await import("./EnvironmentSettingsDrawerFixture")).EnvironmentSettingsDrawerFixture,
@@ -1650,6 +1653,13 @@ function PullRequestCheckStatusFixture() {
 }
 
 function fixtureForPath() {
+  if (window.location.pathname === "/setup-recovery") {
+    return (
+      <Suspense fallback={null}>
+        <SetupRecoveryFixture />
+      </Suspense>
+    );
+  }
   if (window.location.pathname === "/coordinator-pane-tree") return <CoordinatorPaneTreeFixture />;
   if (window.location.pathname === "/add-project") return <AddProjectDialogFixture />;
   if (window.location.pathname === "/mail-tiles") {

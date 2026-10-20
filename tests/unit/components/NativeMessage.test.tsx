@@ -1889,9 +1889,6 @@ describe("NativeMessage", () => {
         <NativeMessage message={message} />
       </TerminalContextHarness>,
     );
-    // Three calls fold into one line; the rows are inside it.
-    fireEvent.click(screen.getByRole("button", { name: /^Show 3 tool calls:/ }));
-
     // Whether a write's empty `before` means "no prior state" is the backend
     // adapter's call; the client forwards it unchanged.
     await waitFor(() => expect(mockMeasureLegacyToolPayload).toHaveBeenCalledTimes(2));

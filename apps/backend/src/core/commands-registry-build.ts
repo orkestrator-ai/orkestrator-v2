@@ -112,15 +112,27 @@ export function registerBuildPipelineCommands(
    */
   register(
     "get_build_pipeline",
-    async ({ pipelineId, knownRevision, knownSessions, prioritySessionKey }, { storage }) => {
+    async ({ pipelineId, knownRevision, knownSessions, prioritySessionKey }, context) => {
+      const { storage } = context;
       const record = await storage.getBuildPipeline(asNonBlankString(pipelineId, "pipelineId"));
       if (!record) return null;
       if (knownSessions && typeof knownSessions === "object" && !Array.isArray(knownSessions)) {
-        return conditionalBuildPipelineRead(storage, record, {
-          knownRevision,
-          knownSessions: knownSessions as Record<string, unknown>,
-          prioritySessionKey,
-        });
+        // Each stage session's own key owns its artifact publications.
+        const environmentId = record.environmentId;
+        const pipelines = context.buildPipelines;
+        return conditionalBuildPipelineRead(
+          storage,
+          record,
+          {
+            knownRevision,
+            knownSessions: knownSessions as Record<string, unknown>,
+            prioritySessionKey,
+          },
+          undefined,
+          pipelines && environmentId
+            ? (sessionKey, rows) => pipelines.placeStageArtifacts(environmentId, sessionKey, rows)
+            : undefined,
+        );
       }
       if (Number.isSafeInteger(knownRevision) && knownRevision === record.revision) {
         return { unchanged: true, revision: record.revision };

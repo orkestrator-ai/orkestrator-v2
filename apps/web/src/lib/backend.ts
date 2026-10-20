@@ -14,3 +14,4 @@ export * from "./backend/mcp-management";
 export * from "./backend/agent-accounts";
 export * from "./backend/opencode-provider-auth";
 export * from "./backend/disk-usage";
+export * from "./backend/transcript-artifacts";

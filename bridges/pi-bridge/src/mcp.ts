@@ -9,6 +9,7 @@
  */
 import { COORDINATOR_CONTROL_TOOL_NAMES } from "@orkestrator/protocol/coordinator";
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
+import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
 import {
   callsOwnWorkflowResult,
   workflowResultTurnToolNames,
@@ -142,14 +143,17 @@ export function publicPiMcpServers(state: SessionState): NativeAgentMcpServer[] 
 }
 
 /**
- * A worker's Orkestrator mail tool. Always allowed, whatever the session's
- * approval policy: it writes only to Orkestrator's own message store, and it is
- * how a worker reports back.
+ * A worker's Orkestrator mail or transcript-artifact tool. Always allowed,
+ * whatever the session's approval policy: mail writes only to Orkestrator's
+ * own message store and is how a worker reports back; artifact tools write
+ * only to Orkestrator's bounded artifact store, never the workspace. Matched
+ * by exact registered name from the Orkestrator server, never by prefix.
  */
 export function isOrkestratorMailTool(state: SessionState, toolName: string): boolean {
   return (
     runtimes.get(state)?.orkestratorToolNames.has(toolName) === true &&
-    (AGENT_MAIL_TOOL_NAMES as readonly string[]).includes(toolName)
+    ((AGENT_MAIL_TOOL_NAMES as readonly string[]).includes(toolName) ||
+      (ARTIFACT_TOOL_NAMES as readonly string[]).includes(toolName))
   );
 }
 
@@ -174,6 +178,20 @@ export function isOwnWorkflowResultCall(
     runtimes.get(state)?.orkestratorToolNames.has(toolName) === true &&
     !state.policy?.toolPolicy?.deny?.includes(toolName) &&
     callsOwnWorkflowResult(turn, input)
+  );
+}
+
+/**
+ * A transcript-artifact tool from an Orkestrator server. It writes only to
+ * Orkestrator's bounded artifact store, never the workspace, so a read-only
+ * review turn may call it like its own result tools. An explicit
+ * `toolPolicy` deny still wins.
+ */
+export function isOrkestratorArtifactTool(state: SessionState, toolName: string): boolean {
+  return (
+    runtimes.get(state)?.orkestratorToolNames.has(toolName) === true &&
+    (ARTIFACT_TOOL_NAMES as readonly string[]).includes(toolName) &&
+    !state.policy?.toolPolicy?.deny?.includes(toolName)
   );
 }
 
@@ -284,8 +302,15 @@ export async function mcpConfigNeedsRefresh(state: SessionState): Promise<boolea
   return runtime.configKey !== (await piMcpConfigFingerprint(state, runtime.configPaths));
 }
 
+/** Any change, the artifact grant included, rebuilds the connections. */
 function mcpConnectionKey(state: SessionState): string {
-  return state.agentMcp ? `${state.agentMcp.url}\u0000${state.agentMcp.token}` : "";
+  return state.agentMcp
+    ? JSON.stringify([
+        state.agentMcp.url,
+        state.agentMcp.token,
+        state.agentMcp.artifacts?.token ?? null,
+      ])
+    : "";
 }
 
 export async function preparePiMcp(

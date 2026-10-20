@@ -95,7 +95,8 @@ export interface RefusedCellTailOptions {
   watch?: WatchRolloutFile;
 }
 
-function textOf(output: unknown): string {
+/** The text of a cell's output as the model got it back. */
+export function cellOutputText(output: unknown): string {
   if (typeof output === "string") return output;
   if (!Array.isArray(output)) return JSON.stringify(output ?? null) ?? "";
   return output
@@ -131,6 +132,12 @@ function turnIdOf(payload: Record<string, unknown>): string | undefined {
 export function reportsRefusal(output: string): boolean {
   const lower = output.toLowerCase();
   return STRONG_REFUSAL_MARKERS.some((marker) => lower.includes(marker));
+}
+
+/** Whether a cell's output reports a refused call, or a script that threw. */
+export function codeModeCellOutcome(output: string): { refused: boolean; failed: boolean } {
+  const refused = reportsRefusal(output);
+  return { refused, failed: refused || output.trimStart().toLowerCase().startsWith(SCRIPT_FAILED) };
 }
 
 function defaultWatch(_path: string, onChange: () => void): RolloutWatcher {
@@ -286,9 +293,9 @@ export class RefusedCellTail {
     const cell = this.pending.get(callId);
     if (!cell || this.reported.has(callId)) return;
     this.pending.delete(callId);
-    const output = textOf(payload.output);
+    const output = cellOutputText(payload.output);
     const completedAtMs = recordTimeMs(record, payload);
-    const refused = reportsRefusal(output);
+    const { refused, failed } = codeModeCellOutcome(output);
     const unseen =
       !Number.isFinite(cell.startedAtMs) ||
       !Number.isFinite(completedAtMs) ||
@@ -299,7 +306,7 @@ export class RefusedCellTail {
       callId,
       source: cell.source.slice(0, MAX_CELL_TEXT_CHARS),
       output: output.slice(0, MAX_CELL_TEXT_CHARS),
-      failed: refused || output.trimStart().toLowerCase().startsWith(SCRIPT_FAILED),
+      failed,
       ...(Number.isFinite(cell.startedAtMs) ? { startedAtMs: cell.startedAtMs } : {}),
       ...(Number.isFinite(completedAtMs) ? { completedAtMs } : {}),
     });

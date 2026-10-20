@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { deepEqualJson } from "@/lib/chat/message-identity";
+import { clearRichEnvironmentContent } from "@/lib/chat/rich-content-reset";
 import type { Environment, EnvironmentStatus, PrState } from "@/types";
 
 const sortByOrder = (environments: Environment[]): Environment[] =>
@@ -64,7 +65,10 @@ export const useEnvironmentStore = create<EnvironmentState>()((set, get) => ({
   addEnvironment: (environment) =>
     set((state) => ({ environments: sortByOrder([...state.environments, environment]) })),
 
-  removeEnvironment: (environmentId) =>
+  removeEnvironment: (environmentId) => {
+    // Deleting an environment removes its conversations' rich view state,
+    // render cache entries and cached artifact reads too.
+    clearRichEnvironmentContent(environmentId);
     set((state) => {
       const deletingEnvironments = new Set(state.deletingEnvironments);
       deletingEnvironments.delete(environmentId);
@@ -72,7 +76,8 @@ export const useEnvironmentStore = create<EnvironmentState>()((set, get) => ({
         environments: state.environments.filter((environment) => environment.id !== environmentId),
         deletingEnvironments,
       };
-    }),
+    });
+  },
 
   updateEnvironment: (environmentId, updates) =>
     set((state) => {

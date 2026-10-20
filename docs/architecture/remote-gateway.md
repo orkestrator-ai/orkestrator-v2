@@ -208,6 +208,70 @@ reconnects on its own capped, jittered ladder (`ReconnectBackoff` from
 - The token lasts for the current browser tab unless **Remember token** is
   enabled.
 
+## Live artifacts in remote browsers
+
+Interactive HTML artifacts run on a separate **content origin** served by the
+backend's artifact content listener, never on the application origin (see
+[transcript-artifacts-runtime.md](transcript-artifacts-runtime.md#content-serving)).
+Locally that is the other loopback host name. A remote browser cannot reach
+the backend's loopback, so until a content origin is configured, **Run
+interactive** is disabled there with the backend's reason; saved previews,
+PDF downloads and source stay available.
+
+The content origin must be a **different site** from every application
+origin (the backend refuses a same-site origin and reports why in
+`transcript_artifact_capabilities().liveInteractiveReason`). Every
+`*.<tailnet>.ts.net` name of one tailnet (machine names, Tailscale Services,
+other ports of the same name) is one site, so when browsers reach the app
+through Tailscale Serve (`https://<machine>.<tailnet>.ts.net`), the content
+origin needs a host name in a registrable domain you control. Either side may
+use the `ts.net` name, never both.
+
+| Variable | Purpose |
+| --- | --- |
+| `ORKESTRATOR_ARTIFACT_CONTENT_ORIGIN` | Bare `https://host[:port]` origin browsers load artifact documents from. Must be a different site from the application. |
+| `ORKESTRATOR_ARTIFACT_CONTENT_PORT` | Fixed listener port for the TLS terminator to forward to (otherwise it changes every start; a warning says so). |
+| `ORKESTRATOR_ARTIFACT_CONTENT_BIND` | Interface the listener binds. Honoured **only** together with `…_CONTENT_ORIGIN`, and only for a loopback or Tailscale address (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`). Wildcard, LAN or public addresses are refused with a warning and the listener stays on `127.0.0.1` (the default). |
+
+Setup with a reverse proxy on the same machine (the listener stays on
+loopback):
+
+1. Pick a name in your own domain, for example
+   `artifacts.example-private.net`, and resolve it to the backend's Tailscale
+   address with split DNS or a private zone. Never use Tailscale Funnel or a
+   public address.
+2. Terminate HTTPS for that name with a certificate that covers it (the
+   hosted client is HTTPS, so an `http:` content origin is blocked as mixed
+   content), for example a reverse proxy bound to the Tailscale address that
+   forwards to `http://127.0.0.1:34122`. Forward the original `Host` header:
+   the listener answers `421` to any host other than the configured origin.
+3. Start the backend with:
+
+   ```bash
+   ORKESTRATOR_ARTIFACT_CONTENT_ORIGIN=https://artifacts.example-private.net \
+   ORKESTRATOR_ARTIFACT_CONTENT_PORT=34122 \
+   orkestrator serve --tailscale-serve --allowed-origins https://orkestrator.dev,https://www.orkestrator.dev
+   ```
+
+4. Check `transcript_artifact_capabilities`: `contentOrigin` is the configured
+   origin and `liveInteractive` is `true`.
+
+If the TLS terminator runs on another tailnet device, also set
+`ORKESTRATOR_ARTIFACT_CONTENT_BIND=<this machine's Tailscale IPv4>` so the
+listener accepts its connections on the tailnet interface only.
+
+With Tailscale Serve as the terminator for the content origin (for example
+`tailscale serve --bg --https=8443 http://127.0.0.1:34122`, origin
+`https://<machine>.<tailnet>.ts.net:8443`), the application must then be
+reached under a different site (your own domain); a Serve port on the same
+`ts.net` name as the application is refused as same-site. The default
+`frame-ancestors` are the gateway's real origins (including the Tailscale
+Serve URL and allowed web origins) plus the desktop shell;
+`ORKESTRATOR_ARTIFACT_FRAME_ANCESTORS` replaces them. The listener has no
+application routes and accepts no gateway token or cookies; documents are
+reachable only through short-lived capability URLs minted after an ownership
+check.
+
 ## File and folder pickers
 
 Every place the app asks for a path on the host (project folder, repository

@@ -20,6 +20,16 @@ import {
 import type { WebAnnotationToolHost } from "./web-annotation-contracts.js";
 import type { ProvisionalFindingSink } from "./review-provisional-findings.js";
 import { registerWebAnnotationTools, WebAnnotationToolLimiter } from "./web-annotation-tools.js";
+import {
+  ARTIFACT_ONLY_SERVER_INSTRUCTIONS,
+  ARTIFACT_TOOL_INSTRUCTIONS,
+  registerTranscriptArtifactTools,
+  type TranscriptArtifactToolHost,
+} from "./transcript-artifacts/tools.js";
+import {
+  ORKESTRATOR_ARTIFACT_MCP_PATH,
+  ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME,
+} from "@orkestrator/protocol/transcript-artifacts";
 
 const MAX_MCP_REQUEST_BYTES = 512 * 1024;
 const MAX_TITLE_LENGTH = 500;
@@ -61,6 +71,8 @@ export type AgentToolConnection = {
   token: string;
   /** Signed one-attempt argument used with the persistent OpenCode broker. */
   workflowResultCapability?: string;
+  /** A workflow turn's artifact-only connection (see `ProviderSendOptions.agentMcp`). */
+  artifacts?: { token: string };
 };
 
 export type AgentToolScope = {
@@ -277,6 +289,7 @@ async function createAgentToolServer(
   workflowResults?: WorkflowResultService,
   webAnnotations?: { host: WebAnnotationToolHost; limiter: WebAnnotationToolLimiter } | null,
   provisionalFindings?: ProvisionalFindingSink | null,
+  artifacts?: TranscriptArtifactToolHost | null,
 ): Promise<McpServer> {
   if (scope.workflowResultBroker) {
     const server = new McpServer(
@@ -350,6 +363,10 @@ async function createAgentToolServer(
   // Annotation tools bind to the tab named by the credential; an
   // environment-wide credential cannot identify an assigned request.
   const annotationTools = webAnnotations && scope.tabId ? webAnnotations : null;
+  // Artifact tools are ordinary tools of this general server only; the
+  // workflow-result branches above returned without them. Environment-wide
+  // credentials must additionally present a per-turn artifact grant.
+  const artifactTools = artifacts?.toolsEnabled() ? artifacts : null;
   const server = new McpServer(
     { name: "orkestrator", version: "1.0.0" },
     {
@@ -360,7 +377,8 @@ async function createAgentToolServer(
         messagingInstructions +
         (annotationTools
           ? " Browser annotation tools read the annotation request assigned to this session and optionally report its result; they never resolve annotations."
-          : ""),
+          : "") +
+        (artifactTools ? ARTIFACT_TOOL_INSTRUCTIONS : ""),
     },
   );
 
@@ -518,6 +536,35 @@ async function createAgentToolServer(
     },
   );
 
+  if (artifactTools) registerTranscriptArtifactTools(server, artifactTools, scope);
+
+  return server;
+}
+
+/**
+ * The artifact-only server of a backend workflow turn (`/artifact-mcp`).
+ *
+ * Its bearer token is the turn's artifact grant, minted at dispatch for the
+ * workflow session's own conversation and revoked when the turn settles. It
+ * lists the artifact tools and nothing else, and every call is authorized
+ * with that grant, so it carries no workflow-result, Kanban or mail authority
+ * and the workflow-result credential beside it carries no artifact authority.
+ */
+function createArtifactOnlyServer(
+  host: TranscriptArtifactToolHost,
+  scope: { environmentId: string; projectId: string },
+  grant: string,
+): McpServer {
+  const server = new McpServer(
+    { name: ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME, version: "1.0.0" },
+    { instructions: ARTIFACT_ONLY_SERVER_INSTRUCTIONS },
+  );
+  registerTranscriptArtifactTools(
+    server,
+    host,
+    { environmentId: scope.environmentId, projectId: scope.projectId },
+    { boundGrant: grant },
+  );
   return server;
 }
 
@@ -545,6 +592,7 @@ export class AgentToolsServer {
   private webAnnotationToolHost: WebAnnotationToolHost | null = null;
   private readonly webAnnotationToolLimiter = new WebAnnotationToolLimiter();
   private provisionalFindingSink: ProvisionalFindingSink | null = null;
+  private transcriptArtifactToolHost: TranscriptArtifactToolHost | null = null;
 
   constructor(
     private readonly storage: StorageService,
@@ -729,6 +777,19 @@ export class AgentToolsServer {
     this.provisionalFindingSink = sink;
   }
 
+  /**
+   * Installs (or removes, with null) the transcript artifact tool host. Tools
+   * are advertised on the general server only, never to workflow-result
+   * credentials.
+   */
+  setTranscriptArtifactToolHost(host: TranscriptArtifactToolHost | null): void {
+    this.transcriptArtifactToolHost = host;
+  }
+
+  hasTranscriptArtifactTools(): boolean {
+    return this.transcriptArtifactToolHost?.toolsEnabled() === true;
+  }
+
   hasWebAnnotationTools(): boolean {
     return this.webAnnotationToolHost !== null;
   }
@@ -798,10 +859,68 @@ export class AgentToolsServer {
     response.end();
   }
 
+  /**
+   * `/artifact-mcp`: authenticated only by a live artifact grant. Agent tool
+   * and workflow-result credentials are refused here, and a grant is refused
+   * on `/mcp`, so neither authority can stand in for the other.
+   */
+  private async handleArtifactMcp(request: IncomingMessage, response: ServerResponse) {
+    if (request.method !== "POST") {
+      request.resume();
+      response.writeHead(405, { allow: "POST", "cache-control": "no-store" });
+      response.end();
+      return;
+    }
+    const host = this.transcriptArtifactToolHost;
+    if (!host?.toolsEnabled() || typeof host.authenticateArtifactGrant !== "function") {
+      request.resume();
+      jsonResponse(response, 404, { error: "Artifact tools are not enabled" });
+      return;
+    }
+    const grant = bearerToken(request);
+    const scope = grant ? host.authenticateArtifactGrant(grant) : null;
+    if (!grant || !scope) {
+      request.resume();
+      jsonResponse(
+        response,
+        401,
+        { error: "Invalid artifact tools credential" },
+        { "www-authenticate": 'Bearer realm="orkestrator-artifact-tools"' },
+      );
+      return;
+    }
+    let body: unknown;
+    try {
+      body = await readJsonBody(request);
+    } catch (error) {
+      if (error instanceof RequestBodyTooLargeError) {
+        jsonResponse(response, 413, { error: error.message });
+        return;
+      }
+      if (error instanceof InvalidJsonBodyError) {
+        jsonResponse(response, 400, { error: error.message });
+        return;
+      }
+      throw error;
+    }
+    const handler = createMcpHandler(() => createArtifactOnlyServer(host, scope, grant), {
+      legacy: "stateless",
+    });
+    try {
+      await toNodeHandler(handler)(request, response, body);
+    } finally {
+      await handler.close().catch(() => undefined);
+    }
+  }
+
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const url = new URL(request.url ?? "/", "http://agent-tools.invalid");
     if (url.pathname === CLAUDE_STATE_SIGNAL_PATH) {
       this.handleStateSignal(request, response);
+      return;
+    }
+    if (url.pathname === ORKESTRATOR_ARTIFACT_MCP_PATH) {
+      await this.handleArtifactMcp(request, response);
       return;
     }
     if (url.pathname !== AGENT_MCP_PATH && !(url.pathname === "/design-mcp" && this.design)) {
@@ -893,6 +1012,7 @@ export class AgentToolsServer {
                   ? { host: this.webAnnotationToolHost, limiter: this.webAnnotationToolLimiter }
                   : null,
                 this.provisionalFindingSink,
+                this.transcriptArtifactToolHost,
               ),
         { legacy: "stateless" },
       );

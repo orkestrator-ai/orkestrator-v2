@@ -12,6 +12,10 @@ import { promises as fs } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { isObject, nonBlank } from "./state.js";
+import {
+  ORKESTRATOR_ARTIFACT_MCP_PATH,
+  ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME,
+} from "@orkestrator/protocol/transcript-artifacts";
 
 export const ORKESTRATOR_MCP_SERVER_NAME = "orkestrator";
 export const AGENT_MCP_URL_ENV = "ORKESTRATOR_AGENT_MCP_URL";
@@ -39,6 +43,12 @@ export type McpTransport = "http" | "stdio";
 export interface AgentMcpConnection {
   url: string;
   token: string;
+  /**
+   * A backend workflow turn's artifact-only connection: an
+   * `orkestrator-artifacts` server at this connection's origin
+   * (`/artifact-mcp`), authenticated by the turn's artifact grant.
+   */
+  artifacts?: { token: string };
 }
 
 export interface ResolvedMcpServer {
@@ -59,7 +69,34 @@ export function parseAgentMcpConnection(value: unknown): AgentMcpConnection | un
   const url = typeof value.url === "string" ? value.url.trim() : "";
   const token = typeof value.token === "string" ? value.token.trim() : "";
   if (!url || !token || Buffer.byteLength(token, "utf8") > 1024) return undefined;
-  return { url, token };
+  const artifacts = isObject(value.artifacts) ? value.artifacts.token : undefined;
+  const artifactToken = typeof artifacts === "string" ? artifacts.trim() : "";
+  return {
+    url,
+    token,
+    ...(artifactToken && Buffer.byteLength(artifactToken, "utf8") <= 1024
+      ? { artifacts: { token: artifactToken } }
+      : {}),
+  };
+}
+
+/**
+ * A workflow turn's artifact-only server, beside the attempt's own
+ * `orkestrator` server. Same trusted scope: its tools are Orkestrator's.
+ */
+export function orkestratorArtifactMcpServer(
+  connection?: AgentMcpConnection,
+): ResolvedMcpServer | undefined {
+  const token = connection?.artifacts?.token;
+  const agent = token ? orkestratorMcpServer(connection, {}) : undefined;
+  if (!token || !agent?.url) return undefined;
+  return {
+    id: ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME,
+    scope: "orkestrator",
+    transport: "http",
+    url: new URL(ORKESTRATOR_ARTIFACT_MCP_PATH, agent.url).toString(),
+    headers: { Authorization: `Bearer ${token}` },
+  };
 }
 
 export function orkestratorMcpServer(
@@ -304,13 +341,18 @@ export async function resolvePiMcpServers(input: {
     { scope: "project", entries: project },
   ]);
   const orkestrator = orkestratorMcpServer(input.agentMcp, input.env);
-  // The Orkestrator entry is reserved: it is inserted last so it wins a name
-  // collision, but the file scopes are truncated first so it is never the entry
-  // `slice` discards. Without this, 64 user servers silently disabled agent mail
-  // and coordinator delegation.
-  const limit = orkestrator ? MAX_MCP_SERVERS - 1 : MAX_MCP_SERVERS;
-  const resolved = fileServers.slice(0, limit);
-  if (orkestrator) resolved.push(orkestrator);
+  const artifacts = orkestratorArtifactMcpServer(input.agentMcp);
+  // The Orkestrator entries are reserved: they are inserted last so they win a
+  // name collision, but the file scopes are truncated first so they are never
+  // the entries `slice` discards. Without this, 64 user servers silently
+  // disabled agent mail and coordinator delegation.
+  const reserved = [orkestrator, artifacts].filter(
+    (server): server is ResolvedMcpServer => server !== undefined,
+  );
+  const resolved = fileServers
+    .filter((server) => server.id !== ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME)
+    .slice(0, MAX_MCP_SERVERS - reserved.length);
+  resolved.push(...reserved);
   return resolved;
 }
 

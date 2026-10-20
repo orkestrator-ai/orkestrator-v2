@@ -59,3 +59,10 @@ The aggregate failed this owner and its unchanged owning file passed with one wo
 The recurrence, owning-file results and remaining limitations are recorded in
 [0501](0501-queued-steer-main-merge-validation.md). No owning implementation,
 assertion, timeout or skip was changed for validation.
+
+## Rich transcripts workflow artifacts — 2026-10-20
+
+- **Original command:** `mise run test` on branch `20261020-005611-6ba26bffea80` (uncommitted rich-transcripts work, base `67a6cc31`), macOS arm64, Bun 1.4.3.
+- **Failure:** `plan approval flow > denies EnterPlanMode when its durable preference cannot be written` failed at the fixture `writeFile` (`session-manager-interactions.test.ts:827`) with `EISDIR` after 1.30 ms; the only failure of the run (codex lockfile, root/support and workspace groups passed).
+- **Owning-file rerun:** `bun test src/services/session-manager-interactions.test.ts -t "denies EnterPlanMode when its durable preference"` from `bridges/claude-bridge` passed three times, and the whole file passed 29/29.
+- **Assessment:** the same fixture-directory symptom. The branch's Claude bridge changes (artifact MCP server configuration, tool naming, permissions) add no file writes under the Claude home; no source, assertion, timeout or skip changed.

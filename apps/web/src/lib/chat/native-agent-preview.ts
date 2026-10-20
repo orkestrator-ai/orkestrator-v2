@@ -18,6 +18,7 @@ export function summarizeNativeAgentAction(part: NativeMessagePart): string {
   if (part.type === "async-question") return part.content.trim() || "Question";
   if (part.type === "thinking") return "Thinking";
   if (part.type === "file") return part.content.trim() || "File";
+  if (part.type === "artifact") return part.artifact.title?.trim() || "Artifact";
 
   const command = typeof part.toolArgs?.command === "string" ? part.toolArgs.command : null;
   if (command) return command;

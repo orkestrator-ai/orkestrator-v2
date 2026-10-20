@@ -91,6 +91,10 @@ import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { ReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 import { useVirtuosoScrollState } from "../../apps/web/src/hooks/useVirtuosoScrollState";
 
+const RichTranscriptPerfFixture = lazy(async () => ({
+  default: (await import("./RichTranscriptPerfFixture")).RichTranscriptPerfFixture,
+}));
+
 const TranscriptPagingFixture = lazy(async () => ({
   default: (await import("./TranscriptPagingFixture")).TranscriptPagingFixture,
 }));
@@ -1783,6 +1787,12 @@ function fixtureForPath() {
     return (
       <Suspense fallback={null}>
         <TranscriptPagingFixture />
+      </Suspense>
+    );
+  if (window.location.pathname === "/rich-transcript-perf")
+    return (
+      <Suspense fallback={null}>
+        <RichTranscriptPerfFixture />
       </Suspense>
     );
   if (window.location.pathname === "/virtuoso-follow") return <VirtuosoFollowFixture />;

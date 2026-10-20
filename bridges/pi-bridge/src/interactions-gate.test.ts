@@ -572,3 +572,72 @@ test("a read-only reviewer may use its own attempt's result tools under every ap
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("a read-only workflow turn may use its own artifact-only server's tools", async () => {
+  const { preparePiMcp, setPiMcpTransportForTests } = await import("./mcp.js");
+  const { mkdir, mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "pi-mcp-artifacts-"));
+  await mkdir(join(root, "agent"), { recursive: true });
+  const connected: Array<{ id: string; url?: string; authorization?: string }> = [];
+  setPiMcpTransportForTests({
+    async connect(server) {
+      connected.push({
+        id: server.id,
+        url: server.url,
+        authorization: server.headers?.Authorization,
+      });
+      return {
+        tools:
+          server.id === "orkestrator-artifacts"
+            ? [{ name: "publish_artifact" }, { name: "create_artifact" }]
+            : [{ name: "submit_review_report" }],
+        async call() {
+          return { content: [{ type: "text", text: "ok" }] };
+        },
+        async close() {},
+      };
+    },
+  });
+  try {
+    for (const approvals of ["auto-approve", "ask", "deny"] as const) {
+      connected.length = 0;
+      const state = newSessionState();
+      state.readOnly = true;
+      state.policy = {
+        id: "pipeline",
+        sandbox: "none",
+        approvals,
+        projectResources: false,
+        networkAccess: "full",
+      };
+      state.agentMcp = {
+        url: "http://127.0.0.1:4567/mcp",
+        token: "attempt-capability",
+        artifacts: { token: "oag1.turn-grant" },
+      };
+      await preparePiMcp(state, { agentDir: join(root, "agent"), cwd: root, env: {} });
+
+      expect(connected).toContainEqual({
+        id: "orkestrator-artifacts",
+        url: "http://127.0.0.1:4567/artifact-mcp",
+        authorization: "Bearer oag1.turn-grant",
+      });
+      expect(await requestToolApproval(state, "pub", "publish_artifact", {})).toEqual({
+        block: false,
+      });
+      // The read-only gate still holds for everything else.
+      expect(await requestToolApproval(state, "edit", "edit", {})).toMatchObject({ block: true });
+      // An explicit deny still wins.
+      state.policy = { ...state.policy, toolPolicy: { deny: ["publish_artifact"] } };
+      expect(await requestToolApproval(state, "pub", "publish_artifact", {})).toMatchObject({
+        block: true,
+      });
+      state.approvals.clear();
+    }
+  } finally {
+    setPiMcpTransportForTests();
+    await rm(root, { recursive: true, force: true });
+  }
+});

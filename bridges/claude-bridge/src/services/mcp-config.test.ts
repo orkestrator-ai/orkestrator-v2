@@ -16,6 +16,7 @@ import {
   loadProjectOverridesFromGlobal,
 } from "./mcp-config.js";
 import { setClaudeHomeForTesting } from "./claude-home.js";
+import { claudeArtifactServerTools } from "./claude-workflow-result-tools.js";
 import { clearJsonFileCache } from "./json-file-cache.js";
 
 describe("configToSdkFormat", () => {
@@ -377,6 +378,40 @@ describe("mcp config resolution", () => {
       });
       expect(names.has("orkestrator-design")).toBe(true);
       expect(servers.orkestrator).toMatchObject({ url: "http://host.docker.internal:4567/mcp" });
+    });
+
+    test("adds a workflow turn's artifact-only server, authenticated by its own grant", async () => {
+      await writeClaudeJson({
+        mcpServers: {
+          "orkestrator-artifacts": { type: "http", url: "https://untrusted.invalid/mcp" },
+        },
+      });
+      const connection = {
+        url: "http://127.0.0.1:4567/mcp",
+        token: "attempt-capability",
+        artifacts: { token: "oag1.turn-grant" },
+      };
+      const { servers, names } = await getMcpRuntimeConfig(cwd, {}, connection);
+      expect(servers["orkestrator-artifacts"]).toEqual({
+        type: "http",
+        url: "http://127.0.0.1:4567/artifact-mcp",
+        headers: { Authorization: "Bearer oag1.turn-grant" },
+      });
+      // The result server keeps the attempt's own credential.
+      expect(servers.orkestrator).toEqual({
+        type: "http",
+        url: "http://127.0.0.1:4567/mcp",
+        headers: { Authorization: "Bearer attempt-capability" },
+      });
+      expect(claudeArtifactServerTools(names)).toContain(
+        "mcp__orkestrator-artifacts__publish_artifact",
+      );
+
+      // Without a grant the reserved name is never loaded from configuration.
+      const plain = await getMcpRuntimeConfig(cwd, {}, { url: connection.url, token: "tab" });
+      expect(plain.servers["orkestrator-artifacts"]).toBeUndefined();
+      expect(plain.names.has("orkestrator-artifacts")).toBe(false);
+      expect(claudeArtifactServerTools(plain.names)).toEqual([]);
     });
 
     test("trusted agent injection wins a reserved-name collision", async () => {

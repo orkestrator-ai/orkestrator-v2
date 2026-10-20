@@ -1,5 +1,6 @@
 import { constants, promises as fs, type Stats } from "node:fs";
 import fsSync from "node:fs";
+import type { FileHandle } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -828,6 +829,33 @@ async function assertOpenedHostFile(
 }
 
 /**
+ * Opens one regular file in Orkestrator-managed workspace storage with the
+ * same confinement as `readReadableHostFile`: lexical root match, no symbolic
+ * link on any segment below the root, canonical target inside the canonical
+ * root, a nonblocking no-follow open, and a handle-backed regular-file and
+ * identity check. The caller owns (and must close) the returned handle; ranged
+ * reads on it read exactly the validated file.
+ */
+export async function openReadableHostFile(
+  filePath: string,
+  allowedRoots: string[],
+): Promise<{ handle: FileHandle; stats: Stats; targetPath: string; canonicalRoot: string }> {
+  const { canonicalRoot, targetPath } = await resolveReadableHostTarget(filePath, allowedRoots);
+  const handle = await fs.open(
+    targetPath,
+    constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0),
+  );
+  try {
+    const stats = await handle.stat();
+    await assertOpenedHostFile(targetPath, canonicalRoot, stats);
+    return { handle, stats, targetPath, canonicalRoot };
+  } catch (error) {
+    await handle.close().catch(() => undefined);
+    throw error;
+  }
+}
+
+/**
  * Reads one bounded snapshot from Orkestrator-managed workspace storage.
  * Validation, fstat, and reads all apply to the same no-follow file handle.
  */
@@ -838,18 +866,17 @@ export async function readReadableHostFile(
     afterInitialValidation?: () => void | Promise<void>;
   },
 ): Promise<Buffer> {
-  const { canonicalRoot, targetPath } = await resolveReadableHostTarget(filePath, allowedRoots);
   // A FIFO blocks during a read-only open until a writer appears. Open every
-  // candidate nonblocking, then let the handle-backed regular-file check below
+  // candidate nonblocking, then let the handle-backed regular-file check
   // reject FIFOs, devices, and sockets without tying up a libuv worker.
-  const handle = await fs.open(
+  const {
+    handle,
+    stats: initialStats,
     targetPath,
-    constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0),
-  );
+    canonicalRoot,
+  } = await openReadableHostFile(filePath, allowedRoots);
 
   try {
-    const initialStats = await handle.stat();
-    await assertOpenedHostFile(targetPath, canonicalRoot, initialStats);
     if (initialStats.size > MAX_BINARY_FILE_BYTES) {
       throw new Error(`File exceeds ${MAX_BINARY_FILE_BYTES} bytes`);
     }

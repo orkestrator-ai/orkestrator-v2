@@ -288,7 +288,7 @@ export interface SessionState {
    * persisting them would write the bearer into `state.json`. Attach falls
    * back to the process env when this is absent after a restart.
    */
-  agentMcp?: { url: string; token: string };
+  agentMcp?: { url: string; token: string; artifacts?: { token: string } };
   /**
    * The workflow-result attempt the current turn runs for, from its prompt.
    * Runtime-only and replaced by every prompt: it scopes the read-only and

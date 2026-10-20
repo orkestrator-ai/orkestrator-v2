@@ -297,7 +297,17 @@ export interface EngineTurnConfig {
    */
   permissionProfile?: string;
   /** In-memory only: never persisted or logged with the bridge session record. */
-  agentMcp?: { url: string; token: string; design?: boolean };
+  agentMcp?: {
+    url: string;
+    token: string;
+    design?: boolean;
+    /**
+     * A backend workflow turn's artifact-only connection: an
+     * `orkestrator-artifacts` server at this connection's origin
+     * (`/artifact-mcp`), authenticated by the turn's artifact grant.
+     */
+    artifacts?: { token: string };
+  };
   /**
    * Backend-selected tool on an attempt-scoped result MCP connection. Its
    * presence permits that narrow server to bypass Codex's MCP approval gate.

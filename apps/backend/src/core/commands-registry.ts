@@ -2,6 +2,8 @@ import { registerDesignCommands } from "./commands-registry-design.js";
 import { registerMcpManagementCommands } from "./commands-registry-mcp.js";
 import { registerPreviewCommands } from "./commands-registry-previews.js";
 import { registerWebAnnotationCommands } from "./commands-registry-web-annotations.js";
+import { registerTranscriptArtifactCommands } from "./transcript-artifacts/commands.js";
+import { registerTranscriptArtifactPdfCommands } from "./transcript-artifacts/commands-pdf.js";
 import type { AwaitBridgeReadyResult } from "@orkestrator/protocol/bridge-readiness";
 import type { ClaudeModelCatalogSnapshot } from "./models.js";
 import type {
@@ -279,6 +281,8 @@ export function createCommandRegistry(
   registerPreviewCommands(register);
   registerMcpManagementCommands(register);
   registerWebAnnotationCommands(register);
+  registerTranscriptArtifactCommands(register);
+  registerTranscriptArtifactPdfCommands(register, (name) => commands.get(name));
   registerProjectCommands(register, dependencies);
   registerControlCommands(register, dependencies);
   registerCoordinatorCommands(register, dependencies);

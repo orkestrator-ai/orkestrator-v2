@@ -74,3 +74,19 @@ These observations do not independently establish a flake. Host load rose above 
 After the other browser suites ended, `ORKESTRATOR_AGENT_TEST_RUN_ID=merge-main-owner-20261019 mise run test:logged -- --name merge-electron-main-owner -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts electron-main.spec.ts --workers=1` passed the unchanged owning file (exit 0, 23.4 seconds logged). No implementation, assertion, timeout or skip changed.
 
 `ORKESTRATOR_AGENT_TEST_RUN_ID=merge-terminal-owner-20261019 mise run test:logged -- --name merge-electron-terminal-owner -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts terminal-input-resume-electron.spec.ts --workers=1` also passed unchanged (exit 0, 10.6 seconds logged). These passes confirm intermittent startup-title recurrences; shared-host contention remains a hypothesis.
+
+## Rich transcript fixes — 2026-10-20
+
+`mise run test:logged -- --name review-electron -- mise run test:agent:electron`
+reported 19 passed, one skipped, and three failed in 166.6 seconds. The two
+main-window cases and the interactive artifact host's initial `toHaveTitle`
+saw `Orkestrator AI` at the existing five-second deadline. The artifact host
+owner passed unchanged alone (`review-electron-artifact-alone`, 5.9 seconds).
+Both main-window cases passed in a focused rerun (14.4 seconds), and the whole
+`electron-main.spec.ts` owner then passed unchanged (`review-electron-main-owner`,
+24.3 seconds). No timeout or assertion was relaxed.
+
+Failure evidence: `orkestrator-test-run.Q4hGyo/review-electron.log.gz` under the
+host temporary directory; screenshots and JSON under
+`output/agent-testing/electron-smoke/electron/`. The aggregate ran beside the
+repository and browser suites; contention remains a hypothesis.

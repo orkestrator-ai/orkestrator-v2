@@ -268,6 +268,13 @@ If another standalone `bun.lock` is added later, add its owning directory to
 both command lists and to the lockfile coverage in
 `tests/unit/version-drift.test.ts`.
 
+`docker/artifact-preview-worker/package-lock.json` is the one npm lockfile: the
+worker image runs Node and installs with `npm ci`. When the backend's
+`playwright-core` pin changes, update that directory's `package.json` and
+regenerate the lockfile with the base image's own npm (`npm install
+--package-lock-only --ignore-scripts` in a container of the worker image); the
+drift test checks the manifest, lockfile, backend pin and base-image tag agree.
+
 ## Formatting and Linting - oxc
 
 Formatting is oxfmt and linting is oxlint; run them from the repo root with

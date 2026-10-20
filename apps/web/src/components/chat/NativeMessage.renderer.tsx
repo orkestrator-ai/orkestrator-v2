@@ -37,6 +37,7 @@ import {
   ToolGroupPart,
 } from "./NativeMessage.agent-parts";
 import { NativeAsyncQuestionCard } from "./NativeAsyncQuestionCard";
+import { ArtifactPart } from "./rich/ArtifactPart";
 
 export function DeferredToolMessagePart({
   part,
@@ -258,6 +259,8 @@ function MessagePartContent({
           promptPresentation={promptPresentation}
           renderJsonPayload={renderJsonPayload}
           expansionKey={`${partKey}/json`}
+          richPartId={part.sourcePartId ?? partKey}
+          containerId={containerId}
         />
       );
     case "transcript-reference":
@@ -323,6 +326,7 @@ function MessagePartContent({
           toolName={part.toolName}
           toolState={part.toolState}
           toolTitle={part.toolTitle}
+          mcpServerName={part.mcpServerName}
           toolArgs={part.toolArgs}
           toolOutput={part.toolOutput}
           toolError={part.toolError}
@@ -373,6 +377,10 @@ function MessagePartContent({
       return <AgentGroupPart part={part} containerId={containerId} partKey={partKey} />;
     case "tool-group":
       return <ToolGroupPart part={part} containerId={containerId} partKey={partKey} />;
+    case "artifact":
+      // A published artifact reference; the card resolves it through the
+      // authenticated conversation scope and never trusts its own text.
+      return <ArtifactPart part={part} />;
     case "task-group":
       return (
         <TaskGroupPart

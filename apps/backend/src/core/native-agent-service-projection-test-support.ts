@@ -287,6 +287,7 @@ export async function withService(
     toolDetailCacheMaxBytes?: number;
     projectedMessageCacheLimits?: NativeAgentServiceOptions["projectedMessageCacheLimits"];
     directHistoryPageCacheLimits?: NativeAgentServiceOptions["directHistoryPageCacheLimits"];
+    artifactLedger?: NativeAgentServiceOptions["artifactLedger"];
   },
   run: (context: { storage: StorageService; service: NativeAgentService }) => Promise<void>,
 ): Promise<void> {
@@ -340,6 +341,7 @@ export async function withService(
     ...(setup.directHistoryPageCacheLimits
       ? { directHistoryPageCacheLimits: setup.directHistoryPageCacheLimits }
       : {}),
+    ...(setup.artifactLedger ? { artifactLedger: setup.artifactLedger } : {}),
   });
   try {
     await run({ storage, service });

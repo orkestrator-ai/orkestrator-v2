@@ -9,6 +9,7 @@ import {
   nativeImage,
   net,
   Notification,
+  protocol,
   safeStorage,
   session,
   shell,
@@ -117,6 +118,9 @@ import {
   shouldProbeMacOsPermissionsBeforeBackend,
 } from "./macos-permissions.js";
 import { createClipboardTextWriter } from "./clipboard.js";
+import { ArtifactHostManager } from "./artifact-host-manager.js";
+import { ARTIFACT_SHELL_SCHEME_PRIVILEGES } from "./artifact-host-shell.js";
+import { ARTIFACT_HOST_CHANNELS } from "@orkestrator/protocol/artifact-host-ipc";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -139,6 +143,10 @@ app.setPath(
   "userData",
   runtimeProfile?.dataDir ?? path.join(app.getPath("appData"), userDataDirectoryName(isDev)),
 );
+// The live artifact host's trusted viewer shell needs a tuple origin (so the
+// content server's frame-ancestors can name it). Must precede `ready`; the
+// scheme is only ever handled on each live host's private session.
+protocol.registerSchemesAsPrivileged([ARTIFACT_SHELL_SCHEME_PRIVILEGES]);
 const applicationLogging =
   runtimeFlavor === "production"
     ? installProductionApplicationLogging({ dataDir: app.getPath("userData") })
@@ -155,6 +163,7 @@ type DesktopWindowContext = {
   slot: number;
   browserPreviewManager: BrowserPreviewManager;
   previewTransport: PreviewTransportManager;
+  artifactHosts: ArtifactHostManager;
 };
 let previewPortHints: ReturnType<typeof createPreviewPortHints> | null = null;
 let browserPreviewCaptures: BrowserPreviewCaptureStore | null = null;
@@ -368,6 +377,28 @@ function createWindowBrowserPreviews(
 }
 
 /**
+ * One live interactive-artifact host per window, on its own sandboxed view
+ * and fresh nonpersistent session. Events go to this window's renderer only.
+ * A renderer reload leaves the host without an owner, so it is closed.
+ */
+function createWindowArtifactHosts(createdWindow: BrowserWindow): ArtifactHostManager {
+  const artifactHosts = new ArtifactHostManager({
+    getWindow: () => createdWindow,
+    WebContentsViewCtor: WebContentsView,
+    fromPartition: (partition) => session.fromPartition(partition, { cache: false }),
+    emit: (event) => {
+      if (!createdWindow.isDestroyed()) {
+        createdWindow.webContents.send(ARTIFACT_HOST_CHANNELS.event, event);
+      }
+    },
+    // Content-free reason counters only; never URLs or page data.
+    reportDiagnostics: (diagnostics) => console.info("[ArtifactHost] host ended", diagnostics),
+  });
+  createdWindow.webContents.on("did-navigate", () => artifactHosts.closeAll("window-closed"));
+  return artifactHosts;
+}
+
+/**
  * Updates are checked after the first window exists, so a slow or failing
  * update server can never delay or break startup.
  */
@@ -520,6 +551,7 @@ async function createWindow(connectionId?: string): Promise<void> {
           slot,
           activeConnectionId,
         );
+        const artifactHosts = createWindowArtifactHosts(createdWindow);
         const webContentsId = createdWindow.webContents.id;
         windowContexts.set(webContentsId, {
           window: createdWindow,
@@ -527,6 +559,7 @@ async function createWindow(connectionId?: string): Promise<void> {
           slot,
           browserPreviewManager: browserPreviewRuntime.manager,
           previewTransport: browserPreviewRuntime.previewTransport,
+          artifactHosts,
         });
         lastFocusedWindowId = webContentsId;
         registered = true;
@@ -548,6 +581,7 @@ async function createWindow(connectionId?: string): Promise<void> {
         createdWindow.once("closed", () => {
           const closing = windowContexts.get(webContentsId);
           closing?.browserPreviewManager.destroyAll();
+          closing?.artifactHosts.dispose();
           // Owned local listeners and tunnel connections end with the window;
           // the backend's services and applications keep running.
           void closing?.previewTransport.disposeAll().catch((error: unknown) => {
@@ -613,6 +647,7 @@ function registerIpc(): void {
       return { invoke: (command, args) => manager().invoke(command, args, scope) };
     },
     getMainWindow: (event) => contextForEvent(event).window,
+    getArtifactHosts: (event) => contextForEvent(event).artifactHosts,
     ipc: ipcMain,
     clipboardApi: clipboard,
     createClipboardItem: (items) => new ClipboardItem(items),

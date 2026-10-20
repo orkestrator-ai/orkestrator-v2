@@ -6,6 +6,12 @@ import type { NativeAgentMcpServer } from "@orkestrator/protocol/native-agent";
 import { resolveCursorSettingSources, workingDirectory } from "./config.js";
 import { isObject, nonBlank, type JsonObject, type SessionState } from "./state.js";
 import { sliceToBytes } from "./transcript.js";
+import {
+  ORKESTRATOR_ARTIFACT_MCP_PATH,
+  ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME,
+} from "@orkestrator/protocol/transcript-artifacts";
+
+const AGENT_MCP_SERVER = "orkestrator";
 
 /** SDK name for in-process custom tools. Remapped to Orkestrator in inventory. */
 export const CURSOR_CUSTOM_USER_TOOLS_SERVER = "custom-user-tools";
@@ -24,6 +30,12 @@ const MAX_OBSERVED_MCP_TOOLS = 512;
 export interface AgentMcpConnection {
   url: string;
   token: string;
+  /**
+   * A backend workflow turn's artifact-only connection: an
+   * `orkestrator-artifacts` server at this connection's origin
+   * (`/artifact-mcp`), authenticated by the turn's artifact grant.
+   */
+  artifacts?: { token: string };
 }
 
 export function parseAgentMcpConnection(value: unknown): AgentMcpConnection | undefined {
@@ -34,14 +46,26 @@ export function parseAgentMcpConnection(value: unknown): AgentMcpConnection | un
   try {
     const parsed = new URL(url);
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return undefined;
-    return { url, token };
+    const artifacts = isObject(value.artifacts) ? value.artifacts.token : undefined;
+    return {
+      url,
+      token,
+      ...(typeof artifacts === "string" &&
+      artifacts.trim() &&
+      Buffer.byteLength(artifacts, "utf8") <= 1024
+        ? { artifacts: { token: artifacts.trim() } }
+        : {}),
+    };
   } catch {
     return undefined;
   }
 }
 
+/** Any change, the artifact grant included, re-attaches the agent with the new set. */
 export function mcpConnectionKey(connection?: AgentMcpConnection): string {
-  return connection ? `${connection.url}\u0000${connection.token}` : "";
+  return connection
+    ? JSON.stringify([connection.url, connection.token, connection.artifacts?.token ?? null])
+    : "";
 }
 
 export interface CursorMcpResolutionPolicy {
@@ -85,8 +109,22 @@ export async function cursorMcpServers(
       headers: { Authorization: `Bearer ${token}` },
     };
   }
+  // Reserved like `orkestrator`: only the backend's turn grant may fill it.
+  delete servers[ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME];
+  const artifactToken = agentMcp?.artifacts?.token;
+  if (agentMcp && artifactToken) {
+    servers[ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME] = {
+      type: "http",
+      url: new URL(ORKESTRATOR_ARTIFACT_MCP_PATH, agentMcp.url).toString(),
+      headers: { Authorization: `Bearer ${artifactToken}` },
+    };
+  }
   if (policy?.readOnly === true) {
-    return servers.orkestrator ? { orkestrator: servers.orkestrator } : {};
+    return Object.fromEntries(
+      [AGENT_MCP_SERVER, ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME]
+        .filter((name) => servers[name] !== undefined)
+        .map((name) => [name, servers[name]!]),
+    );
   }
   return servers;
 }

@@ -1044,6 +1044,35 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     expect(lockfileResolvedVersion("bun.lock", "@playwright/test")).toBe(resolved);
   });
 
+  test("Artifact preview worker: npm lockfile, manifest, backend pin and base image agree", () => {
+    // docker/artifact-preview-worker installs with `npm ci` from its own
+    // package-lock.json (npm, because the image runs Node). It is not a second
+    // Bun workspace lockfile; it only has to describe the package next to it
+    // and the playwright-core the backend itself pins.
+    const dir = "docker/artifact-preview-worker";
+    const manifest = JSON.parse(read(`${dir}/package.json`)) as {
+      dependencies: Record<string, string>;
+    };
+    const lock = JSON.parse(read(`${dir}/package-lock.json`)) as {
+      lockfileVersion: number;
+      packages: Record<string, { version?: string; integrity?: string; dependencies?: object }>;
+    };
+    const backend = JSON.parse(read("apps/backend/package.json")) as {
+      dependencies: Record<string, string>;
+    };
+    const pin = backend.dependencies["playwright-core"] ?? "";
+    expect(pin).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(manifest.dependencies).toEqual({ "playwright-core": pin });
+    expect(lock.packages[""]?.dependencies).toEqual(manifest.dependencies);
+    expect(lock.packages["node_modules/playwright-core"]?.version).toBe(pin);
+    expect(lock.packages["node_modules/playwright-core"]?.integrity).toMatch(/^sha512-/);
+    expect(lockfileResolvedVersion("bun.lock", "playwright-core")).toBe(pin);
+    const dockerfile = read(`${dir}/Dockerfile`);
+    expect(dockerfile).toContain(`FROM mcr.microsoft.com/playwright:v${pin}-noble@sha256:`);
+    expect(dockerfile).toMatch(/^RUN npm ci /m);
+    expect(dockerfile).toMatch(/^COPY package\.json package-lock\.json/m);
+  });
+
   test("Docker: Playwright ships a usable browser, and never branded Chrome", () => {
     // Every assertion below is about what the image *does*, so all of them read
     // the instruction stream. Matching the raw file would let a comment that

@@ -623,3 +623,30 @@ test("retained background approvals and elicitations report waiting with a free 
   call.finish();
   await prompt;
 });
+
+test("injected artifact tools auto-allow under deny approvals without parking", async () => {
+  mockGetMcpServerNames.mockImplementationOnce(async () => new Set(["orkestrator-artifacts"]));
+  mockGetMcpServersForSdk.mockImplementationOnce(async () => ({
+    "orkestrator-artifacts": { type: "http", url: "http://localhost/mcp" },
+  }));
+  const session = createSession("artifact-tools-deny");
+  track(session.id);
+  session.executionPolicy = DENY_POLICY;
+  const prompt = sendPrompt(session.id, "build", { permissionMode: "dontAsk" });
+  const call = await nextQueryCall();
+  for (const name of [
+    "create_artifact",
+    "preview_artifact",
+    "publish_artifact",
+    "get_artifact_operation",
+  ]) {
+    const tool = `mcp__orkestrator-artifacts__${name}`;
+    expect(
+      await call.options.canUseTool!(tool, { requestKey: "test" }, context(name)),
+    ).toMatchObject({ behavior: "allow" });
+  }
+  expect(getPendingInteractions(session.id)).toHaveLength(0);
+  call.push({ type: "result", subtype: "success" });
+  call.finish();
+  await prompt;
+});

@@ -1,4 +1,5 @@
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
+import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
 import { describe, expect, test } from "bun:test";
 import {
   CONTAINER_NETWORK_FOLLOWS_ENVIRONMENT_NOTE,
@@ -286,7 +287,7 @@ describe("OpenCode execution policy translation", () => {
     ).toEqual([
       { permission: "*", pattern: "*", action: "ask" },
       // A worker's mail tools never ask, so it can always report back.
-      ...AGENT_MAIL_TOOL_NAMES.map((name) => ({
+      ...[...AGENT_MAIL_TOOL_NAMES, ...ARTIFACT_TOOL_NAMES].map((name) => ({
         permission: `orkestrator_${name}`,
         pattern: "*",
         action: "allow" as const,

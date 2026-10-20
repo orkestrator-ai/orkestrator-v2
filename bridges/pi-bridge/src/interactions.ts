@@ -30,7 +30,12 @@ import {
   MAX_TOOL_ARGUMENT_BYTES,
   workingDirectory,
 } from "./config.js";
-import { isOrkestratorMailTool, isOrkestratorMcpTool, isOwnWorkflowResultCall } from "./mcp.js";
+import {
+  isOrkestratorArtifactTool,
+  isOrkestratorMailTool,
+  isOrkestratorMcpTool,
+  isOwnWorkflowResultCall,
+} from "./mcp.js";
 import { schedulePersist } from "./persistence.js";
 import {
   isObject,
@@ -63,7 +68,8 @@ export async function requestToolApproval(
 ): Promise<ToolCallDecision> {
   const coordinatorMail =
     state.policy?.id === "coordinator-read-only" && isOrkestratorMcpTool(state, toolName);
-  const ownAttempt = isOwnWorkflowResultCall(state, toolName, input);
+  const ownAttempt =
+    isOwnWorkflowResultCall(state, toolName, input) || isOrkestratorArtifactTool(state, toolName);
   if (state.readOnly && !READ_ONLY_TOOLS.has(toolName) && !coordinatorMail && !ownAttempt) {
     return {
       block: true,

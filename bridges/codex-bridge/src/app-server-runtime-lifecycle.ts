@@ -76,6 +76,13 @@ import {
   type NativeAgentExecutionPolicy,
 } from "@orkestrator/protocol/native-agent";
 
+/** A workflow turn's artifact-only grant (`agentMcp.artifacts.token`), when well-formed. */
+function artifactConnectionToken(value: unknown): string | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const token = (value as Record<string, unknown>).token;
+  return typeof token === "string" && token.length > 0 && token.length <= 1_024 ? token : undefined;
+}
+
 export { CODEX_RESTARTED_MID_TURN_MESSAGE } from "./sessions/thread-registry.js";
 export { patchCommandChangePart } from "./app-server-runtime-rows.js";
 
@@ -2182,10 +2189,12 @@ export class CodexRuntimeLifecycle {
             !url.username &&
             !url.password
           ) {
+            const artifacts = artifactConnectionToken(candidate.artifacts);
             agentMcp = {
               url: url.toString(),
               token: candidate.token,
               ...(candidate.design === true ? { design: true } : {}),
+              ...(artifacts ? { artifacts: { token: artifacts } } : {}),
             };
           }
         } catch {

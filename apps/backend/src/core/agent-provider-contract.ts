@@ -315,6 +315,12 @@ export interface ProviderSendOptions {
   /** Exact workflow-result MCP tool to expose for this turn, when present. */
   workflowResultTool?: string;
   /**
+   * Artifact-only `scopeCapability` for this turn, for providers whose
+   * Orkestrator tool connection is environment-wide. Delivered to the agent
+   * as trusted dispatch instructions; never logged or shown in transcripts.
+   */
+  artifactGrant?: string;
+  /**
    * The result key of the attempt `workflowResultTool` belongs to. Bridges that
    * gate tools themselves (Grok, Pi) let that attempt's tools through a
    * read-only turn only for calls naming this key.
@@ -359,6 +365,13 @@ export interface ProviderSendOptions {
     token: string;
     /** Signed one-attempt argument for providers using a persistent MCP broker. */
     workflowResultCapability?: string;
+    /**
+     * A backend workflow turn's artifact-only connection: the bridge adds an
+     * `orkestrator-artifacts` MCP server at this connection's origin
+     * (`/artifact-mcp`) authenticated by `token`, the turn's artifact grant.
+     * Never logged or shown in transcripts.
+     */
+    artifacts?: { token: string };
   };
 }
 

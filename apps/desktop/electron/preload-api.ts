@@ -15,6 +15,11 @@ import type {
   MacOsPermissionsStatus,
   MacOsPrivacySettingsPane,
 } from "@orkestrator/protocol/macos-permissions";
+import {
+  ARTIFACT_HOST_CHANNELS,
+  type ArtifactHostApi,
+  type ArtifactHostEvent,
+} from "@orkestrator/protocol/artifact-host-ipc";
 
 type EventCallback<T> = (payload: T) => void;
 
@@ -84,6 +89,53 @@ export function createBrowserPreviewCaptureApi(
       ipcRenderer.invoke("orkestrator:browser-preview:capture-show-on-page", input),
     captureResponsiveSet: (input) =>
       ipcRenderer.invoke("orkestrator:browser-preview:capture-responsive-set", input),
+  };
+}
+
+const ARTIFACT_HOST_EVENT_TYPES = new Set<ArtifactHostEvent["type"]>([
+  "ready",
+  "size",
+  "link-request",
+  "navigation-blocked",
+  "crashed",
+  "unresponsive",
+  "closed",
+]);
+
+/**
+ * `window.orkestrator.artifactHost`, exactly `ArtifactHostApi`. The live
+ * artifact runs in a separate sandboxed view; this renderer only positions it
+ * and exchanges presentation messages, on fixed channels.
+ */
+export function createArtifactHostApi(ipcRenderer: IpcRendererLike): ArtifactHostApi {
+  const listeners = new Set<(event: ArtifactHostEvent) => void>();
+  let subscribed = false;
+  const subscribe = () => {
+    if (subscribed) return;
+    subscribed = true;
+    ipcRenderer.on(ARTIFACT_HOST_CHANNELS.event, (_event, payload: unknown) => {
+      if (!payload || typeof payload !== "object") return;
+      const { hostId, type } = payload as { hostId?: unknown; type?: unknown };
+      if (typeof hostId !== "string" || !ARTIFACT_HOST_EVENT_TYPES.has(type as never)) return;
+      for (const listener of listeners) listener(payload as ArtifactHostEvent);
+    });
+  };
+  return {
+    open: (input) => ipcRenderer.invoke(ARTIFACT_HOST_CHANNELS.open, input),
+    setBounds: (hostId, bounds) =>
+      ipcRenderer.invoke(ARTIFACT_HOST_CHANNELS.setBounds, hostId, bounds),
+    setVisible: (hostId, visible) =>
+      ipcRenderer.invoke(ARTIFACT_HOST_CHANNELS.setVisible, hostId, visible),
+    postTheme: (hostId, theme) =>
+      ipcRenderer.invoke(ARTIFACT_HOST_CHANNELS.postTheme, hostId, theme),
+    close: (hostId) => ipcRenderer.invoke(ARTIFACT_HOST_CHANNELS.close, hostId),
+    onEvent(listener) {
+      subscribe();
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
   };
 }
 
@@ -241,6 +293,8 @@ export function createOrkestratorElectronApi(ipcRenderer: IpcRendererLike) {
         return ipcRenderer.invoke("orkestrator:browser-preview:open-external", target);
       },
     },
+
+    artifactHost: createArtifactHostApi(ipcRenderer),
   };
 }
 

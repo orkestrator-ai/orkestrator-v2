@@ -1,4 +1,5 @@
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
+import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
 import { coordinatorCapabilityPolicy } from "@orkestrator/protocol/coordinator-web-research";
 import { afterEach, describe, test, expect, spyOn } from "bun:test";
 import { EventEmitter } from "node:events";
@@ -383,6 +384,36 @@ describe("thread lifecycle", () => {
     });
   });
 
+  test("adds a workflow turn's artifact-only server under its own grant", async () => {
+    const h = harness({
+      "thread/start": () => ({ thread: thread("t1") }),
+    });
+    const config: EngineTurnConfig = {
+      ...BUILD,
+      workflowResultTool: "submit_review_report",
+      agentMcp: {
+        url: "http://127.0.0.1:4567/mcp",
+        token: "attempt-secret",
+        artifacts: { token: "oag1.turn-grant" },
+      },
+    };
+    await h.engine.start();
+    await h.engine.startThread({ config });
+    const sent = h.child().requests.find((request) => request.method === "thread/start")?.params
+      .config as Record<string, Record<string, unknown>>;
+    expect(sent["mcp_servers.orkestrator-artifacts"]).toEqual({
+      url: "http://127.0.0.1:4567/artifact-mcp",
+      http_headers: { Authorization: "Bearer oag1.turn-grant" },
+      required: false,
+      startup_timeout_sec: 3,
+      default_tools_approval_mode: "approve",
+    });
+    // The attempt's result server keeps its own credential.
+    expect(sent["mcp_servers.orkestrator"]?.http_headers).toEqual({
+      Authorization: "Bearer attempt-secret",
+    });
+  });
+
   test("passes a tab-scoped MCP header without overriding ordinary approvals", async () => {
     const h = harness({
       "thread/start": () => ({ thread: thread("t1") }),
@@ -422,9 +453,12 @@ describe("thread lifecycle", () => {
           http_headers: { Authorization: "Bearer tab-secret" },
           required: false,
           startup_timeout_sec: 3,
-          // Only the mail tools bypass the ordinary approval policy.
+          // Only the mail and artifact tools bypass the ordinary approval policy.
           tools: Object.fromEntries(
-            AGENT_MAIL_TOOL_NAMES.map((name) => [name, { approval_mode: "approve" }]),
+            [...AGENT_MAIL_TOOL_NAMES, ...ARTIFACT_TOOL_NAMES].map((name) => [
+              name,
+              { approval_mode: "approve" },
+            ]),
           ),
         },
       });

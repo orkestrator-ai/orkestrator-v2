@@ -69,6 +69,8 @@ import { findNativeAgentAdapter } from "@/components/native-agent/adapter";
 import { StructuredReviewReportView } from "@/components/review/StructuredReviewReportView";
 import { BuildCompletionStatus } from "./BuildCompletionStatus";
 import { toPipelineTranscript } from "./pipeline-transcript";
+import { useWorkflowTranscriptArtifacts } from "@/hooks/useWorkflowTranscriptArtifacts";
+import { RichTranscriptScopeContext } from "@/lib/chat/rich-identity";
 import {
   formatStageSpan,
   pipelineStageGroups,
@@ -556,7 +558,7 @@ export function BuildChatTab({
   // through the Claude adapter silently drops its subagent and tool-group parts.
   // Snapshots written before per-step harnesses carry no session agent.
   const agentType = selectedSession?.agent ?? pipeline?.agentType;
-  const messages = useMemo(() => {
+  const stageTranscript = useMemo(() => {
     if (!agentType) return [];
     const transcript = toPipelineTranscript(
       selectedSession?.messages,
@@ -607,17 +609,44 @@ export function BuildChatTab({
     selectedSession?.label,
     structuredResultAccepted,
   ]);
+  /*
+   * The stage session's own key owns what its agent publishes, in the
+   * pipeline's environment; a replaced provider session is a new generation.
+   * Cards resolve in that conversation, as in a native agent tab.
+   */
+  const pipelineEnvironmentId = pipeline?.environmentId;
+  const stageSessionKey = selectedSession?.sessionKey;
+  const stageProviderSessionId = selectedSession?.sdkSessionId;
+  const stageConversation = useMemo(
+    () =>
+      pipelineEnvironmentId && stageSessionKey
+        ? {
+            environmentId: pipelineEnvironmentId,
+            conversationKey: stageSessionKey,
+            generation: stageProviderSessionId ?? stageSessionKey,
+          }
+        : null,
+    [pipelineEnvironmentId, stageProviderSessionId, stageSessionKey],
+  );
+  const { scope: stageScope, messages } = useWorkflowTranscriptArtifacts(
+    stageConversation,
+    stageTranscript,
+    { canLoadEarlier: false },
+  );
 
   // Tests replaces the visible pane but must not remount or empty the
   // virtualized list — that would lose the reader's place and, with
   // stickToBottomOnActivation, jump them to the bottom on return.
-  const lastListMessagesRef = useRef(messages);
+  // The rows and the conversation their artifact cards resolve in stay together.
+  const lastListViewRef = useRef({ messages, scope: stageScope });
   const lastListReportRef = useRef(selectedReviewReport);
   if (!validationSelected) {
-    lastListMessagesRef.current = messages;
+    lastListViewRef.current = { messages, scope: stageScope };
     lastListReportRef.current = selectedReviewReport;
   }
-  const listMessages = validationSelected ? lastListMessagesRef.current : messages;
+  const listView = validationSelected ? lastListViewRef.current : { messages, scope: stageScope };
+  const listMessages = listView.messages;
+  const listScope = listView.scope;
   const listReviewReport = validationSelected ? lastListReportRef.current : selectedReviewReport;
 
   /** The accepted report a stage produced, as its stage badge and the rail's review chip read it. */
@@ -1287,90 +1316,92 @@ export function BuildChatTab({
               renderer, the same virtualization, the same in-transcript find,
               and the same follow-the-tail behaviour while a stage streams.
             */}
-            <VirtualizedMessageList
-              messages={listMessages}
-              computeItemKey={(_index, message) => message.id}
-              resolvePreviousMessage={findPreviousNativeMessage}
-              renderMessage={(_index, message, previous) => (
-                <NativeMessage
-                  message={message}
-                  previousMessage={previous}
-                  assistantLabel={agentLabel}
-                  containerId={containerId}
-                  agentExpansionScope={data.environmentId}
-                  platform={isAgentPlatform(displayedAgent) ? displayedAgent : undefined}
-                />
-              )}
-              emptyState={
-                <div className="py-12 text-center text-sm text-muted-foreground">
-                  {!selectedSession
-                    ? "Waiting for the backend to start a build stage."
-                    : transcriptUnavailable
-                      ? "The stored transcript for this stage could not be read."
-                      : transcriptStale && selectedSession.messages === undefined
-                        ? "Loading this stage's transcript…"
-                        : selectedSession.status === "running"
-                          ? "This stage is running. Its authoritative transcript will appear here as it is synchronized."
-                          : "No text transcript was produced for this stage."}
-                </div>
-              }
-              header={
-                (selectedSession?.transcript && !selectedSession.transcript.complete) ||
-                selectedSession?.transcriptCheckpointError ? (
-                  <div className="px-3 py-2 text-center text-[11px] text-muted-foreground @sm:px-6">
-                    {selectedSession.transcript && !selectedSession.transcript.complete ? (
-                      <p>
-                        {selectedSession.transcript.omittedMessages ?? "Some"}{" "}
-                        {selectedSession.transcript.omittedMessages === 1
-                          ? "message was"
-                          : "messages were"}{" "}
-                        not kept in the stored transcript because of its size limit.
-                      </p>
-                    ) : null}
-                    {selectedSession.transcriptCheckpointError ? (
-                      <p>The newest messages of this stage could not be stored yet.</p>
-                    ) : null}
+            <RichTranscriptScopeContext.Provider value={listScope}>
+              <VirtualizedMessageList
+                messages={listMessages}
+                computeItemKey={(_index, message) => message.id}
+                resolvePreviousMessage={findPreviousNativeMessage}
+                renderMessage={(_index, message, previous) => (
+                  <NativeMessage
+                    message={message}
+                    previousMessage={previous}
+                    assistantLabel={agentLabel}
+                    containerId={containerId}
+                    agentExpansionScope={data.environmentId}
+                    platform={isAgentPlatform(displayedAgent) ? displayedAgent : undefined}
+                  />
+                )}
+                emptyState={
+                  <div className="py-12 text-center text-sm text-muted-foreground">
+                    {!selectedSession
+                      ? "Waiting for the backend to start a build stage."
+                      : transcriptUnavailable
+                        ? "The stored transcript for this stage could not be read."
+                        : transcriptStale && selectedSession.messages === undefined
+                          ? "Loading this stage's transcript…"
+                          : selectedSession.status === "running"
+                            ? "This stage is running. Its authoritative transcript will appear here as it is synchronized."
+                            : "No text transcript was produced for this stage."}
                   </div>
-                ) : undefined
-              }
-              footer={
-                showReviewReport || showThinking ? (
-                  <>
-                    {showReviewReport && listReviewReport ? (
-                      <div className="px-3 py-3 @sm:px-6">
-                        <StructuredReviewReportView
-                          className="mx-auto max-w-3xl"
-                          report={listReviewReport}
-                          heading={
-                            (pipeline.reviewers?.length ?? 0) > 1
-                              ? ownsCurrentReviewReport
-                                ? "Consolidated Multi Review"
-                                : "Reviewer report"
-                              : undefined
-                          }
-                          collapsibleSections
-                          sectionExpansionKey={`build-pipeline/${pipeline.id}/${selectedSession?.sessionKey ?? "review"}/report-section`}
-                          showRawJson={false}
-                        />
-                      </div>
-                    ) : null}
-                    {showThinking ? (
-                      <div className="px-2 @sm:px-4">
-                        <div className="chat-status-row mx-auto max-w-3xl min-w-0">
-                          <AgentThinkingIndicator agentName={agentLabel} />
+                }
+                header={
+                  (selectedSession?.transcript && !selectedSession.transcript.complete) ||
+                  selectedSession?.transcriptCheckpointError ? (
+                    <div className="px-3 py-2 text-center text-[11px] text-muted-foreground @sm:px-6">
+                      {selectedSession.transcript && !selectedSession.transcript.complete ? (
+                        <p>
+                          {selectedSession.transcript.omittedMessages ?? "Some"}{" "}
+                          {selectedSession.transcript.omittedMessages === 1
+                            ? "message was"
+                            : "messages were"}{" "}
+                          not kept in the stored transcript because of its size limit.
+                        </p>
+                      ) : null}
+                      {selectedSession.transcriptCheckpointError ? (
+                        <p>The newest messages of this stage could not be stored yet.</p>
+                      ) : null}
+                    </div>
+                  ) : undefined
+                }
+                footer={
+                  showReviewReport || showThinking ? (
+                    <>
+                      {showReviewReport && listReviewReport ? (
+                        <div className="px-3 py-3 @sm:px-6">
+                          <StructuredReviewReportView
+                            className="mx-auto max-w-3xl"
+                            report={listReviewReport}
+                            heading={
+                              (pipeline.reviewers?.length ?? 0) > 1
+                                ? ownsCurrentReviewReport
+                                  ? "Consolidated Multi Review"
+                                  : "Reviewer report"
+                                : undefined
+                            }
+                            collapsibleSections
+                            sectionExpansionKey={`build-pipeline/${pipeline.id}/${selectedSession?.sessionKey ?? "review"}/report-section`}
+                            showRawJson={false}
+                          />
                         </div>
-                      </div>
-                    ) : null}
-                  </>
-                ) : undefined
-              }
-              scrollProps={scrollProps}
-              virtuosoRef={virtuosoRef}
-              find={{
-                isActive: ownsGlobalShortcuts && !validationSelected,
-                getSearchText: getNativeMessageSearchText,
-              }}
-            />
+                      ) : null}
+                      {showThinking ? (
+                        <div className="px-2 @sm:px-4">
+                          <div className="chat-status-row mx-auto max-w-3xl min-w-0">
+                            <AgentThinkingIndicator agentName={agentLabel} />
+                          </div>
+                        </div>
+                      ) : null}
+                    </>
+                  ) : undefined
+                }
+                scrollProps={scrollProps}
+                virtuosoRef={virtuosoRef}
+                find={{
+                  isActive: ownsGlobalShortcuts && !validationSelected,
+                  getSearchText: getNativeMessageSearchText,
+                }}
+              />
+            </RichTranscriptScopeContext.Provider>
           </div>
         </div>
       </div>

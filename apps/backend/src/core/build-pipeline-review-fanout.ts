@@ -105,6 +105,11 @@ import { readTranscriptProgressSample } from "./transcript-progress.js";
 import { recordEfficiency, type MultiReviewEfficiencyObserver } from "./multi-review-efficiency.js";
 import type { ReviewFanoutConcurrency } from "./review-fanout-scheduler.js";
 import { multiReviewDuplicateReviewerCount } from "@orkestrator/protocol/multi-review-launch";
+import {
+  beginWorkflowArtifactTurn,
+  settleArtifactDispatchTurn,
+  type ArtifactTurnDispatch,
+} from "./workflow-artifact-turns.js";
 
 /** Names the pipeline in reviewer-facing and user-facing failure text. */
 const FANOUT_LABEL = "Multi-model review";
@@ -168,6 +173,8 @@ export interface BuildPipelineReviewFanoutDeps {
   efficiency?: MultiReviewEfficiencyObserver;
   /** Elapsed-time gate for reviewer poll counts during this pipeline's pass. */
   pollGate?(pipeline: BuildPipeline): ReviewerPollGate;
+  /** Reviewer and consolidation turns' artifact grants (`workflow-artifact-turns.ts`). */
+  artifactDispatch?: ArtifactTurnDispatch;
 }
 
 /** What the supervisor should do after one fan-out pass. */
@@ -309,6 +316,18 @@ export class BuildPipelineReviewFanout {
   // Reviewers
   // -------------------------------------------------------------------------
 
+  private settleConsolidationArtifactTurn(
+    pipeline: BuildPipeline,
+    consolidation: { sessionKey: string; requestId: string },
+  ): void {
+    settleArtifactDispatchTurn(
+      this.deps.artifactDispatch,
+      pipeline.environmentId,
+      consolidation.sessionKey,
+      consolidation.requestId,
+    );
+  }
+
   private reviewHost(pipeline: BuildPipeline, targetBranch: string): ReviewFanoutHost {
     return {
       workflowId: pipeline.id,
@@ -327,6 +346,15 @@ export class BuildPipelineReviewFanout {
       executionPolicy: () => this.deps.executionPolicy(pipeline),
       agentMcp: async (selection, resultKey) =>
         this.deps.agentMcp?.(pipeline, resultKey, selection.agent, "build pipeline reviewer"),
+      ...(this.deps.artifactDispatch
+        ? {
+            artifactTurns: {
+              dispatch: this.deps.artifactDispatch,
+              environmentId: pipeline.environmentId,
+              projectId: pipeline.projectId,
+            },
+          }
+        : {}),
       ...(this.deps.workflowResults && this.deps.agentMcp
         ? {
             supportsToolResult: (selection: ReviewerRecord) =>
@@ -741,12 +769,22 @@ export class BuildPipelineReviewFanout {
           context: consolidationResultContext(state.reviewers),
         });
       }
+      const artifactTurn = beginWorkflowArtifactTurn(this.deps.artifactDispatch, {
+        environmentId: pipeline.environmentId,
+        projectId: pipeline.projectId,
+        conversationKey: consolidation.sessionKey,
+        turnId: consolidation.requestId,
+        providerSessionId: consolidation.providerSessionId,
+        agent: consolidation.agent,
+        ...(agentMcp ? { agentMcp } : {}),
+      });
+      const turnAgentMcp = artifactTurn?.agentMcp ?? agentMcp;
       await attachAgentBeforeDispatch(
         provider,
         consolidation.providerSessionId,
-        agentMcp
+        turnAgentMcp
           ? {
-              agentMcp,
+              agentMcp: turnAgentMcp,
               workflowResultTool: workflowResultToolName("consolidated-review"),
             }
           : undefined,
@@ -775,7 +813,8 @@ export class BuildPipelineReviewFanout {
             ...(typeof consolidation.fastMode === "boolean"
               ? { fastMode: consolidation.fastMode }
               : {}),
-            ...(agentMcp ? { agentMcp } : {}),
+            ...(turnAgentMcp ? { agentMcp: turnAgentMcp } : {}),
+            ...(artifactTurn?.artifactGrant ? { artifactGrant: artifactTurn.artifactGrant } : {}),
             ...(agentMcp
               ? { workflowResultTool: workflowResultToolName("consolidated-review") }
               : {}),
@@ -783,6 +822,7 @@ export class BuildPipelineReviewFanout {
         );
       } catch (error) {
         if (error instanceof AmbiguousPromptDispatchError) return { kind: "working" };
+        this.settleConsolidationArtifactTurn(pipeline, consolidation);
         consolidation.state = "prepared";
         await this.save(pipeline);
         if (error instanceof ProviderDispatchPreparationError) return { kind: "working" };
@@ -828,6 +868,7 @@ export class BuildPipelineReviewFanout {
     const observedStatus = status === "running" || backgroundWorkLive ? "running" : "idle";
     const statusChanged = session.status !== observedStatus;
     const turnEnded = statusChanged && observedStatus === "idle";
+    if (turnEnded) this.settleConsolidationArtifactTurn(pipeline, consolidation);
     if (status !== "running" || persistDue || statusChanged) {
       const changed = await this.deps.refreshMovedTranscript(session, provider, {
         force: turnEnded,

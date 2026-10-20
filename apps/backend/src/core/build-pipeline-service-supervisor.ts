@@ -176,6 +176,7 @@ export class BuildPipelineSupervisor {
           this.ctx.workflowToolEnabled(agent as BuildPipelineAgent, kind),
         agentMcp: (pipeline, resultKey, provider, stage) =>
           this.ctx.workflowAgentMcp(pipeline, resultKey, provider, stage),
+        artifactDispatch: this.ctx.options.artifactDispatch,
         concurrency: this.ctx.options.reviewFanoutConcurrency,
         efficiency: this.ctx.options.efficiency,
         pollGate: (pipeline) => ({
@@ -626,6 +627,12 @@ export class BuildPipelineSupervisor {
     const wasRunning = session.status === "running";
     session.status = "idle";
     delete pipeline.stallWarning;
+    // The turn ended, and its artifact grant with it.
+    this.ctx.settleArtifactTurn(
+      pipeline,
+      session,
+      pipeline.activePromptContext?.requestId ?? pipeline.pendingPromptAttempt?.requestId,
+    );
     // The pass that sees the turn end reads the whole transcript whatever the
     // probe says, so the handoff window and request-id recovery below see the
     // final copy. Later idle passes (a structured-result wait, PR detection)
@@ -1450,6 +1457,7 @@ export class BuildPipelineSupervisor {
       return {
         provider,
         sessionId,
+        sessionKey,
         prompt,
         requestId,
         images,
@@ -1468,6 +1476,7 @@ export class BuildPipelineSupervisor {
     const {
       provider,
       sessionId,
+      sessionKey,
       prompt,
       requestId,
       images,
@@ -1499,12 +1508,21 @@ export class BuildPipelineSupervisor {
             `build pipeline ${phase} step`,
           )
         : undefined;
+    const stageSession = { sessionKey, sdkSessionId: sessionId };
+    const artifactTurn = this.ctx.beginArtifactTurn(
+      pipeline,
+      stageSession,
+      requestId,
+      agent,
+      agentMcp,
+    );
+    const turnAgentMcp = artifactTurn?.agentMcp ?? agentMcp;
     await attachBeforeDispatch(
       provider,
       sessionId,
-      agentMcp
+      turnAgentMcp
         ? {
-            agentMcp,
+            agentMcp: turnAgentMcp,
             ...(resultKind ? { workflowResultTool: workflowResultToolName(resultKind) } : {}),
           }
         : undefined,
@@ -1525,7 +1543,8 @@ export class BuildPipelineSupervisor {
           effort,
           ...(typeof fastMode === "boolean" ? { fastMode } : {}),
           mode,
-          ...(agentMcp ? { agentMcp } : {}),
+          ...(turnAgentMcp ? { agentMcp: turnAgentMcp } : {}),
+          ...(artifactTurn?.artifactGrant ? { artifactGrant: artifactTurn.artifactGrant } : {}),
           ...(agentMcp && resultKind
             ? { workflowResultTool: workflowResultToolName(resultKind) }
             : {}),
@@ -1534,6 +1553,9 @@ export class BuildPipelineSupervisor {
       delete pipeline.pendingPromptAttempt;
       await this.ctx.save(pipeline, pipeline.backendRevision);
     } catch (error) {
+      if (!(error instanceof AmbiguousPromptDispatchError)) {
+        this.ctx.settleArtifactTurn(pipeline, stageSession, requestId);
+      }
       if (error instanceof AmbiguousPromptDispatchError) {
         // The bridge may have accepted the stable request before the response
         // was lost. Keep the durable attempt; the next tick reconciles status
@@ -1671,12 +1693,20 @@ export class BuildPipelineSupervisor {
             `build pipeline ${attempt.phase} step`,
           )
         : undefined;
+    const artifactTurn = this.ctx.beginArtifactTurn(
+      pipeline,
+      session,
+      attempt.requestId,
+      step?.agent ?? (session ? sessionAgent(pipeline, session) : undefined),
+      agentMcp,
+    );
+    const turnAgentMcp = artifactTurn?.agentMcp ?? agentMcp;
     await attachBeforeDispatch(
       provider,
       attempt.sessionId,
-      agentMcp
+      turnAgentMcp
         ? {
-            agentMcp,
+            agentMcp: turnAgentMcp,
             ...(resultKind ? { workflowResultTool: workflowResultToolName(resultKind) } : {}),
           }
         : undefined,
@@ -1697,7 +1727,8 @@ export class BuildPipelineSupervisor {
           model: step?.model,
           effort: step?.effort,
           ...(typeof step?.fastMode === "boolean" ? { fastMode: step.fastMode } : {}),
-          ...(agentMcp ? { agentMcp } : {}),
+          ...(turnAgentMcp ? { agentMcp: turnAgentMcp } : {}),
+          ...(artifactTurn?.artifactGrant ? { artifactGrant: artifactTurn.artifactGrant } : {}),
           ...(agentMcp && resultKind
             ? { workflowResultTool: workflowResultToolName(resultKind) }
             : {}),
@@ -1713,6 +1744,7 @@ export class BuildPipelineSupervisor {
       await this.ctx.save(pipeline, pipeline.backendRevision);
     } catch (error) {
       if (error instanceof AmbiguousPromptDispatchError) return;
+      this.ctx.settleArtifactTurn(pipeline, session, attempt.requestId);
       throw error;
     }
   }

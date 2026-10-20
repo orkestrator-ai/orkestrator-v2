@@ -175,6 +175,8 @@ export const MAX_INVOKE_BODY_BYTES = 48 * 1024 * 1024;
 export const INVOKE_COMMAND_BODY_LIMITS: Readonly<Record<string, number>> = Object.freeze({
   validate_mcp_mutation: 256 * 1024 + 4 * 1024,
   mutate_mcp_definition: 256 * 1024 + 4 * 1024,
+  // One staged artifact asset: 10 MiB decoded, base64-encoded, plus envelope.
+  transcript_artifact_stage_asset: Math.ceil((10 * 1024 * 1024) / 3) * 4 + 16 * 1024,
 });
 export const KEEPALIVE_MS = 25_000;
 export const IMMUTABLE_ASSET_CACHE_CONTROL = "public, max-age=31536000, immutable";
@@ -262,7 +264,7 @@ export const GATEWAY_METRIC_TOTAL_LABEL_BYTES = 8 * 1024;
  * timing breakdown both incomplete and different on every run.
  * `apps/backend/tests/gateway-support-extra.test.ts` pins these against the real registry.
  */
-export const GATEWAY_COMMAND_METRIC_MAP_LIMIT = 657;
+export const GATEWAY_COMMAND_METRIC_MAP_LIMIT = 672;
 export const GATEWAY_COMMAND_METRIC_TOTAL_LABEL_BYTES = 32 * 1024;
 export const GATEWAY_METRIC_SAMPLE_LIMIT = 32;
 export const MAX_CLIENT_METRICS_BODY_BYTES = 64 * 1024;

@@ -2,6 +2,7 @@ import { resolveAgentPlatformSettings } from "@orkestrator/protocol/agent-settin
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import { randomUUID } from "node:crypto";
 import {
+  featurePlanningConversationKey,
   FEATURE_PLANNING_LIMITS,
   FEATURE_PLANNING_RECORD_VERSION,
   boundRawResponse,
@@ -41,6 +42,11 @@ import {
 } from "./storage.js";
 import type { Environment } from "./models.js";
 import type { AgentToolConnection } from "./agent-tools.js";
+import {
+  beginWorkflowArtifactTurn,
+  settleArtifactDispatchTurn,
+  type ArtifactTurnDispatch,
+} from "./workflow-artifact-turns.js";
 import type { WorkflowResultService } from "./workflow-result-service.js";
 import { WorkflowResultRollout } from "./workflow-result-rollout.js";
 import { resolveEnvironmentExecutionPolicy } from "./native-agent-execution-policy.js";
@@ -206,6 +212,8 @@ export interface FeaturePlanningServiceOptions extends KeyedWorkflowServiceOptio
   ) => AgentToolConnection;
   /** Rejects when the environment's container cannot reach the agent tools server. */
   assertAgentToolsReachable?: (environmentId: string, stage: string) => Promise<void>;
+  /** Planning turns' transcript-artifact grants (`workflow-artifact-turns.ts`). */
+  artifactDispatch?: ArtifactTurnDispatch;
 }
 
 /**
@@ -643,9 +651,20 @@ export class FeaturePlanningService implements KeyedWorkflowOwner {
       const agentMcp = toolMode
         ? await this.agentMcp(environment, record.projectId, requestId, record.kind)
         : undefined;
+      // The planning chat (or story chat) owns what this turn publishes.
+      const artifactTurn = beginWorkflowArtifactTurn(this.options.artifactDispatch, {
+        environmentId: environment.id,
+        projectId: record.projectId,
+        conversationKey: featurePlanningConversationKey(record.featureId, record.storyId),
+        turnId: requestId,
+        providerSessionId: sessionId,
+        agent: "codex",
+        ...(agentMcp ? { agentMcp } : {}),
+      });
+      const turnAgentMcp = artifactTurn?.agentMcp ?? agentMcp;
       try {
         await provider.prepareDispatch?.(sessionId, {
-          ...(agentMcp ? { agentMcp } : {}),
+          ...(turnAgentMcp ? { agentMcp: turnAgentMcp } : {}),
           ...(agentMcp ? { workflowResultTool: workflowResultToolName(resultKind) } : {}),
         });
       } catch {
@@ -666,11 +685,15 @@ export class FeaturePlanningService implements KeyedWorkflowOwner {
           ...(typeof launchSettings.fastMode === "boolean"
             ? { fastMode: launchSettings.fastMode }
             : {}),
-          ...(agentMcp ? { agentMcp } : {}),
+          ...(turnAgentMcp ? { agentMcp: turnAgentMcp } : {}),
+          ...(artifactTurn?.artifactGrant ? { artifactGrant: artifactTurn.artifactGrant } : {}),
           ...(agentMcp ? { workflowResultTool: workflowResultToolName(resultKind) } : {}),
         },
       );
     } catch (error) {
+      if (!(error instanceof AmbiguousPromptDispatchError)) {
+        this.settleArtifactTurn({ ...record, environmentId: environment.id, requestId });
+      }
       if (error instanceof AmbiguousPromptDispatchError) {
         await this.evictProvider(environment.id, provider);
         if (await this.clearIfCancellationRequested(record, provider, sessionId)) return;
@@ -840,6 +863,8 @@ export class FeaturePlanningService implements KeyedWorkflowOwner {
    * which is what makes a replay idempotent.
    */
   private async runPersist(record: FeaturePlanningRecord): Promise<void> {
+    // The reply is in: the turn, and its artifact grant, are over.
+    this.settleArtifactTurn(record);
     if (record.resultTransport === "tool-v1" && record.requestId && record.resultAppliedAt) {
       await this.options.workflowResults?.consume(record.requestId);
       await this.clearPlanning(record.featureId, record.operationId);
@@ -1362,7 +1387,21 @@ export class FeaturePlanningService implements KeyedWorkflowOwner {
     return true;
   }
 
+  /** Ends the exchange's artifact grant (`workflow-artifact-turns.ts`). Best-effort. */
+  private settleArtifactTurn(
+    record: Pick<FeaturePlanningRecord, "featureId" | "storyId" | "environmentId" | "requestId">,
+  ): void {
+    if (!record.environmentId || !record.requestId) return;
+    settleArtifactDispatchTurn(
+      this.options.artifactDispatch,
+      record.environmentId,
+      featurePlanningConversationKey(record.featureId, record.storyId),
+      record.requestId,
+    );
+  }
+
   private async finalizeCancellation(record: FeaturePlanningRecord): Promise<void> {
+    this.settleArtifactTurn(record);
     if (record.resultTransport === "tool-v1" && record.requestId) {
       await this.options.workflowResults?.close(record.requestId, "cancelled");
     }
@@ -1409,6 +1448,7 @@ export class FeaturePlanningService implements KeyedWorkflowOwner {
       return;
     }
     this.idleSince.delete(featureId);
+    this.settleArtifactTurn(record);
     await this.mutatePlanning(featureId, record.operationId, (_plan, current) => {
       current.phase = "failed";
       current.failure = {

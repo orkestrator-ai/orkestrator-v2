@@ -5,18 +5,43 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
+  useState,
 } from "react";
-import { Virtuoso, type VirtuosoHandle, type StateSnapshot } from "react-virtuoso";
+import { Virtuoso, type ListRange, type VirtuosoHandle, type StateSnapshot } from "react-virtuoso";
 import {
   AgentChatFindBar,
   findAgentChatTextMatches,
   useAgentChatFind,
+  type AgentChatFindMatch,
 } from "@/components/chat/AgentChatFind";
 import { cn } from "@/lib/utils";
 import { TranscriptAnnotationLayer } from "@/components/chat/TranscriptAnnotationLayer";
 import type { TranscriptAnnotation } from "@/lib/chat/transcript-annotations";
+import {
+  collectSearchTextRuns,
+  hiddenMirrorFor,
+  restoreRichFindReveals,
+  revealRichBlockForFind,
+} from "@/lib/chat/rich-markdown/find-reveal";
+import {
+  decodeBlockViewKey,
+  modelMatchGroup,
+  pairBlockGroups,
+  PROSE_GROUP,
+  searchGroupId,
+  type SearchGroup,
+  type SearchProjection,
+  type SearchTextGetter,
+} from "@/lib/chat/rich-markdown/search-segments";
+import {
+  RichRowVisibilityContext,
+  TranscriptRowVisibilityTracker,
+} from "@/lib/chat/rich-render-priority";
+import { useRichViewPinned } from "@/stores/richContentViewStore";
+import { useArtifactLiveHostStore } from "@/stores/artifactLiveHostStore";
 
 interface VirtuosoListContext {
   footer?: ReactNode;
@@ -46,6 +71,8 @@ interface VirtualizedMessageListProps<TMessage> {
     totalListHeightChanged?: (height: number) => void;
     restoreStateFrom: StateSnapshot | undefined;
     scrollerRef?: (el: HTMLElement | Window | null) => void;
+    /** Pause/resume auto-follow for a reason (see `useVirtuosoScrollState`). */
+    setFollowPaused?: (reason: string, paused: boolean) => void;
   };
   virtuosoRef: RefObject<VirtuosoHandle | null>;
   /**
@@ -55,7 +82,13 @@ interface VirtualizedMessageListProps<TMessage> {
   highlightedItemKey?: string | null;
   find?: {
     isActive: boolean;
-    getSearchText: (message: TMessage) => string;
+    /**
+     * The message's searchable text. A getter carrying a `projection`
+     * (`withSearchProjection`) enables per-block match pairing.
+     */
+    getSearchText: SearchTextGetter<TMessage> | ((message: TMessage) => string);
+    /** Semantic projection whose `text` equals `getSearchText`'s result. */
+    getSearchProjection?: (message: TMessage) => SearchProjection;
   };
   annotation?: {
     enabled: boolean;
@@ -67,27 +100,72 @@ interface VirtualizedMessageListProps<TMessage> {
 
 const EMPTY_SEARCH_TEXT = () => "";
 const SEARCH_CONTENT_SELECTOR = "[data-agent-chat-search-content]";
+const ROW_SELECTOR = "[data-chat-message-index]";
+const PAUSED_FOLLOW_OUTPUT = () => false as const;
 
-interface TextNodeRun {
-  node: Text;
-  start: number;
-  end: number;
+/**
+ * Keep-mounted bounds. While a row holds the reader's text selection or
+ * focused element, Virtuoso renders at least `KEEP_MOUNTED_MARGIN_ROWS`
+ * beyond the visible range on each side, and enough rows toward the protected
+ * row to keep it in the render window — at most `KEEP_MOUNTED_MAX_ROWS` rows
+ * away. Farther than that, protection is released and the row unmounts like
+ * any other (its DOM selection does not survive; view state does). Only one
+ * row is protected at a time; virtualization stays on for the rest.
+ */
+export const KEEP_MOUNTED_MAX_ROWS = 8;
+export const KEEP_MOUNTED_MARGIN_ROWS = 2;
+
+/**
+ * Virtuoso's `minOverscanItemCount` that keeps `protectedIndex` rendered for
+ * the visible `range`, or null when there is nothing to protect or the row is
+ * beyond the keep-mounted bound (release).
+ */
+export function keepMountedOverscan(
+  protectedIndex: number | null,
+  range: { startIndex: number; endIndex: number } | null,
+): { top: number; bottom: number } | null {
+  if (protectedIndex === null || protectedIndex < 0) return null;
+  if (!range) return { top: KEEP_MOUNTED_MARGIN_ROWS, bottom: KEEP_MOUNTED_MARGIN_ROWS };
+  const above = range.startIndex - protectedIndex;
+  const below = protectedIndex - range.endIndex;
+  if (above > KEEP_MOUNTED_MAX_ROWS || below > KEEP_MOUNTED_MAX_ROWS) return null;
+  return {
+    top: Math.max(0, above) + KEEP_MOUNTED_MARGIN_ROWS,
+    bottom: Math.max(0, below) + KEEP_MOUNTED_MARGIN_ROWS,
+  };
 }
 
-function createSearchRanges(root: HTMLElement, query: string): Range[] {
-  const runs: TextNodeRun[] = [];
-  let combinedText = "";
-  const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  let currentNode = walker.nextNode();
+/** The transcript row key holding `node`, if it is inside a row of `root`. */
+function rowKeyOf(root: HTMLElement | null, node: Node | null): string | null {
+  if (!root || !node || !root.contains(node)) return null;
+  const element = node instanceof Element ? node : node.parentElement;
+  return element?.closest<HTMLElement>(ROW_SELECTOR)?.dataset.chatMessageKey ?? null;
+}
 
-  while (currentNode) {
-    if (currentNode instanceof Text && currentNode.data.length > 0) {
-      const start = combinedText.length;
-      combinedText += currentNode.data;
-      runs.push({ node: currentNode, start, end: combinedText.length });
-    }
-    currentNode = walker.nextNode();
+/**
+ * The outermost scoped rich block (decoded `data-rich-block-key`) holding
+ * `node` inside `root`, as a find group; prose when there is none. Artifact
+ * occurrence keys are not Markdown blocks and are passed through.
+ */
+function domSearchGroup(root: HTMLElement, node: Node): SearchGroup {
+  let element = node instanceof Element ? node : node.parentElement;
+  let group: SearchGroup = PROSE_GROUP;
+  while (element && element !== root) {
+    const key = element.getAttribute("data-rich-block-key");
+    const decoded = key ? decodeBlockViewKey(key) : null;
+    if (decoded) group = { type: "block", blockId: decoded.blockId, part: decoded.sourcePartId };
+    element = element.parentElement;
   }
+  return group;
+}
+
+/**
+ * DOM ranges for every match of `query` in one search root. Text inside rich
+ * block chrome (toolbars, labels, notices) is skipped, matching the message
+ * projection (`getNativeMessageSearchText`), so occurrence ordinals agree.
+ */
+function createSearchRanges(root: HTMLElement, query: string): Range[] {
+  const { text: combinedText, runs } = collectSearchTextRuns(root);
 
   const boundaryForOffset = (offset: number, isEnd: boolean) => {
     const run = runs.find(({ start, end }) =>
@@ -112,6 +190,18 @@ function createSearchRanges(root: HTMLElement, query: string): Range[] {
     ranges.push(range);
   }
   return ranges;
+}
+
+/** Scoped rich blocks that contain `node` (an open disclosure, a diagram in source view). */
+function enclosingRichBlockKeys(node: Node): Set<string> {
+  const keys = new Set<string>();
+  let element = node instanceof Element ? node : node.parentElement;
+  while (element) {
+    const key = element.getAttribute("data-rich-block-key");
+    if (key) keys.add(key);
+    element = element.parentElement;
+  }
+  return keys;
 }
 
 function FooterWrapper({ children }: { children: ReactNode }) {
@@ -140,6 +230,51 @@ function StableHeader({ context }: { context?: VirtuosoListContext }) {
 function StableEmptyPlaceholder({ context }: { context?: VirtuosoListContext }) {
   if (!context?.emptyState) return null;
   return <EmptyPlaceholderWrapper>{context.emptyState}</EmptyPlaceholderWrapper>;
+}
+
+/**
+ * One transcript row: observed for viewport intersection, and providing that
+ * visibility to the rich blocks inside it (visible work before prefetch).
+ */
+function TranscriptRow({
+  rowKey,
+  index,
+  tracker,
+  isCurrentFindMessage,
+  isHighlighted,
+  children,
+}: {
+  rowKey: string;
+  index: number;
+  tracker: TranscriptRowVisibilityTracker;
+  isCurrentFindMessage: boolean;
+  isHighlighted: boolean;
+  children: ReactNode;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  // Observe before children's passive effects request render work.
+  useLayoutEffect(() => {
+    const element = ref.current;
+    return element ? tracker.observe(rowKey, element) : undefined;
+  }, [rowKey, tracker]);
+  const visibility = tracker.source(rowKey);
+  return (
+    <div
+      ref={ref}
+      data-chat-message-index={index}
+      data-chat-message-key={rowKey}
+      data-conversation-target={isHighlighted ? "true" : undefined}
+      className={cn(
+        "rounded-sm transition-colors duration-700 motion-reduce:transition-none",
+        isCurrentFindMessage && "outline outline-1 outline-offset-[-1px] outline-amber-400/35",
+        isHighlighted && "bg-sky-500/10 outline outline-2 outline-offset-[-2px] outline-sky-500/50",
+      )}
+    >
+      <RichRowVisibilityContext value={visibility}>
+        <ChatFindActiveContext value={isCurrentFindMessage}>{children}</ChatFindActiveContext>
+      </RichRowVisibilityContext>
+    </div>
+  );
 }
 
 export function VirtualizedMessageList<TMessage>({
@@ -196,6 +331,159 @@ export function VirtualizedMessageList<TMessage>({
     ownerRef: rootRef,
     onNavigate: handleFindNavigate,
   });
+  const getSearchProjection =
+    find?.getSearchProjection ??
+    (find?.getSearchText as SearchTextGetter<TMessage> | undefined)?.projection;
+
+  // Rows report whether they intersect the scroller viewport, so rich blocks
+  // in Virtuoso's overscan request idle prefetch rather than visible work.
+  const [tracker] = useState(() => new TranscriptRowVisibilityTracker());
+  useEffect(() => () => tracker.dispose(), [tracker]);
+
+  // The row holding the reader's selection or focus: kept mounted (bounded)
+  // and, for a selection, a reason to pause auto-follow.
+  const [selectionRowKey, setSelectionRowKey] = useState<string | null>(null);
+  const [focusRowKey, setFocusRowKey] = useState<string | null>(null);
+  // The visible range is only held in state while a row is protected, so
+  // ordinary scrolling does not re-render the list.
+  const latestRangeRef = useRef<ListRange | null>(null);
+  const protectedIndexRef = useRef<number | null>(null);
+  const [visibleRange, setVisibleRange] = useState<ListRange | null>(null);
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const ownerDocument = root.ownerDocument;
+    const onSelectionChange = () => {
+      const selection = ownerDocument.getSelection();
+      const key =
+        !selection || selection.rangeCount === 0 || selection.isCollapsed
+          ? null
+          : (rowKeyOf(root, selection.focusNode) ?? rowKeyOf(root, selection.anchorNode));
+      setSelectionRowKey(key);
+      if (key !== null) setVisibleRange(latestRangeRef.current);
+    };
+    const onFocusIn = (event: FocusEvent) => {
+      const key = rowKeyOf(root, event.target as Node | null);
+      setFocusRowKey(key);
+      if (key !== null) setVisibleRange(latestRangeRef.current);
+    };
+    const onFocusOut = (event: FocusEvent) => {
+      setFocusRowKey(rowKeyOf(root, event.relatedTarget as Node | null));
+    };
+    ownerDocument.addEventListener("selectionchange", onSelectionChange);
+    root.addEventListener("focusin", onFocusIn);
+    root.addEventListener("focusout", onFocusOut);
+    return () => {
+      ownerDocument.removeEventListener("selectionchange", onSelectionChange);
+      root.removeEventListener("focusin", onFocusIn);
+      root.removeEventListener("focusout", onFocusOut);
+    };
+  }, []);
+
+  const appliedOverscan = useRef({ top: 0, bottom: 0 });
+  const handleRangeChanged = useCallback(
+    (reported: ListRange) => {
+      // Virtuoso reports the expanded render window. Recover the viewport
+      // range before calculating new protection, avoiding an overscan feedback loop.
+      let range = {
+        startIndex:
+          reported.startIndex === 0
+            ? 0
+            : Math.min(reported.endIndex, reported.startIndex + appliedOverscan.current.top),
+        endIndex:
+          reported.endIndex === messages.length - 1
+            ? reported.endIndex
+            : Math.max(reported.startIndex, reported.endIndex - appliedOverscan.current.bottom),
+      };
+      const protectedRow = protectedIndexRef.current;
+      if (protectedRow !== null) {
+        // At either list edge overscan is clipped, so subtracting the applied
+        // counts cannot recover the viewport. Measure only while protecting
+        // a row (ordinary scrolling never forces this layout read).
+        const root = rootRef.current;
+        const viewport = root?.querySelector("[data-virtuoso-scroller]")?.getBoundingClientRect();
+        if (viewport && viewport.height > 0) {
+          let first = Infinity;
+          let last = -1;
+          for (const row of root!.querySelectorAll<HTMLElement>(ROW_SELECTOR)) {
+            const rect = row.getBoundingClientRect();
+            if (rect.bottom <= viewport.top || rect.top >= viewport.bottom) continue;
+            const index = Number(row.dataset.chatMessageIndex);
+            if (!Number.isSafeInteger(index)) continue;
+            first = Math.min(first, index);
+            last = Math.max(last, index);
+          }
+          if (last >= first) range = { startIndex: first, endIndex: last };
+        } else if (reported.startIndex === 0 || reported.endIndex === messages.length - 1) {
+          // Hidden scrollers have no usable geometry. Keep the last known
+          // viewport at a clipped edge until layout returns, avoiding feedback.
+          range = latestRangeRef.current ?? range;
+        }
+      }
+      latestRangeRef.current = range;
+      if (protectedRow === null) return;
+      if (keepMountedOverscan(protectedRow, range) === null) {
+        // Beyond the bound the row unmounts like any other: release it.
+        setSelectionRowKey(null);
+        setFocusRowKey(null);
+        setVisibleRange(null);
+        return;
+      }
+      setVisibleRange((previous) =>
+        previous?.startIndex === range.startIndex && previous?.endIndex === range.endIndex
+          ? previous
+          : range,
+      );
+    },
+    [appliedOverscan, messages.length],
+  );
+  const protectedRowKey = selectionRowKey ?? focusRowKey;
+  const protectedIndex = useMemo(() => {
+    if (protectedRowKey === null) return null;
+    const index = messages.findIndex(
+      (message, candidate) => computeItemKey(candidate, message) === protectedRowKey,
+    );
+    return index >= 0 ? index : null;
+  }, [computeItemKey, messages, protectedRowKey]);
+  useLayoutEffect(() => {
+    protectedIndexRef.current = protectedIndex;
+  }, [protectedIndex]);
+  const keepMounted = keepMountedOverscan(protectedIndex, visibleRange);
+  useLayoutEffect(() => {
+    appliedOverscan.current.top = keepMounted?.top ?? 0;
+    appliedOverscan.current.bottom = keepMounted?.bottom ?? 0;
+  }, [appliedOverscan, keepMounted?.top, keepMounted?.bottom]);
+
+  // Auto-follow pauses while the reader selects text here, uses find, or
+  // has an expanded artifact or viewer open; it resumes when they stop.
+  const liveArtifactExpanded = useArtifactLiveHostStore(
+    (state) => state.active !== null && state.active.placement !== "inline",
+  );
+  const viewerOpen = useRichViewPinned();
+  const pausedForSelection = selectionRowKey !== null;
+  const pausedForFind = chatFind.isOpen;
+  const pausedForArtifact = liveArtifactExpanded || viewerOpen;
+  const setFollowPaused = scrollProps.setFollowPaused;
+  // Without the scroll hook's pause support, pause Virtuoso's follow here.
+  const pausedLocally =
+    !setFollowPaused && (pausedForSelection || pausedForFind || pausedForArtifact);
+  useEffect(() => {
+    setFollowPaused?.("selection", pausedForSelection);
+  }, [pausedForSelection, setFollowPaused]);
+  useEffect(() => {
+    setFollowPaused?.("find", pausedForFind);
+  }, [pausedForFind, setFollowPaused]);
+  useEffect(() => {
+    setFollowPaused?.("expanded-artifact", pausedForArtifact);
+  }, [pausedForArtifact, setFollowPaused]);
+  useEffect(
+    () => () => {
+      setFollowPaused?.("selection", false);
+      setFollowPaused?.("find", false);
+      setFollowPaused?.("expanded-artifact", false);
+    },
+    [setFollowPaused],
+  );
 
   useEffect(() => {
     const cssHighlights =
@@ -208,6 +496,10 @@ export function VirtualizedMessageList<TMessage>({
       cssHighlights?.delete(currentHighlightName);
     };
 
+    if (!find?.isActive || !chatFind.isOpen || !chatFind.query.trim()) {
+      // Find closed or emptied: undo every temporary reveal it made.
+      restoreRichFindReveals(findInstanceId);
+    }
     if (
       !cssHighlights ||
       !find?.isActive ||
@@ -221,31 +513,73 @@ export function VirtualizedMessageList<TMessage>({
 
     let frame = 0;
     let attempts = 0;
+    const revealedThisMatch = new Set<string>();
 
+    /**
+     * Pair one row's model matches with its DOM ranges. With a semantic
+     * projection, a match inside a rich block pairs with the n-th range
+     * inside that block's element (by block identity, not row ordinal) and
+     * prose matches pair by ordinal among prose ranges only; without one,
+     * every range pairs by row ordinal.
+     */
     const collectRowRanges = (
       row: HTMLElement,
-      activeOccurrenceIndex: number | null,
-      expectedMatchCount: number,
+      rowMatches: readonly AgentChatFindMatch[],
+      projection: SearchProjection | null,
     ) => {
       const ranges: Range[] = [];
       let activeRange: Range | null = null;
-      let rowOccurrenceIndex = 0;
       const taggedRoots = Array.from(row.querySelectorAll<HTMLElement>(SEARCH_CONTENT_SELECTOR));
       const searchableRoots = taggedRoots.length > 0 ? taggedRoots : [row];
 
+      const domGroups = new Map<string, Range[]>();
+      const domBlockGroups: Extract<SearchGroup, { type: "block" }>[] = [];
       for (const searchableRoot of searchableRoots) {
         for (const range of createSearchRanges(searchableRoot, chatFind.query)) {
-          if (rowOccurrenceIndex >= expectedMatchCount) break;
-          ranges.push(range);
-          if (rowOccurrenceIndex === activeOccurrenceIndex) {
-            activeRange = range;
+          const group = projection
+            ? domSearchGroup(searchableRoot, range.startContainer)
+            : PROSE_GROUP;
+          const id = searchGroupId(group);
+          let list = domGroups.get(id);
+          if (!list) {
+            list = [];
+            domGroups.set(id, list);
+            if (group.type === "block") domBlockGroups.push(group);
           }
-          rowOccurrenceIndex += 1;
+          list.push(range);
         }
+      }
+
+      const modelGroups = rowMatches.map((match) =>
+        projection ? modelMatchGroup(projection, match.characterIndex) : PROSE_GROUP,
+      );
+      const pairs = pairBlockGroups(
+        modelGroups.filter(
+          (group): group is Extract<SearchGroup, { type: "block" }> => group.type === "block",
+        ),
+        domBlockGroups,
+      );
+      const ordinals = new Map<string, number>();
+      for (const [index, match] of rowMatches.entries()) {
+        const modelId = searchGroupId(modelGroups[index]!);
+        const ordinal = ordinals.get(modelId) ?? 0;
+        ordinals.set(modelId, ordinal + 1);
+        const domId = modelId === "prose" ? "prose" : pairs.get(modelId);
+        const range = domId === undefined ? undefined : domGroups.get(domId)?.[ordinal];
+        if (!range) continue;
+        ranges.push(range);
+        if (match === chatFind.currentMatch) activeRange = range;
       }
 
       return { ranges, activeRange };
     };
+
+    const matchesByItem = new Map<number, AgentChatFindMatch[]>();
+    for (const match of chatFind.matches) {
+      const list = matchesByItem.get(match.itemIndex) ?? [];
+      list.push(match);
+      matchesByItem.set(match.itemIndex, list);
+    }
 
     const applyHighlights = () => {
       const root = rootRef.current;
@@ -253,23 +587,16 @@ export function VirtualizedMessageList<TMessage>({
 
       const allRanges: Range[] = [];
       let activeRange: Range | null = null;
-      const rows = root.querySelectorAll<HTMLElement>("[data-chat-message-index]");
-      const matchCountsByItem = new Map<number, number>();
-      for (const match of chatFind.matches) {
-        matchCountsByItem.set(match.itemIndex, (matchCountsByItem.get(match.itemIndex) ?? 0) + 1);
-      }
+      const rows = root.querySelectorAll<HTMLElement>(ROW_SELECTOR);
 
       for (const row of rows) {
         const itemIndex = Number(row.dataset.chatMessageIndex);
-        const activeOccurrenceIndex =
-          chatFind.currentMatch?.itemIndex === itemIndex
-            ? chatFind.currentMatch.occurrenceIndex
-            : null;
-        const rowRanges = collectRowRanges(
-          row,
-          activeOccurrenceIndex,
-          matchCountsByItem.get(itemIndex) ?? 0,
-        );
+        const rowMatches = matchesByItem.get(itemIndex);
+        if (!rowMatches) continue;
+        const message = messages[itemIndex];
+        const projection =
+          getSearchProjection && message !== undefined ? getSearchProjection(message) : null;
+        const rowRanges = collectRowRanges(row, rowMatches, projection);
         allRanges.push(...rowRanges.ranges);
         activeRange ??= rowRanges.activeRange;
       }
@@ -277,14 +604,39 @@ export function VirtualizedMessageList<TMessage>({
       cssHighlights.set(matchHighlightName, new Highlight(...allRanges));
       cssHighlights.set(currentHighlightName, new Highlight(...(activeRange ? [activeRange] : [])));
 
+      // A match in hidden rich content (a collapsed disclosure body, a
+      // diagram's source behind its preview) is revealed first; the next
+      // frame then highlights the now-visible text. Reveals are temporary.
+      const mirror = activeRange ? hiddenMirrorFor(activeRange.startContainer) : null;
+      const revealKey = mirror?.getAttribute("data-rich-reveal-key");
+      if (activeRange && mirror && revealKey && attempts < 8) {
+        revealedThisMatch.add(revealKey);
+        revealRichBlockForFind(revealKey, findInstanceId);
+        attempts += 1;
+        frame = requestAnimationFrame(applyHighlights);
+        return;
+      }
+      if (activeRange) {
+        // Keep this match's reveals (and any open block around it); undo the rest.
+        const keep = enclosingRichBlockKeys(activeRange.startContainer);
+        for (const key of revealedThisMatch) keep.add(key);
+        restoreRichFindReveals(findInstanceId, keep);
+      }
+
       // The selected row may contain a long report. Reveal the occurrence,
       // including text well below the row's initial scroll position.
       if (activeRange) {
-        const node = activeRange.startContainer;
+        // A mirror without a reveal action (a chart's labels) is not laid
+        // out; scroll to the block that hosts it instead.
+        const anchor =
+          mirror?.closest<HTMLElement>("[data-rich-mirror-host]") ?? mirror?.parentElement;
+        const node = anchor ?? activeRange.startContainer;
         const element = node instanceof Element ? node : node.parentElement;
         const scroller = element?.closest<HTMLElement>("[data-virtuoso-scroller]");
         if (scroller) {
-          const matchRect = activeRange.getBoundingClientRect();
+          const matchRect = anchor
+            ? anchor.getBoundingClientRect()
+            : activeRange.getBoundingClientRect();
           const viewport = scroller.getBoundingClientRect();
           if (matchRect.top < viewport.top || matchRect.bottom > viewport.bottom) {
             scroller.scrollBy({
@@ -314,9 +666,14 @@ export function VirtualizedMessageList<TMessage>({
     chatFind.query,
     find?.isActive,
     currentHighlightName,
+    findInstanceId,
+    getSearchProjection,
     matchHighlightName,
     messages,
   ]);
+
+  // Leaving the transcript ends its find session and its temporary reveals.
+  useEffect(() => () => restoreRichFindReveals(findInstanceId), [findInstanceId]);
 
   return (
     <div ref={rootRef} className="relative min-h-0 flex-1">
@@ -349,43 +706,36 @@ export function VirtualizedMessageList<TMessage>({
         context={context}
         computeItemKey={computeItemKey}
         itemContent={(index, data) => {
-          const isCurrentFindMessage =
-            chatFind.isOpen && chatFind.currentMatch?.itemIndex === index;
-          const isHighlighted =
-            highlightedItemKey !== null && computeItemKey(index, data) === highlightedItemKey;
+          const rowKey = computeItemKey(index, data);
           return (
-            <div
-              data-chat-message-index={index}
-              data-conversation-target={isHighlighted ? "true" : undefined}
-              className={cn(
-                "rounded-sm transition-colors duration-700 motion-reduce:transition-none",
-                isCurrentFindMessage &&
-                  "outline outline-1 outline-offset-[-1px] outline-amber-400/35",
-                isHighlighted &&
-                  "bg-sky-500/10 outline outline-2 outline-offset-[-2px] outline-sky-500/50",
-              )}
+            <TranscriptRow
+              rowKey={rowKey}
+              index={index}
+              tracker={tracker}
+              isCurrentFindMessage={chatFind.isOpen && chatFind.currentMatch?.itemIndex === index}
+              isHighlighted={highlightedItemKey !== null && rowKey === highlightedItemKey}
             >
-              <ChatFindActiveContext value={isCurrentFindMessage}>
-                {renderMessage(
-                  index,
-                  data,
-                  resolvePreviousMessage
-                    ? resolvePreviousMessage(messages, index)
-                    : index > 0
-                      ? (messages[index - 1] ?? null)
-                      : null,
-                )}
-              </ChatFindActiveContext>
-            </div>
+              {renderMessage(
+                index,
+                data,
+                resolvePreviousMessage
+                  ? resolvePreviousMessage(messages, index)
+                  : index > 0
+                    ? (messages[index - 1] ?? null)
+                    : null,
+              )}
+            </TranscriptRow>
           );
         }}
         components={components}
-        followOutput={scrollProps.followOutput}
+        followOutput={pausedLocally ? PAUSED_FOLLOW_OUTPUT : scrollProps.followOutput}
         atBottomStateChange={scrollProps.atBottomStateChange}
         atBottomThreshold={scrollProps.atBottomThreshold}
         totalListHeightChanged={scrollProps.totalListHeightChanged}
         restoreStateFrom={scrollProps.restoreStateFrom}
         scrollerRef={scrollProps.scrollerRef}
+        rangeChanged={handleRangeChanged}
+        minOverscanItemCount={keepMounted ?? undefined}
         // A tool block can be thousands of pixels tall. Using it as Virtuoso's
         // default probe height overestimates new text/tool rows, briefly pushes
         // visible history out of the window, then remounts it after measurement.

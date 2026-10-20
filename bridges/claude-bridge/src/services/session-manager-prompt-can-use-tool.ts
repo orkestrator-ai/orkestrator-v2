@@ -25,7 +25,10 @@ import {
   interactionExpiryMessage,
   registerInteractionDeadline,
 } from "./session-manager-interaction-holds.js";
-import { claudeWorkflowResultTools } from "./claude-workflow-result-tools.js";
+import {
+  claudeArtifactServerTools,
+  claudeWorkflowResultTools,
+} from "./claude-workflow-result-tools.js";
 import { abortSession } from "./session-manager-lifecycle.js";
 import { requestClaudeToolApproval } from "./session-manager-parked-interactions.js";
 import type { TurnState } from "./session-manager-prompt-turn.js";
@@ -339,7 +342,8 @@ export async function turnCanUseTool(
   // Otherwise the mode already chose not to ask, so a tool that still reaches
   // here runs.
   if (
-    claudeWorkflowResultTools(turn.mcpServerNames).includes(toolName) &&
+    (claudeWorkflowResultTools(turn.mcpServerNames).includes(toolName) ||
+      claudeArtifactServerTools(turn.mcpServerNames).includes(toolName)) &&
     !session.executionPolicy?.toolPolicy?.deny?.includes(toolName)
   ) {
     return { behavior: "allow", updatedInput: input };

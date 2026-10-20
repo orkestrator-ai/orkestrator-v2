@@ -257,6 +257,7 @@ async function withService(
     abortGraceMs?: number;
     launchReconcileIntervalMs?: number;
     resolveAgentToolConnection?: NativeAgentServiceOptions["resolveAgentToolConnection"];
+    artifactDispatch?: NativeAgentServiceOptions["artifactDispatch"];
     keyedQueueScheduling?: boolean;
   },
   run: (context: { storage: StorageService; service: NativeAgentService }) => Promise<void>,
@@ -312,6 +313,7 @@ async function withService(
     ...(setup.resolveAgentToolConnection
       ? { resolveAgentToolConnection: setup.resolveAgentToolConnection }
       : {}),
+    ...(setup.artifactDispatch ? { artifactDispatch: setup.artifactDispatch } : {}),
   });
   try {
     await run({ storage, service });
@@ -1367,6 +1369,91 @@ describe("NativeAgentService", () => {
         );
       },
     );
+  });
+
+  test("attributes artifact calls to the turn and grants only environment-wide providers", async () => {
+    for (const [agent, expectGrant] of [
+      ["opencode", true],
+      ["cursor", false],
+    ] as const) {
+      const beginTurn = mock((input: { needsGrant: boolean }) =>
+        input.needsGrant ? { grant: "artifact-grant-secret" } : {},
+      );
+      const settleTurn = mock(() => undefined);
+      const stub = createProviderStub(agent, { prepareDispatch: async () => undefined });
+      await withService(
+        {
+          prefix: `orkestrator-native-dispatch-artifact-${agent}-`,
+          provider: async () => stub.provider,
+          artifactDispatch: { beginTurn, settleTurn },
+        },
+        async ({ service }) => {
+          await expect(
+            service.dispatchIntent({
+              environmentId: "env-1",
+              agent,
+              logicalSessionKey: "env-env-1:tab-1",
+              prompt: "Draw the chart",
+              requestId: `artifact-${agent}`,
+              owner: { kind: "environment", projectId: "project-1", environmentId: "env-1" },
+            }),
+          ).resolves.toEqual({ outcome: "accepted", requestId: `artifact-${agent}` });
+          expect(beginTurn).toHaveBeenCalledWith(
+            expect.objectContaining({
+              environmentId: "env-1",
+              projectId: "project-1",
+              conversationKey: "env-env-1:tab-1",
+              turnId: `artifact-${agent}`,
+              needsGrant: expectGrant,
+            }),
+          );
+          const options = stub.send.mock.calls[0]?.[2] as { artifactGrant?: string };
+          expect(options.artifactGrant).toBe(expectGrant ? "artifact-grant-secret" : undefined);
+        },
+      );
+    }
+  });
+
+  test("retains ambiguous dispatch grants until reconciliation and revokes rejected dispatches", async () => {
+    for (const failure of ["rejected", "ambiguous"] as const) {
+      const beginTurn = mock(() => ({ grant: "artifact-grant-secret" }));
+      const settleTurn = mock(
+        (_environmentId: string, _conversationKey: string, _turnId: string) => undefined,
+      );
+      const stub = createProviderStub("opencode", {
+        prepareDispatch: async () => undefined,
+        send: async () => {
+          if (failure === "rejected") throw new PromptRejectedError("No input");
+          throw new AmbiguousPromptDispatchError("Response was lost");
+        },
+      });
+      await withService(
+        {
+          prefix: `orkestrator-native-dispatch-artifact-revoke-${failure}-`,
+          provider: async () => stub.provider,
+          artifactDispatch: { beginTurn, settleTurn },
+        },
+        async ({ service }) => {
+          const outcome = await service.dispatchIntent({
+            environmentId: "env-1",
+            agent: "opencode",
+            logicalSessionKey: "env-env-1:tab-1",
+            prompt: "Draw the chart",
+            requestId: `revoke-${failure}`,
+            owner: { kind: "environment", projectId: "project-1", environmentId: "env-1" },
+          });
+          expect(outcome.outcome).toBe(failure === "rejected" ? "rejected" : "unknown");
+          expect(beginTurn).toHaveBeenCalledTimes(1);
+          if (failure === "rejected")
+            expect(settleTurn).toHaveBeenCalledWith(
+              "env-1",
+              "env-env-1:tab-1",
+              `revoke-${failure}`,
+            );
+          else expect(settleTurn).not.toHaveBeenCalled();
+        },
+      );
+    }
   });
 
   test("retries a failed warm-up credential resolve on the prompt path", async () => {

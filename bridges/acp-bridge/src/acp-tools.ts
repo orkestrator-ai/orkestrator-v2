@@ -937,11 +937,51 @@ export function applyAcpToolSourcePatch(source: AcpToolSourceState, update: Json
   }
 }
 
+/** Grok's deferred-tool wrapper; the tool it runs is in `rawInput.tool_name`. */
+export const GROK_USE_TOOL = "use_tool";
+
+/**
+ * The call a Grok `use_tool` wrapper runs: the wrapped tool's own name
+ * (`orkestrator__publish_artifact`) and its arguments from `tool_input`, an
+ * object or a JSON string. Rendering the wrapper itself left every deferred
+ * MCP call named `use_tool` with its real arguments one level down, so no
+ * reader could tell which tool ran or read its arguments. The source keeps
+ * the wrapper input, which permission requests still read.
+ */
+export function grokWrappedToolCall(
+  source: Pick<AcpToolSourceState, "explicitName" | "inputName" | "metadataName" | "toolArgs">,
+): { name: string; args: JsonObject | undefined } | undefined {
+  // Grok names the wrapper in `_meta["x.ai/tool"]`; a part persisted before
+  // wrappers were unwrapped carries `use_tool` as its own name instead.
+  const wrapper = [source.metadataName, source.explicitName, source.inputName].some(
+    (name) => name?.trim() === GROK_USE_TOOL,
+  );
+  if (!wrapper || !source.toolArgs) return undefined;
+  const name = boundedString(source.toolArgs.tool_name, MAX_TOOL_NAME_BYTES)?.trim();
+  if (!name) return undefined;
+  let input: unknown = source.toolArgs.tool_input;
+  if (typeof input === "string") {
+    // Already within the wrapper's argument bound (`boundedToolArguments`).
+    try {
+      input = JSON.parse(input) as unknown;
+    } catch {
+      input = undefined;
+    }
+  }
+  return { name, args: isObject(input) ? boundedToolArguments(input) : undefined };
+}
+
 export function renderAcpToolSource(part: BridgeToolPart, source: AcpToolSourceState): void {
-  const toolName = source.explicitName ?? source.inputName ?? source.metadataName ?? source.kind;
+  const wrapped = grokWrappedToolCall(source);
+  const toolName =
+    wrapped?.name ?? source.explicitName ?? source.inputName ?? source.metadataName ?? source.kind;
   setOptionalPartField(part, "toolTitle", source.title);
   setOptionalPartField(part, "toolName", toolName);
-  setOptionalPartField(part, "toolArgs", mergeCursorTaskArgs(source.toolArgs, source.cursorTask));
+  setOptionalPartField(
+    part,
+    "toolArgs",
+    wrapped ? wrapped.args : mergeCursorTaskArgs(source.toolArgs, source.cursorTask),
+  );
   setOptionalPartField(part, "toolState", source.toolState);
   part.content = source.title ?? toolName ?? "Tool call";
 

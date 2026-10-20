@@ -161,6 +161,13 @@ interface UseVirtuosoScrollStateReturn {
     totalListHeightChanged: (height: number) => void;
     restoreStateFrom: StateSnapshot | undefined;
     scrollerRef: (el: HTMLElement | Window | null) => void;
+    /**
+     * Hold or release one reason to pause auto-follow (a text selection in
+     * the transcript, an open find bar, an expanded artifact). While any
+     * reason is held, new content does not move the viewport; stick intent is
+     * kept, and growth that happened meanwhile is followed on release.
+     */
+    setFollowPaused: (reason: string, paused: boolean) => void;
   };
 }
 
@@ -184,6 +191,9 @@ interface UseVirtuosoScrollStateReturn {
  *   thinking indicator hold a fixed position while tokens arrive
  * - Smooth animated scroll-to-bottom for the *user-initiated* jump (the
  *   scroll-down button), which keeps pace with late-rendering footer content
+ * - Follow pausing (`setFollowPaused`): while the reader selects text, uses
+ *   find or an expanded artifact, growth does not move the viewport; on
+ *   release a still-sticky reader is brought to the new bottom
  */
 export function useVirtuosoScrollState(
   options: UseVirtuosoScrollStateOptions = {},
@@ -318,7 +328,16 @@ export function useVirtuosoScrollState(
   // followOutput on every item change, and a native smooth scroll restarts its
   // easing from scratch each time it is re-issued. Instant follow keeps the
   // viewport pinned without the streaming tail bobbing.
+  /** Reasons auto-follow is paused (selection, find, expanded artifact). */
+  const followPauseReasonsRef = useRef<Set<string>>(new Set());
+  /** Sticky growth was suppressed by a pause and is owed on release. */
+  const growthWhilePausedRef = useRef(false);
+
   const followOutput = useCallback((_atBottom: boolean): "auto" | false => {
+    if (followPauseReasonsRef.current.size > 0) {
+      if (wantsStickRef.current) growthWhilePausedRef.current = true;
+      return false;
+    }
     return wantsStickRef.current ? "auto" : false;
   }, []);
 
@@ -485,12 +504,32 @@ export function useVirtuosoScrollState(
   const followContentGrowth = useCallback(() => {
     if (!isActiveRef.current) return;
     if (!wantsStickRef.current) return;
+    if (followPauseReasonsRef.current.size > 0) {
+      growthWhilePausedRef.current = true;
+      return;
+    }
     if (scrollInFlightRef.current) return;
     if (pinToBottom()) return;
     // No scroller mounted yet — fall back to the handle. "auto", not "smooth":
     // this is content catching up, not a user-requested journey.
     performScrollToBottom("auto");
   }, [pinToBottom, performScrollToBottom]);
+
+  const setFollowPaused = useCallback(
+    (reason: string, paused: boolean) => {
+      const reasons = followPauseReasonsRef.current;
+      const wasPaused = reasons.size > 0;
+      if (paused) reasons.add(reason);
+      else reasons.delete(reason);
+      if (!wasPaused || reasons.size > 0) return;
+      // Released: normal follow semantics again. A reader who still wants
+      // the tail is brought to growth that arrived during the pause.
+      const owed = growthWhilePausedRef.current;
+      growthWhilePausedRef.current = false;
+      if (owed) followContentGrowth();
+    },
+    [followContentGrowth],
+  );
 
   const totalListHeightChanged = useCallback(
     (_height: number) => {
@@ -924,6 +963,7 @@ export function useVirtuosoScrollState(
       totalListHeightChanged,
       restoreStateFrom,
       scrollerRef,
+      setFollowPaused,
     },
   };
 }

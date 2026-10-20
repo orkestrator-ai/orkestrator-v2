@@ -28,6 +28,7 @@ export default defineConfig({
     "multi-review-live.spec.ts",
     "transcript-paging-live.spec.ts",
     "mcp-apply-live.spec.ts",
+    "rich-transcripts-live.spec.ts",
   ],
   fullyParallel: false,
   workers: 1,

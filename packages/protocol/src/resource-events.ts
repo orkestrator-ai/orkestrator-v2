@@ -28,6 +28,13 @@ export const RESOURCE_KINDS = [
   "agent-mail",
   "agent-mail-summary",
   "coordinator",
+  /**
+   * A conversation's transcript-artifact ledger or drafts changed. The id is
+   * the conversation key (`env-<environment>:<tab>`); clients re-read the
+   * ledger through `transcript_artifact_list_publications`. A hint only: the
+   * ledger read is authoritative and recovers anything a missed event hid.
+   */
+  "transcript-artifact",
 ] as const;
 
 export type ResourceKind = (typeof RESOURCE_KINDS)[number];

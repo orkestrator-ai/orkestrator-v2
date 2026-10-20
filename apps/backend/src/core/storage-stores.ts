@@ -9,6 +9,11 @@ import {
   WEB_ANNOTATION_STORE_PREFIX,
 } from "./web-annotation-store-layout.js";
 import {
+  TRANSCRIPT_ARTIFACT_ENGINE_STORE_LAYOUTS,
+  TRANSCRIPT_ARTIFACT_STORE_LAYOUT,
+  TRANSCRIPT_ARTIFACT_STORE_PREFIX,
+} from "./transcript-artifacts/store-layout.js";
+import {
   StorageDatabase,
   type StorageDatabaseOptions,
   type StorageMigration,
@@ -81,10 +86,12 @@ const ENGINE_STORE_LAYOUTS: Record<string, StoreLayout> = {
   "host-maintenance": { kind: "document" },
   ...NATIVE_AGENT_DISPLAY_TAIL_STORE_LAYOUTS,
   ...BUILD_PIPELINE_TRANSCRIPT_STORE_LAYOUTS,
+  ...TRANSCRIPT_ARTIFACT_ENGINE_STORE_LAYOUTS,
 };
 
 const PREFIX_STORE_LAYOUTS: ReadonlyArray<readonly [string, StoreLayout]> = [
   [WEB_ANNOTATION_STORE_PREFIX, WEB_ANNOTATION_STORE_LAYOUT],
+  [TRANSCRIPT_ARTIFACT_STORE_PREFIX, TRANSCRIPT_ARTIFACT_STORE_LAYOUT],
 ];
 
 const PUBLIC_OPERATION_NAMESPACE = /^public-operations\/ns-[0-9]{13}-[a-f0-9]{8}$/;

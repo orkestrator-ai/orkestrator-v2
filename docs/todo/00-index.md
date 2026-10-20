@@ -58,9 +58,9 @@ it reaches. Some rules of thumb:
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
 | High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 18 |
-| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 261 |
+| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 262 |
 | Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 279 |
-| **Total** | | **559** |
+| **Total** | | **560** |
 
 ## Very high
 
@@ -146,6 +146,9 @@ it reaches. Some rules of thumb:
 
 ### Transcripts, observation and bandwidth (high)
 
+- [x] `qualification` Run the live rich-transcript artifact cycle on every provider ([rich-transcripts.md](rich-transcripts.md))
+- [x] `qualification` Measure the rich-transcript performance gate in a real browser against the pre-change baseline ([rich-transcripts.md](rich-transcripts.md))
+- [x] `qualification` Record `test:agent:electron` and the desktop live-host probe on the release Electron build ([rich-transcripts.md](rich-transcripts.md))
 - [x] Qualify live history paging and reviewer Load earlier messages beyond the 100-message live window ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
 - [x] Run a live multi-review: progress probes, reviewer windows, detail expansion, pages and scroll anchoring ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
 - [ ] Qualify Claude inactive-tab and background-task runs against content-revision tokens ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
@@ -404,6 +407,17 @@ it reaches. Some rules of thumb:
 
 ### Transcripts, observation and bandwidth (medium)
 
+- [x] Project artifact publications in the backend transcript projection for non-native-tab surfaces ([rich-transcripts.md](rich-transcripts.md))
+- [x] Keep Codex code-mode `publish_artifact` call records through history reload ([rich-transcripts.md](rich-transcripts.md))
+- [x] Make the container preview worker the packaged default or ship it; process mode lacks an OS boundary ([rich-transcripts.md](rich-transcripts.md))
+- [x] Document a hosted artifact content origin for remote browsers ([rich-transcripts.md](rich-transcripts.md))
+- [x] Bundle ES-module imports for interactive artifacts; extend the dependency manifest ([rich-transcripts.md](rich-transcripts.md))
+- [x] PDF representation, print profile and isolated PDF preview ([rich-transcripts.md](rich-transcripts.md))
+- [x] Range-capable media serving for audio/video ([rich-transcripts.md](rich-transcripts.md))
+- [x] Clear a conversation's rich content on session deletion or revocation ([rich-transcripts.md](rich-transcripts.md))
+- [x] Qualify executable CSP and sandbox in Firefox and WebKit ([rich-transcripts.md](rich-transcripts.md))
+- [ ] Publish and digest-pin the preview worker image (tooling ready, publishing left to maintainer) ([rich-transcripts.md](rich-transcripts.md))
+- [ ] Cut per-token layout of a streamed highlighted code fence (composer median +13–20% at 4× CPU throttle) ([rich-transcripts.md](rich-transcripts.md))
 - [ ] Range-bound Claude cold hydration with SDK `limit`/`offset`, or record full hydration as the accepted cost ([transcript-history-efficiency.md](transcript-history-efficiency.md))
 - [ ] Add harness workloads for activity sweep, file-tree cache, reviewer/progress probes and checkpoints ([transcript-history-efficiency.md](transcript-history-efficiency.md))
 - [ ] Add heap/RSS and event-loop-lag reporting to the efficiency harness ([transcript-history-efficiency.md](transcript-history-efficiency.md))
@@ -746,6 +760,8 @@ it reaches. Some rules of thumb:
 
 ### Transcripts, observation and bandwidth (low)
 
+- [x] Render Mermaid math labels safely, or keep the explicit diagnostic ([rich-transcripts.md](rich-transcripts.md))
+- [x] Per-block visibility for rich-render idle prefetch ([rich-transcripts.md](rich-transcripts.md))
 - [ ] Record source and normalise phase timing for state and discovery reads ([transcript-history-efficiency.md](transcript-history-efficiency.md))
 - [ ] Verify whether Claude SDK `getSessionMessages` `limit`/`offset` avoids a full JSONL parse ([transcript-history-efficiency.md](transcript-history-efficiency.md), verify)
 - [ ] Restructure frontend retained history into immutable pages if 8 MiB profiling shows long tasks ([transcript-history-efficiency.md](transcript-history-efficiency.md), deferred)
@@ -921,6 +937,7 @@ it reaches. Some rules of thumb:
 | [provider-sdk-adoption-backlog.md](provider-sdk-adoption-backlog.md) |  |  | 2 | 15 | 17 |
 | [session-lifecycle-consistency.md](session-lifecycle-consistency.md) |  |  | 7 | 7 | 14 |
 | **Transcripts, observation and bandwidth** | | | | | |
+| [rich-transcripts.md](rich-transcripts.md) |  |  | 2 |  | 2 |
 | [transcript-history-efficiency.md](transcript-history-efficiency.md) |  | 2 | 13 | 5 | 20 |
 | [remote-client-bandwidth.md](remote-client-bandwidth.md) |  |  | 4 | 9 | 13 |
 | [native-agent-idle-observation.md](native-agent-idle-observation.md) |  | 1 | 3 | 2 | 6 |

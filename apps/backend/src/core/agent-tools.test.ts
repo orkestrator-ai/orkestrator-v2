@@ -4,6 +4,7 @@ import {
   coordinatorRuntimeId,
 } from "@orkestrator/protocol/coordinator";
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
+import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
@@ -235,6 +236,39 @@ describe("agent Kanban tools", () => {
     expect(
       listed.body.result?.tools?.find((tool) => tool.name === "update_ticket")?.annotations,
     ).toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: true });
+  });
+
+  test("adds the transcript artifact tools to the general server only", async () => {
+    await addMessagingEnvironment("env-1", "project-1", ["agent-1"]);
+    await server.stop();
+    const workflowResults = workflowResultService();
+    server = new AgentToolsServer(storage, "127.0.0.1", workflowResults);
+    server.setTranscriptArtifactToolHost({
+      toolsEnabled: () => true,
+      handleTool: async () => ({ value: { schemaVersion: 1, ok: true }, isError: false }),
+    });
+    await server.start();
+    const connection = server.connection("env-1", "project-1", "host", "agent-1");
+    const listed = await rpc(connection.url, connection.token, "tools/list");
+    expect(listed.body.result?.tools?.map((tool) => tool.name)).toEqual([
+      ...ALL_AGENT_TOOL_NAMES,
+      ...ARTIFACT_TOOL_NAMES,
+    ]);
+    const resultKey = crypto.randomUUID();
+    await workflowResults.prepare({
+      resultKey,
+      kind: "feature-plan-state",
+      environmentId: "env-1",
+      projectId: "project-1",
+      provider: "codex",
+    });
+    const restricted = server.workflowResultConnection("env-1", "project-1", "host", resultKey);
+    const restrictedTools = await rpc(restricted.url, restricted.token, "tools/list");
+    expect(restrictedTools.body.result?.tools?.map((tool) => tool.name)).toEqual([
+      "validate_workflow_result",
+      "submit_feature_plan_state",
+      "get_workflow_result_status",
+    ]);
   });
 
   test("exposes scoped workflow submission and status tools when configured", async () => {

@@ -810,3 +810,14 @@ implementation, assertion or timeout changed.
 The recurrence, owning-file results and remaining limitations are recorded in
 [0501](0501-queued-steer-main-merge-validation.md). No owning implementation,
 assertion, timeout or skip was changed for validation.
+
+## Setup recovery browser regression validation — 2026-10-20
+
+- **Original command:** `mise run test:logged -- --name full-tests -- mise run test`, alongside component and isolated application browser validation.
+- **Workers:** workspace/root/bridges/protocol reservations of 4/1/2/1 slots.
+- **Failure:** the staged runtime test exceeded its 30000 ms deadline (30002.49 ms).
+- **Owning-file rerun:** `mise run test:logged -- --name pi-vendor-isolated -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 10.5 seconds logged).
+- **Evidence:** `orkestrator-test-run.iroGIL/root-and-agent-support-tests.log.gz` below the host temporary directory.
+- **Assessment:** confirmed intermittent recurrence. Host contention remains an unconfirmed explanation; no implementation, assertion, timeout or skip changed.
+
+Root/support completed with 3148 passed, one skipped and this single failure across 3150 tests in 148 files (327.4 seconds).

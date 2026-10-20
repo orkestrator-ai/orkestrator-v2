@@ -1,4 +1,5 @@
 import { gitHubCli } from "./github-cli-binary.js";
+import { gitHubCliEnv } from "./github-credentials.js";
 import { parseGitHubRepositoryRemote } from "@orkestrator/protocol/github-repository";
 import { runRemoteGit } from "./git-noninteractive-env.js";
 import { promises as fs } from "node:fs";
@@ -694,6 +695,7 @@ export async function createProjectFromScratch(
           ],
           {
             timeoutMs: 120_000,
+            env: await gitHubCliEnv(),
           },
         );
         remote.state = "created";

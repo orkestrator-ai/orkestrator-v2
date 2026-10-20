@@ -158,10 +158,10 @@ import {
   resolveRemoteWorktreeStartPoint,
   gitRefExists,
   enableGitScanCaches,
-  resolveContainerGitHubToken,
   syncContainerGitHubCredential,
   ensureContainerProjectFilesAccess,
 } from "./commands-files.js";
+import { resolveGitHubToken } from "./github-credentials.js";
 import { AmbiguousContainerCreateError, createDockerContainer } from "./commands-containers.js";
 import {
   configuredImageRef,
@@ -1615,7 +1615,7 @@ export async function startEnvironmentOnce(
     }
     const config = await storage.loadConfig();
     if (context.runtimeFlavor !== "agent-test") {
-      const githubToken = await resolveContainerGitHubToken(config.global);
+      const githubToken = await resolveGitHubToken(config.global);
       await syncContainerGitHubCredential(containerId, githubToken);
     }
     await syncContainerAgentAccountsOnStart(context, environment, containerId, config.global);

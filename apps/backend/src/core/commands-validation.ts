@@ -10,6 +10,7 @@ import {
   type CursorApiKeySource,
 } from "./agent-test-cursor-credential.js";
 import { resolveGitHubRepository } from "./github.js";
+import { gitHubCredentialSource, resolveGitHubToken } from "./github-credentials.js";
 import { isStartFeaturePlanningInput } from "@orkestrator/protocol/feature-planning";
 import { assertValidPromptAttachments, assertValidPromptImages } from "./prompt-attachments.js";
 import type {
@@ -114,10 +115,12 @@ export async function requireGitHubProject(
     context.storage.loadConfig(),
   ]);
   if (!project) throw new Error(`Project not found: ${projectId}`);
-  const token = config.global.githubToken?.trim();
+  const token = await resolveGitHubToken(config.global);
   if (!token) {
     throw new Error(
-      "GitHub is not configured. Add a global GitHub token in Settings and try again.",
+      gitHubCredentialSource(config.global) === "host-cli"
+        ? "GitHub is not configured. Sign in with `gh auth login` (or from Settings) and try again."
+        : "GitHub is not configured. Add a GitHub personal access token in Settings and try again.",
     );
   }
   return { token, repository: resolveGitHubRepository(project.gitUrl) };

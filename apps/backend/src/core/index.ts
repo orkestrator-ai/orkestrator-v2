@@ -1,5 +1,6 @@
 import { stoppedWorkerMailHook } from "./agent-mail-stopped-worker.js";
 import { setManagedGitHubCli } from "./github-cli-binary.js";
+import { setGitHubCliConfigSource } from "./github-credentials.js";
 import { resolveManagedBinary } from "./commands-agent-support.js";
 import { closeEnvironmentCleanupStorage } from "./environment-cleanup-ledger.js";
 import { multiReviewNativeFixOptions } from "./multi-review-native-fix.js";
@@ -374,6 +375,7 @@ export class OrkestratorBackend {
     this.context = context;
     context.pinnedGitHubCli = resolveManagedBinary(context, "gh");
     setManagedGitHubCli(context.pinnedGitHubCli);
+    setGitHubCliConfigSource(async () => (await storage.loadConfig()).global);
     this.hostMaintenance.setReaders({
       impact: () => readRestartImpact(context),
       tools: () => readToolStatus(context, this.hostMaintenance.ghChannel()),

@@ -22,3 +22,10 @@
   passed the unchanged owner (0.1 seconds). Evidence:
   `orkestrator-test-run.rDZFZg/review-full-final.log.gz` under the host temporary
   directory. No storage implementation or test assertion changed.
+
+- **Final review aggregate (2026-10-20):** `review-all-complete` reported
+  9,531 backend passes, 41 skips and this one unchanged ordering failure;
+  8,483 web tests passed (10 skips), and the other aggregate groups passed.
+  The unchanged owner passed again in `review-mail-final-owner` (0.1 s).
+  Evidence: `orkestrator-test-run.c7h361/review-all-complete.log.gz` under the
+  host temporary directory. This remains an aggregate validation limitation.

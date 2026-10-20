@@ -669,16 +669,15 @@ Convergence passed in every run:
 - **Noise.** Run-to-run spread of the composer median is up to about 18%,
   comparable to the threshold, which is why five interleaved runs and
   medians of medians decide.
-- **CPU throttling.** Under `--cpu-throttle 4` the composer p95 stays within
-  10% (−2.5%, +7.7% in two 3-run sessions) and scroll frames are unchanged.
-  The composer median regressed by 13–20% (baseline 10.7–11.4 ms → change
-  12.85–12.9 ms). With `--no-stream` it is +2.4%, and CDP profiles show
-  higher layout time per stream tick (about 200 vs 110–150 ms over the
-  typing window). The cause is that the streamed, highlighted code body is
-  one inline formatting context of per-token spans, which Blink lays out
-  again on every token, where the baseline has one text node. The gate only
-  removed a per-token forced layout and observer rebuild in `CodeBlock`
-  (no measurable change). Restructuring the code body is a follow-up.
+- **CPU throttling.** The earlier streaming composer median regression of
+  13–20% is fixed by containing each code line's layout and deferring open-fence
+  highlighting until closure, while preserving completed line nodes for
+  selection. Review qualification on 2026-10-20 used three interleaved runs per
+  checkout at `--cpu-throttle 4`, with twenty cycles each: composer median
+  12.70 → 13.00 ms (+2.4%), p95 20.20 → 19.91 ms (−1.4%), and unchanged scroll
+  median/p95 (16.70/16.80 ms). All runs converged. See the
+  [review-fix evidence](../handoff/2026-10-20-rich-transcript-review-fixes.md#throttled-performance-gate)
+  and `output/benchmarks/rich-transcripts/2026-10-20T14-43-04-959Z.json`.
 - **Headless and single host.** The gate runs headless on one host; it does
   not cover Electron, a 120 Hz display or lower-end hardware.
 

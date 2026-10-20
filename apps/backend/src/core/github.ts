@@ -218,13 +218,13 @@ function responseError(response: Response, payload: unknown, operation: string):
   }
   if (status === 401) {
     return new GitHubApiError(
-      "GitHub authentication failed. Update the global GitHub token in Settings and try again.",
+      "GitHub authentication failed. Check the GitHub credentials in Settings and try again.",
       { status, code: "authentication" },
     );
   }
   if (status === 403) {
     return new GitHubApiError(
-      `GitHub denied permission to ${operation}. Check that the global GitHub token has Issues write access.`,
+      `GitHub denied permission to ${operation}. Check that your GitHub credentials have Issues write access.`,
       { status, code: "permission" },
     );
   }
@@ -272,7 +272,7 @@ async function githubRequest<T>(
   const credential = token.trim();
   if (!credential) {
     throw new GitHubApiError(
-      "GitHub is not configured. Add a global GitHub token in Settings and try again.",
+      "GitHub is not configured. Add GitHub credentials in Settings and try again.",
       { code: "authentication" },
     );
   }

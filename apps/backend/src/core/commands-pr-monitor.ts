@@ -1,4 +1,5 @@
 import { gitHubCli } from "./github-cli-binary.js";
+import { gitHubCliEnv } from "./github-credentials.js";
 import { PrMonitorService } from "./pr-monitor.js";
 import { runCommand } from "./shell.js";
 import type { Environment } from "./models.js";
@@ -350,6 +351,7 @@ export async function detectEnvironmentPullRequest(
     const { stdout } = await runCommand(gitHubCli(), request.args, {
       cwd: target.worktreePath,
       timeoutMs: PR_DETECTION_TIMEOUT_MS,
+      env: await gitHubCliEnv(),
     });
     const detection = parsePrMonitorDetectionResponse(request, stdout);
     if (!detection) return null;
@@ -366,6 +368,7 @@ export async function detectEnvironmentPullRequest(
             await runCommand(gitHubCli(), checkRequest.args, {
               cwd: worktreePath,
               timeoutMs: 10_000,
+              env: await gitHubCliEnv(),
             })
           ).stdout,
         ),

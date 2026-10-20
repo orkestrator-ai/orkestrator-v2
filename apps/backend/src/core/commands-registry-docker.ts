@@ -64,7 +64,7 @@ import {
   toClientEnvironment,
   getDockerStatus,
   getHostPort,
-  resolveContainerGitHubToken,
+  resolveGitHubToken,
   syncContainerGitHubCredential,
   ensureContainerProjectFilesAccess,
   createDockerContainer,
@@ -251,7 +251,7 @@ export function registerDockerCommands(
     }
     const config = await storage.loadConfig();
     if (context.runtimeFlavor !== "agent-test") {
-      await syncContainerGitHubCredential(id, await resolveContainerGitHubToken(config.global));
+      await syncContainerGitHubCredential(id, await resolveGitHubToken(config.global));
     }
     await syncContainerAgentAccountsOnStart(context, assigned ?? null, id, config.global);
   });
@@ -641,7 +641,7 @@ export function registerDockerCommands(
   });
   register("propagate_github_token_to_containers", async (_args, { storage }) => {
     const config = await storage.loadConfig();
-    const githubToken = await resolveContainerGitHubToken(config.global);
+    const githubToken = await resolveGitHubToken(config.global);
     const environments = await storage.loadEnvironments();
     const updated: string[] = [];
     const failed: [string, string][] = [];

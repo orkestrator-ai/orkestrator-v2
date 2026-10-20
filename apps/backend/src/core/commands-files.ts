@@ -1,6 +1,5 @@
 import { getHostClaudeCredentials as readHostClaudeCredentials } from "./claude-host-credentials.js";
 export { getClaudeOAuthAccessToken } from "./claude-host-credentials.js";
-import { gitHubCli } from "./github-cli-binary.js";
 import { runRemoteGit } from "./git-noninteractive-env.js";
 import { reconcileProjectHomeEnvironment } from "./project-home-environment.js";
 import { constants as fsConstants, promises as fs } from "node:fs";
@@ -2055,45 +2054,6 @@ export function buildSyncContainerGitHubCredentialCommand(
 }
 
 export const SYNC_CONTAINER_GITHUB_CREDENTIAL_COMMAND = buildSyncContainerGitHubCredentialCommand();
-
-export async function getHostGitHubToken(): Promise<string | undefined> {
-  try {
-    const { stdout } = await runCommand(
-      gitHubCli(),
-      ["auth", "token", "--hostname", "github.com"],
-      {
-        timeoutMs: 10_000,
-      },
-    );
-    return stdout.trim() || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-export async function resolveContainerGitHubToken(
-  globalConfig: AppConfig["global"],
-): Promise<string | undefined> {
-  if (globalConfig.useHostGitHubCredentials !== false) {
-    return getHostGitHubToken();
-  }
-  return globalConfig.githubToken?.trim() || undefined;
-}
-
-export async function getContainerGitHubCredentialStatus(
-  globalConfig: AppConfig["global"],
-): Promise<{ source: "host-cli" | "pat"; available: boolean }> {
-  if (globalConfig.useHostGitHubCredentials !== false) {
-    return {
-      source: "host-cli",
-      available: Boolean(await getHostGitHubToken()),
-    };
-  }
-  return {
-    source: "pat",
-    available: Boolean(globalConfig.githubToken?.trim()),
-  };
-}
 
 export async function syncContainerGitHubCredential(
   containerId: string,

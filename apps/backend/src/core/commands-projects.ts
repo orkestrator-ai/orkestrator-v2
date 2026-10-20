@@ -1,4 +1,6 @@
 import { gitHubCli } from "./github-cli-binary.js";
+import { gitHubCliEnv } from "./github-credentials.js";
+import { gitHubGitCredentials } from "./github-git-credentials.js";
 import { parseGitHubRepositoryRemote } from "@orkestrator/protocol/github-repository";
 import { runRemoteGit } from "./git-noninteractive-env.js";
 import { promises as fs } from "node:fs";
@@ -513,6 +515,7 @@ export async function addExistingProject(
                 cwd: temporaryPath,
                 timeoutMs: PROJECT_CLONE_TIMEOUT_MS,
                 redactValues: [gitUrl],
+                ...(await gitHubGitCredentials(gitUrl)),
               },
               run,
             );
@@ -677,6 +680,7 @@ export async function createProjectFromScratch(
         }
       }
 
+      const ghEnv = await gitHubCliEnv();
       try {
         // A timeout or transport error may arrive after GitHub accepted the API
         // request. Mark the outcome ambiguous before invoking gh so rollback
@@ -694,6 +698,7 @@ export async function createProjectFromScratch(
           ],
           {
             timeoutMs: 120_000,
+            env: ghEnv,
           },
         );
         remote.state = "created";
@@ -711,12 +716,14 @@ export async function createProjectFromScratch(
       const gitUrl = await readOriginUrl(projectPath, run);
       if (!gitUrl) throw new Error("Could not verify the origin remote");
 
+      const gitCredentials = await gitHubGitCredentials(gitUrl);
       await runRemoteGit(
         "push",
         ["--set-upstream", "origin", "main"],
         {
           cwd: projectPath,
-          gitOptions: ["-C", projectPath],
+          ...gitCredentials,
+          gitOptions: ["-C", projectPath, ...gitCredentials.gitOptions],
           timeoutMs: 120_000,
         },
         run,

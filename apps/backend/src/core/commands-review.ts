@@ -1,4 +1,5 @@
 import { gitHubCli } from "./github-cli-binary.js";
+import { gitHubCliEnv } from "./github-credentials.js";
 import { beginEnvironmentMutation } from "./environment-replacement-fence.js";
 import {
   reconcileProjectHomeEnvironment,
@@ -150,7 +151,11 @@ export function isRemoteBranchAlreadyDeletedError(message: string): boolean {
 
 export function createLocalGhRunner(cwd: string): GhCliRunner {
   return async (args, timeoutMs = 60_000) => {
-    const { stdout } = await runCommand(gitHubCli(), args, { cwd, timeoutMs });
+    const { stdout } = await runCommand(gitHubCli(), args, {
+      cwd,
+      timeoutMs,
+      env: await gitHubCliEnv(),
+    });
     return stdout;
   };
 }
@@ -208,7 +213,7 @@ export function createEnvironmentCommandRunner(environment: Environment): Enviro
             await runCommand(command === "gh" ? gitHubCli() : command, args, {
               cwd: environment.worktreePath,
               timeoutMs,
-              ...(env ? { env } : {}),
+              env: command === "gh" ? await gitHubCliEnv(env) : env,
             })
           ).stdout
         );

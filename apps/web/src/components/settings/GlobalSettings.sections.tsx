@@ -687,7 +687,8 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             GitHub authentication
           </h3>
           <p className="text-xs text-muted-foreground mt-1">
-            Used by containers to clone private repositories and push over HTTPS.
+            Used for GitHub issues and pull requests, and by containers to clone private
+            repositories and push over HTTPS.
           </p>
         </div>
         <div className="overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950/50">

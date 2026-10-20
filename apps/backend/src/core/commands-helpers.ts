@@ -12,5 +12,6 @@ export * from "./commands-terminal.js";
 export * from "./commands-environment.js";
 export * from "./commands-servers.js";
 export * from "./commands-files.js";
+export * from "./github-credentials.js";
 export * from "./commands-containers.js";
 export * from "./commands-projects.js";

@@ -302,10 +302,19 @@ describe("report_finding on the Orkestrator MCP server", () => {
       (await call(reviewer.resultKey, reviewer.connection.workflowResultCapability)).result
         ?.structuredContent,
     ).toMatchObject({ ok: true });
-    expect(
-      (await call(reviewer.resultKey, other.connection.workflowResultCapability)).result
-        ?.structuredContent,
-    ).toMatchObject({ ok: false, error: { code: "capability_denied" } });
+    const keyCorrection = await call(reviewer.resultKey, other.connection.workflowResultCapability);
+    expect(keyCorrection.result).toMatchObject({
+      isError: true,
+      structuredContent: {
+        ok: false,
+        error: {
+          code: "invalid_finding",
+          nextAction: "correct",
+          message: expect.stringContaining(other.resultKey),
+        },
+      },
+    });
+    expect(JSON.stringify(keyCorrection.result)).not.toContain(reviewer.resultKey);
     expect(
       (await call(fix.resultKey, fix.connection.workflowResultCapability)).result
         ?.structuredContent,

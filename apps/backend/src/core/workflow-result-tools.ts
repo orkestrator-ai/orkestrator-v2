@@ -352,6 +352,31 @@ function registerReportFindingTool(
 }
 
 /**
+ * Resolve the capability's own attempt before comparing caller-supplied keys.
+ * Only disclose its key after authenticating scope, provider and result kind.
+ */
+async function brokerAttempt(
+  workflowResults: WorkflowResultService,
+  scope: WorkflowResultCallerScope,
+  capability: string,
+  kind?: WorkflowResultKind,
+): Promise<string | null> {
+  const authorized = await workflowResults.authenticateCapability(capability);
+  if (
+    !authorized ||
+    authorized.environmentId !== scope.environmentId ||
+    authorized.projectId !== scope.projectId
+  ) {
+    return null;
+  }
+  const binding = await workflowResults.binding(scope, authorized.workflowResultKey);
+  if (binding?.provider !== "opencode" || (kind !== undefined && binding.kind !== kind)) {
+    return null;
+  }
+  return authorized.workflowResultKey;
+}
+
+/**
  * Registers the stable OpenCode broker surface.
  *
  * The bearer credential identifies only the environment/project. Every call
@@ -382,13 +407,16 @@ export function registerWorkflowResultBrokerTools(
       },
       async ({ resultKey, capability, finding }) => {
         try {
-          if (
-            !(await workflowResults.authorizeCapability(scope, resultKey, capability, "opencode"))
-          ) {
-            return findingResponse(findingDenied());
+          const expectedKey = await brokerAttempt(
+            workflowResults,
+            scope,
+            capability,
+            "review-report",
+          );
+          if (!expectedKey) return findingResponse(findingDenied());
+          if (resultKey !== expectedKey) {
+            return findingResponse(findingResultKeyMismatch(expectedKey));
           }
-          const binding = await workflowResults.binding(scope, resultKey);
-          if (binding?.kind !== "review-report") return findingResponse(findingDenied());
           return findingResponse(await findings.report(scope, resultKey, finding));
         } catch {
           return findingResponse(findingStorageFailure());
@@ -420,13 +448,9 @@ export function registerWorkflowResultBrokerTools(
       },
       async ({ resultKey, capability, result, validatedDigest }) => {
         try {
-          if (
-            !(await workflowResults.authorizeCapability(scope, resultKey, capability, "opencode"))
-          ) {
-            return resultResponse(capabilityDenied());
-          }
-          const binding = await workflowResults.binding(scope, resultKey);
-          if (binding?.kind !== kind) return resultResponse(capabilityDenied());
+          const expectedKey = await brokerAttempt(workflowResults, scope, capability, kind);
+          if (!expectedKey) return resultResponse(capabilityDenied());
+          if (resultKey !== expectedKey) return resultResponse(resultKeyMismatch(expectedKey));
           return resultResponse(
             await commitSubmission(workflowResults, scope, resultKey, result, validatedDigest),
           );
@@ -461,11 +485,9 @@ export function registerWorkflowResultBrokerTools(
     },
     async ({ resultKey, capability, result }) => {
       try {
-        if (
-          !(await workflowResults.authorizeCapability(scope, resultKey, capability, "opencode"))
-        ) {
-          return resultResponse(capabilityDenied());
-        }
+        const expectedKey = await brokerAttempt(workflowResults, scope, capability);
+        if (!expectedKey) return resultResponse(capabilityDenied());
+        if (resultKey !== expectedKey) return resultResponse(resultKeyMismatch(expectedKey));
         return resultResponse(await workflowResults.validate(scope, resultKey, result));
       } catch {
         return resultResponse(storageFailure());
@@ -493,11 +515,9 @@ export function registerWorkflowResultBrokerTools(
     },
     async ({ resultKey, capability }) => {
       try {
-        if (
-          !(await workflowResults.authorizeCapability(scope, resultKey, capability, "opencode"))
-        ) {
-          return resultResponse(capabilityDenied());
-        }
+        const expectedKey = await brokerAttempt(workflowResults, scope, capability);
+        if (!expectedKey) return resultResponse(capabilityDenied());
+        if (resultKey !== expectedKey) return resultResponse(resultKeyMismatch(expectedKey));
         const status = await workflowResults.status(scope, resultKey);
         if (status) {
           return {

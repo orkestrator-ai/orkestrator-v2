@@ -107,3 +107,13 @@ Recorded evidence only; no test changed.
 - **Owning-file rerun:** `mise run test:logged -- --name review-activity-batch-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/native-agent-service-activity-batch.test.ts --parallel=1 --only-failures` passed unchanged in 0.5 seconds.
 - **Evidence:** `orkestrator-test-run.yzrbXX/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory.
 - **Assessment:** the owning-file pass establishes intermittence; the cause remains unconfirmed. No source, assertion, deadline or skip changed.
+
+## OpenCode result-key correction validation — 2026-10-20
+
+- **Original command:** `mise run test:logged -- --name full-suite -- mise run test`.
+- **Workers:** workspace/root/bridges/protocol reserved 4/1/2/1 slots; backend used two isolated Bun workers on macOS arm64 with Bun 1.4.3.
+- **Failure:** `activity sweep over the batch route > an older bridge is read individually and not re-probed every sweep` expected one POST but received zero at line 208 (7.43 ms). Reconciliation logged provider-unavailable/unreachable errors.
+- **Suite counts:** backend 9499 passed, 67 skipped and 55 failed across 9621 tests in 532 files (450.39 seconds). Other workspace packages, root, bridges and protocol passed. Aggregate exit 1 after 483.9 seconds. Other failures included reproducible command-fixture database schema mismatches and two broker assertions subsequently updated for the changed contract.
+- **Owning-file rerun:** `mise run test:logged -- --name activity-batch-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/native-agent-service-activity-batch.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 0.3 seconds).
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.I5wqmJ/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer artifact `orkestrator-test-run.mhBVPo/full-suite.log.gz` in the same temporary directory.
+- **Assessment:** matches the existing aggregate-only empty-request symptom. Host contention or local-port failures remain hypotheses. No activity-sweep source, assertion, timeout or skip changed.

@@ -240,3 +240,29 @@ describe("transcript artifact runtime factory", () => {
     30_000,
   );
 });
+
+test("gateway wildcard and underscore hosts never become inferred frame ancestors", async () => {
+  const runtime = await createTranscriptArtifactRuntime({
+    dataDir: "/tmp/unused",
+    env: { ...NO_DOCKER },
+    applicationOrigins: [
+      "https://*.example.com",
+      "https://under_score.example.com",
+      "https://valid.example.com",
+    ],
+  });
+  try {
+    expect(runtime.config.frameAncestors).toEqual([
+      DESKTOP_ARTIFACT_SHELL_ORIGIN,
+      "https://valid.example.com",
+    ]);
+    expect(() =>
+      runtime.setApplicationOrigins({
+        application: ["https://*.example.com", "https://under_score.example.com"],
+      }),
+    ).not.toThrow();
+    expect(runtime.config.frameAncestors).toEqual([DESKTOP_ARTIFACT_SHELL_ORIGIN]);
+  } finally {
+    await runtime.close();
+  }
+});

@@ -179,3 +179,43 @@ test("measured history restores before an explicit jump to the latest row", asyn
   await expect.poll(() => distanceFromBottom(page)).toBeLessThanOrEqual(1);
   await expect(page.locator('[data-chat-message-index="82"]')).toBeVisible();
 });
+
+test("a selection in the first row survives clipped overscan up to the protection bound", async ({
+  page,
+}) => {
+  await page.goto("/streaming-transcript?long=1");
+  await releaseStickyScroll(page);
+  const scroller = page.locator(scrollerSelector);
+  await scroller.evaluate((element) => {
+    element.scrollTop = 0;
+    element.dispatchEvent(new Event("scroll"));
+  });
+  const row = page.locator('[data-chat-message-index="0"]');
+  await expect(row).toBeVisible();
+  await waitForFrames(page, 8);
+  const held = await row.elementHandle();
+  await row.evaluate((element) => {
+    const range = document.createRange();
+    range.selectNodeContents(element.querySelector("p")!);
+    const selection = document.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    document.dispatchEvent(new Event("selectionchange"));
+  });
+  for (let index = 1; index <= 20; index++) {
+    await scroller.evaluate((element, next) => {
+      const target = element.querySelector(`[data-chat-message-index="${next}"]`)!;
+      element.scrollTop +=
+        target.getBoundingClientRect().top - element.getBoundingClientRect().top + 1;
+      element.dispatchEvent(new Event("scroll"));
+    }, index);
+    await waitForFrames(page, 4);
+    if (index <= 8) expect(await held!.evaluate((element) => element.isConnected)).toBe(true);
+    if (index === 8)
+      expect(await page.evaluate(() => document.getSelection()?.toString())).toContain(
+        "History message 0",
+      );
+  }
+  // Past protection and the ordinary 400px viewport buffer it virtualizes away.
+  await expect(row).toHaveCount(0);
+});

@@ -414,3 +414,14 @@ describe("interactive preparation", () => {
     expect(decodeAttributeValue("&unknownentity;")).toBeNull();
   });
 });
+
+test("authored HTML string literals survive rewriting and script serialization", async () => {
+  const source =
+    'document.body.innerHTML = `<section><span class="x">漢字 &amp; 😀</span></section>`;';
+  const result = await prepare(`<html><body><script>${source}</script></body></html>`);
+  expect(result.ok).toBe(true);
+  if (!result.ok) return;
+  const scripts = await collectExecutableScripts(result.prepared.document);
+  expect(scripts).toContain(source);
+  expect(result.prepared.scriptHashes).toContain(inlineScriptHash(source));
+});

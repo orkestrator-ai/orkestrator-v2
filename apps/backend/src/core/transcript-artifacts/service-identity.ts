@@ -30,7 +30,8 @@ export const ARTIFACT_LOCALE = "en-US";
  * bumping CHART_RENDERER_VERSION makes older chart receipts stale.
  */
 export const CHART_RENDERER_BUNDLE_HASH = sha256Hex(`chart-renderer:${CHART_RENDERER_VERSION}`);
-export const HTML_STATIC_RENDERER_VERSION = "html-static-preview:v1";
+// v2 embeds staged assets before verification; v1 receipts must be previewed again.
+export const HTML_STATIC_RENDERER_VERSION = "html-static-preview:v2";
 const FONT_MANIFEST = sha256Hex("artifact-fonts:v1\0system-ui,-apple-system,Segoe UI,sans-serif");
 
 /** Per-kind version fields; tests override them to simulate a renderer/policy bump. */

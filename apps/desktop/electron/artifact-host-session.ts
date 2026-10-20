@@ -151,8 +151,10 @@ export interface ArtifactHostSessionOptions {
   heartbeatIntervalMs?: number;
   /** A probe unanswered this long reports `unresponsive`. */
   heartbeatTimeoutMs?: number;
+  readyTimeoutMs?: number;
 }
 
+export const ARTIFACT_HOST_READY_TIMEOUT_MS = 15_000;
 export const ARTIFACT_HOST_HEARTBEAT_INTERVAL_MS = 1_000;
 export const ARTIFACT_HOST_HEARTBEAT_TIMEOUT_MS = 3_000;
 
@@ -222,6 +224,7 @@ export class ArtifactHostSession {
   private requestedVisible: boolean;
   private appliedZoomFactor = 1;
   private ready = false;
+  private readyTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingTheme: ArtifactThemeMessage | null = null;
   private unresponsive = false;
   private pumping = false;
@@ -311,6 +314,13 @@ export class ArtifactHostSession {
     this.electronSession = electronSession;
     this.state = "open";
     try {
+      this.readyTimer = setTimeout(() => {
+        if (this.state !== "open" || this.ready) return;
+        this.unresponsive = true;
+        this.options.emit({ hostId: this.hostId, type: "unresponsive" });
+        this.close("crashed", { silent: true });
+      }, this.options.readyTimeoutMs ?? ARTIFACT_HOST_READY_TIMEOUT_MS);
+      this.readyTimer.unref?.();
       this.hardenSession(electronSession);
       this.installRequestPolicy(electronSession);
       this.installShellProtocol(electronSession);
@@ -758,6 +768,8 @@ export class ArtifactHostSession {
           return;
         }
         this.ready = true;
+        if (this.readyTimer !== null) clearTimeout(this.readyTimer);
+        this.readyTimer = null;
         this.startHeartbeat();
         this.options.emit({ hostId: this.hostId, type: "ready" });
         const pending = this.pendingTheme;
@@ -871,6 +883,8 @@ export class ArtifactHostSession {
   }
 
   private teardown(): void {
+    if (this.readyTimer !== null) clearTimeout(this.readyTimer);
+    this.readyTimer = null;
     this.ready = false;
     if (this.heartbeat !== null) clearInterval(this.heartbeat);
     this.heartbeat = null;

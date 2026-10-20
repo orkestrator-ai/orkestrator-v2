@@ -114,6 +114,13 @@ function tokenStyle(
  * line's exact text; otherwise the plain line is shown, so a tokenizer can
  * never change what is displayed or copied.
  */
+const CODE_LINE_STYLE: CSSProperties = {
+  display: "inline-block",
+  verticalAlign: "top",
+  maxWidth: "100%",
+  contain: "layout style",
+};
+
 const CodeLine = memo(function CodeLine({
   text,
   tokens,
@@ -123,7 +130,7 @@ const CodeLine = memo(function CodeLine({
 }) {
   if (tokens && tokens.map((token) => token.c).join("") === text) {
     return (
-      <span data-code-line="true">
+      <span data-code-line="true" style={CODE_LINE_STYLE}>
         {tokens.map((token, index) => (
           <span key={index} style={tokenStyle(token.s, token.f)}>
             {token.c}
@@ -132,7 +139,11 @@ const CodeLine = memo(function CodeLine({
       </span>
     );
   }
-  return <span data-code-line="true">{text}</span>;
+  return (
+    <span data-code-line="true" style={CODE_LINE_STYLE}>
+      {text}
+    </span>
+  );
 });
 
 /** The code body: one span per line with `\n` text between, so DOM text equals the source. */
@@ -188,7 +199,9 @@ export const CodeBlock = memo(function CodeBlock({
       rest: `\n${all.slice(INLINE_CODE_LINE_LIMIT).join("\n")}`,
     };
   }, [displayText]);
-  // Oversized fences are plain text in one node: no per-line elements at all.
+  // Oversized fences use one text node. Other fences retain stable line
+  // nodes for selection; each line contains its layout so appends don't
+  // re-layout the tokens in earlier lines.
   const inlineText = useMemo(
     () => (highlightable ? null : inline.lines.join("\n")),
     [highlightable, inline],
@@ -202,7 +215,7 @@ export const CodeBlock = memo(function CodeBlock({
     closed,
     language: highlightLanguage,
     theme,
-    enabled: highlightable,
+    enabled: highlightable && closed,
     visibility: blockVisibility,
   });
 

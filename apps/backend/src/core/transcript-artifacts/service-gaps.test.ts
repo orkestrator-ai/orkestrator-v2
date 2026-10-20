@@ -1,3 +1,6 @@
+import { chromium } from "playwright-core";
+import { resolveDesignChromiumPath } from "../design/index.js";
+import { TranscriptPreviewRunner } from "./preview-runner.js";
 /**
  * Behaviour added to close verified gaps: live change hints, publication
  * anchors, draft inspection, staged assets, receipt freshness, the live
@@ -672,3 +675,132 @@ describe("conversation deletion", () => {
     expect(records.list("asset").some((row) => row.unreferencedSince !== null)).toBe(true);
   });
 });
+
+test("an unreadable publication store is storage_unavailable, never a successful empty ledger", () => {
+  const original = h.service.store.records;
+  h.service.store.records = () => {
+    throw new Error("storage offline");
+  };
+  try {
+    expect(() => h.service.listPublications(SCOPE)).toThrow(ArtifactFailure);
+  } finally {
+    h.service.store.records = original;
+  }
+});
+
+test("requests after close cannot reopen or mutate the artifact store", async () => {
+  await h.service.close();
+  const response = await h.call("create_artifact", { requestKey: key(), draft: chartDraft() });
+  expect(response.error.code).toBe("storage_unavailable");
+  expect(() => h.service.store.records(ENV)).toThrow(ArtifactFailure);
+  await expect(h.service.store.writeAsset(ENV, new Uint8Array([1]))).rejects.toThrow(
+    ArtifactFailure,
+  );
+});
+
+test("post-deletion mutations leave every record count unchanged", async () => {
+  await publishedChart();
+  await h.service.deleteConversation(ENV, CONVERSATION);
+  const counts = () =>
+    (["head", "revision", "operation", "publication", "idempotency"] as const).map((kind) =>
+      h.service.store.records(ENV).count(kind),
+    );
+  const before = counts();
+  const result = await h.call("create_artifact", { requestKey: key(), draft: chartDraft() });
+  expect(result.error.code).toBe("not_found");
+  expect(counts()).toEqual(before);
+});
+const assetChromium = resolveDesignChromiumPath();
+(assetChromium ? test : test.skip)(
+  "staged static assets appear in real preview capture and printed PDF pixels",
+  async () => {
+    const runner = new TranscriptPreviewRunner({
+      isolation: "process",
+      executablePath: () => assetChromium!,
+    });
+    h.service = h.fork({ runtime: { runner, preparer: h.preparer, contentServer: h.content } });
+    const browser = await chromium.launch({ executablePath: assetChromium!, headless: true });
+    try {
+      const page = await browser.newPage();
+      const asset = await page.evaluate(() => {
+        const canvas = document.createElement("canvas");
+        canvas.width = 100;
+        canvas.height = 100;
+        const ctx = canvas.getContext("2d")!;
+        ctx.fillStyle = "#ff0000";
+        ctx.fillRect(0, 0, 100, 100);
+        return canvas.toDataURL("image/png").split(",")[1]!;
+      });
+      const staged = await h.service.stageAsset({
+        ...SCOPE,
+        name: "logo.png",
+        mimeType: "image/png",
+        dataBase64: asset,
+      });
+      const created = await h.call("create_artifact", {
+        requestKey: key(),
+        draft: staticDraft('<img style="width:100px;height:100px" src="artifact-asset:logo.png">', [
+          { name: "logo.png", assetRef: staged.assetRef },
+        ]),
+      });
+      expect(created.isError).toBe(false);
+      const preview = await h.call("preview_artifact", {
+        requestKey: key(),
+        artifactId: created.artifactId,
+        revision: 1,
+      });
+      await h.service.drain();
+      const operation = await h.call("get_artifact_operation", {
+        operationId: preview.operationId,
+      });
+      expect(operation.operation.status).toBe("succeeded");
+      const published = await h.call("publish_artifact", {
+        requestKey: key(),
+        artifactId: created.artifactId,
+        expectedRevision: 1,
+        receiptId: operation.operation.receiptId,
+      });
+      expect(published.isError).toBe(false);
+      const capture = await h.service.readRepresentation({
+        ...SCOPE,
+        publicationId: published.publicationId,
+        representation: "capture",
+      });
+      const isRed = (base64: string) =>
+        page.evaluate(async (data) => {
+          const img = new Image();
+          img.src = `data:image/png;base64,${data}`;
+          await img.decode();
+          const canvas = document.createElement("canvas");
+          canvas.width = img.width;
+          canvas.height = img.height;
+          const ctx = canvas.getContext("2d")!;
+          ctx.drawImage(img, 0, 0);
+          const pixels = ctx.getImageData(0, 0, img.width, img.height).data;
+          let red = 0;
+          for (let i = 0; i < pixels.length; i += 4)
+            if (pixels[i]! > 240 && pixels[i + 1]! < 20 && pixels[i + 2]! < 20) red++;
+          return red > 100;
+        }, base64);
+      expect(await isRed(capture.data)).toBe(true);
+      const pdf = await h.service.readRepresentation({
+        ...SCOPE,
+        publicationId: published.publicationId,
+        representation: "pdf",
+      });
+      const thumbnail = await runner.run(
+        { kind: "pdf-thumbnail", pdf: Buffer.from(pdf.data, "base64"), maxDimension: 960 },
+        { environmentId: ENV, conversationKey: CONVERSATION, operationId: "op_staticassetpdf" },
+        new AbortController().signal,
+      );
+      expect(thumbnail.ok).toBe(true);
+      if (!thumbnail.ok || thumbnail.kind !== "pdf-thumbnail" || !thumbnail.thumbnail)
+        throw new Error("Expected rendered PDF thumbnail");
+      expect(await isRed(Buffer.from(thumbnail.thumbnail.png).toString("base64"))).toBe(true);
+    } finally {
+      await browser.close();
+      await runner.close();
+    }
+  },
+  60_000,
+);

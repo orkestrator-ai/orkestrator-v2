@@ -13,6 +13,8 @@ import {
   INTERACTIVE_HTML_POLICY,
   MERMAID_POLICY,
   PREVIEW_CAPTURE_POLICY,
+  STATIC_HTML_POLICY,
+  utf8ByteLength,
 } from "@orkestrator/protocol/rich-content-policy";
 import {
   ArtifactFailure,
@@ -27,6 +29,7 @@ import {
 } from "@orkestrator/protocol/transcript-artifacts";
 import { validateWorkflowSnapshot } from "@orkestrator/protocol/workflow-snapshot";
 import type { PreviewCapture, PreviewJob, PreviewJobResult } from "./contracts.js";
+import { validateInteractiveAssets } from "./interactive-assets.js";
 import { snapshotHash } from "./hashing.js";
 import { notFound } from "./owner.js";
 import { assetIdFor, type ArtifactServiceContext } from "./service-context.js";
@@ -211,8 +214,57 @@ export class ArtifactPreviewJobs {
         };
       }
       case "html-static": {
+        const assets = [];
+        for (const asset of revision.assets) {
+          const bytes = await this.ctx.store.readAsset(
+            environmentId,
+            asset.sha256,
+            asset.byteLength,
+          );
+          assets.push({ name: asset.name, mimeType: asset.mimeType, bytes, sha256: asset.sha256 });
+        }
+        const diagnostics: ArtifactDiagnostic[] = [];
+        const validated = validateInteractiveAssets(assets, diagnostics);
+        if (!validated)
+          return {
+            ...failure(artifactError("validation_failed", "Static assets failed validation")),
+            diagnostics,
+          };
+        let missing = false;
+        let preparedBytes = utf8ByteLength(payload.html);
+        const html = payload.html.replace(
+          /artifact-asset:([A-Za-z0-9_.-]+)/g,
+          (token, name: string) => {
+            const asset = validated.get(name);
+            if (!asset) {
+              missing = true;
+              return "";
+            }
+            preparedBytes += asset.dataUrl.length - token.length;
+            if (preparedBytes > STATIC_HTML_POLICY.maxPreparedBytes) {
+              throw new ArtifactFailure(
+                artifactError(
+                  "package_size_exceeded",
+                  "Embedded static HTML exceeds the prepared byte limit",
+                ),
+              );
+            }
+            return asset.dataUrl;
+          },
+        );
+        if (missing)
+          return failure(
+            artifactError("validation_failed", "Static HTML references an unstaged asset"),
+          );
+        if (utf8ByteLength(html) > STATIC_HTML_POLICY.maxPreparedBytes)
+          return failure(
+            artifactError(
+              "package_size_exceeded",
+              "Embedded static HTML exceeds the prepared byte limit",
+            ),
+          );
         const result = await this.runJob(
-          { kind: "html-static", html: payload.html, profile: profile! },
+          { kind: "html-static", html, profile: profile! },
           environmentId,
           operation,
           signal,

@@ -25,6 +25,7 @@ export interface ArtifactHostManagerOptions {
   randomId?: () => string;
   heartbeatIntervalMs?: number;
   heartbeatTimeoutMs?: number;
+  readyTimeoutMs?: number;
 }
 
 export const ARTIFACT_HOST_UNAVAILABLE = "Interactive artifacts are unavailable in this window";
@@ -76,6 +77,9 @@ export class ArtifactHostManager implements ArtifactHostController {
         onTerminated: (terminated, diagnostics) => this.onTerminated(terminated, diagnostics),
         ...(this.options.now ? { now: this.options.now } : {}),
         ...(this.options.randomId ? { randomId: this.options.randomId } : {}),
+        ...(this.options.readyTimeoutMs !== undefined
+          ? { readyTimeoutMs: this.options.readyTimeoutMs }
+          : {}),
         ...(this.options.heartbeatIntervalMs !== undefined
           ? { heartbeatIntervalMs: this.options.heartbeatIntervalMs }
           : {}),

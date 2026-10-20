@@ -260,13 +260,14 @@ describe("capacity after an unverified worker exit", () => {
     expect(target.status().quarantinedWorkers).toBeUndefined();
   });
 
-  test("when the bounded reaper gives up the slot stays held and is reported", async () => {
+  test("quarantined slots keep polling after the initial retry burst until Docker recovers", async () => {
     const reaps = { count: 0 };
     const exits: boolean[] = [];
     const target = create({
       admission: { runningGlobal: 1, runningPerEnvironment: 1 },
       reaperDelaysMs: [10, 10, 10],
-      supervise: fakeSupervise({ reapAfter: null, reaps }),
+      reaperPollMs: 120,
+      supervise: fakeSupervise({ reapAfter: 4, reaps }),
       onWorkerExit: (report) => exits.push(report.verified),
     });
     await target.run(
@@ -274,9 +275,8 @@ describe("capacity after an unverified worker exit", () => {
       scope("env-g"),
       new AbortController().signal,
     );
-    expect(await until(() => exits.length === 1)).toBe(true);
-    expect(exits).toEqual([false]);
-    expect(reaps.count).toBe(3);
+    expect(await until(() => reaps.count === 3)).toBe(true);
+    expect(exits).toEqual([]);
     expect(target.stats()).toMatchObject({ running: 1, quarantined: 1 });
     expect(target.status()).toMatchObject({ available: false, quarantinedWorkers: 1 });
     // Further work is queued (and eventually times out), never run beside it.
@@ -285,10 +285,11 @@ describe("capacity after an unverified worker exit", () => {
       scope("env-h"),
       new AbortController().signal,
     );
-    await new Promise((resolve) => setTimeout(resolve, 100));
     expect(target.stats()).toMatchObject({ queued: 1, running: 1 });
-    await target.close();
-    expect((await blocked).ok).toBe(false);
+    expect((await blocked).ok).toBe(true);
+    expect(await until(() => target.stats().running === 0)).toBe(true);
+    expect(exits.every(Boolean)).toBe(true);
+    expect(reaps.count).toBeGreaterThan(3);
   });
 });
 

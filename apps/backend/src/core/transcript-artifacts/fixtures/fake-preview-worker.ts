@@ -27,7 +27,24 @@ process.stdout.write(
   `${JSON.stringify({ t: "launched", browserPid: childPid, browserBuild: "fake/1" })}\n`,
 );
 
-if (source === "env-report") {
+if (source === "split-utf8") {
+  const bytes = Buffer.from(
+    JSON.stringify({
+      t: "result",
+      result: { ok: true, kind: "html-static", effectiveHtml: "<p>漢字 😀</p>" },
+    }) + "\n",
+  );
+  const boundary = bytes.indexOf(Buffer.from("漢")) + 1;
+  process.stdout.write(bytes.subarray(0, boundary));
+  setTimeout(() => process.stdout.write(bytes.subarray(boundary), () => process.exit(0)), 20);
+} else if (source === "malformed") {
+  process.stdout.write("{invalid json}\n");
+  setInterval(() => undefined, 1000);
+} else if (source === "output-limit") {
+  const bytes = Buffer.alloc(1024 * 1024, 32);
+  for (let i = 0; i < 50; i++) process.stdout.write(bytes);
+  setInterval(() => undefined, 1000);
+} else if (source === "env-report") {
   let file: string | null = null;
   try {
     file = readFileSync(path.join(process.env.HOME ?? "/nonexistent", "canary.txt"), "utf8");

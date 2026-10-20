@@ -171,11 +171,20 @@ export class ArtifactPrinting {
     const payload = revision.payload;
     const print = artifactPrintProfile("a4", receipt.profile!);
     if (payload.kind === "html-static") {
+      const effective = target.records.get("asset", receipt.identity.effectiveSourceHash);
+      if (!effective) throw storageCorrupt();
+      const html = (
+        await this.ctx.store.readAsset(
+          target.publication.owner.environmentId,
+          effective.sha256,
+          effective.byteLength,
+        )
+      ).toString("utf8");
       return {
         kind: "html-print",
         print,
         profile: receipt.profile!,
-        document: { type: "static", html: payload.html },
+        document: { type: "static", html },
       };
     }
     const prepared = target.records

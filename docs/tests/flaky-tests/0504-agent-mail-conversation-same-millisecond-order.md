@@ -13,3 +13,12 @@
 - **Evidence:** `orkestrator-test-run.4hwW5S/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
 - **Hypothesis:** two sends inside one millisecond tie on the time prefix and fall back to a random id order. A deterministic tie-break (an insertion sequence) or a test clock would remove it. No implementation, assertion or skip changed.
 - **Recurrence (2026-10-20, later round):** failed again as the only failure of a full `mise run test` (bridges, root and agent-support, lockfile and the rest of the workspace group passed); five isolated reruns of the test from `apps/backend` gave 4 pass, 1 fail, so it reproduces without the rest of the suite. The owning test and the agent-mail modules are still unchanged on this branch.
+
+- **Review-fix validation recurrence (2026-10-20):** `review-full-final`
+  repeated the same-millisecond ordering failure while running alongside
+  browser checks. `mise run test:logged -- --name review-mail-owner -- bun test
+  --cwd apps/backend --preload ../../tests/setup-node.ts
+  ./src/core/storage-agent-mail-conversations.test.ts --parallel=1 --only-failures`
+  passed the unchanged owner (0.1 seconds). Evidence:
+  `orkestrator-test-run.rDZFZg/review-full-final.log.gz` under the host temporary
+  directory. No storage implementation or test assertion changed.

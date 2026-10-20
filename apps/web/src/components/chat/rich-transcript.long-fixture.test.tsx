@@ -500,7 +500,17 @@ describe("long transcript fixture", () => {
           await new Promise((resolve) => setTimeout(resolve, 60));
         });
       }
-      content += "```";
+      expect(pending).toHaveLength(0); // Open fences defer highlighting while keeping their line nodes stable.
+      const completeContent = content + "```";
+      content = completeContent.replace(lines[0]!, "const stale = 0;");
+      view.rerender(
+        <Transcript scope={SCOPES[0]!} messages={[table, streamed(content)]} label="S" />,
+      );
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 60));
+      });
+      expect(pending).toHaveLength(1);
+      content = completeContent;
       view.rerender(
         <Transcript scope={SCOPES[0]!} messages={[table, streamed(content)]} label="S" />,
       );

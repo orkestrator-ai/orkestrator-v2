@@ -36,7 +36,10 @@ import { NativeChatShell } from "@/components/chat/NativeChatShell";
 import { RichTranscriptScopeContext } from "@/lib/chat/rich-identity";
 import { useRichTranscriptScopeValue } from "@/hooks/useTranscriptArtifactCapabilities";
 import { useArtifactPublications } from "@/hooks/useArtifactPublications";
-import { mergeArtifactPublications } from "@/lib/chat/artifact-publication-merge";
+import {
+  ArtifactPublicationPlacements,
+  mergeArtifactPublications,
+} from "@/lib/chat/artifact-publication-merge";
 import { BackgroundTaskChildrenContext } from "@/components/chat/NativeMessage.shared";
 import {
   NativeResumeSessionDialog,
@@ -818,14 +821,27 @@ export function SharedNativeAgentController({
     projection?.sessionId ?? data.sessionId ?? sessionKey,
   );
   const artifactPublications = useArtifactPublications(richTranscriptScope, transcriptMessages);
+  const artifactPlacements = useMemo(
+    () => new ArtifactPublicationPlacements(richTranscriptScope),
+    [richTranscriptScope],
+  );
   const canLoadEarlierHistory = projection?.messageWindow?.canLoadEarlier === true;
   const messages = useMemo(() => {
     const pinned = pinNativeAgentParts(transcriptMessages, displayMessages);
     const withEvidence = fixReport ? attachFixPromptEvidence(pinned, fixReport) : pinned;
-    return mergeArtifactPublications(withEvidence, artifactPublications, {
-      canLoadEarlier: canLoadEarlierHistory,
-    });
-  }, [artifactPublications, canLoadEarlierHistory, displayMessages, fixReport, transcriptMessages]);
+    return artifactPlacements.stabilize(
+      mergeArtifactPublications(withEvidence, artifactPublications, {
+        canLoadEarlier: canLoadEarlierHistory,
+      }),
+    );
+  }, [
+    artifactPlacements,
+    artifactPublications,
+    canLoadEarlierHistory,
+    displayMessages,
+    fixReport,
+    transcriptMessages,
+  ]);
   // "Open full conversation" (web annotations) parks a scroll target for this
   // tab; it is consumed here once the message is rendered.
   const highlightedMessageId = useConversationScrollTarget({

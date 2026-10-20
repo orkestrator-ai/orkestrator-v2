@@ -69,6 +69,8 @@ export const WORKFLOW_SNAPSHOT_POLICY = {
 
 export const STATIC_HTML_POLICY = {
   maxSourceBytes: 256 * KIB,
+  /** Authored source plus validated offline asset data URLs. */
+  maxPreparedBytes: 16 * MIB,
   maxElements: 5_000,
 } as const;
 

@@ -170,6 +170,7 @@ export class EnvironmentRecords {
 export class TranscriptArtifactStore {
   readonly root: string;
   private connection: StorageDatabase | null = null;
+  private closed = false;
   private readonly pending = new Map<string, number>();
   private readonly activeStaging = new Set<string>();
   private readonly deleted = new Set<string>();
@@ -182,6 +183,10 @@ export class TranscriptArtifactStore {
   }
 
   database(): StorageDatabase {
+    if (this.closed)
+      throw new ArtifactFailure(
+        artifactError("storage_unavailable", "The artifact store is closed"),
+      );
     if (this.options.database) return this.options.database;
     if (!this.connection || this.connection.isClosed()) {
       this.connection = openBackendDatabase(this.options.dataDir);
@@ -499,6 +504,7 @@ export class TranscriptArtifactStore {
   }
 
   close(): void {
+    this.closed = true;
     if (!this.options.database) {
       this.connection?.close();
       this.connection = null;

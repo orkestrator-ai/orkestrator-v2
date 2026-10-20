@@ -1,3 +1,7 @@
+import {
+  registerProtectedRichCache,
+  type RichConversationScope,
+} from "@/lib/chat/rich-content-reset";
 import { create } from "zustand";
 import { artifactErrorInfo } from "@/lib/chat/artifact-requests";
 import type { ArtifactLiveSessionResponse } from "@orkestrator/protocol/transcript-artifact-commands";
@@ -325,3 +329,42 @@ export function liveHostScopeInvalidation(
   }
   return null;
 }
+
+// The store owns capabilities and preview bytes even when the transcript is unmounted.
+function clearProtectedHost(
+  matches: (target: LiveArtifactTarget) => boolean,
+  reason?: string,
+): void {
+  const state = useArtifactLiveHostStore.getState();
+  if (state.active && matches(state.active.target)) {
+    if (reason) state.invalidate(reason);
+    else state.stop();
+    useArtifactLiveHostStore.setState({ ...(reason ? {} : { ended: null }), anchors: new Map() });
+  } else if (state.pendingSwitch && matches(state.pendingSwitch)) {
+    state.cancelSwitch();
+  }
+}
+registerProtectedRichCache("artifact-live-host", {
+  clearAll: (reason) => {
+    clearProtectedHost(
+      () => true,
+      reason === "backend-identity" ? LIVE_HOST_INVALIDATION_REASONS.backendChanged : undefined,
+    );
+    useArtifactLiveHostStore.setState({
+      anchors: new Map(),
+      ...(reason === "backend-identity" ? {} : { ended: null }),
+    });
+  },
+  clearEnvironment: (id) =>
+    clearProtectedHost(
+      (target) => target.scope.environmentId === id,
+      LIVE_HOST_INVALIDATION_REASONS.environmentDeleted,
+    ),
+  clearConversation: (scope: RichConversationScope) =>
+    clearProtectedHost(
+      (target) =>
+        target.scope.backendId === scope.backendId &&
+        target.scope.environmentId === scope.environmentId &&
+        target.scope.logicalSessionKey === scope.logicalSessionKey,
+    ),
+});

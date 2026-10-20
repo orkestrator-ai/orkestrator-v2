@@ -140,6 +140,7 @@ test.describe("rich transcripts live", () => {
   test("a real agent repairs, publishes and runs a verified interactive artifact, and rich Markdown renders", async ({
     page,
   }, testInfo) => {
+    page.setDefaultTimeout(30_000);
     const status = profileStatus();
     expect(status.status).toBe("ready");
     const configDir = mkdtempSync(path.join(os.tmpdir(), "ork-rich-live-"));
@@ -273,11 +274,12 @@ test.describe("rich transcripts live", () => {
         .filter({ hasText: "Task time calculator" })
         .first();
       expect(await wheelUntil(page, async () => (await card.count()) > 0)).toBe(true);
-      // The row can re-mount once while the backend projection places the
-      // publication beside its call; scroll to whichever card is attached.
-      await expect(async () => {
-        await card.scrollIntoViewIfNeeded({ timeout: 2_000 });
-      }).toPass({ timeout: 30_000 });
+      // A ledger read may precede the provider overlay. Once painted, the
+      // same card must survive that reconciliation under the same React row.
+      await card.scrollIntoViewIfNeeded({ timeout: 30_000 });
+      const paintedCard = await card.elementHandle();
+      await page.waitForTimeout(1_500);
+      expect(await paintedCard?.evaluate((node) => node.isConnected)).toBe(true);
       await expect(card.locator("figcaption")).toContainText("Revision 2");
       await expect(card.locator("figcaption")).toContainText("Interactions verified by 5 probes");
 
@@ -428,7 +430,6 @@ test.describe("rich transcripts live", () => {
 
       stage("fixture-rendered");
       await openConversation(page, status.browserUrl!, environmentName, providerTab);
-      const last = page.locator("[data-chat-message-index]").last();
       for (const kind of ["callout", "details", "table", "mermaid", "chart"]) {
         await expect(page.locator(`[data-rich-block="${kind}"]`).last(), kind).toBeVisible({
           timeout: COMPLETION_QUALIFIED.has(provider) ? 60_000 : 10 * 60_000,
@@ -445,7 +446,6 @@ test.describe("rich transcripts live", () => {
           element.querySelector("[aria-expanded]")?.getAttribute("aria-expanded"),
         );
       expect(await expanded()).toBe("false");
-      await last.click({ position: { x: 4, y: 4 } });
       await page.keyboard.press("Meta+f");
       if (!(await page.getByLabel("Find in chat").isVisible()))
         await page.keyboard.press("Control+f");

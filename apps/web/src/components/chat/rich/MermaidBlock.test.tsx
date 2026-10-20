@@ -205,3 +205,20 @@ describe("MermaidBlock", () => {
     expect(useRichContentViewStore.getState().entries.get("m10")?.viewport).toEqual(zoomed!);
   });
 });
+
+test("transient capacity failure retries automatically without user action", async () => {
+  const { RichRenderCapacityError } = await import("@/lib/chat/rich-render-cache");
+  const request = richRenderScheduler.request.bind(richRenderScheduler);
+  let count = 0;
+  richRenderScheduler.request = ((input) =>
+    ++count === 1
+      ? { promise: Promise.reject(new RichRenderCapacityError("jobs")), cancel() {} }
+      : request(input)) as typeof richRenderScheduler.request;
+  const { container } = render(<MermaidBlock source={SOURCE} closed blockKey="capacity" />);
+  await waitFor(() =>
+    expect(container.querySelector("[data-rich-search-exclude] svg")).toBeTruthy(),
+  );
+  expect(renderer).toHaveBeenCalledTimes(1);
+  expect(count).toBe(2);
+  richRenderScheduler.request = request;
+});

@@ -152,3 +152,127 @@ describe("useArtifactPublications live updates", () => {
     expect(calls.length).toBe(before);
   });
 });
+
+test("stable unresolved calls retry through empty and failed ledger reads without hints", async () => {
+  const times: number[] = [];
+  invokeMock.mockImplementation(async (command: string) => {
+    if (command !== TRANSCRIPT_ARTIFACT_COMMANDS.listPublications) return undefined;
+    times.push(Date.now());
+    if (times.length === 2) throw new Error("temporary transport failure");
+    return { publications: times.length >= 4 ? [publication(1)] : [], nextSequence: null };
+  });
+  const messages = [
+    {
+      id: "m",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-10-20T10:00:00Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "",
+          toolName: "mcp__orkestrator__publish_artifact",
+          toolState: "success",
+          toolArgs: { artifactId: "art_00000001", expectedRevision: 1 },
+        },
+      ],
+    },
+  ] as import("@/lib/chat/native-message-types").NativeMessage[];
+  const { result, unmount } = renderHook(() => useArtifactPublications(SCOPE, messages));
+  await waitFor(() => expect(result.current).toHaveLength(1), { timeout: 9000 });
+  expect(times).toHaveLength(4);
+  expect(times[1]! - times[0]!).toBeGreaterThanOrEqual(450);
+  expect(times[2]! - times[1]!).toBeGreaterThanOrEqual(1400);
+  expect(times[3]! - times[2]!).toBeGreaterThanOrEqual(3900);
+  unmount();
+}, 12000);
+
+test("unmount fences a retry read and cannot repopulate the cache", async () => {
+  let finish!: (value: unknown) => void;
+  let reads = 0;
+  invokeMock.mockImplementation(async () => {
+    reads++;
+    if (reads === 1) return { publications: [], nextSequence: null };
+    return new Promise((resolve) => {
+      finish = resolve;
+    });
+  });
+  const messages = [
+    {
+      id: "m",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-10-20T10:00:00Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "",
+          toolName: "mcp__orkestrator__publish_artifact",
+          toolState: "success",
+          toolArgs: { artifactId: "art_00000001", expectedRevision: 1 },
+        },
+      ],
+    },
+  ] as import("@/lib/chat/native-message-types").NativeMessage[];
+  const { unmount } = renderHook(() => useArtifactPublications(SCOPE, messages));
+  await waitFor(() => expect(reads).toBe(2), { timeout: 2000 });
+  unmount();
+  finish({ publications: [publication(1)], nextSequence: null });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  // Hold the remount's fresh read: its first paint exposes any stale write
+  // to the cache by the unmounted subscriber, without relying on an epoch reset.
+  invokeMock.mockImplementation(() => new Promise(() => undefined));
+  const remounted = renderHook(() => useArtifactPublications(SCOPE, []));
+  expect(remounted.result.current).toHaveLength(0);
+  remounted.unmount();
+});
+
+test("a failed ledger read preserves protected content; a successful empty ledger revokes it", async () => {
+  const { registerProtectedRichCache } = await import("@/lib/chat/rich-content-reset");
+  let revocations = 0;
+  const unregister = registerProtectedRichCache("ledger-storage-regression", {
+    clearAll() {},
+    clearConversation: () => {
+      revocations++;
+    },
+  });
+  let mode: "content" | "error" | "empty" = "content";
+  let reads = 0;
+  invokeMock.mockImplementation(async (command: string) => {
+    if (command !== TRANSCRIPT_ARTIFACT_COMMANDS.listPublications) return undefined;
+    reads++;
+    if (mode === "error")
+      throw new Error(
+        JSON.stringify({
+          code: "storage_unavailable",
+          message: "unavailable",
+          retryClass: "transient",
+        }),
+      );
+    return { publications: mode === "content" ? [publication(1)] : [], nextSequence: null };
+  });
+  try {
+    const { result } = renderHook(() => useArtifactPublications(SCOPE, []));
+    await waitFor(() => expect(result.current).toHaveLength(1));
+    mode = "error";
+    dispatchResourceChange({
+      resource: "transcript-artifact",
+      id: SCOPE.logicalSessionKey,
+      revision: 40,
+    });
+    await waitFor(() => expect(reads).toBe(2));
+    expect(revocations).toBe(0);
+    expect(result.current).toHaveLength(1);
+    mode = "empty";
+    dispatchResourceChange({
+      resource: "transcript-artifact",
+      id: SCOPE.logicalSessionKey,
+      revision: 41,
+    });
+    await waitFor(() => expect(revocations).toBeGreaterThan(0));
+    expect(result.current).toHaveLength(0);
+  } finally {
+    cleanup();
+    unregister();
+  }
+});

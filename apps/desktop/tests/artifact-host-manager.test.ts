@@ -179,6 +179,7 @@ function createHarness(
     reportDiagnostics: (value) => diagnostics.push(value),
     now: () => clock,
     randomId: () => `id${++ids}`,
+    readyTimeoutMs: 1000,
     heartbeatIntervalMs: 5,
     heartbeatTimeoutMs: 20,
   });
@@ -984,4 +985,14 @@ describe("artifact host lifecycle", () => {
     expect(result.ok).toBe(false);
     expect(JSON.stringify(result)).not.toContain("cap_secret");
   });
+});
+
+test("a content frame that never sends ready is terminated by the readiness deadline", async () => {
+  const harness = createHarness();
+  const { view, session, contents } = await openLive(harness);
+  loadDocuments(session, contents);
+  await new Promise((resolve) => setTimeout(resolve, 1100));
+  expect(harness.events.some((event) => event.type === "unresponsive")).toBe(true);
+  expect(contents.forcefullyCrashRenderer).toHaveBeenCalledTimes(1);
+  expectTornDown(harness, view, session);
 });

@@ -20,7 +20,7 @@ import {
   type MediaDimensions,
 } from "@/lib/chat/media-presentation";
 import { dataUrlBase64, dataUrlMime, fileExtension } from "@/lib/chat/rich-markdown/media-types";
-import { useRichMessageIdentity } from "@/lib/chat/rich-identity";
+import { useRichTranscriptScope, useRichMessageIdentity } from "@/lib/chat/rich-identity";
 import {
   galleryItems,
   useGalleryItem,
@@ -142,7 +142,15 @@ function useNearViewport(ref: RefObject<HTMLElement | null>, enabled: boolean): 
  * text; a failed image keeps its alt text and the file actions that remain
  * permitted (download bytes already held, open a remote original, retry).
  */
-export function MarkdownImage({ src, alt, title }: { src?: string; alt?: string; title?: string }) {
+export function MarkdownImage(props: { src?: string; alt?: string; title?: string }) {
+  const { containerId } = useContext(MediaScopeContext);
+  const identity = useRichMessageIdentity();
+  const scope = useRichTranscriptScope();
+  const key = JSON.stringify([props.src, containerId, identity, scope]);
+  return <MarkdownImageSource key={key} {...props} />;
+}
+
+function MarkdownImageSource({ src, alt, title }: { src?: string; alt?: string; title?: string }) {
   const { containerId } = useContext(MediaScopeContext);
   const loadToolDetails = useContext(ToolDetailLoaderContext);
   const group = useRichMessageIdentity()?.messageId ?? "detached";

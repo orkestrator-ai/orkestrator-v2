@@ -107,7 +107,7 @@ describe("pdf representation", () => {
     // The exact verified source, the receipt's profile, and the owner conversation's scope.
     expect(job.job).toMatchObject({
       kind: "html-print",
-      document: { type: "static", html: "<h1>Hi</h1><script>alert(1)</script>" },
+      document: { type: "static", html: "<h1>Hi</h1>" },
       print: { paper: "a4", printBackground: true, reducedMotion: "reduce" },
     });
     expect(job.scope).toMatchObject({ environmentId: ENV, conversationKey: CONVERSATION });

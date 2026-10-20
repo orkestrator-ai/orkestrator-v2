@@ -218,11 +218,6 @@ export function useArtifactPublications(
   useLayoutEffect(() => {
     shownRef.current = publications;
   });
-  const attemptsRef = useRef<{ key: string; unresolved: number; attempts: number }>({
-    key,
-    unresolved: 0,
-    attempts: 0,
-  });
 
   // Authoritative read on mount, scope change and transport generation change.
   useEffect(() => {
@@ -249,27 +244,32 @@ export function useArtifactPublications(
   // A publish call the ledger does not show yet: re-read with bounded backoff.
   useEffect(() => {
     if (!scope || unresolved === 0) return;
-    const tracker = attemptsRef.current;
-    if (tracker.key !== key || tracker.unresolved !== unresolved) {
-      attemptsRef.current = { key, unresolved, attempts: 0 };
-    }
-    const attempt = attemptsRef.current.attempts;
-    if (attempt >= RETRY_DELAYS_MS.length) return;
-    const timer = setTimeout(() => {
-      attemptsRef.current.attempts++;
-      const request = ++requestRef.current;
-      readArtifactLedger(scope)
-        .then((loaded) => {
-          if (request !== requestRef.current) return;
-          if (!acceptLedger(scope, shownRef.current, loaded)) return;
-          remember(key, loaded);
-          setState({ key, publications: loaded });
-        })
-        .catch((error: unknown) => {
-          if (request === requestRef.current) noteArtifactLedgerFailure(scope, error);
-        });
-    }, RETRY_DELAYS_MS[attempt]);
-    return () => clearTimeout(timer);
+    let cancelled = false;
+    let attempt = 0;
+    let timer: ReturnType<typeof setTimeout>;
+    const schedule = () => {
+      if (cancelled || attempt >= RETRY_DELAYS_MS.length) return;
+      timer = setTimeout(() => {
+        const request = ++requestRef.current;
+        readArtifactLedger(scope)
+          .then((loaded) => {
+            if (cancelled || request !== requestRef.current) return;
+            if (!acceptLedger(scope, shownRef.current, loaded)) return;
+            remember(key, loaded);
+            setState({ key, publications: loaded });
+          })
+          .catch((error: unknown) => {
+            if (!cancelled && request === requestRef.current)
+              noteArtifactLedgerFailure(scope, error);
+          })
+          .finally(schedule);
+      }, RETRY_DELAYS_MS[attempt++]);
+    };
+    schedule();
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [key, scope, unresolved]);
 
   // Live hint: the backend announces ledger/draft changes per conversation.

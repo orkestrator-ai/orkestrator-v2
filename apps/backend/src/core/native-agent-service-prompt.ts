@@ -1025,10 +1025,11 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
                 providerSessionId: durable.providerSessionId,
               });
             } catch (error) {
-              // The turn never verifiably started (rejected), or its outcome
-              // is unknown (ambiguous): either way no settlement will follow
-              // for it, so its artifact grant must not outlive this call.
-              this.settleArtifactTurn(durable, input.requestId);
+              // Ambiguous dispatch may still be running. Reconciliation owns
+              // settlement and the artifact grant until the outcome is known.
+              if (!(error instanceof AmbiguousPromptDispatchError)) {
+                this.settleArtifactTurn(durable, input.requestId);
+              }
               if (
                 mailInject &&
                 error instanceof ProviderUnavailableError &&

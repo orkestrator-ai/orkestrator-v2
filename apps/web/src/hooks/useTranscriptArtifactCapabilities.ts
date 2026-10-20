@@ -13,6 +13,28 @@ import { noteRichBackendIdentity, registerProtectedRichCache } from "@/lib/chat/
 let snapshot: TranscriptArtifactCapabilities | null = null;
 let inflight: Promise<void> | null = null;
 let failedAt = 0;
+let retryTimer: ReturnType<typeof setTimeout> | null = null;
+let failures = 0;
+const RETRY_DELAYS = [10_000, 20_000, 40_000, 60_000];
+function cancelRetry() {
+  if (retryTimer !== null) clearTimeout(retryTimer);
+  retryTimer = null;
+}
+function scheduleRetry() {
+  if (snapshot || !failedAt || retryTimer !== null || listeners.size === 0) return;
+  retryTimer = setTimeout(
+    () => {
+      retryTimer = null;
+      load();
+    },
+    Math.max(
+      0,
+      failedAt +
+        RETRY_DELAYS[Math.min(Math.max(failures - 1, 0), RETRY_DELAYS.length - 1)]! -
+        Date.now(),
+    ),
+  );
+}
 /** Bumped by a reset so a read issued under the previous credentials is discarded. */
 let readGeneration = 0;
 const listeners = new Set<() => void>();
@@ -22,7 +44,15 @@ function emit() {
 }
 
 function load(): void {
-  if (snapshot || inflight || Date.now() - failedAt < 10_000) return;
+  if (snapshot || inflight) return;
+  if (
+    failedAt &&
+    Date.now() - failedAt <
+      RETRY_DELAYS[Math.min(Math.max(failures - 1, 0), RETRY_DELAYS.length - 1)]!
+  ) {
+    scheduleRetry();
+    return;
+  }
   const generation = readGeneration;
   // Promise.resolve: a backend shim that answers synchronously must not break rendering.
   const request: Promise<void> = Promise.resolve()
@@ -34,13 +64,27 @@ function load(): void {
       // from: clear protected rich content before exposing the new identity.
       if (next) noteRichBackendIdentity(next.backendId);
       snapshot = next;
+      if (next) {
+        failures = 0;
+        failedAt = 0;
+        cancelRetry();
+      } else {
+        failedAt = Date.now();
+        failures++;
+      }
     })
     .catch(() => {
-      if (generation === readGeneration) failedAt = Date.now();
+      if (generation === readGeneration) {
+        failedAt = Date.now();
+        failures++;
+      }
     })
     .finally(() => {
       if (inflight === request) inflight = null;
-      emit();
+      if (generation === readGeneration) {
+        emit();
+        scheduleRetry();
+      }
     });
   inflight = request;
 }
@@ -57,6 +101,8 @@ export function richMarkdownEnabled(): boolean {
 /** Forget the cached identity (connection replaced, logout). */
 export function resetTranscriptArtifactCapabilities(): void {
   readGeneration++;
+  cancelRetry();
+  failures = 0;
   snapshot = null;
   inflight = null;
   failedAt = 0;
@@ -95,7 +141,11 @@ export function useTranscriptArtifactCapabilities(): TranscriptArtifactCapabilit
   const value = useSyncExternalStore(
     (listener) => {
       listeners.add(listener);
-      return () => listeners.delete(listener);
+      scheduleRetry();
+      return () => {
+        listeners.delete(listener);
+        if (listeners.size === 0) cancelRetry();
+      };
     },
     () => snapshot,
     () => snapshot,

@@ -344,14 +344,29 @@ export async function createTranscriptArtifactRuntime(
       ? parseList(env.ORKESTRATOR_ARTIFACT_FRAME_ANCESTORS)
       : null);
   // The desktop trusted viewer shell is always a permitted ancestor; `'none'` would keep artifacts from going live.
-  const ancestorsFor = (application: readonly string[], development: readonly string[]) =>
-    normalizeFrameAncestors([
+  const ancestorsFor = (application: readonly string[], development: readonly string[]) => {
+    // Gateway rules are broader than concrete CSP origins (wildcards, for
+    // example). An unsupported inferred ancestor must not break startup.
+    const inferred = [
+      ...normalizeApplicationOrigins(application),
+      ...normalizeApplicationOrigins(development),
+    ];
+    const accepted = inferred.filter((origin) => {
+      try {
+        normalizeFrameAncestors([origin]);
+        return true;
+      } catch {
+        options.logger?.warn(
+          "[transcript-artifacts] ignored unsupported application frame ancestor",
+        );
+        return false;
+      }
+    });
+    return normalizeFrameAncestors([
       DESKTOP_ARTIFACT_SHELL_ORIGIN,
-      ...(explicitAncestors ?? [
-        ...normalizeApplicationOrigins(application),
-        ...normalizeApplicationOrigins(development),
-      ]),
+      ...(explicitAncestors ?? accepted),
     ]);
+  };
   let frameAncestors = ancestorsFor(
     options.applicationOrigins ?? [],
     options.developmentOrigins ?? [],

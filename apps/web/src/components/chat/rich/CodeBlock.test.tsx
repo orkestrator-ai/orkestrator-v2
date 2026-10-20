@@ -172,12 +172,11 @@ describe("CodeBlock", () => {
     );
   });
 
-  test("while streaming, only complete lines are highlighted and appended lines resume state", async () => {
+  test("streaming fences keep exact plain text and highlight once closed", async () => {
     const { container, rerender } = render(
       <CodeBlock source={"line one\nline tw"} language="ts" closed={false} live blockKey="k9" />,
     );
-    await waitFor(() => expect(backend.calls).toHaveLength(1));
-    expect(backend.calls[0]?.code).toBe("line one");
+    expect(backend.calls).toHaveLength(0);
     rerender(
       <CodeBlock
         source={"line one\nline two\nline th"}
@@ -187,10 +186,13 @@ describe("CodeBlock", () => {
         blockKey="k9"
       />,
     );
-    await waitFor(() => expect(backend.calls).toHaveLength(2));
-    expect(backend.calls[1]).toMatchObject({ code: "line two", resumeStateId: "state-1" });
+    expect(backend.calls).toHaveLength(0);
     expect(body(container).textContent).toBe("line one\nline two\nline th");
-    expect(screen.getByText("Generating…")).toBeTruthy();
+    rerender(
+      <CodeBlock source={"line one\nline two\nline th"} language="ts" closed blockKey="k9" />,
+    );
+    await waitFor(() => expect(backend.calls).toHaveLength(1));
+    expect(backend.calls[0]?.code).toBe("line one\nline two\nline th");
   });
 
   test("Run in terminal is enabled only for a complete single-line shell fence and runs once per click", () => {

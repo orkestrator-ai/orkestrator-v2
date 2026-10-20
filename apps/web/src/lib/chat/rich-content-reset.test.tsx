@@ -252,3 +252,32 @@ describe("protected rich content clearing", () => {
     expect(richContentResetCounters.all).toBe(2);
   });
 });
+
+test("superseded media bytes cannot restore the cache or delete a replacement inflight read", async () => {
+  const { resolveMediaUrl } = await import("./rich-markdown/media-resolver");
+  let finishA!: (value: string) => void;
+  let finishB!: (value: string) => void;
+  const ref = { path: "/workspace-storage/same.png" };
+  invokeMock.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finishA = resolve;
+      }),
+  );
+  const a = resolveMediaUrl(ref, { cacheImage: true });
+  const rejected = a.catch((error: unknown) => error);
+  clearProtectedRichContent("credentials");
+  invokeMock.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finishB = resolve;
+      }),
+  );
+  const b = resolveMediaUrl(ref, { cacheImage: true });
+  finishA("OLD");
+  expect(await rejected).toMatchObject({ name: "AbortError" });
+  expect(resolveMediaUrl(ref, { cacheImage: true })).toBe(b);
+  finishB("NEW");
+  await expect(b).resolves.toContain("NEW");
+  await expect(resolveMediaUrl(ref, { cacheImage: true })).resolves.toContain("NEW");
+});

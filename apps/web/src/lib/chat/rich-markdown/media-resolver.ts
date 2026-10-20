@@ -125,6 +125,7 @@ export function mediaCacheKey(reference: MediaReference): string {
 }
 
 const inflight = new Map<string, Promise<string>>();
+let resetGeneration = 0;
 
 /**
  * Resolve a reference to a URL an <img>/<video> can load: a `data:` URL for
@@ -145,23 +146,33 @@ export function resolveMediaUrl(
   }
   const existing = inflight.get(key);
   if (existing) return existing;
-  const request = resolveUncached(reference, { ...options, asImage: options.cacheImage }).then(
-    (url) => {
-      if (options.cacheImage && url.startsWith("data:")) writeImagePreviewCache(key, url);
-      return url;
-    },
-  );
+  const generation = resetGeneration;
+  const request = resolveUncached(reference, {
+    ...options,
+    asImage: options.cacheImage,
+    isCurrent: () => generation === resetGeneration,
+  }).then((url) => {
+    if (generation !== resetGeneration)
+      throw new DOMException("Superseded media read", "AbortError");
+    if (options.cacheImage && url.startsWith("data:")) writeImagePreviewCache(key, url);
+    return url;
+  });
   inflight.set(key, request);
-  void request.then(
-    () => inflight.delete(key),
-    () => inflight.delete(key),
-  );
+  const cleanup = () => {
+    if (inflight.get(key) === request) inflight.delete(key);
+  };
+  void request.then(cleanup, cleanup);
   return request;
 }
 
 async function resolveUncached(
   { path, fileUrl, detailRef, containerId }: MediaReference,
-  options: { loadToolDetails?: ToolDetailLoader; detailCache?: ToolDetailCache; asImage?: boolean },
+  options: {
+    loadToolDetails?: ToolDetailLoader;
+    detailCache?: ToolDetailCache;
+    asImage?: boolean;
+    isCurrent: () => boolean;
+  },
 ): Promise<string> {
   // No path and no inline copy on the part: the bytes live behind the
   // deferred detail reference. Fetch them before choosing a source.
@@ -175,6 +186,7 @@ async function resolveUncached(
     let details = options.detailCache?.read(detailRef);
     if (!details) {
       details = await options.loadToolDetails(detailRef);
+      if (!options.isCurrent()) throw new DOMException("Superseded media read", "AbortError");
       options.detailCache?.write(details);
     }
     resolvedFileUrl = details.fileDataUrl;
@@ -209,12 +221,14 @@ function mimeFor(path: string, asImage: boolean | undefined): string {
 
 /** Drop in-flight bookkeeping (tests). */
 export function clearMediaResolverInflight(): void {
+  resetGeneration++;
   inflight.clear();
 }
 
 // Resolved media (data: URLs of environment files) is protected content.
 registerProtectedRichCache("media", {
   clearAll: () => {
+    resetGeneration++;
     inflight.clear();
     clearImagePreviewCache();
   },

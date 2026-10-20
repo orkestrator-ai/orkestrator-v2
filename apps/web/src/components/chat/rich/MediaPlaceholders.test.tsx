@@ -279,3 +279,38 @@ describe("file preview states", () => {
     expect(image.style.aspectRatio).toBe("320 / 200");
   });
 });
+
+test.each(["success", "failure", "pending"])(
+  "changing an existing source after %s loads only the new reference",
+  async (initial) => {
+    let finishA!: (value: string) => void;
+    const a = new Promise<string>((resolve) => {
+      finishA = resolve;
+    });
+    invokeMock.mockImplementation((command: string, args: { filePath?: string }) => {
+      if (command !== "read_file_base64") return Promise.resolve();
+      if (args.filePath?.endsWith("a.png"))
+        return initial === "pending"
+          ? a
+          : initial === "failure"
+            ? Promise.reject(new Error("unavailable"))
+            : Promise.resolve(pngHeaderBase64(20, 10));
+      return Promise.resolve(pngHeaderBase64(40, 30));
+    });
+    const { rerender, container } = render(
+      <MarkdownImage src="/workspace-storage/a.png" alt="Image" />,
+    );
+    await waitFor(() => expect(readCalls()).toHaveLength(1));
+    if (initial === "success")
+      await waitFor(() => expect(container.querySelector("img")?.getAttribute("width")).toBe("20"));
+    if (initial === "failure")
+      await screen.findByRole("img", { name: "Image (image unavailable)" });
+    rerender(<MarkdownImage src="/workspace-storage/b.png" alt="Image" />);
+    await waitFor(() => expect(container.querySelector("img")?.getAttribute("width")).toBe("40"));
+    await act(async () => {
+      finishA(pngHeaderBase64(20, 10));
+      await a;
+    });
+    expect(container.querySelector("img")?.getAttribute("width")).toBe("40");
+  },
+);

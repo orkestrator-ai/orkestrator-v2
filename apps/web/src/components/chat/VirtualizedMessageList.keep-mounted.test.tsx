@@ -9,7 +9,7 @@ import { pinRichViewKey } from "@/stores/richContentViewStore";
 
 /**
  * A Virtuoso stand-in with a real render window: it renders the visible range
- * plus `minOverscanItemCount` rows on each side and reports the visible range
+ * plus `minOverscanItemCount` rows on each side and reports the expanded range
  * through `rangeChanged`, so tests can establish exactly which rows are
  * mounted while the reader scrolls.
  */
@@ -41,22 +41,56 @@ function FakeVirtuoso({
     };
     lastFollowOutput = followOutput ?? null;
   });
-  useEffect(() => {
-    rangeChanged?.(range);
-  }, [range, rangeChanged]);
   const overscan =
     typeof minOverscanItemCount === "number"
       ? { top: minOverscanItemCount, bottom: minOverscanItemCount }
       : (minOverscanItemCount ?? { top: 0, bottom: 0 });
   const start = Math.max(0, range.startIndex - overscan.top);
   const end = Math.min(data.length - 1, range.endIndex + overscan.bottom);
+  useEffect(() => {
+    rangeChanged?.({ startIndex: start, endIndex: end });
+  }, [start, end, rangeChanged]);
   const rows: ReactNode[] = [];
   for (let index = start; index <= end; index++) {
     rows.push(
       <div key={computeItemKey(index, data[index])}>{itemContent(index, data[index])}</div>,
     );
   }
-  return <div data-virtuoso-scroller="true">{rows}</div>;
+  return (
+    <div
+      data-virtuoso-scroller="true"
+      ref={(node) => {
+        if (!node) return;
+        node.getBoundingClientRect = () => ({
+          top: range.startIndex * 20,
+          bottom: (range.endIndex + 1) * 20,
+          height: (range.endIndex - range.startIndex + 1) * 20,
+          width: 100,
+          left: 0,
+          right: 100,
+          x: 0,
+          y: range.startIndex * 20,
+          toJSON() {},
+        });
+        for (const row of node.querySelectorAll<HTMLElement>("[data-chat-message-index]")) {
+          const index = Number(row.dataset.chatMessageIndex);
+          row.getBoundingClientRect = () => ({
+            top: index * 20,
+            bottom: (index + 1) * 20,
+            height: 20,
+            width: 100,
+            left: 0,
+            right: 100,
+            x: 0,
+            y: index * 20,
+            toJSON() {},
+          });
+        }
+      }}
+    >
+      {rows}
+    </div>
+  );
 }
 
 mock.module("react-virtuoso", () => ({ ...realVirtuosoSnapshot, Virtuoso: FakeVirtuoso }));
@@ -303,3 +337,20 @@ describe("VirtualizedMessageList render priority", () => {
     }
   });
 });
+
+test.each(["first", "last"])(
+  "overscan converges while the %s row is protected at a clipped edge",
+  (edge) => {
+    renderList();
+    const index = edge === "first" ? 0 : ROWS.length - 1;
+    if (edge === "last") scrollTo(index - 2);
+    const selected = rowElement(`m-${index}`)!;
+    selectText(selected.querySelector("p")!.firstChild!);
+    scrollTo(edge === "first" ? KEEP_MOUNTED_MAX_ROWS : index - KEEP_MOUNTED_MAX_ROWS - 2);
+    expect(rowElement(`m-${index}`)).toBe(selected);
+    expect(selected.isConnected).toBe(true);
+    expect(document.getSelection()?.toString()).toBe(`Message number ${index}`);
+    scrollTo(edge === "first" ? KEEP_MOUNTED_MAX_ROWS + 1 : index - KEEP_MOUNTED_MAX_ROWS - 3);
+    expect(rowElement(`m-${index}`)).toBeNull();
+  },
+);

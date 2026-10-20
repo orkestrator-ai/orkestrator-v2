@@ -1,3 +1,4 @@
+import { RichRenderCapacityError } from "@/lib/chat/rich-render-cache";
 import {
   memo,
   useCallback,
@@ -99,7 +100,7 @@ function useMermaidPreview(
   visibility: RichRowVisibility | null,
 ) {
   const [settled, setSettled] = useState<{ key: string; state: PreviewState } | null>(null);
-  const [attempt, setAttempt] = useState(0);
+  const [retryState, setRetryState] = useState({ key: "", attempt: 0 });
   // The latest preview shown, labelled as earlier work while a new source renders.
   const [lastPreview, setLastPreview] = useState<MermaidPreview | null>(null);
   const key = `${theme}\u0000${source}`;
@@ -108,6 +109,8 @@ function useMermaidPreview(
   const render = useMermaidRenderOptions();
   const blockPriority = useRichRenderPriority(visibility);
   const scope = render.options.scope;
+  const retryKey = JSON.stringify([scope, key, render.epoch]);
+  const attempt = retryState.key === retryKey ? retryState.attempt : 0;
   const priorityRef = useRef(blockPriority.current);
   useLayoutEffect(() => {
     priorityRef.current = blockPriority.current;
@@ -126,6 +129,7 @@ function useMermaidPreview(
   useEffect(() => {
     if (!enabled || cachedPreview || cachedError) return;
     let disposed = false;
+    let capacityTimer: ReturnType<typeof setTimeout> | undefined;
     const request = requestMermaidPreview(source, theme, {
       scope,
       priority: priorityRef.current(),
@@ -137,6 +141,12 @@ function useMermaidPreview(
       },
       (error: unknown) => {
         if (disposed || (error instanceof DOMException && error.name === "AbortError")) return;
+        if (error instanceof RichRenderCapacityError && attempt < 4) {
+          capacityTimer = setTimeout(() => {
+            if (!disposed) setRetryState({ key: retryKey, attempt: attempt + 1 });
+          }, [100, 300, 1000, 3000][attempt]);
+          return;
+        }
         setSettled({
           key,
           state: {
@@ -150,11 +160,26 @@ function useMermaidPreview(
     );
     return () => {
       disposed = true;
+      clearTimeout(capacityTimer);
       request.cancel();
     };
-  }, [enabled, cachedPreview, cachedError, source, theme, key, attempt, scope, render.epoch]);
+  }, [
+    enabled,
+    cachedPreview,
+    cachedError,
+    source,
+    theme,
+    key,
+    attempt,
+    scope,
+    render.epoch,
+    retryKey,
+  ]);
 
-  const retry = useCallback(() => setAttempt((value) => value + 1), []);
+  const retry = useCallback(
+    () => setRetryState({ key: retryKey, attempt: attempt + 1 }),
+    [retryKey, attempt],
+  );
 
   let state: PreviewState;
   if (!enabled) state = { status: "idle" };

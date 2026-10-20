@@ -529,3 +529,19 @@ describe("repair budget", () => {
     expect(calls).toBe(3);
   });
 });
+
+test("shutdown interrupts active previews and reopening preserves that outcome", async () => {
+  const artifactId = await create();
+  h.runner.hold();
+  const preview = await h.call("preview_artifact", { requestKey: key(), artifactId, revision: 1 });
+  await h.runner.started.promise;
+  await h.service.close();
+  const reopened = h.fork();
+  try {
+    const records = reopened.store.records(ENV);
+    expect(records.get("operation", preview.operationId)?.status).toBe("interrupted");
+    expect(records.count("repair")).toBe(0);
+  } finally {
+    await reopened.close();
+  }
+});

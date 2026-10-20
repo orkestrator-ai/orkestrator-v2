@@ -259,7 +259,9 @@ export class ArtifactUiReads {
     try {
       records = this.ctx.store.records(scope.environmentId);
     } catch {
-      return { publications: [], nextSequence: null };
+      throw new ArtifactFailure(
+        artifactError("storage_unavailable", "The publication ledger is unavailable"),
+      );
     }
     const all = records
       .list("publication", { owner: scope.logicalSessionKey })
@@ -413,7 +415,11 @@ export class ArtifactUiReads {
         return text(JSON.stringify(payload.spec, null, 2), "application/json", "json");
       case "chart-csv":
         if (payload.kind !== "chart") throw unsupported();
-        return text(chartToCsv(payload.spec), "text/csv; charset=utf-8", "csv");
+        return text(
+          chartToCsv(payload.spec, { mode: "spreadsheet-safe" }),
+          "text/csv; charset=utf-8",
+          "csv",
+        );
       case "pdf": {
         if (!html) throw unsupported();
         return this.printing.readPdf(located, request.paper === "letter" ? "letter" : "a4");

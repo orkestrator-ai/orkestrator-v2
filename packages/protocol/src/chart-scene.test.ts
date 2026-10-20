@@ -248,3 +248,22 @@ describe("line, area, scatter and donut geometry", () => {
     expect(zero.height).toBe(0);
   });
 });
+
+test("SVG escapes hostile labels and large-magnitude axes have finite geometry", () => {
+  const chart = {
+    ...REPRESENTATIVE_BAR_CHART,
+    title: '<script>"&',
+    categories: REPRESENTATIVE_BAR_CHART.categories.map((c) => ({
+      ...c,
+      label: '<img onerror="bad()">&',
+    })),
+    series: REPRESENTATIVE_BAR_CHART.series.map((s) => ({
+      ...s,
+      points: s.points.map((p) => ({ ...p, value: p.value === null ? null : p.value * 1e100 })),
+    })),
+  };
+  const svg = chartSceneToSvg(buildChartScene(chart), "light");
+  expect(svg).not.toMatch(/NaN|Infinity|<script|<img/);
+  expect(svg).toContain("&lt;img");
+  expect(chartToCsv(chart, { mode: "exact" })).toContain("<img");
+});

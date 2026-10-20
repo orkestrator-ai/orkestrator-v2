@@ -68,3 +68,11 @@ describe("inlineCodeFileReference", () => {
     expect(inlineCodeFileReference(long)).toBe(null);
   });
 });
+
+test("repeated host labels and long failing suffixes complete within the input budget", () => {
+  const started = performance.now();
+  for (let count = 16; count <= 240; count += 16) {
+    expect(inlineCodeFileReference("www.".repeat(count) + "x/a.ts:1")).not.toBeNull();
+  }
+  expect(performance.now() - started).toBeLessThan(250);
+});

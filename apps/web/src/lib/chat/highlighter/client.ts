@@ -66,7 +66,7 @@ interface Pending {
   timer: ReturnType<typeof setTimeout>;
 }
 
-class WorkerHighlightBackend implements HighlightBackend {
+export class WorkerHighlightBackend implements HighlightBackend {
   private worker: Worker | null = null;
   private readonly pending = new Map<number, Pending>();
   private nextId = 1;

@@ -18,7 +18,7 @@ import { sanitizeSvg } from "./svg-sanitize";
 
 /** Full dataset CSV (default export). */
 export function chartCsvExport(spec: ChartSpecV1): string {
-  return chartToCsv(spec, { mode: "exact" });
+  return chartToCsv(spec, { mode: "spreadsheet-safe" });
 }
 
 /** Explicitly filtered export: only the series the user left visible. */
@@ -26,7 +26,7 @@ export function chartVisibleCsvExport(
   spec: ChartSpecV1,
   hiddenSeriesIds: ReadonlySet<string>,
 ): string {
-  return chartToCsv(spec, { mode: "exact", hiddenSeriesIds });
+  return chartToCsv(spec, { mode: "spreadsheet-safe", hiddenSeriesIds });
 }
 
 /** The exact validated specification: the authored text when available. */

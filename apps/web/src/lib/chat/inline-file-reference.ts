@@ -48,7 +48,7 @@ const EXTENSIONLESS_FILE_NAMES = new Set([
 
 /** Top-level domains that make a leading `name.tld/` segment read as a host. */
 const HOST_SUFFIX =
-  /^(?:www\.|[a-z0-9-]+\.)+(?:com|org|net|io|dev|ai|co|app|cloud|gov|edu|info|me|us|uk|de)$/i;
+  /^(?:[a-z0-9-]+\.)+(?:com|org|net|io|dev|ai|co|app|cloud|gov|edu|info|me|us|uk|de)$/i;
 
 function hasDirectoryComponent(path: string): boolean {
   return /[\\/]/.test(path);

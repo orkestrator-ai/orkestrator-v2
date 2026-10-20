@@ -144,6 +144,7 @@ export interface PreviewRunnerOptions {
   isolationSelection?: "auto" | "configured";
   /** Delays of the bounded reaper for unverified exits (tests shorten it). */
   reaperDelaysMs?: readonly number[];
+  reaperPollMs?: number;
   /** Test seam: replaces the external supervisor. Never configured from content. */
   supervise?: typeof superviseWorker;
   /** Process mode: Chromium discovery (defaults to the design renderer's resolver). */
@@ -772,10 +773,10 @@ export class TranscriptPreviewRunner implements PreviewRunner {
     switch (job.kind) {
       case "html-static": {
         const bytes = utf8ByteLength(job.html);
-        if (bytes > STATIC_HTML_POLICY.maxSourceBytes) {
+        if (bytes > STATIC_HTML_POLICY.maxPreparedBytes) {
           return artifactError(
             "package_size_exceeded",
-            `Static HTML is ${bytes} bytes (limit ${STATIC_HTML_POLICY.maxSourceBytes})`,
+            `Static HTML is ${bytes} bytes (limit ${STATIC_HTML_POLICY.maxPreparedBytes})`,
             { resource: "source-bytes" },
           );
         }
@@ -1092,8 +1093,8 @@ export class TranscriptPreviewRunner implements PreviewRunner {
    * Frees the slot only on positive evidence that the boundary is gone. An
    * unverified exit is quarantined: the slot stays held (it counts against
    * global and per-environment capacity) while a bounded reaper re-runs
-   * kill-and-verify. If the reaper's attempts run out the slot stays held
-   * and the status keeps reporting it; it is never released on a guess.
+   * kill-and-verify. After the initial retry burst a single slow timer
+   * keeps checking, so Docker recovery restores capacity without a restart.
    */
   private release(
     ticket: Ticket,
@@ -1114,14 +1115,10 @@ export class TranscriptPreviewRunner implements PreviewRunner {
     const delays = this.options.reaperDelaysMs ?? DEFAULT_REAPER_DELAYS_MS;
     const attempt = (index: number) => {
       if (this.stopping) return;
-      if (index >= delays.length) {
-        this.options.logger?.warn("[artifact-preview] reaper gave up; slot stays quarantined", {
-          operation: ticket.scope.operationId,
-          attempts: delays.length,
-        });
-        this.notifyExit(ticket, supervised, pids, false);
-        return;
-      }
+      // Keep one slow timer per quarantined slot after the initial burst.
+      // Docker can recover without restarting this backend; only positive
+      // evidence from reap may release capacity.
+      const delay = index < delays.length ? delays[index]! : (this.options.reaperPollMs ?? 60_000);
       const timer = setTimeout(() => {
         this.reaperTimers.delete(timer);
         supervised
@@ -1129,9 +1126,10 @@ export class TranscriptPreviewRunner implements PreviewRunner {
           .catch(() => false)
           .then((gone) => {
             if (gone) this.free(ticket, supervised, pids, true);
-            else attempt(index + 1);
+            else attempt(Math.min(index + 1, delays.length));
           });
-      }, delays[index]);
+      }, delay);
+      timer.unref?.();
       this.reaperTimers.add(timer);
     };
     attempt(0);

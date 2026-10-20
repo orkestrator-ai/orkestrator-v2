@@ -14,6 +14,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 
 import { PREVIEW_ADMISSION_POLICY } from "@orkestrator/protocol/rich-content-policy";
 
@@ -423,6 +424,7 @@ export function superviseWorker(
 
   let readySeen = false;
   let renderTimer: ReturnType<typeof setTimeout> | undefined;
+  const decoder = new StringDecoder("utf8");
   let buffered = "";
   let received = 0;
   spawned.stdout?.on("data", (chunk: Buffer) => {
@@ -432,7 +434,7 @@ export function superviseWorker(
       spawned.stdout?.destroy();
       return;
     }
-    buffered += chunk.toString("utf8");
+    buffered += decoder.write(chunk);
     let newline: number;
     while ((newline = buffered.indexOf("\n")) >= 0) {
       const line = buffered.slice(0, newline);

@@ -550,3 +550,42 @@ describe("ArtifactLiveHost scope invalidation", () => {
     ).toBeNull();
   });
 });
+
+test.each(["logout", "credentials", "conversation"])(
+  "%s clears active and pending views even with no mounted host",
+  async (reason) => {
+    const { clearProtectedRichContent, clearRichConversationContent } =
+      await import("@/lib/chat/rich-content-reset");
+    const store = useArtifactLiveHostStore.getState();
+    store.request(target("a", { previewDataUrl: "data:image/png;base64,old" }));
+    await waitFor(() => expect(useArtifactLiveHostStore.getState().active?.session).not.toBeNull());
+    store.request(target("b", { previewDataUrl: "data:image/png;base64,also-old" }));
+    if (reason === "conversation") clearRichConversationContent(target("a").scope);
+    else clearProtectedRichContent(reason);
+    expect(useArtifactLiveHostStore.getState().active).toBeNull();
+    expect(useArtifactLiveHostStore.getState().pendingSwitch).toBeNull();
+    expect(calls(TRANSCRIPT_ARTIFACT_COMMANDS.closeLiveSession)).toHaveLength(1);
+  },
+);
+
+test("a session opened after credentials reset is released without being attached", async () => {
+  const { clearProtectedRichContent } = await import("@/lib/chat/rich-content-reset");
+  let finish!: (value: unknown) => void;
+  invokeMock.mockImplementation((command: string) =>
+    command === TRANSCRIPT_ARTIFACT_COMMANDS.openLiveSession
+      ? new Promise((resolve) => {
+          finish = resolve;
+        })
+      : Promise.resolve(),
+  );
+  useArtifactLiveHostStore
+    .getState()
+    .request(target("a", { previewDataUrl: "data:image/png;base64,old" }));
+  clearProtectedRichContent("credentials");
+  await act(async () => {
+    finish(liveSessionFor({ publicationId: target("a").publicationId }));
+    await Promise.resolve();
+  });
+  expect(useArtifactLiveHostStore.getState().active).toBeNull();
+  expect(calls(TRANSCRIPT_ARTIFACT_COMMANDS.closeLiveSession)).toHaveLength(1);
+});

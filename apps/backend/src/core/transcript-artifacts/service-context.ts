@@ -361,6 +361,8 @@ export function recordRequest(
   now: string,
   artifactId?: string,
 ): void {
+  // Failed requests are writes too: never restore a record after deletion.
+  assertConversationLive(records, request.conversationKey);
   // A reserved key already holds its row; only a new key adds one.
   if (
     !records.get("idempotency", request.key) &&

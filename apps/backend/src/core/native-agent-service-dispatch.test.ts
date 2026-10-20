@@ -1414,7 +1414,7 @@ describe("NativeAgentService", () => {
     }
   });
 
-  test("revokes the turn's artifact grant when the provider send is rejected or ambiguous", async () => {
+  test("retains ambiguous dispatch grants until reconciliation and revokes rejected dispatches", async () => {
     for (const failure of ["rejected", "ambiguous"] as const) {
       const beginTurn = mock(() => ({ grant: "artifact-grant-secret" }));
       const settleTurn = mock(
@@ -1444,7 +1444,13 @@ describe("NativeAgentService", () => {
           });
           expect(outcome.outcome).toBe(failure === "rejected" ? "rejected" : "unknown");
           expect(beginTurn).toHaveBeenCalledTimes(1);
-          expect(settleTurn).toHaveBeenCalledWith("env-1", "env-env-1:tab-1", `revoke-${failure}`);
+          if (failure === "rejected")
+            expect(settleTurn).toHaveBeenCalledWith(
+              "env-1",
+              "env-env-1:tab-1",
+              `revoke-${failure}`,
+            );
+          else expect(settleTurn).not.toHaveBeenCalled();
         },
       );
     }

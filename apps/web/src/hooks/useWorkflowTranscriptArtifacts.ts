@@ -1,7 +1,10 @@
 import { useMemo } from "react";
 import { useArtifactPublications } from "@/hooks/useArtifactPublications";
 import { useTranscriptArtifactCapabilities } from "@/hooks/useTranscriptArtifactCapabilities";
-import { mergeArtifactPublications } from "@/lib/chat/artifact-publication-merge";
+import {
+  ArtifactPublicationPlacements,
+  mergeArtifactPublications,
+} from "@/lib/chat/artifact-publication-merge";
 import type { RichTranscriptScope } from "@/lib/chat/rich-identity";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 
@@ -46,14 +49,17 @@ export function useWorkflowTranscriptArtifacts<T extends NativeMessage>(
         : null,
     [backendId, conversationKey, environmentId, generation],
   );
+  const placements = useMemo(() => new ArtifactPublicationPlacements(scope), [scope]);
   const publications = useArtifactPublications(scope, messages);
   const canLoadEarlier = options.canLoadEarlier;
   const merged = useMemo(
     () =>
       scope
-        ? mergeArtifactPublications(messages, publications, { canLoadEarlier })
+        ? placements.stabilize(
+            mergeArtifactPublications(messages, publications, { canLoadEarlier }),
+          )
         : (messages as T[]),
-    [canLoadEarlier, messages, publications, scope],
+    [canLoadEarlier, messages, placements, publications, scope],
   );
   return { scope, messages: merged };
 }

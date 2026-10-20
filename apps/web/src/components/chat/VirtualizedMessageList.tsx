@@ -380,19 +380,63 @@ export function VirtualizedMessageList<TMessage>({
     };
   }, []);
 
-  const handleRangeChanged = useCallback((range: ListRange) => {
-    latestRangeRef.current = range;
-    const protectedRow = protectedIndexRef.current;
-    if (protectedRow === null) return;
-    if (keepMountedOverscan(protectedRow, range) === null) {
-      // Beyond the bound the row unmounts like any other: release it.
-      setSelectionRowKey(null);
-      setFocusRowKey(null);
-      setVisibleRange(null);
-      return;
-    }
-    setVisibleRange(range);
-  }, []);
+  const appliedOverscan = useRef({ top: 0, bottom: 0 });
+  const handleRangeChanged = useCallback(
+    (reported: ListRange) => {
+      // Virtuoso reports the expanded render window. Recover the viewport
+      // range before calculating new protection, avoiding an overscan feedback loop.
+      let range = {
+        startIndex:
+          reported.startIndex === 0
+            ? 0
+            : Math.min(reported.endIndex, reported.startIndex + appliedOverscan.current.top),
+        endIndex:
+          reported.endIndex === messages.length - 1
+            ? reported.endIndex
+            : Math.max(reported.startIndex, reported.endIndex - appliedOverscan.current.bottom),
+      };
+      const protectedRow = protectedIndexRef.current;
+      if (protectedRow !== null) {
+        // At either list edge overscan is clipped, so subtracting the applied
+        // counts cannot recover the viewport. Measure only while protecting
+        // a row (ordinary scrolling never forces this layout read).
+        const root = rootRef.current;
+        const viewport = root?.querySelector("[data-virtuoso-scroller]")?.getBoundingClientRect();
+        if (viewport && viewport.height > 0) {
+          let first = Infinity;
+          let last = -1;
+          for (const row of root!.querySelectorAll<HTMLElement>(ROW_SELECTOR)) {
+            const rect = row.getBoundingClientRect();
+            if (rect.bottom <= viewport.top || rect.top >= viewport.bottom) continue;
+            const index = Number(row.dataset.chatMessageIndex);
+            if (!Number.isSafeInteger(index)) continue;
+            first = Math.min(first, index);
+            last = Math.max(last, index);
+          }
+          if (last >= first) range = { startIndex: first, endIndex: last };
+        } else if (reported.startIndex === 0 || reported.endIndex === messages.length - 1) {
+          // Hidden scrollers have no usable geometry. Keep the last known
+          // viewport at a clipped edge until layout returns, avoiding feedback.
+          range = latestRangeRef.current ?? range;
+        }
+      }
+      latestRangeRef.current = range;
+      if (protectedRow === null) return;
+      if (keepMountedOverscan(protectedRow, range) === null) {
+        // Beyond the bound the row unmounts like any other: release it.
+        setSelectionRowKey(null);
+        setFocusRowKey(null);
+        setVisibleRange(null);
+        return;
+      }
+      setVisibleRange((previous) =>
+        previous?.startIndex === range.startIndex && previous?.endIndex === range.endIndex
+          ? previous
+          : range,
+      );
+    },
+    [appliedOverscan, messages.length],
+  );
   const protectedRowKey = selectionRowKey ?? focusRowKey;
   const protectedIndex = useMemo(() => {
     if (protectedRowKey === null) return null;
@@ -405,6 +449,10 @@ export function VirtualizedMessageList<TMessage>({
     protectedIndexRef.current = protectedIndex;
   }, [protectedIndex]);
   const keepMounted = keepMountedOverscan(protectedIndex, visibleRange);
+  useLayoutEffect(() => {
+    appliedOverscan.current.top = keepMounted?.top ?? 0;
+    appliedOverscan.current.bottom = keepMounted?.bottom ?? 0;
+  }, [appliedOverscan, keepMounted?.top, keepMounted?.bottom]);
 
   // Auto-follow pauses while the reader selects text here, uses find, or
   // has an expanded artifact or viewer open; it resumes when they stop.

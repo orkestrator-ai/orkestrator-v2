@@ -71,3 +71,16 @@ describe("shellCommandEligibility", () => {
     });
   });
 });
+
+test("pathological near-matches stay bounded by the command length cap", () => {
+  const started = performance.now();
+  for (let n = 10; n <= 500; n += 10)
+    shellCommandEligibility({
+      source: "www.".repeat(n) + "x/a.ts:1",
+      language: "bash",
+      closed: true,
+      live: false,
+      clipped: false,
+    });
+  expect(performance.now() - started).toBeLessThan(250);
+});

@@ -78,29 +78,33 @@ function anchorToolCallId(publication: ArtifactPublicationView): string | null {
   return typeof id === "string" && id.length > 0 ? id : null;
 }
 
-function collectToolUseIds(parts: readonly NativeMessagePart[], into: Set<string>, depth = 0) {
-  if (depth > 4) return;
+/** All nested parts, bounded independently of provider nesting. */
+function visitParts(
+  parts: readonly NativeMessagePart[],
+  visit: (part: NativeMessagePart) => void,
+  depth = 0,
+) {
+  if (depth > 8) return;
   for (const part of parts) {
-    if (part.toolUseId) into.add(part.toolUseId);
-    if (part.type === "tool-group") collectToolUseIds(part.parts, into, depth + 1);
+    visit(part);
+    if (part.type === "tool-group" || part.type === "agent-group")
+      visitParts(part.parts, visit, depth + 1);
+    else if (part.type === "task-group")
+      visitParts([part.task, ...part.childTools], visit, depth + 1);
   }
 }
-
-/** Artifact parts already in these parts, including inside groups. */
+function collectToolUseIds(parts: readonly NativeMessagePart[], into: Set<string>) {
+  visitParts(parts, (part) => {
+    if (part.toolUseId) into.add(part.toolUseId);
+  });
+}
 function collectArtifactParts(
   parts: readonly NativeMessagePart[],
   visit: (part: NativeArtifactPart) => void,
-  depth = 0,
 ) {
-  if (depth > 4) return;
-  for (const part of parts) {
+  visitParts(parts, (part) => {
     if (part.type === "artifact") visit(part);
-    else if (part.type === "tool-group" || part.type === "agent-group") {
-      collectArtifactParts(part.parts, visit, depth + 1);
-    } else if (part.type === "task-group") {
-      collectArtifactParts([part.task, ...part.childTools], visit, depth + 1);
-    }
-  }
+  });
 }
 
 export function artifactPartFromPublication(
@@ -185,13 +189,13 @@ export function mergeArtifactPublications<T extends NativeMessage>(
   }
   // Pass 2: fall back to the publish call's arguments.
   messages.forEach((message, index) => {
-    for (const part of message.parts) {
+    visitParts(message.parts, (part) => {
       const target = publishCallTarget(part);
-      if (!target) continue;
+      if (!target) return;
       const publication = byTarget.get(target);
-      if (!publication || placed.has(publication.ref.publicationId)) continue;
+      if (!publication || placed.has(publication.ref.publicationId)) return;
       add(index, publication);
-    }
+    });
   });
 
   const result: T[] =
@@ -300,12 +304,71 @@ export function unresolvedPublishCalls(
   }
   let unresolved = 0;
   for (const message of messages) {
-    for (const part of message.parts) {
+    visitParts(message.parts, (part) => {
       const target = publishCallTarget(part);
-      if (!target || known.has(target)) continue;
-      if (part.toolUseId && anchored.has(part.toolUseId)) continue;
+      if (!target || known.has(target)) return;
+      if (part.toolUseId && anchored.has(part.toolUseId)) return;
       unresolved++;
-    }
+    });
   }
   return unresolved;
+}
+
+/**
+ * Preserve first-paint placement within one mounted conversation. A ledger
+ * can precede its call row: once its standalone card is visible, a later
+ * provider overlay must not move it into a different React parent. Bounded
+ * by the same retained-publication limit as the ledger, and discarded with
+ * the conversation scope. Only identifiers are retained here.
+ */
+export class ArtifactPublicationPlacements {
+  constructor(readonly scope: unknown = null) {}
+  private readonly rows = new Map<string, boolean>();
+  stabilize<T extends NativeMessage>(messages: readonly T[]): T[] {
+    const held = new Map<string, NativeArtifactPart>();
+    for (const message of messages) {
+      collectArtifactParts(message.parts, (part) => {
+        const id = part.artifact.publicationId;
+        if (!this.rows.has(id))
+          this.rows.set(id, message.id.startsWith(ARTIFACT_PUBLICATION_MESSAGE_PREFIX));
+        if (this.rows.get(id)) held.set(id, part);
+      });
+    }
+    while (this.rows.size > 2000) this.rows.delete(this.rows.keys().next().value!);
+    if (held.size === 0) return messages as T[];
+    const strip = <P extends NativeMessagePart>(parts: readonly P[], depth = 0): P[] => {
+      if (depth > 8) return parts as P[];
+      return parts.flatMap((part): NativeMessagePart[] => {
+        if (part.type === "artifact" && held.has(part.artifact.publicationId)) return [];
+        if (part.type === "tool-group") return [{ ...part, parts: strip(part.parts, depth + 1) }];
+        if (part.type === "agent-group") return [{ ...part, parts: strip(part.parts, depth + 1) }];
+        if (part.type === "task-group")
+          return [{ ...part, childTools: strip(part.childTools, depth + 1) }];
+        return [part];
+      }) as P[];
+    };
+    const result = messages.flatMap((message): T[] => {
+      if (message.id.startsWith(ARTIFACT_PUBLICATION_MESSAGE_PREFIX)) return [];
+      let changed = false;
+      collectArtifactParts(message.parts, (part) => {
+        if (held.has(part.artifact.publicationId)) changed = true;
+      });
+      return [changed ? { ...message, parts: strip(message.parts) } : message];
+    });
+    for (const [id, part] of held) {
+      const row = {
+        id: `${ARTIFACT_PUBLICATION_MESSAGE_PREFIX}${id}`,
+        role: "assistant",
+        content: part.content,
+        parts: [part],
+        createdAt: part.publishedAt,
+      } as T;
+      const index = result.findIndex(
+        (message) => timeOf(message.createdAt) > timeOf(row.createdAt),
+      );
+      if (index < 0) result.push(row);
+      else result.splice(index, 0, row);
+    }
+    return result;
+  }
 }

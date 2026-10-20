@@ -547,6 +547,23 @@ export class ArtifactPreviews {
         return false;
       }
       const now = this.ctx.iso();
+      if (active.reason === "shutdown" && !operation.cancellationRequestedAt) {
+        records.put(
+          "operation",
+          operation.operationId,
+          {
+            ...operation,
+            status: "interrupted",
+            completedAt: now,
+            lease: null,
+            error: artifactError("interrupted", "The preview was interrupted by shutdown", {
+              operationId: operation.operationId,
+            }),
+          },
+          operation.owner.conversationKey,
+        );
+        return true;
+      }
       const cancelled =
         operation.cancellationRequestedAt !== undefined || active.reason === "cancel";
       const head = records.get("head", operation.artifactId);

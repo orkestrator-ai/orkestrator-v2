@@ -1,3 +1,4 @@
+import { render, cleanup } from "@testing-library/react";
 import { describe, expect, test } from "bun:test";
 import type { ArtifactPublicationView } from "@orkestrator/protocol/transcript-artifact-commands";
 import { ARTIFACT_PUBLICATION_MESSAGE_PREFIX } from "@orkestrator/protocol/transcript-artifacts";
@@ -384,4 +385,102 @@ describe("rows the backend projection already placed", () => {
     const merged = mergeArtifactPublications(rows, [], { canLoadEarlier: false });
     expect(artifactCount(merged)).toBe(1);
   });
+});
+
+test.each(["tool-group", "agent-group", "task-group"])(
+  "nested %s publish calls resolve both anchor and argument placements",
+  (type) => {
+    const pub = publication(1, "art_nested", 1, "2026-10-20T10:00:01Z");
+    const call = { ...publishCall("art_nested", 1), toolUseId: "nested-call" };
+    const group =
+      type === "task-group"
+        ? { type, content: "", task: { type: "text", content: "task" }, childTools: [call] }
+        : { type, content: "", parts: [call] };
+    const rows = [
+      message("nested", "2026-10-20T10:00:00Z", [group as NativeMessage["parts"][number]]),
+    ];
+    expect(unresolvedPublishCalls(rows, [])).toBe(1);
+    for (const view of [pub, { ...pub, anchor: { toolCallId: "nested-call" } }]) {
+      const merged = mergeArtifactPublications(rows, [view], { canLoadEarlier: false });
+      expect(merged).toHaveLength(1);
+      expect(merged[0]!.parts.at(-1)!.type).toBe("artifact");
+      expect(unresolvedPublishCalls(rows, [view])).toBe(0);
+    }
+  },
+);
+
+test("standalone first-paint placement survives a late call-row overlay", async () => {
+  const { ArtifactPublicationPlacements } = await import("./artifact-publication-merge");
+  const placements = new ArtifactPublicationPlacements();
+  const pub = publication(1, "art_late", 1, "2026-10-20T10:00:01Z");
+  const first = placements.stabilize(
+    mergeArtifactPublications<NativeMessage>([], [pub], { canLoadEarlier: false }),
+  );
+  const next = placements.stabilize(
+    mergeArtifactPublications(
+      [
+        message("call", "2026-10-20T10:00:00Z", [
+          publishCall("art_late", 1),
+          artifactPartFromPublication(pub),
+        ]),
+      ],
+      [pub],
+      { canLoadEarlier: false },
+    ),
+  );
+  expect(next.at(-1)!.id).toBe(first[0]!.id);
+  expect(next.at(-1)!.parts[0]!.sourcePartId).toBe(first[0]!.parts[0]!.sourcePartId);
+  expect(next[0]!.parts).toHaveLength(1);
+});
+
+test("a painted standalone card DOM node remains connected across a late provider overlay", async () => {
+  const { createElement } = await import("react");
+  const { ArtifactPublicationPlacements } = await import("./artifact-publication-merge");
+  const placements = new ArtifactPublicationPlacements();
+  const pub = publication(1, "art_dom", 1, "2026-10-20T10:00:01Z");
+  const view = (messages: NativeMessage[]) =>
+    createElement(
+      "div",
+      null,
+      ...messages.map((row) =>
+        createElement(
+          "div",
+          { key: row.id },
+          ...row.parts.map((part, index) =>
+            part.type === "artifact"
+              ? createElement(
+                  "article",
+                  {
+                    key: part.sourcePartId ?? index,
+                    "data-publication": part.artifact.publicationId,
+                  },
+                  part.artifact.title,
+                )
+              : createElement("span", { key: index }, part.content),
+          ),
+        ),
+      ),
+    );
+  const first = placements.stabilize(
+    mergeArtifactPublications<NativeMessage>([], [pub], { canLoadEarlier: false }),
+  );
+  const { container, rerender } = render(view(first));
+  const card = container.querySelector("article")!;
+  try {
+    const overlay = [
+      message("call-row", "2026-10-20T10:00:00Z", [
+        publishCall("art_dom", 1),
+        artifactPartFromPublication(pub),
+      ]),
+    ];
+    rerender(
+      view(
+        placements.stabilize(mergeArtifactPublications(overlay, [pub], { canLoadEarlier: false })),
+      ),
+    );
+    expect(container.querySelector("article")).toBe(card);
+    expect(card.isConnected).toBe(true);
+  } finally {
+    cleanup();
+  }
 });

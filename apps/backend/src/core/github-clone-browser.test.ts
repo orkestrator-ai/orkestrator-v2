@@ -266,6 +266,27 @@ describe("GitHub listing edge cases", () => {
     }
   });
 
+  test.each([undefined, "", "   "])(
+    "missing PAT %j refuses discovery before gh runs",
+    async (githubToken) => {
+      setGitHubCliConfigSource(
+        async () => ({ useHostGitHubCredentials: false, githubToken }) as AppConfig["global"],
+      );
+      const run = runner(() => "host-account");
+      try {
+        await expect(listGitHubCloneAccounts(run)).rejects.toThrow(
+          "personal access token is missing",
+        );
+        await expect(listGitHubCloneRepositories("acme", run)).rejects.toThrow(
+          "personal access token is missing",
+        );
+        expect(run).not.toHaveBeenCalled();
+      } finally {
+        setGitHubCliConfigSource(undefined);
+      }
+    },
+  );
+
   test("rejects malformed JSON and non-array repository output", async () => {
     for (const [output, message] of [
       ["{", "invalid JSON"],

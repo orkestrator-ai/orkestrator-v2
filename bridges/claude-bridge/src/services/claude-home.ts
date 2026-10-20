@@ -59,6 +59,15 @@ export function claudeCommandChangesDir(): string {
 }
 
 /**
+ * Bridge-owned directory for unacknowledged change evidence (see
+ * `change-evidence.ts`), beside the command-change journals. Each bridge
+ * instance keeps its spool in a subdirectory of its own.
+ */
+export function claudeChangeEvidenceDir(): string {
+  return join(claudeHome(), ".claude", "orkestrator", "change-evidence");
+}
+
+/**
  * Point every resolver at a different home directory.
  *
  * Exported for tests. Mocking `node:os` instead would be visible to every

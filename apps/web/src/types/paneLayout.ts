@@ -65,7 +65,33 @@ export interface FileTabData {
   gitStatus?: GitFileStatus;
   /** Target branch for comparison (e.g., "main") */
   baseBranch?: string;
+  /**
+   * Backend change-tracking target for a diff tab
+   * (docs/architecture/change-tracking.md). When present the tab renders
+   * backend hunks for exactly this identity instead of comparing files.
+   */
+  changeDiff?: ChangeDiffTarget;
 }
+
+/**
+ * What a diff tab shows. A historical target names an immutable diff
+ * identity and never re-reads today's file; a live target names a row (or
+ * path) of an environment projection and is re-resolved when its content
+ * changes.
+ */
+export type ChangeDiffTarget =
+  | { kind: "historical"; diffIdentityId: string; title: string }
+  | {
+      kind: "live";
+      resourceKey: string;
+      /** Opaque row path id from a projection row, or… */
+      pathId?: string;
+      /** …a plain path (worktree-relative or absolute); the backend resolves it. */
+      path?: string;
+      rowId?: string;
+      revision?: number;
+      title: string;
+    };
 
 // Data for Claude tmux chat tabs (CLI driven under tmux, native-style UI)
 export interface ClaudeTmuxData {

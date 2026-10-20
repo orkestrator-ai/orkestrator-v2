@@ -8,6 +8,7 @@ import health from "./routes/health.js";
 import config from "./routes/config.js";
 import session from "./routes/session.js";
 import { sessionActivityBatch } from "./routes/session-activity.js";
+import changeEvidence from "./routes/change-evidence.js";
 import { compressTranscriptReads } from "./routes/session-transcript.js";
 import events from "./routes/events.js";
 import mcp from "./routes/mcp.js";
@@ -192,6 +193,8 @@ app.route("/config", config);
 app.route("/session", session);
 // `POST /sessions/activity`: outside `/session/:id` so no id route can shadow it.
 app.route("/", sessionActivityBatch);
+// `GET /change-evidence`, `GET /change-evidence/body`, `POST /change-evidence/ack`.
+app.route("/", changeEvidence);
 app.route("/event", events);
 app.route("/mcp", mcp);
 app.route("/plugins", plugins);

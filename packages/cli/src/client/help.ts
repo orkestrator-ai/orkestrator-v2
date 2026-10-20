@@ -7,6 +7,7 @@ const GROUP_SUMMARIES: Record<string, string> = {
   environment: "Create, start, stop, configure, launch and delete environments.",
   agent: "Discover agents, models and controls.",
   session: "Start, prompt, control and inspect native-agent conversations.",
+  changes: "Read the file and line changes the backend measures (read-only).",
   run: "Inspect, wait for and recover individual operations.",
 };
 

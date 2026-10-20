@@ -3468,7 +3468,7 @@ describe("crash recovery", () => {
     await h.drain();
 
     expect(h.runtime.getRegistry().getThread("thread-1")).toBeUndefined();
-    // The render state holds the diff baselines and the coalescer holds a timer;
+    // The render state holds the rendered diffs and the coalescer holds a timer;
     // dropping the map entry alone leaks both.
     expect(runtime.threadState.has("thread-1")).toBe(false);
   });
@@ -4245,8 +4245,8 @@ describe("idle detach and transparent re-attach", () => {
 
     expect(await h.runtime.getMessages(sessionId)).toEqual([]);
     expect(h.runtime.getRegistry().getSession(sessionId)!.threadId).toBeNull();
-    // The diff baselines are the largest per-thread allocation, and the coalescer
-    // owns a live timer; neither can be reclaimed by a thread that never returns.
+    // The render state holds the rendered diffs, and the coalescer owns a live
+    // timer; neither can be reclaimed by a thread that never returns.
     expect(runtime.threadState.has("thread-1")).toBe(false);
   });
 

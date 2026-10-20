@@ -4,6 +4,12 @@ import { useEnvironmentStore, useFilesPanelStore, useProjectStore, useUIStore } 
 import type { Environment, Project } from "@/types";
 import * as realBackend from "@/lib/backend";
 import { mockToastError, mockToastSuccess } from "../../../../tests/mocks/sonner";
+import type { ChangesRefreshResult } from "@orkestrator/protocol/change-resources";
+import { useChangeProjectionStore } from "@/stores/changeProjectionStore";
+import {
+  environmentProjectionFixture,
+  resetChangeProjectionStore,
+} from "@/components/files-panel/change-projection-test-fixture";
 
 const realBackendSnapshot = { ...realBackend };
 const copyExternalFileMock = mock(
@@ -31,6 +37,11 @@ const projectHome = {
   branch: "main",
 } as Environment;
 const ensureProjectHomeEnvironmentMock = mock(async (_projectId: string) => projectHome);
+const refreshChangesMock = mock(async (_resourceKey: string): Promise<ChangesRefreshResult> => ({
+  kind: "pending",
+  token: "refresh-1",
+  requiredObservationEpoch: 1,
+}));
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
@@ -38,6 +49,7 @@ mock.module("@/lib/backend", () => ({
   copyExternalFile: copyExternalFileMock,
   getLocalFileTreeSnapshot: getLocalFileTreeSnapshotMock,
   getLocalGitStatusSnapshot: getLocalGitStatusSnapshotMock,
+  refreshChanges: refreshChangesMock,
 }));
 
 const { MAX_EXTERNAL_FILE_DROP_BYTES, MAX_EXTERNAL_FILE_DROP_COUNT, useFilesPanel } =
@@ -64,6 +76,8 @@ beforeEach(() => {
   mockToastError.mockClear();
   mockToastSuccess.mockClear();
   ensureProjectHomeEnvironmentMock.mockClear();
+  refreshChangesMock.mockClear();
+  resetChangeProjectionStore();
   useProjectStore.setState({ projects: [] });
   useUIStore.setState({ selectedEnvironmentId: "environment-1", selectedProjectId: null });
   useEnvironmentStore.setState({
@@ -419,6 +433,64 @@ describe("useFilesPanel coordinated auto-refresh", () => {
       await clock.advance(0);
     });
     expect(refreshed).toBe(true);
+  });
+
+  test("an event-driven change projection owns the Changes tab: the list is not polled", async () => {
+    const { clock } = installFakeReadCoordinator();
+    useChangeProjectionStore
+      .getState()
+      .applyProjection(environmentProjectionFixture("environment-1"));
+    const { result } = await openPanel("changes");
+    expect(result.current.changeEnvironmentId).toBe("environment-1");
+
+    await act(() => clock.advance(30_000));
+    // Neither the open nor the old 5 s cadence reads the legacy change list.
+    expect(snapshotCalls()).toEqual({ tree: 0, changes: 0 });
+    expect(clock.pending).toBe(0);
+
+    // An explicit refresh asks the backend for a fenced pass instead, and a
+    // settled projection replaces the held one.
+    refreshChangesMock.mockImplementationOnce(async () => ({
+      kind: "settled",
+      token: "refresh-2",
+      requiredObservationEpoch: 2,
+      projection: environmentProjectionFixture("environment-1", {
+        revision: 2,
+        measurementId: "m-2",
+      }),
+    }));
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(refreshChangesMock).toHaveBeenCalledWith(
+      "environment-net/environment/environment-1/live",
+    );
+    expect(snapshotCalls().changes).toBe(0);
+    expect(
+      useChangeProjectionStore
+        .getState()
+        .projections.get("environment-net/environment/environment-1/live")?.measurementId,
+    ).toBe("m-2");
+  });
+
+  test("the file tree keeps its cadence while a change projection exists", async () => {
+    const { clock } = installFakeReadCoordinator();
+    useChangeProjectionStore
+      .getState()
+      .applyProjection(environmentProjectionFixture("environment-1"));
+    await openPanel("all-files");
+    expect(snapshotCalls()).toEqual({ tree: 1, changes: 1 });
+    await act(() => clock.advance(5_000));
+    expect(snapshotCalls()).toEqual({ tree: 2, changes: 2 });
+  });
+
+  test("an older backend without a projection keeps polling the change list", async () => {
+    const { clock } = installFakeReadCoordinator();
+    await openPanel("changes");
+    expect(snapshotCalls().changes).toBe(1);
+    await act(() => clock.advance(5_000));
+    expect(snapshotCalls().changes).toBe(2);
+    expect(refreshChangesMock).not.toHaveBeenCalled();
   });
 });
 

@@ -1,20 +1,16 @@
-import { describe, expect, mock, test } from "bun:test";
-import { execFileSync } from "node:child_process";
-import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { describe, expect, test } from "bun:test";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_MAX_COMMAND_OUTPUT_CHARS } from "../sessions/turn-accumulator.js";
 import {
-  __testing as normalizationTesting,
   capCommandOutput,
   countDiffLines,
+  fileChangeDiffMetadata,
   getFileChangeDiffMetadata,
   hasVisibleText,
   itemToParts,
-  readGitHeadTextFile,
-  runGitDiffNoIndex,
 } from "./normalization.js";
-import { BaselineMap } from "./diff-budget.js";
 
 async function withIsolatedTempDir<T>(callback: (directory: string) => Promise<T>): Promise<T> {
   const directory = await mkdtemp(join(tmpdir(), "normalization-test-"));
@@ -197,87 +193,6 @@ describe("diff line counting", () => {
   });
 });
 
-describe("git diff fallbacks", () => {
-  test("returns undefined when git cannot read HEAD content", async () => {
-    expect(await readGitHeadTextFile("/path/that/does/not/exist", "missing.txt")).toBeUndefined();
-  });
-
-  test("returns undefined when git HEAD output exceeds the read cap", async () => {
-    await withIsolatedTempDir(async (directory) => {
-      execFileSync("git", ["init"], { cwd: directory, stdio: "ignore" });
-      execFileSync("git", ["config", "user.email", "test@example.com"], {
-        cwd: directory,
-        stdio: "ignore",
-      });
-      execFileSync("git", ["config", "user.name", "Test User"], {
-        cwd: directory,
-        stdio: "ignore",
-      });
-      await writeFile(join(directory, "oversized.txt"), "x".repeat(2 * 1024 * 1024 + 1), "utf8");
-      execFileSync("git", ["add", "oversized.txt"], { cwd: directory, stdio: "ignore" });
-      execFileSync("git", ["commit", "-m", "oversized"], {
-        cwd: directory,
-        stdio: "ignore",
-      });
-
-      expect(await readGitHeadTextFile(directory, "oversized.txt")).toBeUndefined();
-    });
-  });
-
-  test("returns undefined without creating temp files for equal content", async () => {
-    await withIsolatedTempDir(async (directory) => {
-      expect(await runGitDiffNoIndex("/tmp", "same.txt", "same\n", "same\n")).toBeUndefined();
-      expect(await readdir(directory)).toEqual([]);
-    });
-  });
-
-  test("cleans its temp directory when git execution fails without stdout", async () => {
-    await withIsolatedTempDir(async (directory) => {
-      expect(
-        await runGitDiffNoIndex("/path/that/does/not/exist", "failed.txt", "before\n", "after\n"),
-      ).toBeUndefined();
-      expect(await readdir(directory)).toEqual([]);
-    });
-  });
-
-  test("cleans its temp directory when writing a diff input fails", async () => {
-    const removeTempDir = mock(async () => undefined);
-    const execute = mock(async () => ({ stdout: "" }));
-    const writeTextFile = mock(async () => {
-      throw new Error("simulated write failure");
-    });
-
-    await expect(
-      normalizationTesting.runGitDiffNoIndexWithIo(
-        "/tmp",
-        "unwritable.txt",
-        "before\n",
-        "after\n",
-        {
-          makeTempDir: async () => "/tmp/normalization-write-failure",
-          writeTextFile,
-          removeTempDir,
-          execute,
-        },
-      ),
-    ).rejects.toThrow("simulated write failure");
-    expect(writeTextFile).toHaveBeenCalledTimes(1);
-    expect(execute).not.toHaveBeenCalled();
-    expect(removeTempDir).toHaveBeenCalledTimes(1);
-    expect(removeTempDir).toHaveBeenCalledWith("/tmp/normalization-write-failure");
-  });
-
-  test("discards partial oversized diff output and still removes temporary inputs", async () => {
-    await withIsolatedTempDir(async (directory) => {
-      const oversized = "x".repeat(2 * 1024 * 1024 + 1);
-      const diff = await runGitDiffNoIndex("/tmp", "oversized.txt", "", oversized);
-
-      expect(diff).toBeUndefined();
-      expect(await readdir(directory)).toEqual([]);
-    });
-  });
-});
-
 describe("hasVisibleText", () => {
   test.each([
     ["an empty string", ""],
@@ -309,76 +224,49 @@ describe("hasVisibleText", () => {
 });
 
 describe("getFileChangeDiffMetadata", () => {
-  test("prefers a retained baseline over git HEAD for the before content", async () => {
-    await withIsolatedTempDir(async () => {
-      const context = {
-        baselines: new BaselineMap([["tracked.txt", "from-baseline\n"]]),
-        cache: new Map(),
-      };
-      const metadata = await getFileChangeDiffMetadata(
-        "/path/that/does/not/exist",
-        { path: "tracked.txt", kind: "update" },
-        context,
-      );
-
-      // A baseline is what makes a second edit diff against the previous turn
-      // rather than against HEAD, so it must win even when HEAD is readable.
-      expect(metadata.before).toBe("from-baseline\n");
-      expect(metadata.filePath).toBe("/path/that/does/not/exist/tracked.txt");
-    });
-  });
-
-  test("returns a cache hit verbatim without re-running git", async () => {
+  test("returns a cache hit verbatim", async () => {
     const cached = { filePath: "/cached.ts", diff: "cached diff" };
     const metadata = await getFileChangeDiffMetadata(
       "/path/that/does/not/exist",
-      { path: "cached.ts", kind: "update" },
-      { baselines: new BaselineMap(), cache: new Map([["key", cached]]) },
+      { path: "cached.ts", kind: "update", diff: "@@ -1 +1 @@\n-a\n+b\n" },
+      { cache: new Map([["key", cached]]) },
       "key",
     );
 
     expect(metadata).toBe(cached);
   });
 
-  test("reports zero counts rather than throwing when git cannot run", async () => {
+  test("leaves the counts unknown when no diff was supplied, touching nothing on disk", async () => {
     await withIsolatedTempDir(async (directory) => {
       const metadata = await getFileChangeDiffMetadata("/path/that/does/not/exist", {
         path: "missing.ts",
         kind: "update",
       });
 
-      // Diff detail is additive; a transcript must still render without it.
-      expect(metadata).toMatchObject({ additions: 0, deletions: 0 });
-      expect(metadata.diff).toBeUndefined();
+      expect(metadata).toEqual({ filePath: "/path/that/does/not/exist/missing.ts" });
       expect(await readdir(directory)).toEqual([]);
     });
   });
 
   test("resolves an absolute change path without re-joining it to cwd", async () => {
-    await withIsolatedTempDir(async () => {
-      const metadata = await getFileChangeDiffMetadata("/path/that/does/not/exist", {
-        path: "/tmp/elsewhere/a.ts",
-        kind: "add",
-      });
-
-      expect(metadata.filePath).toBe("/tmp/elsewhere/a.ts");
+    const metadata = await getFileChangeDiffMetadata("/path/that/does/not/exist", {
+      path: "/tmp/elsewhere/a.ts",
+      kind: "add",
+      diff: "a\n",
     });
+
+    expect(metadata.filePath).toBe("/tmp/elsewhere/a.ts");
+    expect(metadata).toMatchObject({ additions: 1, deletions: 0 });
   });
 
-  test("skips the HEAD read for an added file and the disk read for a deleted one", async () => {
-    await withIsolatedTempDir(async () => {
-      const added = await getFileChangeDiffMetadata("/path/that/does/not/exist", {
-        path: "added.ts",
-        kind: "add",
-      });
-      const deleted = await getFileChangeDiffMetadata("/path/that/does/not/exist", {
-        path: "deleted.ts",
-        kind: "delete",
-      });
+  test("keeps an update payload that is not unified diff without inventing counts", () => {
+    const metadata = fileChangeDiffMetadata(
+      "/w",
+      { path: "a.ts", kind: "update", diff: "not a diff" },
+      "completed",
+    );
 
-      expect(added.before).toBeUndefined();
-      expect(deleted.after).toBeUndefined();
-    });
+    expect(metadata).toEqual({ filePath: "/w/a.ts" });
   });
 });
 

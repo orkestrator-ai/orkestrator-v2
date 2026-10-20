@@ -1,3 +1,4 @@
+import { resolveAgentHandoffChangeSummaries } from "@/lib/changes/handoff";
 import {
   useCallback,
   useEffect,
@@ -700,6 +701,17 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
       if (messages.length === 0) {
         throw new Error("This conversation has no history to transfer");
       }
+      // Change counts in the handoff are written by the backend from its
+      // selected measurements; unmeasured calls say so instead of "+0/-0".
+      const changeSummaries = await resolveAgentHandoffChangeSummaries(
+        {
+          environmentId: sourceSession.environmentId,
+          provider: sourceSession.provider,
+          conversationId: sourceSessionId,
+        },
+        messages,
+      ).catch(() => ({}));
+      if (!isCurrent()) return;
       const handoff = createAgentHandoffSnapshot({
         id: createUuid(),
         environmentId: sourceSession.environmentId,
@@ -709,6 +721,7 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
         sourceTitle: neutralProjection?.title,
         sourceModel: modelId,
         messages,
+        changeSummaries,
       });
       await persistAgentHandoff(handoff);
       if (!isCurrent()) {

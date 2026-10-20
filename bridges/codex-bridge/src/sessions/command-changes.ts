@@ -28,7 +28,7 @@ import type { NormalizedMessage, NormalizedPart } from "../messages/types.js";
 /** The probe surface the runtime drives; tests substitute a fake. */
 export type CommandChangeProbe = Pick<
   WorkspaceChangeProbe,
-  "begin" | "note" | "end" | "discard" | "prime"
+  "begin" | "note" | "endObservation" | "discard" | "prime"
 >;
 
 /**

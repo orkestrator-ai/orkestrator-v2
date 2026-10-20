@@ -54,6 +54,7 @@ export class CommandFailedError extends Error {
 }
 
 type RunCommandOptions = {
+  signal?: AbortSignal;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   /** Optional stdin payload. When omitted, stdin is closed immediately. */
@@ -175,6 +176,10 @@ function executeCommandBytes(
   timeoutMs: number,
 ): Promise<ExecBufferResult> {
   return new Promise((resolve, reject) => {
+    if (options.signal?.aborted) {
+      reject(Object.assign(new Error("Command aborted"), { killed: true }));
+      return;
+    }
     const child = spawn(command, args, {
       cwd: options.cwd,
       env: command === "git" ? nonInteractiveGitEnv(options.env) : options.env,
@@ -200,6 +205,7 @@ function executeCommandBytes(
       if (settled) return;
       settled = true;
       clearTimeout(timeoutTimer);
+      options.signal?.removeEventListener("abort", abort);
       stopCapture();
       reject(
         Object.assign(error, {
@@ -209,6 +215,12 @@ function executeCommandBytes(
         }),
       );
     };
+    const abort = () => {
+      timedOut = true;
+      signalCommand(child, "SIGKILL");
+      fail(new Error("Command aborted"));
+    };
+    options.signal?.addEventListener("abort", abort, { once: true });
     const capture = (chunks: Buffer[], chunk: Buffer, stream: "stdout" | "stderr") => {
       if (settled || timedOut) return;
       const previousBytes = stream === "stdout" ? stdoutBytes : stderrBytes;
@@ -248,6 +260,7 @@ function executeCommandBytes(
       }
       settled = true;
       clearTimeout(timeoutTimer);
+      options.signal?.removeEventListener("abort", abort);
       resolve({
         stdout: Buffer.concat(stdout, stdoutBytes),
         stderr: Buffer.concat(stderr, stderrBytes),

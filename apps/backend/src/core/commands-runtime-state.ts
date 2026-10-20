@@ -466,14 +466,16 @@ process.stdin.on("end", () => {
     // Past the cap the path is still reported - the user must be able to see the
     // file - but it is not opened. The host marks the result truncated by
     // comparing the record count against the same cap.
+    // Counts are "<n>", "-" (binary) or "?" (not counted). The host keeps "0"
+    // for older readers and records why there is no count.
     if (scanned >= maxFiles) {
-      process.stdout.write(Buffer.from("0\t"));
+      process.stdout.write(Buffer.from("?\t"));
       process.stdout.write(filePath);
       process.stdout.write(Buffer.from([0]));
       continue;
     }
     scanned += 1;
-    let count = 0;
+    let count = "0";
     let fd;
     try {
       fd = fs.openSync(
@@ -483,7 +485,8 @@ process.stdin.on("end", () => {
           | (fs.constants.O_NONBLOCK || 0),
       );
       const initial = fs.fstatSync(fd);
-      if (!initial.isFile() || initial.size === 0 || initial.size > limit) throw new Error("skip");
+      if (!initial.isFile() || initial.size > limit) throw new Error("skip");
+      if (initial.size === 0) throw new Error("empty");
       const buffer = Buffer.allocUnsafe(64 * 1024);
       let total = 0;
       let separators = 0;
@@ -496,7 +499,7 @@ process.stdin.on("end", () => {
         if (total > limit) throw new Error("skip");
         for (let index = 0; index < bytesRead; index += 1) {
           const byte = buffer[index];
-          if (byte === 0) throw new Error("skip");
+          if (byte === 0) throw new Error("binary");
           if (byte === 13) {
             separators += 1;
             previousWasCarriageReturn = true;
@@ -509,15 +512,15 @@ process.stdin.on("end", () => {
           lastByte = byte;
         }
       }
-      count = separators + (lastByte !== 13 && lastByte !== 10 ? 1 : 0);
-    } catch {
-      count = 0;
+      count = String(separators + (lastByte !== 13 && lastByte !== 10 ? 1 : 0));
+    } catch (error) {
+      count = error && error.message === "binary" ? "-" : error && error.message === "empty" ? "0" : "?";
     } finally {
       if (fd !== undefined) {
         try { fs.closeSync(fd); } catch {}
       }
     }
-    process.stdout.write(Buffer.from(String(count) + "\t"));
+    process.stdout.write(Buffer.from(count + "\t"));
     process.stdout.write(filePath);
     process.stdout.write(Buffer.from([0]));
   }

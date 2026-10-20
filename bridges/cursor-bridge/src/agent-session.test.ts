@@ -155,6 +155,9 @@ const { useCursorModelsForTests } = await import("./models.js");
 const { useCursorCredentialRuntimeForTests } = await import("./credentials.js");
 const { clientSessionKeys, sessions } = await import("./state.js");
 const { setCursorMcpTimeoutsForTests, setCursorMcpTransportForTests } = await import("./mcp.js");
+const { useChangeEvidenceForTests } = await import("./change-evidence.js");
+const { ChangeEvidenceSpool } =
+  await import("@orkestrator/protocol/node/change-tracking/evidence-spool");
 
 const testStore = new FakeJsonlLocalAgentStore(
   join(bridgeStateRoot, "cursor-sdk"),
@@ -2258,5 +2261,128 @@ describe("resumeSession", () => {
       approvals: "deny",
       projectResources: true,
     });
+  });
+});
+
+describe("change evidence from replayed history", () => {
+  let spool: InstanceType<typeof ChangeEvidenceSpool>;
+  let restoreEvidence: () => void;
+
+  beforeEach(() => {
+    spool = new ChangeEvidenceSpool();
+    restoreEvidence = useChangeEvidenceForTests(spool, "host-worker");
+  });
+
+  const fileTools = [
+    {
+      type: "toolCall",
+      message: {
+        type: "edit",
+        args: { path: "a.ts" },
+        result: { status: "success", value: { linesAdded: 1, linesRemoved: 1, diffString: "+ x" } },
+      },
+    },
+    {
+      type: "toolCall",
+      message: {
+        type: "write",
+        args: { path: "b.ts", fileText: "b\n" },
+        result: { status: "success", value: { path: "b.ts", linesCreated: 1, fileSize: 2 } },
+      },
+    },
+    {
+      type: "toolCall",
+      message: {
+        type: "delete",
+        args: { path: "c.ts" },
+        result: { status: "success", value: { fileSize: 1 } },
+      },
+    },
+  ];
+
+  test("history rebuilt without call ids produces no frames", async () => {
+    try {
+      runs = {
+        items: [
+          conversationRun([
+            {
+              type: "conversationTurn",
+              turn: { userMessage: { text: "change files" }, steps: fileTools },
+            },
+          ]),
+        ],
+      };
+      const state = await resumeSession("agent-evidence-history", undefined);
+
+      // The cards are there; nothing was matched to an operation.
+      expect(
+        state.messages.flatMap((message) =>
+          message.parts.flatMap((part) => (part.type === "tool-invocation" ? [part.toolName] : [])),
+        ),
+      ).toEqual(["edit", "write", "delete"]);
+      expect(spool.read(0).entries).toEqual([]);
+    } finally {
+      restoreEvidence();
+    }
+  });
+
+  test("a re-adopted run reports its tail by call id, as reconciliation, never measured", async () => {
+    try {
+      runs = {
+        items: [
+          {
+            id: "run-evidence-recovered",
+            status: "running",
+            createdAt: Date.now(),
+            supports: () => true,
+            async *stream() {
+              yield {
+                type: "tool-call-started",
+                callId: "edit-1",
+                toolCall: { type: "edit", args: { path: "a.ts" } },
+              };
+              yield {
+                type: "tool-call-completed",
+                callId: "edit-1",
+                toolCall: {
+                  type: "edit",
+                  args: { path: "a.ts" },
+                  result: { status: "success", value: { linesAdded: 2, linesRemoved: 0 } },
+                },
+              };
+            },
+            wait: async () => ({ status: "finished" }),
+            cancel: async () => undefined,
+            onDidChangeStatus: () => () => undefined,
+            conversation: async () => [
+              {
+                type: "conversationTurn",
+                turn: { userMessage: { text: "change files" }, steps: fileTools },
+              },
+            ],
+          },
+        ],
+      };
+      const state = await resumeSession("agent-evidence-recovered", undefined);
+      await state.recoveringRun;
+
+      const entries = spool.read(0).entries;
+      expect(entries.every((entry) => entry.type === "frame")).toBe(true);
+      const frames = entries.flatMap((entry) => (entry.type === "frame" ? [entry.frame] : []));
+      expect(
+        frames.map((frame) => [
+          frame.source.conversationId,
+          frame.source.callId,
+          frame.source.mode,
+          frame.source.turnId,
+          frame.event.kind === "tool" ? frame.event.phase : frame.event.kind,
+        ]),
+      ).toEqual([
+        [state.id, "edit-1", "reconciliation", undefined, "running"],
+        [state.id, "edit-1", "reconciliation", undefined, "succeeded"],
+      ]);
+    } finally {
+      restoreEvidence();
+    }
   });
 });

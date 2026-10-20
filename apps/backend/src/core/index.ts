@@ -121,6 +121,7 @@ import {
   reconcileInterruptedEnvironmentLifecycleTasks,
 } from "./environment-lifecycle-tasks.js";
 import { recoverInterruptedEnvironmentMoves } from "./environment-move.js";
+import { createBackendChangeTracking } from "./change-tracking/backend-wiring.js";
 import {
   configureTerminalHistoryRetention,
   flushTerminalHistories,
@@ -351,6 +352,20 @@ export class OrkestratorBackend {
       new BackendRuntime({ emit: (event, payload) => options.emit(event, payload) });
     this.environmentLifecycleDrainTimeoutMs =
       options.environmentLifecycleDrainTimeoutMs ?? ENVIRONMENT_LIFECYCLE_DRAIN_TIMEOUT_MS;
+    // Backend-owned file-change tracking (docs/architecture/change-tracking.md):
+    // one service per backend, fed by the environment scan owner, native
+    // dispatch and bridge evidence. Started in init(), closed in shutdown().
+    if (!this.runtime.changeTracking) {
+      this.runtime.attachChangeTracking(
+        createBackendChangeTracking({
+          dataDir: options.dataDir,
+          storage,
+          emit: (event, payload) => options.emit(event, payload),
+          refreshEnvironment: (environmentId) =>
+            this.runtime.diffStats.service.refresh(environmentId),
+        }),
+      );
+    }
     // Every committed mutation fans out to all connected clients, so a second
     // window or browser converges without polling. `emit` is read lazily by the
     // caller's closure, which is how this survives the gateway not existing yet.
@@ -466,6 +481,7 @@ export class OrkestratorBackend {
         return (await handler(args, context)) as T;
       },
       {
+        changeTracking: () => this.runtime.changeTracking?.nativeAgentHooks() ?? null,
         interactionMonitorMode,
         // Rollback for step 07's observation sharing; fences stay either way.
         observationSharing: process.env.ORKESTRATOR_NATIVE_OBSERVATION_SHARING !== "0",
@@ -524,6 +540,15 @@ export class OrkestratorBackend {
               });
           }
           if (isAgentTurnEndTransition(event)) {
+            // Capture the turn's end state and publish turn-net/thread-net.
+            let changesFinalized: Promise<unknown> = Promise.resolve();
+            if (event.owner !== "coordinator" && event.logicalSessionKey) {
+              changesFinalized =
+                this.runtime.changeTracking?.finalizeTurn({
+                  environmentId: event.environmentId,
+                  logicalSessionKey: event.logicalSessionKey,
+                }) ?? Promise.resolve();
+            }
             // A coordinator has no environment row and no PR to probe for.
             if (event.owner !== "coordinator") {
               this.probeForAgentCreatedPullRequest(event.environmentId, context);
@@ -537,12 +562,14 @@ export class OrkestratorBackend {
              * dispatch latency instead of the mail backoff, which for a
              * coordinator could previously reach thirty seconds.
              */
-            void this.nativeAgents.drainPromptQueueForSession(event).catch((error: unknown) => {
-              console.warn(
-                "[backend] Failed to drain the prompt queue after a turn ended:",
-                error instanceof Error ? error.message : error,
-              );
-            });
+            void changesFinalized
+              .then(() => this.nativeAgents.drainPromptQueueForSession(event))
+              .catch((error: unknown) => {
+                console.warn(
+                  "[backend] Failed to drain the prompt queue after a turn ended:",
+                  error instanceof Error ? error.message : error,
+                );
+              });
             /*
              * Settle first, drain second, in that order.
              *
@@ -950,6 +977,14 @@ export class OrkestratorBackend {
 
   async init(): Promise<void> {
     await this.context.storage.init();
+    try {
+      this.runtime.changeTracking?.start();
+    } catch (error) {
+      console.warn(
+        "[backend] Failed to start change tracking:",
+        error instanceof Error ? error.message : error,
+      );
+    }
     // Settles an update the previous process was applying; installing one is
     // what restarted this backend.
     try {

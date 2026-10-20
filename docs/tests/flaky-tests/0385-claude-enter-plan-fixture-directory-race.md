@@ -93,3 +93,13 @@ assertion, timeout or skip was changed for validation.
   the bridge group failing. Every workspace package passed (backend: 9,530
   passed, 79 skipped, zero failed across 532 files); root/support and Codex
   protocol regeneration also passed.
+
+## File/LOC change-tracking main merge — 2026-10-20
+
+- **Original command:** `mise run test:logged -- --name merge-tests-final -- mise run test`, on `implement-file-change-f3950a40ac3a-r1`, merging `origin/main` (`6bc55812`) into `68cefe21`. Workspace/root/bridges/protocol reserved 4/1/2/1 worker slots; Bun 1.4.3 on macOS arm64.
+- **Failure:** `plan approval flow > keeps plan mode enabled when an approved exit cannot be persisted` failed at `session-manager-interactions.test.ts:863` while writing its `.claude` sentinel: `EISDIR` (1.54 ms). Claude reported 1,600 passed, five skipped and one failed across 76 files (38.28 seconds).
+- **Owning-file rerun:** `mise run test:logged -- --name merge-claude-owner -- bun test --cwd bridges/claude-bridge --preload ../../tests/setup-node.ts ./src/services/session-manager-interactions.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 0.1 seconds).
+- **Evidence:** `orkestrator-test-run.R5TGEu/bridges.log.gz` below the host temporary directory; the owning-file passing output was deleted by the logged runner.
+- **Assessment:** confirmed recurrence of the existing fixture-directory race. The first full aggregate in this merge passed all bridge packages. No Claude source, assertions, deadlines or skips changed; concurrent fixture work remains a hypothesis.
+- **Bridge-group rerun:** `mise run test:logged -- --name merge-bridges-rerun -- bunx turbo run test:bridge --cwd . '--filter=./bridges/*' --concurrency=2 --continue=dependencies-successful --output-logs=new-only --log-order=stream` passed all five unchanged bridge packages (exit 0, 77.5 seconds).
+- **Final aggregate result:** exit 1 in 370.1 seconds, with only the bridge fixture above failing. All workspace packages, root/support and Codex protocol generation passed. Formatting, lint, typechecking, the application build, isolated browser suite, Electron suite and Docker suite also passed. Disposable browser and Docker profiles were stopped and reset. iOS and standalone CLI scenarios were omitted because the merge does not change those areas; ordinary CLI tests ran in the workspace suite.

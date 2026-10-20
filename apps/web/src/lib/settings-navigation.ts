@@ -5,6 +5,7 @@ export const GLOBAL_SETTINGS_SECTIONS = [
   "general",
   "updates",
   "disk-usage",
+  "usage",
   "connections",
   "defaults",
   "platforms",

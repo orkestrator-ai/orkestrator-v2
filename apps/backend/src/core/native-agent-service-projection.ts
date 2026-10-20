@@ -105,6 +105,7 @@ import {
   displayTailRecoveryWindow,
 } from "./native-agent-display-tails.js";
 import { NativeAgentDisplayTailScheduler } from "./native-agent-display-tail-scheduler.js";
+import { UsageHistoryRecorder } from "./usage-history-recorder.js";
 import {
   ProgressiveReadMetrics,
   ProgressiveReadPhaseTimer,
@@ -749,6 +750,23 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       typeof this.storage.onNativeAgentDisplayTailDeleted === "function"
         ? this.storage.onNativeAgentDisplayTailDeleted(listener)
         : () => undefined,
+  });
+  /**
+   * Durable token and spend history, fed from the per-turn usage every
+   * provider already reports. The recorder de-duplicates and writes off the
+   * projection path, so a projection never waits on it.
+   */
+  private readonly usageRecorder = new UsageHistoryRecorder({
+    // Optional because narrow test doubles of the storage omit it.
+    write: ({ sessionKey, environmentId, platform, turns }) =>
+      typeof this.storage.recordAgentUsageTurns === "function"
+        ? this.storage.recordAgentUsageTurns({
+            sessionKey,
+            environmentId,
+            platform,
+            turns: turns ?? [],
+          })
+        : 0,
   });
   private readonly progressiveHydrations = new Map<string, ProgressiveHydrationEntry>();
   private readonly progressiveHydrationTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -4707,6 +4725,14 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         input.agent,
         input.logicalSessionKey,
       );
+      // Usage history is recorded from the merged turns, which carry every
+      // turn the provider still republishes rather than only the newest one.
+      this.usageRecorder.observe({
+        sessionKey,
+        environmentId: input.environmentId,
+        platform: input.agent,
+        usage: contextUsage,
+      });
       const normalized = this.projectionMessages(
         sessionKey,
         snapshot.messages,

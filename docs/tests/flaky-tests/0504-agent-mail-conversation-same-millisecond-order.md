@@ -29,3 +29,13 @@
   The unchanged owner passed again in `review-mail-final-owner` (0.1 s).
   Evidence: `orkestrator-test-run.c7h361/review-all-complete.log.gz` under the
   host temporary directory. This remains an aggregate validation limitation.
+
+- **Usage settings pane validation (2026-10-20):** recurred in the final
+  `mise run test` of the settings Usage-tab branch (`t3/settings-usage-tab`,
+  base `97af3d45`), with the same two ids sharing one millisecond prefix
+  (`00mvgyv76h-…`). The unchanged owner passed alone from `apps/backend`
+  (`bun test --preload ../../tests/setup-node.ts
+  ./src/core/storage-agent-mail-conversations.test.ts`, 3 pass). Evidence:
+  `orkestrator-test-run.OcQh31/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+  under the host temporary directory. Nothing in agent-mail storage or this
+  test changed on that branch.

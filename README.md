@@ -206,6 +206,10 @@ curl -fsSL https://orkestrator.dev/install.sh | \
 
 See the [CLI guide](packages/cli/README.md) for service options and Tailscale Serve setup. Remote browser access (`mise run start:web`, `mise run start:web-public`, tokens, Tailscale Serve) is documented in [`docs/architecture/remote-gateway.md`](docs/architecture/remote-gateway.md). The gateway binds Tailscale addresses by default and requires a token.
 
+### Reporting a problem
+
+Run `bunx orkestrator --fix claude` (or `codex`, `opencode`, `grok`). It opens that agent instead of Orkestrator, with instructions to ask what went wrong, read Orkestrator's logs on this machine, and file a redacted GitHub issue on this repository once you approve the draft. See the [CLI guide](packages/cli/README.md#reporting-a-problem).
+
 ## Further reading
 
 | Document | Contents |

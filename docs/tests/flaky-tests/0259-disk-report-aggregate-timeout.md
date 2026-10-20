@@ -54,3 +54,23 @@
 ## Agent-mail main merge recurrence — 2026-10-19
 
 The aggregate failed this owner and its unchanged owning file passed with one worker. Exact commands, symptoms, counts, timings and bounded evidence are recorded in [0500](0500-agent-mail-main-merge-validation.md). No implementation, assertion, timeout or skip changed.
+
+## Recurrence — 2026-10-20 (HTTP dispatch-detail review fixes)
+
+- **Original command:** `mise run test:logged -- --name full-tests -- mise run test`;
+  workspace/root/bridges/protocol reserved 4/1/2/1 worker slots. Static checks
+  ran alongside the start of the aggregate.
+- **Failure:** `disk report > reports an isolated checkout and only fixes named legacy Turbo artifacts`
+  timed out after 5000 ms (5022.99 ms observed); `report.status` was null
+  instead of 0, also producing an error between tests.
+- **Suite counts:** root/support reported 3,147 passed, one skipped, one failed
+  and one error across 3,149 tests in 148 files (239.68 seconds).
+- **Isolated rerun:** `mise run test:logged -- --name disk-report-isolated -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures`
+  passed the unchanged owning file (exit 0, five tests, 2.1 seconds).
+- **Evidence:** `orkestrator-test-run.RpsrRk/root-and-agent-support-tests.log.gz`.
+- **Assessment:** confirmed intermittent recurrence; host process/filesystem
+  contention remains plausible but unconfirmed. No assertion, timeout or skip
+  changed.
+- **Follow-up aggregate:** `mise run test:logged -- --name full-tests-gnu -- mise run test`,
+  using the testing guide's GNU-tool PATH, passed the complete root/support
+  group unchanged (273.8 seconds).

@@ -488,7 +488,7 @@ describe("workflow result broker tools", () => {
     });
   });
 
-  test("attempt-scoped validation denies a different result key before service access", async () => {
+  test("attempt-scoped tools turn a different result key into correctable feedback before service access", async () => {
     const handlers = new Map<string, (args: Record<string, unknown>) => Promise<unknown>>();
     const server = {
       registerTool(
@@ -499,33 +499,82 @@ describe("workflow result broker tools", () => {
         handlers.set(name, handler);
       },
     };
-    let validations = 0;
+    let serviceCalls = 0;
     const workflowResults = {
       async validate() {
-        validations += 1;
+        serviceCalls += 1;
         return { ok: true, valid: true };
       },
       async submit() {
+        serviceCalls += 1;
         return { ok: true, lifecycle: "accepted" };
       },
       async status() {
+        serviceCalls += 1;
         return null;
       },
     };
+    let findingCalls = 0;
+    const findings = {
+      accepts() {
+        return true;
+      },
+      async report() {
+        findingCalls += 1;
+        return { ok: true, findingId: "f-1", duplicate: false, provisionalCount: 1, limit: 10 };
+      },
+    };
+    const boundKey = crypto.randomUUID();
+    // The slip that stranded a real run: one digit of the key mistyped.
+    const mistyped = `${boundKey.slice(0, -1)}${boundKey.endsWith("0") ? "1" : "0"}`;
     const { registerWorkflowResultTools } = await import("./workflow-result-tools.js");
-    registerWorkflowResultTools(server as never, workflowResults as never, {
-      environmentId: "env-1",
-      projectId: "project-1",
-      workflowResultKey: crypto.randomUUID(),
-      kind: "review-report",
-    });
-    const validate = handlers.get("validate_workflow_result");
-    if (!validate) throw new Error("missing validation tool");
-    expect(await validate({ resultKey: crypto.randomUUID(), result: report })).toMatchObject({
+    registerWorkflowResultTools(
+      server as never,
+      workflowResults as never,
+      {
+        environmentId: "env-1",
+        projectId: "project-1",
+        workflowResultKey: boundKey,
+        kind: "review-report",
+      },
+      findings as never,
+    );
+    const calls: Array<[string, Record<string, unknown>]> = [
+      ["validate_workflow_result", { resultKey: mistyped, result: report }],
+      ["submit_review_report", { resultKey: mistyped, result: report }],
+      ["get_workflow_result_status", { resultKey: mistyped }],
+    ];
+    for (const [name, args] of calls) {
+      const handler = handlers.get(name);
+      if (!handler) throw new Error(`missing ${name}`);
+      expect(await handler(args)).toMatchObject({
+        isError: true,
+        structuredContent: {
+          ok: false,
+          error: {
+            code: "invalid_result",
+            nextAction: "correct",
+            message: expect.stringContaining(boundKey),
+            issues: [{ path: "$.resultKey", code: "result_key_mismatch" }],
+          },
+        },
+      });
+    }
+    const reportFinding = handlers.get("report_finding");
+    if (!reportFinding) throw new Error("missing report_finding");
+    expect(await reportFinding({ resultKey: mistyped, finding: {} })).toMatchObject({
       isError: true,
-      structuredContent: { ok: false, error: { code: "capability_denied" } },
+      structuredContent: {
+        ok: false,
+        error: {
+          code: "invalid_finding",
+          nextAction: "correct",
+          message: expect.stringContaining(boundKey),
+        },
+      },
     });
-    expect(validations).toBe(0);
+    expect(serviceCalls).toBe(0);
+    expect(findingCalls).toBe(0);
   });
 
   test("status reports capability rejection, unavailability, and storage failure", async () => {

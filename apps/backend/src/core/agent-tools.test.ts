@@ -371,13 +371,21 @@ describe("agent Kanban tools", () => {
       duplicate: true,
     });
 
-    const denied = await rpc(connection.url, connection.token, "tools/call", {
+    // The bearer serves one key, so another key is a slip to correct.
+    const mismatched = await rpc(connection.url, connection.token, "tools/call", {
       name: "get_workflow_result_status",
       arguments: { resultKey: crypto.randomUUID() },
     });
-    expect(denied.body.result).toMatchObject({
+    expect(mismatched.body.result).toMatchObject({
       isError: true,
-      structuredContent: { ok: false, error: { code: "capability_denied" } },
+      structuredContent: {
+        ok: false,
+        error: {
+          code: "invalid_result",
+          nextAction: "correct",
+          message: expect.stringContaining(resultKey),
+        },
+      },
     });
   });
 

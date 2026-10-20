@@ -56,6 +56,30 @@ function capabilityDenied(): WorkflowResultSubmission {
   };
 }
 
+/**
+ * An attempt-scoped connection's bearer is bound to exactly one result key, so
+ * a different key in the arguments is a transcription slip, not a reach for
+ * another attempt. Naming the bound key discloses nothing the bearer cannot
+ * already use, and lets the model correct the call instead of stopping.
+ */
+function resultKeyMismatch(expected: string): WorkflowResultSubmission {
+  return {
+    ok: false,
+    error: {
+      code: "invalid_result",
+      nextAction: "correct",
+      message: `This tool connection serves resultKey "${expected}". Repeat the call with that exact resultKey; nothing else needs to change.`,
+      issues: [
+        {
+          path: "$.resultKey",
+          code: "result_key_mismatch",
+          message: `Expected "${expected}".`,
+        },
+      ],
+    },
+  };
+}
+
 const validatedDigestSchema = z.string().regex(/^[a-f0-9]{64}$/);
 
 function submissionDescription(label: string, authorized: boolean): string {
@@ -138,6 +162,17 @@ function findingDenied(): ReportFindingResult {
   };
 }
 
+function findingResultKeyMismatch(expected: string): ReportFindingResult {
+  return {
+    ok: false,
+    error: {
+      code: "invalid_finding",
+      nextAction: "correct",
+      message: `This tool connection serves resultKey "${expected}". Repeat the call with that exact resultKey; nothing else needs to change.`,
+    },
+  };
+}
+
 function findingStorageFailure(): ReportFindingResult {
   return {
     ok: false,
@@ -189,7 +224,9 @@ export function registerWorkflowResultTools(
       },
     },
     async ({ resultKey, result }) => {
-      if (resultKey !== scope.workflowResultKey) return resultResponse(capabilityDenied());
+      if (resultKey !== scope.workflowResultKey) {
+        return resultResponse(resultKeyMismatch(scope.workflowResultKey));
+      }
       try {
         return resultResponse(await workflowResults.validate(scope, resultKey, result));
       } catch {
@@ -217,7 +254,9 @@ export function registerWorkflowResultTools(
       },
     },
     async ({ resultKey, result, validatedDigest }) => {
-      if (resultKey !== scope.workflowResultKey) return resultResponse(capabilityDenied());
+      if (resultKey !== scope.workflowResultKey) {
+        return resultResponse(resultKeyMismatch(scope.workflowResultKey));
+      }
       try {
         return resultResponse(
           await commitSubmission(workflowResults, scope, resultKey, result, validatedDigest),
@@ -242,7 +281,9 @@ export function registerWorkflowResultTools(
       },
     },
     async ({ resultKey }) => {
-      if (resultKey !== scope.workflowResultKey) return resultResponse(capabilityDenied());
+      if (resultKey !== scope.workflowResultKey) {
+        return resultResponse(resultKeyMismatch(scope.workflowResultKey));
+      }
       let status;
       try {
         status = await workflowResults.status(scope, resultKey);
@@ -298,7 +339,9 @@ function registerReportFindingTool(
       annotations: REPORT_FINDING_ANNOTATIONS,
     },
     async ({ resultKey, finding }) => {
-      if (resultKey !== scope.workflowResultKey) return findingResponse(findingDenied());
+      if (resultKey !== scope.workflowResultKey) {
+        return findingResponse(findingResultKeyMismatch(scope.workflowResultKey));
+      }
       try {
         return findingResponse(await findings.report(scope, resultKey, finding));
       } catch {

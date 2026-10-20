@@ -2250,6 +2250,8 @@ describe("backend command wrapper coverage", () => {
       "getNativeAgentProjectionUpdate",
       "getNativeAgentMessagePage",
       "getMultiReviewReviewerHistoryPage",
+      // Test seam for the cached change-tracking capabilities, not a command.
+      "resetChangeTrackingCapabilitiesForTests",
     ]);
     const commandWrappers = Object.entries(backendWrappers).flatMap(([name, value]) =>
       typeof value === "function" && !specialWrappers.has(name)

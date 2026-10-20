@@ -19,6 +19,7 @@
 import { AGENT_PLATFORMS } from "./agent-platforms.js";
 import { PUBLIC_ACTION_NAMES, PUBLIC_API_LIMITS, type PublicActionName } from "./public-api.js";
 import {
+  PUBLIC_CHANGE_SCOPES,
   PUBLIC_ENVIRONMENT_SETTINGS,
   PUBLIC_PROJECT_SETTINGS,
   type PublicSettingDescriptor,
@@ -858,6 +859,59 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
         ["sessionId"],
       ),
       examples: [{ sessionId: EXAMPLE_SESSION_ID, limit: 3 }],
+    },
+    "changes.view": {
+      capability: "discovery",
+      confirmation: "never",
+      input: schema(
+        {
+          environmentId,
+          scope: {
+            type: "string",
+            enum: PUBLIC_CHANGE_SCOPES,
+            description:
+              "environment (default): the environment's baseline to its current workspace.",
+          },
+          pageSize: {
+            type: "integer",
+            minimum: 1,
+            maximum: PUBLIC_API_LIMITS.pageMaxItems,
+            description: `File rows per page (default and maximum ${PUBLIC_API_LIMITS.pageMaxItems}).`,
+          },
+          cursor: {
+            type: "string",
+            minLength: 1,
+            maxLength: 1024,
+            description:
+              "files.nextCursor from the previous page; refused once the changes have moved on.",
+          },
+        },
+        ["environmentId"],
+      ),
+      examples: [{ environmentId: "env-1" }, { environmentId: "env-1", pageSize: 20 }],
+    },
+    "changes.history": {
+      capability: "sessions.read",
+      confirmation: "never",
+      input: schema(
+        {
+          sessionId,
+          limit: {
+            type: "integer",
+            minimum: 1,
+            maximum: PUBLIC_API_LIMITS.pageMaxItems,
+            description: `Turns per page (default ${PUBLIC_API_LIMITS.pageDefaultItems}).`,
+          },
+          cursor: {
+            type: "string",
+            minLength: 1,
+            maxLength: 64,
+            description: "nextCursor from the previous page, to read newer turns.",
+          },
+        },
+        ["sessionId"],
+      ),
+      examples: [{ sessionId: EXAMPLE_SESSION_ID }, { sessionId: EXAMPLE_SESSION_ID, limit: 10 }],
     },
     "run.get": {
       capability: "discovery",

@@ -1,6 +1,7 @@
 import type { SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { BackgroundTaskSnapshot } from "../../types/index.js";
 import { sessionHealth } from "../../types/index.js";
+import { claudeToolResultOutcomes, recordClaudeToolResult } from "../change-evidence.js";
 import { commandChangeProbe } from "../command-changes.js";
 import { eventEmitter } from "../event-emitter.js";
 import {
@@ -62,6 +63,9 @@ export function handleUserMessage(turn: TurnState, message: SDKMessage): void {
       turn.pendingCommandChanges.delete(toolUseId);
       toolTracker.setCommandChanges(toolUseId, pending);
     }
+  }
+  for (const outcome of claudeToolResultOutcomes(sdkUserMessage)) {
+    recordClaudeToolResult(outcome.callId, outcome.isError);
   }
   let settledProvisionalTask = false;
   for (const outcome of bashToolResultOutcomes(sdkUserMessage, toolTracker)) {

@@ -323,3 +323,13 @@ The component/public-site browser task passed separately (`merge2-browser`, exit
 The recurrence, owning-file results and remaining limitations are recorded in
 [0501](0501-queued-steer-main-merge-validation.md). No owning implementation,
 assertion, timeout or skip was changed for validation.
+
+## File/LOC change-tracking validation — 2026-10-20
+
+- **Original command:** `mise run test:logged -- --name change-tracking-browser -- mise run test:agent:browser:isolated` on branch `implement-file-change-f3950a40ac3a-r1` (uncommitted change-tracking implementation on `97af3d45`), macOS arm64.
+- **Failure:** "Repository settings" stayed hidden after "Open tools" at the narrow width (`locator.click` timeout, 15 s). The suite reported 27 passed, 37 skipped and 2 failed; the other failure was a real diff-tab title regression in this branch, since fixed.
+- **Owning-test reruns:** against a disposable local profile with `--grep "persisted diff baselines|host picker creates"`, the narrow case failed once more in a first rerun, then failed 1 of 2 under `--repeat-each=2` (5 passed, 1 failed overall); the desktop case passed every time. Profiles were stopped and reset.
+- **Trace analysis (ct-qa-56068):** the project click at 1466 ms issued `ensure_project_home_environment` (1601 ms); "Open tools" was clicked at 1625 ms and the "Repository settings" click began at 1664 ms but waited on the popover's 150 ms open transition ("element is not stable"). The home environment was selected at about 1789 ms (its `list_prompt_queues`/`get_pane_layout` reads), and `MobileAppShellLayout` closes the tools popover on any selection change, so the button became hidden before the click landed. The branch's first change-tracking request (`changes_get_view`) came at 1813 ms, after the selection, so it did not cause the close. This supports the late-selection hypothesis: the spec opens tools before the project's home environment selection settles.
+- **Side fix:** `changes_get_view` no longer runs a full diff-stats reconcile when the environment is already tracked; a reconcile reloads every environment and was queued once per projection reader. The narrow case still failed 1 of 6 afterwards, consistent with the race above.
+- **Rates on this branch:** the narrow case failed 4 of 15 runs overall; with the branch's action-bar change temporarily reverted it passed 4 of 4. That is too small a sample to separate the two; the trace above is the stronger evidence.
+- **Evidence:** `orkestrator-test-run.yJXAyR` below the host temporary directory; browser artifacts under `output/agent-testing/ct-qa-45617/` and `output/agent-testing/ct-qa-57405/`.

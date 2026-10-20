@@ -8,7 +8,6 @@ import {
   SUBAGENT_TRANSCRIPT_PROBE_INTERVAL_MS,
   TRUNCATION_NOTICE,
   beginAssistantRowRenderState,
-  beginTurnRenderState,
   createTurnRenderState,
   effectiveItem,
   loadSubagentPartsFromTranscripts,
@@ -121,8 +120,8 @@ async function withEarlierTurnChildTranscript(run: () => Promise<void>): Promise
 }
 
 describe("turn render state", () => {
-  test("begins the first turn with empty render state", () => {
-    const state = beginTurnRenderState(undefined);
+  test("begins with empty render state", () => {
+    const state = createTurnRenderState();
     expect(state.timelineOrder).toEqual([]);
     expect(state.completedItemParts.size).toBe(0);
     expect(state.machineOutputByItem.size).toBe(0);
@@ -130,36 +129,7 @@ describe("turn render state", () => {
     expect(state.subagentFingerprints.size).toBe(0);
     expect(state.subagentPathIds.size).toBe(0);
     expect(state.subagentTerminalPathRetries.size).toBe(0);
-    expect(state.fileChange.baselines.size).toBe(0);
     expect(state.fileChange.cache.size).toBe(0);
-  });
-
-  test("begins a new turn with baselines retained and per-item state cleared", () => {
-    const previous = createTurnRenderState();
-    previous.timelineOrder.push("item:old");
-    previous.completedItemParts.set("old", { source: null, parts: [] });
-    previous.machineOutputByItem.set("old", {
-      source: null,
-      version: 1,
-      withheld: true,
-    });
-    previous.subagentParts.set("agent:old", { type: "subagent", content: "old" });
-    previous.subagentFingerprints.set("agent:old", "old");
-    previous.subagentPathIds.set("/root/old", "old");
-    previous.subagentTerminalPathRetries.add("/root/missing");
-    previous.fileChange.baselines.set("a.ts", "before");
-    previous.fileChange.cache.set("old", { filePath: "a.ts" });
-
-    const next = beginTurnRenderState(previous);
-    expect(next.timelineOrder).toEqual([]);
-    expect(next.completedItemParts.size).toBe(0);
-    expect(next.machineOutputByItem.size).toBe(0);
-    expect(next.subagentParts.size).toBe(0);
-    expect(next.subagentFingerprints.size).toBe(0);
-    expect(next.subagentPathIds.size).toBe(0);
-    expect(next.subagentTerminalPathRetries.size).toBe(0);
-    expect(next.fileChange.baselines.get("a.ts")).toBe("before");
-    expect(next.fileChange.cache.size).toBe(0);
   });
 
   test("a turn's next row starts its own caches but shares the turn's", () => {
@@ -168,7 +138,6 @@ describe("turn render state", () => {
     previous.completedItemParts.set("old", { source: null, parts: [] });
     previous.subagentParts.set("agent:old", { type: "subagent", content: "old" });
     previous.subagentProbedAt = 1;
-    previous.fileChange.baselines.set("a.ts", "after the edit");
     previous.fileChange.cache.set("edit:0:update:a.ts", { filePath: "a.ts", diff: "-a\n+A" });
 
     const next = beginAssistantRowRenderState(previous);
@@ -176,9 +145,7 @@ describe("turn render state", () => {
     expect(next.completedItemParts.size).toBe(0);
     expect(next.subagentParts.size).toBe(0);
     expect(next.subagentProbedAt).toBe(0);
-    // The edit's diff was taken against the baseline before it, and the
-    // baseline already moved past it: recomputing it would diff the file
-    // against itself, so the per-item cache must survive the row split.
+    // The per-item diff cache is turn-scoped, so it survives the row split.
     expect(next.fileChange).toBe(previous.fileChange);
     expect(next.fileChange.cache.get("edit:0:update:a.ts")?.diff).toBe("-a\n+A");
     expect(next.subagentPathIds).toBe(previous.subagentPathIds);
@@ -199,7 +166,6 @@ describe("turn render state", () => {
     state.subagentFingerprints.set("a", "fingerprint");
     state.subagentPathIds.set("/root/a", "a");
     state.subagentTerminalPathRetries.add("/root/missing");
-    state.fileChange.baselines.set("a.ts", "x");
     state.fileChange.cache.set("a", { filePath: "a.ts" });
     releaseTurnRenderState(state);
     expect(state.timelineOrder).toEqual([]);
@@ -209,7 +175,6 @@ describe("turn render state", () => {
     expect(state.subagentFingerprints.size).toBe(0);
     expect(state.subagentPathIds.size).toBe(0);
     expect(state.subagentTerminalPathRetries.size).toBe(0);
-    expect(state.fileChange.baselines.size).toBe(0);
     expect(state.fileChange.cache.size).toBe(0);
   });
 });
@@ -1315,7 +1280,7 @@ describe("renderTurn", () => {
     ]);
   });
 
-  test("carries file baselines across turns and renders tool-only turns without message content", async () => {
+  test("renders tool-only turns from supplied diffs and keeps completed diffs immutable", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "orkestrator-render-turn-"));
     try {
       const path = join(cwd, "example.txt");
@@ -1324,7 +1289,7 @@ describe("renderTurn", () => {
       firstTurn.onItemCompleted({
         id: "add",
         type: "file_change",
-        changes: [{ path: "example.txt", kind: "add" }],
+        changes: [{ path: "example.txt", kind: "add", diff: "one\n" }],
         status: "completed",
       });
       const firstState = createTurnRenderState();
@@ -1346,7 +1311,6 @@ describe("renderTurn", () => {
       expect(added.parts[0]?.toolDiff?.before).toBeUndefined();
       expect(added.parts[0]?.toolDiff?.after).toBeUndefined();
       expect(added.parts[0]?.toolDiff?.diff).toContain("+one");
-      firstState.fileChange.baselines.set("unused.txt", "cold\n");
 
       await writeFile(path, "one\ntwo\n", "utf8");
       const firstAgain = await renderTurn(firstTurn, {
@@ -1360,16 +1324,15 @@ describe("renderTurn", () => {
       // the file's newer contents and silently rewrite history.
       expect(firstAgain.parts[0]).toBe(added.parts[0]);
       expect(firstAgain.parts[0]?.toolDiff?.after).toBeUndefined();
-      expect([...firstState.fileChange.baselines.keys()]).toEqual(["unused.txt", "example.txt"]);
 
       const secondTurn = turn();
       secondTurn.onItemCompleted({
         id: "update",
         type: "file_change",
-        changes: [{ path: "example.txt", kind: "update" }],
+        changes: [{ path: "example.txt", kind: "update", diff: "@@ -1 +1,2 @@\n one\n+two\n" }],
         status: "completed",
       });
-      const secondState = beginTurnRenderState(firstState);
+      const secondState = createTurnRenderState();
       const updated = await renderTurn(secondTurn, {
         threadId: "thread-1",
         cwd,

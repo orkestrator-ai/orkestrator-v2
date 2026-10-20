@@ -221,7 +221,11 @@ test("wide and narrow paths preserve filename order and changed-file typography"
 
   for (const pathCase of pathCases) {
     const pane = page.getByTestId(`${pathCase.kind}-path-pane`);
-    const path = pane.getByTitle(pathCase.fullPath);
+    // Measure the settled header: the backend body has loaded, so the path
+    // comes from the diff identity and the status badge competes for width.
+    await expect(pane.getByTestId("change-hunks").getByText("+export {};")).toBeVisible();
+    await expect(pane.getByTestId("diff-viewer-header").getByText("New file")).toBeVisible();
+    const path = pane.getByTitle(pathCase.fullPath, { exact: true });
     await expect(path).toBeVisible();
     await expectPathLayout({
       path,

@@ -87,6 +87,7 @@ import {
 import { closeBridgeSessionRetaining } from "./bridge-session-close.js";
 import { HttpBridgeTranscriptReader } from "./http-bridge-transcript-reader.js";
 import { HttpBridgeActivityBatchReader } from "./http-bridge-activity-batch.js";
+import { bridgeChangeEvidenceSource } from "./http-bridge-change-evidence.js";
 import { readAcpTurnTerminalError } from "./http-bridge-turn-outcome.js";
 
 export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
@@ -113,6 +114,8 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   private readonly transcripts: HttpBridgeTranscriptReader;
   /** Scoped to this connection, so a restarted bridge re-detects the batch route. */
   private readonly activityBatchReader: HttpBridgeActivityBatchReader;
+  /** The bridge's change-evidence spool (docs/architecture/change-tracking.md). */
+  readonly changeEvidenceSource: ReturnType<typeof bridgeChangeEvidenceSource>;
   /** Grok only: see {@link readAcpTurnTerminalError}. */
   readonly turnTerminalError?: (sessionId: string, requestId: string) => Promise<string | null>;
 
@@ -127,6 +130,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     this.interactionAdapter = new HttpBridgeInteractionAdapter(this.agent, connection, fetchImpl);
     this.catalogAdapter = new HttpBridgeCatalogAdapter(this.agent, connection, fetchImpl);
     this.activityBatchReader = new HttpBridgeActivityBatchReader(connection, fetchImpl);
+    this.changeEvidenceSource = bridgeChangeEvidenceSource(connection, fetchImpl);
     this.interactions = this.interactionAdapter;
     if (this.agent === "grok") {
       this.turnTerminalError = (sessionId, requestId) =>

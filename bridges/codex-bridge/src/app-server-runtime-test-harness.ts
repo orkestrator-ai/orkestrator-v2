@@ -56,6 +56,7 @@ import {
 import { DispatchJournal } from "./sessions/dispatch-journal.js";
 
 import type { CommandChangeProbe } from "./sessions/command-changes.js";
+import type { CodexChangeEvidence } from "./change-evidence.js";
 
 import { persistSessionTitle } from "./session-titles.js";
 
@@ -318,6 +319,7 @@ export async function harness(
     /** Leaves `runtime.start()` to the caller, so startup itself can be observed. */
     deferStart?: boolean;
     commandChangeProbe?: CommandChangeProbe;
+    changeEvidence?: CodexChangeEvidence;
     watchRolloutFile?: WatchRolloutFile;
   } = {},
 ): Promise<Harness> {
@@ -409,6 +411,7 @@ export async function harness(
       ? { skillRefreshDebounceMs: options.skillRefreshDebounceMs }
       : {}),
     ...(options.commandChangeProbe ? { commandChangeProbe: options.commandChangeProbe } : {}),
+    ...(options.changeEvidence ? { changeEvidence: options.changeEvidence } : {}),
     ...(options.watchRolloutFile ? { watchRolloutFile: options.watchRolloutFile } : {}),
   });
   if (options.deferStart !== true) await runtime.start();

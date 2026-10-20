@@ -6,6 +6,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { CommandChangeJournal } from "@orkestrator/protocol/node/command-change-journal";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import { newSessionState } from "./agent-session.js";
+import { setChangeEvidenceForTests } from "./change-evidence.js";
 import {
   commandChangeExtension,
   discardToolCall,
@@ -24,12 +25,15 @@ const CHANGE: MeasuredWorkspaceChange = {
 };
 
 interface ProbeCall {
-  method: "begin" | "note" | "end" | "discard";
+  method: "begin" | "note" | "endObservation" | "discard";
   cwd?: string;
   id: string;
 }
 
-/** Records every call; `end` answers from `results`, keyed by window id. */
+/**
+ * Records every call; `endObservation` answers a clean fresh-before window
+ * holding `results`' change, keyed by window id.
+ */
 function fakeProbe(results: Map<string, MeasuredWorkspaceChange | undefined> = new Map()) {
   const calls: ProbeCall[] = [];
   const probe: CommandChangeProbe = {
@@ -39,9 +43,16 @@ function fakeProbe(results: Map<string, MeasuredWorkspaceChange | undefined> = n
     note: async (cwd, id) => {
       calls.push({ method: "note", cwd, id });
     },
-    end: async (id) => {
-      calls.push({ method: "end", id });
-      return results.get(id);
+    endObservation: async (id) => {
+      calls.push({ method: "endObservation", id });
+      const change = results.get(id);
+      if (!change) return undefined;
+      return {
+        change: structuredClone(change),
+        boundary: { before: "fresh-before", after: "after-terminal" },
+        overlap: "none-observed",
+        omittedReasons: [],
+      };
     },
     discard: (id) => {
       calls.push({ method: "discard", id });
@@ -101,10 +112,13 @@ beforeEach(async () => {
   stateDirectory = await mkdtemp(join(tmpdir(), "pi-bridge-command-changes-"));
   previousStateDirectory = process.env.PI_BRIDGE_STATE_DIR;
   process.env.PI_BRIDGE_STATE_DIR = stateDirectory;
+  // Memory-only, so the evidence these hooks record never outlives the test.
+  setChangeEvidenceForTests({});
 });
 
 afterEach(async () => {
   setCommandChangeProbeForTests(undefined);
+  setChangeEvidenceForTests(undefined);
   if (previousStateDirectory === undefined) delete process.env.PI_BRIDGE_STATE_DIR;
   else process.env.PI_BRIDGE_STATE_DIR = previousStateDirectory;
   await rm(stateDirectory, { recursive: true, force: true });

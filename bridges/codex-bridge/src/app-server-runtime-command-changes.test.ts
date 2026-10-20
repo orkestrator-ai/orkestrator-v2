@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
-import type { BeginOptions } from "@orkestrator/protocol/node/workspace-change-probe";
+import type {
+  BeginOptions,
+  ProbeObservation,
+} from "@orkestrator/protocol/node/workspace-change-probe";
 import { readCommandChanges, type CommandChangeProbe } from "./sessions/command-changes.js";
 import type { NormalizedPart } from "./messages/types.js";
 import { MAX_TRACKED_ASSISTANT_ROWS } from "./app-server-runtime-base.js";
@@ -33,10 +36,18 @@ class FakeProbe implements CommandChangeProbe {
     this.calls.push(`note ${callId} ${cwd}`);
   }
 
-  async end(callId: string): Promise<MeasuredWorkspaceChange | undefined> {
+  async endObservation(callId: string): Promise<ProbeObservation | undefined> {
     this.calls.push(`end ${callId}`);
     await this.gates.get(callId);
-    return this.results.get(callId);
+    const change = this.results.get(callId);
+    return change
+      ? {
+          change,
+          boundary: { before: "prior-observation", after: "after-terminal" },
+          overlap: "none-observed",
+          omittedReasons: [],
+        }
+      : undefined;
   }
 
   discard(callId: string): void {

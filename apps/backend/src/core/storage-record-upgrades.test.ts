@@ -121,7 +121,8 @@ describe("record shape upgrades", () => {
       }),
     );
     const first = openBackendDatabase(directory);
-    expect(first.schemaVersion()).toBe(3);
+    // Later migrations (the change ledger is 4) run in the same open.
+    expect(first.schemaVersion()).toBeGreaterThanOrEqual(3);
     expect(first.readStore("coordinators")?.value).toMatchObject({
       workspaces: { p1: { projectId: "p1", bridgePort: 4100 } },
     });

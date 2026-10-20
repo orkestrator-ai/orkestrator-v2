@@ -3,6 +3,7 @@ import { readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { PublicReceipt } from "@orkestrator/protocol/public-api";
 import type {
+  PublicChangesView,
   PublicEnvironmentSummary,
   PublicProjectSummary,
 } from "@orkestrator/protocol/public-api-resources";
@@ -96,6 +97,52 @@ async function createEnvironment(
   return result.environment;
 }
 
+/**
+ * `changes view` reads the backend's own change projection. In a local
+ * worktree a new file must show up in it with the backend's line count; a
+ * container environment only proves the read answers its own resource.
+ */
+async function expectChangesView(
+  context: ScenarioContext,
+  environmentId: string,
+  workspacePath: string | null,
+): Promise<void> {
+  if (context.environmentType !== "local" || !workspacePath) {
+    const { result } = await context.cli.ok<PublicChangesView>(
+      ["changes", "view", environmentId],
+      "changes view",
+    );
+    expectThat(
+      result.projection.resourceKey.startsWith("environment-net/"),
+      "changes view answered another resource",
+    );
+    return;
+  }
+  await writeFile(path.join(workspacePath, "changes-probe.txt"), "one\ntwo\n");
+  const deadline = Date.now() + 60_000;
+  for (;;) {
+    const { result } = await context.cli.ok<PublicChangesView>(
+      ["changes", "view", environmentId],
+      "changes view",
+    );
+    const probe = result.files.rows.find((row) => row.newPathDisplay === "changes-probe.txt");
+    if (probe) {
+      expectThat(
+        probe.status === "added" && probe.additions.value === 2,
+        "changes view reported the new file with the wrong status or count",
+      );
+      expectThat(
+        result.projection.counters.changedFiles !== null &&
+          result.projection.counters.changedFiles >= 1,
+        "changes view counted no changed files",
+      );
+      return;
+    }
+    expectThat(Date.now() < deadline, "changes view never reported the new file");
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+}
+
 function git(cwd: string, args: string[]): string {
   const result = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
   if (result.status !== 0) throw new Error(`git ${args[0]} failed: ${result.stderr}`);
@@ -174,6 +221,7 @@ export const SCENARIOS: ScenarioDefinition[] = [
         );
       }
       expectThat(ready.base.commit === fixture.head, "recorded base commit differs");
+      await expectChangesView(context, environment.id, ready.workspacePath);
       const configured = await context.cli.ok<{ settings: { revision: string } }>(
         [
           "environment",

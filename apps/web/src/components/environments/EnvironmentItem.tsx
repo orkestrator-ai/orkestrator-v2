@@ -56,6 +56,16 @@ import { getEnvironmentPortAddress } from "@/lib/environment-address";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import { useLocalEnvironmentAvailable } from "@/hooks/useLocalEnvironmentAvailable";
+import { useEnvironmentChangeProjection } from "@/hooks/useChangeProjection";
+import { ChangeCountBadge } from "@/components/changes/ChangeCountBadge";
+import {
+  changeLabel,
+  changeReason,
+  formatFileCount,
+  formatLineCount,
+  projectionTitle,
+} from "@/lib/changes/labels";
+import type { ChangeProjection } from "@orkestrator/protocol/change-resources";
 
 /** Below this width the row shows an explicit actions button; a right-click
  *  context menu is not reachable on touch. Matches Tailwind's `md` breakpoint. */
@@ -163,6 +173,71 @@ function EnvironmentMenuItems({
   );
 }
 
+const APPROXIMATE_MARK = /^[~≥≤]/;
+
+/**
+ * The row badge for the environment's `environment-net` projection. Shown
+ * only when the backend says so; a stale or partial projection keeps the
+ * row's muted `~` idiom (unless the counts already carry their own mark) and
+ * explains itself in the tooltip.
+ */
+function EnvironmentChangeBadge({ projection }: { projection: ChangeProjection }) {
+  if (!projection.badge.visible) return null;
+  const marked =
+    APPROXIMATE_MARK.test(formatLineCount("+", projection.counters.additions)) ||
+    APPROXIMATE_MARK.test(formatLineCount("-", projection.counters.deletions));
+  const approximate =
+    (projection.state === "partial" || projection.state === "stale") &&
+    projection.badge.mode === "counts" &&
+    !marked;
+  return (
+    <span
+      data-testid="environment-change-badge"
+      data-measurement-id={projection.measurementId ?? ""}
+      data-change-state={projection.state}
+      title={projectionTitle(projection)}
+      className="ml-1 flex shrink-0 items-center gap-1 font-mono text-[10px] tabular-nums"
+    >
+      {approximate && (
+        <span className="text-muted-foreground" aria-hidden="true">
+          ~
+        </span>
+      )}
+      <ChangeCountBadge projection={projection} testId="environment-change-counts" />
+    </span>
+  );
+}
+
+/** Hover-card detail for the same projection: files, counts and every backend reason. */
+function EnvironmentChangeSummary({ projection }: { projection: ChangeProjection }) {
+  if (!projection.badge.visible) return null;
+  const plus = formatLineCount("+", projection.counters.additions);
+  const minus = formatLineCount("-", projection.counters.deletions);
+  return (
+    <div
+      className="border-t border-border/50 pt-1 mt-1"
+      data-testid="environment-change-summary"
+      data-measurement-id={projection.measurementId ?? ""}
+    >
+      <p className="text-xs text-muted-foreground">
+        {changeLabel(projection.labelKey, projection.labelArgs)}:{" "}
+        {formatFileCount(projection.counters.changedFiles)} changed
+      </p>
+      {projection.reasonKeys.map((reason) => (
+        <p key={reason} className="text-xs text-muted-foreground">
+          {changeReason(reason)}
+        </p>
+      ))}
+      {projection.badge.mode === "counts" && (plus || minus) && (
+        <div className="flex items-center gap-2 font-mono text-xs tabular-nums">
+          {plus && <span className="text-success">{plus} added</span>}
+          {minus && <span className="text-failure">{minus} removed</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface EnvironmentItemProps {
   environment: Environment;
   isSelected: boolean;
@@ -207,8 +282,14 @@ export const EnvironmentItem = memo(function EnvironmentItem({
   // Check if this environment is being deleted
   const isEnvironmentDeleting = useEnvironmentStore((s) => s.isDeleting(environment.id));
 
-  // Get diff stats for this environment
-  const diffStats = useEnvironmentDiffStore((s) => s.stats.get(environment.id));
+  // The badge is the backend's `environment-net` projection — the same
+  // measurement the Files → Changes rows page through. Visibility, counts and
+  // their quality are backend decisions. An older backend answers no
+  // projection; only then does the legacy diff-stat mirror drive the badge.
+  const changeProjection = useEnvironmentChangeProjection(environment.id);
+  const diffStats = useEnvironmentDiffStore((s) =>
+    changeProjection ? undefined : s.stats.get(environment.id),
+  );
 
   // Check if this is a build pipeline environment (O(1) Set lookup, stable reference)
   const isBuildEnvironment = useBuildPipelineStore((s) =>
@@ -531,7 +612,10 @@ export const EnvironmentItem = memo(function EnvironmentItem({
                   </span>
                 )}
               </span>
-              {diffStats &&
+              {changeProjection ? (
+                <EnvironmentChangeBadge projection={changeProjection} />
+              ) : (
+                diffStats &&
                 (diffStats.additions > 0 ||
                   diffStats.deletions > 0 ||
                   diffStats.filesChanged > 0) && (
@@ -555,7 +639,8 @@ export const EnvironmentItem = memo(function EnvironmentItem({
                         <span className="text-muted-foreground">{diffStats.filesChanged}F</span>
                       )}
                   </span>
-                )}
+                )
+              )}
             </div>
             {isMobile && (
               <DropdownMenu>
@@ -648,7 +733,10 @@ export const EnvironmentItem = memo(function EnvironmentItem({
                 )}
               </p>
             )}
-            {diffStats &&
+            {changeProjection ? (
+              <EnvironmentChangeSummary projection={changeProjection} />
+            ) : (
+              diffStats &&
               (diffStats.additions > 0 ||
                 diffStats.deletions > 0 ||
                 diffStats.filesChanged > 0) && (
@@ -670,7 +758,8 @@ export const EnvironmentItem = memo(function EnvironmentItem({
                     )}
                   </div>
                 </div>
-              )}
+              )
+            )}
             {environment.prUrl && <p className="text-xs text-blue-400">PR: {environment.prUrl}</p>}
           </div>
         </HoverTooltipContent>

@@ -53,9 +53,25 @@ export type PatchChangeKind = "add" | "delete" | "update";
 export interface FileUpdateChange {
   path: string;
   kind: PatchChangeKind;
+  /**
+   * app-server's own per-change payload (`v2/FileUpdateChange.diff`), kept
+   * verbatim: the whole new content for `add`, the whole old content for
+   * `delete`, and headerless unified hunks for `update` (followed by
+   * `\n\nMoved to: <path>` for a rename). Absent when the source supplied
+   * none (older history); the change is then known only by path and kind.
+   * See `messages/file-change-diff.ts`.
+   */
+  diff?: string;
+  /** Destination of a renamed `update` (`kind.move_path`). */
+  move_path?: string;
 }
 
-export type PatchApplyStatus = "completed" | "failed";
+/**
+ * app-server's real patch lifecycle. `in_progress` covers a patch still being
+ * written or awaiting approval; `declined` was never applied. Never folded
+ * into `completed`.
+ */
+export type PatchApplyStatus = "in_progress" | "completed" | "failed" | "declined";
 
 export interface FileChangeItem {
   id: string;

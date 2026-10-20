@@ -456,9 +456,10 @@ and no interactive links. `TextPart` passes a stable `richPartId`
   Download original, read only when clicked. Markdown images
   (`MediaBlock.tsx`) are images only and do not stream. Attachment
   thumbnails in `NativeMessage.file-parts.tsx` do not yet use these states.
-- **Diffs**: `packages/protocol/src/line-diff.ts` produces minimal hunks
-  within a budget; larger changes show a labelled summary and open the full
-  diff viewer instead of an invented patch.
+- **Diffs**: edit and shell rows render backend-prepared change projections
+  and hunks (raw-lines-v1 counts and bodies from one measurement); the client
+  never counts or diffs. Bodies beyond their budget say so and keep exact
+  counts. See [change-tracking.md](change-tracking.md).
 
 ## Find, copy and accessibility
 

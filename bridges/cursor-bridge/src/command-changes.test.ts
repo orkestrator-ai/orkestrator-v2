@@ -3,7 +3,7 @@
  * where the measurement lands.
  *
  * The probe itself (git snapshots and diffs) is covered in
- * `packages/protocol`; here it is a recorder whose `end` answers what the test
+ * `packages/protocol`; here it is a recorder whose `endObservation` answers what the test
  * says, so the wiring can be checked without a repository.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -28,7 +28,7 @@ type ProbeCall =
   | { method: "prime"; cwd: string }
   | { method: "begin"; cwd: string; id: string; baseline?: boolean }
   | { method: "note"; cwd: string; id: string }
-  | { method: "end"; id: string }
+  | { method: "endObservation"; id: string }
   | { method: "discard"; id: string };
 
 interface RecordingProbe extends CommandChangeProbe {
@@ -51,9 +51,17 @@ function recordingProbe(): RecordingProbe {
         baseline: options?.baseline,
       }),
     note: async (cwd, id) => void calls.push({ method: "note", cwd, id }),
-    end: async (id) => {
-      calls.push({ method: "end", id });
-      return results.get(id);
+    endObservation: async (id) => {
+      calls.push({ method: "endObservation", id });
+      const change = results.get(id);
+      return change
+        ? {
+            change,
+            boundary: { before: "prior-observation", after: "after-terminal" },
+            overlap: "none-observed",
+            omittedReasons: [],
+          }
+        : undefined;
     },
     discard: (id) => void calls.push({ method: "discard", id }),
   };
@@ -146,7 +154,7 @@ describe("shell calls", () => {
     expect(probe.calls).toEqual([
       { method: "prime", cwd: workingDirectory },
       { method: "begin", cwd: workingDirectory, id: "c1", baseline: true },
-      { method: "end", id: "c1" },
+      { method: "endObservation", id: "c1" },
     ]);
     expect(toolPart(state, "c1")?.commandChanges).toEqual(CHANGE);
     expect(state.revision).toBe(revision + 1);
@@ -232,7 +240,7 @@ describe("shell calls", () => {
     tracker.observe(completed);
     await settle();
 
-    expect(probe.calls.map((call) => call.method)).toEqual(["prime", "begin", "end"]);
+    expect(probe.calls.map((call) => call.method)).toEqual(["prime", "begin", "endObservation"]);
   });
 
   test("still measures a call whose start was never reported", async () => {
@@ -249,7 +257,7 @@ describe("shell calls", () => {
 
     expect(probe.calls.slice(1)).toEqual([
       { method: "begin", cwd: workingDirectory, id: "c1", baseline: true },
-      { method: "end", id: "c1" },
+      { method: "endObservation", id: "c1" },
     ]);
     expect(toolPart(state, "c1")?.commandChanges).toEqual(CHANGE);
   });
@@ -348,11 +356,11 @@ describe("other tools", () => {
 
     expect(probe.calls.slice(1)).toEqual([
       { method: "note", cwd: workingDirectory, id: "e1" },
-      { method: "end", id: "e1" },
+      { method: "endObservation", id: "e1" },
       { method: "note", cwd: workingDirectory, id: "w1" },
-      { method: "end", id: "w1" },
+      { method: "endObservation", id: "w1" },
       { method: "note", cwd: workingDirectory, id: "d1" },
-      { method: "end", id: "d1" },
+      { method: "endObservation", id: "d1" },
     ]);
   });
 

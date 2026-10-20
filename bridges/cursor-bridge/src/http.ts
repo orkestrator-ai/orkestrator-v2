@@ -77,6 +77,15 @@ import {
 } from "@orkestrator/protocol/node/bridge-transcript-routes";
 import { cursorTranscriptSource } from "./transcript-source.js";
 import {
+  CHANGE_EVIDENCE_ACK_ROUTE,
+  CHANGE_EVIDENCE_BODY_ROUTE,
+  CHANGE_EVIDENCE_ROUTE,
+  changeEvidenceAckRouteBody,
+  changeEvidenceBodyRouteBody,
+  changeEvidenceReadBody,
+} from "@orkestrator/protocol/node/change-tracking/evidence-routes";
+import { changeEvidenceSpool } from "./change-evidence.js";
+import {
   DISPATCH_OUTCOME_LOST_KIND,
   isNativeAgentExecutionPolicy,
 } from "@orkestrator/protocol/native-agent";
@@ -173,6 +182,7 @@ export async function route(
       });
       return json(response, answer.status, answer.body);
     }
+    if (await routeChangeEvidence(request, response, url)) return;
     const handled = await routeGlobal(request, response, url);
     if (handled) return;
     return await routeSession(request, response, url, clientSignal);
@@ -208,6 +218,33 @@ export async function route(
     console.error("[cursor-bridge] Unexpected HTTP route failure");
     return json(response, 500, { error: "Internal bridge error" });
   }
+}
+
+/**
+ * The change-evidence spool (`change-evidence.ts`), behind the same bearer as
+ * the transcript routes. Pulling never touches a session: no liveness, no
+ * hydration, no re-attach. Only an acknowledgment releases anything.
+ */
+async function routeChangeEvidence(
+  request: IncomingMessage,
+  response: ServerResponse,
+  url: URL,
+): Promise<boolean> {
+  const query = (name: string) => url.searchParams.get(name);
+  if (url.pathname === CHANGE_EVIDENCE_ROUTE && request.method === "GET") {
+    json(response, 200, changeEvidenceReadBody(changeEvidenceSpool(), query));
+    return true;
+  }
+  if (url.pathname === CHANGE_EVIDENCE_BODY_ROUTE && request.method === "GET") {
+    json(response, 200, changeEvidenceBodyRouteBody(changeEvidenceSpool(), query));
+    return true;
+  }
+  if (url.pathname === CHANGE_EVIDENCE_ACK_ROUTE && request.method === "POST") {
+    const answer = changeEvidenceAckRouteBody(changeEvidenceSpool(), await readJson(request));
+    json(response, answer.ok ? 200 : 400, answer);
+    return true;
+  }
+  return false;
 }
 
 async function routeGlobal(

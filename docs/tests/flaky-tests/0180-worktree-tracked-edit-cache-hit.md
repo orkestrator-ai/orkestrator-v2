@@ -296,3 +296,11 @@ The unchanged owning file passed alone (4 pass, 1.4 s).
 - **Owning-file rerun:** the same PATH with `mise run test:logged -- --name merge-final-owner-worktree-snapshots -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 0.5 seconds logged).
 - **Evidence:** `orkestrator-test-run.cM59au/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and outer `orkestrator-test-run.NdOLPH/merge-final-tests.log.gz` below the host temporary directory.
 - **Assessment:** confirmed intermittent recurrence. The invalidation-timing hypothesis remains unconfirmed; no implementation, assertion, timeout or skip changed.
+
+## File/LOC change-tracking validation — 2026-10-20
+
+- **Original command:** `mise run test:logged -- --name ct-full2 -- mise run test` on branch `implement-file-change-f3950a40ac3a-r1` (uncommitted change-tracking implementation on `97af3d45`), on a macOS arm64 host.
+- **Failure:** the tracked-edit cache-hit assertion at line 139 expected 1 and received 0 (134.31 ms). Backend ran 9748 tests across 548 files; this was the only failure. Root/support, bridges and the codex protocol lockfile passed.
+- **Owning-file rerun:** `bun test --cwd apps/backend ./src/core/worktree-snapshots-git.test.ts` passed 4/4 in five consecutive runs.
+- **Caveat:** the owning file is unchanged, but the branch changes the shared scan path it exercises (`SharedScanQueue` now lets a caller join a running pass that started after its request, and `DiffScanEvent` hooks were added), so this occurrence does not independently establish the flake. An earlier full run on the same branch, before the scan-sharing change, passed this test.
+- **Evidence:** `orkestrator-test-run.MRqN8v` and `orkestrator-test-run.SZoJWF` below the host temporary directory.

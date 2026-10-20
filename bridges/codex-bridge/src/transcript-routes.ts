@@ -7,6 +7,15 @@ import {
   bridgeTranscriptRouteBody,
   type BridgeTranscriptSource,
 } from "@orkestrator/protocol/node/bridge-transcript-routes";
+import {
+  CHANGE_EVIDENCE_ACK_ROUTE,
+  CHANGE_EVIDENCE_BODY_ROUTE,
+  CHANGE_EVIDENCE_ROUTE,
+  changeEvidenceAckRouteBody,
+  changeEvidenceBodyRouteBody,
+  changeEvidenceReadBody,
+} from "@orkestrator/protocol/node/change-tracking/evidence-routes";
+import type { ChangeEvidenceSpool } from "@orkestrator/protocol/node/change-tracking/evidence-spool";
 import type { NormalizedMessage } from "./messages/types.js";
 
 /** The runtime reads the transcript routes use; neither touches liveness or attaches. */
@@ -117,4 +126,22 @@ export function registerCodexTranscriptRoutes(app: Hono, runtime: CodexTranscrip
       bridgeTranscriptPageRouteBody(codexTranscriptSource(runtime, c.req.param("id")), query(c)),
     ),
   );
+}
+
+/**
+ * `GET /change-evidence`, `GET /change-evidence/body` and
+ * `POST /change-evidence/ack`: the backend's pull over this process's
+ * change-evidence spool (`change-evidence.ts`). Registered beside the
+ * transcript routes, behind the same bridge authentication. Bodies are shared
+ * with every bridge (`evidence-routes.ts`); an unknown body id is answered in
+ * band, never 404, because a 404 here means "this bridge predates the route".
+ */
+export function registerCodexChangeEvidenceRoutes(app: Hono, spool: ChangeEvidenceSpool): void {
+  app.get(CHANGE_EVIDENCE_ROUTE, (c) => c.json(changeEvidenceReadBody(spool, query(c))));
+  app.get(CHANGE_EVIDENCE_BODY_ROUTE, (c) => c.json(changeEvidenceBodyRouteBody(spool, query(c))));
+  app.post(CHANGE_EVIDENCE_ACK_ROUTE, async (c) => {
+    const body: unknown = await c.req.json().catch(() => null);
+    const result = changeEvidenceAckRouteBody(spool, body);
+    return result.ok ? c.json(result) : c.json(result, 400);
+  });
 }

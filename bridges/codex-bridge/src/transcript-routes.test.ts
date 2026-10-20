@@ -17,7 +17,13 @@ import {
 import type { EngineTurnConfig } from "./engine/types.js";
 import type { NormalizedMessage } from "./messages/types.js";
 import { ThreadRegistry, type BridgeSession } from "./sessions/thread-registry.js";
-import { registerCodexTranscriptRoutes, type CodexTranscriptRuntime } from "./transcript-routes.js";
+import {
+  registerCodexChangeEvidenceRoutes,
+  registerCodexTranscriptRoutes,
+  type CodexTranscriptRuntime,
+} from "./transcript-routes.js";
+import { ChangeEvidenceSpool } from "@orkestrator/protocol/node/change-tracking/evidence-spool";
+import { CodexChangeEvidence } from "./change-evidence.js";
 
 // The DOM test preload replaces browser globals; Hono's compress middleware
 // captures this constructor when it is installed.
@@ -404,4 +410,43 @@ describe("Codex: shared v2 transcript contract", () => {
       await scenario.run(codexContractAdapter());
     });
   }
+});
+
+describe("change-evidence routes", () => {
+  test("serve the spool, answer an unknown body in band and release on ack", async () => {
+    const spool = new ChangeEvidenceSpool();
+    const evidence = new CodexChangeEvidence({ spool, executor: "host-worker" });
+    evidence.turnDiff({ sessionIds: ["session-a"], turnId: "turn-1" }, "@@ -1 +1 @@\n-a\n+b\n");
+    const app = new Hono();
+    registerCodexChangeEvidenceRoutes(app, spool);
+
+    const read: Body = await (await app.request("/change-evidence?cursor=0")).json();
+    expect(read.runtimeEpoch).toBe(spool.runtimeEpoch);
+    expect(read.entries).toHaveLength(1);
+    expect(read.capabilities).toHaveLength(1);
+    const bodyId = read.entries[0].frame.event.evidence[0].evidence.body.id;
+
+    const found: Body = await (
+      await app.request(`/change-evidence/body?id=${encodeURIComponent(bodyId)}`)
+    ).json();
+    expect(Buffer.from(found.base64, "base64").toString("utf8")).toBe("@@ -1 +1 @@\n-a\n+b\n");
+    const missing = await app.request("/change-evidence/body?id=sha256:unknown");
+    expect(missing.status).toBe(200);
+    expect(await missing.json()).toEqual({ id: "sha256:unknown", state: "missing" });
+
+    const invalid = await app.request("/change-evidence/ack", { method: "POST", body: "nope" });
+    expect(invalid.status).toBe(400);
+    const ack = await app.request("/change-evidence/ack", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        runtimeEpoch: spool.runtimeEpoch,
+        upTo: read.nextCursor,
+        retainedBodyIds: [bodyId],
+        unavailableBodyIds: [],
+      }),
+    });
+    expect(await ack.json()).toEqual({ ok: true, released: 1 });
+    expect(spool.stats()).toMatchObject({ entries: 0, bodies: 0 });
+  });
 });

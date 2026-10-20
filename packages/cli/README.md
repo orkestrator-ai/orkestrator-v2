@@ -1,18 +1,20 @@
 # Orkestrator backend and client
 
-The `orkestrator` executable has two modes:
+The `orkestrator` executable has three modes:
 
 - **Service** — `orkestrator`, `orkestrator serve …`, or the historical
   `orkestrator --host … --port …` forms run the backend in the foreground.
 - **Client** — `orkestrator <group> <command> …` talks to a backend that is
   already running. Client commands never start a backend.
+- **Problem report** — `orkestrator --fix AGENT` opens a coding agent to
+  collect diagnostics and draft a GitHub issue.
 
 ## Reporting a problem
 
 Something wrong with Orkestrator? Let a coding agent help you report it:
 
 ```bash
-bunx orkestrator --fix claude    # or codex, opencode, grok
+bunx orkestrator --fix claude    # or codex, opencode
 ```
 
 Instead of starting Orkestrator, this opens that agent's interactive session

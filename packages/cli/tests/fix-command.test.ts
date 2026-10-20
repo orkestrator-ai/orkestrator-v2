@@ -1,6 +1,16 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { existsSync, realpathSync } from "node:fs";
+import {
+  chmod,
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { classifyInvocation } from "../src/client.js";
@@ -8,6 +18,8 @@ import {
   buildFixPrompt,
   collectFixFacts,
   FIX_ISSUE_REPOSITORY,
+  FIX_AGENTS,
+  FIX_HELP,
   parseFixArguments,
   resolveFixAgent,
   runFix,
@@ -27,7 +39,7 @@ interface FixSandbox {
 }
 
 async function sandbox(): Promise<FixSandbox> {
-  const root = await mkdtemp(path.join(tmpdir(), "orkestrator-fix-test-"));
+  const root = realpathSync(await mkdtemp(path.join(tmpdir(), "orkestrator-fix-test-")));
   roots.push(root);
   const created = {
     root,
@@ -82,6 +94,7 @@ function testEnv(box: FixSandbox, extra: NodeJS.ProcessEnv = {}): NodeJS.Process
   return {
     PATH: `${box.bin}:${path.dirname(process.execPath)}`,
     HOME: box.root,
+    ORKESTRATOR_CLI_CONFIG_DIR: path.join(box.root, "cli"),
     FIX_TEST_RECORD: box.record,
     ...extra,
   };
@@ -94,7 +107,7 @@ describe("--fix classification", () => {
       argv: ["--fix", "claude"],
     });
     expect(classifyInvocation(["--fix=codex"]).mode).toBe("fix");
-    expect(classifyInvocation(["--data-dir", "/tmp/x", "--fix", "grok"]).mode).toBe("fix");
+    expect(classifyInvocation(["--data-dir", "/tmp/x", "--fix", "codex"]).mode).toBe("fix");
     expect(classifyInvocation(["--fix"]).mode).toBe("fix");
     expect(classifyInvocation([]).mode).toBe("serve");
     expect(classifyInvocation(["project", "list"]).mode).toBe("client");
@@ -110,9 +123,9 @@ describe("parseFixArguments", () => {
       agent: "codex",
       dataDir: "/srv/data",
     });
-    expect(parseFixArguments(["--data-dir=/srv/data", "--fix", "grok"])).toEqual({
+    expect(parseFixArguments(["--data-dir=/srv/data", "--fix", "codex"])).toEqual({
       kind: "run",
-      agent: "grok",
+      agent: "codex",
       dataDir: "/srv/data",
     });
   });
@@ -154,7 +167,7 @@ describe("agent resolution", () => {
       executable: onPath,
       source: "path",
     });
-    expect(resolveFixAgent("grok", { env: testEnv(box), dataDir: box.dataDir })).toBeNull();
+    expect(resolveFixAgent("opencode", { env: testEnv(box), dataDir: box.dataDir })).toBeNull();
   });
 });
 
@@ -237,7 +250,7 @@ describe("runFix", () => {
     return { exitCode, record, ...capture };
   }
 
-  test("starts Claude Code in a scratch directory with the prompt and the data directory", async () => {
+  test("starts Claude Code in a scratch directory with the prompt and only the logs directory", async () => {
     const box = await sandbox();
     await fakeAgent(box.bin, "claude", 7);
     const { exitCode, record, err } = await run(box, [
@@ -250,7 +263,7 @@ describe("runFix", () => {
     // `--add-dir` is variadic: anything after it would be read as a directory.
     expect(record!.args).toHaveLength(3);
     expect(record!.args[0]).toContain(`orkestrator --fix claude`);
-    expect(record!.args.slice(1)).toEqual(["--add-dir", box.dataDir]);
+    expect(record!.args.slice(1)).toEqual(["--add-dir", path.join(box.dataDir, "logs")]);
     expect(path.basename(record!.cwd)).toStartWith("orkestrator-fix-");
     // A PATH install is the user's own and keeps its updater.
     expect(record!.claudeAutoupdater).toBeNull();
@@ -288,19 +301,101 @@ describe("runFix", () => {
     expect(err.join("")).toContain("issue draft are in");
   });
 
-  test("passes Codex and Grok the prompt as their only argument", async () => {
+  test("passes Codex the prompt as its only argument", async () => {
     const box = await sandbox();
-    for (const agent of ["codex", "grok"]) {
-      await fakeAgent(box.bin, agent);
-      const { record } = await run(box, ["--fix", agent, "--data-dir", box.dataDir]);
+    await fakeAgent(box.bin, "codex");
+    const { record } = await run(box, ["--fix", "codex", "--data-dir", box.dataDir]);
+    expect(record!.args).toHaveLength(1);
+    expect(record!.args[0]).toContain("orkestrator --fix codex");
+  });
+
+  test("does not advertise or launch Grok without a verified prompt contract", async () => {
+    const box = await sandbox();
+    await fakeAgent(box.bin, "grok");
+    expect(FIX_AGENTS.map((agent) => agent.name)).not.toContain("grok");
+    expect(FIX_HELP).not.toContain("grok");
+    const result = await run(box, ["--fix", "grok"]);
+    expect(result.exitCode).toBe(2);
+    expect(result.record).toBeNull();
+  });
+
+  test.each(["direct", "symlink"])("protects managed Claude found on PATH (%s)", async (kind) => {
+    const box = await sandbox();
+    const managedDir = path.join(box.dataDir, "toolchains", "bin", "current");
+    await mkdir(managedDir, { recursive: true });
+    const managed = await fakeAgent(managedDir, "claude");
+    if (kind === "symlink") await symlink(managed, path.join(box.bin, "claude"));
+    const env = testEnv(box, {
+      PATH: `${kind === "direct" ? managedDir : box.bin}:${path.dirname(process.execPath)}`,
+    });
+    expect(resolveFixAgent("claude", { env, dataDir: box.dataDir })?.source).toBe("managed");
+    const { record } = await run(box, ["--fix", "claude", "--data-dir", box.dataDir], env);
+    expect(record!.claudeAutoupdater).toBe("1");
+  });
+
+  test("preserves user-installed Claude updater settings even with a managed copy", async () => {
+    const box = await sandbox();
+    await fakeAgent(box.bin, "claude");
+    const managedDir = path.join(box.dataDir, "toolchains", "bin", "current");
+    await mkdir(managedDir, { recursive: true });
+    await fakeAgent(managedDir, "claude");
+    const { record } = await run(box, ["--fix", "claude", "--data-dir", box.dataDir], {
+      DISABLE_AUTOUPDATER: "0",
+    });
+    expect(record!.claudeAutoupdater).toBe("0");
+  });
+
+  test.each(["missing-data", "missing-logs"])(
+    "omits Claude's directory grant for %s",
+    async (kind) => {
+      const box = await sandbox();
+      await fakeAgent(box.bin, "claude");
+      const dataDir = kind === "missing-data" ? path.join(box.root, "absent") : box.dataDir;
+      if (kind === "missing-logs") await rm(path.join(dataDir, "logs"), { recursive: true });
+      const { record } = await run(box, ["--fix", "claude", "--data-dir", dataDir]);
       expect(record!.args).toHaveLength(1);
-      expect(record!.args[0]).toContain(`orkestrator --fix ${agent}`);
-    }
+      expect(existsSync(path.join(dataDir, "logs"))).toBe(false);
+    },
+  );
+
+  test("formats synchronous spawn failure and cleans empty scratch space", async () => {
+    const box = await sandbox();
+    await fakeAgent(box.bin, "codex");
+    const capture = captureIo(testEnv(box));
+    const status = await runFix(["--fix", "codex", "--data-dir", box.dataDir], {
+      version: "2.23.0",
+      io: capture.io,
+      tmpDir: box.tmp,
+      spawn: () => {
+        throw new Error("raw exception with private prompt");
+      },
+    });
+    expect(status).toBe(1);
+    expect(capture.err.join("")).toContain("error [agent-failed]");
+    expect(capture.err.join("")).not.toContain("raw exception");
+    expect(await readdir(box.tmp)).toEqual([]);
+  });
+
+  test("cleans listeners and scratch space when child completion rejects", async () => {
+    const box = await sandbox();
+    await fakeAgent(box.bin, "codex");
+    const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+    const before = signals.map((signal) => process.listeners(signal));
+    const capture = captureIo(testEnv(box));
+    const status = await runFix(["--fix", "codex", "--data-dir", box.dataDir], {
+      version: "2.23.0",
+      io: capture.io,
+      tmpDir: box.tmp,
+      spawn: () => ({ exited: Promise.reject(new Error("completion failed")), kill: () => {} }),
+    });
+    expect(status).toBe(1);
+    expect(signals.map((signal) => process.listeners(signal))).toEqual(before);
+    expect(await readdir(box.tmp)).toEqual([]);
   });
 
   test("reports a missing agent and invalid input without launching anything", async () => {
     const box = await sandbox();
-    const missing = await run(box, ["--fix", "grok", "--data-dir", box.dataDir]);
+    const missing = await run(box, ["--fix", "codex", "--data-dir", box.dataDir]);
     expect(missing.exitCode).toBe(3);
     expect(missing.err.join("")).toContain("error [not-found]");
     const invalid = await run(box, ["--fix", "nope"]);
@@ -311,4 +406,272 @@ describe("runFix", () => {
     expect(help.out.join("")).toContain("Usage: orkestrator --fix AGENT");
     expect(await readdir(box.tmp)).toEqual([]);
   });
+});
+
+async function factsFor(box: FixSandbox) {
+  return collectFixFacts({
+    resolved: {
+      agent: FIX_AGENTS[0]!,
+      executable: "/test/claude",
+      source: "path",
+    },
+    version: "2.23.0",
+    dataDir: box.dataDir,
+    workDir: box.tmp,
+    env: testEnv(box),
+  });
+}
+
+describe("managed installation layouts", () => {
+  test.each(["digest-set", "base"])(
+    "resolves agents and reports the %s directory",
+    async (layout) => {
+      const box = await sandbox();
+      const binDir = path.join(
+        box.dataDir,
+        "toolchains",
+        "bin",
+        ...(layout === "base" ? [] : ["abc123"]),
+      );
+      await mkdir(binDir, { recursive: true });
+      const executable = await fakeAgent(binDir, "claude");
+      expect(resolveFixAgent("claude", { env: testEnv(box), dataDir: box.dataDir })).toMatchObject({
+        executable,
+        source: "managed",
+      });
+      expect((await factsFor(box)).toolchainBinDir).toBe(binDir);
+      const capture = captureIo(testEnv(box));
+      let updater: string | undefined;
+      expect(
+        await runFix(["--fix", "claude", "--data-dir", box.dataDir], {
+          version: "2.23.0",
+          io: capture.io,
+          tmpDir: box.tmp,
+          spawn: (_command, options) => {
+            updater = options.env.DISABLE_AUTOUPDATER;
+            return { exited: Promise.resolve(0), kill: () => {} };
+          },
+        }),
+      ).toBe(0);
+      expect(updater).toBe("1");
+    },
+  );
+
+  test("does not guess among several desktop activation sets", async () => {
+    const box = await sandbox();
+    for (const digest of ["abc123", "def456"]) {
+      const directory = path.join(box.dataDir, "toolchains", "bin", digest);
+      await mkdir(directory, { recursive: true });
+      await fakeAgent(directory, "claude");
+    }
+    expect(resolveFixAgent("claude", { env: testEnv(box), dataDir: box.dataDir })).toBeNull();
+  });
+
+  test.each(["current", "gh-latest", "gh"])("discovers managed gh in %s", async (layout) => {
+    const box = await sandbox();
+    const root = path.join(box.dataDir, "toolchains");
+    let expected: string;
+    if (layout === "current") {
+      const set = path.join(root, "bin", "abc123");
+      await mkdir(set, { recursive: true });
+      expected = await fakeAgent(set, "gh");
+      await symlink("abc123", path.join(root, "bin", "current"));
+    } else {
+      for (const version of ["2.9.0", "2.100.0"]) {
+        const dir = path.join(root, layout, version, ...(layout === "gh" ? ["darwin-arm64"] : []));
+        await mkdir(dir, { recursive: true });
+        await fakeAgent(dir, "gh");
+      }
+      expected = path.join(
+        root,
+        layout,
+        "2.100.0",
+        ...(layout === "gh" ? ["darwin-arm64"] : []),
+        "gh",
+      );
+    }
+    const facts = await factsFor(box);
+    expect(facts.managedGh).toBe(expected);
+    expect(buildFixPrompt(facts)).toContain(expected);
+  });
+
+  test("prefers activated gh over a newer gh-latest installation", async () => {
+    const box = await sandbox();
+    const activated = path.join(box.dataDir, "toolchains", "bin", "current");
+    const latest = path.join(box.dataDir, "toolchains", "gh-latest", "2.100.0");
+    await mkdir(activated, { recursive: true });
+    await mkdir(latest, { recursive: true });
+    const expected = await fakeAgent(activated, "gh");
+    await fakeAgent(latest, "gh");
+    expect((await factsFor(box)).managedGh).toBe(expected);
+  });
+});
+
+describe("diagnostic backend selection", () => {
+  test.each(["empty", "unrelated", "matching"])(
+    "handles %s saved connections without changing configuration",
+    async (kind) => {
+      const box = await sandbox();
+      const descriptor = path.join(box.dataDir, "backend-instance.json");
+      await writeFile(descriptor, JSON.stringify({ pid: process.pid }));
+      const configDir = path.join(box.root, "cli");
+      const configFile = path.join(configDir, "connections.json");
+      const config = JSON.stringify({
+        version: 1,
+        defaultConnection: "remote",
+        connections: {
+          remote: {
+            kind: "endpoint",
+            url: "https://elsewhere.example",
+            credentialFile: "/private/token",
+          },
+          ...(kind === "matching"
+            ? { local: { kind: "descriptor", descriptorPath: descriptor } }
+            : {}),
+        },
+      });
+      if (kind !== "empty") {
+        await mkdir(configDir);
+        await writeFile(configFile, config, { mode: 0o600 });
+      }
+      const facts = await factsFor(box);
+      const prompt = buildFixPrompt(facts);
+      if (kind === "matching") {
+        expect(facts.diagnosticConnection).toBe("local");
+        expect(prompt).toContain("host status --connection local");
+        expect(prompt).toContain("connection check --connection local");
+      } else {
+        expect(facts.diagnosticConnection).toBeNull();
+        expect(prompt).not.toContain("host status");
+        expect(prompt).not.toContain("connection check");
+        expect(prompt).toContain("No saved CLI connection was verified");
+      }
+      expect(prompt).not.toContain("elsewhere.example");
+      expect(prompt).not.toContain("/private/token");
+      if (kind === "empty") expect(existsSync(configDir)).toBe(false);
+      else expect(await readFile(configFile, "utf8")).toBe(config);
+    },
+  );
+});
+
+async function waitForFile(file: string): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (!existsSync(file)) {
+    if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${path.basename(file)}`);
+    await Bun.sleep(10);
+  }
+}
+
+test("live child suppresses parent SIGINT, receives termination signals, and releases listeners", async () => {
+  const box = await sandbox();
+  const agent = path.join(box.bin, "codex");
+  const ready = path.join(box.root, "ready");
+  const term = path.join(box.root, "term");
+  const interrupted = path.join(box.root, "interrupted");
+  const resultFile = path.join(box.root, "result.json");
+  await writeFile(
+    agent,
+    `#!/usr/bin/env bun
+import { writeFileSync } from "node:fs";
+process.on("SIGINT", () => writeFileSync(${JSON.stringify(interrupted)}, "unexpected"));
+process.on("SIGTERM", () => writeFileSync(${JSON.stringify(term)}, "forwarded"));
+process.on("SIGHUP", () => process.exit(7));
+setInterval(() => {}, 1000);
+writeFileSync(${JSON.stringify(ready)}, "ready");
+`,
+  );
+  await chmod(agent, 0o755);
+  const runner = path.join(box.root, "runner.ts");
+  await writeFile(
+    runner,
+    `
+import { runFixProcess } from ${JSON.stringify(path.resolve(import.meta.dir, "../src/client/fix.ts"))};
+const signals = ["SIGINT", "SIGTERM", "SIGHUP"];
+const before = signals.map(signal => process.listenerCount(signal));
+const status = await runFixProcess(["--fix", "codex", "--data-dir", ${JSON.stringify(box.dataDir)}], "2.23.0");
+await Bun.write(${JSON.stringify(resultFile)}, JSON.stringify({ status, before, after: signals.map(signal => process.listenerCount(signal)) }));
+`,
+  );
+  const child = Bun.spawn([process.execPath, runner], {
+    env: testEnv(box, { TMPDIR: box.tmp }),
+    stdin: "ignore",
+    stdout: "ignore",
+    stderr: "ignore",
+  });
+  try {
+    await waitForFile(ready);
+    child.kill("SIGINT");
+    // Wait for another forwarded signal to establish the runner stayed alive.
+    child.kill("SIGTERM");
+    await waitForFile(term);
+    expect(existsSync(interrupted)).toBe(false);
+    child.kill("SIGHUP");
+    await waitForFile(resultFile);
+    expect(await child.exited).toBe(0);
+    const result = JSON.parse(await readFile(resultFile, "utf8"));
+    expect(result.status).toBe(7);
+    expect(result.after).toEqual(result.before);
+    expect(await readdir(box.tmp)).toEqual([]);
+  } finally {
+    child.kill("SIGKILL");
+    await child.exited;
+  }
+});
+
+test("packaged launcher dispatches fix without importing a backend or creating data", async () => {
+  const box = await sandbox();
+  const packageDir = path.join(box.root, "package");
+  await mkdir(path.join(packageDir, "bin"), { recursive: true });
+  await mkdir(path.join(packageDir, "dist"));
+  await copyFile(
+    path.resolve(import.meta.dir, "../bin/orkestrator.js"),
+    path.join(packageDir, "bin", "orkestrator.js"),
+  );
+  await copyFile(
+    path.resolve(import.meta.dir, "../dist/client.js"),
+    path.join(packageDir, "dist", "client.js"),
+  );
+  await writeFile(
+    path.join(packageDir, "package.json"),
+    JSON.stringify({ type: "module", version: "2.23.0" }),
+  );
+  // Any accidental backend import fails this fixture immediately.
+  await writeFile(path.join(packageDir, "dist", "main.js"), 'throw new Error("BACKEND_IMPORTED");');
+  await fakeAgent(box.bin, "claude", 7);
+  const dataDir = path.join(box.root, "absent-data");
+  for (const [argv, expected] of [
+    [["--fix", "--help"], 0],
+    [["--fix", "grok"], 2],
+    [["--fix", "claude", "--data-dir", dataDir], 7],
+  ] as const) {
+    const child = Bun.spawn(
+      [process.execPath, path.join(packageDir, "bin", "orkestrator.js"), ...argv],
+      {
+        env: testEnv(box, { ORKESTRATOR_DATA_DIR: dataDir, TMPDIR: box.tmp }),
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const timer = setTimeout(() => child.kill("SIGKILL"), 10_000);
+    try {
+      const [stdout, stderr, status] = await Promise.all([
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+        child.exited,
+      ]);
+      expect({ argv, status }).toEqual({ argv, status: expected });
+      expect(stdout + stderr).not.toContain("BACKEND_IMPORTED");
+      expect(existsSync(dataDir)).toBe(false);
+      expect(existsSync(path.join(box.root, "cli"))).toBe(false);
+    } finally {
+      clearTimeout(timer);
+      child.kill("SIGKILL");
+      await child.exited;
+    }
+  }
+  expect(await readdir(box.tmp)).toEqual([]);
+  const record = JSON.parse(await readFile(box.record, "utf8"));
+  expect(record.args).toHaveLength(1);
+  expect(record.args[0]).toContain("orkestrator --fix claude");
 });

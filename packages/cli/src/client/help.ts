@@ -80,7 +80,7 @@ export function rootHelp(tree: CommandTree): string {
     "",
     "Other:",
     "  serve          Run the backend service (same as passing only service options)",
-    "  --fix AGENT    Open claude, codex, opencode or grok to diagnose an Orkestrator",
+    "  --fix AGENT    Open claude, codex or opencode to diagnose an Orkestrator",
     "                 problem and file a GitHub issue (`orkestrator --fix --help`)",
     "  help [COMMAND] Show help for a group or command",
     "  version        Print the client version",

@@ -9,28 +9,30 @@
  * directory. The agent runs in a fresh scratch directory that holds the issue
  * draft.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { mkdtemp, readdir, rmdir, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isHostVersion } from "@orkestrator/protocol/host-maintenance";
 import { readApplicationLogSettings } from "@orkestrator/protocol/node/application-logging";
 import {
   CLAUDE_PINNED_RUNTIME_ENV,
   OPENCODE_PINNED_RUNTIME_ENV,
 } from "@orkestrator/protocol/terminal-agent-launch";
-import { currentToolchainBinDir, toolchainRootDir } from "@orkestrator/toolchain/layout";
+import { defaultToolchainBinDir, toolchainRootDir } from "@orkestrator/toolchain/layout";
+import { CliConfigStore, defaultCliConfigDir } from "./config.js";
 import { defaultDataDir } from "../../../../apps/backend/src/data-dir.js";
 
 export const FIX_ISSUE_REPOSITORY = "orkestrator-ai/orkestrator-v2";
 
-export type FixAgentName = "claude" | "codex" | "opencode" | "grok";
+export type FixAgentName = "claude" | "codex" | "opencode";
 
 interface FixAgent {
   name: FixAgentName;
   displayName: string;
   /** Arguments that open an interactive session seeded with `prompt`. */
-  args(prompt: string, options: { dataDir: string | null }): string[];
-  /** Environment for the copy Orkestrator manages; a PATH install is the user's own. */
+  args(prompt: string, options: { logsDir: string | null }): string[];
+  /** Environment for managed copies, including those found on PATH. */
   managedEnv?: Readonly<Record<string, string>>;
   /** Environment every copy needs. */
   env?: Readonly<Record<string, string>>;
@@ -40,10 +42,9 @@ export const FIX_AGENTS: readonly FixAgent[] = [
   {
     name: "claude",
     displayName: "Claude Code",
-    // Reading the data directory is the point of the session, so grant it up
-    // front instead of prompting for every log file. `--add-dir` is variadic,
-    // so the prompt must come before it or Claude reads it as a directory.
-    args: (prompt, { dataDir }) => [prompt, ...(dataDir ? ["--add-dir", dataDir] : [])],
+    // Only logs are pre-authorized; the data directory also holds credentials.
+    // `--add-dir` is variadic, so the prompt must precede it.
+    args: (prompt, { logsDir }) => [prompt, ...(logsDir ? ["--add-dir", logsDir] : [])],
     managedEnv: CLAUDE_PINNED_RUNTIME_ENV,
   },
   { name: "codex", displayName: "Codex", args: (prompt) => [prompt] },
@@ -53,7 +54,6 @@ export const FIX_AGENTS: readonly FixAgent[] = [
     args: (prompt) => ["--prompt", prompt],
     env: OPENCODE_PINNED_RUNTIME_ENV,
   },
-  { name: "grok", displayName: "Grok Build", args: (prompt) => [prompt] },
 ];
 
 const AGENT_LIST = FIX_AGENTS.map((agent) => agent.name).join(", ");
@@ -159,8 +159,24 @@ export function resolveFixAgent(
 ): ResolvedFixAgent | null {
   const agent = FIX_AGENTS.find((candidate) => candidate.name === name)!;
   const onPath = Bun.which(agent.name, { PATH: options.env.PATH ?? "" });
-  if (onPath) return { agent, executable: onPath, source: "path" };
-  const managed = path.join(currentToolchainBinDir(options.dataDir), agent.name);
+  const managed = path.join(defaultToolchainBinDir(options.dataDir), agent.name);
+  if (onPath) {
+    // PATH precedence chooses the executable, not whether it needs pin protection.
+    let isManaged = false;
+    try {
+      const root = realpathSync(toolchainRootDir(options.dataDir));
+      const target = realpathSync(onPath);
+      const relative = path.relative(root, target);
+      isManaged =
+        (!relative.startsWith(`..${path.sep}`) &&
+          relative !== ".." &&
+          !path.isAbsolute(relative)) ||
+        (existsSync(managed) && target === realpathSync(managed));
+    } catch {
+      // No managed installation to compare against.
+    }
+    return { agent, executable: onPath, source: isManaged ? "managed" : "path" };
+  }
   if (existsSync(managed)) return { agent, executable: managed, source: "managed" };
   return null;
 }
@@ -184,6 +200,7 @@ export interface FixFacts {
   backend: { appVersion?: string; startedAt?: string; pid?: number; running: boolean } | null;
   toolchainBinDir: string | null;
   managedGh: string | null;
+  diagnosticConnection: string | null;
   desktopApp: string | null;
 }
 
@@ -239,14 +256,48 @@ function backendInstance(dataDir: string): FixFacts["backend"] {
 }
 
 async function managedGhBinary(dataDir: string): Promise<string | null> {
+  const activated = path.join(defaultToolchainBinDir(dataDir), "gh");
+  if (existsSync(activated)) return activated;
+  const latestRoot = path.join(toolchainRootDir(dataDir), "gh-latest");
+  const latestVersions = await readdir(latestRoot).catch(() => [] as string[]);
+  for (const version of latestVersions
+    .filter(isHostVersion)
+    .sort((left, right) => right.localeCompare(left, undefined, { numeric: true }))) {
+    const candidate = path.join(latestRoot, version, "gh");
+    if (existsSync(candidate)) return candidate;
+  }
   const root = path.join(toolchainRootDir(dataDir), "gh");
   const versions = await readdir(root).catch(() => [] as string[]);
-  for (const version of versions.sort().reverse()) {
+  for (const version of versions.sort((left, right) =>
+    right.localeCompare(left, undefined, { numeric: true }),
+  )) {
     const platforms = await readdir(path.join(root, version)).catch(() => [] as string[]);
     for (const platform of platforms) {
       const candidate = path.join(root, version, platform, "gh");
       if (existsSync(candidate)) return candidate;
     }
+  }
+  return null;
+}
+
+/** Only a descriptor for this data directory establishes a local connection match. */
+async function diagnosticConnection(
+  dataDir: string,
+  env: NodeJS.ProcessEnv,
+): Promise<string | null> {
+  try {
+    const descriptor = realpathSync(path.join(dataDir, "backend-instance.json"));
+    const config = await new CliConfigStore(defaultCliConfigDir(env)).read();
+    for (const [name, connection] of Object.entries(config.connections)) {
+      if (connection.kind !== "descriptor") continue;
+      try {
+        if (realpathSync(connection.descriptorPath) === descriptor) return name;
+      } catch {
+        // A stale saved connection does not identify this installation.
+      }
+    }
+  } catch {
+    // Missing descriptors or configuration leave local evidence as the only source.
   }
   return null;
 }
@@ -272,7 +323,7 @@ export async function collectFixFacts(options: {
 }): Promise<FixFacts> {
   const { resolved, dataDir, env } = options;
   const logsDir = path.join(dataDir, "logs");
-  const binDir = currentToolchainBinDir(dataDir);
+  const binDir = defaultToolchainBinDir(dataDir);
   return {
     agent: {
       name: resolved.agent.name,
@@ -298,6 +349,7 @@ export async function collectFixFacts(options: {
     backend: backendInstance(dataDir),
     toolchainBinDir: existsSync(binDir) ? binDir : null,
     managedGh: await managedGhBinary(dataDir),
+    diagnosticConnection: await diagnosticConnection(dataDir, env),
     desktopApp: desktopAppPath(os.homedir()),
   };
 }
@@ -368,7 +420,9 @@ export function buildFixPrompt(facts: FixFacts): string {
     "Useful sources:",
     "- Log files: `orkestrator-ai-YYYY-MM-DD.log` is the desktop app (it includes its backend's output), `orkestrator-backend-YYYY-MM-DD.log` a standalone backend; a busy day continues in `.1.log`, `.2.log`, and so on. Search around the time of the problem (errors, warnings, stack traces, the environment or session name) rather than reading whole files.",
     "- If debug logging is off or the logs predate the problem, ask me to turn on Settings → Debug → Save Logs for Debugging, reproduce the problem, and tell you when I have.",
-    `- \`${facts.cliCommand} host status\` and \`${facts.cliCommand} connection check\` describe a running backend; add \`--json\` for full detail. They never start or change anything.`,
+    facts.diagnosticConnection
+      ? `- Run \`${facts.cliCommand} host status --connection ${facts.diagnosticConnection}\` and \`${facts.cliCommand} connection check --connection ${facts.diagnosticConnection}\` for this installation; add \`--json\` for detail. They never start or change anything.`
+      : "- No saved CLI connection was verified for this data directory. Use the local evidence above; do not run backend status commands against the saved default or change CLI configuration.",
     "- Docker environments: `docker version`, `docker ps -a`, and `docker logs --tail 200 <container>` for the affected container.",
     "- Versions: `<agent> --version` for the agents involved, `git --version`, `gh --version`; on macOS, `defaults read /Applications/OrkestratorV2.app/Contents/Info.plist CFBundleShortVersionString` for the desktop app.",
     "- `config.json` in the data directory holds settings. Read only the keys that bear on the problem.",
@@ -473,56 +527,68 @@ export async function runFix(
     );
   }
 
-  const workDir = await mkdtemp(path.join(options.tmpDir ?? os.tmpdir(), "orkestrator-fix-"));
-  const facts = await collectFixFacts({
-    resolved,
-    version: options.version,
-    dataDir,
-    workDir,
-    env: io.env,
-  });
-  const agent = resolved.agent;
-  const env: NodeJS.ProcessEnv = {
-    ...io.env,
-    ...agent.env,
-    ...(resolved.source === "managed" ? agent.managedEnv : {}),
-  };
-  io.stderr(
-    `Starting ${agent.displayName} to help you report a problem with Orkestrator.\n` +
-      `It works in ${workDir} and will ask before filing anything.\n\n`,
-  );
-
-  const child = (options.spawn ?? defaultSpawn)(
-    [
-      resolved.executable,
-      ...agent.args(buildFixPrompt(facts), { dataDir: facts.dataDirExists ? dataDir : null }),
-    ],
-    { cwd: workDir, env },
-  );
-  // The agent owns the terminal: Ctrl+C is the agent's to interpret, and this
-  // process must outlive it rather than orphan a TUI on the user's terminal.
-  const ignore = () => {};
-  const forward = (signal: NodeJS.Signals) => child.kill(signal);
-  process.on("SIGINT", ignore);
-  process.on("SIGTERM", forward);
-  process.on("SIGHUP", forward);
-  let exitCode: number;
+  let workDir: string | undefined;
   try {
-    exitCode = await child.exited;
-  } finally {
-    process.off("SIGINT", ignore);
-    process.off("SIGTERM", forward);
-    process.off("SIGHUP", forward);
-  }
+    workDir = await mkdtemp(path.join(options.tmpDir ?? os.tmpdir(), "orkestrator-fix-"));
 
-  // Keep the directory only when the agent left something in it.
-  const remaining = await readdir(workDir).catch(() => [] as string[]);
-  if (remaining.length === 0) {
-    await rmdir(workDir).catch(() => {});
-  } else {
-    io.stderr(`\nNotes and the issue draft are in ${workDir}\n`);
+    const facts = await collectFixFacts({
+      resolved,
+      version: options.version,
+      dataDir,
+      workDir,
+      env: io.env,
+    });
+    const agent = resolved.agent;
+    const env: NodeJS.ProcessEnv = {
+      ...io.env,
+      ...agent.env,
+      ...(resolved.source === "managed" ? agent.managedEnv : {}),
+    };
+    io.stderr(
+      `Starting ${agent.displayName} to help you report a problem with Orkestrator.\n` +
+        `It works in ${workDir} and will ask before filing anything.\n\n`,
+    );
+
+    const child = (options.spawn ?? defaultSpawn)(
+      [
+        resolved.executable,
+        ...agent.args(buildFixPrompt(facts), {
+          logsDir: existsSync(facts.logsDir) ? facts.logsDir : null,
+        }),
+      ],
+      { cwd: workDir, env },
+    );
+    // The agent owns the terminal: Ctrl+C is the agent's to interpret, and this
+    // process must outlive it rather than orphan a TUI on the user's terminal.
+    const ignore = () => {};
+    const forward = (signal: NodeJS.Signals) => child.kill(signal);
+    process.on("SIGINT", ignore);
+    process.on("SIGTERM", forward);
+    process.on("SIGHUP", forward);
+    let exitCode: number;
+    try {
+      exitCode = await child.exited;
+    } finally {
+      process.off("SIGINT", ignore);
+      process.off("SIGTERM", forward);
+      process.off("SIGHUP", forward);
+    }
+
+    return exitCode;
+  } catch {
+    // Spawn errors can contain command arguments (including the whole prompt).
+    return failure(io, "agent-failed", "Unable to start or complete the reporting agent", 1);
+  } finally {
+    if (workDir) {
+      // Retain drafts on both success and failure, but remove empty scratch space.
+      const remaining = await readdir(workDir).catch(() => [] as string[]);
+      if (remaining.length === 0) {
+        await rmdir(workDir).catch(() => {});
+      } else {
+        io.stderr(`\nNotes and the issue draft are in ${workDir}\n`);
+      }
+    }
   }
-  return exitCode;
 }
 
 /** Bind the real process environment and streams. */

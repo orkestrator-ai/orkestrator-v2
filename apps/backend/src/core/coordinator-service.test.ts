@@ -704,6 +704,50 @@ describe("project coordinator", () => {
     expect(snapshot!.workspace.repositoryContextRevision).toBeGreaterThan(0);
   });
 
+  test("operation markers in a newline-containing Git directory block linked-worktree switches", async () => {
+    const repository = path.join(root, "repository\nmetadata");
+    await fs.rename(checkout, repository);
+    await runCommand("git", ["branch", "other"], { cwd: repository });
+    await runCommand("git", ["worktree", "add", "-b", "linked", checkout], {
+      cwd: repository,
+    });
+    const project = await storage.addProject(
+      createProject("https://example.invalid/repo.git", checkout),
+    );
+    const git = new ProjectGitService(storage);
+    const initial = await git.status(project.id);
+    expect(initial).toMatchObject({ branch: "linked", mergeInProgress: false });
+
+    const gitDirectory = (
+      await runCommand("git", ["rev-parse", "--absolute-git-dir"], { cwd: checkout })
+    ).stdout.trim();
+    expect(gitDirectory).toContain("repository\nmetadata");
+    expect(gitDirectory).not.toBe(path.join(checkout, ".git"));
+    const marker = path.join(gitDirectory, "MERGE_HEAD");
+    await fs.writeFile(marker, `${initial.headCommit!}\n`);
+
+    expect(await git.status(project.id)).toMatchObject({
+      mergeInProgress: true,
+      repositoryOperationBlockedReason: "Finish the current merge first.",
+      trackedChanges: 0,
+      untrackedChanges: 0,
+    });
+    await expect(git.prepareSwitchBranch(project.id, "refs/heads/other")).rejects.toThrow(
+      "current merge",
+    );
+    await expect(git.switchBranch(project.id, "refs/heads/other")).rejects.toThrow("current merge");
+    expect(
+      (await runCommand("git", ["branch", "--show-current"], { cwd: checkout })).stdout.trim(),
+    ).toBe("linked");
+    expect(await fs.readFile(marker, "utf8")).toBe(`${initial.headCommit!}\n`);
+
+    await fs.rm(marker);
+    expect(await git.switchBranch(project.id, "refs/heads/other")).toMatchObject({
+      branch: "other",
+      mergeInProgress: false,
+    });
+  });
+
   /** A coordinator-owned project on the template checkout, with a second branch `other`. */
   async function discardFixture() {
     await runCommand("git", ["branch", "other"], { cwd: checkout });

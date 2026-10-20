@@ -500,7 +500,7 @@ async function expandStop(list: Locator, trail: Trail, stop: number): Promise<vo
   const name = trail.files[stop - 1]!.replace(".txt", "");
   // A folded tool group shows only its newest call; open the rendered ones so
   // the stop's own row is reachable.
-  const folded = list.getByRole("button", { name: /^Show \d+ tool calls$/ });
+  const folded = list.getByRole("button", { name: /^Show \d+ tool calls:/ });
   for (let opened = 0; opened < 20 && (await folded.count()) > 0; opened += 1) {
     await folded.first().click();
   }

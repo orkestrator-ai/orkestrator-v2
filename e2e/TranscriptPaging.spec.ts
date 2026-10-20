@@ -31,9 +31,9 @@ for (const view of ["native", "reviewer"]) {
           // Retried, as an activation that lands while the freshly mounted list
           // is still settling its row sizes can miss the trigger.
           await expect(async () => {
-            const show = list.getByRole("button", { name: /^Show \d+ tool calls$/ });
+            const show = list.getByRole("button", { name: /^Show \d+ tool calls:/ });
             if ((await show.count()) > 0) await show.first().press("Enter");
-            await expect(list.getByRole("button", { name: /^Fold \d+ tool calls$/ })).toBeVisible({
+            await expect(list.getByRole("button", { name: /^Fold \d+ tool calls:/ })).toBeVisible({
               timeout: 1_000,
             });
           }).toPass();

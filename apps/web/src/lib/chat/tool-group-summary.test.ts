@@ -95,4 +95,30 @@ describe("shouldFoldToolGroup", () => {
       shouldFoldToolGroup([tool(), tool(), tool({ toolName: "createPlan", toolArgs: {} })]),
     ).toBe(false);
   });
+  test("keeps pending questions visible, including provider question-shaped tools", () => {
+    for (const toolName of ["AskUserQuestion", "question"]) {
+      const question = tool({
+        toolName,
+        toolState: "pending",
+        toolArgs: { questions: [{ question: "Which approach?", options: ["Simple"] }] },
+      });
+      expect(shouldFoldToolGroup([tool(), question, tool()])).toBe(false);
+      expect(shouldFoldToolGroup([tool(), { ...question, toolState: "success" }, tool()])).toBe(
+        true,
+      );
+      expect(
+        shouldFoldToolGroup([tool(), { ...question, toolDenied: { reason: "cancelled" } }, tool()]),
+      ).toBe(true);
+    }
+  });
+
+  test("keeps a pending AskUserQuestion visible before its arguments arrive", () => {
+    expect(
+      shouldFoldToolGroup([
+        tool(),
+        tool(),
+        tool({ toolName: "AskUserQuestion", toolState: "pending", toolArgs: {} }),
+      ]),
+    ).toBe(false);
+  });
 });

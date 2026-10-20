@@ -1,4 +1,5 @@
 import { isPlanTool } from "@/lib/plan-tool";
+import { parseQuestionToolArgs } from "@/lib/question-tool";
 import type { NativeMessagePart, NativeToolInvocationPart } from "./native-message-types";
 
 /**
@@ -75,12 +76,20 @@ export function summarizeToolGroup(
 
 /**
  * Whether a tool group opens folded. A plan call never hides inside one: the
- * plan is what the reader is asked to review, so its group stays open.
+ * plan is what the reader is asked to review, so its group stays open. Pending
+ * questions also stay visible until answered or denied.
  */
 export function shouldFoldToolGroup(parts: readonly NativeMessagePart[]): boolean {
   const tools = toolCalls(parts);
   return (
     tools.length >= TOOL_GROUP_FOLD_MIN_CALLS &&
-    !tools.some((tool) => !tool.toolDenied && isPlanTool(tool.toolName))
+    !tools.some(
+      (tool) =>
+        !tool.toolDenied &&
+        (isPlanTool(tool.toolName) ||
+          (tool.toolState === "pending" &&
+            (tool.toolName === "AskUserQuestion" ||
+              parseQuestionToolArgs(tool.toolArgs) !== null))),
+    )
   );
 }

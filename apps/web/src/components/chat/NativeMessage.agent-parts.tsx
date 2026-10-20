@@ -1453,23 +1453,11 @@ function FoldedToolGroup({
   const groupKey = (toolKey = `part:${partKey}`) =>
     `native-tool-group:${toolKey.startsWith("id:") ? JSON.stringify([transcriptScope]) : messageScope}:${toolKey}`;
   /*
-   * Remembered under both ends of the group. A streaming turn appends calls,
-   * which keeps the first; paging in earlier history coalesces older calls in
-   * front, which keeps the last. Either alone would fold an opened group again
-   * under one of the two. An open group hands its state on to a new end as
-   * soon as one arrives, so a group that streamed and then paged stays open.
+   * Remember every member: paging and streaming can change both ends in one
+   * update. The message-local fallback also bridges calls acquiring provider
+   * ids. All aliases are cleared together when the reader folds the group.
    */
-  const [firstOpen, setFirstOpen] = useMessagePartExpansion(groupKey(toolKeys[0]));
-  const [lastOpen, setLastOpen] = useMessagePartExpansion(groupKey(toolKeys.at(-1)));
-  const isOpen = firstOpen || lastOpen;
-  useEffect(() => {
-    if (firstOpen && !lastOpen) setLastOpen(true);
-    else if (lastOpen && !firstOpen) setFirstOpen(true);
-  }, [firstOpen, lastOpen, setFirstOpen, setLastOpen]);
-  const setIsOpen = (open: boolean) => {
-    setFirstOpen(open);
-    setLastOpen(open);
-  };
+  const [isOpen, setIsOpen] = useMessagePartExpansion([groupKey(), ...toolKeys.map(groupKey)]);
   const summary = summarizeToolGroup(part.parts);
   if (!summary) return null;
 
@@ -1497,10 +1485,10 @@ function FoldedToolGroup({
         Open, the call's own row carries it instead.
       */}
       <div className="px-2 py-0.5" data-transcript-part-id={isOpen ? undefined : latestPartId}>
-        <CollapsibleTrigger
-          aria-label={`${isOpen ? "Fold" : "Show"} ${countLabel}`}
-          className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
-        >
+        <CollapsibleTrigger className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground">
+          <span className="sr-only">
+            {isOpen ? "Fold" : "Show"} {countLabel}:{" "}
+          </span>
           <ChevronRight
             className={cn("h-3 w-3 shrink-0 transition-transform", isOpen && "rotate-90")}
           />

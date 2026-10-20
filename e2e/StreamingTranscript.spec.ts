@@ -133,11 +133,13 @@ test("a tool row outside the render window remains reachable after a long-sessio
   // Retried: the jump keeps correcting the rows around it for a while, and an
   // activation that lands while its row is re-laid out can miss the trigger.
   await expect(async () => {
-    const show = historicToolRow.getByRole("button", { name: "Show 16 tool calls" });
+    const show = historicToolRow.getByRole("button", { name: /^Show 16 tool calls:/ });
     if ((await show.count()) > 0) await show.press("Enter");
-    await expect(historicToolRow.getByRole("button", { name: "Fold 16 tool calls" })).toBeVisible({
-      timeout: 1_000,
-    });
+    await expect(historicToolRow.getByRole("button", { name: /^Fold 16 tool calls:/ })).toBeVisible(
+      {
+        timeout: 1_000,
+      },
+    );
   }).toPass();
   await expect(historicToolRow.getByRole("button", { name: "Exec Command success" })).toHaveCount(
     16,

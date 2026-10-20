@@ -1789,7 +1789,7 @@ describe("NativeMessage", () => {
       </TerminalContextHarness>,
     );
     // Three calls fold into one line; the rows are inside it.
-    fireEvent.click(screen.getByRole("button", { name: "Show 3 tool calls" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Show 3 tool calls:/ }));
 
     const created = screen.getByRole("button", { name: /write created\.ts \+1 success/i });
     const deleted = screen.getByRole("button", { name: /edit deleted\.ts -1 success/i });
@@ -2122,7 +2122,7 @@ describe("NativeMessage", () => {
     };
 
     render(<NativeMessage message={message} />);
-    fireEvent.click(screen.getByRole("button", { name: "Show 5 tool calls" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Show 5 tool calls:/ }));
 
     expect(screen.getByRole("button", { name: /glob src\/\*\*\/\*\.tsx success/i })).toBeTruthy();
     expect(screen.getByRole("button", { name: /grep todo\|fixme success/i })).toBeTruthy();
@@ -2690,7 +2690,7 @@ describe("NativeMessage", () => {
     };
 
     render(<NativeMessage message={message} />);
-    fireEvent.click(screen.getByRole("button", { name: "Show 3 tool calls" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Show 3 tool calls:/ }));
 
     // The pending row, and the group line above it that reports it.
     const running = screen.getAllByText("running...");

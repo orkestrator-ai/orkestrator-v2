@@ -75,7 +75,7 @@ import {
   assertOkWithErrorDetail,
   throwExplainedTurnFailure,
   boundedJson,
-  bridgeErrorDetail,
+  promptDispatchUnavailableError,
   bridgeFetch,
   normalizeProviderReadiness,
   fetchSessionSnapshot,
@@ -357,12 +357,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       response.status === 409 ||
       isTransientHttpStatus(response.status)
     ) {
-      const detail = await bridgeErrorDetail(response, "prompt dispatch");
-      throw new ProviderUnavailableError(
-        `${this.agent} prompt dispatch is temporarily unavailable (HTTP ${response.status})${
-          detail ? `: ${detail}` : ""
-        }`,
-      );
+      throw await promptDispatchUnavailableError(this.agent, response);
     }
     if (!response.ok) {
       // Bridges answer terminal rejections with an actionable message. Surface it

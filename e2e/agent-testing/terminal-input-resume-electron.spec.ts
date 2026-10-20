@@ -150,7 +150,9 @@ test("Electron keeps a lost terminal write fenced until Resume, without restarti
     await installFetchFault(electronApp);
     const window = await electronApp.firstWindow();
     window.setDefaultTimeout(20_000);
-    await expect(window).toHaveTitle(profile.electronTitle);
+    // index.html's title stays until Vite serves and runs renderer-entry; under
+    // host load that startup takes longer than expect's 5 s default.
+    await expect(window).toHaveTitle(profile.electronTitle, { timeout: 60_000 });
     const invoke = <T>(command: string, args: Record<string, unknown> = {}) =>
       window.evaluate(
         ({ command, args }) =>

@@ -233,8 +233,23 @@ function sendFingerprint(input: AgentMailSendInput): string {
     .digest("hex");
 }
 
+let lastIdTime = 0;
+let idSequence = 0;
+
+/**
+ * Ids sort in send order: a clock that never runs backwards, then a sequence
+ * within one millisecond, then a random suffix. Without the sequence, two
+ * sends in the same millisecond ordered by their random suffixes.
+ */
 function sortableId(): string {
-  return `${Date.now().toString(36).padStart(10, "0")}-${randomUUID()}`;
+  const now = Date.now();
+  if (now > lastIdTime) {
+    lastIdTime = now;
+    idSequence = 0;
+  } else {
+    idSequence += 1;
+  }
+  return `${lastIdTime.toString(36).padStart(10, "0")}-${idSequence.toString(36).padStart(4, "0")}-${randomUUID()}`;
 }
 
 /**

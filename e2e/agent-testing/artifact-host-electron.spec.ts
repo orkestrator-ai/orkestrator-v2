@@ -252,7 +252,9 @@ test("Run interactive opens a sandboxed host view that relays readiness, size an
     launchedApp = app;
     dismissStartupDialogs(app);
     const window = await app.firstWindow();
-    await expect(window).toHaveTitle(profile.electronTitle);
+    // index.html's title stays until Vite serves and runs renderer-entry; under
+    // host load that startup takes longer than expect's 5 s default.
+    await expect(window).toHaveTitle(profile.electronTitle, { timeout: 60_000 });
     await expect(window.getByRole("button", { name: "Global settings" })).toBeVisible({
       timeout: 60_000,
     });

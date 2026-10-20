@@ -95,3 +95,21 @@ and view-state limits; no unexpected backend commands occurred. Report:
 The disposable baseline checkout was removed after the benchmark. All test
 profiles created for this review were stopped and reset. No iOS or standalone CLI scenario suite was selected: those flows
 were not changed; ordinary CLI/package tests are in the aggregate suite.
+
+## Follow-up: validation failures fixed
+
+The three failures left in the validation above were fixed afterwards.
+
+| Failure | Fix and evidence |
+| --- | --- |
+| Agent-mail same-millisecond order ([0504](../tests/flaky-tests/0504-agent-mail-conversation-same-millisecond-order.md)) | Message ids carry a per-process sequence after a monotonic millisecond prefix, so ties sort in send order. A frozen-clock regression fails on the old id and passes now; the five agent-mail owners pass (109 tests). Resolved. |
+| Electron startup title ([0470](../tests/flaky-tests/0470-electron-launch-title-timeout-under-load.md)) | The first title after launch waits for Vite to serve the renderer entry. The three failing owners used the 5-second default; they now use the 60 seconds the service-preview and annotation specs already gave this wait. `test:agent:electron` passed (117.1 s), at low host load only. Resolved; reopen on a loaded recurrence. |
+| Docker fixture Git ownership | Git reads `safe.directory` only from global or system config, so `GIT_CONFIG_*` environment cannot fix it. The backend now sets `ORKESTRATOR_AGENT_TEST_GIT_REMOTE` only when it mounts the agent-test origin, and `workspace-setup.sh` then trusts only the fixed `/orkestrator-agent-test-origin.git` path. Production containers get no trust entry. In the real image, a root-owned mount cloned by `node` fails without the trust and clones with it. Unit coverage is in `commands-process-coverage.test.ts` and `workspace-setup-preserve.test.ts`. |
+
+Docker fixture rerun: `rtfix-docker` profile started with the documented
+`--fixture --fixture-environments local,container` command (the all-platform
+default), image rebuilt with `docker:build:dev`. `test:agent:docker`: 6 passed,
+1 opt-in case skipped (live Claude approval), 0 failed. That includes the
+deletion case and the settings and rebuild cases where the earlier run hit the
+Claude sign-in modal; the modal did not recur. The profile was stopped and reset.
+`mise run check` passed.

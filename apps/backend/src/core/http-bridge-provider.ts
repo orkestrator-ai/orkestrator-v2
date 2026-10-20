@@ -75,6 +75,7 @@ import {
   assertOkWithErrorDetail,
   throwExplainedTurnFailure,
   boundedJson,
+  promptDispatchUnavailableError,
   bridgeFetch,
   normalizeProviderReadiness,
   fetchSessionSnapshot,
@@ -349,18 +350,15 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         `${this.agent} prompt dispatch outcome is unknown (HTTP ${response.status})`,
       );
     }
-    // A session can briefly disappear while a bridge reconciles a restarted
-    // provider, and an idle status read can race with another client starting a
-    // turn. Both are retryable dispatch races, not validation rejections that
-    // should park the user's prompt indefinitely.
+    // Missing sessions after restart and raced turns are retryable refusals.
+    // Preserve the bridge's reason: changing a launch-only setting can require
+    // the user to wait for background work to finish or stop it first.
     if (
       response.status === 404 ||
       response.status === 409 ||
       isTransientHttpStatus(response.status)
     ) {
-      throw new ProviderUnavailableError(
-        `${this.agent} prompt dispatch is temporarily unavailable (HTTP ${response.status})`,
-      );
+      throw await promptDispatchUnavailableError(this.agent, response);
     }
     if (!response.ok) {
       // Bridges answer terminal rejections with an actionable message. Surface it

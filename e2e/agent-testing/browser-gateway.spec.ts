@@ -1718,6 +1718,101 @@ test("coordinator Multi Review action reconciles a mounted renderer and survives
   }
 });
 
+test("Docker fixture prepare-only trusts a differently owned origin before cloning as node", () => {
+  test.skip(process.env.ORKESTRATOR_AGENT_TEST_DOCKER !== "1", "requires a development image");
+  const runtime = resolveRuntimeProfile({
+    repositoryRoot,
+    requestedId: profile,
+    flavor: "agent-test",
+  });
+  const created = spawnSync(
+    "docker",
+    [
+      "create",
+      "--network",
+      "none",
+      "--label",
+      "app=orkestrator-v2",
+      "--label",
+      `orkestrator-owner=prepare-only-${profile}`,
+      "--user",
+      "root",
+      "--mount",
+      `type=bind,source=${path.join(repositoryRoot, "docker")},target=/setup-under-test,readonly`,
+      "--entrypoint",
+      "bash",
+      runtime.dockerImage,
+      "-euc",
+      `
+# Build a committed root-owned origin and an empty workspace owned by node.
+mkdir -p /tmp/fixture-seed /tmp/prepare-home /workspace /run/orkestrator
+git -C /tmp/fixture-seed init --initial-branch=main
+printf 'fixture contents\\n' > /tmp/fixture-seed/tracked.txt
+printf '%s\\n' '{"setupContainer":"touch /workspace/setup-ran"}' > /tmp/fixture-seed/orkestrator-ai.json
+git -C /tmp/fixture-seed add .
+git -C /tmp/fixture-seed -c user.name=Fixture -c user.email=fixture@example.invalid commit -m fixture
+git clone --bare /tmp/fixture-seed /orkestrator-agent-test-origin.git
+chown -R node:node /workspace /tmp/prepare-home
+touch /tmp/prepare-home/.claude.json
+chown node:node /tmp/prepare-home/.claude.json
+jq -n --arg start "$(awk '{print $22}' /proc/1/stat)" '{pid1Start:$start,phase:"ready"}' > /run/orkestrator/boot-status.json
+
+as_node() {
+    /usr/sbin/runuser -u node -- env -i HOME=/tmp/prepare-home PATH=/usr/local/bin:/usr/bin:/bin GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 "$@"
+}
+test "$(stat -c %u /orkestrator-agent-test-origin.git)" != "$(id -u node)"
+# Prove ownership protection is active before exercising the real setup script.
+if as_node git clone /orkestrator-agent-test-origin.git /tmp/untrusted-clone > /tmp/clone-denied.log 2>&1; then
+    echo 'Expected the untrusted clone to be refused' >&2
+    exit 1
+fi
+grep -q 'dubious ownership' /tmp/clone-denied.log
+
+as_node env ORKESTRATOR_AGENT_TEST_GIT_REMOTE=/orkestrator-agent-test-origin.git GIT_URL=/orkestrator-agent-test-origin.git GIT_BRANCH=main bash /setup-under-test/workspace-setup.sh --prepare-only
+test "$(as_node git config --global --get-all safe.directory)" = /orkestrator-agent-test-origin.git
+test "$(as_node git -C /workspace rev-parse HEAD)" = "$(git -C /tmp/fixture-seed rev-parse HEAD)"
+test "$(cat /workspace/tracked.txt)" = 'fixture contents'
+test "$(stat -c %u /workspace/.git)" = "$(id -u node)"
+test ! -e /workspace/setup-ran
+test ! -e /tmp/.workspace-setup-complete
+`,
+    ],
+    { encoding: "utf8", timeout: 30_000 },
+  );
+  expect(created.status, created.stderr).toBe(0);
+  const containerId = created.stdout.trim();
+  expect(containerId).toBeTruthy();
+  try {
+    const prepared = spawnSync("docker", ["start", "--attach", containerId], {
+      encoding: "utf8",
+      timeout: 60_000,
+      killSignal: "SIGKILL",
+    });
+    expect(prepared.error, prepared.stderr).toBeUndefined();
+    expect(prepared.status, `${prepared.stdout}\n${prepared.stderr}`).toBe(0);
+    const exited = spawnSync(
+      "docker",
+      ["inspect", "--format", "{{.State.ExitCode}}", containerId],
+      {
+        encoding: "utf8",
+        timeout: 10_000,
+      },
+    );
+    expect(exited.status, exited.stderr).toBe(0);
+    expect(exited.stdout.trim(), `${prepared.stdout}\n${prepared.stderr}`).toBe("0");
+    expect(prepared.stdout).toContain("Clone successful!");
+    expect(prepared.stderr).not.toContain("dubious ownership");
+    expect(prepared.stdout).toContain("ORKESTRATOR_PREPARE_OK");
+    expect(prepared.stdout).not.toContain("=== Running Container Setup ===");
+  } finally {
+    const removed = spawnSync("docker", ["rm", "--force", containerId], {
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+    expect(removed.status, removed.stderr).toBe(0);
+  }
+});
+
 test("Docker fixture rejects containers owned by another profile", async ({ page }) => {
   test.skip(
     process.env.ORKESTRATOR_AGENT_TEST_DOCKER !== "1",

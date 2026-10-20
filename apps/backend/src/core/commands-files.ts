@@ -784,6 +784,12 @@ export async function getContainerGitStatusDetailed(
  * The three git reads are independent of each other, so they run together: the
  * status read used to wait for both diffs to finish before starting, which cost
  * a whole round of process spawn and git startup for nothing.
+ *
+ * The reads are read-only: `--no-optional-locks` stops `git status` from
+ * opportunistically refreshing and rewriting the index. That rewrite is an
+ * index change the worktree watcher must treat as a hint, so without the flag
+ * every watcher-driven scan scheduled its own redundant rescan (and took
+ * `index.lock`, which can collide with the user's own Git commands).
  */
 export async function getLocalGitStatusDetailed(
   worktreePath: string,
@@ -796,19 +802,18 @@ export async function getLocalGitStatusDetailed(
 
   const base = await resolveLocalGitBase(worktreePath, targetBranch, fetches);
   const endRef = includeUncommitted ? [] : ["HEAD"];
+  const git = ["--no-optional-locks", "-C", worktreePath];
   const [nameStatus, numstat, porcelain] = await Promise.all([
-    runCommand("git", ["-C", worktreePath, "diff", "--name-status", "-z", "-M", base, ...endRef], {
+    runCommand("git", [...git, "diff", "--name-status", "-z", "-M", base, ...endRef], {
       timeoutMs: 60_000,
     }),
-    runCommand("git", ["-C", worktreePath, "diff", "--numstat", "-z", "-M", base, ...endRef], {
+    runCommand("git", [...git, "diff", "--numstat", "-z", "-M", base, ...endRef], {
       timeoutMs: 60_000,
     }),
     includeUncommitted
-      ? runCommand(
-          "git",
-          ["-C", worktreePath, "status", "--porcelain=v1", "-z", "--untracked-files=all"],
-          { timeoutMs: 60_000 },
-        )
+      ? runCommand("git", [...git, "status", "--porcelain=v1", "-z", "--untracked-files=all"], {
+          timeoutMs: 60_000,
+        })
       : Promise.resolve({ stdout: "" }),
   ]);
 

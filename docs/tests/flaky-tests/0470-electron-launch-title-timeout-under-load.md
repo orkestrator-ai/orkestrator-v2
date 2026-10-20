@@ -1,7 +1,7 @@
 # Electron launch title check times out under heavy host load
 
 - **ID:** 0470
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-18
 - **Tests:**
   - `real Electron main process shares one backend across independent windows`
@@ -90,3 +90,20 @@ Failure evidence: `orkestrator-test-run.Q4hGyo/review-electron.log.gz` under the
 host temporary directory; screenshots and JSON under
 `output/agent-testing/electron-smoke/electron/`. The aggregate ran beside the
 repository and browser suites; contention remains a hypothesis.
+
+## Resolution — 2026-10-20
+
+Every recurrence was the first `toHaveTitle` after launch (or after the New
+Window accelerator), which waits for Vite to serve and run `renderer-entry.tsx`
+while `index.html`'s `Orkestrator AI` is still shown. The service-preview and
+web-annotations Electron specs already give this exact startup wait 60 seconds
+and never recorded the symptom; the three failing owners used expect's 5-second
+default. `electron-main.spec.ts` (both windows), `terminal-input-resume-electron.spec.ts`
+and `artifact-host-electron.spec.ts` now use the same 60-second startup deadline.
+Later title assertions (Window menu entries, nicknames) are unchanged.
+
+`title-deadline-electron` (`mise run test:agent:electron`, one worker) passed
+in 117.1 seconds. Host load was low (about 2), so that run shows no regression
+rather than proving the loaded case; reopen this entry if the startup title
+still misses 60 seconds under contention.
+

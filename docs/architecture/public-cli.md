@@ -9,9 +9,9 @@ Outstanding work: [cli-command-surface.md](../todo/cli-command-surface.md) and
 Contract source: [`packages/protocol/src/public-api.ts`](../../packages/protocol/src/public-api.ts)
 and [`public-api-resources.ts`](../../packages/protocol/src/public-api-resources.ts).
 
-## Service versus client
+## Invocation modes
 
-One executable has two modes. The launcher
+One executable has three modes. The launcher
 ([`bin/orkestrator.js`](../../packages/cli/bin/orkestrator.js)) decides which
 **before** the backend is imported, using
 [`packages/cli/src/client.ts`](../../packages/cli/src/client.ts):
@@ -22,6 +22,7 @@ One executable has two modes. The launcher
 | `orkestrator serve [service options]` | Foreground service (explicit form) |
 | `orkestrator --host … --port … …` (only service flags) | Foreground service (historical form) |
 | `orkestrator <group> <command> …`, `help`, `version`, `--help`, `--version` | Client |
+| `orkestrator --fix AGENT [--data-dir DIR]` (anywhere in argv) | Problem report: opens `claude`, `codex` or `opencode` |
 | Anything else (typos, stray words, service flags mixed with client options) | Refused, exit 2 |
 
 Service flags are inventoried in
@@ -30,6 +31,20 @@ test fails if `options.ts` parses a flag the inventory lacks. Client commands,
 help and version never initialize a backend, create its data directory, or
 start a listener, bridge or child process. Client commands **never start a
 backend**: they attach to one that is already running.
+
+`--fix` ([`fix.ts`](../../packages/cli/src/client/fix.ts)) takes the place of
+starting Orkestrator: it resolves the agent (PATH first, then
+the managed toolchain: `bin/current`, the sole activation set, or `bin`), reads
+a few non-secret facts about this machine (versions, data and log directories,
+whether debug logging is on, the running backend's version from
+`backend-instance.json`), and runs the agent
+interactively in a new temporary directory with a prompt that has it interview
+the user, collect diagnostics read-only, draft a redacted issue in `issue.md`
+and, once the user approves, file it on `orkestrator-ai/orkestrator-v2` with
+`gh issue create`. The launcher ignores SIGINT while the agent runs (Ctrl+C
+belongs to the agent's TUI) and exits with the agent's status. Edit the prompt
+in `buildFixPrompt` when the data-directory layout, log names or settings labels
+it cites change.
 
 ## Selecting a backend
 

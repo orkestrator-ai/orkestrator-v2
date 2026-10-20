@@ -1,11 +1,33 @@
 # Orkestrator backend and client
 
-The `orkestrator` executable has two modes:
+The `orkestrator` executable has three modes:
 
 - **Service** — `orkestrator`, `orkestrator serve …`, or the historical
   `orkestrator --host … --port …` forms run the backend in the foreground.
 - **Client** — `orkestrator <group> <command> …` talks to a backend that is
   already running. Client commands never start a backend.
+- **Problem report** — `orkestrator --fix AGENT` opens a coding agent to
+  collect diagnostics and draft a GitHub issue.
+
+## Reporting a problem
+
+Something wrong with Orkestrator? Let a coding agent help you report it:
+
+```bash
+bunx orkestrator --fix claude    # or codex, opencode
+```
+
+Instead of starting Orkestrator, this opens that agent's interactive session
+with instructions to ask what went wrong, read Orkestrator's logs and version
+details on this machine, and draft a GitHub issue for
+`orkestrator-ai/orkestrator-v2`. The agent is told to stay read-only, redact
+credentials and personal details, and file only after you approve the draft
+(through `gh`, or by giving you the new-issue link). It works in a new
+temporary directory and saves the draft there as `issue.md`.
+
+The agent on `PATH` is used; otherwise the copy Orkestrator installed. Pass
+`--data-dir DIR` when the backend uses a non-default data directory. Run
+`orkestrator --fix --help` for details.
 
 Run the Orkestrator backend service without installing the desktop application:
 

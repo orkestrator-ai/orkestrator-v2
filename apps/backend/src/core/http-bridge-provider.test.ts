@@ -496,6 +496,26 @@ describe("HTTP bridge provider", () => {
     },
   );
 
+  test("keeps a retryable dispatch refusal's reason", async () => {
+    const reason =
+      "Claude is still running background work in this session, so a prompt that changes its plugins cannot start until that work finishes or is stopped";
+    const explained = httpProvider(() => Response.json({ error: reason }, { status: 409 }));
+    const error = await explained.provider
+      .send("session-1", "Build it", { requestId: "request-1" })
+      .catch((rejection: unknown) => rejection);
+    // Still retryable: the refusal clears once the background work ends.
+    expect(error).toBeInstanceOf(ProviderUnavailableError);
+    expect(error).not.toBeInstanceOf(AmbiguousPromptDispatchError);
+    expect((error as Error).message).toBe(
+      `claude prompt dispatch is temporarily unavailable (HTTP 409): ${reason}`,
+    );
+
+    const bare = httpProvider(() => new Response(null, { status: 409 }));
+    await expect(bare.provider.send("session-1", "Build it", { requestId: "r" })).rejects.toThrow(
+      /^claude prompt dispatch is temporarily unavailable \(HTTP 409\)$/,
+    );
+  });
+
   test.each([
     [
       "a transport rejection",

@@ -201,6 +201,10 @@ describe("StorageService agent mail conversations", () => {
       }
       const conversation = await storage.getAgentMailConversation(E1, E2);
       expect(conversation.messages.map(({ id }) => id)).toEqual(sent.map(({ id }) => id));
+      const listed = await storage.listAgentMailConversations();
+      expect(listed.conversations).toHaveLength(1);
+      expect(listed.conversations[0]!.lastMessage.id).toBe(sent.at(-1)!.id);
+      expect(listed.conversations[0]!.lastPreview).toBe("Message 19");
     } finally {
       setSystemTime();
       await fs.rm(dataDir, { recursive: true, force: true });

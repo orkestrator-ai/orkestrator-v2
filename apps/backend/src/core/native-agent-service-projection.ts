@@ -4,6 +4,7 @@ import { claudeReasoningSelection } from "@orkestrator/protocol/claude-model-cat
 import { fileURLToPath } from "node:url";
 import * as shared from "./native-agent-service-shared.js";
 import { AGENT_INTERACTION_KINDS } from "@orkestrator/protocol/agent-interactions";
+import { redactArtifactGrantArgs } from "@orkestrator/protocol/transcript-artifacts";
 import {
   NATIVE_AGENT_PROGRESSIVE_VIEW_VERSION,
   NATIVE_AGENT_REVISED_MESSAGES_MAX,
@@ -123,6 +124,12 @@ import {
   encodeDirectHistoryCursor,
 } from "./native-agent-direct-history.js";
 import {
+  ArtifactOverlayIndex,
+  artifactPublicationIds,
+  overlayArtifactParts,
+  type ArtifactOverlay,
+} from "./native-agent-service-projection-artifacts.js";
+import {
   ProjectedMessageCache,
   copyProjectionSource,
   type ProjectionDetailRegistration,
@@ -187,6 +194,10 @@ interface ProjectedProgressiveTranscript {
   value: NativeAgentTranscriptView;
   historyStartIndex?: number;
   historyEndIndex?: number;
+  /** Artifact ledger revision the view's artifact parts reflect. */
+  ledgerRevision?: number;
+  /** Ids in `value.revisedMessages` sent because a publication reached them. */
+  ledgerRevisedIds?: readonly string[];
 }
 type ProviderInteractionObservationEvent = shared.ProviderInteractionObservationEvent;
 type ProviderExecutionMode = shared.ProviderExecutionMode;
@@ -264,6 +275,14 @@ function providerReportedImagePath(part: Record<string, unknown>): string | unde
     if (candidate) return candidate;
   }
   return localImagePath(part.toolTitle);
+}
+
+/** Tool arguments with the artifact scope grant redacted (see `redactArtifactGrantArgs`). */
+function redactArtifactGrant(part: Record<string, unknown>): Record<string, unknown> | undefined {
+  return redactArtifactGrantArgs(part.toolName, part.toolArgs, {
+    toolTitle: part.toolTitle,
+    mcpServerName: part.mcpServerName,
+  });
 }
 
 function imageMimeType(filePath: string): string {
@@ -662,6 +681,17 @@ interface ProjectedTranscriptMessage {
   promptPresentation?: PromptPresentationKind;
 }
 
+type ProgressiveTranscriptEntry = {
+  token: string;
+  sourceToken?: string;
+  value: NativeAgentTranscriptView;
+  bytes: number;
+  historyStartIndex?: number;
+  historyEndIndex?: number;
+  ledgerRevision?: number;
+  ledgerRevisedIds?: readonly string[];
+};
+
 type ProgressiveHydrationEntry = {
   sourceToken: string;
   snapshot?: ProviderTranscriptSnapshot;
@@ -672,17 +702,7 @@ type ProgressiveHydrationEntry = {
 
 export abstract class NativeAgentServiceProjection extends NativeAgentServiceDispatch {
   private readonly progressiveInstanceId = randomUUID();
-  private readonly progressiveTranscriptCache = new Map<
-    string,
-    {
-      token: string;
-      sourceToken?: string;
-      value: NativeAgentTranscriptView;
-      bytes: number;
-      historyStartIndex?: number;
-      historyEndIndex?: number;
-    }
-  >();
+  private readonly progressiveTranscriptCache = new Map<string, ProgressiveTranscriptEntry>();
   private progressiveTranscriptBytes = 0;
   private readonly progressiveSourceTokens = new Map<string, string>();
   private readonly progressiveStateCache = new Map<
@@ -756,6 +776,10 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     ttlMs: NATIVE_DIRECT_PAGE_CACHE_TTL_MS,
     ...this.options.directHistoryPageCacheLimits,
   });
+  /** Per-conversation publication ledger reads, keyed by ledger revision. */
+  private readonly artifactOverlays = new ArtifactOverlayIndex(
+    () => this.options.artifactLedger?.() ?? null,
+  );
   /**
    * Collects the detail references registered while one row (or one page) is
    * projected, so a reuse can re-register them without the bodies. Projection
@@ -828,6 +852,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     this.progressiveMetrics.clear();
     this.projectedMessages.clear();
     this.directHistoryPages.clear();
+    this.artifactOverlays.clear();
     const drained = await displayTailDrain;
     if (drained.skipped > 0) {
       // Aggregate count only: previews carry transcript content.
@@ -1025,6 +1050,8 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     // A summary locator is provider-internal: it becomes a session-scoped
     // backend reference here and never reaches a renderer.
     delete projected.detail;
+    const redactedArgs = redactArtifactGrant(part);
+    if (redactedArgs) projected.toolArgs = redactedArgs;
     const summaryDetail = remote ? bridgePartDetail(part.detail) : undefined;
     if (summaryDetail && remote) {
       projected.detailRef = this.cacheRemoteToolDetails(sessionKey, messageId, partPath, {
@@ -1211,6 +1238,12 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     initialPromptPresentation?: PersistedNativeAgentSession["initialPromptPresentation"],
     coordinatorTranscript = false,
     remote?: { providerSessionId: string },
+    /**
+     * Publications placed beside their calls after the per-row cache. Omit
+     * for a read whose projected rows are themselves cached (history pages):
+     * those apply the overlay on the way out instead.
+     */
+    artifactOverlay?: ArtifactOverlay | null,
   ): { messages: unknown[]; window: NativeAgentMessageWindow } {
     const firstUserMessageIndex = messages.findIndex(
       (candidate) =>
@@ -1225,7 +1258,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       ...(remote ? { remoteSessionId: remote.providerSessionId } : {}),
       coordinator: coordinatorTranscript,
     };
-    const requested = messages.slice(requestedStart).map((raw, requestedIndex) => {
+    const projectedRows = messages.slice(requestedStart).map((raw, requestedIndex) => {
       const message =
         raw && typeof raw === "object" && !Array.isArray(raw)
           ? (raw as Record<string, unknown>)
@@ -1256,6 +1289,9 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         remote,
       );
     });
+    // Never written back into the per-row cache: an overlaid row is a new
+    // object, valid only for the ledger read that produced it.
+    const requested = overlayArtifactParts(projectedRows, artifactOverlay);
     let boundedTranscript;
     try {
       boundedTranscript = boundTranscriptResponse(requested, maximumBytes, {
@@ -2065,6 +2101,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     initialPromptPresentation: PersistedNativeAgentSession["initialPromptPresentation"],
   ): ProjectedProgressiveTranscript {
     const previous = this.progressiveTranscriptCache.get(key);
+    const overlay = this.artifactOverlay(input);
     const sourceGeneration =
       this.providerRegistry.connectionIdentity(
         providerCacheKey(input.environmentId, input.agent),
@@ -2102,15 +2139,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       isNormalizedProgressiveMessage(previewHead) &&
       isNormalizedProgressiveMessage(displayedHead)
     ) {
-      return {
-        value: previous.value,
-        ...(previous.historyStartIndex === undefined
-          ? {}
-          : { historyStartIndex: previous.historyStartIndex }),
-        ...(previous.historyEndIndex === undefined
-          ? {}
-          : { historyEndIndex: previous.historyEndIndex }),
-      };
+      return this.keptProgressiveProjection(previous, overlay);
     }
     const summary = snapshot.representation === "summary";
     const sessionKey = nativeAgentSessionStorageKey(
@@ -2139,6 +2168,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       initialPromptPresentation,
       Boolean(coordinatorIdFromRuntimeId(input.environmentId)),
       summary ? { providerSessionId } : undefined,
+      overlay,
     );
     let projectedMessages = normalized.messages;
     let projectedStartIndex = snapshot.historyStartIndex;
@@ -2280,6 +2310,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       initialPromptPresentation,
       Boolean(coordinatorIdFromRuntimeId(input.environmentId)),
       summary ? { providerSessionId } : undefined,
+      overlay,
     );
     const deliveredRevisions = new Set(
       [...normalized.messages, ...(revised ?? [])].map((row) => (row as { id: string }).id),
@@ -2297,7 +2328,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     const revisedById = new Map(
       (revised ?? []).map((message) => [(message as { id: string }).id, message] as const),
     );
-    const viewed = revisedById.size
+    const replaced = revisedById.size
       ? bounded.messages.map((message) => {
           const id = (message as { id?: unknown }).id;
           const replacement = typeof id === "string" ? revisedById.get(id) : undefined;
@@ -2306,9 +2337,27 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           return replacement;
         })
       : bounded.messages;
-    const revisedMessages = revised?.filter((message) =>
-      revisedById.has((message as { id: string }).id),
-    );
+    // A prefix joined from the previous view carries that read's placements;
+    // publications committed since then are placed here (idempotently).
+    const viewed = overlayArtifactParts(replaced, overlay);
+    const providerRevisedMessages =
+      revised?.filter((message) => revisedById.has((message as { id: string }).id)) ?? [];
+    const ledgerRevised = this.ledgerRevisedRows({
+      sessionKey,
+      context: {
+        sessionKey,
+        ...(summary ? { remoteSessionId: providerSessionId } : {}),
+        coordinator: Boolean(coordinatorIdFromRuntimeId(input.environmentId)),
+      },
+      previous,
+      sameHistory:
+        previous?.value.historyEpoch === historyEpoch &&
+        previous.value.identity.providerSessionId === providerSessionId,
+      overlay,
+      window: viewed,
+      providerRevised: providerRevisedMessages,
+    });
+    const revisedMessages = [...providerRevisedMessages, ...ledgerRevised];
     // A cached history page holds whatever copy of a row it was read with; a
     // row that has changed since must not come back from one.
     if (
@@ -2350,7 +2399,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         ...(directHistoryCursor ? { historyPaging: "direct" as const } : {}),
         historyEpoch,
         historyComplete: complete,
-        ...(revisedMessages?.length ? { revisedMessages } : {}),
+        ...(revisedMessages.length ? { revisedMessages } : {}),
         ...(historyReconciliationToken ? { historyReconciliationToken } : {}),
       },
       ...(boundedStartIndex === undefined
@@ -2359,7 +2408,141 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
             historyStartIndex: boundedStartIndex,
             historyEndIndex: boundedStartIndex + bounded.messages.length,
           }),
+      ledgerRevision: overlay?.revision ?? 0,
+      ...(ledgerRevised.length
+        ? { ledgerRevisedIds: ledgerRevised.map((row) => (row as { id: string }).id) }
+        : {}),
     };
+  }
+
+  private artifactOverlay(input: {
+    environmentId: string;
+    logicalSessionKey: string;
+  }): ArtifactOverlay | null {
+    return this.artifactOverlays.overlay(input.environmentId, input.logicalSessionKey);
+  }
+
+  /**
+   * A view kept from an earlier read, with publications committed since then
+   * placed into its rows. Its rows are never modified, and its ledger
+   * revision is not advanced: rows outside it are searched by the next full
+   * projection.
+   */
+  private keptProgressiveProjection(
+    previous: ProgressiveTranscriptEntry,
+    overlay: ArtifactOverlay | null,
+  ): ProjectedProgressiveTranscript {
+    const messages = overlayArtifactParts(previous.value.messages, overlay);
+    return {
+      value:
+        messages === previous.value.messages ? previous.value : { ...previous.value, messages },
+      ...(previous.historyStartIndex === undefined
+        ? {}
+        : { historyStartIndex: previous.historyStartIndex }),
+      ...(previous.historyEndIndex === undefined
+        ? {}
+        : { historyEndIndex: previous.historyEndIndex }),
+      ...(previous.ledgerRevision === undefined ? {} : { ledgerRevision: previous.ledgerRevision }),
+      ...(previous.ledgerRevisedIds ? { ledgerRevisedIds: previous.ledgerRevisedIds } : {}),
+    };
+  }
+
+  /**
+   * Rows outside the window that a publication committed since the previous
+   * view now reaches, plus rows sent this way before that are still outside
+   * it. Readers re-read only the window, so like a provider's revised rows
+   * these travel in `revisedMessages` and replace the reader's copy.
+   *
+   * A row is taken from the previous view or the per-row projection cache,
+   * never fabricated, and never a part-trimmed head row (a reader would lose
+   * the parts it holds). A publication whose row this backend no longer holds
+   * is left to the reader's own merge, which places it when that row is
+   * paged. Bounded together with the provider's revised rows by
+   * `NATIVE_AGENT_REVISED_MESSAGES_MAX` and `NATIVE_REVISED_MESSAGES_MAX_BYTES`.
+   */
+  private ledgerRevisedRows(input: {
+    sessionKey: string;
+    context: ProjectionEntryContext;
+    previous: ProgressiveTranscriptEntry | undefined;
+    sameHistory: boolean;
+    overlay: ArtifactOverlay | null;
+    window: readonly unknown[];
+    providerRevised: readonly unknown[];
+  }): unknown[] {
+    const { previous, overlay } = input;
+    if (!overlay || !previous || !input.sameHistory) return [];
+    const room = NATIVE_AGENT_REVISED_MESSAGES_MAX - input.providerRevised.length;
+    if (room <= 0) return [];
+    const idOf = (row: unknown): string | undefined => {
+      const id = (row as { id?: unknown } | null | undefined)?.id;
+      return typeof id === "string" ? id : undefined;
+    };
+    const excluded = new Set<string>();
+    for (const row of [...input.window, ...input.providerRevised]) {
+      const id = idOf(row);
+      if (id !== undefined) excluded.add(id);
+    }
+    const candidates = new Map<string, unknown>();
+    const since = previous.ledgerRevision;
+    if (since !== undefined && overlay.revision > since) {
+      const shown = artifactPublicationIds([...input.window, ...input.providerRevised]);
+      const fresh = new Set(
+        overlay.publications
+          .filter(
+            (publication) =>
+              publication.conversationSequence > since && !shown.has(publication.ref.publicationId),
+          )
+          .map((publication) => publication.ref.publicationId),
+      );
+      const previousRows = previous.value.messages;
+      const trimmedHead =
+        (previous.value.messageWindow?.omittedParts ?? 0) > 0 ? idOf(previousRows[0]) : undefined;
+      const consider = (row: unknown): void => {
+        const id = idOf(row);
+        if (id === undefined || excluded.has(id) || candidates.has(id) || id === trimmedHead) {
+          return;
+        }
+        const [overlaid] = overlayArtifactParts([row], overlay);
+        if (overlaid === row) return;
+        let reached = false;
+        for (const publicationId of artifactPublicationIds([overlaid])) {
+          if (fresh.delete(publicationId)) reached = true;
+        }
+        if (reached) candidates.set(id, overlaid);
+      };
+      for (const row of [...(previous.value.revisedMessages ?? []), ...previousRows]) {
+        if (fresh.size === 0 || candidates.size >= room) break;
+        consider(row);
+      }
+      if (fresh.size > 0 && candidates.size < room) {
+        for (const entry of this.projectedMessages.sessionEntries(input.context)) {
+          if (fresh.size === 0 || candidates.size >= room) break;
+          const id = idOf(entry.projected);
+          if (id === undefined || excluded.has(id) || candidates.has(id)) continue;
+          // Its detail references must resolve like the window's do.
+          if (!this.restoreDetailRegistrations(input.sessionKey, entry.details)) continue;
+          consider(entry.projected);
+        }
+      }
+    }
+    for (const id of previous.ledgerRevisedIds ?? []) {
+      if (excluded.has(id) || candidates.has(id)) continue;
+      const row = previous.value.revisedMessages?.find((candidate) => idOf(candidate) === id);
+      if (row !== undefined) candidates.set(id, overlayArtifactParts([row], overlay)[0]);
+    }
+    let bytes = input.providerRevised.reduce<number>(
+      (total, row) => total + encodedValue(row).bytes,
+      0,
+    );
+    const rows: unknown[] = [];
+    for (const row of candidates.values()) {
+      if (rows.length >= room) break;
+      const size = encodedValue(row).bytes;
+      if (bytes + size > NATIVE_REVISED_MESSAGES_MAX_BYTES) continue;
+      bytes += size;
+      rows.push(row);
+    }
+    return rows;
   }
 
   /**
@@ -2381,6 +2564,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     initialPromptPresentation: PersistedNativeAgentSession["initialPromptPresentation"],
     coordinatorTranscript: boolean,
     remote: { providerSessionId: string } | undefined,
+    artifactOverlay: ArtifactOverlay | null,
   ): unknown[] | undefined {
     if (!revised?.length) return undefined;
     const seen = new Set(window.map((message) => (message as { id?: unknown }).id));
@@ -2406,6 +2590,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           undefined,
           coordinatorTranscript,
           remote,
+          artifactOverlay,
         );
       } catch (error) {
         if (error instanceof ProviderUnavailableError) continue;
@@ -2439,6 +2624,10 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
             this.progressiveSourceTokens.get(key),
             projection.historyStartIndex,
             projection.historyEndIndex,
+            // A publication moves the view even before its row is read. No
+            // ledger read (a persisted tail) and an empty ledger hash alike, so
+            // an identical view keeps its token.
+            projection.ledgerRevision ?? 0,
           ]),
         ),
         value.messages,
@@ -2465,6 +2654,10 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         ...(projection.historyEndIndex === undefined
           ? {}
           : { historyEndIndex: projection.historyEndIndex }),
+        ...(projection.ledgerRevision === undefined
+          ? {}
+          : { ledgerRevision: projection.ledgerRevision }),
+        ...(projection.ledgerRevisedIds ? { ledgerRevisedIds: projection.ledgerRevisedIds } : {}),
       });
       this.progressiveTranscriptBytes += bytes;
       this.trimProgressiveTranscriptCache();
@@ -2481,12 +2674,19 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     const resolved = await this.resolveProjectionSession(input);
     if (!resolved) return null;
     const previous = this.progressiveTranscriptCache.get(key);
+    // A publication committed since the previous view changes rows the
+    // provider has not: its "unchanged" would keep the view without them.
+    const ledgerMoved =
+      previous !== undefined &&
+      (previous.ledgerRevision ?? 0) !== (this.artifactOverlay(input)?.revision ?? 0);
     phases?.sourceStarted();
     const providerResult = resolved.provider.transcriptSnapshot
       ? await resolved.provider.transcriptSnapshot(resolved.session.providerSessionId, {
           limit: input.liveWindow.messages,
           targetBytes: input.liveWindow.targetBytes,
-          ...(previous?.sourceToken ? { knownSourceToken: previous.sourceToken } : {}),
+          ...(previous?.sourceToken && !ledgerMoved
+            ? { knownSourceToken: previous.sourceToken }
+            : {}),
           // This projection resolves detail locators, so it can take the
           // lightweight form; other consumers keep reading bodies inline.
           representation: "summary",
@@ -2526,15 +2726,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         sourceToken: providerResult.sourceToken,
       });
       this.progressiveSourceTokens.set(key, providerResult.sourceToken);
-      return {
-        value: previous.value,
-        ...(previous.historyStartIndex === undefined
-          ? {}
-          : { historyStartIndex: previous.historyStartIndex }),
-        ...(previous.historyEndIndex === undefined
-          ? {}
-          : { historyEndIndex: previous.historyEndIndex }),
-      };
+      return this.keptProgressiveProjection(previous, this.artifactOverlay(input));
     }
     const snapshot = this.resolveProgressiveSnapshot(key, providerResult);
     if (snapshot.sourceToken) this.progressiveSourceTokens.set(key, snapshot.sourceToken);
@@ -2572,15 +2764,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       previous.value.messages.length > 0
     ) {
       if (!holdsPreview) scheduleHydration(false);
-      return {
-        value: previous.value,
-        ...(previous.historyStartIndex === undefined
-          ? {}
-          : { historyStartIndex: previous.historyStartIndex }),
-        ...(previous.historyEndIndex === undefined
-          ? {}
-          : { historyEndIndex: previous.historyEndIndex }),
-      };
+      return this.keptProgressiveProjection(previous, this.artifactOverlay(input));
     }
     let projection: ProjectedProgressiveTranscript;
     try {
@@ -3590,10 +3774,16 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       pageKey,
       this.now(),
     );
+    // Cached pages hold provider rows only; publications are placed on the
+    // way out, so a ledger change never leaves a stale page behind.
+    const withArtifacts = (page: NativeAgentMessagePage): NativeAgentMessagePage => ({
+      ...page,
+      messages: overlayArtifactParts(page.messages, this.artifactOverlay(input)).slice(),
+    });
     if (cached) {
       if (this.restoreDetailRegistrations(resolved.key, cached.details)) {
         this.recordProgressiveMetric("transcript", startedAt, "memory", "cached");
-        return { ...cached.page, messages: cached.page.messages.slice() };
+        return withArtifacts(cached.page);
       }
       // An inline detail body was evicted; only a fresh read registers it again.
       this.directHistoryPages.delete(pageKey);
@@ -3703,7 +3893,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       () => this.now(),
     );
     // Callers share the cached page; each gets its own message array.
-    return { ...page, messages: page.messages.slice() };
+    return withArtifacts(page);
   }
 
   /**
@@ -4524,6 +4714,8 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         NATIVE_PROJECTION_MAX_BYTES,
         resolved.session.initialPromptPresentation,
         resolved.session.owner?.kind === "coordinator",
+        undefined,
+        this.artifactOverlay(input),
       );
       const transcript =
         input.representation === "sync-v1"

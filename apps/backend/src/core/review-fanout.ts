@@ -39,9 +39,6 @@ import {
   STRUCTURED_REVIEW_MAX_ISSUES,
   safeParseStructuredReviewReport,
   structuredReviewReportBudgetIssues,
-  stripStructuredReviewProvenance,
-  type ReviewContractValidationIssue,
-  type StructuredReviewReport,
 } from "@orkestrator/protocol/structured-review";
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import {
@@ -58,6 +55,12 @@ import {
   workflowRestartContinuationPrompt,
 } from "./workflow-result-missing.js";
 import type { AgentToolConnection } from "./agent-tools.js";
+import {
+  beginWorkflowArtifactTurn,
+  settleArtifactDispatchTurn,
+  type ArtifactTurnDispatch,
+  type WorkflowArtifactTurnOptions,
+} from "./workflow-artifact-turns.js";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import {
   AmbiguousPromptDispatchError,
@@ -104,6 +107,7 @@ import {
   type ReviewFanoutConcurrency,
 } from "./review-fanout-scheduler.js";
 import { PassTranscriptReader } from "./review-fanout-transcript.js";
+import { attributeReportFindings } from "./review-fanout-provenance.js";
 import {
   clearReviewerAdmission,
   projectReviewerAdmissionQueue,
@@ -299,178 +303,14 @@ export function promptWorktreeSnapshot(
       };
 }
 
-// ---------------------------------------------------------------------------
-// Report provenance
-// ---------------------------------------------------------------------------
-
-export function reviewerProvenanceLabel(
-  reviewer: Pick<ReviewerModelSelection, "agent" | "model">,
-): string {
-  return `${reviewer.agent}/${reviewer.model}`;
-}
-
-/** Provider output cannot authoritatively identify its own launch model. */
-export function attributeReportFindings(
-  report: StructuredReviewReport,
-  reviewer: Pick<ReviewerModelSelection, "agent" | "model">,
-): StructuredReviewReport {
-  const clean = stripStructuredReviewProvenance(report);
-  const label = reviewerProvenanceLabel(reviewer);
-  return {
-    ...clean,
-    issues: clean.issues.map((issue) => ({ ...issue, reviewModels: [label] })),
-    testCoverageGaps: clean.testCoverageGaps.map((gap) => ({
-      ...gap,
-      reviewModels: [label],
-    })),
-  };
-}
-
-type SourceFindingKind = "issue" | "coverage-gap";
-
-interface ProvenanceSource {
-  kind: SourceFindingKind;
-  model: string;
-}
-
-function sourceFindingId(
-  reviewerIndex: number,
-  kind: SourceFindingKind,
-  findingIndex: number,
-): string {
-  return `reviewer-${reviewerIndex + 1}/${kind}-${findingIndex + 1}`;
-}
-
-export function consolidationReports(
-  reviewers: readonly ReviewerRecord[],
-): Parameters<typeof createMultiReviewConsolidationPrompt>[0]["reports"] {
-  return reviewers.flatMap((reviewer, reviewerIndex) => {
-    if (reviewer.status !== "completed" || !reviewer.report) return [];
-    return [
-      {
-        reviewerId: reviewer.id,
-        agent: reviewer.agent,
-        model: reviewer.model,
-        report: {
-          ...reviewer.report,
-          issues: reviewer.report.issues.map((issue, findingIndex) => ({
-            ...issue,
-            reviewSourceIds: [sourceFindingId(reviewerIndex, "issue", findingIndex)],
-          })),
-          testCoverageGaps: reviewer.report.testCoverageGaps.map((gap, findingIndex) => ({
-            ...gap,
-            reviewSourceIds: [sourceFindingId(reviewerIndex, "coverage-gap", findingIndex)],
-          })),
-        },
-      },
-    ];
-  });
-}
-
-function provenanceSources(
-  reviewers: readonly ReviewerRecord[],
-): ReadonlyMap<string, ProvenanceSource> {
-  const sources = new Map<string, ProvenanceSource>();
-  reviewers.forEach((reviewer, reviewerIndex) => {
-    if (reviewer.status !== "completed" || !reviewer.report) return;
-    const model = reviewerProvenanceLabel(reviewer);
-    reviewer.report.issues.forEach((_issue, findingIndex) => {
-      sources.set(sourceFindingId(reviewerIndex, "issue", findingIndex), {
-        kind: "issue",
-        model,
-      });
-    });
-    reviewer.report.testCoverageGaps.forEach((_gap, findingIndex) => {
-      sources.set(sourceFindingId(reviewerIndex, "coverage-gap", findingIndex), {
-        kind: "coverage-gap",
-        model,
-      });
-    });
-  });
-  return sources;
-}
-
-export function consolidationResultContext(reviewers: readonly ReviewerRecord[]): {
-  type: "consolidated-review";
-  sources: Record<string, SourceFindingKind>;
-} {
-  return {
-    type: "consolidated-review",
-    sources: Object.fromEntries(
-      Array.from(provenanceSources(reviewers), ([sourceId, source]) => [sourceId, source.kind]),
-    ),
-  };
-}
-
-export function deriveConsolidatedProvenance(
-  report: StructuredReviewReport,
-  reviewers: readonly ReviewerRecord[],
-): { report: StructuredReviewReport; issues: ReviewContractValidationIssue[] } {
-  const issues: ReviewContractValidationIssue[] = [];
-  const sources = provenanceSources(reviewers);
-  const inspect = (
-    reviewModels: string[] | undefined,
-    reviewSourceIds: string[] | undefined,
-    kind: SourceFindingKind,
-    path: string,
-  ): string[] => {
-    if (reviewModels?.length) {
-      issues.push({
-        path: `${path}.reviewModels`,
-        code: "invalid_value",
-        message: "Consolidated findings must cite source IDs; the backend derives review models.",
-      });
-    }
-    if (!reviewSourceIds?.length) {
-      issues.push({
-        path: `${path}.reviewSourceIds`,
-        code: "missing_field",
-        message: "Every consolidated finding must cite at least one source finding ID.",
-      });
-      return [];
-    }
-    const models: string[] = [];
-    reviewSourceIds.forEach((sourceId, index) => {
-      const source = sources.get(sourceId);
-      if (!source || source.kind !== kind) {
-        issues.push({
-          path: `${path}.reviewSourceIds[${index}]`,
-          code: "invalid_value",
-          message: `Source finding ${JSON.stringify(sourceId)} does not identify a ${kind} in the supplied reviewer reports.`,
-        });
-      } else if (!models.includes(source.model)) {
-        models.push(source.model);
-      }
-    });
-    return models;
-  };
-
-  const derived = stripStructuredReviewProvenance(report);
-  return {
-    issues,
-    report: {
-      ...derived,
-      issues: report.issues.map((finding, index) => ({
-        ...derived.issues[index]!,
-        reviewModels: inspect(
-          finding.reviewModels,
-          finding.reviewSourceIds,
-          "issue",
-          `$.issues[${index}]`,
-        ),
-      })),
-      testCoverageGaps: report.testCoverageGaps.map((finding, index) => ({
-        ...derived.testCoverageGaps[index]!,
-        reviewModels: inspect(
-          finding.reviewModels,
-          finding.reviewSourceIds,
-          "coverage-gap",
-          `$.testCoverageGaps[${index}]`,
-        ),
-      })),
-    },
-  };
-}
+// Report provenance lives in review-fanout-provenance.ts; re-exported for owners.
+export {
+  attributeReportFindings,
+  consolidationReports,
+  consolidationResultContext,
+  deriveConsolidatedProvenance,
+  reviewerProvenanceLabel,
+} from "./review-fanout-provenance.js";
 
 const NO_VALID_REPORT_ERROR = "No reviewer produced a valid report";
 
@@ -773,6 +613,17 @@ export interface ReviewFanoutHost {
   readonly pollGate?: ReviewerPollGate;
   /** Whether this owner persists provider-session usage for reviewer presentation. */
   readonly captureReviewerUsage?: boolean;
+  /**
+   * Transcript-artifact authority for reviewer turns. With it, each turn gets
+   * an artifact grant owned by the reviewer session's own key
+   * ({@link sessionKeyFor}) in this environment, delivered with the turn and
+   * revoked when the turn settles (`workflow-artifact-turns.ts`).
+   */
+  readonly artifactTurns?: {
+    dispatch: ArtifactTurnDispatch;
+    environmentId: string;
+    projectId: string;
+  };
   /**
    * When false, token-count deltas stay in memory until the owner already has
    * another reason to save. Pipeline fan-out sets this so a streaming meter
@@ -1153,6 +1004,36 @@ export class ReviewFanoutRunner {
     }
   }
 
+  /** See {@link ReviewFanoutHost.artifactTurns}. Best-effort; never blocks a dispatch. */
+  private beginReviewerArtifactTurn(
+    reviewer: ReviewerRecord,
+    index: number,
+    agentMcp: AgentToolConnection | undefined,
+  ): WorkflowArtifactTurnOptions | undefined {
+    const turns = this.host.artifactTurns;
+    if (!turns || !reviewer.providerSessionId || !reviewer.requestId) return undefined;
+    return beginWorkflowArtifactTurn(turns.dispatch, {
+      environmentId: turns.environmentId,
+      projectId: turns.projectId,
+      conversationKey: reviewer.sessionKey ?? this.host.sessionKeyFor(reviewer, index),
+      turnId: reviewer.requestId,
+      providerSessionId: reviewer.providerSessionId,
+      agent: reviewer.agent,
+      ...(agentMcp ? { agentMcp } : {}),
+    });
+  }
+
+  private settleReviewerArtifactTurn(reviewer: ReviewerRecord, index: number): void {
+    const turns = this.host.artifactTurns;
+    if (!turns || !reviewer.requestId) return;
+    settleArtifactDispatchTurn(
+      turns.dispatch,
+      turns.environmentId,
+      reviewer.sessionKey ?? this.host.sessionKeyFor(reviewer, index),
+      reviewer.requestId,
+    );
+  }
+
   private async advanceReviewerWithProvider(
     reviewer: ReviewerRecord,
     index: number,
@@ -1262,23 +1143,30 @@ export class ReviewFanoutRunner {
           throw new ReviewerPolicyUnavailableError(error);
         }
       }
-      // Attach after the connection is resolved so broker registration happens
-      // outside the at-most-once window.
-      await attachAgentBeforeDispatch(
-        provider,
-        reviewer.providerSessionId,
-        agentMcp
-          ? {
-              agentMcp,
-              workflowResultTool: workflowResultToolName("review-report"),
-            }
-          : undefined,
-      );
-      reviewer.dispatchState = "dispatching";
-      // Other reviewers may be committing concurrently; this reviewer's own
-      // journal is what matters. Its `dispatching` write is durable once this
-      // await resolves, and `send` is the next reviewer-local fallible call.
-      await this.commit();
+      const artifactTurn = this.beginReviewerArtifactTurn(reviewer, index, agentMcp);
+      const turnAgentMcp = artifactTurn?.agentMcp ?? agentMcp;
+      try {
+        // Attach after the connection is resolved so broker registration happens
+        // outside the at-most-once window.
+        await attachAgentBeforeDispatch(
+          provider,
+          reviewer.providerSessionId,
+          turnAgentMcp
+            ? {
+                agentMcp: turnAgentMcp,
+                workflowResultTool: workflowResultToolName("review-report"),
+              }
+            : undefined,
+        );
+        reviewer.dispatchState = "dispatching";
+        // Other reviewers may be committing concurrently; this reviewer's own
+        // journal is what matters. Its `dispatching` write is durable once this
+        // await resolves, and `send` is the next reviewer-local fallible call.
+        await this.commit();
+      } catch (error) {
+        this.settleReviewerArtifactTurn(reviewer, index);
+        throw error;
+      }
       const sendStarted = Date.now();
       try {
         await provider.send(
@@ -1301,7 +1189,8 @@ export class ReviewFanoutRunner {
             model: reviewerModel(reviewer),
             effort: reviewer.reasoningEffort,
             ...(typeof reviewer.fastMode === "boolean" ? { fastMode: reviewer.fastMode } : {}),
-            ...(agentMcp ? { agentMcp } : {}),
+            ...(turnAgentMcp ? { agentMcp: turnAgentMcp } : {}),
+            ...(artifactTurn?.artifactGrant ? { artifactGrant: artifactTurn.artifactGrant } : {}),
             ...(agentMcp
               ? {
                   workflowResultTool: workflowResultToolName("review-report"),
@@ -1311,6 +1200,11 @@ export class ReviewFanoutRunner {
           },
         );
       } catch (error) {
+        // An ambiguous send may still be running; its grant settles with the
+        // turn. A refused one never ran, so its grant must not outlive it.
+        if (!(error instanceof AmbiguousPromptDispatchError)) {
+          this.settleReviewerArtifactTurn(reviewer, index);
+        }
         if (error instanceof AmbiguousPromptDispatchError) {
           this.record({
             operation: "reviewer.send",
@@ -1385,13 +1279,11 @@ export class ReviewFanoutRunner {
       observer: host.efficiency,
       owner: host.efficiencyOwner ?? "multi-review",
     });
-    await this.mirrorTranscript(
-      reviewer,
-      index,
-      provider,
-      transcript,
-      status !== "running" && observation.backgroundWorkLive !== true,
-    );
+    const settling = status !== "running" && observation.backgroundWorkLive !== true;
+    await this.mirrorTranscript(reviewer, index, provider, transcript, settling);
+    // The turn ended: its artifact grant ends with it. A reminder, repair or
+    // continuation turn is dispatched under a new request id with its own.
+    if (settling) this.settleReviewerArtifactTurn(reviewer, index);
     if (status === "running") {
       await this.clearStall(reviewer);
       await this.nudgeUncommittedResult(provider, reviewer);

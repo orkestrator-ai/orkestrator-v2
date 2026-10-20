@@ -3,9 +3,20 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
+import {
+  RECORDED_ARTIFACT_ERROR_CODE,
+  RECORDED_PUBLICATION_ID,
+  RECORDED_PUBLISH_ARTIFACT_ARGS,
+  SUCCESSFUL_PUBLISH_CONTRACT,
+  publishArtifactCallContract,
+  recordedArtifactCallToolResult,
+} from "@orkestrator/protocol/testing/artifact-tool-fixtures";
 import { newSessionState } from "./agent-session.js";
+import { requestToolApproval } from "./interactions.js";
 import {
   closePiMcp,
+  isOrkestratorMailTool,
   isOrkestratorMcpTool,
   mcpConfigNeedsRefresh,
   mcpConnectionNeedsRefresh,
@@ -19,6 +30,8 @@ import {
   type PiMcpConnection,
   type PiMcpTransport,
 } from "./mcp.js";
+import type { BridgeToolPart } from "./state.js";
+import { applySessionEvent } from "./translate.js";
 
 const roots: string[] = [];
 
@@ -474,4 +487,126 @@ describe("Pi MCP client", () => {
 
     await expect(registeredTools(state)[0]!.execute("call-1", {})).rejects.toThrow(/timed out/);
   });
+});
+
+describe("transcript artifact tools", () => {
+  /*
+   * The web client anchors a published artifact on the successful
+   * `publish_artifact` call naming it, by the call's name and arguments.
+   * Run the bridge-registered tool against a recorded Orkestrator result and
+   * translate the frames Pi emits around it (`agent-loop.js`: a thrown
+   * `execute` becomes `{ content: [{ type: "text", text: message }] }` with
+   * `isError: true`).
+   */
+  async function preparedArtifactTools(isError = false) {
+    const root = await tempRoot("pi-mcp-artifacts-");
+    const calls: Array<{ name: string; args: unknown }> = [];
+    setPiMcpTransportForTests({
+      async connect() {
+        return {
+          tools: [...ARTIFACT_TOOL_NAMES.map((name) => ({ name })), { name: "create_ticket" }],
+          async call(name, args) {
+            calls.push({ name, args });
+            return recordedArtifactCallToolResult(isError);
+          },
+          async close() {},
+        };
+      },
+    });
+    const state = newSessionState();
+    state.status = "running";
+    state.agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "tab-token" };
+    await preparePiMcp(state, { agentDir: join(root, "agent"), cwd: root, env: {} });
+    return { state, calls };
+  }
+
+  async function publishThroughPi(isError: boolean): Promise<BridgeToolPart> {
+    const { state, calls } = await preparedArtifactTools(isError);
+    const tool = registeredTools(state).find((candidate) => candidate.name === "publish_artifact");
+    if (!tool) throw new Error("publish_artifact was not registered");
+    let result: unknown;
+    try {
+      result = await tool.execute("call-publish", { ...RECORDED_PUBLISH_ARTIFACT_ARGS });
+    } catch (error) {
+      result = { content: [{ type: "text", text: (error as Error).message }], details: {} };
+    }
+    expect(calls).toEqual([
+      { name: "publish_artifact", args: { ...RECORDED_PUBLISH_ARTIFACT_ARGS } },
+    ]);
+    applySessionEvent(state, {
+      type: "tool_execution_start",
+      toolCallId: "call-publish",
+      toolName: "publish_artifact",
+      args: { ...RECORDED_PUBLISH_ARTIFACT_ARGS },
+    });
+    applySessionEvent(state, {
+      type: "tool_execution_end",
+      toolCallId: "call-publish",
+      toolName: "publish_artifact",
+      result,
+      isError,
+      durationMs: 12,
+    });
+    await closePiMcp(state);
+    const part = state.messages
+      .flatMap((message) => message.parts)
+      .find(
+        (candidate): candidate is BridgeToolPart =>
+          candidate.type === "tool-invocation" && candidate.toolUseId === "call-publish",
+      );
+    if (!part) throw new Error("missing publish_artifact card");
+    return part;
+  }
+
+  test("a successful publish renders a recognisable call with its arguments", async () => {
+    const part = await publishThroughPi(false);
+
+    expect(publishArtifactCallContract(part)).toEqual({ ...SUCCESSFUL_PUBLISH_CONTRACT });
+    // Registered under its bare name; Pi reports no MCP server, and the title
+    // names none either, so the bare name is unambiguous.
+    expect(part.toolName).toBe("publish_artifact");
+    expect(part.toolTitle).toBe("publish_artifact");
+    expect(part.toolOutput).toContain(RECORDED_PUBLICATION_ID);
+  });
+
+  test("a refused publish is not a success and keeps its error code", async () => {
+    const part = await publishThroughPi(true);
+    const contract = publishArtifactCallContract(part);
+
+    expect(contract.tool).toBe("publish_artifact");
+    expect(contract.toolState).not.toBe("success");
+    expect(part.toolError).toContain(RECORDED_ARTIFACT_ERROR_CODE);
+  });
+
+  test.each(["ask", "deny"] as const)(
+    "artifact tools are exempt from %s approvals by exact Orkestrator name only",
+    async (approvals) => {
+      const { state } = await preparedArtifactTools();
+      state.policy = {
+        id: "interactive-host",
+        sandbox: "provider",
+        approvals,
+        projectResources: false,
+        networkAccess: "restricted",
+      };
+      try {
+        for (const tool of ARTIFACT_TOOL_NAMES) {
+          expect(isOrkestratorMailTool(state, tool)).toBe(true);
+          expect(await requestToolApproval(state, `call-${tool}`, tool, {})).toEqual({
+            block: false,
+          });
+        }
+        // The rest of the Orkestrator server is not whitelisted with them.
+        expect(isOrkestratorMailTool(state, "create_ticket")).toBe(false);
+        expect(isOrkestratorMailTool(state, "mcp_orkestrator_publish_artifact")).toBe(false);
+        if (approvals === "deny") {
+          expect(await requestToolApproval(state, "ticket", "create_ticket", {})).toMatchObject({
+            block: true,
+          });
+        }
+      } finally {
+        await closePiMcp(state);
+      }
+    },
+  );
 });

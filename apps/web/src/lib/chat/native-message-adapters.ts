@@ -21,6 +21,7 @@ import type { AcpMessage } from "@/lib/acp-client";
 import { stripInitialPromptAttachmentReferences } from "@orkestrator/protocol/initial-prompt-attachments";
 import { parsePromptTranscriptReferences } from "./transcript-annotations";
 import { agentMailToolCall } from "./agent-mail-tool-call";
+import { dedupeArtifactPublications } from "./artifact-publication-dedupe";
 
 interface AttachmentTag {
   type: string;
@@ -181,6 +182,8 @@ export function normalizeClaudePart(part: ClaudeMessagePart): NativeMessagePart 
     case "agent-group":
     case "tool-group":
     case "task-group":
+    // A published artifact is a first-class transcript part, never tool activity.
+    case "artifact":
       return part;
     default:
       return null;
@@ -216,7 +219,12 @@ function groupTaskParts(
   let currentTask: NativeTaskGroupPart | null = null;
 
   for (const part of parts) {
-    const explicitParent = part.parentTaskUseId ? taskGroups.get(part.parentTaskUseId) : undefined;
+    // Artifact publications stay visible at the top level: a task group never
+    // adopts one, even when the publishing call ran inside a subagent.
+    const explicitParent =
+      part.parentTaskUseId && part.type !== "artifact"
+        ? taskGroups.get(part.parentTaskUseId)
+        : undefined;
     if (explicitParent && !(part.type === "tool-invocation" && shouldPromote(part))) {
       explicitParent.childTools.push(part);
       currentTask = explicitParent;
@@ -227,7 +235,8 @@ function groupTaskParts(
       part.type === "text" ||
       part.type === "transcript-reference" ||
       part.type === "async-question" ||
-      part.type === "file"
+      part.type === "file" ||
+      part.type === "artifact"
     ) {
       currentTask = null;
       result.push(part);
@@ -450,6 +459,9 @@ export function messageHasVisibleContent(message: NativeMessage): boolean {
         return part.content.trim().length > 0;
       case "async-question":
         return part.asyncQuestion.questions.length > 0;
+      // A published artifact always renders a card (at least its summary).
+      case "artifact":
+        return true;
       // Tool results are rendered inline with their invocation, never on their
       // own, so a message holding only results is still an empty block.
       case "tool-result":
@@ -617,7 +629,7 @@ export function normalizeNativeMessage(message: NativeMessage): NativeMessage {
 }
 
 export function normalizeNativeMessages(messages: readonly NativeMessage[]): NativeMessage[] {
-  const rows = messages.flatMap((message) =>
+  const rows = dedupeArtifactPublications(messages).flatMap((message) =>
     splitAssistantTranscriptBlocks(normalizeNativeMessage(message)),
   );
   return coalesceAdjacentToolMessages(rows);
@@ -1567,7 +1579,8 @@ function isTextSectionPart(part: NativeMessagePart): boolean {
     part.type === "text" ||
     part.type === "transcript-reference" ||
     part.type === "async-question" ||
-    part.type === "file"
+    part.type === "file" ||
+    part.type === "artifact"
   );
 }
 
@@ -1647,7 +1660,9 @@ function splitAssistantTranscriptBlocksUncached(message: NativeMessage): NativeM
  */
 export function normalizeClaudeMessagesForDisplay(messages: ClaudeMessage[]): NativeMessage[] {
   return coalesceAdjacentToolMessages(
-    messages.flatMap((message) => splitAssistantTranscriptBlocks(normalizeClaudeMessage(message))),
+    dedupeArtifactPublications(messages.map(normalizeClaudeMessage)).flatMap((message) =>
+      splitAssistantTranscriptBlocks(message),
+    ),
   );
 }
 

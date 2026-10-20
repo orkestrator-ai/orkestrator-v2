@@ -336,7 +336,22 @@ const root = path.resolve(process.argv[1]);
 const target = path.resolve(process.argv[2]);
 const limit = Number(process.argv[3]);
 const editorRead = process.argv[4] === "editor";
+// "stream": the attachment validation, but raw bytes go to stdout as they are
+// read (no in-memory copy); the final stability check still decides the exit
+// status, so the host discards the copy on any failure.
+const streamRead = process.argv[4] === "stream";
 const editorLimitLabel = process.argv[5] || String(limit) + " bytes";
+function writeAll(buffer) {
+  let offset = 0;
+  while (offset < buffer.length) {
+    try {
+      offset += fs.writeSync(1, buffer, offset, buffer.length - offset);
+    } catch (error) {
+      if (!error || error.code !== "EAGAIN") throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+    }
+  }
+}
 function fail(message) {
   const error = new Error(message);
   error.safeMessage = true;
@@ -392,8 +407,11 @@ function main() {
       const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, (limit + 1) - total));
       const bytesRead = fs.readSync(fd, chunk, 0, chunk.length, null);
       if (bytesRead === 0) break;
-      chunks.push(chunk.subarray(0, bytesRead));
       total += bytesRead;
+      if (streamRead) {
+        if (total > limit) break;
+        writeAll(chunk.subarray(0, bytesRead));
+      } else chunks.push(chunk.subarray(0, bytesRead));
     }
     if (total > limit) {
       fail(editorRead
@@ -410,7 +428,7 @@ function main() {
       || final.mtimeMs !== initial.mtimeMs
       || final.ctimeMs !== initial.ctimeMs
     )) fail("File changed while it was being read; please try again");
-    process.stdout.write(Buffer.concat(chunks, total).toString("base64"));
+    if (!streamRead) process.stdout.write(Buffer.concat(chunks, total).toString("base64"));
   } finally {
     fs.closeSync(fd);
   }

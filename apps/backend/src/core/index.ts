@@ -61,6 +61,14 @@ import { claudeTmuxRuntimeRootPrefix } from "./tmux.js";
 import { StorageService } from "./storage.js";
 import { BackendRuntime } from "./backend-runtime.js";
 import { AgentToolsServer } from "./agent-tools.js";
+import type { TranscriptArtifactService } from "./transcript-artifacts/service.js";
+import type { TranscriptArtifactRuntime } from "./transcript-artifacts/runtime.js";
+import {
+  attachTranscriptArtifactRuntime,
+  createTranscriptArtifactService,
+} from "./transcript-artifacts/runtime-wiring.js";
+import type { TranscriptArtifactToolHost } from "./transcript-artifacts/tools.js";
+import type { ArtifactTurnDispatch } from "./workflow-artifact-turns.js";
 import { ContainerHostReachabilityService } from "./container-host-reachability.js";
 import {
   ensureContainerAgentToolsHost,
@@ -160,6 +168,10 @@ export class OrkestratorBackend {
   private readonly workflowAdmission = new WorkAdmissionPool({ name: "workflow-provider" });
   private readonly webAnnotations: WebAnnotationService;
   private readonly webAnnotationRollout: WebAnnotationRollout;
+  /** Durable transcript artifacts (revisions, receipts, publications). */
+  readonly transcriptArtifacts: TranscriptArtifactService;
+  private transcriptArtifactRuntime: TranscriptArtifactRuntime | null = null;
+  private readonly transcriptArtifactRuntimeEnabled: boolean;
   private shuttingDown = false;
   private shutdownPromise: Promise<void> | null = null;
   private activityLeaseSweep: ReturnType<typeof setInterval> | null = null;
@@ -250,6 +262,11 @@ export class OrkestratorBackend {
     };
     /** Test seam; defaults to a Docker-backed checker outside `bun test`. */
     containerHostReachability?: ContainerHostReachabilityService;
+    /**
+     * Start the artifact preview runtime (headless browser runner, content
+     * listener). Defaults to on outside `bun test`.
+     */
+    transcriptArtifactRuntime?: boolean;
   }) {
     this.keyedActivityJobs =
       options.keyedActivityJobs ?? keyedSchedulingEnabled("backend-activity");
@@ -411,6 +428,34 @@ export class OrkestratorBackend {
       process.env.ORKESTRATOR_AGENT_INTERACTION_OBSERVE_ONLY === "1"
         ? ("observe-only" as const)
         : ("disabled" as const);
+    // Per-turn transcript-artifact bookkeeping, shared by native turns and the
+    // workflows that drive providers directly (workflow-artifact-turns.ts).
+    // The artifact service is constructed after this; resolve it lazily.
+    const artifactDispatch: ArtifactTurnDispatch = {
+      beginTurn: (turn) => {
+        const artifacts = this.transcriptArtifacts;
+        if (!artifacts) return {};
+        artifacts.noteDispatchedTurn(turn.environmentId, turn.conversationKey, turn.turnId);
+        if (!turn.needsGrant) return {};
+        return {
+          grant: artifacts.mintArtifactGrant({
+            environmentId: turn.environmentId,
+            projectId: turn.projectId,
+            conversationKey: turn.conversationKey,
+            turnId: turn.turnId,
+            providerSessionId: turn.providerSessionId,
+          }).grant,
+        };
+      },
+      settleTurn: (environmentId, conversationKey, turnId) => {
+        const artifacts = this.transcriptArtifacts;
+        if (!artifacts) return;
+        artifacts.clearDispatchedTurn(environmentId, conversationKey, turnId);
+        artifacts.revokeArtifactGrantsForTurn(environmentId, turnId);
+      },
+      toolsEnabled: () => this.transcriptArtifacts?.toolsEnabled() === true,
+    };
+    const artifactLedger = () => this.transcriptArtifacts ?? null;
     this.nativeAgents = new NativeAgentService(
       storage,
       async <T>(command: string, args: Record<string, unknown> = {}) => {
@@ -552,6 +597,8 @@ export class OrkestratorBackend {
         },
         resolveAgentToolConnection: (environmentId, projectId, tabId, target) =>
           this.agentTools.connection(environmentId, projectId, target, tabId),
+        artifactLedger,
+        artifactDispatch,
         coordinatorDelegationAvailable: (platform) =>
           this.controlMcp.getSettings().running &&
           coordinatorProviderQualification(platform).delegation,
@@ -602,6 +649,31 @@ export class OrkestratorBackend {
     annotationTools.setWebAnnotationToolHost?.(this.webAnnotations.toolHost());
     context.webAnnotations = this.webAnnotations;
     context.webAnnotationRollout = this.webAnnotationRollout;
+    // Transcript artifacts: ordinary agent tools on the common server plus
+    // renderer commands. Preview infrastructure attaches during init().
+    this.transcriptArtifacts = createTranscriptArtifactService(storage, {
+      dataDir: options.dataDir,
+      // Live hints after committed draft/operation/ledger changes.
+      announce: (_environmentId, conversationKey) =>
+        storage.announceTranscriptArtifact(conversationKey),
+      // Asset imports: only uploads staged by the same conversation through
+      // `transcript_artifact_stage_asset`; never a path or URL.
+      assetResolver: (owner, assetRef) =>
+        this.transcriptArtifacts.resolveStagedAsset(owner, assetRef),
+    });
+    this.transcriptArtifactRuntimeEnabled =
+      options.transcriptArtifactRuntime ?? process.env.NODE_ENV !== "test";
+    (
+      this.agentTools as {
+        setTranscriptArtifactToolHost?: (host: TranscriptArtifactToolHost | null) => void;
+      }
+    ).setTranscriptArtifactToolHost?.(this.transcriptArtifacts);
+    context.transcriptArtifacts = this.transcriptArtifacts;
+    // A publication changes its conversation's projected transcript (the
+    // artifact part beside its call): views of that environment re-read.
+    this.transcriptArtifacts.onLedgerChange((change) =>
+      storage.announceNativeAgentSessionProjection(change.environmentId),
+    );
     this.projectGit = new ProjectGitService(storage, async (projectId) => {
       for (const home of await storage.getEnvironmentsByProject(projectId)) {
         if (home.projectHome && (await this.nativeAgents.hasActiveCheckoutWork(home.id)))
@@ -655,6 +727,8 @@ export class OrkestratorBackend {
           this.nativeAgents.recordProviderInteractionObservation(event);
         },
         workflowAdmission: this.workflowAdmission,
+        artifactDispatch,
+        artifactLedger,
       },
     );
     context.buildPipelines = this.buildPipelines;
@@ -689,6 +763,8 @@ export class OrkestratorBackend {
         workflowResultRollout: this.workflowResultRollout,
         resolveAgentToolConnection,
         assertAgentToolsReachable,
+        artifactDispatch,
+        artifactLedger,
         dispatchAddressPrompt: (workflow, presentation) =>
           dispatchMultiReviewAddressPrompt(
             this.nativeAgents,
@@ -729,6 +805,7 @@ export class OrkestratorBackend {
         resolveAgentToolConnection,
         assertAgentToolsReachable,
         workflowAdmission: this.workflowAdmission,
+        artifactDispatch,
       },
     );
     context.featurePlanning = this.featurePlanning;
@@ -903,6 +980,24 @@ export class OrkestratorBackend {
         error instanceof Error ? error.name : "unknown",
       );
     });
+    // Interrupts verification left unfinished by a previous process (never
+    // re-run), then cleans up hourly. The preview runtime is optional.
+    try {
+      this.transcriptArtifacts.initialize();
+    } catch (error) {
+      console.warn(
+        "[backend] Failed to initialize transcript artifacts:",
+        error instanceof Error ? error.name : "unknown",
+      );
+    }
+    if (this.transcriptArtifactRuntimeEnabled) {
+      this.transcriptArtifactRuntime = await attachTranscriptArtifactRuntime(
+        this.transcriptArtifacts,
+        {
+          dataDir: this.context.storage.getDataDir(),
+        },
+      );
+    }
     // Preview definitions load before the gateway accepts commands; resolving
     // targets happens in the background so a slow Docker daemon cannot delay
     // startup. A registry that fails to load disables previews, not the backend.
@@ -1522,6 +1617,20 @@ export class OrkestratorBackend {
     return this.context.previews;
   }
 
+  /**
+   * The application's real page origins, known only once the gateway has
+   * bound: they become the artifact content server's `frame-ancestors`, and
+   * the content origin is re-chosen so it never shares a site with them.
+   */
+  setTranscriptArtifactApplicationOrigins(input: {
+    application: string[];
+    development?: string[];
+  }): void {
+    const status = this.transcriptArtifactRuntime?.setApplicationOrigins(input);
+    if (status && !status.available)
+      console.warn("[backend] Live interactive artifacts are unavailable:", status.reason);
+  }
+
   getControlMcpInfo(): ControlMcpInfo | null {
     return this.controlMcp.getInfo();
   }
@@ -1638,6 +1747,8 @@ export class OrkestratorBackend {
           }),
           new Promise<void>((resolve) => setTimeout(resolve, 5_000).unref?.()),
         ]);
+        await this.transcriptArtifactRuntime?.close().catch(() => undefined);
+        await this.transcriptArtifacts.close().catch(() => undefined);
         const closeLifecycleStorage = async () => {
           await this.context.design?.close();
           // Last: closing checkpoints the WAL into the database file.

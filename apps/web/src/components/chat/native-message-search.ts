@@ -1,4 +1,7 @@
 import { marked, Renderer, type Tokens } from "marked";
+import { artifactPartSearchSegments } from "@/lib/chat/rich-search-text";
+import { cachedArtifactSearchBody } from "@/lib/chat/artifact-requests";
+import { richMarkdownEnabled } from "@/hooks/useTranscriptArtifactCapabilities";
 import { parseLocalFileLinkTarget } from "@/lib/chat/file-url";
 import type { NativeMessage, NativeMessagePart } from "@/lib/chat/native-message-types";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
@@ -8,6 +11,13 @@ import {
   structuredReviewJsonPayload,
 } from "@/lib/chat/json-payload";
 import { userPromptPresentation } from "@/lib/chat/user-prompt-display";
+import { markdownSearchProjection } from "@/lib/chat/rich-markdown/markdown-search";
+import {
+  offsetSegments,
+  withSearchProjection,
+  type SearchProjection,
+  type SearchSegment,
+} from "@/lib/chat/rich-markdown/search-segments";
 import {
   PEER_MAIL_MESSAGE_PREFIX,
   splitPeerMailNativeMessageContent,
@@ -148,19 +158,36 @@ export function markdownToAgentSearchText(
   }
 }
 
-function textPartSources(parts: readonly NativeMessagePart[]): string[] {
-  return parts
-    .filter(
-      (part) =>
-        part.type === "text" ||
-        part.type === "transcript-reference" ||
-        part.type === "async-question",
-    )
-    .flatMap((part) =>
-      part.type === "transcript-reference" && part.comment
-        ? [part.content, part.comment]
-        : [part.content],
-    );
+interface SearchSource {
+  source: string;
+  /** Rendered by `TextPart` (rich pipeline) rather than plain `MessageMarkdown`. */
+  rich: boolean;
+  /** Plain text rendered verbatim (an artifact card's summary). */
+  literal?: boolean;
+}
+
+function textPartSources(parts: readonly NativeMessagePart[]): SearchSource[] {
+  return parts.flatMap((part): SearchSource[] => {
+    if (part.type === "text" || part.type === "async-question") {
+      return [{ source: part.content, rich: true }];
+    }
+    if (part.type === "transcript-reference") {
+      // Quoted excerpts and comments render through plain `MessageMarkdown`.
+      return part.comment
+        ? [
+            { source: part.content, rich: false },
+            { source: part.comment, rich: false },
+          ]
+        : [{ source: part.content, rich: false }];
+    }
+    if (part.type === "artifact") {
+      // The card's summary root plus, once its body has loaded, its label root.
+      return artifactPartSearchSegments(part, cachedArtifactSearchBody(part.artifact)).map(
+        (source) => ({ source, rich: false, literal: true }),
+      );
+    }
+    return [];
+  });
 }
 
 /**
@@ -175,29 +202,55 @@ function textPartSources(parts: readonly NativeMessagePart[]): string[] {
  * wrong text. Folded parts therefore contribute exactly what the collapsed row
  * renders.
  */
-function textPartSearchText(source: string, foldJsonPayload: boolean): string {
+function textPartSearchProjection(
+  source: string,
+  foldJsonPayload: boolean,
+  rich = richMarkdownEnabled(),
+): SearchProjection {
   if (foldJsonPayload) {
     const payload = parseJsonPayload(source);
-    if (payload) return jsonPayloadSearchText(payload);
+    if (payload) return { text: jsonPayloadSearchText(payload), segments: [] };
   }
-  return markdownToAgentSearchText(source);
+  // Derived from the renderer's own parse, so it matches mounted DOM text.
+  return markdownSearchProjection(source, { rich });
 }
 
-function userTextPartSearchText(
+/** Join projections with `separator`, dropping empty ones and shifting segments. */
+function joinProjections(
+  chunks: readonly { projection: SearchProjection; part: number }[],
+  separator: string,
+): SearchProjection {
+  let text = "";
+  const segments: SearchSegment[] = [];
+  for (const { projection, part } of chunks) {
+    if (!projection.text) continue;
+    if (text) text += separator;
+    segments.push(...offsetSegments(projection.segments, text.length, part));
+    text += projection.text;
+  }
+  return { text, segments };
+}
+
+function userTextPartSearchProjection(
   source: string,
   promptPresentation?: NativeMessage["promptPresentation"],
   promptEvidence?: StructuredReviewReport,
-): string {
+  part = 0,
+): SearchProjection {
   const presentation = userPromptPresentation(source, promptPresentation);
   const evidence = promptEvidence
     ? structuredReviewJsonPayload(promptEvidence)
     : presentation.evidencePayload;
-  return [
-    evidence ? jsonPayloadSearchText(evidence) : "",
-    textPartSearchText(presentation.displayText, false),
-  ]
-    .filter(Boolean)
-    .join("\n\n");
+  return joinProjections(
+    [
+      {
+        projection: { text: evidence ? jsonPayloadSearchText(evidence) : "", segments: [] },
+        part,
+      },
+      { projection: textPartSearchProjection(presentation.displayText, false), part },
+    ],
+    "\n\n",
+  );
 }
 
 /**
@@ -205,13 +258,25 @@ function userTextPartSearchText(
  * independently searchable segment, with message.content as the fallback for
  * system/error/legacy messages without text parts.
  */
-export function getNativeMessageSearchText(message: NativeMessage): string {
+function nativeMessageSearchText(message: NativeMessage): string {
+  return getNativeMessageSearchProjection(message).text;
+}
+
+/**
+ * The message's searchable text (exactly `getNativeMessageSearchText`) plus
+ * per-block segments for its rich Markdown blocks. Segment `part` is the
+ * ordinal of the source part within the message.
+ */
+export function getNativeMessageSearchProjection(message: NativeMessage): SearchProjection {
   // A peer-mail card only tags its Markdown body as searchable content.
   if (message.id.startsWith(PEER_MAIL_MESSAGE_PREFIX)) {
-    return markdownToAgentSearchText(
-      splitPeerMailNativeMessageContent(message.content).body,
-      peerMailSearchTextRenderer,
-    );
+    return {
+      text: markdownToAgentSearchText(
+        splitPeerMailNativeMessageContent(message.content).body,
+        peerMailSearchTextRenderer,
+      ),
+      segments: [],
+    };
   }
 
   if (
@@ -219,7 +284,7 @@ export function getNativeMessageSearchText(message: NativeMessage): string {
     message.id.startsWith("system-") ||
     message.id.startsWith("error-")
   ) {
-    return message.content;
+    return { text: message.content, segments: [] };
   }
 
   // NativeMessage only folds JSON for non-user roles. User prompts are indexed
@@ -228,26 +293,46 @@ export function getNativeMessageSearchText(message: NativeMessage): string {
   const foldJsonPayload = message.role !== "user";
   const sources = textPartSources(message.parts);
   if (sources.length === 0) {
-    // Assistant legacy content is indexed as written. User content is rendered
-    // through MessageMarkdown, so normalize it exactly like a user text part.
+    // Legacy content without parts renders through `TextPart`, so it is
+    // normalized exactly like a text part of the same role.
     const payload = foldJsonPayload ? parseJsonPayload(message.content) : null;
-    if (payload) return jsonPayloadSearchText(payload);
+    if (payload) return { text: jsonPayloadSearchText(payload), segments: [] };
     return message.role === "user"
-      ? userTextPartSearchText(message.content, message.promptPresentation, message.promptEvidence)
-      : message.content;
+      ? userTextPartSearchProjection(
+          message.content,
+          message.promptPresentation,
+          message.promptEvidence,
+        )
+      : textPartSearchProjection(message.content, false);
   }
 
   let promptPresentationAvailable = message.promptPresentation;
   let promptEvidenceAvailable = message.promptEvidence;
-  return sources
-    .map((source) => {
-      if (message.role !== "user") return textPartSearchText(source, foldJsonPayload);
+  return joinProjections(
+    sources.map(({ source, rich, literal }, part) => {
+      if (literal) return { projection: { text: source, segments: [] }, part };
+      if (!rich) return { projection: textPartSearchProjection(source, false, false), part };
+      if (message.role !== "user") {
+        return { projection: textPartSearchProjection(source, foldJsonPayload), part };
+      }
       const promptPresentation = promptPresentationAvailable;
       const promptEvidence = promptEvidenceAvailable;
       promptPresentationAvailable = undefined;
       promptEvidenceAvailable = undefined;
-      return userTextPartSearchText(source, promptPresentation, promptEvidence);
-    })
-    .filter(Boolean)
-    .join("\n\n");
+      return {
+        projection: userTextPartSearchProjection(source, promptPresentation, promptEvidence, part),
+        part,
+      };
+    }),
+    "\n\n",
+  );
 }
+
+/**
+ * The searchable text of a message, carrying its semantic projection
+ * (`getSearchText.projection`) so find pairs rich-block matches per block.
+ */
+export const getNativeMessageSearchText = withSearchProjection(
+  nativeMessageSearchText,
+  getNativeMessageSearchProjection,
+);

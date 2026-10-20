@@ -82,6 +82,8 @@ import type { TrustedUserPromptPresentation } from "@orkestrator/protocol/review
 import type { StorageService } from "./storage.js";
 import type { DirectHistoryPageCacheLimits } from "./native-agent-direct-history.js";
 import type { ProjectedMessageCacheLimits } from "./native-agent-projection-entries.js";
+import type { ArtifactLedgerReader } from "./native-agent-service-projection-artifacts.js";
+import type { ArtifactTurnDispatch } from "./workflow-artifact-turns.js";
 import { PendingNativeAgentDispatchError, PendingNativeAgentSteerError } from "./storage.js";
 import {
   AmbiguousPromptDispatchError,
@@ -428,6 +430,22 @@ export interface NativeAgentServiceOptions {
     tabId: string,
     target: "host" | "container",
   ) => { url: string; token: string };
+  /**
+   * Transcript-artifact turn bookkeeping. `beginTurn` attributes the
+   * conversation's artifact tool calls to the dispatched turn and, for a
+   * provider whose Orkestrator tool connection is environment-wide (no
+   * per-tab credential), returns an artifact-only grant the dispatch passes
+   * to the agent as trusted instructions. `settleTurn` revokes that turn's
+   * grants; already-admitted artifact work continues.
+   */
+  artifactDispatch?: ArtifactTurnDispatch;
+  /**
+   * The transcript-artifact publication ledger, read by projection to place
+   * each publication beside the call that published it. A getter because the
+   * artifact service is constructed after this one; absent or null means no
+   * artifact parts are projected (the renderer's own merge still runs).
+   */
+  artifactLedger?: () => ArtifactLedgerReader | null | undefined;
   /** Authoritative availability of the scoped worker-delegation MCP. */
   /**
    * Whether this conversation can actually reach the delegation tools.

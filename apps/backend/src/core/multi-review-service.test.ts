@@ -37,6 +37,7 @@ import {
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
+import type { ArtifactPublication } from "@orkestrator/protocol/transcript-artifacts";
 import type { NativeAgentContextUsage } from "@orkestrator/protocol/native-agent";
 import { newReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 import type {
@@ -536,6 +537,108 @@ test("MultiReviewService exposes an authoritative reviewer transcript read model
       messages: provider.messagesValue,
     });
   });
+});
+
+test("MultiReviewService places a reviewer's own publications beside their publish calls", async () => {
+  const provider = new Provider(false);
+  provider.statusValue = "running";
+  const publishRow = (id: string, toolUseId: string, artifactId: string) => ({
+    id,
+    role: "assistant",
+    content: "",
+    parts: [
+      {
+        type: "tool-invocation",
+        toolName: "mcp__orkestrator-artifacts__publish_artifact",
+        toolUseId,
+        toolState: "success",
+        toolArgs: { artifactId, expectedRevision: 1 },
+      },
+    ],
+  });
+  provider.messagesValue = [
+    publishRow("assistant-1", "toolu_own", "art_own"),
+    publishRow("assistant-2", "toolu_other", "art_other"),
+  ];
+  const publications: ArtifactPublication[] = [];
+  const publication = (
+    owner: { environmentId: string; conversationKey: string },
+    artifactId: string,
+    toolCallId: string,
+  ): ArtifactPublication => {
+    const publicationId = `pub_mr${String(publications.length + 1).padStart(8, "0")}`;
+    return {
+      schemaVersion: 1,
+      publicationId,
+      artifactId,
+      revision: 1,
+      receiptId: `rcpt_${publicationId}`,
+      owner: { backendId: "backend-test", projectId: "project-1", ...owner },
+      conversationSequence: publications.length + 1,
+      publishedAt: "2026-10-20T00:00:01.000Z",
+      anchor: { toolCallId },
+      ref: {
+        schemaVersion: 1,
+        artifactId,
+        revision: 1,
+        publicationId,
+        kind: "chart",
+        title: "Findings chart",
+        summary: "A chart the reviewer published.",
+        provenance: { backendId: "backend-test", origin: "agent" },
+      },
+    };
+  };
+  // A ledger that returns everything: the read path must refuse what it does not own.
+  const artifactLedger = () => ({
+    publicationsForConversation: () => publications,
+    ledgerRevision: () => publications.length,
+  });
+
+  await withService(
+    "env-reviewer-artifacts",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () =>
+        Boolean((await snapshot(started.id))?.reviewers[0]?.providerSessionId),
+      );
+      const reviewer = (await snapshot(started.id))!.reviewers[0]!;
+      // Read once before anything is published: the next read must still see
+      // the publications, because the ledger revision moved.
+      const before = await service.reviewerTranscript(started.id, reviewer.id);
+      expect(before.messages.flatMap((row) => (row as { parts: unknown[] }).parts)).toHaveLength(2);
+
+      publications.push(
+        publication(
+          { environmentId: started.environmentId, conversationKey: reviewer.sessionKey! },
+          "art_own",
+          "toolu_own",
+        ),
+        // Another reviewer's conversation and another environment never appear.
+        publication(
+          { environmentId: started.environmentId, conversationKey: `${reviewer.sessionKey}-x` },
+          "art_other",
+          "toolu_other",
+        ),
+        publication(
+          { environmentId: "env-elsewhere", conversationKey: reviewer.sessionKey! },
+          "art_other",
+          "toolu_other",
+        ),
+      );
+      const read = await service.reviewerTranscript(started.id, reviewer.id);
+      const kinds = (read.messages as Array<{ parts: Array<{ type: string }> }>).map((row) =>
+        row.parts.map((part) => part.type),
+      );
+      expect(kinds).toEqual([["tool-invocation", "artifact"], ["tool-invocation"]]);
+      expect(
+        (read.messages[0] as { parts: Array<{ artifact?: { artifactId: string } }> }).parts[1]
+          ?.artifact?.artifactId,
+      ).toBe("art_own");
+    },
+    { serviceOptions: { artifactLedger } },
+  );
 });
 
 test("MultiReviewService pages earlier reviewer history bound to the reviewer's session", async () => {

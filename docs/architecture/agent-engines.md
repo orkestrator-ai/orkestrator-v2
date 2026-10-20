@@ -849,7 +849,11 @@ server publishes three tools for that capability: one typed submission tool for
 the attempt's result kind, `validate_workflow_result` and
 `get_workflow_result_status`. A live Multi Review reviewer's attempt also gets
 `report_finding` (see "Provisional findings" below). No Kanban or mail tool is
-reachable through it, so a subagent cannot inherit anything broader. The turn carries no provider final-output schema, and the prompt states
+reachable through it, so a subagent cannot inherit anything broader. The one
+addition is a separate, artifact-only `orkestrator-artifacts` server bound to
+the turn's transcript-artifact grant (never to this capability), so workflow
+agents can publish artifacts into their own transcript; see
+[rich-transcripts.md](rich-transcripts.md#workflow-transcripts). The turn carries no provider final-output schema, and the prompt states
 that the tool instruction supersedes any earlier "final JSON only" guidance.
 
 **Legacy mode.** Review and pipeline attempts fall back to

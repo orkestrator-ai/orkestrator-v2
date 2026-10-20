@@ -149,6 +149,26 @@ describe("OpenCode provider dispatch", () => {
     }
   });
 
+  test("delivers an artifact grant only through the prompt's system field", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    try {
+      await provider.send("owned-session", "Draw the chart", {
+        requestId: "request-artifact",
+        artifactGrant: "artifact-grant-secret",
+      });
+      await provider.send("owned-session", "Plain turn", { requestId: "request-plain" });
+      const [withGrant, plain] = fake.promptCalls as Array<Record<string, unknown>>;
+      expect(String(withGrant?.system)).toContain(
+        'scopeCapability set exactly to "artifact-grant-secret"',
+      );
+      expect(JSON.stringify(withGrant?.parts)).not.toContain("artifact-grant-secret");
+      expect(plain?.system).toBeUndefined();
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
   test("a pre-prompt MCP failure stays retryable and does not write a prompt", async () => {
     const fake = openCodeFake();
     fake.setMcpAddError(new Error("mcp add failed"));

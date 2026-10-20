@@ -155,6 +155,10 @@ import {
   nativeAgentObservationGroupKey,
   observationSatisfies,
 } from "./native-agent-observation.js";
+import {
+  beginArtifactDispatchTurn,
+  settleArtifactDispatchTurn,
+} from "./workflow-artifact-turns.js";
 
 export abstract class NativeAgentServicePrompt extends NativeAgentServiceProjection {
   sessionActivitySnapshot(
@@ -418,6 +422,7 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
         : ("completed" as const);
     const error =
       outcome === "failed" ? (terminalError ?? observation.error)?.slice(0, 500) : undefined;
+    this.settleArtifactTurn(session, input.requestId);
     try {
       await this.storage.recordNativeAgentTurnOutcome(key, session.providerSessionId, {
         requestId: input.requestId,
@@ -429,6 +434,39 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
       // The answer is still correct for this call; a later call re-reads.
     }
     return { outcome, ...(error ? { error } : {}) };
+  }
+
+  /**
+   * Attribute this conversation's artifact tool calls to the turn being
+   * dispatched and, when the provider's Orkestrator connection is
+   * environment-wide (no per-tab credential), mint the turn's artifact-only
+   * grant. Best-effort: artifact bookkeeping never blocks a prompt.
+   */
+  protected beginArtifactTurn(
+    durable: PersistedNativeAgentSession,
+    requestId: string,
+  ): string | undefined {
+    if (durable.owner?.kind !== "environment") return undefined;
+    return beginArtifactDispatchTurn(this.options.artifactDispatch, {
+      environmentId: durable.environmentId,
+      projectId: durable.owner.projectId,
+      conversationKey: durable.logicalSessionKey,
+      turnId: requestId,
+      providerSessionId: durable.providerSessionId,
+      needsGrant: nativeAgentCapabilities(durable.agent).agentTools !== true,
+    });
+  }
+
+  protected settleArtifactTurn(
+    session: Pick<PersistedNativeAgentSession, "environmentId" | "logicalSessionKey">,
+    requestId: string,
+  ): void {
+    settleArtifactDispatchTurn(
+      this.options.artifactDispatch,
+      session.environmentId,
+      session.logicalSessionKey,
+      requestId,
+    );
   }
 
   /**
@@ -464,6 +502,7 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
         }
       }
     }
+    this.settleArtifactTurn(session, requestId);
     try {
       await this.storage.recordNativeAgentTurnOutcome(session.key, session.providerSessionId, {
         requestId,
@@ -932,6 +971,7 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
              * answer from before this turn and must never be applied after the
              * `working` recorded below (it would end a turn that just began).
              */
+            const artifactGrant = this.beginArtifactTurn(durable, input.requestId);
             const groupKey = nativeAgentObservationGroupKey(durable.environmentId, durable.agent);
             const releaseDispatchFence = this.observations.beginDispatch(durable.key, groupKey);
             try {
@@ -969,6 +1009,7 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
                   durable.controls?.approvalMode,
                 ),
                 agentMcp,
+                ...(artifactGrant ? { artifactGrant } : {}),
               });
               // Provider acceptance is the authoritative working edge. Record it
               // before the durable dispatch bookkeeping completes so a newer
@@ -984,6 +1025,10 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
                 providerSessionId: durable.providerSessionId,
               });
             } catch (error) {
+              // The turn never verifiably started (rejected), or its outcome
+              // is unknown (ambiguous): either way no settlement will follow
+              // for it, so its artifact grant must not outlive this call.
+              this.settleArtifactTurn(durable, input.requestId);
               if (
                 mailInject &&
                 error instanceof ProviderUnavailableError &&

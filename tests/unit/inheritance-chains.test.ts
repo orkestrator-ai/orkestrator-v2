@@ -98,6 +98,11 @@ const INTENTIONAL_SUBCLASSES: ReadonlyArray<{
   reason: string;
 }> = [
   {
+    classes: ["RichRenderDeterministicError", "MermaidDeterministicError"],
+    reason:
+      "Error refinement: a Mermaid syntax failure is a deterministic render failure the scheduler caches.",
+  },
+  {
     classes: ["ProviderUnavailableError", "ProviderUnreachableError"],
     reason: "Error refinement: callers treat an unreachable provider as unavailable.",
   },

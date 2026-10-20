@@ -12,6 +12,7 @@ export default defineConfig({
     "web-annotations-electron.spec.ts",
     "terminal-input-resume-electron.spec.ts",
     "service-preview-electron.spec.ts",
+    "artifact-host-electron.spec.ts",
   ],
   workers: 1,
   timeout: 120_000,

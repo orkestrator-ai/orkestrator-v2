@@ -15,7 +15,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import { promisify } from "node:util";
-import type { ThreadItem } from "../codex-item-types.js";
+import type { McpToolCallItem, ThreadItem } from "../codex-item-types.js";
 import { normalizeTranscriptToolArgs } from "../subagent-transcript.js";
 import { mapTodoArgs, summarizeTodoList } from "../todo-helpers.js";
 import type { EngineItem } from "../engine/types.js";
@@ -308,6 +308,28 @@ export async function getFileChangeDiffMetadata(
   return metadata;
 }
 
+/**
+ * An MCP tool call's part. Synchronous and exported so a history reload renders
+ * a rollout's recorded call through exactly this code (`history/rollout.ts`).
+ */
+export function mcpToolCallParts(item: McpToolCallItem): NormalizedPart[] {
+  return [
+    {
+      type: "tool-invocation",
+      toolUseId: item.id,
+      content: item.tool,
+      toolName: item.tool,
+      toolArgs: (item.arguments ?? {}) as Record<string, unknown>,
+      toolState:
+        item.status === "failed" ? "failure" : item.status === "completed" ? "success" : "pending",
+      toolTitle: `${item.server}:${item.tool}`,
+      toolOutput: stringifyUnknown(item.result),
+      toolError: item.error?.message,
+      ...finishedDuration(item),
+    },
+  ];
+}
+
 export async function itemToParts(
   item: EngineItem,
   cwd: string,
@@ -379,25 +401,7 @@ export async function itemToParts(
         })),
       );
     case "mcp_tool_call":
-      return [
-        {
-          type: "tool-invocation",
-          toolUseId: item.id,
-          content: item.tool,
-          toolName: item.tool,
-          toolArgs: (item.arguments ?? {}) as Record<string, unknown>,
-          toolState:
-            item.status === "failed"
-              ? "failure"
-              : item.status === "completed"
-                ? "success"
-                : "pending",
-          toolTitle: `${item.server}:${item.tool}`,
-          toolOutput: stringifyUnknown(item.result),
-          toolError: item.error?.message,
-          ...finishedDuration(item),
-        },
-      ];
+      return mcpToolCallParts(item);
     case "dynamic_tool_call": {
       const output =
         capCommandOutput(stringifyDynamicToolContent(item.content_items) ?? "") || undefined;

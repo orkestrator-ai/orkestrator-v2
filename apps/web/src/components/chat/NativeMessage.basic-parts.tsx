@@ -5,6 +5,11 @@ import {
   type MeasuredWorkspaceChange,
 } from "@orkestrator/protocol/tool-diff";
 import {
+  DEFAULT_LINE_DIFF_BUDGET,
+  diffLines,
+  unifiedDiffLines,
+} from "@orkestrator/protocol/line-diff";
+import {
   Brain,
   ChevronRight,
   Wrench,
@@ -32,6 +37,7 @@ import {
   resolveQuestionToolAnswers,
 } from "@/lib/question-tool";
 import { QuestionToolDetails } from "./QuestionToolDetails";
+import { ArtifactDraftInspectorAction, draftInspectorTool } from "./rich/ArtifactDraftInspector";
 import {
   markdownComponents,
   TASK_LIST_SYNTAX_PATTERN,
@@ -192,6 +198,7 @@ export function ToolPart({
   commandChanges,
   durationMs,
   deferredDetails = false,
+  mcpServerName,
 }: {
   expansionKey: string;
   toolName?: string;
@@ -221,8 +228,12 @@ export function ToolPart({
   durationMs?: number;
   /** Output exists but is fetched on expand, so the row must stay expandable. */
   deferredDetails?: boolean;
+  /** Reported MCP server, so a same-named tool of another server is not taken for Orkestrator's. */
+  mcpServerName?: string;
 }) {
   const [isOpen, setIsOpen] = useMessagePartExpansion(expansionKey);
+  // Canonical artifact authoring rows get a host-owned "Inspect draft" action.
+  const inspectsArtifactDraft = draftInspectorTool(toolName, { toolTitle, mcpServerName }) !== null;
   const displayToolName = getToolDisplayName(toolName);
   const displayToolTitle = getToolTitleDisplayName(toolTitle, toolName);
   const isTaskStop = isBackgroundTaskStopTool(toolName);
@@ -475,56 +486,74 @@ export function ToolPart({
   // line would report work that has already stopped.
   const livingProgress = toolState === "pending" ? progress : undefined;
 
+  const trigger = (
+    <CollapsibleTrigger
+      className={cn(
+        "flex items-center gap-2 w-full text-xs text-muted-foreground py-1.5 px-2 rounded-md transition-colors hover:text-foreground",
+        hasExpandableContent && "cursor-pointer",
+        !hasExpandableContent && "cursor-default",
+      )}
+      disabled={!hasExpandableContent}
+    >
+      <ChevronRight
+        className={cn(
+          "w-3 h-3 transition-transform shrink-0",
+          isOpen && "rotate-90",
+          !hasExpandableContent && "opacity-0",
+        )}
+      />
+      <Wrench className="w-3.5 h-3.5 shrink-0" />
+      <span className="font-medium">{displayToolName}</span>
+      {displayInfo && (
+        <span
+          className={cn(
+            "text-muted-foreground/80 truncate flex-1 text-left",
+            displayInfo.monospace && "font-mono",
+          )}
+        >
+          {displayInfo.text}
+        </span>
+      )}
+      {isTaskAction && taskId && displayInfo?.text !== taskId && (
+        <span
+          className="max-w-28 shrink-0 truncate font-mono text-[10px] text-muted-foreground/50"
+          title={taskId}
+        >
+          {taskId}
+        </span>
+      )}
+      {shouldShowToolTitle && (
+        <span className="text-muted-foreground/70 truncate flex-1 text-left">
+          {displayToolTitle}
+        </span>
+      )}
+      {commandChanges && <CommandChangeStats change={commandChanges} />}
+      {displayedState && (
+        <span className={cn("ml-auto shrink-0", displayedState.className)}>
+          {displayedState.label}
+        </span>
+      )}
+      <ToolDurationLabel label={durationLabel} />
+    </CollapsibleTrigger>
+  );
+
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen} className="my-0">
-      <CollapsibleTrigger
-        className={cn(
-          "flex items-center gap-2 w-full text-xs text-muted-foreground py-1.5 px-2 rounded-md transition-colors hover:text-foreground",
-          hasExpandableContent && "cursor-pointer",
-          !hasExpandableContent && "cursor-default",
-        )}
-        disabled={!hasExpandableContent}
-      >
-        <ChevronRight
-          className={cn(
-            "w-3 h-3 transition-transform shrink-0",
-            isOpen && "rotate-90",
-            !hasExpandableContent && "opacity-0",
-          )}
-        />
-        <Wrench className="w-3.5 h-3.5 shrink-0" />
-        <span className="font-medium">{displayToolName}</span>
-        {displayInfo && (
-          <span
-            className={cn(
-              "text-muted-foreground/80 truncate flex-1 text-left",
-              displayInfo.monospace && "font-mono",
-            )}
-          >
-            {displayInfo.text}
-          </span>
-        )}
-        {isTaskAction && taskId && displayInfo?.text !== taskId && (
-          <span
-            className="max-w-28 shrink-0 truncate font-mono text-[10px] text-muted-foreground/50"
-            title={taskId}
-          >
-            {taskId}
-          </span>
-        )}
-        {shouldShowToolTitle && (
-          <span className="text-muted-foreground/70 truncate flex-1 text-left">
-            {displayToolTitle}
-          </span>
-        )}
-        {commandChanges && <CommandChangeStats change={commandChanges} />}
-        {displayedState && (
-          <span className={cn("ml-auto shrink-0", displayedState.className)}>
-            {displayedState.label}
-          </span>
-        )}
-        <ToolDurationLabel label={durationLabel} />
-      </CollapsibleTrigger>
+      {inspectsArtifactDraft ? (
+        // Beside the trigger, never inside it: no nested buttons.
+        <div className="flex min-w-0 items-center gap-1">
+          <div className="min-w-0 flex-1">{trigger}</div>
+          <ArtifactDraftInspectorAction
+            toolName={toolName}
+            toolTitle={toolTitle}
+            mcpServerName={mcpServerName}
+            toolArgs={toolArgs}
+            toolOutput={toolOutput}
+          />
+        </div>
+      ) : (
+        trigger
+      )}
 
       {deniedLine ? (
         <div
@@ -707,48 +736,95 @@ function parseDiffLines(
   });
 }
 
-/** Generate diff lines from before/after content */
-function generateDiffFromBeforeAfter(
-  before?: string,
-  after?: string,
-): Array<{ type: "add" | "remove" | "context" | "header"; content: string }> {
-  const result: Array<{
-    type: "add" | "remove" | "context" | "header";
-    content: string;
-  }> = [];
+type DiffDisplayLine = {
+  type: "add" | "remove" | "context" | "header";
+  content: string;
+};
 
+interface SideDiff {
+  lines: DiffDisplayLine[];
+  additions: number;
+  deletions: number;
+  /** Set when the change is beyond the inline diff budget. */
+  tooLarge: {
+    reason: string;
+    oldLineCount: number;
+    newLineCount: number;
+  } | null;
+}
+
+const TOO_LARGE_REASONS: Record<"line-count" | "edit-distance" | "output-lines", string> = {
+  "line-count": "the files are too long to compare inline",
+  "edit-distance": "the edit is too extensive to compare inline",
+  "output-lines": "the changed region is too long to show inline",
+};
+
+/**
+ * Display lines for an authoritative change that supplies only before/after
+ * text. Both sides present: a bounded minimal line diff in unified hunks, so a
+ * one-line edit in a long file shows as that one line. Beyond the inline
+ * budget the result is a labelled summary, never a coarse whole-file patch.
+ * One side only (a created or deleted file) is genuinely all additions or all
+ * removals.
+ */
+function diffFromBeforeAfter(before?: string, after?: string): SideDiff {
+  if (before !== undefined && after !== undefined) {
+    const result = diffLines(before, after);
+    if (result.kind === "too-large") {
+      return {
+        lines: [],
+        additions: 0,
+        deletions: 0,
+        tooLarge: {
+          reason: TOO_LARGE_REASONS[result.reason],
+          oldLineCount: result.oldLineCount,
+          newLineCount: result.newLineCount,
+        },
+      };
+    }
+    return {
+      lines: unifiedDiffLines(result.hunks).map((content) => ({
+        type: content.startsWith("@@")
+          ? "header"
+          : content.startsWith("+")
+            ? "add"
+            : content.startsWith("-")
+              ? "remove"
+              : "context",
+        content,
+      })),
+      additions: result.additions,
+      deletions: result.deletions,
+      tooLarge: null,
+    };
+  }
   // Logical lines, not String#split: a trailing newline terminates the last
   // line rather than creating an empty `+`/`-` row that disagrees with the
   // collapsed badge. An empty file is zero lines, not one empty line.
-  const contentLines = (content: string): string[] => splitTextLines(content);
-
-  // If we have both before and after, show the diff
-  if (before !== undefined && after !== undefined) {
-    // Add removed lines
-    const beforeLines = contentLines(before);
-    for (const line of beforeLines) {
-      result.push({ type: "remove", content: `-${line}` });
-    }
-    // Add added lines
-    const afterLines = contentLines(after);
-    for (const line of afterLines) {
-      result.push({ type: "add", content: `+${line}` });
-    }
-  } else if (after !== undefined) {
-    // Only additions (write/new content)
-    const afterLines = contentLines(after);
-    for (const line of afterLines) {
-      result.push({ type: "add", content: `+${line}` });
-    }
-  } else if (before !== undefined) {
-    // Only deletions
-    const beforeLines = contentLines(before);
-    for (const line of beforeLines) {
-      result.push({ type: "remove", content: `-${line}` });
-    }
+  const side = after ?? before;
+  const lines = splitTextLines(side);
+  if (lines.length > DEFAULT_LINE_DIFF_BUDGET.maxOutputLines) {
+    return {
+      lines: [],
+      additions: 0,
+      deletions: 0,
+      tooLarge: {
+        reason: TOO_LARGE_REASONS["output-lines"],
+        oldLineCount: after === undefined ? lines.length : 0,
+        newLineCount: after === undefined ? 0 : lines.length,
+      },
+    };
   }
-
-  return result;
+  const added = after !== undefined;
+  return {
+    lines: lines.map((line) => ({
+      type: added ? "add" : "remove",
+      content: `${added ? "+" : "-"}${line}`,
+    })),
+    additions: added ? lines.length : 0,
+    deletions: added ? 0 : lines.length,
+    tooLarge: null,
+  };
 }
 
 /** Count additions and deletions from diff output or metadata */
@@ -842,15 +918,36 @@ export function EditToolPart({
   const diffAdditions = toolDiff?.additions;
   const diffDeletions = toolDiff?.deletions;
 
-  // Calculate diff stats
+  // Before/after sides are only diffed when nothing authoritative (a provider
+  // patch, or diff-formatted output) is available.
+  const outputHasDiff = useMemo(
+    () =>
+      parseDiffLines(toolOutput || "").some(
+        (line) => line.type === "add" || line.type === "remove",
+      ),
+    [toolOutput],
+  );
+  const sideDiff = useMemo(
+    () =>
+      !diffSource && !outputHasDiff && (diffBefore !== undefined || diffAfter !== undefined)
+        ? diffFromBeforeAfter(diffBefore, diffAfter)
+        : null,
+    [diffSource, outputHasDiff, diffBefore, diffAfter],
+  );
+
+  // Calculate diff stats. With both sides present the minimal diff's counts
+  // replace whole-side line totals, which would overstate a small edit.
   const { additions, deletions } = useMemo(
-    () => countDiffStats(toolOutput, toolDiff),
+    () =>
+      sideDiff && !sideDiff.tooLarge && diffBefore !== undefined && diffAfter !== undefined
+        ? { additions: sideDiff.additions, deletions: sideDiff.deletions }
+        : countDiffStats(toolOutput, toolDiff),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- value deps, see above
-    [toolOutput, diffSource, diffBefore, diffAfter, diffAdditions, diffDeletions],
+    [sideDiff, toolOutput, diffSource, diffBefore, diffAfter, diffAdditions, diffDeletions],
   );
 
   // Parse diff lines for display - try unified diff first, then output, then generate from before/after
-  const diffLines = useMemo(() => {
+  const diffDisplayLines = useMemo(() => {
     // A provider-supplied diff is authoritative even when it contains no
     // additions or removals. Falling through to before/after in that case would
     // turn an unchanged whole-file state into a synthetic full replacement. An
@@ -860,22 +957,14 @@ export function EditToolPart({
     }
 
     // Then try parsing from output (if it's in diff format)
-    const outputLines = parseDiffLines(toolOutput || "");
-    const hasActualDiffContent = outputLines.some(
-      (line) => line.type === "add" || line.type === "remove",
-    );
-    if (hasActualDiffContent) {
-      return outputLines;
+    if (outputHasDiff) {
+      return parseDiffLines(toolOutput || "");
     }
 
-    // Finally generate from before/after content
-    if (toolDiff?.before !== undefined || toolDiff?.after !== undefined) {
-      return generateDiffFromBeforeAfter(toolDiff.before, toolDiff.after);
-    }
-
-    return [];
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- value deps, see above
-  }, [toolOutput, diffSource, diffBefore, diffAfter]);
+    // Finally the bounded minimal diff of the before/after sides
+    return sideDiff?.lines ?? [];
+  }, [toolOutput, diffSource, outputHasDiff, sideDiff]);
+  const tooLarge = sideDiff?.tooLarge ?? null;
 
   // Determine if there's content to show when expanded. A deferred part counts:
   // its diff only loads *because* the row was expanded, so gating the trigger
@@ -883,7 +972,8 @@ export function EditToolPart({
   const hasExpandableContent =
     toolOutput ||
     toolError ||
-    diffLines.length > 0 ||
+    diffDisplayLines.length > 0 ||
+    tooLarge ||
     toolDiff?.diff ||
     toolDiff?.before ||
     toolDiff?.after ||
@@ -965,11 +1055,32 @@ export function EditToolPart({
               )}
             </div>
 
+            {/* Change beyond the inline diff budget: a labelled summary, not a fake patch */}
+            {tooLarge && (
+              <div role="note" className="px-3 py-2 text-xs text-muted-foreground">
+                <span className="font-medium text-foreground">Change too large to show inline</span>
+                {" — "}
+                {tooLarge.oldLineCount} → {tooLarge.newLineCount} lines; {tooLarge.reason}.{" "}
+                {createFileTab && filePath ? (
+                  <button
+                    type="button"
+                    className="font-medium text-foreground underline-offset-2 hover:underline"
+                    onClick={handlePopOut}
+                  >
+                    Open the full diff
+                  </button>
+                ) : (
+                  "Open the file's diff to review it."
+                )}{" "}
+                (The full diff viewer shows the current workspace state.)
+              </div>
+            )}
+
             {/* Unified diff view */}
-            {diffLines.length > 0 && (
+            {diffDisplayLines.length > 0 && (
               <div className="max-h-64 overflow-auto">
                 <pre className="text-xs font-mono">
-                  {diffLines.map((line, i) => (
+                  {diffDisplayLines.map((line, i) => (
                     <div
                       key={i}
                       className={cn(
@@ -988,7 +1099,7 @@ export function EditToolPart({
             )}
 
             {/* Fallback to raw output if no diff lines parsed */}
-            {diffLines.length === 0 && toolOutput && (
+            {diffDisplayLines.length === 0 && !tooLarge && toolOutput && (
               <div className="px-3 py-2 max-h-64 overflow-auto">
                 <pre className="text-xs font-mono text-foreground/80 whitespace-pre-wrap break-all">
                   {toolOutput}

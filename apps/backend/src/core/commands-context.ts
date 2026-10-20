@@ -23,6 +23,8 @@ export type CommandContext = {
   previews?: import("./preview-runtime.js").PreviewRuntime;
   mcpManagement?: import("./mcp-management/service.js").McpManagementService;
   webAnnotations?: import("./web-annotation-service.js").WebAnnotationService;
+  /** Transcript artifacts: durable revisions, receipts and publications. */
+  transcriptArtifacts?: import("./transcript-artifacts/service.js").TranscriptArtifactService;
   /** Backend rollout switch for web annotations (enabled / read-only / disabled). */
   webAnnotationRollout?: import("./web-annotation-rollout.js").WebAnnotationRollout;
   storage: StorageService;

@@ -47,6 +47,7 @@ import {
   showOnPageInput,
   startCaptureInput,
 } from "./browser-preview-capture-validation.js";
+import { registerArtifactHostIpc, type ArtifactHostController } from "./artifact-host-ipc.js";
 
 type BackendInvoker = {
   invoke(command: string, args: Record<string, unknown>): Promise<unknown> | unknown;
@@ -151,6 +152,8 @@ export type MainIpcDependencies = {
   openConnectionWindow: (connectionId: string, event?: IpcEventLike) => Promise<void>;
   browserPreviews?: BrowserPreviewController;
   getBrowserPreviews?: (event: IpcEventLike) => BrowserPreviewController | null;
+  /** The sending window's live interactive-artifact host; absent means unavailable. */
+  getArtifactHosts?: (event: IpcEventLike) => ArtifactHostController | null;
   trustedRendererUrl: string;
 };
 
@@ -238,6 +241,7 @@ export function registerMainIpc({
   openConnectionWindow,
   browserPreviews,
   getBrowserPreviews,
+  getArtifactHosts,
   trustedRendererUrl,
 }: MainIpcDependencies): void {
   const isTrustedSender = (event: IpcEventLike): boolean =>
@@ -526,4 +530,11 @@ export function registerMainIpc({
   handle("orkestrator:browser-preview:destroy", (event, tabId: unknown) =>
     previews(event).destroy(browserPreviewTabId(tabId)),
   );
+
+  // Live interactive artifacts: positioning and presentation messages only.
+  registerArtifactHostIpc({
+    handle,
+    getController: (event) => getArtifactHosts?.(event) ?? null,
+    trustedRendererUrl,
+  });
 }

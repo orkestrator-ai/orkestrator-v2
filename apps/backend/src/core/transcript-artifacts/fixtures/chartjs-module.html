@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <title>Pinned Chart.js bars (module)</title>
+    <style>
+      body {
+        font:
+          14px system-ui,
+          sans-serif;
+        margin: 16px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Weekly tasks</h1>
+    <canvas
+      id="chart"
+      width="480"
+      height="240"
+      role="img"
+      aria-label="Bar chart of tasks per day"
+    ></canvas>
+    <p>Bars: <span data-artifact-test="bar-count">0</span></p>
+    <p>Max: <span data-artifact-test="max-value">0</span></p>
+    <p>Drawn: <span data-artifact-test="drawn">no</span></p>
+    <p>Auto entry: <span data-artifact-test="auto-entry">unknown</span></p>
+    <button type="button" data-artifact-test="add-day">Add a day</button>
+    <script type="module">
+      import { Chart, registerables } from "chart.js";
+
+      Chart.register(...registerables);
+      const data = [3, 7, 4, 9, 5];
+      const chart = new Chart(document.getElementById("chart"), {
+        type: "bar",
+        data: {
+          labels: data.map((_, index) => `Day ${index + 1}`),
+          datasets: [{ label: "Tasks", data, backgroundColor: "#4f6bed" }],
+        },
+        options: { animation: false, responsive: false, plugins: { legend: { display: false } } },
+      });
+      function report() {
+        const bars = chart.getDatasetMeta(0).data;
+        document.querySelector('[data-artifact-test="bar-count"]').textContent = String(
+          bars.length,
+        );
+        document.querySelector('[data-artifact-test="max-value"]').textContent = String(
+          Math.max(...data),
+        );
+        document.querySelector('[data-artifact-test="drawn"]').textContent = bars.every(
+          (bar) => Number.isFinite(bar.x) && bar.height > 0,
+        )
+          ? "yes"
+          : "no";
+      }
+      document.querySelector('[data-artifact-test="add-day"]').addEventListener("click", () => {
+        data.push(12);
+        chart.data.labels.push(`Day ${data.length}`);
+        chart.update();
+        report();
+      });
+      report();
+    </script>
+    <script type="module">
+      import AutoChart from "chart.js/auto";
+
+      document.querySelector('[data-artifact-test="auto-entry"]').textContent =
+        AutoChart === globalThis.Chart && typeof AutoChart.register === "function"
+          ? "shared"
+          : "different";
+    </script>
+  </body>
+</html>

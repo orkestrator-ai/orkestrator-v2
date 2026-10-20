@@ -358,12 +358,23 @@ function renderMcp(rendered: RenderedToolCall, args: JsonObject, result: ToolRes
   if (!value) return;
   const content = Array.isArray(value.content) ? value.content : [];
   const text = content
-    .map((entry) =>
-      isObject(entry) ? (readRawText(entry.text) ?? stringify(entry)) : String(entry),
-    )
+    .map((entry) => (isObject(entry) ? (mcpContentText(entry) ?? stringify(entry)) : String(entry)))
     .join("\n");
   if (value.isError === true) rendered.toolError = boundText(text, MAX_TOOL_OUTPUT_BYTES);
   else rendered.toolOutput = boundText(text, MAX_TOOL_OUTPUT_BYTES);
+}
+
+/**
+ * The text of one MCP result item. The SDK wraps it (`{ text: { text } }`,
+ * see `McpToolResultContentItemSchema`); a bare `{ text }` is accepted too.
+ * Reading only the bare form showed every MCP result as a JSON wrapper with
+ * escaped quotes instead of the text the tool returned. An image item is
+ * named, never inlined: its base64 would fill the card's whole budget.
+ */
+function mcpContentText(entry: JsonObject): string | undefined {
+  if (isObject(entry.text)) return readRawText(entry.text.text);
+  if (isObject(entry.image)) return "[image]";
+  return readRawText(entry.text);
 }
 
 function renderCreatePlan(rendered: RenderedToolCall, args: JsonObject, _result: ToolResult): void {

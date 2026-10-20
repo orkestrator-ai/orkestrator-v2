@@ -1,5 +1,6 @@
 import type { Part as OpenCodePart } from "@opencode-ai/sdk/v2/types";
 import { providerInlineErrorMessageId } from "@orkestrator/protocol/native-agent";
+import { redactArtifactGrantArgs } from "@orkestrator/protocol/transcript-artifacts";
 import {
   tryParseStructuredOutputText,
   type JsonSchema,
@@ -469,7 +470,14 @@ export function normalizeOpenCodeInteractiveMessage(
       type: isSubagent ? "subagent" : "tool-invocation",
       content: typeof state?.title === "string" ? state.title : toolName,
       toolName,
-      ...(input ? { toolArgs: input } : {}),
+      // A shared registration's artifact grant never leaves the provider
+      // record: every consumer of this normalization sees it redacted.
+      ...(input
+        ? {
+            toolArgs:
+              redactArtifactGrantArgs(toolName, input, { toolTitle: state?.title }) ?? input,
+          }
+        : {}),
       ...(normalizedToolState ? { toolState: normalizedToolState } : {}),
       ...(toolDurationMs === undefined ? {} : { toolDurationMs }),
       ...(typeof state?.title === "string" ? { toolTitle: state.title } : {}),

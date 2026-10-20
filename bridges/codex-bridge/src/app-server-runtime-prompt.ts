@@ -93,7 +93,7 @@ export class CodexRuntimePrompt {
       attachments: PromptAttachmentInput[];
       outputSchema?: JsonSchema;
       readOnly?: boolean;
-      agentMcp?: { url: string; token: string; design?: boolean };
+      agentMcp?: EngineTurnConfig["agentMcp"];
       workflowResultTool?: string;
       /** The session's composer approval mode. */
       approvalMode?: CodexApprovalMode;
@@ -149,7 +149,7 @@ export class CodexRuntimePrompt {
       attachments: PromptAttachmentInput[];
       outputSchema?: JsonSchema;
       readOnly?: boolean;
-      agentMcp?: { url: string; token: string; design?: boolean };
+      agentMcp?: EngineTurnConfig["agentMcp"];
       workflowResultTool?: string;
       /** The session's composer approval mode. */
       approvalMode?: CodexApprovalMode;

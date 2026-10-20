@@ -1237,7 +1237,7 @@ export interface PromptOptions {
   outputSchema?: JsonSchema;
   /** Stable caller id used to reconcile an async structured turn. */
   requestId?: string;
-  agentMcp?: { url: string; token: string; design?: boolean };
+  agentMcp?: { url: string; token: string; design?: boolean; artifacts?: { token: string } };
   parameterValues?: Record<string, string | boolean>;
   /** Optional backend-owned budget cap for this session. */
   maxBudgetUsd?: number;

@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <title>Pinned d3 bars (module)</title>
+    <style>
+      body {
+        font:
+          14px system-ui,
+          sans-serif;
+        margin: 16px;
+      }
+      .bar {
+        fill: #4f6bed;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Weekly tasks</h1>
+    <svg
+      id="chart"
+      width="480"
+      height="200"
+      role="img"
+      aria-label="Bar chart of tasks per day"
+    ></svg>
+    <p>Bars: <span data-artifact-test="bar-count">0</span></p>
+    <p>Max: <span data-artifact-test="max-value">0</span></p>
+    <button type="button" data-artifact-test="add-day">Add a day</button>
+    <script type="module">
+      import * as d3 from "d3";
+
+      const data = [3, 7, 4, 9, 5];
+      const svg = d3.select("#chart");
+      function draw() {
+        const x = d3.scaleBand().domain(d3.range(data.length)).range([0, 480]).padding(0.2);
+        const y = d3
+          .scaleLinear()
+          .domain([0, d3.max(data)])
+          .range([200, 0]);
+        svg
+          .selectAll("rect")
+          .data(data)
+          .join("rect")
+          .attr("class", "bar")
+          .attr("x", (_, i) => x(i))
+          .attr("width", x.bandwidth())
+          .attr("y", (d) => y(d))
+          .attr("height", (d) => 200 - y(d));
+        document.querySelector('[data-artifact-test="bar-count"]').textContent = String(
+          svg.selectAll("rect").size(),
+        );
+        document.querySelector('[data-artifact-test="max-value"]').textContent = String(
+          d3.max(data),
+        );
+      }
+      document.querySelector('[data-artifact-test="add-day"]').addEventListener("click", () => {
+        data.push(12);
+        draw();
+      });
+      draw();
+    </script>
+  </body>
+</html>

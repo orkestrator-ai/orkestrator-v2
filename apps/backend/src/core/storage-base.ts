@@ -294,6 +294,16 @@ export abstract class StorageBase {
     this.announce("native-agent-session", environmentId, undefined, scope);
   }
 
+  /**
+   * Publish a content-free hint that a conversation's transcript artifacts
+   * (drafts, verification operations or publication ledger) changed. The
+   * artifact service commits to its own store first and only then calls
+   * this; the id is the conversation's logical session key.
+   */
+  announceTranscriptArtifact(conversationKey: string): void {
+    this.announce("transcript-artifact", conversationKey);
+  }
+
   getDataDir(): string {
     return this.dataDir;
   }

@@ -250,8 +250,16 @@ export async function readReviewerTranscript(
     maxMessages: MAX_REVIEWER_TRANSCRIPT_MESSAGES,
     maxBytes: MAX_REVIEWER_TRANSCRIPT_BYTES,
   },
+  /**
+   * Further state the returned token must describe besides the provider's
+   * source (the reviewer conversation's artifact ledger revision). A token
+   * minted under another value is not offered to the provider, so its
+   * "unchanged" cannot hide that state's change.
+   */
+  tokenState?: string,
 ): Promise<ReviewerTranscriptRead> {
   const capable = provider as SnapshotCapable;
+  const tokenScope = tokenState ? `${providerSessionId} state:${tokenState}` : providerSessionId;
   if (typeof capable.transcriptSnapshot === "function") {
     const snapshot = await capable.transcriptSnapshot(providerSessionId, {
       limit: limits.maxMessages,
@@ -261,16 +269,23 @@ export async function readReviewerTranscript(
       ...(typeof capable.transcriptDetail === "function"
         ? { representation: "summary" as const }
         : {}),
-      ...(unwrapToken(providerSessionId, knownSourceToken)
-        ? { knownSourceToken: unwrapToken(providerSessionId, knownSourceToken) }
+      ...(unwrapToken(tokenScope, knownSourceToken)
+        ? { knownSourceToken: unwrapToken(tokenScope, knownSourceToken) }
         : {}),
     });
     if ("unchanged" in snapshot) {
-      const sourceToken = wrapToken(providerSessionId, snapshot.sourceToken);
+      const sourceToken = wrapToken(tokenScope, snapshot.sourceToken);
       // An unwrappable token cannot be sent back; answer with a snapshot the
       // renderer can use instead of an unchanged it cannot follow up on.
       if (sourceToken) return { kind: "unchanged", sourceToken, fallback: false };
-      return readReviewerTranscript(provider, providerSessionId, undefined, history, limits);
+      return readReviewerTranscript(
+        provider,
+        providerSessionId,
+        undefined,
+        history,
+        limits,
+        tokenState,
+      );
     }
     if (!Array.isArray(snapshot.messages)) {
       throw new Error("The reviewer transcript snapshot was malformed");
@@ -285,7 +300,7 @@ export async function readReviewerTranscript(
     const bounded = boundReviewerTranscript(normalizeOpenCodeDisplayEntries(source), limits);
     const firstShown = source[source.length - bounded.messages.length];
     const sourceToken = snapshot.sourceToken
-      ? wrapToken(providerSessionId, snapshot.sourceToken)
+      ? wrapToken(tokenScope, snapshot.sourceToken)
       : undefined;
     const truncated = bounded.truncated || snapshot.complete === false;
     const historyEpoch = snapshot.historyEpoch ?? LEGACY_HISTORY_EPOCH;

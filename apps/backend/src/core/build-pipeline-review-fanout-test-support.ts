@@ -15,7 +15,10 @@ import type { StructuredReviewReport } from "@orkestrator/protocol/structured-re
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import type { WorkflowResultKind } from "@orkestrator/protocol/workflow-results";
 import { StorageService } from "./storage.js";
-import { BuildPipelineService } from "./build-pipeline-service.js";
+import {
+  BuildPipelineService,
+  type BuildPipelineServiceOptions,
+} from "./build-pipeline-service.js";
 import { ReviewSnapshotChangedError } from "./review-fanout.js";
 import { WorkflowResultRollout } from "./workflow-result-rollout.js";
 import { WorkflowResultService } from "./workflow-result-service.js";
@@ -107,6 +110,8 @@ export class FanoutProvider implements BuildPipelineProvider {
     requestId: string;
     model?: string;
     fastMode?: boolean;
+    agentMcp?: ProviderSendOptions["agentMcp"];
+    artifactGrant?: string;
   }> = [];
   readonly aborted: string[] = [];
   readonly steers: Array<{ sessionId: string; action: unknown }> = [];
@@ -186,6 +191,8 @@ export class FanoutProvider implements BuildPipelineProvider {
       requestId: options.requestId,
       model: options.model,
       fastMode: options.fastMode,
+      ...(options.agentMcp ? { agentMcp: options.agentMcp } : {}),
+      ...(options.artifactGrant ? { artifactGrant: options.artifactGrant } : {}),
     });
     const model = this.sessionModels.get(sessionId);
     if (model && this.ambiguousModels.has(model) && !this.ambiguityRaised.has(model)) {
@@ -336,6 +343,7 @@ export async function withPipeline(
     environmentType?: "local" | "containerized";
     assertAgentToolsReachable?: (environmentId: string, stage: string) => Promise<void>;
     efficiency?: RecordingEfficiencyObserver;
+    artifactDispatch?: BuildPipelineServiceOptions["artifactDispatch"];
   } = {},
 ): Promise<void> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-fanout-"));
@@ -420,6 +428,7 @@ export async function withPipeline(
     provider: async (_pipeline, agent) => providers.get(agent)!,
     transcriptPersistIntervalMs: options.transcriptPersistIntervalMs,
     ...(options.efficiency ? { efficiency: options.efficiency } : {}),
+    ...(options.artifactDispatch ? { artifactDispatch: options.artifactDispatch } : {}),
     ...(workflowResults
       ? {
           workflowResults,

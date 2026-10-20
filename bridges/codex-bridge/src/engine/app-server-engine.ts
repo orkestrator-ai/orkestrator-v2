@@ -23,6 +23,11 @@
  */
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import {
+  ARTIFACT_TOOL_NAMES,
+  ORKESTRATOR_ARTIFACT_MCP_PATH,
+  ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME,
+} from "@orkestrator/protocol/transcript-artifacts";
+import {
   NATIVE_AGENT_PENDING_SIGN_IN_TTL_MS,
   normalizePendingSignIn,
   type NativeAgentPendingSignIn,
@@ -97,12 +102,16 @@ import {
 } from "./types.js";
 
 /**
- * Per-tool MCP approval for Orkestrator's mail tools (keyed by the raw tool
- * name). Always approved: they only write to Orkestrator's message store, and
- * they are how a worker reports back whatever its approval setting.
+ * Per-tool MCP approval for Orkestrator's mail and transcript-artifact tools
+ * (keyed by the raw tool name). Always approved: mail only writes to
+ * Orkestrator's message store and is how a worker reports back; artifact tools
+ * only write to Orkestrator's bounded artifact store and never the workspace.
  */
 const AGENT_MAIL_TOOL_APPROVALS = Object.fromEntries(
-  AGENT_MAIL_TOOL_NAMES.map((name) => [name, { approval_mode: "approve" }]),
+  [...AGENT_MAIL_TOOL_NAMES, ...ARTIFACT_TOOL_NAMES].map((name) => [
+    name,
+    { approval_mode: "approve" },
+  ]),
 );
 
 /**
@@ -1497,6 +1506,22 @@ export class AppServerEngine implements CodexEngine {
                     http_headers: { Authorization: `Bearer ${config.agentMcp.token}` },
                     required: false,
                     startup_timeout_sec: 3,
+                  },
+                }
+              : {}),
+            ...(config.agentMcp.artifacts
+              ? {
+                  // A workflow turn's artifact-only server. Its own bearer is
+                  // the turn's artifact grant; the result credential above
+                  // carries no artifact authority.
+                  [`mcp_servers.${ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME}`]: {
+                    url: new URL(ORKESTRATOR_ARTIFACT_MCP_PATH, config.agentMcp.url).toString(),
+                    http_headers: { Authorization: `Bearer ${config.agentMcp.artifacts.token}` },
+                    required: false,
+                    startup_timeout_sec: 3,
+                    // It serves only the artifact tools, which bypass the
+                    // approval policy on every Orkestrator server.
+                    default_tools_approval_mode: "approve",
                   },
                 }
               : {}),

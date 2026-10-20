@@ -17,6 +17,7 @@ import { useUIStore, useEnvironmentStore, useConfigStore, useClaudeOptionsStore 
 import { useProjectStore } from "@/stores/projectStore";
 import { startPaneLayoutPersistence } from "@/lib/pane-layout-persistence";
 import { setReadCoordinatorConnection } from "@/lib/read-coordinator";
+import { noteRichContentConnection } from "@/lib/chat/rich-content-reset";
 import { startResourceSync } from "@/lib/resource-sync";
 import { startStoreResourceSync } from "@/lib/store-resource-sync";
 import { hydrateLoopedReviewWorkflowsForEnvironment } from "@/lib/looped-review-persistence";
@@ -28,6 +29,7 @@ import {
 import { hydratePromptQueuesForEnvironment } from "@/lib/prompt-queue-persistence";
 import { createPromptQueueSources } from "@/lib/prompt-queue-sources";
 import { Toaster } from "@/components/ui/sonner";
+import { ArtifactLiveHost } from "@/components/chat/rich/ArtifactLiveHost";
 import { ErrorDetailsDialog } from "@/components/errors";
 import { HostPathPickerDialog } from "@/components/host-path/HostPathPickerDialog";
 import { ContainerHostReachabilityNotice } from "@/components/docker/ContainerHostReachabilityNotice";
@@ -376,6 +378,8 @@ function App() {
       setActiveConnectionName(activeConnection ? connectionDisplayName(activeConnection) : null);
       // Presentation reads are keyed by server identity; a switch resets them.
       setReadCoordinatorConnection(list.activeConnectionId);
+      // So is protected rich transcript content (render caches, artifact reads).
+      noteRichContentConnection(list.activeConnectionId);
       setConnectionScopeResolved(true);
       setLocalBackendUnavailableMessage(
         list.activeConnectionId === LOCAL_CONNECTION_ID && list.localAvailable === false
@@ -1214,6 +1218,8 @@ function App() {
           </AppShell>
         </DockerAvailabilityProvider>
         <Toaster />
+        {/* The window's single live interactive-artifact host, owned outside every transcript. */}
+        <ArtifactLiveHost />
         <ErrorDetailsDialog />
         <HostPathPickerDialog />
         <ContainerHostReachabilityNotice />

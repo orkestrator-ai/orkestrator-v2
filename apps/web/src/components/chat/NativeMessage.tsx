@@ -43,6 +43,7 @@ import { TextPart } from "./NativeMessage.file-parts";
 import { MailTile } from "./MailTile";
 import { structuredReviewJsonPayload } from "@/lib/chat/json-payload";
 import { WebAnnotationRequestChip, webAnnotationMarkerFor } from "./WebAnnotationRequestChip";
+import { RichMessageContext } from "@/lib/chat/rich-identity";
 
 export const NativeMessage = memo(function NativeMessage({
   message,
@@ -79,6 +80,10 @@ export const NativeMessage = memo(function NativeMessage({
   const [stableAgentExpansionScope] = useState(() => agentExpansionScope ?? containerId ?? "host");
   const messageAgentExpansionScope = JSON.stringify([stableAgentExpansionScope, message.id]);
 
+  const richMessageIdentity = useMemo(
+    () => ({ messageId: message.id, role: message.role }),
+    [message.id, message.role],
+  );
   const isUser = message.role === "user";
   const isError = message.id.startsWith(ERROR_MESSAGE_PREFIX);
   const isSystem = message.role === "system" || message.id.startsWith(SYSTEM_MESSAGE_PREFIX);
@@ -107,8 +112,10 @@ export const NativeMessage = memo(function NativeMessage({
     );
   }, [isUser, message.content, message.parts]);
 
+  // An artifact card already shows its summary, so a publication row's
+  // content is not repeated as a fallback text block.
   const hasTextParts = message.parts.some(
-    (part) => part.type === "text" || part.type === "async-question",
+    (part) => part.type === "text" || part.type === "async-question" || part.type === "artifact",
   );
   const hasContent = messageHasVisibleContent(message);
   // An empty assistant message with no attributable content or actions carries
@@ -133,7 +140,11 @@ export const NativeMessage = memo(function NativeMessage({
     : "";
   const assistantCopyContent = !isUser
     ? message.parts
-        .filter((part) => part.type === "text" || part.type === "async-question")
+        // Artifact parts contribute their textual summary, never icons or bodies.
+        .filter(
+          (part) =>
+            part.type === "text" || part.type === "async-question" || part.type === "artifact",
+        )
         .map((part) => part.content)
         .join("\n\n")
         .trim() || message.content
@@ -227,101 +238,103 @@ export const NativeMessage = memo(function NativeMessage({
   }
 
   return (
-    <ToolDetailLoaderContext.Provider value={loadToolDetails}>
-      <BackgroundTaskStopContext.Provider value={stopBackgroundTask}>
-        <AsyncQuestionResponseContext.Provider
-          value={{
-            responses: asyncQuestionResponses,
-            respond: respondToAsyncQuestion,
-            draftScope: stableAgentExpansionScope,
-          }}
-        >
-          <AgentPlatformContext.Provider value={platform}>
-            <ModelLabelResolverContext.Provider value={resolveModelLabel}>
-              <AgentExpansionScopeContext.Provider value={stableAgentExpansionScope}>
-                <MessageExpansionScopeContext.Provider value={messageAgentExpansionScope}>
-                  <UserPromptEvidenceContext.Provider value={message.promptEvidence}>
-                    <NativeMessagePartRendererContext.Provider
-                      value={(props) => (
-                        <MessagePart
-                          {...props}
-                          suppressImageReadPreview={
-                            props.suppressImageReadPreview ??
-                            (props.part.type === "tool-invocation" &&
-                              Boolean(
-                                props.part.toolUseId &&
-                                toolIdsWithFirstClassImages.has(props.part.toolUseId),
-                              ))
-                          }
-                        />
-                      )}
-                    >
-                      <MessageShell
-                        isUser={isUser}
-                        authorLabel={isUser ? "You" : assistantAuthorLabel}
-                        timestampLabel={formatTime(message.createdAt)}
-                        durationLabel={durationLabel}
-                        showHeader={!isContinuation}
-                        showFooter={isUser || showAssistantFooter || hasAssistantFooterContent}
-                        className={cn(!isUser && (isContinuation ? "pt-0 pb-3" : "py-3"))}
-                        onUserLongPress={
-                          isUser && userCopyContent ? handleUserLongPress : undefined
-                        }
-                        actions={
-                          (isUser ? userCopyContent : assistantCopyContent) || messageActions ? (
-                            <>
-                              {messageActions}
-                              {(isUser ? userCopyContent : assistantCopyContent) ? (
-                                <MessageCopyButton
-                                  content={isUser ? userCopyContent : assistantCopyContent}
-                                  wrapperClassName="mt-0 pr-0"
-                                />
-                              ) : null}
-                            </>
-                          ) : undefined
-                        }
-                      >
-                        {annotationMarker ? (
-                          <WebAnnotationRequestChip
-                            requestId={annotationMarker.requestId}
-                            operation={annotationMarker.operation}
-                            annotationCount={annotationMarker.annotationCount}
-                          />
-                        ) : null}
-                        {isUser && message.promptEvidence ? (
-                          <div className="pb-2">
-                            <JsonPayloadPart
-                              payload={structuredReviewJsonPayload(message.promptEvidence)}
-                              expansionKey={`${message.id}-content/json/prompt-evidence`}
-                            />
-                          </div>
-                        ) : null}
-                        {renderMessageParts(message, {
-                          showTextCopy: false,
-                          containerId,
-                          toolIdsWithFirstClassImages,
-                        })}
-
-                        {!hasTextParts && message.content && (
-                          <TextPart
-                            content={message.content}
-                            showCopy={false}
-                            truncateUserPrompt={isUser}
-                            promptPresentation={message.promptPresentation}
-                            renderJsonPayload={!isUser}
-                            expansionKey={`${message.id}-content/json`}
+    <RichMessageContext.Provider value={richMessageIdentity}>
+      <ToolDetailLoaderContext.Provider value={loadToolDetails}>
+        <BackgroundTaskStopContext.Provider value={stopBackgroundTask}>
+          <AsyncQuestionResponseContext.Provider
+            value={{
+              responses: asyncQuestionResponses,
+              respond: respondToAsyncQuestion,
+              draftScope: stableAgentExpansionScope,
+            }}
+          >
+            <AgentPlatformContext.Provider value={platform}>
+              <ModelLabelResolverContext.Provider value={resolveModelLabel}>
+                <AgentExpansionScopeContext.Provider value={stableAgentExpansionScope}>
+                  <MessageExpansionScopeContext.Provider value={messageAgentExpansionScope}>
+                    <UserPromptEvidenceContext.Provider value={message.promptEvidence}>
+                      <NativeMessagePartRendererContext.Provider
+                        value={(props) => (
+                          <MessagePart
+                            {...props}
+                            suppressImageReadPreview={
+                              props.suppressImageReadPreview ??
+                              (props.part.type === "tool-invocation" &&
+                                Boolean(
+                                  props.part.toolUseId &&
+                                  toolIdsWithFirstClassImages.has(props.part.toolUseId),
+                                ))
+                            }
                           />
                         )}
-                      </MessageShell>
-                    </NativeMessagePartRendererContext.Provider>
-                  </UserPromptEvidenceContext.Provider>
-                </MessageExpansionScopeContext.Provider>
-              </AgentExpansionScopeContext.Provider>
-            </ModelLabelResolverContext.Provider>
-          </AgentPlatformContext.Provider>
-        </AsyncQuestionResponseContext.Provider>
-      </BackgroundTaskStopContext.Provider>
-    </ToolDetailLoaderContext.Provider>
+                      >
+                        <MessageShell
+                          isUser={isUser}
+                          authorLabel={isUser ? "You" : assistantAuthorLabel}
+                          timestampLabel={formatTime(message.createdAt)}
+                          durationLabel={durationLabel}
+                          showHeader={!isContinuation}
+                          showFooter={isUser || showAssistantFooter || hasAssistantFooterContent}
+                          className={cn(!isUser && (isContinuation ? "pt-0 pb-3" : "py-3"))}
+                          onUserLongPress={
+                            isUser && userCopyContent ? handleUserLongPress : undefined
+                          }
+                          actions={
+                            (isUser ? userCopyContent : assistantCopyContent) || messageActions ? (
+                              <>
+                                {messageActions}
+                                {(isUser ? userCopyContent : assistantCopyContent) ? (
+                                  <MessageCopyButton
+                                    content={isUser ? userCopyContent : assistantCopyContent}
+                                    wrapperClassName="mt-0 pr-0"
+                                  />
+                                ) : null}
+                              </>
+                            ) : undefined
+                          }
+                        >
+                          {annotationMarker ? (
+                            <WebAnnotationRequestChip
+                              requestId={annotationMarker.requestId}
+                              operation={annotationMarker.operation}
+                              annotationCount={annotationMarker.annotationCount}
+                            />
+                          ) : null}
+                          {isUser && message.promptEvidence ? (
+                            <div className="pb-2">
+                              <JsonPayloadPart
+                                payload={structuredReviewJsonPayload(message.promptEvidence)}
+                                expansionKey={`${message.id}-content/json/prompt-evidence`}
+                              />
+                            </div>
+                          ) : null}
+                          {renderMessageParts(message, {
+                            showTextCopy: false,
+                            containerId,
+                            toolIdsWithFirstClassImages,
+                          })}
+
+                          {!hasTextParts && message.content && (
+                            <TextPart
+                              content={message.content}
+                              showCopy={false}
+                              truncateUserPrompt={isUser}
+                              promptPresentation={message.promptPresentation}
+                              renderJsonPayload={!isUser}
+                              expansionKey={`${message.id}-content/json`}
+                            />
+                          )}
+                        </MessageShell>
+                      </NativeMessagePartRendererContext.Provider>
+                    </UserPromptEvidenceContext.Provider>
+                  </MessageExpansionScopeContext.Provider>
+                </AgentExpansionScopeContext.Provider>
+              </ModelLabelResolverContext.Provider>
+            </AgentPlatformContext.Provider>
+          </AsyncQuestionResponseContext.Provider>
+        </BackgroundTaskStopContext.Provider>
+      </ToolDetailLoaderContext.Provider>
+    </RichMessageContext.Provider>
   );
 });
 

@@ -106,6 +106,24 @@ describe("renderToolCall", () => {
     expect(rendered.toolOutput).toBe("docs");
   });
 
+  test("reads the SDK's wrapped MCP text items and names image items", () => {
+    const rendered = renderToolCall({
+      type: "mcp",
+      args: { providerIdentifier: "orkestrator", toolName: "get_artifact_operation" },
+      result: {
+        status: "success",
+        value: {
+          content: [
+            { text: { text: '{"ok":true}' } },
+            { image: { data: "iVBORw0KGgo".repeat(1_000), mimeType: "image/png" } },
+          ],
+          isError: false,
+        },
+      },
+    });
+    expect(rendered.toolOutput).toBe('{"ok":true}\n[image]');
+  });
+
   test("an MCP isError payload lands as an error rather than as output", () => {
     const rendered = renderToolCall({
       type: "mcp",

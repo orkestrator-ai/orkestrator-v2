@@ -1,9 +1,13 @@
 import type { CanUseTool, HookCallback, Options } from "@anthropic-ai/claude-agent-sdk";
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
+import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { createHash } from "node:crypto";
 import type { SessionState } from "../types/index.js";
-import { claudeWorkflowResultTools } from "./claude-workflow-result-tools.js";
+import {
+  claudeArtifactServerTools,
+  claudeWorkflowResultTools,
+} from "./claude-workflow-result-tools.js";
 import { backgroundCommandInstruction } from "./background-commands.js";
 import {
   claudeAsksForApproval,
@@ -135,10 +139,14 @@ export async function resolveQueryPlan(
       ];
   const coordinatorReadOnly = isCoordinatorReadOnlyPolicy(policy);
   // A worker can always report back, whatever its approval setting: under
-  // "deny" only allowed tools run, and the mail tools must be among them. An
-  // explicit toolPolicy deny still wins.
+  // "deny" only allowed tools run, and the mail tools must be among them. The
+  // transcript-artifact tools share that footing: they write only to
+  // Orkestrator's own bounded artifact store and never touch the workspace.
+  // An explicit toolPolicy deny still wins.
   const agentMailTools = mcpServerNames.has(AGENT_MCP_SERVER_NAME)
-    ? AGENT_MAIL_TOOL_NAMES.map((name) => `mcp__${AGENT_MCP_SERVER_NAME}__${name}`)
+    ? [...AGENT_MAIL_TOOL_NAMES, ...ARTIFACT_TOOL_NAMES].map(
+        (name) => `mcp__${AGENT_MCP_SERVER_NAME}__${name}`,
+      )
     : [];
   const allowedTools = coordinatorReadOnly
     ? claudeReadOnlyAllowedTools({
@@ -156,6 +164,7 @@ export async function resolveQueryPlan(
         ...(policy?.toolPolicy?.allow ?? defaultAllowedTools),
         ...agentMailTools,
         ...claudeWorkflowResultTools(mcpServerNames),
+        ...claudeArtifactServerTools(mcpServerNames),
       ];
   // Provider tool names, not the policy's own: `toolPolicy.deny` carries
   // Codex's vocabulary, and passing it to `disallowedTools` matches nothing.

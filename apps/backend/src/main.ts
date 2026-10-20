@@ -192,6 +192,15 @@ if (managedWebClient) {
   }
 }
 
+// Transcript artifacts: the executable-content origin must differ from, and
+// may be framed only by, the application's own page origins.
+backend.setTranscriptArtifactApplicationOrigins({
+  application: [gatewayInfo.browserUrl, info.browserUrl, ...(options.allowedOrigins ?? [])].filter(
+    (origin): origin is string => Boolean(origin),
+  ),
+  development: options.rendererDevServerUrl ? [options.rendererDevServerUrl] : [],
+});
+
 // Private preview origins are optional: a missing domain or certificate only
 // disables browser publication and never blocks the backend from serving.
 const previewPublication = backend.previews

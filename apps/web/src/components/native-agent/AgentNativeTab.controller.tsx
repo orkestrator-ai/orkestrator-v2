@@ -33,6 +33,10 @@ import type { MentionableInputRef } from "@/components/chat/MentionableInput";
 import { NativeAttachmentMenu } from "@/components/chat/NativeAttachmentMenu";
 import { NativeComposeBar } from "@/components/chat/NativeComposeBar";
 import { NativeChatShell } from "@/components/chat/NativeChatShell";
+import { RichTranscriptScopeContext } from "@/lib/chat/rich-identity";
+import { useRichTranscriptScopeValue } from "@/hooks/useTranscriptArtifactCapabilities";
+import { useArtifactPublications } from "@/hooks/useArtifactPublications";
+import { mergeArtifactPublications } from "@/lib/chat/artifact-publication-merge";
 import { BackgroundTaskChildrenContext } from "@/components/chat/NativeMessage.shared";
 import {
   NativeResumeSessionDialog,
@@ -808,11 +812,20 @@ export function SharedNativeAgentController({
   const fixReport = useMultiReviewStore((state) =>
     findMultiReviewFixReport(state.workflows.values(), tabId, data.environmentId),
   );
+  const richTranscriptScope = useRichTranscriptScopeValue(
+    data.environmentId,
+    sessionKey,
+    projection?.sessionId ?? data.sessionId ?? sessionKey,
+  );
+  const artifactPublications = useArtifactPublications(richTranscriptScope, transcriptMessages);
+  const canLoadEarlierHistory = projection?.messageWindow?.canLoadEarlier === true;
   const messages = useMemo(() => {
     const pinned = pinNativeAgentParts(transcriptMessages, displayMessages);
-    if (!fixReport) return pinned;
-    return attachFixPromptEvidence(pinned, fixReport);
-  }, [displayMessages, fixReport, transcriptMessages]);
+    const withEvidence = fixReport ? attachFixPromptEvidence(pinned, fixReport) : pinned;
+    return mergeArtifactPublications(withEvidence, artifactPublications, {
+      canLoadEarlier: canLoadEarlierHistory,
+    });
+  }, [artifactPublications, canLoadEarlierHistory, displayMessages, fixReport, transcriptMessages]);
   // "Open full conversation" (web annotations) parks a scroll target for this
   // tab; it is consumed here once the message is rendered.
   const highlightedMessageId = useConversationScrollTarget({
@@ -3325,7 +3338,9 @@ export function SharedNativeAgentController({
   );
   return (
     <BackgroundTaskChildrenContext.Provider value={childBackgroundTasks}>
-      {chatShell}
+      <RichTranscriptScopeContext.Provider value={richTranscriptScope}>
+        {chatShell}
+      </RichTranscriptScopeContext.Provider>
     </BackgroundTaskChildrenContext.Provider>
   );
 }

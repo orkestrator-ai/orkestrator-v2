@@ -180,6 +180,7 @@ function isNativeMessagePart(value: unknown): value is NativeMessagePart {
       "agent-group",
       "tool-group",
       "task-group",
+      "artifact",
     ].includes(String(value.type)) ||
     !hasValidOptionalPartStrings(value) ||
     !hasValidToolDiff(value.toolDiff) ||
@@ -212,6 +213,16 @@ function isNativeMessagePart(value: unknown): value is NativeMessagePart {
   }
   if (value.type === "tool-group" || value.type === "agent-group") {
     return Array.isArray(value.parts) && value.parts.every(isNativeMessagePart);
+  }
+  if (value.type === "artifact") {
+    // Shape only: the renderer resolves the reference against its own
+    // authenticated conversation and shows it unavailable elsewhere.
+    return (
+      isRecord(value.artifact) &&
+      typeof value.publishedAt === "string" &&
+      typeof value.conversationSequence === "number" &&
+      Number.isFinite(value.conversationSequence)
+    );
   }
   if (value.type === "task-group") {
     return (
@@ -717,6 +728,10 @@ function renderPart(part: NativeMessagePart, depth = 0): string[] {
   }
   if (part.type === "file") {
     return [`${indent}[FILE] ${part.content || part.fileUrl || "attachment"}`];
+  }
+  if (part.type === "artifact") {
+    // The textual summary only; artifact bodies are never inlined into a prompt.
+    return [`${indent}[ARTIFACT] ${part.content.trim() || part.artifact.title || "artifact"}`];
   }
   if (part.type === "tool-invocation" || part.type === "tool-result") {
     const name = part.toolName ?? part.toolTitle ?? "tool";

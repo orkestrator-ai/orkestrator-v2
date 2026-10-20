@@ -26,6 +26,7 @@ ignored, so title generation cannot inherit the user's tools or instructions.
 | `src/app-server/notification-recorder.ts` | Opt-in capture of the inbound stream for fixtures |
 | `src/sessions/dispatch-journal.ts`      | At-most-once prompt dispatch                       |
 | `src/sessions/refused-cell-tail.ts`     | Refused code-mode cells, read from the rollout     |
+| `src/history/code-mode-mcp-calls.ts`    | A reload's code-mode MCP calls, rendered as live   |
 | `src/messages/normalization.ts`         | Item → normalized part rendering                   |
 | `src/messages/diff-budget.ts`           | Caps the diff state, the largest memory consumer   |
 | `src/codex-item-types.ts`               | Local thread-item types (was the Codex SDK)        |
@@ -119,6 +120,15 @@ newest row, which every window holds.
   response events cannot either: `experimentalRawEvents` exists only on
   `thread/start`, so a thread resumed in a new app-server never gets them.
   Verified against 0.162.1 by `live-refused-calls.test.ts` (no credits).
+- Never reload a code-mode MCP call from its `exec` cell when the rollout
+  recorded it. Each call is an `event_msg` `item_completed` record with an
+  `McpToolCall` item; `history/code-mode-mcp-calls.ts` renders it through the
+  live adapter and `mcpToolCallParts`, so the reloaded part (id, arguments,
+  outcome, output) matches live and anchors an artifact publication. As live,
+  a cell whose only recorded work was MCP calls loses its `exec` row unless its
+  output reports a refusal. Only a cell with no record falls back to its
+  source: strict-JSON single-argument `tools.mcp__<server>__<tool>(…)` calls,
+  bounded, never evaluated, and never claimed successful.
 - Agent version bumps follow [`docs/development/upgrade-agents.md`](../../docs/development/upgrade-agents.md);
   the generated protocol under `app-server/generated/` is a lockfile.
 - Never resolve an approval to "approved" by default. Every timeout, disconnect,

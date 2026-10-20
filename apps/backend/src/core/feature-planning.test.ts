@@ -54,7 +54,7 @@ class FakeProvider implements BuildPipelineProvider {
     model?: string;
     effort?: string;
     fastMode?: boolean;
-    agentMcp?: { url: string; token: string };
+    agentMcp?: ProviderSendOptions["agentMcp"];
   }> = [];
   readonly created: string[] = [];
   readonly createOptions: Array<ProviderCreateSessionOptions | undefined> = [];
@@ -359,6 +359,80 @@ describe("FeaturePlanningService", () => {
       expect(settled?.status).toBe("confirming");
       expect(settled?.title).toBe("Bulk export");
       expect(settled?.messages.at(-1)?.content).toBe("The export plan is ready for confirmation.");
+    } finally {
+      await context.dispose();
+    }
+  });
+
+  test("a planning turn's artifact grant belongs to its own chat and ends with the turn", async () => {
+    const begun: Array<Record<string, unknown>> = [];
+    const settled: string[][] = [];
+    const artifactDispatch = {
+      beginTurn: (input: { turnId: string } & Record<string, unknown>) => {
+        begun.push(input);
+        return { grant: `oag1.grant-${input.turnId}` };
+      },
+      settleTurn: (environmentId: string, conversationKey: string, turnId: string) => {
+        settled.push([environmentId, conversationKey, turnId]);
+      },
+      toolsEnabled: () => true,
+    };
+    const context = await harness({ toolMode: true, serviceOptions: { artifactDispatch } });
+    try {
+      await context.start({ kind: "feature", userMessage: "Let me export reports" });
+      const record = (await context.record())!;
+      const conversationKey = `feature-planning:${context.featureId}`;
+      expect(begun).toEqual([
+        {
+          environmentId: "env-1",
+          projectId: "project-1",
+          conversationKey,
+          turnId: record.requestId,
+          providerSessionId: "session-existing",
+          needsGrant: true,
+        },
+      ]);
+      // The bridge gets an artifact-only server beside the attempt's result
+      // server; the result credential itself is unchanged.
+      expect(context.provider.sends[0]?.agentMcp).toEqual({
+        url: "http://127.0.0.1:1234/mcp",
+        token: "test-token",
+        artifacts: { token: `oag1.grant-${record.requestId}` },
+      });
+      await context.workflowResults!.submit(
+        { environmentId: "env-1", projectId: "project-1" },
+        record.requestId!,
+        { phase: "confirming", title: "Bulk export", summary: "Export every report as CSV" },
+      );
+      context.provider.reply("The export plan is ready for confirmation.");
+      await context.service.advanceNow(context.featureId);
+      await context.service.advanceNow(context.featureId);
+      expect(settled).toContainEqual(["env-1", conversationKey, record.requestId!]);
+    } finally {
+      await context.dispose();
+    }
+  });
+
+  test("a story refinement publishes into that story's own chat", async () => {
+    const begun: Array<{ conversationKey?: unknown }> = [];
+    const context = await harness({
+      toolMode: true,
+      withStory: true,
+      serviceOptions: {
+        artifactDispatch: {
+          beginTurn: (input) => {
+            begun.push(input);
+            return { grant: "oag1.story-grant" };
+          },
+          settleTurn: () => undefined,
+        },
+      },
+    });
+    try {
+      await context.start({ kind: "story", storyId: "story-1", userMessage: "Tighten it" });
+      expect(begun.map((input) => input.conversationKey)).toEqual([
+        `feature-planning:${context.featureId}:story:story-1`,
+      ]);
     } finally {
       await context.dispose();
     }

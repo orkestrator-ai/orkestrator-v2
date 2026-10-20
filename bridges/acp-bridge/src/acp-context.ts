@@ -25,6 +25,10 @@ import type { WorkflowResultTurn } from "@orkestrator/protocol/workflow-results"
 import type { InteractionDeadline } from "@orkestrator/protocol/agent-interaction-deadline";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
+import {
+  ORKESTRATOR_ARTIFACT_MCP_PATH,
+  ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME,
+} from "@orkestrator/protocol/transcript-artifacts";
 import type { RecentlyRevisedRows } from "@orkestrator/protocol/node/revised-rows";
 import type { AcpTurnUsage } from "./usage.js";
 import { formatAcpRpcError } from "./acp-errors.js";
@@ -684,6 +688,12 @@ export const agentRuntime: {
 export interface AgentMcpConnection {
   url: string;
   token: string;
+  /**
+   * A backend workflow turn's artifact-only connection: an
+   * `orkestrator-artifacts` server at this connection's origin
+   * (`/artifact-mcp`), authenticated by the turn's artifact grant.
+   */
+  artifacts?: { token: string };
 }
 
 export interface AcpSpawnOptions {
@@ -704,14 +714,25 @@ export function parseAgentMcpConnection(value: unknown): AgentMcpConnection | un
   try {
     const parsed = new URL(url);
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return undefined;
-    return { url, token };
+    const artifacts = isObject(value.artifacts) ? value.artifacts.token : undefined;
+    const artifactToken = typeof artifacts === "string" ? artifacts.trim() : "";
+    return {
+      url,
+      token,
+      ...(artifactToken && Buffer.byteLength(artifactToken, "utf8") <= 1024
+        ? { artifacts: { token: artifactToken } }
+        : {}),
+    };
   } catch {
     return undefined;
   }
 }
 
+/** Any change, the artifact grant included, re-attaches the agent with the new set. */
 export function mcpConnectionKey(connection?: AgentMcpConnection): string {
-  return connection ? `${connection.url}\u0000${connection.token}` : "";
+  return connection
+    ? JSON.stringify([connection.url, connection.token, connection.artifacts?.token ?? null])
+    : "";
 }
 
 /**
@@ -732,6 +753,7 @@ export function configuredAcpMcpServers(connection?: AgentMcpConnection): McpSer
       actions: [],
     },
   ];
+  const artifactToken = connection?.artifacts?.token;
   return [
     {
       name: "orkestrator",
@@ -739,6 +761,17 @@ export function configuredAcpMcpServers(connection?: AgentMcpConnection): McpSer
       url,
       headers: [{ name: "Authorization", value: `Bearer ${token}` }],
     },
+    // A workflow turn's artifact-only server; its bearer is the turn's grant.
+    ...(connection && artifactToken
+      ? [
+          {
+            name: ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME,
+            type: "http" as const,
+            url: new URL(ORKESTRATOR_ARTIFACT_MCP_PATH, connection.url).toString(),
+            headers: [{ name: "Authorization", value: `Bearer ${artifactToken}` }],
+          },
+        ]
+      : []),
   ];
 }
 

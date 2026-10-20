@@ -4,6 +4,8 @@ import {
 } from "@orkestrator/protocol/agent-mail";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { WEB_ANNOTATION_TOOL_NAMES } from "@orkestrator/protocol/web-annotations";
+import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
+import { isArtifactServerToolCall } from "./acp-artifact-permission.js";
 import {
   callsOwnWorkflowResult,
   workflowResultTurnToolNames,
@@ -97,6 +99,7 @@ import {
   applySubagentFinished,
   applySubagentSpawned,
   applyToolCallUpdate,
+  GROK_USE_TOOL,
   restoreCursorTodosFromMessages,
 } from "./acp-tools.js";
 import {
@@ -655,6 +658,7 @@ async function startDeferredSession(state: SessionState): Promise<AcpProcess> {
 const ORKESTRATOR_AUTO_ALLOWED_TOOL_NAMES: readonly string[] = [
   ...AGENT_MAIL_TOOL_NAMES,
   ...WEB_ANNOTATION_TOOL_NAMES,
+  ...ARTIFACT_TOOL_NAMES,
 ];
 
 const ORKESTRATOR_AUTO_ALLOWED_TOOL_IDS = new Set(
@@ -666,9 +670,6 @@ const ORKESTRATOR_AUTO_ALLOWED_TOOL_IDS = new Set(
     `${ORKESTRATOR_MCP_SERVER_NAME}.${name}`,
   ]),
 );
-
-/** Grok's deferred-tool wrapper: the MCP tool it runs is in `tool_name`. */
-const GROK_USE_TOOL = "use_tool";
 
 function wrappedToolName(input: unknown): string | undefined {
   return isObject(input) && typeof input.tool_name === "string" ? input.tool_name : undefined;
@@ -959,20 +960,33 @@ export function attachChild(state: SessionState, child: AcpProcess): void {
       typeof toolCallId === "string"
         ? findToolPart(state, toolCallId, turnStartIndex(state))?.part
         : undefined;
-    const recordedTool = recorded
-      ? { name: recorded.toolName, input: recorded.toolArgs }
+    // The call's own input as the agent sent it. A Grok `use_tool` part
+    // renders the wrapped tool's arguments, while a permission request that
+    // names only the wrapper is matched by the wrapper input kept on its
+    // source state.
+    const recordedInput = recorded
+      ? (acpToolSourceStates.get(recorded)?.toolArgs ?? recorded.toolArgs)
       : undefined;
+    const recordedTool = recorded ? { name: recorded.toolName, input: recordedInput } : undefined;
     const toolDenied = explicitlyDeniedPermissionTool(params, policy, recordedTool);
     const attemptAllow = toolDenied
       ? undefined
-      : workflowResultPermissionOption(params, state.workflowResultTurn, recorded?.toolArgs);
+      : workflowResultPermissionOption(params, state.workflowResultTurn, recordedInput);
     if (attemptAllow) {
       child.respond(requestId, { outcome: { outcome: "selected", optionId: attemptAllow } });
       return;
     }
+    const artifactAllow =
+      !toolDenied && isArtifactServerToolCall(params, state.agentMcp, recordedInput)
+        ? allowOptionId(params)
+        : undefined;
+    if (artifactAllow) {
+      child.respond(requestId, { outcome: { outcome: "selected", optionId: artifactAllow } });
+      return;
+    }
     const orkestratorAllow = toolDenied
       ? undefined
-      : orkestratorToolPermissionOption(params, policy?.approvals, recorded?.toolArgs);
+      : orkestratorToolPermissionOption(params, policy?.approvals, recordedInput);
     if (orkestratorAllow) {
       child.respond(requestId, { outcome: { outcome: "selected", optionId: orkestratorAllow } });
       return;

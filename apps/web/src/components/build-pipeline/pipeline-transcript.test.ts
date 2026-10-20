@@ -136,6 +136,56 @@ quoted context
     });
   });
 
+  test("keeps a backend-placed artifact part beside its publish call for every harness", () => {
+    const artifact = {
+      schemaVersion: 1,
+      artifactId: "art_stage0001",
+      revision: 1,
+      publicationId: "pub_stage0001",
+      kind: "chart",
+      title: "Coverage",
+      summary: "Coverage by package",
+      provenance: { backendId: "backend-1", origin: "agent" },
+    };
+    for (const agent of ["claude", "codex", "cursor", "pi"] as const) {
+      const rows = toPipelineTranscript(
+        [
+          {
+            id: `${agent}-1`,
+            role: "assistant",
+            content: "",
+            parts: [
+              {
+                type: "tool-invocation",
+                content: "publish_artifact",
+                toolName: "mcp__orkestrator-artifacts__publish_artifact",
+                toolUseId: "toolu_1",
+                toolState: "success",
+                toolArgs: { artifactId: "art_stage0001", expectedRevision: 1 },
+              },
+              {
+                type: "artifact",
+                content: "[Artifact: Coverage]",
+                artifact,
+                publishedAt: FALLBACK,
+                conversationSequence: 1,
+                sourcePartId: "artifact:pub_stage0001",
+              },
+            ],
+          },
+        ],
+        agent,
+        FALLBACK,
+      );
+      // The display adapters close the tool group before a text-section part,
+      // so the card is the row right after its call, as in a native tab.
+      expect(flattenedParts(rows).map((part) => part.type)).toEqual([
+        "tool-invocation",
+        "artifact",
+      ]);
+    }
+  });
+
   test("groups Claude child tools under the Task that spawned them", () => {
     const transcript = toPipelineTranscript(
       [

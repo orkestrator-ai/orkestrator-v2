@@ -1811,6 +1811,15 @@ export async function deleteEnvironment(
           error instanceof Error ? error.name : "unknown",
         );
       });
+      // Fences and removes the environment's artifact records, bytes and grants.
+      await context.transcriptArtifacts
+        ?.deleteEnvironment(environmentId)
+        .catch((error: unknown) => {
+          console.warn(
+            `[backend] transcript artifact cleanup failed for ${environmentId}:`,
+            error instanceof Error ? error.name : "unknown",
+          );
+        });
       context.agentTools?.revokeEnvironment(environmentId);
       await storage.removeEnvironment(environmentId);
       // Bridges were stopped above, so nothing is writing bridge state now.

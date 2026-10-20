@@ -169,6 +169,14 @@ function stalePrompt(message: string): { error: string; status: "stale" } {
   return { error: message, status: "stale" };
 }
 
+/** A workflow turn's artifact-only grant (`agentMcp.artifacts.token`), when well-formed. */
+function agentMcpArtifactsToken(record: Record<string, unknown>): string | undefined {
+  const artifacts = record.artifacts;
+  if (!artifacts || typeof artifacts !== "object" || Array.isArray(artifacts)) return undefined;
+  const token = (artifacts as Record<string, unknown>).token;
+  return typeof token === "string" && token.length > 0 && token.length <= 1024 ? token : undefined;
+}
+
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
 }
@@ -730,12 +738,14 @@ session.post("/:id/prompt", async (c) => {
       body.agentMcp && typeof body.agentMcp === "object" && !Array.isArray(body.agentMcp)
         ? (body.agentMcp as Record<string, unknown>)
         : undefined;
+    const artifactsToken = agentMcpRecord ? agentMcpArtifactsToken(agentMcpRecord) : undefined;
     const agentMcp =
       typeof agentMcpRecord?.url === "string" && typeof agentMcpRecord.token === "string"
         ? {
             url: agentMcpRecord.url,
             token: agentMcpRecord.token,
             ...(agentMcpRecord.design === true ? { design: true } : {}),
+            ...(artifactsToken ? { artifacts: { token: artifactsToken } } : {}),
           }
         : undefined;
     // Every prompt is deduplicated on this id, not just structured ones: a plain

@@ -34,6 +34,10 @@ deleted once their behaviour is in a living doc; git history keeps them. The
 | [agent-messaging.md](architecture/agent-messaging.md) | Durable mailbox, routes (coordinator / peer / isolated), budgets, automatic retry, idle injection. |
 | [agent-registry.md](architecture/agent-registry.md) | Every agent tab and what it is doing: `get_agent_registry`, Control MCP `list_agents`, sidebar hover counts. |
 | [coordinator.md](architecture/coordinator.md) | Current Coordinator: ownership, one main plus side agents, tiers, async delegation, MCP actions. Remaining work: [coordinator-read-only-adapters.md](todo/coordinator-read-only-adapters.md), [coordinator-live-conformance.md](todo/coordinator-live-conformance.md), [coordinator-consistency-gaps.md](todo/coordinator-consistency-gaps.md). |
+| [rich-transcripts.md](architecture/rich-transcripts.md) | Rich transcript rendering: Markdown pipeline, code/diagram/table/callout/disclosure/media blocks, native charts, workflow snapshots, identities, bounded caches, find and copy, publication placement. |
+| [transcript-artifacts-runtime.md](architecture/transcript-artifacts-runtime.md) | Transcript artifacts: ownership and grants, records and storage, receipts and publication, preview worker isolation, interactive preparation and CSP, content serving, desktop live host, configuration. |
+| [transcript-artifacts-agent-guide.md](architecture/transcript-artifacts-agent-guide.md) | Agent-facing guide to the seven artifact tools, with chart and interactive examples. |
+| [rich-transcripts-user-guide.md](architecture/rich-transcripts-user-guide.md) | User guide: supported content, controls, copy/export, interactive artifacts, snapshots versus live state, platform limits. |
 | [design-canvas.md](architecture/design-canvas.md) | HTML/CSS canvas, recoverable operations, private records, history, sync, safe export, design MCP and .orkdes files. |
 | [control-mcp.md](architecture/control-mcp.md) | Control MCP operator guide. |
 | [mcp-management.md](architecture/mcp-management.md) | Per-provider MCP server management: sources, precedence, safe writes, secrets, apply states, evidence. |

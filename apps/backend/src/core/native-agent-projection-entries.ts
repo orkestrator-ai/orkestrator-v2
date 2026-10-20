@@ -316,6 +316,22 @@ export class ProjectedMessageCache {
     if (session.entries.size === 0) this.sessions.delete(entry.sessionKey);
   }
 
+  /**
+   * The session's entries kept in this context, most recently used first,
+   * without refreshing their recency. The projected values are shared: a
+   * caller derives new objects from them and never stores those here.
+   */
+  *sessionEntries(context: ProjectionEntryContext): Generator<ProjectedMessageEntry> {
+    const session = this.sessions.get(context.sessionKey);
+    if (!session) return;
+    const prefix = ProjectedMessageCache.key(context, "");
+    const entries = Array.from(session.entries.values());
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const entry = entries[index]!;
+      if (entry.key.startsWith(prefix)) yield entry;
+    }
+  }
+
   /** Drop every entry of a logical session, in all of its contexts. */
   forgetSession(sessionKey: string): void {
     const session = this.sessions.get(sessionKey);

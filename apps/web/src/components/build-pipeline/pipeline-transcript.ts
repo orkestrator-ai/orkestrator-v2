@@ -38,6 +38,7 @@ import {
   type TranscriptSkewKind,
 } from "@/lib/chat/transcript-skew";
 import type { ClaudeMessage, ClaudeMessagePart } from "@/lib/claude-types";
+import type { TranscriptArtifactRef } from "@orkestrator/protocol/transcript-artifacts";
 import type {
   NativeAgentActivityPart,
   NativeAgentState,
@@ -190,6 +191,9 @@ const PART_TYPES = new Set([
   "tool-group",
   "agent-group",
   "task-group",
+  // Published transcript artifacts: a reference only, resolved by the renderer
+  // against its own authenticated scope.
+  "artifact",
 ]);
 
 const IMAGE_SOURCES = new Set(["attachment", "generated", "viewed"]);
@@ -311,6 +315,21 @@ function toNativePart(value: unknown): NativeMessagePart | null {
       const parts = toNativeParts(raw.parts).filter(isAgentActivityPart);
       return parts.length > 0 ? { ...base, type, parts } : null;
     }
+    case "artifact": {
+      const artifact = asRecord(raw.artifact);
+      const publishedAt = asString(raw.publishedAt);
+      const conversationSequence = asNumber(raw.conversationSequence);
+      if (!artifact || !publishedAt || conversationSequence === undefined) return null;
+      // The renderer reads this with `readTranscriptArtifactRef`, so an
+      // unknown version or kind becomes an honest unsupported card.
+      return {
+        ...base,
+        type,
+        artifact: artifact as unknown as TranscriptArtifactRef,
+        publishedAt,
+        conversationSequence,
+      };
+    }
     case "task-group": {
       const task = toNativePart(raw.task);
       if (task?.type !== "tool-invocation") return null;
@@ -327,7 +346,14 @@ function toNativePart(value: unknown): NativeMessagePart | null {
 }
 
 /** The part types `normalizeClaudePart` understands; it drops the rest. */
-const CLAUDE_PART_TYPES = new Set(["text", "thinking", "file", "tool-invocation", "tool-result"]);
+const CLAUDE_PART_TYPES = new Set([
+  "text",
+  "thinking",
+  "file",
+  "tool-invocation",
+  "tool-result",
+  "artifact",
+]);
 
 /**
  * Validate provider parts into the subset accepted by the Claude display

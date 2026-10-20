@@ -59,6 +59,11 @@ import {
 import type { AppConfig, Environment } from "./models.js";
 import type { StorageService } from "./storage.js";
 import type { AgentToolConnection } from "./agent-tools.js";
+import type { ArtifactTurnDispatch } from "./workflow-artifact-turns.js";
+import {
+  WorkflowTranscriptArtifacts,
+  type ArtifactLedgerSource,
+} from "./workflow-transcript-artifacts.js";
 import type { WorkflowResultService } from "./workflow-result-service.js";
 import { WorkflowResultRollout } from "./workflow-result-rollout.js";
 import { ProviderUnreachableError } from "./agent-provider-contract.js";
@@ -504,6 +509,10 @@ export interface MultiReviewServiceOptions extends KeyedWorkflowServiceOptions {
    * so the stage fails now instead of idling until its result poll gives up.
    */
   assertAgentToolsReachable?: (environmentId: string, stage: string) => Promise<void>;
+  /** Reviewer turns' transcript-artifact grants (`workflow-artifact-turns.ts`). */
+  artifactDispatch?: ArtifactTurnDispatch;
+  /** Publication ledger; reviewer transcripts place each publication beside its call. */
+  artifactLedger?: ArtifactLedgerSource;
   /**
    * Delivers the durable interactive handoff after {@link address} records it.
    * The supervisor, not a mounted renderer, retries this callback until it
@@ -600,11 +609,14 @@ export class MultiReviewService implements KeyedWorkflowOwner {
   /** Findings live reviewers reported through `report_finding`, until a pass collects them. */
   private readonly provisionalFindings: ProvisionalFindingInbox;
 
+  private readonly transcriptArtifacts: WorkflowTranscriptArtifacts;
+
   constructor(
     private readonly storage: StorageService,
     private readonly invoke: CommandInvoker,
     private readonly options: MultiReviewServiceOptions = {},
   ) {
+    this.transcriptArtifacts = new WorkflowTranscriptArtifacts(options.artifactLedger);
     this.progress = new MultiReviewProgressTracker(
       options.progressProbeIntervalMs ?? DEFAULT_PROGRESS_PROBE_INTERVAL_MS,
     );
@@ -759,6 +771,12 @@ export class MultiReviewService implements KeyedWorkflowOwner {
 
     let transcript: ReviewerTranscriptRead | undefined;
     const readSessionId = reviewer.providerSessionId;
+    // The reviewer session's own conversation owns its artifact publications.
+    const conversationKey = reviewer.sessionKey ?? reviewerSessionKey(workflow.id, reviewer.id);
+    const ledgerRevision = this.transcriptArtifacts.revision(
+      workflow.environmentId,
+      conversationKey,
+    );
     if (readSessionId) {
       const key = this.providerKey(workflow, reviewer);
       this.providerReaders.set(key, (this.providerReaders.get(key) ?? 0) + 1);
@@ -775,9 +793,14 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         const started = Date.now();
         const release = retainProvider(provider);
         try {
-          transcript = await readReviewerTranscript(provider, readSessionId, knownSourceToken, {
-            key: reviewerHistoryKey(workflow.id, reviewer.id),
-          });
+          transcript = await readReviewerTranscript(
+            provider,
+            readSessionId,
+            knownSourceToken,
+            { key: reviewerHistoryKey(workflow.id, reviewer.id) },
+            undefined,
+            ledgerRevision > 0 ? `artifacts-${ledgerRevision}` : undefined,
+          );
         } finally {
           release();
         }
@@ -802,6 +825,17 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       // the next poll reads the new session.
       ({ workflow, reviewer } = await loadReviewer());
       if (reviewer.providerSessionId !== readSessionId) transcript = undefined;
+    }
+    if (transcript?.kind === "snapshot") {
+      const place = (rows: unknown[]) =>
+        this.transcriptArtifacts.place(workflow.environmentId, conversationKey, rows);
+      transcript = {
+        ...transcript,
+        messages: place(transcript.messages),
+        ...(transcript.revisedMessages
+          ? { revisedMessages: place(transcript.revisedMessages) }
+          : {}),
+      };
     }
 
     return {
@@ -1001,7 +1035,11 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     if (page.kind === "expired") return { status: "expired", reason: page.reason };
     return {
       status: "page",
-      messages: page.messages,
+      messages: this.transcriptArtifacts.place(
+        workflow.environmentId,
+        reviewer.sessionKey ?? reviewerSessionKey(workflow.id, reviewer.id),
+        page.messages,
+      ),
       historyEpoch: page.historyEpoch,
       ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
       complete: page.complete,
@@ -3357,6 +3395,15 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       executionPolicy: () => this.executionPolicy(workflow),
       agentMcp: (selection, resultKey) =>
         this.workflowAgentMcp(workflow, resultKey, selection.agent, "Multi Review reviewer"),
+      ...(this.options.artifactDispatch
+        ? {
+            artifactTurns: {
+              dispatch: this.options.artifactDispatch,
+              environmentId: workflow.environmentId,
+              projectId: workflow.projectId,
+            },
+          }
+        : {}),
       ...(this.options.workflowResults
         ? {
             supportsToolResult: (selection: MultiReviewModelSelection) =>

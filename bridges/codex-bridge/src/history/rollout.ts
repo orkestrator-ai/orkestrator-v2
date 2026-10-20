@@ -38,6 +38,15 @@ import {
 } from "../messages/types.js";
 import { rawApplyPatchParts } from "../messages/apply-patch.js";
 import { overlayCommandChanges, readCommandChanges } from "../sessions/command-changes.js";
+import { cellOutputText, codeModeCellOutcome } from "../sessions/refused-cell-tail.js";
+import {
+  codeModeMcpCalleeKey,
+  codeModeMcpCallees,
+  codeModeMcpCallPart,
+  parseCodeModeMcpCalls,
+  ROLLOUT_MCP_TOOL_CALL_ITEM_TYPE,
+  rolloutMcpToolCallParts,
+} from "./code-mode-mcp-calls.js";
 import {
   isAuthoritativeAgentMessagePhase,
   visibleCommentaryText,
@@ -1196,6 +1205,44 @@ function describeUnreadableRecords(
 const ROLLOUT_TOOL_CALL_TYPES = new Set(["function_call", "custom_tool_call", "local_shell_call"]);
 
 /**
+ * `item_completed` turn items that are not a client tool call. Any other item
+ * finishing while a code-mode cell runs is work the reload does not render on
+ * its own, so that cell keeps its `exec` row.
+ */
+const NON_TOOL_TURN_ITEM_TYPES = new Set([
+  "UserMessage",
+  "AgentMessage",
+  "Reasoning",
+  "ContextCompaction",
+  "Plan",
+]);
+
+/** Code-mode cells awaiting their output during one replay; the oldest settles beyond this. */
+export const MAX_OPEN_CODE_MODE_CELLS = 256;
+
+/**
+ * A code-mode `exec` cell between its call and its output.
+ *
+ * Live, app-server streams each MCP call the cell makes as an item and never
+ * the cell itself (`RefusedCellTail` adds it only when nothing else shows
+ * it). A reload matches that: the rollout's `McpToolCall` records render
+ * through the live renderer, and a cell whose only recorded work was MCP calls
+ * drops its `exec` row unless its output reports a refusal.
+ */
+interface CodeModeCell {
+  callId: string;
+  message: NormalizedMessage;
+  execPartIndex: number;
+  /** `server`/`tool` pairs the source names, to attribute records between parallel cells. */
+  callees: Set<string>;
+  /** Calls read from the source, shown only if the rollout recorded none for the cell. */
+  sourceCalls: Array<{ partIndex: number; callee: string; replaced: boolean }>;
+  sawMcpRecord: boolean;
+  /** Something besides an MCP call was recorded while it ran, or it is ambiguous. */
+  keepExecRow: boolean;
+}
+
+/**
  * Replays one rollout snapshot into normalized messages, streaming its record
  * blocks in file order. Returns `null` if the snapshot went stale mid-replay.
  *
@@ -1294,6 +1341,148 @@ async function replayPersistedRollout(
     nextRowStartedAt = undefined;
   };
 
+  const ensureAssistantMessage = (timestamp: string): NormalizedMessage => {
+    if (currentAssistantMessage) return currentAssistantMessage;
+    currentAssistantMessage = {
+      id: createMessageId(),
+      role: "assistant",
+      content: "",
+      parts: [],
+      createdAt: nextRowStartedAt ?? timestamp,
+      ...(currentTurnModel ? { modelId: currentTurnModel } : {}),
+      ...(currentTurnId ? { turnId: currentTurnId } : {}),
+    };
+    messages.push(currentAssistantMessage);
+    nextRowStartedAt = undefined;
+    return currentAssistantMessage;
+  };
+
+  const openCells = new Map<string, CodeModeCell>();
+  /** Parts a settled cell gave up; removed once no part index is held any more. */
+  const droppedParts = new Set<NormalizedPart>();
+  const messagesWithDroppedParts = new Set<NormalizedMessage>();
+  const dropPart = (message: NormalizedMessage, partIndex: number): void => {
+    const part = message.parts[partIndex];
+    if (!part) return;
+    droppedParts.add(part);
+    messagesWithDroppedParts.add(message);
+  };
+
+  /** `output` is undefined for a cell the rollout never answered (an interrupted turn). */
+  const settleCodeModeCell = (cell: CodeModeCell, output?: unknown): void => {
+    openCells.delete(cell.callId);
+    const outcome = output === undefined ? undefined : codeModeCellOutcome(cellOutputText(output));
+    if (cell.sawMcpRecord) {
+      // The rollout recorded the calls that ran; a source-only call never did.
+      for (const call of cell.sourceCalls) {
+        if (!call.replaced) dropPart(cell.message, call.partIndex);
+      }
+      if (!cell.keepExecRow && !outcome?.refused) {
+        // A late output must not write the cell back in.
+        toolPartsByCallId.delete(cell.callId);
+        dropPart(cell.message, cell.execPartIndex);
+      }
+      return;
+    }
+    // The source says a call was made, never how it ended: claim no success.
+    for (const call of cell.sourceCalls) {
+      const { toolState: _inFlight, ...settled } = cell.message.parts[call.partIndex]!;
+      cell.message.parts[call.partIndex] = outcome?.failed
+        ? { ...settled, toolState: "failure" }
+        : settled;
+    }
+  };
+
+  const settleOpenCells = (): void => {
+    // Deleting the entry being visited is safe while iterating a Map.
+    for (const cell of openCells.values()) settleCodeModeCell(cell);
+  };
+
+  const openCodeModeCell = (
+    callId: string,
+    message: NormalizedMessage,
+    execPartIndex: number,
+    input: unknown,
+  ): void => {
+    const previous = openCells.get(callId);
+    if (previous) settleCodeModeCell(previous);
+    if (openCells.size >= MAX_OPEN_CODE_MODE_CELLS) {
+      const oldest = openCells.values().next().value;
+      if (oldest) settleCodeModeCell(oldest);
+    }
+    const source = typeof input === "string" ? input : "";
+    const sourceCalls = parseCodeModeMcpCalls(source).map((call, index) => {
+      message.parts.push(codeModeMcpCallPart(call, `${callId}:mcp:${index}`));
+      return {
+        partIndex: message.parts.length - 1,
+        callee: codeModeMcpCalleeKey(call.server, call.tool),
+        replaced: false,
+      };
+    });
+    openCells.set(callId, {
+      callId,
+      message,
+      execPartIndex,
+      callees: codeModeMcpCallees(source),
+      sourceCalls,
+      sawMcpRecord: false,
+      keepExecRow: false,
+    });
+  };
+
+  const visitCompletedItem = (item: unknown, timestamp: string): void => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return;
+    const fields = item as Record<string, unknown>;
+    if (fields.type !== ROLLOUT_MCP_TOOL_CALL_ITEM_TYPE) {
+      if (typeof fields.type === "string" && !NON_TOOL_TURN_ITEM_TYPES.has(fields.type)) {
+        for (const cell of openCells.values()) cell.keepExecRow = true;
+      }
+      return;
+    }
+    const parts = rolloutMcpToolCallParts(item);
+    const part = parts?.[0];
+    if (!part) return;
+    const id = asNonEmptyString(fields.id);
+    // A direct (not code-mode) call shares its id with the `function_call`
+    // already on screen; the record replaces that part, and the later output
+    // record must not overwrite the outcome it carries.
+    const direct = id ? toolPartsByCallId.get(id) : undefined;
+    if (direct) {
+      toolPartsByCallId.delete(id!);
+      if (direct.partIndexes.length === 1) direct.message.parts[direct.partIndexes[0]!] = part;
+      return;
+    }
+    const callee = codeModeMcpCalleeKey(String(fields.server), String(fields.tool));
+    const open = [...openCells.values()];
+    const naming = open.filter((cell) => cell.callees.has(callee));
+    const cell =
+      naming.length === 1
+        ? naming[0]
+        : naming.length === 0 && open.length === 1
+          ? open[0]
+          : undefined;
+    if (!cell) {
+      // Parallel cells it cannot be pinned to keep their rows, and none of
+      // them shows a source-only call for it.
+      for (const candidate of open) {
+        candidate.sawMcpRecord = true;
+        candidate.keepExecRow = true;
+      }
+      const target = open.at(-1)?.message ?? ensureAssistantMessage(timestamp);
+      target.parts.push(part);
+      if (target === currentAssistantMessage) currentRowCalledTool = true;
+      return;
+    }
+    cell.sawMcpRecord = true;
+    const sourceCall = cell.sourceCalls.find((call) => !call.replaced && call.callee === callee);
+    if (sourceCall) {
+      sourceCall.replaced = true;
+      cell.message.parts[sourceCall.partIndex] = part;
+    } else {
+      cell.message.parts.push(part);
+    }
+  };
+
   const visit = (record: TranscriptRecord, recordIndex: number): void => {
     if (isCollaborationRecord(record)) collaborationRecords.push(record);
     if (typeof record.timestamp === "string") lastTimestamp = record.timestamp;
@@ -1342,6 +1531,7 @@ async function replayPersistedRollout(
 
     const recordTurnId = readTurnId(record.payload);
     if (recordTurnId && recordTurnId !== currentTurnId) {
+      settleOpenCells();
       currentTurnId = recordTurnId;
       currentTurnModel = undefined;
       closeAssistantRow();
@@ -1350,13 +1540,19 @@ async function replayPersistedRollout(
       currentTurnModel = readTurnModel(record.payload) ?? currentTurnModel;
     }
 
+    const timestamp =
+      typeof record.timestamp === "string" ? record.timestamp : new Date().toISOString();
+
+    if (record.type === "event_msg" && record.payload?.type === "item_completed") {
+      visitCompletedItem(record.payload.item, timestamp);
+      return;
+    }
+
     if (record.type !== "response_item" || !record.payload) {
       return;
     }
 
     const payload = record.payload;
-    const timestamp =
-      typeof record.timestamp === "string" ? record.timestamp : new Date().toISOString();
 
     if (
       currentRowCalledTool &&
@@ -1366,26 +1562,10 @@ async function replayPersistedRollout(
       nextRowStartedAt = timestamp;
     }
 
-    const ensureAssistantMessage = (): NormalizedMessage => {
-      if (currentAssistantMessage) return currentAssistantMessage;
-      currentAssistantMessage = {
-        id: createMessageId(),
-        role: "assistant",
-        content: "",
-        parts: [],
-        createdAt: nextRowStartedAt ?? timestamp,
-        ...(currentTurnModel ? { modelId: currentTurnModel } : {}),
-        ...(currentTurnId ? { turnId: currentTurnId } : {}),
-      };
-      messages.push(currentAssistantMessage);
-      nextRowStartedAt = undefined;
-      return currentAssistantMessage;
-    };
-
     if (ROLLOUT_TOOL_CALL_TYPES.has(String(payload.type))) currentRowCalledTool = true;
 
     if (payload.type === "function_call" || payload.type === "custom_tool_call") {
-      const assistantMessage = ensureAssistantMessage();
+      const assistantMessage = ensureAssistantMessage(timestamp);
       const callId = asNonEmptyString(payload.call_id);
       const parts = createPersistedToolParts(payload, transcriptCwd, callId);
       const firstPartIndex = assistantMessage.parts.length;
@@ -1401,6 +1581,9 @@ async function replayPersistedRollout(
           message: assistantMessage,
           partIndexes: parts.map((_part, index) => firstPartIndex + index),
         });
+      }
+      if (payload.type === "custom_tool_call" && payload.name === "exec" && callId) {
+        openCodeModeCell(callId, assistantMessage, firstPartIndex, payload.input);
       }
       return;
     }
@@ -1420,6 +1603,10 @@ async function replayPersistedRollout(
             persistedOutputState(payload.type, existing, payload.output),
           );
         }
+      }
+      const cell = callId ? openCells.get(callId) : undefined;
+      if (cell && payload.type === "custom_tool_call_output") {
+        settleCodeModeCell(cell, payload.output);
       }
       return;
     }
@@ -1450,7 +1637,7 @@ async function replayPersistedRollout(
         return;
       }
       const displayText = commentary ? visibleCommentaryText(text) : text;
-      const assistantMessage = ensureAssistantMessage();
+      const assistantMessage = ensureAssistantMessage(timestamp);
       assistantMessage.content = displayText;
       assistantMessage.parts.push({ type: "text", content: displayText });
       return;
@@ -1475,6 +1662,7 @@ async function replayPersistedRollout(
     }
   });
   if (!replayed) return null;
+  settleOpenCells();
 
   // A spawn's generic tool part (with any output folded into it) gives way to
   // the rich child card, exactly as if the card had been placed when the call
@@ -1487,6 +1675,10 @@ async function replayPersistedRollout(
     const subagentPart = persistedSubagentParts.get(callId);
     if (!subagentPart) continue;
     for (const slot of slots) slot.message.parts[slot.partIndex] = subagentPart;
+  }
+  // Last, because every recorded part index above points into the unfiltered list.
+  for (const message of messagesWithDroppedParts) {
+    message.parts = message.parts.filter((part) => !droppedParts.has(part));
   }
   // Shell rows' measured line changes are the bridge's own record; the rollout
   // never had them.

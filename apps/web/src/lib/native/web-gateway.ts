@@ -6,6 +6,7 @@ import {
 } from "@/lib/native/gateway-auth-transport";
 import { readClipboardImageDimensions } from "@/lib/clipboard-image";
 import { GatewayHttpError } from "@/lib/native/gateway-http-error";
+import { clearProtectedRichContent } from "@/lib/chat/rich-content-reset";
 import {
   GATEWAY_EVENT_CURSOR_PARAM,
   GatewayEventStreamState,
@@ -233,6 +234,8 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
 
   const applyGatewayToken = (token: string): void => {
     const normalizedToken = token.trim();
+    // New credentials: rich content derived under the old ones is dropped.
+    if ((normalizedToken || undefined) !== bearerToken) clearProtectedRichContent("credentials");
     bearerToken = normalizedToken || undefined;
     terminalSocket?.updateToken(normalizedToken);
     updateDirectGatewayToken(normalizedToken);
@@ -266,6 +269,8 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     if (!agentTestSessionActive || credentialLapseHandled) return;
     credentialLapseHandled = true;
     disposeAgentTestActivity();
+    // The session ended: protected rich content must not outlive it.
+    clearProtectedRichContent("logout");
     if (options.onCredentialLapsed) {
       options.onCredentialLapsed();
       return;
@@ -1287,6 +1292,8 @@ export function installBrowserGatewayApi(
       browserGatewayDisposers.get(targetWindow.orkestrator)?.(
         new Error("Browser gateway replaced"),
       );
+      // A replaced gateway may be another backend or other credentials.
+      clearProtectedRichContent("gateway-replaced");
     }
     if (baseUrl && options.token) {
       configureDirectGatewayTransport(baseUrl, options.token.trim());

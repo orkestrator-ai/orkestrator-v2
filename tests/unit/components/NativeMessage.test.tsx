@@ -941,6 +941,9 @@ describe("NativeMessage", () => {
   });
 
   test("closes image previews from the backdrop and close button but not the image panel", async () => {
+    // The shared gallery is a modal dialog: the image sits on its own panel
+    // (the pan/zoom stage) inside the dialog content, the backdrop is the
+    // dialog overlay, and the close control is a labelled toolbar button.
     const message: NativeMessageType = {
       id: "msg-overlay-controls",
       role: "assistant",
@@ -955,22 +958,36 @@ describe("NativeMessage", () => {
 
     let image = await screen.findByAltText("overlay.png");
     const panel = image.parentElement as HTMLElement;
-    const backdrop = panel.parentElement as HTMLElement;
+    fireEvent.pointerDown(panel);
     fireEvent.click(panel);
+    fireEvent.click(image);
     expect(screen.getByAltText("overlay.png")).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "Image preview: overlay.png" })).toBeTruthy();
 
+    const backdrop = document.querySelector('[data-slot="dialog-overlay"]') as HTMLElement;
+    expect(backdrop).toBeTruthy();
+    expect(backdrop.contains(image)).toBe(false);
+    // Radix completes an outside press on the click that follows pointerdown.
+    fireEvent.pointerDown(backdrop);
     fireEvent.click(backdrop);
     await waitFor(() => expect(screen.queryByAltText("overlay.png") === null).toBe(true));
 
     fireEvent.click(attachment);
     image = await screen.findByAltText("overlay.png");
-    const closeButton = image.parentElement?.querySelector("button") as HTMLButtonElement;
-    expect(closeButton).toBeTruthy();
+    const closeButton = screen.getByRole("button", { name: "Close image preview" });
+    // The control is not nested inside another clickable element.
+    expect(closeButton.parentElement?.closest("button") === null).toBe(true);
     fireEvent.click(closeButton);
     await waitFor(() => expect(screen.queryByAltText("overlay.png") === null).toBe(true));
+    // Reopening reused the cached bytes.
+    expect(mockReadFileBase64).toHaveBeenCalledTimes(1);
   });
 
-  test("keeps non-image attachments disabled and does not perform file reads", () => {
+  test("offers non-image attachments as a preview that reads nothing until opened", async () => {
+    // Non-image files used to be a disabled row. They now open a MIME-aware
+    // preview; the protected invariant is unchanged: rendering the transcript
+    // performs no file read, and only an explicit open reads the file, once.
+    mockReadFileBase64.mockImplementation(async () => btoa("plain notes"));
     const message: NativeMessageType = {
       id: "msg-text-attachment",
       role: "assistant",
@@ -981,10 +998,18 @@ describe("NativeMessage", () => {
 
     render(<NativeMessage message={message} />);
 
-    const attachment = screen.getByRole("button", { name: /notes\.txt/i });
-    expect((attachment as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.click(attachment);
+    const attachment = screen.getByRole("button", { name: "Preview file: notes.txt (Text)" });
     expect(mockReadFileBase64).not.toHaveBeenCalled();
+    expect(mockReadContainerFileBase64).not.toHaveBeenCalled();
+    // Not an image: no image gallery entry point.
+    expect(screen.queryByRole("button", { name: /Open full image/ }) === null).toBe(true);
+
+    fireEvent.click(attachment);
+
+    expect(await screen.findByRole("dialog")).toBeTruthy();
+    expect(await screen.findByText("plain notes")).toBeTruthy();
+    expect(mockReadFileBase64).toHaveBeenCalledTimes(1);
+    expect(mockReadFileBase64).toHaveBeenCalledWith("/tmp/notes.txt");
     expect(mockReadContainerFileBase64).not.toHaveBeenCalled();
   });
 
@@ -3223,8 +3248,12 @@ describe("NativeMessage", () => {
 
     render(<NativeMessage message={message} />);
 
-    expect(screen.getByRole("button", { name: "notes-only.txt" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "file" })).toBeTruthy();
+    // Non-image rows are preview buttons named by their display name and type;
+    // the display name still falls back to the raw path, then to "file".
+    const named = screen.getByRole("button", { name: "Preview file: notes-only.txt (Text)" });
+    expect(named.textContent).toBe("notes-only.txt");
+    const generic = screen.getByRole("button", { name: "Preview file: file (File)" });
+    expect(generic.textContent).toBe("file");
   });
 
   test("ignores non-Escape keys and detaches the overlay listener on unmount", async () => {

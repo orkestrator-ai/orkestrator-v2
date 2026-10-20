@@ -23,6 +23,21 @@ for (const view of ["native", "reviewer"]) {
       const load = page.getByRole("button", { name: "Load earlier messages", exact: true });
       const check = async () => {
         await expect(list).toBeVisible();
+        if (!mixed) {
+          // The same-minute reads coalesce into one folded group. Open it, and
+          // before scrolling to the top, since focusing it scrolls the list:
+          // the page then grows a tall row, and the group must stay open as
+          // older calls are coalesced in front of the ones it was opened with.
+          // Retried, as an activation that lands while the freshly mounted list
+          // is still settling its row sizes can miss the trigger.
+          await expect(async () => {
+            const show = list.getByRole("button", { name: /^Show \d+ tool calls:/ });
+            if ((await show.count()) > 0) await show.first().press("Enter");
+            await expect(list.getByRole("button", { name: /^Fold \d+ tool calls:/ })).toBeVisible({
+              timeout: 1_000,
+            });
+          }).toPass();
+        }
         await list.hover();
         await expect
           .poll(async () => {

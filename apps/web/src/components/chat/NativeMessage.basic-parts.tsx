@@ -126,6 +126,189 @@ function taskCommandFromOutput(output?: string): string | undefined {
   return messageMatch?.[1]?.trim() || undefined;
 }
 
+/**
+ * The collapsed row is a single truncating line, so anything shown there is
+ * flattened and capped rather than relying on CSS alone — the accessible name
+ * and the DOM string are otherwise unbounded.
+ */
+function toSingleLinePreview(value: string): string {
+  const preview = value.trim().replace(/\s+/g, " ");
+  return preview.length > 180 ? `${preview.slice(0, 179)}…` : preview;
+}
+
+export interface ToolRowPreview {
+  text: string;
+  /**
+   * A fallback preview of raw input, which is not specific enough to justify
+   * hiding a descriptive tool title the way a real command or path does.
+   */
+  generic: boolean;
+  monospace: boolean;
+}
+
+/**
+ * The one-line summary a collapsed tool row shows beside the tool's name: the
+ * command, file, pattern or query that identifies the call. Shared by the row
+ * itself and by a folded tool group, which previews its latest call.
+ */
+export function toolRowPreview(
+  {
+    toolName,
+    toolArgs,
+    toolOutput,
+    backgroundTask,
+  }: {
+    toolName?: string;
+    toolArgs?: Record<string, unknown>;
+    toolOutput?: string;
+    backgroundTask?: NativeBackgroundTask;
+  },
+  questions = parseQuestionToolArgs(toolArgs),
+): ToolRowPreview | null {
+  const isTaskAction = isBackgroundTaskActionTool(toolName);
+  const isBackgroundLaunch = toolArgs?.run_in_background === true;
+  const taskId = backgroundTask?.id ?? stringToolArg(toolArgs, "task_id", "taskId");
+  const taskDescription =
+    backgroundTask?.description ??
+    (isBackgroundLaunch ? stringToolArg(toolArgs, "description") : undefined);
+
+  if (!toolArgs) return null;
+
+  // Background task actions are meaningful only in relation to their task.
+  // Prefer the human-authored launch description, then a command recovered
+  // from TaskStop output, and leave the opaque id as the final fallback.
+  if (isTaskAction) {
+    if (taskDescription) {
+      return {
+        text: toSingleLinePreview(taskDescription),
+        generic: false,
+        monospace: false,
+      };
+    }
+    const resultCommand = taskCommandFromOutput(toolOutput);
+    if (resultCommand) {
+      return {
+        text: toSingleLinePreview(resultCommand),
+        generic: false,
+        monospace: true,
+      };
+    }
+    if (taskId) {
+      return {
+        text: toSingleLinePreview(taskId),
+        generic: false,
+        monospace: true,
+      };
+    }
+  }
+
+  if (isBackgroundLaunch && taskDescription) {
+    return {
+      text: toSingleLinePreview(taskDescription),
+      generic: false,
+      monospace: false,
+    };
+  }
+
+  // For shell commands, show the command in the collapsed row.
+  const command = toolArgs.command as string | undefined;
+  if (command) {
+    return {
+      text: toSingleLinePreview(command),
+      generic: false,
+      monospace: true,
+    };
+  }
+
+  // For Read tool - show filename
+  const filePath = toolArgs.file_path as string | undefined;
+  if (filePath) {
+    const name = filePath.split("/").pop();
+    return name ? { text: name, generic: false, monospace: true } : null;
+  }
+
+  // For Glob tool - show pattern
+  const pattern = toolArgs.pattern as string | undefined;
+  if (pattern) {
+    return {
+      text: toSingleLinePreview(pattern),
+      generic: false,
+      monospace: true,
+    };
+  }
+
+  // For Grep tool - show search pattern
+  const grepPattern = toolArgs.regex as string | undefined;
+  if (grepPattern) {
+    return {
+      text: toSingleLinePreview(grepPattern),
+      generic: false,
+      monospace: true,
+    };
+  }
+
+  // Cursor child JSONL names its read argument `path` where Claude-style
+  // tools use `file_path`. It ranks below `pattern`/`regex` on purpose:
+  // Glob and Grep carry `path` as the *search root* alongside the pattern
+  // that actually identifies the call, so reading it first would label them
+  // with a directory instead.
+  const genericPath = toolArgs.path;
+  if (typeof genericPath === "string" && genericPath) {
+    const name = genericPath.split("/").pop();
+    return name ? { text: name, generic: false, monospace: true } : null;
+  }
+
+  // For WebFetch tool - show hostname from URL
+  const url = toolArgs.url as string | undefined;
+  if (url) {
+    try {
+      return {
+        text: new URL(url).hostname,
+        generic: false,
+        monospace: true,
+      };
+    } catch {
+      return {
+        text: toSingleLinePreview(url),
+        generic: false,
+        monospace: true,
+      };
+    }
+  }
+
+  // For WebSearch tool - show search query
+  const query = toolArgs.query as string | undefined;
+  if (query) {
+    return {
+      text: toSingleLinePreview(query),
+      generic: false,
+      monospace: true,
+    };
+  }
+
+  if (questions) {
+    return {
+      text: toSingleLinePreview(questionToolPreview(questions)),
+      generic: false,
+      monospace: false,
+    };
+  }
+
+  // Custom tools such as Codex's `exec` carry raw input rather than a
+  // provider-standard argument shape. Keep the collapsed row informative
+  // even when the bridge cannot safely derive a more specific command.
+  const input = toolArgs.input;
+  if (typeof input === "string" && input.trim()) {
+    return {
+      text: toSingleLinePreview(input),
+      generic: true,
+      monospace: true,
+    };
+  }
+
+  return null;
+}
+
 function backgroundTaskState(
   task: NativeBackgroundTask | undefined,
 ): { label: string; className: string } | undefined {
@@ -238,11 +421,7 @@ export function ToolPart({
   const displayToolTitle = getToolTitleDisplayName(toolTitle, toolName);
   const isTaskStop = isBackgroundTaskStopTool(toolName);
   const isTaskAction = isBackgroundTaskActionTool(toolName);
-  const isBackgroundLaunch = toolArgs?.run_in_background === true;
   const taskId = backgroundTask?.id ?? stringToolArg(toolArgs, "task_id", "taskId");
-  const taskDescription =
-    backgroundTask?.description ??
-    (isBackgroundLaunch ? stringToolArg(toolArgs, "description") : undefined);
 
   const questions = useMemo(() => parseQuestionToolArgs(toolArgs), [toolArgs]);
   const answeredQuestions = useMemo(
@@ -269,160 +448,7 @@ export function ToolPart({
     (commandChanges && commandChanges.files.length > 0) ||
     (toolArgs && Object.keys(toolArgs).length > 0);
 
-  // The collapsed row is a single truncating line, so anything shown there is
-  // flattened and capped rather than relying on CSS alone — the accessible name
-  // and the DOM string are otherwise unbounded.
-  const toSingleLinePreview = (value: string): string => {
-    const preview = value.trim().replace(/\s+/g, " ");
-    return preview.length > 180 ? `${preview.slice(0, 179)}…` : preview;
-  };
-
-  // Extract display info from toolArgs based on tool type. `generic` marks a
-  // fallback preview of raw input, which is not specific enough to justify
-  // hiding a descriptive tool title the way a real command or path does.
-  const getDisplayInfo = (): {
-    text: string;
-    generic: boolean;
-    monospace: boolean;
-  } | null => {
-    if (!toolArgs) return null;
-
-    // Background task actions are meaningful only in relation to their task.
-    // Prefer the human-authored launch description, then a command recovered
-    // from TaskStop output, and leave the opaque id as the final fallback.
-    if (isTaskAction) {
-      if (taskDescription) {
-        return {
-          text: toSingleLinePreview(taskDescription),
-          generic: false,
-          monospace: false,
-        };
-      }
-      const resultCommand = taskCommandFromOutput(toolOutput);
-      if (resultCommand) {
-        return {
-          text: toSingleLinePreview(resultCommand),
-          generic: false,
-          monospace: true,
-        };
-      }
-      if (taskId) {
-        return {
-          text: toSingleLinePreview(taskId),
-          generic: false,
-          monospace: true,
-        };
-      }
-    }
-
-    if (isBackgroundLaunch && taskDescription) {
-      return {
-        text: toSingleLinePreview(taskDescription),
-        generic: false,
-        monospace: false,
-      };
-    }
-
-    // For shell commands, show the command in the collapsed row.
-    const command = toolArgs.command as string | undefined;
-    if (command) {
-      return {
-        text: toSingleLinePreview(command),
-        generic: false,
-        monospace: true,
-      };
-    }
-
-    // For Read tool - show filename
-    const filePath = toolArgs.file_path as string | undefined;
-    if (filePath) {
-      const name = filePath.split("/").pop();
-      return name ? { text: name, generic: false, monospace: true } : null;
-    }
-
-    // For Glob tool - show pattern
-    const pattern = toolArgs.pattern as string | undefined;
-    if (pattern) {
-      return {
-        text: toSingleLinePreview(pattern),
-        generic: false,
-        monospace: true,
-      };
-    }
-
-    // For Grep tool - show search pattern
-    const grepPattern = toolArgs.regex as string | undefined;
-    if (grepPattern) {
-      return {
-        text: toSingleLinePreview(grepPattern),
-        generic: false,
-        monospace: true,
-      };
-    }
-
-    // Cursor child JSONL names its read argument `path` where Claude-style
-    // tools use `file_path`. It ranks below `pattern`/`regex` on purpose:
-    // Glob and Grep carry `path` as the *search root* alongside the pattern
-    // that actually identifies the call, so reading it first would label them
-    // with a directory instead.
-    const genericPath = toolArgs.path;
-    if (typeof genericPath === "string" && genericPath) {
-      const name = genericPath.split("/").pop();
-      return name ? { text: name, generic: false, monospace: true } : null;
-    }
-
-    // For WebFetch tool - show hostname from URL
-    const url = toolArgs.url as string | undefined;
-    if (url) {
-      try {
-        return {
-          text: new URL(url).hostname,
-          generic: false,
-          monospace: true,
-        };
-      } catch {
-        return {
-          text: toSingleLinePreview(url),
-          generic: false,
-          monospace: true,
-        };
-      }
-    }
-
-    // For WebSearch tool - show search query
-    const query = toolArgs.query as string | undefined;
-    if (query) {
-      return {
-        text: toSingleLinePreview(query),
-        generic: false,
-        monospace: true,
-      };
-    }
-
-    if (questions) {
-      return {
-        text: toSingleLinePreview(questionToolPreview(questions)),
-        generic: false,
-        monospace: false,
-      };
-    }
-
-    // Custom tools such as Codex's `exec` carry raw input rather than a
-    // provider-standard argument shape. Keep the collapsed row informative
-    // even when the bridge cannot safely derive a more specific command.
-    const input = toolArgs.input;
-    if (typeof input === "string" && input.trim()) {
-      return {
-        text: toSingleLinePreview(input),
-        generic: true,
-        monospace: true,
-      };
-    }
-
-    return null;
-  };
-
-  const displayInfo = getDisplayInfo();
+  const displayInfo = toolRowPreview({ toolName, toolArgs, toolOutput, backgroundTask }, questions);
   const shouldShowToolTitle =
     Boolean(displayToolTitle) &&
     (!displayInfo || displayInfo.generic) &&

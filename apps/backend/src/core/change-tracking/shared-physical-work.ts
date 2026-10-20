@@ -108,6 +108,7 @@ export class SharedScanQueue<T> {
 }
 
 interface SharedWatcher {
+  generation?: object;
   watcher: WorktreeWatcher;
   listeners: Set<WorktreeWatcherOptions>;
 }
@@ -130,21 +131,28 @@ export class SharedWatcherRegistry {
     const key = `${this.keys.key({ kind: "local", worktreePath: options.worktreePath })}\0${options.comparisonRef ?? ""}`;
     let shared = this.watchers.get(key);
     if (!shared || !shared.watcher.watching) {
-      const listeners = new Set<WorktreeWatcherOptions>();
+      const listeners = shared?.listeners ?? new Set<WorktreeWatcherOptions>();
+      shared?.watcher.close();
+      const entry = shared ?? { watcher: { watching: false, close() {} }, listeners };
+      const generation = {};
+      entry.generation = generation;
       const watcher = this.start({
         ...options,
         onChange: (hint?: WorktreeChangeHint) => {
+          if (entry.generation !== generation) return;
           for (const listener of Array.from(listeners)) listener.onChange(hint);
         },
         onError: (error) => {
-          this.watchers.delete(key);
+          if (entry.generation !== generation) return;
           for (const listener of Array.from(listeners)) listener.onError?.(error);
         },
         onCoverageChange: () => {
+          if (entry.generation !== generation) return;
           for (const listener of Array.from(listeners)) listener.onCoverageChange?.();
         },
       });
-      shared = { watcher, listeners };
+      entry.watcher = watcher;
+      shared = entry;
       this.watchers.set(key, shared);
     }
     const entry = shared;

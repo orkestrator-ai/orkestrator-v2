@@ -118,4 +118,33 @@ describe("RestoreChangesButton", () => {
     const button = await screen.findByTestId("restore-changes-button");
     expect(button.hasAttribute("disabled")).toBe(true);
   });
+  test("an uncertain apply retries the same prepared token and idempotency key", async () => {
+    render(<RestoreChangesButton projection={projection(true)} />);
+    fireEvent.click(await screen.findByTestId("restore-changes-button"));
+    await screen.findByTestId("restore-preview");
+    let attempts = 0;
+    invokeMock.mockImplementation(async (command: string, args: unknown) => {
+      calls.push({ command, args });
+      if (command === "changes_apply_restore" && ++attempts === 1) throw new Error("response lost");
+      return {
+        kind: "applied",
+        operationId: "op",
+        outcome: "complete",
+        completedPathIds: ["u:a.txt"],
+        failedPathIds: [],
+        resultMeasurementId: null,
+      };
+    });
+    fireEvent.click(screen.getByText("Restore"));
+    await waitFor(() =>
+      expect(screen.getByRole("status").textContent).toContain("result is unknown"),
+    );
+    fireEvent.click(screen.getByText("Restore"));
+    await waitFor(() =>
+      expect(screen.getByRole("status").textContent).toContain("Restored 1 file"),
+    );
+    const applies = calls.filter((call) => call.command === "changes_apply_restore");
+    expect(applies).toHaveLength(2);
+    expect(applies[0]?.args).toEqual(applies[1]?.args);
+  });
 });

@@ -10,32 +10,32 @@
  */
 
 import { randomUUID } from "node:crypto";
-import {
-  lstat,
-  mkdir,
-  readFile,
-  readlink,
-  realpath,
-  rename,
-  rm,
-  writeFile,
-} from "node:fs/promises";
-import path from "node:path";
 import type {
   ChangesApplyRestoreResult,
   ChangesPrepareRestoreResult,
   RestorePreviewFile,
 } from "@orkestrator/protocol/change-resources";
 import { runCommandBuffer } from "../shell.js";
-import { decodePath, displayPath, readManifest, type Manifest } from "./capture.js";
+import {
+  decodePath,
+  displayPath,
+  readManifest,
+  type Manifest,
+  type ReadRecord,
+} from "./capture.js";
+import { validCapturePath } from "./confined-read.js";
 import type { ChangeLedger } from "./change-ledger.js";
-import { objectId, type ObjectStore } from "./object-store.js";
+import type { ObjectStore } from "./object-store.js";
 import type { WorktreeRegistry, WorktreeChangeOwner } from "./worktree-owner.js";
 
 interface RestoreAction {
   pathId: string;
   /** Blob the destination must currently hold; null = must be absent. */
   expectedOid: string | null;
+  expectedMode?: string | null;
+  groupId?: string;
+  previewPathId?: string;
+  guard?: { pathId: string; expectedOid: string | null; expectedMode?: string | null };
   /** Blob to write; null = delete. */
   targetBlob: string | null;
   mode: string | null;
@@ -51,106 +51,114 @@ export type ConditionalWriteOutcome = "applied" | "precondition-failed" | "faile
 
 /** Reject anything that could leave the worktree root. */
 export function safeRelativePath(pathId: string): string | null {
-  const relative = Buffer.from(decodePath(pathId)).toString();
-  if (!relative || relative.includes("\0") || path.isAbsolute(relative)) return null;
-  const parts = relative.split(/[\\/]/);
-  if (parts.some((part) => part === ".." || part === "")) return null;
-  return relative;
+  if (!validCapturePath(decodePath(pathId))) return null;
+  return Buffer.from(decodePath(pathId)).toString();
 }
 
-async function currentOid(file: string): Promise<string | null | "unsupported"> {
-  const info = await lstat(file).catch(() => null);
-  if (!info) return null;
-  if (info.isSymbolicLink())
-    return objectId("blob", new Uint8Array(await readlink(file, { encoding: "buffer" })));
-  if (!info.isFile()) return "unsupported";
-  return objectId("blob", new Uint8Array(await readFile(file)));
-}
-
-/** Host executor: check-and-write with a temporary sibling and rename. */
+/** Same root-pinned helper on the host and beside the container filesystem. */
 export async function hostConditionalWrite(
   root: string,
   action: RestoreAction,
   bytes: Uint8Array | null,
 ): Promise<ConditionalWriteOutcome> {
-  const relative = safeRelativePath(action.pathId);
-  if (!relative) return "failed";
-  const realRoot = await realpath(root).catch(() => null);
-  if (!realRoot) return "failed";
-  const file = path.join(realRoot, relative);
-  const parent = path.dirname(file);
-  await mkdir(parent, { recursive: true });
-  const realParent = await realpath(parent).catch(() => null);
-  if (!realParent || (realParent !== realRoot && !realParent.startsWith(`${realRoot}${path.sep}`)))
-    return "failed";
-  const current = await currentOid(file);
-  if (current === "unsupported" || current !== action.expectedOid) return "precondition-failed";
-  try {
-    if (!bytes) {
-      await rm(file, { force: true });
-      return "applied";
-    }
-    const temp = path.join(parent, `.${path.basename(file)}.orkestrator-restore-${randomUUID()}`);
-    await writeFile(temp, bytes, { mode: action.mode === "100755" ? 0o755 : 0o644, flag: "wx" });
-    // Recheck immediately before the replacing rename.
-    const again = await currentOid(file);
-    if (again !== action.expectedOid) {
-      await rm(temp, { force: true });
-      return "precondition-failed";
-    }
-    await rename(temp, file);
-    return "applied";
-  } catch {
-    return "failed";
-  }
+  return executeConditionalWrite(
+    process.execPath,
+    ["-e", CONTAINER_RESTORE_HELPER],
+    root,
+    action,
+    bytes,
+  );
 }
 
-const CONTAINER_RESTORE_HELPER = String.raw`
-const fs = require("node:fs"); const path = require("node:path"); const crypto = require("node:crypto");
-const input = JSON.parse(fs.readFileSync(0, "utf8"));
-const root = fs.realpathSync(input.root);
-const rel = Buffer.from(input.path, "base64").toString();
-const out = (r) => process.stdout.write(JSON.stringify({ result: r }));
-if (!rel || path.isAbsolute(rel) || rel.split(/[\\/]/).some((p) => p === ".." || p === "")) { out("failed"); process.exit(0); }
-const file = path.join(root, rel);
-fs.mkdirSync(path.dirname(file), { recursive: true });
-const parent = fs.realpathSync(path.dirname(file));
-if (parent !== root && !parent.startsWith(root + path.sep)) { out("failed"); process.exit(0); }
-const oid = () => { let s; try { s = fs.lstatSync(file); } catch { return null; }
-  const b = s.isSymbolicLink() ? fs.readlinkSync(file, { encoding: "buffer" }) : s.isFile() ? fs.readFileSync(file) : null;
-  if (!b) return "unsupported";
-  return crypto.createHash("sha1").update("blob " + b.length + "\0").update(b).digest("hex"); };
-if (oid() !== input.expected) { out("precondition-failed"); process.exit(0); }
+export const CONTAINER_RESTORE_HELPER = String.raw`
+const fs = require("node:fs"), path = require("node:path"), crypto = require("node:crypto");
+const out = result => process.stdout.write(JSON.stringify({ result }));
+let temp;
 try {
-  if (input.content === null) { fs.rmSync(file, { force: true }); out("applied"); process.exit(0); }
-  const temp = path.join(path.dirname(file), "." + path.basename(file) + ".orkestrator-restore-" + crypto.randomUUID());
-  fs.writeFileSync(temp, Buffer.from(input.content, "base64"), { mode: input.mode === "100755" ? 0o755 : 0o644, flag: "wx" });
-  if (oid() !== input.expected) { fs.rmSync(temp, { force: true }); out("precondition-failed"); process.exit(0); }
-  fs.renameSync(temp, file); out("applied");
+  const input = JSON.parse(fs.readFileSync(0, "utf8"));
+  const root = fs.realpathSync(input.root), expectedRoot = fs.lstatSync(root);
+  const valid = rel => rel && !rel.includes("\0") && !rel.includes("\\") && !/^[A-Za-z]:/.test(rel) && rel.split("/").every(p => p && p !== "." && p !== ".." && p.toLowerCase() !== ".git");
+  const pin = (encoded, create) => {
+    const rel = Buffer.from(encoded, "base64").toString();
+    if (!valid(rel)) throw new Error("path");
+    process.chdir(root);
+    const opened = fs.statSync(".");
+    if (opened.dev !== expectedRoot.dev || opened.ino !== expectedRoot.ino) throw new Error("root");
+    const parts = rel.split("/"), name = parts.pop();
+    for (const p of parts) {
+      if (create) { try { fs.mkdirSync(p); } catch (e) { if (e.code !== "EEXIST") throw e; } }
+      const info = fs.lstatSync(p);
+      if (!info.isDirectory() || info.isSymbolicLink()) throw new Error("ancestor");
+      process.chdir(p);
+      const pinned = fs.statSync(".");
+      if (info.dev !== pinned.dev || info.ino !== pinned.ino) throw new Error("ancestor");
+    }
+    return name;
+  };
+  const matches = (file, oid, mode) => {
+    let s;
+    try { s = fs.lstatSync(file); } catch (e) { if (e.code === "ENOENT") return oid === null && mode == null; throw e; }
+    if (!s.isFile() || s.isSymbolicLink() || s.size > 16 * 1024 * 1024) return false;
+    if (mode !== undefined && mode !== ((s.mode & 0o111) ? "100755" : "100644")) return false;
+    const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    try {
+      const info = fs.fstatSync(fd);
+      if (!info.isFile() || info.dev !== s.dev || info.ino !== s.ino) return false;
+      const b = Buffer.alloc(s.size + 1); let size = 0;
+      while (size < b.length) { const n = fs.readSync(fd, b, size, b.length - size, null); if (!n) break; size += n; }
+      const after = fs.fstatSync(fd);
+      if (size !== s.size || after.mtimeMs !== s.mtimeMs || after.ctimeMs !== s.ctimeMs) return false;
+      return crypto.createHash("sha1").update("blob " + size + "\0").update(b.subarray(0, size)).digest("hex") === oid;
+    } finally { fs.closeSync(fd); }
+  };
+  if (input.guard) {
+    const guarded = pin(input.guard.path, false);
+    if (!matches(guarded, input.guard.expectedOid, input.guard.expectedMode)) { out("precondition-failed"); process.exit(0); }
+  }
+  const file = pin(input.path, true);
+  if (!matches(file, input.expected, input.expectedMode)) { out("precondition-failed"); process.exit(0); }
+  if (input.content === null) { fs.unlinkSync(file); out("applied"); }
+  else {
+    temp = "." + file + ".orkestrator-restore-" + crypto.randomUUID();
+    fs.writeFileSync(temp, Buffer.from(input.content, "base64"), { mode: input.mode === "100755" ? 0o755 : 0o644, flag: "wx" });
+    if (!matches(file, input.expected, input.expectedMode)) { out("precondition-failed"); }
+    else {
+      if (input.expected === null) fs.linkSync(temp, file);
+      else fs.renameSync(temp, file);
+      out("applied");
+    }
+  }
 } catch { out("failed"); }
+finally { if (temp) try { fs.rmSync(temp, { force: true }); } catch {} }
 `;
 
-export async function containerConditionalWrite(
-  containerId: string,
+async function executeConditionalWrite(
+  command: string,
+  args: string[],
   root: string,
   action: RestoreAction,
   bytes: Uint8Array | null,
 ): Promise<ConditionalWriteOutcome> {
   try {
-    const result = await runCommandBuffer(
-      "docker",
-      ["exec", "-i", containerId, "node", "-e", CONTAINER_RESTORE_HELPER],
-      {
-        stdin: JSON.stringify({
-          root,
-          path: Buffer.from(decodePath(action.pathId)).toString("base64"),
-          expected: action.expectedOid,
-          content: bytes ? Buffer.from(bytes).toString("base64") : null,
-          mode: action.mode,
-        }),
-        timeoutMs: 60_000,
-      },
-    );
+    const result = await runCommandBuffer(command, args, {
+      stdin: JSON.stringify({
+        root,
+        path: Buffer.from(decodePath(action.pathId)).toString("base64"),
+        expected: action.expectedOid,
+        expectedMode: action.expectedMode,
+        content: bytes ? Buffer.from(bytes).toString("base64") : null,
+        mode: action.mode,
+        ...(action.guard
+          ? {
+              guard: {
+                ...action.guard,
+                path: Buffer.from(decodePath(action.guard.pathId)).toString("base64"),
+              },
+            }
+          : {}),
+      }),
+      timeoutMs: 60_000,
+    });
     const parsed = JSON.parse(result.stdout.toString("utf8")) as {
       result?: ConditionalWriteOutcome;
     };
@@ -158,6 +166,32 @@ export async function containerConditionalWrite(
   } catch {
     return "failed";
   }
+}
+
+export async function containerConditionalWrite(
+  containerId: string,
+  root: string,
+  action: RestoreAction,
+  bytes: Uint8Array | null,
+): Promise<ConditionalWriteOutcome> {
+  return executeConditionalWrite(
+    "docker",
+    ["exec", "-i", containerId, "node", "-e", CONTAINER_RESTORE_HELPER],
+    root,
+    action,
+    bytes,
+  );
+}
+
+function matchesAction(action: RestoreAction, record: ReadRecord | undefined): boolean {
+  if (!record) return false;
+  if (record.kind === "missing") return action.expectedOid === null && action.expectedMode == null;
+  return (
+    (record.kind === "file" || record.kind === "symlink") &&
+    record.stable &&
+    record.oid === action.expectedOid &&
+    (action.expectedMode === undefined || record.mode === action.expectedMode)
+  );
 }
 
 export class ChangeRestoreService {
@@ -226,17 +260,28 @@ export class ChangeRestoreService {
           continue;
         }
         if (row.old_path && row.new_path && row.old_path !== row.new_path) {
-          actions.push({
-            pathId: row.new_path,
-            expectedOid: newEntry?.o ?? null,
-            targetBlob: null,
-            mode: null,
-          });
+          if (!safeRelativePath(row.old_path) || !safeRelativePath(row.new_path)) {
+            skip("changes.restore.path-outside-worktree");
+            continue;
+          }
+          // Both preconditions belong to one unit. Restore the old name first.
           actions.push({
             pathId: row.old_path,
             expectedOid: null,
+            expectedMode: null,
             targetBlob: oldEntry?.o ?? null,
             mode: oldEntry?.m ?? null,
+            groupId: row.path_id,
+            previewPathId: row.path_id,
+          });
+          actions.push({
+            pathId: row.new_path,
+            expectedOid: newEntry?.o ?? null,
+            expectedMode: newEntry?.m ?? null,
+            targetBlob: null,
+            mode: null,
+            groupId: row.path_id,
+            previewPathId: row.path_id,
           });
           preview.push({
             pathId: row.path_id,
@@ -254,6 +299,8 @@ export class ChangeRestoreService {
         actions.push({
           pathId,
           expectedOid: newEntry?.o ?? null,
+          expectedMode: newEntry?.m ?? null,
+          previewPathId: row.path_id,
           targetBlob: oldEntry?.o ?? null,
           mode: oldEntry?.m ?? null,
         });
@@ -266,48 +313,44 @@ export class ChangeRestoreService {
       }
     }
     // Preflight the destination against the measured after-state.
-    const signal = new AbortController().signal;
-    const described = await owner.executor
-      .describe(
-        actions.map((action) => action.pathId),
-        {
-          maxCandidates: actions.length,
-          maxFileBytes: 16 * 1024 * 1024,
-          maxCaptureBytes: 256 * 1024 * 1024,
-          readers: 4,
-          stableReadAttempts: 2,
-        },
-        signal,
-      )
-      .catch(() => null);
-    if (!described) return { kind: "disabled", reasonKey: "changes.restore.runtime-unavailable" };
-    const currentByPath = new Map(
-      described.map((record) => [
-        record.pathId,
-        record.kind === "file" || record.kind === "symlink"
-          ? record.oid
-          : record.kind === "missing"
-            ? null
-            : "unsupported",
-      ]),
+    const described = new Map<string, ReadRecord>();
+    const signal = AbortSignal.timeout(10_000);
+    try {
+      const batchSize = owner.executor.kind === "host-worker" ? 1 : 5_000;
+      for (let index = 0; index < actions.length; index += batchSize) {
+        const batch = await owner.executor.describe(
+          actions.slice(index, index + batchSize).map((action) => action.pathId),
+          {
+            maxCandidates: actions.length,
+            maxFileBytes: 16 * 1024 * 1024,
+            maxCaptureBytes: 256 * 1024 * 1024,
+            readers: 1,
+            stableReadAttempts: 2,
+          },
+          signal,
+        );
+        for (const record of batch) {
+          // Only the precondition metadata belongs in a restore preview.
+          if (record.kind === "file" || record.kind === "symlink") record.bytes = undefined;
+          described.set(record.pathId, record);
+        }
+      }
+    } catch {
+      return { kind: "disabled", reasonKey: "changes.restore.runtime-unavailable" };
+    }
+    const matches = (action: RestoreAction) => matchesAction(action, described.get(action.pathId));
+    const blocked = new Set(
+      actions.filter((action) => !matches(action)).map((action) => action.groupId ?? action.pathId),
     );
-    const runnable = actions.filter(
-      (action) => currentByPath.get(action.pathId) === action.expectedOid,
-    );
+    const runnable = actions.filter((action) => !blocked.has(action.groupId ?? action.pathId));
     for (const action of actions) {
       if (runnable.includes(action)) continue;
-      const entry = preview.find(
-        (file) =>
-          file.pathId === action.pathId ||
-          (file.action !== "skip" && action.pathId === file.pathId),
-      );
+      const entry = preview.find((file) => file.pathId === (action.previewPathId ?? action.pathId));
       if (entry) {
         entry.action = "skip";
         entry.reasonKey = "changes.restore.destination-changed";
       }
     }
-    if (runnable.length === 0)
-      return { kind: "disabled", reasonKey: "changes.restore.nothing-applicable" };
     const token = `rst_${randomUUID()}`;
     const expiresAt = new Date(Date.now() + this.deps.tokenTtlMs()).toISOString();
     const payload: RestoreTokenPayload = {
@@ -388,41 +431,127 @@ export class ChangeRestoreService {
         kind: "error",
         error: { code: "token-expired", reasonKey: "changes.restore.token-expired" },
       };
-    // Recovery checkpoint of the destination before any write.
-    await owner.capture({
-      purpose: "restore-checkpoint",
-      deadlineMs: 10_000,
-      boundaryKey: `restore-checkpoint:${operationId}`,
-    });
     const completed: string[] = [];
     const failed: string[] = [];
-    for (const action of payload.actions) {
-      const bytes = action.targetBlob ? await store.get(action.targetBlob) : null;
-      if (action.targetBlob && !bytes) {
-        failed.push(action.pathId);
-        continue;
+    let outcome: ChangesApplyRestoreResult;
+    try {
+      const checkpoint = await owner.capture({
+        purpose: "restore-checkpoint",
+        deadlineMs: 10_000,
+        boundaryKey: `restore-checkpoint:${operationId}`,
+      });
+      if (checkpoint.kind !== "published") throw new Error("checkpoint-unavailable");
+      // Keep the recovery checkpoint independently reachable.
+      ledger.transaction(() =>
+        ledger.addReference({
+          ownerKind: "restore",
+          ownerId: operationId,
+          snapshotId: checkpoint.snapshotId,
+          reason: "restore-checkpoint",
+        }),
+      );
+      const groups = new Map<string, RestoreAction[]>();
+      for (const action of payload.actions) {
+        const key = action.groupId ?? action.pathId;
+        const group = groups.get(key) ?? [];
+        group.push(action);
+        groups.set(key, group);
       }
-      const outcome = await this.write(owner, action, bytes);
-      (outcome === "applied" ? completed : failed).push(action.pathId);
+      for (const group of groups.values()) {
+        if (group.length === 2)
+          group[0]!.guard = {
+            pathId: group[1]!.pathId,
+            expectedOid: group[1]!.expectedOid,
+            expectedMode: group[1]!.expectedMode,
+          };
+        // Check both rename endpoints at apply time before either mutation.
+        const current = await owner.executor
+          .describe(
+            group.map((a) => a.pathId),
+            {
+              maxCandidates: group.length,
+              maxFileBytes: 16 * 1024 * 1024,
+              maxCaptureBytes: 256 * 1024 * 1024,
+              readers: 1,
+              stableReadAttempts: 2,
+            },
+            new AbortController().signal,
+          )
+          .catch(() => []);
+        if (
+          group.some(
+            (action) =>
+              !matchesAction(
+                action,
+                current.find((record) => record.pathId === action.pathId),
+              ),
+          )
+        ) {
+          failed.push(...group.map((a) => a.pathId));
+          continue;
+        }
+        let blocked = false;
+        for (const action of group) {
+          try {
+            owner.assertCurrent();
+            const bytes = action.targetBlob ? await store.get(action.targetBlob) : null;
+            const result =
+              blocked || (action.targetBlob && !bytes)
+                ? "failed"
+                : await this.write(owner, action, bytes);
+            if (result === "applied") completed.push(action.pathId);
+            else {
+              failed.push(action.pathId);
+              blocked = true;
+            }
+          } catch {
+            failed.push(action.pathId);
+            blocked = true;
+          }
+        }
+      }
+      owner.invalidate(completed);
+      await owner.capture({
+        purpose: "restore-result",
+        deadlineMs: 10_000,
+        boundaryKey: `restore-result:${operationId}`,
+      });
+      outcome = {
+        kind: "applied",
+        operationId,
+        outcome: failed.length === 0 ? "complete" : "partial",
+        completedPathIds: completed,
+        failedPathIds: failed,
+        resultMeasurementId: null,
+      };
+    } catch {
+      outcome =
+        completed.length > 0
+          ? {
+              kind: "applied",
+              operationId,
+              outcome: "partial",
+              completedPathIds: completed,
+              failedPathIds: payload.actions
+                .map((a) => a.pathId)
+                .filter((id) => !completed.includes(id)),
+              resultMeasurementId: null,
+            }
+          : {
+              kind: "error",
+              error: {
+                code: "precondition-failed",
+                reasonKey: "changes.restore.checkpoint-unavailable",
+              },
+            };
     }
-    owner.invalidate(completed);
-    const result = await owner.capture({
-      purpose: "restore-result",
-      deadlineMs: 10_000,
-      boundaryKey: `restore-result:${operationId}`,
-    });
-    const outcome: ChangesApplyRestoreResult = {
-      kind: "applied",
-      operationId,
-      outcome: failed.length === 0 ? "complete" : "partial",
-      completedPathIds: completed,
-      failedPathIds: failed,
-      resultMeasurementId: null,
-    };
     ledger.transaction(() =>
-      ledger.finishRestoreOperation(operationId, outcome.outcome, JSON.stringify(outcome)),
+      ledger.finishRestoreOperation(
+        operationId,
+        outcome.kind === "applied" ? outcome.outcome : "failed",
+        JSON.stringify(outcome),
+      ),
     );
-    void result;
     const environmentId =
       ledger.measurement(payload.measurementId)?.logicalOwner.environmentId ?? null;
     this.deps.onApplied?.(payload.worktreeId, environmentId);

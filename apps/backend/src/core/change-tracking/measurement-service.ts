@@ -261,6 +261,7 @@ export class ChangeMeasurementService {
     owner: { kind: string; id: string },
     withIdentity: "payload" | "comparison" | null,
     identityExtra?: Record<string, unknown>,
+    files: readonly MeasurementFileRecord[] = [],
   ): { measurement: ChangeMeasurement; identity: DiffIdentity | null } {
     const {
       createdAt: _createdAt,
@@ -268,7 +269,11 @@ export class ChangeMeasurementService {
       diffIdentityId: _d,
       ...stable
     } = draft;
-    const measurementId = `m_${digest(owner, stable)}`;
+    const measurementId = `m_${digest(
+      owner,
+      stable,
+      [...files].sort((a, b) => a.pathId.localeCompare(b.pathId)),
+    )}`;
     const previous = this.ledger.latestMeasurement(owner.kind, owner.id, draft.scope);
     const supersedes =
       previous && previous.measurementId !== measurementId ? previous.measurementId : null;
@@ -424,7 +429,7 @@ export class ChangeMeasurementService {
     const { candidates, read } = await this.loadBodies(
       this.ledger.selectedEvidence("operation", operationId),
     );
-    const selection = selectToolEvidence(candidates, lifecycle);
+    const selection = selectToolEvidence(candidates, lifecycle, read);
     const owner = {
       environmentId: op.environment_id,
       threadId: op.conversation_id,
@@ -435,7 +440,9 @@ export class ChangeMeasurementService {
 
     const publishEvidence = (role: "payload" | "effect", chosen: EvidenceCandidate[]) => {
       const measured = combineEvidenceMeasurements(
-        chosen.map((candidate) => measureEvidence(candidate.evidence, read)),
+        chosen.map((candidate) =>
+          measureEvidence(candidate.evidence, read, { selectedPaths: candidate.selectedPaths }),
+        ),
       );
       const discrepancies = findCountDiscrepancies(
         { role, kind: chosen[0]!.evidence.kind, candidates: chosen },
@@ -461,6 +468,7 @@ export class ChangeMeasurementService {
         evidenceRefs: chosen.map((c) => ({
           evidenceId: c.evidenceId,
           evidenceRevision: c.evidenceRevision,
+          ...(c.selectedPaths ? { selectedPaths: c.selectedPaths } : {}),
         })),
         capabilityRevision: op.capability_revision,
         origin: measured.origin,
@@ -933,6 +941,17 @@ export class ChangeMeasurementService {
       } as typeof draft;
     } else {
       const comparison = await compareManifests(this.store, beforeManifest, afterManifest);
+      const truncated = [input.before, input.after].some(
+        (row) => JSON.parse(row.coverage_json).inventoryTruncated === true,
+      );
+      if (truncated) {
+        comparison.completeness = "partial";
+        comparison.reasons.push("inventory-limit");
+        if (comparison.additions.value !== null)
+          comparison.additions = partialCount(comparison.additions.value);
+        if (comparison.deletions.value !== null)
+          comparison.deletions = partialCount(comparison.deletions.value);
+      }
       const beforeConsistency = JSON.parse(input.before.consistency_json).state as string;
       const afterConsistency = JSON.parse(input.after.consistency_json).state as string;
       const changed =
@@ -950,7 +969,7 @@ export class ChangeMeasurementService {
         completeness: {
           files: comparison.completeness,
           reasons: [...new Set(reasons)].slice(0, 32),
-          omittedFileCount: comparison.omittedFileCount,
+          omittedFileCount: truncated ? null : comparison.omittedFileCount,
         },
         totals: {
           additions: comparison.additions,
@@ -978,7 +997,7 @@ export class ChangeMeasurementService {
         }),
       );
     }
-    const { measurement, identity } = this.seal(draft, input.owner, withIdentity);
+    const { measurement, identity } = this.seal(draft, input.owner, withIdentity, undefined, files);
     return this.publish({
       measurement,
       owner: input.owner,

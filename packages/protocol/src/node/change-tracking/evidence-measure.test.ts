@@ -304,3 +304,107 @@ describe("measurement validation", () => {
     ).toBeGreaterThan(0);
   });
 });
+
+test("mixed evidence ranks per independent file and deduplicates multifile patches", () => {
+  const patch: ProviderEvidence = {
+    kind: "patch",
+    format: "git_unified",
+    effectClaim: "provider-reported",
+    body: body("--- a/updated\n+++ b/updated\n@@ -1 +1 @@\n-old\n+new\n"),
+  };
+  const added: ProviderEvidence = {
+    kind: "replacement",
+    path: "added",
+    before: { state: "absent" },
+    after: { state: "present", body: body("new\n") },
+    extent: "whole-file",
+    origin: "result",
+    effectClaim: "provider-reported",
+  };
+  const deleted: ProviderEvidence = {
+    kind: "replacement",
+    path: "deleted",
+    before: { state: "present", body: body("old\n") },
+    after: { state: "absent" },
+    extent: "whole-file",
+    origin: "result",
+    effectClaim: "provider-reported",
+  };
+  const chosen = selectToolEvidence(
+    [
+      candidate(patch, "p"),
+      candidate(patch, "duplicate"),
+      candidate(added, "a"),
+      candidate(deleted, "d"),
+    ],
+    { phase: "succeeded", executionOccurrence: "started" },
+    read,
+  ).effect!;
+  const measured = combineEvidenceMeasurements(
+    chosen.candidates.map((c) =>
+      measureEvidence(c.evidence, read, { selectedPaths: c.selectedPaths }),
+    ),
+  );
+  expect(measured.files.map((f) => f.path).sort()).toEqual(["added", "deleted", "updated"]);
+  expect(measured.additions.value).toBe(2);
+  expect(measured.deletions.value).toBe(2);
+});
+
+for (const text of ["--- a/f\n+++ b/f\n@@ -1,3 +1,3 @@\n-old\n+new\n", "malformed patch"])
+  test(`complete replacements outrank unusable patches: ${text.startsWith("---") ? "truncated" : "malformed"}`, () => {
+    const patch: ProviderEvidence = {
+      kind: "patch",
+      path: "f",
+      format: "git_unified",
+      body: body(text, !text.startsWith("---")),
+      effectClaim: "provider-reported",
+    };
+    const replacement: ProviderEvidence = {
+      kind: "replacement",
+      path: "f",
+      before: { state: "present", body: body("old\n") },
+      after: { state: "present", body: body("new\n") },
+      extent: "whole-file",
+      origin: "result",
+      effectClaim: "provider-reported",
+    };
+    const chosen = selectToolEvidence(
+      [candidate(patch, "p"), candidate(replacement, "r")],
+      { phase: "succeeded", executionOccurrence: "started" },
+      read,
+    ).effect!;
+    expect(chosen.candidates.map((c) => c.evidenceId)).toEqual(["e-r"]);
+  });
+
+test("partial multifile patch fills independent paths without duplicating a complete replacement", () => {
+  const patch: ProviderEvidence = {
+    kind: "patch",
+    format: "git_unified",
+    body: body(
+      "--- a/f\n+++ b/f\n@@ -1 +1 @@\n-a\n+b\n--- a/g\n+++ b/g\n@@ -1 +1 @@\n-c\n+d\n",
+      false,
+    ),
+    effectClaim: "provider-reported",
+  };
+  const replacement: ProviderEvidence = {
+    kind: "replacement",
+    path: "f",
+    before: { state: "present", body: body("a\n") },
+    after: { state: "present", body: body("b\n") },
+    extent: "whole-file",
+    origin: "result",
+    effectClaim: "provider-reported",
+  };
+  const chosen = selectToolEvidence(
+    [candidate(patch, "p"), candidate(replacement, "r")],
+    { phase: "succeeded", executionOccurrence: "started" },
+    read,
+  ).effect!;
+  const measured = combineEvidenceMeasurements(
+    chosen.candidates.map((c) =>
+      measureEvidence(c.evidence, read, { selectedPaths: c.selectedPaths }),
+    ),
+  );
+  expect(measured.files.map((f) => f.path).sort()).toEqual(["f", "g"]);
+  expect(measured.additions.value).toBe(2);
+});

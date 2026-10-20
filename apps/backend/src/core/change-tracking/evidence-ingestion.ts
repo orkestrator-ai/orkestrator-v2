@@ -573,6 +573,7 @@ export class ProviderEvidenceIngress {
         provider: context.provider,
         conversationId: report.source.conversationId,
         callId,
+        attemptId: report.source.attemptId,
       });
       const previous = ledger.operation(operationId);
       if (!previous) {
@@ -584,7 +585,7 @@ export class ProviderEvidenceIngress {
           turn_id: report.source.turnId ?? null,
           call_id: callId,
           parent_call_id: null,
-          attempt_id: "attempt-1",
+          attempt_id: report.source.attemptId ?? "attempt-1",
           tool_kind: "shell",
           phase: "unknown",
           execution_occurrence: "unknown",

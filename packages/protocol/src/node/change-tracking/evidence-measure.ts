@@ -66,6 +66,7 @@ export interface EvidenceMeasurement {
 export interface MeasureOptions {
   /** Produce display hunks as well as counts. */
   withHunks?: boolean;
+  selectedPaths?: readonly string[];
   diffBudget?: Partial<RawLineDiffBudget>;
   patchLimits?: Partial<UnifiedPatchLimits>;
 }
@@ -436,16 +437,39 @@ export function measureEvidence(
   read: EvidenceBodyReader,
   options: MeasureOptions = {},
 ): EvidenceMeasurement {
+  let measured: EvidenceMeasurement;
   switch (evidence.kind) {
     case "patch":
-      return measurePatch(evidence, read, options);
+      measured = measurePatch(evidence, read, options);
+      break;
     case "replacement":
-      return measureReplacement(evidence, read, options);
+      measured = measureReplacement(evidence, read, options);
+      break;
     case "reported-counts":
-      return measureReportedCounts(evidence);
+      measured = measureReportedCounts(evidence);
+      break;
     case "path-operation":
-      return measurePathOperation(evidence);
+      measured = measurePathOperation(evidence);
+      break;
   }
+  if (!options.selectedPaths) return measured;
+  const files = measured.files.filter(
+    (file) => file.path !== null && options.selectedPaths!.includes(file.path),
+  );
+  if (files.length === measured.files.length) return measured;
+  let additions = files[0]?.additions ?? exactCount(0),
+    deletions = files[0]?.deletions ?? exactCount(0);
+  for (const file of files.slice(1)) {
+    additions = addLineCounts(additions, file.additions);
+    deletions = addLineCounts(deletions, file.deletions);
+  }
+  return {
+    ...measured,
+    files,
+    additions,
+    deletions,
+    changedFiles: new Set(files.map((f) => f.path)).size,
+  };
 }
 
 /**

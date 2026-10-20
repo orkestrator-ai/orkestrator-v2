@@ -107,8 +107,8 @@ export class ChangeRetentionService {
       if (!["finalized", "interrupted", "end-unavailable", "abandoned"].includes(turn.lifecycle))
         continue;
       if (!eligible(turn)) continue;
-      ledger.transaction(() => ledger.removeReferences("turn", turn.turn_id));
-      released++;
+      const removed = ledger.transaction(() => ledger.removeReferences("turn", turn.turn_id));
+      if (removed > 0) released++;
     }
     return released;
   }

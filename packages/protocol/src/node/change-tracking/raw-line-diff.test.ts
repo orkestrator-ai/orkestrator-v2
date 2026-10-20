@@ -130,3 +130,18 @@ describe("raw-lines-v1 hunks", () => {
     expect(isProbablyBinary(bytes("text"))).toBe(false);
   });
 });
+
+for (const merged of [false, true])
+  test(`output budget bounds rows inside a ${merged ? "merged-context" : "single large"} hunk`, () => {
+    const before = merged ? "a\nb\nc\nd\ne\nf\n" : "";
+    const after = merged ? "A\nb\nC\nd\nE\nf\n" : lines(100);
+    const result = diffRawLines(bytes(before), bytes(after), {
+      maxOutputLines: 5,
+      contextLines: 3,
+    });
+    expect(result.kind).toBe("diff");
+    if (result.kind !== "diff") return;
+    expect(result.hunks.reduce((sum, h) => sum + 1 + h.lines.length, 0)).toBeLessThanOrEqual(5);
+    expect(result.truncated).toBe(true);
+    expect(result.additions).toBe(merged ? 3 : 100);
+  });

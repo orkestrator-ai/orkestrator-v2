@@ -15,6 +15,7 @@ import {
   addLineCounts,
   exactCount,
   notApplicableCount,
+  partialCount,
   unknownCount,
   type LineCount,
   type MeasurementScope,
@@ -459,7 +460,13 @@ export class GitScopeService {
       };
     });
     if (input.changes.some((change) => change.countOmitted)) input.reasons.push("count-omitted");
-    const partial = input.reasons.includes("ambiguous-index-membership") || input.filtered.size > 0;
+    const capped = input.reasons.includes("untracked-scan-capped");
+    const partial =
+      capped || input.reasons.includes("ambiguous-index-membership") || input.filtered.size > 0;
+    if (capped) {
+      if (additions.value !== null) additions = partialCount(additions.value);
+      if (deletions.value !== null) deletions = partialCount(deletions.value);
+    }
     const measurements = this.deps.measurements;
     const draft = {
       ...measurements.base({
@@ -494,7 +501,7 @@ export class GitScopeService {
       totals: { additions, deletions, changedFiles: input.changes.length },
     };
     const owner = { kind: `git-${input.scope}`, id: input.resourceKey };
-    const { measurement } = measurements.seal(draft, owner, null);
+    const { measurement } = measurements.seal(draft, owner, null, undefined, files);
     measurements.publish({
       measurement,
       owner,

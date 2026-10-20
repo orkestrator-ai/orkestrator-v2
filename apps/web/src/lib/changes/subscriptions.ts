@@ -90,6 +90,7 @@ function ensureListening(): Promise<void> {
       const store = useChangeProjectionStore.getState();
       switch (payload.kind) {
         case "projection":
+          reconcileToolPresentations();
           if (interest.has(payload.projection.resourceKey))
             store.applyProjection(payload.projection);
           break;
@@ -104,6 +105,7 @@ function ensureListening(): Promise<void> {
             payload.resourceKey,
             payload.contentGeneration,
             payload.pathIds,
+            payload.ownerGeneration,
           );
           break;
       }
@@ -111,6 +113,8 @@ function ensureListening(): Promise<void> {
     {
       onResync: () => {
         connectionEpoch++;
+        useChangeProjectionStore.getState().resync();
+        reconcileToolPresentations();
         for (const key of interest.keys()) requestChangeRead(key);
       },
     },
@@ -148,6 +152,42 @@ interface PendingBatch {
   callIds: Set<string>;
 }
 
+const toolInterest = new Map<
+  string,
+  {
+    scope: { environmentId: string; provider: string; conversationId: string };
+    callId: string;
+    count: number;
+  }
+>();
+
+export function subscribeToolPresentation(
+  scope: { environmentId: string; provider: string; conversationId: string },
+  callId: string,
+): () => void {
+  const key = toolPresentationKey(
+    scope.environmentId,
+    scope.provider,
+    scope.conversationId,
+    callId,
+  );
+  const entry = toolInterest.get(key) ?? { scope, callId, count: 0 };
+  entry.count++;
+  toolInterest.set(key, entry);
+  requestToolPresentation(scope, callId);
+  return () => {
+    if (--entry.count === 0) {
+      toolInterest.delete(key);
+      requestedTools.delete(key);
+    }
+  };
+}
+
+function reconcileToolPresentations(): void {
+  for (const { scope, callId } of toolInterest.values())
+    requestToolPresentation(scope, callId, true);
+}
+
 const batches = new Map<string, PendingBatch>();
 const requestedTools = new Set<string>();
 let batchScheduled = false;
@@ -160,6 +200,7 @@ function flushBatches(): void {
     const callIds = [...batch.callIds];
     for (let index = 0; index < callIds.length; index += 200) {
       const slice = callIds.slice(index, index + 200);
+      const epoch = connectionEpoch;
       void backend
         .getToolChangePresentations({
           environmentId: batch.environmentId,
@@ -168,6 +209,7 @@ function flushBatches(): void {
           callIds: slice,
         })
         .then((result) => {
+          if (epoch !== connectionEpoch) return;
           const store = useChangeProjectionStore.getState();
           store.applyToolPresentations(
             slice.map((callId) => [
@@ -244,5 +286,6 @@ export function resetChangeSubscriptionsForTests(): void {
   connectionEpoch = 0;
   batches.clear();
   requestedTools.clear();
+  toolInterest.clear();
   active = 0;
 }

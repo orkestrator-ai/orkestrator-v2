@@ -110,6 +110,7 @@ export class HttpBridgeChangeEvidence {
       this.fetchImpl,
     );
     await response.body?.cancel().catch(() => undefined);
+    if (!response.ok) throw new Error("change-evidence-ack-unavailable");
   }
 }
 

@@ -1,3 +1,4 @@
+import { validCapturePath } from "./confined-read.js";
 /**
  * Immutable diff bodies and live-detail resolution.
  *
@@ -257,6 +258,7 @@ export class DiffBodyService {
       }
       const measured = measureEvidence(evidence, (id) => bytes.get(id) ?? null, {
         withHunks: true,
+        selectedPaths: "selectedPaths" in ref ? ref.selectedPaths : undefined,
       });
       for (const file of measured.files) {
         const available = bodyIds(evidence).every((id) => bytes.has(id));
@@ -381,6 +383,11 @@ export class DiffBodyService {
     const pathId = row?.new_path ?? row?.path_id ?? input.pathId;
     if (!pathId)
       return { kind: "error", error: { code: "not-found", reasonKey: "changes.error.not-found" } };
+    if (!validCapturePath(decodePath(pathId)))
+      return {
+        kind: "error",
+        error: { code: "invalid-request", reasonKey: "changes.error.invalid-request" },
+      };
     const oldPathId = row ? row.old_path : pathId;
     const target = await this.deps.environmentTarget(environmentId);
     const identity = target ? await this.deps.registry.resolve(target) : null;
@@ -488,7 +495,7 @@ export class DiffBodyService {
         files: beforeBytes && afterBytes ? ("complete" as const) : ("partial" as const),
         reasons: [
           "live-file-detail",
-          ...(baseline ? [] : ["baseline-mutable-ref"]),
+          ...(baseline ? [] : ["baseline-mutable-ref", "baseline-unavailable"]),
           ...(beforeBytes ? [] : ["baseline-unreadable"]),
           ...(afterBytes ? [] : ["current-unreadable"]),
         ],

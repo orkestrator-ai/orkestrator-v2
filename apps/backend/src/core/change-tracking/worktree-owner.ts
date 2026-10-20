@@ -106,6 +106,8 @@ export interface CaptureRequestOptions {
   deadlineMs: number;
   /** Stable key making the reservation idempotent (for example a turn id). */
   boundaryKey?: string;
+  signal?: AbortSignal;
+  requestedAt?: number;
 }
 
 export interface OwnerDependencies {
@@ -263,6 +265,20 @@ export class WorktreeChangeOwner {
    * has not started can, and is shared.
    */
   capture(options: CaptureRequestOptions): Promise<CaptureOutcome> {
+    const controller = new AbortController();
+    const requestedAt = (this.deps.now ?? Date.now)();
+    let timer: ReturnType<typeof setTimeout>;
+    const expired = new Promise<CaptureOutcome>((resolve) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        resolve({ kind: "unavailable", reason: "capture-timeout", boundarySeq: 0 });
+      }, options.deadlineMs);
+    });
+    const work = this.scheduleCapture({ ...options, signal: controller.signal, requestedAt });
+    return Promise.race([work, expired]).finally(() => clearTimeout(timer));
+  }
+
+  private scheduleCapture(options: CaptureRequestOptions): Promise<CaptureOutcome> {
     this.lastUsedAt = Date.now();
     const urgent = URGENT.has(options.purpose);
     if (this.queued) {
@@ -295,9 +311,13 @@ export class WorktreeChangeOwner {
   private async captureNow(options: CaptureRequestOptions): Promise<CaptureOutcome> {
     const { ledger } = this.deps;
     const now = this.deps.now ?? Date.now;
-    const started = now();
+    const started = options.requestedAt ?? now();
+    if (options.signal?.aborted || now() - started >= options.deadlineMs)
+      return { kind: "unavailable", reason: "capture-timeout", boundarySeq: 0 };
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), options.deadlineMs);
+    const abort = () => controller.abort();
+    options.signal?.addEventListener("abort", abort, { once: true });
+    const timer = setTimeout(abort, Math.max(0, options.deadlineMs - (now() - started)));
     timer.unref?.();
     let fence: number;
     try {
@@ -369,7 +389,7 @@ export class WorktreeChangeOwner {
         );
         return { kind: "unavailable", reason: result.reason, boundarySeq };
       }
-      if (now() - started > options.deadlineMs) {
+      if (controller.signal.aborted || now() - started >= options.deadlineMs) {
         ledger.transaction(() =>
           ledger.finishCapture(attempt.id, "failed", { errorCode: "capture-timeout" }),
         );
@@ -444,6 +464,7 @@ export class WorktreeChangeOwner {
       return { kind: "unavailable", reason, boundarySeq };
     } finally {
       clearTimeout(timer);
+      options.signal?.removeEventListener("abort", abort);
       releaseRemote?.();
     }
   }

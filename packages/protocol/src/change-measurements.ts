@@ -177,6 +177,8 @@ export interface MeasurementLogicalOwner {
 export interface EvidenceRef {
   evidenceId: string;
   evidenceRevision: number;
+  /** Per-file selection within a retained multifile patch. */
+  selectedPaths?: readonly string[];
 }
 
 export interface MeasurementTotals {

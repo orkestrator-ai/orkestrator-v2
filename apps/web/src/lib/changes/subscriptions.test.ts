@@ -15,7 +15,11 @@ import {
   exactCount,
   resetChangeProjectionStore,
 } from "@/components/files-panel/change-projection-test-fixture";
-import { resetChangeSubscriptionsForTests, subscribeChangeResource } from "./subscriptions";
+import {
+  resetChangeSubscriptionsForTests,
+  subscribeChangeResource,
+  subscribeToolPresentation,
+} from "./subscriptions";
 
 // `@/lib/native/backend` and `@/lib/native/events` are mocked for every
 // renderer test in tests/setup.ts.
@@ -199,6 +203,7 @@ describe("change projection subscriptions", () => {
     });
     expect(useChangeProjectionStore.getState().contentGenerations.get(KEY)).toEqual({
       generation: 4,
+      ownerGeneration: "gen-2",
       pathIds: ["p:src/a.ts"],
     });
 
@@ -273,5 +278,83 @@ describe("change projection subscriptions", () => {
     await settle();
     expect(held()?.revision).toBe(2);
     release();
+  });
+  test("owner replacement resets content counters and retires late owners", async () => {
+    const release = subscribeChangeResource(KEY);
+    await settle();
+    const store = useChangeProjectionStore.getState();
+    store.applyProjection(projection(1, { ownerGeneration: "A" }));
+    emit({
+      kind: "content-invalidated",
+      resourceKey: KEY,
+      ownerGeneration: "A",
+      contentGeneration: 100,
+      pathIds: null,
+    });
+    store.applyProjection(projection(1, { ownerGeneration: "B" }));
+    emit({
+      kind: "content-invalidated",
+      resourceKey: KEY,
+      ownerGeneration: "B",
+      contentGeneration: 1,
+      pathIds: ["u:b"],
+    });
+    emit({
+      kind: "content-invalidated",
+      resourceKey: KEY,
+      ownerGeneration: "A",
+      contentGeneration: 101,
+      pathIds: ["u:a"],
+    });
+    expect(useChangeProjectionStore.getState().contentGenerations.get(KEY)).toEqual({
+      generation: 1,
+      ownerGeneration: "B",
+      pathIds: ["u:b"],
+    });
+    release();
+  });
+
+  test("a null tool presentation reconciles after delayed evidence and again on reconnect", async () => {
+    let available = false,
+      reads = 0;
+    const scope = { environmentId: "env-1", provider: "codex", conversationId: "s" };
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === "changes_get_tool_presentations") {
+        reads++;
+        return {
+          presentations: {
+            call: available
+              ? {
+                  schemaVersion: 1,
+                  operationId: "op",
+                  revision: reads,
+                  toolKind: "file-edit",
+                  changes: [{ role: "effect", resourceKey: KEY, prominence: "primary" }],
+                }
+              : null,
+          },
+          projections: {},
+        };
+      }
+      return { kind: "unchanged", ownerGeneration: "gen-1", revision: 0 };
+    });
+    const release = subscribeToolPresentation(scope, "call");
+    await settle();
+    const key = "env-1\0codex\0s\0call";
+    expect(useChangeProjectionStore.getState().toolPresentations.get(key)).toBeNull();
+    available = true;
+    // Nobody has resource interest yet: only the tool row is mounted.
+    emit({ kind: "projection", projection: projection(2) });
+    await settle();
+    expect(useChangeProjectionStore.getState().toolPresentations.get(key)?.changes).toHaveLength(1);
+    const before = reads;
+    reconnect();
+    await settle();
+    expect(reads).toBeGreaterThan(before);
+    release();
+    const after = reads;
+    emit({ kind: "projection", projection: projection(3) });
+    await settle();
+    expect(reads).toBe(after);
   });
 });

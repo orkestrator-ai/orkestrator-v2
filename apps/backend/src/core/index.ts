@@ -541,11 +541,13 @@ export class OrkestratorBackend {
           }
           if (isAgentTurnEndTransition(event)) {
             // Capture the turn's end state and publish turn-net/thread-net.
+            let changesFinalized: Promise<unknown> = Promise.resolve();
             if (event.owner !== "coordinator" && event.logicalSessionKey) {
-              void this.runtime.changeTracking?.finalizeTurn({
-                environmentId: event.environmentId,
-                logicalSessionKey: event.logicalSessionKey,
-              });
+              changesFinalized =
+                this.runtime.changeTracking?.finalizeTurn({
+                  environmentId: event.environmentId,
+                  logicalSessionKey: event.logicalSessionKey,
+                }) ?? Promise.resolve();
             }
             // A coordinator has no environment row and no PR to probe for.
             if (event.owner !== "coordinator") {
@@ -560,12 +562,14 @@ export class OrkestratorBackend {
              * dispatch latency instead of the mail backoff, which for a
              * coordinator could previously reach thirty seconds.
              */
-            void this.nativeAgents.drainPromptQueueForSession(event).catch((error: unknown) => {
-              console.warn(
-                "[backend] Failed to drain the prompt queue after a turn ended:",
-                error instanceof Error ? error.message : error,
-              );
-            });
+            void changesFinalized
+              .then(() => this.nativeAgents.drainPromptQueueForSession(event))
+              .catch((error: unknown) => {
+                console.warn(
+                  "[backend] Failed to drain the prompt queue after a turn ended:",
+                  error instanceof Error ? error.message : error,
+                );
+              });
             /*
              * Settle first, drain second, in that order.
              *

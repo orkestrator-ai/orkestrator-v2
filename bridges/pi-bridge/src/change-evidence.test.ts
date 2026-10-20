@@ -449,3 +449,40 @@ describe("forks", () => {
     expect(entries()).toHaveLength(0);
   });
 });
+
+test("native call ids reused across turns retain separate transcript occurrences and observations", async () => {
+  const state = newSessionState();
+  const hooks = registerHooks(state);
+  setCommandChangeProbeForTests(
+    fakeProbe({
+      change: CHANGE,
+      boundary: { before: "fresh-before", after: "after-terminal" },
+      overlap: "none-observed",
+      omittedReasons: [],
+    }).probe,
+  );
+  for (const [index, content] of ["same\n", "same\n", "different\n"].entries()) {
+    beginEvidenceTurn(state, `turn-${index}`);
+    // This is the row identity stamped on the transcript card by execution_start.
+    state.toolCallRows = new Map([["reused", `assistant-${index}`]]);
+    const event = { toolCallId: "reused", toolName: "write", input: { path: "a.txt", content } };
+    await hooks.tool_call![0]!(event);
+    await hooks.tool_result![0]!({ ...event, isError: false });
+  }
+  const successes = toolFrames().filter((f) => f.event.phase === "succeeded");
+  expect(successes).toHaveLength(3);
+  expect(successes.map((f) => f.source.attemptId)).toEqual([
+    "assistant-0",
+    "assistant-1",
+    "assistant-2",
+  ]);
+  expect(successes.map((f) => f.source.turnId)).toEqual(["turn-0", "turn-1", "turn-2"]);
+  expect(
+    new Set(
+      frames()
+        .filter((f) => f.event.kind === "tool" && f.event.phase === "succeeded")
+        .map((f) => f.frameId),
+    ).size,
+  ).toBe(3);
+  for (const report of observations()) expect(report.source.attemptId).toBeDefined();
+});

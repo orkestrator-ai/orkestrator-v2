@@ -898,6 +898,14 @@ export class ChangeLedger {
       .all(threadId, afterOrdinal, limit) as TurnBoundaryRow[];
   }
 
+  recentTurnsForThread(threadId: string, beforeOrdinal: number, limit: number): TurnBoundaryRow[] {
+    return this.db
+      .query(
+        "SELECT * FROM change_turn_boundaries WHERE thread_id = ? AND ordinal < ? ORDER BY ordinal DESC LIMIT ?",
+      )
+      .all(threadId, beforeOrdinal, limit) as TurnBoundaryRow[];
+  }
+
   nextTurnOrdinal(threadId: string): number {
     const row = this.db
       .query("SELECT MAX(ordinal) AS n FROM change_turn_boundaries WHERE thread_id = ?")
@@ -1160,6 +1168,10 @@ export class ChangeLedger {
     reason: string;
     expiresAt?: string | null;
   }): void {
+    if (input.reason === "thread-latest") {
+      this.removeReferences(input.ownerKind, input.ownerId, input.reason);
+      if (input.ownerKind === "segment") this.removeReferences("segment-live", input.ownerId);
+    }
     this.db
       .query(
         "INSERT OR IGNORE INTO change_references (owner_kind, owner_id, snapshot_id, reason, expires_at) VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -1167,15 +1179,15 @@ export class ChangeLedger {
       .run(input.ownerKind, input.ownerId, input.snapshotId, input.reason, input.expiresAt ?? null);
   }
 
-  removeReferences(ownerKind: string, ownerId: string, reason?: string): void {
+  removeReferences(ownerKind: string, ownerId: string, reason?: string): number {
     if (reason) {
-      this.db
+      return this.db
         .query("DELETE FROM change_references WHERE owner_kind = ? AND owner_id = ? AND reason = ?")
-        .run(ownerKind, ownerId, reason);
+        .run(ownerKind, ownerId, reason).changes;
     } else {
-      this.db
+      return this.db
         .query("DELETE FROM change_references WHERE owner_kind = ? AND owner_id = ?")
-        .run(ownerKind, ownerId);
+        .run(ownerKind, ownerId).changes;
     }
   }
 
@@ -1339,6 +1351,18 @@ export class ChangeLedger {
         "INSERT INTO change_restore_operations (id, idempotency_key, token, measurement_id, state, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, 'applying', ?5, ?5)",
       )
       .run(input.id, input.idempotencyKey, input.token, input.measurementId, at);
+  }
+
+  recoverRestoreOperations(): void {
+    const outcome = {
+      kind: "error",
+      error: { code: "precondition-failed", reasonKey: "changes.restore.interrupted" },
+    };
+    this.db
+      .query(
+        "UPDATE change_restore_operations SET state = 'failed', outcome_json = ?, updated_at = ? WHERE state = 'applying' AND outcome_json IS NULL",
+      )
+      .run(JSON.stringify(outcome), now());
   }
 
   finishRestoreOperation(id: string, state: string, outcomeJson: string): void {

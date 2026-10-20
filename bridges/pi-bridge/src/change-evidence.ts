@@ -166,6 +166,11 @@ function toolSource(
   return {
     conversationId: state.id,
     callId: toolCallId,
+    attemptId:
+      state.toolCallRows?.get(toolCallId) ??
+      state.currentAssistantMessageId ??
+      turnId ??
+      "unscoped",
     ...(turnId ? { turnId } : {}),
     ...(typeof parentToolCallId === "string" && parentToolCallId && parentToolCallId !== toolCallId
       ? { parentCallId: parentToolCallId }

@@ -137,7 +137,11 @@ export class ChangeTrackingService {
   constructor(private readonly options: ChangeTrackingServiceOptions) {
     const root = path.join(options.dataDir, "change-tracking");
     this.ledger = new ChangeLedger(options.database);
-    this.objects = new ObjectStore({ root: path.join(root, "objects"), durable: options.durable });
+    this.objects = new ObjectStore({
+      root: path.join(root, "objects"),
+      durable: options.durable,
+      hardBudgetBytes: () => this.policies.policy.snapshotHardBudgetBytes,
+    });
     this.bodies = new EvidenceBodyStore(
       path.join(root, "evidence-bodies"),
       options.durable ?? true,
@@ -220,6 +224,7 @@ export class ChangeTrackingService {
     if (this.started) return;
     this.started = true;
     try {
+      this.ledger.transaction(() => this.ledger.recoverRestoreOperations());
       this.turns.reconcileAfterRestart();
       this.publisher.drainOutbox();
     } catch (error) {
@@ -322,6 +327,9 @@ export class ChangeTrackingService {
     },
   ): Promise<TurnStartResult> {
     try {
+      await this.turnFinalizations.get(
+        threadIdFor(context.environmentId, context.logicalSessionKey),
+      );
       if (context.providerSessionId)
         this.rememberConversation(
           context.environmentId,
@@ -419,6 +427,11 @@ export class ChangeTrackingService {
     writersSettled?: boolean;
   }): Promise<string[]> {
     const key = threadIdFor(input.environmentId, input.logicalSessionKey);
+    // Select synchronously at the idle edge, before evidence I/O or queue drains.
+    const ending = input.requestId
+      ? this.ledger.turn(turnIdFor(input.environmentId, input.logicalSessionKey, input.requestId))
+      : this.turns.activeTurn(input.environmentId, input.logicalSessionKey);
+    if (!ending) return Promise.resolve([]);
     const previous = this.turnFinalizations.get(key) ?? Promise.resolve([]);
     const next = previous
       .catch(() => [])
@@ -429,14 +442,8 @@ export class ChangeTrackingService {
         return this.turns.finalizeTurn({
           environmentId: input.environmentId,
           logicalSessionKey: input.logicalSessionKey,
-          requestId: input.requestId ?? null,
-          writersSettled:
-            input.writersSettled ??
-            this.writersSettled(
-              input.requestId
-                ? turnIdFor(input.environmentId, input.logicalSessionKey, input.requestId)
-                : (this.ledger.latestTurnForThread(key)?.turn_id ?? null),
-            ),
+          turnId: ending.turn_id,
+          writersSettled: input.writersSettled ?? this.writersSettled(ending.turn_id),
           terminalEvidence: "activity-idle",
         });
       })
@@ -564,6 +571,33 @@ export class ChangeTrackingService {
 
   private async pullNow(source: EvidenceSource): Promise<number> {
     let total = 0;
+    const ackKey = `pending-evidence-ack:${source.sourceKey}`;
+    const retryAck = async (): Promise<boolean> => {
+      const pending = this.ledger.meta(ackKey);
+      if (!pending) return true;
+      try {
+        const request = JSON.parse(pending) as Parameters<EvidenceSource["ack"]>[0];
+        do {
+          const retainedBodyIds = request.retainedBodyIds.slice(0, 10_000);
+          const unavailableBodyIds = request.unavailableBodyIds.slice(0, 10_000);
+          await source.ack({ ...request, retainedBodyIds, unavailableBodyIds });
+          request.retainedBodyIds = request.retainedBodyIds.slice(retainedBodyIds.length);
+          request.unavailableBodyIds = request.unavailableBodyIds.slice(unavailableBodyIds.length);
+          this.ledger.transaction(() =>
+            this.ledger.setMeta(
+              ackKey,
+              request.retainedBodyIds.length || request.unavailableBodyIds.length
+                ? JSON.stringify(request)
+                : "",
+            ),
+          );
+        } while (request.retainedBodyIds.length || request.unavailableBodyIds.length);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    if (!(await retryAck())) return 0;
     for (let round = 0; round < 8 && !this.stopped; round++) {
       const cursor = this.ledger.cursor(source.sourceKey);
       const response = await source.read(cursor?.cursor ?? 0, cursor?.runtimeEpoch ?? null);
@@ -576,6 +610,15 @@ export class ChangeTrackingService {
         cursor && cursor.runtimeEpoch === response.runtimeEpoch ? cursor.cursor : 0;
       const fresh = response.entries.filter((entry) => entry.seq > startCursor);
       if (fresh.length === 0) {
+        if (cursor?.runtimeEpoch === response.runtimeEpoch)
+          await source
+            .ack({
+              runtimeEpoch: cursor.runtimeEpoch,
+              upTo: cursor.cursor,
+              retainedBodyIds: [],
+              unavailableBodyIds: [],
+            })
+            .catch(() => undefined);
         if (!cursor || cursor.runtimeEpoch !== response.runtimeEpoch) {
           this.ledger.transaction(() =>
             this.ledger.setCursor(source.sourceKey, response.runtimeEpoch, response.nextCursor),
@@ -596,24 +639,26 @@ export class ChangeTrackingService {
         response.capabilities,
         (id) => source.body(id),
       );
-      // Durable before acknowledgment: the ingest committed every entry.
-      this.ledger.transaction(() =>
-        this.ledger.setCursor(source.sourceKey, response.runtimeEpoch, response.nextCursor),
-      );
-      await source
-        .ack({
-          runtimeEpoch: response.runtimeEpoch,
-          upTo: response.nextCursor,
-          retainedBodyIds: [...new Set(result.retainedBodyIds)],
-          unavailableBodyIds: [...new Set(result.unavailableBodyIds)],
-        })
-        .catch(() => undefined);
+      // Cursor and body dispositions commit together. A failed acknowledgment
+      // is retried before the next read, including after process restart.
+      const ack = {
+        runtimeEpoch: response.runtimeEpoch,
+        upTo: response.nextCursor,
+        retainedBodyIds: [...new Set(result.retainedBodyIds)],
+        unavailableBodyIds: [...new Set(result.unavailableBodyIds)],
+      };
+      this.ledger.transaction(() => {
+        this.ledger.setCursor(source.sourceKey, response.runtimeEpoch, response.nextCursor);
+        this.ledger.setMeta(ackKey, JSON.stringify(ack));
+      });
+      const acknowledged = await retryAck();
       await this.afterIngest(
         source,
         result,
         identity ? { worktreeId: identity.worktreeId, incarnation: identity.incarnation } : null,
       );
       total += fresh.length;
+      if (!acknowledged) break;
       if (response.entries.length < this.policies.policy.evidencePullEntries) break;
     }
     return total;
@@ -821,11 +866,31 @@ export class ChangeTrackingService {
     const presentations: Record<string, CanonicalToolPresentation | null> = {};
     const projections: Record<string, ChangeProjection> = {};
     for (const callId of input.callIds.slice(0, 500)) {
+      let nativeCallId = callId;
+      let attemptId: string | undefined;
+      // An occurrence-aware transcript can address an attempt without making
+      // the shared domain depend on which adapter produced it.
+      if (callId.startsWith("[")) {
+        try {
+          const tuple = JSON.parse(callId);
+          if (
+            Array.isArray(tuple) &&
+            tuple.length === 2 &&
+            tuple.every((item) => typeof item === "string")
+          ) {
+            nativeCallId = tuple[0]!;
+            attemptId = tuple[1]!;
+          }
+        } catch {
+          /* A plain native call id remains supported. */
+        }
+      }
       const operationId = operationIdFor({
         environmentId: input.environmentId,
         provider: input.provider,
         conversationId: input.conversationId,
-        callId,
+        callId: nativeCallId,
+        attemptId,
       });
       const op = this.ledger.operation(operationId);
       if (!op) {
@@ -879,9 +944,15 @@ export class ChangeTrackingService {
     logicalSessionKey: string;
     cursor?: string | null;
     pageSize?: number;
+    /** Renderer history refreshes its tail; the public CLI keeps oldest-first paging. */
+    newestFirst?: boolean;
   }): ChangesGetHistoryResult {
     const threadId = threadIdFor(input.environmentId, input.logicalSessionKey);
-    const after = input.cursor ? Number.parseInt(input.cursor, 10) : 0;
+    const after = input.cursor
+      ? Number(input.cursor)
+      : input.newestFirst
+        ? Number.MAX_SAFE_INTEGER
+        : 0;
     if (!Number.isSafeInteger(after) || after < 0) {
       return {
         kind: "error",
@@ -889,7 +960,9 @@ export class ChangeTrackingService {
       };
     }
     const limit = Math.max(1, Math.min(input.pageSize ?? 50, 200));
-    const rows = this.ledger.turnsForThread(threadId, after, limit + 1);
+    const rows = input.newestFirst
+      ? this.ledger.recentTurnsForThread(threadId, after, limit + 1)
+      : this.ledger.turnsForThread(threadId, after, limit + 1);
     const entries: ChangeHistoryEntry[] = rows.slice(0, limit).map((turn) => {
       const providerTurnId = this.ledger.meta(`pturn:${turn.turn_id}`);
       const keys = turnResourceKeys(turn.turn_id, providerTurnId);

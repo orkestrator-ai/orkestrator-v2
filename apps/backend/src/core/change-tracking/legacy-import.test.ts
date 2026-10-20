@@ -90,3 +90,24 @@ describe("shadow comparison: expected corrections versus the legacy client count
     expect(canonical.deletions.value).toBe(1);
   });
 });
+
+test("a capped import resumes remaining journals on the next run", async () => {
+  const h = createHarness();
+  harnesses.push(h);
+  for (const id of ["s1", "s2"])
+    await new CommandChangeJournal(
+      path.join(h.dataDir, OPENCODE_COMMAND_CHANGES_DIRECTORY, "env-1", `${id}.jsonl`),
+    ).append("call", {
+      additions: 1,
+      deletions: 0,
+      files: [{ path: `${id}.ts`, additions: 1, deletions: 0, status: "A" }],
+    });
+  expect((await importOpenCodeCommandJournals(h.service, h.dataDir, { maxFiles: 1 })).records).toBe(
+    1,
+  );
+  expect(h.service.ledger.meta("legacy-import:opencode:v1")).toBeNull();
+  expect((await importOpenCodeCommandJournals(h.service, h.dataDir, { maxFiles: 1 })).records).toBe(
+    1,
+  );
+  expect(h.service.ledger.meta("legacy-import:opencode:v1")).not.toBeNull();
+});

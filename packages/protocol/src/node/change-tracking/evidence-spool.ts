@@ -103,6 +103,7 @@ export class ChangeEvidenceSpool {
   private nextSeq = 1;
   private queuedBytes = 0;
   private bodyBytes = 0;
+  private readonly pendingBodies = new Set<string>();
   private droppedFrameIds: string[] = [];
   private droppedUnknown = false;
   private gapBindingId = "";
@@ -140,7 +141,8 @@ export class ChangeEvidenceSpool {
     const original = typeof content === "string" ? new TextEncoder().encode(content) : content;
     const complete = original.length <= this.limits.maxSingleBodyBytes;
     const bytes = complete ? original : original.subarray(0, this.limits.maxSingleBodyBytes);
-    if (this.bodyBytes + bytes.length > this.limits.maxBodyBytes) {
+    const id = evidenceBodyId(bytes);
+    if (!this.bodies.has(id) && this.bodyBytes + bytes.length > this.limits.maxBodyBytes) {
       return {
         id: `unretained:${stableEvidenceId(evidenceBodyId(original))}`,
         state: "unavailable",
@@ -150,9 +152,9 @@ export class ChangeEvidenceSpool {
         unavailableReason: "bridge-spool-body-capacity",
       };
     }
-    const id = evidenceBodyId(bytes);
     if (!this.bodies.has(id)) {
       this.bodies.set(id, { bytes, refs: 0 });
+      this.pendingBodies.add(id);
       this.bodyBytes += bytes.length;
       this.persistBody(id, bytes);
     }
@@ -167,15 +169,30 @@ export class ChangeEvidenceSpool {
 
   /** Append a canonical frame. Duplicate frame ids are idempotent. */
   appendFrame(frame: ProviderEvidenceFrame): boolean {
-    if (this.seenFrameIds.has(frame.frameId)) return true;
-    if (!isProviderEvidenceFrame(frame)) return false;
+    if (this.seenFrameIds.has(frame.frameId)) {
+      this.releasePendingBodies();
+      return true;
+    }
+    this.gapBindingId ||= frame.bindingId;
+    const frameId = frame.frameId;
+    if (!isProviderEvidenceFrame(frame)) {
+      this.recordDrop(frameId);
+      this.releasePendingBodies();
+      return false;
+    }
     this.seenFrameIds.add(frame.frameId);
     if (this.seenFrameIds.size > this.limits.maxEntries * 4) {
       const oldest = this.seenFrameIds.values().next().value;
       if (oldest !== undefined) this.seenFrameIds.delete(oldest);
     }
     this.gapBindingId ||= frame.bindingId;
-    return this.push({ seq: 0, type: "frame", frame }, collectBodyIds(frame), frame.frameId);
+    const accepted = this.push(
+      { seq: 0, type: "frame", frame },
+      collectBodyIds(frame),
+      frame.frameId,
+    );
+    this.releasePendingBodies();
+    return accepted;
   }
 
   appendObservation(report: WorkspaceObservationReport): boolean {
@@ -287,15 +304,24 @@ export class ChangeEvidenceSpool {
         if (body) body.refs--;
       }
     }
-    for (const id of [...request.retainedBodyIds, ...request.unavailableBodyIds]) {
+    this.releaseUnreferencedBodies([...request.retainedBodyIds, ...request.unavailableBodyIds]);
+    if (released > 0) this.compactPersisted();
+    return { released };
+  }
+
+  private releasePendingBodies(): void {
+    this.releaseUnreferencedBodies(this.pendingBodies);
+    this.pendingBodies.clear();
+  }
+
+  private releaseUnreferencedBodies(ids: Iterable<string>): void {
+    for (const id of Array.from(ids)) {
       const body = this.bodies.get(id);
       if (!body || body.refs > 0) continue;
       this.bodies.delete(id);
       this.bodyBytes -= body.bytes.length;
       this.removeBody(id);
     }
-    if (released > 0) this.compactPersisted();
-    return { released };
   }
 
   stats() {

@@ -87,6 +87,8 @@ export function environmentProjectionFixture(
 export function resetChangeProjectionStore(): void {
   useChangeProjectionStore.setState({
     projections: new Map(),
+    retiredOwners: new Map(),
+    transportRevision: 0,
     deleted: new Set(),
     contentGenerations: new Map(),
     toolPresentations: new Map(),

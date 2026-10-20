@@ -202,6 +202,8 @@ beforeEach(() => {
   resetChangeSubscriptionsForTests();
   useChangeProjectionStore.setState({
     projections: new Map(),
+    retiredOwners: new Map(),
+    transportRevision: 0,
     deleted: new Set(),
     contentGenerations: new Map(),
     toolPresentations: new Map(),
@@ -484,12 +486,33 @@ describe("DiffViewerTab live targets", () => {
     expect(screen.getByTestId("diff-viewer-endpoints").textContent).toBe(
       "vs main@63d1257 · Current workspace file",
     );
-    // Titled with the baseline ref, as the Files panel names it.
-    expect(screen.getByTestId("diff-viewer-endpoints").getAttribute("title")).toBe("vs main");
+    expect(screen.getByTestId("diff-viewer-endpoints").getAttribute("title")).toBe(
+      "main@63d12576e9198f24bc2271a6a8c3702dfb391eae → Current workspace file",
+    );
     expectOnlyChangeCommands();
 
     fireEvent.click(screen.getByRole("button", { name: "View file" }));
     expect(onSwitchToFileView).toHaveBeenCalledTimes(1);
+  });
+
+  test("reconnect and returning from an inactive environment resolve missed same-count edits", async () => {
+    liveHandlers();
+    const view = render(<DiffViewerTab target={live} isActive />);
+    await screen.findByText("+body of diff-live-1");
+    act(() => useChangeProjectionStore.getState().resync());
+    await screen.findByText("+body of diff-live-2");
+    view.rerender(<DiffViewerTab target={live} isActive={false} />);
+    act(() => useChangeProjectionStore.getState().resync());
+    view.rerender(<DiffViewerTab target={live} isActive />);
+    await screen.findByText("+body of diff-live-3");
+  });
+
+  test("hosts without change tracking show an explicit unsupported state", async () => {
+    handlers.changes_resolve_live_detail = () => {
+      throw new Error("unknown command");
+    };
+    render(<DiffViewerTab target={live} isActive />);
+    expect(await screen.findByText(/This host does not support change diffs/)).toBeTruthy();
   });
 
   test("re-resolves when the content generation names this file, and only then", async () => {

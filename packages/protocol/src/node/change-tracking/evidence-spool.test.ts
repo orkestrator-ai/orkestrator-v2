@@ -8,7 +8,7 @@ import {
   changeEvidenceBodyRouteBody,
   changeEvidenceReadBody,
 } from "./evidence-routes";
-import { ChangeEvidenceSpool } from "./evidence-spool";
+import { collectBodyIds, ChangeEvidenceSpool } from "./evidence-spool";
 
 const directories: string[] = [];
 afterEach(() => {
@@ -204,5 +204,74 @@ describe("change evidence spool", () => {
       }),
     ).toEqual({ released: 0 });
     expect(spool.read(0).entries).toHaveLength(1);
+  });
+});
+
+test("duplicate body frames after ack and rejected invalid/overflow frames release orphan bodies", () => {
+  const spool = new ChangeEvidenceSpool({ limits: { maxEntries: 3, maxEntryBytes: 1500 } });
+  const rec = recorder(spool);
+  const emit = (id: string, text: string) =>
+    rec.tool(
+      { conversationId: "s", callId: id },
+      {
+        toolKind: "file-edit",
+        phase: "succeeded",
+        executionOccurrence: "started",
+        evidence: [{ kind: "patch", text, claim: "provider-reported" }],
+      },
+    );
+  emit("c", "patch");
+  const read = spool.read(0);
+  spool.acknowledge({
+    runtimeEpoch: spool.runtimeEpoch,
+    upTo: read.nextCursor,
+    retainedBodyIds: read.entries.flatMap((e) =>
+      e.type === "frame" ? collectBodyIds(e.frame) : [],
+    ),
+    unavailableBodyIds: [],
+  });
+  expect(spool.stats().bodyBytes).toBe(0);
+  emit("c", "patch");
+  expect(spool.stats().bodyBytes).toBe(0);
+  // Entry too large, despite a tiny retained body: no zero-reference leak.
+  emit("oversized", "different");
+  emit("overflow1", "one");
+  emit("overflow2", "two");
+  const pending = spool.read(0);
+  spool.acknowledge({
+    runtimeEpoch: spool.runtimeEpoch,
+    upTo: pending.nextCursor,
+    retainedBodyIds: pending.entries.flatMap((e) =>
+      e.type === "frame" ? collectBodyIds(e.frame) : [],
+    ),
+    unavailableBodyIds: [],
+  });
+  expect(spool.stats().bodyBytes).toBe(0);
+});
+
+test("invalid oversized update arrays record a stream gap and release all bodies", () => {
+  const spool = new ChangeEvidenceSpool();
+  const rec = recorder(spool);
+  const accepted = rec.tool(
+    { conversationId: "s", callId: "huge" },
+    {
+      toolKind: "file-edit",
+      phase: "succeeded",
+      executionOccurrence: "started",
+      evidence: Array.from({ length: 257 }, (_, i) => ({
+        kind: "patch" as const,
+        text: `body-${i}`,
+        claim: "provider-reported" as const,
+      })),
+    },
+  );
+  expect(accepted).toBe(false);
+  expect(spool.stats().bodyBytes).toBe(0);
+  const gaps = spool
+    .read(0)
+    .entries.filter((e) => e.type === "frame" && e.frame.event.kind === "stream-gap");
+  expect(gaps).toHaveLength(1);
+  expect(gaps[0]?.type === "frame" && gaps[0].frame.event).toMatchObject({
+    coverage: { kind: "frames", frameIds: [expect.any(String)] },
   });
 });

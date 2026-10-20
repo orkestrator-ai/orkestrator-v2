@@ -221,3 +221,18 @@ describe("environment-net projections", () => {
     expect(queue.stats().joined).toBe(8);
   });
 });
+
+test("equal totals with a different file set advance measurement identity and file page", async () => {
+  const { h, target, key } = setup();
+  h.service.onDiffScanEvent(scanned(target, [change("a.ts", 1, 1)]));
+  await h.service.environments.idle();
+  const first = h.service.projections.selectedMeasurement(key)!;
+  h.service.onDiffScanEvent(scanned(target, [change("b.ts", 1, 1)]));
+  await h.service.environments.idle();
+  const second = h.service.projections.selectedMeasurement(key)!;
+  expect(second.measurementId).not.toBe(first.measurementId);
+  const view = h.service.getView({ resourceKey: key });
+  expect(view.kind === "projection" && view.projection.filePage?.rows[0]?.newPathDisplay).toBe(
+    "b.ts",
+  );
+});

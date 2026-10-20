@@ -102,7 +102,7 @@ export class TurnBoundaryService {
     const threadId = threadIdFor(context.environmentId, context.logicalSessionKey);
     const turnId = turnIdFor(context.environmentId, context.logicalSessionKey, context.requestId);
     const existing = ledger.turn(turnId);
-    if (existing?.dispatch_token) {
+    if (existing?.dispatch_token && existing.lifecycle !== "abandoned") {
       // A retried dispatch of the same request reuses its recorded boundary.
       return existing.start_snapshot_id
         ? {
@@ -150,13 +150,31 @@ export class TurnBoundaryService {
         }),
       );
     }
+    if (existing?.lifecycle === "abandoned") {
+      ledger.transaction(() => {
+        ledger.removeReferences("turn", turnId);
+        ledger.updateTurn(turnId, {
+          lifecycle: "preparing-start",
+          start_snapshot_id: null,
+          end_snapshot_id: null,
+          dispatch_token: null,
+          dispatch_receipt: null,
+          reason: null,
+          finished_at: null,
+          started_at: new Date().toISOString(),
+        });
+      });
+    }
     const release = owner.retain();
     let outcome: CaptureOutcome;
     try {
       outcome = await owner.capture({
         purpose: "turn-start",
         deadlineMs: policies.policy.foregroundBoundaryDeadlineMs,
-        boundaryKey: `turn-start:${turnId}`,
+        boundaryKey:
+          existing?.lifecycle === "abandoned"
+            ? `turn-start:${turnId}:${randomUUID()}`
+            : `turn-start:${turnId}`,
       });
     } finally {
       release();
@@ -226,7 +244,13 @@ export class TurnBoundaryService {
     const { ledger } = this.deps;
     return ledger.transaction(() => {
       const current = ledger.currentSegment(threadId);
-      if (current && current.worktree_id === worktreeId) return current;
+      if (current && current.worktree_id === worktreeId) {
+        if (current.baseline_state === "pending" && !current.initial_turn_id) {
+          ledger.updateSegment(current.segment_id, { initial_turn_id: turnId });
+          return { ...current, initial_turn_id: turnId };
+        }
+        return current;
+      }
       const parent = !current && inheritedFrom ? ledger.segment(inheritedFrom) : null;
       if (current)
         ledger.updateSegment(current.segment_id, { closed_at: new Date().toISOString() });
@@ -358,14 +382,17 @@ export class TurnBoundaryService {
     environmentId: string;
     logicalSessionKey: string;
     requestId?: string | null;
+    turnId?: string;
     writersSettled: boolean;
     terminalEvidence: string;
   }): Promise<string[]> {
     const { ledger, policies } = this.deps;
     const threadId = threadIdFor(input.environmentId, input.logicalSessionKey);
-    const turn = input.requestId
-      ? ledger.turn(turnIdFor(input.environmentId, input.logicalSessionKey, input.requestId))
-      : ledger.latestTurnForThread(threadId);
+    const turn = input.turnId
+      ? ledger.turn(input.turnId)
+      : input.requestId
+        ? ledger.turn(turnIdFor(input.environmentId, input.logicalSessionKey, input.requestId))
+        : ledger.latestTurnForThread(threadId);
     if (!turn || TERMINAL.has(turn.lifecycle) || turn.lifecycle === "capturing-end") return [];
     ledger.transaction(() =>
       ledger.updateTurn(turn.turn_id, {

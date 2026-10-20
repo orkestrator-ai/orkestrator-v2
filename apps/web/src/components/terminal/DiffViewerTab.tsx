@@ -23,6 +23,7 @@ import * as backend from "@/lib/backend";
 import { changeLabel, changeReason, formatFileCount, formatLineCount } from "@/lib/changes/labels";
 import { useChangeContentGeneration, useChangeProjection } from "@/hooks/useChangeProjection";
 import { useMediaQuery } from "@/hooks";
+import { useChangeProjectionStore } from "@/stores/changeProjectionStore";
 import { useConfigStore } from "@/stores";
 import { DEFAULT_TERMINAL_APPEARANCE } from "@/constants/terminal";
 import { Button } from "@/components/ui/button";
@@ -210,21 +211,33 @@ export function DiffViewerTab({
 
   // Registering interest installs the shared change-event listener, which
   // records content invalidations for this resource.
-  useChangeProjection(liveResourceKey);
+  const projection = useChangeProjection(liveResourceKey);
+  const transportRevision = useChangeProjectionStore((state) => state.transportRevision);
   const contentGeneration = useChangeContentGeneration(liveResourceKey);
+  const ownerGeneration = contentGeneration?.ownerGeneration ?? projection?.ownerGeneration;
 
   // ---------------------------------------------------------------------------
   // Live target -> immutable identity
   // ---------------------------------------------------------------------------
   const [liveResolution, setLiveResolution] = useState<LiveResolution | null>(null);
   const resolveSeqRef = useRef(0);
-  const handledRef = useRef<{ key: string; reload: number; generation: number } | null>(null);
+  const handledRef = useRef<{
+    key: string;
+    reload: number;
+    generation: number;
+    owner?: string;
+    transport: number;
+  } | null>(null);
   /** Whether the target's pinned row/revision still applies (only for the first answer). */
   const pinnedRef = useRef(true);
   /** Path ids learned from the last identity; used for invalidation and later resolves. */
   const knownPathIdsRef = useRef<string[]>([]);
 
   useEffect(() => {
+    if (!isActive) {
+      handledRef.current = null;
+      return;
+    }
     if (!liveKey || !liveResourceKey) return;
     const handled = handledRef.current;
     const generation = contentGeneration?.generation ?? -1;
@@ -232,7 +245,11 @@ export function DiffViewerTab({
       // A different target: forget what the previous one learned.
       pinnedRef.current = true;
       knownPathIdsRef.current = [];
-    } else if (handled.reload === reloadCount) {
+    } else if (
+      handled.reload === reloadCount &&
+      handled.owner === ownerGeneration &&
+      handled.transport === transportRevision
+    ) {
       // Only the content generation moved. Re-resolve when it names this file.
       if (generation <= handled.generation) return;
       handled.generation = generation;
@@ -240,7 +257,13 @@ export function DiffViewerTab({
       const ours = new Set([...knownPathIdsRef.current, ...(livePathId ? [livePathId] : [])]);
       if (pathIds !== null && ours.size > 0 && !pathIds.some((id) => ours.has(id))) return;
     }
-    handledRef.current = { key: liveKey, reload: reloadCount, generation };
+    handledRef.current = {
+      key: liveKey,
+      reload: reloadCount,
+      generation,
+      owner: ownerGeneration,
+      transport: transportRevision,
+    };
 
     const seq = ++resolveSeqRef.current;
     const pathId = knownPathIdsRef.current[0] ?? livePathId;
@@ -280,13 +303,21 @@ export function DiffViewerTab({
         } else {
           setLiveResolution({ key: liveKey, kind: "unavailable", error: result.error });
         }
-      } catch (error) {
+      } catch {
         if (seq !== resolveSeqRef.current) return;
-        setLiveResolution({ key: liveKey, kind: "failed", message: errorMessage(error) });
+        setLiveResolution({
+          key: liveKey,
+          kind: "failed",
+          message:
+            "This host does not support change diffs, or is temporarily unavailable. Update the host and reload.",
+        });
       }
     })();
   }, [
     contentGeneration,
+    ownerGeneration,
+    transportRevision,
+    isActive,
     liveKey,
     livePath,
     livePathId,
@@ -615,7 +646,7 @@ function DiffHeader({
   // A live comparison is titled with its full baseline ("vs <commit>"), as the
   // Files panel names it; a historical one with both endpoints.
   const endpointTitle = isLive
-    ? `vs ${baseline ? baselineRef(baseline) : "Before"}`
+    ? `${baseline ?? "Before"} → ${afterLabel}`
     : `${baseline ?? "Before"} → ${afterLabel}`;
   const unknownSide =
     fileIdentity?.before.state === "unknown"

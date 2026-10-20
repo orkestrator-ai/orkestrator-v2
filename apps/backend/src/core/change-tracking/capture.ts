@@ -18,8 +18,7 @@
  * place so only missing blobs cross the boundary).
  */
 
-import { constants } from "node:fs";
-import { lstat, open, readlink } from "node:fs/promises";
+import { confinedRead, validCapturePath } from "./confined-read.js";
 import { CommandFailedError, runCommandBuffer } from "../shell.js";
 import { objectId, type ObjectStore } from "./object-store.js";
 
@@ -173,6 +172,7 @@ export interface CaptureExecutor {
     pathIds: readonly string[],
     limits: CaptureLimits,
     signal: AbortSignal,
+    sizes?: ReadonlyMap<string, number>,
   ): Promise<ReadRecord[]>;
 }
 
@@ -226,19 +226,20 @@ export class HostCaptureExecutor implements CaptureExecutor {
     this.label = `host:${root}`;
   }
 
-  private git(args: string[], timeoutMs: number) {
+  private git(args: string[], timeoutMs: number, signal?: AbortSignal) {
     return runCommandBuffer("git", [...SAFE_GIT_CONFIG, ...args], {
       cwd: this.root,
+      signal,
       env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" },
       timeoutMs,
     });
   }
 
-  async inventory(limits: CaptureLimits): Promise<Inventory> {
+  async inventory(limits: CaptureLimits, signal?: AbortSignal): Promise<Inventory> {
     const [staged, untracked, head] = await Promise.all([
-      this.git(["ls-files", "-z", "-s"], 30_000),
-      this.git(["ls-files", "-z", "--others", "--exclude-standard"], 30_000),
-      this.git(["rev-parse", "--verify", "-q", "HEAD"], 10_000).then(
+      this.git(["ls-files", "-z", "-s"], 30_000, signal),
+      this.git(["ls-files", "-z", "--others", "--exclude-standard"], 30_000, signal),
+      this.git(["rev-parse", "--verify", "-q", "HEAD"], 10_000, signal).then(
         (result) => result.stdout.toString().trim() || null,
         () => null,
       ),
@@ -273,7 +274,7 @@ export class HostCaptureExecutor implements CaptureExecutor {
     statCache?: ReadonlyMap<string, { stamp: string; oid: string; mode: ManifestMode }>,
   ): Promise<ReadRecord[]> {
     return mapBounded(pathIds, limits.readers, signal, (pathId) =>
-      this.readOne(pathId, limits, statCache),
+      this.readOne(pathId, limits, statCache, signal),
     );
   }
 
@@ -282,102 +283,54 @@ export class HostCaptureExecutor implements CaptureExecutor {
     limits: CaptureLimits,
     signal: AbortSignal,
   ): Promise<ReadRecord[]> {
-    return mapBounded(pathIds, limits.readers, signal, (pathId) => this.readOne(pathId, limits));
+    return mapBounded(pathIds, limits.readers, signal, (pathId) =>
+      this.readOne(pathId, limits, undefined, signal),
+    );
   }
 
   private async readOne(
     pathId: string,
     limits: CaptureLimits,
     statCache?: ReadonlyMap<string, { stamp: string; oid: string; mode: ManifestMode }>,
+    signal?: AbortSignal,
   ): Promise<ReadRecord> {
-    // A Buffer path keeps non-UTF-8 names byte-exact.
-    const absolute = Buffer.concat([Buffer.from(`${this.root}/`), Buffer.from(decodePath(pathId))]);
+    if (!validCapturePath(decodePath(pathId)))
+      return { pathId, kind: "omitted", reason: "unreadable", size: null, stamp: null };
     for (let attempt = 0; attempt < limits.stableReadAttempts; attempt++) {
-      const before = await lstat(absolute).catch(() => null);
-      if (!before) return { pathId, kind: "missing" };
-      if (before.isSymbolicLink()) {
-        const target = await readlink(absolute, { encoding: "buffer" }).catch(() => null);
-        const after = await lstat(absolute).catch(() => null);
-        if (!target)
-          return { pathId, kind: "omitted", reason: "unreadable", size: null, stamp: null };
-        const bytes = new Uint8Array(target);
-        const stable = !!after && statStamp(after) === statStamp(before);
+      try {
+        const { bytes, info, after, symlink } = await confinedRead(
+          this.root,
+          decodePath(pathId),
+          limits.maxFileBytes,
+          signal,
+        );
+        const stamp = info ? statStamp(info) : `symlink:${objectId("blob", bytes)}`;
+        const stable =
+          !info || (!!after && statStamp(after) === stamp && bytes.length === info.size);
         if (!stable && attempt + 1 < limits.stableReadAttempts) continue;
+        const cached = statCache?.get(pathId);
         return {
           pathId,
-          kind: "symlink",
-          mode: "120000",
+          kind: symlink ? "symlink" : "file",
+          mode: symlink ? "120000" : info!.mode & 0o111 ? "100755" : "100644",
           size: bytes.length,
-          stamp: statStamp(before),
+          stamp,
           oid: objectId("blob", bytes),
-          bytes,
+          ...(cached?.stamp === stamp ? {} : { bytes }),
           stable,
         };
-      }
-      if (!before.isFile()) {
+      } catch (error) {
+        if (signal?.aborted) throw new Error("capture-timeout");
+        const message = error instanceof Error ? error.message : "";
+        if (message === "capture-file-missing") return { pathId, kind: "missing" };
         return {
           pathId,
           kind: "omitted",
-          reason: "unsupported-kind",
+          reason: message === "capture-file-too-large" ? "too-large" : "unreadable",
           size: null,
-          stamp: statStamp(before),
+          stamp: null,
         };
       }
-      // Metadata reuse: an unchanged size/mtime/ctime/inode keeps the blob read
-      // last time. Recorded in coverage; a rewrite preserving all four is the
-      // known limitation of this optimisation.
-      const cached = statCache?.get(pathId);
-      if (cached && cached.stamp === statStamp(before)) {
-        return {
-          pathId,
-          kind: "file",
-          mode: cached.mode,
-          size: before.size,
-          stamp: cached.stamp,
-          oid: cached.oid,
-          stable: true,
-        };
-      }
-      if (before.size > limits.maxFileBytes) {
-        return {
-          pathId,
-          kind: "omitted",
-          reason: "too-large",
-          size: before.size,
-          stamp: statStamp(before),
-        };
-      }
-      let bytes: Uint8Array;
-      try {
-        const handle = await open(absolute, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-        try {
-          bytes = new Uint8Array(await handle.readFile());
-        } finally {
-          await handle.close();
-        }
-      } catch {
-        return {
-          pathId,
-          kind: "omitted",
-          reason: "unreadable",
-          size: before.size,
-          stamp: statStamp(before),
-        };
-      }
-      const after = await lstat(absolute).catch(() => null);
-      const stable =
-        !!after && statStamp(after) === statStamp(before) && bytes.length === before.size;
-      if (!stable && attempt + 1 < limits.stableReadAttempts) continue;
-      return {
-        pathId,
-        kind: "file",
-        mode: (before.mode & 0o111) !== 0 ? "100755" : "100644",
-        size: bytes.length,
-        stamp: statStamp(before),
-        oid: objectId("blob", bytes),
-        bytes,
-        stable,
-      };
     }
     return { pathId, kind: "omitted", reason: "unreadable", size: null, stamp: null };
   }
@@ -396,12 +349,17 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const cp = require("node:child_process");
 const root = path.resolve(process.argv[1]);
+const rootInfo = fs.lstatSync(root);
+if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink()) throw new Error("unsafe-root");
+const pinRoot = () => { process.chdir(root); const pinned = fs.statSync("."); if (pinned.dev !== rootInfo.dev || pinned.ino !== rootInfo.ino) throw new Error("unsafe-root"); };
+pinRoot();
 const mode = process.argv[2];
 const maxFile = Number(process.argv[3]);
 const maxCandidates = Number(process.argv[4]);
 const attempts = Number(process.argv[5]) || 2;
+let remaining = Number(process.argv[6]) || 0;
 const out = (value) => process.stdout.write(JSON.stringify(value) + "\n");
-const git = (args) => cp.execFileSync("git", ["-c","core.fsmonitor=false","-c","core.untrackedCache=false","-c","core.hooksPath=/dev/null", ...args], { cwd: root, env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" }, maxBuffer: 256 * 1024 * 1024 });
+const git = (args) => cp.execFileSync("git", ["-c","core.fsmonitor=false","-c","core.untrackedCache=false","-c","core.hooksPath=/dev/null", ...args], { cwd: ".", env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" }, maxBuffer: 256 * 1024 * 1024 });
 const split = (buffer) => { const parts = []; let start = 0; for (let i = 0; i < buffer.length; i++) { if (buffer[i] === 0) { if (i > start) parts.push(buffer.subarray(start, i)); start = i + 1; } } if (start < buffer.length) parts.push(buffer.subarray(start)); return parts; };
 const stamp = (s) => s.size + ":" + Math.trunc(s.mtimeMs * 1000) + ":" + Math.trunc(s.ctimeMs * 1000) + ":" + s.ino;
 const blobId = (bytes) => crypto.createHash("sha1").update("blob " + bytes.length + "\0").update(bytes).digest("hex");
@@ -423,12 +381,29 @@ if (mode === "inventory") {
   const input = fs.readFileSync(0);
   for (const encoded of split(input)) {
     const p = encoded.toString("latin1");
-    const file = Buffer.concat([Buffer.from(root + "/"), Buffer.from(p, "base64")]);
+    const rawPath = Buffer.from(p, "base64");
+    const text = rawPath.toString("latin1");
+    const parts = text.split("/");
+    if (!text || text.includes("\0") || text.includes("\\") || /^[A-Za-z]:/.test(text) || parts.some(x => !x || x === "." || x === ".." || x.toLowerCase() === ".git")) { out({ p, k: "omitted", r: "unreadable" }); continue; }
+    const file = Buffer.from(parts.pop(), "latin1");
+    try {
+      pinRoot();
+      for (const part of parts) {
+        const component = Buffer.from(part, "latin1");
+        const before = fs.lstatSync(component);
+        if (!before.isDirectory() || before.isSymbolicLink()) throw new Error("ancestor");
+        process.chdir(component);
+        const pinned = fs.statSync(".");
+        if (before.dev !== pinned.dev || before.ino !== pinned.ino) throw new Error("ancestor");
+      }
+    } catch (e) { out(e.code === "ENOENT" ? { p, k: "missing" } : { p, k: "omitted", r: "unreadable" }); continue; }
+    const maxRead = mode === "fetch" ? Math.min(maxFile, remaining) : maxFile;
     let result = null;
     for (let attempt = 0; attempt < attempts && !result; attempt++) {
       let before; try { before = fs.lstatSync(file); } catch { result = { p, k: "missing" }; break; }
       if (before.isSymbolicLink()) {
         let target; try { target = fs.readlinkSync(file, { encoding: "buffer" }); } catch { result = { p, k: "omitted", r: "unreadable" }; break; }
+        if (target.length > maxRead) { result = { p, k: "omitted", r: maxRead < maxFile ? "capture-byte-budget" : "too-large", s: target.length }; break; }
         let after = null; try { after = fs.lstatSync(file); } catch {}
         const stable = !!after && stamp(after) === stamp(before);
         if (!stable && attempt + 1 < attempts) continue;
@@ -436,13 +411,14 @@ if (mode === "inventory") {
         break;
       }
       if (!before.isFile()) { result = { p, k: "omitted", r: "unsupported-kind", st: stamp(before) }; break; }
-      if (before.size > maxFile) { result = { p, k: "omitted", r: "too-large", s: before.size, st: stamp(before) }; break; }
-      let bytes; try { bytes = fs.readFileSync(file, { flag: fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) }); } catch { result = { p, k: "omitted", r: "unreadable", s: before.size, st: stamp(before) }; break; }
+      if (before.size > maxRead) { result = { p, k: "omitted", r: maxRead < maxFile ? "capture-byte-budget" : "too-large", s: before.size, st: stamp(before) }; break; }
+      let bytes; try { const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK); try { const info = fs.fstatSync(fd); if (!info.isFile() || info.size > maxRead) throw new Error("size"); const buffer = Buffer.alloc(Math.min(info.size + 1, maxRead + 1)); let n = 0; while(n < buffer.length) { const count = fs.readSync(fd, buffer, n, buffer.length - n, null); if (!count) break; n += count; } if (n > maxRead) throw new Error("size"); bytes = buffer.subarray(0, n); } finally { fs.closeSync(fd); } } catch { result = { p, k: "omitted", r: "unreadable", s: before.size, st: stamp(before) }; break; }
       let after = null; try { after = fs.lstatSync(file); } catch {}
       const stable = !!after && stamp(after) === stamp(before) && bytes.length === before.size;
       if (!stable && attempt + 1 < attempts) continue;
       result = { p, k: "file", m: (before.mode & 0o111) ? "100755" : "100644", s: bytes.length, st: stamp(before), o: blobId(bytes), ok: stable, b: mode === "fetch" ? bytes.toString("base64") : undefined };
     }
+    if (result && result.b !== undefined) remaining -= result.s;
     out(result || { p, k: "omitted", r: "unreadable" });
   }
 }
@@ -468,6 +444,7 @@ export class ContainerCaptureExecutor implements CaptureExecutor {
     limits: CaptureLimits,
     stdin: Buffer | undefined,
     timeoutMs: number,
+    signal?: AbortSignal,
   ) {
     try {
       const result = await runCommandBuffer(
@@ -485,8 +462,9 @@ export class ContainerCaptureExecutor implements CaptureExecutor {
           String(limits.maxFileBytes),
           String(limits.maxCandidates),
           String(limits.stableReadAttempts),
+          String(limits.maxCaptureBytes),
         ],
-        { ...(stdin ? { stdin } : {}), timeoutMs },
+        { ...(stdin ? { stdin } : {}), timeoutMs, signal },
       );
       return result.stdout.toString("utf8");
     } catch (error) {
@@ -495,8 +473,10 @@ export class ContainerCaptureExecutor implements CaptureExecutor {
     }
   }
 
-  async inventory(limits: CaptureLimits): Promise<Inventory> {
-    const parsed = JSON.parse(await this.helper("inventory", limits, undefined, 60_000)) as {
+  async inventory(limits: CaptureLimits, signal?: AbortSignal): Promise<Inventory> {
+    const parsed = JSON.parse(
+      await this.helper("inventory", limits, undefined, 60_000, signal),
+    ) as {
       records: Array<{ p: string; t: 0 | 1; g?: string }>;
       truncated: boolean;
       head: string | null;
@@ -576,7 +556,7 @@ export class ContainerCaptureExecutor implements CaptureExecutor {
       if (signal.aborted) throw new Error("capture-timeout");
       const batch = pathIds.slice(index, index + CONTAINER_DESCRIBE_BATCH);
       records.push(
-        ...this.parse(await this.helper("describe", limits, this.input(batch), 120_000)),
+        ...this.parse(await this.helper("describe", limits, this.input(batch), 120_000, signal)),
       );
     }
     return records;
@@ -595,7 +575,9 @@ export class ContainerCaptureExecutor implements CaptureExecutor {
     const flush = async () => {
       if (batch.length === 0) return;
       if (signal.aborted) throw new Error("capture-timeout");
-      records.push(...this.parse(await this.helper("fetch", limits, this.input(batch), 120_000)));
+      records.push(
+        ...this.parse(await this.helper("fetch", limits, this.input(batch), 120_000, signal)),
+      );
       batch = [];
       batchBytes = 0;
     };
@@ -708,12 +690,6 @@ export async function captureWorktree(request: CaptureRequest): Promise<CaptureR
       }
     }
 
-    const described = await request.executor.describe(
-      toDescribe,
-      limits,
-      signal,
-      request.statCache,
-    );
     const entries: ManifestEntry[] = [...gitlinks];
     const omitted: ManifestOmission[] = [];
     const unstable: string[] = [];
@@ -738,8 +714,8 @@ export async function captureWorktree(request: CaptureRequest): Promise<CaptureR
         }
         const written = await request.store.put("blob", record.bytes);
         if (written.id !== record.oid) unstable.push(record.pathId);
+        retainedBytes += record.bytes.length;
         if (written.created) {
-          retainedBytes += record.bytes.length;
           newObjectIds.push(written.id);
         }
         entries.push({
@@ -752,7 +728,7 @@ export async function captureWorktree(request: CaptureRequest): Promise<CaptureR
         statCache.set(record.pathId, { stamp: record.stamp, oid: written.id, mode: record.mode });
         return;
       }
-      if (await request.store.has(record.oid)) {
+      if (await request.store.reuse(record.oid)) {
         entries.push({
           p: record.pathId,
           m: record.mode,
@@ -766,75 +742,120 @@ export async function captureWorktree(request: CaptureRequest): Promise<CaptureR
       needBytes.push(record);
     };
 
-    for (const record of described) {
-      if (signal.aborted) return unavailable("capture-timeout");
-      if (record.kind === "missing") continue;
-      if (record.kind === "omitted") {
-        omitted.push({
-          p: record.pathId,
-          reason: record.reason,
-          size: record.size,
-          stamp: record.stamp,
-        });
-        continue;
-      }
-      const cached = request.statCache?.get(record.pathId);
-      if (
-        request.executor.kind === "host-worker" &&
-        !record.bytes &&
-        cached &&
-        cached.stamp === record.stamp &&
-        cached.oid === record.oid
-      ) {
-        metadataReused++;
-      }
-      await accept(record);
-    }
-
-    if (needBytes.length > 0) {
-      const sizes = new Map(
-        needBytes.map((record) => [
-          record.pathId,
-          record.kind === "omitted" || record.kind === "missing" ? 0 : record.size,
-        ]),
+    const describeBatch = request.executor.kind === "host-worker" ? 1 : CONTAINER_DESCRIBE_BATCH;
+    for (let index = 0; index < toDescribe.length; index += describeBatch) {
+      const described = await request.executor.describe(
+        toDescribe.slice(index, index + describeBatch),
+        {
+          ...limits,
+          maxFileBytes: Math.min(
+            limits.maxFileBytes,
+            Math.max(0, limits.maxCaptureBytes - retainedBytes),
+          ),
+        },
+        signal,
+        request.statCache,
       );
-      const fetched =
-        request.executor instanceof ContainerCaptureExecutor
-          ? await request.executor.fetch(
-              needBytes.map((record) => record.pathId),
-              limits,
-              signal,
-              sizes,
-            )
-          : await request.executor.fetch(
-              needBytes.map((record) => record.pathId),
-              limits,
-              signal,
-            );
-      for (const record of fetched) {
+      for (const record of described) {
+        if (signal.aborted) return unavailable("capture-timeout");
         if (record.kind === "missing") continue;
         if (record.kind === "omitted") {
           omitted.push({
             p: record.pathId,
-            reason: record.reason,
+            reason:
+              record.reason === "too-large" &&
+              limits.maxCaptureBytes - retainedBytes < limits.maxFileBytes
+                ? "capture-byte-budget"
+                : record.reason,
             size: record.size,
             stamp: record.stamp,
           });
           continue;
         }
-        if (!record.bytes) {
-          omitted.push({
-            p: record.pathId,
-            reason: "unreadable",
-            size: record.size,
-            stamp: record.stamp,
-          });
-          continue;
+        const cached = request.statCache?.get(record.pathId);
+        if (
+          request.executor.kind === "host-worker" &&
+          !record.bytes &&
+          cached &&
+          cached.stamp === record.stamp &&
+          cached.oid === record.oid
+        ) {
+          metadataReused++;
         }
         await accept(record);
       }
     }
-
+    if (needBytes.length > 0) {
+      for (let index = 0; index < needBytes.length;) {
+        const batch: string[] = [];
+        const batchSizes = new Map<string, number>();
+        let batchBytes = 0;
+        const transferBudget = Math.min(
+          CONTAINER_FETCH_BATCH_BYTES,
+          limits.maxCaptureBytes - retainedBytes,
+        );
+        do {
+          const candidate = needBytes[index]!;
+          if (candidate.kind !== "file" && candidate.kind !== "symlink") {
+            index++;
+            continue;
+          }
+          if (candidate.size > limits.maxCaptureBytes - retainedBytes) {
+            omitted.push({
+              p: candidate.pathId,
+              reason: "capture-byte-budget",
+              size: candidate.size,
+              stamp: candidate.stamp,
+            });
+            index++;
+            continue;
+          }
+          if (
+            batch.length &&
+            (batchBytes + candidate.size > transferBudget ||
+              request.executor.kind === "host-worker")
+          )
+            break;
+          batch.push(candidate.pathId);
+          batchSizes.set(candidate.pathId, candidate.size);
+          batchBytes += candidate.size;
+          index++;
+        } while (index < needBytes.length && batch.length < CONTAINER_DESCRIBE_BATCH);
+        if (!batch.length) continue;
+        const fetched = await request.executor.fetch(
+          batch,
+          {
+            ...limits,
+            maxFileBytes: Math.min(limits.maxFileBytes, transferBudget),
+            maxCaptureBytes: transferBudget,
+          },
+          signal,
+          batchSizes,
+        );
+        for (const record of fetched) {
+          if (record.kind === "missing") continue;
+          if (record.kind === "omitted") {
+            omitted.push({
+              p: record.pathId,
+              reason: record.reason,
+              size: record.size,
+              stamp: record.stamp,
+            });
+            continue;
+          }
+          if (!record.bytes) {
+            omitted.push({
+              p: record.pathId,
+              reason: "unreadable",
+              size: record.size,
+              stamp: record.stamp,
+            });
+            continue;
+          }
+          await accept(record);
+        }
+      }
+    }
     // Inventory recheck: membership that moved during the pass is unstable.
     let inventoryChanged = false;
     const recheck = await request.executor.inventory(limits, signal).catch(() => null);
@@ -855,6 +876,7 @@ export async function captureWorktree(request: CaptureRequest): Promise<CaptureR
       omitted,
       unstable: [...new Set(unstable)].sort(comparePathIds),
     };
+    if (signal.aborted) return unavailable("capture-timeout");
     const manifestBytes = new TextEncoder().encode(JSON.stringify(manifest));
     const written = await request.store.put("manifest", manifestBytes);
     if (written.created) newObjectIds.push(written.id);
@@ -895,6 +917,7 @@ export async function captureWorktree(request: CaptureRequest): Promise<CaptureR
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
     if (signal.aborted || message === "capture-timeout") return unavailable("capture-timeout");
+    if (message === "capture-storage-quota") return unavailable(message);
     if (message === "capture-executor-unavailable")
       return unavailable("capture-executor-unavailable");
     if (error instanceof CommandFailedError) return unavailable("not-a-git-worktree");

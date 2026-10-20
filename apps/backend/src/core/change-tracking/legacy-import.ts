@@ -39,13 +39,15 @@ export async function importOpenCodeCommandJournals(
     }
     const files = await readdir(path.join(root, environmentId)).catch(() => [] as string[]);
     for (const file of files) {
-      if (result.files >= maxFiles) break;
       if (!file.endsWith(".jsonl")) continue;
       const conversationId = file.slice(0, -".jsonl".length);
       if (!SAFE_SEGMENT.test(conversationId) || HASHED_SEGMENT.test(conversationId)) {
         result.skipped++;
         continue;
       }
+      const marker = `legacy-import:opencode:file:${environmentId}:${conversationId}`;
+      if (service.ledger.meta(marker)) continue;
+      if (result.files >= maxFiles) return result;
       const records = await new CommandChangeJournal(path.join(root, environmentId, file)).read();
       result.files++;
       result.records += service.importLegacyJournal({
@@ -54,6 +56,7 @@ export async function importOpenCodeCommandJournals(
         conversationId,
         records,
       });
+      service.ledger.transaction(() => service.ledger.setMeta(marker, "done"));
     }
   }
   service.ledger.transaction(() => service.ledger.setMeta(IMPORT_MARKER, new Date().toISOString()));

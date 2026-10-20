@@ -1,3 +1,4 @@
+import { ChangeTrackingFixture, installChangeTrackingFixture } from "./changeTracking";
 import { ClaudeInteractionsFixture } from "./ClaudeInteractionsFixture";
 import {
   AgentLaunchDialog,
@@ -1707,6 +1708,7 @@ function fixtureForPath() {
   if (window.location.pathname === "/build-pipeline-header") {
     return <BuildPipelineHeaderFixture />;
   }
+  if (window.location.pathname === "/change-tracking") return <ChangeTrackingFixture />;
   if (window.location.pathname === "/diff-viewer") return <DiffViewerFixture />;
   if (window.location.pathname === "/native-compose") return <NativeComposeFixture />;
   if (window.location.pathname === "/menu-placement") return <MenuPlacementFixture />;
@@ -1788,4 +1790,5 @@ function fixtureForPath() {
   return <CreateEnvironmentFixture />;
 }
 
+if (window.location.pathname === "/change-tracking") installChangeTrackingFixture();
 createRoot(document.getElementById("root")!).render(<StrictMode>{fixtureForPath()}</StrictMode>);

@@ -313,7 +313,7 @@ export class EnvironmentChangeProjector {
       totals: { additions, deletions, changedFiles: changes.length },
     };
     const owner = { kind: "environment", id: target.environmentId };
-    const { measurement } = measurements.seal(draft, owner, null);
+    const { measurement } = measurements.seal(draft, owner, null, undefined, files);
     return measurements.publish({
       measurement,
       owner,

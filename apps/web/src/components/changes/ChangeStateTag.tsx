@@ -27,12 +27,19 @@ export function ChangeStateTag({
   className?: string;
 }) {
   const provisional = isProvisionalProjection(projection);
-  const text = provisional
-    ? "Live"
-    : projection.state === "ready" || projection.state === "partial"
-      ? "Final"
-      : projection.state.charAt(0).toUpperCase() + projection.state.slice(1);
-  const reason = provisional ? changeReason(PROVISIONAL_REASON_KEY) : null;
+  const interrupted = projection.reasonKeys.includes("changes.reason.interrupted");
+  const text = interrupted
+    ? "Interrupted"
+    : provisional
+      ? "Live"
+      : projection.state === "ready" || projection.state === "partial"
+        ? "Final"
+        : projection.state.charAt(0).toUpperCase() + projection.state.slice(1);
+  const reason = interrupted
+    ? changeReason("changes.reason.interrupted")
+    : provisional
+      ? changeReason(PROVISIONAL_REASON_KEY)
+      : null;
   return (
     <span
       data-testid="change-state-tag"

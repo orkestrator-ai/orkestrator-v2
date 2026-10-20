@@ -192,6 +192,7 @@ export function ToolDurationLabel({ label }: { label?: string }) {
 export function ToolPart({
   expansionKey,
   callId,
+  occurrenceId,
   toolName,
   toolState,
   toolTitle,
@@ -209,6 +210,7 @@ export function ToolPart({
   expansionKey: string;
   /** Provider call id; keys the backend's change presentation for this row. */
   callId?: string;
+  occurrenceId?: string;
   toolName?: string;
   toolState?: "success" | "failure" | "pending";
   toolTitle?: string;
@@ -246,7 +248,7 @@ export function ToolPart({
   const changeScope = useNativeChangeScope();
   // The backend's effect/observation projections for this call. They replace
   // the legacy bridge measurement whenever a presentation exists.
-  const { presentation, roles } = useToolChangeRow(callId, toolState);
+  const { presentation, roles } = useToolChangeRow(callId, toolState, occurrenceId);
   const changeRoles = roles.filter((entry) => projectionHasContent(entry.projection));
   const primaryChange = roles[0]?.projection;
   const legacyChanges = presentation ? undefined : commandChanges;
@@ -796,6 +798,7 @@ const EDIT_STATE_COLORS = {
 export function EditToolPart({
   expansionKey,
   callId,
+  occurrenceId,
   toolName,
   toolState,
   toolTitle,
@@ -808,6 +811,7 @@ export function EditToolPart({
   expansionKey: string;
   /** Provider call id; keys the backend's change presentation for this row. */
   callId?: string;
+  occurrenceId?: string;
   toolName?: string;
   toolState?: "success" | "failure" | "pending";
   toolTitle?: string;
@@ -826,7 +830,7 @@ export function EditToolPart({
   const displayToolName = getToolDisplayName(toolName, "Edit");
   const displayToolTitle = getToolTitleDisplayName(toolTitle, toolName);
 
-  const { presentation, roles, legacy } = useToolChangeRow(callId, toolState);
+  const { presentation, roles, legacy } = useToolChangeRow(callId, toolState, occurrenceId);
   const primary = roles[0]?.projection;
 
   const filePath = toolDiff?.filePath || projectionFirstPath(primary);

@@ -1,17 +1,26 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  symlinkSync,
+  statSync,
+  chmodSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   captureWorktree,
+  DEFAULT_CAPTURE_LIMITS,
   ContainerCaptureExecutor,
   displayPath,
   HostCaptureExecutor,
 } from "./capture.js";
 import { ObjectStore } from "./object-store.js";
 import { compareManifests } from "./snapshot-diff.js";
-import { containerConditionalWrite } from "./restore.js";
+import { hostConditionalWrite, containerConditionalWrite } from "./restore.js";
 import { objectId } from "./object-store.js";
 
 /**
@@ -111,3 +120,60 @@ describe("container capture executor", () => {
     ).toBe("failed");
   });
 });
+
+test("container reads reject encoded traversal and symlink ancestors in live reads and capture", async () => {
+  installDockerShim();
+  const root = repo();
+  const outside = temp("ork-outside-");
+  writeFileSync(join(outside, "secret"), "outside sentinel");
+  mkdirSync(join(root, "nested"));
+  writeFileSync(join(root, "nested", "secret"), "inside");
+  execFileSync("git", ["add", "nested/secret"], { cwd: root });
+  rmSync(join(root, "nested"), { recursive: true });
+  symlinkSync(outside, join(root, "nested"));
+  const executor = new ContainerCaptureExecutor("fake", root);
+  for (const id of [
+    "u:../secret",
+    `b:${Buffer.from("../secret").toString("base64")}`,
+    "u:.git/config",
+    "u:nested/secret",
+  ]) {
+    expect(
+      (await executor.fetch([id], DEFAULT_CAPTURE_LIMITS, new AbortController().signal))[0]?.kind,
+    ).toBe("omitted");
+  }
+  const result = await captureWorktree({
+    executor,
+    store: new ObjectStore({ root: temp("ork-store-"), durable: false }),
+  });
+  expect(result.kind).toBe("captured");
+  if (result.kind === "captured")
+    expect(result.manifest.entries.some((e) => e.p === "u:nested/secret")).toBe(false);
+});
+
+for (const executor of ["host", "container"] as const)
+  test(`${executor} conditional restore protects modes and catches filesystem errors`, async () => {
+    installDockerShim();
+    const root = repo();
+    const write = (action: Parameters<typeof hostConditionalWrite>[1], bytes: Uint8Array) =>
+      executor === "host"
+        ? hostConditionalWrite(root, action, bytes)
+        : containerConditionalWrite("fake", root, action, bytes);
+    const bytes = new TextEncoder().encode("one\n");
+    const action = {
+      pathId: "u:a.txt",
+      expectedOid: objectId("blob", bytes),
+      expectedMode: "100644",
+      targetBlob: "x",
+      mode: "100644",
+    };
+    chmodSync(join(root, "a.txt"), 0o755);
+    expect(await write(action, new TextEncoder().encode("restored\n"))).toBe("precondition-failed");
+    expect((statSync(join(root, "a.txt")).mode & 0o111) !== 0).toBe(true);
+    expect(
+      await write(
+        { ...action, pathId: "u:a.txt/child", expectedOid: null, expectedMode: null },
+        bytes,
+      ),
+    ).toBe("failed");
+  });

@@ -48,8 +48,15 @@ export function isFileToolKind(kind: ToolKind | undefined): boolean {
  * (the row the call renders as asks). Selects a string, so routing re-renders
  * only when the kind itself changes.
  */
-export function useToolChangeKind(callId: string | undefined): ToolKind | undefined {
+export function useToolChangeKind(
+  nativeCallId: string | undefined,
+  occurrenceId?: string,
+): ToolKind | undefined {
   const scope = useToolChangeScope();
+  const callId =
+    scope?.provider === "pi" && nativeCallId && occurrenceId
+      ? JSON.stringify([nativeCallId, occurrenceId])
+      : nativeCallId;
   const key =
     scope && callId
       ? toolPresentationKey(scope.environmentId, scope.provider, scope.conversationId, callId)
@@ -71,8 +78,16 @@ export interface ToolChangeRole {
  * presentation: no conversation scope or call id, or the backend answered
  * that it holds none for this call (history recorded before tracking).
  */
-export function useToolChangeRow(callId: string | undefined, toolState?: string) {
+export function useToolChangeRow(
+  nativeCallId: string | undefined,
+  toolState?: string,
+  occurrenceId?: string,
+) {
   const scope = useToolChangeScope();
+  const callId =
+    scope?.provider === "pi" && nativeCallId && occurrenceId
+      ? JSON.stringify([nativeCallId, occurrenceId])
+      : nativeCallId;
   const { presentation, projections } = useToolChangePresentation(scope, callId, toolState);
   const roles: ToolChangeRole[] = [
     ...projections.filter((entry) => entry.prominence === "primary"),

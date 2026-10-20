@@ -669,7 +669,7 @@ export interface WorkspaceObservationReport {
   bindingId: string;
   runtimeEpoch: string;
   capabilityRevision: string;
-  source: { conversationId: string; turnId?: string; callId?: string };
+  source: { conversationId: string; turnId?: string; callId?: string; attemptId?: string };
   executor: "host-worker" | "container-worker";
   boundary: {
     before: "fresh-before" | "prior-observation" | "late-start" | "unknown";

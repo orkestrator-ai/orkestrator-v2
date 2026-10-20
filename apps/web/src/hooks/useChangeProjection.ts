@@ -4,7 +4,11 @@ import {
   type CanonicalToolPresentation,
   type ChangeProjection,
 } from "@orkestrator/protocol/change-resources";
-import { requestToolPresentation, subscribeChangeResource } from "@/lib/changes/subscriptions";
+import {
+  requestToolPresentation,
+  subscribeToolPresentation,
+  subscribeChangeResource,
+} from "@/lib/changes/subscriptions";
 import { toolPresentationKey, useChangeProjectionStore } from "@/stores/changeProjectionStore";
 
 /**
@@ -65,9 +69,10 @@ export function useToolChangePresentation(
       : null;
   useEffect(() => {
     if (!scope || !callId) return;
-    requestToolPresentation(scope, callId, revisionHint !== undefined);
-    // oxlint-disable-next-line react-hooks/exhaustive-deps -- scope fields are listed individually
-  }, [scope?.environmentId, scope?.provider, scope?.conversationId, callId, revisionHint]);
+    const release = subscribeToolPresentation(scope, callId);
+    if (revisionHint !== undefined) requestToolPresentation(scope, callId, true);
+    return release;
+  }, [scope, callId, revisionHint]);
   const presentation = useChangeProjectionStore((state) =>
     key ? state.toolPresentations.get(key) : undefined,
   );

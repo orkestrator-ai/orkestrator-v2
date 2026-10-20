@@ -111,7 +111,7 @@ const MAX_TRACKED_REVISIONS = 4_096;
 export class ChangeEvidenceRecorder {
   readonly capabilityRevision: string;
   /** Last revision emitted per (binding, call, evidence key), to declare supersession. */
-  private readonly lastRevisions = new Map<string, string>();
+  private readonly lastRevisions = new Map<string, { content: string; revision: string }>();
   readonly capabilities: ProviderChangeCapabilities;
   private readonly spool: ChangeEvidenceSpool;
   private readonly provider: string;
@@ -284,15 +284,28 @@ export class ChangeEvidenceRecorder {
       if (update.kind !== "replace") return update;
       const key = `${scope}\0${update.evidenceKey}`;
       const previous = this.lastRevisions.get(key);
+      const content = update.revisionKey;
+      // A repeated adjacent delivery is a replay; returning to an older body
+      // after another revision is a new ordered transition.
+      const revisionKey =
+        previous?.content === content
+          ? previous.revision
+          : previous
+            ? `rev:${stableEvidenceId(scope, content, previous.revision)}`
+            : content;
       this.lastRevisions.delete(key);
-      this.lastRevisions.set(key, update.revisionKey);
+      this.lastRevisions.set(key, { content, revision: revisionKey });
       if (this.lastRevisions.size > MAX_TRACKED_REVISIONS) {
         const oldest = this.lastRevisions.keys().next().value;
         if (oldest !== undefined) this.lastRevisions.delete(oldest);
       }
-      return previous && previous !== update.revisionKey
-        ? { ...update, replacesRevisionKey: previous }
-        : update;
+      return {
+        ...update,
+        revisionKey,
+        ...(previous && previous.revision !== revisionKey
+          ? { replacesRevisionKey: previous.revision }
+          : {}),
+      };
     });
   }
 
@@ -368,6 +381,7 @@ export class ChangeEvidenceRecorder {
         conversationId: clampId(source.conversationId),
         ...(source.turnId ? { turnId: clampId(source.turnId) } : {}),
         callId: clampId(source.callId),
+        ...(source.attemptId ? { attemptId: clampId(source.attemptId) } : {}),
       },
       executor: this.executor,
       boundary: observation.boundary,

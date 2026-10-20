@@ -40,14 +40,20 @@ export function RestoreChangesButton({ projection }: { projection: ChangeProject
     ChangesPrepareRestoreResult,
     { kind: "preview" }
   > | null>(null);
+  const [applyKey, setApplyKey] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    void backend.getChangeTrackingCapabilities().then((capabilities) => {
-      if (!cancelled) setEnabled(Boolean(capabilities?.restore));
-    });
+    void backend
+      .getChangeTrackingCapabilities()
+      .then((capabilities) => {
+        if (!cancelled) setEnabled(Boolean(capabilities?.restore));
+      })
+      .catch(() => {
+        if (!cancelled) setEnabled(false);
+      });
     return () => {
       cancelled = true;
     };
@@ -60,8 +66,10 @@ export function RestoreChangesButton({ projection }: { projection: ChangeProject
     setMessage(null);
     try {
       const result = await backend.prepareChangeRestore(action.targetToken);
-      if (result.kind === "preview") setPreview(result);
-      else
+      if (result.kind === "preview") {
+        setApplyKey(crypto.randomUUID());
+        setPreview(result);
+      } else
         setMessage(
           changeReason(result.kind === "disabled" ? result.reasonKey : result.error.reasonKey),
         );
@@ -73,14 +81,15 @@ export function RestoreChangesButton({ projection }: { projection: ChangeProject
   };
 
   const apply = async () => {
-    if (!preview) return;
+    if (!preview || !applyKey) return;
     setBusy(true);
     try {
       const result: ChangesApplyRestoreResult = await backend.applyChangeRestore(
         preview.actionToken,
-        crypto.randomUUID(),
+        applyKey,
       );
       if (result.kind === "applied") {
+        setPreview(null);
         setMessage(
           result.outcome === "complete"
             ? `Restored ${result.completedPathIds.length} file${result.completedPathIds.length === 1 ? "" : "s"}.`
@@ -90,10 +99,9 @@ export function RestoreChangesButton({ projection }: { projection: ChangeProject
         setMessage(changeReason(result.error.reasonKey));
       }
     } catch {
-      setMessage("Restore failed");
+      setMessage("The restore result is unknown. Retry to retrieve the same operation.");
     } finally {
       setBusy(false);
-      setPreview(null);
     }
   };
 
@@ -116,14 +124,14 @@ export function RestoreChangesButton({ projection }: { projection: ChangeProject
       >
         {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Undo2 className="size-3.5" />}
       </Button>
-      {message ? (
+      {message && !preview ? (
         <span role="status" className="text-[11px] text-muted-foreground">
           {message}
         </span>
       ) : null}
       <AlertDialog
         open={preview !== null}
-        onOpenChange={(open) => (open ? undefined : setPreview(null))}
+        onOpenChange={(open) => (open || busy ? undefined : setPreview(null))}
       >
         <AlertDialogContent data-testid="restore-preview">
           <AlertDialogHeader>
@@ -149,9 +157,22 @@ export function RestoreChangesButton({ projection }: { projection: ChangeProject
               {RISK_TEXT[key] ?? changeReason(key)}
             </p>
           ))}
+          {message ? (
+            <p role="status" className="text-xs text-muted-foreground">
+              {message}
+            </p>
+          ) : null}
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={() => void apply()}>Restore</AlertDialogAction>
+            <AlertDialogAction
+              disabled={busy || !preview?.files.some((file) => file.action !== "skip")}
+              onClick={(event) => {
+                event.preventDefault();
+                void apply();
+              }}
+            >
+              Restore
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

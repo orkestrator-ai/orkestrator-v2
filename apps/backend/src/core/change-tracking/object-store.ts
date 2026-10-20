@@ -16,7 +16,17 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, fsyncSync, openSync } from "node:fs";
-import { lstat, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { deflateSync, inflateSync } from "node:zlib";
 
@@ -43,15 +53,27 @@ export interface ObjectStoreOptions {
   root: string;
   /** fsync objects when publishing; disabled only in tests. */
   durable?: boolean;
+  hardBudgetBytes?: () => number;
 }
 
 export class ObjectStore {
   readonly root: string;
   private readonly objects: string;
   private readonly durable: boolean;
+  private readonly hardBudgetBytes: () => number;
+  private mutation: Promise<unknown> = Promise.resolve();
+  private usedBytes: number | null = null;
+
+  private exclusive<T>(work: () => Promise<T>): Promise<T> {
+    const result = this.mutation.then(work);
+    this.mutation = result.catch(() => undefined);
+    return result;
+  }
+
   private initialized: Promise<void> | null = null;
 
   constructor(options: ObjectStoreOptions) {
+    this.hardBudgetBytes = options.hardBudgetBytes ?? (() => Infinity);
     this.root = options.root;
     this.objects = join(options.root, "objects");
     this.durable = options.durable ?? true;
@@ -84,23 +106,46 @@ export class ObjectStore {
     );
   }
 
+  /** Renew the orphan fence before adopting a metadata-reused object. */
+  reuse(id: string): Promise<boolean> {
+    if (!isObjectId(id)) return Promise.resolve(false);
+    return this.exclusive(async () => {
+      const now = new Date();
+      return utimes(this.path(id), now, now).then(
+        () => true,
+        () => false,
+      );
+    });
+  }
+
   /**
    * Write one immutable object. Returns its id and whether it was new. The
    * write is atomic; concurrent writers of the same content converge.
    */
   async put(type: ObjectType, bytes: Uint8Array): Promise<{ id: string; created: boolean }> {
-    await this.init();
-    const id = objectId(type, bytes);
-    const target = this.path(id);
-    if (await this.has(id)) return { id, created: false };
-    await mkdir(join(this.objects, id.slice(0, 2)), { recursive: true, mode: 0o700 });
-    const header = Buffer.from(`${gitType(type)} ${bytes.length}\0`);
-    const compressed = deflateSync(Buffer.concat([header, bytes]));
-    const temp = join(this.root, "tmp", `${id}.${randomUUID()}`);
-    await writeFile(temp, compressed, { mode: 0o400 });
-    if (this.durable) fsyncPath(temp);
-    await rename(temp, target);
-    return { id, created: true };
+    return this.exclusive(async () => {
+      await this.init();
+      const id = objectId(type, bytes);
+      const target = this.path(id);
+      this.usedBytes ??= await this.storedBytes();
+      if (this.usedBytes >= this.hardBudgetBytes()) throw new Error("capture-storage-quota");
+      if (await this.has(id)) {
+        const now = new Date();
+        await utimes(target, now, now);
+        return { id, created: false };
+      }
+      await mkdir(join(this.objects, id.slice(0, 2)), { recursive: true, mode: 0o700 });
+      const header = Buffer.from(`${gitType(type)} ${bytes.length}\0`);
+      const compressed = deflateSync(Buffer.concat([header, bytes]));
+      if (this.usedBytes + compressed.length > this.hardBudgetBytes())
+        throw new Error("capture-storage-quota");
+      const temp = join(this.root, "tmp", `${id}.${randomUUID()}`);
+      await writeFile(temp, compressed, { mode: 0o400 });
+      if (this.durable) fsyncPath(temp);
+      await rename(temp, target);
+      this.usedBytes += compressed.length;
+      return { id, created: true };
+    });
   }
 
   /** Read an object's payload, verifying its id. Null when absent or corrupt. */
@@ -146,35 +191,38 @@ export class ObjectStore {
     removed: number;
     bytes: number;
   }> {
-    await this.init();
-    let removed = 0;
-    let bytes = 0;
-    let fanout: string[];
-    try {
-      fanout = await readdir(this.objects);
-    } catch {
-      return { removed, bytes };
-    }
-    for (const prefix of fanout) {
-      if (!/^[0-9a-f]{2}$/.test(prefix)) continue;
-      const directory = join(this.objects, prefix);
-      for (const name of await readdir(directory).catch(() => [] as string[])) {
-        const id = `${prefix}${name}`;
-        if (!isObjectId(id) || reachable.has(id)) continue;
-        const info = await lstat(join(directory, name)).catch(() => null);
-        if (!info || nowMs - info.mtimeMs < graceMs) continue;
-        await rm(join(directory, name), { force: true });
-        removed++;
-        bytes += info.size;
+    return this.exclusive(async () => {
+      await this.init();
+      let removed = 0;
+      let bytes = 0;
+      let fanout: string[];
+      try {
+        fanout = await readdir(this.objects);
+      } catch {
+        return { removed, bytes };
       }
-    }
-    // Abandoned temporaries from crashed writers.
-    for (const name of await readdir(join(this.root, "tmp")).catch(() => [] as string[])) {
-      const file = join(this.root, "tmp", name);
-      const info = await lstat(file).catch(() => null);
-      if (info && nowMs - info.mtimeMs >= graceMs) await rm(file, { force: true });
-    }
-    return { removed, bytes };
+      for (const prefix of fanout) {
+        if (!/^[0-9a-f]{2}$/.test(prefix)) continue;
+        const directory = join(this.objects, prefix);
+        for (const name of await readdir(directory).catch(() => [] as string[])) {
+          const id = `${prefix}${name}`;
+          if (!isObjectId(id) || reachable.has(id)) continue;
+          const info = await lstat(join(directory, name)).catch(() => null);
+          if (!info || nowMs - info.mtimeMs <= graceMs) continue;
+          await rm(join(directory, name), { force: true });
+          removed++;
+          bytes += info.size;
+        }
+      }
+      // Abandoned temporaries from crashed writers.
+      for (const name of await readdir(join(this.root, "tmp")).catch(() => [] as string[])) {
+        const file = join(this.root, "tmp", name);
+        const info = await lstat(file).catch(() => null);
+        if (info && nowMs - info.mtimeMs >= graceMs) await rm(file, { force: true });
+      }
+      this.usedBytes = null;
+      return { removed, bytes };
+    });
   }
 
   /** Total stored bytes (compressed), for quota accounting. */

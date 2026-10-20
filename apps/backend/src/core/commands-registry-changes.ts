@@ -104,6 +104,7 @@ export function registerChangeCommands(register: CommandRegistrar): void {
 
   register("changes_get_history", async (args, context): Promise<ChangesGetHistoryResult> => {
     return tracking(context).getHistory({
+      newestFirst: true,
       environmentId: text(args.environmentId, "environmentId"),
       logicalSessionKey: text(args.logicalSessionKey, "logicalSessionKey"),
       cursor: optionalText(args.cursor, "cursor", 64) ?? null,

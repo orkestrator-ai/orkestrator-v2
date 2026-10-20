@@ -435,8 +435,16 @@ function groupHunks(
     let newCount = 0;
     let firstOld: number | null = null;
     let firstNew: number | null = null;
+    let cut = false;
     for (let index = start; index <= end; index++) {
       const edit = edits[index]!;
+      const token = edit.type === "insert" ? newTokens[edit.newIndex]! : oldTokens[edit.oldIndex]!;
+      const rows = displayToken(token).terminated ? 1 : 2;
+      if (emitted + 1 + lines.length + rows > maxOutputLines) {
+        cut = true;
+        break;
+      }
+
       if (edit.type === "equal") {
         firstOld ??= edit.oldIndex;
         firstNew ??= edit.newIndex;
@@ -459,6 +467,7 @@ function groupHunks(
         newCount++;
       }
     }
+    if (lines.length === 0) return { hunks, truncated: true };
     const first = edits[start]!;
     const oldStart = oldCount === 0 ? first.oldIndex : (firstOld ?? first.oldIndex) + 1;
     const newStart = newCount === 0 ? first.newIndex : (firstNew ?? first.newIndex) + 1;
@@ -471,6 +480,7 @@ function groupHunks(
       newLines: newCount,
       lines,
     });
+    if (cut) return { hunks, truncated: true };
   }
   return { hunks, truncated: false };
 }

@@ -66,3 +66,30 @@ assertion, timeout or skip was changed for validation.
 - **Failure:** `plan approval flow > denies EnterPlanMode when its durable preference cannot be written` failed at the fixture `writeFile` (`session-manager-interactions.test.ts:827`) with `EISDIR` after 1.30 ms; the only failure of the run (codex lockfile, root/support and workspace groups passed).
 - **Owning-file rerun:** `bun test src/services/session-manager-interactions.test.ts -t "denies EnterPlanMode when its durable preference"` from `bridges/claude-bridge` passed three times, and the whole file passed 29/29.
 - **Assessment:** the same fixture-directory symptom. The branch's Claude bridge changes (artifact MCP server configuration, tool naming, permissions) add no file writes under the Claude home; no source, assertion, timeout or skip changed.
+
+## Observation — 2026-10-20 (HTTP dispatch-detail review fixes)
+
+- **Original command:** `mise run test:logged -- --name full-tests-gnu -- mise run test`,
+  using the testing guide's GNU-tool PATH; workspace/root/bridges/protocol
+  reserved 4/1/2/1 worker slots.
+- **Failure:** `plan approval flow > denies EnterPlanMode when its durable preference cannot be written`
+  failed at the fixture's `.claude` write with `EISDIR` (2.74 ms).
+- **Package counts:** Claude reported 1,581 passed, five skipped and one failed
+  across 1,587 tests in 74 files (47.65 seconds).
+- **Owning-file reruns:** `mise run test:logged -- --name claude-interactions-isolated -- bun test --cwd bridges/claude-bridge --preload ../../tests/setup-node.ts ./src/services/session-manager-interactions.test.ts --parallel=1 --only-failures`
+  reproduced `EISDIR` in the sibling approved-exit persistence fixture
+  (28 passed, one failed; 0.2 seconds). Repeating with the GNU-tool PATH and
+  log name `claude-interactions-gnu-isolated` reproduced the original
+  EnterPlanMode fixture failure (28 passed, one failed; 0.2 seconds).
+- **Evidence:** `orkestrator-test-run.bOXAnB/bridges.log.gz`,
+  `orkestrator-test-run.Q1KuIs/claude-interactions-isolated.log.gz` and
+  `orkestrator-test-run.MhuXhW/claude-interactions-gnu-isolated.log.gz`.
+- **Assessment:** the same previously tracked fixture-directory symptom;
+  these isolated reruns did not pass, so this observation alone does not
+  establish intermittence. The first aggregate in this review-fix validation
+  passed all bridge packages unchanged. No bridge source, test assertion,
+  timeout or skip changed.
+- **Aggregate result:** the GNU-tool rerun finished in 636.6 seconds with only
+  the bridge group failing. Every workspace package passed (backend: 9,530
+  passed, 79 skipped, zero failed across 532 files); root/support and Codex
+  protocol regeneration also passed.

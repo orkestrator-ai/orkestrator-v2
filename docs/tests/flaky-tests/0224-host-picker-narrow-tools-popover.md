@@ -323,3 +323,12 @@ The component/public-site browser task passed separately (`merge2-browser`, exit
 The recurrence, owning-file results and remaining limitations are recorded in
 [0501](0501-queued-steer-main-merge-validation.md). No owning implementation,
 assertion, timeout or skip was changed for validation.
+
+## Git-fixture main merge validation — 2026-10-20
+
+- **Original command:** `mise run test:logged -- --name merge-browser -- mise run test:agent:browser:isolated`, credential-free Codex profile `qa-browser-320b81f4-807`, one worker, alongside the non-iOS aggregate and Electron/Docker checks.
+- **Full result:** 27 passed, 38 opt-in skips, two failed; exit 1 in 539.1 seconds including lifecycle. The narrow picker reached the five-second deadline with `Select file` disabled in the SSH socket dialog (line 303). Separately, signed-out Codex recovery could not find `Sign in to Codex` within 60 seconds (line 881).
+- **Owning-file rerun:** `mise run test:logged -- --name merge-gateway-owner -- bun -e 'import { runIsolatedBrowser } from "./apps/desktop/scripts/dev/isolated-browser.ts"; process.exitCode = await runIsolatedBrowser({ suite: { label: "gateway owner", config: "output/agent-testing/merge-gateway-owner.config.ts" } });'`. The ignored temporary config imported the normal browser config and restricted `testMatch` to `browser-gateway.spec.ts`; fresh credential-free Codex profile `qa-browser-8a68726c-057`, one worker.
+- **Owner result:** 14 passed, seven skipped, one failed; exit 1 in 168.0 seconds. The narrow picker reproduced the hidden `Repository settings` button after `Open tools` (line 239, 15-second timeout). The signed-out Codex recovery case passed unchanged, but the whole owning file did not, so this observation does not independently classify a new flake.
+- **Evidence:** `orkestrator-test-run.Ow1M3o/merge-browser.log.gz` and `orkestrator-test-run.MWfKgp/merge-gateway-owner.log.gz` below the host temporary directory; browser artifacts under `output/agent-testing/<profile>/browser/` for the two profiles above.
+- **Disposition:** existing narrow-picker limitation remains unresolved. Both supervisors stopped and reset their profiles. No source, assertion, deadline or skip changed.

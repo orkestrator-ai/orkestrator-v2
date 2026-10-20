@@ -377,14 +377,32 @@ export function assertOk(response: Response, operation: string): void {
   }
 }
 
+/** A bridge's `error` text on a failed response, flattened and bounded; "" when absent. */
+export async function bridgeErrorDetail(response: Response, operation: string): Promise<string> {
+  const payload = await boundedJson(response, operation).catch(() => null);
+  const rawDetail = nonEmptyString(asRecord(payload)?.error)?.trim();
+  return rawDetail ? rawDetail.replace(/[\r\n\t]+/g, " ").slice(0, 500) : "";
+}
+
+/** Preserve a retryable dispatch refusal's reason without trusting its response body. */
+export async function promptDispatchUnavailableError(
+  agent: ProviderAgent,
+  response: Response,
+): Promise<ProviderUnavailableError> {
+  const detail = await bridgeErrorDetail(response, "prompt dispatch");
+  return new ProviderUnavailableError(
+    `${agent} prompt dispatch is temporarily unavailable (HTTP ${response.status})${
+      detail ? `: ${detail}` : ""
+    }`,
+  );
+}
+
 export async function assertOkWithErrorDetail(
   response: Response,
   operation: string,
 ): Promise<void> {
   if (response.ok) return;
-  const payload = await boundedJson(response, operation).catch(() => null);
-  const rawDetail = nonEmptyString(asRecord(payload)?.error);
-  const detail = rawDetail ? rawDetail.replace(/[\r\n\t]+/g, " ").slice(0, 500) : "";
+  const detail = await bridgeErrorDetail(response, operation);
   const message = `${operation} ${
     isTransientHttpStatus(response.status) ? "is temporarily unavailable" : "failed"
   } (HTTP ${response.status})${detail ? `: ${detail}` : ""}`;

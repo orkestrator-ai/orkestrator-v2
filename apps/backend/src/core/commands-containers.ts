@@ -274,8 +274,17 @@ export async function createDockerContainer(
     // Bounded container stdout/stderr (10 MiB × 3) where the daemon offers
     // the local driver.
     ...logDriverArguments((await dockerCapacity()).logDrivers),
+    // The bind-mounted fixture keeps its host owner, which the container's
+    // user often is not, so Git refuses it as dubiously owned. Git reads
+    // safe.directory only from global or system config, so workspace setup
+    // trusts this one fixed path when told to; production containers are not.
     ...(agentTestLocalGitRemote
-      ? ["-v", `${agentTestLocalGitRemote}:${AGENT_TEST_LOCAL_GIT_REMOTE_PATH}`]
+      ? [
+          "-v",
+          `${agentTestLocalGitRemote}:${AGENT_TEST_LOCAL_GIT_REMOTE_PATH}`,
+          "-e",
+          `ORKESTRATOR_AGENT_TEST_GIT_REMOTE=${AGENT_TEST_LOCAL_GIT_REMOTE_PATH}`,
+        ]
       : []),
     // Linux Engine does not provide Docker Desktop's host.docker.internal DNS
     // entry automatically. Do not add this override on macOS/Windows: there it

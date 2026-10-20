@@ -103,8 +103,9 @@ export function TerminalContainerOverlays({
         </div>
       )}
 
+      {/* Laid-out tab content is z-10, so recovery must sit above it or a tab's own setup overlay shows through. */}
       {setupPhase === "failed" && isEnvironmentRunning && (
-        <div className="absolute inset-0 bg-background">
+        <div className="absolute inset-0 z-20 bg-background">
           <SetupPendingOverlay
             environmentId={environmentId}
             setupPhase={setupPhase}

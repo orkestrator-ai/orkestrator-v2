@@ -1611,16 +1611,25 @@ exit 0
 
       expect(environment.worktreePath).toBeDefined();
       const worktreePath = environment.worktreePath!;
-      const gitDir = await gitOutput(worktreePath, ["rev-parse", "--git-dir"]);
-      const excludePath = await gitOutput(worktreePath, [
-        "rev-parse",
-        "--git-path",
-        "info/exclude",
-      ]);
-      expect(gitDir).not.toBe(".git");
-      const excludeFile = path.isAbsolute(excludePath)
-        ? excludePath
-        : path.resolve(worktreePath, excludePath);
+      // Read from Git's documented on-disk layout instead of `git rev-parse`, so
+      // the test spawns nothing alongside the diff scan that starting the
+      // environment begins. Under aggregate load Bun intermittently never
+      // reported the exit of a scan subprocess spawned together with these
+      // reads; the scan then held the worktree's admission slot until its
+      // 10-second command timeout, and `get_local_git_status` queued behind it.
+      // A linked worktree's `.git` is a file naming its private Git directory,
+      // whose `commondir` names the shared directory holding `info/exclude`.
+      const dotGit = path.join(worktreePath, ".git");
+      expect((await fs.stat(dotGit)).isFile()).toBe(true);
+      const gitDir = path.resolve(
+        worktreePath,
+        (await fs.readFile(dotGit, "utf8")).replace(/^gitdir:/, "").trim(),
+      );
+      const commonDir = path.resolve(
+        gitDir,
+        (await fs.readFile(path.join(gitDir, "commondir"), "utf8")).trim(),
+      );
+      const excludeFile = path.join(commonDir, "info", "exclude");
       await expect(fs.readFile(excludeFile, "utf8")).resolves.toContain(".orkestrator\n");
 
       await fs.writeFile(excludeFile, "existing-pattern");

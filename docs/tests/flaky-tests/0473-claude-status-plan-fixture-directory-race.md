@@ -42,3 +42,24 @@ The final `full-suite-final` aggregate with the explicit GNU-tool/Python PATH
 passed every group (391.5 seconds logged), including the unchanged Claude
 fixture in the bridge group (80.0 seconds). This successful warm execution
 does not resolve the fixture race.
+
+## Git scan regression coverage recurrence — 2026-10-20
+
+`mise run test:logged -- --name git-coverage-all -- mise run test` repeated
+the same EISDIR at line 270 (1.61 ms), with 4/1/2/1 reserved
+workspace/root/bridge/protocol slots. The Claude implementation and test file
+were unchanged. Evidence: `orkestrator-test-run.T5B1Ho/bridges.log.gz` below
+the host temporary directory.
+
+The unchanged owning file passed with the matching Node preload under
+`mise run test:logged -- --name git-coverage-claude-owner -- bun test --cwd bridges/claude-bridge --preload ../../tests/setup-node.ts ./src/services/session-manager-system-events.test.ts --parallel=1 --only-failures`
+(exit 0, 0.1 seconds). This occurrence confirms the existing intermittent
+fixture failure; no implementation, assertion, timeout or skip changed.
+
+The aggregate completed in 432.0 seconds (exit 1). Root/support and protocol
+passed. The only other failure was the Docker maintenance case in
+`apps/backend/tests/commands-registry-coverage.test.ts:252`; that owning file
+also failed alone, including with the unmodified `commands-files.ts` from HEAD
+(`git-coverage-registry-baseline`, exit 1, 0.5 seconds). This Docker failure is
+not classified as a flake. Baseline evidence:
+`orkestrator-test-run.3JXBkZ/git-coverage-registry-baseline.log.gz`.

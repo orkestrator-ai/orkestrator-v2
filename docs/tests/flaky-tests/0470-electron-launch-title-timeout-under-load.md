@@ -106,4 +106,3 @@ Later title assertions (Window menu entries, nicknames) are unchanged.
 in 117.1 seconds. Host load was low (about 2), so that run shows no regression
 rather than proving the loaded case; reopen this entry if the startup title
 still misses 60 seconds under contention.
-

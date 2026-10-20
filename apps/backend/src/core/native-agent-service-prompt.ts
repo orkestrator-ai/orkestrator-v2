@@ -155,6 +155,7 @@ import {
   nativeAgentObservationGroupKey,
   observationSatisfies,
 } from "./native-agent-observation.js";
+import { beginChangeTrackingTurn } from "./native-agent-change-tracking.js";
 import {
   beginArtifactDispatchTurn,
   settleArtifactDispatchTurn,
@@ -971,6 +972,12 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
              * answer from before this turn and must never be applied after the
              * `working` recorded below (it would end a turn that just began).
              */
+            // Change tracking captures the turn's start before the provider can write.
+            const settleChangeTurn = await beginChangeTrackingTurn(
+              this.options.changeTracking?.(),
+              durable,
+              input.requestId,
+            );
             const artifactGrant = this.beginArtifactTurn(durable, input.requestId);
             const groupKey = nativeAgentObservationGroupKey(durable.environmentId, durable.agent);
             const releaseDispatchFence = this.observations.beginDispatch(durable.key, groupKey);
@@ -1024,7 +1031,11 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
                 groupKey,
                 providerSessionId: durable.providerSessionId,
               });
+              settleChangeTurn("accepted");
             } catch (error) {
+              settleChangeTurn(
+                error instanceof AmbiguousPromptDispatchError ? "uncertain" : "rejected",
+              );
               // Ambiguous dispatch may still be running. Reconciliation owns
               // settlement and the artifact grant until the outcome is known.
               if (!(error instanceof AmbiguousPromptDispatchError)) {

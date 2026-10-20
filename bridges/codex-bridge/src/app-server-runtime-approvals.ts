@@ -78,6 +78,16 @@ export class CodexRuntimeApprovals {
     if (sessionIds.length === 0) return false;
 
     this.ctx.pendingApprovals.set(enriched.approvalId, { request: enriched });
+    // The call is parked on a person: a patch is still only a proposal and a
+    // command has not run.
+    const turn = context?.activeTurn;
+    if (context && turn && item && (!request.turnId || request.turnId === turn.turnId)) {
+      this.ctx.options.changeEvidence?.item(
+        this.lifecycle.evidenceSource(context, turn),
+        "awaiting-approval",
+        item,
+      );
+    }
     const publish = () => {
       for (const sessionId of sessionIds) {
         this.ctx.options.emit({

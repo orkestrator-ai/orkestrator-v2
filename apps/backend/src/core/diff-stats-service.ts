@@ -117,11 +117,36 @@ export interface DiffScanResult {
   stats: EnvironmentDiffStats;
   /** Retained so the Files panel is served from the same scan. */
   changes: unknown[];
+  /** Immutable commit the comparison ref resolved to, when known. */
+  baseOid?: string;
+  /** Untracked paths already listed by the tracked diff (index-membership overlap). */
+  ambiguousPaths?: string[];
 }
+
+/**
+ * Every settled outcome of the environment owner, for the change-tracking
+ * projector (docs/architecture/change-tracking.md). Delivered synchronously;
+ * a listener must not throw or await.
+ */
+export type DiffScanEvent =
+  | {
+      kind: "scanned";
+      target: DiffStatsTarget;
+      result: DiffScanResult;
+      /** Published counts changed (a no-op scan still advances the check time). */
+      changed: boolean;
+      at: string;
+      /** When the pass began; only passes started after a refresh may settle it. */
+      startedAt: string;
+    }
+  | { kind: "failed"; target: DiffStatsTarget; at: string }
+  | { kind: "paused"; target: DiffStatsTarget; at: string }
+  | { kind: "removed"; environmentId: string; at: string }
+  | { kind: "hint"; target: DiffStatsTarget; paths: readonly string[] | null; at: string };
 
 export interface DiffStatsServiceOptions {
   /** Runs the real git scan. Injected so the service is testable without git. */
-  scan: (target: DiffStatsTarget) => Promise<DiffScanResult>;
+  scan: (target: DiffStatsTarget, request?: ScanRequest) => Promise<DiffScanResult>;
   emit: (event: string, payload: unknown) => void;
   /**
    * Reads a file list for an identity no tracked entry covers. Defaults to
@@ -170,6 +195,8 @@ export interface DiffStatsServiceOptions {
    * {@link DiffStatsService.remoteFreshnessChanged} when it changes.
    */
   remoteFreshness?: (target: DiffStatsTarget) => WorktreeRemoteFreshness | undefined;
+  /** Settled scans, failures, removals and watcher hints (see {@link DiffScanEvent}). */
+  onScanEvent?: (event: DiffScanEvent) => void;
 }
 
 export interface RetryPolicy {
@@ -235,7 +262,14 @@ export interface TreeReadResultWithView {
 
 type ScanReason = "track" | "hint" | "refresh" | "read" | "periodic" | "retry" | "rerun";
 
+/** When the scan was asked for: a physical pass started later satisfies it. */
+export type ScanRequest = { requestedAtMs: number };
+
 type ScanAttempt = {
+  /** Wall-clock start, so a fenced refresh never settles on an older pass. */
+  startedAt: string;
+  /** `monotonicNow()` when the attempt was created. */
+  requestedAtMs: number;
   target: DiffStatsTarget;
   targetKey: string;
   targetGeneration: number;
@@ -322,6 +356,7 @@ export class DiffStatsService {
   > & {
     onWarning?: DiffStatsServiceOptions["onWarning"];
     remoteFreshness?: DiffStatsServiceOptions["remoteFreshness"];
+    onScanEvent?: DiffStatsServiceOptions["onScanEvent"];
   };
   private readonly metrics: RecurringWorkMetrics;
   private readonly admission: WorkAdmissionPool | null;
@@ -360,6 +395,7 @@ export class DiffStatsService {
       startWatcher: options.startWatcher ?? startWorktreeWatcher,
       onWarning: options.onWarning,
       remoteFreshness: options.remoteFreshness,
+      onScanEvent: options.onScanEvent,
     };
     this.generation = options.generation ?? randomUUID();
     this.metrics = options.metrics ?? recurringWorkMetrics;
@@ -439,6 +475,11 @@ export class DiffStatsService {
         // The previous counts were measured against something else; drop them so
         // a stale number cannot be served from the cache or suppress an emit.
         existing.last = undefined;
+        this.notify({
+          kind: "removed",
+          environmentId: target.environmentId,
+          at: this.options.now(),
+        });
         if (hadPublishedCounts) {
           this.announce({
             environmentId: target.environmentId,
@@ -493,6 +534,7 @@ export class DiffStatsService {
   untrack(environmentId: string): void {
     const entry = this.release(environmentId);
     if (!entry) return;
+    this.notify({ kind: "removed", environmentId, at: this.options.now() });
     if (entry.published) {
       this.announceSnapshot({ environmentId, removed: true } satisfies WorktreeSnapshotRemoval);
     }
@@ -547,11 +589,16 @@ export class DiffStatsService {
     this.tree.release(environmentId);
     this.adhoc.invalidateTarget(entry.target);
     this.publishSnapshot(entry);
+    this.notify({ kind: "paused", target: entry.target, at: this.options.now() });
   }
 
   /** Every environment the service holds state for, paused or not. */
   trackedIds(): string[] {
     return [...this.entries.keys()];
+  }
+
+  isTracked(environmentId: string): boolean {
+    return this.entries.has(environmentId);
   }
 
   /** Releases every watcher and timer; used on backend shutdown. */
@@ -824,6 +871,12 @@ export class DiffStatsService {
         // cannot say which view it touched (or an overflow) dirties both.
         if (!hint || hint.tree || hint.overflow) this.tree.hint(entry.target.environmentId);
         if (!hint || hint.fileList || hint.overflow) this.request(entry, "hint");
+        this.notify({
+          kind: "hint",
+          target: entry.target,
+          paths: hint?.paths && !hint.overflow ? hint.paths : null,
+          at: this.options.now(),
+        });
       },
       onCoverageChange: () => {
         if (!current()) return;
@@ -957,6 +1010,8 @@ export class DiffStatsService {
     priority: Exclude<RecurringPriorityClass, "critical">,
   ): void {
     const attempt: ScanAttempt = {
+      startedAt: this.options.now(),
+      requestedAtMs: this.options.monotonicNow(),
       target: entry.target,
       targetKey: entry.targetKey,
       targetGeneration: entry.targetGeneration,
@@ -988,7 +1043,10 @@ export class DiffStatsService {
   ): Promise<void> {
     let result: DiffScanResult;
     try {
-      const work = () => this.metrics.observe("diff-scan", () => this.options.scan(attempt.target));
+      const work = () =>
+        this.metrics.observe("diff-scan", () =>
+          this.options.scan(attempt.target, { requestedAtMs: attempt.requestedAtMs }),
+        );
       result = this.admission
         ? await this.admission.run(
             {
@@ -1053,7 +1111,16 @@ export class DiffStatsService {
       completedAt: this.options.monotonicNow(),
     };
 
-    if (entry.last && isSameStats(entry.last.stats, result.stats)) {
+    const unchanged = entry.last !== undefined && isSameStats(entry.last.stats, result.stats);
+    this.notify({
+      kind: "scanned",
+      target,
+      result,
+      changed: !unchanged,
+      at: this.options.now(),
+      startedAt: attempt.startedAt,
+    });
+    if (unchanged) {
       this.metrics.outcome("diff-scan", "unchanged");
     } else {
       this.metrics.outcome("diff-scan", "changed");
@@ -1082,6 +1149,7 @@ export class DiffStatsService {
       retryAt: this.options.monotonicNow() + delayMs,
     };
     this.warn(`Diff scan failed for ${attempt.target.environmentId}`, error);
+    this.notify({ kind: "failed", target: attempt.target, at: this.options.now() });
     if (entry.retryTimer !== undefined) this.options.cancelDelay(entry.retryTimer);
     entry.retryTimer = undefined;
     if (entry.failures <= this.failureRetry.maxAttempts) {
@@ -1264,6 +1332,14 @@ export class DiffStatsService {
    * Stamps and emits one change or removal. The revision advances even when
    * the sink throws, so a client that missed it sees a gap.
    */
+  private notify(event: DiffScanEvent): void {
+    try {
+      this.options.onScanEvent?.(event);
+    } catch (error) {
+      this.warn("Change-tracking scan listener failed", error);
+    }
+  }
+
   private announce(payload: EnvironmentDiffStatsChange | EnvironmentDiffStatsRemoval): void {
     this.revision += 1;
     this.emitSafely(DIFF_STATS_CHANGED_EVENT, payload.environmentId, {

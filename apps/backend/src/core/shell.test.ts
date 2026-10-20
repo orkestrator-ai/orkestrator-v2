@@ -439,3 +439,22 @@ describe("runCommand capture", () => {
     expect((failure as CommandFailedError).timedOut).toBe(false);
   });
 });
+
+posixOnly("AbortSignal cancels a command without waiting for its independent timeout", async () => {
+  const controller = new AbortController();
+  const started = Date.now();
+  const running = runCommandBuffer("sh", ["-c", "sleep 30"], {
+    signal: controller.signal,
+    timeoutMs: 30_000,
+  });
+  const timer = setTimeout(() => controller.abort(), 40);
+  try {
+    const result = await running.catch((error) => error);
+    expect(result).toBeInstanceOf(CommandFailedError);
+    expect(result.timedOut).toBe(true);
+    expect(Date.now() - started).toBeLessThan(1000);
+  } finally {
+    clearTimeout(timer);
+    controller.abort();
+  }
+});

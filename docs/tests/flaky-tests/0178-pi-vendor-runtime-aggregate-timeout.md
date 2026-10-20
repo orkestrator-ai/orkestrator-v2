@@ -821,3 +821,17 @@ assertion, timeout or skip was changed for validation.
 - **Assessment:** confirmed intermittent recurrence. Host contention remains an unconfirmed explanation; no implementation, assertion, timeout or skip changed.
 
 Root/support completed with 3148 passed, one skipped and this single failure across 3150 tests in 148 files (327.4 seconds).
+
+## Setup recovery main merge — 2026-10-21
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`, alongside component and isolated application browser validation.
+- **Workers:** workspace/root/bridges/protocol reservations of 4/1/2/1 slots.
+- **Failure:** staged runtime loading exceeded 30000 ms (30000.08 ms). Root/support reported 3149 passed, one skipped and two failed across 3152 tests in 149 files (292.36 seconds); the other failure was an independently reproducible stale NativeMessage grouping interaction, corrected in this merge.
+- **Owning-file rerun:** `mise run test:logged -- --name merge-pi-vendor-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 7.3 seconds logged).
+- **Evidence:** `orkestrator-test-run.J8cVw1/root-and-agent-support-tests.log.gz` under the host temporary directory.
+- **Assessment:** confirmed intermittent recurrence. Concurrent validation was active; host contention remains unconfirmed. No Pi implementation, assertion, timeout or skip changed.
+
+The final `mise run test:logged -- --name merge-tests-final -- mise run test`
+passed all four groups (424.5 seconds logged); root/support passed in 200.4
+seconds. The unrelated NativeMessage interaction was corrected; Pi staging
+remained unchanged.

@@ -11,6 +11,7 @@ import {
   noteClaudeAuthenticationFailure,
   noteClaudeAuthenticationWorked,
 } from "../claude-sign-in.js";
+import { claudeEvidenceTurnId, claudeToolUses, recordClaudeToolUse } from "../change-evidence.js";
 import { eventEmitter } from "../event-emitter.js";
 import { debugLog } from "../logger.js";
 import {
@@ -157,6 +158,20 @@ export function handleAssistantMessage(turn: TurnState, message: SDKMessage): vo
     receivedAt,
     recordUnknownContentBlock,
   );
+
+  // Each call this response makes starts its change-evidence lifecycle with
+  // the proposal its input states. A subagent's calls name the call that
+  // started the subagent.
+  const evidenceParent = (message as { parent_tool_use_id?: unknown }).parent_tool_use_id;
+  for (const use of claudeToolUses(message)) {
+    recordClaudeToolUse(sessionId, {
+      ...use,
+      turnId: claudeEvidenceTurnId(turn),
+      ...(typeof evidenceParent === "string" && evidenceParent
+        ? { parentCallId: evidenceParent }
+        : {}),
+    });
+  }
 
   // Frames a subagent sends name the call that started it. Remember that
   // this turn's row holds the call, so they reach it after a newer turn

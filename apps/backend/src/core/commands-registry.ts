@@ -1,3 +1,4 @@
+import { registerChangeCommands } from "./commands-registry-changes.js";
 import { registerDesignCommands } from "./commands-registry-design.js";
 import { registerMcpManagementCommands } from "./commands-registry-mcp.js";
 import { registerPreviewCommands } from "./commands-registry-previews.js";
@@ -301,6 +302,7 @@ export function createCommandRegistry(
   registerBuildPipelineCommands(register, dependencies);
   registerPromptCommands(register, dependencies);
   registerTerminalCommands(register, dependencies);
+  registerChangeCommands(register);
   registerPullRequestCommands(register, dependencies);
   registerKanbanCommands(register, dependencies);
   registerAgentMailCommands(register);

@@ -124,6 +124,12 @@ export interface TranscriptLine {
    * tmux and Native Mode agree.
    */
   taskSnapshots?: Record<string, TaskListSnapshot>;
+  /**
+   * Diff sides (path and payload sides, never counts) of each tool call this
+   * line started, keyed by tool use id, stamped on by the backend that reads
+   * the transcript. The renderer never interprets provider tool inputs itself.
+   */
+  toolDiffs?: Record<string, { filePath?: string; before?: string; after?: string }>;
   [key: string]: unknown;
 }
 

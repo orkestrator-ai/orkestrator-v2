@@ -43,7 +43,11 @@ test("scanning a stat-dirty but content-clean linked worktree leaves its index u
       await getLocalGitStatusDetailed(linked, "main", true, {
         ensureFetched: async () => undefined,
       }),
-    ).toEqual({ changes: [], truncated: false });
+    ).toEqual({
+      changes: [],
+      truncated: false,
+      baseOid: (await git(linked, "rev-parse", "main")).stdout.trim(),
+    });
     expect(await fs.readFile(index)).toEqual(before);
     expect((await fs.stat(index)).mtimeMs).toBe(mtimeBefore);
 

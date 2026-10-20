@@ -127,6 +127,7 @@ RUN_ID=$(jq -er '.result.runId' launch.json)
 SESSION=$(jq -er '.result.sessionId' launch.json)
 orkestrator run wait "$RUN_ID" --timeout 30m --json
 orkestrator session transcript "$SESSION" --limit 20 --json > transcript.json
+orkestrator changes view "$ENV" --json > changes.json
 orkestrator environment exec "$ENV" --wait -- bun test
 ```
 

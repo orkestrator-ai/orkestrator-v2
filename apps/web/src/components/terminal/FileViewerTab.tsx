@@ -15,7 +15,7 @@ import {
   resolveFileDraftSaveConflict,
 } from "@/lib/file-draft-persistence";
 import { DraftRevisionConflictError } from "@/lib/draft-conflict";
-import type { GitFileStatus } from "@/types/paneLayout";
+import type { ChangeDiffTarget } from "@/types/paneLayout";
 import {
   LazyLoadBoundary,
   LazyLoadInlineErrorFallback,
@@ -72,9 +72,10 @@ export function getFileViewerKind(
   filePath: string,
   options: { showDiff: boolean; hasDiffData: boolean },
 ): FileViewerKind {
-  const isImage = isImageFile(filePath);
-  if (options.showDiff && options.hasDiffData && !isImage) return "diff";
-  if (isImage) return "image";
+  // A diff target names backend hunks (binary files included); it never falls
+  // through to today's file, so an image diff is still a diff.
+  if (options.showDiff && options.hasDiffData) return "diff";
+  if (isImageFile(filePath)) return "image";
   if (isMarkdownFile(filePath)) return "markdown";
   return "text";
 }
@@ -112,10 +113,8 @@ interface FileViewerTabProps {
   isLocalEnvironment?: boolean;
   isActive: boolean;
   language?: string;
-  // Diff-related props
-  isDiff?: boolean;
-  gitStatus?: GitFileStatus;
-  baseBranch?: string;
+  /** Backend change-diff target; when set the tab opens on its diff view. */
+  changeDiff?: ChangeDiffTarget;
 }
 
 export function FileViewerTab({
@@ -130,9 +129,7 @@ export function FileViewerTab({
   isLocalEnvironment = false,
   isActive,
   language,
-  isDiff,
-  gitStatus,
-  baseBranch,
+  changeDiff,
 }: FileViewerTabProps) {
   // ALL HOOKS MUST BE CALLED BEFORE ANY CONDITIONAL RETURNS
   // This is required by React's rules of hooks
@@ -143,7 +140,15 @@ export function FileViewerTab({
     DEFAULT_TERMINAL_APPEARANCE;
 
   // Internal state to allow switching between diff and file view
-  const [showDiff, setShowDiff] = useState(isDiff ?? false);
+  const hasDiffTarget = Boolean(changeDiff);
+  const [showDiff, setShowDiff] = useState(hasDiffTarget);
+  // Reset showDiff when the tab gains or loses a diff target (adjusting state
+  // during render, so the file view never loads for a frame first).
+  const [diffTargetSeen, setDiffTargetSeen] = useState(hasDiffTarget);
+  if (diffTargetSeen !== hasDiffTarget) {
+    setDiffTargetSeen(hasDiffTarget);
+    setShowDiff(hasDiffTarget);
+  }
 
   // File content state
   const [content, setContent] = useState<string | null>(null);
@@ -170,7 +175,7 @@ export function FileViewerTab({
   const isMarkdown = isMarkdownFile(filePath);
   const viewerKind = getFileViewerKind(filePath, {
     showDiff,
-    hasDiffData: Boolean(gitStatus && baseBranch),
+    hasDiffData: hasDiffTarget,
   });
   const { saveFile, isSaving } = useFileSave({
     tabId,
@@ -296,15 +301,10 @@ export function FileViewerTab({
   // its editor buffer are still real. Do not clear on unmount; explicit tab
   // closure owns discarding the buffer.
 
-  // Reset showDiff when isDiff prop changes (e.g., when switching tabs)
+  // Fetch file content only for the file view; the diff view renders backend
+  // hunks and never reads the current file.
   useEffect(() => {
-    setShowDiff(isDiff ?? false);
-  }, [isDiff]);
-
-  // Fetch file content (runs even if showing diff, to have content ready when switching)
-  useEffect(() => {
-    // Skip loading if we're showing diff view (but not for images, which bypass the diff viewer)
-    if (showDiff && !isImage) {
+    if (showDiff && hasDiffTarget) {
       return;
     }
 
@@ -408,6 +408,7 @@ export function FileViewerTab({
     isImage,
     language,
     showDiff,
+    hasDiffTarget,
     tabId,
     environmentId,
     hydrateDraft,
@@ -459,23 +460,18 @@ export function FileViewerTab({
     };
   }, [environmentId, filePath, flushFileDraft]);
 
-  // If in diff mode and we have the required data, render DiffViewerTab
-  // Image files can't be diffed in Monaco, so they fall through to the image preview
-  if (viewerKind === "diff" && gitStatus && baseBranch) {
+  // A diff tab renders the backend's hunks for its target. Only a live
+  // (current workspace file) target offers switching to the editor.
+  if (viewerKind === "diff" && changeDiff) {
     return (
       <LazyLoadBoundary
         loadingFallback={renderEditorFallback("Loading diff viewer...")}
         renderError={renderEditorError}
       >
         <LazyDiffViewerTab
+          target={changeDiff}
           filePath={filePath}
-          containerId={containerId}
-          worktreePath={worktreePath}
-          isLocalEnvironment={isLocalEnvironment}
-          baseBranch={baseBranch}
-          gitStatus={gitStatus}
           isActive={isActive}
-          language={language}
           onSwitchToFileView={() => setShowDiff(false)}
         />
       </LazyLoadBoundary>

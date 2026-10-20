@@ -1,22 +1,15 @@
 /**
  * Memory budget for file-change diff state.
  *
- * This is the largest in-memory consumer in the bridge, and the least obvious.
- * `ToolDiffMetadata` carries `before` and `after` — **entire file contents** — and
- * the render state keeps two collections of them per thread:
+ * `ToolDiffMetadata` can carry `before`/`after` — **entire file contents** (an
+ * added or deleted file's text) — plus the diff, and the render state keeps one
+ * per `fileChange` item in a turn-scoped cache:
  *
- *   baselines: path  → full content after the last turn touched it
- *   cache:     item  → { before, after, diff } for one file_change item
+ *   cache: item → { before?, after?, diff } for one file_change item
  *
- * A session that edits 40 files of 40KB, several times each, therefore holds tens
- * of megabytes. With `codex exec` this was survivable because the whole bridge
- * session was thrown away relatively often; with a long-lived app-server thread it
- * simply grows.
- *
- * The fix is not to stop caching — baselines are what make a second edit to the
- * same file diff against the previous turn rather than against git HEAD. The fix
- * is to bound it, and to stop storing full contents for files where nobody will
- * look at a side-by-side view anyway.
+ * With a long-lived app-server thread a turn that touches many large files
+ * would hold all of them, so oversized contents are dropped before they are
+ * stored and the cache is capped.
  */
 import type { FileChangeDiffContext, ToolDiffMetadata } from "./types.js";
 
@@ -34,10 +27,6 @@ export const MAX_INLINE_FILE_BYTES = 256 * 1024;
 
 /** Above this a diff is summarised rather than stored in full. */
 export const MAX_DIFF_BYTES = 1024 * 1024;
-
-/** Baselines are one entry per distinct file the thread has touched. */
-export const MAX_BASELINE_ENTRIES = 128;
-export const MAX_BASELINE_BYTES = 32 * 1024 * 1024;
 
 /** The per-turn cache; cleared between turns, so this is a within-turn cap. */
 export const MAX_DIFF_CACHE_ENTRIES = 256;
@@ -73,83 +62,8 @@ export function applyDiffBudget(metadata: ToolDiffMetadata): ToolDiffMetadata {
     deletions: metadata.deletions,
     diff,
     // `before`/`after` are deliberately omitted when either side is oversized
-    // or a unified diff already carries the same visible information. The
-    // baseline map remains separate, so future edits can still diff against
-    // the previous file state without serializing that state to the renderer.
+    // or a unified diff already carries the same visible information.
   };
-}
-
-/** True when this content is small enough to be worth keeping as a baseline. */
-export function isBaselineWorthKeeping(content: string | undefined): boolean {
-  return byteLength(content) <= MAX_INLINE_FILE_BYTES;
-}
-
-/**
- * The baseline map, with a running byte total maintained on every mutation.
- *
- * Recomputing `Buffer.byteLength` over every retained baseline made each budget
- * check O(total bytes) — and the check runs per `pruneBaselines` call, per
- * evicted entry, and on every polled `/global/health` read. Tracking the total
- * as entries change makes all of those O(1) without touching eviction order or
- * thresholds.
- */
-export class BaselineMap extends Map<string, string | undefined> {
-  private bytes: number;
-
-  constructor(entries?: Iterable<readonly [string, string | undefined]>) {
-    // The entries are inserted through `set` after `bytes` is initialized;
-    // passing them to `super` would invoke the override before the field exists.
-    super();
-    this.bytes = 0;
-    if (entries) {
-      for (const [key, value] of entries) this.set(key, value);
-    }
-  }
-
-  get totalBytes(): number {
-    return this.bytes;
-  }
-
-  override set(key: string, value: string | undefined): this {
-    if (super.has(key)) this.bytes -= byteLength(super.get(key));
-    this.bytes += byteLength(value);
-    return super.set(key, value);
-  }
-
-  override delete(key: string): boolean {
-    if (super.has(key)) this.bytes -= byteLength(super.get(key));
-    return super.delete(key);
-  }
-
-  override clear(): void {
-    this.bytes = 0;
-    super.clear();
-  }
-}
-
-/**
- * Evicts oldest-first until the baseline map is inside budget.
- *
- * Eviction is safe: a missing baseline just means the next diff for that file is
- * taken against git HEAD instead of the previous turn — the pre-baseline
- * behaviour, and still a correct diff.
- */
-export function pruneBaselines(baselines: BaselineMap): number {
-  let evicted = 0;
-  while (baselines.size > MAX_BASELINE_ENTRIES) {
-    const oldest = baselines.keys().next().value;
-    if (oldest === undefined) break;
-    baselines.delete(oldest);
-    evicted += 1;
-  }
-  // Byte budget is checked after the entry budget so the cheap check runs first.
-  while (baselines.totalBytes > MAX_BASELINE_BYTES) {
-    const oldest = baselines.keys().next().value;
-    if (oldest === undefined) break;
-    baselines.delete(oldest);
-    evicted += 1;
-  }
-  return evicted;
 }
 
 export function pruneDiffCache(cache: Map<string, ToolDiffMetadata>): number {
@@ -163,42 +77,10 @@ export function pruneDiffCache(cache: Map<string, ToolDiffMetadata>): number {
   return evicted;
 }
 
-/**
- * Marks a baseline as recently used so eviction is LRU rather than FIFO.
- *
- * A file edited repeatedly across a long session should outlive one touched once
- * at the start, and `Map` iterates in insertion order — so re-inserting is what
- * makes "oldest key" mean "least recently used".
- */
-export function touchBaseline(baselines: BaselineMap, path: string): void {
-  if (!baselines.has(path)) return;
-  const value = baselines.get(path);
-  baselines.delete(path);
-  baselines.set(path, value);
-}
-
-/**
- * Starts a new turn.
- *
- * The per-item cache is turn-scoped, so it is cleared. Baselines are **kept**:
- * dropping them would make every turn diff against git HEAD, so turn 3 would
- * re-display the changes made in turns 1 and 2.
- */
-export function beginTurn(context: FileChangeDiffContext): void {
-  context.cache.clear();
-  pruneBaselines(context.baselines);
-}
-
 export interface DiffBudgetStats {
-  baselineEntries: number;
-  baselineBytes: number;
   cacheEntries: number;
 }
 
 export function describeDiffBudget(context: FileChangeDiffContext): DiffBudgetStats {
-  return {
-    baselineEntries: context.baselines.size,
-    baselineBytes: context.baselines.totalBytes,
-    cacheEntries: context.cache.size,
-  };
+  return { cacheEntries: context.cache.size };
 }

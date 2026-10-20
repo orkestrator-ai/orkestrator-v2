@@ -31,6 +31,10 @@ export const RECURRING_JOB_KINDS = [
   "file-tree-read",
   "git-fetch-local",
   "git-fetch-container",
+  // Backend: change tracking (docs/architecture/change-tracking.md).
+  "change-capture",
+  "change-evidence-pull",
+  "change-retention",
   // Backend: agent observation and queues.
   "native-activity-sweep",
   "native-launch-scan",
@@ -237,6 +241,21 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
   // 5 min attempt cooldown per container generation + clone + ref, joined in
   // flight, immutable local baselines never fetch (`container-git-fetch.ts`).
   "git-fetch-container": backend("F02", "read", "discovery", 300_000, "join", "next-tick"),
+  // Boundary and provisional snapshot captures: one per WorktreeIdentity at a
+  // time inside the shared git-docker-scan pool; fresh boundaries outrank
+  // provisional captures, which run only while dirty (1 s local / 5 s remote).
+  "change-capture": backend(
+    "B03",
+    "watcher",
+    "progress",
+    null,
+    "per-key-serial",
+    "storage-reconcile",
+  ),
+  // Rides the 2 s activity sweep, once per bridge connection with evidence.
+  "change-evidence-pull": backend("B06", "interval", "progress", 2_000, "join", "next-tick"),
+  // Reference expiry, quota enforcement and object sweep.
+  "change-retention": backend("B03", "interval", "discovery", 3_600_000, "join", "next-tick"),
   "native-activity-sweep": backend("B06", "interval", "progress", 2_000, "join", "next-tick"),
   // Step 08: one recovery job, 2 s while a launch intent is pending, else a
   // 30 s safety pass; environment changes wake it.

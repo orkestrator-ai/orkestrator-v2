@@ -192,9 +192,10 @@ describe("workflow result transport conformance", () => {
         result: { phase: "collecting", title: "T", summary: "" },
       },
     });
+    // The connection answers only for its own key; the other slot is untouched.
     expect(crossSubmit.result?.structuredContent).toMatchObject({
       ok: false,
-      error: { code: "capability_denied" },
+      error: { code: "invalid_result", nextAction: "correct" },
     });
 
     const crossStatus = await rpc(first.connection.url, first.connection.token, "tools/call", {
@@ -203,8 +204,9 @@ describe("workflow result transport conformance", () => {
     });
     expect(crossStatus.result?.structuredContent).toMatchObject({
       ok: false,
-      error: { code: "capability_denied" },
+      error: { code: "invalid_result", nextAction: "correct" },
     });
+    expect(JSON.stringify(crossStatus.result)).not.toContain(second.resultKey);
     expect(await workflowResults.projection(second.resultKey)).toBe("preparing");
   });
 

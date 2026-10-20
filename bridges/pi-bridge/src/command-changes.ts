@@ -12,6 +12,10 @@
  * The result is stamped on the card, persisted with the transcript, and
  * journaled per Pi session so a resume or fork — which rebuilds the transcript
  * from Pi's session file — can put the badge back.
+ *
+ * The same hooks feed the change-evidence spool (`change-evidence.ts`): each
+ * call's lifecycle, what Pi reported it changed, and the probe window around
+ * it. Only these live hooks record; an overlay of journaled history never does.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
@@ -19,10 +23,21 @@ import {
   hasMeasuredChanges,
 } from "@orkestrator/protocol/node/command-change-journal";
 import { isFileEditToolName, type MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
-import { WorkspaceChangeProbe } from "@orkestrator/protocol/node/workspace-change-probe";
+import {
+  WorkspaceChangeProbe,
+  type ProbeObservation,
+} from "@orkestrator/protocol/node/workspace-change-probe";
 import { commandChangeJournalPath, workingDirectory } from "./config.js";
 import { schedulePersist } from "./persistence.js";
 import type { SessionState } from "./state.js";
+import {
+  recordToolCallStarted,
+  recordToolNotRun,
+  recordToolObservation,
+  recordToolResult,
+  type PiToolCallEvent,
+  type PiToolResultEvent,
+} from "./change-evidence.js";
 import { applyCommandChanges } from "./translate.js";
 import { chargeTranscript, noteRowRevised } from "./transcript.js";
 
@@ -34,7 +49,10 @@ export function isShellToolName(toolName: string | undefined): boolean {
 }
 
 /** The probe surface this module uses, so tests can substitute one. */
-export type CommandChangeProbe = Pick<WorkspaceChangeProbe, "begin" | "note" | "end" | "discard">;
+export type CommandChangeProbe = Pick<
+  WorkspaceChangeProbe,
+  "begin" | "note" | "endObservation" | "discard"
+>;
 
 /** One per process: overlap detection only works if every call shares it. */
 let probe: CommandChangeProbe = new WorkspaceChangeProbe();
@@ -69,10 +87,20 @@ export async function beginToolCall(
   }
 }
 
-/** Close a call's window and record what it changed, if anything. */
+/**
+ * Close a call's window and record what it changed, if anything.
+ *
+ * The badge keeps exactly what `WorkspaceChangeProbe.end` would have
+ * reported; the observation itself, with its boundaries kept apart, goes to
+ * the change-evidence spool whether or not the call succeeded.
+ */
 export async function endToolCall(state: SessionState, toolCallId: string): Promise<void> {
   if (!toolCallId) return;
-  const change = await probe.end(windowId(state, toolCallId)).catch(() => undefined);
+  const id = windowId(state, toolCallId);
+  const observation = await probe.endObservation(id).catch(() => undefined);
+  if (!observation) return;
+  recordToolObservation(state, toolCallId, id, observation);
+  const change = legacyChange(observation);
   if (!change || !hasMeasuredChanges(change)) return;
   applyCommandChanges(state, toolCallId, change);
   schedulePersist();
@@ -80,13 +108,30 @@ export async function endToolCall(state: SessionState, toolCallId: string): Prom
   if (journal) void journal.append(toolCallId, change);
 }
 
+/** The `end()` answer for an observation: approximate unless clean. */
+function legacyChange(observation: ProbeObservation): MeasuredWorkspaceChange | undefined {
+  const change = observation.change;
+  if (!change) return undefined;
+  if (
+    observation.overlap === "known-overlap" ||
+    observation.boundary.before === "late-start" ||
+    observation.omittedReasons.length > 0
+  ) {
+    change.approximate = true;
+  }
+  return change;
+}
+
 /**
  * Drop a window whose call never reached the post-tool hook — a later
- * `tool_call` handler blocked it, or the turn aborted before it ran. A no-op
- * for a call already ended, which is every call that executed.
+ * `tool_call` handler blocked it, or the turn aborted before it ran — and
+ * report that call as never run. A no-op for a call already ended, which is
+ * every call that executed. `result` is the `tool_execution_end` result.
  */
-export function discardToolCall(state: SessionState, toolCallId: string): void {
-  if (toolCallId) probe.discard(windowId(state, toolCallId));
+export function discardToolCall(state: SessionState, toolCallId: string, result?: unknown): void {
+  if (!toolCallId) return;
+  probe.discard(windowId(state, toolCallId));
+  recordToolNotRun(state, toolCallId, result);
 }
 
 /**
@@ -100,12 +145,15 @@ export function commandChangeExtension(state: SessionState): (pi: ExtensionAPI) 
   return (pi) => {
     pi.on("tool_call", async (event) => {
       await beginToolCall(state, event.toolCallId, event.toolName);
+      // After the "before" snapshot: the call is about to run.
+      recordToolCallStarted(state, event as PiToolCallEvent);
       return undefined;
     });
     // Awaited so the "after" snapshot is taken before Pi moves on; returning
     // nothing leaves the result untouched.
     pi.on("tool_result", async (event) => {
       await endToolCall(state, event.toolCallId);
+      recordToolResult(state, event as PiToolResultEvent);
       return undefined;
     });
   };

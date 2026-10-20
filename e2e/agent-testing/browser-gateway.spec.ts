@@ -2492,7 +2492,10 @@ test("persisted diff baselines keep Files, the badge and diff tabs aligned after
       .filter({ has: page.getByText(worker.name, { exact: true }) });
     await expect(row.getByText("+1", { exact: true })).toBeVisible();
     await own.click();
-    await expect(page.getByTitle(`vs ${tip}`, { exact: true })).toBeVisible();
+    await expect(page.getByTestId("diff-viewer-endpoints")).toHaveAttribute(
+      "title",
+      `${tip}@${tip} → Current workspace file`,
+    );
     await page.reload();
     await openWorker();
     await expect(own).toBeVisible();

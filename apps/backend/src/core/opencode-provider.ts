@@ -99,7 +99,8 @@ import {
 } from "./opencode-commands.js";
 import { openCodeContextUsage } from "./opencode-usage.js";
 import { OpenCodeStreamState } from "./opencode-stream-state.js";
-import { OpenCodeCommandChanges } from "./opencode-command-changes.js";
+import { openCodeCommandChangesFor, OpenCodeCommandChanges } from "./opencode-command-changes.js";
+import { OpenCodeChangeEvidence } from "./opencode-change-evidence.js";
 import { openCodeInstanceReload, type OpenCodeInstanceReload } from "./opencode-command-reload.js";
 import {
   DEFAULT_OPENCODE_EXISTENCE_CACHE_TTL_MS,
@@ -205,6 +206,9 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   private readonly actionRetry: OpenCodeActionRetryCoordinator;
   /** Shell-call badges; absent when the worktree is not readable from here. */
   private readonly commandChanges?: OpenCodeCommandChanges;
+  /** Change evidence; also feeds the shell probe its events, turns and releases. */
+  readonly changeEvidence: OpenCodeChangeEvidence;
+  readonly changeEvidenceSource = (id: string) => this.changeEvidence.connectionSource(id);
   private activeStreamController: AbortController | null = null;
   private reconciliation: Promise<void> | null = null;
   private streamReconciliation: Promise<void> | null = null;
@@ -309,16 +313,12 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       (sessionId) => this.observation.changed(sessionId),
     );
     this.resolveOpenCodeModelProviders = dependencies.resolveOpenCodeModelProviders;
-    // Only a connection with a host directory runs where git can read it:
-    // local-worktree environments. A container's OpenCode works on a clone
-    // inside the container, so its connection carries no directory.
-    if (dependencies.commandChanges && connection.directory) {
-      this.commandChanges = new OpenCodeCommandChanges(
-        connection.directory,
-        dependencies.commandChanges,
-        (sessionId) => this.streamState.touch(sessionId),
-      );
-    }
+    this.commandChanges = openCodeCommandChangesFor(
+      connection.directory,
+      dependencies.commandChanges,
+      (sessionId) => this.streamState.touch(sessionId),
+    );
+    this.changeEvidence = OpenCodeChangeEvidence.forConnection(connection, this.commandChanges);
     this.monitorPromise = this.monitorRequests();
   }
 
@@ -511,7 +511,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       event.type === "global.disposed";
     const owned = Boolean(rawSessionId && this.lifecycle.ownedSessions.has(rawSessionId));
     // Tool starts and ends reach the probe in stream order, before any await.
-    this.commandChanges?.observeScoped(event, this.lifecycle.ownedSessions);
+    this.changeEvidence.observeScoped(event, this.lifecycle.ownedSessions);
     if (globalEvent || owned) {
       const effect = this.streamState.apply(event as OpenCodeEvent, this.now());
       if (effect.status && effect.sessionId) {
@@ -781,7 +781,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       const dispatchStartedAt = this.now();
       this.streamState.beginTurn(sessionId, dispatchStartedAt);
       this.actionRetry.beginTurn(sessionId);
-      await this.commandChanges?.beginTurn(sessionId);
+      await this.changeEvidence.beginTurn(sessionId, messageID);
       let response;
       try {
         if (command) {
@@ -1464,7 +1464,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   releaseSession(sessionId: string): void {
     this.lifecycle.release(sessionId);
     this.streamState.forget(sessionId);
-    this.commandChanges?.forget(sessionId);
+    this.changeEvidence.forget(sessionId);
     this.interactiveMetadata.delete(sessionId);
     this.sessionPolicies.delete(sessionId);
     this.blockedSessions.delete(sessionId);
@@ -1491,7 +1491,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     this.answeringRequestIds.clear();
     this.requestTasks.clear();
     this.streamState.clear();
-    this.commandChanges?.dispose();
+    this.changeEvidence.dispose();
   }
 
   private requestOptions(): { signal: AbortSignal } {

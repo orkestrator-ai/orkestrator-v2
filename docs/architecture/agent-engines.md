@@ -1026,9 +1026,16 @@ approval policy, including read-only: its submission tool,
 
 An explicit `toolPolicy` deny still wins on both. A turn that declared no
 attempt (an ordinary, coordinator or older backend's turn) gets no exemption,
-and the backend still answers another key with `capability_denied`, because
-the attempt capability authorises only its own. Only the review fan-out
-declares the key today; consolidation and Fix turns on Grok or Pi do not yet.
+so a call naming another key has no read-only approval exemption. If a
+mismatched key reaches an attempt-scoped backend tool, it answers
+`invalid_result` (or `invalid_finding` for `report_finding`) with
+`nextAction: correct` and names only the connection's own key. The OpenCode
+broker gives the same correction after authenticating the capability against
+its own key and checking its environment, project, provider and result kind.
+Invalid capabilities, foreign scopes, provider mismatches and wrong result
+kinds still get `capability_denied` with `nextAction: stop`. Only the review
+fan-out declares the key today; consolidation and Fix turns on Grok or Pi do
+not yet.
 
 ### Provider qualification
 

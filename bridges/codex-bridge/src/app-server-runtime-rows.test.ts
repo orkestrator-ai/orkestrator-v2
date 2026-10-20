@@ -218,7 +218,8 @@ describe("a row tracked again", () => {
         id: "add",
         type: "fileChange",
         status: "completed",
-        changes: [{ path: "a.txt", kind: { type: "add" } }],
+        // app-server's own payload for an add is the new file's content.
+        changes: [{ path: "a.txt", kind: { type: "add" }, diff: "one\n" }],
       });
       notifyItem(h, "item/started", command("c1", "inProgress"));
       await h.drain();
@@ -237,6 +238,7 @@ describe("a row tracked again", () => {
         changes: Array.from({ length: MAX_DIFF_CACHE_ENTRIES + 44 }, () => ({
           path: "a.txt",
           kind: { type: "update" },
+          diff: "@@ -1 +1 @@\n-one\n+two\n",
         })),
       });
       await h.drain();

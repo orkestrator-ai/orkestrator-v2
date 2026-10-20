@@ -31,25 +31,31 @@ import {
   hasMeasuredChanges,
   parseMeasuredWorkspaceChange,
 } from "@orkestrator/protocol/node/command-change-journal";
-import { isFileEditToolName, type MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
-import { WorkspaceChangeProbe } from "@orkestrator/protocol/node/workspace-change-probe";
+import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
+import {
+  WorkspaceChangeProbe,
+  type ProbeObservation,
+} from "@orkestrator/protocol/node/workspace-change-probe";
 import {
   MAX_RESUMABLE_SESSIONS,
   acpToolSourceStates,
   sessions,
   stateDirectory,
   workingDirectory,
-  type AcpToolSourceState,
   type BridgeToolPart,
   type SessionState,
 } from "./acp-context.js";
 import { commitToolPartMutation, ensureAcpToolSource, renderAcpToolSource } from "./acp-tools.js";
 import { findToolPart } from "./acp-rows.js";
+import { commandChangeRole } from "./acp-tool-classification.js";
+import { commandMeasurementSetting, recordAcpShellObservation } from "./change-evidence.js";
+
+export { commandChangeRole };
 
 /** The slice of the probe this bridge drives; a test substitutes its own. */
 export type CommandChangeProbe = Pick<
   WorkspaceChangeProbe,
-  "begin" | "note" | "end" | "discard" | "prime"
+  "begin" | "note" | "endObservation" | "discard" | "prime"
 >;
 
 /**
@@ -60,24 +66,6 @@ export type CommandChangeProbe = Pick<
  */
 type WindowRole = "eligible" | "measure" | "note" | "skip";
 
-/**
- * Tool names that run a shell command, for agents that do not set the
- * standard `execute` kind. Grok's is `run_terminal_cmd` (`run_terminal_command`
- * in its docs); the rest are the names other ACP agents use.
- */
-const SHELL_TOOL_NAMES = new Set([
-  "bash",
-  "shell",
-  "terminal",
-  "run_terminal_cmd",
-  "run_terminal_command",
-  "run_command",
-  "execute_command",
-]);
-/** ACP tool kinds that change files by some means other than a command. */
-const FILE_CHANGE_KINDS = new Set(["edit", "delete", "move"]);
-/** Grok's own file tools, which the shared edit-name list does not know. */
-const FILE_CHANGE_TOOL_NAMES = new Set(["search_replace", "write_file", "delete_file"]);
 /**
  * Open windows per session. A call whose end never arrives (a lost frame, a
  * killed child) would otherwise sit here for the life of the session.
@@ -117,11 +105,7 @@ export function configureCommandChanges(options: {
  */
 function commandChangeProbe(): CommandChangeProbe | null {
   if (probe === undefined) {
-    const setting = process.env.ACP_MEASURE_COMMAND_CHANGES?.trim().toLowerCase();
-    probe =
-      setting === "0" || setting === "false" || setting === "off"
-        ? null
-        : new WorkspaceChangeProbe();
+    probe = commandMeasurementSetting() ? new WorkspaceChangeProbe() : null;
   }
   return probe;
 }
@@ -138,44 +122,6 @@ function probeCallId(state: SessionState, toolUseId: string): string {
   // Vendor tool ids are only unique within one ACP session, and the probe is
   // shared by every session in this process.
   return `${state.id}\u0000${toolUseId}`;
-}
-
-function toolNames(source: AcpToolSourceState): string[] {
-  return [source.explicitName, source.inputName, source.metadataName].flatMap((name) => {
-    const normalized = name?.trim().toLowerCase();
-    return normalized ? [normalized] : [];
-  });
-}
-
-/**
- * A command that returns as soon as it has started something that keeps
- * running. Its window would close long before the process stops writing, so a
- * count would be both partial and misleading.
- */
-function isBackgroundLaunch(args: AcpToolSourceState["toolArgs"]): boolean {
-  return (
-    args?.background === true ||
-    args?.run_in_background === true ||
-    args?.is_background === true ||
-    args?.isBackground === true
-  );
-}
-
-/** Whether a call should be measured, noted, or left alone. */
-export function commandChangeRole(source: AcpToolSourceState): "measure" | "note" | undefined {
-  const kind = source.kind?.trim().toLowerCase();
-  const names = toolNames(source);
-  if (kind === "execute" || names.some((name) => SHELL_TOOL_NAMES.has(name))) {
-    return isBackgroundLaunch(source.toolArgs) ? undefined : "measure";
-  }
-  if (
-    (kind !== undefined && FILE_CHANGE_KINDS.has(kind)) ||
-    names.some((name) => isFileEditToolName(name) || FILE_CHANGE_TOOL_NAMES.has(name)) ||
-    source.contentDiffs.length > 0
-  ) {
-    return "note";
-  }
-  return undefined;
 }
 
 function windowsFor(state: SessionState): Map<string, WindowRole> {
@@ -275,13 +221,19 @@ function closeWindow(
   const key = probeCallId(state, toolUseId);
   if (role === "note") {
     // Ending a noted window refreshes the baseline past the edit.
-    void active.end(key).catch(() => undefined);
+    void active.endObservation(key).catch(() => undefined);
     return;
   }
   if (role !== "measure") return;
   void active
-    .end(key)
-    .then((change) => recordCommandChange(state, toolUseId, change))
+    .endObservation(key)
+    .then((observation) => {
+      if (!observation) return;
+      // The canonical report keeps the probe's boundary and overlap apart;
+      // the legacy badge folds them into `approximate` exactly as `end` did.
+      recordAcpShellObservation(state, toolUseId, observation);
+      recordCommandChange(state, toolUseId, legacyCommandChange(observation));
+    })
     .catch((error: unknown) => {
       console.warn(
         `[acp-bridge] Failed to record a measured command change: ${
@@ -289,6 +241,22 @@ function closeWindow(
         }`,
       );
     });
+}
+
+/** What `WorkspaceChangeProbe.end` would have answered for this window. */
+export function legacyCommandChange(
+  observation: ProbeObservation,
+): MeasuredWorkspaceChange | undefined {
+  if (!observation.change) return undefined;
+  const change: MeasuredWorkspaceChange = { ...observation.change };
+  if (
+    observation.overlap === "known-overlap" ||
+    observation.boundary.before === "late-start" ||
+    observation.omittedReasons.length > 0
+  ) {
+    change.approximate = true;
+  }
+  return change;
 }
 
 /**

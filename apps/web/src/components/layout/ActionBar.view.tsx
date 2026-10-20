@@ -239,7 +239,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     filesPanelOpen,
     toggleFilesPanel,
     canToggleFilesPanel,
-    changes,
+    hasChanges,
     sidebarOpen,
     toggleSidebar,
     setRepoSettingsProjectId,
@@ -1491,14 +1491,14 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                         <span className="truncate">
                           {filesPanelOpen ? "Hide files" : "Show files"}
                         </span>
-                        {changes.length > 0 && !filesPanelOpen && (
+                        {hasChanges && !filesPanelOpen && (
                           <span
                             className="h-2 w-2 shrink-0 rounded-full bg-primary"
                             aria-hidden="true"
                           />
                         )}
                       </span>
-                    ) : changes.length > 0 && !filesPanelOpen ? (
+                    ) : hasChanges && !filesPanelOpen ? (
                       <span className="absolute right-0.5 top-0.5 h-2 w-2 rounded-full bg-primary" />
                     ) : null}
                   </Button>

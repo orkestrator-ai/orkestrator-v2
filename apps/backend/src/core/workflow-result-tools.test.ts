@@ -425,9 +425,9 @@ describe("workflow result broker tools", () => {
     const validationCalls: unknown[][] = [];
     let failValidation = false;
     const workflowResults = {
-      async authorizeCapability(...args: unknown[]) {
-        authorizationCalls.push(args);
-        return args[1] === resultKey && args[2] === capability;
+      async authenticateCapability(token: string) {
+        authorizationCalls.push([token]);
+        return token === capability ? { ...scope, workflowResultKey: resultKey } : null;
       },
       async validate(...args: unknown[]) {
         validationCalls.push(args);
@@ -435,7 +435,7 @@ describe("workflow result broker tools", () => {
         return { ok: true, valid: true };
       },
       async binding() {
-        return { kind: "review-report" };
+        return { kind: "review-report", provider: "opencode" };
       },
       async submit() {
         return { ok: true, lifecycle: "accepted" };
@@ -471,14 +471,14 @@ describe("workflow result broker tools", () => {
       }),
     ).toMatchObject({
       isError: true,
-      structuredContent: { ok: false, error: { code: "capability_denied" } },
+      structuredContent: { ok: false, error: { code: "invalid_result", nextAction: "correct" } },
     });
     expect(validationCalls).toHaveLength(0);
 
     expect(await registration.handler({ resultKey, capability, result })).toMatchObject({
       structuredContent: { ok: true, valid: true },
     });
-    expect(authorizationCalls.at(-1)).toEqual([scope, resultKey, capability, "opencode"]);
+    expect(authorizationCalls.at(-1)).toEqual([capability]);
     expect(validationCalls).toEqual([[scope, resultKey, result]]);
 
     failValidation = true;
@@ -488,7 +488,7 @@ describe("workflow result broker tools", () => {
     });
   });
 
-  test("attempt-scoped validation denies a different result key before service access", async () => {
+  test("attempt-scoped tools turn a different result key into correctable feedback before service access", async () => {
     const handlers = new Map<string, (args: Record<string, unknown>) => Promise<unknown>>();
     const server = {
       registerTool(
@@ -499,33 +499,82 @@ describe("workflow result broker tools", () => {
         handlers.set(name, handler);
       },
     };
-    let validations = 0;
+    let serviceCalls = 0;
     const workflowResults = {
       async validate() {
-        validations += 1;
+        serviceCalls += 1;
         return { ok: true, valid: true };
       },
       async submit() {
+        serviceCalls += 1;
         return { ok: true, lifecycle: "accepted" };
       },
       async status() {
+        serviceCalls += 1;
         return null;
       },
     };
+    let findingCalls = 0;
+    const findings = {
+      accepts() {
+        return true;
+      },
+      async report() {
+        findingCalls += 1;
+        return { ok: true, findingId: "f-1", duplicate: false, provisionalCount: 1, limit: 10 };
+      },
+    };
+    const boundKey = crypto.randomUUID();
+    // The slip that stranded a real run: one digit of the key mistyped.
+    const mistyped = `${boundKey.slice(0, -1)}${boundKey.endsWith("0") ? "1" : "0"}`;
     const { registerWorkflowResultTools } = await import("./workflow-result-tools.js");
-    registerWorkflowResultTools(server as never, workflowResults as never, {
-      environmentId: "env-1",
-      projectId: "project-1",
-      workflowResultKey: crypto.randomUUID(),
-      kind: "review-report",
-    });
-    const validate = handlers.get("validate_workflow_result");
-    if (!validate) throw new Error("missing validation tool");
-    expect(await validate({ resultKey: crypto.randomUUID(), result: report })).toMatchObject({
+    registerWorkflowResultTools(
+      server as never,
+      workflowResults as never,
+      {
+        environmentId: "env-1",
+        projectId: "project-1",
+        workflowResultKey: boundKey,
+        kind: "review-report",
+      },
+      findings as never,
+    );
+    const calls: Array<[string, Record<string, unknown>]> = [
+      ["validate_workflow_result", { resultKey: mistyped, result: report }],
+      ["submit_review_report", { resultKey: mistyped, result: report }],
+      ["get_workflow_result_status", { resultKey: mistyped }],
+    ];
+    for (const [name, args] of calls) {
+      const handler = handlers.get(name);
+      if (!handler) throw new Error(`missing ${name}`);
+      expect(await handler(args)).toMatchObject({
+        isError: true,
+        structuredContent: {
+          ok: false,
+          error: {
+            code: "invalid_result",
+            nextAction: "correct",
+            message: expect.stringContaining(boundKey),
+            issues: [{ path: "$.resultKey", code: "result_key_mismatch" }],
+          },
+        },
+      });
+    }
+    const reportFinding = handlers.get("report_finding");
+    if (!reportFinding) throw new Error("missing report_finding");
+    expect(await reportFinding({ resultKey: mistyped, finding: {} })).toMatchObject({
       isError: true,
-      structuredContent: { ok: false, error: { code: "capability_denied" } },
+      structuredContent: {
+        ok: false,
+        error: {
+          code: "invalid_finding",
+          nextAction: "correct",
+          message: expect.stringContaining(boundKey),
+        },
+      },
     });
-    expect(validations).toBe(0);
+    expect(serviceCalls).toBe(0);
+    expect(findingCalls).toBe(0);
   });
 
   test("status reports capability rejection, unavailability, and storage failure", async () => {
@@ -540,16 +589,16 @@ describe("workflow result broker tools", () => {
       },
     };
     const workflowResults = {
-      async authorizeCapability(_scope: unknown, resultKey: string, capability: string) {
-        if (capability === "denied") return false;
+      async authenticateCapability(capability: string) {
+        if (capability === "denied") return null;
         if (capability === "storage") throw new Error("disk full");
-        return resultKey === "known-key";
+        return { environmentId: "env-1", projectId: "project-1", workflowResultKey: "known-key" };
       },
       async status() {
         return null;
       },
       async binding() {
-        return { kind: "review-report" };
+        return { kind: "review-report", provider: "opencode" };
       },
       async submit() {
         return { ok: true, lifecycle: "accepted" };
@@ -591,11 +640,11 @@ describe("workflow result broker tools", () => {
       },
     };
     const workflowResults = {
-      async authorizeCapability() {
-        return true;
+      async authenticateCapability() {
+        return { environmentId: "env-1", projectId: "project-1", workflowResultKey: "known-key" };
       },
       async binding() {
-        return { kind: "review-report" };
+        return { kind: "review-report", provider: "opencode" };
       },
       async submit() {
         return { ok: true, lifecycle: "accepted" };
@@ -624,6 +673,205 @@ describe("workflow result broker tools", () => {
       isError: true,
       structuredContent: { ok: false, error: { code: "capability_denied" } },
     });
+  });
+});
+
+describe("broker result key correction with signed capabilities", () => {
+  type Handler = (args: Record<string, unknown>) => Promise<{
+    isError?: boolean;
+    structuredContent?: Record<string, unknown>;
+  }>;
+  const scope = { environmentId: "env-1", projectId: "project-1" };
+  const toolNames = [
+    "submit_review_report",
+    "report_finding",
+    "validate_workflow_result",
+    "get_workflow_result_status",
+  ];
+  const finding = {
+    severity: "P2",
+    confidence: 85,
+    category: "correctness",
+    title: "A finding",
+    file: "src/review.ts",
+    line: 12,
+    symbol: "review",
+    description: "The clock resets when the step restarts.",
+    evidence: "restartStep clears stepRuntimes",
+    suggestion: "Keep the previous runtime.",
+    verification: "Restart a step and read its runtime.",
+  };
+  let dataDir: string;
+  let service: WorkflowResultService;
+  let handlers: Map<string, Handler>;
+  let resultKey: string;
+  let otherKey: string;
+  let capability: string;
+  let findingCalls: unknown[][];
+
+  beforeEach(async () => {
+    dataDir = await mkdtemp(join(tmpdir(), "ork-broker-key-correction-"));
+    service = new WorkflowResultService(dataDir);
+    await service.initializeCapabilityIdentity();
+    resultKey = crypto.randomUUID();
+    otherKey = crypto.randomUUID();
+    for (const key of [resultKey, otherKey]) {
+      await service.prepare({
+        ...scope,
+        resultKey: key,
+        kind: "review-report",
+        provider: "opencode",
+      });
+    }
+    capability = service.capabilityToken(scope, resultKey);
+    handlers = new Map();
+    findingCalls = [];
+    const { registerWorkflowResultBrokerTools } = await import("./workflow-result-tools.js");
+    registerWorkflowResultBrokerTools(
+      {
+        registerTool(name: string, _meta: unknown, handler: Handler) {
+          handlers.set(name, handler);
+        },
+      } as never,
+      service,
+      scope,
+      {
+        accepts() {
+          return true;
+        },
+        async report(...args) {
+          findingCalls.push(args);
+          return { ok: true, findingId: "f-1", duplicate: false, provisionalCount: 1, limit: 10 };
+        },
+      },
+    );
+  });
+
+  afterEach(async () => {
+    service.closeStorage();
+    await rm(dataDir, { recursive: true, force: true });
+  });
+
+  test.each(toolNames)(
+    "%s corrects another attempt's key without accessing that attempt",
+    async (name) => {
+      const handler = handlers.get(name)!;
+      const before = await service.status(scope, resultKey);
+      const otherBefore = await service.status(scope, otherKey);
+      const response = await handler({ resultKey: otherKey, capability, result: report, finding });
+      expect(response).toMatchObject({
+        isError: true,
+        structuredContent: {
+          ok: false,
+          error: {
+            code: name === "report_finding" ? "invalid_finding" : "invalid_result",
+            nextAction: "correct",
+            message: expect.stringContaining(resultKey),
+          },
+        },
+      });
+      expect(JSON.stringify(response)).not.toContain(otherKey);
+      expect(JSON.stringify(response)).not.toContain(capability);
+      expect(await service.status(scope, resultKey)).toEqual(before);
+      expect(await service.status(scope, otherKey)).toEqual(otherBefore);
+      expect(findingCalls).toHaveLength(0);
+
+      // Correcting the key makes the original call usable without a new capability.
+      const corrected = await handler({ resultKey, capability, result: report, finding });
+      expect(corrected.isError).toBeUndefined();
+      if (name === "report_finding") {
+        expect(findingCalls).toEqual([[scope, resultKey, finding]]);
+      }
+      expect(await service.status(scope, otherKey)).toEqual(otherBefore);
+    },
+  );
+
+  test.each([
+    "tampered signature",
+    "tampered embedded key",
+    "unknown attempt",
+    "foreign environment",
+    "foreign project",
+    "provider mismatch",
+  ])("%s stays denied for both matching and mismatched keys", async (failure) => {
+    let deniedKey = resultKey;
+    let deniedCapability = capability;
+    if (failure === "tampered signature") {
+      deniedCapability = capability.slice(0, -1) + (capability.endsWith("A") ? "B" : "A");
+    } else if (failure === "tampered embedded key") {
+      deniedCapability = otherKey + capability.slice(resultKey.length);
+    } else {
+      deniedKey = crypto.randomUUID();
+      const deniedScope = {
+        environmentId: failure === "foreign environment" ? "other-env" : scope.environmentId,
+        projectId: failure === "foreign project" ? "other-project" : scope.projectId,
+      };
+      if (failure !== "unknown attempt") {
+        await service.prepare({
+          ...deniedScope,
+          resultKey: deniedKey,
+          kind: "review-report",
+          provider: failure === "provider mismatch" ? "codex" : "opencode",
+        });
+      }
+      deniedCapability = service.capabilityToken(deniedScope, deniedKey);
+    }
+    for (const name of toolNames) {
+      for (const submittedKey of [deniedKey, otherKey]) {
+        const response = await handlers.get(name)!({
+          resultKey: submittedKey,
+          capability: deniedCapability,
+          result: report,
+          finding,
+        });
+        expect(response).toMatchObject({
+          isError: true,
+          structuredContent: {
+            ok: false,
+            error: { code: "capability_denied", nextAction: "stop" },
+          },
+        });
+        const encoded = JSON.stringify(response);
+        for (const secret of [resultKey, otherKey, deniedKey, deniedCapability]) {
+          expect(encoded).not.toContain(secret);
+        }
+      }
+    }
+    expect(findingCalls).toHaveLength(0);
+    expect(await service.projection(resultKey)).toBe("preparing");
+    expect(await service.projection(otherKey)).toBe("preparing");
+  });
+
+  test("wrong result kinds stay denied before disclosing a correction", async () => {
+    const fixKey = crypto.randomUUID();
+    await service.prepare({
+      ...scope,
+      resultKey: fixKey,
+      kind: "fix-result",
+      provider: "opencode",
+    });
+    const fixCapability = service.capabilityToken(scope, fixKey);
+    for (const name of ["submit_review_report", "report_finding"]) {
+      for (const submittedKey of [fixKey, otherKey]) {
+        const response = await handlers.get(name)!({
+          resultKey: submittedKey,
+          capability: fixCapability,
+          result: report,
+          finding,
+        });
+        expect(response).toMatchObject({
+          isError: true,
+          structuredContent: {
+            ok: false,
+            error: { code: "capability_denied", nextAction: "stop" },
+          },
+        });
+        expect(JSON.stringify(response)).not.toContain(fixKey);
+        expect(JSON.stringify(response)).not.toContain(otherKey);
+      }
+    }
+    expect(findingCalls).toHaveLength(0);
+    expect(await service.projection(fixKey)).toBe("preparing");
   });
 });
 
@@ -726,11 +974,11 @@ describe("committing a submission by validated digest", () => {
     const capability = "c".repeat(32);
     const calls: string[] = [];
     const workflowResults = {
-      async authorizeCapability() {
-        return true;
+      async authenticateCapability() {
+        return { environmentId: "env-1", projectId: "project-1", workflowResultKey: resultKey };
       },
       async binding() {
-        return { kind: "review-report" };
+        return { kind: "review-report", provider: "opencode" };
       },
       async submit() {
         calls.push("submit");

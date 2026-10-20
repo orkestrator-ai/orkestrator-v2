@@ -1,6 +1,6 @@
 # Claude idle admission fixture directory race
 
-- **ID:** 0509
+- **ID:** 0510
 - **Status:** open
 - **Date observed:** 2026-10-20
 - **Test:** `a warm Claude CLI between turns > failed plan-mode admission rechecks capacity after restoring idle ownership`

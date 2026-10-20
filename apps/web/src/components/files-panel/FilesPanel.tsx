@@ -33,6 +33,7 @@ export function FilesPanel() {
     fileActionPending,
     environmentId,
     projectScopeProjectId,
+    changeEnvironmentId,
     isLocalEnvironment,
     worktreePath,
   } = useFilesPanel();
@@ -124,10 +125,11 @@ export function FilesPanel() {
 
   return (
     <div className="flex h-full flex-col bg-zinc-900">
-      <FilesPanelHeader onRefresh={refresh} />
+      <FilesPanelHeader onRefresh={refresh} changeEnvironmentId={changeEnvironmentId} />
       <ScrollArea className="min-h-0 flex-1">
         {activeTab === "changes" ? (
           <ChangesView
+            environmentId={changeEnvironmentId}
             onReveal={isLocalEnvironment && worktreePath ? revealFile : undefined}
             onRevert={(path) => requestFileAction("revert", path)}
             onDelete={(path) => requestFileAction("delete", path)}

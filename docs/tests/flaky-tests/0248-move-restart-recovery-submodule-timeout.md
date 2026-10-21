@@ -158,3 +158,11 @@ The aggregate failed this owner and its unchanged owning file passed with one wo
 - **Owning-file reruns:** `bun --cwd=apps/backend test src/core/environment-move.test.ts` without the Node preload failed the same case again (5075.09 ms; 36 passed). The documented command, `env -u PORT mise run test:logged -- --name environment-move-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts --parallel=1 --only-failures`, passed unchanged (exit 0, 40.0 seconds logged).
 - **Evidence:** `orkestrator-test-run.oQ14Bx` (aggregate) and `orkestrator-test-run.ZCmfUZ` (preload-free rerun) under the host temporary directory.
 - **Assessment:** confirmed recurrence. No implementation, assertion, timeout or skip changed.
+
+## Cold restart review qualification — 2026-10-21
+
+- **Original command:** `mise run test:logged -- --name review-full-suite -- mise run test`, alongside isolated live cold-restart qualification; workspace/root/bridges/protocol reserved 4/1/2/1 slots.
+- **Failure:** `restart recovery re-links submodules of an adopted or abandoned copy` exceeded the default 5000 ms deadline (5073.05 ms). Backend reported 9739 passed, 67 skipped, three failed and one between-test error across 9809 tests in 551 files (630.83 seconds).
+- **Owning-file rerun:** `mise run test:logged -- --name environment-move-recheck -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts --parallel=1 --only-failures` passed the unchanged owning file (exit 0, 20.3 seconds logged).
+- **Evidence:** `orkestrator-test-run.K1HiOG/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory.
+- **Assessment:** confirmed intermittent recurrence; concurrent load is an unconfirmed explanation. No implementation, assertion, timeout or skip changed.

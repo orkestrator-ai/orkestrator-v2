@@ -9,6 +9,7 @@
  * getting that wrong is either a stuck build or a duplicated agent turn.
  */
 import { describe, expect, test } from "bun:test";
+import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -268,6 +269,7 @@ type ServiceOptions = ConstructorParameters<typeof BuildPipelineService>[2];
 async function withService(
   run: (context: {
     service: BuildPipelineService;
+    dataDir: string;
     storage: StorageService;
     provider: ScriptedProvider;
     invocations: Array<{ command: string; args: Record<string, unknown> }>;
@@ -357,7 +359,7 @@ async function withService(
     ...options,
   });
   try {
-    await run({ service, storage, provider, invocations, packageGeneration });
+    await run({ service, dataDir, storage, provider, invocations, packageGeneration });
   } finally {
     await service.shutdown();
     await fs.rm(dataDir, { recursive: true, force: true });
@@ -518,6 +520,96 @@ describe("BuildPipelineService reconnect", () => {
 });
 
 describe("BuildPipelineService prompt dispatch", () => {
+  test("SIGKILL before provider acceptance retries the durable request id once on a fresh owner", async () => {
+    await withService(async ({ service, storage, dataDir, provider }) => {
+      const staged = await startAtSetup(service, storage);
+      const child = spawn(
+        process.execPath,
+        [
+          path.join(import.meta.dirname, "build-pipeline-held-dispatch-test-support.ts"),
+          dataDir,
+          staged.id,
+        ],
+        { stdio: ["ignore", "pipe", "ignore"] },
+      );
+      const exited = new Promise<{ code: number | null; signal: string | null }>(
+        (resolve, reject) => {
+          child.once("error", reject);
+          child.once("exit", (code, signal) => resolve({ code, signal }));
+        },
+      );
+      // Attach the rejection handler immediately: a spawn error can precede
+      // the held marker, and unhandled rejections terminate the test process.
+      void exited.catch(() => undefined);
+      // Observe the bounded, content-free boundary marker, never the prompt.
+      const held = new Promise<void>((resolve, reject) => {
+        let output = "";
+        child.stdout.setEncoding("utf8");
+        child.stdout.on("data", (chunk: string) => {
+          output = (output + chunk).slice(-64);
+          if (output.includes("dispatch-held\n")) resolve();
+        });
+        child.once("error", reject);
+        child.once("exit", () => reject(new Error("fixture exited before dispatch was held")));
+      });
+      let restarted: BuildPipelineService | undefined;
+      let deadline: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          held,
+          new Promise<never>((_resolve, reject) => {
+            deadline = setTimeout(
+              () => reject(new Error("held-dispatch fixture timed out")),
+              8_000,
+            );
+          }),
+        ]);
+        clearTimeout(deadline);
+        const pending = (await snapshot(storage, staged.id)).pendingPromptAttempt!;
+        expect(pending).toBeDefined();
+        expect(provider.sent).toHaveLength(0);
+        expect(child.kill("SIGKILL")).toBe(true);
+        expect((await exited).signal).toBe("SIGKILL");
+
+        // New storage and service instances read only what was committed before
+        // SIGKILL. The old owner's held send could never accept or drain.
+        const freshStorage = new StorageService(dataDir);
+        await freshStorage.init();
+        expect((await snapshot(freshStorage, staged.id)).pendingPromptAttempt).toEqual(pending);
+        restarted = new BuildPipelineService(freshStorage, async () => undefined as never, {
+          autoAdvance: false,
+          provider: async () => provider,
+        });
+        await restarted.init();
+        await restarted.advanceNow(staged.id);
+        expect(provider.sent).toHaveLength(1);
+        expect(provider.sent[0]).toMatchObject({
+          sessionId: pending.sessionId,
+          requestId: pending.requestId,
+          prompt: pending.prompt,
+        });
+        const recovered = await snapshot(freshStorage, staged.id);
+        expect(recovered.pendingPromptAttempt).toBeUndefined();
+        expect(recovered.sessions.find((session) => session.phase === "build")?.sdkSessionId).toBe(
+          pending.sessionId,
+        );
+        expect(
+          recovered.sessions.find((session) => session.phase === "build")?.restartContinuationSent,
+        ).not.toBe(true);
+        provider.markRunning(pending.sessionId);
+        await restarted.advanceNow(staged.id);
+        expect(provider.sent.filter((entry) => entry.requestId === pending.requestId)).toHaveLength(
+          1,
+        );
+      } finally {
+        clearTimeout(deadline);
+        child.kill("SIGKILL");
+        await exited;
+        await restarted?.shutdown();
+      }
+    });
+  }, 15_000);
+
   test("redispatch keeps a deliberately unpinned session despite changed defaults", async () => {
     await withService(async ({ service, storage, provider }) => {
       const staged = await startAtSetup(service, storage);

@@ -72,6 +72,17 @@ import {
 import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 
+import {
+  rowText,
+  repeatedPrompts,
+  lostContent,
+  duplicatedContent,
+  sameDisplayedRows,
+  trailOrder,
+  trailStopsRead,
+  type Row,
+} from "./cold-restart-evidence";
+
 import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
 
 type Status = {
@@ -85,7 +96,7 @@ type Status = {
 type Project = { id: string; name: string; localPath: string | null };
 type Environment = { id: string; name: string; worktreePath?: string | null };
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
-type Row = { id?: unknown; role?: unknown; content?: unknown; parts?: unknown };
+
 type ProjectionUpdate = {
   status: string;
   projection?: { turn: { phase: string; error?: string }; messages: Row[] };
@@ -229,7 +240,9 @@ function runAsync(
  * last written. `--fixture` is deliberately not passed on the way back up: it
  * recreates the fixture repository every environment's worktree points at.
  */
-async function restartProfile(mode: "graceful" | "crash"): Promise<{ status: Status; ms: number }> {
+async function restartProfile(
+  mode: "graceful" | "crash",
+): Promise<{ status: Status; ms: number; killedAt?: number }> {
   const startedAt = Date.now();
   const runtime = resolveRuntimeProfile({
     repositoryRoot,
@@ -239,9 +252,11 @@ async function restartProfile(mode: "graceful" | "crash"): Promise<{ status: Sta
   const stored = JSON.parse(
     await fs.readFile(path.join(runtime.profileRoot, "profile.json"), "utf8"),
   ) as { credentialSources?: string[]; agentPlatforms?: string[] };
+  let killedAt: number | undefined;
   if (mode === "crash") {
     const backend = readyStatus().pids?.backend;
     expect(backend, "dev:status names no backend pid to kill").toBeTruthy();
+    killedAt = Date.now();
     process.kill(backend!, "SIGKILL");
     await expect.poll(() => processAlive(backend!), { timeout: 10_000 }).toBe(false);
   }
@@ -278,7 +293,7 @@ async function restartProfile(mode: "graceful" | "crash"): Promise<{ status: Sta
       { timeout: 240_000, intervals: [2_000] },
     )
     .toBe(true);
-  return { status: status!, ms: Date.now() - startedAt };
+  return { status: status!, ms: Date.now() - startedAt, killedAt };
 }
 
 /** A chain of files, each naming the next under a random name. */
@@ -339,40 +354,15 @@ class Trail {
 
   /** The stops a row's tool calls read, from their arguments only. */
   stopsRead(row: Row): number[] {
-    const found: number[] = [];
-    const visit = (value: unknown) => {
-      if (Array.isArray(value)) {
-        for (const entry of value) visit(entry);
-        return;
-      }
-      if (typeof value !== "object" || value === null) return;
-      const record = value as Record<string, unknown>;
-      if (record.type === "tool-invocation" && record.toolArgs !== undefined) {
-        for (const match of JSON.stringify(record.toolArgs).matchAll(/([0-9a-f]{10})\.txt/g)) {
-          const stop = this.positions.get(`${match[1]}.txt`);
-          if (stop !== undefined) found.push(stop);
-        }
-      }
-      visit(record.parts);
-      visit(record.childTools);
-    };
-    visit(row.parts);
-    return found;
+    return trailStopsRead(row, this.positions);
   }
 
   /** Highest stop read in order; fails when a stop appears before its predecessor. */
   verifyOrder(rows: Row[], label: string): { stopsRead: number; highest: number } {
-    let highest = 0;
-    const seen = new Set<number>();
-    for (const row of rows) {
-      for (const stop of this.stopsRead(row)) {
-        if (seen.has(stop)) continue;
-        expect(stop, `${label}: stop ${stop} appears before stop ${highest + 1}`).toBe(highest + 1);
-        highest = stop;
-        seen.add(stop);
-      }
-    }
-    return { stopsRead: seen.size, highest };
+    const result = trailOrder(rows, (row) => this.stopsRead(row));
+    expect(result.outOfOrder, `${label}: a stop appears before its predecessor`).toBe(0);
+    expect(result.duplicates, `${label}: a stop was read twice in the same prompt`).toBe(0);
+    return { stopsRead: result.highest, highest: result.highest };
   }
 
   /** User rows carrying this trail's prompt. */
@@ -383,97 +373,6 @@ class Trail {
   reachedEnd(rows: Row[]): boolean {
     return rows.some((row) => row.role === "assistant" && rowText(row).includes(this.closingWord));
   }
-}
-
-function rowText(row: Row): string {
-  if (typeof row.content === "string" && row.content) return row.content;
-  if (!Array.isArray(row.parts)) return "";
-  return row.parts
-    .map((part) => {
-      const { text, content } = (part ?? {}) as {
-        text?: unknown;
-        content?: unknown;
-      };
-      return typeof text === "string" ? text : typeof content === "string" ? content : "";
-    })
-    .join("");
-}
-
-/**
- * User rows whose text repeats an earlier user row's: a prompt delivered
- * twice. Designed follow-ups (a restart continuation, a review-preparation
- * prompt) differ from the prompt they follow, so they never count.
- */
-function repeatedPrompts(rows: Row[]): number {
-  const seen = new Set<string>();
-  let repeated = 0;
-  for (const row of rows) {
-    if (row.role !== "user") continue;
-    const text = rowText(row);
-    if (seen.has(text)) repeated += 1;
-    seen.add(text);
-  }
-  return repeated;
-}
-
-/** The prose of a row's text and reasoning parts, one entry per part. */
-function proseParts(row: Row): string[] {
-  if (!Array.isArray(row.parts)) {
-    return typeof row.content === "string" && row.content.trim() ? [row.content.trim()] : [];
-  }
-  return row.parts.flatMap((part) => {
-    const { type, text, content } = (part ?? {}) as {
-      type?: unknown;
-      text?: unknown;
-      content?: unknown;
-    };
-    if (type !== "text" && type !== "thinking" && type !== "reasoning") return [];
-    const prose = typeof text === "string" ? text : typeof content === "string" ? content : "";
-    return prose.trim() ? [prose.trim()] : [];
-  });
-}
-
-/**
- * Content from `before` that `after` no longer holds, independent of row ids
- * and row boundaries (a provider replay may split or merge rows the live
- * stream drew differently): prompts, trail stops read, and each assistant
- * text or reasoning part (a streaming part may have grown, so containment is
- * enough).
- */
-function lostContent(
-  before: Row[],
-  after: Row[],
-  trails: Trail[],
-): { prompts: number; stops: number; replies: number } {
-  const promptsAfter = after.filter((row) => row.role === "user").map(rowText);
-  const repliesAfter = after
-    .filter((row) => row.role === "assistant")
-    .flatMap(proseParts)
-    .join("\n");
-  const stopsAfter = new Set(
-    trails.flatMap((trail) =>
-      after.flatMap((row) => trail.stopsRead(row).map((stop) => `${trail.dir}:${stop}`)),
-    ),
-  );
-  let prompts = 0;
-  let stops = 0;
-  let replies = 0;
-  for (const row of before) {
-    if (row.role === "user") {
-      if (!promptsAfter.includes(rowText(row))) prompts += 1;
-      continue;
-    }
-    for (const trail of trails) {
-      for (const stop of trail.stopsRead(row)) {
-        if (!stopsAfter.has(`${trail.dir}:${stop}`)) stops += 1;
-      }
-    }
-    if (row.role !== "assistant") continue;
-    for (const prose of proseParts(row)) {
-      if (!repliesAfter.includes(prose)) replies += 1;
-    }
-  }
-  return { prompts, stops, replies };
 }
 
 function rowIds(rows: Row[]): string[] {
@@ -716,8 +615,10 @@ test.describe("live cold restart", () => {
         await expect(composeBar.getByRole("button", { name: "Send", exact: true })).toBeEnabled({
           timeout: 90_000,
         });
+        const sentAt = Date.now();
         await composer.press("Enter");
         await expect(composer).toHaveText("", { timeout: 30_000 });
+        return sentAt;
       };
       /** The browser shows each prompt and the short trail's closing word once. */
       /**
@@ -808,6 +709,9 @@ test.describe("live cold restart", () => {
         rowIds(idleCold.view.messages),
         "the persisted tail is exactly the idle transcript",
       ).toEqual(rowIds(beforeIdle));
+      expect(sameDisplayedRows(idleCold.view.messages, beforeIdle), "cached idle content").toBe(
+        true,
+      );
       const idleClient = await followAsClient("idle", idleCold);
       const afterIdle = await authoritative();
       note("idle-reconciled", {
@@ -816,6 +720,10 @@ test.describe("live cold restart", () => {
         rowsWithNewIds: missingIds(beforeIdle, afterIdle).length,
       });
       expectUniqueIds(afterIdle, "after the idle restart");
+      expect(duplicatedContent(beforeIdle, afterIdle), "duplicated idle replay content").toEqual({
+        replies: 0,
+        tools: 0,
+      });
       expect(repeatedPrompts(afterIdle), "a prompt appears twice after the idle restart").toBe(0);
       expect(
         lostContent(beforeIdle, afterIdle, [short]),
@@ -829,6 +737,10 @@ test.describe("live cold restart", () => {
         rowIds(idleClient.messages),
         "the client kept a stale view instead of the provider's rows",
       ).toEqual(rowIds(afterIdle));
+      expect(
+        sameDisplayedRows(idleClient.messages, afterIdle),
+        "the client retained stale displayed content or parts",
+      ).toBe(true);
       await openApp(page, status, fixture, environment.name);
       await expectBrowserOnce("after the idle restart", [short.tag], [short.closingWord]);
       await page.reload();
@@ -836,7 +748,7 @@ test.describe("live cold restart", () => {
       await expectBrowserOnce("after a reload", [short.tag], [short.closingWord]);
 
       // --- Crash mid-turn -------------------------------------------------
-      await send(long.prompt(NATIVE_PLATFORM));
+      const promptSentAt = await send(long.prompt(NATIVE_PLATFORM));
       let midTurn: Row[] = [];
       await expect
         .poll(
@@ -847,7 +759,6 @@ test.describe("live cold restart", () => {
           { timeout: TURN_TIMEOUT_MS, intervals: [3_000] },
         )
         .toBeGreaterThanOrEqual(STOPS_BEFORE_RESTART);
-      const promptSeenAt = Date.now();
       expect(await phase(), "the long turn must still be running").toBe("running");
       // Keep streaming past the checkpoint age bound, so the prompt (and some
       // rows) must already be in the persisted tail when the backend dies.
@@ -861,7 +772,7 @@ test.describe("live cold restart", () => {
       const cachedRows = crashCold.view.messages;
       note("crash-cold-read", {
         restartMs: crash.ms,
-        msFromPromptToCrash: Date.now() - crash.ms - promptSeenAt,
+        msFromPromptSendToKill: crash.killedAt! - promptSentAt,
         freshness: crashCold.view.freshness,
         cachedRows: cachedRows.length,
         rowsBeforeCrash: midTurn.length,
@@ -888,6 +799,14 @@ test.describe("live cold restart", () => {
         .toBe(true);
       const crashClient = await followAsClient("crash", crashCold);
       const afterCrash = await authoritative();
+      expect(
+        lostContent(cachedRows, afterCrash, [short, long]),
+        "cached content absent from provider",
+      ).toEqual({ prompts: 0, stops: 0, replies: 0 });
+      expect(duplicatedContent(midTurn, afterCrash), "duplicated crash replay content").toEqual({
+        replies: 0,
+        tools: 0,
+      });
       const lost = lostContent(midTurn, afterCrash, [short, long]);
       note("crash-reconciled", {
         phases: phasesSeen.join(">"),
@@ -911,6 +830,10 @@ test.describe("live cold restart", () => {
         rowIds(crashClient.messages),
         "the client kept a stale view instead of the provider's rows",
       ).toEqual(rowIds(afterCrash));
+      expect(
+        sameDisplayedRows(crashClient.messages, afterCrash),
+        "the client retained stale displayed content or parts",
+      ).toBe(true);
       await openApp(page, status, fixture, environment.name);
       await expectBrowserOnce("after the crash", [short.tag, long.tag], [short.closingWord]);
       // The tab must be usable again: finish the trail.
@@ -920,6 +843,10 @@ test.describe("live cold restart", () => {
       await waitForIdle();
       const finished = await authoritative();
       expectUniqueIds(finished, "after the follow-up");
+      expect(
+        duplicatedContent(afterCrash, finished),
+        "duplicated replay before the follow-up",
+      ).toEqual({ replies: 0, tools: 0 });
       expect(long.reachedEnd(finished), `${NATIVE_LABEL} never finished the long trail`).toBe(true);
       expect(long.verifyOrder(finished, "after the follow-up").highest).toBe(long.stops);
       expect(long.promptRows(finished)).toBe(1);
@@ -1048,6 +975,9 @@ test.describe("live cold restart", () => {
           .length;
 
       // --- Mid-dispatch crash --------------------------------------------
+      // This live window may include provider acceptance while profile metadata
+      // is read. The deterministic pre-acceptance SIGKILL boundary and same-id
+      // retry live in build-pipeline-service-recovery.test.ts (held send).
       const dispatchTrail = new Trail(SHORT_STOPS);
       await dispatchTrail.write(dispatchEnv.worktreePath!);
       const dispatchId = await start(dispatchEnv, dispatchTrail);
@@ -1144,6 +1074,10 @@ test.describe("live cold restart", () => {
         "committed content was lost across the restart",
       ).toEqual({ prompts: 0, stops: 0, replies: 0 });
       expectUniqueIds(straightAfter, "committed history straight after the restart");
+      expect(
+        duplicatedContent(beforeTurnRestart, straightAfter),
+        "duplicated committed replay",
+      ).toEqual({ replies: 0, tools: 0 });
       const turnDone = await waitForBuild(turnId);
       await invoke("cancel_build_pipeline", { pipelineId: turnId });
       const turnSession = buildSession(turnDone.pipeline)!;
@@ -1151,6 +1085,10 @@ test.describe("live cold restart", () => {
         runningSession!.sdkSessionId,
       );
       const turnRows = (await committed(turnId)).get(turnSession.sessionKey) ?? [];
+      expect(
+        duplicatedContent(beforeTurnRestart, turnRows),
+        "duplicated content after continuation",
+      ).toEqual({ replies: 0, tools: 0 });
       note("turn-history", {
         rows: turnRows.length,
         taskPrompts: turnTrail.promptRows(turnRows),

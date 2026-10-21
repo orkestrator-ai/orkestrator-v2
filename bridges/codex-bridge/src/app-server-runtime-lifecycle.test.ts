@@ -21,7 +21,7 @@ import {
   hashCwd,
 } from "./sessions/persistence.js";
 import { phaseToExternalStatus } from "./sessions/thread-registry.js";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -678,71 +678,142 @@ describe("session lifecycle", () => {
     });
   });
 
-  test("bridge-process recovery keeps the replayed rows of the interrupted turn", async () => {
-    // A backend crash leaves the in-flight turn's rows only in the rollout. The
-    // replay's last assistant row is that turn's work up to the crash (in the
-    // live qualification, a step note and the tool call after it). Recovery
-    // must finalize the interrupted turn on a row of its own: rendering its
-    // empty accumulator over the replayed row erased that work from the
-    // transcript although the model still had it in context.
-    writeRolloutWithTurns("thread-replayed", [
-      {
-        turnId: "turn-replayed",
-        user: "Follow the trail",
-        assistant: "I reached stop 20; reading stop 21 next.",
-      },
-    ]);
-    const store = new BridgeSessionStore({ codexHome, cwd: "/tmp/ws" });
-    await store.upsert(
-      store.toRecord({
-        bridgeSessionId: "session-replayed",
-        threadId: "thread-replayed",
-        cwd: "/tmp/ws",
-        config: { mode: "build", sandbox: "danger-full-access" },
-        lastAcceptedRequestId: "req-replayed",
-      }),
-    );
-    const journal = new DispatchJournal({ codexHome, cwd: "/tmp/ws" });
-    await journal.load();
-    await journal.markPrepared({
-      requestId: "req-replayed",
-      bridgeSessionId: "session-replayed",
-      threadId: "thread-replayed",
-    });
-    await journal.markAccepted("req-replayed", {
-      threadId: "thread-replayed",
-      turnId: "turn-replayed",
-    });
+  for (const rowKind of ["text", "tool-only"] as const) {
+    for (const outcome of ["interrupted", "inProgress", "completed", "failed", "absent"] as const) {
+      test(`bridge-process ${outcome} recovery preserves a replayed ${rowKind} row`, async () => {
+        const replayText = "I reached stop 20; reading stop 21 next.";
+        writeRolloutWithTurns("thread-replayed", [
+          {
+            turnId: "turn-replayed",
+            user: "Follow the trail",
+            assistant: rowKind === "text" ? replayText : "",
+          },
+        ]);
+        if (rowKind === "tool-only") {
+          appendFileSync(
+            join(codexHome, "sessions", "thread-replayed.jsonl"),
+            `${[
+              {
+                type: "response_item",
+                payload: {
+                  type: "function_call",
+                  name: "exec_command",
+                  call_id: "persisted-tool",
+                  arguments: JSON.stringify({ cmd: "cat stop21.txt" }),
+                },
+              },
+              {
+                type: "response_item",
+                payload: {
+                  type: "function_call_output",
+                  call_id: "persisted-tool",
+                  output: "Next stop: stop22.txt",
+                },
+              },
+            ]
+              .map((record) => JSON.stringify(record))
+              .join("\n")}\n`,
+          );
+        }
+        const store = new BridgeSessionStore({ codexHome, cwd: "/tmp/ws" });
+        await store.upsert(
+          store.toRecord({
+            bridgeSessionId: "session-replayed",
+            threadId: "thread-replayed",
+            cwd: "/tmp/ws",
+            config: { mode: "build", sandbox: "danger-full-access" },
+            lastAcceptedRequestId: "req-replayed",
+          }),
+        );
+        const journal = new DispatchJournal({ codexHome, cwd: "/tmp/ws" });
+        await journal.load();
+        await journal.markPrepared({
+          requestId: "req-replayed",
+          bridgeSessionId: "session-replayed",
+          threadId: "thread-replayed",
+        });
+        await journal.markAccepted("req-replayed", {
+          threadId: "thread-replayed",
+          turnId: "turn-replayed",
+        });
 
-    const h = await harness({
-      "thread/resume": () => ({ thread: threadPayload("thread-replayed") }),
-      "thread/read": () => ({
-        thread: threadPayload("thread-replayed", {
-          turns: [
-            {
-              id: "turn-replayed",
-              status: "interrupted",
-              items: [{ type: "userMessage", clientId: "req-replayed" }],
-            },
-          ],
-        }),
-      }),
-    });
-    await h.drain();
+        const h = await harness({
+          "thread/resume": () => ({ thread: threadPayload("thread-replayed") }),
+          "thread/read": () => ({
+            thread: threadPayload("thread-replayed", {
+              turns:
+                outcome === "absent"
+                  ? []
+                  : [
+                      {
+                        id: "turn-replayed",
+                        status: outcome,
+                        items: [{ type: "userMessage", clientId: "req-replayed" }],
+                      },
+                    ],
+            }),
+          }),
+        });
+        await h.drain();
+        const context = h.runtime.getRegistry().getThread("thread-replayed")!;
+        const replayed = context.messages.find((message) =>
+          rowKind === "text"
+            ? message.content.includes(replayText)
+            : message.parts.some((part) => part.toolUseId === "persisted-tool"),
+        );
+        expect(replayed, "recovery erased the replayed row").toBeDefined();
+        expect(replayed!.role).toBe("assistant");
+        if (rowKind === "tool-only") {
+          expect(replayed!.content).toBe("");
+          expect(replayed!.parts).toContainEqual(
+            expect.objectContaining({
+              type: "tool-invocation",
+              toolUseId: "persisted-tool",
+              toolOutput: "Next stop: stop22.txt",
+            }),
+          );
+        }
+        const preserved = structuredClone(replayed!);
+        const recoveryRow = context.messages.at(-1)!;
+        expect(recoveryRow.id).not.toBe(replayed!.id);
+        expect(new Set(context.messages.map((message) => message.id)).size).toBe(
+          context.messages.length,
+        );
 
-    expect(h.runtime.getStatus("session-replayed")).toMatchObject({
-      phase: "failed",
-      error: CODEX_RESTARTED_MID_TURN_MESSAGE,
-    });
-    const messages = (await h.runtime.getMessages("session-replayed"))!;
-    const replayed = messages.find((message) =>
-      JSON.stringify(message).includes("I reached stop 20; reading stop 21 next."),
-    );
-    expect(replayed, "the replayed row lost its content").toBeDefined();
-    expect(replayed!.role).toBe("assistant");
-    expect(messages.at(-1)!.id).not.toBe(replayed!.id);
-    expect(new Set(messages.map((message) => message.id)).size).toBe(messages.length);
-  });
+        if (outcome === "inProgress") {
+          expect(context.phase).toBe("running");
+          expect(context.activeTurn?.assistantMessageId).toBe(recoveryRow.id);
+          h.child().notify("item/agentMessage/delta", {
+            threadId: "thread-replayed",
+            turnId: "turn-replayed",
+            itemId: "resumed-text",
+            delta: "New live response",
+          });
+          await h.drain();
+          expect(context.messages.find((message) => message.id === recoveryRow.id)?.content).toBe(
+            "New live response",
+          );
+          h.child().notify("turn/completed", {
+            threadId: "thread-replayed",
+            turn: { id: "turn-replayed", status: "completed" },
+          });
+          await h.drain();
+        } else {
+          expect(context.activeTurn).toBeNull();
+          expect(context.phase).toBe(outcome === "completed" ? "idle" : "failed");
+          if (outcome === "interrupted")
+            expect(context.error).toBe(CODEX_RESTARTED_MID_TURN_MESSAGE);
+        }
+        // Read through the tab-facing path too: it must not overwrite the replayed
+        // tool-only row while attaching or finalizing the recovery accumulator.
+        expect(
+          (await h.runtime.getMessages("session-replayed"))?.find(
+            (message) => message.id === preserved.id,
+          ),
+        ).toEqual(preserved);
+      });
+    }
+  }
 
   test("a restored dispatch announces its assistant row before patching it", async () => {
     // Updates to a streaming row are sparse patches keyed by message id. A row

@@ -507,7 +507,14 @@ mise run dev:reset --profile qa-cold
 ```
 
 Turns follow a trail of files (as in the paging spec), and every prompt
-carries a random tag, so a prompt delivered twice is countable.
+carries a random tag, so a prompt delivered twice is countable. Reconciliation
+compares ordered row ids, displayed text and parts (excluding measured times and
+publication metadata). Replay checks count prose and tool-call occurrences across
+row splits and re-keying; Codex's live `bash` and replayed `exec_command`/code-mode
+`exec` forms of a single trail read share one canonical operation. When a turn
+has advanced since the captured snapshot, prose counts stop at its last captured
+tool call so newly generated steps are not mistaken for replay. Explicit
+follow-up prompts may intentionally read an earlier stop again.
 
 - **Native conversation** (Codex GPT-6-Luna by default; set
   `ORKESTRATOR_AGENT_TEST_COLD_RESTART_NATIVE_PLATFORM=claude` for Haiku). After
@@ -520,11 +527,23 @@ carries a random tag, so a prompt delivered twice is countable.
   finishes the trail. The browser shows each prompt and closing word once.
 - **Build pipeline**. One pipeline's backend is `SIGKILL`ed the moment its
   build prompt is journaled (`pendingPromptAttempt`), the mid-dispatch window;
-  the prompt must reach the provider once, on the same session. A second is
-  restarted mid-turn after a persist boundary: its committed history must read
+  the prompt must reach the provider once, on the same session. Acceptance may
+  race this live crash. The deterministic pre-acceptance case lives in
+  `apps/backend/src/core/build-pipeline-service-recovery.test.ts`: a subprocess
+  holds `send` after durable admission, is killed with SIGKILL, and a fresh
+  service/storage pair must retry the same request id and session exactly once.
+  A second pipeline is restarted mid-turn after a persist boundary: its committed history must read
   back straight after the restart without the provider, and the stage
   continues once on the same session. Both are cancelled once the build turn
   ends, and an idle restart must return every stage history byte-identical.
+
+Review validation on 2026-10-21 exercised the real profile with Codex Luna and
+GPT-6.1-Sol build turns. The strengthened build check reached final history but
+reported 18 repeated trail reads within one prompt (`mid-turn: a stop was read
+twice in the same prompt`). This remains an unresolved live qualification
+failure; the assertion is retained. An earlier Luna build also failed to return
+its required structured review-preparation result. The credential-free held-send
+SIGKILL regression independently qualifies pre-acceptance same-request-id retry.
 
 The restarts leave the profile running under a detached launcher; stop it
 with `dev:stop` as usual. `dev:status` no longer reports `testProject` after a

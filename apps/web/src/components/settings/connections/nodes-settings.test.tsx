@@ -157,6 +157,35 @@ describe("RG-06 editing a node's routes", () => {
   });
 });
 
+// Settings is a z-[60] fullscreen surface; a default z-50 dialog renders
+// behind it while Radix blocks pointer events, so the app looks frozen.
+describe("node dialogs open above fullscreen settings", () => {
+  function expectRaised() {
+    const dialog = screen.getByRole("dialog");
+    const overlay = document.querySelector<HTMLElement>('[data-slot="dialog-overlay"]')!;
+    expect(dialog.className).toContain("z-[80]");
+    expect(dialog.className).not.toContain("z-50");
+    expect(overlay.className).toContain("z-[80]");
+    expect(overlay.className).not.toContain("z-50");
+  }
+
+  for (const button of ["Edit routes to Build box", "Forget Build box", "Add node"]) {
+    test(button, async () => {
+      install(commandStatus, {
+        revision: 1,
+        mode: "command",
+        suspended: false,
+        nodes: [leafView],
+        pendingDetaches: [],
+      });
+      render(<NodesSettings />);
+      await waitFor(() => expect(screen.getByText("Build box")).toBeTruthy());
+      fireEvent.click(screen.getByRole("button", { name: button }));
+      expectRaised();
+    });
+  }
+});
+
 test("pending SSH prompts rehydrate and overlapping prompts retain isolated answers", async () => {
   const handlers = new Map<string, (event: { payload: unknown }) => void>();
   const listenMock = listen as unknown as ReturnType<typeof mock>;

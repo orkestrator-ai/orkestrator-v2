@@ -23,6 +23,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 import { MachineDot } from "@/components/federation/MachineDot";
 import {
   addNode,
@@ -417,7 +418,7 @@ function ForgetNodeButton({
         <Trash2 className="h-4 w-4" />
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent>
+        <DialogContent className={Z_FULLSCREEN_DIALOG} overlayClassName={Z_FULLSCREEN_DIALOG}>
           <DialogHeader>
             <DialogTitle>Forget {node.displayName}?</DialogTitle>
             <DialogDescription>
@@ -539,7 +540,7 @@ function AddNodeDialog({
         onOpenChange(next);
       }}
     >
-      <DialogContent>
+      <DialogContent className={Z_FULLSCREEN_DIALOG} overlayClassName={Z_FULLSCREEN_DIALOG}>
         <form onSubmit={(event) => void submit(event)} className="space-y-4">
           <DialogHeader>
             <DialogTitle>Add a node</DialogTitle>
@@ -734,7 +735,7 @@ export function NodeSshPromptDialog() {
 
   return (
     <Dialog open={prompt !== null} onOpenChange={(open) => (open ? undefined : respond(null))}>
-      <DialogContent>
+      <DialogContent className={Z_FULLSCREEN_DIALOG} overlayClassName={Z_FULLSCREEN_DIALOG}>
         <form
           onSubmit={(event) => {
             event.preventDefault();

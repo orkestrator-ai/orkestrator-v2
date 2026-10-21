@@ -206,7 +206,8 @@ const PROVIDER_AUTH_LABEL: Record<ProviderAuthFormat, { name: string; command: s
  * - Non-rotating OAuth logins (`NON_ROTATING_OAUTH_PROVIDERS`) are kept whole.
  * - Other OAuth logins keep their access token with `refresh` blanked (still a
  *   string, which both schemas require). One whose access token expires within
- *   `PROVIDER_AUTH_MIN_VALIDITY_MS`, by `expires` or a JWT `exp`, is dropped.
+ *   `PROVIDER_AUTH_MIN_VALIDITY_MS`, by the earlier of `expires` and a JWT
+ *   `exp` (either alone when only one can be read), is dropped.
  * - Entries of any other type are dropped: OpenCode ignores them anyway, and
  *   Pi rejects the whole file over one.
  */
@@ -244,7 +245,10 @@ export function restrictProviderAuthEntries(
     const stored =
       typeof entry.expires === "number" && Number.isFinite(entry.expires) ? entry.expires : NaN;
     const claimed = access ? jwtExpiryMs(access) : undefined;
-    const expiresAt = claimed === undefined ? stored : Math.min(stored, claimed);
+    const expiresAt =
+      claimed !== undefined && Number.isFinite(stored)
+        ? Math.min(stored, claimed)
+        : (claimed ?? stored);
     if (!access || !(expiresAt - nowMs >= PROVIDER_AUTH_MIN_VALIDITY_MS)) {
       dropped += 1;
       continue;

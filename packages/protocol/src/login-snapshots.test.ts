@@ -207,6 +207,22 @@ describe("restrictPiAuthSnapshot", () => {
     expect(snapshot).toHaveProperty("withheld");
   });
 
+  test("uses a JWT access token's expiry when the stored one is missing", () => {
+    const access = jwt({ exp: Math.floor((NOW + 2 * HOUR) / 1000) });
+    const { expires: _expires, ...noExpiry } = oauth(0, { access });
+    expect(text(restrictPiAuthSnapshot(JSON.stringify({ xai: noExpiry }), NOW))).toEqual({
+      xai: { ...noExpiry, refresh: "" },
+    });
+    const nearly = jwt({ exp: Math.floor((NOW + 60_000) / 1000) });
+    expect(
+      restrictPiAuthSnapshot(JSON.stringify({ xai: { ...noExpiry, access: nearly } }), NOW),
+    ).toHaveProperty("withheld");
+    // With neither expiry readable the login cannot be shown to be live.
+    expect(
+      restrictPiAuthSnapshot(JSON.stringify({ xai: { ...noExpiry, access: "opaque" } }), NOW),
+    ).toHaveProperty("withheld");
+  });
+
   test("withholds a file of expired logins without echoing it, and keeps an empty one", () => {
     const none = restrictPiAuthSnapshot(JSON.stringify({ anthropic: oauth(NOW - HOUR) }), NOW);
     expect(none).toHaveProperty("withheld");

@@ -1802,10 +1802,10 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
             <AlertDialogTitle>Merge Pull Request</AlertDialogTitle>
             <AlertDialogDescription>
               This will squash and merge <BranchName>{sourceBranch}</BranchName> into{" "}
-              <BranchName>{targetBranch}</BranchName>. If the pull request is a draft,
-              it will be marked ready for review first. The feature branch will be deleted after
-              merging. Merge &amp; Cleanup also permanently deletes this environment, but only after
-              the merge is confirmed successful.
+              <BranchName>{targetBranch}</BranchName>. If the pull request is a draft, it will be
+              marked ready for review first. The feature branch will be deleted after merging. Merge
+              &amp; Cleanup also permanently deletes this environment, but only after the merge is
+              confirmed successful.
             </AlertDialogDescription>
           </AlertDialogHeader>
           {mergeError && (

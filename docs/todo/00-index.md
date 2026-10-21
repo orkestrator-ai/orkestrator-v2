@@ -57,10 +57,10 @@ it reaches. Some rules of thumb:
 | Score | Meaning | Items |
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
-| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 18 |
-| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 262 |
+| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 19 |
+| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 263 |
 | Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 280 |
-| **Total** | | **561** |
+| **Total** | | **563** |
 
 ## Very high
 
@@ -116,7 +116,9 @@ it reaches. Some rules of thumb:
 - [x] Replace the 1 s Claude state `docker exec` poll with a pushed change signal and a slow safety read ([container-state-observation.md](container-state-observation.md))
 - [x] Record a non-skipped run of the deletion-during-setup real-stack spec on current `main` ([environment-and-disk-cleanup.md](environment-and-disk-cleanup.md), qualification)
 - [x] Run a seeded real-stack pass of the pre-ledger startup sweeps in an isolated dev profile ([environment-and-disk-cleanup.md](environment-and-disk-cleanup.md), qualification)
-- [ ] Stop Docker containers spending the host's single-use Grok refresh token, which signs the host out ([container-network-and-credential-isolation.md](container-network-and-credential-isolation.md))
+- [x] Stop Docker containers spending the host's single-use Grok refresh token, which signs the host out ([container-network-and-credential-isolation.md](container-network-and-credential-isolation.md))
+- [ ] Stop Docker containers spending the host's Claude refresh token: access-only copies need a re-push before the 8-hour token lapses ([container-network-and-credential-isolation.md](container-network-and-credential-isolation.md))
+- [ ] Stop Docker containers spending the host's OpenCode and Pi OAuth refresh tokens, which are staged in full today ([container-network-and-credential-isolation.md](container-network-and-credential-isolation.md))
 
 ### Design canvas (high)
 
@@ -294,6 +296,7 @@ it reaches. Some rules of thumb:
 - [ ] Decide whether `restoreRecoveryCopy` always assigns a new `runtimeGeneration` so stale handles are refused ([container-rebuild-state-preservation.md](container-rebuild-state-preservation.md), decision)
 - [ ] Generate one canonical default allowlist for the backend, renderer and firewall fallbacks ([container-network-and-credential-isolation.md](container-network-and-credential-isolation.md))
 - [ ] Prototype bounded external egress enforcement so restricted containers no longer need `NET_ADMIN` ([container-network-and-credential-isolation.md](container-network-and-credential-isolation.md))
+- [ ] Qualify a Grok container running past the host access token's expiry with a live login: it signs out alone, the host stays signed in ([container-network-and-credential-isolation.md](container-network-and-credential-isolation.md), qualification)
 - [ ] Choose and apply a measured default CPU, memory and PID budget for new container runtimes ([container-resource-budgets-and-performance.md](container-resource-budgets-and-performance.md))
 - [ ] Measure browser, build and provider workloads with and without the experiment budget on Engine and Desktop ([container-resource-budgets-and-performance.md](container-resource-budgets-and-performance.md), qualification)
 - [ ] Record container benchmark numbers for Docker Desktop and arm64 against the regression targets ([container-resource-budgets-and-performance.md](container-resource-budgets-and-performance.md), qualification)
@@ -918,7 +921,7 @@ it reaches. Some rules of thumb:
 | **Containers and environments** | | | | | |
 | [container-platform-qualification.md](container-platform-qualification.md) |  |  | 12 | 2 | 14 |
 | [container-rebuild-state-preservation.md](container-rebuild-state-preservation.md) |  |  | 2 | 2 | 4 |
-| [container-network-and-credential-isolation.md](container-network-and-credential-isolation.md) |  | 1 | 2 | 1 | 4 |
+| [container-network-and-credential-isolation.md](container-network-and-credential-isolation.md) |  | 2 | 3 | 1 | 6 |
 | [container-resource-budgets-and-performance.md](container-resource-budgets-and-performance.md) |  |  | 3 | 6 | 9 |
 | [container-state-observation.md](container-state-observation.md) |  |  | 5 | 6 | 11 |
 | [environment-and-disk-cleanup.md](environment-and-disk-cleanup.md) |  |  |  | 6 | 6 |

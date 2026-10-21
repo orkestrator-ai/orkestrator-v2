@@ -114,13 +114,6 @@ evidence. This file only points at it.
    agent-test container the access token only, as the local path and the CLI
    scenario harness do, and decide whether production containers should
    share a rotating refresh token with the host at all. Not run live here.
-5. **OpenCode model preferences ignore `XDG_STATE_HOME`.**
-   `get_opencode_model_preferences`
-   (`apps/backend/src/core/commands-registry-servers.ts`) reads
-   `~/.local/state/opencode/model.json` from `HOME`, while OpenCode writes it
-   under `${XDG_STATE_HOME:-~/.local/state}`. A host that sets
-   `XDG_STATE_HOME`, and every agent-test profile (whose OpenCode state is in
-   `agent-credentials/xdg-state`), gets no recent or favourite models.
 
 ### Qualification: checks with no other home
 

@@ -103,6 +103,37 @@ mise run dev:stop --profile claude-warm-qa
 mise run dev:reset --profile claude-warm-qa
 ```
 
+## Grok container login qualification
+
+The Docker fixture suite boots and restarts a disposable image with synthetic
+access-only Codex and Grok imports. It checks owner-only permissions, retained
+access tokens, empty refresh tokens, and unchanged read-only sources. Build the
+profile image before running the Docker suite:
+
+```bash
+mise run docker:build:dev --profile grok-login-qa
+mise run dev:test --profile grok-login-qa --fixture --fixture-environments local,container --credential-source grok --agent-platforms grok
+# From a second terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=grok-login-qa mise run test:logged -- --name docker-login -- mise run test:agent:docker
+```
+
+`grok-container-login.spec.ts` also offers an opt-in real-provider check. It
+requires a usable host Grok login when the profile starts; a missing or expired
+login produces an explicit skip. It gets an authenticated reply, advances only
+the disposable profile's login expiry metadata, withholds the expired host
+snapshot, restores a current host snapshot, and synchronizes it into the same
+bridge. A follow-up must recall the first turn's codeword in the same session.
+This simulates expiry and host renewal without waiting hours or consuming the
+host's refresh token; it does not qualify the provider's own refresh exchange.
+Traces and screenshots are disabled, and credentials and replies stay out of
+assertion output.
+
+```bash
+ORKESTRATOR_AGENT_TEST_PROFILE=grok-login-qa ORKESTRATOR_AGENT_TEST_DOCKER=1 ORKESTRATOR_AGENT_TEST_LIVE_GROK_LOGIN=1 mise run test:logged -- --name grok-login-live -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts --grep 'Grok login renewal'
+mise run dev:stop --profile grok-login-qa
+mise run dev:reset --profile grok-login-qa
+```
+
 ## Start or reuse a profile manually
 
 `dev:test` is a **foreground supervisor**. After printing `ready`, it stays

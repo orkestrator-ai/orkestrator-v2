@@ -1,6 +1,6 @@
 # Terminal history backward paging misses a request in the aggregate
 
-- **ID:** 0512
+- **ID:** 0513
 - **Status:** open
 - **Date observed:** 2026-10-21
 - **Test:** `TerminalHistoryPanel > keeps the page cache bounded during repeated backward paging`

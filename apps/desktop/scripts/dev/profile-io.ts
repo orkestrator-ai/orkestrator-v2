@@ -6,6 +6,7 @@ import {
   STORAGE_DATABASE_FILE,
   readStorageDatabaseStore,
 } from "@orkestrator/protocol/node/storage-database";
+import { restrictGrokAuthSnapshot } from "@orkestrator/protocol/login-snapshots";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { constants, type Stats } from "node:fs";
@@ -486,48 +487,11 @@ export async function seedInstalledAgentToolchains(
 const PROVIDER_SNAPSHOT_MIN_VALIDITY_MS = 60_000;
 
 /**
- * Reduce a copy of the host's Grok `auth.json` to what an isolated profile
- * may hold: each login's access token, with its refresh token blanked.
- *
- * xAI refresh tokens are single-use. A profile that refreshes with the host's
- * token spends it, and the host's own Grok then fails its next refresh and
- * clears the login (observed with Grok 1.0.52 on 2026-10-18). Without a
- * refresh token, a profile whose access token expires is signed out on its
- * own copy only, and the host login is never touched. Logins that have
- * already expired, or whose shape is unknown, are dropped rather than copied.
+ * Shared with the container imports: each login's access token, with its
+ * refresh token blanked, and expired logins dropped. See
+ * `packages/protocol/src/login-snapshots.ts` for why a copy may never refresh.
  */
-export function restrictGrokAuthSnapshot(
-  text: string,
-  nowMs = Date.now(),
-): { text: string } | { withheld: string } {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return { withheld: "the host Grok auth.json is not valid JSON" };
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return { withheld: "the host Grok auth.json has an unknown shape" };
-  }
-  const kept: Record<string, unknown> = {};
-  for (const [key, entry] of Object.entries(parsed)) {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
-    const login = { ...(entry as Record<string, unknown>) };
-    if ("expires_at" in login) {
-      const expiresAt = typeof login.expires_at === "string" ? Date.parse(login.expires_at) : NaN;
-      if (!(expiresAt - nowMs >= PROVIDER_SNAPSHOT_MIN_VALIDITY_MS)) continue;
-    }
-    if ("refresh_token" in login) login.refresh_token = "";
-    kept[key] = login;
-  }
-  if (Object.keys(kept).length === 0) {
-    return {
-      withheld:
-        "the host Grok login has expired and the profile may not refresh it; run grok on the host (grok login if it is signed out there), then restart the profile",
-    };
-  }
-  return { text: JSON.stringify(kept) };
-}
+export { restrictGrokAuthSnapshot };
 
 /** Never a real OAuth refresh token; see `restrictCodexAuthSnapshot`. */
 export const CODEX_SNAPSHOT_REFRESH_TOKEN_PREFIX = "orkestrator-agent-test-snapshot-no-refresh-";

@@ -304,7 +304,7 @@ host's login to it, never the host directory. Pi is the one exception, below:
 | Claude | Process-scoped OAuth access token read from the host `CLAUDE_CONFIG_DIR`/`~/.claude` (or Keychain), and `ANTHROPIC_API_KEY` when inherited. The bridge keeps the profile's own `CLAUDE_CONFIG_DIR`. |
 | Codex | Owner-only snapshot of host `CODEX_HOME`/`~/.codex` `auth.json` in the profile's own `CODEX_HOME`: an API key, or the ChatGPT access and id tokens with a placeholder refresh token; `OPENAI_API_KEY` when inherited |
 | Cursor | Owner-only snapshot of the host's effective Orkestrator Cursor key (`CURSOR_API_KEY` when inherited still wins) |
-| Grok | Owner-only snapshot of host `~/.grok/auth.json` for local runs, with each refresh token blanked and expired logins dropped; bounded read-only host imports for containers |
+| Grok | Owner-only snapshot of host `~/.grok/auth.json`, with each refresh token blanked and expired logins dropped, for local runs and for containers |
 | OpenCode | Owner-only snapshot of host `${XDG_DATA_HOME:-~/.local/share}/opencode/auth.json` in the profile's own XDG data directory: API keys and well-known tokens, OAuth access tokens with the refresh token blanked; `OPENCODE_API_KEY` when inherited. Host OpenCode config and state are not copied. |
 | Pi | Host `~/.pi/agent/auth.json` (or `PI_CODING_AGENT_DIR`), shared in place; nothing else from the host Pi directory. Tilde overrides expand against the host home and relative overrides resolve before HOME changes. |
 
@@ -317,7 +317,7 @@ it), so a login made inside a profile that does not authorize the host's
 survives. Cursor snapshots preserve a
 minted key's expiry, and the backend stops resolving the key when it expires.
 A Grok snapshot carries access tokens only (`restrictGrokAuthSnapshot` in
-`apps/desktop/scripts/dev/profile-io.ts`). xAI refresh tokens are single-use:
+`packages/protocol/src/login-snapshots.ts`, shared with container staging). xAI refresh tokens are single-use:
 on 2026-10-18 a profile that refreshed with a copy of the host's token spent
 it, the next copy failed its refresh, and Grok cleared that login. So a
 profile may use the host's current access token until it expires, but it can
@@ -347,6 +347,11 @@ For a container test environment, the same provider homes (the profile's
 snapshots for Codex and OpenCode, the host's `~/.claude` read-only for Claude)
 are mounted read-only and copied into writable container state using the
 normal production allowlists. Claude's Keychain credential is synchronized separately over stdin.
+Codex and Grok logins reach any container (test or not) access-only, with the
+refresh token blanked and expired logins withheld, because their refresh
+tokens are single-use and a container refresh would sign the host out
+([Container lifecycle](../architecture/container-lifecycle.md), "Portable
+inputs").
 
 When credentials are disabled, provider paths point into empty profile-owned
 directories, Cursor's inherited key is removed, and no Grok auth is copied.

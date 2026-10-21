@@ -336,7 +336,9 @@ export function FilePart({
               setLoadedImageSrc(null);
               setLoadError("unavailable");
             }}
-            className="h-48 w-full bg-black/10 object-cover transition-transform duration-200 group-hover:scale-[1.02] motion-reduce:transition-none"
+            // Fit the tile's width and follow the image's own aspect ratio so
+            // nothing is cropped; very tall images letterbox under the cap.
+            className="block h-auto max-h-96 w-full bg-black/10 object-contain transition-transform duration-200 group-hover:scale-[1.02] motion-reduce:transition-none"
           />
         ) : showThumbnailTile ? (
           <span className="flex h-48 w-full items-center justify-center bg-muted/40">

@@ -109,6 +109,15 @@ evidence. This file only points at it.
    an agent-test profile. A Codex snapshot must not carry a refresh token the
    copy could rotate.
 
+   Approval rules leak the same way. On 2026-10-21 a profile run of
+   `paused-interactions-live.spec.ts` answered a Codex command approval with
+   the card's optional "Approve with command policy" choice (a harness bug,
+   since fixed). Codex then wrote `prefix_rule(... decision="allow")` into the
+   host's own `~/.codex/rules/default.rules`, and the next run's `touch` ran
+   on the host policy without asking. The file was created by that run and
+   removed afterwards. Any isolated Codex home has to cover `rules/` as well
+   as `config.toml`.
+
 ### Qualification: checks with no other home
 
 - **Electron terminal input resume.** Re-run `mise run test:agent:electron` for

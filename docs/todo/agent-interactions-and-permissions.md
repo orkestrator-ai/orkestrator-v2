@@ -128,6 +128,11 @@ per-bridge environment overrides that predate the execution policy.
     pause but warn that their server may stop waiting first. OpenCode publishes
     no deadline, so there is nothing to pause.
   - Claude in tmux shows the countdown as not pausable yet (item 9).
+  - Qualified live on Claude (question and command approval), Codex (command
+    approval), OpenCode (question and permission) and Pi (command approval):
+    each was left pending for 11 minutes, then answered after a reload, and its
+    turn finished with the answer (live pause record below). Grok is not
+    qualified yet.
 - Deprecated overrides still read by the bridges, with a one-time deprecation
   warning:
   - Cursor: `CURSOR_BRIDGE_SANDBOX` and `CURSOR_BRIDGE_PROJECT_SETTINGS`
@@ -245,15 +250,28 @@ per-bridge environment overrides that predate the execution policy.
     closed: an empty `GROK_HOME` would also drop the login. Find one on the
     pinned build (or ask xAI), then honour `false` and drop the note, as item 6
     plans for Codex.
+13. **Codex questions never reach the card.** The capability table and the
+    bridge's `item/tool/requestUserInput` path claim Codex questions, but no
+    real Codex turn can raise one. The bridge never sets a collaboration mode
+    on `turn/start`, so every turn, Orkestrator Plan included (a prompt
+    reminder, not Codex's Plan mode), runs in Codex's Default mode. Codex
+    0.162.1 there answers `request_user_input` with "request_user_input is
+    unavailable in Default mode", and the model falls back to asking in plain
+    text (seen live on 2026-10-21, see the live pause record). Either run
+    Orkestrator Plan turns in Codex's Plan collaboration mode, or turn on
+    Codex's `default_mode_request_user_input` feature for interactive
+    sessions only (unattended owners would then decline the question by
+    policy). Until then, take `question` out of the Codex row in
+    `nativeAgentCapabilities()`, or say why it stays. Then add the Codex
+    question case to `paused-interactions-live.spec.ts`.
 
 ### Qualification
 
-- Live pause on each provider: pause a Claude question, a Claude tool approval
-  under `ask`, a Codex command approval, a Grok permission and a Pi approval;
-  leave each paused past ten minutes, then answer it and confirm the turn
-  continues with that answer. Only the Claude bridge is covered end to end, by
-  `e2e/ClaudeInteractions.spec.ts` against a fake SDK; no real CLI has been
-  left waiting longer than the old five minutes.
+- Live pause on Grok: a Grok permission and a Grok `ask_user_question`, paused
+  past ten minutes and then answered, with
+  `ORKESTRATOR_AGENT_TEST_PAUSE_PROVIDERS=grok` (see the live pause record).
+  The 2026-10-21 run skipped Grok because the host Grok login had expired, and
+  a profile may never refresh it. Claude, Codex, OpenCode and Pi passed.
 
 - Browser: raise an MCP elicitation (Codex or Claude), answer it, reload
   mid-question, and confirm it rehydrates from `/session/:id/interactions`. On
@@ -267,6 +285,81 @@ per-bridge environment overrides that predate the execution policy.
   can neither leave the sandbox (`allowUnsandboxedCommands: false`) nor reach a
   domain off its allowlist when the network is restricted (`strictAllowlist`).
   The conformance suite proves the options; only the CLI proves the behaviour.
+
+### Live pause record (2026-10-21)
+
+`e2e/agent-testing/paused-interactions-live.spec.ts` (procedure in
+[agent-testing.md](../development/agent-testing.md#live-paused-interactions))
+ran on `9b3f53a2` plus this change, in the disposable profile `qa-pause-0640`
+(macOS arm64, load average about 20). The profile authorized Claude, Codex,
+Grok, OpenCode and Pi, with pinned CLIs claude 2.1.296, codex 0.162.1,
+opencode 1.19.0 and pi 1.2.0. Each case had its own local environment under
+`approvals: "ask"` and its own real turn. All six were raised within seven
+seconds of each other and held together.
+
+| Case | Request | Pause from the card | After 11 min | Answer (after reload) | Turn |
+| --- | --- | --- | --- | --- | --- |
+| Claude question | `question` (AskUserQuestion) | Paused, deadline moved to +24 h | Pending, turn waiting | Picked `PAUSE_BETA` | Finished with `CODEWORD_CHOSEN=PAUSE_BETA` |
+| Claude approval | `command-approval` (Bash `touch`) | Paused, +24 h | Pending, no marker file | **Approve** | Marker created, finished with the done token |
+| Codex approval | `command-approval` (`untrusted`) | Paused, +24 h | Pending, no marker file | **Approve** | Marker created, finished |
+| OpenCode question | `question` | No countdown shown (no deadline published) | Pending, turn waiting | Picked `PAUSE_BETA` | Finished with the codeword |
+| OpenCode approval | `permission` (bash) | No countdown shown | Pending, no marker file | **Approve once** (not "Always allow") | Marker created, finished |
+| Pi approval | `command-approval` | Paused to its 6 h turn budget (`provider-limit`) | Pending, no marker file | **Approve** | Marker created, finished |
+
+The spec checked every 60 s that each request kept its id and stayed
+`pending`, that no turn went `idle` or `error`, and that no marker file
+appeared. The answers were given only after a fresh sign-in and a reload, so
+each card was rehydrated from the backend. The Playwright run passed in
+675 s (`mise run test:logged -- --name paused-interactions-live`, results in
+`output/agent-testing/qa-pause-0640/browser/results.json`). No silent
+timeout, auto-deny or auto-approve was seen on any provider. Earlier one-minute
+shakedowns showed the same behaviour.
+
+Not qualified:
+
+- **Grok.** The host Grok login had expired, and a profile may not refresh it
+  (refresh tokens are single-use), so the launcher seeded nothing. It is
+  tracked as its own qualification item above.
+- **Codex question.** No real Codex turn can raise one (Code item 13).
+- **Cursor.** It raises no interactions (`interactions.kinds` is `[]`).
+
+Found on the way, none of them in the pause path:
+
+1. Codex refuses `request_user_input` in every Orkestrator turn (item 13).
+2. Two OpenCode servers starting in the same second can lose one to `database
+   is locked`, and that turn then waits silently
+   ([session-lifecycle-consistency.md](session-lifecycle-consistency.md) item
+   5). The spec starts a provider's cases one after the other.
+3. A harness bug selected the Codex card's optional "Approve with command
+   policy", which wrote a durable rule into the host's
+   `~/.codex/rules/default.rules`, because a profile shares the host Codex
+   home. The product behaved as designed: only that explicit choice sends
+   `acceptWithExecpolicyAmendment`, and **Approve** alone sends `accept`. The
+   spec now never picks an optional or amendment option. The file, created by
+   the run, was removed. The isolation gap is recorded under
+   [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md)
+   item 4.
+4. An early approval prompt passed an absolute path containing a space
+   (`Application Support`), and one agent created an empty `~/Library/Application`.
+   That file was removed, and the prompts now use a bare file name in the
+   worktree.
+5. In a profile, Pi falls back to `gpt-4`, because only Pi's `auth.json` is
+   shared, not the host's default model. A ChatGPT-backed OpenAI login refuses
+   that model, so the spec defaults Pi to `openai/gpt-6-sol`.
+
+Decisions:
+
+- **How to drive it.** Options: drive the browser by hand, write a
+  backend-only script, or add an opt-in Playwright spec. We added the spec.
+  The pause and answer go through the real card, the run can be repeated for
+  Grok later, and the wait is checked continuously rather than once. The
+  dispatches go through the backend command the compose bar uses, because
+  typing six prompts would not change what is under test.
+- **Parallelism.** One environment per case, all held together, so the run
+  takes about 12 minutes for six cases rather than 66.
+- **Wait.** 10.5 minutes after the last request was raised, which is past the
+  old five-minute default and Claude's 600 s hook limit. Every case had in
+  fact waited 11 minutes when it was answered.
 
 ## Constraints and rationale
 

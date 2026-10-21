@@ -1,6 +1,7 @@
 # Modal-width main-merge validation
 
-- **ID:** 0626
+- **ID:** 0627
+- **Status:** open
 - **Observed:** 2026-10-21
 - **Merge baseline:** `1a365c12069dc8f8b2333a9cc608434378e28f8c`
 - **Merged main:** `4608d8299`
@@ -103,3 +104,60 @@ formatting after the imported ActionBar prose was formatted, lint, all typecheck
 all workspace builds, focused modal regression tests and the complete Electron
 suite. iOS, Docker opt-in and billed-provider suites were outside this merge's
 validation scope.
+
+## Subsequent main refresh — 2026-10-21
+
+Merged `40dd964b1` into pre-merge HEAD `26004e12e`. The only conflict was the
+index: main and this branch had independently allocated 0626. Both records
+were retained; this record became 0627. The register test also caught the
+missing `Status` field in this earlier record; adding it made the complete
+unchanged `tests/unit/flaky-tests-index.test.ts` owner pass (1.5 seconds).
+That was a documentation defect, not a flake.
+
+The 49 changed paths, including automatically merged source and tests, were
+included in validation. Formatting, lint, all typechecks and focused renderer
+owners passed. No runtime code, assertion, timeout or skip was changed to
+address the observations below.
+
+- `main-refresh-browser` (`mise run test:browser`, dedicated ports 21422 and
+  24423) reported 373 passed, 81 skipped and 16 failures. All complete affected
+  owners passed unchanged sequentially with one worker in 150.6 seconds:
+  `AgentUsage`, `DesignCanvas`, `GitHubCliSetup`, `NativeHeldSend`,
+  `PaneBreakpoint`, `SetupRecovery`, `ClaudeInteractions`, `GlobalStyles` and
+  `MonacoRuntime` under `e2e/`. Public-site browser coverage passed separately
+  with one worker in 33.0 seconds.
+- The isolated full browser suite reported 27 passed, 42 skipped and two
+  failures: the narrow gateway picker and the design-canvas hidden-file pane
+  persistence assertion (the latter matches case 0380). The complete gateway
+  owner passed unchanged on fresh profile `merge-main-refresh-173c590` in
+  272.2 seconds. The complete design owner passed through
+  `mise run test:agent:design:isolated` in 69.3 seconds. All three disposable
+  profiles were stopped and reset.
+- The aggregate fake Codex subprocess probe exceeded five seconds; its complete
+  unchanged owner passed alone with the Node preload in 0.4 seconds (case 0210).
+- Disk-report timed out at five seconds; its complete unchanged owner passed
+  alone in 5.2 seconds.
+- The long-transcript fixture exceeded 120 seconds; its complete unchanged
+  owner passed alone in 43.5 seconds.
+- OpenCode execution-policy conformance exceeded 20 seconds and the Mermaid
+  watchdog exceeded its nine-second elapsed bound. Both complete unchanged
+  backend owners passed sequentially with the Node preload in 47.2 seconds.
+- Pi runtime vendoring exceeded 30 seconds in the aggregate; its complete
+  unchanged owner passed alone after the aggregate finished in 10.8 seconds.
+
+The complete aggregate finished in 1151.9 seconds. Its original workspace,
+root/support and bridge group exits remained failed; the protocol lockfile
+check passed. Every failing test passed on a complete owning-file rerun;
+the registry metadata case required the correction described above, and all
+other owners passed unchanged. The initial concurrent `build:all` also hit
+ENOENT reading a generated renderer asset during precompression; this was
+tracked separately from test failures. The final standalone `build:all` passed
+after the other jobs ended (cached production builds were restored).
+
+All commands used `test:logged`; direct Bun reruns used explicit paths and
+`--parallel=1 --only-failures`. Private failure artifacts:
+`orkestrator-test-run.Xf0fAN` (aggregate groups),
+`orkestrator-test-run.zj23KS` (component browser), and
+`orkestrator-test-run.TV7Wnr` (isolated browser), below the host temporary
+directory. Electron, Docker opt-in, iOS and billed-provider suites were not
+rerun because this refresh changed none of their owning code.

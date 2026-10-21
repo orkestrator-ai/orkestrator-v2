@@ -234,6 +234,59 @@ describe("backend runtimes", () => {
   });
 });
 
+describe("bounded resource use", () => {
+  test("PF-01: repeated demand cycles leave no subscriptions behind", async () => {
+    const client = fakeClient("a", sharedIds("A"));
+    let subscriptions = 0;
+    const original = client.subscribe;
+    client.subscribe = (listener) => {
+      subscriptions += 1;
+      const stop = original(listener);
+      return () => {
+        subscriptions -= 1;
+        stop();
+      };
+    };
+    const runtime = new BackendRuntime({ client, connection: summary("a", "bk_a") });
+    for (let cycle = 0; cycle < 200; cycle += 1) {
+      const release = runtime.acquireSummaryDemand();
+      release();
+      release();
+    }
+    expect(subscriptions).toBe(0);
+    expect(client.release).toHaveBeenCalledTimes(200);
+    runtime.dispose();
+  });
+
+  test("PF-03: an event flood on A is coalesced and never touches B", async () => {
+    const clientA = fakeClient("a", sharedIds("A"));
+    const clientB = fakeClient("b", sharedIds("B"));
+    const runtimeA = new BackendRuntime({ client: clientA, connection: summary("a", "bk_a") });
+    const runtimeB = new BackendRuntime({ client: clientB, connection: summary("b", "bk_b") });
+    runtimeA.acquireSummaryDemand();
+    runtimeB.acquireSummaryDemand();
+    await Promise.all([settle(runtimeA), settle(runtimeB)]);
+    const aReads = clientA.calls.length;
+    const bReads = clientB.calls.length;
+    for (let revision = 1; revision <= 1000; revision += 1) {
+      clientA.emit(RESOURCE_CHANGED_EVENT, {
+        resource: "environment",
+        id: "env-1",
+        projectId: "project-1",
+        revision,
+      });
+    }
+    // B handles its own event immediately despite A's flood.
+    clientB.emit(RESOURCE_CHANGED_EVENT, { resource: "project", id: "project-1", revision: 1 });
+    await runtimeB.whenIdle();
+    expect(clientB.calls.length).toBeGreaterThan(bReads);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await runtimeA.whenIdle();
+    // 1000 changes to one project become one debounced project refresh.
+    expect(clientA.calls.length - aReads).toBeLessThanOrEqual(2);
+  });
+});
+
 describe("backend client registry", () => {
   function list(connections: ConnectionSummary[], active = "local"): ConnectionList {
     return { activeConnectionId: active, connections };

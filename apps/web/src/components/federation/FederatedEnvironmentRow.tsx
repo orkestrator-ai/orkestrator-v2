@@ -1,7 +1,20 @@
 import { useState } from "react";
 import { toast } from "sonner";
-import { Bell, Loader2, MoreHorizontal, PanelRight, Play, Square, Trash2 } from "lucide-react";
-import type { EnvironmentRef } from "@orkestrator/protocol/federation";
+import {
+  Bell,
+  Link2,
+  Loader2,
+  MoreHorizontal,
+  PanelRight,
+  Play,
+  Square,
+  Trash2,
+} from "lucide-react";
+import {
+  FEDERATED_LINK_PARAM,
+  encodeResourceLink,
+  type EnvironmentRef,
+} from "@orkestrator/protocol/federation";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
@@ -196,6 +209,30 @@ export function FederatedEnvironmentRow({
             <DropdownMenuItem onSelect={open}>
               <PanelRight className="h-3.5 w-3.5" aria-hidden="true" />
               Open in panel
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onSelect={() => {
+                // A machine-qualified link: machine identity plus resource, never a
+                // route, forwarded port or credential.
+                const url = new URL(window.location.href);
+                url.search = "";
+                url.hash = "";
+                url.searchParams.set(FEDERATED_LINK_PARAM, encodeResourceLink(environment.ref));
+                const text = url.toString();
+                const write =
+                  window.orkestrator?.clipboard?.writeText(text) ??
+                  navigator.clipboard?.writeText(text);
+                void Promise.resolve(write).then(
+                  () =>
+                    toast.success("Copied link", {
+                      description: `${environment.name} on ${machine.name}`,
+                    }),
+                  () => toast.error("Could not copy the link"),
+                );
+              }}
+            >
+              <Link2 className="h-3.5 w-3.5" aria-hidden="true" />
+              Copy link
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem

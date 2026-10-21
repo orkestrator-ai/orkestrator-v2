@@ -288,6 +288,59 @@ describe("identity and routes", () => {
     connections.dispose();
   });
 
+  test("adding a machine with select:false neither switches nor rebinds the window", async () => {
+    installGateways({ "https://b.example": { installationId: "bk_b" } });
+    const store = new MemoryStore(catalogue([]));
+    const connections = manager(store);
+    await connections.initialize();
+    await connections.bind("window", "local");
+    const list = await connections.connect(
+      { address: "https://b.example", token, select: false },
+      "window",
+    );
+    expect(list.activeConnectionId).toBe("local");
+    expect(store.value?.activeConnectionId).toBe("local");
+    expect(
+      list.connections.find((entry) => entry.address === "https://b.example")?.backendId as string,
+    ).toBe("bk_b");
+    connections.dispose();
+  });
+
+  test("ID-02 explicit: an added connection method must prove the same installation", async () => {
+    installGateways({
+      "https://a.example": { installationId: "bk_a" },
+      "https://a-other.example": { installationId: "bk_a" },
+      "https://imposter.example": { installationId: "bk_x" },
+    });
+    const store = new MemoryStore(
+      catalogue([
+        savedBackend("a", ["https://a.example"], { verifiedInstallationId: "bk_a" as never }),
+      ]),
+    );
+    const connections = manager(store);
+    await connections.initialize();
+    await expect(
+      connections.connect({
+        address: "https://imposter.example",
+        token,
+        connectionId: "a",
+        select: false,
+      }),
+    ).rejects.toThrow("different Orkestrator installation");
+    expect(store.value?.backends).toHaveLength(1);
+    await connections.connect({
+      address: "https://a-other.example",
+      token,
+      connectionId: "a",
+      select: false,
+    });
+    expect(store.value?.backends).toHaveLength(1);
+    expect(
+      store.value?.backends[0]?.routes.map((route) => route.kind === "https" && route.origin),
+    ).toEqual(["https://a.example", "https://a-other.example"]);
+    connections.dispose();
+  });
+
   test("ID-03: an address that now answers as another installation is blocked, not merged", async () => {
     installGateways({ "https://a.example": { installationId: "bk_other" } });
     const store = new MemoryStore(

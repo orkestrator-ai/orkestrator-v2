@@ -93,6 +93,7 @@ import {
 import { subscribeToConnections } from "@/lib/connections";
 import { FederationProvider } from "@/components/federation/FederationProvider";
 import { SshPromptDialog } from "@/components/federation/SshPromptDialog";
+import { FederationEffects } from "@/components/federation/FederationEffects";
 import { machinePanelTarget } from "@/lib/federation/panel-realm";
 
 export const DOCKER_AVAILABILITY_POLL_INTERVAL_MS = 60_000;
@@ -1651,6 +1652,7 @@ function App() {
           </AlertDialog>
         </TerminalProvider>
         <SshPromptDialog />
+        <FederationEffects />
       </TooltipProvider>
     </FederationProvider>
   );

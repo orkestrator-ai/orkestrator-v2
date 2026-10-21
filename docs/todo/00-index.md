@@ -57,9 +57,9 @@ it reaches. Some rules of thumb:
 | Score | Meaning | Items |
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
-| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 16 |
+| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 15 |
 | Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 269 |
-| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 283 |
+| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 284 |
 | **Total** | | **569** |
 
 ## Very high
@@ -153,7 +153,7 @@ it reaches. Some rules of thumb:
 - [x] `qualification` Record `test:agent:electron` and the desktop live-host probe on the release Electron build ([rich-transcripts.md](rich-transcripts.md))
 - [x] Qualify live history paging and reviewer Load earlier messages beyond the 100-message live window ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
 - [x] Run a live multi-review: progress probes, reviewer windows, detail expansion, pages and scroll anchoring ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
-- [ ] Qualify Claude inactive-tab and background-task runs against content-revision tokens ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
+- [x] Qualify Claude inactive-tab and background-task runs against content-revision tokens ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
 - [ ] Qualify cold restart: display tails and pipeline histories reconcile, including a mid-dispatch restart ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
 - [ ] Qualify idle observation live per provider: missed final event, approvals, sub-agents, reconnect, hidden ([native-agent-idle-observation.md](native-agent-idle-observation.md), qualification)
 - [x] Back off gateway terminal fallback reconnect timers with `ReconnectBackoff`, resetting after healthy streams ([client-reconnect-and-freshness.md](client-reconnect-and-freshness.md))
@@ -780,6 +780,7 @@ it reaches. Some rules of thumb:
 - [x] Per-block visibility for rich-render idle prefetch ([rich-transcripts.md](rich-transcripts.md))
 - [ ] Record source and normalise phase timing for state and discovery reads ([transcript-history-efficiency.md](transcript-history-efficiency.md))
 - [ ] Verify whether Claude SDK `getSessionMessages` `limit`/`offset` avoids a full JSONL parse ([transcript-history-efficiency.md](transcript-history-efficiency.md), verify)
+- [ ] Verify why a re-activated Claude view takes two or three state and discovery snapshots before settling ([transcript-history-efficiency.md](transcript-history-efficiency.md), verify)
 - [ ] Restructure frontend retained history into immutable pages if 8 MiB profiling shows long tasks ([transcript-history-efficiency.md](transcript-history-efficiency.md), deferred)
 - [ ] Measure bridge-to-backend snapshot bytes and CPU before designing incremental bridge part deltas ([transcript-history-efficiency.md](transcript-history-efficiency.md), deferred)
 - [ ] Add per-message provider revisions so projection can skip its per-row comparison walk ([transcript-history-efficiency.md](transcript-history-efficiency.md), deferred)
@@ -954,7 +955,7 @@ it reaches. Some rules of thumb:
 | [session-lifecycle-consistency.md](session-lifecycle-consistency.md) |  |  | 8 | 7 | 15 |
 | **Transcripts, observation and bandwidth** | | | | | |
 | [rich-transcripts.md](rich-transcripts.md) |  |  | 2 |  | 2 |
-| [transcript-history-efficiency.md](transcript-history-efficiency.md) |  | 2 | 13 | 5 | 20 |
+| [transcript-history-efficiency.md](transcript-history-efficiency.md) |  | 1 | 13 | 6 | 20 |
 | [remote-client-bandwidth.md](remote-client-bandwidth.md) |  |  | 4 | 9 | 13 |
 | [native-agent-idle-observation.md](native-agent-idle-observation.md) |  | 1 | 3 | 2 | 6 |
 | [client-reconnect-and-freshness.md](client-reconnect-and-freshness.md) |  |  | 6 | 2 | 8 |

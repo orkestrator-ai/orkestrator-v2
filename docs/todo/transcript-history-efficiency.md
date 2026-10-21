@@ -156,7 +156,6 @@ credentials and platforms CI lacks, batch with
   blocks, the case that first lost the place and then pinned the list to the
   tail; the fixes were proved live on Codex and in unit tests, but every Claude
   attempt after them hit the account's 429 rate limit.
-- Claude inactive-tab and background-task runs against content-revision tokens.
 - A Cursor run long enough to reach the producer trim thresholds while its
   environment is inactive; return and check the bounded window, sub-agent
   lifecycle and controls.
@@ -171,6 +170,65 @@ credentials and platforms CI lacks, batch with
 - Activity-sweep p50/p95 for 1, 10 and 100 sessions against real bridges.
 - Re-measure display-tail cost and the maximum checkpoint age with workload
   `d` now that tails are SQLite rows.
+
+## Qualification results (2026-10-21): Claude revision tokens
+
+Claude's content-revision tokens with the view off screen, run on
+`9b3f53a2` plus this change on a loaded macOS arm64 host. Profile
+`qa-revtok-2ead` (`dev:test --fixture --credential-source claude
+--agent-platforms claude`), Claude Agent SDK 0.3.296, model Claude Haiku. The
+spec is `e2e/agent-testing/claude-revision-tokens-live.spec.ts`; how to run
+it is in
+[agent-testing.md](../development/agent-testing.md#live-revision-tokens-with-inactive-views).
+Content-free timelines are the annotations in
+`output/agent-testing/qa-revtok-run<N>/browser/results.json` (N = 1 through 4).
+These run artifacts are local and untracked. The historical runs below predate
+the stricter conditional-content and per-case lifecycle assertions; they do not
+qualify those new assertions.
+
+One session, two cases. In the first, a prompt starts a background Bash
+command (`sleep 45`) and the test switches to a second tab in the pane. In the
+second, a prompt starts a background subagent (`sleep 40` inside it) and the
+test selects another environment. In both, the turn ends, the task finishes
+and Claude answers the task report while the view is off screen. The test
+reads the session as a view does, with its last transcript and state tokens,
+every 2 s.
+
+| Check | Result |
+| --- | --- |
+| No missed update | Pass (runs 3 and 4; runs 1 and 2 passed it before failing on spec checks). Every change reached the reader as a delta or snapshot, including the task report folding onto its launching row and Claude's answer to it. The background task went from running to `completed` in session state, and the answer row arrived 50 to 56 s after the switch for the Bash case. |
+| No needless re-read | Pass. Once settled, ten reads in a row answered `unchanged` for transcript and state in every case and run. Overall the inactive-tab case took 1 snapshot, 4 or 5 deltas and 31 or 32 `unchanged` answers over about 72 s. A final read of the settled session with its token answered `unchanged`. |
+| The off-screen view does not poll | Pass. From 2 s after the tab switch or environment switch, the page sent nothing for the session (the empty `inactive-*-inactive-timeline` annotations). |
+| State on return, tab switch | Pass. The kept view sent its old token, got one transcript snapshot (the content had moved), showed the newest row within 120 to 220 ms, and then sent only conditional reads answered `unchanged`, about every 1.5 s. |
+| State on return, environment switch | Pass. The remounted view restored its transcript token, so its first transcript read was conditional (a snapshot, because the content had moved) and the rest `unchanged`. The newest row showed within 300 to 355 ms. |
+| Reload | Pass. The cold client read once without a token per mount, showed the newest row within about 1.9 s, and then settled to `unchanged`. All four markers were in the backend rows in order. |
+
+Bridge unit coverage: the mutation matrix in
+`bridges/claude-bridge/src/services/session-manager-transcript-revision.test.ts`
+gained two rows, a task report settling its launching row and a report with
+no row to attach to. Both pass, and the suite records no marker repair.
+
+Findings that are not defects:
+
+- A dev profile renders under `React.StrictMode`
+  (`apps/web/src/renderer-entry.tsx`), so a remount mounts the view twice and
+  every read is doubled for about 300 ms. A production build mounts once.
+- A remount re-reads session state without a token on purpose: the shared
+  cache carries tokens but not the state value, and `useNativeAgentSession`
+  does not let a mount claim state it never read. Transcript tokens are kept.
+- Haiku once ran the requested foreground `sleep 8` in the background, saying
+  the harness had blocked it. The spec now uses a foreground `echo`.
+
+Spec fixes made during the runs: run 1 asserted that idle reads after an
+environment switch kept their state token (see the remount note above). Run 2
+looked for an older row on screen after the reload, but the list is
+virtualized and the row had scrolled out of the DOM. Neither was a product
+defect.
+
+Not run here: a production build (no StrictMode double mount), an Electron
+window, a container environment, and Codex, whose background terminals
+change an idle view in the same way. The profile was stopped and reset
+afterwards.
 
 ## Qualification results (2026-10-18)
 
@@ -306,6 +364,15 @@ reset afterwards.
 - Do items 5, 6 and 7 justify their complexity once profiling exists?
 
 ## Needs verification
+
+- Why a re-activated Claude view takes two or three session-state and
+  discovery snapshots before it settles to `unchanged`. In the 2026-10-21
+  run a tab switch took one state snapshot and three discovery snapshots in
+  about 150 ms, and an environment switch took two state snapshots and three
+  discovery snapshots per mounted view. Transcript reads were unaffected.
+  Find out whether the discovery value is still filling in (a catalogue
+  arriving after adopt) or whether a token is being dropped, and stop the
+  repeats if it is the latter.
 
 - Whether Grok's ACP `session/new` "Invalid params" rejection, seen in the
   September live run, is fixed. #874 (MCP headers in ACP `{name,value}` form)

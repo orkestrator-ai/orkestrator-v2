@@ -521,6 +521,51 @@ stays pinned to the tail and snaps back. Measurements land as annotations in
 `results.json`. Override models and trail lengths with the variables named in
 the spec's header.
 
+### Live revision tokens with inactive views
+
+`e2e/agent-testing/claude-revision-tokens-live.spec.ts` checks Claude's
+transcript content-revision tokens while the view under test is off screen.
+It has its own opt-in and uses the host's Claude credentials:
+
+```bash
+mise run dev:test --profile qa-revtok --fixture --credential-source claude --agent-platforms claude
+# In a second terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-revtok ORKESTRATOR_AGENT_TEST_LIVE_REVISION_TOKENS=1 \
+  mise run test:logged -- --name revision-tokens-live -- mise run test:agent:browser -- \
+  e2e/agent-testing/claude-revision-tokens-live.spec.ts
+mise run dev:stop --profile qa-revtok
+mise run dev:reset --profile qa-revtok
+```
+
+One session runs two cases. First, a prompt starts a background Bash command,
+then the test switches to a second tab in the same pane. Second, a prompt
+starts a background subagent, then the test selects another environment. In
+each case the turn ends, the task finishes and Claude answers its report while
+the view is off screen. The test reads the session the way a view does, with
+its last transcript and state tokens. It checks four things. Every change
+reaches it as a delta or snapshot. A settled session answers `unchanged` ten
+times in a row. The off-screen view sends no reads. On return the view shows
+the newest row without a reload, keeps its transcript token, and settles to
+conditional `unchanged` reads. A reload then repaints the same newest row.
+The model writes each marker as a sum it computes, so only an assistant row
+can contain it. Only the newest row is checked on screen, because the list is
+virtualized; every marker is checked in order in the conditional reader's
+retained rows. The reader validates delta base tokens and applies the shared
+protocol delta helper. Each case must observe a new task running while the
+foreground is idle, its later completion, and a post-idle transcript update.
+The launching row must have its final state and deferred report output. Forced
+snapshots independently compare against the retained view without repairing it.
+Active idle checks require unchanged polls for both transcript and session state.
+`ORKESTRATOR_AGENT_TEST_REVISION_MODEL` overrides the model (default Haiku).
+Each read the page sends for the session is recorded as a content-free
+timeline annotation in `results.json`.
+
+A dev profile renders under `React.StrictMode`, so a remount (an environment
+switch or a reload) mounts the view twice and every read is doubled for about
+300 ms. A remount also re-reads session state without a token on purpose
+(`useNativeAgentSession` never trusts a state token it did not read itself).
+The idle checks therefore start 2 s after the newest row appears.
+
 ### Live MCP apply in an inactive environment
 
 `e2e/agent-testing/mcp-apply-inactive.spec.ts` saves and applies MCP server

@@ -837,6 +837,19 @@ seconds. The unrelated NativeMessage interaction was corrected; Pi staging
 remained unchanged.
 
 
+## Claude revision-token review fixes — 2026-10-21
+
+- **Original command:** `mise run test:logged -- --name full-tests-cold -- mise run test`, on macOS arm64 with concurrent host validation.
+- **Workers:** workspace/root/bridges/protocol reservations of 4/1/2/1 slots; root used `--parallel=1`.
+- **Failure:** `Pi bridge runtime vendoring > loads Pi's supported SDK from the staged runtime closure` exceeded 30000 ms (30002.80 ms). Root/support reported 3163 passed, one skipped and one failed across 3165 tests in 150 files (224.74 seconds).
+- **Owning-file rerun:** `mise run test:logged -- --name pi-vendor-alone -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed all four cases unchanged (exit 0, 14.0 seconds logged).
+- **Evidence:** `orkestrator-test-run.e4Hc1C/root-and-agent-support-tests.log.gz` below the host temporary directory.
+- **Assessment:** confirmed intermittent recurrence; host contention remains an unconfirmed explanation. No Pi implementation, assertion, timeout or skip changed.
+
+The subsequent `mise run test:logged -- --name full-tests-warm -- mise run test`
+passed all four groups (exit 0, 442.9 seconds logged); root/support passed in
+190.9 seconds. Both owning implementations and tests remained unchanged.
+
 ## Design qualification second main merge — 2026-10-21
 
 `mise run test:logged -- --name merge2-tests -- mise run test` on `be2e89da` merged into `5f8b2bca` timed out `Pi bridge runtime vendoring > loads Pi's supported SDK from the staged runtime closure` at 30,000.39 ms. Root/support used one Bun worker alongside workspace/bridge groups and other worktrees; host load was about 40–60 by the end, after exceeding 100 in the earlier validation. The overall retry was interrupted at 335.2 seconds after admission delays and is incomplete, rather than a complete one-failure aggregate.

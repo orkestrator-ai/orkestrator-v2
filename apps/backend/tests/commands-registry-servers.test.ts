@@ -1,4 +1,5 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
+import os from "node:os";
 
 import { createCommandFixtures } from "./command-fixtures";
 
@@ -27,6 +28,42 @@ import type { CommandContext } from "./command-fixtures";
 type ServerStart = { hostPort: number; wasRunning: boolean; authToken: string };
 
 describe("Electron backend command registry", () => {
+  test.each([true, false])(
+    "reads OpenCode preferences with XDG_STATE_HOME set: %s",
+    async (useXdg) => {
+      const root = await createTempDir("ork-opencode-preferences-");
+      const previousHome = process.env.HOME;
+      const previousState = process.env.XDG_STATE_HOME;
+      const state = path.join(root, "state");
+      const home = path.join(root, "home");
+      const preferences = {
+        recent: [{ providerID: "openai", modelID: "test" }],
+        favorite: [],
+        variant: {},
+      };
+      const directory = path.join(useXdg ? state : path.join(home, ".local", "state"), "opencode");
+      await fs.mkdir(directory, { recursive: true });
+      await fs.writeFile(path.join(directory, "model.json"), JSON.stringify(preferences));
+      process.env.HOME = home;
+      // Bun caches os.homedir(), so redirect it explicitly as well.
+      const homeDirectory = spyOn(os, "homedir").mockReturnValue(home);
+      if (useXdg) process.env.XDG_STATE_HOME = state;
+      else delete process.env.XDG_STATE_HOME;
+      try {
+        const { context } = createContext(createEnvironment());
+        expect(
+          await createCommandRegistry().get("get_opencode_model_preferences")?.({}, context),
+        ).toEqual(preferences);
+      } finally {
+        homeDirectory.mockRestore();
+        if (previousHome === undefined) delete process.env.HOME;
+        else process.env.HOME = previousHome;
+        if (previousState === undefined) delete process.env.XDG_STATE_HOME;
+        else process.env.XDG_STATE_HOME = previousState;
+      }
+    },
+  );
+
   // The `security` stub only takes effect on darwin, where `getHostClaudeCredentials`
   // consults the Keychain; elsewhere resolution starts at the on-disk credential.
   // Seeding both with the same payload keeps these tests asserting the same thing
@@ -440,7 +477,31 @@ exit 0
       containerId: `container-${provider}`,
       status: "running",
     });
-    const { context } = createContext(environment);
+    const { context } = createContext(environment, {
+      globalConfig: { enabledAgentPlatforms: ["grok"] },
+    });
+    context.runtimeFlavor = "agent-test";
+    context.credentialSources = new Set(["grok"]);
+    const hostHome = path.join(path.dirname(pidFile), "host");
+    const hostAuth = path.join(hostHome, ".grok", "auth.json");
+    const importedAuth = path.join(path.dirname(pidFile), "imported-auth.json");
+    await fs.mkdir(path.dirname(hostAuth), { recursive: true });
+    const writeHostLogin = (key: string, expired = false) =>
+      fs.writeFile(
+        hostAuth,
+        JSON.stringify({
+          live: {
+            key,
+            refresh_token: "SENTINEL-HOST-REFRESH",
+            expires_at: new Date(Date.now() + (expired ? -3600_000 : 3600_000)).toISOString(),
+          },
+        }),
+      );
+    await writeHostLogin("first-access");
+    const previousHostHome = process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME;
+    const previousImportedAuth = process.env.FAKE_GROK_IMPORTED_AUTH;
+    process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = hostHome;
+    process.env.FAKE_GROK_IMPORTED_AUTH = importedAuth;
     const commands = createCommandRegistry();
 
     const previousHostPort = process.env.FAKE_BRIDGE_HOST_PORT;
@@ -458,14 +519,10 @@ case "$1" in
   port) printf '127.0.0.1:%s\\n' "$FAKE_BRIDGE_HOST_PORT"; exit 0 ;;
   exec)
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
-    # /tmp/orkestrator-ai is not guaranteed to exist in the image, so model it:
-    # a redirection into it only lands once some command has created it. This
-    # is what catches a fingerprint write that skips its own mkdir.
     case "$*" in
-      *"mkdir -p '/tmp/orkestrator-ai'"*|*'mkdir -p "$credential_dir"'*)
-        : > "$FAKE_CURSOR_DIR_MARKER" ;;
-    esac
-    case "$*" in
+      *"/home/node/.grok/auth.json"*)
+        cat > "$FAKE_GROK_IMPORTED_AUTH"
+        exit 0 ;;
       *"cat /tmp/${provider}-acp-bridge-token"*)
         cat "$FAKE_BRIDGE_TOKEN_FILE" 2>/dev/null || true
         exit 0 ;;
@@ -490,6 +547,8 @@ case "$1" in
         cat > "$FAKE_CURSOR_KEY_CAPTURE"
         exit 0 ;;
     esac
+    # A cold launch must see sync's access-only credential first.
+    test -s "$FAKE_GROK_IMPORTED_AUTH" || exit 91
     token=$(printf '%s' "$*" | sed -n "s/.*ACP_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p")
     if [ -z "$token" ]; then
       token=$(printf '%s' "$*" | sed -n "s/.*CURSOR_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p")
@@ -508,6 +567,7 @@ exit 0
 
     try {
       await withFakeDocker(dockerScript, async (logs) => {
+        process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = hostHome;
         // Concurrent starts must be serialized into one bridge process.
         const [first, second] = (await Promise.all([
           commands.get(`start_${provider}_server`)?.(
@@ -523,6 +583,32 @@ exit 0
         expect(second).toMatchObject({ hostPort, wasRunning: true });
         expect(first.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
         expect(second.authToken).toBe(first.authToken);
+
+        expect(JSON.parse(await fs.readFile(importedAuth, "utf8")).live).toMatchObject({
+          key: "first-access",
+          refresh_token: "",
+        });
+        // Model expiry without sleeping: an expired host login cannot replace
+        // the existing access-only copy, and cannot spend the host refresh token.
+        await writeHostLogin("expired-access", true);
+        await commands.get("start_grok_server")?.(
+          { containerId: environment.containerId },
+          context,
+        );
+        expect(JSON.parse(await fs.readFile(importedAuth, "utf8")).live.key).toBe("first-access");
+        await writeHostLogin("renewed-access");
+        const renewed = await commands.get("start_grok_server")?.(
+          { containerId: environment.containerId },
+          context,
+        );
+        expect(renewed).toEqual(second);
+        expect(JSON.parse(await fs.readFile(importedAuth, "utf8")).live).toMatchObject({
+          key: "renewed-access",
+          refresh_token: "",
+        });
+        expect(JSON.parse(await fs.readFile(hostAuth, "utf8")).live.refresh_token).toBe(
+          "SENTINEL-HOST-REFRESH",
+        );
 
         const status = (await commands.get(`get_${provider}_server_status`)?.(
           { containerId: `container-${provider}` },
@@ -569,6 +655,9 @@ exit 0
         // The token is written under a restrictive umask, never echoed.
         expect(execLog).toContain("umask 077");
         expect(execLog).not.toContain("configured-container-cursor-key");
+        expect(execLog).not.toContain("SENTINEL-HOST-REFRESH");
+        expect(execLog).not.toContain("renewed-access");
+        expect(execLog).not.toContain("first-access");
 
         await commands.get(`stop_${provider}_server`)?.(
           { containerId: `container-${provider}` },
@@ -579,6 +668,10 @@ exit 0
         expect(afterStop).toContain(`rm -f /tmp/${provider}-acp-bridge-token`);
       });
     } finally {
+      if (previousHostHome === undefined) delete process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME;
+      else process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = previousHostHome;
+      if (previousImportedAuth === undefined) delete process.env.FAKE_GROK_IMPORTED_AUTH;
+      else process.env.FAKE_GROK_IMPORTED_AUTH = previousImportedAuth;
       const pid = await fs.readFile(pidFile, "utf8").catch(() => "");
       if (pid) {
         try {

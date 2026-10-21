@@ -527,10 +527,40 @@ describe("Electron backend process supervisor", () => {
 
     expect(isolated.OPENAI_API_KEY).toBe("allowed-openai");
     expect(isolated.CURSOR_API_KEY).toBe("allowed-cursor");
-    expect(isolated.CODEX_HOME).toBe("/Users/tester/.codex");
     expect(isolated.ANTHROPIC_API_KEY).toBeUndefined();
     expect(isolated.NPM_TOKEN).toBeUndefined();
     expect(isolated.CLAUDE_CONFIG_DIR).toBe("/profiles/qa/credentials/claude");
+  });
+
+  test("authorized Codex and OpenCode keep the profile's own provider homes", () => {
+    const parent = {
+      HOME: "/Users/tester",
+      CODEX_HOME: "/Users/tester/custom-codex",
+      XDG_CONFIG_HOME: "/Users/tester/.xdg/config",
+      XDG_DATA_HOME: "/Users/tester/.xdg/data",
+      XDG_STATE_HOME: "/Users/tester/.xdg/state",
+      OPENAI_API_KEY: "allowed-openai",
+      OPENCODE_API_KEY: "allowed-opencode",
+    };
+    const runtime = {
+      flavor: "agent-test" as const,
+      isolatedCredentialRoot: "/profiles/qa/credentials",
+    };
+    // The host login reaches these homes only as the restricted snapshot
+    // `seedAgentTestProviderCredentials` writes, never as the host directory.
+    for (const credentialSources of [[], ["codex", "opencode"]]) {
+      const isolated = createBackendProcessEnvironment(parent, "2.8.2", {
+        ...runtime,
+        credentialSources,
+      });
+      expect(isolated.CODEX_HOME).toBe("/profiles/qa/credentials/codex");
+      expect(isolated.XDG_CONFIG_HOME).toBe("/profiles/qa/credentials/xdg-config");
+      expect(isolated.XDG_DATA_HOME).toBe("/profiles/qa/credentials/xdg-data");
+      expect(isolated.XDG_STATE_HOME).toBe("/profiles/qa/credentials/xdg-state");
+      const authorized = credentialSources.length > 0;
+      expect(isolated.OPENAI_API_KEY).toBe(authorized ? "allowed-openai" : undefined);
+      expect(isolated.OPENCODE_API_KEY).toBe(authorized ? "allowed-opencode" : undefined);
+    }
   });
 
   test("keeps host Claude configuration provider-scoped", () => {

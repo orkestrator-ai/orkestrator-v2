@@ -8,6 +8,7 @@ import {
   readdir,
   realpath,
   rename,
+  readFile,
   rm,
   truncate,
   writeFile,
@@ -15,6 +16,11 @@ import {
 import os from "node:os";
 import path from "node:path";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import {
+  restrictCodexAuthSnapshot,
+  restrictGrokAuthSnapshot,
+  type LoginSnapshot,
+} from "@orkestrator/protocol/login-snapshots";
 import { environmentStateDirectory } from "./environment-state-paths.js";
 
 /**
@@ -29,7 +35,8 @@ import { environmentStateDirectory } from "./environment-state-paths.js";
  * Only enabled providers are staged. Sources are read without following
  * symlinks (every ancestor and the entry itself), each file is re-checked
  * after opening so a swapped path cannot be read, and bounds are enforced
- * while copying. A revision is written under a temporary name and renamed
+ * while copying. Logins whose refresh token is single-use are staged
+ * access-only (`accessOnlyLogin`), so no container can spend the host's. A revision is written under a temporary name and renamed
  * into place, so a container never binds a half-written revision.
  */
 
@@ -66,7 +73,15 @@ export interface InputSource {
   root: string | null;
   files?: readonly string[];
   directories?: readonly { path: string; mode: DirectoryMode; exclude?: readonly string[] }[];
+  /**
+   * One of `files` that holds a login with a single-use refresh token. It is
+   * staged through `restrict` (see `@orkestrator/protocol/login-snapshots`),
+   * or not at all when that withholds it.
+   */
+  accessOnlyLogin?: { file: string; restrict: AccessOnlyLoginRestriction };
 }
+
+export type AccessOnlyLoginRestriction = (text: string, nowMs?: number) => LoginSnapshot;
 
 export interface InputFile {
   stage: string;
@@ -234,6 +249,7 @@ export function portableInputSpec(roots: InputSourceRoots): ProviderInputSpec[] 
             // plugins/.plugin-appserver holds host-platform binaries.
             { path: "plugins/cache", mode: "tree" },
           ],
+          accessOnlyLogin: { file: "auth.json", restrict: restrictCodexAuthSnapshot },
         },
         ...(codexAccountHome
           ? [
@@ -242,6 +258,7 @@ export function portableInputSpec(roots: InputSourceRoots): ProviderInputSpec[] 
                 target: "/codex-home",
                 root: codexAccountHome,
                 files: ["auth.json"],
+                accessOnlyLogin: { file: "auth.json", restrict: restrictCodexAuthSnapshot },
               },
             ]
           : []),
@@ -266,6 +283,7 @@ export function portableInputSpec(roots: InputSourceRoots): ProviderInputSpec[] 
             { path: "hooks", mode: "entries" },
             { path: "skills", mode: "entries" },
           ],
+          accessOnlyLogin: { file: "auth.json", restrict: restrictGrokAuthSnapshot },
         },
         {
           stage: "grok-config",
@@ -323,7 +341,9 @@ export type SkipReason =
   | "too-many-entries"
   | "aggregate-budget"
   | "unreadable"
-  | "changed-while-reading";
+  | "changed-while-reading"
+  /** A login withheld because a copy could not use it without refreshing. */
+  | "login-withheld";
 
 export interface ProviderInputSummary {
   provider: ProviderInputSpec["provider"];
@@ -473,6 +493,15 @@ class ProviderCopier {
 
   skip(reason: SkipReason, count = 1): void {
     this.summary.skipped[reason] = (this.summary.skipped[reason] ?? 0) + count;
+  }
+
+  adjustLogin(adjustment: { withheld: boolean; originalBytes: number; bytes: number }): void {
+    const files = adjustment.withheld ? -1 : 0;
+    const bytes = adjustment.bytes - adjustment.originalBytes;
+    this.summary.files += files;
+    this.summary.bytes += bytes;
+    this.total.take(files, bytes);
+    if (adjustment.withheld) this.skip("login-withheld");
   }
 
   private record(files: number, bytes: number): void {
@@ -648,7 +677,17 @@ export async function stagePortableInputs(
         const root = await realpath(source.root).catch(() => null);
         if (!root) continue;
         const stageRoot = path.join(partial, source.stage);
-        for (const file of source.files ?? []) await copier.file(root, file, stageRoot);
+        for (const file of source.files ?? []) {
+          await copier.file(root, file, stageRoot);
+          if (source.accessOnlyLogin?.file === file) {
+            const adjustment = await restrictStagedLogin(
+              path.join(stageRoot, file),
+              source.accessOnlyLogin.restrict,
+              now,
+            );
+            if (adjustment) copier.adjustLogin(adjustment);
+          }
+        }
         for (const directory of source.directories ?? []) {
           await copier.directory(root, directory, stageRoot);
         }
@@ -710,6 +749,46 @@ export async function stagePortableInputs(
     await rm(partial, { recursive: true, force: true }).catch(() => undefined);
     throw error;
   }
+}
+
+/**
+ * Rewrite a just-staged login file access-only, or remove it, returning the
+ * accounting adjustment. An absent file was never counted and needs no adjustment.
+ */
+async function restrictStagedLogin(
+  file: string,
+  restrict: AccessOnlyLoginRestriction,
+  now: Date,
+): Promise<{ withheld: boolean; originalBytes: number; bytes: number } | undefined> {
+  const contents = await readFile(file).catch(() => undefined);
+  if (contents === undefined) return undefined;
+  const originalBytes = contents.byteLength;
+  const restricted = restrict(contents.toString("utf8"), now.getTime());
+  if ("withheld" in restricted) {
+    await rm(file, { force: true });
+    return { withheld: true, originalBytes, bytes: 0 };
+  }
+  // The staged copy is private to this revision and not yet mounted.
+  await rm(file, { force: true });
+  await writeFile(file, restricted.text, { mode: 0o600, flag: "wx" });
+  return { withheld: false, originalBytes, bytes: Buffer.byteLength(restricted.text) };
+}
+
+/**
+ * The access-only form of a login a running container or a restaged revision
+ * is about to receive, or undefined when it must receive none.
+ */
+export function accessOnlyLoginText(
+  provider: "codex" | "grok",
+  text: string | undefined,
+  nowMs = Date.now(),
+): string | undefined {
+  if (text === undefined) return undefined;
+  const restricted = (provider === "codex" ? restrictCodexAuthSnapshot : restrictGrokAuthSnapshot)(
+    text,
+    nowMs,
+  );
+  return "text" in restricted ? restricted.text : undefined;
 }
 
 /** Docker arguments binding exactly the staged subtrees, read-only. */

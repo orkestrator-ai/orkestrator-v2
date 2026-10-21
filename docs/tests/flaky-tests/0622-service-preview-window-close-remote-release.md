@@ -37,3 +37,19 @@
 - **Evidence:** `output/agent-testing/svc-preview-0a835-last` (failure),
   `output/agent-testing/svc-preview-0a835-close-1` to `-4` (passes, with
   `window-close` timings).
+
+
+## Main merge validation, 2026-10-21
+
+The full Electron suite failed the same two-backend scenario earlier than the
+window-close step: `attachService`'s 30-second URL poll did not match `http://`
+at `service-preview-electron.spec.ts:355`. The complete unchanged owning file
+then passed all 14 cases (291.4 s logged), using
+`ORKESTRATOR_AGENT_TEST_RUN_ID=preview-main-merge-service-preview-electron.spec.ts
+mise run test:logged -- --name preview-merge-rerun-service-preview-electron.spec.ts
+-- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts
+service-preview-electron.spec.ts --workers=1`.
+This does not reproduce or resolve the earlier window-close release symptom.
+See [0623](0623-preview-main-merge-validation.md) for the original suite,
+other validation limitations and artifacts. No source, assertion or timeout
+changed between these Electron runs.

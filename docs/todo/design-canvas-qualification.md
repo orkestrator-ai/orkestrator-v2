@@ -321,12 +321,14 @@ now pass.
   and the scratch directory deleted. Artifacts (results JSON and four
   screenshots per run) are under `output/agent-testing/qa-design-live-c06/`:
   run 2 in `browser/`, run 1 in `run-1/`.
-- **Follow-up found while setting up.** An agent-test profile always takes the
-  default host login's token but uses the launching shell's
+- **Follow-up found while setting up.** At `9b3f53a2`, an agent-test profile
+  took the default host login's token but used the launching shell's
   `CLAUDE_CONFIG_DIR` as the bridge's configuration directory. Started from a
-  shell on an added account, it runs on one account and writes into the
-  other's directory, and there is no way to pick the account with headroom.
-  Logged in [agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md).
+  shell on an added account, it ran on one account and wrote into the
+  other's directory, with no way to pick the account with headroom. The
+  merged host-home isolation change now keeps writes in the profile; selecting
+  the matching credential entry remains logged in
+  [agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md).
 - **Repository validation.** No product or test code changed. `mise run
   check` passed, and so did the flake-index and doc-link unit tests. A full
   `mise run test` passed all four groups in 647.6 s with no profile live.

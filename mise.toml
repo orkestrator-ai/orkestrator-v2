@@ -240,6 +240,10 @@ description = "Run the Docker agent browser fixture"
 env = { ORKESTRATOR_AGENT_TEST_DOCKER = "1" }
 run = "bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts --grep 'Docker fixture'"
 
+[tasks."test:agent:paused-interactions"]
+description = "Opt-in billed provider qualification past ten minutes against an already-running disposable profile"
+run = "bunx playwright test --config e2e/agent-testing/playwright.paused-interactions.config.ts"
+
 [tasks."test:agent:coordinator"]
 description = "Opt-in live coordinator suite: a disposable profile and real provider turn per platform (--credential-source <platform> narrows)"
 raw_args = true

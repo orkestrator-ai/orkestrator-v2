@@ -7,6 +7,7 @@ import { useClaudeOptionsStore } from "../../../apps/web/src/stores/claudeOption
 import { useLoopedReviewStore } from "../../../apps/web/src/stores/loopedReviewStore";
 import { useUIStore } from "../../../apps/web/src/stores/uiStore";
 import { useErrorDialogStore } from "../../../apps/web/src/stores/errorDialogStore";
+import { useProjectStore } from "../../../apps/web/src/stores/projectStore";
 import { useSessionStore } from "../../../apps/web/src/stores/sessionStore";
 import { usePaneLayoutStore } from "../../../apps/web/src/stores/paneLayoutStore";
 import { mockToastError, mockToastInfo, mockToastSuccess } from "../../mocks/sonner";
@@ -17,7 +18,7 @@ import type {
   PortMapping,
   StartEnvironmentResult,
 } from "../../../apps/web/src/types";
-import { createMockEnvironment } from "../utils/testFactories";
+import { createMockEnvironment, createMockProject } from "../utils/testFactories";
 import {
   DEFAULT_TERMINAL_APPEARANCE,
   DEFAULT_TERMINAL_SCROLLBACK,
@@ -1788,6 +1789,10 @@ describe("useEnvironments", () => {
     useEnvironmentStore.setState({
       environments: [environment],
     });
+    const previousProjects = useProjectStore.getState().projects;
+    useProjectStore.setState({
+      projects: [createMockProject({ id: "project-1", name: "orkestrator-v2" })],
+    });
     mockGetEnvironment.mockResolvedValue({
       ...environment,
       status: "error",
@@ -1796,6 +1801,7 @@ describe("useEnvironments", () => {
     });
 
     await reconcileEnvironmentSetupSnapshots();
+    useProjectStore.setState({ projects: previousProjects });
 
     const state = useEnvironmentStore.getState();
     expect(state.getEnvironmentById(environment.id)).toMatchObject({
@@ -1811,9 +1817,13 @@ describe("useEnvironments", () => {
     act(() => {
       toastOptions.action?.onClick?.();
     });
+    expect(mockToastError.mock.calls[0]?.[1]).toMatchObject({
+      description: "orkestrator-v2 / mock-env: Docker provisioning failed",
+    });
     expect(useErrorDialogStore.getState().error).toMatchObject({
       title: "Failed to start environment",
       message: "Docker provisioning failed",
+      context: { project: "orkestrator-v2", environment: "mock-env" },
     });
   });
 

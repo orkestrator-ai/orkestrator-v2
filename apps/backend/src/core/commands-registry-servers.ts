@@ -8,6 +8,7 @@ import { persistentStateExports } from "./container-state-layout.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import { promises as fs } from "node:fs";
 import { randomBytes } from "node:crypto";
+import path from "node:path";
 import {
   APP_SLUG,
   APP_VERSION,
@@ -165,7 +166,11 @@ export function registerServerCommands(
     if (context.runtimeFlavor === "agent-test" && !context.credentialSources?.has("opencode")) {
       return { recent: [], favorite: [], variant: {} };
     }
-    const modelPath = homePath(".local", "state", "opencode", "model.json");
+    const modelPath = path.join(
+      process.env.XDG_STATE_HOME?.trim() || homePath(".local", "state"),
+      "opencode",
+      "model.json",
+    );
     if (!(await pathExists(modelPath))) return { recent: [], favorite: [], variant: {} };
     return JSON.parse(await fs.readFile(modelPath, "utf8"));
   });

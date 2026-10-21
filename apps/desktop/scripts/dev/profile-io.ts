@@ -220,6 +220,7 @@ function isSameFile(initial: Stats, current: Stats): boolean {
 async function seedBoundedFiles(
   candidates: readonly BoundedSeedCandidate[],
   options: ModelCacheSeedOptions,
+  onFailure?: () => void,
 ): Promise<string[]> {
   const copied: string[] = [];
   for (const candidate of candidates) {
@@ -230,7 +231,8 @@ async function seedBoundedFiles(
       if (!candidate.replace && (await pathExists(candidate.destination))) continue;
       sourceHandle = await open(candidate.source, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
       const initialSourceInfo = await sourceHandle.stat();
-      if (!initialSourceInfo.isFile() || initialSourceInfo.size > MAX_MODEL_CACHE_BYTES) continue;
+      if (!initialSourceInfo.isFile() || initialSourceInfo.size > MAX_MODEL_CACHE_BYTES)
+        throw new Error("Seed source is not a bounded regular file");
       await options.afterSourceValidation?.(candidate.label);
 
       await mkdir(path.dirname(candidate.destination), { recursive: true, mode: 0o700 });
@@ -282,7 +284,8 @@ async function seedBoundedFiles(
         await link(temporary, candidate.destination);
       }
       copied.push(candidate.label);
-    } catch {
+    } catch (error) {
+      if (sourceHandle || (error as NodeJS.ErrnoException).code !== "ENOENT") onFailure?.();
       // Provider state is an optional convenience, never a startup dependency.
     } finally {
       await sourceHandle?.close().catch(() => undefined);
@@ -584,6 +587,7 @@ export function restrictCodexAuthSnapshot(
   if (accessToken) {
     const expiresAt = jwtExpiryMs(accessToken);
     if (expiresAt !== undefined && expiresAt - nowMs < PROVIDER_SNAPSHOT_MIN_VALIDITY_MS) {
+      if (apiKey) return { text: JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: apiKey }) };
       return {
         withheld:
           "the host Codex login has expired and the profile may not refresh it; run codex on the host (codex login if it is signed out there), then restart the profile",
@@ -670,18 +674,109 @@ type RestrictedCredentialSeed = {
   restrict: (text: string, nowMs?: number) => { text: string } | { withheld: string };
   /**
    * `always` removes the destination whenever no snapshot was published.
-   * `seeded` removes it only when an earlier start published one (recorded in
-   * a marker beside it), so a login made inside the profile itself survives a
-   * profile that does not authorize the host's.
+   * `seeded` revokes only credentials whose digests match the ownership marker.
+   * OpenCode entries are tracked individually to preserve profile-owned providers.
    */
   revoke: "always" | "seeded";
 };
 
+/** Stable across provider rewrites that only reorder JSON object keys. */
+function credentialDigest(value: unknown): string {
+  const canonical = (item: unknown): unknown => {
+    if (Array.isArray(item)) return item.map(canonical);
+    const record = jsonRecord(item);
+    return record
+      ? Object.fromEntries(
+          Object.keys(record)
+            .sort()
+            .map((key) => [key, canonical(record[key])]),
+        )
+      : item;
+  };
+  return createHash("sha256")
+    .update(JSON.stringify(canonical(value)))
+    .digest("hex");
+}
+
+/** Missing files are expected; unreadable ownership or credentials are not. */
+async function readCredentialFile(file: string): Promise<string | undefined> {
+  try {
+    return await readFile(file, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
 /**
- * Publish a restricted snapshot of one host credential file, owner-only, or
- * revoke the previous snapshot. Never throws and never reports filesystem
- * errors, which can contain credential data.
+ * Remove only credentials still owned by a previous host snapshot. Return any
+ * profile-owned contents for merging on an authorized refresh. Failure must
+ * stop startup, since a readable stale credential could otherwise be loaded.
  */
+async function revokeRestrictedCredential(
+  seed: RestrictedCredentialSeed,
+): Promise<string | undefined> {
+  const marker = `${seed.destination}.orkestrator-host-snapshot`;
+  try {
+    if (seed.revoke === "always") {
+      await rm(seed.destination, { force: true });
+      return undefined;
+    }
+    const ownership = await readCredentialFile(marker);
+    const current = await readCredentialFile(seed.destination);
+    if (ownership !== undefined) {
+      const recorded = jsonRecord(JSON.parse(ownership));
+      if (recorded?.version !== 1 || typeof recorded.digest !== "string")
+        throw new Error("Unknown credential ownership");
+      if (current !== undefined) {
+        // Invalid JSON cannot equal a published snapshot; it belongs to the profile.
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(current);
+        } catch {
+          parsed = undefined;
+        }
+        if (parsed !== undefined && credentialDigest(parsed) === recorded.digest) {
+          await rm(seed.destination, { force: true });
+        } else if (
+          seed.provider === "OpenCode" &&
+          jsonRecord(parsed) &&
+          jsonRecord(recorded.entries)
+        ) {
+          const remaining = { ...jsonRecord(parsed) };
+          let changed = false;
+          for (const [provider, digest] of Object.entries(jsonRecord(recorded.entries)!)) {
+            if (
+              Object.hasOwn(remaining, provider) &&
+              credentialDigest(remaining[provider]) === digest
+            ) {
+              delete remaining[provider];
+              changed = true;
+            }
+          }
+          if (Object.keys(remaining).length === 0) await rm(seed.destination, { force: true });
+          else {
+            if (changed) await atomicWriteJson(seed.destination, remaining);
+            await rm(marker, { force: true });
+            return JSON.stringify(remaining);
+          }
+        } else {
+          await rm(marker, { force: true });
+          return current;
+        }
+      }
+      await rm(marker, { force: true });
+      return undefined;
+    }
+    return current;
+  } catch {
+    throw new Error(
+      `Could not revoke previous ${seed.provider} host credentials; reset the profile before startup.`,
+    );
+  }
+}
+
+/** Publish owner-only snapshots; optional copy failures never expose raw errors. */
 async function seedRestrictedCredential(
   seed: RestrictedCredentialSeed,
   options: ModelCacheSeedOptions & { warn?: (message: string) => void; nowMs?: number },
@@ -691,16 +786,21 @@ async function seedRestrictedCredential(
   // The host copy lands beside the destination, where the provider never
   // reads, and only its restricted form is published under the name it loads.
   const hostCopy = `${destination}.host-copy`;
-  const copied = seed.authorized
-    ? (
-        await seedBoundedFiles(
-          [{ label: seed.label, source: seed.source, destination: hostCopy, replace: true }],
-          options,
-        )
-      ).length > 0
-    : false;
-  let published = false;
+  const profileOwned = await revokeRestrictedCredential(seed);
   let withheld: string | undefined;
+  const copied =
+    seed.authorized && !(profileOwned !== undefined && provider === "Codex")
+      ? (
+          await seedBoundedFiles(
+            [{ label: seed.label, source: seed.source, destination: hostCopy, replace: true }],
+            options,
+            () => {
+              withheld = `the authorized host ${provider} auth.json could not be copied`;
+            },
+          )
+        ).length > 0
+      : false;
+  let published = false;
   const temporary = `${destination}.${process.pid}.${Date.now()}.tmp`;
   if (copied) {
     const restricted = await readFile(hostCopy, "utf8")
@@ -708,11 +808,39 @@ async function seedRestrictedCredential(
       .catch(() => ({ withheld: `the host ${provider} auth.json could not be read back` }));
     if ("text" in restricted) {
       try {
-        // The marker comes first, so a published snapshot is always revocable.
-        if (seed.revoke === "seeded") await writeFile(marker, "", { mode: 0o600 });
-        await writeFile(temporary, restricted.text, { mode: 0o600, flag: "wx" });
-        await rename(temporary, destination);
-        published = true;
+        published = await (async () => {
+          let snapshot = JSON.parse(restricted.text) as Record<string, unknown>;
+          if (profileOwned !== undefined) {
+            // Codex has one login. OpenCode has independently owned provider entries.
+            if (provider !== "OpenCode") return false;
+            const own = jsonRecord(JSON.parse(profileOwned));
+            if (!own) return false;
+            snapshot = Object.fromEntries(
+              Object.entries(snapshot).filter(([key]) => !Object.hasOwn(own, key)),
+            );
+            if (Object.keys(snapshot).length === 0) return false;
+          }
+          if (seed.revoke === "seeded") {
+            await atomicWriteJson(marker, {
+              version: 1,
+              digest: credentialDigest(snapshot),
+              ...(provider === "OpenCode"
+                ? {
+                    entries: Object.fromEntries(
+                      Object.entries(snapshot).map(([key, value]) => [
+                        key,
+                        credentialDigest(value),
+                      ]),
+                    ),
+                  }
+                : {}),
+            });
+            snapshot = { ...snapshot, ...(profileOwned ? JSON.parse(profileOwned) : {}) };
+          }
+          await writeFile(temporary, JSON.stringify(snapshot), { mode: 0o600, flag: "wx" });
+          await rename(temporary, destination);
+          return true;
+        })();
       } catch {
         withheld = `the restricted ${provider} snapshot could not be published`;
       } finally {
@@ -728,15 +856,7 @@ async function seedRestrictedCredential(
     withheld ??= `the host ${provider} snapshot copy could not be removed`;
   });
   if (withheld) published = false;
-  // An absent or failed refresh must not leave a previous account signed in.
-  if (!published && (seed.revoke === "always" || (await pathExists(marker).catch(() => true)))) {
-    try {
-      await rm(destination, { force: true });
-      await rm(marker, { force: true });
-    } catch {
-      withheld = `the previous ${provider} snapshot could not be removed; reset the profile before using ${provider}`;
-    }
-  }
+  if (!published) await revokeRestrictedCredential(seed);
   if (withheld)
     options.warn?.(`Could not seed ${provider} credentials in this profile: ${withheld}.`);
   return published;

@@ -207,6 +207,13 @@ export class TestNodeNetwork {
     const portal = new NodePortal({
       nodes: service,
       emit: (event, payload) => events.push({ event, payload }),
+      local: {
+        invoke: async <T>(command: string, args: Record<string, unknown> = {}) => {
+          const handler = node.commands.get(command);
+          if (!handler) throw new Error(`Unknown command ${command}`);
+          return (await handler(args)) as T;
+        },
+      },
       fetchImpl: this.fetch,
     });
     const streams = new Set<ReadableStreamDefaultController<Uint8Array>>();

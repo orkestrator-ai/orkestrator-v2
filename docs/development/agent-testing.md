@@ -485,6 +485,51 @@ stays pinned to the tail and snaps back. Measurements land as annotations in
 `results.json`. Override models and trail lengths with the variables named in
 the spec's header.
 
+### Live cold restart
+
+`e2e/agent-testing/cold-restart-live.spec.ts` stops and starts the whole
+profile (backend, bridges and Electron) around real provider turns and checks
+that display tails and build-pipeline histories reconcile with no lost,
+duplicated or stale rows. It has its own opt-in,
+`ORKESTRATOR_AGENT_TEST_LIVE_COLD_RESTART=1`, and restarts the profile with the
+selection stored in its `profile.json`, so run it on its own against a profile
+you started by hand:
+
+```bash
+mise run dev:test --profile qa-cold --fixture --credential-source claude --credential-source codex --agent-platforms claude,codex
+# In a second terminal:
+ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS=900000 \
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-cold ORKESTRATOR_AGENT_TEST_LIVE_COLD_RESTART=1 \
+  mise run test:logged -- --name cold-restart-live -- mise run test:agent:browser -- \
+  e2e/agent-testing/cold-restart-live.spec.ts
+mise run dev:stop --profile qa-cold
+mise run dev:reset --profile qa-cold
+```
+
+Turns follow a trail of files (as in the paging spec), and every prompt
+carries a random tag, so a prompt delivered twice is countable.
+
+- **Native conversation** (Codex GPT-6-Luna by default; set
+  `ORKESTRATOR_AGENT_TEST_COLD_RESTART_NATIVE_PLATFORM=claude` for Haiku). After
+  an idle graceful restart, the first transcript read must be the persisted
+  display tail (`freshness: "cached"`) with exactly the conversation's rows,
+  and a client reading on from that cached view must converge on the
+  provider's rows. Then the backend is `SIGKILL`ed mid-turn: the tail may lag
+  by up to the checkpoint age, but must hold the prompt and no row the provider
+  lacks; the turn must settle, every earlier row must survive, and a follow-up
+  finishes the trail. The browser shows each prompt and closing word once.
+- **Build pipeline**. One pipeline's backend is `SIGKILL`ed the moment its
+  build prompt is journaled (`pendingPromptAttempt`), the mid-dispatch window;
+  the prompt must reach the provider once, on the same session. A second is
+  restarted mid-turn after a persist boundary: its committed history must read
+  back straight after the restart without the provider, and the stage
+  continues once on the same session. Both are cancelled once the build turn
+  ends, and an idle restart must return every stage history byte-identical.
+
+The restarts leave the profile running under a detached launcher; stop it
+with `dev:stop` as usual. `dev:status` no longer reports `testProject` after a
+restart, so the spec falls back to the profile's seeded copy.
+
 ### Live MCP apply in an inactive environment
 
 `e2e/agent-testing/mcp-apply-inactive.spec.ts` saves and applies MCP server

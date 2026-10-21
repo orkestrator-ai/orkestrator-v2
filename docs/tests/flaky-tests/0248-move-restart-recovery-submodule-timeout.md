@@ -150,3 +150,11 @@ The aggregate failed this owner and its unchanged owning file passed with one wo
 - **Suite counts:** backend reported 9166 passed, 41 skipped, two failed and one between-test error across 9209 tests in 491 files (408.13 seconds). The other failure was the merged registry metric capacity, corrected by raising the bounded entry limit from 656 to 657; its unchanged owning test passed. The aggregate exited 1 after 492.1 seconds.
 - **Evidence:** `orkestrator-test-run.tW4jss/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory after aggregate completion.
 - **Assessment:** confirmed intermittent recurrence. Concurrent subprocess contention remains a hypothesis; no implementation, assertion, timeout or skip changed.
+
+## Cold-restart qualification — 2026-10-21
+
+- **Original command:** `env -u PORT mise run test` on branch `qualify-cold-restart-reconcile-c5a876531b5f` (base `9b3f53a2`), with the host at a load average of about 10 on 18 cores. The change touches only the Codex bridge, one e2e spec and docs.
+- **Failure:** `restart recovery re-links submodules of an adopted or abandoned copy` exceeded 5000 ms (5137.87 ms); the backend reported one failure and the workspace group failed after 707.2 seconds. Every other group passed.
+- **Owning-file reruns:** `bun --cwd=apps/backend test src/core/environment-move.test.ts` without the Node preload failed the same case again (5075.09 ms; 36 passed). The documented command, `env -u PORT mise run test:logged -- --name environment-move-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts --parallel=1 --only-failures`, passed unchanged (exit 0, 40.0 seconds logged).
+- **Evidence:** `orkestrator-test-run.oQ14Bx` (aggregate) and `orkestrator-test-run.ZCmfUZ` (preload-free rerun) under the host temporary directory.
+- **Assessment:** confirmed recurrence. No implementation, assertion, timeout or skip changed.

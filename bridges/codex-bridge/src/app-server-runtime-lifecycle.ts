@@ -333,9 +333,16 @@ export class CodexRuntimeLifecycle {
             return;
           }
 
+          // The recovered turn renders from an empty accumulator, and a render
+          // replaces its row's parts. Only an empty assistant row may host it:
+          // a replayed row holds the interrupted turn's work up to the crash,
+          // which the model still has in context, and rendering over it would
+          // erase that work from the transcript.
           const lastMessage = context.messages.at(-1);
           const assistantMessage =
-            lastMessage?.role === "assistant"
+            lastMessage?.role === "assistant" &&
+            !lastMessage.content &&
+            (lastMessage.parts?.length ?? 0) === 0
               ? lastMessage
               : {
                   id: createMessageId(),

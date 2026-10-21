@@ -270,6 +270,15 @@ reliably green on `main`, and nothing requires it to be.
    the group from a fixture teardown or a worker-exit hook as well, and bound
    the `close()` wait.
 
+10. **The Codex bridge listens on import.** Found on 2026-10-21 during the
+    cold-restart qualification
+    ([flake 0660](../tests/flaky-tests/0660-codex-item-to-parts-inherited-port.md)).
+    `bridges/codex-bridge/src/item-to-parts.test.ts` imports `./index.js`,
+    which starts the bridge's HTTP server on `env.PORT`. An Orkestrator agent
+    tab exports `PORT` (its own bridge's port), so the suite errors with
+    "Failed to start server" whenever it runs from such a tab. Start the server
+    only when `index.ts` is the entry point, or move `itemToParts` out of it.
+
 ### Qualification
 
 - There is no controlled before-and-after comparison; the streamlining

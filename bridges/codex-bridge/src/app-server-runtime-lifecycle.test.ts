@@ -32,6 +32,7 @@ import {
   harness,
   threadPayload,
   waitUntil,
+  writeRolloutWithTurns,
 } from "./app-server-runtime-test-harness.js";
 import type { Harness } from "./app-server-runtime-test-harness.js";
 
@@ -675,6 +676,72 @@ describe("session lifecycle", () => {
       state: "terminal",
       terminalStatus: "failed",
     });
+  });
+
+  test("bridge-process recovery keeps the replayed rows of the interrupted turn", async () => {
+    // A backend crash leaves the in-flight turn's rows only in the rollout. The
+    // replay's last assistant row is that turn's work up to the crash (in the
+    // live qualification, a step note and the tool call after it). Recovery
+    // must finalize the interrupted turn on a row of its own: rendering its
+    // empty accumulator over the replayed row erased that work from the
+    // transcript although the model still had it in context.
+    writeRolloutWithTurns("thread-replayed", [
+      {
+        turnId: "turn-replayed",
+        user: "Follow the trail",
+        assistant: "I reached stop 20; reading stop 21 next.",
+      },
+    ]);
+    const store = new BridgeSessionStore({ codexHome, cwd: "/tmp/ws" });
+    await store.upsert(
+      store.toRecord({
+        bridgeSessionId: "session-replayed",
+        threadId: "thread-replayed",
+        cwd: "/tmp/ws",
+        config: { mode: "build", sandbox: "danger-full-access" },
+        lastAcceptedRequestId: "req-replayed",
+      }),
+    );
+    const journal = new DispatchJournal({ codexHome, cwd: "/tmp/ws" });
+    await journal.load();
+    await journal.markPrepared({
+      requestId: "req-replayed",
+      bridgeSessionId: "session-replayed",
+      threadId: "thread-replayed",
+    });
+    await journal.markAccepted("req-replayed", {
+      threadId: "thread-replayed",
+      turnId: "turn-replayed",
+    });
+
+    const h = await harness({
+      "thread/resume": () => ({ thread: threadPayload("thread-replayed") }),
+      "thread/read": () => ({
+        thread: threadPayload("thread-replayed", {
+          turns: [
+            {
+              id: "turn-replayed",
+              status: "interrupted",
+              items: [{ type: "userMessage", clientId: "req-replayed" }],
+            },
+          ],
+        }),
+      }),
+    });
+    await h.drain();
+
+    expect(h.runtime.getStatus("session-replayed")).toMatchObject({
+      phase: "failed",
+      error: CODEX_RESTARTED_MID_TURN_MESSAGE,
+    });
+    const messages = (await h.runtime.getMessages("session-replayed"))!;
+    const replayed = messages.find((message) =>
+      JSON.stringify(message).includes("I reached stop 20; reading stop 21 next."),
+    );
+    expect(replayed, "the replayed row lost its content").toBeDefined();
+    expect(replayed!.role).toBe("assistant");
+    expect(messages.at(-1)!.id).not.toBe(replayed!.id);
+    expect(new Set(messages.map((message) => message.id)).size).toBe(messages.length);
   });
 
   test("a restored dispatch announces its assistant row before patching it", async () => {

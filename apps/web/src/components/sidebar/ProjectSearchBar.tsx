@@ -26,6 +26,7 @@ import {
   type ProjectSearchHit,
 } from "@/lib/project-search";
 import { cn } from "@/lib/utils";
+import { FederatedSearchSection } from "@/components/federation/FederatedSearchSection";
 import type { Environment, Project } from "@/types";
 
 const FILTER_LABELS: Record<ProjectSearchFilter, string> = {
@@ -467,6 +468,7 @@ export function ProjectSearchBar({
                 ) : null}
               </div>
             )}
+            <FederatedSearchSection query={query} onOpened={() => setOpen(false)} />
           </div>
 
           <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-1 border-t border-border/70 px-4 py-2 text-[11px] text-zinc-500">

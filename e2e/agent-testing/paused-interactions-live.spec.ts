@@ -14,6 +14,12 @@ import { expect, test, type Page } from "@playwright/test";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { withDesignLiveHeartbeat } from "./design-live-heartbeat";
+import {
+  approvalOption,
+  raiseAndProtect,
+  withEnvironmentCleanup,
+} from "./paused-interactions-live-support";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import type { AgentInteractionRequest } from "@orkestrator/protocol/agent-interactions";
 import type { NativeAgentSessionProjection } from "@orkestrator/protocol/native-agent";
@@ -183,291 +189,361 @@ test("a paused question and approval wait past ten minutes on every provider, th
   const cases = CASES.filter((testCase) => PROVIDERS.has(testCase.agent));
   expect(cases.length, "no provider selected").toBeGreaterThan(0);
   page.setDefaultTimeout(20_000);
-  await page.setViewportSize({ width: 1440, height: 1000 });
-  const { invoke, fixture, status, signIn } = await connect(page);
-  const suffix = Date.now();
-  const runs: Running[] = [];
-  const log = (line: string) => console.log(`[paused-interactions] ${line}`);
-  const read = (run: Running) =>
-    invoke<Projection>("get_native_agent_projection", { ...run.identity, messageLimit: 50 });
-  const open = async (name: string) => {
-    const expand = page.getByRole("button", { name: `Expand project ${fixture.name}` });
-    const entry = page.getByText(name, { exact: true }).first();
-    await expect(expand.or(entry)).toBeVisible({ timeout: 90_000 });
-    for (const label of ["Continue Without Docker", "Continue Without GitHub CLI"]) {
-      const button = page.getByRole("button", { name: label, exact: true });
-      if (await button.isVisible()) await button.click();
-    }
-    if (await expand.isVisible()) await expand.click();
-    await page.mouse.move(0, 0);
-    await entry.click();
-  };
+  await withDesignLiveHeartbeat("paused-interactions", async () => {
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    const { invoke, fixture, status, signIn } = await connect(page);
+    const suffix = Date.now();
+    const runs: Running[] = [];
+    const log = (line: string) => console.log(`[paused-interactions] ${line}`);
+    const read = (run: Running) =>
+      invoke<Projection>("get_native_agent_projection", { ...run.identity, messageLimit: 50 });
+    const open = async (name: string) => {
+      const expand = page.getByRole("button", { name: `Expand project ${fixture.name}` });
+      const entry = page.getByText(name, { exact: true }).first();
+      await expect(expand.or(entry)).toBeVisible({ timeout: 90_000 });
+      for (const label of ["Continue Without Docker", "Continue Without GitHub CLI"]) {
+        const button = page.getByRole("button", { name: label, exact: true });
+        if (await button.isVisible()) await button.click();
+      }
+      if (await expand.isVisible()) await expand.click();
+      await page.mouse.move(0, 0);
+      await entry.click();
+    };
 
-  try {
-    await test.step("one environment per case, under an Ask policy", async () => {
-      for (const testCase of cases) {
-        const environment = await invoke<Environment>("create_environment", {
-          projectId: fixture.id,
-          name: `pause-${testCase.id}-${suffix}`,
-          environmentType: "local",
-        });
-        await invoke("update_environment_agent_settings", {
-          environmentId: environment.id,
-          agentSettings: { executionPolicy: { approvals: "ask" } },
-        });
-        await invoke("start_environment", { environmentId: environment.id });
-        const started = await invoke<Environment>("get_environment", {
-          environmentId: environment.id,
-        });
-        expect(started.worktreePath).toBeTruthy();
-        const tabId = `pause-${testCase.id}`;
-        const layout = await invoke<{ revision?: number } | null>("get_pane_layout", {
-          environmentId: environment.id,
-        });
-        await invoke("save_pane_layout", {
-          environmentId: environment.id,
-          expectedRevision: layout?.revision ?? 0,
-          layout: {
-            version: PANE_LAYOUT_VERSION,
-            containerId: null,
-            activePaneId: "pause-pane",
-            root: {
-              kind: "leaf",
-              id: "pause-pane",
-              activeTabId: tabId,
-              tabs: [
-                {
-                  id: tabId,
-                  type: "agent-native",
-                  nativeAgentData: {
-                    environmentId: environment.id,
-                    platform: testCase.agent,
-                    isLocal: true,
-                  },
-                },
-              ],
-            },
-          },
-        });
-        runs.push({
-          testCase,
-          environment: started,
-          identity: {
-            environmentId: environment.id,
-            agent: testCase.agent,
-            logicalSessionKey: `env-${environment.id}:${tabId}`,
-          },
-          marker: path.join(started.worktreePath!, `pause-${testCase.id}.txt`),
-          done: `${testCase.id.toUpperCase().replace("-", "_")}_DONE`,
-          observed: [],
-        });
-      }
-    });
-
-    await test.step("every case raises its request", async () => {
-      // Providers run in parallel. A provider's own cases go one after the
-      // other: two OpenCode servers starting at once can fail on OpenCode's
-      // shared database ("database is locked"), which is not what this
-      // qualifies.
-      const raise = async (run: Running) => {
-        await invoke("dispatch_native_agent_intent", {
-          ...run.identity,
-          requestId: `pause-${run.testCase.id}-${suffix}`,
-          mode: "build",
-          ...(run.testCase.approvalMode ? { approvalMode: run.testCase.approvalMode } : {}),
-          ...(MODELS[run.testCase.agent] ? { model: MODELS[run.testCase.agent] } : {}),
-          prompt: promptFor(run.testCase, run.marker, run.done),
-        });
-        let last = null as Projection;
-        await expect
-          .poll(
-            async () => {
-              last = await read(run).catch(() => null);
-              if (last?.turn.phase === "error") {
-                throw new Error(`${run.testCase.id}: turn error ${last.turn.error ?? ""}`);
-              }
-              if (last?.turn.phase === "idle" && last.messages.length > 1) {
-                throw new Error(`${run.testCase.id}: turn ended without asking`);
-              }
-              run.request = pendingOf(last, run.testCase);
-              return run.request !== undefined;
-            },
-            {
-              timeout: 300_000,
-              intervals: [2_000],
-              message: `${run.testCase.id} never asked (turn ${last?.turn.phase ?? "none"})`,
-            },
-          )
-          .toBe(true);
-        run.observed.push(`raised ${run.request!.kind}`);
-        if (run.testCase.kind === "approval") expect(existsSync(run.marker)).toBe(false);
-        log(
-          `${run.testCase.id}: ${run.request!.kind} pending, expiresAt=${run.request!.expiresAt}`,
-        );
-      };
-      const byAgent = new Map<Platform, Running[]>();
-      for (const run of runs) {
-        byAgent.set(run.testCase.agent, [...(byAgent.get(run.testCase.agent) ?? []), run]);
-      }
-      await Promise.all(
-        [...byAgent.values()].map(async (group) => {
-          for (const run of group) await raise(run);
-        }),
-      );
-    });
-
-    await test.step("pause each countdown from its card", async () => {
-      await page.goto(status.browserUrl);
-      for (const run of runs) {
-        await open(run.environment.name);
-        if (!run.testCase.pausable) {
-          // No deadline published, so the card shows no countdown at all.
-          expect(run.request!.expiresAt).toBeUndefined();
-          await expect(page.getByTestId("prompt-deadline-toggle")).toHaveCount(0, {
-            timeout: 30_000,
-          });
-          run.observed.push("no countdown");
-          continue;
-        }
-        const pause = page.getByRole("button", { name: /^Pause countdown,/ });
-        await expect(pause).toBeVisible({ timeout: 90_000 });
-        await pause.press("Enter");
-        await expect(
-          page.getByRole("button", { name: "Resume countdown", exact: true }),
-        ).toBeVisible();
-        await expect
-          .poll(async () => pendingOf(await read(run), run.testCase)?.hold?.heldAt)
-          .toBeTruthy();
-        const paused = pendingOf(await read(run), run.testCase)!;
-        expect(paused.id).toBe(run.request!.id);
-        run.pausedExpiresAt = paused.expiresAt;
-        run.observed.push(
-          `paused until +${Math.round(((paused.expiresAt ?? 0) - Date.now()) / 60_000)} min` +
-            (paused.hold?.reason ? ` (${paused.hold.reason})` : ""),
-        );
-        log(`${run.testCase.id}: paused, expiresAt=${paused.expiresAt}`);
-        // The pause must outlast the wait, or this run cannot prove anything.
-        expect(paused.expiresAt!).toBeGreaterThan(paused.createdAt + WAIT_MS + 60_000);
-      }
-    });
-
-    await test.step("every request is still waiting past ten minutes", async () => {
-      const waitUntil = Math.max(...runs.map((run) => run.request!.createdAt)) + WAIT_MS;
-      log(`waiting until ${new Date(waitUntil).toISOString()}`);
-      while (Date.now() < waitUntil) {
-        await page.waitForTimeout(Math.min(60_000, Math.max(0, waitUntil - Date.now())));
-        // Pointer activity keeps the gateway session from lapsing.
-        await page.mouse.move(10 + (Date.now() % 50), 10);
-        for (const run of runs) {
-          const projection = await read(run);
-          const pending = pendingOf(projection, run.testCase);
-          expect(
-            pending?.id,
-            `${run.testCase.id}: request left pending state (turn ${projection?.turn.phase})`,
-          ).toBe(run.request!.id);
-          expect(projection?.turn.phase, `${run.testCase.id}: turn phase`).not.toMatch(
-            /^(idle|error)$/,
-          );
-          if (run.testCase.kind === "approval") {
-            expect(existsSync(run.marker), `${run.testCase.id}: approved on its own`).toBe(false);
-          }
-        }
-        // A heartbeat, too: `test:logged` ends a run that is silent for 5 min.
-        log(
-          `all ${runs.length} still pending, ${Math.ceil((waitUntil - Date.now()) / 60_000)} min left`,
-        );
-      }
-      for (const run of runs) {
-        const pending = pendingOf(await read(run), run.testCase)!;
-        run.observed.push(
-          `pending after ${Math.round((Date.now() - pending.createdAt) / 60_000)} min, turn waiting`,
-        );
-      }
-    });
-
-    await test.step("answer each card after a reload; the turn carries on", async () => {
-      // A fresh sign-in and reload: the cards must rehydrate from the backend.
-      await signIn();
-      await page.goto(status.browserUrl);
-      for (const run of runs) {
-        await open(run.environment.name);
-        const request = pendingOf(await read(run), run.testCase)!;
-        expect(request.id).toBe(run.request!.id);
-        if (run.testCase.pausable) {
-          await expect(
-            page.getByRole("button", { name: "Resume countdown", exact: true }),
-          ).toBeVisible({ timeout: 90_000 });
-        }
-        await answer(page, request, run.testCase);
-        run.observed.push("answered");
-        log(`${run.testCase.id}: answered`);
-      }
-      await Promise.all(
-        runs.map(async (run) => {
-          await expect
-            .poll(
-              async () => {
-                const projection = await read(run);
-                if (projection?.turn.phase === "error") {
-                  throw new Error(`${run.testCase.id}: turn error ${projection.turn.error ?? ""}`);
-                }
-                const text = assistantText(projection);
-                const finished =
-                  run.testCase.kind === "question"
-                    ? text.includes(`CODEWORD_CHOSEN=${CODEWORD}`)
-                    : existsSync(run.marker) && text.includes(run.done);
-                return projection?.turn.phase === "idle" && finished;
-              },
-              { timeout: 300_000, intervals: [3_000] },
-            )
-            .toBe(true)
-            .catch(async (error: unknown) => {
-              const projection = await read(run).catch(() => null);
-              throw new Error(
-                `${run.testCase.id} did not finish after the answer: turn ` +
-                  `${projection?.turn.phase ?? "none"}, marker ${existsSync(run.marker)}, ` +
-                  `interactions ${JSON.stringify(
-                    projection?.interactions.map((item) => `${item.kind}:${item.state}`) ?? [],
-                  )}, reply …${assistantText(projection).slice(-600)}`,
-                { cause: error },
-              );
+    await withEnvironmentCleanup(invoke, async (register) => {
+      try {
+        await test.step("one environment per case, under an Ask policy", async () => {
+          for (const testCase of cases) {
+            const environment = await invoke<Environment>("create_environment", {
+              projectId: fixture.id,
+              name: `pause-${testCase.id}-${suffix}`,
+              environmentType: "local",
             });
-          const settled = await read(run);
-          expect(settled?.interactions.filter((item) => item.state === "pending") ?? []).toEqual(
-            [],
+            register(environment.id);
+            await invoke("update_environment_agent_settings", {
+              environmentId: environment.id,
+              agentSettings: { executionPolicy: { approvals: "ask" } },
+            });
+            await invoke("start_environment", { environmentId: environment.id });
+            const started = await invoke<Environment>("get_environment", {
+              environmentId: environment.id,
+            });
+            expect(started.worktreePath).toBeTruthy();
+            const tabId = `pause-${testCase.id}`;
+            const layout = await invoke<{ revision?: number } | null>("get_pane_layout", {
+              environmentId: environment.id,
+            });
+            await invoke("save_pane_layout", {
+              environmentId: environment.id,
+              expectedRevision: layout?.revision ?? 0,
+              layout: {
+                version: PANE_LAYOUT_VERSION,
+                containerId: null,
+                activePaneId: "pause-pane",
+                root: {
+                  kind: "leaf",
+                  id: "pause-pane",
+                  activeTabId: tabId,
+                  tabs: [
+                    {
+                      id: tabId,
+                      type: "agent-native",
+                      nativeAgentData: {
+                        environmentId: environment.id,
+                        platform: testCase.agent,
+                        isLocal: true,
+                      },
+                    },
+                  ],
+                },
+              },
+            });
+            runs.push({
+              testCase,
+              environment: started,
+              identity: {
+                environmentId: environment.id,
+                agent: testCase.agent,
+                logicalSessionKey: `env-${environment.id}:${tabId}`,
+              },
+              marker: path.join(started.worktreePath!, `pause-${testCase.id}.txt`),
+              done: `${testCase.id.toUpperCase().replace("-", "_")}_DONE`,
+              observed: [],
+            });
+          }
+        });
+
+        await test.step("every case raises its request", async () => {
+          // Providers run in parallel. A provider's own cases go one after the
+          // other: two OpenCode servers starting at once can fail on OpenCode's
+          // shared database ("database is locked"), which is not what this
+          // qualifies.
+          const raise = async (run: Running) => {
+            await invoke("dispatch_native_agent_intent", {
+              ...run.identity,
+              requestId: `pause-${run.testCase.id}-${suffix}`,
+              mode: "build",
+              ...(run.testCase.approvalMode ? { approvalMode: run.testCase.approvalMode } : {}),
+              ...(MODELS[run.testCase.agent] ? { model: MODELS[run.testCase.agent] } : {}),
+              prompt: promptFor(run.testCase, run.marker, run.done),
+            });
+            let last = null as Projection;
+            await expect
+              .poll(
+                async () => {
+                  last = await read(run).catch(() => null);
+                  if (last?.turn.phase === "error") {
+                    throw new Error(`${run.testCase.id}: turn error ${last.turn.error ?? ""}`);
+                  }
+                  if (last?.turn.phase === "idle" && last.messages.length > 1) {
+                    throw new Error(`${run.testCase.id}: turn ended without asking`);
+                  }
+                  run.request = pendingOf(last, run.testCase);
+                  return run.request !== undefined;
+                },
+                {
+                  timeout: 300_000,
+                  intervals: [2_000],
+                  message: `${run.testCase.id} never asked (turn ${last?.turn.phase ?? "none"})`,
+                },
+              )
+              .toBe(true);
+            run.observed.push(`raised ${run.request!.kind}`);
+            if (run.testCase.kind === "approval") expect(existsSync(run.marker)).toBe(false);
+            log(
+              `${run.testCase.id}: ${run.request!.kind} pending, expiresAt=${run.request!.expiresAt}`,
+            );
+          };
+          const byAgent = new Map<Platform, Running[]>();
+          for (const run of runs) {
+            byAgent.set(run.testCase.agent, [...(byAgent.get(run.testCase.agent) ?? []), run]);
+          }
+          await raiseAndProtect([...byAgent.values()], raise, async (run) => {
+            // Protect this request before waiting for any other provider or case.
+            // The UI phase below still exercises resume/pause on the actual card.
+            if (run.testCase.pausable) {
+              await invoke("hold_native_agent_interaction", {
+                ...run.identity,
+                interactionId: run.request!.id,
+                held: true,
+              });
+              const held = pendingOf(await read(run), run.testCase);
+              expect(held?.id).toBe(run.request!.id);
+              expect(held?.hold?.heldAt).toBeTruthy();
+              expect(held?.expiresAt).toBeGreaterThan(Date.now() + WAIT_MS + 60_000);
+            }
+          });
+        });
+
+        await test.step("pause each countdown from its card", async () => {
+          await page.goto(status.browserUrl);
+          for (const run of runs) {
+            await open(run.environment.name);
+            const card =
+              run.testCase.kind === "question"
+                ? page.getByTestId("agent-question-card")
+                : page.getByRole("group", { name: run.request!.presentation.title, exact: true });
+            await expect(card).toBeVisible({ timeout: 90_000 });
+            if (!run.testCase.pausable) {
+              // No deadline published, so the card shows no countdown at all.
+              expect(run.request!.expiresAt).toBeUndefined();
+              await expect(card.getByTestId("prompt-deadline-toggle")).toHaveCount(0, {
+                timeout: 30_000,
+              });
+              run.observed.push("no countdown");
+              continue;
+            }
+            const resume = card.getByRole("button", { name: "Resume countdown", exact: true });
+            await expect(resume).toBeVisible();
+            await expect(resume).toBeEnabled();
+            await resume.press("Enter");
+            await expect
+              .poll(async () => pendingOf(await read(run), run.testCase)?.hold?.heldAt)
+              .toBeUndefined();
+            const pause = card.getByRole("button", { name: /^Pause countdown,/ });
+            await expect(pause).toBeVisible({ timeout: 90_000 });
+            // The label changes optimistically while the resume is still in
+            // flight. Keyboard activation does not wait for enabledness.
+            await expect(pause).toBeEnabled();
+            await pause.press("Enter");
+            await expect(
+              page.getByRole("button", { name: "Resume countdown", exact: true }),
+            ).toBeVisible();
+            await expect
+              .poll(async () => pendingOf(await read(run), run.testCase)?.hold?.heldAt)
+              .toBeTruthy();
+            const paused = pendingOf(await read(run), run.testCase)!;
+            expect(paused.id).toBe(run.request!.id);
+            run.pausedExpiresAt = paused.expiresAt;
+            run.observed.push(
+              `paused until +${Math.round(((paused.expiresAt ?? 0) - Date.now()) / 60_000)} min` +
+                (paused.hold?.reason ? ` (${paused.hold.reason})` : ""),
+            );
+            log(`${run.testCase.id}: paused, expiresAt=${paused.expiresAt}`);
+            // The pause must outlast the wait, or this run cannot prove anything.
+            expect(paused.expiresAt!).toBeGreaterThan(Date.now() + WAIT_MS + 60_000);
+          }
+        });
+
+        await test.step("every request is still waiting past ten minutes", async () => {
+          const waitUntil = Date.now() + WAIT_MS;
+          log(`waiting until ${new Date(waitUntil).toISOString()}`);
+          while (Date.now() < waitUntil) {
+            await page.waitForTimeout(Math.min(60_000, Math.max(0, waitUntil - Date.now())));
+            // Pointer activity keeps the gateway session from lapsing.
+            await page.mouse.move(10 + (Date.now() % 50), 10);
+            for (const run of runs) {
+              const projection = await read(run);
+              const pending = pendingOf(projection, run.testCase);
+              expect(
+                pending?.id,
+                `${run.testCase.id}: request left pending state (turn ${projection?.turn.phase})`,
+              ).toBe(run.request!.id);
+              expect(projection?.turn.phase, `${run.testCase.id}: turn phase`).not.toMatch(
+                /^(idle|error)$/,
+              );
+              if (run.testCase.kind === "approval") {
+                expect(existsSync(run.marker), `${run.testCase.id}: approved on its own`).toBe(
+                  false,
+                );
+              }
+            }
+            // A heartbeat, too: `test:logged` ends a run that is silent for 5 min.
+            log(
+              `all ${runs.length} still pending, ${Math.ceil((waitUntil - Date.now()) / 60_000)} min left`,
+            );
+          }
+          for (const run of runs) {
+            const pending = pendingOf(await read(run), run.testCase)!;
+            run.observed.push(
+              `pending after ${Math.round((Date.now() - pending.createdAt) / 60_000)} min, turn waiting`,
+            );
+          }
+        });
+
+        await test.step("answer each card after a reload; the turn carries on", async () => {
+          // A fresh sign-in and reload: the cards must rehydrate from the backend.
+          await signIn();
+          await page.goto(status.browserUrl);
+          for (const run of runs) {
+            await open(run.environment.name);
+            const request = pendingOf(await read(run), run.testCase)!;
+            expect(request.id).toBe(run.request!.id);
+            if (run.testCase.pausable) {
+              await expect(
+                page.getByRole("button", { name: "Resume countdown", exact: true }),
+              ).toBeVisible({ timeout: 90_000 });
+            }
+            await answer(page, request, run.testCase);
+            run.observed.push("answered");
+            log(`${run.testCase.id}: answered`);
+          }
+          const finished = await Promise.allSettled(
+            runs.map(async (run) => {
+              await expect
+                .poll(
+                  async () => {
+                    const projection = await read(run);
+                    if (projection?.turn.phase === "error") {
+                      throw new Error(
+                        `${run.testCase.id}: turn error ${projection.turn.error ?? ""}`,
+                      );
+                    }
+                    const text = assistantText(projection);
+                    const finished =
+                      run.testCase.kind === "question"
+                        ? text.includes(`CODEWORD_CHOSEN=${CODEWORD}`)
+                        : existsSync(run.marker) && text.includes(run.done);
+                    return projection?.turn.phase === "idle" && finished;
+                  },
+                  { timeout: 300_000, intervals: [3_000] },
+                )
+                .toBe(true)
+                .catch(async (error: unknown) => {
+                  const projection = await read(run).catch(() => null);
+                  throw new Error(
+                    `${run.testCase.id} did not finish after the answer: turn ` +
+                      `${projection?.turn.phase ?? "none"}, marker ${existsSync(run.marker)}, ` +
+                      `interactions ${JSON.stringify(
+                        projection?.interactions.map((item) => `${item.kind}:${item.state}`) ?? [],
+                      )}, reply …${assistantText(projection).slice(-600)}`,
+                    { cause: error },
+                  );
+                });
+              const settled = await read(run);
+              expect(
+                settled?.interactions.filter((item) => item.state === "pending") ?? [],
+              ).toEqual([]);
+              run.outcome = "resumed with the answer";
+              run.observed.push("turn finished with the answer");
+            }),
           );
-          run.outcome = "resumed with the answer";
-          run.observed.push("turn finished with the answer");
-        }),
-      );
+          const failures = finished.filter((result) => result.status === "rejected");
+          if (failures.length) throw new AggregateError(failures.map((result) => result.reason));
+        });
+      } catch (error) {
+        await page
+          .screenshot({ path: testInfo.outputPath("before-cleanup.png"), fullPage: true })
+          .catch(() => undefined);
+        throw error;
+      } finally {
+        const summary = runs.map((run) => ({
+          case: run.testCase.id,
+          outcome: run.outcome ?? "incomplete",
+          observed: run.observed,
+        }));
+        log(JSON.stringify(summary));
+        await testInfo.attach("paused-interactions", {
+          body: JSON.stringify(summary, null, 2),
+          contentType: "application/json",
+        });
+        await page.goto("about:blank").catch(() => undefined);
+      }
     });
-  } catch (error) {
-    await page
-      .screenshot({ path: testInfo.outputPath("before-cleanup.png"), fullPage: true })
-      .catch(() => undefined);
-    throw error;
-  } finally {
-    const summary = runs.map((run) => ({
-      case: run.testCase.id,
-      outcome: run.outcome ?? "incomplete",
-      observed: run.observed,
-    }));
-    log(JSON.stringify(summary));
-    await testInfo.attach("paused-interactions", {
-      body: JSON.stringify(summary, null, 2),
-      contentType: "application/json",
-    });
-    await page.goto("about:blank").catch(() => undefined);
-    for (const run of runs.reverse()) {
-      await invoke("stop_environment", { environmentId: run.environment.id }).catch(
-        () => undefined,
-      );
-      await invoke("delete_environment", { environmentId: run.environment.id }).catch(
-        () => undefined,
-      );
-    }
-  }
+  });
 });
+
+// Exercise the ownership boundary with real environments, without a provider turn.
+for (const stage of ["after creation", "before layout persistence"] as const) {
+  test(`setup failure ${stage} cleans up its environment`, async ({ page }) => {
+    test.skip(!ENABLED, "requires the disposable paused-interactions profile");
+    const { invoke, fixture } = await connect(page);
+    const cleanup: string[] = [];
+    let created: Environment | undefined;
+    const injected = new Error(`injected failure ${stage}`);
+    let caught: unknown;
+    try {
+      await withEnvironmentCleanup(
+        async (command, args) => {
+          cleanup.push(command);
+          return invoke(command, args);
+        },
+        async (register) => {
+          created = await invoke<Environment>("create_environment", {
+            projectId: fixture.id,
+            name: `pause-cleanup-${Date.now()}`,
+            environmentType: "local",
+          });
+          register(created.id);
+          if (stage === "before layout persistence") {
+            await invoke("start_environment", { environmentId: created.id });
+            created = await invoke<Environment>("get_environment", { environmentId: created.id });
+            expect(created.worktreePath).toBeTruthy();
+          }
+          throw injected;
+        },
+      );
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(AggregateError);
+    expect((caught as AggregateError).errors).toEqual([injected]);
+    expect(cleanup).toEqual(["stop_environment", "delete_environment"]);
+    const remaining = await invoke<Environment[]>("get_environments", { projectId: fixture.id });
+    expect(remaining.some((environment) => environment.id === created!.id)).toBe(false);
+    if (created!.worktreePath) expect(existsSync(created!.worktreePath)).toBe(false);
+  });
+}
 
 /** An option button's name is its label followed by its description. */
 function startsWith(label: string): RegExp {
@@ -498,17 +574,10 @@ async function answer(page: Page, request: AgentInteractionRequest, testCase: Ca
   // question is a broader grant: Codex's "Approve with command policy" writes
   // a durable execpolicy rule into the provider home, which allow-once must
   // never do, so neither it nor any option carrying an amendment is chosen.
-  const options = question?.required
-    ? question.options.filter((item) => item.amendment === undefined)
-    : [];
-  if (options.length > 0) {
-    const allow =
-      options.find((item) => /once/i.test(item.label)) ??
-      options.find((item) => /^(allow|approve|yes|accept|run)/i.test(item.label)) ??
-      options.find((item) => !/always|session|deny|reject|never|no\b/i.test(item.label));
-    expect(allow, `no allow-once option in ${JSON.stringify(options)}`).toBeTruthy();
+  const allow = approvalOption(question);
+  if (allow) {
     await page
-      .getByRole("button", { name: startsWith(allow!.label) })
+      .getByRole("button", { name: startsWith(allow.label) })
       .first()
       .click();
   }

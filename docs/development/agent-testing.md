@@ -572,7 +572,7 @@ mise run dev:test --profile qa-pause --fixture --credential-source claude --cred
 ORKESTRATOR_AGENT_TEST_PROFILE=qa-pause ORKESTRATOR_AGENT_TEST_LIVE_PAUSED_INTERACTIONS=1 \
   ORKESTRATOR_AGENT_TEST_PAUSE_PROVIDERS=claude,codex,opencode,pi \
   mise run test:logged -- --name paused-interactions-live -- \
-  bunx playwright test --config e2e/agent-testing/playwright.paused-interactions.config.ts
+  mise run test:agent:paused-interactions
 mise run dev:stop --profile qa-pause
 mise run dev:reset --profile qa-pause
 ```
@@ -581,10 +581,14 @@ Each case (a Claude question and approval, a Codex command approval, a Grok
 question and permission, an OpenCode question and permission, a Pi approval)
 gets its own local environment under an `approvals: "ask"` policy and its own
 real turn. Providers run in parallel, and a provider's own cases start one
-after the other. The spec pauses each countdown from the card (OpenCode
-publishes none, so its card must show none). It then checks every 60 s that
+after the other. As soon as a request appears, the spec holds its countdown
+through the backend, before starting another case or waiting for a slower
+provider. It then resumes and pauses each countdown from the card, waiting
+for the backend state and enabled controls between actions. OpenCode publishes
+no deadline: its card must be visible before the absence of a countdown is
+asserted within that card. It then checks every 60 s that
 each request is still pending, the turn has not ended and no marker file
-appeared. Once 10.5 minutes have passed since the last request was raised, it
+appeared. Once 10.5 minutes have passed since every card was checked, it
 signs in again and reloads, then answers each card. Every turn must finish
 with the chosen codeword, or with the approved command's marker file and done
 token. The whole run takes about 20 minutes.
@@ -603,7 +607,17 @@ The approval card is answered with **Approve** alone. The spec never picks an
 optional or amendment option. Codex's "Approve with command policy" writes a
 rule into the Codex home, which a profile shares with the host (see
 [live-provider-and-platform-qualification.md](../todo/live-provider-and-platform-qualification.md)).
-Each case deletes its environment. The evidence is in
+The task remains explicitly opt-in (the environment flag above is required);
+it is not part of the default suite or CI because it spends real provider tokens.
+Two additional cases inject setup failures immediately after creation and
+before layout persistence against real fixture environments, and verify that
+stop/delete removes both the stored environment and any started worktree.
+A one-minute heartbeat covers setup, raising, the long wait, finishing and cleanup,
+including unchanged five-minute polls. `ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS=90000`
+can check it against a shorter watchdog. Environments are registered for stop/delete
+immediately after creation, so setup failures also clean up; cleanup failures fail
+the qualification. Credential-free regression tests for cleanup, immediate holds
+and approval choices run in `mise run test`. The evidence is in
 [agent-interactions-and-permissions.md](../todo/agent-interactions-and-permissions.md#live-pause-record-2026-10-21).
 
 ### Live design-tool cycle

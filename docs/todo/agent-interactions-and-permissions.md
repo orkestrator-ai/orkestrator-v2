@@ -361,6 +361,71 @@ Decisions:
   old five-minute default and Claude's 600 s hook limit. Every case had in
   fact waited 11 minutes when it was answered.
 
+### Review rerun (2026-10-21)
+
+The review fixes were validated on base `5f290e5c` plus the review changes in
+profile `qa-pause-review-2a03`, using the same pinned provider CLIs as the
+record above. The new `test:agent:paused-interactions` mise task keeps the
+live qualification separate from credential-free default tests.
+
+- The full 10.5-minute live qualification passed in 678.6 seconds, using:
+
+  ```bash
+  ORKESTRATOR_AGENT_TEST_PROFILE=qa-pause-review-2a03 \
+    ORKESTRATOR_AGENT_TEST_LIVE_PAUSED_INTERACTIONS=1 \
+    ORKESTRATOR_AGENT_TEST_PAUSE_PROVIDERS=claude,codex,opencode,pi \
+    ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS=90000 \
+    mise run test:logged -- --name paused-interactions-review-live -- \
+    mise run test:agent:paused-interactions
+  ```
+
+  All six cases in the table above stayed pending for about 11 minutes and
+  finished with their expected answer after reload: Claude question/approval,
+  Codex approval, OpenCode question/permission, and Pi approval. Every timed
+  request was held immediately on arrival, then resumed and paused through
+  its enabled card controls. Both OpenCode cards were visibly mounted before
+  asserting no countdown. The 10.5-minute wait began after all card checks,
+  so every UI hold itself received the full qualification interval. No marker
+  appeared before approval; no pending interaction remained after completion.
+  Results: `output/agent-testing/qa-pause-review-2a03/browser/results.json`.
+- Cleanup was tested against real fixture environments by injecting failures
+  immediately after creation and after startup, before layout persistence:
+  `ORKESTRATOR_AGENT_TEST_PROFILE=qa-pause-review-2a03
+  ORKESTRATOR_AGENT_TEST_RUN_ID=qa-pause-review-2a03-cleanup
+  ORKESTRATOR_AGENT_TEST_LIVE_PAUSED_INTERACTIONS=1 mise run test:logged --
+  --name paused-cleanup-live -- mise run test:agent:paused-interactions --grep
+  'setup failure'`. Both cases passed. Both stop/delete commands were attempted,
+  the environment records disappeared, and the started worktree was removed.
+- The 13 credential-free helper regressions cover optional choices, amendments,
+  allow-once preference, unsafe choices, setup/cleanup failures, immediate holds
+  despite delayed providers, and draining providers before cleanup. They now
+  run in the default `mise run test`, alongside the existing heartbeat tests.
+- The separate Grok attempt used `ORKESTRATOR_AGENT_TEST_PAUSE_PROVIDERS=grok`
+  and run ID `qa-pause-review-2a03-grok`. It **failed qualification** after
+  303 seconds: no question became pending. The launcher had reported that the
+  host Grok login was expired and could not be refreshed by an isolated profile.
+  The question and permission cases remain unqualified; neither is counted as
+  passed. Five one-minute heartbeats kept the 300-second raise poll alive under
+  `ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS=90000`; the failure was the assertion
+  timeout, not the watchdog. Its environments were cleaned up. Failure logs:
+  `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.p0WoNb`.
+- `mise run test:logged -- --name full-non-ios -- mise run test` passed
+  in 554.6 seconds. Format, lint and all typechecks passed through `mise run
+  check`; the changed TypeScript files also linted with zero warnings.
+  Focused task, heartbeat, helper and Playwright-loading checks passed, and
+  `mise tasks validate` accepted all 79 tasks. Other platform scenario suites
+  were omitted because only the qualification harness, task wiring and docs
+  changed; the real browser paths are exercised by the live qualification.
+- Codex question qualification remains blocked by the Default-mode limitation
+  in item 13 above. The approval qualification does not imply question coverage.
+  Enabling a different Codex collaboration mode is a product change outside
+  these harness fixes. No passing Codex question result is claimed.
+
+The disposable profile was stopped and reset after validation. The initial
+rerun exposed a harness race between optimistic countdown labels and a still
+pending resume action; waiting for the authoritative resumed state and an
+enabled pause button fixed it before the successful qualification above.
+
 ## Constraints and rationale
 
 - Approvals fail closed. A timeout, disconnect or unparseable answer denies.

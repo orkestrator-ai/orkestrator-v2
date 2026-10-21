@@ -1,3 +1,4 @@
+import { CONTROLLER_HEADER } from "@orkestrator/protocol/command-nodes";
 import type { GatewayContext } from "./gateway-context.js";
 import type { GatewayHandlers } from "./gateway-handlers.js";
 import type { GatewayLifecycle } from "./gateway-lifecycle.js";
@@ -203,7 +204,9 @@ export class GatewayAuth {
     // Keep the existing renderer served by the backend working without extra
     // configuration, including when TLS is terminated by Tailscale Serve.
     if (request.headers.host && origin.host === request.headers.host) return true;
-    return this.ctx.allowedOrigins.some((rule) => originMatchesRule(origin, rule));
+    if (this.ctx.allowedOrigins.some((rule) => originMatchesRule(origin, rule))) return true;
+    // Portals of attached command nodes reach this leaf directly.
+    return this.ctx.nodeHooks?.isPortalOriginAllowed(originValue) ?? false;
   }
 
   applyCorsHeaders(request: IncomingMessage, response: ServerResponse): boolean {
@@ -371,6 +374,9 @@ export class GatewayAuth {
       return;
     }
 
+    const controllerId = headerValueToString(request.headers[CONTROLLER_HEADER]);
+    if (controllerId) this.ctx.nodeHooks?.noteControllerContact(controllerId);
+
     if (url.pathname === `${API_PREFIX}/agent-test/session`) {
       this.handleAgentTestSession(request, response, listenerKind);
       return;
@@ -479,6 +485,7 @@ export class GatewayAuth {
       [BACKEND_CAPABILITIES.summaryReads]: 1,
     };
     if (this.ctx.loopbackClientUrl) capabilities[BACKEND_CAPABILITIES.loopbackClientGateway] = 1;
+    if (identity.nodeMode) capabilities[BACKEND_CAPABILITIES.nodeAttachment] = 1;
     const hello: BackendHello = {
       schemaVersion: BACKEND_HELLO_SCHEMA_VERSION,
       installationId: parseBackendId(identity.installationId, "installationId"),
@@ -489,6 +496,7 @@ export class GatewayAuth {
       profile: parseBackendProfile(identity.profile),
       endpointRole: listenerKind === "control" ? "control" : "client",
     };
+    if (identity.nodeMode) hello.nodeMode = identity.nodeMode;
     jsonResponse(response, 200, hello, { "cache-control": "no-store" });
   }
 

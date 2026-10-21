@@ -53,6 +53,11 @@ export type BackendOptions = {
   strictDockerOwner: boolean;
   strictGatewayPort: boolean;
   credentialSources: AgentPlatform[];
+  /**
+   * `--command-node`: command-node registration is always enabled. The
+   * desktop passes it for its local backend, which is always a command node.
+   */
+  commandNode: boolean;
 };
 
 function valueAfter(args: string[], name: string): string | undefined {
@@ -190,6 +195,7 @@ export function parseOptions(
     tailscaleServe: args.includes("--tailscale-serve") || env.ORKESTRATOR_TAILSCALE_SERVE === "1",
     desktopWebClient: args.includes("--desktop-web-client"),
     desktopUpdater: args.includes("--desktop-updater"),
+    commandNode: args.includes("--command-node") || env.ORKESTRATOR_COMMAND_NODE === "1",
     standaloneUpdaterDir: valueAfter(args, "--standalone-updater"),
     tailscaleServePort,
     tailscaleExecutable:

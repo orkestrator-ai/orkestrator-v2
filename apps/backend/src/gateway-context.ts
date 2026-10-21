@@ -60,6 +60,7 @@ export class GatewayContext {
   readonly controlPort?: number;
   readonly loopbackClientPort?: number;
   readonly backendHello: OrkestratorGatewayOptions["backendHello"];
+  readonly nodeHooks: OrkestratorGatewayOptions["nodeHooks"];
   readonly env: NodeJS.ProcessEnv;
   readonly interfaces?: NetworkInterfaceMap;
   readonly logger: Pick<Console, "debug" | "error" | "info" | "warn">;
@@ -131,6 +132,7 @@ export class GatewayContext {
     this.controlPort = options.controlPort;
     this.loopbackClientPort = options.loopbackClientPort;
     this.backendHello = options.backendHello;
+    this.nodeHooks = options.nodeHooks;
     this.env = options.env ?? process.env;
     this.interfaces = options.interfaces;
     this.logger = options.logger ?? console;

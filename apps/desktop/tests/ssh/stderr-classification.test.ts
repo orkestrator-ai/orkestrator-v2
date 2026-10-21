@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { classifySshStderr, redactSshDiagnostic } from "@orkestrator/protocol/node/ssh/stderr-classification";
+import {
+  classifySshStderr,
+  redactSshDiagnostic,
+} from "@orkestrator/protocol/node/ssh/stderr-classification";
 import {
   SSH_TUNNEL_FAILURE_CODES,
   SshTunnelError,

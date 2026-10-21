@@ -325,7 +325,7 @@ function parseSavedRoute(value: unknown, label: string): SavedRoute {
   throw new Error(`Expected ${label}.kind to be https or ssh.`);
 }
 
-function parseStoredOrigin(value: unknown, label: string): string {
+export function parseStoredOrigin(value: unknown, label: string): string {
   const text = asString(value, label, 2048);
   let url: URL;
   try {

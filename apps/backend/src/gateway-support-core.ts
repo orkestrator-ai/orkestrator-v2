@@ -87,6 +87,14 @@ export interface BackendHelloIdentity {
   generation: string;
   appVersion: string;
   profile: import("@orkestrator/protocol/backend-profile").BackendProfile;
+  /** Command-node role; absent from embedded gateways without command nodes. */
+  nodeMode?: "standalone" | "command" | "leaf";
+}
+
+/** Command-node hooks: attached controllers' portal origins and their last contact. */
+export interface GatewayNodeHooks {
+  isPortalOriginAllowed(origin: string): boolean;
+  noteControllerContact(controllerId: string): void;
 }
 
 export interface OrkestratorGatewayOptions {
@@ -119,6 +127,7 @@ export interface OrkestratorGatewayOptions {
    * fronts no backend identity and `/__orkestrator/hello` answers 404.
    */
   backendHello?: () => Promise<BackendHelloIdentity>;
+  nodeHooks?: GatewayNodeHooks;
   env?: NodeJS.ProcessEnv;
   interfaces?: NetworkInterfaceMap;
   logger?: Pick<Console, "debug" | "error" | "info" | "warn">;
@@ -292,7 +301,7 @@ export const GATEWAY_METRIC_TOTAL_LABEL_BYTES = 8 * 1024;
  * timing breakdown both incomplete and different on every run.
  * `apps/backend/tests/gateway-support-extra.test.ts` pins these against the real registry.
  */
-export const GATEWAY_COMMAND_METRIC_MAP_LIMIT = 704;
+export const GATEWAY_COMMAND_METRIC_MAP_LIMIT = 832;
 export const GATEWAY_COMMAND_METRIC_TOTAL_LABEL_BYTES = 32 * 1024;
 export const GATEWAY_METRIC_SAMPLE_LIMIT = 32;
 export const MAX_CLIENT_METRICS_BODY_BYTES = 64 * 1024;

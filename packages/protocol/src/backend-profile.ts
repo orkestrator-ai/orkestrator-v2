@@ -180,6 +180,8 @@ export const BACKEND_CAPABILITIES = {
   loopbackClientGateway: "loopback-client-gateway",
   /** `get_projects` / `get_environment_snapshots` summary reads. */
   summaryReads: "summary-reads",
+  /** `attach_controller` / `detach_controller` and node mode (command nodes). */
+  nodeAttachment: "node-attachment",
 } as const;
 
 const MAX_CAPABILITIES = 64;
@@ -196,6 +198,8 @@ export interface BackendHello {
   endpointRole: BackendEndpointRole;
   /** Optional non-secret grant identity; absent when the gateway has one shared grant. */
   authorizationScopeId?: string;
+  /** Command-node role; absent from backends that predate command nodes. */
+  nodeMode?: "standalone" | "command" | "leaf";
 }
 
 export function parseBackendHello(value: unknown): BackendHello {
@@ -253,6 +257,13 @@ export function parseBackendHello(value: unknown): BackendHello {
     profile: parseBackendProfile(record.profile),
     endpointRole,
   };
+  if (
+    record.nodeMode === "standalone" ||
+    record.nodeMode === "command" ||
+    record.nodeMode === "leaf"
+  ) {
+    hello.nodeMode = record.nodeMode;
+  }
   if (record.authorizationScopeId !== undefined) {
     hello.authorizationScopeId = boundedText(
       record.authorizationScopeId,

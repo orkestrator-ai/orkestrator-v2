@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { readdirSync } from "node:fs";
 import type { ForwardProbeResult } from "@orkestrator/protocol/node/ssh/port-allocation";
-import { SshTunnelError, type SshTunnelFailure } from "@orkestrator/protocol/node/ssh/tunnel-failures";
+import {
+  SshTunnelError,
+  type SshTunnelFailure,
+} from "@orkestrator/protocol/node/ssh/tunnel-failures";
 import { SshTunnelSupervisor } from "@orkestrator/protocol/node/ssh/tunnel-supervisor";
 import {
   authenticatedTunnel,

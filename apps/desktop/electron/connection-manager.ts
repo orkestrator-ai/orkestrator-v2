@@ -156,6 +156,9 @@ type RemoteConnection = {
  * federated sidebar and backend-scoped panels. See
  * `docs/architecture/federation.md`.
  */
+/** A saved machine and the first gateway token that could be decrypted for it. */
+export type SavedMachineExport = { backend: SavedBackend; token: string | null };
+
 export class ConnectionManager {
   private readonly localBackend: LocalBackend;
   private readonly secureStorage: SecureStorage;
@@ -1891,6 +1894,29 @@ export class ConnectionManager {
         backends: current.backends.map((entry) => (entry.id === record.id ? record : entry)),
       };
     });
+  }
+
+  /**
+   * The saved machines with their decrypted gateway tokens, for the one-time
+   * import into the local command node's registry. Tokens leave Electron
+   * main only in the request to the local backend; a route whose token
+   * cannot be decrypted contributes none.
+   */
+  async savedMachinesForCommandNode(): Promise<SavedMachineExport[]> {
+    const machines: SavedMachineExport[] = [];
+    for (const backend of this.catalogue.backends) {
+      let token: string | null = null;
+      for (const route of orderedRoutes(backend)) {
+        try {
+          token = await this.resolveToken(route, false);
+        } catch {
+          token = null;
+        }
+        if (token) break;
+      }
+      machines.push({ backend, token });
+    }
+    return machines;
   }
 
   private async resolveToken(route: SavedRoute, reEncrypt: boolean): Promise<string | null> {

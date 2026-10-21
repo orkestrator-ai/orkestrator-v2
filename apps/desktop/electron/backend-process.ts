@@ -717,6 +717,9 @@ export class BackendProcess {
     ];
     if (options.toolchainBinDir) args.push("--toolchain-bin-dir", options.toolchainBinDir);
     if (options.desktopUpdater) args.push("--desktop-updater");
+    // The desktop's local backend is always a command node: it can register
+    // the user's other machines as its leaves (docs/architecture/command-nodes.md).
+    args.push("--command-node");
     if (options.desktopWebClient) {
       args.push(
         "--desktop-web-client",

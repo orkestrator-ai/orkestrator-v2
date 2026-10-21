@@ -49,6 +49,7 @@ import { duplicateMachineColors } from "@/lib/federation/aggregate";
 import { useFederation } from "@/components/federation/FederationProvider";
 import { MachineDetails } from "./connections/MachineDetails";
 import { SshRouteDialog } from "./connections/SshRouteDialog";
+import { NodesSettings } from "./connections/NodesSettings";
 import {
   BrowserMachinesSettings,
   FederationFeatureToggles,
@@ -302,20 +303,27 @@ export function ConnectionsSettings() {
     }
   };
 
-  if (!api && federation.kind === "browser") return <BrowserMachinesSettings />;
-  if (!api) {
+  if (!api && federation.kind === "browser") {
     return (
-      <div className="max-w-3xl rounded-lg border border-zinc-800 bg-zinc-950/40 p-5">
-        <h3 className="text-sm font-medium text-foreground">Connections are unavailable</h3>
-        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-          This client does not provide saved remote connections.
-        </p>
+      <div className="max-w-4xl space-y-8">
+        <NodesSettings />
+        <BrowserMachinesSettings />
+      </div>
+    );
+  }
+  if (!api) {
+    // Mobile and other single-target clients: the connected node's own
+    // command-node settings are still served by that node.
+    return (
+      <div className="max-w-4xl space-y-6">
+        <NodesSettings />
       </div>
     );
   }
 
   return (
     <div className="max-w-4xl space-y-6">
+      <NodesSettings />
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h3 className="text-base font-semibold text-foreground">Machines</h3>

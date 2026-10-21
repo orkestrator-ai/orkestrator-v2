@@ -1,3 +1,6 @@
+import { NodeService, errorCode, type NodeServiceOptions } from "./nodes/node-service.js";
+import { createNodeSshFactory } from "./nodes/node-ssh.js";
+import type { NodeMode } from "@orkestrator/protocol/command-nodes";
 import { stoppedWorkerMailHook } from "./agent-mail-stopped-worker.js";
 import { setManagedGitHubCli } from "./github-cli-binary.js";
 import { setGitHubCliConfigSource } from "./github-credentials.js";
@@ -151,6 +154,10 @@ export class OrkestratorBackend {
   private readonly multiReviews: MultiReviewService;
   private readonly featurePlanning: FeaturePlanningService;
   private readonly coordinators: CoordinatorService;
+  /** Command-node registry and leaf attachments. */
+  readonly nodes: NodeService;
+  /** Origins clients load this node's UI from; registered on attached leaves. */
+  private portalOriginsSource: () => string[] = () => [];
   private readonly projectGit: ProjectGitService;
   private readonly promptQueues: PromptQueueDrainer;
   private readonly agentMail: AgentMailService;
@@ -270,6 +277,10 @@ export class OrkestratorBackend {
      * listener). Defaults to on outside `bun test`.
      */
     transcriptArtifactRuntime?: boolean;
+    /** `--command-node`: command-node registration is always enabled. */
+    commandNode?: boolean;
+    /** Test seam: node links (fetch, SSH, timers). */
+    nodeLinks?: Pick<NodeServiceOptions, "fetchImpl" | "createSsh" | "timers" | "heartbeatMs">;
   }) {
     this.keyedActivityJobs =
       options.keyedActivityJobs ?? keyedSchedulingEnabled("backend-activity");
@@ -442,6 +453,19 @@ export class OrkestratorBackend {
       },
     );
     context.coordinators = this.coordinators;
+    this.nodes = new NodeService({
+      storage,
+      emit: (event, payload) => options.emit(event, payload),
+      forceRegistration: options.commandNode === true,
+      portalOrigins: () => normalizePortalOrigins(this.portalOriginsSource()),
+      ...(options.nodeLinks?.fetchImpl ? { fetchImpl: options.nodeLinks.fetchImpl } : {}),
+      ...(options.nodeLinks?.timers ? { timers: options.nodeLinks.timers } : {}),
+      ...(options.nodeLinks?.heartbeatMs ? { heartbeatMs: options.nodeLinks.heartbeatMs } : {}),
+      ...((options.nodeLinks?.createSsh ?? createNodeSshFactory(options.dataDir))
+        ? { createSsh: options.nodeLinks?.createSsh ?? createNodeSshFactory(options.dataDir)! }
+        : {}),
+    });
+    context.nodes = this.nodes;
     const interactionMonitorMode =
       process.env.ORKESTRATOR_AGENT_INTERACTION_OBSERVE_ONLY === "1"
         ? ("observe-only" as const)
@@ -1616,6 +1640,11 @@ export class OrkestratorBackend {
       console.warn("[backend] Failed to start control MCP:", error);
     });
     this.reserveOwnedPreviewPorts();
+    // Node links reach other machines; they start after local recovery and
+    // never block it.
+    await this.nodes.start().catch((error) => {
+      console.warn("[backend] Command-node links did not start:", errorCode(error));
+    });
     this.coordinators.startStatusWakes();
     reconcileCoordinatorWorkflows();
     // Tell the user now, not when a review stage silently fails to submit its
@@ -1660,6 +1689,7 @@ export class OrkestratorBackend {
     generation: string;
     appVersion: string;
     profile: BackendProfile;
+    nodeMode: NodeMode;
   }> {
     const storage = this.context.storage;
     const [identity, profile] = await Promise.all([
@@ -1671,7 +1701,27 @@ export class OrkestratorBackend {
       generation: storage.getResourceGeneration(),
       appVersion: APP_VERSION,
       profile,
+      nodeMode: this.nodes.mode(),
     };
+  }
+
+  /**
+   * The gateway's view of command-node state: attached command nodes'
+   * portal origins are allowed, and their requests record the last contact.
+   */
+  nodeGateway(): {
+    isPortalOriginAllowed(origin: string): boolean;
+    noteControllerContact(id: string): void;
+  } {
+    return {
+      isPortalOriginAllowed: (origin) => this.nodes.isPortalOriginAllowed(origin),
+      noteControllerContact: (id) => this.nodes.noteControllerContact(id),
+    };
+  }
+
+  /** Set once the gateway has bound: the origins clients use for this node, read on each attach. */
+  setPortalOriginsSource(source: () => string[]): void {
+    this.portalOriginsSource = source;
   }
 
   /** Backend-owned preview services, for gateway transport adapters. */
@@ -1714,6 +1764,8 @@ export class OrkestratorBackend {
     // Stop new annotation reconciliation; pending requests stay as persisted
     // (never marked failed) and resume on the next start.
     this.webAnnotations.stopReconciler();
+    // Closes node links and owned SSH tunnels only; nothing on any node stops.
+    const nodesStopped = this.nodes.stop().catch(() => undefined);
     if (this.activityLeaseSweep) {
       clearInterval(this.activityLeaseSweep);
       this.activityLeaseSweep = null;
@@ -1758,6 +1810,7 @@ export class OrkestratorBackend {
         } catch (error) {
           console.warn("[backend] Failed to drain native agent work:", error);
         }
+        await nodesStopped;
         try {
           await this.buildPipelines.shutdown();
         } catch (error) {
@@ -1842,4 +1895,20 @@ export class OrkestratorBackend {
       throw error;
     }
   }
+}
+
+/** Exact `http(s)` origins only (wildcard allow rules are not portal origins), deduplicated. */
+function normalizePortalOrigins(values: string[]): string[] {
+  const origins = new Set<string>();
+  for (const value of values) {
+    try {
+      const url = new URL(value);
+      if ((url.protocol === "https:" || url.protocol === "http:") && !url.hostname.includes("*")) {
+        origins.add(url.origin);
+      }
+    } catch {
+      // Not an origin.
+    }
+  }
+  return [...origins].slice(0, 16);
 }

@@ -11,7 +11,10 @@ import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import type { SshAskpassHandler } from "@orkestrator/protocol/node/ssh/askpass";
-import { createSshAdapterContext, type SshAdapterContext } from "@orkestrator/protocol/node/ssh/context";
+import {
+  createSshAdapterContext,
+  type SshAdapterContext,
+} from "@orkestrator/protocol/node/ssh/context";
 import { allocateLoopbackPort } from "@orkestrator/protocol/node/ssh/port-allocation";
 import { SshTunnelError } from "@orkestrator/protocol/node/ssh/tunnel-failures";
 import { SshTunnelSupervisor } from "@orkestrator/protocol/node/ssh/tunnel-supervisor";

@@ -70,6 +70,8 @@ const STORE_LAYOUTS: Record<string, StoreLayout> = {
   "preview-settings": { kind: "document" },
   "backend-identity": { kind: "document" },
   "backend-profile": { kind: "document" },
+  "node-registry": { kind: "document" },
+  "node-attachments": { kind: "document" },
   "agent-accounts": { kind: "document" },
   "public-operations/index": { kind: "document" },
   "environment-cleanup-ledger": { kind: "envelope", collections: ["entries"] },

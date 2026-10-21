@@ -102,6 +102,7 @@ const backend = new OrkestratorBackend({
   hostRollbackEvidence: () =>
     standaloneLayoutForService ? readLauncherState(standaloneLayoutForService).rollback : null,
   emit: (event, payload) => gateway?.emit(event, payload),
+  commandNode: options.commandNode,
 });
 await backend.init();
 
@@ -121,6 +122,7 @@ gateway = new OrkestratorGateway({
   controlPort: options.controlPort,
   loopbackClientPort: options.loopbackClientPort,
   backendHello: () => backend.backendHelloIdentity(),
+  nodeHooks: backend.nodeGateway(),
   compression: options.compression,
   allowNonTailscaleBind:
     options.allowNonTailscaleBind || options.tailscaleServe || options.desktopWebClient,
@@ -194,6 +196,18 @@ if (managedWebClient) {
     throw error;
   }
 }
+
+// Command nodes register these on their leaves, so a client that loaded this
+// node's portal can reach a leaf directly.
+backend.setPortalOriginsSource(() =>
+  [
+    gatewayInfo.browserUrl,
+    info.browserUrl,
+    managedWebClient?.getStatus().url ?? undefined,
+    ...(options.allowedOrigins ?? []),
+    options.rendererDevServerUrl,
+  ].filter((origin): origin is string => Boolean(origin)),
+);
 
 // Transcript artifacts: the executable-content origin must differ from, and
 // may be framed only by, the application's own page origins.

@@ -34,6 +34,7 @@ import {
   installRendererNavigationGuards,
   trustedRendererUrlFor,
 } from "./window.js";
+import { importSavedMachinesOnce } from "./command-node-migration.js";
 import { ConnectionManager, DEFAULT_CONNECTION_SCOPE } from "./connection-manager.js";
 import {
   LocalBackendCatalogueStore,
@@ -1126,6 +1127,29 @@ async function startApplication(): Promise<void> {
   });
   await connectionManager.initialize();
   if (backend) await backend.invoke("get_config");
+  if (backend && runtimeFlavor !== "agent-test") {
+    const manager = connectionManager;
+    const local = backend;
+    // Saved machines become leaves of this desktop's command node, once.
+    void importSavedMachinesOnce({
+      connectionsDir: path.join(dataDir, "connections"),
+      machines: () => manager.savedMachinesForCommandNode(),
+      invoke: (command, args) => local.invoke(command, args),
+    })
+      .then((result) => {
+        if (result !== "already-imported") {
+          console.info(
+            `[Desktop] Saved machines attached to the local command node: ${result.imported} imported, ${result.skipped} skipped, ${result.needsCredential} need a token`,
+          );
+        }
+      })
+      .catch((error: unknown) => {
+        console.warn(
+          "[Desktop] Saved machines were not imported into the local command node yet:",
+          error instanceof Error ? error.name : "unknown",
+        );
+      });
+  }
   panelViews = createPanelViews();
   app.on("will-quit", () => connectionManager?.dispose());
 

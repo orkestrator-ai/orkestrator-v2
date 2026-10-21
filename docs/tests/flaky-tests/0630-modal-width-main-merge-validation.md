@@ -1,6 +1,6 @@
 # Modal-width main-merge validation
 
-- **ID:** 0627
+- **ID:** 0630
 - **Status:** open
 - **Observed:** 2026-10-21
 - **Merge baseline:** `1a365c12069dc8f8b2333a9cc608434378e28f8c`

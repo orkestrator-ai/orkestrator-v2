@@ -44,6 +44,24 @@
   existing contention hypothesis remains unconfirmed; no implementation,
   assertion, timeout or skip changed.
 
+## Structured review layout validation recurrence — 2026-10-21
+
+- **Command:** `mise run test:logged -- --name complete-tests -- mise run test`;
+  root used one worker while workspace, bridge, protocol and browser checks
+  ran concurrently, with other worktree validations active.
+- **Failure:** `kills the server when the overall deadline expires` at line 399
+  observed `[]` instead of its initial temporary-root list (88.65 ms). The
+  server-exit assertion passed.
+- **Root counts:** 3,151 passed, one skipped, three failed and one error across
+  3,155 tests in 150 files (536.90 s).
+- **Owning-file rerun:** `mise run test:logged -- --name opencode-probe-rerun -- bun test ./scripts/opencode-live-compatibility-probe.test.ts --parallel=1 --only-failures`
+  passed unchanged (exit 0, 1.4 s logged).
+- **Evidence:** `orkestrator-test-run.RzbPLB/root-and-agent-support-tests.log.gz`
+  under the host temporary directory.
+- **Assessment:** confirms the shared temporary-root observation recurrence;
+  cross-worktree cleanup interference remains plausible but unproven. No test
+  or product code changed.
+
 ## Command-node review validation recurrence — 2026-10-21
 
 - `mise run test:logged -- --name review-final-full -- mise run test` reproduced the existing failure while another checkout's complete suite ran on the same host. The root/support group reported 3147 passed, one skipped, four failed and one error across 3152 tests (530.0 s).

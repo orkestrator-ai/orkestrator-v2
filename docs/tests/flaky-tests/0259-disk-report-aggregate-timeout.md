@@ -75,6 +75,27 @@ The aggregate failed this owner and its unchanged owning file passed with one wo
   using the testing guide's GNU-tool PATH, passed the complete root/support
   group unchanged (273.8 seconds).
 
+## Structured review layout validation recurrence — 2026-10-21
+
+- **Command:** `mise run test:logged -- --name complete-tests -- mise run test`;
+  root used one worker alongside workspace/bridge/protocol groups (4/2/1
+  slots), browser checks and another worktree's validation.
+- **Failure:** `reports an isolated checkout and only fixes named legacy Turbo artifacts`
+  timed out after 5,042.09 ms; the child status was `null` instead of zero,
+  also producing an error between tests.
+- **Root counts:** 3,151 passed, one skipped, three failed and one error across
+  3,155 tests in 150 files (536.90 s).
+- **Evidence:** `orkestrator-test-run.RzbPLB/root-and-agent-support-tests.log.gz`
+  under the host temporary directory.
+- **First owning-file rerun:** `mise run test:logged -- --name disk-report-rerun -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures`
+  also timed out (four passed, one failed, one error; 6.2 s logged). Evidence:
+  `orkestrator-test-run.DQ2WbV/disk-report-rerun.log.gz`.
+- **Final owning-file rerun:** `mise run test:logged -- --name disk-report-final-rerun -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures`
+  passed unchanged (five tests, exit 0, 1.3 s logged) after the root and
+  component browser runs ended.
+- **Assessment:** confirms intermittent process/filesystem latency under load;
+  the specific cause remains unproven. No assertion, deadline or skip changed.
+
 ## Command-node review validation recurrence — 2026-10-21
 
 - `mise run test:logged -- --name review-final-full -- mise run test` reproduced the existing failure while another checkout's complete suite ran on the same host. The root/support group reported 3147 passed, one skipped, four failed and one error across 3152 tests (530.0 s).
@@ -94,3 +115,7 @@ The aggregate failed this owner and its unchanged owning file passed with one wo
 The subsequent `refresh-main-warm-tests` complete-suite observation passed
 the root/support group unchanged in 179.1 seconds. That aggregate's only
 failure was the separately recorded receipt-fixture cleanup recurrence in 0261.
+
+## Two-column report main merge — 2026-10-21
+
+Disk reporting exceeded five seconds (5,027.73 ms) in the aggregate; the complete unchanged owner passed in 4.4 seconds (`merge-disk-owner`). See [0629](0629-two-column-main-merge-validation.md) for commands, worker configuration, counts and evidence. No source, assertion, timeout or skip changed.

@@ -1,5 +1,10 @@
 # Federated client benchmarks
 
+> **Historical:** the measured client runtime and `scripts/benchmark-federation.ts`
+> were removed in favour of command nodes
+> ([command-nodes-handoff.md](command-nodes-handoff.md)). The numbers below
+> describe the removed design.
+
 Evidence for `docs/temp/remote.md` section 17 (performance budgets). These are
 measurements on one development Mac, not thresholds or support guarantees.
 

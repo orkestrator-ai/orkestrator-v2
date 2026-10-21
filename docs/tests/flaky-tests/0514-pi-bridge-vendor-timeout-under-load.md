@@ -4,7 +4,7 @@
 - **Status:** open
 - **Date observed:** 2026-10-21
 - **Test:** `Pi bridge runtime vendoring > loads Pi's supported SDK from the staged runtime closure`
-- **File:** `tests/unit/pi-bridge-vendor.test.ts`
+- **File:** `tests/unit/pi-bridge-vendor.test.ts:21`
 - **Original command:** `mise run test:logged -- --name command-nodes-final -- mise run test` (complete non-iOS suite) while another worktree's session was running its own `pi-bridge-vendor` rerun on the same host.
 - **Worker configuration:** default `scripts/test-all.ts` planning; the suite took 1394 s instead of the usual ~600 s because of the concurrent load.
 - **Failure:** the test hit its 30 000 ms timeout.

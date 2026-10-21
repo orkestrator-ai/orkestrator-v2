@@ -67,6 +67,7 @@ deleted once their behaviour is in a living doc; git history keeps them. The
 
 | Document | Notes |
 | --- | --- |
+| [command-nodes-handoff.md](development/command-nodes-handoff.md) | What was built for command nodes, where it lives, migration, deviations and what was not verified. |
 | [command-nodes-plan.md](development/command-nodes-plan.md) | Build plan for command nodes: contracts, milestones, requirement matrix with evidence and status, and the final verification procedure. |
 | [testing-guide.md](development/testing-guide.md) | How to choose and run tests. Commands live here. |
 | [agent-testing.md](development/agent-testing.md) | Isolated profiles and real-stack QA. |

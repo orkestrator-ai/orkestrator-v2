@@ -6,7 +6,9 @@
 > coordinator / client aggregates" statements below describe the delivered
 > code, not the target. What carries over, moves or is removed is listed in
 > command-nodes.md.
-
+>
+> **Since built:** the client-side runtime was removed in favour of command
+> nodes; see [command-nodes-handoff.md](command-nodes-handoff.md).
 
 Handoff for the plan in `docs/temp/remote.md` (sections 21 and 23). The
 living references are
@@ -92,8 +94,8 @@ Every command ran through `mise run test:logged`.
 | `mise run test:browser` | PASS. Connections specs were updated for the new labels. |
 | `mise run test:agent:electron` | PASS |
 | SSH real-sshd suites (`ORKESTRATOR_SSH_INTEGRATION=1`) | PASS, 96 tests: SH-01/02/03/04/05/06/07/10/11, ID-02, OP-01 |
-| `bun scripts/qa-federation-browser.ts` | PASS |
-| `bun scripts/benchmark-federation.ts` | Results in federation-benchmarks.md |
+| `bun scripts/qa-federation-browser.ts` (since removed) | PASS |
+| `bun scripts/benchmark-federation.ts` (since removed) | Results in federation-benchmarks.md |
 
 The real-stack QA screenshots are in
 `output/agent-testing/federation-qa/<run>/`, which is gitignored. They are

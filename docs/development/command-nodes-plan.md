@@ -1,7 +1,8 @@
 # Command nodes: implementation plan and traceability
 
-Status: **Plan of record for building
-[command-nodes.md](../architecture/command-nodes.md) on this branch.**
+Status: **Plan of record for
+[command-nodes.md](../architecture/command-nodes.md); built on this branch
+(M1–M4) and verified 2026-10-21 (see [Verification results](#verification-results)).**
 command-nodes.md says *what* the system must do. This document says *how* it
 is built: the contracts, the code layout, the milestone tasks, and a
 requirement matrix used to check the finished build against the spec.
@@ -772,3 +773,49 @@ Run after M4, and record the results in this document:
    for the test tokens and the `.env` test values, and expect no matches.
 6. **Report.** Summarize what was built, the deviations, the deferred rows
    and the evidence. Open the PR only when the user gives the go-ahead.
+
+## Verification results
+
+Run 2026-10-21 after M4, following the procedure above. The short tour is
+in [command-nodes-handoff.md](command-nodes-handoff.md).
+
+1. **Matrix walk.** Every row is `Done` except DP-07 (`Deferred`, deviation
+   2). Each row's evidence names the test or QA step that exercises it.
+2. **Spec re-read.** command-nodes.md and the user decisions (D-01–D-24)
+   were re-read sentence by sentence. Three gaps were found and fixed:
+   - coordinators could not read another node's diff, files or test
+     results (CO-06): fixed with `read_environment_details`;
+   - the portal could not edit a node's routes or token (RG-06): fixed
+     with the routes dialog;
+   - SSH prompts surfaced only on the settings page (RG-05): the dialog is
+     now app-wide.
+3. **Checks** (through `mise run test:logged`):
+
+   | Check | Result |
+   | --- | --- |
+   | `format:check`, `lint`, `typecheck` | PASS |
+   | `mise run test` (complete non-iOS) | Workspace, bridges and codex groups PASS. Root group failed on the inheritance-chain guard (real: `StorageNodes` was not recorded; fixed) and Pi vendoring (a 30 s timeout under a concurrent session; recorded as 0514). Root group rerun: PASS. |
+   | `mise run test:browser` | PASS (159.8 s) |
+   | `mise run test:agent:electron` | PASS (116.3 s) |
+   | SSH real-sshd suites (`ORKESTRATOR_SSH_INTEGRATION=1`) | Desktop 96 pass; backend `node-ssh-integration.test.ts` 1 pass |
+   | `bun scripts/qa-command-nodes.ts` | 26/26 checks PASS (four live backends) |
+
+   Flakes seen during the build and recorded: 0513 (Claude bridge, aggregate
+   suite) and 0514 (Pi vendoring under load). Neither test's area changed.
+4. **Two-node QA.** `scripts/qa-command-nodes.ts` covers:
+   - attachment, leaf mode of a nested command node and the two-level rule;
+   - node-qualified summaries, and no credential in views;
+   - a direct workspace grant (client API only, revoked on close) and the
+     relay;
+   - compare without values, and a file transfer;
+   - a deletion only after approval;
+   - an unavailable node (stale, writes refused) and reconnection;
+   - forgetting, and a log scan.
+
+   Screenshots were not taken, and the browser and Electron UI was not
+   driven against live leaves. The UI paths are covered by component tests
+   and the browser and Electron suites.
+5. **Secret scan.** The QA run's backend output contained none of the four
+   gateway tokens, the workspace grant or either `.env` test value.
+6. **Report.** See the handoff's "Deviations and deferrals" and "Not
+   verified". The PR is opened only with the user's go-ahead.

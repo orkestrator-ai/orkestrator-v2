@@ -4,12 +4,15 @@ Status: **Superseded direction — transitional code.** The objective for
 multi-machine Orkestrator is now [command-nodes.md](command-nodes.md): clients
 connect to one command node, which keeps the registry of leaf nodes in its
 backend, aggregates them, routes commands and runs cross-node coordinators.
-This file describes the client-side federation that is currently on the
-branch. It is being reworked into the command node: the registry, routes,
+This file describes the client-side federation that was on the branch
+before command nodes. It was reworked into the command node: the registry, routes,
 SSH tunnels and per-machine read model move into the command node backend,
 and the renderer-side multi-backend runtime, machine panels as separate
 renderer realms and the client-owned machine catalogue are removed. Do not
 extend the client-side design; build on command-nodes.md instead.
+
+> **Since built:** the client-side runtime was removed in favour of command
+> nodes; see [command-nodes-handoff.md](../development/command-nodes-handoff.md).
 
 Other references: SSH operator setup in
 [ssh-routes.md](../development/ssh-routes.md), upgrade and rollback in
@@ -627,6 +630,12 @@ Test names carry the plan's scenario IDs (section 22). Paths are relative to
 the repository root. Real-sshd suites run only with
 `ORKESTRATOR_SSH_INTEGRATION=1`; see
 [ssh-routes.md](../development/ssh-routes.md#real-sshd-integration-test).
+
+Historical map: `federation-runtime.test.ts`, `scripts/benchmark-federation.ts` and
+`scripts/qa-federation-browser.ts` were removed with the client-side runtime,
+and the observation tests of `connection-manager-federation.test.ts` went
+with it. The command-node equivalents are in the requirement matrix of
+[command-nodes-plan.md](../development/command-nodes-plan.md#requirement-matrix).
 
 | ID | Tests |
 | --- | --- |

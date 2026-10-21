@@ -1,13 +1,14 @@
 # Command nodes and leaf nodes
 
-Status: **Target architecture (agreed 2026-10-21, decisions refined the same day; being built).** This
+Status: **Agreed 2026-10-21 and built on this branch (milestones 1–4).** This
 is the objective for multi-machine Orkestrator. It supersedes the
 "independent backends, client-side federation" direction in
 [`docs/temp/remote.md`](../temp/remote.md) and the client-side design
 described in [federation.md](federation.md). Where those documents conflict
 with this one, this one wins. Open decisions are listed at the end. The build plan, contracts and the
-requirement matrix used to verify the build are in
-[command-nodes-plan.md](../development/command-nodes-plan.md).
+requirement matrix with evidence are in
+[command-nodes-plan.md](../development/command-nodes-plan.md); the short tour
+is [command-nodes-handoff.md](../development/command-nodes-handoff.md).
 
 ## Summary
 

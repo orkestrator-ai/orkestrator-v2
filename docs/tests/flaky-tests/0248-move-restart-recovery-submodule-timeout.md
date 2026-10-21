@@ -150,3 +150,10 @@ The aggregate failed this owner and its unchanged owning file passed with one wo
 - **Suite counts:** backend reported 9166 passed, 41 skipped, two failed and one between-test error across 9209 tests in 491 files (408.13 seconds). The other failure was the merged registry metric capacity, corrected by raising the bounded entry limit from 656 to 657; its unchanged owning test passed. The aggregate exited 1 after 492.1 seconds.
 - **Evidence:** `orkestrator-test-run.tW4jss/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory after aggregate completion.
 - **Assessment:** confirmed intermittent recurrence. Concurrent subprocess contention remains a hypothesis; no implementation, assertion, timeout or skip changed.
+
+## Federated client backend validation — 2026-10-21
+
+- **Original command:** a full `test:workspace` run during the federated multi-backend client work on `implement-remote-doc-007d1ec11a16-r1` (backend machine profile, authenticated hello and loopback client gateway, `0ec079bb`). That change does not touch `environment-move.ts` or its test.
+- **Failure:** this owner's submodule re-link case exceeded the five-second test timeout. The exact test name, elapsed milliseconds, worker counts, suite counts and evidence log path were not captured.
+- **Owning-file rerun:** `apps/backend/src/core/environment-move.test.ts` passed unchanged when rerun alone. The exact rerun command and duration were not captured.
+- **Assessment:** reported recurrence of the known intermittent timeout; shared-host contention remains a hypothesis. No implementation, assertion, timeout or skip changed.

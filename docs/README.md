@@ -42,6 +42,7 @@ deleted once their behaviour is in a living doc; git history keeps them. The
 | [control-mcp.md](architecture/control-mcp.md) | Control MCP operator guide. |
 | [mcp-management.md](architecture/mcp-management.md) | Per-provider MCP server management: sources, precedence, safe writes, secrets, apply states, evidence. |
 | [remote-gateway.md](architecture/remote-gateway.md) | Standalone backend, Tailscale Serve, flags, troubleshooting. |
+| [federation.md](architecture/federation.md) | Multi-machine client: no central coordinator, four identities, hello handshake, machine profile and colours, device catalogue v2, ConnectionManager routes/fallback/epochs, renderer runtimes, realm-based machine panels, sidebar, security invariants, flags, known limitations, acceptance-ID map. |
 | [host-updates.md](architecture/host-updates.md) | Maintaining the backend's computer from any client: Orkestrator updates (desktop app or standalone service; now or when idle; cancel; 60 s countdown; restart reconciliation; rollback), toolchain repair, gh channel, container image, UI and CLI. Remaining work: [remote-host-upgrades.md](todo/remote-host-upgrades.md). |
 | [public-cli.md](architecture/public-cli.md) | `orkestrator` client commands: backend selection, JSON/exit contract, request keys and retention, lifecycle waits, settings, sessions, request-specific completion, exec, scenarios. |
 | [event-snapshot-recovery.md](architecture/event-snapshot-recovery.md) | Which sequence each consumer may compare, revisioned view snapshots/outcomes, bounded client hydration, best-effort PR notifications, terminal input recovery. |
@@ -76,6 +77,9 @@ deleted once their behaviour is in a living doc; git history keeps them. The
 | [releasing.md](development/releasing.md) | Cutting a desktop release, CI secrets, artifact names, how the in-app updater decides to run, Linux/Omarchy notes. |
 | [container-qualification.md](development/container-qualification.md) | Real-Docker qualification: C01–C30 scenario matrix, live suites and how to run them, platform dimensions, benchmark harness and regression targets. |
 | [efficiency-harness.md](development/efficiency-harness.md) | Running `efficiency:baseline`: options, workloads a–j, counting method and limitations. |
+| [ssh-routes.md](development/ssh-routes.md) | Managed SSH routes: `--loopback-client-port`, SSH alias rules, host-key trust and recovery, prompts and BatchMode, platform support, failure codes, real-sshd integration test. |
+| [federation-migration.md](development/federation-migration.md) | Catalogue v1→v2 migration, what older clients see, storage-key migration, feature flags and rollback, client/backend compatibility table. |
+| [federation-benchmarks.md](development/federation-benchmarks.md) | Synthetic 1/3/10/25-machine runtime benchmark results and what is not measured. |
 | [flaky-tests.md](development/flaky-tests.md) | Pointer to the flake registry in `tests/`. |
 
 ## Tests

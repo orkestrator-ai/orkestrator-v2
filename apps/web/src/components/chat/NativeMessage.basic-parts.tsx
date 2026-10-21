@@ -167,11 +167,17 @@ export function toolRowPreview(
     toolName,
     toolArgs,
     toolOutput,
+    toolState,
+    toolDenied,
+    toolError,
     backgroundTask,
   }: {
     toolName?: string;
     toolArgs?: Record<string, unknown>;
     toolOutput?: string;
+    toolState?: "success" | "failure" | "pending";
+    toolDenied?: { reason?: string; source?: string };
+    toolError?: string;
     backgroundTask?: NativeBackgroundTask;
   },
   questions = parseQuestionToolArgs(toolArgs),
@@ -306,7 +312,9 @@ export function toolRowPreview(
   }
 
   const wakeup = parseScheduleWakeupArgs(toolName, toolArgs);
-  const wakeupPreview = wakeup ? scheduleWakeupPreview(wakeup) : "";
+  const wakeupPreview = wakeup
+    ? scheduleWakeupPreview(wakeup, toolState === "success" && !toolDenied && !toolError)
+    : "";
   if (wakeupPreview) {
     return {
       text: toSingleLinePreview(wakeupPreview),
@@ -490,7 +498,10 @@ export function ToolPart({
     (legacyChanges && legacyChanges.files.length > 0) ||
     (toolArgs && Object.keys(toolArgs).length > 0);
 
-  const displayInfo = toolRowPreview({ toolName, toolArgs, toolOutput, backgroundTask }, questions);
+  const displayInfo = toolRowPreview(
+    { toolName, toolArgs, toolOutput, toolState, toolDenied: denied, toolError, backgroundTask },
+    questions,
+  );
   const shouldShowToolTitle =
     Boolean(displayToolTitle) &&
     (!displayInfo || displayInfo.generic) &&
@@ -652,7 +663,11 @@ export function ToolPart({
             {answeredQuestions ? (
               <QuestionToolDetails questions={answeredQuestions} />
             ) : wakeup ? (
-              <ScheduleWakeupToolDetails call={wakeup} result={wakeupResult} />
+              <ScheduleWakeupToolDetails
+                call={wakeup}
+                result={wakeupResult}
+                succeeded={toolState === "success" && !denied && !toolError}
+              />
             ) : (
               formattedInput && (
                 <div className="px-3 py-2 border-b border-border/30">

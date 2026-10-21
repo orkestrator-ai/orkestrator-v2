@@ -54,15 +54,17 @@ function formatExtraValue(value: unknown): string {
 export function ScheduleWakeupToolDetails({
   call,
   result,
+  succeeded,
 }: {
   call: ScheduleWakeupCall;
   result: ScheduleWakeupResult | null;
+  succeeded: boolean;
 }) {
   // The runtime clamps the requested delay, so the result's figure is the one
   // that will actually elapse; the request stays in the tooltip.
   const requested =
     call.delaySeconds !== undefined ? `Requested ${call.delaySeconds} seconds` : undefined;
-  const delaySeconds = result?.inSeconds ?? call.delaySeconds;
+  const delaySeconds = (succeeded ? result?.inSeconds : undefined) ?? call.delaySeconds;
 
   return (
     <div
@@ -72,7 +74,7 @@ export function ScheduleWakeupToolDetails({
       <div className="flex flex-wrap items-center gap-1.5">
         {call.stop ? (
           <Chip icon={<CircleStop className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />}>
-            Loop stopped
+            {succeeded ? "Loop stopped" : "Stop requested"}
           </Chip>
         ) : (
           delaySeconds !== undefined && (
@@ -80,12 +82,12 @@ export function ScheduleWakeupToolDetails({
               icon={<AlarmClock className="h-3.5 w-3.5 text-primary" aria-hidden />}
               title={requested}
             >
-              Wakes in{" "}
+              {succeeded ? "Wakes in" : "Requested"}{" "}
               <span className="font-medium tabular-nums">{formatWakeupDelay(delaySeconds)}</span>
             </Chip>
           )
         )}
-        {!call.stop && result && (
+        {succeeded && !call.stop && result && (
           <Chip icon={<Clock className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />}>
             at <span className="font-medium tabular-nums">{result.scheduledFor}</span>
           </Chip>

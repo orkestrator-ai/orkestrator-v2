@@ -7,10 +7,8 @@
 /** The prompt Claude passes back for an autonomous `/loop` with no user prompt. */
 export const AUTONOMOUS_LOOP_SENTINEL = "<<autonomous-loop-dynamic>>";
 
-const KNOWN_KEYS = new Set(["delaySeconds", "noop", "prompt", "reason", "stop"]);
-
 export interface ScheduleWakeupCall {
-  /** The loop was ended rather than rescheduled. */
+  /** The call requests ending the loop rather than rescheduling it. */
   stop: boolean;
   delaySeconds?: number;
   /** `true` when the tick changed nothing, `false` when it did; absent when unreported. */
@@ -67,9 +65,13 @@ export function parseScheduleWakeupArgs(
   const noop = typeof toolArgs.noop === "boolean" ? toolArgs.noop : undefined;
   const reason = nonEmptyString(toolArgs.reason);
   const prompt = nonEmptyString(toolArgs.prompt);
-  const extra = Object.entries(toolArgs).filter(
-    ([key, value]) => !KNOWN_KEYS.has(key) && value !== undefined && value !== null,
-  );
+  const modelled = new Set<string>();
+  if (typeof toolArgs.stop === "boolean") modelled.add("stop");
+  if (delaySeconds !== undefined) modelled.add("delaySeconds");
+  if (noop !== undefined) modelled.add("noop");
+  if (reason !== undefined) modelled.add("reason");
+  if (prompt !== undefined) modelled.add("prompt");
+  const extra = Object.entries(toolArgs).filter(([key]) => !modelled.has(key));
   if (!stop && delaySeconds === undefined && noop === undefined && !reason && !prompt) {
     return null;
   }
@@ -84,7 +86,9 @@ export function parseScheduleWakeupArgs(
   };
 }
 
-const SCHEDULED_PATTERN = /scheduled for\s+([^()]+?)\s*(?:\(in\s+(\d+)\s*s\))?[.,]/i;
+// The delay marker (or end of the line) bounds the time, not punctuation:
+// dates can themselves contain commas and periods.
+const SCHEDULED_PATTERN = /scheduled for\s+([^\r\n]+?)(?:\s*\(in\s+(\d+)\s*s\)|[.,]?\s*$)/im;
 
 /** The fire time the harness reported in the tool result, when it reported one. */
 export function parseScheduleWakeupResult(toolOutput?: string): ScheduleWakeupResult | null {
@@ -114,11 +118,21 @@ export function formatWakeupDelay(seconds: number): string {
 }
 
 /** The collapsed row's one-line summary of the call. */
-export function scheduleWakeupPreview(call: ScheduleWakeupCall): string {
+export function scheduleWakeupPreview(call: ScheduleWakeupCall, succeeded = false): string {
   const head = call.stop
-    ? "Loop stopped"
+    ? succeeded
+      ? "Loop stopped"
+      : "Stop requested"
     : call.delaySeconds !== undefined
-      ? `in ${formatWakeupDelay(call.delaySeconds)}`
-      : undefined;
+      ? `${succeeded ? "in" : "Requested"} ${formatWakeupDelay(call.delaySeconds)}`
+      : call.prompt
+        ? call.autonomous
+          ? "Continue the autonomous loop"
+          : call.prompt
+        : call.noop === true
+          ? "No change"
+          : call.noop === false
+            ? "Progress"
+            : undefined;
   return [head, call.reason].filter(Boolean).join(" · ");
 }

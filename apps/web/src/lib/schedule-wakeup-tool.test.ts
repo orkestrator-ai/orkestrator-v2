@@ -57,7 +57,30 @@ describe("parseScheduleWakeupArgs", () => {
     });
     expect(call?.delaySeconds).toBe(60);
     expect(call?.autonomous).toBe(true);
-    expect(call?.extra).toEqual([["label", "ci"]]);
+    expect(call?.extra).toEqual([
+      ["label", "ci"],
+      ["empty", null],
+    ]);
+  });
+
+  test.each([
+    ["prompt", 42],
+    ["reason", { detail: "invalid" }],
+    ["noop", "yes"],
+    ["stop", [true]],
+    ["prompt", null],
+    ["reason", "  "],
+  ])("preserves unsupported %s alongside a valid delay", (key, value) => {
+    expect(
+      parseScheduleWakeupArgs("ScheduleWakeup", { delaySeconds: 60, [key]: value })?.extra,
+    ).toEqual([[key, value]]);
+  });
+
+  test("preserves an unsupported delay alongside a valid prompt", () => {
+    expect(
+      parseScheduleWakeupArgs("ScheduleWakeup", { delaySeconds: "later", prompt: "Check CI" })
+        ?.extra,
+    ).toEqual([["delaySeconds", "later"]]);
   });
 
   test("ignores other tools and empty arguments", () => {
@@ -86,6 +109,23 @@ describe("parseScheduleWakeupResult", () => {
     expect(parseScheduleWakeupResult(undefined)).toBeNull();
     expect(parseScheduleWakeupResult("Loop stopped.")).toBeNull();
   });
+
+  test.each([
+    ["Next wakeup scheduled for 21:16:00 (in 60s)", "21:16:00", 60],
+    [
+      "Wakeup scheduled for Oct. 21, 2026 at 9:05 PM (in 60s). More instructions.",
+      "Oct. 21, 2026 at 9:05 PM",
+      60,
+    ],
+    ["Wakeup scheduled for Oct. 21, 2026 at 9:05 PM.", "Oct. 21, 2026 at 9:05 PM", undefined],
+    ["Wakeup scheduled for 9:05 PM", "9:05 PM", undefined],
+    ["Wakeup scheduled for 9:05 PM,", "9:05 PM", undefined],
+  ])("reads result punctuation in %s", (output, scheduledFor, inSeconds) => {
+    expect(parseScheduleWakeupResult(output)).toEqual({
+      scheduledFor,
+      ...(inSeconds === undefined ? {} : { inSeconds }),
+    });
+  });
 });
 
 describe("formatWakeupDelay", () => {
@@ -106,19 +146,31 @@ describe("formatWakeupDelay", () => {
 describe("scheduleWakeupPreview", () => {
   test("summarises the delay and reason", () => {
     expect(
-      scheduleWakeupPreview({
-        stop: false,
-        delaySeconds: 1800,
-        reason: "Heartbeat",
-        autonomous: false,
-        extra: [],
-      }),
+      scheduleWakeupPreview(
+        {
+          stop: false,
+          delaySeconds: 1800,
+          reason: "Heartbeat",
+          autonomous: false,
+          extra: [],
+        },
+        true,
+      ),
     ).toBe("in 30m · Heartbeat");
   });
 
   test("summarises a stop", () => {
-    expect(scheduleWakeupPreview({ stop: true, autonomous: false, extra: [] })).toBe(
+    expect(scheduleWakeupPreview({ stop: true, autonomous: false, extra: [] }, true)).toBe(
       "Loop stopped",
     );
+  });
+
+  test("defaults to request wording without a confirmed outcome", () => {
+    expect(scheduleWakeupPreview({ stop: true, autonomous: false, extra: [] })).toBe(
+      "Stop requested",
+    );
+    expect(
+      scheduleWakeupPreview({ stop: false, delaySeconds: 60, autonomous: false, extra: [] }),
+    ).toBe("Requested 1m");
   });
 });

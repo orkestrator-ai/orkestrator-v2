@@ -75,8 +75,100 @@ describe("ScheduleWakeup tool row", () => {
     fireEvent.click(screen.getByText("ScheduleWakeup"));
 
     const details = screen.getByTestId("schedule-wakeup-tool");
-    expect(details.textContent).toContain("Wakes in 30m");
+    expect(details.textContent).toContain("Requested 30m");
     expect(details.textContent).not.toContain(" at ");
+  });
+
+  const unconfirmedStates: Array<[string, Partial<NativeMessagePart>]> = [
+    ["pending", { toolState: "pending", toolOutput: undefined }],
+    ["failed", { toolState: "failure", toolOutput: undefined, toolError: "Scheduling failed" }],
+    // A denial overrides even a nominal success and success-shaped output.
+    ["denied", { toolDenied: { reason: "Blocked by policy", source: "rule" } }],
+    ["unknown", { toolState: undefined }],
+    ["error", { toolError: "Scheduling failed" }],
+  ];
+
+  test.each(unconfirmedStates)("uses request wording for a %s schedule", (_name, overrides) => {
+    const { container } = renderParts([wakeupPart(overrides)]);
+    expect(screen.getByText(`Requested 30m · ${WAKEUP_ARGS.reason}`)).toBeTruthy();
+    fireEvent.click(screen.getByText("ScheduleWakeup"));
+
+    const details = screen.getByTestId("schedule-wakeup-tool");
+    expect(details.textContent).toContain("Requested 30m");
+    expect(details.textContent).not.toContain("Wakes in");
+    expect(details.textContent).not.toContain("21:16:00");
+    if (overrides.toolError) expect(container.textContent).toContain(overrides.toolError);
+    if (overrides.toolDenied) expect(container.textContent).toContain("Blocked by policy");
+  });
+
+  test.each(unconfirmedStates)("uses request wording for a %s stop", (_name, overrides) => {
+    const { container } = renderParts([
+      wakeupPart({ ...overrides, toolArgs: { stop: true }, toolOutput: undefined }),
+    ]);
+    expect(screen.getByText("Stop requested")).toBeTruthy();
+    fireEvent.click(screen.getByText("ScheduleWakeup"));
+    expect(
+      within(screen.getByTestId("schedule-wakeup-tool")).getByText("Stop requested"),
+    ).toBeTruthy();
+    expect(container.textContent).not.toContain("Loop stopped");
+  });
+
+  test("keeps malformed known fields and unmodelled values inspectable", () => {
+    renderParts([
+      wakeupPart({
+        toolArgs: {
+          delaySeconds: 60,
+          prompt: 42,
+          reason: { detail: "invalid" },
+          noop: "yes",
+          stop: [true],
+          label: "ci",
+          metadata: { attempts: 2 },
+          empty: null,
+        },
+        toolState: "failure",
+        toolOutput: undefined,
+      }),
+    ]);
+    fireEvent.click(screen.getByText("ScheduleWakeup"));
+    const details = screen.getByTestId("schedule-wakeup-tool");
+    for (const [key, value] of [
+      ["prompt", "42"],
+      ["reason", '{"detail":"invalid"}'],
+      ["noop", "yes"],
+      ["stop", "[true]"],
+      ["label", "ci"],
+      ["metadata", '{"attempts":2}'],
+      ["empty", "null"],
+    ]) {
+      const term = within(details).getByText(key!);
+      expect(term.tagName).toBe("DT");
+      expect(term.nextElementSibling?.textContent).toBe(value);
+    }
+  });
+
+  test("keeps generic JSON when no recognized field can be parsed", () => {
+    const toolArgs = { delaySeconds: "later", prompt: 42, noop: "yes" };
+    renderParts([wakeupPart({ toolArgs, toolOutput: undefined })]);
+    fireEvent.click(screen.getByText("ScheduleWakeup"));
+    expect(screen.queryAllByTestId("schedule-wakeup-tool").length).toBe(0);
+    expect(
+      screen.getByText(JSON.stringify(toolArgs, null, 2), {
+        exact: true,
+        normalizer: (text) => text,
+      }),
+    ).toBeTruthy();
+  });
+
+  test.each([
+    [{ prompt: "Check CI" }, "Check CI"],
+    [{ prompt: "<<autonomous-loop-dynamic>>" }, "Continue the autonomous loop"],
+    [{ noop: true }, "No change"],
+    [{ noop: false }, "Progress"],
+  ])("shows a collapsed preview for %j", (toolArgs, preview) => {
+    renderParts([wakeupPart({ toolArgs, toolOutput: undefined })]);
+    expect(screen.getByText(preview)).toBeTruthy();
+    expect(screen.queryAllByTestId("schedule-wakeup-tool").length).toBe(0);
   });
 
   test("shows a stopped loop and the autonomous sentinel", () => {

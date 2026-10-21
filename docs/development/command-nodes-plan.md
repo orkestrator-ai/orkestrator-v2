@@ -580,7 +580,7 @@ Test names include the requirement ID (for example
 | --- | --- | --- | --- | --- | --- |
 | RG-01 | The registry in the backend holds identity, profile, routes, credential, preference and enabled state. | 1 | `node-registry-store.ts` | `storage-nodes.test.ts`; `node-service.test.ts` RG-01/RG-02 | Done |
 | RG-02 | Leaf credentials stay on the command node, never in a response, event or log. | 1 | Redaction, `NodeView` | `node-service.test.ts` RG-01/RG-02 (views, status, events carry no token); `command-node-migration.test.ts` | Done |
-| RG-03 | Routes are hello-verified; identity mismatch, certificate and host-key failures block without bypass. | 1 | `NodeLinkManager` | `node-service.test.ts` RG-03 (fallback, identity mismatch, rejected token, retry) | Done |
+| RG-03 | Routes are hello-verified; identity mismatch, certificate and host-key failures block without bypass. | 1 | `NodeLinkManager` | `node-service.test.ts` RG-03; `qa-command-nodes.ts` RG-03 (restart and reconnect with the same identity) | Done |
 | RG-04 | SSH routes run from the backend using host OpenSSH with owned forwards, host-key trust and no remote install. | 1 | Moved supervisor | `node-service.test.ts` RG-04/RG-05 with a fake supervisor; real-sshd run of the backend path pending (shared supervisor covered by desktop SSH suites) | In progress |
 | RG-05 | SSH prompts are relayed through the portal; unattended reconnects use keys or the agent only. | 1 | `node-ssh-prompts.ts` | `node-service.test.ts` RG-04/RG-05 (interactive add, batch reconnect, prompt relay without answer) | Done |
 | RG-06 | The registry is managed from the portal's Connections settings. | 1 | Nodes section | `nodes-settings.test.tsx` RG-06 | Done |
@@ -647,21 +647,21 @@ Test names include the requirement ID (for example
 | CO-04 | Deletion happens only on user request, with a confirmation naming node and environment. | 3 | Action requests | `control-mcp-nodes.test.ts` CO-04 (request only); `node-mail.test.ts` CO-04 (approve executes once, reject/expiry never); `node-action-requests.test.tsx` CO-04 (dialog names node and environment) | Done |
 | CO-05 | Node-qualified mail to and from agents on every node; replies are collected. | 3 | Node mail, outbox | `control-mcp-nodes.test.ts` CO-05; `node-coordination.test.ts` CO-05/UP-02 (both directions over the real mail store) | Done |
 | CO-06 | Read-only interrogation: status, activity, transcripts, diffs, files and test results. | 3 | `read_environment` | `control-mcp-nodes.test.ts` CO-02/CO-06 (list and read on other nodes, reads route no writes) | Done |
-| CO-07 | File transfer through the framework. | 4 | `transfer_files` | | Planned |
+| CO-07 | File transfer through the framework. | 4 | `transfer_files` | `control-mcp-node-files.test.ts` CO-07/FL-01 (transfer_files returns a receipt only); `qa-command-nodes.ts` FL-01 | Done |
 | CO-08 | Existing per-project ownership and the read-only checkout boundary are kept. | 3 | Unchanged policy | Node tools act only on the coordinator's project (matched by repository) and refuse the node's project checkout; `resolve_node_action_request` denied to coordinator credentials | Done |
 
 ### Files and projects
 
 | ID | Requirement | M | Implementation | Evidence | Status |
 | --- | --- | --- | --- | --- | --- |
-| FL-01 | Transfers are bounded and audited, with no content in logs, receipts or transcripts. | 4 | `NodeFileTransfer` | | Planned |
-| FL-02 | A project is created on a leaf only after user approval stating the location. | 4 | `create-project` request | | Planned |
-| FL-03 | A leaf environment gets `.env` and selected files from the leaf's project root. | 4 | Existing copy | | Planned |
-| FL-04 | Files missing on the leaf are copied from the command node's project root during setup. | 4 | Seed staging | | Planned |
-| FL-05 | The leaf's copy wins. | 4 | Copy order | | Planned |
-| FL-06 | Compare reports missing or extra files and `.env` keys added, removed or changed, with values only as same or differs. | 4 | `project-file-compare.ts` | | Planned |
-| FL-07 | Plain-text values are shown only on explicit user request. | 4 | `reveal-env-value` request | | Planned |
-| FL-08 | Update pushes chosen files or keys node to node, not through the model, after an approval listing nodes and files. | 4 | `update-project-files` | | Planned |
+| FL-01 | Transfers are bounded and audited, with no content in logs, receipts or transcripts. | 4 | `NodeFileTransfer` | `node-files.test.ts` FL-01 (chunked, verified, atomic, no overwrite unless asked, confined paths, content-free receipt); `qa-command-nodes.ts` FL-01 | Done |
+| FL-02 | A project is created on a leaf only after user approval stating the location. | 4 | `create-project` request | `control-mcp-node-files.test.ts` FL-02 (request names node, remote and absolute location); executor `executeCreateProject` runs `add_project` on the node only after approval | Done |
+| FL-03 | A leaf environment gets `.env` and selected files from the leaf's project root. | 4 | Existing copy | `node-seed-worktree.test.ts` FL-03/FL-04/FL-05 (own files copied) | Done |
+| FL-04 | Files missing on the leaf are copied from the command node's project root during setup. | 4 | Seed staging | `node-project-files.test.ts` FL-04/FL-05 (only missing files staged); `node-seed-worktree.test.ts` (seed fills gaps); routed `create_environment` triggers seeding | Done |
+| FL-05 | The leaf's copy wins. | 4 | Copy order | `node-seed-worktree.test.ts` and `node-project-files.test.ts` (leaf's own copy wins) | Done |
+| FL-06 | Compare reports missing or extra files and `.env` keys added, removed or changed, with values only as same or differs. | 4 | `project-file-compare.ts` | `node-project-files.test.ts` FL-06; `node-files.test.ts` FL-06 (one-time HMAC key); `qa-command-nodes.ts` FL-06 (no values in the result) | Done |
+| FL-07 | Plain-text values are shown only on explicit user request. | 4 | `reveal-env-value` request | `node-project-files.test.ts` FL-08/FL-07 (value mailed to the conversation only, not stored in the request); `control-mcp-node-files.test.ts` (request only) | Done |
+| FL-08 | Update pushes chosen files or keys node to node, not through the model, after an approval listing nodes and files. | 4 | `update-project-files` | `node-project-files.test.ts` FL-08 (keys and whole files node to node); `control-mcp-node-files.test.ts` (request lists nodes and files) | Done |
 
 ### Security
 
@@ -670,7 +670,7 @@ Test names include the requirement ID (for example
 | SC-01 | Command nodes have full control of leaves; no permission model yet. | 1 | Documented | No permission model: any attached controller has the full client API (`commands-registry-nodes.ts`) | Done |
 | SC-02 | Leaves enforce their own approval and execution policies. | 2 | Unchanged | Unchanged leaf policies; routed commands run under the leaf's own command handlers | Done |
 | SC-03 | Closing, hiding, detaching or forgetting never stops remote work. | 1, 2 | Tests per action | `node-service.test.ts` AT-02/RG-07/SC-03; `federation-ui.test.tsx` OP-06/CR-03 and DP-01/DP-03/CR-03 (closing a panel stops nothing) | Done |
-| SC-04 | No tokens, prompts, file contents or `.env` values in logs, metrics, receipts or events. | 1–4 | Redaction tests | | Planned |
+| SC-04 | No tokens, prompts, file contents or `.env` values in logs, metrics, receipts or events. | 1–4 | Redaction tests | `qa-command-nodes.ts` SC-04 (no token, grant or .env value in any backend's output); RG-02 and FL-06 tests; receipts and requests carry no content | Done |
 
 ### Migration and carry-over
 

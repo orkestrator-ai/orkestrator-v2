@@ -286,6 +286,7 @@ export const COORDINATOR_CONTROL_TOOL_NAMES = Object.freeze([
   "adopt_workflow",
   "cancel_build_pipeline",
   "cancel_multi_review",
+  "compare_project_files",
   "create_ticket",
   "get_build_pipeline",
   "get_environment",
@@ -315,7 +316,10 @@ export const COORDINATOR_CONTROL_TOOL_NAMES = Object.freeze([
   "pause_build_pipeline",
   "read_messages",
   "read_node_environment",
+  "request_env_value_reveal",
   "request_environment_deletion",
+  "request_project_file_update",
+  "request_project_on_node",
   "resume_build_pipeline",
   "send_message",
   "send_node_message",
@@ -327,6 +331,7 @@ export const COORDINATOR_CONTROL_TOOL_NAMES = Object.freeze([
   "start_node_environment",
   "stop_environment",
   "stop_node_environment",
+  "transfer_files",
   "update_ticket",
 ] as const);
 

@@ -13,6 +13,14 @@ import { assertOnlyKeys } from "./commands-validation.js";
 import type { DesktopConnectionImport, NodeService } from "./nodes/node-service.js";
 import type { NodePortal } from "./nodes/node-portal.js";
 import type { NodeCoordination } from "./nodes/node-coordination.js";
+import { parseNodeFileScope } from "./nodes/node-files.js";
+
+function safeInteger(value: unknown, label: string): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`Expected ${label} to be a non-negative integer.`);
+  }
+  return value;
+}
 
 /**
  * Command-node and leaf commands. See docs/development/command-nodes-plan.md.
@@ -253,6 +261,125 @@ export function registerNodeCommands(register: CommandRegistrar): void {
       throw new Error("Expected decision approve or reject.");
     }
     return coordination(context).actions.resolve(args.requestId, args.decision);
+  });
+
+  // Node files (any node; a command node calls them on itself and its nodes).
+  register("stat_node_file", async (args, context) => {
+    assertOnlyKeys(args, ["scope", "path"], "arguments");
+    return coordination(context).files.stat(parseNodeFileScope(args.scope), String(args.path));
+  });
+
+  register("read_node_file", async (args, context) => {
+    assertOnlyKeys(args, ["scope", "path", "offset", "length"], "arguments");
+    return coordination(context).files.read(
+      parseNodeFileScope(args.scope),
+      String(args.path),
+      safeInteger(args.offset, "offset"),
+      safeInteger(args.length, "length"),
+    );
+  });
+
+  register("begin_node_file_write", async (args, context) => {
+    assertOnlyKeys(args, ["scope", "path", "size", "sha256", "overwrite"], "arguments");
+    return coordination(context).files.beginWrite({
+      scope: parseNodeFileScope(args.scope),
+      path: String(args.path),
+      size: safeInteger(args.size, "size"),
+      sha256: String(args.sha256),
+      overwrite: args.overwrite === true,
+    });
+  });
+
+  register("append_node_file_write", async (args, context) => {
+    assertOnlyKeys(args, ["uploadId", "contentBase64"], "arguments");
+    return coordination(context).files.appendWrite(
+      String(args.uploadId),
+      String(args.contentBase64),
+    );
+  });
+
+  register("commit_node_file_write", async (args, context) => {
+    assertOnlyKeys(args, ["uploadId"], "arguments");
+    return coordination(context).files.commitWrite(String(args.uploadId));
+  });
+
+  register("abort_node_file_write", async (args, context) => {
+    assertOnlyKeys(args, ["uploadId"], "arguments");
+    return coordination(context).files.abortWrite(String(args.uploadId));
+  });
+
+  register("get_project_seed_files", async (args, context) => {
+    assertOnlyKeys(args, ["projectId"], "arguments");
+    return coordination(context).files.seedFiles(String(args.projectId));
+  });
+
+  register("fingerprint_project_files", async (args, context) => {
+    assertOnlyKeys(args, ["projectId", "files", "key"], "arguments");
+    const key = Buffer.from(String(args.key), "base64");
+    if (key.length < 16) throw new Error("Expected a fingerprint key.");
+    if (!Array.isArray(args.files) || args.files.length > 200) throw new Error("Expected files.");
+    return coordination(context).files.fingerprints(
+      String(args.projectId),
+      args.files.filter((entry): entry is string => typeof entry === "string"),
+      key,
+    );
+  });
+
+  register("apply_env_keys", async (args, context) => {
+    assertOnlyKeys(args, ["projectId", "path", "set", "remove"], "arguments");
+    const set = (args.set && typeof args.set === "object" ? args.set : {}) as Record<
+      string,
+      unknown
+    >;
+    return coordination(context).files.applyEnvKeys(
+      String(args.projectId),
+      String(args.path),
+      Object.fromEntries(Object.entries(set).map(([key, value]) => [key, String(value)])),
+      Array.isArray(args.remove) ? args.remove.map(String) : [],
+    );
+  });
+
+  register("read_env_values", async (args, context) => {
+    assertOnlyKeys(args, ["projectId", "path", "keys"], "arguments");
+    if (!Array.isArray(args.keys) || args.keys.length > 20) throw new Error("Expected keys.");
+    return coordination(context).files.envValues(
+      String(args.projectId),
+      String(args.path),
+      args.keys.map(String),
+    );
+  });
+
+  // Command node: transfers and comparisons across its nodes.
+  register("transfer_node_files", async (args, context) => {
+    assertOnlyKeys(args, ["from", "to", "files", "toDirectory", "overwrite", "actor"], "arguments");
+    const endpoint = (value: unknown, label: string) => {
+      const record = value as Record<string, unknown> | null;
+      if (!record || typeof record.nodeId !== "string")
+        throw new Error(`Expected ${label}.nodeId.`);
+      return { nodeId: record.nodeId, scope: parseNodeFileScope(record.scope) };
+    };
+    if (!Array.isArray(args.files)) throw new Error("Expected files.");
+    return coordination(context).projectFiles.transfer.transfer({
+      from: endpoint(args.from, "from"),
+      to: endpoint(args.to, "to"),
+      files: args.files.map(String),
+      ...(typeof args.toDirectory === "string" ? { toDirectory: args.toDirectory } : {}),
+      overwrite: args.overwrite === true,
+      actor: typeof args.actor === "string" ? args.actor : "user",
+    });
+  });
+
+  register("list_node_transfers", async (args, context) => {
+    assertOnlyKeys(args, [], "arguments");
+    return coordination(context).projectFiles.transfer.list();
+  });
+
+  register("compare_project_files", async (args, context) => {
+    assertOnlyKeys(args, ["projectId", "nodeIds"], "arguments");
+    return coordination(context).projectFiles.compare(
+      String(args.projectId),
+      Array.isArray(args.nodeIds) ? args.nodeIds.map(String) : undefined,
+    );
   });
 
   register("import_desktop_connections", async (args, context) => {

@@ -45,6 +45,7 @@ import {
 } from "./control-mcp-review-actions.js";
 import { normalizedWorkflow, workflowSummary } from "./control-workflow-summary.js";
 import { NODE_TOOL_CAPABILITIES, registerNodeTools } from "./control-mcp-nodes.js";
+import { NODE_FILE_TOOL_CAPABILITIES, registerNodeFileTools } from "./control-mcp-node-files.js";
 import { withCoordinatorDelegationPresentation } from "./coordinator-delegation-authority.js";
 
 const CONTROL_MCP_PATH = "/mcp";
@@ -108,6 +109,7 @@ const COORDINATOR_TOOL_CAPABILITY = new Map<string, string>([
   ["get_message_status", "mail"],
   ["ack_message", "mail"],
   ...NODE_TOOL_CAPABILITIES,
+  ...NODE_FILE_TOOL_CAPABILITIES,
 ]);
 const COORDINATOR_CAPABILITIES = new Set(COORDINATOR_TOOL_CAPABILITY.values());
 
@@ -1331,11 +1333,13 @@ async function createControlMcp(
 
   if (coordinatorScope) {
     registerControlReviewActions(server, invoke, coordinatorScope);
-    registerNodeTools(server, invoke, {
+    const nodeToolScope = {
       projectId: coordinatorScope.projectId,
       coordinatorId: coordinatorScope.coordinatorId,
       conversationId: coordinatorScope.conversationId,
-    });
+    };
+    registerNodeTools(server, invoke, nodeToolScope);
+    registerNodeFileTools(server, invoke, nodeToolScope);
     server.registerTool(
       "get_repository_context",
       {

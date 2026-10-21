@@ -53,6 +53,15 @@ export class NodePortal {
   readonly outcomes: NodeOutcomeLedger;
   readonly grants: ClientGrantService;
   private readonly workspaces = new Map<string, NodeWorkspace>();
+  /** Runs after a routed command succeeded (environment seed files after create_environment). */
+  afterRouted:
+    | ((
+        nodeId: BackendId,
+        command: string,
+        args: Record<string, unknown>,
+        result: unknown,
+      ) => Promise<void>)
+    | null = null;
 
   constructor(
     private readonly options: {
@@ -116,8 +125,19 @@ export class NodePortal {
       ...(typeof args.requestKey === "string" ? { requestKey: args.requestKey.slice(0, 128) } : {}),
       outcomes: this.outcomes,
     });
-    // Writes refresh that node's summaries sooner than its next event.
-    if (result.outcome === "ok") void this.readModel.requestHydrate(nodeId);
+    if (result.outcome === "ok") {
+      // An environment on a leaf gets its seed files before it starts.
+      await this.afterRouted?.(nodeId, args.command, commandArgs, result.result).catch(
+        (error: unknown) => {
+          console.warn(
+            "[nodes] Post-command step on a node failed:",
+            error instanceof Error ? error.name : "unknown",
+          );
+        },
+      );
+      // Writes refresh that node's summaries sooner than its next event.
+      void this.readModel.requestHydrate(nodeId);
+    }
     return result;
   }
 

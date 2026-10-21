@@ -1,0 +1,187 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import { createHash, randomBytes } from "node:crypto";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
+import { NodeFileTransfer } from "./node-file-transfer.js";
+import { NodeFiles, parseEnv, type NodeFileScope } from "./node-files.js";
+
+const dirs: string[] = [];
+afterEach(async () => {
+  for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true });
+});
+
+/** A node with one project whose checkout is a temp directory. */
+async function node(
+  name: string,
+  files: Record<string, string | Buffer> = {},
+  filesToCopy: string[] = [],
+) {
+  const root = await mkdtemp(path.join(os.tmpdir(), `ork-node-files-${name}-`));
+  dirs.push(root);
+  const checkout = path.join(root, "checkout");
+  const dataDir = path.join(root, "data");
+  await Bun.write(path.join(checkout, ".keep"), "");
+  for (const [file, content] of Object.entries(files))
+    await Bun.write(path.join(checkout, file), content);
+  const storage = {
+    getDataDir: () => dataDir,
+    getProject: async (id: string) => (id === "p1" ? { id, localPath: checkout } : null),
+    getEnvironment: async () => null,
+    getRepositoryConfig: async () => ({ filesToCopy }),
+  };
+  const files_ = new NodeFiles(storage as never);
+  const commands: Record<string, (args: Record<string, unknown>) => Promise<unknown>> = {
+    stat_node_file: (args) => files_.stat(args.scope as NodeFileScope, String(args.path)),
+    read_node_file: (args) =>
+      files_.read(
+        args.scope as NodeFileScope,
+        String(args.path),
+        Number(args.offset),
+        Number(args.length),
+      ),
+    begin_node_file_write: (args) =>
+      files_.beginWrite({
+        scope: args.scope as NodeFileScope,
+        path: String(args.path),
+        size: Number(args.size),
+        sha256: String(args.sha256),
+        overwrite: args.overwrite === true,
+      }),
+    append_node_file_write: (args) =>
+      files_.appendWrite(String(args.uploadId), String(args.contentBase64)),
+    commit_node_file_write: (args) => files_.commitWrite(String(args.uploadId)),
+    abort_node_file_write: (args) => files_.abortWrite(String(args.uploadId)),
+  };
+  return { checkout, dataDir, files: files_, invoke: commands };
+}
+
+function framework(nodes: Record<string, Awaited<ReturnType<typeof node>>>) {
+  return new NodeFileTransfer({
+    invokerFor:
+      (nodeId) =>
+      async <T>(command: string, args: Record<string, unknown>) =>
+        (await nodes[nodeId]!.invoke[command]!(args)) as T,
+  });
+}
+
+describe("FL-01 the file-transfer framework", () => {
+  test("copies files node to node in chunks, verified and atomic, with a content-free receipt", async () => {
+    const big = randomBytes(9 * 1024 * 1024);
+    const a = await node("a", { "assets/big.bin": big, "notes.txt": "secret notes" });
+    const b = await node("b");
+    const transfer = framework({ a, b });
+    const receipt = await transfer.transfer({
+      from: { nodeId: "a", scope: { projectId: "p1" } },
+      to: { nodeId: "b", scope: { projectId: "p1" } },
+      files: ["assets/big.bin", "notes.txt"],
+      overwrite: false,
+      actor: "coordinator test",
+    });
+    expect(receipt.status).toBe("completed");
+    expect(receipt.bytes).toBe(big.length + 12);
+    expect((await readFile(path.join(b.checkout, "assets/big.bin"))).equals(big)).toBe(true);
+    expect(receipt.files[0]!.sha256).toBe(createHash("sha256").update(big).digest("hex"));
+    // The receipt names files, sizes and hashes; never their content.
+    expect(JSON.stringify(receipt)).not.toContain("secret notes");
+  });
+
+  test("never overwrites unless asked, and a failure leaves no partial file", async () => {
+    const a = await node("a", { "x.txt": "new" });
+    const b = await node("b", { "x.txt": "old" });
+    const transfer = framework({ a, b });
+    const refused = await transfer.transfer({
+      from: { nodeId: "a", scope: { projectId: "p1" } },
+      to: { nodeId: "b", scope: { projectId: "p1" } },
+      files: ["x.txt"],
+      overwrite: false,
+      actor: "test",
+    });
+    expect(refused.status).toBe("failed");
+    expect(refused.error?.code).toBe("exists");
+    expect(await readFile(path.join(b.checkout, "x.txt"), "utf8")).toBe("old");
+    const replaced = await transfer.transfer({
+      from: { nodeId: "a", scope: { projectId: "p1" } },
+      to: { nodeId: "b", scope: { projectId: "p1" } },
+      files: ["x.txt"],
+      overwrite: true,
+      actor: "test",
+    });
+    expect(replaced.status).toBe("completed");
+    expect(await readFile(path.join(b.checkout, "x.txt"), "utf8")).toBe("new");
+  });
+
+  test("paths cannot leave their scope", async () => {
+    const a = await node("a", { "x.txt": "x" });
+    await expect(a.files.stat({ projectId: "p1" }, "../../etc/passwd")).rejects.toThrow();
+    await expect(
+      a.files.beginWrite({
+        scope: { projectId: "p1" },
+        path: "/abs",
+        size: 1,
+        sha256: "0".repeat(64),
+        overwrite: true,
+      }),
+    ).rejects.toThrow();
+  });
+
+  test("a hash mismatch writes nothing", async () => {
+    const b = await node("b");
+    const { uploadId } = await b.files.beginWrite({
+      scope: { projectId: "p1" },
+      path: "y.txt",
+      size: 3,
+      sha256: "0".repeat(64),
+      overwrite: false,
+    });
+    await b.files.appendWrite(uploadId, Buffer.from("abc").toString("base64"));
+    await expect(b.files.commitWrite(uploadId)).rejects.toThrow("did not match");
+    await expect(stat(path.join(b.checkout, "y.txt"))).rejects.toThrow();
+  });
+});
+
+describe("FL-06 fingerprints and .env handling", () => {
+  test("fingerprints whole files and each .env key under a one-time key, without values", async () => {
+    const a = await node("a", { ".env": "API_KEY=abc123\nDEBUG=1\n# comment\n" });
+    const key = randomBytes(32);
+    const [entry] = await a.files.fingerprints("p1", [".env"], key);
+    expect(entry!.exists).toBe(true);
+    expect(Object.keys(entry!.envKeys!).sort()).toEqual(["API_KEY", "DEBUG"]);
+    expect(JSON.stringify(entry)).not.toContain("abc123");
+    // A different key gives unrelated fingerprints.
+    const [other] = await a.files.fingerprints("p1", [".env"], randomBytes(32));
+    expect(other!.envKeys!.API_KEY).not.toBe(entry!.envKeys!.API_KEY);
+  });
+
+  test("applying keys keeps every other line and round-trips quoted values", async () => {
+    const a = await node("a", { ".env": "# header\nKEEP=1\nCHANGE=old\nDROP=x\n" });
+    await a.files.applyEnvKeys(
+      "p1",
+      ".env",
+      { CHANGE: 'new value with $ and "quotes"', ADDED: "2" },
+      ["DROP"],
+    );
+    const text = await readFile(path.join(a.checkout, ".env"), "utf8");
+    expect(text.startsWith("# header\nKEEP=1\n")).toBe(true);
+    expect(text).not.toContain("DROP=");
+    const values = new Map(parseEnv(text));
+    expect(values.get("CHANGE")).toBe('new value with $ and "quotes"');
+    expect(values.get("ADDED")).toBe("2");
+    expect((await stat(path.join(a.checkout, ".env"))).mode & 0o777).toBe(0o600);
+    await expect(a.files.applyEnvKeys("p1", ".env", { BAD: "two\nlines" }, [])).rejects.toThrow();
+  });
+
+  test("lists which seed files a project root has", async () => {
+    const a = await node("a", { ".env": "A=1", "config/local.json": "{}" }, [
+      "config/local.json",
+      "certs/dev.pem",
+    ]);
+    expect(await a.files.seedFiles("p1")).toEqual([
+      { path: ".env", exists: true },
+      { path: ".env.local", exists: false },
+      { path: "config/local.json", exists: true },
+      { path: "certs/dev.pem", exists: false },
+    ]);
+  });
+});

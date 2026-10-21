@@ -25,7 +25,9 @@ import {
   type NodeMailState,
   type NodeMailStore,
 } from "./node-mail.js";
+import { NodeFiles } from "./node-files.js";
 import type { NodePortal } from "./node-portal.js";
+import { NodeProjectFiles } from "./node-project-files.js";
 import type { NodeService } from "./node-service.js";
 
 /**
@@ -52,6 +54,8 @@ export class NodeCoordination {
   readonly leafMail: LeafNodeMail;
   readonly collector: NodeMailCollector;
   readonly actions: NodeActionRequests;
+  readonly files: NodeFiles;
+  readonly projectFiles: NodeProjectFiles;
 
   constructor(
     private readonly options: {
@@ -131,11 +135,37 @@ export class NodeCoordination {
         connected = now;
       });
     });
+    this.files = new NodeFiles(storage);
+    this.projectFiles = new NodeProjectFiles({
+      storage,
+      nodes,
+      portal,
+      local: this.files,
+      localInvoke: (command, args) => options.invoke(command, args),
+      deliverToConversation: (input) =>
+        this.deliverToCoordinator({
+          toCoordinator: { environmentId: input.environmentId, tabId: input.tabId },
+          subject: input.subject,
+          body: input.body,
+          requestId: input.requestId,
+        }),
+    });
+    portal.afterRouted = async (nodeId, command, args, result) => {
+      if (command !== "create_environment" || typeof args.projectId !== "string") return;
+      const environmentId = (result as { id?: unknown } | null)?.id;
+      if (typeof environmentId !== "string") return;
+      await this.projectFiles.seedEnvironment(nodeId, args.projectId, environmentId);
+    };
     this.actions = new NodeActionRequests({
       load: () => storage.loadNodeActionRequests(),
       save: (requests) => storage.saveNodeActionRequests(requests),
       emit: options.emit,
-      executors: { "delete-environment": (request) => this.executeDeletion(request) },
+      executors: {
+        "delete-environment": (request) => this.executeDeletion(request),
+        "update-project-files": (request) => this.projectFiles.executeUpdate(request),
+        "reveal-env-value": (request) => this.projectFiles.executeReveal(request),
+        "create-project": (request) => this.projectFiles.executeCreateProject(request),
+      },
       notify: (request) => this.notifyRequester(request),
     });
   }

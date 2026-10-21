@@ -47,6 +47,10 @@ export const NODE_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
   "create_node_action_request",
   "list_node_action_requests",
   "resolve_node_action_request",
+  // Transfers and comparisons are run by the command node, not through it.
+  "transfer_node_files",
+  "list_node_transfers",
+  "compare_project_files",
   "get_node_summaries",
   "open_node_workspace",
   "renew_node_workspace",

@@ -92,6 +92,7 @@ import {
   imageWritesVolumeStorage,
 } from "./docker-image.js";
 import { storageMountArguments } from "./container-storage.js";
+import { seedFilesDir } from "./nodes/node-files.js";
 import {
   allowedDomainsArgument,
   containerAllowedDomains,
@@ -474,9 +475,17 @@ export async function createDockerContainer(
     }
   }
 
+  // A command node may have staged seed files this node's project root lacks;
+  // the node's own copy always wins.
+  const seedRoot = seedFilesDir(context.storage.getDataDir(), environment.id);
   if (project.localPath) {
-    await bindIfExists(path.join(project.localPath, ".env"), "/project-env/.env");
-    await bindIfExists(path.join(project.localPath, ".env.local"), "/project-env/.env.local");
+    for (const envFile of [".env", ".env.local"]) {
+      const own = path.join(project.localPath, envFile);
+      await bindIfExists(
+        (await pathExists(own)) ? own : path.join(seedRoot, envFile),
+        `/project-env/${envFile}`,
+      );
+    }
     await bindIfExists(path.join(project.localPath, "opencode.json"), "/opencode-project-json");
   }
 
@@ -568,6 +577,7 @@ export async function createDockerContainer(
         containerId,
         project.localPath,
         configuredFilesToCopy,
+        (await pathExists(seedRoot)) ? seedRoot : undefined,
       );
     }
   } catch (error) {

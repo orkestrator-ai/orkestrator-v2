@@ -74,3 +74,24 @@ The aggregate failed this owner and its unchanged owning file passed with one wo
 - **Follow-up aggregate:** `mise run test:logged -- --name full-tests-gnu -- mise run test`,
   using the testing guide's GNU-tool PATH, passed the complete root/support
   group unchanged (273.8 seconds).
+
+## Structured review layout validation recurrence — 2026-10-21
+
+- **Command:** `mise run test:logged -- --name complete-tests -- mise run test`;
+  root used one worker alongside workspace/bridge/protocol groups (4/2/1
+  slots), browser checks and another worktree's validation.
+- **Failure:** `reports an isolated checkout and only fixes named legacy Turbo artifacts`
+  timed out after 5,042.09 ms; the child status was `null` instead of zero,
+  also producing an error between tests.
+- **Root counts:** 3,151 passed, one skipped, three failed and one error across
+  3,155 tests in 150 files (536.90 s).
+- **Evidence:** `orkestrator-test-run.RzbPLB/root-and-agent-support-tests.log.gz`
+  under the host temporary directory.
+- **First owning-file rerun:** `mise run test:logged -- --name disk-report-rerun -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures`
+  also timed out (four passed, one failed, one error; 6.2 s logged). Evidence:
+  `orkestrator-test-run.DQ2WbV/disk-report-rerun.log.gz`.
+- **Final owning-file rerun:** `mise run test:logged -- --name disk-report-final-rerun -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures`
+  passed unchanged (five tests, exit 0, 1.3 s logged) after the root and
+  component browser runs ended.
+- **Assessment:** confirms intermittent process/filesystem latency under load;
+  the specific cause remains unproven. No assertion, deadline or skip changed.

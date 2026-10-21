@@ -1,4 +1,5 @@
 import { ChangeTrackingFixture, installChangeTrackingFixture } from "./changeTracking";
+import { StructuredReviewLayoutFixture } from "./StructuredReviewLayoutFixture";
 import { ClaudeInteractionsFixture } from "./ClaudeInteractionsFixture";
 import {
   AgentLaunchDialog,
@@ -1653,6 +1654,8 @@ function PullRequestCheckStatusFixture() {
 }
 
 function fixtureForPath() {
+  if (window.location.pathname === "/structured-review-layout")
+    return <StructuredReviewLayoutFixture />;
   if (window.location.pathname === "/setup-recovery") {
     return (
       <Suspense fallback={null}>

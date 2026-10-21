@@ -187,7 +187,12 @@ function List({
 }) {
   if (items.length === 0) return <EmptyLine />;
   return (
-    <ul className={cn("grid gap-y-1.5 text-sm text-foreground/90", columns && twoColumnGrid)}>
+    <ul
+      className={cn(
+        "grid grid-cols-1 gap-y-1.5 text-sm text-foreground/90",
+        columns && twoColumnGrid,
+      )}
+    >
       {items.map((item, index) => (
         <li key={index} className="flex gap-2">
           <span className="mt-[0.55rem] size-1 shrink-0 rounded-full bg-muted-foreground/60" />
@@ -207,7 +212,7 @@ function IssuesSection({ issues }: { issues: readonly ReviewIssue[] }) {
       {issues.length === 0 ? (
         <EmptyLine>No high-confidence issues were found in the reviewed scope.</EmptyLine>
       ) : (
-        <ol className={cn("grid gap-3", twoColumnGrid)}>
+        <ol className={cn("grid grid-cols-1 gap-3", twoColumnGrid)}>
           {issues.map((issue, index) => (
             <li
               key={`${issue.file}-${issue.line}-${issue.title}-${index}`}
@@ -228,7 +233,7 @@ function IssuesSection({ issues }: { issues: readonly ReviewIssue[] }) {
                 {location(issue.file, issue.line)}
                 {issue.symbol ? ` · ${issue.symbol}` : ""}
               </p>
-              <dl className="mt-3 grid gap-2 text-sm text-foreground/85">
+              <dl className="mt-3 grid grid-cols-1 gap-2 text-sm text-foreground/85">
                 <div>
                   <dt className="inline font-medium text-foreground">Description: </dt>
                   <dd className="inline">{issue.description}</dd>

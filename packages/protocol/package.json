@@ -45,6 +45,7 @@
     "./container-resources": "./src/container-resources.ts",
     "./coordinator": "./src/coordinator.ts",
     "./command-nodes": "./src/command-nodes.ts",
+    "./node-summaries": "./src/node-summaries.ts",
     "./coordinator-web-research": "./src/coordinator-web-research.ts",
     "./codex-background-task": "./src/codex-background-task.ts",
     "./node/cursor-plan-usage": "./src/node/cursor-plan-usage.ts",

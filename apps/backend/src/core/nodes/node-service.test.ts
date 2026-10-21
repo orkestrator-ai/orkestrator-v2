@@ -356,7 +356,14 @@ describe("AT-02/RG-07/SC-03 forgetting and detaching", () => {
     expect(
       leaf.received
         .slice(before)
-        .every((entry) => ["list_controllers", "attach_controller"].includes(entry.command)),
+        .every((entry) =>
+          [
+            "list_controllers",
+            "attach_controller",
+            "get_projects",
+            "get_environment_snapshots",
+          ].includes(entry.command),
+        ),
     ).toBe(true);
 
     await leaf.service.allowController("bk_command");
@@ -490,7 +497,15 @@ describe("RG-04/RG-05 SSH routes from the command node's backend", () => {
       extra: { createSsh: ssh.createSsh as never },
     });
     const view = await command.service.addNode({
-      routes: [{ id: "ssh", kind: "ssh", enabled: true, destination: "leaf-host", remoteGatewayPort: 34122 }],
+      routes: [
+        {
+          id: "ssh",
+          kind: "ssh",
+          enabled: true,
+          destination: "leaf-host",
+          remoteGatewayPort: 34122,
+        },
+      ],
       token: leaf.token,
     });
     expect(view.connection.state).toBe("connected");
@@ -510,7 +525,10 @@ describe("RG-04/RG-05 SSH routes from the command node's backend", () => {
     const network = new TestNodeNetwork();
     const leaf = await network.add("leaf");
     const error = Object.assign(new Error("Host key changed"), { code: "host-key-changed" });
-    const ssh = fakeSsh(() => leaf.origin, () => error);
+    const ssh = fakeSsh(
+      () => leaf.origin,
+      () => error,
+    );
     const command = await network.add("command", {
       forceRegistration: true,
       extra: { createSsh: ssh.createSsh as never },
@@ -519,7 +537,13 @@ describe("RG-04/RG-05 SSH routes from the command node's backend", () => {
     await command.service.updateNode({
       nodeId: "bk_leaf",
       routes: [
-        { id: "ssh", kind: "ssh", enabled: true, destination: "leaf-host", remoteGatewayPort: 34122 },
+        {
+          id: "ssh",
+          kind: "ssh",
+          enabled: true,
+          destination: "leaf-host",
+          remoteGatewayPort: 34122,
+        },
         httpsRoute(leaf, "https"),
       ],
     });
@@ -543,9 +567,11 @@ describe("RG-04/RG-05 SSH routes from the command node's backend", () => {
       state: string;
     };
     expect(open.state).toBe("open");
-    expect(command.service.answerSshPrompt({ promptId: open.promptId, answer: "hunter2" })).toEqual({
-      answered: true,
-    });
+    expect(command.service.answerSshPrompt({ promptId: open.promptId, answer: "hunter2" })).toEqual(
+      {
+        answered: true,
+      },
+    );
     expect(await answer).toBe("hunter2");
     expect(command.service.answerSshPrompt({ promptId: open.promptId, answer: "again" })).toEqual({
       answered: false,

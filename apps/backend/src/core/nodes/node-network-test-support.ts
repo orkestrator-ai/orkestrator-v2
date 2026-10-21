@@ -10,6 +10,7 @@ import {
 
 import type { CommandContext, CommandHandler } from "../commands-context.js";
 import { registerNodeCommands } from "../commands-registry-nodes.js";
+import { NodePortal } from "./node-portal.js";
 import { NodeService, type NodeServiceOptions, type NodeServiceStorage } from "./node-service.js";
 import type { NodeLinkTimers } from "./node-link.js";
 
@@ -104,6 +105,14 @@ export interface TestNode {
   /** Answer the hello with a different identity (a route that reaches another machine). */
   impersonate?: string;
   online: boolean;
+  portal: NodePortal;
+  /** Extra commands this node answers (projects, environments, writes). */
+  commands: Map<string, (args: Record<string, unknown>) => unknown>;
+  /** Open event streams; `emit` pushes to all of them. */
+  streams: Set<ReadableStreamDefaultController<Uint8Array>>;
+  emit(event: string, payload: unknown): void;
+  /** Drop every open event stream (a lost connection). */
+  dropStreams(): void;
 }
 
 export class TestNodeNetwork {
@@ -130,18 +139,43 @@ export class TestNodeNetwork {
       return json(200, await this.hello(node));
     }
     if (url.pathname === "/__orkestrator/status") return json(200, { ok: true });
+    if (url.pathname === "/__orkestrator/events") {
+      let own: ReadableStreamDefaultController<Uint8Array> | null = null;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          own = controller;
+          node.streams.add(controller);
+          controller.enqueue(
+            new TextEncoder().encode(
+              `id: c1\ndata: ${JSON.stringify({ event: "gateway.connected", payload: { status: "fresh" } })}\n\n`,
+            ),
+          );
+        },
+        cancel() {
+          if (own) node.streams.delete(own);
+        },
+      });
+      init?.signal?.addEventListener("abort", () => {
+        if (own) node.streams.delete(own);
+      });
+      return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+    }
     if (url.pathname === "/__orkestrator/invoke") {
       const body = JSON.parse(String(init?.body ?? "{}")) as {
         command: string;
         args: Record<string, unknown>;
       };
       node.received.push({ command: body.command, controller });
+      const extra = node.commands.get(body.command);
       const handler = this.commands.get(body.command);
-      if (!handler) return json(500, { error: `Unknown command: ${body.command}` });
+      if (!handler && !extra) return json(500, { error: `Unknown command: ${body.command}` });
       try {
-        const result = await handler(body.args ?? {}, {
-          nodes: node.service,
-        } as unknown as CommandContext);
+        const result = extra
+          ? await extra(body.args ?? {})
+          : await handler!(body.args ?? {}, {
+              nodes: node.service,
+              nodePortal: node.portal,
+            } as unknown as CommandContext);
         return json(200, { result });
       } catch (error) {
         return json(500, { error: error instanceof Error ? error.message : String(error) });
@@ -170,6 +204,13 @@ export class TestNodeNetwork {
       timers: this.timers,
       ...options.extra,
     });
+    const portal = new NodePortal({
+      nodes: service,
+      emit: (event, payload) => events.push({ event, payload }),
+      fetchImpl: this.fetch,
+    });
+    const streams = new Set<ReadableStreamDefaultController<Uint8Array>>();
+    let sequence = 1;
     const node: TestNode = {
       name,
       origin: `https://${name}.test`,
@@ -180,9 +221,36 @@ export class TestNodeNetwork {
       received: [],
       legacy: false,
       online: true,
+      portal,
+      commands: new Map(),
+      streams,
+      emit(event, payload) {
+        sequence += 1;
+        const frame = new TextEncoder().encode(
+          `id: c${sequence}\ndata: ${JSON.stringify({ event, payload })}\n\n`,
+        );
+        for (const controller of streams) {
+          try {
+            controller.enqueue(frame);
+          } catch {
+            streams.delete(controller);
+          }
+        }
+      },
+      dropStreams() {
+        for (const controller of streams) {
+          try {
+            controller.error(new Error("connection lost"));
+          } catch {
+            // Already closed.
+          }
+        }
+        streams.clear();
+      },
     };
     this.nodes.set(name, node);
     await service.start();
+    await portal.start();
     return node;
   }
 

@@ -113,6 +113,8 @@ export class NodeService {
   /** Nodes being added by the user: their first connect may prompt for SSH. */
   private readonly interactiveStarts = new Map<BackendId, Promise<void> | null>();
   private lastMode: NodeMode | null = null;
+  private readonly changeListeners = new Set<() => void>();
+  private readonly detachListeners = new Set<(controllerId: BackendId) => void>();
   private changeQueued = false;
 
   constructor(options: NodeServiceOptions) {
@@ -147,6 +149,22 @@ export class NodeService {
     const providers = [...this.sshProviders.values(), this.probeSsh ?? null];
     this.sshProviders.clear();
     await Promise.all(providers.map((provider) => provider?.disposeAll?.().catch(() => undefined)));
+  }
+
+  /** Registry, connection or mode changed (coalesced). */
+  subscribe(listener: () => void): () => void {
+    this.changeListeners.add(listener);
+    return () => this.changeListeners.delete(listener);
+  }
+
+  /** A command node detached from this node (by itself or by the user here). */
+  onControllerDetached(listener: (controllerId: BackendId) => void): () => void {
+    this.detachListeners.add(listener);
+    return () => this.detachListeners.delete(listener);
+  }
+
+  selfIdentity(): Promise<BackendId> {
+    return this.self();
   }
 
   /*
@@ -337,6 +355,7 @@ export class NodeService {
     this.pendingContacts.delete(controllerId);
     this.lastPersistedContact.delete(controllerId);
     if (result.detached) {
+      for (const listener of this.detachListeners) listener(controllerId);
       this.applyMode();
       this.emitStatus();
     }
@@ -1016,6 +1035,13 @@ export class NodeService {
     queueMicrotask(() => {
       this.changeQueued = false;
       this.emit(NODES_CHANGED_EVENT, { revision: this.registry?.revision ?? 0 });
+      for (const listener of this.changeListeners) {
+        try {
+          listener();
+        } catch {
+          // A listener's failure never affects the registry.
+        }
+      }
     });
   }
 

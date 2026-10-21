@@ -11,6 +11,7 @@ import type { CommandContext } from "./commands-context.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 import { assertOnlyKeys } from "./commands-validation.js";
 import type { DesktopConnectionImport, NodeService } from "./nodes/node-service.js";
+import type { NodePortal } from "./nodes/node-portal.js";
 
 /**
  * Command-node and leaf commands. See docs/development/command-nodes-plan.md.
@@ -25,6 +26,12 @@ import type { DesktopConnectionImport, NodeService } from "./nodes/node-service.
  */
 
 const MAX_IMPORT_ENTRIES = 64;
+
+function portal(context: CommandContext): NodePortal {
+  if (!context.nodePortal)
+    throw new Error("The command-node portal is not available in this backend.");
+  return context.nodePortal;
+}
 
 function nodes(context: CommandContext): NodeService {
   if (!context.nodes) throw new Error("Command nodes are not available in this backend.");
@@ -120,6 +127,59 @@ export function registerNodeCommands(register: CommandRegistrar): void {
   register("trust_node_host_key", async (args, context) => {
     assertOnlyKeys(args, ["probeId"], "arguments");
     return nodes(context).trustHostKey(args.probeId);
+  });
+
+  // Portal (command node).
+  register("get_node_summaries", async (args, context) => {
+    assertOnlyKeys(args, ["nodeIds"], "arguments");
+    return portal(context).summaries(args.nodeIds);
+  });
+
+  register("invoke_on_node", async (args, context) => {
+    assertOnlyKeys(args, ["nodeId", "command", "args", "requestKey"], "arguments");
+    return portal(context).invokeOnNode(args);
+  });
+
+  register("list_node_outcomes", async (args, context) => {
+    assertOnlyKeys(args, ["nodeId"], "arguments");
+    return portal(context).outcomes.list(typeof args.nodeId === "string" ? args.nodeId : undefined);
+  });
+
+  register("dismiss_node_outcome", async (args, context) => {
+    assertOnlyKeys(args, ["outcomeId"], "arguments");
+    if (typeof args.outcomeId !== "string") throw new Error("Expected outcomeId.");
+    return { dismissed: await portal(context).outcomes.dismiss(args.outcomeId) };
+  });
+
+  register("open_node_workspace", async (args, context) => {
+    assertOnlyKeys(args, ["nodeId"], "arguments");
+    return portal(context).openWorkspace(args.nodeId);
+  });
+
+  register("renew_node_workspace", async (args, context) => {
+    assertOnlyKeys(args, ["workspaceId"], "arguments");
+    return portal(context).renewWorkspace(args.workspaceId);
+  });
+
+  register("close_node_workspace", async (args, context) => {
+    assertOnlyKeys(args, ["workspaceId"], "arguments");
+    return portal(context).closeWorkspace(args.workspaceId);
+  });
+
+  // Client grants (leaf), requested by an attached command node.
+  register("create_client_grant", async (args, context) => {
+    assertOnlyKeys(args, ["controllerId", "ttlSeconds", "label"], "arguments");
+    return portal(context).createClientGrant(args);
+  });
+
+  register("renew_client_grant", async (args, context) => {
+    assertOnlyKeys(args, ["controllerId", "grantId", "ttlSeconds"], "arguments");
+    return portal(context).renewClientGrant(args);
+  });
+
+  register("revoke_client_grant", async (args, context) => {
+    assertOnlyKeys(args, ["controllerId", "grantId"], "arguments");
+    return portal(context).revokeClientGrant(args);
   });
 
   register("import_desktop_connections", async (args, context) => {

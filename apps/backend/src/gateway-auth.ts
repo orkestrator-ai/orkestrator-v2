@@ -1,4 +1,23 @@
+import type { Duplex } from "node:stream";
 import { CONTROLLER_HEADER } from "@orkestrator/protocol/command-nodes";
+import {
+  NODE_RELAY_PREFIX,
+  parseRelayPath,
+  relayHttp,
+  relayUpgrade,
+} from "./core/nodes/node-relay.js";
+import { isNodeExcludedCommand } from "./core/nodes/node-routing.js";
+
+/** Routes a client grant (leaf workspace) may use: the client API only. */
+const GRANT_ALLOWED_PATHS = [
+  /^\/__orkestrator\/hello$/,
+  /^\/__orkestrator\/status$/,
+  /^\/__orkestrator\/invoke$/,
+  /^\/__orkestrator\/events$/,
+  /^\/__orkestrator\/client-metrics$/,
+  /^\/__orkestrator\/proxy\/loopback\/\d+(?:\/.*)?$/,
+  /^\/__orkestrator\/browser\/loopback\/\d+(?:\/.*)?$/,
+];
 import type { GatewayContext } from "./gateway-context.js";
 import type { GatewayHandlers } from "./gateway-handlers.js";
 import type { GatewayLifecycle } from "./gateway-lifecycle.js";
@@ -87,6 +106,39 @@ export class GatewayAuth {
     return this.gatewayCredentialMatches(credential);
   }
 
+  /** The request is authenticated by a client grant (a leaf workspace), not the gateway token. */
+  private authenticatedByGrant(request: IncomingMessage): boolean {
+    const credential = getBearerToken(request.headers) ?? getCookie(request.headers, AUTH_COOKIE);
+    return Boolean(credential && this.grantExpiresAt(credential) !== null);
+  }
+
+  private grantExpiresAt(candidate: string): number | null {
+    if (!candidate.startsWith("okg_")) return null;
+    return this.ctx.nodeHooks?.authenticateGrant?.(candidate) ?? null;
+  }
+
+  /**
+   * Terminal upgrades relayed to a leaf (`/__orkestrator/nodes/<id>/terminal`).
+   * The caller must already be authenticated here, from an allowed origin.
+   */
+  handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): boolean {
+    const url = new URL(request.url ?? "/", "http://orkestrator.local");
+    if (!parseRelayPath(url.pathname)) return false;
+    const origin = request.headers.origin;
+    if (
+      !this.ctx.nodeHooks?.relayTarget ||
+      (origin && !this.isOriginAllowed(request, origin)) ||
+      !this.authenticated(request) ||
+      this.authenticatedByGrant(request)
+    ) {
+      socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
+      return true;
+    }
+    const resolve = this.ctx.nodeHooks.relayTarget.bind(this.ctx.nodeHooks);
+    if (!relayUpgrade(request, socket, head, url, resolve)) socket.destroy();
+    return true;
+  }
+
   private authenticatedWithAgentTestSession(request: IncomingMessage): boolean {
     if (!this.ctx.agentTestMode) return false;
     const credential = getBearerToken(request.headers) ?? getCookie(request.headers, AUTH_COOKIE);
@@ -99,6 +151,7 @@ export class GatewayAuth {
 
   gatewayCredentialMatches(candidate: string | null): boolean {
     if (tokenMatches(this.ctx.token, candidate)) return true;
+    if (candidate && this.grantExpiresAt(candidate) !== null) return true;
     if (!this.ctx.agentTestMode || !candidate) return false;
     const session = this.ctx.agentTestSessions.get(candidate);
     if (session === undefined) return false;
@@ -117,6 +170,10 @@ export class GatewayAuth {
    */
   gatewayCredentialExpiresAt(candidate: string | null): number | null {
     if (tokenMatches(this.ctx.token, candidate)) return null;
+    if (candidate) {
+      const grantExpiry = this.grantExpiresAt(candidate);
+      if (grantExpiry !== null) return grantExpiry;
+    }
     if (!this.ctx.agentTestMode || !candidate) return null;
     const session = this.ctx.agentTestSessions.get(candidate);
     return session ? Math.min(session.expiresAt, session.absoluteExpiresAt) : null;
@@ -377,6 +434,25 @@ export class GatewayAuth {
     const controllerId = headerValueToString(request.headers[CONTROLLER_HEADER]);
     if (controllerId) this.ctx.nodeHooks?.noteControllerContact(controllerId);
 
+    // A client grant opens a leaf workspace: the client API only, never
+    // administration, the relay or this node's own settings.
+    const viaGrant = this.authenticatedByGrant(request);
+    if (viaGrant && !GRANT_ALLOWED_PATHS.some((pattern) => pattern.test(url.pathname))) {
+      jsonResponse(response, 403, { error: "A workspace grant cannot use this route." });
+      return;
+    }
+
+    if (url.pathname.startsWith(NODE_RELAY_PREFIX)) {
+      const resolve = this.ctx.nodeHooks?.relayTarget;
+      if (
+        !resolve ||
+        !(await relayHttp(request, response, url, resolve.bind(this.ctx.nodeHooks)))
+      ) {
+        jsonResponse(response, 404, { error: "Not found" });
+      }
+      return;
+    }
+
     if (url.pathname === `${API_PREFIX}/agent-test/session`) {
       this.handleAgentTestSession(request, response, listenerKind);
       return;
@@ -431,7 +507,12 @@ export class GatewayAuth {
     }
 
     if (url.pathname === `${API_PREFIX}/invoke`) {
-      await this.handlers.handleInvoke(request, response, requestMetrics);
+      await this.handlers.handleInvoke(
+        request,
+        response,
+        requestMetrics,
+        viaGrant ? { refuseCommand: isNodeExcludedCommand } : undefined,
+      );
       return;
     }
 

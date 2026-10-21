@@ -30,6 +30,37 @@ export class StorageNodes extends StoragePreviewServices {
     return this.file("node-attachments.json");
   }
 
+  protected nodeSummariesFile(): string {
+    return this.file("node-summaries.json");
+  }
+
+  protected nodeOutcomesFile(): string {
+    return this.file("node-outcomes.json");
+  }
+
+  /** Last-known portal summaries of other nodes (names and states only). */
+  async loadNodeSummariesCache(): Promise<unknown> {
+    return this.loadJson<unknown>(this.nodeSummariesFile(), () => null);
+  }
+
+  async saveNodeSummariesCache(value: unknown): Promise<void> {
+    await this.serializeMutation(this.nodeSummariesFile(), "node summaries", () =>
+      this.saveJson(this.nodeSummariesFile(), value, { backup: false }),
+    );
+  }
+
+  /** Outcome-unknown records of routed writes, kept until the user dismisses them. */
+  async loadNodeOutcomes(): Promise<unknown> {
+    const value = await this.loadJson<unknown>(this.nodeOutcomesFile(), () => null);
+    return (value as { records?: unknown } | null)?.records ?? null;
+  }
+
+  async saveNodeOutcomes(records: unknown): Promise<void> {
+    await this.serializeMutation(this.nodeOutcomesFile(), "node outcomes", () =>
+      this.saveJson(this.nodeOutcomesFile(), { version: 1, records }),
+    );
+  }
+
   async getNodeRegistry(): Promise<NodeRegistry> {
     return this.readNodeRegistry();
   }

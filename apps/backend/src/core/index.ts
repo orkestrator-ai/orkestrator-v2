@@ -1,3 +1,5 @@
+import { NodePortal } from "./nodes/node-portal.js";
+import type { GatewayNodeHooks } from "../gateway-support-core.js";
 import { NodeService, errorCode, type NodeServiceOptions } from "./nodes/node-service.js";
 import { createNodeSshFactory } from "./nodes/node-ssh.js";
 import type { NodeMode } from "@orkestrator/protocol/command-nodes";
@@ -156,6 +158,7 @@ export class OrkestratorBackend {
   private readonly coordinators: CoordinatorService;
   /** Command-node registry and leaf attachments. */
   readonly nodes: NodeService;
+  readonly nodePortal: NodePortal;
   /** Origins clients load this node's UI from; registered on attached leaves. */
   private portalOriginsSource: () => string[] = () => [];
   private readonly projectGit: ProjectGitService;
@@ -466,6 +469,20 @@ export class OrkestratorBackend {
         : {}),
     });
     context.nodes = this.nodes;
+    this.nodePortal = new NodePortal({
+      nodes: this.nodes,
+      emit: (event, payload) => options.emit(event, payload),
+      summaries: {
+        load: () => storage.loadNodeSummariesCache(),
+        save: (value) => storage.saveNodeSummariesCache(value),
+      },
+      outcomes: {
+        load: () => storage.loadNodeOutcomes(),
+        save: (value) => storage.saveNodeOutcomes(value),
+      },
+      ...(options.nodeLinks?.fetchImpl ? { fetchImpl: options.nodeLinks.fetchImpl } : {}),
+    });
+    context.nodePortal = this.nodePortal;
     const interactionMonitorMode =
       process.env.ORKESTRATOR_AGENT_INTERACTION_OBSERVE_ONLY === "1"
         ? ("observe-only" as const)
@@ -1645,6 +1662,9 @@ export class OrkestratorBackend {
     await this.nodes.start().catch((error) => {
       console.warn("[backend] Command-node links did not start:", errorCode(error));
     });
+    await this.nodePortal.start().catch((error) => {
+      console.warn("[backend] The command-node portal did not start:", errorCode(error));
+    });
     this.coordinators.startStatusWakes();
     reconcileCoordinatorWorkflows();
     // Tell the user now, not when a review stage silently fails to submit its
@@ -1709,13 +1729,12 @@ export class OrkestratorBackend {
    * The gateway's view of command-node state: attached command nodes'
    * portal origins are allowed, and their requests record the last contact.
    */
-  nodeGateway(): {
-    isPortalOriginAllowed(origin: string): boolean;
-    noteControllerContact(id: string): void;
-  } {
+  nodeGateway(): GatewayNodeHooks {
     return {
       isPortalOriginAllowed: (origin) => this.nodes.isPortalOriginAllowed(origin),
       noteControllerContact: (id) => this.nodes.noteControllerContact(id),
+      authenticateGrant: (token) => this.nodePortal.grants.authenticate(token)?.expiresAt ?? null,
+      relayTarget: (nodeId) => this.nodePortal.relayTarget(nodeId),
     };
   }
 
@@ -1765,6 +1784,7 @@ export class OrkestratorBackend {
     // (never marked failed) and resume on the next start.
     this.webAnnotations.stopReconciler();
     // Closes node links and owned SSH tunnels only; nothing on any node stops.
+    this.nodePortal.stop();
     const nodesStopped = this.nodes.stop().catch(() => undefined);
     if (this.activityLeaseSweep) {
       clearInterval(this.activityLeaseSweep);

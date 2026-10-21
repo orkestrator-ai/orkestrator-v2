@@ -27,7 +27,8 @@ import type { ListenerKind, GatewayStartInfo } from "./gateway-internals.js";
  * back into this class for the token settings, so the facade passes a callback
  * bound late to it.
  */
-export type GatewayRequestRouter = Pick<GatewayAuth, "handle">;
+export type GatewayRequestRouter = Pick<GatewayAuth, "handle"> &
+  Partial<Pick<GatewayAuth, "handleUpgrade">>;
 
 /** The loopback client gateway binds IPv4 loopback only. */
 const LOOPBACK_CLIENT_BIND_ADDRESS = "127.0.0.1";
@@ -222,6 +223,8 @@ export class GatewayLifecycle {
         // Exact-path routing: the preview tunnel claims only its own path and
         // never steals terminal upgrades; everything unclaimed is destroyed.
         if (this.ctx.previewTunnel?.handleUpgrade(request, socket, head)) return;
+        // A leaf workspace's terminal relayed through this command node.
+        if (this.router.handleUpgrade?.(request, socket, head)) return;
         if (!this.ctx.terminalWebSocket.handleUpgrade(request, socket, head)) socket.destroy();
       } catch {
         this.ctx.logger.warn("[RemoteGateway] WebSocket upgrade failed");

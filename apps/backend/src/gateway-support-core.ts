@@ -95,6 +95,13 @@ export interface BackendHelloIdentity {
 export interface GatewayNodeHooks {
   isPortalOriginAllowed(origin: string): boolean;
   noteControllerContact(controllerId: string): void;
+  /** Expiry (ms) of a live client grant this token proves, else `null`. */
+  authenticateGrant?(token: string): number | null;
+  /** Where `/__orkestrator/nodes/<id>/…` relays to; `null` while that node is not connected. */
+  relayTarget?(nodeId: import("@orkestrator/protocol/federation").BackendId): {
+    baseUrl: string;
+    headers: Record<string, string>;
+  } | null;
 }
 
 export interface OrkestratorGatewayOptions {

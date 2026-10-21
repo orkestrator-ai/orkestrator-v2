@@ -20,3 +20,13 @@
 - **Owning-file rerun:** `mise run test:logged -- --name merge-desktop-lifecycle-owner -- bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./tests/backend-lifecycle.test.ts --parallel=1 --only-failures` passed unchanged, exit 0, in 0.1 seconds.
 - **Evidence:** `orkestrator-test-run.B1tmFx/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory after aggregate completion.
 - **Assessment:** confirmed intermittent observation in the same shutdown owner. Shared-host scheduling beyond fixed sleeps remains a hypothesis; no source, assertion, timeout or skip changed.
+
+## Lifecycle error-context coverage validation — 2026-10-21
+
+- **Command:** `mise run test:logged -- --name full-suite -- mise run test` at `5442a172b` plus renderer regression tests. Workspace/root/bridges/protocol reserved 4/1/2/1 slots; desktop used two isolated workers.
+- **Test:** `desktop backend lifecycle > quits anyway when the backend outlives its exit deadline`, `apps/desktop/tests/backend-lifecycle.test.ts:122`.
+- **Failure:** expected one quit after the 10 ms deadline and `Bun.sleep(60)`, received zero (78.24 ms).
+- **Suite result:** aggregate exited 1 after 435.3 seconds with this failure and the backend cleanup failure in case 0261. Root/support, bridges and protocol passed.
+- **Owning-file rerun:** `mise run test:logged -- --name desktop-lifecycle-rerun -- bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./tests/backend-lifecycle.test.ts --parallel=1 --only-failures` passed unchanged, exit 0 in 0.2 seconds.
+- **Evidence:** `orkestrator-test-run.7BXWb1/full-suite.log.gz` and `orkestrator-test-run.wdkpxS/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
+- **Assessment:** recurrence of the recorded fixed-sleep timing flake; shared-host scheduling remains an unconfirmed hypothesis. No production code, assertions, timeouts or skips changed in this owner.

@@ -1,4 +1,8 @@
-import { BACKEND_PROFILE_CHANGED_EVENT } from "@orkestrator/protocol/backend-profile";
+import {
+  BACKEND_PROFILE_CHANGED_EVENT,
+  parseBackendProfile,
+  type BackendProfile,
+} from "@orkestrator/protocol/backend-profile";
 import type { NodeListResult, NodeView } from "@orkestrator/protocol/command-nodes";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@orkestrator/protocol/gateway-event-stream";
@@ -43,6 +47,8 @@ export interface ReadModelNodes {
   listNodes(): Promise<NodeListResult>;
   link(nodeId: BackendId): ReadModelLink | null;
   subscribe(listener: () => void): () => void;
+  /** Cache a node's changed profile so its views show the new name and colour. */
+  recordProfile(nodeId: BackendId, profile: BackendProfile): Promise<void>;
 }
 
 export interface ReadModelPersistence {
@@ -257,7 +263,13 @@ export class NodeReadModel {
       return;
     }
     if (event === BACKEND_PROFILE_CHANGED_EVENT) {
-      // The registry caches the profile on the next hello; tell clients now.
+      // The registry's cached profile feeds every view of this node; refresh
+      // it now instead of on the next hello, then tell clients.
+      try {
+        void this.options.nodes.recordProfile(nodeId, parseBackendProfile(payload));
+      } catch {
+        // A malformed profile event changes nothing; the next hello reconciles.
+      }
       this.noteChanged(nodeId);
       return;
     }

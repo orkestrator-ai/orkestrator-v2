@@ -6,6 +6,7 @@ import type {
   NativeBackgroundTask,
   NativeBackgroundTaskStatus,
   NativeFilePart,
+  NativeImagePart,
   NativeMessage,
   NativeMessagePart,
   NativeTaskGroupPart,
@@ -18,7 +19,10 @@ import {
 import { createNativeAgentSettleAnchors } from "./native-agent-pinning";
 import { parseLocalFilePathFromUrl } from "./file-url";
 import type { AcpMessage } from "@/lib/acp-client";
-import { stripInitialPromptAttachmentReferences } from "@orkestrator/protocol/initial-prompt-attachments";
+import {
+  extractMarkedAttachmentReferences,
+  stripInitialPromptAttachmentReferences,
+} from "@orkestrator/protocol/initial-prompt-attachments";
 import { parsePromptTranscriptReferences } from "./transcript-annotations";
 import { agentMailToolCall } from "./agent-mail-tool-call";
 import { dedupeArtifactPublications } from "./artifact-publication-dedupe";
@@ -101,7 +105,13 @@ export function parseNativeAttachmentsFromContent(content: string): {
   return { cleanContent, attachments };
 }
 
-function attachmentReference(part: NativeFilePart): { name: string; path: string } {
+type AttachmentPart = NativeFilePart | NativeImagePart;
+
+function isAttachmentPart(part: NativeMessagePart): part is AttachmentPart {
+  return part.type === "file" || (part.type === "image" && part.imageSource === "attachment");
+}
+
+function attachmentReference(part: AttachmentPart): { name: string; path: string } {
   const path = fileAttachmentIdentity(part);
   const pathWithoutTrailingSeparators = path.replace(/[\\/]+$/, "");
   const separatorIndex = Math.max(
@@ -116,20 +126,42 @@ function attachmentReference(part: NativeFilePart): { name: string; path: string
 
 function parseNativeUserContent(
   content: string,
-  structuredAttachments: readonly NativeFilePart[] = [],
+  structuredAttachments: readonly AttachmentPart[] = [],
 ): {
   cleanContent: string;
   parts: NativeMessagePart[];
 } {
   const parsedReferences = parsePromptTranscriptReferences(content);
   const parsedAttachments = parseNativeAttachmentsFromContent(parsedReferences.cleanPrompt);
+  const markedReferences = extractMarkedAttachmentReferences(parsedAttachments.cleanContent);
+  const knownAttachments = [...structuredAttachments, ...parsedAttachments.attachments];
+  const knownIdentities = new Set(knownAttachments.map(fileAttachmentIdentity));
+  const referencedAttachments: NativeFilePart[] = [];
+  for (const { name, path } of markedReferences.attachments) {
+    const identity = parseLocalFilePathFromUrl(path) ?? path;
+    // Inline/deferred attachments may retain only a bare filename. Match that
+    // spelling only when it identifies a single marked reference; equal
+    // basenames in different directories must remain separate attachments.
+    const matchingBareName = knownAttachments.some((part) => {
+      const known = fileAttachmentIdentity(part);
+      return (
+        known === name &&
+        !/[\\/]/.test(known) &&
+        markedReferences.attachments.filter((reference) => reference.name === name).length === 1
+      );
+    });
+    if (knownIdentities.has(identity) || matchingBareName) continue;
+    referencedAttachments.push({ type: "file", content: path, filename: name });
+    knownIdentities.add(identity);
+  }
   return {
     cleanContent: stripInitialPromptAttachmentReferences(
-      parsedAttachments.cleanContent,
-      [...structuredAttachments, ...parsedAttachments.attachments].map(attachmentReference),
+      markedReferences.prompt,
+      knownAttachments.map(attachmentReference),
     ),
     parts: [
       ...parsedAttachments.attachments,
+      ...referencedAttachments,
       ...parsedReferences.references.map((reference) => ({
         type: "transcript-reference" as const,
         content: reference.selectedText,
@@ -529,7 +561,7 @@ const normalizedNativeMessageCache = new WeakMap<NativeMessage, NativeMessage>()
  * would render the same image twice. A `data:` URL carries no identity beyond
  * its own bytes, so those fall back to the part's content.
  */
-function fileAttachmentIdentity(part: NativeFilePart): string {
+function fileAttachmentIdentity(part: AttachmentPart): string {
   const fileUrl = part.fileUrl;
   if (fileUrl && !fileUrl.startsWith("data:")) {
     return parseLocalFilePathFromUrl(fileUrl) ?? fileUrl;
@@ -540,9 +572,7 @@ function fileAttachmentIdentity(part: NativeFilePart): string {
 function normalizeNativeUserPresentation(message: NativeMessage): NativeMessage {
   if (message.role !== "user") return message;
 
-  const structuredAttachments = message.parts.filter(
-    (part): part is NativeFilePart => part.type === "file",
-  );
+  const structuredAttachments = message.parts.filter(isAttachmentPart);
   const parsedContent = parseNativeUserContent(message.content, structuredAttachments);
   let parsedPresentationPart = false;
   const parsedParts = message.parts.flatMap((part): NativeMessagePart[] => {
@@ -772,20 +802,26 @@ export function normalizeClaudeMessage(message: ClaudeMessage): NativeMessage {
 }
 
 function normalizeClaudeMessageUncached(message: ClaudeMessage): NativeMessage {
-  const { cleanContent, parts: presentationParts } =
-    message.role === "user"
-      ? parseNativeUserContent(message.content)
-      : { cleanContent: message.content, parts: [] };
-
-  const rawParts =
-    message.role === "user"
-      ? [
-          ...(cleanContent ? [{ type: "text" as const, content: cleanContent }] : []),
-          ...presentationParts,
-        ]
-      : message.parts
+  if (message.role === "user") {
+    return normalizeNativeMessage({
+      id: message.id,
+      role: message.role,
+      content: message.content,
+      parts: [
+        ...(message.content ? [{ type: "text" as const, content: message.content }] : []),
+        ...message.parts
+          .filter((part) => part.type !== "text")
           .map(normalizeClaudePart)
-          .filter((part): part is NativeMessagePart => part !== null);
+          .filter((part): part is NativeMessagePart => part !== null),
+      ],
+      createdAt: message.createdAt,
+      ...(message.modelId ? { modelId: message.modelId } : {}),
+    });
+  }
+  const cleanContent = message.content;
+  const rawParts = message.parts
+    .map(normalizeClaudePart)
+    .filter((part): part is NativeMessagePart => part !== null);
 
   const taskGroupedParts =
     message.role === "assistant"

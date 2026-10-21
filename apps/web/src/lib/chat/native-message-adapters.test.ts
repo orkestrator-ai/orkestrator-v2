@@ -2487,6 +2487,58 @@ describe("native message adapters", () => {
     ]);
   });
 
+  test("always hides a marked path block, even when the file part spells the file differently", () => {
+    const rawContent =
+      "Why do I need separate apps?\n\n" +
+      "<orkestrator-attachment-paths>\n" +
+      "Attached files have been saved in the workspace. Use these paths as task context:\n" +
+      "- clipboard.png: /workspace/.orkestrator/clipboard/clipboard.png\n" +
+      "</orkestrator-attachment-paths>";
+    const message: NativeMessage = {
+      id: "native-marked-path-reference",
+      role: "user",
+      content: rawContent,
+      createdAt: "2026-10-21T11:49:31.000Z",
+      parts: [
+        { type: "text", content: rawContent },
+        { type: "file", content: "clipboard.png", fileUrl: "data:image/png;base64,QUJD" },
+      ],
+    };
+
+    const normalized = normalizeNativeMessage(message);
+
+    expect(normalized.content).toBe("Why do I need separate apps?");
+    expect(normalized.parts).toEqual([
+      { type: "text", content: "Why do I need separate apps?" },
+      { type: "file", content: "clipboard.png", fileUrl: "data:image/png;base64,QUJD" },
+    ]);
+  });
+
+  test("shows the files of a marked path block when no structured part carries them", () => {
+    const rawContent =
+      "Use the requirements\n\n" +
+      "<orkestrator-attachment-paths>\n" +
+      "Attached files have been saved in the workspace. Use these paths as task context:\n" +
+      "- requirements.md: /workspace/.orkestrator/initial-prompt/requirements.md\n" +
+      "</orkestrator-attachment-paths>";
+    const message: NativeMessage = {
+      id: "native-marked-path-only",
+      role: "user",
+      content: rawContent,
+      createdAt: "2026-10-21T11:49:31.000Z",
+      parts: [{ type: "text", content: rawContent }],
+    };
+
+    expect(normalizeNativeMessage(message).parts).toEqual([
+      { type: "text", content: "Use the requirements" },
+      {
+        type: "file",
+        content: "/workspace/.orkestrator/initial-prompt/requirements.md",
+        filename: "requirements.md",
+      },
+    ]);
+  });
+
   test("preserves initial-prompt path references without a structured file part", () => {
     const rawContent =
       "Use the requirements\n\n" +

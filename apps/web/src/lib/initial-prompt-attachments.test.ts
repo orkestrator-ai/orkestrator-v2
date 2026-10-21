@@ -71,7 +71,9 @@ describe("buildInitialPromptWithAttachmentReferences", () => {
       { name: "only-image.png", path: "/tmp/worktree/.orkestrator/initial-prompt/only-image.png" },
     ]);
 
-    expect(prompt.startsWith("Attached files have been saved in the workspace")).toBe(true);
+    expect(
+      prompt.startsWith("<orkestrator-attachment-paths>\nAttached files have been saved"),
+    ).toBe(true);
     expect(prompt).toContain("/tmp/worktree/.orkestrator/initial-prompt/only-image.png");
   });
 });

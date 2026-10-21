@@ -3382,6 +3382,8 @@ describe("NativeMessage task list rendering", () => {
     expect(screen.getByText("Make the profile match")).toBeTruthy();
     expect(screen.queryByText(/Attached files have been saved/) === null).toBe(true);
     expect(await screen.findByAltText("Thumbnail: screenshot.png")).toBeTruthy();
+    // The thumbnail is the attachment; its filename caption is not repeated.
+    expect(screen.queryByText("screenshot.png") === null).toBe(true);
   });
 
   test("renders a rehydrated attachment part, which has a path but no inline data", async () => {

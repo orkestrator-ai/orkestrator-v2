@@ -4025,8 +4025,10 @@ describe("NativeAgentService", () => {
 
           expect(send).toHaveBeenCalledWith(
             "provider-session",
-            "Attached files have been saved in the workspace. Use these paths as task context:\n" +
-              "- requirements.md: /workspace/.orkestrator/initial-prompt/batch/requirements.md",
+            "<orkestrator-attachment-paths>\n" +
+              "Attached files have been saved in the workspace. Use these paths as task context:\n" +
+              "- requirements.md: /workspace/.orkestrator/initial-prompt/batch/requirements.md\n" +
+              "</orkestrator-attachment-paths>",
             expect.objectContaining({
               requestId: "initial-prompt:env-1:startup-agent",
               images: [],

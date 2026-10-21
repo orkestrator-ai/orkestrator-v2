@@ -18,7 +18,10 @@ import {
 import { createNativeAgentSettleAnchors } from "./native-agent-pinning";
 import { parseLocalFilePathFromUrl } from "./file-url";
 import type { AcpMessage } from "@/lib/acp-client";
-import { stripInitialPromptAttachmentReferences } from "@orkestrator/protocol/initial-prompt-attachments";
+import {
+  extractMarkedAttachmentReferences,
+  stripInitialPromptAttachmentReferences,
+} from "@orkestrator/protocol/initial-prompt-attachments";
 import { parsePromptTranscriptReferences } from "./transcript-annotations";
 import { agentMailToolCall } from "./agent-mail-tool-call";
 import { dedupeArtifactPublications } from "./artifact-publication-dedupe";
@@ -123,13 +126,27 @@ function parseNativeUserContent(
 } {
   const parsedReferences = parsePromptTranscriptReferences(content);
   const parsedAttachments = parseNativeAttachmentsFromContent(parsedReferences.cleanPrompt);
+  const markedReferences = extractMarkedAttachmentReferences(parsedAttachments.cleanContent);
+  const knownAttachments = [...structuredAttachments, ...parsedAttachments.attachments];
+  // The marked block is always hidden. Its files are shown from it only when
+  // nothing else carries them: a provider's structured part may name the same
+  // file by a different spelling, which would render it twice.
+  const referencedAttachments: NativeFilePart[] =
+    knownAttachments.length === 0
+      ? markedReferences.attachments.map(({ name, path }) => ({
+          type: "file",
+          content: path,
+          filename: name,
+        }))
+      : [];
   return {
     cleanContent: stripInitialPromptAttachmentReferences(
-      parsedAttachments.cleanContent,
-      [...structuredAttachments, ...parsedAttachments.attachments].map(attachmentReference),
+      markedReferences.prompt,
+      knownAttachments.map(attachmentReference),
     ),
     parts: [
       ...parsedAttachments.attachments,
+      ...referencedAttachments,
       ...parsedReferences.references.map((reference) => ({
         type: "transcript-reference" as const,
         content: reference.selectedText,

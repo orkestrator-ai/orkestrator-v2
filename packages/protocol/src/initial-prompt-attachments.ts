@@ -23,6 +23,20 @@ export interface SavedInitialPromptAttachment {
 const INITIAL_PROMPT_ATTACHMENT_REFERENCE_HEADING =
   "Attached files have been saved in the workspace. Use these paths as task context:";
 
+/**
+ * Markup around the path-reference block so transcripts can hide it.
+ *
+ * The block is transport for the agent, not something the user wrote, and the
+ * files it names already render as attachments. Wrapping it lets a transcript
+ * remove it exactly, without guessing from the heading text.
+ */
+const ATTACHMENT_REFERENCES_OPEN_TAG = "<orkestrator-attachment-paths>";
+const ATTACHMENT_REFERENCES_CLOSE_TAG = "</orkestrator-attachment-paths>";
+const ATTACHMENT_REFERENCES_BLOCK = new RegExp(
+  `\\s*${ATTACHMENT_REFERENCES_OPEN_TAG}\\n?([\\s\\S]*?)\\n?${ATTACHMENT_REFERENCES_CLOSE_TAG}`,
+  "g",
+);
+
 export function toDurableInitialPromptAttachments(
   attachments: readonly InitialPromptAttachmentStorageRecord[],
 ): DurableInitialPromptAttachment[] {
@@ -51,8 +65,40 @@ export function buildInitialPromptWithAttachmentReferences(
   const references = attachments
     .map((attachment) => `- ${attachment.name}: ${attachment.path}`)
     .join("\n");
-  const context = `${INITIAL_PROMPT_ATTACHMENT_REFERENCE_HEADING}\n${references}`;
+  const context =
+    `${ATTACHMENT_REFERENCES_OPEN_TAG}\n` +
+    `${INITIAL_PROMPT_ATTACHMENT_REFERENCE_HEADING}\n${references}\n` +
+    ATTACHMENT_REFERENCES_CLOSE_TAG;
   return trimmedPrompt ? `${trimmedPrompt}\n\n${context}` : context;
+}
+
+/**
+ * Remove every marked path-reference block from transcript text.
+ *
+ * Returns the text without the blocks and the attachments they named, so a
+ * transcript with no structured file part can still show the files. Text with
+ * no marked block is returned unchanged.
+ */
+export function extractMarkedAttachmentReferences(prompt: string): {
+  prompt: string;
+  attachments: SavedInitialPromptAttachment[];
+} {
+  if (!prompt.includes(ATTACHMENT_REFERENCES_OPEN_TAG)) return { prompt, attachments: [] };
+
+  const attachments: SavedInitialPromptAttachment[] = [];
+  let found = false;
+  const stripped = prompt.replace(ATTACHMENT_REFERENCES_BLOCK, (_block, body: string) => {
+    found = true;
+    for (const line of body.split("\n")) {
+      if (!line.startsWith("- ")) continue;
+      // A filename may contain ": "; the saved absolute path rarely does.
+      const separator = line.lastIndexOf(": ");
+      if (separator < 2) continue;
+      attachments.push({ name: line.slice(2, separator), path: line.slice(separator + 2) });
+    }
+    return "";
+  });
+  return found ? { prompt: stripped.trim(), attachments } : { prompt, attachments: [] };
 }
 
 /**

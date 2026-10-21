@@ -135,6 +135,7 @@ export function FilePart({
   eagerPreview = false,
   detailRef,
   alwaysImage = false,
+  hideThumbnailCaption = false,
   onLoadUnavailable,
 }: {
   path: string;
@@ -155,6 +156,11 @@ export function FilePart({
    * the filename-extension heuristic must not decide for it.
    */
   alwaysImage?: boolean;
+  /**
+   * Show a thumbnail tile as the image alone. A user's own attachment needs no
+   * filename caption; the name stays available to assistive technology.
+   */
+  hideThumbnailCaption?: boolean;
   /**
    * The bytes could not be resolved, so the owner should stop showing this row.
    *
@@ -305,7 +311,7 @@ export function FilePart({
         className={cn(
           "text-xs my-0 rounded-md border transition-colors",
           showThumbnailTile
-            ? "group relative block w-40 max-w-full shrink-0 overflow-hidden bg-muted/50 border-border hover:border-foreground/25 cursor-zoom-in"
+            ? "group relative block w-80 max-w-full shrink-0 overflow-hidden bg-muted/50 border-border hover:border-foreground/25 cursor-zoom-in"
             : "inline-flex items-center gap-1.5 py-1.5 px-2.5 bg-muted/50 border-border hover:bg-muted hover:border-border/80 cursor-zoom-in",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
           loading && "opacity-50",
@@ -316,25 +322,27 @@ export function FilePart({
             src={imageSrc}
             alt={`Thumbnail: ${displayName}`}
             referrerPolicy="no-referrer"
-            className="h-24 w-full bg-black/10 object-cover transition-transform duration-200 group-hover:scale-[1.02] motion-reduce:transition-none"
+            className="h-48 w-full bg-black/10 object-cover transition-transform duration-200 group-hover:scale-[1.02] motion-reduce:transition-none"
           />
         ) : showThumbnailTile ? (
-          <span className="flex h-24 w-full items-center justify-center bg-muted/40">
+          <span className="flex h-48 w-full items-center justify-center bg-muted/40">
             <ImageIcon className="size-5 text-muted-foreground" />
           </span>
         ) : (
           <ImageIcon className="w-3.5 h-3.5 text-muted-foreground" />
         )}
-        <span
-          className={cn(
-            "font-mono truncate text-muted-foreground",
-            showThumbnailTile
-              ? "block border-t border-border/60 px-2 py-1.5 text-left"
-              : "max-w-[240px]",
-          )}
-        >
-          {displayName}
-        </span>
+        {showThumbnailTile && hideThumbnailCaption ? null : (
+          <span
+            className={cn(
+              "font-mono truncate text-muted-foreground",
+              showThumbnailTile
+                ? "block border-t border-border/60 px-2 py-1.5 text-left"
+                : "max-w-[240px]",
+            )}
+          >
+            {displayName}
+          </span>
+        )}
         {loadError && !onLoadUnavailable && (
           <span
             className={cn(

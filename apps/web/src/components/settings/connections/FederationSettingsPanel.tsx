@@ -10,6 +10,7 @@ import { MachineDot, machineStatusText } from "@/components/federation/MachineDo
 import { machineDisplayName, useFederation } from "@/components/federation/FederationProvider";
 import { addBrowserMachine, removeBrowserMachine } from "@/lib/federation/browser-machines";
 import { publishConnections } from "@/lib/connections";
+import { MachineDetails } from "./MachineDetails";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 
 /**
@@ -141,29 +142,34 @@ export function BrowserMachinesSettings() {
           <li className="px-4 py-3 text-sm text-muted-foreground">No other machines yet.</li>
         ) : (
           machines.map((machine) => (
-            <li key={machine.id} className="flex items-center gap-3 px-4 py-3 text-sm">
-              <MachineDot
-                colorToken={machine.profile?.colorToken}
-                machineName={machineDisplayName(machine)}
-              />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-zinc-100">{machineDisplayName(machine)}</span>
-                <span className="block truncate font-mono text-xs text-zinc-500">
-                  {machine.address}
+            <li key={machine.id} className="px-4 py-3 text-sm">
+              <div className="flex items-center gap-3">
+                <MachineDot
+                  colorToken={machine.profile?.colorToken}
+                  machineName={machineDisplayName(machine)}
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-zinc-100">
+                    {machineDisplayName(machine)}
+                  </span>
+                  <span className="block truncate font-mono text-xs text-zinc-500">
+                    {machine.address}
+                  </span>
                 </span>
-              </span>
-              <span className="text-xs text-zinc-500">
-                {machineStatusText({ transport: machine.transport ?? "connecting" })}
-              </span>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                aria-label={`Forget ${machineDisplayName(machine)} in this browser`}
-                onClick={() => removeBrowserMachine(machine.id)}
-              >
-                <Trash2 className="h-4 w-4" />
-              </Button>
+                <span className="text-xs text-zinc-500">
+                  {machineStatusText({ transport: machine.transport ?? "connecting" })}
+                </span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  aria-label={`Forget ${machineDisplayName(machine)} in this browser`}
+                  onClick={() => removeBrowserMachine(machine.id)}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
+              <MachineDetails connection={machine} duplicateColorWith={[]} showRoutes={false} />
             </li>
           ))
         )}

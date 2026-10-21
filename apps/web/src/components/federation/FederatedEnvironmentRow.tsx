@@ -42,6 +42,8 @@ import {
   stopFederatedEnvironment,
 } from "@/lib/federation/federated-actions";
 import { OutcomeUnknownError } from "@/lib/federation/operation-recovery";
+import { browserPanelUrl } from "@/lib/federation/panel-realm";
+import { MOBILE_SHELL_MEDIA_QUERY } from "@/components/layout/MobileAppShellLayout";
 import { cn } from "@/lib/utils";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useUIStore } from "@/stores";
@@ -67,13 +69,16 @@ export function FederatedEnvironmentRow({
   project,
   environment,
   showMachineLabel,
+  indented = false,
 }: {
   machine: MachineView;
   project: FederatedProject | null;
   environment: FederatedEnvironment;
   showMachineLabel: boolean;
+  /** Nested under a project heading. */
+  indented?: boolean;
 }) {
-  const { registry } = useFederation();
+  const { registry, kind } = useFederation();
   const compact = useMachineViewStore((state) => state.compactMachineLabels);
   const openPanel = useMachineViewStore((state) => state.openPanel);
   const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
@@ -97,6 +102,20 @@ export function FederatedEnvironmentRow({
   const open = () => {
     if (machine.bound) {
       selectProjectAndEnvironment(environment.projectId, environment.ref.environmentId);
+      return;
+    }
+    // A phone-sized hosted page has no room for side panels: the machine's
+    // workspace opens in its own tab instead (same direct session).
+    if (kind === "browser" && window.matchMedia?.(MOBILE_SHELL_MEDIA_QUERY).matches) {
+      window.open(
+        browserPanelUrl({
+          machineId: machine.connectionId,
+          projectId: environment.projectId,
+          environmentId: environment.ref.environmentId,
+        }),
+        "_blank",
+        "noopener=no",
+      );
       return;
     }
     openPanel({
@@ -130,6 +149,7 @@ export function FederatedEnvironmentRow({
     <div
       className={cn(
         "group mx-1 flex min-h-8 items-center gap-2 rounded-lg px-2 py-1",
+        indented && "pl-9",
         selected ? "bg-selected text-selected-foreground" : "hover:bg-environment-hover",
         !live && "opacity-60",
       )}

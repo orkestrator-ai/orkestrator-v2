@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { ArrowDown, ArrowUp, Loader2, Network, Plus, Terminal, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -40,8 +40,11 @@ export function MachineDetails({
   connection,
   duplicateColorWith,
   onAddRoute,
+  showRoutes = true,
 }: {
   connection: ConnectionSummary;
+  /** This client manages routes itself (desktop); a browser has one HTTPS route per machine. */
+  showRoutes?: boolean;
   /** Other machines using the same colour, for a suggestion only. */
   duplicateColorWith: readonly string[];
   onAddRoute?: (kind: "https" | "ssh") => void;
@@ -51,7 +54,17 @@ export function MachineDetails({
   const [draftName, setDraftName] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [busyRoute, setBusyRoute] = useState<string | null>(null);
-  const profile = connection.profile;
+  // The machine's own runtime sees profile events first (from any client);
+  // edits must carry that revision, not a possibly older list snapshot.
+  const runtime = registry.get(connection.id);
+  const liveProfile = useSyncExternalStore(
+    (onChange) => runtime?.store.subscribe(onChange) ?? (() => undefined),
+    () => runtime?.store.getState().connection.profile,
+  );
+  const profile =
+    liveProfile && (!connection.profile || liveProfile.revision >= connection.profile.revision)
+      ? liveProfile
+      : connection.profile;
   const live = connection.transport === "connected" || connection.id === bound?.id;
   const sshSupported = list?.supportedRouteKinds?.includes("ssh") ?? false;
 
@@ -211,7 +224,7 @@ export function MachineDetails({
         )}
       </div>
 
-      {connection.kind === "remote" ? (
+      {connection.kind === "remote" && showRoutes ? (
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium text-zinc-200">

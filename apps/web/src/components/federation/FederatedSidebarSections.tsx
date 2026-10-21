@@ -161,6 +161,7 @@ function ProjectInstance({
               project={null}
               environment={environment}
               showMachineLabel={false}
+              indented
             />
           ))
         : null}

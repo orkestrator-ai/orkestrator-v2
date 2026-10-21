@@ -26,7 +26,10 @@ import {
   type ProjectRef,
 } from "@orkestrator/protocol/federation";
 import type { ConnectionSummary } from "@orkestrator/protocol/connections";
-import { BACKEND_PROFILE_CHANGED_EVENT } from "@orkestrator/protocol/backend-profile";
+import {
+  BACKEND_PROFILE_CHANGED_EVENT,
+  parseBackendProfile,
+} from "@orkestrator/protocol/backend-profile";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@orkestrator/protocol/gateway-event-stream";
 import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
 import { PrefetchedCommandCache } from "@/lib/prefetched-command-responses";
@@ -282,8 +285,13 @@ export class BackendRuntime {
       });
       return;
     }
+    const keepProfile =
+      previous.connection.profile &&
+      (!connection.profile || connection.profile.revision < previous.connection.profile.revision);
     this.store.setState({
-      connection,
+      connection: keepProfile
+        ? { ...connection, profile: previous.connection.profile }
+        : connection,
       freshness:
         connection.transport === "connected"
           ? previous.freshness === "stale"
@@ -388,7 +396,10 @@ export class BackendRuntime {
       void this.requestHydrate();
       return;
     }
-    if (event === BACKEND_PROFILE_CHANGED_EVENT) return;
+    if (event === BACKEND_PROFILE_CHANGED_EVENT) {
+      this.applyProfile(payload);
+      return;
+    }
     if (event !== RESOURCE_CHANGED_EVENT || !payload || typeof payload !== "object") return;
     const change = payload as {
       resource?: unknown;
@@ -417,6 +428,29 @@ export class BackendRuntime {
       if (projectId) this.scheduleProjectRefresh(projectId);
       else void this.requestHydrate();
     }
+  }
+
+  /** The machine's shared name/colour changed (from any client); newer revisions only. */
+  private applyProfile(payload: unknown): void {
+    let profile;
+    try {
+      profile = parseBackendProfile(payload);
+    } catch {
+      return;
+    }
+    const connection = this.store.getState().connection;
+    if (connection.profile && connection.profile.revision > profile.revision) return;
+    this.store.setState({
+      connection: {
+        ...connection,
+        profile: {
+          displayName: profile.displayName,
+          colorToken: profile.colorToken,
+          revision: profile.revision,
+          cached: false,
+        },
+      },
+    });
   }
 
   private projectOfEnvironment(environmentId: unknown): string | null {

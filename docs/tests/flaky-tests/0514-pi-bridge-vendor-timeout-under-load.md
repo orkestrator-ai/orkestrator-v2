@@ -36,3 +36,10 @@
   summary in `orkestrator-test-run.T8dkv2/root-tests.log.gz`.
 - Host contention remains a hypothesis. No vendoring implementation, assertion,
   timeout or skip changed.
+
+## Remote sidebar reorder review observation — 2026-10-21
+
+- `mise run test:logged -- --name reorder-suite -- mise run test` hit the 30-second vendoring deadline (30000.07 ms) in the root/support group.
+- `mise run test:logged -- --name reorder-pi-vendor-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` also timed out (3 passed, one failed; 32.8 seconds logged) while the workspace and browser suites were still active. This occurrence does not independently establish a flake; vendoring qualification remains unresolved at this point.
+- Evidence: `orkestrator-test-run.U6kMZC/root-and-agent-support-tests.log.gz` after aggregate completion, and `orkestrator-test-run.aSTJ3f/reorder-pi-vendor-owner.log.gz`, below the host temporary directory. No implementation, assertion, deadline or skip in this owner changed.
+- After the browser suite finished, `mise run test:logged -- --name reorder-pi-vendor-after-browser -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed the complete unchanged owner (4 passed, zero failed; 14.3 seconds logged). This later pass confirms intermittence for the recurrence.

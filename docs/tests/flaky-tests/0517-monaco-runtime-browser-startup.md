@@ -13,3 +13,10 @@
 - This unchanged owning file failed at its existing deadline. All three unchanged owners then passed sequentially with one worker: `ORKESTRATOR_E2E_PORT=45673 ORKESTRATOR_PUBLIC_E2E_PORT=45674 mise run test:logged -- --name review-browser-three-isolated -- bunx playwright test --config e2e/playwright.config.ts e2e/PaneBreakpoint.spec.ts e2e/DesignCanvas.spec.ts e2e/MonacoRuntime.spec.ts --workers=1` (exit 0, 85.5 seconds).
 - Evidence: private compressed logs under the host temporary directory `orkestrator-test-run.tj4puK`. The pane case found no `.xterm` at line 121; the desktop canvas exceeded 30 seconds; the desktop Monaco fixture found no editor within five seconds.
 - Host scheduling or fixture startup contention is a hypothesis. No implementation, assertion, deadline, or skip in these owners changed.
+
+## Transcript-scroll main merge validation — 2026-10-21
+
+- `mise run test:logged -- --name merge-browser -- mise run test:browser` ran nine workers and reported 373 passed, 81 skipped and two failures in 427.3 s. The desktop Monaco editor was absent at the five-second deadline (`e2e/MonacoRuntime.spec.ts:25`).
+- The same unchanged owner failed both the one-worker combined rerun with DesignCanvas (36.4 s logged, one pass/one failure) and `mise run test:logged -- --name merge-monaco-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/MonacoRuntime.spec.ts --project=desktop-chromium --workers=1` (one failure, 20.2 s logged). Those focused reruns still failed at the same deadline.
+- Evidence: host temporary directories `orkestrator-test-run.2Itj5O`, `orkestrator-test-run.SL0qW8` and `orkestrator-test-run.PRdnBF`. No source, assertion, timeout or skip changed.
+- After the complete aggregate ended, the unchanged owner passed: `mise run test:logged -- --name merge-monaco-after-aggregate -- bunx playwright test --config e2e/playwright.config.ts e2e/MonacoRuntime.spec.ts --project=desktop-chromium --workers=1` (exit 0, 3.9 s logged). Shared-host or startup contention remains a hypothesis.

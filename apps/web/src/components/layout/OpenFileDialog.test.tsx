@@ -90,6 +90,16 @@ describe("OpenFileDialog", () => {
 
   afterEach(cleanup);
 
+  test("keeps mobile and sm viewport gutters while capping the dialog at 42rem", async () => {
+    render(<OpenFileDialog />);
+    fireEvent.keyDown(window, { key: "p", metaKey: true, shiftKey: true });
+
+    const dialog = await screen.findByRole("dialog", { name: "Open File" });
+    expect(dialog.classList.contains("max-w-[calc(100%-1rem)]")).toBe(true);
+    expect(dialog.classList.contains("sm:max-w-[min(42rem,calc(100%-2rem))]")).toBe(true);
+    expect(dialog.classList.contains("sm:max-w-2xl")).toBe(false);
+  });
+
   test("opens from the shortcut, filters directories, and opens the keyboard selection", async () => {
     render(<OpenFileDialog />);
     fireEvent.keyDown(window, { key: "p", metaKey: true, shiftKey: true });

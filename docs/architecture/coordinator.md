@@ -61,8 +61,12 @@ worker environments on that machine. The agreed objective
 command nodes and can create environments on their own node (default) or on
 a connected leaf, control and interrogate environments on every connected
 node, exchange mail with agents on them, and transfer files to and from them.
-Creating a project on a leaf, or moving gitignored secrets there, needs the
-user's approval.
+Creating a project on a leaf needs the user's approval; environments on a
+leaf get the project's `.env` and selected files the same way local
+environments do. A coordinator deletes environments only when the user asks,
+with an explicit confirmation. Coordinators run only on the top-level command
+node: a command node attached to another one suspends its coordinator
+activity.
 
 ## One main coordinator, and side agents
 

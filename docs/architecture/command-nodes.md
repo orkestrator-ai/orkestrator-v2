@@ -1,6 +1,6 @@
 # Command nodes and leaf nodes
 
-Status: **Target architecture (agreed 2026-10-21, not yet implemented).** This
+Status: **Target architecture (agreed 2026-10-21, decisions refined the same day; not yet implemented).** This
 is the objective for multi-machine Orkestrator. It supersedes the
 "independent backends, client-side federation" direction in
 [`docs/temp/remote.md`](../temp/remote.md) and the client-side design
@@ -20,8 +20,9 @@ Every Orkestrator backend is a **node**. A node is either a **leaf** or a
   interface (the "portal") that clients use.
 
 A command node can itself be attached to another command node and then acts
-as a leaf for it. There can be several command nodes. A client connects to
-**one** command node at a time.
+as a leaf for it. There can be several command nodes, and a leaf can be attached to more than
+one. A client connects to **one** target at a time: normally a command node,
+or a leaf directly if the user chooses.
 
 ```text
               Electron / web / iOS  (thin clients; one command node at a time)
@@ -61,39 +62,59 @@ as a leaf for it. There can be several command nodes. A client connects to
    reach the leaf.
 4. **The command node dials out.** It connects to each leaf over
    HTTPS/Tailscale or a managed SSH route, using the leaf's gateway
-   credentials stored on the command node. Leaves do not need to know their
-   command nodes.
+   credentials stored on the command node. A leaf records which command
+   nodes are attached to it, but never needs to reach them.
 5. **No silent cross-node side effects.** Creating projects on a leaf, moving
    secrets, and destructive actions on another node are explicit and
    approved. Ambiguous outcomes are reported, never blindly retried.
 
 ## Roles
 
+There are exactly two levels: a command node and the nodes it commands.
+There is no deeper hierarchy.
+
 | | Leaf node | Command node |
 | --- | --- | --- |
 | Runs projects, environments, agents | Yes | Yes |
-| Registry of other nodes | No | Yes, stored in its backend |
+| Registry of subordinate nodes | No | Yes, stored in its backend |
 | Serves the portal (multi-node UI) | No (its own single-node UI only) | Yes |
 | Runs cross-node coordinators | No | Yes |
-| Can be attached to a command node | Yes | Yes (acts as a leaf) |
+| Can be attached to a command node | Yes | Yes, and it then becomes a leaf |
 
-- An Electron app connected to its own local backend is **always a command
-  node**.
-- A standalone backend (for example a VPS) is a leaf unless it is configured
-  as a command node.
-- When a command node is attached to another command node as a leaf, it
-  exposes its **own** projects and environments. It does not re-export its
-  own leaves to the parent (no transitive control by default).
+- **What makes a command node is having subordinates.** Any node becomes a
+  command node as soon as another node is registered under it. A setting
+  exposes the ability to register nodes; an Electron app on its own local
+  backend always has it, so the desktop is a command node whenever it
+  commands anything (and is the natural command node by default).
+- **A node is either commanding or subordinate, never both.** When a node
+  that has its own subordinates is attached to another command node, it
+  becomes a leaf: it suspends its command activity (stops controlling its
+  own subordinates and stops its cross-node coordinator activity), because
+  coordination belongs with the top-level command node. Its own projects,
+  environments and agents keep running and are controlled by the command
+  node above it. Its suspended registry is not exposed to the controller;
+  the controller sees only that node's own projects and environments.
+- **A leaf can have several command nodes.** It may be attached to more
+  than one command node at once and still be used directly (its own UI) by
+  connecting to it as the target. It keeps a record of the command nodes
+  attached to it and which one contacted it most recently, and uses that to
+  decide where updates that need a destination go (see
+  [Updates from leaves](#updates-from-leaves)).
+- A standalone backend (for example a VPS) is a leaf until it has
+  subordinates of its own.
 
 ## Clients
 
-- A client connects to exactly one command node and sees one interface that
-  covers that node and all of its connected nodes.
-- Switching command nodes is a connection switch (the existing server
-  switcher), not a merge. Clients keep only a short list of command nodes
-  they can connect to; they do not keep a registry of leaves.
-- Web and iOS always connect to a command node. A leaf's own single-node UI
-  remains available for direct use.
+- A client connects to exactly one target node at a time. Normally that is
+  a command node, and the client sees one interface covering it and all of
+  its subordinate nodes.
+- A client can choose a leaf as its target instead and work with that leaf
+  directly through the leaf's own single-node interface.
+- Switching targets is a connection switch (the existing server switcher),
+  not a merge. Clients keep only a short list of targets they can connect
+  to; they never keep a registry of a command node's leaves.
+- Web and iOS connect to a command node (or directly to a leaf) exactly as
+  they connect to a backend today, and receive the UI from it.
 
 ## Node registry (on the command node)
 
@@ -112,6 +133,36 @@ as a leaf for it. There can be several command nodes. A client connects to
   node from a registry only forgets it on that command node; it never stops
   or deletes anything on the node.
 
+## Attachment
+
+- A command node attaches a node by connecting to it with that node's
+  gateway credential and registering itself on the node (its identity,
+  display name and the time). The attached node records the attachment.
+- While at least one command node is attached, the node is subordinate. If
+  it has subordinates of its own, its command activity is suspended (not
+  deleted) and resumes when it is no longer attached anywhere.
+- Detaching happens when the command node removes the node from its
+  registry, or when the user detaches it on the node itself. Neither stops
+  the node's work.
+- Attaching is refused if it would create more than two levels: a node that
+  is currently subordinate cannot register subordinates, and a node cannot
+  attach the command node that controls it.
+
+## Updates from leaves
+
+Every attached command node keeps its own subscription to the leaf's event
+stream, so status, activity and environment changes reach all of them.
+Updates that have a single destination are routed intelligently:
+
+- Mail from a leaf environment's agent to "the coordinator", answers to a
+  coordinator's request, and task completion reports go to the command node
+  that started that conversation or task (recorded when it was started).
+- When there is no originating command node, they go to the command node
+  that contacted the leaf most recently.
+- If that command node is unreachable, the update waits in the leaf's
+  outbox until a command node collects it; it is not dropped or sent to a
+  different command node silently.
+
 ## Portal (aggregated interface)
 
 - The command node keeps a live read model of every connected node's
@@ -124,15 +175,35 @@ as a leaf for it. There can be several command nodes. A client connects to
 - Each environment shows its node's colour dot before its name. Unavailable
   nodes keep their last-known state, labelled, with writes disabled.
 
+## Agent chat through the command node
+
+Agent chat (transcripts, streaming responses, prompts, approvals and
+questions) goes through the command node, not directly from the leaf:
+
+- It is control traffic, not bulk data: structured, moderate in volume and
+  already bounded by transcript windows and paging.
+- The command node must see it anyway: it aggregates attention (waiting,
+  approvals), routes mail between coordinators and agents, and enforces
+  approval rules. One path keeps approvals arbitrated in one place and
+  avoids a second, divergent client connection to the leaf.
+- The added hop is small on a tailnet compared with model latency.
+
+Large binary content attached to chat (images, artifact files, downloads)
+can use the direct data path with a scoped grant, like terminals and
+previews, so it does not pass through the command node.
+
 ## Coordinators
 
-Coordinators run on command nodes. A coordinator can:
+Coordinators run on the top-level command node only. A coordinator can:
 
 - **Create environments** — on its own node by default, or on a named
   connected node when asked.
 - **Control environments on every connected node** — start, stop, prompt,
-  answer within its permissions — including on command nodes acting as
-  leaves.
+  answer — including on command nodes acting as leaves.
+- **Delete environments only when the user asks.** A coordinator never
+  deletes an environment on its own initiative. The user may ask for it in
+  the coordinator chat; the deletion then goes through an explicit
+  confirmation that names the node and the environment.
 - **Send and receive mail** with agents in environments on every connected
   node. Mail addresses are node-qualified; the command node routes mail to
   and from leaves.
@@ -147,25 +218,32 @@ boundary on their own checkout.
 ## Projects on leaf nodes
 
 - A coordinator never creates a project on a leaf without asking. It can do
-  so after the user approves, with the location on the leaf stated
-  explicitly in the approval.
-- A project's gitignored files (for example `.env`) are never copied to a
-  leaf implicitly. Transferring them is a separate, explicitly approved file
-  transfer that names the files, and the values never appear in logs,
-  receipts or transcripts.
+  so after the user approves, with the location on the leaf stated in the
+  approval.
+- Creating an environment on a leaf follows the same rules as creating a
+  local environment today: a worktree (or container) is made from the
+  project, then the project's `.env` files and other files selected in the
+  project's settings are copied into it from the project root.
+- On a leaf, those files come from the leaf's copy of the project root.
+  Where the leaf's project has none (for example a project newly added from
+  its git remote), they are copied from the command node's project root as
+  part of environment setup, using the same per-project file selection.
+- File contents are never written to logs, receipts or transcripts.
 
 ## Security
 
 - Leaf credentials live only on the command node's backend (encrypted at
   rest). Clients never receive them.
+- A command node has **full control** of its leaves to begin with.
+  Finer-grained permissions (for example read-only access) are a later
+  addition.
 - Data-plane grants for direct streams are short-lived, scoped to one
-  environment and one stream (one terminal session or one preview), and
-  revocable; they are not the leaf's gateway token.
-- A command node's authority over a leaf is the authority of the credential
-  it holds; leaves still enforce their own approval and execution policies.
-- Closing a connection, hiding a node or forgetting a node never stops
-  remote work. Unknown outcomes after a lost connection are recorded against
-  the owning node and never resubmitted automatically.
+  environment and one stream (one terminal session, one preview, one
+  download), and revocable; they are not the leaf's gateway token.
+- Leaves still enforce their own approval and execution policies.
+- Closing a connection, hiding a node, detaching or forgetting a node never
+  stops remote work. Unknown outcomes after a lost connection are recorded
+  against the owning node and never resubmitted automatically.
 
 ## What carries over from the current branch
 
@@ -204,23 +282,28 @@ command node:
 8. Nested command nodes, several command nodes per leaf, migration from the
    client-side federation, removal of the client-side code.
 
+## Decided
+
+| Topic | Decision |
+| --- | --- |
+| Leaf with several command nodes | Allowed. The leaf tracks attachments and the most recent contact and routes single-destination updates accordingly. Direct connection to a leaf stays possible. |
+| What makes a command node | Having subordinate nodes registered. A setting exposes registration; the desktop always has it. |
+| Agent chat | Through the command node; large binary attachments may use the direct data path. |
+| Leaf permissions | Full control first; permissions later. |
+| Deleting environments | Only on the user's request, which may come through coordinator chat, always with an explicit confirmation. |
+| Files for leaf environments | Same as local environments: worktree or container, then `.env` and selected files copied from the project root (the leaf's, else the command node's). |
+| Hierarchy | Two levels only. A command node attached to another becomes a leaf and suspends its command and coordinator activity. |
+| Dial direction | The command node dials out to its leaves. |
+| Projects on leaves | Created only with user approval and an explicit location. |
+
 ## Open decisions
 
-These need confirmation before the corresponding phase is built:
+1. When a client cannot reach a leaf directly (for example iOS off the
+   tailnet), is relaying terminals and previews through the command node an
+   acceptable fallback? Assumed: yes.
+2. If both the leaf's project root and the command node's project root have
+   a selected file, which copy wins? Assumed: the leaf's.
+3. What should the user see on a node whose command activity is suspended
+   because it was attached to another command node, and should its own
+   coordinator conversations be paused or left read-only?
 
-1. Can one leaf be attached to several command nodes at the same time, and
-   can it still be used directly (its own UI and coordinators) while
-   attached? Assumed: yes to both, with the leaf arbitrating conflicts.
-2. How does a standalone backend become a command node: a setting, a start
-   flag, or both?
-3. When a client cannot reach a leaf directly (for example iOS off the
-   tailnet), is relaying terminals and previews through the command node
-   acceptable? Assumed: yes, as a fallback.
-4. Do agent chat and transcripts go through the command node (assumed), or
-   also directly from the leaf?
-5. Can a command node's access to a leaf be restricted (for example
-   read-only, or no deletes), or is it always full control?
-6. Which coordinator actions on leaves need user approval beyond project
-   creation and secret transfer (for example deleting environments)?
-7. Secret transfer: which files are eligible, does the approval cover one
-   transfer or a standing rule, and are secrets kept on the leaf afterwards?

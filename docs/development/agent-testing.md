@@ -103,6 +103,37 @@ mise run dev:stop --profile claude-warm-qa
 mise run dev:reset --profile claude-warm-qa
 ```
 
+## Grok container login qualification
+
+The Docker fixture suite boots and restarts a disposable image with synthetic
+access-only Codex and Grok imports. It checks owner-only permissions, retained
+access tokens, empty refresh tokens, and unchanged read-only sources. Build the
+profile image before running the Docker suite:
+
+```bash
+mise run docker:build:dev --profile grok-login-qa
+mise run dev:test --profile grok-login-qa --fixture --fixture-environments local,container --credential-source grok --agent-platforms grok
+# From a second terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=grok-login-qa mise run test:logged -- --name docker-login -- mise run test:agent:docker
+```
+
+`grok-container-login.spec.ts` also offers an opt-in real-provider check. It
+requires a usable host Grok login when the profile starts; a missing or expired
+login produces an explicit skip. It gets an authenticated reply, advances only
+the disposable profile's login expiry metadata, withholds the expired host
+snapshot, restores a current host snapshot, and synchronizes it into the same
+bridge. A follow-up must recall the first turn's codeword in the same session.
+This simulates expiry and host renewal without waiting hours or consuming the
+host's refresh token; it does not qualify the provider's own refresh exchange.
+Traces and screenshots are disabled, and credentials and replies stay out of
+assertion output.
+
+```bash
+ORKESTRATOR_AGENT_TEST_PROFILE=grok-login-qa ORKESTRATOR_AGENT_TEST_DOCKER=1 ORKESTRATOR_AGENT_TEST_LIVE_GROK_LOGIN=1 mise run test:logged -- --name grok-login-live -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts --grep 'Grok login renewal'
+mise run dev:stop --profile grok-login-qa
+mise run dev:reset --profile grok-login-qa
+```
+
 ## Start or reuse a profile manually
 
 `dev:test` is a **foreground supervisor**. After printing `ready`, it stays
@@ -161,7 +192,12 @@ agent has to diagnose: if the browser under test is suddenly showing the login
 page, the session lapsed and the fix is a fresh `dev:login` link.
 
 Agent-test profiles authorize the host's Claude, Codex, Cursor, Grok, OpenCode
-and Pi credentials by default so manual QA can run real agents:
+and Pi credentials by default so manual QA can run real agents. A profile gets
+the host's login, never its provider directory: Claude a process-scoped access
+token, Codex, OpenCode and Grok an owner-only `auth.json` snapshot without a
+refresh token in the profile's own home, re-read on every start. Sessions,
+trust grants, MCP saves and settings stay in the profile. Pi alone shares the
+host `auth.json` in place:
 
 See [`credentials-and-models.md`](credentials-and-models.md) for the full
 per-platform credential, container-import, and model-cache matrix.
@@ -549,10 +585,10 @@ ORKESTRATOR_AGENT_TEST_PROFILE=qa-mcp-inactive ORKESTRATOR_AGENT_TEST_LIVE_MCP=1
 
 It writes only the disposable environment's `.mcp.json` and the profile's
 isolated `~/.claude.json`, and its fixture server lives under
-`output/agent-testing/<profile>/`. Do not add Codex to this scenario's
-credential sources for a user-scope edit: with the Codex credential source a
-profile uses the host's `CODEX_HOME`, so a Codex user-scope save would write
-the operator's own `config.toml`. Set
+`output/agent-testing/<profile>/`. A profile's provider homes are always its
+own, including a Codex or OpenCode source it authorizes (that adds only a
+restricted copy of the host's `auth.json`), so a user-scope save never reaches
+the operator's own `config.toml` or `opencode.json`. Set
 `ORKESTRATOR_AGENT_TEST_MCP_OLDER_CLAUDE_BRIDGE` to the `dist` folder of a
 Claude bridge built before the `mcpConfigReporting` marker to add the
 older-bridge step. That step swaps the build in only while it starts the

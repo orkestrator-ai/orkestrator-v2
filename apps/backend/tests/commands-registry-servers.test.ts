@@ -1,4 +1,5 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
+import os from "node:os";
 
 import { createCommandFixtures } from "./command-fixtures";
 
@@ -27,6 +28,42 @@ import type { CommandContext } from "./command-fixtures";
 type ServerStart = { hostPort: number; wasRunning: boolean; authToken: string };
 
 describe("Electron backend command registry", () => {
+  test.each([true, false])(
+    "reads OpenCode preferences with XDG_STATE_HOME set: %s",
+    async (useXdg) => {
+      const root = await createTempDir("ork-opencode-preferences-");
+      const previousHome = process.env.HOME;
+      const previousState = process.env.XDG_STATE_HOME;
+      const state = path.join(root, "state");
+      const home = path.join(root, "home");
+      const preferences = {
+        recent: [{ providerID: "openai", modelID: "test" }],
+        favorite: [],
+        variant: {},
+      };
+      const directory = path.join(useXdg ? state : path.join(home, ".local", "state"), "opencode");
+      await fs.mkdir(directory, { recursive: true });
+      await fs.writeFile(path.join(directory, "model.json"), JSON.stringify(preferences));
+      process.env.HOME = home;
+      // Bun caches os.homedir(), so redirect it explicitly as well.
+      const homeDirectory = spyOn(os, "homedir").mockReturnValue(home);
+      if (useXdg) process.env.XDG_STATE_HOME = state;
+      else delete process.env.XDG_STATE_HOME;
+      try {
+        const { context } = createContext(createEnvironment());
+        expect(
+          await createCommandRegistry().get("get_opencode_model_preferences")?.({}, context),
+        ).toEqual(preferences);
+      } finally {
+        homeDirectory.mockRestore();
+        if (previousHome === undefined) delete process.env.HOME;
+        else process.env.HOME = previousHome;
+        if (previousState === undefined) delete process.env.XDG_STATE_HOME;
+        else process.env.XDG_STATE_HOME = previousState;
+      }
+    },
+  );
+
   // The `security` stub only takes effect on darwin, where `getHostClaudeCredentials`
   // consults the Keychain; elsewhere resolution starts at the on-disk credential.
   // Seeding both with the same payload keeps these tests asserting the same thing

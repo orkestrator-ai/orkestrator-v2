@@ -11,6 +11,7 @@ import { registerDockerCommands } from "./commands-registry-docker.js";
 import type { CommandHandler } from "./commands-context.js";
 import type { RegistryDependencies } from "./commands-registry-types.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
+import { resetImageManifestCache } from "./docker-image.js";
 import { revokeProviderCredentials } from "./portable-input-status.js";
 import { staleLoginEnvironmentIds } from "./agent-account-bridge-state.js";
 import {
@@ -919,15 +920,36 @@ describe("reconcileContainerAgentAccount", () => {
 
 describe("container start credential hand-off", () => {
   async function withStartFixture(
-    options: { running?: boolean; failure?: "start" | "ambiguous-start" | "project-access" },
+    options: {
+      running?: boolean;
+      entrypointInvalidates?: boolean;
+      failure?: "start" | "ambiguous-start" | "project-access" | "boot" | "marker-write";
+    },
     run: (fixture: {
-      start: () => Promise<unknown>;
+      start: (shortId?: boolean) => Promise<unknown>;
       auth: () => Promise<string>;
       marker: () => Promise<string>;
+      stagedAuth: () => Promise<string>;
     }) => Promise<void>,
   ): Promise<void> {
     const fullId = "a".repeat(64);
     environment.containerId = fullId;
+    if (options.failure === "boot") {
+      resetImageManifestCache();
+      environment.containerLifecycle = {
+        schemaVersion: 1,
+        revision: 0,
+        lastRuntimeGeneration: 1,
+        runtime: {
+          containerId: fullId,
+          runtimeGeneration: 1,
+          owner: dockerOwnerNamespace(storage.getDataDir()),
+          imageId: `sha256:${"b".repeat(64)}`,
+        },
+        storage: { format: "legacy-layer", workspaceGeneration: 1 },
+        outcomes: [],
+      };
+    }
     context.storage.loadConfig = async () =>
       ({ global: { enabledAgentPlatforms: ["codex"] } }) as never;
     const lifecycle = memoryLifecycleContext([environment], storage.getDataDir()).context;
@@ -938,6 +960,7 @@ describe("container start credential hand-off", () => {
     const authFile = path.join(root, "installed-auth.json");
     const markerFile = path.join(root, "installed-marker");
     const runningFile = path.join(root, "running");
+    const failedMarkerWrite = path.join(root, "failed-marker-write");
     await write(authFile, '{"OPENAI_API_KEY":"codex-host"}');
     await write(markerFile, "default");
     await write(runningFile, String(options.running ?? false));
@@ -950,12 +973,13 @@ describe("container start credential hand-off", () => {
     // boundary. Only the daemon is replaced; its installed login is independent
     // of staged inputs and changes on a genuine boot or an actual credential pipe.
     const script = `#!/usr/bin/env bun
-import { readFileSync, writeFileSync, copyFileSync } from "node:fs";
+import { readFileSync, writeFileSync, copyFileSync, existsSync } from "node:fs";
 const [command, ...args] = process.argv.slice(2);
 const auth = ${JSON.stringify(authFile)};
 const marker = ${JSON.stringify(markerFile)};
 const running = ${JSON.stringify(runningFile)};
 const failure = ${JSON.stringify(options.failure ?? null)};
+const failedMarkerWrite = ${JSON.stringify(failedMarkerWrite)};
 if (command === "inspect") {
   const format = args[1];
   if (format.includes(".State.Running")) console.log(readFileSync(running, "utf8"));
@@ -965,6 +989,7 @@ if (command === "inspect") {
 } else if (command === "start") {
   if (failure === "start") process.exit(17);
   if (readFileSync(running, "utf8") !== "true") {
+    if (${JSON.stringify(options.entrypointInvalidates ?? false)}) writeFileSync(marker, "unstaged");
     copyFileSync(${JSON.stringify(staged(revision, "codex-home/auth.json"))}, auth);
     writeFileSync(running, "true");
   }
@@ -975,30 +1000,85 @@ if (command === "inspect") {
     if (failure === "project-access") process.exit(19);
   } else {
     const text = args.at(-1);
-    if (text.startsWith("cat /tmp/orkestrator-codex-account")) console.log(readFileSync(marker, "utf8"));
+    if (text.includes("/run/orkestrator/boot-status.json")) {
+      console.log(JSON.stringify({ version: 1, bootId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", pid1Start: "5000", phase: "failed", failureCode: "entrypoint-failed" }));
+      console.log("5000");
+    } else if (text.startsWith("cat /tmp/orkestrator-codex-account")) console.log(readFileSync(marker, "utf8"));
     else if (text.includes("/tmp/orkestrator-codex-account")) {
+      if (failure === "marker-write" && !existsSync(failedMarkerWrite)) {
+        writeFileSync(failedMarkerWrite, "failed");
+        process.exit(23);
+      }
       const value = text.match(/printf '%s' '([^']*)'/)?.[1];
       if (value === undefined) process.exit(20);
       writeFileSync(marker, value);
     } else if (text.includes("/home/node/.codex/auth.json")) writeFileSync(auth, await Bun.stdin.text());
     else process.exit(21);
   }
-} else process.exit(22);
+} else if (command === "create") console.log("manifest-probe");
+else if (command === "cp") {
+  const body = Buffer.from(JSON.stringify({ schemaVersion: 1, appVersion: "1.0.0", sourceRevision: null, architecture: "arm64", runtimes: {}, agents: {}, bridges: [], capabilities: { "boot-status": 1 }, stateFormats: {} }));
+  const header = Buffer.alloc(512);
+  header.write("image-manifest.json");
+  header.write(body.length.toString(8).padStart(11, "0"), 124);
+  header[156] = 48;
+  process.stdout.write(Buffer.concat([header, body]));
+} else if (command !== "rm") process.exit(22);
 `;
     try {
       await withDockerScript(script, async () =>
         run({
           // A short id must still use the assigned environment's lifecycle path.
-          start: async () =>
-            commands.get("docker_start_container")!({ containerId: fullId.slice(0, 12) }, context),
+          start: async (shortId = true) =>
+            commands.get("docker_start_container")!(
+              { containerId: shortId ? fullId.slice(0, 12) : fullId },
+              context,
+            ),
           auth: () => fs.readFile(authFile, "utf8"),
           marker: () => fs.readFile(markerFile, "utf8"),
+          stagedAuth: () => fs.readFile(staged(revision, "codex-home/auth.json"), "utf8"),
         }),
       );
     } finally {
       lifecycle.runtime.shutdown();
+      resetImageManifestCache();
     }
   }
+
+  test("overlapping short and full id starts cannot consume or replace an installed marker", async () => {
+    await withStartFixture({}, async (fixture) => {
+      await addAccounts({ codex: CODEX_ID });
+      await Promise.all([fixture.start(), fixture.start(false)]);
+      expect(await fixture.auth()).toBe('{"OPENAI_API_KEY":"codex-2"}');
+      expect(await fixture.marker()).toBe("unstaged");
+      await addAccounts({});
+      await reconcileContainerAgentAccount(context, environment.containerId!, "codex", {
+        isRunning: async () => false,
+        stop: async () => {},
+      });
+      expect(await fixture.auth()).toBe('{"OPENAI_API_KEY":"codex-host"}');
+      expect(await fixture.marker()).toBe("default");
+    });
+  });
+
+  test("entrypoint invalidation survives a failed backend marker write", async () => {
+    await withStartFixture(
+      { entrypointInvalidates: true, failure: "marker-write" },
+      async (fixture) => {
+        await addAccounts({ codex: CODEX_ID });
+        await fixture.start();
+        expect(await fixture.auth()).toBe('{"OPENAI_API_KEY":"codex-2"}');
+        expect(await fixture.marker()).toBe("unstaged");
+        await addAccounts({});
+        await reconcileContainerAgentAccount(context, environment.containerId!, "codex", {
+          isRunning: async () => false,
+          stop: async () => {},
+        });
+        expect(await fixture.auth()).toBe('{"OPENAI_API_KEY":"codex-host"}');
+        expect(await fixture.marker()).toBe("default");
+      },
+    );
+  });
 
   for (const busy of [false, true]) {
     test(`a no-op start preserves the installed host login until the bridge is idle (busy=${busy})`, async () => {
@@ -1008,6 +1088,7 @@ if (command === "inspect") {
         await fixture.start();
         expect(await fixture.marker()).toBe("default");
         expect(await fixture.auth()).toContain("codex-host");
+        expect(await fixture.stagedAuth()).toBe('{"OPENAI_API_KEY":"codex-host"}');
         let stopped = 0;
         const bridge = {
           isRunning: async () => true,
@@ -1029,11 +1110,20 @@ if (command === "inspect") {
     });
   }
 
-  for (const failure of [undefined, "project-access", "ambiguous-start", "start"] as const) {
+  for (const failure of [
+    undefined,
+    "project-access",
+    "boot",
+    "ambiguous-start",
+    "start",
+  ] as const) {
     test(`a real start leaves a recoverable marker through ${failure ?? "successful startup"}`, async () => {
       await withStartFixture({ failure }, async (fixture) => {
         await addAccounts({ codex: CODEX_ID });
-        if (failure) await expect(fixture.start()).rejects.toThrow();
+        if (failure)
+          await expect(fixture.start()).rejects.toThrow(
+            failure === "boot" ? "entrypoint-failed" : undefined,
+          );
         else await fixture.start();
         if (failure === "start") {
           // No entrypoint ran: a rejected exec cannot certify a staged account.

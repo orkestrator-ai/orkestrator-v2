@@ -14,6 +14,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 import { nodeErrorText as errorText, updateNode } from "@/lib/backend/command-nodes";
 
 function routeText(route: NodeRoute): string {
@@ -100,7 +101,7 @@ export function EditNodeDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className={Z_FULLSCREEN_DIALOG} overlayClassName={Z_FULLSCREEN_DIALOG}>
         <form onSubmit={(event) => void save(event)} className="space-y-4">
           <DialogHeader>
             <DialogTitle>Routes to {node.displayName}</DialogTitle>

@@ -1,5 +1,13 @@
 # Managed SSH routes
 
+> **Direction change (2026-10-21):** under
+> [command-nodes.md](../architecture/command-nodes.md), SSH routes to leaf
+> nodes are run by the **command node's backend**, not by the desktop
+> client. The remote-side setup below (loopback client gateway, aliases,
+> host-key trust) still applies; the desktop-managed tunnel described here is
+> the transitional implementation.
+
+
 Status: Living. This is the setup and troubleshooting guide for reaching a
 remote backend through a desktop-managed OpenSSH tunnel. For how routes,
 identities and fallback work, see

@@ -1,5 +1,13 @@
 # Federation migration and rollback
 
+> **Direction change (2026-10-21):** the target is
+> [command-nodes.md](../architecture/command-nodes.md). The client-side
+> device catalogue described here is transitional: the registry of nodes
+> moves into the command node's backend and clients keep only their list of
+> command nodes. A migration from this catalogue into a command node registry
+> will be specified with that work.
+
+
 Status: Living. This covers upgrading to the federated client, what older
 clients and backends see, the feature flags, and how to roll back. The
 design is in [federation.md](../architecture/federation.md).

@@ -1,5 +1,13 @@
 # Federated multi-backend client: implementation handoff
 
+> **Superseded direction (2026-10-21):** this records the client-side
+> federation delivered on this branch. The agreed objective is now
+> [command-nodes.md](../architecture/command-nodes.md); the "no central
+> coordinator / client aggregates" statements below describe the delivered
+> code, not the target. What carries over, moves or is removed is listed in
+> command-nodes.md.
+
+
 Handoff for the plan in `docs/temp/remote.md` (sections 21 and 23). The
 living references are
 [federation.md](../architecture/federation.md),

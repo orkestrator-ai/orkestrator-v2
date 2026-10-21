@@ -53,6 +53,17 @@ live approvals, revokes its credential, and tombstones its mailbox without
 deleting provider history or the checkout. Removing the project stops
 Coordinator and deletes the isolated runtime, never the user's local repository.
 
+## Multiple machines (planned)
+
+Today a coordinator reads its own machine's checkout and delegates only to
+worker environments on that machine. The agreed objective
+([command-nodes.md](command-nodes.md)) extends this: coordinators run on
+command nodes and can create environments on their own node (default) or on
+a connected leaf, control and interrogate environments on every connected
+node, exchange mail with agents on them, and transfer files to and from them.
+Creating a project on a leaf, or moving gitignored secrets there, needs the
+user's approval.
+
 ## One main coordinator, and side agents
 
 A project has exactly one **main** coordinator conversation

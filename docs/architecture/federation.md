@@ -1,34 +1,40 @@
-# Federated multi-machine client
+# Federated multi-machine client (transitional)
 
-Status: Living. The design brief is [`docs/temp/remote.md`](../temp/remote.md).
-This file describes what is built. Gaps are listed under
-[Known limitations](#known-limitations). Operator setup for SSH is in
-[ssh-routes.md](../development/ssh-routes.md). Upgrade, rollback and the
-compatibility table are in
-[federation-migration.md](../development/federation-migration.md). Synthetic
-measurements are in
+Status: **Superseded direction — transitional code.** The objective for
+multi-machine Orkestrator is now [command-nodes.md](command-nodes.md): clients
+connect to one command node, which keeps the registry of leaf nodes in its
+backend, aggregates them, routes commands and runs cross-node coordinators.
+This file describes the client-side federation that is currently on the
+branch. It is being reworked into the command node: the registry, routes,
+SSH tunnels and per-machine read model move into the command node backend,
+and the renderer-side multi-backend runtime, machine panels as separate
+renderer realms and the client-owned machine catalogue are removed. Do not
+extend the client-side design; build on command-nodes.md instead.
+
+Other references: SSH operator setup in
+[ssh-routes.md](../development/ssh-routes.md), upgrade and rollback in
+[federation-migration.md](../development/federation-migration.md), synthetic
+measurements in
 [federation-benchmarks.md](../development/federation-benchmarks.md).
 
-One desktop window, or one hosted browser page, shows projects and
-environments from several independent Orkestrator backends ("machines") at
-once. Each environment row starts with a coloured dot naming its machine. A
-machine can be reached over HTTPS/Tailscale, over a desktop-managed OpenSSH
-tunnel, or both.
+What exists today: one desktop window, or one hosted browser page, shows
+projects and environments from several Orkestrator backends ("machines").
+Each environment row starts with a coloured dot naming its machine. A
+machine can be reached over HTTPS/Tailscale, over an OpenSSH tunnel, or both.
 
-## Goals and non-goals
+## Properties that carry over to command nodes
 
-- The client connects to every saved machine directly and independently. A
-  slow, offline or incompatible machine never blocks another.
-- There is **no central coordinator**. Backends do not know about each other.
-  Nothing relays one backend's traffic through another. Nothing schedules,
-  places, migrates or replicates work across machines. The per-project
-  Coordinator agents are unchanged and stay inside their own backend.
-- The client aggregates views. Each backend stays authoritative for its
-  projects, environments, agents, workflows, approvals, files and Git.
-  Hiding a machine, changing the filter, closing a panel or forgetting a
-  machine never stops remote work.
+- A slow, offline or incompatible machine never blocks another.
+- Each backend stays authoritative for its projects, environments, agents,
+  workflows, approvals, files and Git. Hiding a machine, changing the
+  filter, closing a panel or forgetting a machine never stops remote work.
 - SSH carries the existing authenticated client API. It is not a second
   execution path, and gateway authentication still applies on top of it.
+
+The transitional code below connects to every machine from the client and
+keeps per-project coordinators inside their own backend. Under
+command-nodes.md, connections move to the command node and coordinators on
+command nodes span all connected nodes.
 
 ## Ownership
 

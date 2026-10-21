@@ -93,7 +93,10 @@ restricted containers no longer need `NET_ADMIN` can the sudo grants shrink or
 - Rotating OpenCode and Pi OAuth refresh tokens (2026-10-21). OpenCode's
   `auth.json` and Pi's `agent/auth.json` hold one login per model provider
   (`{ type: "oauth", access, refresh, expires }`, expiry in milliseconds, or
-  an API key). Both CLIs re-read the file before each request. Checked against
+  an API key). Both CLIs re-read the file before each request: Pi reloads its
+  auth storage, and OpenCode's OAuth plugins call `Auth.get`, a file read, on
+  every request. An OpenCode server only learns of a provider first signed in
+  after it started when it restarts, as on the host. Checked against
   the pinned sources (OpenCode 1.19.0 plugins, Pi 1.2.0 `pi-ai`): Anthropic,
   OpenAI (Codex and ChatGPT), xAI, Kimi and Radius store the new refresh token
   on every refresh, so they rotate (OpenAI's and xAI's are known single-use).
@@ -110,8 +113,15 @@ restricted containers no longer need `NET_ADMIN` can the sudo grants shrink or
   container's file (`buildMergeContainerProviderAuthCommand`, under Pi's lock
   directory): a provider the user signed in to inside the container keeps its
   own login, and any refresh token the container still holds for a provider
-  the host has as rotating OAuth is blanked. The entrypoint blanks rotating
-  refresh tokens again on every start. Access tokens last hours (Anthropic
+  the host has as rotating OAuth is blanked, even when every host login has
+  expired and nothing new is handed over. The merge never takes a lock it
+  finds held, however old: Pi's asynchronous refresh holds it for up to 30
+  seconds with a 15-second heartbeat, and Pi clears a stale one itself, so a
+  held lock only skips that push until the next bridge start. The entrypoint
+  blanks rotating refresh tokens again on every start, for the providers the
+  mounted host file holds as rotating OAuth; a login made inside the
+  container keeps its refresh token, and with no host file the container's
+  own file is left alone. Access tokens last hours (Anthropic
   about eight, xAI about six) to days (OpenAI about ten), so a bridge session
   that outlives one signs out until the next bridge start or container start
   picks up the host's refreshed login; the host must have refreshed it, by

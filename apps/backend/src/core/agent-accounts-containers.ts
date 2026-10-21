@@ -408,10 +408,14 @@ node -e ${quoteShell(script)} ${quoteShell(file)}
  * hand it the host's current login, access-only. Their access tokens can last
  * only hours (Grok about six, Anthropic about eight) and the copy can never
  * refresh them, so this is what keeps a long-lived container signed in while
- * the host's own agent keeps refreshing. OpenCode and Pi re-read the file on
- * each request, so a bridge that is reused picks it up too. A host with no
- * usable login leaves the container's copy alone, as the Claude sync does: it
- * is either still valid or already signed out on its own.
+ * the host's own agent keeps refreshing. Pi reloads the file and OpenCode's
+ * OAuth plugins read it (`Auth.get`) on each request, so a bridge that is
+ * reused picks a renewed login up too; only a provider first signed in after
+ * an OpenCode server started waits for that server to restart, as on the
+ * host. A host with no usable login leaves the container's copy alone, as the
+ * Claude sync does: it is either still valid or already signed out on its
+ * own. OpenCode and Pi still strip a refresh token the copy holds for one of
+ * the host's rotating providers (`providerAuthMergePayload`).
  */
 export async function syncContainerLogin(
   context: CommandContext,

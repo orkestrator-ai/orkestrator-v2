@@ -842,3 +842,15 @@ remained unchanged.
 `mise run test:logged -- --name merge2-tests -- mise run test` on `be2e89da` merged into `5f8b2bca` timed out `Pi bridge runtime vendoring > loads Pi's supported SDK from the staged runtime closure` at 30,000.39 ms. Root/support used one Bun worker alongside workspace/bridge groups and other worktrees; host load was about 40–60 by the end, after exceeding 100 in the earlier validation. The overall retry was interrupted at 335.2 seconds after admission delays and is incomplete, rather than a complete one-failure aggregate.
 
 `mise run test:logged -- --name merge2-pi-vendor-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed the complete unchanged owning file, exit 0 in 10.4 seconds. This confirms another intermittent recurrence, without proving the resource-contention hypothesis. No implementation, assertion, timeout or skip changed. Evidence: `orkestrator-test-run.MGM72b/merge2-tests.log.gz` and `orkestrator-test-run.Z2xRFB` below the host temporary root.
+
+## Transcript-scroll review validation — 2026-10-21
+
+- **Original command:** `mise run test:logged -- --name full-tests -- mise run test`, alongside the component browser suite.
+- **Workers:** workspace/root/bridges/protocol reservations of 4/1/2/1 slots; root used `--parallel=1`.
+- **Failure:** `Pi bridge runtime vendoring > loads Pi's supported SDK from the staged runtime closure` timed out at 30001.01 ms. Root/support reported 3178 passed, one skipped and two failed across 3181 tests in 151 files (276.71 seconds). The other failure was a new DOM absence assertion in the scroll-affordance regression; it was corrected and its component and diagnostic-contract owners passed.
+- **Owning-file rerun:** `mise run test:logged -- --name pi-vendor-isolated -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed the unchanged complete owner (four tests, exit 0, 10.7 seconds logged).
+- **Evidence:** `orkestrator-test-run.vcs7Uq/root-and-agent-support-tests.log.gz` under the host temporary root.
+- **Assessment:** confirmed intermittent recurrence. Concurrent browser and aggregate validation was active, but resource contention remains unconfirmed. No Pi implementation, assertion, timeout or skip changed.
+
+The `full-tests-final` aggregate rerun passed the complete root/support group
+in 167.09 seconds (3180 passed, one skipped, zero failed).

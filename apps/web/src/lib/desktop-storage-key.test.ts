@@ -50,3 +50,44 @@ describe("desktop connection storage keys", () => {
     expect(localStorage.getItem(remoteKey)).toBeNull();
   });
 });
+
+describe("machine-identity storage keys", () => {
+  afterEach(() => {
+    delete window.orkestratorDesktopIdentity;
+  });
+
+  test("CL-02/MG-01: a verified machine keeps one namespace across routes and adopts its old one", () => {
+    window.orkestrator = { isolatedViewState: true } as Window["orkestrator"];
+    window.orkestratorGateway = { enabled: true, desktop: true, baseUrl: "https://desk.example" };
+    const legacyKey = desktopConnectionStorageKey("ui-storage");
+    localStorage.setItem(legacyKey, "remembered");
+
+    window.orkestratorDesktopIdentity = {
+      connectionId: "c1",
+      backendId: "bk_desk",
+      legacyOrigin: "https://desk.example",
+      panel: false,
+    };
+    const verifiedKey = desktopConnectionStorageKey("ui-storage");
+    expect(verifiedKey).not.toBe(legacyKey);
+    expect(localStorage.getItem(verifiedKey)).toBe("remembered");
+
+    // Reached later over an SSH tunnel on an ephemeral port: same namespace.
+    window.orkestratorGateway = { enabled: true, desktop: true, baseUrl: "http://127.0.0.1:49152" };
+    expect(desktopConnectionStorageKey("ui-storage")).toBe(verifiedKey);
+  });
+
+  test("an unproved SSH-only machine is namespaced by its entry, never its port", () => {
+    window.orkestrator = { isolatedViewState: true } as Window["orkestrator"];
+    window.orkestratorDesktopIdentity = {
+      connectionId: "ssh-entry",
+      backendId: null,
+      legacyOrigin: null,
+      panel: true,
+    };
+    window.orkestratorGateway = { enabled: true, desktop: true, baseUrl: "http://127.0.0.1:41001" };
+    const first = desktopConnectionStorageKey("ui-storage");
+    window.orkestratorGateway = { enabled: true, desktop: true, baseUrl: "http://127.0.0.1:41002" };
+    expect(desktopConnectionStorageKey("ui-storage")).toBe(first);
+  });
+});

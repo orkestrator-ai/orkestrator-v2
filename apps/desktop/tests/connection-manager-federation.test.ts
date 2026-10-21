@@ -672,7 +672,13 @@ describe("SSH routes", () => {
     await connections.initialize();
     await connections.bind("window", "local");
     const list = await connections.connectSsh(
-      { destination: "build-machine", remoteGatewayPort: 34121, token, nickname: "Build" },
+      {
+        destination: "build-machine",
+        remoteGatewayPort: 34121,
+        token,
+        nickname: "Build",
+        select: true,
+      },
       "window",
     );
     const machine = list.connections.find((entry) => entry.kind === "remote");

@@ -320,6 +320,23 @@ export class ConnectionManager {
         backend.routes.some((route) => route.kind === "https" && route.origin === address),
       );
       const hello = outcome.kind === "hello" ? outcome.hello : null;
+      if (input.connectionId) {
+        // "Add connection method": only for a verified machine, and only when
+        // the new address proves that same installation.
+        const target = this.findBackend(input.connectionId);
+        if (!target) throw new Error("That saved connection no longer exists.");
+        if (!target.verifiedInstallationId) {
+          throw new Error(
+            "Connect to this machine over its existing route once before adding another, so its identity can be verified.",
+          );
+        }
+        if (!hello || hello.installationId !== target.verifiedInstallationId) {
+          throw identityMismatch(target, address);
+        }
+        if (byAddress && byAddress.id !== target.id) {
+          throw new Error("That address is already saved as another machine.");
+        }
+      }
       if (
         byAddress?.verifiedInstallationId &&
         hello &&
@@ -371,11 +388,12 @@ export class ConnectionManager {
       );
       if (hello) record = this.recordHello(record, hello);
       const committed = record;
+      const select = input.select !== false;
       await this.mutateCatalogue((current) => {
         this.assertScopeGeneration(scope, generation);
         return {
           ...current,
-          activeConnectionId: committed.id,
+          activeConnectionId: select ? committed.id : current.activeConnectionId,
           backends: [
             committed,
             ...current.backends.filter((backend) => backend.id !== committed.id),
@@ -386,14 +404,16 @@ export class ConnectionManager {
       this.sessionTokens.set(route.id, token);
       this.markHello(record.id, outcome);
       this.blockedRoutes(record.id).delete(route.id);
-      this.installRemote(
-        record.id,
-        route,
-        { baseUrl: address, release: () => undefined },
-        token,
-        outcome,
-      );
-      this.bindScope(scope, record.id);
+      if (select || this.isWanted(record.id) || this.remoteConnections.has(record.id)) {
+        this.installRemote(
+          record.id,
+          route,
+          { baseUrl: address, release: () => undefined },
+          token,
+          outcome,
+        );
+      }
+      if (select) this.bindScope(scope, record.id);
       this.emitStateChange();
       return this.getList(scope);
     });
@@ -500,7 +520,8 @@ export class ConnectionManager {
           const known = current.backends.some((backend) => backend.id === committed.id);
           return {
             ...current,
-            activeConnectionId: target ? current.activeConnectionId : committed.id,
+            activeConnectionId:
+              !target && input.select === true ? committed.id : current.activeConnectionId,
             backends: known
               ? current.backends.map((backend) =>
                   backend.id === committed.id ? committed : backend,
@@ -514,10 +535,11 @@ export class ConnectionManager {
         if (target || owner) {
           // Adding a method to a known machine never moves its active route.
           transport.release();
-          if (!target) this.bindScopeAfterActivation(scope, record.id);
+          if (!target && input.select === true) this.bindScopeAfterActivation(scope, record.id);
         } else {
           this.installRemote(record.id, savedRoute, transport, token, outcome);
-          this.bindScope(scope, record.id);
+          if (input.select === true) this.bindScope(scope, record.id);
+          else this.releaseIfUnused(record.id);
         }
         this.emitStateChange();
         return this.getList(scope);

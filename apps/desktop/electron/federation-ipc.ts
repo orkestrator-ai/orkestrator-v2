@@ -188,8 +188,16 @@ export function registerFederationIpc(deps: FederationIpcDependencies): void {
 
   handle("orkestrator:connections:connect-ssh", (event, value) => {
     const input = record(value, "SSH route details");
-    const { destination, sshPort, identityFile, remoteGatewayPort, token, nickname, connectionId } =
-      input;
+    const {
+      destination,
+      sshPort,
+      identityFile,
+      remoteGatewayPort,
+      token,
+      nickname,
+      connectionId,
+      select,
+    } = input;
     if (typeof destination !== "string" || typeof token !== "string") {
       throw new Error("Expected an SSH destination and gateway token");
     }
@@ -206,6 +214,7 @@ export function registerFederationIpc(deps: FederationIpcDependencies): void {
         destination,
         token,
         remoteGatewayPort: Number(remoteGatewayPort),
+        ...(select === true ? { select: true } : {}),
         ...(sshPort === undefined || sshPort === null || sshPort === ""
           ? {}
           : { sshPort: Number(sshPort) }),

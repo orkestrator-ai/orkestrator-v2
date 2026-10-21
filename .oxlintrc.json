@@ -102,6 +102,45 @@
       }
     },
     {
+      "files": ["apps/web/src/lib/federation/**", "apps/web/src/components/federation/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "@/lib/native/backend",
+                "message": "Federated code reaches a machine through its backend-bound client (lib/federation), never the window's single-backend command transport."
+              },
+              {
+                "name": "@/lib/backend",
+                "message": "Federated code reaches a machine through its backend-bound client (lib/federation), never the window's single-backend clients."
+              }
+            ],
+            "patterns": [
+              {
+                "group": ["@/lib/backend/*"],
+                "message": "Federated code reaches a machine through its backend-bound client (lib/federation)."
+              },
+              {
+                "group": ["node:*", "bun:*"],
+                "message": "The renderer runs in a browser; keep Node and Bun APIs out of its bundle."
+              },
+              {
+                "group": ["@orkestrator/protocol/node/*"],
+                "allowTypeImports": true,
+                "message": "Node-only protocol module; the renderer may import its types only."
+              },
+              {
+                "group": ["@orkestrator/protocol/testing/*"],
+                "message": "Test fixtures and fakes are for tests only."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
       "files": ["packages/protocol/src/*.ts"],
       "rules": {
         "no-restricted-imports": [

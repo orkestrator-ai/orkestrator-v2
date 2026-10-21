@@ -38,6 +38,7 @@ type ParentWindowLike = {
     id: number;
     send(channel: string, ...args: unknown[]): void;
     isDestroyed(): boolean;
+    getZoomFactor?(): number;
   };
 };
 
@@ -144,8 +145,19 @@ export class BackendPanelViews {
     return { panelId };
   }
 
+  /** Bounds arrive in the parent's CSS pixels; the view is placed in window pixels. */
   setBounds(parentWebContentsId: number, panelId: string, bounds: PanelBounds): void {
-    this.owned(parentWebContentsId, panelId).view.setBounds(bounds);
+    const entry = this.owned(parentWebContentsId, panelId);
+    const zoom = entry.parent.webContents.getZoomFactor?.() ?? 1;
+    const factor = Number.isFinite(zoom) && zoom > 0 ? zoom : 1;
+    entry.view.setBounds({
+      x: Math.round(bounds.x * factor),
+      y: Math.round(bounds.y * factor),
+      width: Math.round(bounds.width * factor),
+      height: Math.round(bounds.height * factor),
+    });
+    // The panel renders at the parent's zoom so it reads as one window.
+    if (!entry.webContents.isDestroyed()) entry.webContents.setZoomFactor?.(factor);
   }
 
   setVisible(parentWebContentsId: number, panelId: string, visible: boolean): void {

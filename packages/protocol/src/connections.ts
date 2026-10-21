@@ -103,6 +103,8 @@ export interface ConnectSshRouteInput {
   nickname?: string;
   /** Attach the route to this existing machine instead of onboarding a new one. */
   connectionId?: string;
+  /** Bind the requesting window to the new machine; defaults to false. */
+  select?: boolean;
 }
 
 export interface ConnectToRemoteInput {
@@ -110,6 +112,16 @@ export interface ConnectToRemoteInput {
   token: string;
   /** Optional nickname. Omitted or blank keeps an existing nickname for a known address. */
   nickname?: string;
+  /**
+   * Bind the requesting window to this machine (the single-machine switch).
+   * `false` only adds the machine; multi-machine views observe it in place.
+   */
+  select?: boolean;
+  /**
+   * Add this address as another route of an existing, verified machine. The
+   * address must prove the same installation; nothing is merged otherwise.
+   */
+  connectionId?: string;
 }
 
 export const MAX_CONNECTION_NICKNAME_LENGTH = 64;

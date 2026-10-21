@@ -1,18 +1,50 @@
 /**
- * Keeps persisted presentation state separate when one Electron window moves
- * between backends. Browser clients retain their established storage keys.
+ * Keeps persisted presentation state separate per machine inside Electron.
+ * Browser clients retain their established storage keys.
+ *
+ * The namespace is the machine's identity, never a route: a proved backend
+ * identity when there is one, otherwise the saved connection. An SSH
+ * tunnel's ephemeral local port therefore never becomes part of a key.
+ * Namespaces created by earlier releases were derived from the connection's
+ * HTTPS address; a verified machine adopts that state once, and a machine
+ * whose identity is still unproved keeps using it unchanged.
  */
-export function desktopConnectionStorageKey(baseKey: string): string {
-  if (typeof window === "undefined" || window.orkestrator?.isolatedViewState !== true) {
-    return baseKey;
-  }
-  const identity = window.orkestratorGateway?.baseUrl ?? "local";
+
+function hashIdentity(identity: string): string {
   let hash = 2_166_136_261;
   for (let index = 0; index < identity.length; index += 1) {
     hash ^= identity.charCodeAt(index);
     hash = Math.imul(hash, 16_777_619);
   }
-  const connectionKey = `${baseKey}:desktop:${(hash >>> 0).toString(36)}`;
+  return (hash >>> 0).toString(36);
+}
+
+function namespaceFor(): { identity: string; legacyIdentity: string | null } {
+  const desktopIdentity = window.orkestratorDesktopIdentity;
+  if (!desktopIdentity) {
+    return { identity: window.orkestratorGateway?.baseUrl ?? "local", legacyIdentity: null };
+  }
+  if (desktopIdentity.connectionId === "local") return { identity: "local", legacyIdentity: null };
+  if (desktopIdentity.backendId) {
+    return {
+      identity: `backend:${desktopIdentity.backendId}`,
+      legacyIdentity: desktopIdentity.legacyOrigin,
+    };
+  }
+  // Unproved identity: an HTTPS-addressed machine keeps its established
+  // namespace; an SSH-only one is namespaced by its saved entry.
+  return {
+    identity: desktopIdentity.legacyOrigin ?? `connection:${desktopIdentity.connectionId}`,
+    legacyIdentity: null,
+  };
+}
+
+export function desktopConnectionStorageKey(baseKey: string): string {
+  if (typeof window === "undefined" || window.orkestrator?.isolatedViewState !== true) {
+    return baseKey;
+  }
+  const { identity, legacyIdentity } = namespaceFor();
+  const connectionKey = `${baseKey}:desktop:${hashIdentity(identity)}`;
   const migrationKey = `${baseKey}:desktop:migrated-v1`;
   // The first desktop window deliberately retains Electron's legacy default
   // session for one release. Copy old Zustand state before persist middleware
@@ -26,6 +58,13 @@ export function desktopConnectionStorageKey(baseKey: string): string {
         if (legacyValue !== null) localStorage.setItem(connectionKey, legacyValue);
       }
       localStorage.setItem(migrationKey, "1");
+    }
+    if (legacyIdentity && localStorage.getItem(connectionKey) === null) {
+      // One-time adoption of the address-derived namespace by the verified
+      // machine that owns that address.
+      const legacyKey = `${baseKey}:desktop:${hashIdentity(legacyIdentity)}`;
+      const legacyValue = localStorage.getItem(legacyKey);
+      if (legacyValue !== null) localStorage.setItem(connectionKey, legacyValue);
     }
   } catch {
     // Storage can be disabled or unavailable. Zustand will apply its own

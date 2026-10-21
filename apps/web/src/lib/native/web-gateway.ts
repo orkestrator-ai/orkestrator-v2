@@ -1,4 +1,6 @@
 import type { GatewayTokenSettings, WebClientStatus } from "@/types";
+import { browserPanelMachineId, isMachinePanelRealm } from "@/lib/federation/panel-realm";
+import { browserMachineCredentials } from "@/lib/federation/browser-machines";
 import { getGatewayBaseUrl, resolveGatewayApiUrl } from "@/lib/gateway-url";
 import {
   configureDirectGatewayTransport,
@@ -1314,6 +1316,18 @@ export function installBrowserGatewayApi(
   }
 }
 
+/**
+ * A hosted-browser machine panel is a same-origin frame of this page bound to
+ * another machine: it talks to that machine directly with the tab's own
+ * session token for it, and never through the page's backend.
+ */
+function machinePanelGatewayOptions(): BrowserGatewayOptions {
+  if (!isMachinePanelRealm()) return {};
+  const machineId = browserPanelMachineId();
+  const credentials = machineId ? browserMachineCredentials(machineId) : null;
+  return credentials ? { baseUrl: credentials.origin, token: credentials.token } : {};
+}
+
 if (typeof window !== "undefined") {
-  installBrowserGatewayApi();
+  installBrowserGatewayApi(window, machinePanelGatewayOptions());
 }

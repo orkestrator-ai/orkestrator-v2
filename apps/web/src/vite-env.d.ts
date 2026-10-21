@@ -12,6 +12,22 @@ interface Window {
     desktop?: boolean;
     /** Backend origin used when the renderer was loaded from a separate host. */
     baseUrl?: string;
+    /**
+     * Electron only: the current origin of the window's machine. A tunnelled
+     * route's local port can change after a reconnect, so direct URLs call
+     * this instead of keeping `baseUrl` from page load.
+     */
+    resolveBaseUrl?: () => string;
+  };
+  /**
+   * Electron only: the machine this renderer is bound to, for presentation
+   * storage namespaces. Never a route, port or credential.
+   */
+  orkestratorDesktopIdentity?: {
+    connectionId: string;
+    backendId: string | null;
+    legacyOrigin: string | null;
+    panel: boolean;
   };
   orkestrator?: {
     /** Electron windows keep focus and renderer storage independent. */
@@ -76,6 +92,78 @@ interface Window {
       ): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
       /** Electron only: opens a saved connection without switching this renderer. */
       openWindow?(connectionId: string): Promise<void>;
+      /** Electron only (qualified platforms): adds a managed SSH route. */
+      connectSsh?(
+        input: import("@orkestrator/protocol/connections").ConnectSshRouteInput,
+      ): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
+      probeSshHostKey?(input: { destination: string; sshPort?: number }): Promise<{
+        probeId: string;
+        destination: string;
+        fingerprints: Array<{ type: string; fingerprint: string }>;
+      }>;
+      trustSshHostKey?(probeId: string): Promise<{ added: number }>;
+      removeRoute?(
+        connectionId: string,
+        routeId: string,
+      ): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
+      setRouteOrder?(
+        connectionId: string,
+        routeIds: string[],
+      ): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
+      setRouteEnabled?(
+        connectionId: string,
+        routeId: string,
+        enabled: boolean,
+      ): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
+      useRoute?(
+        connectionId: string,
+        routeId: string,
+      ): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
+      setAutoConnect?(
+        connectionId: string,
+        autoConnect: boolean,
+      ): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
+      setFeatures?(features: {
+        federation?: boolean;
+        sshRoutes?: boolean;
+        routeFallback?: boolean;
+      }): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
+      answerSshPrompt?(promptId: string, answer: string | null): void;
+    };
+    /**
+     * Electron only: commands and events of an explicit machine this window
+     * observes. Never resolves a destination from focus.
+     */
+    backends?: {
+      invoke<T = unknown>(
+        connectionId: string,
+        command: string,
+        args?: Record<string, unknown>,
+      ): Promise<T>;
+      observe(
+        connectionId: string,
+      ): Promise<import("@orkestrator/protocol/connections").ConnectionSummary>;
+      unobserve(connectionId: string): Promise<void>;
+      onEvent(
+        listener: (connectionId: string, epoch: number, event: string, payload: unknown) => void,
+      ): () => void;
+    };
+    /** Electron only: backend-scoped workspace panels inside this window. */
+    panels?: {
+      open(input: {
+        connectionId: string;
+        projectId: string;
+        environmentId?: string;
+      }): Promise<{ panelId: string }>;
+      setBounds(
+        panelId: string,
+        bounds: { x: number; y: number; width: number; height: number },
+      ): Promise<void>;
+      setVisible(panelId: string, visible: boolean): Promise<void>;
+      close(panelId: string): Promise<void>;
+      onEvent(
+        listener: (event: { panelId: string; type: "closed" | "crashed" | "load-failed" }) => void,
+      ): () => void;
     };
     process: {
       exit(code?: number): Promise<void>;

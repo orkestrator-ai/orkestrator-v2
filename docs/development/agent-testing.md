@@ -602,6 +602,17 @@ focused, Escape stops the active tab's running turn (`useEscapeToStop`). A
 Claude CLI rate limit (429) ends the turn on an API error; rerun later rather
 than treating it as a product failure.
 
+The profile's Claude bridge authenticates with the host's **default** Claude
+login (on macOS the plain `Claude Code-credentials` Keychain entry; access
+token only), so check that login's usage in Settings before a run. It uses the launching
+shell's `CLAUDE_CONFIG_DIR` as its configuration directory, which may be
+another account's or the host's own (`~/.claude`), and writes session records
+there. To keep them out of every host provider home, start `dev:test` with
+`CLAUDE_CONFIG_DIR` set to an empty owner-only scratch directory and delete it
+after the reset; the token still comes from the default login. Making the
+token and directory follow one account is tracked in
+[agent-accounts-and-sign-in.md](../todo/agent-accounts-and-sign-in.md).
+
 ### Live coordinator suite
 
 The live coordinator suite checks that a real provider keeps the coordinator's

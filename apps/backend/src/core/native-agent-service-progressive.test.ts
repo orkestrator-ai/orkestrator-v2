@@ -2057,6 +2057,98 @@ describe("native agent progressive remainder", () => {
     );
   });
 
+  test.each([false, true])(
+    "announces discovery timeout semantics once and announces recovery (cached: %s)",
+    async (cached) => {
+      let now = 1_000;
+      let held = false;
+      const health = { summary: { state: "attached" }, notices: [], authoritative: true };
+      let release: (value: typeof health) => void = () => {};
+      let reject: (error: Error) => void = () => {};
+      const runtimeHealth = mock(() =>
+        held
+          ? new Promise<typeof health>((resolve, fail) => {
+              release = resolve;
+              reject = fail;
+            })
+          : Promise.resolve(health),
+      );
+      const stub = createProviderStub("cursor");
+      Object.assign(stub.provider, { runtimeHealth });
+      await withService(
+        {
+          prefix: "orkestrator-discovery-timeout-",
+          provider: async () => stub.provider,
+          now: () => now,
+        },
+        async ({ service, storage }) => {
+          const input = {
+            environmentId: "env-1",
+            agent: "cursor" as const,
+            logicalSessionKey: "env-env-1:discovery-timeout",
+            viewVersion: 1 as const,
+            sections: ["runtime" as const],
+          };
+          await service.ensureSession(input);
+          const section = async () => {
+            const update = await service.getDiscoveryUpdate(input);
+            if (update.status !== "snapshot") throw new Error("expected discovery snapshot");
+            return update.value.sections.runtime;
+          };
+          if (cached) {
+            await section();
+            await waitForCondition(async () => (await section())?.availability === "ready");
+            now += 31_000;
+          }
+          const announced = spyOn(storage, "announceNativeAgentSessionProjection");
+          held = true;
+          try {
+            await section();
+            await Bun.sleep(2_100);
+            const first = await section();
+            expect(first?.availability).toBe(cached ? "stale" : "unavailable");
+            expect(first?.error).toBe("Discovery timed out");
+            expect(first?.value).toEqual(
+              cached ? { summary: health.summary, notices: [] } : undefined,
+            );
+            expect(announced).toHaveBeenCalledTimes(1);
+
+            // Finish the timed-out read with the same error, then expire its
+            // fallback so a second actual read reaches the deadline too.
+            reject(new Error("Discovery timed out"));
+            await Bun.sleep(20);
+            now += 5_001;
+            const reads = runtimeHealth.mock.calls.length;
+            await section();
+            await waitForCondition(() => runtimeHealth.mock.calls.length === reads + 1);
+            await Bun.sleep(2_100);
+            const repeated = await section();
+            expect(repeated).toEqual(first);
+            expect(announced).toHaveBeenCalledTimes(1);
+
+            // A late successful result changes availability and contents and
+            // must wake readers even after its own deadline has fired.
+            release({ ...health, summary: { state: "detached" } });
+            await waitForCondition(async () => (await section())?.availability === "ready");
+            const recovered = await section();
+            expect(recovered?.value?.summary.state).toBe("detached");
+            expect(recovered?.revision).toBe((first?.revision ?? 0) + 1);
+            expect(recovered?.error).toBeUndefined();
+            expect(announced).toHaveBeenCalledTimes(2);
+            expect(announced).toHaveBeenLastCalledWith("env-1", {
+              agent: "cursor",
+              logicalSessionKey: input.logicalSessionKey,
+            });
+          } finally {
+            release(health);
+            announced.mockRestore();
+          }
+        },
+      );
+    },
+    15_000,
+  );
+
   test("announces an expired model catalogue renewal only when the catalogue changed", async () => {
     let now = 1_000;
     let catalog = [{ platform: "codex", id: "gpt-6.1-sol", label: "GPT-6.1-Sol" }];

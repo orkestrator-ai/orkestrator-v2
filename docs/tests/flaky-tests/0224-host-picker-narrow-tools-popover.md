@@ -342,3 +342,32 @@ assertion, timeout or skip was changed for validation.
 - **Owner result:** 14 passed, seven skipped, one failed; exit 1 in 168.0 seconds. The narrow picker reproduced the hidden `Repository settings` button after `Open tools` (line 239, 15-second timeout). The signed-out Codex recovery case passed unchanged, but the whole owning file did not, so this observation does not independently classify a new flake.
 - **Evidence:** `orkestrator-test-run.Ow1M3o/merge-browser.log.gz` and `orkestrator-test-run.MWfKgp/merge-gateway-owner.log.gz` below the host temporary directory; browser artifacts under `output/agent-testing/<profile>/browser/` for the two profiles above.
 - **Disposition:** existing narrow-picker limitation remains unresolved. Both supervisors stopped and reset their profiles. No source, assertion, deadline or skip changed.
+
+
+## Idle-observation review validation (2026-10-21)
+
+The narrow host-picker timeout recurred while validating the idle-observation
+assertions and isolated-runner opt-in default:
+
+- `ORKESTRATOR_AGENT_TEST_LIVE_IDLE_OBSERVATION=1 mise run test:logged -- --name isolated-browser -- mise run test:agent:browser:isolated`
+  on credential-free Codex fixture `qa-browser-b58be031-38c`: 28 passed,
+  44 skipped, one failed (402.7 s including startup/cleanup). The failure was
+  the same 15 s click on hidden `Repository settings` at
+  `browser-gateway.spec.ts:239`, after `Open tools`. All six idle-observation
+  live cases stayed skipped despite the inherited opt-in. Evidence:
+  `orkestrator-test-run.ObH8th/isolated-browser.log.gz` in the host temporary
+  directory and `output/agent-testing/qa-browser-b58be031-38c/browser/`.
+- The complete unchanged owning file was rerun with one worker in a fresh
+  credential-free Codex fixture, `qa-browser-50d29a4f-6e8`, using
+  `runIsolatedBrowser` with a temporary config selecting only
+  `browser-gateway.spec.ts` (`mise run test:logged -- --name gateway-owner -- bun output/idle-review/gateway-run.ts`).
+  It reproduced the same narrow click failure: 14 passed, seven skipped, one
+  failed (144.8 s). Evidence: `orkestrator-test-run.BevcYq/gateway-owner.log.gz`
+  in the host temporary directory and
+  `output/agent-testing/qa-browser-50d29a4f-6e8/browser/`.
+
+The owning-file failure leaves this recurrence reproducible in isolation; this
+run does not establish a new flaky classification. The existing late-selection
+hypothesis remains unconfirmed by this run. No assertions were skipped or
+weakened. Both profiles were stopped/reset, and the temporary runner/config
+files were removed.

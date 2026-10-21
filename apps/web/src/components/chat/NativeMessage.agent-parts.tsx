@@ -1110,6 +1110,8 @@ export function BackgroundTaskCard({
       open={open && hasBody}
       onOpenChange={onOpenChange}
       className={cn(STOPPABLE_CARD_GROUP, !embedded && agentCardClassName)}
+      data-background-task-id={task.id}
+      data-background-task-status={task.status}
     >
       <div className="flex items-start gap-3 px-3 py-2.5">
         <BackgroundTaskActivitySlot

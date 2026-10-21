@@ -45,9 +45,11 @@ import path from "node:path";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import {
   failedCases,
+  freshToolResults,
   gapHistogram,
   readCadence,
   selectedCases,
+  shellOutputContainsMarker,
   sidebarActivityFromClass,
   type CaseRecord,
   type IdleObservationCase,
@@ -583,6 +585,44 @@ test.describe("live idle observation", () => {
         const messageIds = async () =>
           new Set(((await projection())?.messages ?? []).map((message) => message.id));
 
+        const freshToolOutputContains = async (previous: ReadonlySet<string>, marker: string) => {
+          const results = freshToolResults((await projection())?.messages ?? [], previous);
+          for (const result of results) {
+            if (shellOutputContainsMarker(result.toolOutput, marker)) return true;
+            if (!result.detailRef) continue;
+            const detail = await client.invoke<{ toolOutput?: string }>(
+              "get_native_agent_tool_details",
+              {
+                ...identity(),
+                detailRef: result.detailRef,
+              },
+            );
+            if (shellOutputContainsMarker(detail.toolOutput, marker)) return true;
+          }
+          return false;
+        };
+
+        // Runtime discovery uses the bridge's no-touch runtime-health read. A
+        // full projection/status read here could reattach before we observe it.
+        const runtimeState = async () => {
+          const update = await client.invoke<{
+            status: string;
+            value?: {
+              sections: {
+                runtime?: { availability: string; value?: { summary?: { state?: string } } };
+              };
+            };
+          }>("get_native_agent_discovery_update", {
+            ...identity(),
+            viewVersion: 1,
+            sections: ["runtime"],
+          });
+          const runtime = update.value?.sections.runtime;
+          return runtime?.availability === "ready"
+            ? (runtime.value?.summary?.state ?? null)
+            : undefined;
+        };
+
         /** Send through the composer, as a user would. */
         const sendFromComposer = async (prompt: string) => {
           await expect(composer()).toBeVisible({ timeout: 90_000 });
@@ -795,10 +835,13 @@ test.describe("live idle observation", () => {
               .evaluate(() => {
                 const seams = (
                   window as unknown as {
-                    __idleQa?: { dropEnvironment: unknown };
+                    __idleQa?: { dropEnvironment: unknown; setHidden: (hidden: boolean) => void };
                   }
                 ).__idleQa;
-                if (seams) seams.dropEnvironment = null;
+                if (seams) {
+                  seams.dropEnvironment = null;
+                  seams.setHidden(false);
+                }
               })
               .catch(() => undefined);
             await client.context.setOffline(false).catch(() => undefined);
@@ -932,25 +975,25 @@ test.describe("live idle observation", () => {
           // this case in a second environment created with `approvals: "ask"`.
           const home = { environmentId, environmentName };
           let policyEnvironment: Environment | null = null;
-          if (askMode) {
-            await setControls({ approvalMode: askMode.id });
-          } else {
-            policyEnvironment = await client.invoke<Environment>("create_environment", {
-              projectId: fixture!.id,
-              name: `idle-ask-${platform}-${Date.now()}`,
-              networkAccessMode: "restricted",
-              environmentType: "local",
-              agentSettings: { executionPolicy: { approvals: "ask" } },
-            });
-            environmentId = policyEnvironment.id;
-            environmentName = policyEnvironment.name;
-            record.notes.push(
-              'no "ask" composer mode: ran under an environment policy of approvals "ask"',
-            );
-            await prepareEnvironment();
-            await goToEnvironment();
-          }
           try {
+            if (askMode) {
+              await setControls({ approvalMode: askMode.id });
+            } else {
+              policyEnvironment = await client.invoke<Environment>("create_environment", {
+                projectId: fixture!.id,
+                name: `idle-ask-${platform}-${Date.now()}`,
+                networkAccessMode: "restricted",
+                environmentType: "local",
+                agentSettings: { executionPolicy: { approvals: "ask" } },
+              });
+              environmentId = policyEnvironment.id;
+              environmentName = policyEnvironment.name;
+              record.notes.push(
+                'no "ask" composer mode: ran under an environment policy of approvals "ask"',
+              );
+              await prepareEnvironment();
+              await goToEnvironment();
+            }
             const file = `idleqa-approval-${nonce()}.txt`;
             const word = `IDLEQA-APPROVED-${nonce()}`;
             const before = await messageIds();
@@ -1121,8 +1164,16 @@ test.describe("live idle observation", () => {
               if (running && taskStartedAt === null) taskStartedAt = Date.now();
               if (running) sawRunningTask = true;
               if (running && taskShownAt === null) {
-                const indicator = page().getByText(/background/i);
-                if ((await indicator.count()) > 0) taskShownAt = Date.now();
+                for (const task of current?.backgroundTasks ?? []) {
+                  if (task.status !== "running") continue;
+                  const indicator = page().locator(
+                    `[data-background-task-id=${JSON.stringify(task.id)}][data-background-task-status="running"]`,
+                  );
+                  if (await indicator.isVisible()) {
+                    taskShownAt = Date.now();
+                    break;
+                  }
+                }
               }
             },
           });
@@ -1132,7 +1183,7 @@ test.describe("live idle observation", () => {
             record.status = "not-exercised";
             record.notes.push("no running background task appeared in the projection");
           } else {
-            noteBudget(
+            expectWithin(
               record,
               "backgroundIndicatorLagMs",
               record.timings.backgroundIndicatorLagMs ?? null,
@@ -1152,10 +1203,14 @@ test.describe("live idle observation", () => {
           await expect(stopButton()).toHaveCount(0, {
             timeout: COMPLETION_BUDGET_MS + 1_000,
           });
-          const shownMarker = (await projection())?.messages.some((message) =>
-            JSON.stringify(message).includes(marker),
-          );
-          record.notes.push(`task output reached the transcript: ${shownMarker === true}`);
+          const shownMarker = await freshToolOutputContains(before, marker);
+          record.notes.push(`task output reached the transcript: ${shownMarker}`);
+          if (sawRunningTask) {
+            expect(
+              shownMarker,
+              "the exercised background task produced fresh tool-result output",
+            ).toBe(true);
+          }
         });
 
         await runCase("reconnect", async (record) => {
@@ -1232,6 +1287,10 @@ test.describe("live idle observation", () => {
           await sleep(8_000);
           const hiddenWindow = readCadence(client.readTimes, hiddenAt + 2_000, Date.now());
           record.timings.readsWhileHidden = hiddenWindow.reads;
+          expect(
+            hiddenWindow.reads,
+            "a hidden document issues no native session reads after draining",
+          ).toBe(0);
           const visibleAt = Date.now();
           await qa("window.__idleQa.setHidden(false)");
           await expect(page().getByText(word, { exact: true }).first()).toBeVisible({
@@ -1254,46 +1313,50 @@ test.describe("live idle observation", () => {
         await runCase("no-renderer", async (record) => {
           const word = `IDLEQA-HEADLESS-${nonce()}`;
           const before = await messageIds();
-          await sendFromComposer(
-            `Run this shell command and wait for it: sleep 5\nThen reply with exactly ${word} and nothing else.`,
-          );
+          const prompt = `Run this shell command and wait for it: sleep 5\nThen reply with exactly ${word} and nothing else.`;
+          await sendFromComposer(prompt);
           await expect(stopButton()).toBeVisible({ timeout: 30_000 });
           // Close every renderer; backend reads go through the surviving context.
           await client.page.close();
-          await expect
-            .poll(
-              async () => {
-                const current = await projection();
-                await answerPending(current);
-                return (
-                  current?.turn.phase === "idle" &&
-                  current.messages.some(
-                    (message) => !before.has(message.id) && textOf(message).includes(word),
-                  )
-                );
-              },
-              { timeout: TURN_TIMEOUT_MS },
-            )
-            .toBe(true);
-          // With no renderer, the backend aggregate alone must leave working.
-          const backendIdleAt = Date.now();
-          await expect
-            .poll(
-              async () =>
-                (
-                  await client.invoke<{ agentActivityState?: string } | null>("get_environment", {
-                    environmentId,
-                  })
-                )?.agentActivityState,
-              { timeout: SIDEBAR_BOUND_MS + 5_000, intervals: [250] },
-            )
-            .toBe("idle");
-          record.timings.backendAggregateLagMs = Date.now() - backendIdleAt;
-          await client.context.close();
-          // Another client rehydrates the finished conversation.
-          client = await openClient(browser, status, logicalSessionKey());
-          const loadAt = Date.now();
-          await goToEnvironment();
+          let loadAt = 0;
+          try {
+            await expect
+              .poll(
+                async () => {
+                  const current = await projection();
+                  await answerPending(current);
+                  return (
+                    current?.turn.phase === "idle" &&
+                    current.messages.some(
+                      (message) => !before.has(message.id) && textOf(message).includes(word),
+                    )
+                  );
+                },
+                { timeout: TURN_TIMEOUT_MS },
+              )
+              .toBe(true);
+            // With no renderer, the backend aggregate alone must leave working.
+            const backendIdleAt = Date.now();
+            await expect
+              .poll(
+                async () =>
+                  (
+                    await client.invoke<{ agentActivityState?: string } | null>("get_environment", {
+                      environmentId,
+                    })
+                  )?.agentActivityState,
+                { timeout: SIDEBAR_BOUND_MS + 5_000, intervals: [250] },
+              )
+              .toBe("idle");
+            record.timings.backendAggregateLagMs = Date.now() - backendIdleAt;
+          } finally {
+            // Restore a renderer even if a backend poll failed, so later cases
+            // cannot inherit a closed page and misattribute the failure.
+            await client.context.close();
+            client = await openClient(browser, status, logicalSessionKey());
+            loadAt = Date.now();
+            await goToEnvironment();
+          }
           await expect(page().getByText(word, { exact: true }).first()).toBeVisible({
             timeout: 30_000,
           });
@@ -1305,9 +1368,9 @@ test.describe("live idle observation", () => {
             })
             .toBe("idle");
           const prompts = ((await projection())?.messages ?? []).filter(
-            (message) => message.role === "user" && textOf(message).includes(word.toLowerCase()),
+            (message) => message.role === "user" && textOf(message) === prompt,
           );
-          expect(prompts.length, "the prompt appears once after rehydration").toBeLessThanOrEqual(
+          expect(prompts.length, "the exact submitted prompt appears once after rehydration").toBe(
             1,
           );
         });
@@ -1340,18 +1403,42 @@ test.describe("live idle observation", () => {
               .filter(([, count]) => count > 0),
           );
           record.notes.push(`idle reads by command: ${JSON.stringify(commandsDuring)}`);
-          const detached = await projection();
-          record.notes.push(`runtime after idle wait: ${detached?.runtime?.state ?? "unknown"}`);
+          await expect
+            .poll(runtimeState, { timeout: 40_000, intervals: [500] })
+            .not.toBeUndefined();
+          const detachedState = await runtimeState();
+          record.notes.push(`no-touch runtime after idle wait: ${detachedState ?? "unknown"}`);
+          const cadenceOnly = DETACH_WAIT_MS < 630_000;
+          // OpenCode's server lifetime and Codex's engine health are not a
+          // session detach observation; Claude currently exposes no state here.
+          const reportsSessionDetach = detachedState === "attached" || detachedState === "detached";
+          if (cadenceOnly || !reportsSessionDetach) {
+            record.status = "not-exercised";
+            record.notes.push(
+              cadenceOnly
+                ? "shortened wait: cadence only, idle detachment was not qualified"
+                : "provider exposes no session detach state on its no-touch runtime observation",
+            );
+          } else {
+            await expect.poll(runtimeState, { timeout: 40_000, intervals: [500] }).toBe("detached");
+          }
           expect(sawStop, "Stop never shows on an idle tab").toBe(false);
           expect(sawWorkingSidebar, "the sidebar never shows working on an idle tab").toBe(false);
           const word = `IDLEQA-REATTACH-${nonce()}`;
-          const ids = await messageIds();
+          // Reuse the pre-wait IDs: no tab-facing read between observing
+          // detachment and dispatching the turn that must reattach it.
+          const ids = new Set((before?.messages ?? []).map((message) => message.id));
           await sendFromComposer(replyPrompt(word));
           const settled = await watchSettle(ids, word, {
             uiBoundMs: COMPLETION_BUDGET_MS,
           });
           expectWithin(record, "uiLagMs", settled.uiLagMs, COMPLETION_BUDGET_MS + 1_000);
           expectWithin(record, "sidebarLagMs", settled.sidebarLagMs, SIDEBAR_BOUND_MS);
+          if (!cadenceOnly && reportsSessionDetach) {
+            await expect.poll(runtimeState, { timeout: 40_000, intervals: [500] }).toBe("attached");
+            record.notes.push("observed detached then attached through no-touch runtime discovery");
+          }
+          expect(before?.sessionId, "the original session exists").toBeTruthy();
           expect((await projection())?.sessionId).toBe(before?.sessionId);
         });
 

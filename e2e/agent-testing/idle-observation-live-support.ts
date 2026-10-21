@@ -118,3 +118,40 @@ export function failedCases(records: Readonly<Record<string, CaseRecord>>): stri
     .filter(([, record]) => record.status === "failed")
     .map(([name, record]) => `${name}: ${record.error ?? "failed"}`);
 }
+
+/** Only result fields on fresh non-user rows can prove a shell emitted output. */
+export function freshToolResults(
+  messages: readonly { id: string; role: string; parts?: unknown }[],
+  previous: ReadonlySet<string>,
+): Array<{ toolOutput?: string; detailRef?: string }> {
+  const results: Array<{ toolOutput?: string; detailRef?: string }> = [];
+  const visit = (value: unknown) => {
+    if (!value || typeof value !== "object") return;
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    const part = value as Record<string, unknown>;
+    if (part.type === "tool-invocation") {
+      results.push({
+        ...(typeof part.toolOutput === "string" ? { toolOutput: part.toolOutput } : {}),
+        ...(typeof part.detailRef === "string" ? { detailRef: part.detailRef } : {}),
+      });
+    }
+    // Descend through task groups, never through tool arguments or output metadata.
+    if (part.type === "task-group") {
+      visit(part.task);
+      visit(part.childTools);
+    }
+  };
+  for (const message of messages) {
+    if (message.role === "user" || previous.has(message.id)) continue;
+    visit(message.parts);
+  }
+  return results;
+}
+
+/** An echoed command/argument is not the line the shell was asked to emit. */
+export function shellOutputContainsMarker(output: string | undefined, marker: string): boolean {
+  return output?.split(/\r?\n/).some((line) => line.trim() === marker) ?? false;
+}

@@ -105,8 +105,17 @@ The live run of 2026-10-21 is recorded below. What it left open:
   the foreground). Cursor's approval case ran under an `approvals: "ask"`
   policy and still ran the command without asking, which is the documented
   Cursor mapping (it reports `ask` as the auto-approval it runs).
-- Completion with no renderer was proved for a local environment only; a
-  container environment was not part of this run.
+- Completion with no renderer was observed for a local environment only; a
+  container environment was not part of this run. Re-run with the corrected
+  exact-prompt assertion to qualify missing/duplicate prompt protection.
+- Re-run the background-shell indicator/output and detach cases with the
+  corrected assertions. The original background checks could match the user
+  prompt, and the detach case recorded cadence and session continuity without
+  requiring detachment. Neither is qualification evidence for those behaviors.
+  Shortened detach waits are cadence-only (`not-exercised`); a full wait must
+  observe `detached` before dispatch and `attached` afterwards through no-touch
+  runtime discovery. Providers without session detach telemetry on that route
+  are also `not-exercised`, pending an observable lifecycle.
 
 ## Live qualification record (2026-10-21)
 
@@ -165,15 +174,37 @@ behind backend truth unless stated.
 | Missed final event (every frame naming the environment dropped) | passed, 365 ms | passed, 12 ms | passed, 344 ms | passed alone, 8.8 s (see below); failed once in the final run (flake 0670) | skipped | skipped |
 | Parked approval | passed: card 126 ms after parking, sidebar `waiting`, survived 10 s hidden, settled 314 ms after approving | passed: card 20 ms | not exercised: under `approvals: "ask"` Cursor ran the command without asking (documented mapping) | passed under `approvals: "ask"`: `permission` card 139 ms | skipped | skipped |
 | Sub-agents | passed: `Agent` tool, one background task, none left running | not exercised: no sub-agent call | passed: `task` tool | passed: `task` tool | skipped | skipped |
-| Background shell | passed: indicator 8 ms after the task appeared, sidebar idle 2.7 s after the projection, output in the transcript | not exercised: ran in the foreground | not exercised | not exercised | skipped | skipped |
+| Background shell | unverified: original indicator/output checks could match the prompt; re-run required | not exercised: ran in the foreground | not exercised | not exercised | skipped | skipped |
 | Stream cut and offline through completion | passed, 122 ms after online | passed, 127 ms | passed, 142 ms | passed, 182 ms | skipped | skipped |
 | Hidden for the whole turn | passed: no reads while hidden, 318 ms after visible | passed, 191 ms | passed, 163 ms | passed, 219 ms | skipped | skipped |
 | No renderer, then a second client | passed: backend aggregate idle 4 ms after the projection, rehydrated in 3.6 s | passed, 3.1 s | passed, 3.8 s | passed, 3.9 s | skipped | skipped |
-| Idle 10.5 min past detach, then reattach | passed: 120.5 reads/min (1.5 s), settled 303 ms, same session | passed: 126.8 reads/min | passed: 13.8 reads/min, gaps at the 15 s step | passed: 27.9 reads/min (code item 5) | skipped | skipped |
+| Idle 10.5 min, then follow-up | cadence/continuity only: 120.5 reads/min (1.5 s), settled 303 ms, same session; detach unverified | cadence only: 126.8 reads/min; detach unverified | cadence only: 13.8 reads/min, gaps at the 15 s step; detach unverified | cadence only: 27.9 reads/min (code item 5); detach unverified | skipped | skipped |
 
 Grok and Pi: both sessions reported `needs-auth` ("Grok is not signed in",
 "Pi is not signed in"); the profile also printed that the host Grok login had
 expired. Recorded as skipped, not passed.
+
+### Review follow-up validation (2026-10-21)
+
+The assertions were tightened after review: no-renderer rehydration requires
+exactly one exact submitted user prompt; hidden-page reads must be zero after
+the drain window; a background case needs its running task card and fresh tool
+result output (including lazily fetched result details). Detach uses no-touch
+runtime discovery and requires detached then attached state where the provider
+exposes it. Approval preparation and headless polling now restore their
+environment/page even on failure. The overall qualification remains open.
+
+- `qa-browser-0b1487c9-eb4`, Codex, disposable local fixture: hidden passed
+  (zero reads while hidden, visible lag 142 ms); no-renderer passed (one exact
+  prompt row, aggregate idle lag 4 ms, rehydration 3.17 s). A deliberately
+  shortened detach wait was `not-exercised`, with follow-up continuity checked.
+- `qa-browser-88278b44-d08`, Claude, background only: **failed** with the new
+  output assertion. A running task card was observed in 280 ms and the view
+  settled, but fresh tool-result output did not contain the emitted marker.
+  The submitted prompt no longer counts as output evidence. This is pending
+  qualification, not a passing background-output observation. The failure's
+  trace also exceeded the artifact sanitizer's 16 MiB bound; no trace was kept.
+- Both live profiles were stopped and reset by the isolated runner.
 
 ### Findings
 

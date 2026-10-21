@@ -3,6 +3,8 @@ import {
   IDLE_OBSERVATION_CASES,
   droppableGatewayEvent,
   failedCases,
+  freshToolResults,
+  shellOutputContainsMarker,
   gapHistogram,
   readCadence,
   readGaps,
@@ -52,6 +54,56 @@ describe("idle observation live support", () => {
     expect(droppableGatewayEvent("gateway.reconcile-required")).toBe(false);
     expect(droppableGatewayEvent("native-event-stream-connected")).toBe(false);
     expect(droppableGatewayEvent("")).toBe(false);
+  });
+
+  test("background evidence excludes prompts, tool arguments, old results and assistant prose", () => {
+    const marker = "IDLEQA-BGOUT-123456";
+    const prompt = `Start a background task: sleep 20; echo ${marker}`;
+    const messages = [
+      {
+        id: "prompt",
+        role: "user",
+        content: prompt,
+        parts: [{ type: "tool-invocation", toolOutput: marker }],
+      },
+      { id: "old", role: "assistant", parts: [{ type: "tool-invocation", toolOutput: marker }] },
+      {
+        id: "call",
+        role: "assistant",
+        parts: [
+          { type: "tool-invocation", toolArgs: { command: prompt }, content: prompt },
+          { type: "text", content: marker },
+        ],
+      },
+    ];
+    const previous = new Set(["old"]);
+    expect(
+      freshToolResults(messages, previous).some((result) =>
+        shellOutputContainsMarker(result.toolOutput, marker),
+      ),
+    ).toBe(false);
+    const result = {
+      id: "result",
+      role: "assistant",
+      parts: [
+        {
+          type: "task-group",
+          task: { type: "tool-invocation", detailRef: "detail-1" },
+          childTools: [{ type: "tool-invocation", toolOutput: `stdout:\n${marker}\r\n` }],
+        },
+      ],
+    };
+    expect(freshToolResults([result], previous)).toEqual([
+      { detailRef: "detail-1" },
+      { toolOutput: `stdout:\n${marker}\r\n` },
+    ]);
+    expect(
+      freshToolResults([result], previous).some((entry) =>
+        shellOutputContainsMarker(entry.toolOutput, marker),
+      ),
+    ).toBe(true);
+    expect(shellOutputContainsMarker(`echo ${marker}`, marker)).toBe(false);
+    expect(shellOutputContainsMarker(prompt, marker)).toBe(false);
   });
 
   test("only failed cases fail a provider", () => {

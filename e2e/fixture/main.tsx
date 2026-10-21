@@ -1,3 +1,4 @@
+import { RemoteMachineTreeFixture } from "../../apps/web/src/test/RemoteMachineTreeFixture";
 import { NativeAttachmentsFixture } from "./NativeAttachmentsFixture";
 import { ChangeTrackingFixture, installChangeTrackingFixture } from "./changeTracking";
 import { ClaudeInteractionsFixture } from "./ClaudeInteractionsFixture";
@@ -1706,6 +1707,7 @@ function fixtureForPath() {
       </Suspense>
     );
   }
+  if (window.location.pathname === "/remote-machine-tree") return <RemoteMachineTreeFixture />;
   if (window.location.pathname === "/connections-settings") return <ConnectionsSettingsFixture />;
   if (window.location.pathname === "/fullscreen-settings") return <FullscreenSettingsFixture />;
   if (window.location.pathname === "/global-settings") return <GlobalSettingsFixture />;

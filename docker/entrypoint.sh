@@ -277,11 +277,26 @@ publish_claude_credentials() {
         echo "Failed to write Claude credentials" >&2
         return 1
     fi
-    if ! chmod 600 "$temporary_path" || ! mv -f "$temporary_path" "$destination_path"; then
+    # Sanitize the private payload before publication. A concurrent backend
+    # push must win even if it lands while this import is being restricted.
+    restrict_imported_login "$temporary_path" claude Claude
+    if [ ! -f "$temporary_path" ]; then return 1; fi
+    if ! chmod 600 "$temporary_path"; then
+        rm -f "$temporary_path"
+        return 1
+    fi
+    # Atomic create-if-absent, unlike a test followed by rename. The backend
+    # replaces this file atomically, so its newer payload always wins.
+    if ! node -e 'require("fs").linkSync(process.argv[1], process.argv[2])' "$temporary_path" "$destination_path" 2>/dev/null; then
+        if [ -f "$destination_path" ] && [ ! -L "$destination_path" ]; then
+            rm -f "$temporary_path"
+            return 0
+        fi
         rm -f "$temporary_path"
         echo "Failed to publish Claude credentials" >&2
         return 1
     fi
+    rm -f "$temporary_path"
     chmod 600 "$destination_path"
 }
 
@@ -668,7 +683,6 @@ else
     # Linux hosts keep the credential on disk, so the mount can carry it.
     if [ -f /claude-config/.credentials.json ] && [ ! -L /claude-config/.credentials.json ]; then
         if publish_claude_credentials /claude-config/.credentials.json; then
-            restrict_imported_login "$HOME/.claude/.credentials.json" claude Claude
             echo "Copied credentials from host"
         else
             echo "No credential on the mount; awaiting the backend credential sync"

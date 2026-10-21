@@ -9,7 +9,7 @@ import {
   stripInheritedAgentCredentials,
   type ResolvedAgentAccount,
 } from "./agent-accounts-active.js";
-import { runCommand } from "./shell.js";
+import { CommandFailedError, runCommand } from "./shell.js";
 
 /**
  * Have the host's own Claude Code refresh one account's login.
@@ -66,5 +66,25 @@ export async function refreshHostClaudeLogin(
       "--no-session-persistence",
     ],
     { cwd, env, timeoutMs: 60_000 },
-  ).catch(() => undefined);
+  ).catch((error: unknown) => {
+    // The deliberately unknown model normally exits 1. Infrastructure failures
+    // must reach the keeper, which warns once per refresh backoff window.
+    if (
+      error instanceof CommandFailedError &&
+      !error.timedOut &&
+      !error.executableMissing &&
+      error.exitCode === 1 &&
+      !error.signal
+    )
+      return;
+    const reason =
+      error instanceof CommandFailedError
+        ? error.timedOut
+          ? "timeout"
+          : error.executableMissing
+            ? "executable missing"
+            : "command failed"
+        : "command failed";
+    throw new Error(`Host Claude refresh ${reason}`);
+  });
 }

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, spyOn } from "bun:test";
 
 import type { CommandContext } from "./commands-context.js";
 import {
@@ -30,6 +30,8 @@ function harness(options: {
   runtimeFlavor?: "agent-test";
   useHostClaudeCredentials?: false;
   leaseHeld?: boolean;
+  failRefresh?: boolean;
+  timers?: import("./container-claude-login-keeper.js").ClaudeLoginKeeperOptions["timers"];
 }) {
   let now = NOW;
   const reads: number[] = [];
@@ -56,6 +58,7 @@ function harness(options: {
   } as unknown as CommandContext;
   const keeper = new ContainerClaudeLoginKeeper(context, {
     now: () => now,
+    timers: options.timers,
     readCredentials: async () => {
       reads.push(now);
       const text = options.credentials[Math.min(credentialIndex, options.credentials.length - 1)];
@@ -67,6 +70,7 @@ function harness(options: {
     },
     refreshHostLogin: async (account) => {
       refreshed.push(account.accountId);
+      if (options.failRefresh) throw new Error("SECRET-OUTPUT");
     },
   });
   return {
@@ -185,6 +189,52 @@ describe("ContainerClaudeLoginKeeper", () => {
     expect(run.refreshed).toHaveLength(1);
   });
 
+  test("start catches up a running container already inside the refresh window", async () => {
+    const scheduled: Array<{ callback: () => void; delay: number }> = [];
+    const run = harness({
+      environments: [environment("busy")],
+      credentials: [login(NOW + 60_000), login(NOW + 8 * 3600_000)],
+      timers: {
+        setTimeout: (callback, delay) => {
+          scheduled.push({ callback, delay });
+          return scheduled.length;
+        },
+        clearTimeout: () => {},
+      },
+    });
+    run.keeper.start();
+    expect(scheduled[0]!.delay).toBe(1_000);
+    scheduled[0]!.callback();
+    for (let i = 0; i < 100 && scheduled.length < 2; i++) await Promise.resolve();
+    expect(scheduled).toHaveLength(2);
+    expect(run.refreshed).toEqual(["default"]);
+    expect(run.synced).toEqual(["container-busy"]);
+    expect(scheduled[1]!.delay).toBe(CLAUDE_LOGIN_KEEPER_INTERVAL_MS);
+    run.keeper.stop();
+  });
+
+  for (const failRefresh of [true, false]) {
+    test(`warns once per backoff window for ${failRefresh ? "failed" : "ineffective"} refreshes without command output`, async () => {
+      const warn = spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const run = harness({
+          environments: [environment("a")],
+          credentials: [login(NOW + 60_000)],
+          failRefresh,
+        });
+        await run.keeper.tick();
+        await run.keeper.tick();
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(JSON.stringify(warn.mock.calls)).not.toContain("SECRET");
+        run.advance(CLAUDE_HOST_REFRESH_RETRY_MS);
+        await run.keeper.tick();
+        expect(warn).toHaveBeenCalledTimes(2);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+  }
+
   test("start and stop schedule and cancel one timer", async () => {
     const scheduled: Array<{ callback: () => void; delayMs: number }> = [];
     const cleared: unknown[] = [];
@@ -207,7 +257,7 @@ describe("ContainerClaudeLoginKeeper", () => {
     );
     keeper.start();
     keeper.start();
-    expect(scheduled.map((entry) => entry.delayMs)).toEqual([CLAUDE_LOGIN_KEEPER_INTERVAL_MS]);
+    expect(scheduled.map((entry) => entry.delayMs)).toEqual([1_000]);
     keeper.stop();
     expect(cleared).toEqual([1]);
   });

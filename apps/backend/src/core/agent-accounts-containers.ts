@@ -25,6 +25,7 @@ import { DOCKER_LABEL_INPUTS_REVISION } from "./constants.js";
 import { runCommand } from "./shell.js";
 import {
   accessOnlyLoginText,
+  INPUT_LIMITS,
   defaultInputSourceRoots,
   portableInputRevisionDirectory,
   replaceStagedInputFile,
@@ -36,8 +37,12 @@ import {
   enqueueContainerBridgeOperation,
 } from "./container-bridge-operations.js";
 import { staleLoginEnvironmentIds } from "./agent-account-bridge-state.js";
-import { prepareAgentAccountHome } from "./agent-accounts-homes.js";
-import { readAddedClaudeCredentials, resolveActiveAgentAccount } from "./agent-accounts-active.js";
+import { agentAccountHome, prepareAgentAccountHome } from "./agent-accounts-homes.js";
+import {
+  readAddedClaudeCredentials,
+  resolveActiveAgentAccount,
+  type ResolvedAgentAccount,
+} from "./agent-accounts-active.js";
 
 /**
  * Containers and the active agent account.
@@ -160,10 +165,9 @@ async function accountHasBeenUsed(
 
 /**
  * Rewrite one platform's staged login in a container's revision so its next
- * start imports the active account. A Claude user who never added an account
- * keeps the snapshot taken when the container was created. Codex is always
- * re-read, access-only: the snapshot a container was created with cannot
- * refresh, so only the host's current login keeps it signed in.
+ * start imports the active account. Every login is re-read access-only, including
+ * default-account revisions created before refresh tokens were restricted.
+ * Only the host's current login can keep an access-only snapshot signed in.
  */
 async function refreshStagedLogin(
   context: CommandContext,
@@ -172,12 +176,6 @@ async function refreshStagedLogin(
   platform: AgentAccountPlatform,
 ): Promise<void> {
   const { global } = await context.storage.loadConfig();
-  if (
-    platform === "claude" &&
-    !(await accountHasBeenUsed(context, platform)) &&
-    global.useHostClaudeCredentials !== false
-  )
-    return;
   const active = await resolveActiveAgentAccount(context, platform);
   const host = hostStagingSources(context);
   const dataDir = context.storage.getDataDir();
@@ -337,17 +335,19 @@ export async function syncContainerGrokLoginUnlocked(
 async function containerClaudeCredentials(
   context: CommandContext,
   global: AppConfig["global"],
+  active: ResolvedAgentAccount,
 ): Promise<string | undefined> {
-  return accessOnlyLoginText("claude", await activeClaudeCredentials(context, global));
+  return accessOnlyLoginText("claude", await activeClaudeCredentials(context, global, active));
 }
 
 /** The active account's whole Claude credential, refresh token included. Never leaves the host. */
 export async function activeClaudeCredentials(
   context: CommandContext,
   global: AppConfig["global"],
+  account?: ResolvedAgentAccount,
 ): Promise<string | undefined> {
   if (global.useHostClaudeCredentials === false) return undefined;
-  const active = await resolveActiveAgentAccount(context, "claude");
+  const active = account ?? (await resolveActiveAgentAccount(context, "claude"));
   return active.home
     ? await readAddedClaudeCredentials(active.home)
     : await resolveContainerClaudeCredentials(global);
@@ -422,17 +422,39 @@ export const SYNC_CONTAINER_CLAUDE_ACCOUNT_COMMAND = `
   '
 `;
 
-/** The active Claude account's `oauthAccount`: identity only, never a credential. */
-async function activeClaudeOAuthAccount(context: CommandContext): Promise<unknown> {
+/** Identity reads follow host dotfile links, bounded by the staging file limit. */
+async function activeClaudeOAuthAccount(
+  context: CommandContext,
+): Promise<{ oauthAccount?: unknown } | undefined> {
   const active = await resolveActiveAgentAccount(context, "claude");
-  const text = await readLoginFile(
-    active.home ? path.join(active.home, ".claude.json") : hostStagingSources(context).claudeJson,
-  );
+  let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
   try {
-    const account = (JSON.parse(text ?? "") as { oauthAccount?: unknown }).oauthAccount;
-    return account && typeof account === "object" && !Array.isArray(account) ? account : undefined;
+    handle = await fs.open(
+      active.home ? path.join(active.home, ".claude.json") : hostStagingSources(context).claudeJson,
+      "r",
+    );
+    const limit = INPUT_LIMITS.fileBytes;
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.size > limit) return undefined;
+    const buffer = Buffer.alloc(limit + 1);
+    let length = 0;
+    while (length < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, length, buffer.length - length, null);
+      if (!bytesRead) break;
+      length += bytesRead;
+    }
+    if (length > limit) return undefined;
+    const config = JSON.parse(buffer.subarray(0, length).toString("utf8"));
+    if (!config || typeof config !== "object" || Array.isArray(config)) return undefined;
+    const account = config.oauthAccount;
+    return account && typeof account === "object" && !Array.isArray(account)
+      ? { oauthAccount: account }
+      : {};
   } catch {
+    // Unreadable is not signed out: leave the container's identity unchanged.
     return undefined;
+  } finally {
+    await handle?.close();
   }
 }
 
@@ -452,11 +474,14 @@ export function setHostClaudeLoginRefresher(refresher: (() => Promise<unknown>) 
 async function freshContainerClaudeCredentials(
   context: CommandContext,
   global: AppConfig["global"],
+  account?: ResolvedAgentAccount,
 ): Promise<string | undefined> {
-  const text = await containerClaudeCredentials(context, global);
-  if (text || !hostClaudeLoginRefresher) return text;
-  await hostClaudeLoginRefresher().catch(() => undefined);
-  return containerClaudeCredentials(context, global);
+  if (global.useHostClaudeCredentials === false) return undefined;
+  const active = account ?? (await resolveActiveAgentAccount(context, "claude"));
+  // MCP entries can survive an expired subscription login. Always run the due
+  // check, which also handles usable tokens already inside the refresh window.
+  await hostClaudeLoginRefresher?.().catch(() => undefined);
+  return containerClaudeCredentials(context, global, active);
 }
 
 /**
@@ -517,11 +542,20 @@ export async function syncContainerClaudeLoginUnlocked(
     ) {
       return false;
     }
-    if (await accountHasBeenUsed(context, "claude")) {
-      const expected = await currentAccountMarker(context, "claude");
-      if ((await readMarker(runners, containerId, "claude")) !== expected) return false;
-    }
-    const text = await freshContainerClaudeCredentials(context, global);
+    // Account and generation come from one authoritative snapshot. Credential
+    // reads stay pinned to it even if the selection changes during marker I/O.
+    const store = await context.storage.loadAgentAccounts();
+    const accountId = store.active.claude ?? DEFAULT_AGENT_ACCOUNT_ID;
+    const generation = store.loginGeneration?.claude;
+    const expected = generation ? `${accountId}:${generation}` : accountId;
+    const active = {
+      accountId,
+      ...(store.active.claude
+        ? { home: agentAccountHome(context.storage.agentAccountsDirectory(), "claude", accountId) }
+        : {}),
+    };
+    if ((await readMarker(runners, containerId, "claude")) !== expected) return false;
+    const text = await freshContainerClaudeCredentials(context, global, active);
     // Revocation is persisted before its queued cleanup. Re-read after host I/O
     // so a revoke requested during the read also fences this delivery.
     const current = await context.storage.getEnvironment(environment.id);
@@ -530,7 +564,13 @@ export async function syncContainerClaudeLoginUnlocked(
       !current?.containerId ||
       !containerIdMatches(current.containerId, containerId) ||
       config.global.useHostClaudeCredentials === false ||
-      !providerCredentialsAllowed(context, config.global.enabledAgentPlatforms, current, "claude")
+      !providerCredentialsAllowed(
+        context,
+        config.global.enabledAgentPlatforms,
+        current,
+        "claude",
+      ) ||
+      (await currentAccountMarker(context, "claude")) !== expected
     ) {
       return false;
     }
@@ -670,13 +710,10 @@ async function pushContainerLogin(
       // Signed out beats silently staying on the previous account.
       await removeClaudeLogin(runners, containerId);
     }
-    const oauthAccount = await activeClaudeOAuthAccount(context);
+    const identity = await activeClaudeOAuthAccount(context);
+    if (identity === undefined) return;
     await runners
-      .pipe(
-        containerId,
-        SYNC_CONTAINER_CLAUDE_ACCOUNT_COMMAND,
-        JSON.stringify(oauthAccount ? { oauthAccount } : {}),
-      )
+      .pipe(containerId, SYNC_CONTAINER_CLAUDE_ACCOUNT_COMMAND, JSON.stringify(identity))
       .catch((error: unknown) =>
         logFailure("Failed to update the container's Claude account", error),
       );

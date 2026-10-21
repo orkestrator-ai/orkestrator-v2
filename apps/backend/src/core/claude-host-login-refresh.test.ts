@@ -1,9 +1,14 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, spyOn } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { CLAUDE_HOST_REFRESH_MODEL, refreshHostClaudeLogin } from "./claude-host-login-refresh.js";
+import {
+  ContainerClaudeLoginKeeper,
+  CLAUDE_HOST_REFRESH_RETRY_MS,
+} from "./container-claude-login-keeper.js";
+import { CommandFailedError } from "./shell.js";
 import type { CommandContext } from "./commands-context.js";
 
 let root: string | undefined;
@@ -39,7 +44,7 @@ describe("refreshHostClaudeLogin", () => {
           options: { env?: NodeJS.ProcessEnv; cwd?: string },
         ) => {
           calls.push({ command, args, ...options });
-          throw new Error("exit 1: model not found");
+          throw new CommandFailedError("exit 1: model not found", { exitCode: 1 });
         }) as never,
       );
     } finally {
@@ -67,6 +72,55 @@ describe("refreshHostClaudeLogin", () => {
     expect(call!.cwd).toBe(path.join(root!, "claude-login-refresh"));
     expect((await fs.stat(call!.cwd!)).isDirectory()).toBe(true);
   });
+
+  for (const [reason, details] of [
+    ["timeout", { timedOut: true }],
+    ["executable missing", { executableMissing: true }],
+    ["command failed", { exitCode: 2 }],
+  ] as const) {
+    test(`reports ${reason} without exposing command output`, async () => {
+      await expect(
+        refreshHostClaudeLogin(await context(), { accountId: "default" }, (async () => {
+          throw new CommandFailedError("SECRET-OUTPUT", details);
+        }) as never),
+      ).rejects.toThrow(`Host Claude refresh ${reason}`);
+    });
+  }
+
+  for (const details of [{ timedOut: true }, { executableMissing: true }]) {
+    test(`the keeper diagnoses ${details.timedOut ? "timeout" : "missing executable"} once per backoff window`, async () => {
+      const ctx = await context();
+      const now = Date.now();
+      Object.assign(ctx.storage, {
+        loadConfig: async () => ({ global: {} }),
+        loadAgentAccounts: async () => ({ accounts: [], active: {} }),
+      });
+      const warn = spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const keeper = new ContainerClaudeLoginKeeper(ctx, {
+          now: () => now,
+          readCredentials: async () =>
+            JSON.stringify({
+              claudeAiOauth: {
+                accessToken: "a",
+                refreshToken: "r",
+                expiresAt: now + CLAUDE_HOST_REFRESH_RETRY_MS,
+              },
+            }),
+          refreshHostLogin: (account) =>
+            refreshHostClaudeLogin(ctx, account, (async () => {
+              throw new CommandFailedError("SECRET-OUTPUT", details);
+            }) as never),
+        });
+        await keeper.refreshHostIfDue();
+        await keeper.refreshHostIfDue();
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(warn.mock.calls).toEqual([["[claude-login-keeper] Host Claude refresh failed"]]);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+  }
 
   test("an agent-test profile never runs it", async () => {
     let ran = false;

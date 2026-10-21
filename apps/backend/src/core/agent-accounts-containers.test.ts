@@ -169,6 +169,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  setHostClaudeLoginRefresher(undefined);
   for (const key of ENV_KEYS) {
     if (savedEnv[key] === undefined) delete process.env[key];
     else process.env[key] = savedEnv[key];
@@ -263,9 +264,12 @@ describe("replaceStagedInputFile", () => {
 });
 
 describe("refreshStagedAgentAccountLogins", () => {
-  test("leaves Claude alone until an account has been added, but re-reads Codex every start", async () => {
+  test("migrates default-account staged Claude credentials and re-reads Codex every start", async () => {
     const revision = await stage();
-    await write(staged(revision, "claude-config/.credentials.json"), "snapshot");
+    await write(
+      staged(revision, "claude-config/.credentials.json"),
+      '{"claudeAiOauth":{"accessToken":"old","refreshToken":"OLD-REFRESH"}}',
+    );
     await write(staged(revision, "codex-home/auth.json"), "snapshot");
     await refreshStagedAgentAccountLogins(
       context,
@@ -274,8 +278,11 @@ describe("refreshStagedAgentAccountLogins", () => {
       fakeRunners(revision).runners,
     );
     expect(await fs.readFile(staged(revision, "claude-config/.credentials.json"), "utf8")).toBe(
-      "snapshot",
+      '{"claudeAiOauth":{"accessToken":"claude-host"}}',
     );
+    expect(
+      await fs.readFile(staged(revision, "claude-config/.credentials.json"), "utf8"),
+    ).not.toContain("refreshToken");
     // The snapshot a container was created with cannot refresh, so only the
     // host's current login keeps it signed in.
     expect(await fs.readFile(staged(revision, "codex-home/auth.json"), "utf8")).toBe(
@@ -998,7 +1005,7 @@ describe("access-only Claude logins", () => {
       expect(refreshes).toBe(1);
       const piped = fake.calls.find(isCredentialPipe);
       expect(JSON.parse(piped!.stdin!).claudeAiOauth.accessToken).toBe("renewed-on-host");
-      // A usable token needs no refresh.
+      // The due-check runs even for a usable token; the keeper decides whether to refresh.
       await syncContainerAgentAccountsOnStart(
         context,
         environment,
@@ -1006,11 +1013,127 @@ describe("access-only Claude logins", () => {
         { enabledAgentPlatforms: ["claude", "codex"] } as never,
         fake.runners,
       );
-      expect(refreshes).toBe(1);
+      expect(refreshes).toBe(2);
     } finally {
       setHostClaudeLoginRefresher(undefined);
     }
   });
+
+  for (const entry of ["expired-mcp", "near-expiry"] as const) {
+    for (const start of ["container", "bridge"] as const) {
+      test(`${start} start refreshes a ${entry} subscription even when MCP credentials survive`, async () => {
+        await writeHostLogin(hostLogin("old", entry === "expired-mcp" ? 1 : Date.now() + 120_000));
+        const fake = fakeRunners(null);
+        let checks = 0;
+        setHostClaudeLoginRefresher(async () => {
+          checks++;
+          await writeHostLogin(hostLogin("renewed"));
+        });
+        if (start === "container") {
+          await syncContainerAgentAccountsOnStart(
+            context,
+            environment,
+            useContainer(`start-${entry}`),
+            { enabledAgentPlatforms: ["claude"] } as never,
+            fake.runners,
+          );
+        } else {
+          await syncContainerClaudeLogin(context, useContainer(`bridge-${entry}`), {
+            runners: fake.runners,
+            restrictWhenUnusable: true,
+          });
+        }
+        expect(checks).toBe(1);
+        expect(
+          JSON.parse(fake.calls.find(isCredentialPipe)!.stdin!).claudeAiOauth.accessToken,
+        ).toBe("renewed");
+        expect(JSON.stringify(fake.calls)).not.toContain("HOST-");
+      });
+    }
+  }
+
+  for (const change of ["account", "generation"] as const) {
+    test(`a ${change} change while marker lookup is paused fences a busy container delivery`, async () => {
+      await addAccounts({});
+      liveWork = true;
+      const fake = fakeRunners(null);
+      const paused = Promise.withResolvers<void>();
+      const resume = Promise.withResolvers<void>();
+      const exec = fake.runners.exec;
+      fake.runners.exec = async (...args) => {
+        const result = await exec(...args);
+        if (args[1].startsWith("cat /tmp/orkestrator-claude-account")) {
+          paused.resolve();
+          await resume.promise;
+        }
+        return result;
+      };
+      const sync = syncContainerClaudeLogin(context, useContainer(`race-${change}`), {
+        runners: fake.runners,
+      });
+      try {
+        await paused.promise;
+        await storage.mutateAgentAccounts((store) => ({
+          store:
+            change === "account"
+              ? { ...store, active: { claude: CLAUDE_ID } }
+              : { ...store, loginGeneration: { claude: crypto.randomUUID() } },
+          result: undefined,
+        }));
+      } finally {
+        resume.resolve();
+      }
+      expect(await sync).toBe(false);
+      expect(fake.calls.some(isCredentialPipe)).toBe(false);
+    });
+  }
+
+  for (const kind of [
+    "large",
+    "symlink",
+    "invalid",
+    "missing",
+    "too-large",
+    "no-account",
+  ] as const) {
+    test(`switch to a default account with ${kind} identity does not confuse unreadable with signed out`, async () => {
+      await addAccounts({});
+      const file = path.join(root, "host-home", ".claude.json");
+      const identity = JSON.stringify({
+        oauthAccount: { emailAddress: "host@example.com" },
+        history: "x".repeat(
+          kind === "large" ? 2 * 1024 * 1024 : kind === "too-large" ? 11 * 1024 * 1024 : 0,
+        ),
+      });
+      await fs.rm(file);
+      if (kind === "symlink") {
+        await write(`${file}.target`, identity);
+        await fs.symlink(`${file}.target`, file);
+      } else if (kind !== "missing") {
+        await write(
+          file,
+          kind === "invalid" ? "not json" : kind === "no-account" ? "{}" : identity,
+        );
+      }
+      const fake = fakeRunners(null);
+      fake.markers.set("/tmp/orkestrator-claude-account", CLAUDE_ID);
+      await reconcileContainerAgentAccount(
+        context,
+        "container-1",
+        "claude",
+        { isRunning: async () => true, stop: async () => {} },
+        fake.runners,
+      );
+      const update = fake.calls.find(
+        (call) => call.command === SYNC_CONTAINER_CLAUDE_ACCOUNT_COMMAND,
+      );
+      if (["invalid", "missing", "too-large"].includes(kind)) expect(update).toBeUndefined();
+      else
+        expect(JSON.parse(update!.stdin!)).toEqual(
+          kind === "no-account" ? {} : { oauthAccount: { emailAddress: "host@example.com" } },
+        );
+    });
+  }
 
   test("an account switch also updates oauthAccount in the running container", async () => {
     const revision = await stage();

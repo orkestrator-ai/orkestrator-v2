@@ -706,7 +706,7 @@ report_agent_copy_skips OpenCode
     // they run concurrently. Extract the real block and drive each ordering.
     function runCredentialBlock(
       dir: string,
-      options: { mount?: string; existing?: string; envValue?: string },
+      options: { mount?: string; existing?: string; envValue?: string; interleave?: boolean },
     ): { stdout: string; exitCode: number | null; credential: string | null } {
       const home = join(dir, "home");
       const mount = join(dir, "claude-config");
@@ -734,6 +734,18 @@ eval "$(sed -n '${AGENT_HELPER_SED}' ${shellQuote(entrypointPath)})"
 block="$(sed -n '/^if \\[ -n "\\$CLAUDE_OAUTH_CREDENTIALS" \\]/,/^fi$/p' ${shellQuote(entrypointPath)} | sed "s#/claude-config#\\$AGENT_TEST_MOUNT#g")"
 [ -n "$block" ] || { echo "harness failed to extract the credential block"; exit 9; }
 log_progress() { echo "$1"; }
+${
+  options.interleave
+    ? `eval ${shellQuote(
+        read("docker/entrypoint.sh")
+          .match(/^restrict_imported_login\(\) \{[\s\S]*?^}/m)![0]
+          .replace(
+            "        if (!login",
+            '        const target = process.env.HOME + "/.claude/.credentials.json"; fs.writeFileSync(target + ".backend", JSON.stringify({claudeAiOauth:{accessToken:"fresh-backend"}})); fs.renameSync(target + ".backend", target);\n        if (!login',
+          ),
+      )}`
+    : ""
+}
 eval "$block"
 `,
         {
@@ -784,6 +796,20 @@ eval "$block"
       });
     });
 
+    test("a backend push during imported-login restriction cannot be overwritten", () => {
+      withTempDir((dir) => {
+        const result = runCredentialBlock(dir, {
+          mount: JSON.stringify({
+            claudeAiOauth: { accessToken: "stale-mounted", refreshToken: "SENTINEL" },
+          }),
+          interleave: true,
+        });
+        expect(result.exitCode).toBe(0);
+        expect(JSON.parse(result.credential!).claudeAiOauth.accessToken).toBe("fresh-backend");
+        expect(result.credential).not.toContain("SENTINEL");
+      });
+    });
+
     test("a credential copied from the mount loses its refresh tokens", () => {
       withTempDir((dir) => {
         // A host-mounted ~/.claude, or a revision staged before logins were
@@ -808,7 +834,7 @@ eval "$block"
       });
     });
 
-    test("treats an empty pre-existing credential as absent", () => {
+    test("leaves an empty pre-existing file for the backend to replace atomically", () => {
       withTempDir((dir) => {
         // A zero-byte file is a failed write, not a login. `-s` is what makes
         // this differ from `-f`, which would strand the container logged out.
@@ -818,7 +844,7 @@ eval "$block"
         });
 
         expect(result.exitCode).toBe(0);
-        expect(result.credential).toContain("from-mount");
+        expect(result.credential).toBe("");
       });
     });
 
@@ -832,7 +858,7 @@ eval "$block"
       });
     });
 
-    test("an explicit CLAUDE_OAUTH_CREDENTIALS still overrides both sources", () => {
+    test("backend credentials win over a concurrently imported environment payload", () => {
       withTempDir((dir) => {
         const result = runCredentialBlock(dir, {
           envValue: '{"claudeAiOauth":{"accessToken":"from-env"}}',
@@ -841,7 +867,7 @@ eval "$block"
         });
 
         expect(result.exitCode).toBe(0);
-        expect(result.credential).toContain("from-env");
+        expect(result.credential).toContain("already-synced");
       });
     });
 
@@ -1159,9 +1185,7 @@ copy_agent_directory "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" skills Codex
 
   test("imported Codex and Grok logins lose their single-use refresh tokens", () => {
     const entrypoint = read("docker/entrypoint.sh");
-    expect(entrypoint).toMatch(
-      /publish_claude_credentials \/claude-config\/\.credentials\.json; then\n\s*restrict_imported_login "\$HOME\/\.claude\/\.credentials\.json" claude Claude/,
-    );
+    expect(entrypoint).toContain('restrict_imported_login "$temporary_path" claude Claude');
     // Each import is restricted right after it is copied, before any agent runs.
     expect(entrypoint).toMatch(
       /chmod 600 "\$HOME\/\.codex\/auth\.json"[^\n]*\n\s*restrict_imported_login "\$HOME\/\.codex\/auth\.json" codex Codex/,

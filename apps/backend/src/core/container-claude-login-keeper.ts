@@ -102,7 +102,7 @@ export class ContainerClaudeLoginKeeper {
   start(): void {
     if (!this.stopped) return;
     this.stopped = false;
-    this.schedule(this.intervalMs);
+    this.schedule(1_000);
   }
 
   stop(): void {
@@ -205,14 +205,18 @@ export class ContainerClaudeLoginKeeper {
       };
       const refresh = this.options.refreshHostLogin;
       if (!refresh) return login;
-      await refresh(await resolveActiveAgentAccount(this.context, "claude")).catch(
-        (error: unknown) =>
-          console.warn(
-            "[claude-login-keeper] Host Claude refresh failed:",
-            error instanceof Error ? error.message : String(error),
-          ),
-      );
-      return summarize(await read());
+      try {
+        await refresh(await resolveActiveAgentAccount(this.context, "claude"));
+      } catch {
+        // CLI output may contain credentials; only fixed diagnostics escape.
+        console.warn("[claude-login-keeper] Host Claude refresh failed");
+        return summarize(await read());
+      }
+      const renewed = summarize(await read());
+      if (renewed?.expiresAt === undefined || renewed.expiresAt <= login.expiresAt) {
+        console.warn("[claude-login-keeper] Host Claude refresh did not extend login expiry");
+      }
+      return renewed;
     } catch (error) {
       console.warn(
         "[claude-login-keeper] Host Claude refresh check failed:",

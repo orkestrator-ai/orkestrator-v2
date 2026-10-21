@@ -14,8 +14,8 @@ export { usePaneLayoutStore, getAllLeaves } from "./paneLayoutStore";
 export { useTerminalSessionStore, createSessionKey } from "./terminalSessionStore";
 export { useTerminalPortalStore } from "./terminalPortalStore";
 export type { PersistentTerminalData, CreateTerminalOptions } from "./terminalPortalStore";
-export { useErrorDialogStore } from "./errorDialogStore";
-export type { ErrorDetails } from "./errorDialogStore";
+export { formatErrorContext, useErrorDialogStore } from "./errorDialogStore";
+export type { ErrorContext, ErrorDetails } from "./errorDialogStore";
 export { useFileDirtyStore } from "./fileDirtyStore";
 export {
   useKanbanStore,

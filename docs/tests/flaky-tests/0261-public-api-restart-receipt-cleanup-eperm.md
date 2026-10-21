@@ -34,3 +34,16 @@ The subsequent settled-snapshot aggregate (`stable-final-tests`) did not reprodu
 The subsequent full confirmation run,
 `mise run test:logged -- --name merge-tests-confirm -- mise run test`,
 passed all four groups (exit 0, 282.3 seconds).
+
+## OpenCode and Pi access-only logins recurrence (2026-10-21)
+
+- **Command:** `mise run test` (standard aggregate allocation), on a heavily
+  loaded host with other worktrees validating.
+- **Failure:** The same replay test failed at `public-api/test-support.ts:143`
+  with `EPERM` removing `/tmp/ork-public-api-…` (8.10 ms). The run's only
+  other failure was a coverage-test stub that this change needed and was
+  fixed.
+- **Isolated rerun:** `bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/public-api/public-api-projects.test.ts`
+  passed unchanged (25 pass, 3.2 seconds).
+- **Assessment:** Recurrence of the registered cleanup flake; cause still
+  unestablished.

@@ -661,15 +661,38 @@ exit 0
       containerId: "container-pi",
       status: "running",
     });
-    const { context } = createContext(environment);
+    const { context } = createContext(environment, {
+      globalConfig: { enabledAgentPlatforms: ["pi"] },
+    });
+    context.runtimeFlavor = "agent-test";
+    context.credentialSources = new Set(["pi"]);
+    const hostHome = path.join(path.dirname(pidFile), "host");
+    const hostAuth = path.join(hostHome, ".pi", "agent", "auth.json");
+    const importedAuth = path.join(path.dirname(pidFile), "imported-auth.jsonl");
+    await fs.mkdir(path.dirname(hostAuth), { recursive: true });
+    await fs.writeFile(
+      hostAuth,
+      JSON.stringify({
+        anthropic: {
+          type: "oauth",
+          access: "pi-access",
+          refresh: "SENTINEL-HOST-REFRESH",
+          expires: Date.now() + 8 * 3600_000,
+        },
+      }),
+    );
     const commands = createCommandRegistry();
     const previousHostPort = process.env.FAKE_BRIDGE_HOST_PORT;
     const previousPidFile = process.env.FAKE_BRIDGE_PID_FILE;
     const previousTokenFile = process.env.FAKE_BRIDGE_TOKEN_FILE;
+    const previousHostHome = process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME;
+    const previousImportedAuth = process.env.FAKE_PI_IMPORTED_AUTH;
     const tokenFile = path.join(path.dirname(pidFile), "token");
     process.env.FAKE_BRIDGE_HOST_PORT = String(hostPort);
     process.env.FAKE_BRIDGE_PID_FILE = pidFile;
     process.env.FAKE_BRIDGE_TOKEN_FILE = tokenFile;
+    process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = hostHome;
+    process.env.FAKE_PI_IMPORTED_AUTH = importedAuth;
 
     const dockerScript = `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
@@ -679,6 +702,10 @@ case "$1" in
   exec)
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
+      *"/home/node/.pi/agent/auth.json"*)
+        cat >> "$FAKE_PI_IMPORTED_AUTH"
+        printf '\n' >> "$FAKE_PI_IMPORTED_AUTH"
+        exit 0 ;;
       *"cat /tmp/pi-bridge-token"*)
         cat "$FAKE_BRIDGE_TOKEN_FILE" 2>/dev/null || true
         exit 0 ;;
@@ -691,6 +718,8 @@ case "$1" in
         if [ -n "$pid" ]; then kill "$pid" 2>/dev/null || true; fi
         exit 0 ;;
     esac
+    # A cold launch must see sync's access-only login first.
+    test -s "$FAKE_PI_IMPORTED_AUTH" || exit 91
     token=$(printf '%s' "$*" | sed -n "s/.*PI_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p")
     printf '%s' "$token" > "$FAKE_BRIDGE_TOKEN_FILE"
     bun -e 'require("node:http").createServer((q,s)=>{s.writeHead(q.url==="/global/health"?200:404,{"content-type":"application/json"});s.end("{}")}).listen(Number(process.env.FAKE_BRIDGE_HOST_PORT),"127.0.0.1")' >/dev/null 2>&1 &
@@ -702,6 +731,7 @@ exit 0
 
     try {
       await withFakeDocker(dockerScript, async (logs) => {
+        process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = hostHome;
         const [first, second] = (await Promise.all([
           commands.get("start_pi_server")?.({ containerId: "container-pi" }, context),
           commands.get("start_pi_server")?.({ containerId: "container-pi" }, context),
@@ -727,6 +757,18 @@ exit 0
         expect(execLog).not.toContain("PI_BRIDGE_PROJECT_RESOURCES");
         expect(execLog).toContain("setsid bun /opt/pi-bridge/dist/index.js");
         expect(execLog).toContain("umask 077");
+        // Both starts, the reused one too, hand over the host login access-only.
+        const pushes = (await fs.readFile(importedAuth, "utf8")).trim().split("\n");
+        expect(pushes).toHaveLength(2);
+        for (const push of pushes) {
+          expect(JSON.parse(push)).toEqual({
+            logins: {
+              anthropic: expect.objectContaining({ access: "pi-access", refresh: "" }),
+            },
+            accessOnly: ["anthropic"],
+          });
+        }
+        expect(execLog).not.toContain("SENTINEL");
 
         await commands.get("stop_pi_server")?.({ containerId: "container-pi" }, context);
         const afterStop = await fs.readFile(logs.exec, "utf8");
@@ -748,6 +790,10 @@ exit 0
       else process.env.FAKE_BRIDGE_PID_FILE = previousPidFile;
       if (previousTokenFile === undefined) delete process.env.FAKE_BRIDGE_TOKEN_FILE;
       else process.env.FAKE_BRIDGE_TOKEN_FILE = previousTokenFile;
+      if (previousHostHome === undefined) delete process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME;
+      else process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = previousHostHome;
+      if (previousImportedAuth === undefined) delete process.env.FAKE_PI_IMPORTED_AUTH;
+      else process.env.FAKE_PI_IMPORTED_AUTH = previousImportedAuth;
     }
   });
 
@@ -971,9 +1017,30 @@ exit 0
       containerId: "container-opencode-auth",
       status: "running",
     });
-    const { context } = createContext(environment);
+    const { context } = createContext(environment, {
+      globalConfig: { enabledAgentPlatforms: ["opencode"] },
+    });
+    context.runtimeFlavor = "agent-test";
+    context.credentialSources = new Set(["opencode"]);
+    const importedAuth = path.join(stateDir, "imported-auth.jsonl");
+    const hostAuth = path.join(stateDir, "xdg-data", "opencode", "auth.json");
+    await fs.mkdir(path.dirname(hostAuth), { recursive: true });
+    await fs.writeFile(
+      hostAuth,
+      JSON.stringify({
+        "opencode-go": { type: "api", key: "go-key" },
+        openai: {
+          type: "oauth",
+          access: "oc-access",
+          refresh: "SENTINEL-HOST-REFRESH",
+          expires: Date.now() + 3600_000,
+        },
+      }),
+    );
     const commands = createCommandRegistry();
     const previous = {
+      xdgDataHome: process.env.XDG_DATA_HOME,
+      importedAuth: process.env.FAKE_OPENCODE_IMPORTED_AUTH,
       hostPort: process.env.FAKE_BRIDGE_HOST_PORT,
       tokenFile: process.env.FAKE_BRIDGE_TOKEN_FILE,
       liveTokenFile: process.env.FAKE_BRIDGE_LIVE_TOKEN_FILE,
@@ -988,6 +1055,8 @@ exit 0
     process.env.FAKE_OPENCODE_PLUGIN_FINGERPRINT_FILE = pluginFingerprintFile;
     process.env.FAKE_OPENCODE_PLUGIN_FINGERPRINT =
       commandTesting.OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT;
+    process.env.XDG_DATA_HOME = path.join(stateDir, "xdg-data");
+    process.env.FAKE_OPENCODE_IMPORTED_AUTH = importedAuth;
 
     const bridge = await startAuthenticatedContainerServer(hostPort, {
       isHealthy: () => existsSync(healthyFile),
@@ -1002,6 +1071,10 @@ case "$1" in
   exec)
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
+      *"/home/node/.local/share/opencode/auth.json"*)
+        cat >> "$FAKE_OPENCODE_IMPORTED_AUTH"
+        printf '\n' >> "$FAKE_OPENCODE_IMPORTED_AUTH"
+        exit 0 ;;
       *"cat /tmp/opencode-server-password"*)
         cat "$FAKE_BRIDGE_TOKEN_FILE" 2>/dev/null || true
         exit 0 ;;
@@ -1078,11 +1151,24 @@ exit 0
         expect(execLog).toContain("/home/node/.config/opencode/plugins/orkestrator-github-env.js");
         expect(execLog).not.toContain("OPENCODE_CONFIG_CONTENT");
         expect(execLog).toContain("unset GITHUB_TOKEN GH_TOKEN GITHUB_PERSONAL_ACCESS_TOKEN");
+        // Every start, the reused one too, hands over the host login access-only.
+        const pushes = (await fs.readFile(importedAuth, "utf8")).trim().split("\n");
+        expect(pushes).toHaveLength(5);
+        expect(JSON.parse(pushes[4]!)).toEqual({
+          logins: {
+            "opencode-go": { type: "api", key: "go-key" },
+            openai: expect.objectContaining({ access: "oc-access", refresh: "" }),
+          },
+          accessOnly: ["openai"],
+        });
+        expect(execLog).not.toContain("SENTINEL");
       });
     } finally {
       await bridge.close();
       for (const [key, value] of Object.entries(previous)) {
         const envName = {
+          xdgDataHome: "XDG_DATA_HOME",
+          importedAuth: "FAKE_OPENCODE_IMPORTED_AUTH",
           hostPort: "FAKE_BRIDGE_HOST_PORT",
           tokenFile: "FAKE_BRIDGE_TOKEN_FILE",
           liveTokenFile: "FAKE_BRIDGE_LIVE_TOKEN_FILE",

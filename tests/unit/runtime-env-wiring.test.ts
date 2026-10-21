@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { nonRotatingOAuthProviders } from "@orkestrator/protocol/login-snapshots";
 
 const repoRoot = join(import.meta.dir, "..", "..");
 
@@ -1126,6 +1127,67 @@ copy_agent_directory "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" skills Codex
     });
   });
 
+  test("imported OpenCode and Pi OAuth logins lose rotating refresh tokens, keeping keys", () => {
+    const entrypoint = read("docker/entrypoint.sh");
+    expect(entrypoint).toMatch(
+      /chmod 600 "\$HOME\/\.local\/share\/opencode\/auth\.json"[^\n]*\n\s*restrict_imported_login "\$HOME\/\.local\/share\/opencode\/auth\.json" opencode OpenCode/,
+    );
+    expect(entrypoint).toMatch(
+      /chmod 600 "\$HOME\/\.pi\/agent\/auth\.json"[^\n]*\n\s*restrict_imported_login "\$HOME\/\.pi\/agent\/auth\.json" pi Pi/,
+    );
+    // The entrypoint keeps the same non-rotating providers as the backend.
+    expect(entrypoint).toContain(
+      `{ opencode: ${JSON.stringify(nonRotatingOAuthProviders("opencode")).replaceAll(",", ", ")}, pi: ${JSON.stringify(nonRotatingOAuthProviders("pi")).replaceAll(",", ", ")} }[kind]`,
+    );
+    withTempDir((dir) => {
+      const bin = join(dir, "bin");
+      mkdirSync(bin);
+      if (!Bun.which("node")) {
+        writeFileSync(join(bin, "node"), `#!/bin/sh\nexec ${shellQuote(process.execPath)} "$@"\n`);
+        chmodSync(join(bin, "node"), 0o755);
+      }
+      const opencode = join(dir, "opencode.json");
+      const pi = join(dir, "pi.json");
+      writeFileSync(
+        opencode,
+        JSON.stringify({
+          "opencode-go": { type: "api", key: "go" },
+          openai: { type: "oauth", access: "a", refresh: "SENTINEL-OC", expires: 1 },
+          "github-copilot": { type: "oauth", access: "gho", refresh: "gho", expires: 0 },
+        }),
+      );
+      writeFileSync(
+        pi,
+        JSON.stringify({
+          anthropic: { type: "oauth", access: "a", refresh: "SENTINEL-PI", expires: 1 },
+          meta: { type: "oauth", access: "key", refresh: "identity", expires: 2 },
+          openrouter: { type: "api_key", key: "or" },
+        }),
+      );
+      const result = runShell(
+        agentCopyHelperHarness(`
+restrict_imported_login ${shellQuote(opencode)} opencode OpenCode
+restrict_imported_login ${shellQuote(pi)} pi Pi
+`),
+        { PATH: `${bin}:${process.env.PATH ?? "/usr/bin:/bin"}` },
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(readFileSync(opencode, "utf8"))).toEqual({
+        "opencode-go": { type: "api", key: "go" },
+        openai: { type: "oauth", access: "a", refresh: "", expires: 1 },
+        "github-copilot": { type: "oauth", access: "gho", refresh: "gho", expires: 0 },
+      });
+      expect(JSON.parse(readFileSync(pi, "utf8"))).toEqual({
+        anthropic: { type: "oauth", access: "a", refresh: "", expires: 1 },
+        meta: { type: "oauth", access: "key", refresh: "identity", expires: 2 },
+        openrouter: { type: "api_key", key: "or" },
+      });
+      expect((statSync(pi).mode & 0o777).toString(8)).toBe("600");
+      expect(result.stdout + result.stderr).not.toContain("SENTINEL");
+    });
+  });
+
   test("imported Codex and Grok logins lose their single-use refresh tokens", () => {
     const entrypoint = read("docker/entrypoint.sh");
     // Each import is restricted right after it is copied, before any agent runs.
@@ -2047,7 +2109,14 @@ eval "$claude_setup"
       writeFileSync(join(config, "opencode.json"), '{"config":true}\n');
       writeFileSync(join(config, "plugin", "custom.ts"), "export default {}\n");
       writeFileSync(join(config, "node_modules", "some-dep", "binary.node"), "mach-o\n");
-      writeFileSync(join(data, "auth.json"), '{"token":"opencode"}\n', { mode: 0o600 });
+      writeFileSync(
+        join(data, "auth.json"),
+        JSON.stringify({
+          opencode: { type: "api", key: "k" },
+          openai: { type: "oauth", access: "a", refresh: "r", expires: 1 },
+        }),
+        { mode: 0o600 },
+      );
       writeFileSync(join(data, "account.json"), '{"account":"test"}\n');
       writeFileSync(join(data, "opencode.db"), "x".repeat(1024 * 1024));
       writeFileSync(join(data, "storage", "kept.json"), "kept\n");
@@ -2082,10 +2151,13 @@ eval "$opencode_setup"
         "export default {}\n",
       );
       expect(() => statSync(join(home, ".config", "opencode", "node_modules"))).toThrow();
-      // Credential rides the mount; the multi-GB session database does not.
-      expect(readFileSync(join(home, ".local", "share", "opencode", "auth.json"), "utf8")).toBe(
-        '{"token":"opencode"}\n',
-      );
+      // Credential rides the mount, access-only; the multi-GB session database does not.
+      expect(
+        JSON.parse(readFileSync(join(home, ".local", "share", "opencode", "auth.json"), "utf8")),
+      ).toEqual({
+        opencode: { type: "api", key: "k" },
+        openai: { type: "oauth", access: "a", refresh: "", expires: 1 },
+      });
       expect(readFileSync(join(home, ".local", "share", "opencode", "account.json"), "utf8")).toBe(
         '{"account":"test"}\n',
       );

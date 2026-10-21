@@ -384,6 +384,31 @@ Update the traced version only after doing the steps below.
 4. Set the provider's entry in `PROVIDER_STATE_TRACED_VERSIONS` to the new
    version and update the "Traced against" line under "Provider state".
 
+## Re-check OAuth refresh-token rotation
+
+Containers get Codex, Grok, OpenCode and Pi logins access-only, because a copy
+that refreshed with the host's refresh token would spend it and sign the host
+out (`packages/protocol/src/login-snapshots.ts`). OpenCode and Pi hold one
+login per model provider, and `NON_ROTATING_OAUTH_PROVIDERS` there lists the
+OAuth providers whose refresh token is reused rather than rotated, so a
+container may keep it whole. `restrict_imported_login` in
+`docker/entrypoint.sh` repeats the same list (a unit test keeps them equal).
+On every OpenCode or Pi bump, re-read each OAuth provider's refresh function:
+
+- Pi: `dist/auth/oauth/*.js` in `@earendil-works/pi-ai`. A provider whose
+  refresh returns the token it was given (`refresh: refreshToken`) is
+  non-rotating; one that stores the response's `refresh_token` rotates.
+- OpenCode: the built-in auth plugins under `packages/opencode/src/plugin/` at
+  the release tag (`openai/codex.ts`, `github-copilot/copilot.ts`, `xai.ts`),
+  and any new plugin `internalPlugins` loads.
+
+A new rotating provider needs no change (anything unlisted is access-only). A
+new non-rotating one, such as a token exchange like Copilot's, needs adding to
+both lists, or its container copy signs out when its short access token
+expires. Also check that `expires` is still in milliseconds and the refresh
+window (Pi refreshes five minutes early, OpenCode's xAI two) still fits inside
+`PROVIDER_AUTH_MIN_VALIDITY_MS`.
+
 ## Claude
 
 ### Where the SDK is used

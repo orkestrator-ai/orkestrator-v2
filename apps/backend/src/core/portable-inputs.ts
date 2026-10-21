@@ -19,6 +19,8 @@ import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
   restrictCodexAuthSnapshot,
   restrictGrokAuthSnapshot,
+  restrictOpenCodeAuthSnapshot,
+  restrictPiAuthSnapshot,
   type LoginSnapshot,
 } from "@orkestrator/protocol/login-snapshots";
 import { environmentStateDirectory } from "./environment-state-paths.js";
@@ -35,9 +37,11 @@ import { environmentStateDirectory } from "./environment-state-paths.js";
  * Only enabled providers are staged. Sources are read without following
  * symlinks (every ancestor and the entry itself), each file is re-checked
  * after opening so a swapped path cannot be read, and bounds are enforced
- * while copying. Logins whose refresh token is single-use are staged
- * access-only (`accessOnlyLogin`), so no container can spend the host's. A revision is written under a temporary name and renamed
- * into place, so a container never binds a half-written revision.
+ * while copying. Logins whose refresh token is single-use or rotating (Codex,
+ * Grok, and OpenCode and Pi OAuth) are staged access-only (`accessOnlyLogin`),
+ * so no container can spend the host's. A revision is written under a
+ * temporary name and renamed into place, so a container never binds a
+ * half-written revision.
  */
 
 export const PORTABLE_INPUT_SPEC_VERSION = 1;
@@ -74,9 +78,10 @@ export interface InputSource {
   files?: readonly string[];
   directories?: readonly { path: string; mode: DirectoryMode; exclude?: readonly string[] }[];
   /**
-   * One of `files` that holds a login with a single-use refresh token. It is
-   * staged through `restrict` (see `@orkestrator/protocol/login-snapshots`),
-   * or not at all when that withholds it.
+   * One of `files` that holds a login with a single-use or rotating refresh
+   * token. It is staged through `restrict` (see
+   * `@orkestrator/protocol/login-snapshots`), or not at all when that
+   * withholds it.
    */
   accessOnlyLogin?: { file: string; restrict: AccessOnlyLoginRestriction };
 }
@@ -210,6 +215,7 @@ export function portableInputSpec(roots: InputSourceRoots): ProviderInputSpec[] 
           target: "/opencode-data",
           root: join(dataHome, "opencode"),
           files: ["auth.json", "account.json"],
+          accessOnlyLogin: { file: "auth.json", restrict: restrictOpenCodeAuthSnapshot },
           directories: [
             { path: "storage", mode: "entries" },
             { path: "snapshot", mode: "entries" },
@@ -316,6 +322,7 @@ export function portableInputSpec(roots: InputSourceRoots): ProviderInputSpec[] 
             { path: "agent/extensions", mode: "entries" },
             { path: "agent/themes", mode: "entries" },
           ],
+          accessOnlyLogin: { file: "agent/auth.json", restrict: restrictPiAuthSnapshot },
         },
       ],
       files: [],
@@ -495,13 +502,15 @@ class ProviderCopier {
     this.summary.skipped[reason] = (this.summary.skipped[reason] ?? 0) + count;
   }
 
-  adjustLogin(adjustment: { withheld: boolean; originalBytes: number; bytes: number }): void {
+  adjustLogin(adjustment: LoginAdjustment): void {
     const files = adjustment.withheld ? -1 : 0;
     const bytes = adjustment.bytes - adjustment.originalBytes;
     this.summary.files += files;
     this.summary.bytes += bytes;
     this.total.take(files, bytes);
     if (adjustment.withheld) this.skip("login-withheld");
+    // Provider logins left out of an OpenCode or Pi file that is still staged.
+    if (adjustment.dropped) this.skip("login-withheld", adjustment.dropped);
   }
 
   private record(files: number, bytes: number): void {
@@ -751,6 +760,14 @@ export async function stagePortableInputs(
   }
 }
 
+interface LoginAdjustment {
+  withheld: boolean;
+  originalBytes: number;
+  bytes: number;
+  /** Provider logins left out of a file that is still staged. */
+  dropped?: number;
+}
+
 /**
  * Rewrite a just-staged login file access-only, or remove it, returning the
  * accounting adjustment. An absent file was never counted and needs no adjustment.
@@ -759,7 +776,7 @@ async function restrictStagedLogin(
   file: string,
   restrict: AccessOnlyLoginRestriction,
   now: Date,
-): Promise<{ withheld: boolean; originalBytes: number; bytes: number } | undefined> {
+): Promise<LoginAdjustment | undefined> {
   const contents = await readFile(file).catch(() => undefined);
   if (contents === undefined) return undefined;
   const originalBytes = contents.byteLength;
@@ -771,23 +788,35 @@ async function restrictStagedLogin(
   // The staged copy is private to this revision and not yet mounted.
   await rm(file, { force: true });
   await writeFile(file, restricted.text, { mode: 0o600, flag: "wx" });
-  return { withheld: false, originalBytes, bytes: Buffer.byteLength(restricted.text) };
+  return {
+    withheld: false,
+    originalBytes,
+    bytes: Buffer.byteLength(restricted.text),
+    dropped: restricted.dropped,
+  };
 }
+
+const ACCESS_ONLY_LOGINS: Record<AccessOnlyLoginProvider, AccessOnlyLoginRestriction> = {
+  codex: restrictCodexAuthSnapshot,
+  grok: restrictGrokAuthSnapshot,
+  opencode: restrictOpenCodeAuthSnapshot,
+  pi: restrictPiAuthSnapshot,
+};
+
+/** Providers whose staged login file a container may only hold access-only. */
+export type AccessOnlyLoginProvider = "codex" | "grok" | "opencode" | "pi";
 
 /**
  * The access-only form of a login a running container or a restaged revision
  * is about to receive, or undefined when it must receive none.
  */
 export function accessOnlyLoginText(
-  provider: "codex" | "grok",
+  provider: AccessOnlyLoginProvider,
   text: string | undefined,
   nowMs = Date.now(),
 ): string | undefined {
   if (text === undefined) return undefined;
-  const restricted = (provider === "codex" ? restrictCodexAuthSnapshot : restrictGrokAuthSnapshot)(
-    text,
-    nowMs,
-  );
+  const restricted = ACCESS_ONLY_LOGINS[provider](text, nowMs);
   return "text" in restricted ? restricted.text : undefined;
 }
 

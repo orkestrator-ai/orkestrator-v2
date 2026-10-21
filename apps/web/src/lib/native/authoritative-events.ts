@@ -1,6 +1,7 @@
 import {
   listen,
   NATIVE_EVENT_STREAM_CONNECTED_EVENT,
+  type ListenOptions,
   type NativeEvent,
   type UnlistenFn,
 } from "@/lib/native/events";
@@ -25,7 +26,23 @@ export interface AuthoritativeListenOptions {
  * falls outside its replay ring the missed events are gone, and a consumer
  * that only applies events stays stale until the next one arrives.
  */
-export async function listenAuthoritative<T>(
+export function listenAuthoritative<T>(
+  event: string,
+  handler: (event: NativeEvent<T>) => unknown,
+  options: AuthoritativeListenOptions,
+): Promise<UnlistenFn> {
+  return listenAuthoritativeWith(listen, event, handler, options);
+}
+
+type ListenFn = <T>(
+  event: string,
+  handler: (event: NativeEvent<T>) => unknown,
+  options?: ListenOptions,
+) => Promise<UnlistenFn>;
+
+/** `listenAuthoritative` over an explicit `listen` (the portal's, for example). */
+export async function listenAuthoritativeWith<T>(
+  subscribe: ListenFn,
   event: string,
   handler: (event: NativeEvent<T>) => unknown,
   options: AuthoritativeListenOptions,
@@ -50,14 +67,14 @@ export async function listenAuthoritative<T>(
   };
   // Install recovery first so a handshake while event readiness is pending
   // cannot disappear. Defer its read until the incremental listener is ready.
-  const unlistenResync = await listen<undefined>(
+  const unlistenResync = await subscribe<undefined>(
     NATIVE_EVENT_STREAM_CONNECTED_EVENT,
     resync,
     ...listenOptions,
   );
   let unlistenEvent: UnlistenFn;
   try {
-    unlistenEvent = await listen<T>(event, handler, ...listenOptions);
+    unlistenEvent = await subscribe<T>(event, handler, ...listenOptions);
   } catch (error) {
     disposed = true;
     unlistenResync();

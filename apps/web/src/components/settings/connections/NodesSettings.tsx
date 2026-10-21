@@ -42,8 +42,7 @@ import {
   trustNodeHostKey,
   updateNode,
 } from "@/lib/backend/command-nodes";
-import { listen } from "@/lib/native/events";
-import { listenAuthoritative } from "@/lib/native/authoritative-events";
+import { portalListen, portalListenAuthoritative } from "@/lib/portal/portal-transport";
 import { EditNodeDialog } from "./EditNodeDialog";
 
 /**
@@ -112,7 +111,7 @@ export function NodesSettings() {
     const unlisten: Array<() => void> = [];
     let cancelled = false;
     for (const event of [NODES_CHANGED_EVENT, NODE_STATUS_CHANGED_EVENT]) {
-      void listen(event, () => void refresh()).then((stop) => {
+      void portalListen(event, () => void refresh()).then((stop) => {
         if (cancelled) stop();
         else unlisten.push(stop);
       });
@@ -702,7 +701,7 @@ export function NodeSshPromptDialog() {
       }
       setPrompts(snapshot.filter((entry) => entry.state === "open"));
     };
-    void listenAuthoritative<PromptEvent>(
+    void portalListenAuthoritative<PromptEvent>(
       NODE_SSH_PROMPT_EVENT,
       ({ payload }) => {
         revision++;

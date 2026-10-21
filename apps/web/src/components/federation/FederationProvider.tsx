@@ -1,23 +1,25 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useStore } from "zustand";
 import {
-  BACKEND_PROFILE_CHANGED_EVENT,
   FALLBACK_MACHINE_COLOR,
   defaultMachineColor,
-  parseBackendProfile,
   type BackendProfile,
 } from "@orkestrator/protocol/backend-profile";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { isMachinePanelRealm } from "@/lib/federation/panel-realm";
-import { listen } from "@/lib/native/events";
 import {
-  getOwnProfile,
+  getWorkspaceProfile,
+  listenWorkspaceProfile,
   portalStore,
   type PortalState,
   type PortalStore,
 } from "@/lib/portal/portal-store";
+import { workspaceTarget } from "@/lib/portal/portal-transport";
 
-/** The machine this realm is bound to: the command node (or leaf) the client connected to. */
+/**
+ * The machine the window's workspace is on: the command node the client
+ * connected to, or the node whose environment the user opened.
+ */
 export interface BoundMachine {
   /** Same as `backendId`: views key every machine by its node identity. */
   connectionId: string;
@@ -69,18 +71,13 @@ export function FederationProvider({ children }: { children: ReactNode }) {
     if (kind === "none") return;
     let active = true;
     let stop: (() => void) | null = null;
-    void getOwnProfile()
+    void getWorkspaceProfile()
       .then((value) => {
         if (active) setProfile(value);
       })
       .catch(() => undefined);
-    void listen<unknown>(BACKEND_PROFILE_CHANGED_EVENT, ({ payload }) => {
-      try {
-        const next = parseBackendProfile(payload);
-        setProfile((current) => (current && current.revision > next.revision ? current : next));
-      } catch {
-        // A malformed event changes nothing.
-      }
+    void listenWorkspaceProfile((next) => {
+      setProfile((current) => (current && current.revision > next.revision ? current : next));
     }).then((unlisten) => {
       if (active) stop = unlisten;
       else unlisten();
@@ -92,13 +89,13 @@ export function FederationProvider({ children }: { children: ReactNode }) {
   }, [kind]);
 
   const value = useMemo<FederationContextValue>(() => {
-    const selfId = portalState.selfId;
-    const bound: BoundMachine | null = selfId
+    const boundId = (workspaceTarget()?.nodeId as BackendId | undefined) ?? portalState.selfId;
+    const bound: BoundMachine | null = boundId
       ? {
-          connectionId: selfId,
-          backendId: selfId,
+          connectionId: boundId,
+          backendId: boundId,
           name: profile?.displayName ?? "This machine",
-          colorToken: profile?.colorToken ?? defaultMachineColor(selfId),
+          colorToken: profile?.colorToken ?? defaultMachineColor(boundId),
         }
       : null;
     return {

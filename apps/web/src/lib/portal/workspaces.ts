@@ -11,7 +11,7 @@
 
 import { BACKEND_HELLO_PATH, parseBackendHello } from "@orkestrator/protocol/backend-profile";
 import type { BackendId } from "@orkestrator/protocol/federation";
-import { invoke } from "@/lib/native/backend";
+import { portalInvoke } from "./portal-transport";
 
 export interface OpenedNodeWorkspace {
   workspaceId: string;
@@ -76,7 +76,7 @@ export async function openLeafWorkspace(
   nodeId: BackendId,
   options: { commandNodeName: string; probe?: typeof reachable } = { commandNodeName: "" },
 ): Promise<LeafWorkspace> {
-  const opened = await invoke<OpenedNodeWorkspace>("open_node_workspace", { nodeId });
+  const opened = await portalInvoke<OpenedNodeWorkspace>("open_node_workspace", { nodeId });
   const probe = options.probe ?? reachable;
   for (const origin of opened.directOrigins) {
     if (await probe(origin, opened.grant.token, opened.nodeId)) {
@@ -107,7 +107,7 @@ export async function openLeafWorkspace(
 /** Keep the workspace's grant alive while it is open. Returns the stop function. */
 export function keepWorkspaceAlive(workspaceId: string): () => void {
   const timer = setInterval(() => {
-    void invoke("renew_node_workspace", { workspaceId }).catch(() => undefined);
+    void portalInvoke("renew_node_workspace", { workspaceId }).catch(() => undefined);
   }, WORKSPACE_RENEW_INTERVAL_MS);
   return () => clearInterval(timer);
 }
@@ -115,7 +115,7 @@ export function keepWorkspaceAlive(workspaceId: string): () => void {
 /** Closing revokes the grant; nothing on the node stops. */
 export async function closeLeafWorkspace(workspaceId: string): Promise<void> {
   forgetWorkspaceForFrame(workspaceId);
-  await invoke("close_node_workspace", { workspaceId }).catch(() => undefined);
+  await portalInvoke("close_node_workspace", { workspaceId }).catch(() => undefined);
 }
 
 /**

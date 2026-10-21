@@ -23,6 +23,24 @@ interface Window {
    * Electron only: the machine this renderer is bound to, for presentation
    * storage namespaces. Never a route, port or credential.
    */
+  /**
+   * The command node this client is connected to, while the window's
+   * workspace (`orkestrator`) is on another node. Only the portal layer uses
+   * it; see `lib/portal/portal-transport.ts`.
+   */
+  orkestratorPortal?: {
+    invoke<T = unknown>(command: string, args?: Record<string, unknown>): Promise<T>;
+    listen<T = unknown>(event: string, callback: (payload: T) => void): () => void;
+    eventStreamReady?(event: string): Promise<void>;
+  };
+  /** The node the window's workspace is on, when it is not the command node. */
+  orkestratorWorkspaceTarget?: {
+    nodeId: string;
+    nodeName: string;
+    path: "direct" | "relay";
+    routeKind?: "https" | "ssh";
+    via?: string;
+  };
   orkestratorDesktopIdentity?: {
     connectionId: string;
     backendId: string | null;

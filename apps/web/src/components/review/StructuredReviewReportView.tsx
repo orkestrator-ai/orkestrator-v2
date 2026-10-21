@@ -168,16 +168,26 @@ function EmptyLine({ children = "None." }: { children?: React.ReactNode }) {
   return <p className="text-sm text-muted-foreground">{children}</p>;
 }
 
+/**
+ * Report sections split into two columns once the card is wide enough that a
+ * single column leaves long, hard-to-scan lines. Queried against the report
+ * card itself, so a narrow transcript or side pane keeps one column.
+ */
+const twoColumnGrid = "@5xl:grid-cols-2 @5xl:gap-x-8";
+
 function List({
   items,
   render,
+  columns = false,
 }: {
   items: readonly unknown[];
   render: (value: unknown, index: number) => React.ReactNode;
+  /** Flow items into two columns on a wide card. */
+  columns?: boolean;
 }) {
   if (items.length === 0) return <EmptyLine />;
   return (
-    <ul className="space-y-1.5 text-sm text-foreground/90">
+    <ul className={cn("grid gap-y-1.5 text-sm text-foreground/90", columns && twoColumnGrid)}>
       {items.map((item, index) => (
         <li key={index} className="flex gap-2">
           <span className="mt-[0.55rem] size-1 shrink-0 rounded-full bg-muted-foreground/60" />
@@ -197,7 +207,7 @@ function IssuesSection({ issues }: { issues: readonly ReviewIssue[] }) {
       {issues.length === 0 ? (
         <EmptyLine>No high-confidence issues were found in the reviewed scope.</EmptyLine>
       ) : (
-        <ol className="space-y-3">
+        <ol className={cn("grid gap-3", twoColumnGrid)}>
           {issues.map((issue, index) => (
             <li
               key={`${issue.file}-${issue.line}-${issue.title}-${index}`}
@@ -257,6 +267,7 @@ function CoverageGapsSection({ gaps }: { gaps: readonly ReviewCoverageGap[] }) {
       icon={<FileWarning className="size-4 text-orange-400" />}
     >
       <List
+        columns
         items={gaps}
         render={(value) => {
           const gap = value as ReviewCoverageGap;
@@ -341,7 +352,7 @@ export function StructuredReviewFindingsView({
     >
       <article
         className={cn(
-          "rounded-xl border border-border/50 bg-card/40 p-4 shadow-sm @sm:p-5",
+          "@container rounded-xl border border-border/50 bg-card/40 p-4 shadow-sm @sm:p-5",
           className,
         )}
         aria-label="Review findings"
@@ -371,7 +382,7 @@ function ReportArticle({
   return (
     <article
       className={cn(
-        "rounded-xl border border-border/50 bg-card/40 p-4 shadow-sm @sm:p-5",
+        "@container rounded-xl border border-border/50 bg-card/40 p-4 shadow-sm @sm:p-5",
         className,
       )}
       aria-label={heading}
@@ -548,6 +559,7 @@ function ReportArticle({
             </div>
           </dl>
           <List
+            columns
             items={changed.keyCodeChanges}
             render={(value) => {
               const change = value as (typeof changed.keyCodeChanges)[number];
@@ -610,6 +622,7 @@ function ReportArticle({
           <span className="text-muted-foreground">{notRun} not run</span>
         </div>
         <List
+          columns
           items={report.testResults.failures}
           render={(value) => {
             const failure = value as (typeof report.testResults.failures)[number];
@@ -625,6 +638,7 @@ function ReportArticle({
 
       <Section title="Strengths" icon={<CheckCircle2 className="size-4 text-emerald-400" />}>
         <List
+          columns
           items={report.strengths}
           render={(value) => {
             const strength = value as (typeof report.strengths)[number];

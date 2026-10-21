@@ -1998,6 +1998,113 @@ describe("native agent progressive remainder", () => {
     );
   });
 
+  test("announces an expired discovery renewal only when its value changed", async () => {
+    // Every section expires after 30 s and the idle view's own read renews it.
+    // An announcement for an unchanged renewal re-read the view and reset its
+    // quiet backoff (live qualification, 2026-10-21).
+    let now = 1_000;
+    let health = { summary: { state: "ready" }, notices: [], authoritative: true };
+    const runtimeHealth = mock(async () => health);
+    const stub = createProviderStub("cursor");
+    Object.assign(stub.provider, { runtimeHealth });
+    await withService(
+      {
+        prefix: "orkestrator-progressive-discovery-renewal-",
+        provider: async () => stub.provider,
+        now: () => now,
+      },
+      async ({ service, storage }) => {
+        const input = {
+          environmentId: "env-1",
+          agent: "cursor" as const,
+          logicalSessionKey: "env-env-1:discovery-renewal",
+          viewVersion: 1 as const,
+          sections: ["runtime" as const],
+        };
+        await service.ensureSession(input);
+        const announced = spyOn(storage, "announceNativeAgentSessionProjection");
+        const readyRevision = async () => {
+          let revision = -1;
+          await waitForCondition(async () => {
+            const update = await service.getDiscoveryUpdate(input);
+            if (update.status !== "snapshot") return false;
+            const runtime = update.value.sections.runtime;
+            revision = runtime?.revision ?? -1;
+            return runtime?.availability === "ready";
+          });
+          return revision;
+        };
+
+        const first = await readyRevision();
+        expect(runtimeHealth).toHaveBeenCalledTimes(1);
+        expect(announced).toHaveBeenCalledTimes(1);
+
+        now += 31_000;
+        expect(await readyRevision()).toBe(first);
+        expect(runtimeHealth).toHaveBeenCalledTimes(2);
+        expect(announced).toHaveBeenCalledTimes(1);
+
+        health = { summary: { state: "detached" }, notices: [], authoritative: true };
+        now += 31_000;
+        await service.getDiscoveryUpdate(input);
+        await waitForCondition(async () => announced.mock.calls.length === 2);
+        expect(await readyRevision()).toBe(first + 1);
+        expect(announced).toHaveBeenLastCalledWith("env-1", {
+          agent: "cursor",
+          logicalSessionKey: "env-env-1:discovery-renewal",
+        });
+      },
+    );
+  });
+
+  test("announces an expired model catalogue renewal only when the catalogue changed", async () => {
+    let now = 1_000;
+    let catalog = [{ platform: "codex", id: "gpt-6.1-sol", label: "GPT-6.1-Sol" }];
+    const invoke = async <T>(command: string): Promise<T> => {
+      if (command !== "get_native_agent_model_catalog") {
+        throw new Error(`Unexpected backend command: ${command}`);
+      }
+      return catalog as T;
+    };
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-progressive-catalog-renewal-",
+        provider: async () => stub.provider,
+        invoke,
+        now: () => now,
+      },
+      async ({ service, storage }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:catalog-renewal",
+        };
+        await service.ensureSession(identity);
+        await service.getProjection(identity);
+        const announced = spyOn(storage, "announceNativeAgentSessionProjection");
+        // The environment-wide hint is the catalogue renewal's own.
+        const catalogueAnnouncements = () =>
+          announced.mock.calls.filter((call) => call.length === 1 || call[1] === undefined);
+
+        now += 31_000;
+        await service.getProjection(identity);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(catalogueAnnouncements()).toHaveLength(0);
+
+        catalog = [...catalog, { platform: "codex", id: "gpt-6-luna", label: "GPT-6-Luna" }];
+        now += 31_000;
+        await service.getProjection(identity);
+        await waitForCondition(async () => catalogueAnnouncements().length === 1);
+        expect(
+          (await service.getProjection(identity))?.composer?.models.map((model) => model.id),
+        ).toEqual(["gpt-6.1-sol", "gpt-6-luna"]);
+      },
+    );
+  });
+
   test("held discovery does not delay a progressive transcript snapshot", async () => {
     const discoveryHeld = new Promise<never>(() => undefined);
     const slashCommands = mock(async () => discoveryHeld);

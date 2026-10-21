@@ -29,6 +29,7 @@ export default defineConfig({
     "transcript-paging-live.spec.ts",
     "mcp-apply-live.spec.ts",
     "rich-transcripts-live.spec.ts",
+    "idle-observation-live.spec.ts",
   ],
   fullyParallel: false,
   workers: 1,

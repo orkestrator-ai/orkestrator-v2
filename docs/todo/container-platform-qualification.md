@@ -54,7 +54,8 @@ than behaviour it has shown.
 - Unit-only today: readiness failure typing (`apps/backend/tests/container-readiness.test.ts`),
   C10 (setup interrupted after a side effect), the fixture half of C21
   (interrupted revoke, staging interrupted by a restart), and kill-at-every-phase
-  reconciliation of a rebuild.
+  reconciliation of a rebuild. The live half of C21 ran for Codex on
+  2026-10-21 (results below).
 
 The commands that reproduce the evidence, the C01–C30 scenario matrix, the
 platform dimensions and the benchmark targets are in
@@ -317,6 +318,121 @@ bare script (`apps/desktop/scripts/dev/lifecycle.ts:629`), so
    that diagnosis and 4 of 4 passing runs, including a forced teardown sweep.
    It stays reopenable if the failure appears without a pending intent.
 
+## Results, 2026-10-21 (C21 live: Codex rotation and account switching)
+
+Commit `688f9f69` plus this change. Host: macOS 27.0, Apple M5 Pro, Docker
+Desktop (Engine 29.8.2, `linux/arm64`), shared with other environments'
+test runs (load average about 8). Image: the workspace's isolated development
+image `orkestrator-v2:dev-4ec6b15ad812` (`8cd8f2f670ba` at `688f9f69`, then
+`19c1be6fb5ac` with the fixes below; codex-cli 0.162.1, Grok 1.0.52). Profile
+`cred-rot-0700`, started with `--fixture --fixture-environments
+local,container --credential-source codex --credential-source grok
+--agent-platforms codex,grok` and `CODEX_HOME` pointed at a disposable copy
+of the host login with its refresh token blanked. Every "host" rotation below
+rewrote that copy (or an added account's directory in the profile), never the
+host's `~/.codex`. Turns went through `ensure_native_agent_session` and
+`dispatch_native_agent_prompt`, the path the renderer uses, so the backend's
+live-work guard saw them.
+
+- Baseline: the container's `~/.codex/auth.json` had an empty refresh token,
+  a fresh `last_refresh` and mode 600; a real turn answered.
+- Host rotation during a turn: while a 1,200-number turn ran, the host login
+  was rewritten (a `rotation-1` field added) and `start_codex_server` called
+  again. The bridge was reused (same port and token), the container's login
+  was untouched and the turn finished. This is the documented behaviour:
+  Codex is re-read from the host only before a start.
+- Restart: `stop_environment` and `start_environment` restaged the rotated
+  login (refresh token blank, `last_refresh` reset, mode 600). The staged
+  revision held no `.partial` or `.tmp` entries. The same session then
+  recalled a codeword from before the restart.
+- Container copy past expiry: the container's own access token was given an
+  `exp` an hour in the past (claims otherwise real; the server rejects it) and
+  the bridge restarted. Codex tried a refresh with the blank token; OpenAI
+  answered 400 `empty_string`, and turns failed with "workspace routing
+  discovery unauthorized (401)". Nothing on the host was read for this and
+  nothing could be spent: the container holds no refresh token. A restart
+  restaged the host login and the next turn answered.
+- Host login expired: staging withheld it (the staged file was removed) and
+  the container kept the copy it had, which in practice is the same expired
+  token. After restoring the host copy, a restart signed the container in.
+- Account switching under a running turn: with a second Codex account
+  seeded into the profile (an access-only copy of the same login, tagged
+  `account-b`), the active account was switched while a 1,500-number turn
+  ran, and `start_codex_server` called during it. The busy bridge kept its
+  login and the turn finished (all 1,500 numbers and `DONE`). Once idle, the
+  backend pushed account B's login access-only, wrote the account marker and
+  replaced the bridge; the same session recalled its codeword on account B.
+  Rotating account B's own login and restarting restaged B's login, not the
+  host's.
+- Opt-in Grok live renewal spec (`grok-container-login.spec.ts`): skipped
+  explicitly at 2026-10-21T07:58Z, because the host Grok access token expired
+  at 2026-10-20T16:24:55Z (see the Grok qualification item in
+  [container-network-and-credential-isolation.md](container-network-and-credential-isolation.md)).
+- `test:agent:docker` on the same profile and the rebuilt image: 9 passed,
+  2 skipped (the opt-in live Claude C11 spec and the Grok spec above).
+- Host `~/.codex/auth.json` and `~/.grok/auth.json`: SHA-256 prefix and
+  mtime recorded before and after the run; both unchanged.
+
+### Problems found and fixed
+
+1. **A restart left a switched-back container on the added account.** With
+   account B active, a restart restaged B's login, then the start path cleared
+   the container's Codex account marker, and a missing marker reads as the
+   host login. Switching back to the host then matched that marker, so
+   nothing was pushed and turns kept running on account B until the next
+   restart. Reproduced live. A first fix recorded the staged account in an
+   in-process map for the start path to write, and was re-run live (the
+   marker named B after the restart, and the switch back pushed the host
+   login). Multi Review then found four ways that hint could still name the
+   wrong login: the marker and the login came from two registry reads; a
+   start of an already-running container restaged without importing; a lost
+   hint cleared the marker; and a failure after `docker start` left the old
+   marker. Now staging never names an account. A real start (the container
+   was stopped) sets the Codex marker to `unstaged`, a value no account
+   matches, right after `docker start` and before any later step can fail;
+   the entrypoint does the same before it imports, so a backend that dies
+   mid-start is covered too. The next idle bridge start then pushes the
+   active login and writes its marker, taking the account, home and
+   generation from one registry read. A start of a running container leaves
+   the login and marker alone. The revised design has unit and registry
+   fixture coverage but has not been re-run live.
+2. **A lapsed Codex login read as "temporarily unavailable".** Codex 0.162.1
+   answers `account/read` with an RPC error ("workspace routing discovery
+   unauthorized (401)") rather than a signed-out account once its token is
+   refused and cannot be refreshed. The bridge returned HTTP 500 for
+   `/global/auth`, the backend reported "authentication status is temporarily
+   unavailable", and the sign-out was never confirmed, so no sign-in prompt
+   appeared. The engine now reads that refusal as the signed-out answer. Re-run
+   live on the rebuilt image: auth status `needs-auth`, and the session
+   projection carries `readiness: authentication-required` with "You've been
+   signed out of Codex" and the "Codex sign-in expired" notice.
+
+### Decisions
+
+1. **How the start path records the installed Codex account.** Options: an
+   in-process map from container to marker, filled by the restage and taken
+   by the start (the first fix); a marker file inside the staged revision
+   copied by the entrypoint; writing the current active account's marker at
+   start; or never naming an account at start, invalidating the marker on a
+   real start and letting the next idle bridge start reconcile. The map
+   needed no image change, but review showed it can be lost, consumed by an
+   overlapping start, or applied when nothing was imported. A file in the
+   revision still trusts that the entrypoint ran and imported it, and the
+   current account at start can name an account switched to after the
+   restage. We chose invalidation: only a push the backend made itself
+   writes a real marker. It costs one access-only Codex login push on the
+   first bridge start after each real start, for users who have used
+   accounts, and a one-line entrypoint change (the backend write covers
+   older images). Going back to a hint means re-solving the four review
+   findings.
+2. **Codex sign-out detection.** Options: map only `account/read` errors that
+   say `unauthorized (401)`, `HTTP 401` or `401 Unauthorized` to signed out;
+   or treat every account read failure as signed out. Only the first keeps a
+   transient failure from asking a working account to sign in. A future Codex
+   that reports the refusal differently falls back to today's "unavailable".
+3. **Scope.** Claude credential handling is being changed elsewhere in the
+   same batch, so its rotation was left to run after that lands, and logged.
+
 ## Outstanding work
 
 ### Qualification
@@ -348,12 +464,14 @@ bare script (`apps/desktop/scripts/dev/lifecycle.ts:629`), so
   model was not connected, Pi's first turn did not finish, and Cursor and
   Grok sessions did not start. The proof also requires that an ambiguous
   dispatch stays unresolved rather than being resent.
-- Live credential rotation (C21 live half) while a provider process is
-  running: the documented stop/restart behaviour holds and no partial
-  revision is published. `syncContainerClaudeCredential` and the Cursor file
-  sync still refresh a running container; account switching
-  (`apps/backend/src/core/agent-accounts-containers.ts`) is a natural
-  rotation path to exercise.
+- Live credential rotation (C21 live half) for Claude, Cursor and Grok while
+  a provider process runs. Codex rotation and Codex account switching passed
+  on 2026-10-21 (results above). Still to run: the Claude start sync and
+  login-renewal push (`syncContainerAgentAccountsOnStart`,
+  `markContainersForClaudeLoginRefresh`) once the access-only Claude change
+  in [container-network-and-credential-isolation.md](container-network-and-credential-isolation.md)
+  lands, a Claude account switch under a running turn, the Cursor key file
+  sync, and the Grok push before each bridge start with a live host login.
 - A stopped environment's pending interactions in the backend projection.
   After a stop the projection still lists the dead request as `pending` until
   the session reattaches on the next start (C11, 2026-10-17). The stopped view

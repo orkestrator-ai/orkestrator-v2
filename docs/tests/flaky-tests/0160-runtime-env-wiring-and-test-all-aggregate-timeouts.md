@@ -78,3 +78,16 @@ case passing consistently.
 - **Isolated rerun:** `mise run test:logged -- --name merge-runtime-env-isolated -- bun test ./tests/unit/runtime-env-wiring.test.ts --parallel=1 --only-failures` passed the unchanged owning file in 12.0 s with the same PATH preference.
 - **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.Gj6LAK/root-and-agent-support-tests.log.gz`.
 - **Assessment:** recurrence confirmed; shared-host process contention remains a hypothesis. No assertion, timeout or skip changed.
+
+
+## Preview qualification main merge, 2026-10-21
+
+`mise run test:logged -- --name merge-tests -- mise run test` repeated a
+five-second timeout in `Codex setup copies the complete allowlist, secures auth,
+and excludes plugin runtime state` (5,374.65 ms; shell exit status was null).
+The complete unchanged owner passed with `mise run test:logged -- --name
+preview-main-merge-runtime-owner -- bun test ./tests/unit/runtime-env-wiring.test.ts
+--parallel=1 --only-failures` (exit 0, 51.4 s). The aggregate used one root
+worker beside workspace and bridge groups and other host validation. No timeout
+or assertion changed. Full-run evidence and other unresolved failures are in
+[0623](0623-preview-main-merge-validation.md).

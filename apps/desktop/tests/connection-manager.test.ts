@@ -362,6 +362,37 @@ describe("Electron connection manager", () => {
     ).toBeNull();
   });
 
+  test("serves a connection's client by id only while a window holds the connection", async () => {
+    const local = localBackendHarness();
+    installHealthyRemoteFetch();
+    const manager = new ConnectionManager({
+      localBackend: local.backend,
+      secureStorage: secureStorage(),
+      onEvent: () => undefined,
+      platform: "darwin",
+    });
+    await manager.initialize();
+    await manager.bind("window-a", "local");
+    expect(manager.backendForConnection("local")).toBe(local.backend);
+
+    const { activeConnectionId: remoteId } = await manager.connect(
+      { address: "desk.tailnet.ts.net", token },
+      "window-a",
+    );
+    const remote = manager.backendForConnection(remoteId) as BackendHttpClient | null;
+    expect(remote).not.toBeNull();
+    expect(remote).not.toBe(local.backend);
+    expect(remote?.previewTunnelUrl()).toBe(
+      "wss://desk.tailnet.ts.net/__orkestrator/preview/tunnel",
+    );
+
+    // The window moves on: the remote client is no longer held by anyone.
+    await manager.use("local", "window-a");
+    expect(manager.backendForConnection(remoteId)).toBeNull();
+    expect(manager.backendForConnection("local")).toBe(local.backend);
+    manager.release("window-a");
+  });
+
   test("requires HTTPS and keeps session-only tokens available until restart", async () => {
     const local = localBackendHarness();
     globalThis.fetch = mock(async (input, init) => {

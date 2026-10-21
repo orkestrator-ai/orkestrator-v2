@@ -303,7 +303,7 @@ production data directory rather than a provider home:
 | Claude | Host `CLAUDE_CONFIG_DIR`/`~/.claude`, process-scoped OAuth access token, and `ANTHROPIC_API_KEY` when inherited |
 | Codex | Host `CODEX_HOME`/`~/.codex` and `OPENAI_API_KEY` when inherited |
 | Cursor | Owner-only snapshot of the host's effective Orkestrator Cursor key (`CURSOR_API_KEY` when inherited still wins) |
-| Grok | Owner-only snapshot of host `~/.grok/auth.json` for local runs, with each refresh token blanked and expired logins dropped; bounded read-only host imports for containers |
+| Grok | Owner-only snapshot of host `~/.grok/auth.json`, with each refresh token blanked and expired logins dropped, for local runs and for containers |
 | OpenCode | Host XDG config/data/state directories and `OPENCODE_API_KEY` when inherited |
 | Pi | Host `~/.pi/agent/auth.json` (or `PI_CODING_AGENT_DIR`), shared in place; nothing else from the host Pi directory. Tilde overrides expand against the host home and relative overrides resolve before HOME changes. |
 
@@ -312,7 +312,7 @@ the host credential removes the previous snapshot. A failed refresh also removes
 the old snapshot; a removal failure stops startup. Cursor snapshots preserve a
 minted key's expiry, and the backend stops resolving the key when it expires.
 A Grok snapshot carries access tokens only (`restrictGrokAuthSnapshot` in
-`apps/desktop/scripts/dev/profile-io.ts`). xAI refresh tokens are single-use:
+`packages/protocol/src/login-snapshots.ts`, shared with container staging). xAI refresh tokens are single-use:
 on 2026-10-18 a profile that refreshed with a copy of the host's token spent
 it, the next copy failed its refresh, and Grok cleared that login. So a
 profile may use the host's current access token until it expires, but it can
@@ -332,6 +332,11 @@ projects, Orkestrator sessions, and Orkestrator configuration remain isolated.
 For a container test environment, those host provider directories are mounted
 read-only and copied into writable container state using the normal production
 allowlists. Claude's Keychain credential is synchronized separately over stdin.
+Codex and Grok logins reach any container (test or not) access-only, with the
+refresh token blanked and expired logins withheld, because their refresh
+tokens are single-use and a container refresh would sign the host out
+([Container lifecycle](../architecture/container-lifecycle.md), "Portable
+inputs").
 
 When credentials are disabled, provider paths point into empty profile-owned
 directories, Cursor's inherited key is removed, and no Grok auth is copied.

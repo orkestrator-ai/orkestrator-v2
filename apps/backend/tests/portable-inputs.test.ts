@@ -151,6 +151,131 @@ describe("portable input staging", () => {
     expect(summary.files).toBeLessThanOrEqual(6);
   });
 
+  test("stages single-use Codex and Grok logins access-only, never their refresh tokens", async () => {
+    const { dataDir, roots, home } = await fixtureHome();
+    const now = new Date("2026-10-21T12:00:00Z");
+    const accessToken = `h.${Buffer.from(
+      JSON.stringify({ exp: now.getTime() / 1000 + 3600 }),
+    ).toString("base64url")}.s`;
+    await write(
+      path.join(home, ".codex", "auth.json"),
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: { access_token: accessToken, refresh_token: "SENTINEL-CODEX-REFRESH" },
+      }),
+    );
+    await write(
+      path.join(home, ".grok", "auth.json"),
+      JSON.stringify({
+        live: {
+          key: "grok-access",
+          refresh_token: "SENTINEL-GROK-REFRESH",
+          expires_at: "2026-10-21T18:00:00Z",
+        },
+      }),
+    );
+    await write(path.join(home, ".grok", "config.toml"), "model = 'x'");
+    const staged = await stagePortableInputs(
+      dataDir,
+      "env-inputs",
+      new Set(["codex", "grok"] as const),
+      roots,
+      now,
+    );
+    const codex = JSON.parse(
+      await fs.readFile(path.join(staged.directory, "codex-home", "auth.json"), "utf8"),
+    );
+    expect(codex.tokens).toEqual({ access_token: accessToken, refresh_token: "" });
+    expect(codex.last_refresh).toBe(now.toISOString());
+    const grok = JSON.parse(
+      await fs.readFile(path.join(staged.directory, "grok-home", "auth.json"), "utf8"),
+    );
+    expect(grok.live).toMatchObject({ key: "grok-access", refresh_token: "" });
+    for (const provider of ["codex", "grok"] as const) {
+      const files = await listFiles(path.join(staged.directory, `${provider}-home`));
+      const bytes = (
+        await Promise.all(
+          files.map((file) => fs.stat(path.join(staged.directory, `${provider}-home`, file))),
+        )
+      ).reduce((sum, stat) => sum + stat.size, 0);
+      expect(staged.providers.find((entry) => entry.provider === provider)).toMatchObject({
+        files: files.length,
+        bytes,
+      });
+    }
+    for (const file of await listFiles(staged.directory)) {
+      expect(await fs.readFile(path.join(staged.directory, file), "utf8")).not.toContain(
+        "SENTINEL",
+      );
+      expect((await fs.stat(path.join(staged.directory, file))).mode & 0o077).toBe(0);
+    }
+
+    // An expired login cannot be used without refreshing, so none is staged.
+    await write(
+      path.join(home, ".grok", "auth.json"),
+      JSON.stringify({ old: { key: "k", refresh_token: "r", expires_at: "2026-10-21T11:00:00Z" } }),
+    );
+    const expired = await stagePortableInputs(
+      dataDir,
+      "env-expired",
+      new Set(["grok"] as const),
+      roots,
+      now,
+      // The withheld login must release its budget before config is copied.
+      { ...INPUT_LIMITS, totalEntries: 1 },
+    );
+    expect(await listFiles(expired.directory)).toEqual(["grok-home/config.toml", "manifest.json"]);
+    expect(expired.providers[0]).toEqual({
+      provider: "grok",
+      files: 1,
+      bytes: Buffer.byteLength("model = 'x'"),
+      skipped: { "login-withheld": 1 },
+    });
+    expect((await readInputsManifest(dataDir, "env-expired", expired.revision))?.providers).toEqual(
+      expired.providers,
+    );
+    // Codex is subject to the same withholding and accounting rules.
+    await write(
+      path.join(home, ".codex", "auth.json"),
+      JSON.stringify({
+        tokens: {
+          access_token: `h.${Buffer.from(JSON.stringify({ exp: now.getTime() / 1000 - 3600 })).toString("base64url")}.s`,
+          refresh_token: "SENTINEL",
+        },
+      }),
+    );
+    const expiredCodex = await stagePortableInputs(
+      dataDir,
+      "env-expired-codex",
+      new Set(["codex"]),
+      roots,
+      now,
+    );
+    expect(expiredCodex.providers[0]).toEqual({
+      provider: "codex",
+      files: 0,
+      bytes: 0,
+      skipped: { "login-withheld": 1 },
+    });
+  });
+
+  test("withheld non-UTF-8 logins do not leave negative byte totals", async () => {
+    const { dataDir, roots, home } = await fixtureHome();
+    await write(path.join(home, ".grok", "auth.json"), Buffer.from([0xff]));
+    const staged = await stagePortableInputs(
+      dataDir,
+      "env-invalid-login",
+      new Set(["grok"]),
+      roots,
+    );
+    expect(staged.providers[0]).toEqual({
+      provider: "grok",
+      files: 0,
+      bytes: 0,
+      skipped: { "login-withheld": 1 },
+    });
+  });
+
   test("a symlinked ancestor below the home entry is never followed", async () => {
     const { dataDir, roots, home, root } = await fixtureHome();
     await write(path.join(root, "elsewhere", "secret.md"), "SENTINEL-ELSEWHERE");

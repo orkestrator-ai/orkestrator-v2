@@ -1,7 +1,7 @@
 # Electron launch title check times out under heavy host load
 
 - **ID:** 0470
-- **Status:** resolved
+- **Status:** open
 - **Date observed:** 2026-10-18
 - **Tests:**
   - `real Electron main process shares one backend across independent windows`
@@ -106,3 +106,15 @@ Later title assertions (Window menu entries, nicknames) are unchanged.
 in 117.1 seconds. Host load was low (about 2), so that run shows no regression
 rather than proving the loaded case; reopen this entry if the startup title
 still misses 60 seconds under contention.
+
+
+## Reopened during design qualification main merge — 2026-10-21
+
+`ORKESTRATOR_AGENT_TEST_RUN_ID=merge-main-20261021-dab5ea29 mise run test:logged -- --name merge-electron -- mise run test:agent:electron` ran with one Playwright worker while repository/browser/Docker validation and other worktrees were active. Host load averages reached 132 on 18 logical cores.
+
+The suite reported 19 passed, one skipped and three failed, exit 1 in 1157.2 seconds. The independent-window and remote-nickname cases reached their 120-second test deadlines. Terminal resume received `Orkestrator AI` instead of `Orkestrator AI — DEV [electron-resume]` after the now-60-second startup-title deadline at line 155. This meets the recorded condition for reopening; the exact cause remains unproven. No assertion, deadline or skip changed.
+
+Evidence: `orkestrator-test-run.jYz5SO/merge-electron.log.gz` below the host temporary directory; sanitized results and traces under `output/agent-testing/merge-main-20261021-dab5ea29/electron/`.
+
+
+Owning-file rerun: `ORKESTRATOR_AGENT_TEST_RUN_ID=merge-main-electron-owner-dab5ea29 mise run test:logged -- --name merge-electron-owners -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts electron-main.spec.ts terminal-input-resume-electron.spec.ts --workers=1` reported two passed, one skipped and two failed, exit 1 in 382.8 seconds. Terminal resume passed unchanged; both independent-window and nickname cases again reached 120 seconds. Native main-window validation remains unresolved, without a new flaky classification for those test-deadline failures. Evidence: `orkestrator-test-run.pwITdf/merge-electron-owners.log.gz` below the host temporary directory and `output/agent-testing/merge-main-electron-owner-dab5ea29/electron/`.

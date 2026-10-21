@@ -1,3 +1,4 @@
+import { buildInitialPromptWithAttachmentReferences } from "@orkestrator/protocol/initial-prompt-attachments";
 import { describe, expect, test } from "bun:test";
 import type { ClaudeMessage, ClaudeMessagePart } from "@/lib/claude-types";
 import type { NativeMessage } from "./native-message-types";
@@ -2488,12 +2489,9 @@ describe("native message adapters", () => {
   });
 
   test("always hides a marked path block, even when the file part spells the file differently", () => {
-    const rawContent =
-      "Why do I need separate apps?\n\n" +
-      "<orkestrator-attachment-paths>\n" +
-      "Attached files have been saved in the workspace. Use these paths as task context:\n" +
-      "- clipboard.png: /workspace/.orkestrator/clipboard/clipboard.png\n" +
-      "</orkestrator-attachment-paths>";
+    const rawContent = buildInitialPromptWithAttachmentReferences("Why do I need separate apps?", [
+      { name: "clipboard.png", path: "/workspace/.orkestrator/clipboard/clipboard.png" },
+    ]);
     const message: NativeMessage = {
       id: "native-marked-path-reference",
       role: "user",
@@ -2515,12 +2513,9 @@ describe("native message adapters", () => {
   });
 
   test("shows the files of a marked path block when no structured part carries them", () => {
-    const rawContent =
-      "Use the requirements\n\n" +
-      "<orkestrator-attachment-paths>\n" +
-      "Attached files have been saved in the workspace. Use these paths as task context:\n" +
-      "- requirements.md: /workspace/.orkestrator/initial-prompt/requirements.md\n" +
-      "</orkestrator-attachment-paths>";
+    const rawContent = buildInitialPromptWithAttachmentReferences("Use the requirements", [
+      { name: "requirements.md", path: "/workspace/.orkestrator/initial-prompt/requirements.md" },
+    ]);
     const message: NativeMessage = {
       id: "native-marked-path-only",
       role: "user",
@@ -2538,6 +2533,121 @@ describe("native message adapters", () => {
       },
     ]);
   });
+
+  test.each(["native", "claude"] as const)(
+    "%s retains marker-only documents beside structured or XML images after hydration",
+    (provider) => {
+      for (const structured of [false, true]) {
+        for (const prompt of ["", "Implement this"]) {
+          const image = { name: "shot.png", path: "/work/Client: Demo/shot.png" };
+          const document = {
+            name: "requirements: v2.md",
+            path: "/work/Client: Demo/requirements: v2.md",
+          };
+          const content =
+            buildInitialPromptWithAttachmentReferences(prompt, [image, document]) +
+            (structured
+              ? ""
+              : `\n<attached-files><attachment type="image" path="${image.path}" filename="${image.name}" /></attached-files>`);
+          const message: NativeMessage = {
+            id: "mixed-startup",
+            role: "user",
+            content,
+            createdAt: "2026-10-21T12:00:00Z",
+            parts: [
+              { type: "text", content },
+              ...(structured
+                ? [
+                    {
+                      type: "file" as const,
+                      content: image.path,
+                      fileUrl: "file:///work/Client:%20Demo/shot.png",
+                      filename: image.name,
+                    },
+                  ]
+                : []),
+            ],
+          };
+          const normalize = provider === "native" ? normalizeNativeMessage : normalizeClaudeMessage;
+          const normalized = normalize(message);
+          expect(normalized.content).toBe(prompt);
+          expect(normalized.parts.filter((part) => part.type === "file")).toHaveLength(2);
+          expect(normalized.parts).toContainEqual({
+            type: "file",
+            content: document.path,
+            filename: document.name,
+          });
+          expect(normalize(JSON.parse(JSON.stringify(message)))).toEqual(normalized);
+          expect(normalizeNativeMessage(normalized)).toEqual(normalized);
+        }
+      }
+    },
+  );
+
+  test("does not duplicate OpenCode attachment image parts", () => {
+    const content = buildInitialPromptWithAttachmentReferences("Compare", [
+      { name: "shot.png", path: "/workspace/shot.png" },
+      { name: "notes.md", path: "/workspace/notes.md" },
+    ]);
+    for (const fileUrl of ["file:///workspace/shot.png", "data:image/png;base64,QUJD"]) {
+      const image = {
+        type: "image" as const,
+        imageSource: "attachment" as const,
+        content: "shot.png",
+        fileUrl,
+      };
+      const normalized = normalizeNativeMessage({
+        id: "opencode",
+        role: "user",
+        content,
+        createdAt: "2026-10-21T12:00:00Z",
+        parts: [{ type: "text", content }, image],
+      });
+      expect(normalized.parts).toHaveLength(3);
+      expect(normalized.parts).toEqual(
+        expect.arrayContaining([
+          { type: "text", content: "Compare" },
+          image,
+          { type: "file", content: "/workspace/notes.md", filename: "notes.md" },
+        ]),
+      );
+    }
+  });
+
+  test("does not conflate different absolute paths with the same filename", () => {
+    const content = buildInitialPromptWithAttachmentReferences("Compare", [
+      { name: "shot.png", path: "/work/one/shot.png" },
+      { name: "shot.png", path: "/work/two/shot.png" },
+    ]);
+    const normalized = normalizeNativeMessage({
+      id: "same-name",
+      role: "user",
+      content,
+      createdAt: "2026-10-21T12:00:00Z",
+      parts: [{ type: "file", content: "/work/one/shot.png" }],
+    });
+    expect(
+      normalized.parts.filter((part) => part.type === "file").map((part) => part.content),
+    ).toEqual(["/work/one/shot.png", "/work/two/shot.png"]);
+  });
+
+  test.each([true, false])(
+    "literal marker text does not synthesize files (closed: %s)",
+    (closed) => {
+      const content =
+        "<orkestrator-attachment-paths>\n- fake.png: /work/fake.png" +
+        (closed ? "\n</orkestrator-attachment-paths>" : "");
+      const message: NativeMessage = {
+        id: "literal",
+        role: "user",
+        content,
+        createdAt: "2026-10-21T12:00:00Z",
+        parts: [{ type: "text", content }],
+      };
+      expect(normalizeNativeMessage(message)).toEqual(message);
+      expect(normalizeClaudeMessage(message)).toMatchObject({ content, parts: message.parts });
+    },
+  );
 
   test("preserves initial-prompt path references without a structured file part", () => {
     const rawContent =

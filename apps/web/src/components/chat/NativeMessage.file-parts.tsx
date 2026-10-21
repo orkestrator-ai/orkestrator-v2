@@ -177,6 +177,7 @@ export function FilePart({
   const [gallery, setGallery] = useState<{ items: GalleryItem[]; index: number } | null>(null);
   const [imageSrc, setImageSrc] = useState<string | null>(() => readImagePreviewCache(cacheKey));
   const [loading, setLoading] = useState(false);
+  const [loadedImageSrc, setLoadedImageSrc] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<"unavailable" | "too-large" | null>(null);
   const imageLoadRef = useRef<Promise<string | null> | null>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -258,9 +259,13 @@ export function FilePart({
     }
     let cancelled = false;
 
-    void loadImage().then((source) => {
-      if (!cancelled && source) setImageSrc(source);
-    });
+    // Start the asynchronous read after effect setup, and skip it if the row
+    // unmounts before then. Loading state belongs to the read, not setup.
+    void Promise.resolve()
+      .then(() => (cancelled ? null : loadImage()))
+      .then((source) => {
+        if (!cancelled && source) setImageSrc(source);
+      });
 
     return () => {
       cancelled = true;
@@ -308,6 +313,7 @@ export function FilePart({
         onClick={handleClick}
         aria-label={`Open full image: ${displayName}`}
         aria-busy={loading}
+        data-image-presentation={showThumbnailTile ? "thumbnail" : "chip"}
         className={cn(
           "text-xs my-0 rounded-md border transition-colors",
           showThumbnailTile
@@ -322,6 +328,14 @@ export function FilePart({
             src={imageSrc}
             alt={`Thumbnail: ${displayName}`}
             referrerPolicy="no-referrer"
+            onLoad={() => {
+              setLoadedImageSrc(imageSrc);
+              setLoadError(null);
+            }}
+            onError={() => {
+              setLoadedImageSrc(null);
+              setLoadError("unavailable");
+            }}
             className="h-48 w-full bg-black/10 object-cover transition-transform duration-200 group-hover:scale-[1.02] motion-reduce:transition-none"
           />
         ) : showThumbnailTile ? (
@@ -331,7 +345,11 @@ export function FilePart({
         ) : (
           <ImageIcon className="w-3.5 h-3.5 text-muted-foreground" />
         )}
-        {showThumbnailTile && hideThumbnailCaption ? null : (
+        {showThumbnailTile &&
+        hideThumbnailCaption &&
+        loadedImageSrc === imageSrc &&
+        imageSrc &&
+        !loadError ? null : (
           <span
             className={cn(
               "font-mono truncate text-muted-foreground",

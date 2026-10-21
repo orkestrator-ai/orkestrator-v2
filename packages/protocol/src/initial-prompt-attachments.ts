@@ -30,7 +30,7 @@ const INITIAL_PROMPT_ATTACHMENT_REFERENCE_HEADING =
  * files it names already render as attachments. Wrapping it lets a transcript
  * remove it exactly, without guessing from the heading text.
  */
-const ATTACHMENT_REFERENCES_OPEN_TAG = "<orkestrator-attachment-paths>";
+const ATTACHMENT_REFERENCES_OPEN_TAG = '<orkestrator-attachment-paths source="orkestrator">';
 const ATTACHMENT_REFERENCES_CLOSE_TAG = "</orkestrator-attachment-paths>";
 const ATTACHMENT_REFERENCES_BLOCK = new RegExp(
   `\\s*${ATTACHMENT_REFERENCES_OPEN_TAG}\\n?([\\s\\S]*?)\\n?${ATTACHMENT_REFERENCES_CLOSE_TAG}`,
@@ -63,7 +63,9 @@ export function buildInitialPromptWithAttachmentReferences(
   if (attachments.length === 0) return trimmedPrompt;
 
   const references = attachments
-    .map((attachment) => `- ${attachment.name}: ${attachment.path}`)
+    // JSON preserves separators and line breaks in both fields. Escape markup so
+    // a filename cannot terminate the transport block.
+    .map(({ name, path }) => `- ${JSON.stringify({ name, path }).replace(/</g, "\\u003c")}`)
     .join("\n");
   const context =
     `${ATTACHMENT_REFERENCES_OPEN_TAG}\n` +
@@ -73,7 +75,7 @@ export function buildInitialPromptWithAttachmentReferences(
 }
 
 /**
- * Remove every marked path-reference block from transcript text.
+ * Remove every valid, source-qualified path-reference block from transcript text.
  *
  * Returns the text without the blocks and the attachments they named, so a
  * transcript with no structured file part can still show the files. Text with
@@ -88,14 +90,30 @@ export function extractMarkedAttachmentReferences(prompt: string): {
   const attachments: SavedInitialPromptAttachment[] = [];
   let found = false;
   const stripped = prompt.replace(ATTACHMENT_REFERENCES_BLOCK, (_block, body: string) => {
-    found = true;
-    for (const line of body.split("\n")) {
-      if (!line.startsWith("- ")) continue;
-      // A filename may contain ": "; the saved absolute path rarely does.
-      const separator = line.lastIndexOf(": ");
-      if (separator < 2) continue;
-      attachments.push({ name: line.slice(2, separator), path: line.slice(separator + 2) });
+    const lines = body.split("\n");
+    if (lines.shift() !== INITIAL_PROMPT_ATTACHMENT_REFERENCE_HEADING) return _block;
+    const references: SavedInitialPromptAttachment[] = [];
+    for (const line of lines) {
+      if (!line.startsWith("- ")) return _block;
+      try {
+        const reference: unknown = JSON.parse(line.slice(2));
+        if (
+          !reference ||
+          typeof reference !== "object" ||
+          !("name" in reference) ||
+          typeof reference.name !== "string" ||
+          !("path" in reference) ||
+          typeof reference.path !== "string"
+        )
+          return _block;
+        references.push({ name: reference.name, path: reference.path });
+      } catch {
+        return _block;
+      }
     }
+    if (references.length === 0) return _block;
+    found = true;
+    attachments.push(...references);
     return "";
   });
   return found ? { prompt: stripped.trim(), attachments } : { prompt, attachments: [] };

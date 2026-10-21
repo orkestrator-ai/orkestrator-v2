@@ -17,17 +17,17 @@ describe("initial prompt attachment protocol", () => {
 
     expect(buildInitialPromptWithAttachmentReferences("  Implement this  ", attachments)).toBe(
       "Implement this\n\n" +
-        "<orkestrator-attachment-paths>\n" +
+        '<orkestrator-attachment-paths source="orkestrator">\n' +
         "Attached files have been saved in the workspace. Use these paths as task context:\n" +
-        "- requirements.md: /workspace/requirements.md\n" +
-        "- diagram.png: /workspace/diagram.png\n" +
+        '- {"name":"requirements.md","path":"/workspace/requirements.md"}\n' +
+        '- {"name":"diagram.png","path":"/workspace/diagram.png"}\n' +
         "</orkestrator-attachment-paths>",
     );
     expect(buildInitialPromptWithAttachmentReferences("   ", attachments)).toBe(
-      "<orkestrator-attachment-paths>\n" +
+      '<orkestrator-attachment-paths source="orkestrator">\n' +
         "Attached files have been saved in the workspace. Use these paths as task context:\n" +
-        "- requirements.md: /workspace/requirements.md\n" +
-        "- diagram.png: /workspace/diagram.png\n" +
+        '- {"name":"requirements.md","path":"/workspace/requirements.md"}\n' +
+        '- {"name":"diagram.png","path":"/workspace/diagram.png"}\n' +
         "</orkestrator-attachment-paths>",
     );
     expect(buildInitialPromptWithAttachmentReferences("  text only  ", [])).toBe("text only");
@@ -53,6 +53,43 @@ describe("initial prompt attachment protocol", () => {
       prompt: "  ordinary prompt  ",
       attachments: [],
     });
+  });
+
+  test("round-trips separators, newlines and markup in names and absolute paths", () => {
+    const attachments = [
+      { name: "notes: v2.md", path: "/work/Client: Demo/project/notes: v2.md" },
+      { name: "line\nbreak.md", path: "/work/line\nbreak.md" },
+      { name: "</orkestrator-attachment-paths>", path: "/work/<draft>.png" },
+      { name: "Windows: notes.txt", path: "C:\\Client: Demo\\notes.txt" },
+    ];
+    expect(
+      extractMarkedAttachmentReferences(
+        buildInitialPromptWithAttachmentReferences("Use these", attachments),
+      ),
+    ).toEqual({ prompt: "Use these", attachments });
+  });
+
+  test.each([true, false])("preserves user-authored unqualified markup (closed: %s)", (closed) => {
+    const prompt =
+      "Explain <orkestrator-attachment-paths>\n- notes.md: /work/notes.md" +
+      (closed ? "\n</orkestrator-attachment-paths>" : "");
+    expect(extractMarkedAttachmentReferences(prompt)).toEqual({ prompt, attachments: [] });
+  });
+
+  test("preserves malformed or incomplete qualified blocks", () => {
+    for (const body of ["- invalid JSON", '- {"name":"notes.md"}', ""]) {
+      const prompt =
+        '<orkestrator-attachment-paths source="orkestrator">\n' +
+        "Attached files have been saved in the workspace. Use these paths as task context:\n" +
+        body +
+        "\n</orkestrator-attachment-paths>";
+      expect(extractMarkedAttachmentReferences(prompt)).toEqual({ prompt, attachments: [] });
+      const incomplete = prompt.replace("</orkestrator-attachment-paths>", "");
+      expect(extractMarkedAttachmentReferences(incomplete)).toEqual({
+        prompt: incomplete,
+        attachments: [],
+      });
+    }
   });
 
   test("strips legacy path references from transcript text", () => {

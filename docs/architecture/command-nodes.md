@@ -1,11 +1,13 @@
 # Command nodes and leaf nodes
 
-Status: **Target architecture (agreed 2026-10-21, decisions refined the same day; not yet implemented).** This
+Status: **Target architecture (agreed 2026-10-21, decisions refined the same day; being built).** This
 is the objective for multi-machine Orkestrator. It supersedes the
 "independent backends, client-side federation" direction in
 [`docs/temp/remote.md`](../temp/remote.md) and the client-side design
 described in [federation.md](federation.md). Where those documents conflict
-with this one, this one wins. Open decisions are listed at the end.
+with this one, this one wins. Open decisions are listed at the end. The build plan, contracts and the
+requirement matrix used to verify the build are in
+[command-nodes-plan.md](../development/command-nodes-plan.md).
 
 ## Summary
 
@@ -123,7 +125,8 @@ There is no deeper hierarchy.
 
 - Stored in the command node's backend: node identity (installation ID),
   display profile (name, colour), routes (HTTPS/Tailscale and SSH), the
-  leaf's gateway credential (encrypted at rest with the host's secret store),
+  leaf's gateway credential (in the backend's sensitive store, never sent to
+  clients; OS-keychain encryption is a later hardening),
   route preference and enable/disable state.
 - Every route is verified with the authenticated hello before use; identity
   mismatches and host-key or certificate failures are blocked, not bypassed
@@ -281,14 +284,18 @@ selected files across every node that has the project:
 
 ## Security
 
-- Leaf credentials live only on the command node's backend (encrypted at
-  rest). Clients never receive them.
+- Leaf credentials live only on the command node's backend, in its
+  sensitive store (0600, secure-delete database). Clients never receive
+  them.
 - A command node has **full control** of its leaves to begin with.
   Finer-grained permissions (for example read-only access) are a later
   addition.
-- Data-plane grants for direct streams are short-lived, scoped to one
-  environment and one stream (one terminal session, one preview, one
-  download), and revocable; they are not the leaf's gateway token.
+- Data-plane grants for direct streams are short-lived, revocable and
+  never the leaf's gateway token, and they cannot be used for
+  administration (token rotation, attachment, grants, registry). The first
+  version is a workspace grant: one leaf, one controller and one client
+  session. Narrowing to one environment and one stream (one terminal
+  session, one preview, one download) is a later hardening.
 - Leaves still enforce their own approval and execution policies.
 - Closing a connection, hiding a node, detaching or forgetting a node never
   stops remote work. Unknown outcomes after a lost connection are recorded

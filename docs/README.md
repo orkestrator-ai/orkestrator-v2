@@ -42,7 +42,7 @@ deleted once their behaviour is in a living doc; git history keeps them. The
 | [control-mcp.md](architecture/control-mcp.md) | Control MCP operator guide. |
 | [mcp-management.md](architecture/mcp-management.md) | Per-provider MCP server management: sources, precedence, safe writes, secrets, apply states, evidence. |
 | [remote-gateway.md](architecture/remote-gateway.md) | Standalone backend, Tailscale Serve, flags, troubleshooting. |
-| [command-nodes.md](architecture/command-nodes.md) | **Target multi-machine architecture:** command nodes (registry, portal, cross-node coordinators, mail, files) and leaf nodes; control plane via the command node, terminal/preview streams direct where reachable; open decisions. |
+| [command-nodes.md](architecture/command-nodes.md) | **Target multi-machine architecture:** command nodes (registry, portal, cross-node coordinators, mail, files) and leaf nodes; control plane via the command node, agent chat, terminals and previews direct from client to leaf where reachable. |
 | [federation.md](architecture/federation.md) | Transitional client-side multi-machine federation on this branch, being reworked into command nodes: identities, hello handshake, machine profile and colours, routes/fallback, realm-based panels, known limitations, acceptance-ID map. |
 | [host-updates.md](architecture/host-updates.md) | Maintaining the backend's computer from any client: Orkestrator updates (desktop app or standalone service; now or when idle; cancel; 60 s countdown; restart reconciliation; rollback), toolchain repair, gh channel, container image, UI and CLI. Remaining work: [remote-host-upgrades.md](todo/remote-host-upgrades.md). |
 | [public-cli.md](architecture/public-cli.md) | `orkestrator` client commands: backend selection, JSON/exit contract, request keys and retention, lifecycle waits, settings, sessions, request-specific completion, exec, scenarios. |
@@ -67,6 +67,7 @@ deleted once their behaviour is in a living doc; git history keeps them. The
 
 | Document | Notes |
 | --- | --- |
+| [command-nodes-plan.md](development/command-nodes-plan.md) | Build plan for command nodes: contracts, milestones, requirement matrix with evidence and status, and the final verification procedure. |
 | [testing-guide.md](development/testing-guide.md) | How to choose and run tests. Commands live here. |
 | [agent-testing.md](development/agent-testing.md) | Isolated profiles and real-stack QA. |
 | [cli-testing.md](development/cli-testing.md) | Driving a `dev:test` profile with the `orkestrator` CLI: setup from a worktree, scripting output, recipes, UI rehydration checks. Contract stays in `public-cli.md`. |

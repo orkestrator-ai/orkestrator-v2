@@ -121,7 +121,7 @@ export function resolveEnvironmentAgentActivity(
  * desktop context menu and the mobile actions dropdown, so an action added
  * here cannot be missing from one surface.
  */
-type EnvironmentMenuItem =
+export type EnvironmentMenuItem =
   | { key: string; separator: true }
   | {
       key: string;
@@ -145,7 +145,7 @@ type MenuItemComponent = ComponentType<{
 type MenuSeparatorComponent = ComponentType<Record<never, never>>;
 
 /** Renders `items` with whichever menu primitive the calling surface uses. */
-function EnvironmentMenuItems({
+export function EnvironmentMenuItems({
   items,
   Item,
   Separator,

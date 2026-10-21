@@ -419,13 +419,15 @@ export class NodeReadModel {
           const list = Array.isArray(raw) ? raw : [];
           const environments = list
             .slice(0, MAX_SUMMARY_ENVIRONMENTS_PER_PROJECT)
-            .flatMap((entry) => {
+            .flatMap((entry, index) => {
               const environment =
                 entry && typeof entry === "object"
-                  ? toNodeEnvironmentSummary(nodeId, entry as Record<string, unknown>)
+                  ? toNodeEnvironmentSummary(nodeId, entry as Record<string, unknown>, index)
                   : null;
               return environment ? [environment] : [];
-            });
+            })
+            // The node's own sidebar order; its storage order is creation order.
+            .sort((a, b) => a.order - b.order);
           results.set(projectId, {
             environments,
             truncated: list.length > MAX_SUMMARY_ENVIRONMENTS_PER_PROJECT,

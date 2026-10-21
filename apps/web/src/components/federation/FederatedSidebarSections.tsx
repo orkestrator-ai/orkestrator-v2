@@ -1,6 +1,4 @@
-import { openMachineWorkspace } from "@/lib/federation/open-workspace";
 import { useState, type ReactNode } from "react";
-import { toast } from "sonner";
 import { ChevronDown, ChevronRight, FolderGit2, Plus, WifiOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -11,13 +9,12 @@ import {
   type MachineView,
   type ProjectGroup,
 } from "@/lib/federation/aggregate";
-import { createFederatedEnvironment } from "@/lib/federation/federated-actions";
-import { OutcomeUnknownError } from "@/lib/portal/portal-store";
 import { cn } from "@/lib/utils";
-import { useFederation } from "./FederationProvider";
 import { FederatedEnvironmentRow } from "./FederatedEnvironmentRow";
 import { MachineDot, machineStatusText } from "./MachineDot";
+import { RemoteMachineTree } from "./RemoteMachineTree";
 import { UnknownOutcomesNotice } from "./UnknownOutcomesNotice";
+import { useCreateFederatedEnvironment } from "./useFederatedEnvironmentActions";
 
 /** A machine heading: colour, name and its connection state, never activity. */
 export function MachineSectionHeader({
@@ -82,39 +79,10 @@ function ProjectInstance({
   group: ProjectGroup;
   showMachineLabel: boolean;
 }) {
-  const { portal } = useFederation();
-  const openPanel = openMachineWorkspace;
   const [collapsed, setCollapsed] = useState(false);
-  const [creating, setCreating] = useState(false);
   const { machine, project, environments } = group;
+  const { creating, create } = useCreateFederatedEnvironment(machine, project);
   const writable = isMachineWritable(machine) && !machine.bound;
-
-  const create = async () => {
-    // The project instance's own machine; there is no placement.
-    const ref = project.ref;
-    setCreating(true);
-    try {
-      const environment = await createFederatedEnvironment(portal, ref);
-      openPanel({
-        connectionId: machine.connectionId,
-        projectId: ref.projectId,
-        environmentId: environment.id,
-        title: project.name,
-      });
-    } catch (error) {
-      if (error instanceof OutcomeUnknownError) {
-        toast.warning(`Create environment: outcome unknown on ${machine.name}`, {
-          description: error.message,
-        });
-      } else {
-        toast.error(`Could not create an environment on ${machine.name}`, {
-          description: error instanceof Error ? error.message : String(error),
-        });
-      }
-    } finally {
-      setCreating(false);
-    }
-  };
 
   return (
     <div className="py-0.5" data-testid="federated-project" data-project={project.key}>
@@ -206,7 +174,7 @@ function MachineNotices({ machine }: { machine: MachineView }) {
   return notices.length > 0 ? <>{notices}</> : null;
 }
 
-/** Another machine's projects and environments, in that backend's order. */
+/** Another machine's projects and environments, laid out as its own sidebar lays them out. */
 export function RemoteMachineSection({ machine }: { machine: MachineView }) {
   const [collapsed, setCollapsed] = useState(false);
   return (
@@ -229,9 +197,7 @@ export function RemoteMachineSection({ machine }: { machine: MachineView }) {
           ) : machine.projects.length === 0 ? (
             <p className="px-3 py-2 text-xs text-muted-foreground">No projects</p>
           ) : (
-            groupByProject([machine]).map((group) => (
-              <ProjectInstance key={group.project.key} group={group} showMachineLabel={false} />
-            ))
+            <RemoteMachineTree machine={machine} />
           )}
         </div>
       ) : null}

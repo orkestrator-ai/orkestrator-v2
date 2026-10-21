@@ -52,14 +52,16 @@ or a leaf directly if the user chooses.
    environments, agent processes, approvals, files, Git operations and
    durable records. The command node controls and observes them; it does not
    take them over, copy their databases or migrate their work.
-3. **Control plane through the command node; data plane direct where
-   possible.** Commands, state, events, coordinator traffic, mail and file
-   transfer go through the command node. High-bandwidth interactive streams
-   (terminals, web previews) go **directly from the leaf to the client**
-   whenever the client can reach the leaf, authorised by a short-lived,
-   narrowly scoped grant the command node obtains from the leaf. Relaying a
-   stream through the command node is the fallback when the client cannot
-   reach the leaf.
+3. **The command node is the registry and the coordinator; the leaf talks
+   to the user directly.** The command node knows every node, keeps the
+   aggregated view, routes commands and coordinator messages, and runs file
+   transfer. Interaction with a leaf environment — agent chat, terminals
+   and web previews — goes **directly between the client and the leaf**
+   whenever the client can reach it, authorised by a short-lived, narrowly
+   scoped grant the command node obtains from the leaf. The command node can
+   see that chat (it reads the leaf's transcripts) but does not sit in the
+   middle of it. Relaying through the command node is the fallback when the
+   client cannot reach the leaf, and the client shows which path is in use.
 4. **The command node dials out.** It connects to each leaf over
    HTTPS/Tailscale or a managed SSH route, using the leaf's gateway
    credentials stored on the command node. A leaf records which command
@@ -88,9 +90,10 @@ There is no deeper hierarchy.
   commands anything (and is the natural command node by default).
 - **A node is either commanding or subordinate, never both.** When a node
   that has its own subordinates is attached to another command node, it
-  becomes a leaf: it suspends its command activity (stops controlling its
-  own subordinates and stops its cross-node coordinator activity), because
-  coordination belongs with the top-level command node. Its own projects,
+  switches to **leaf mode**: it stops controlling its own subordinates and
+  its coordinators stop acting as cross-node coordinators, because
+  coordination belongs with the top-level command node (see
+  [Leaf mode](#leaf-mode)). Its own projects,
   environments and agents keep running and are controlled by the command
   node above it. Its suspended registry is not exposed to the controller;
   the controller sees only that node's own projects and environments.
@@ -163,6 +166,24 @@ Updates that have a single destination are routed intelligently:
   outbox until a command node collects it; it is not dropped or sent to a
   different command node silently.
 
+## Leaf mode
+
+A command node attached to another command node operates in leaf mode:
+
+- Its coordinators know they are in leaf mode. Their context says the node
+  is subordinate to the named command node, and their cross-node tools
+  (controlling other nodes, creating environments elsewhere, file transfer
+  to other nodes) are unavailable. If one receives a message, it handles it
+  as an agent on a leaf would — acting on its own node and replying — and
+  does not start acting as a command node.
+- Its coordinator conversations are kept, because they may hold important
+  information, but they are mostly hidden: the portal and the node's own UI
+  do not show them by default. They can be opened behind a warning that the
+  node is in leaf mode and that coordination happens on the named command
+  node.
+- When the node is no longer attached anywhere, it returns to being a
+  command node and its coordinators regain their cross-node tools.
+
 ## Portal (aggregated interface)
 
 - The command node keeps a live read model of every connected node's
@@ -175,22 +196,34 @@ Updates that have a single destination are routed intelligently:
 - Each environment shows its node's colour dot before its name. Unavailable
   nodes keep their last-known state, labelled, with writes disabled.
 
-## Agent chat through the command node
+## Agent chat and the coordinator
 
-Agent chat (transcripts, streaming responses, prompts, approvals and
-questions) goes through the command node, not directly from the leaf:
+An agent in a leaf environment has two separate conversations:
 
-- It is control traffic, not bulk data: structured, moderate in volume and
-  already bounded by transcript windows and paging.
-- The command node must see it anyway: it aggregates attention (waiting,
-  approvals), routes mail between coordinators and agents, and enforces
-  approval rules. One path keeps approvals arbitrated in one place and
-  avoids a second, divergent client connection to the leaf.
-- The added hop is small on a tailnet compared with model latency.
+- **With the user, directly.** The client opens the environment's agent
+  chat straight to the leaf (transcripts, streaming responses, prompts,
+  approvals and questions), using a scoped grant from the command node. The
+  leaf arbitrates its own approvals exactly as it does today.
+- **With the coordinator, by message.** The two never share a chat.
+  - When the agent needs to tell the coordinator something, it sends a
+    message. The leaf routes it to the right command node (see
+    [Updates from leaves](#updates-from-leaves)).
+  - When the coordinator needs the agent, it either **reads directly** —
+    a read-only link to the environment's transcripts, activity and state,
+    to see what it is doing — or **sends it a message**. A message arrives
+    as an ordinary incoming message: the agent processes it, which may
+    change what it is doing and may lead it to send a message back.
 
-Large binary content attached to chat (images, artifact files, downloads)
-can use the direct data path with a scoped grant, like terminals and
-previews, so it does not pass through the command node.
+The command node can see any leaf chat through the same read-only link, so
+the portal can show attention (waiting, approvals) and coordinators can
+follow progress, without relaying the conversation.
+
+### Showing the connection path
+
+The environment's info panel (the one that shows context, usage and runtime
+details) shows how the client is connected to that environment: direct to
+the leaf or relayed through the command node, the route in use (for example
+Tailscale HTTPS or SSH via the command node), and the node it belongs to.
 
 ## Coordinators
 
@@ -204,11 +237,11 @@ Coordinators run on the top-level command node only. A coordinator can:
   deletes an environment on its own initiative. The user may ask for it in
   the coordinator chat; the deletion then goes through an explicit
   confirmation that names the node and the environment.
-- **Send and receive mail** with agents in environments on every connected
-  node. Mail addresses are node-qualified; the command node routes mail to
-  and from leaves.
-- **Interrogate** any environment on any connected node: status, activity,
-  transcripts, diffs, files, test results.
+- **Message** agents in environments on every connected node, and receive
+  their messages. Mail addresses are node-qualified; the command node
+  delivers the coordinator's messages to the leaf and collects replies.
+- **Interrogate** any environment on any connected node through a direct
+  read-only link: status, activity, transcripts, diffs, files, test results.
 - **Transfer files** to and from environments on connected nodes through a
   bounded, audited file-transfer framework (no content in logs).
 
@@ -228,7 +261,23 @@ boundary on their own checkout.
   Where the leaf's project has none (for example a project newly added from
   its git remote), they are copied from the command node's project root as
   part of environment setup, using the same per-project file selection.
+- If both have a selected file, **the leaf's copy wins**.
 - File contents are never written to logs, receipts or transcripts.
+
+### Comparing and updating project files across leaves
+
+Coordinators get project-level tools for the project's `.env` and other
+selected files across every node that has the project:
+
+- **Compare:** for each node, which selected files exist and how they differ
+  from the command node's copy — files missing or extra, and for `.env`
+  files the keys added, removed or changed. Values are shown as "differs" or
+  "same" (compared by fingerprint), not as plain text, so secrets do not
+  enter the coordinator's model context or transcripts.
+- **Update:** push the command node's version of chosen files (or chosen
+  keys) to some or all nodes in one action. Content is copied node to node
+  by the file-transfer framework without passing through the model, and the
+  user approves the update, which lists the nodes and files.
 
 ## Security
 
@@ -259,10 +308,14 @@ command node:
   fallback and epochs (today `ConnectionManager`), the OpenSSH tunnel
   supervisor (today in Electron main), and the per-node read model (today
   renderer `BackendRuntime`s).
-- **Removed:** renderer-side multi-backend runtimes and registry, panels as
-  separate renderer realms, hosted-browser direct machine sessions, and the
-  client-owned machine catalogue (clients keep only their list of command
-  nodes).
+- **Reworked:** machine panels (a workspace bound to one leaf, talking to it
+  directly) become how a client opens a leaf environment's chat, terminals
+  and previews. They are authorised by scoped grants from the command node
+  instead of credentials the client holds, and fall back to a relay through
+  the command node when the leaf is unreachable.
+- **Removed:** renderer-side multi-backend runtimes and registry, the
+  client-owned machine catalogue (clients keep only their list of targets),
+  and clients holding other nodes' gateway tokens.
 
 ## Delivery outline
 
@@ -288,22 +341,21 @@ command node:
 | --- | --- |
 | Leaf with several command nodes | Allowed. The leaf tracks attachments and the most recent contact and routes single-destination updates accordingly. Direct connection to a leaf stays possible. |
 | What makes a command node | Having subordinate nodes registered. A setting exposes registration; the desktop always has it. |
-| Agent chat | Through the command node; large binary attachments may use the direct data path. |
+| Agent chat | Direct between client and leaf; the command node can read it. Coordinator and agent communicate by message, or the coordinator reads the agent's transcript directly. |
+| Fallback | Relaying through the command node is acceptable when the client cannot reach the leaf; the info panel shows the path in use. |
+| Selected files on both | The leaf's copy wins; coordinators can compare and update project files across leaves. |
+| Command node in leaf mode | Coordinators know they are in leaf mode and lose cross-node tools; their conversations stay accessible behind a warning. |
 | Leaf permissions | Full control first; permissions later. |
 | Deleting environments | Only on the user's request, which may come through coordinator chat, always with an explicit confirmation. |
 | Files for leaf environments | Same as local environments: worktree or container, then `.env` and selected files copied from the project root (the leaf's, else the command node's). |
-| Hierarchy | Two levels only. A command node attached to another becomes a leaf and suspends its command and coordinator activity. |
+| Hierarchy | Two levels only. A command node attached to another becomes a leaf (leaf mode). |
 | Dial direction | The command node dials out to its leaves. |
 | Projects on leaves | Created only with user approval and an explicit location. |
 
 ## Open decisions
 
-1. When a client cannot reach a leaf directly (for example iOS off the
-   tailnet), is relaying terminals and previews through the command node an
-   acceptable fallback? Assumed: yes.
-2. If both the leaf's project root and the command node's project root have
-   a selected file, which copy wins? Assumed: the leaf's.
-3. What should the user see on a node whose command activity is suspended
-   because it was attached to another command node, and should its own
-   coordinator conversations be paused or left read-only?
+1. Should a coordinator ever be able to see `.env` values in plain text
+   (for example when the user explicitly asks), or only fingerprint-level
+   differences? Assumed: fingerprints only by default; plain text only on an
+   explicit user request in that conversation.
 

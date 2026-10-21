@@ -64,9 +64,11 @@ node, exchange mail with agents on them, and transfer files to and from them.
 Creating a project on a leaf needs the user's approval; environments on a
 leaf get the project's `.env` and selected files the same way local
 environments do. A coordinator deletes environments only when the user asks,
-with an explicit confirmation. Coordinators run only on the top-level command
-node: a command node attached to another one suspends its coordinator
-activity.
+with an explicit confirmation. A coordinator talks to a leaf agent by message, or reads its transcript
+directly; the user chats with that agent directly. Coordinators run only on
+the top-level command node: a command node attached to another one runs in
+leaf mode, where its coordinators lose cross-node tools and their
+conversations are hidden behind a warning.
 
 ## One main coordinator, and side agents
 

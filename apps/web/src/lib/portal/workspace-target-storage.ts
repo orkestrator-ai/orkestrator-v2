@@ -32,6 +32,6 @@ export function writeStoredWorkspace(workspace: LeafWorkspace | null): void {
     if (workspace) window.sessionStorage.setItem(TARGET_KEY, JSON.stringify(workspace));
     else window.sessionStorage.removeItem(TARGET_KEY);
   } catch {
-    // Without session storage the tab stays on the command node.
+    throw new Error("Could not save the workspace target in this tab");
   }
 }

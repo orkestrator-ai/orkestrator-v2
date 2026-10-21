@@ -23,7 +23,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -162,8 +162,12 @@ async function seed(node: Node, project: string, environment: string): Promise<S
     ]),
     repoDir,
   );
+  const originPath = path.join(node.dir, "repos", `${project}.git`);
+  await run("git", ["init", "--bare", "-b", "main", originPath], node.dir);
+  await run("git", ["remote", "add", "origin", originPath], repoDir);
+  await run("git", ["push", "-u", "origin", "main"], repoDir);
   const created = await invoke<{ id: string }>(node, "add_project", {
-    gitUrl: `https://github.com/acme/${project}.git`,
+    gitUrl: originPath,
     localPath: repoDir,
   });
   const env = await invoke<{ id: string }>(node, "create_environment", {
@@ -253,6 +257,8 @@ async function main(): Promise<void> {
     try {
       const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
       const page = await context.newPage();
+      page.on("pageerror", (error) => log("renderer error:", error.message.slice(0, 300)));
+
       const requests: string[] = [];
       context.on("request", (request) => {
         const url = new URL(request.url());
@@ -260,8 +266,19 @@ async function main(): Promise<void> {
       });
       await page.goto(`${origin(desk)}/`);
       await page.fill("#token", desk.token);
-      await Promise.all([page.waitForNavigation(), page.keyboard.press("Enter")]);
-      await page.waitForSelector('[data-testid="project-search-bar"]', { timeout: 30_000 });
+      await Promise.all([
+        page.waitForNavigation({ waitUntil: "domcontentloaded" }),
+        page.keyboard.press("Enter"),
+      ]);
+      await page
+        .waitForSelector('[data-testid="project-search-bar"]', { timeout: 30_000 })
+        .catch(async (error) => {
+          await page.screenshot({
+            path: path.join(out, "startup-failure.png"),
+            mask: [page.locator("#token")],
+          });
+          throw error;
+        });
       await dismissStartupPrompts(page);
 
       const leafRow = `[data-testid="federated-environment-row"][data-machine="${leafId}"]`;
@@ -271,7 +288,7 @@ async function main(): Promise<void> {
       // Opening Leaf's environment moves the tab itself to Leaf.
       requests.length = 0;
       await Promise.all([
-        page.waitForNavigation({ timeout: 30_000 }),
+        page.waitForNavigation({ timeout: 30_000, waitUntil: "domcontentloaded" }),
         page.click(`${leafRow} button >> nth=0`),
       ]);
       await page.waitForSelector('[data-testid="project-search-bar"]', { timeout: 30_000 });
@@ -317,16 +334,32 @@ async function main(): Promise<void> {
         (list) =>
           list.some(
             (entry) =>
-              entry.id === leafEnvironment && (entry.status !== "stopped" || !!entry.worktreePath),
+              entry.id === leafEnvironment && entry.status === "running" && !!entry.worktreePath,
           ),
       );
       log(
         `Leaf environment: ${JSON.stringify(started.find((entry) => entry.id === leafEnvironment)?.status)}`,
       );
 
+      // Work and a pending input remain owned by Leaf while the tab is on Desk.
+      const terminal = await invoke<{ sessionId: string }>(leaf, "create_local_terminal_session", {
+        environmentId: leafEnvironment,
+        terminalKey: "leaf-background-check",
+        cols: 80,
+        rows: 24,
+        trackEnvironmentActivity: true,
+      });
+      await invoke(leaf, "start_local_terminal_session", { sessionId: terminal.sessionId });
+      const gate = path.join(leaf.dir, "finish-background");
+      const quotedGate = "'" + gate.replaceAll("'", "'\\''") + "'";
+      await invoke(leaf, "local_terminal_write", {
+        sessionId: terminal.sessionId,
+        data: `while [ ! -f ${quotedGate} ]; do sleep 0.1; done; printf 'leaf-background-finished\\n'; read -r qa_reply; printf 'leaf-input-%s\\n' "$qa_reply"\n`,
+      });
+
       // Opening Desk's environment moves the tab back.
       await Promise.all([
-        page.waitForNavigation({ timeout: 30_000 }),
+        page.waitForNavigation({ timeout: 30_000, waitUntil: "domcontentloaded" }),
         page.click(`${deskRow} button >> nth=0`),
       ]);
       await page.waitForSelector('[data-testid="project-search-bar"]', { timeout: 30_000 });
@@ -351,12 +384,85 @@ async function main(): Promise<void> {
           list.some(
             (entry) =>
               entry.id === deskSeed.environmentId &&
-              (entry.status !== "stopped" || !!entry.worktreePath),
+              entry.status === "running" &&
+              !!entry.worktreePath,
           ),
       );
       log(
         `back on Desk; its environment: ${JSON.stringify(deskStarted.find((entry) => entry.id === deskSeed.environmentId)?.status)}`,
       );
+      await dismissStartupPrompts(page);
+      await writeFile(gate, "finish");
+      const finishedLine = (output: string, text: string) =>
+        output.split(/\r?\n/).some((line) => line.trim() === text);
+      await until(
+        "Leaf finishes in background and waits for input",
+        () =>
+          invoke<{ output: string }>(leaf, "get_terminal_output_snapshot", {
+            sessionId: terminal.sessionId,
+          }),
+        (snapshot) => finishedLine(snapshot.output, "leaf-background-finished"),
+      );
+      await invoke(leaf, "set_environment_unread", {
+        environmentId: leafEnvironment,
+        unread: true,
+      });
+      await Promise.all([
+        page.waitForNavigation({ waitUntil: "domcontentloaded" }),
+        page.click(`${leafRow} button >> nth=0`),
+      ]).catch(async (error) => {
+        await page.screenshot({ path: path.join(out, "return-leaf-failure.png") });
+        log("return notices:", await page.locator("[data-sonner-toast]").allTextContents());
+        throw error;
+      });
+      await page.waitForSelector('[data-testid="project-search-bar"]');
+      await dismissStartupPrompts(page);
+      await page.reload();
+      await page.waitForSelector('[data-testid="project-search-bar"]');
+      await dismissStartupPrompts(page);
+      const rehydrated = await page.evaluate(async (sessionId) => {
+        return window.orkestrator!.invoke<{ output: string; mode: string }>(
+          "get_terminal_state_snapshot",
+          { sessionId },
+        );
+      }, terminal.sessionId);
+      if (!rehydrated || !rehydrated.output.includes("leaf-background-finished"))
+        fail("background transcript did not rehydrate");
+      // Pending terminal input is still actionable after returning and reloading.
+      await page.evaluate(async (sessionId) => {
+        await window.orkestrator!.invoke("local_terminal_write", { sessionId, data: "resumed\n" });
+      }, terminal.sessionId);
+      await until(
+        "rehydrated input control works",
+        () =>
+          invoke<{ output: string }>(leaf, "get_terminal_output_snapshot", {
+            sessionId: terminal.sessionId,
+          }),
+        (snapshot) => finishedLine(snapshot.output, "leaf-input-resumed"),
+      );
+      const returnedEnvironment = await page.evaluate(
+        async (environmentId) =>
+          window.orkestrator!.invoke<{ status: string }>("get_environment", { environmentId }),
+        leafEnvironment,
+      );
+      if (returnedEnvironment.status === "stopped") fail("Leaf work stopped while inactive");
+      await invoke(leaf, "close_local_terminal_session", { sessionId: terminal.sessionId });
+      log("background status, transcript and pending input survived switch and reload");
+
+      // Removing the only registered leaf must leave Desk's return path usable.
+      await invoke(desk, "forget_node", { nodeId: leafId });
+      await page.waitForSelector(deskRow, { timeout: 30_000 });
+      await page.reload();
+      await page.waitForSelector(deskRow, { timeout: 30_000 });
+      await dismissStartupPrompts(page);
+      await Promise.all([
+        page.waitForNavigation({ waitUntil: "domcontentloaded" }),
+        page.click(`${deskRow} button >> nth=0`),
+      ]);
+      await page.waitForSelector('[data-testid="project-search-bar"]');
+      if (await page.evaluate(() => Boolean(window.orkestratorWorkspaceTarget)))
+        fail("return after final leaf removal failed");
+      log("final leaf removal kept a working command-node return route");
       log(`PASS — screenshots in ${path.relative(repo, out)}`);
     } finally {
       await browser.close();

@@ -72,8 +72,6 @@ const SUMMARY_READ_CONCURRENCY = 4;
 const REFRESH_DEBOUNCE_MS = 250;
 const PERSIST_DEBOUNCE_MS = 5_000;
 const MAX_PERSISTED_BYTES = 2 * 1024 * 1024;
-/** Self-summary changes are announced only while a client has asked for them recently. */
-const SELF_WATCH_MS = 10 * 60_000;
 
 interface NodeState {
   nodeId: BackendId;
@@ -109,8 +107,7 @@ export class NodeReadModel {
     summary: SelfNodeSummary | null;
     stale: boolean;
     reading: Promise<SelfNodeSummary | null> | null;
-    watchedUntil: number;
-  } = { id: null, summary: null, stale: true, reading: null, watchedUntil: 0 };
+  } = { id: null, summary: null, stale: true, reading: null };
 
   constructor(
     private readonly options: {
@@ -191,8 +188,8 @@ export class NodeReadModel {
 
   /**
    * A local change that may alter the self summary. Announced as a summary
-   * change of this node only while some client is watching it, so a client
-   * on this node's own workspace is not made to re-read for nothing.
+   * change once self summaries have been requested. Notifications are cheap
+   * invalidations; reads remain demand-driven and reconnect reads reconcile gaps.
    */
   noteLocalEvent(event: string, payload: unknown): void {
     if (event === RESOURCE_CHANGED_EVENT) {
@@ -202,7 +199,7 @@ export class NodeReadModel {
       return;
     }
     this.self.stale = true;
-    if (this.self.id && this.now() < this.self.watchedUntil) this.noteChanged(this.self.id);
+    if (this.self.id) this.noteChanged(this.self.id);
   }
 
   private now(): number {
@@ -212,7 +209,6 @@ export class NodeReadModel {
   private readSelf(): Promise<SelfNodeSummary | null> {
     const local = this.options.local;
     if (!local) return Promise.resolve(null);
-    this.self.watchedUntil = this.now() + SELF_WATCH_MS;
     if (this.self.summary && !this.self.stale) return Promise.resolve(this.self.summary);
     if (this.self.reading) return this.self.reading;
     // Cleared before reading, so a change during the read marks it stale again.
@@ -236,6 +232,12 @@ export class NodeReadModel {
           const result = environments.get(project.ref.projectId);
           if (!result) {
             this.self.stale = true;
+            truncated = true;
+            rows.push(
+              ...(this.self.summary?.environments.filter(
+                (row) => row.projectId === project.ref.projectId,
+              ) ?? []),
+            );
             continue;
           }
           truncated ||= result.truncated;

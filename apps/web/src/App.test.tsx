@@ -1726,6 +1726,64 @@ describe("App Docker availability", () => {
     }
   });
 
+  test.each([false, true])(
+    "a leaf from Local bypasses missing or failed host permissions (probe error: %s)",
+    async (probeError) => {
+      const originalOrkestrator = window.orkestrator;
+      const getMacOsStatus = mock(async () => ({
+        ...(probeError ? { error: "probe failed" } : {}),
+        supported: true,
+        missing: [
+          {
+            id: "documents" as const,
+            label: "Documents folder",
+            settingsPane: "files-and-folders" as const,
+            required: true,
+          },
+        ],
+      }));
+      window.orkestrator = {
+        permissions: { getMacOsStatus, openMacOsSettings: async () => undefined },
+        listen: () => () => undefined,
+        connections: {
+          list: async () => ({
+            activeConnectionId: "local",
+            localAvailable: true,
+            connections: [
+              {
+                id: "local",
+                name: "Remote",
+                address: "https://gateway.example",
+                kind: "remote",
+                active: true,
+                requiresToken: false,
+              },
+            ],
+          }),
+        } as NonNullable<Window["orkestrator"]>["connections"],
+        window: {
+          startDragging: async () => undefined,
+          setZoomFactor: async () => false,
+        },
+      } as unknown as NonNullable<Window["orkestrator"]>;
+
+      try {
+        window.orkestratorWorkspaceTarget = { nodeId: "bk_leaf", nodeName: "Leaf", path: "relay" };
+        resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+        render(<App />);
+
+        await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(1));
+        expect(getMacOsStatus).not.toHaveBeenCalled();
+        expect(screen.queryByText("macOS File Access") === null).toBe(true);
+        expect(screen.getByTestId("app-shell")).toBeTruthy();
+      } finally {
+        cleanup();
+        window.orkestrator = originalOrkestrator;
+        delete window.orkestratorWorkspaceTarget;
+      }
+    },
+  );
+
   test.each([
     { nickname: "Studio", displayName: "Studio" },
     { nickname: undefined, displayName: "gateway-host" },

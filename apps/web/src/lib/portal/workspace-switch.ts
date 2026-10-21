@@ -10,7 +10,7 @@
  * the portal channel.
  */
 
-import { portalInvoke, workspaceTarget } from "./portal-transport";
+import { portalInvoke } from "./portal-transport";
 import { readStoredWorkspace, writeStoredWorkspace } from "./workspace-target-storage";
 import { closeLeafWorkspace, keepWorkspaceAlive, openLeafWorkspace } from "./workspaces";
 
@@ -20,6 +20,8 @@ export interface WorkspaceSwitchIntent {
   /** Open the Add Project dialog on the node. */
   addProject?: boolean;
 }
+
+let switching = false;
 
 const INTENT_KEY = "orkestrator.workspace-switch-intent";
 
@@ -74,6 +76,8 @@ export async function switchWorkspace(
   nodeId: string | null,
   intent: WorkspaceSwitchIntent = {},
 ): Promise<void> {
+  if (switching) throw new Error("A workspace switch is already in progress");
+  switching = true;
   writeIntent(intent);
   try {
     const desktop = window.orkestrator?.workspaceTarget;
@@ -90,7 +94,12 @@ export async function switchWorkspace(
         const workspace = await openLeafWorkspace(nodeId as never, {
           commandNodeName: profile?.displayName ?? "",
         });
-        writeStoredWorkspace(workspace);
+        try {
+          writeStoredWorkspace(workspace);
+        } catch (error) {
+          await closeLeafWorkspace(workspace.workspaceId);
+          throw error;
+        }
       }
       // The previous node's grant is revoked; its work keeps running.
       if (current) await closeLeafWorkspace(current.workspaceId);
@@ -98,6 +107,8 @@ export async function switchWorkspace(
   } catch (error) {
     writeIntent(null);
     throw error;
+  } finally {
+    switching = false;
   }
   window.location.reload();
 }
@@ -110,9 +121,39 @@ export async function switchWorkspace(
 export function keepStoredWorkspaceAlive(): () => void {
   if (window.orkestrator?.workspaceTarget) return () => undefined;
   const workspace = readStoredWorkspace();
-  const target = workspaceTarget();
-  if (!workspace || !target) return () => undefined;
-  return keepWorkspaceAlive(workspace.workspaceId, () => {
-    void switchWorkspace(target.nodeId).catch(() => undefined);
-  });
+  if (!workspace) return () => undefined;
+  return keepWorkspaceAlive(workspace.workspaceId, () => switchWorkspace(workspace.nodeId));
+}
+
+const STARTUP_ERROR_KEY = "orkestrator.workspace-startup-error";
+
+export function takeWorkspaceStartupError(): string | null {
+  try {
+    const message = window.sessionStorage.getItem(STARTUP_ERROR_KEY);
+    window.sessionStorage.removeItem(STARTUP_ERROR_KEY);
+    return message;
+  } catch {
+    return null;
+  }
+}
+
+/** Recover before the first workspace request; an unavailable leaf returns to the portal. */
+export async function recoverStoredWorkspace(): Promise<boolean> {
+  if (window.orkestrator?.workspaceTarget) return false;
+  const workspace = readStoredWorkspace();
+  if (!workspace || workspace.expiresAt > Date.now() + 60_000) return false;
+  try {
+    await switchWorkspace(workspace.nodeId);
+  } catch {
+    try {
+      window.sessionStorage.setItem(
+        STARTUP_ERROR_KEY,
+        "Could not reconnect to the saved workspace. Returned to the command node; open the machine again to retry.",
+      );
+    } catch {
+      /* Recovery still returns to the command node. */
+    }
+    await switchWorkspace(null);
+  }
+  return true;
 }

@@ -159,7 +159,7 @@ describe("Electron packaging configuration", () => {
     expect(desktopMain).toContain(
       "rebindWindowPreviews(context, connectionManager.getConnectionId",
     );
-    expect(desktopMain.match(/followWindowConnection\(context\);/g)).toHaveLength(4);
+    expect(desktopMain.match(/followWindowConnection\((?:context|current)\);/g)).toHaveLength(4);
     expect(desktopMain.indexOf("registerIpc();")).toBeLessThan(
       desktopMain.indexOf("windowRequestGate.markReady()"),
     );

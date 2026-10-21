@@ -96,7 +96,7 @@ import { SshPromptDialog } from "@/components/federation/SshPromptDialog";
 import { FederationEffects } from "@/components/federation/FederationEffects";
 import { NodeActionRequestsDialog } from "@/components/federation/NodeActionRequestsDialog";
 import { NodeSshPromptDialog } from "@/components/settings/connections/NodesSettings";
-import { keepStoredWorkspaceAlive } from "@/lib/portal/workspace-switch";
+import { keepStoredWorkspaceAlive, takeWorkspaceStartupError } from "@/lib/portal/workspace-switch";
 import { useWorkspaceSwitchSelection } from "@/hooks/useWorkspaceSwitchSelection";
 
 export const DOCKER_AVAILABILITY_POLL_INTERVAL_MS = 60_000;
@@ -109,6 +109,14 @@ function desktopConnectionScopeSeed(): {
   activeConnectionId: string | null;
   resolved: boolean;
 } {
+  if (window.orkestratorWorkspaceTarget) {
+    return {
+      activeConnectionId:
+        window.orkestratorDesktopIdentity?.connectionId ??
+        `workspace:${window.orkestratorWorkspaceTarget.nodeId}`,
+      resolved: true,
+    };
+  }
   if (!window.orkestrator?.connections) {
     return { activeConnectionId: null, resolved: true };
   }
@@ -275,7 +283,9 @@ function ConnectedApp() {
   const [activeConnectionId, setActiveConnectionId] = useState<string | null>(
     () => desktopConnectionScopeSeed().activeConnectionId,
   );
-  const [activeConnectionName, setActiveConnectionName] = useState<string | null>(null);
+  const [activeConnectionName, setActiveConnectionName] = useState<string | null>(
+    () => window.orkestratorWorkspaceTarget?.nodeName ?? null,
+  );
   const [connectionScopeResolved, setConnectionScopeResolved] = useState(
     () => desktopConnectionScopeSeed().resolved,
   );
@@ -312,6 +322,10 @@ function ConnectedApp() {
   useWorkspaceSwitchSelection(startEnvironment);
   // A browser tab on another node renews that node's workspace grant.
   useEffect(() => keepStoredWorkspaceAlive(), []);
+  useEffect(() => {
+    const message = takeWorkspaceStartupError();
+    if (message) toast.error(message);
+  }, []);
   useEffect(() => startPaneLayoutPersistence(), []);
   useEffect(() => {
     void migrateLegacyBuildPipelines().catch((error) => {
@@ -386,6 +400,12 @@ function ConnectedApp() {
     let active = true;
     const applyConnectionList = (list: ConnectionList) => {
       if (!active) return;
+      // Connection lists administer the command node; the gateway seed owns
+      // workspace identity while this window is on a leaf.
+      if (window.orkestratorWorkspaceTarget) {
+        setConnectionScopeResolved(true);
+        return;
+      }
       setActiveConnectionId(list.activeConnectionId);
       const activeConnection = list.connections.find(
         (connection) => connection.id === list.activeConnectionId,
@@ -407,7 +427,7 @@ function ConnectedApp() {
       .then(applyConnectionList)
       .catch(() => {
         if (!active) return;
-        setActiveConnectionId(LOCAL_CONNECTION_ID);
+        if (!window.orkestratorWorkspaceTarget) setActiveConnectionId(LOCAL_CONNECTION_ID);
         setConnectionScopeResolved(true);
       });
     const unsubscribeConnections = subscribeToConnections(applyConnectionList);
@@ -415,7 +435,7 @@ function ConnectedApp() {
     const unsubscribeUnavailable =
       typeof listenDesktop === "function"
         ? listenDesktop<{ message?: string }>("local-backend-unavailable", (payload) => {
-            if (!active) return;
+            if (!active || window.orkestratorWorkspaceTarget) return;
             setLocalBackendUnavailableMessage(
               payload.message
                 ? `The Local backend stopped: ${payload.message}`
@@ -469,9 +489,10 @@ function ConnectedApp() {
     }
   }, []);
   const isRemoteBackendWindow =
-    connectionScopeResolved &&
-    activeConnectionId !== null &&
-    activeConnectionId !== LOCAL_CONNECTION_ID;
+    Boolean(window.orkestratorWorkspaceTarget) ||
+    (connectionScopeResolved &&
+      activeConnectionId !== null &&
+      activeConnectionId !== LOCAL_CONNECTION_ID);
   const macOsProbeFailed = Boolean(macOsPermissions?.error);
   const macOsHasBlockingMissing =
     macOsPermissions !== null && hasBlockingMacOsPermissions(macOsPermissions);
@@ -498,13 +519,15 @@ function ConnectedApp() {
   useEffect(() => {
     if (!window.orkestrator?.permissions) return;
     if (!connectionScopeResolved) return;
-    if (isRemoteBackendWindow) {
-      setMacOsPermissions({ supported: false, missing: [] });
-      setIsCheckingMacOsPermissions(false);
-      return;
-    }
-    void refreshMacOsPermissions();
+    if (isRemoteBackendWindow) return;
+    let active = true;
+    // Start the external probe after this commit, and fence StrictMode's
+    // discarded mount before it can schedule loading state or a host read.
+    void Promise.resolve().then(() => {
+      if (active) return refreshMacOsPermissions();
+    });
     return () => {
+      active = false;
       macOsRefreshGenerationRef.current += 1;
     };
   }, [refreshMacOsPermissions, connectionScopeResolved, isRemoteBackendWindow]);
@@ -533,6 +556,7 @@ function ConnectedApp() {
         dockerAvailableRef.current = next.available;
         setDockerAvailable(next.available);
         setDockerUnavailableReason(next.reason);
+        if (next.available) setDockerWarningDismissed(false);
       };
 
       // Keep the established non-blocking startup behavior for daemon and
@@ -632,12 +656,6 @@ function ConnectedApp() {
     }, DOCKER_AVAILABILITY_POLL_INTERVAL_MS);
     return () => window.clearInterval(interval);
   }, [macOsPermissionsReady, refreshDockerAvailability]);
-
-  // Dismissing an outage should last for that outage. Once Docker recovers, a
-  // later outage is new information and should warn the user again.
-  useEffect(() => {
-    if (dockerAvailable === true) setDockerWarningDismissed(false);
-  }, [dockerAvailable]);
 
   // Host CLI availability is independent of Docker. Run it in parallel with
   // the daemon probe so local worktree workflows receive the same onboarding.

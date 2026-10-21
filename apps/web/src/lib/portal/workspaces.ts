@@ -103,21 +103,52 @@ export async function openLeafWorkspace(
   };
 }
 
-/**
- * Keep the workspace's grant alive while the window works on it. A renewal
- * the command node refuses (the grant lapsed while the computer slept, the
- * node restarted) is reported once. Returns the stop function.
- */
-export function keepWorkspaceAlive(workspaceId: string, onLapsed?: () => void): () => void {
-  let lapsed = false;
+/** Renew on a bounded tick, retry failed recovery, and reconcile after sleep/reconnect. */
+export function keepWorkspaceAlive(
+  workspaceId: string,
+  onLapsed?: () => Promise<void> | void,
+): () => void {
+  let stopped = false;
+  let running = false;
+  let recovered = false;
+  let failed = false;
+  let renewedAt = Date.now();
+  const tick = async (force = false) => {
+    if (stopped || running || recovered) return;
+    if (!force && !failed && Date.now() - renewedAt < WORKSPACE_RENEW_INTERVAL_MS) return;
+    running = true;
+    try {
+      if (failed) throw new Error("Workspace needs recovery");
+      await portalInvoke("renew_node_workspace", { workspaceId });
+      renewedAt = Date.now();
+    } catch {
+      failed = true;
+      if (!stopped && onLapsed) {
+        try {
+          await onLapsed();
+          recovered = true;
+        } catch {
+          /* Retry on the next bounded tick or connectivity event. */
+        }
+      }
+    } finally {
+      running = false;
+    }
+  };
+  const reconcile = () => {
+    void tick(true);
+  };
   const timer = setInterval(() => {
-    void portalInvoke("renew_node_workspace", { workspaceId }).catch(() => {
-      if (lapsed) return;
-      lapsed = true;
-      onLapsed?.();
-    });
-  }, WORKSPACE_RENEW_INTERVAL_MS);
-  return () => clearInterval(timer);
+    void tick();
+  }, 5_000);
+  window.addEventListener("online", reconcile);
+  window.addEventListener("focus", reconcile);
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+    window.removeEventListener("online", reconcile);
+    window.removeEventListener("focus", reconcile);
+  };
 }
 
 /** Closing revokes the grant; nothing on the node stops. */

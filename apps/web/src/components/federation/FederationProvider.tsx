@@ -100,7 +100,7 @@ export function FederationProvider({ children }: { children: ReactNode }) {
       portalState,
       bound,
       supported: kind !== "none",
-      enabled: kind !== "none" && portalState.nodes.length > 0,
+      enabled: kind !== "none" && (portalState.nodes.length > 0 || workspaceTarget() !== null),
       kind,
       boundMachine: bound
         ? { name: bound.name, colorToken: bound.colorToken ?? FALLBACK_MACHINE_COLOR }

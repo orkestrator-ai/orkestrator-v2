@@ -30,7 +30,8 @@ import {
 import { registerMainIpc } from "./ipc.js";
 import { resolveRuntimeRoots } from "./paths.js";
 import { createMainWindow, trustedRendererUrlFor } from "./window.js";
-import { NodeWorkspaceScopes, openNodeWorkspace } from "./node-workspaces.js";
+import { NodeWorkspaceScopes } from "./node-workspaces.js";
+import { editDesktopConnection, setDesktopWorkspaceTarget } from "./window-workspace-target.js";
 import { importSavedMachinesOnce } from "./command-node-migration.js";
 import { ConnectionManager, DEFAULT_CONNECTION_SCOPE } from "./connection-manager.js";
 import {
@@ -749,81 +750,19 @@ async function setWindowWorkspaceTarget(
   context: DesktopWindowContext,
   input: { nodeId: string | null },
 ): Promise<void> {
-  const manager = connectionManager;
-  if (!manager) throw new Error("Connections are not initialized");
-  if ((context.target?.nodeId ?? null) === input.nodeId) return;
-  if (context.portalScope) {
-    // Back to the command node: its connection is still held by the portal scope.
-    nodeWorkspaceScopes?.release(context.scope);
-    manager.restoreScopeFrom(context.scope, context.portalScope);
-    manager.release(context.portalScope);
-    context.portalScope = null;
-    context.target = null;
-  }
-  if (input.nodeId !== null) {
-    const nodeId = input.nodeId;
-    const portalScope = `${context.scope}:portal`;
-    await manager.bind(portalScope, manager.getConnectionId(context.scope));
-    const invoke = (command: string, args: Record<string, unknown>) =>
-      manager.invoke(command, args, portalScope);
-    const reopen = async () => {
-      const profile = (await invoke("get_backend_profile", {}).catch(() => null)) as {
-        displayName?: string;
-      } | null;
-      return openNodeWorkspace({
-        nodeId,
-        invoke,
-        commandNodeName: profile?.displayName ?? "command node",
-        relay: manager.getGatewayBaseUrl(portalScope)
-          ? () => {
-              const baseUrl = manager.getGatewayBaseUrl(portalScope);
-              const authorization =
-                baseUrl &&
-                manager.getRendererRequestAuthorization(
-                  `${baseUrl}/__orkestrator/invoke`,
-                  portalScope,
-                );
-              return baseUrl && authorization ? { baseUrl, token: authorization.slice(7) } : null;
-            }
-          : undefined,
-      });
-    };
-    try {
-      const binding = await reopen();
-      nodeWorkspaceScopes ??= new NodeWorkspaceScopes(invoke);
-      manager.retargetScopeToWorkspace(context.scope, {
-        ...binding,
-        onUnavailable: () => nodeWorkspaceScopes?.invalidate(context.scope),
-      });
-      nodeWorkspaceScopes.track(context.scope, binding.workspaceId, {
-        invoke,
-        reopen,
-        epoch: () => manager.epochOf(manager.getConnectionId(portalScope)),
-        retarget: (replacement) => manager.rebindWorkspace(context.scope, replacement),
-      });
-      context.portalScope = portalScope;
-      context.target = workspaceTargetFrom(nodeId, binding.params);
-    } catch (error) {
-      manager.release(portalScope);
-      throw error;
-    }
-  }
-  followWindowConnection(context);
-  setConnectionTitle(context.window, context.scope);
-  publishConnectionLists();
-}
-
-function workspaceTargetFrom(
-  nodeId: string,
-  params: Record<string, string>,
-): WindowWorkspaceTarget {
-  return {
-    nodeId,
-    nodeName: params.node ?? nodeId,
-    path: params.path === "direct" ? "direct" : "relay",
-    ...(params.route === "https" || params.route === "ssh" ? { routeKind: params.route } : {}),
-    ...(params.via ? { via: params.via } : {}),
-  };
+  if (!connectionManager) throw new Error("Connections are not initialized");
+  nodeWorkspaceScopes ??= new NodeWorkspaceScopes((command, args) =>
+    connectionManager!.invoke(command, args, context.scope),
+  );
+  await setDesktopWorkspaceTarget(context, input, {
+    manager: connectionManager,
+    scopes: nodeWorkspaceScopes,
+    committed: (current) => {
+      followWindowConnection(current);
+      setConnectionTitle(current.window, current.scope);
+      publishConnectionLists();
+    },
+  });
 }
 
 function registerIpc(): void {
@@ -876,8 +815,9 @@ function registerIpc(): void {
     },
     connectToRemote: async (input, event) => {
       const context = contextForEvent(event);
-      await setWindowWorkspaceTarget(context, { nodeId: null });
-      const list = await manager().connect(input, context.scope);
+      const list = await editDesktopConnection(context, { kind: "connect", input }, manager(), () =>
+        setWindowWorkspaceTarget(context, { nodeId: null }),
+      );
       followWindowConnection(context);
       refreshConnectionTitles();
       publishConnectionLists();
@@ -899,8 +839,12 @@ function registerIpc(): void {
     },
     useConnection: async (connectionId, event) => {
       const context = contextForEvent(event);
-      await setWindowWorkspaceTarget(context, { nodeId: null });
-      const list = await manager().use(connectionId, context.scope);
+      const list = await editDesktopConnection(
+        context,
+        { kind: "use", connectionId },
+        manager(),
+        () => setWindowWorkspaceTarget(context, { nodeId: null }),
+      );
       followWindowConnection(context);
       updateWindowTitle(event);
       publishConnectionLists();
@@ -908,8 +852,12 @@ function registerIpc(): void {
     },
     forgetConnection: async (connectionId, event) => {
       const context = contextForEvent(event);
-      await setWindowWorkspaceTarget(context, { nodeId: null });
-      const list = await manager().forget(connectionId, context.scope);
+      const list = await editDesktopConnection(
+        context,
+        { kind: "forget", connectionId },
+        manager(),
+        () => setWindowWorkspaceTarget(context, { nodeId: null }),
+      );
       followWindowConnection(context);
       updateWindowTitle(event);
       publishConnectionLists();

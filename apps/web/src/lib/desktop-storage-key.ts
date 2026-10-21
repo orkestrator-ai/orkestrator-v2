@@ -1,3 +1,5 @@
+import { readStoredWorkspace } from "./portal/workspace-target-storage";
+
 /**
  * Keeps persisted presentation state separate per machine inside Electron.
  * Browser clients retain their established storage keys.
@@ -49,7 +51,7 @@ function namespaceFor(
  * selections and layouts.
  */
 function browserWorkspaceNode(): string | null {
-  const nodeId = window.orkestratorWorkspaceTarget?.nodeId;
+  const nodeId = window.orkestratorWorkspaceTarget?.nodeId ?? readStoredWorkspace()?.nodeId;
   return nodeId && nodeId.length <= 128 ? nodeId : null;
 }
 

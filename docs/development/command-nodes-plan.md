@@ -83,7 +83,7 @@ to match, and each one is listed in the final report.
 | Area | Location | Notes |
 | --- | --- | --- |
 | Shared contracts | `packages/protocol/src/command-nodes.ts` | Node mode, registry view, attachment, grant, node event, outbox, action request and node mail address types, with parsers. |
-| Node link (shared, Node-only) | `packages/protocol/src/node/node-link/` | Moved from `apps/desktop/electron`: `BackendHttpClient` (from `backend-process.ts`), `backend-hello.ts`, `connection-route-selection.ts`, `connection-routes.ts`, `ssh/*`. Exported as `@orkestrator/protocol/node/node-link`. The desktop re-exports them so its server switcher keeps working; none of these files import `electron`. |
+| Node link (shared, Node-only) | `packages/protocol/src/node/ssh/` and `packages/protocol/src/node/node-link/` | Moved from `apps/desktop/electron`: the OpenSSH tunnel adapter (`ssh/*`), the authenticated hello check (`backend-hello.ts`) and route opening and failure classification (`connection-routes.ts` → `routes.ts`). The desktop keeps re-export shims. Built in M1: the desktop's multi-route `ConnectionManager` and `BackendHttpClient` stay in the desktop (they serve its own target switching); the backend has its own lean `NodeLink` (`apps/backend/src/core/nodes/node-link.ts`) on the shared pieces. |
 | Command-node backend | `apps/backend/src/core/nodes/` | `node-registry-store.ts`, `node-attachments.ts`, `node-mode.ts`, `node-link-manager.ts`, `node-ssh-prompts.ts`, `node-read-model.ts`, `node-relay.ts`, `client-grants.ts`, `node-outbox.ts`, `node-action-requests.ts`, `node-file-transfer.ts`, `project-file-compare.ts`. |
 | Commands | `apps/backend/src/core/commands-registry-nodes.ts` (command side), `commands-registry-node-leaf.ts` (leaf side) | Registered with the existing `register(name, handler)` registrar. |
 | Storage | `StorageService` chain, new stores in `STORE_LAYOUTS` and `storage-writer-guards` | `node-registry.json` (sensitive), `node-attachments.json`, `node-summaries.json`, `node-outbox.json` (sensitive: mail bodies), `node-action-requests.json`, `node-outcomes.json`. |
@@ -206,8 +206,13 @@ Commands:
   - `controller-is-subordinate`, when the controller is in this node's own
     registry, which would make a cycle;
   - `self-attach`.
-- `detach_controller {controllerId}`. Callable by the controller, or by the
-  user from the leaf's own Connections page.
+- `detach_controller {controllerId}`. Called by the controller when it
+  forgets this node.
+- `detach_controller_here {controllerId}`. The user detaching a command node
+  on the leaf itself: it is recorded in `detachedControllers` and its
+  re-attach is refused with `detached-on-node` until the user calls
+  `allow_controller {controllerId}`. The command node notices within one
+  heartbeat (it checks `list_controllers`).
 - `list_controllers`.
 
 Other behaviour:
@@ -524,13 +529,13 @@ Test names include the requirement ID (for example
 
 | ID | Requirement | M | Implementation | Evidence | Status |
 | --- | --- | --- | --- | --- | --- |
-| RM-01 | A node becomes a command node by having a registered subordinate; it is a leaf while attached; otherwise standalone. | 1 | `node-mode.ts` | | Planned |
-| RM-02 | A setting exposes registration; the desktop's local backend always has it. | 1 | `commandNode.enabled`, `--command-node` | | Planned |
-| RM-03 | An attached command node suspends command activity (links closed, registry kept) and resumes when no controllers remain. | 1 | `node-mode.ts`, `NodeLinkManager` | | Planned |
-| RM-04 | A controller never sees a subordinate's suspended registry, only that node's own projects and environments. | 1 | Leaf refuses registry commands from grants and controllers; summaries are local only | | Planned |
-| RM-05 | A leaf accepts several controllers and tracks the most recent contact. | 1 | `node-attachments.ts` | | Planned |
-| RM-06 | A leaf can still be the client's direct target with its own UI. | 1 | Unchanged server switcher | | Planned |
-| RM-07 | Two levels only: a subordinate cannot register nodes; cycles are refused. | 1 | Command and leaf checks | | Planned |
+| RM-01 | A node becomes a command node by having a registered subordinate; it is a leaf while attached; otherwise standalone. | 1 | `node-mode.ts` | `node-service.test.ts` RM-01/RM-02 | Done |
+| RM-02 | A setting exposes registration; the desktop's local backend always has it. | 1 | `commandNode.enabled`, `--command-node` | `node-service.test.ts` RM-01/RM-02; `options.test.ts` flag inventory | Done |
+| RM-03 | An attached command node suspends command activity (links closed, registry kept) and resumes when no controllers remain. | 1 | `node-mode.ts`, `NodeLinkManager` | `node-service.test.ts` RM-03/RM-04/LM-05/MG-02 | Done |
+| RM-04 | A controller never sees a subordinate's suspended registry, only that node's own projects and environments. | 1 | Leaf refuses registry commands from grants and controllers; summaries are local only | `node-service.test.ts` RM-03/RM-04 (registry commands refused in leaf mode); summaries in M2 | In progress |
+| RM-05 | A leaf accepts several controllers and tracks the most recent contact. | 1 | `node-attachments.ts` | `node-service.test.ts` AT-01/AT-04/RM-05 | Done |
+| RM-06 | A leaf can still be the client's direct target with its own UI. | 1 | Unchanged server switcher | Server switcher unchanged; leaf UI shows Controlled by (`nodes-settings.test.tsx` LM) | Done |
+| RM-07 | Two levels only: a subordinate cannot register nodes; cycles are refused. | 1 | Command and leaf checks | `node-service.test.ts` RM-07 (3 tests) | Done |
 
 ### Clients
 
@@ -544,23 +549,23 @@ Test names include the requirement ID (for example
 
 | ID | Requirement | M | Implementation | Evidence | Status |
 | --- | --- | --- | --- | --- | --- |
-| RG-01 | The registry in the backend holds identity, profile, routes, credential, preference and enabled state. | 1 | `node-registry-store.ts` | | Planned |
-| RG-02 | Leaf credentials stay on the command node, never in a response, event or log. | 1 | Redaction, `NodeView` | | Planned |
-| RG-03 | Routes are hello-verified; identity mismatch, certificate and host-key failures block without bypass. | 1 | `NodeLinkManager` | | Planned |
-| RG-04 | SSH routes run from the backend using host OpenSSH with owned forwards, host-key trust and no remote install. | 1 | Moved supervisor | | Planned |
-| RG-05 | SSH prompts are relayed through the portal; unattended reconnects use keys or the agent only. | 1 | `node-ssh-prompts.ts` | | Planned |
-| RG-06 | The registry is managed from the portal's Connections settings. | 1 | Nodes section | | Planned |
-| RG-07 | Forgetting a node never stops or deletes anything on it. | 1 | `forget_node` | | Planned |
+| RG-01 | The registry in the backend holds identity, profile, routes, credential, preference and enabled state. | 1 | `node-registry-store.ts` | `storage-nodes.test.ts`; `node-service.test.ts` RG-01/RG-02 | Done |
+| RG-02 | Leaf credentials stay on the command node, never in a response, event or log. | 1 | Redaction, `NodeView` | `node-service.test.ts` RG-01/RG-02 (views, status, events carry no token); `command-node-migration.test.ts` | Done |
+| RG-03 | Routes are hello-verified; identity mismatch, certificate and host-key failures block without bypass. | 1 | `NodeLinkManager` | `node-service.test.ts` RG-03 (fallback, identity mismatch, rejected token, retry) | Done |
+| RG-04 | SSH routes run from the backend using host OpenSSH with owned forwards, host-key trust and no remote install. | 1 | Moved supervisor | `node-service.test.ts` RG-04/RG-05 with a fake supervisor; real-sshd run of the backend path pending (shared supervisor covered by desktop SSH suites) | In progress |
+| RG-05 | SSH prompts are relayed through the portal; unattended reconnects use keys or the agent only. | 1 | `node-ssh-prompts.ts` | `node-service.test.ts` RG-04/RG-05 (interactive add, batch reconnect, prompt relay without answer) | Done |
+| RG-06 | The registry is managed from the portal's Connections settings. | 1 | Nodes section | `nodes-settings.test.tsx` RG-06 | Done |
+| RG-07 | Forgetting a node never stops or deletes anything on it. | 1 | `forget_node` | `node-service.test.ts` AT-02/RG-07/SC-03; `nodes-settings.test.tsx` RG-07 | Done |
 
 ### Attachment
 
 | ID | Requirement | M | Implementation | Evidence | Status |
 | --- | --- | --- | --- | --- | --- |
-| AT-01 | Attaching records the controller's identity, name and time on the leaf. | 1 | `attach_controller` | | Planned |
-| AT-02 | Detach happens from the command node (forget) or from the leaf; neither stops work. | 1 | `detach_controller`, tombstones | | Planned |
-| AT-03 | Attaching registers the portal origins on the leaf (CORS). | 1 | `GatewayAuth.isOriginAllowed` | | Planned |
-| AT-04 | Every command-node request identifies the controller and updates last contact. | 1 | Header, throttled persist | | Planned |
-| AT-05 | Nodes without `node-attachment` show "needs update" and are not controlled. | 1 | Hello capability | | Planned |
+| AT-01 | Attaching records the controller's identity, name and time on the leaf. | 1 | `attach_controller` | `node-service.test.ts` AT-01/AT-04/RM-05 | Done |
+| AT-02 | Detach happens from the command node (forget) or from the leaf; neither stops work. | 1 | `detach_controller`, tombstones | `node-service.test.ts` AT-02 (forget, offline tombstone, user detach on leaf with re-attach refused) | Done |
+| AT-03 | Attaching registers the portal origins on the leaf (CORS). | 1 | `GatewayAuth.isOriginAllowed` | `node-service.test.ts` AT-03; `gateway-command-nodes.test.ts` AT-03 | Done |
+| AT-04 | Every command-node request identifies the controller and updates last contact. | 1 | Header, throttled persist | `gateway-command-nodes.test.ts` AT-04; `node-service.test.ts` AT-01/AT-04 | Done |
+| AT-05 | Nodes without `node-attachment` show "needs update" and are not controlled. | 1 | Hello capability | `node-service.test.ts` AT-05; `gateway-command-nodes.test.ts` AT-05 | Done |
 
 ### Updates from leaves
 
@@ -579,7 +584,7 @@ Test names include the requirement ID (for example
 | LM-02 | Cross-node tools are unavailable in leaf mode. | 3 | Control MCP gating | | Planned |
 | LM-03 | An incoming message is handled as a leaf agent would. | 3 | Context and gating | | Planned |
 | LM-04 | Coordinator conversations are kept, hidden by default, and openable behind a warning naming the controller. | 3 | Renderer | | Planned |
-| LM-05 | Detaching from all controllers restores command mode and tools. | 1, 3 | `node-mode.ts` | | Planned |
+| LM-05 | Detaching from all controllers restores command mode and tools. | 1, 3 | `node-mode.ts` | `node-service.test.ts` RM-03/LM-05 (links resume); coordinator tools in M3 | In progress |
 
 ### Portal
 
@@ -633,7 +638,7 @@ Test names include the requirement ID (for example
 
 | ID | Requirement | M | Implementation | Evidence | Status |
 | --- | --- | --- | --- | --- | --- |
-| SC-01 | Command nodes have full control of leaves; no permission model yet. | 1 | Documented | | Planned |
+| SC-01 | Command nodes have full control of leaves; no permission model yet. | 1 | Documented | No permission model: any attached controller has the full client API (`commands-registry-nodes.ts`) | Done |
 | SC-02 | Leaves enforce their own approval and execution policies. | 2 | Unchanged | | Planned |
 | SC-03 | Closing, hiding, detaching or forgetting never stops remote work. | 1, 2 | Tests per action | | Planned |
 | SC-04 | No tokens, prompts, file contents or `.env` values in logs, metrics, receipts or events. | 1–4 | Redaction tests | | Planned |
@@ -642,9 +647,9 @@ Test names include the requirement ID (for example
 
 | ID | Requirement | M | Implementation | Evidence | Status |
 | --- | --- | --- | --- | --- | --- |
-| MG-01 | Saved desktop connections are attached as leaves of the local command node on upgrade. | 1 | `import_desktop_connections` | | Planned |
-| MG-02 | A migrated machine that commands its own leaves switches to leaf mode. | 1 | RM-03 path | | Planned |
-| MG-03 | Migration is idempotent and keeps the catalogue for downgrade; undecryptable tokens become `needs-credential`. | 1 | Import | | Planned |
+| MG-01 | Saved desktop connections are attached as leaves of the local command node on upgrade. | 1 | `import_desktop_connections` | `node-service.test.ts` MG-01/MG-03; `command-node-migration.test.ts` | Done |
+| MG-02 | A migrated machine that commands its own leaves switches to leaf mode. | 1 | RM-03 path | `node-service.test.ts` MG-01/MG-03 (migrated command node switches to leaf mode) | Done |
+| MG-03 | Migration is idempotent and keeps the catalogue for downgrade; undecryptable tokens become `needs-credential`. | 1 | Import | `node-service.test.ts` MG-01/MG-03; `command-node-migration.test.ts` (marker, retry on failure) | Done |
 | CR-01 | Identities, profile, hello, loopback gateway, outcome-unknown, dot, sidebar and projections are reused. | 1–2 | | | Planned |
 | CR-02 | Registry, route logic, SSH supervisor and read model are moved into the backend. | 1–2 | | | Planned |
 | CR-03 | Panels are reworked into grant-authorised leaf workspaces with relay fallback. | 2 | | | Planned |

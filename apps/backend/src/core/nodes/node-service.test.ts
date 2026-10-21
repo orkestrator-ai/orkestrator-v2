@@ -458,3 +458,106 @@ describe("MG-01/MG-03 importing the desktop's saved machines", () => {
     expect(server.service.link("bk_worker" as never)!.connected).toBe(false);
   });
 });
+
+describe("RG-04/RG-05 SSH routes from the command node's backend", () => {
+  function fakeSsh(origin: () => string, fail?: () => Error | null) {
+    const calls: Array<{ routeId: string; interactive: boolean }> = [];
+    let prompt: ((p: never) => Promise<string | null>) | null = null;
+    const provider = {
+      acquire: async (spec: { routeId: string }, options: { interactive: boolean }) => {
+        calls.push({ routeId: spec.routeId, interactive: options.interactive });
+        const error = fail?.();
+        if (error) throw error;
+        return { localOrigin: origin(), release: () => undefined, onClosed: () => () => undefined };
+      },
+    };
+    return {
+      calls,
+      createSsh: (handler: (p: never) => Promise<string | null>) => {
+        prompt = handler;
+        return provider;
+      },
+      prompt: () => prompt,
+    };
+  }
+
+  test("a user-initiated add may prompt; background reconnects run in batch mode", async () => {
+    const network = new TestNodeNetwork();
+    const leaf = await network.add("leaf");
+    const ssh = fakeSsh(() => leaf.origin);
+    const command = await network.add("command", {
+      forceRegistration: true,
+      extra: { createSsh: ssh.createSsh as never },
+    });
+    const view = await command.service.addNode({
+      routes: [{ id: "ssh", kind: "ssh", enabled: true, destination: "leaf-host", remoteGatewayPort: 34122 }],
+      token: leaf.token,
+    });
+    expect(view.connection.state).toBe("connected");
+    expect(view.connection.activeRouteKind).toBe("ssh");
+    expect(ssh.calls.every((call) => call.interactive)).toBe(true);
+
+    leaf.online = false;
+    network.timers.runAll(); // heartbeat fails → background reconnect
+    await settle();
+    leaf.online = true;
+    network.timers.runAll();
+    await settle();
+    expect(ssh.calls.at(-1)?.interactive).toBe(false);
+  });
+
+  test("a changed host key quarantines the node and no other route is tried", async () => {
+    const network = new TestNodeNetwork();
+    const leaf = await network.add("leaf");
+    const error = Object.assign(new Error("Host key changed"), { code: "host-key-changed" });
+    const ssh = fakeSsh(() => leaf.origin, () => error);
+    const command = await network.add("command", {
+      forceRegistration: true,
+      extra: { createSsh: ssh.createSsh as never },
+    });
+    await attach(command, leaf);
+    await command.service.updateNode({
+      nodeId: "bk_leaf",
+      routes: [
+        { id: "ssh", kind: "ssh", enabled: true, destination: "leaf-host", remoteGatewayPort: 34122 },
+        httpsRoute(leaf, "https"),
+      ],
+    });
+    await settle();
+    const node = (await command.service.listNodes()).nodes[0]!;
+    expect(node.connection.state).toBe("quarantined");
+    expect(node.connection.lastError?.code).toBe("host-key-changed");
+  });
+
+  test("SSH prompts are relayed as events without the answer, and answered once", async () => {
+    const network = new TestNodeNetwork();
+    const command = await network.add("command", { forceRegistration: true });
+    const abort = new AbortController();
+    const answer = command.service.prompts.ask("bk_leaf" as never, {
+      kind: "passphrase",
+      message: "Enter passphrase for key",
+      signal: abort.signal,
+    });
+    const open = command.events.find((entry) => entry.event === "node-ssh-prompt")!.payload as {
+      promptId: string;
+      state: string;
+    };
+    expect(open.state).toBe("open");
+    expect(command.service.answerSshPrompt({ promptId: open.promptId, answer: "hunter2" })).toEqual({
+      answered: true,
+    });
+    expect(await answer).toBe("hunter2");
+    expect(command.service.answerSshPrompt({ promptId: open.promptId, answer: "again" })).toEqual({
+      answered: false,
+    });
+    expect(JSON.stringify(command.events)).not.toContain("hunter2");
+
+    const cancelled = command.service.prompts.ask("bk_leaf" as never, {
+      kind: "password",
+      message: "Password",
+      signal: abort.signal,
+    });
+    abort.abort();
+    expect(await cancelled).toBeNull();
+  });
+});

@@ -146,6 +146,18 @@ const toolUse = (id: string, name = "Bash", parent: string | null = null, apiId 
   },
 });
 
+/** The `<task-notification>` user turn the CLI injects when a background task ends. */
+const taskReport = (toolUseId: string | undefined) =>
+  [
+    "<task-notification>",
+    "<task-id>task-1</task-id>",
+    ...(toolUseId ? [`<tool-use-id>${toolUseId}</tool-use-id>`] : []),
+    "<status>completed</status>",
+    "<summary>Background task finished</summary>",
+    "<result>Background report</result>",
+    "</task-notification>",
+  ].join("\n");
+
 interface MutationCase {
   name: string;
   /** Build the session and return the one mutation this row is about. */
@@ -238,6 +250,50 @@ const mutationCases: MutationCase[] = [
     (s) => assistantParts(s).some((p) => p.toolUseId === "task-1"),
     [toolUse("child-1", "Read", "task-1", "msg_child")],
     (s) => assistantParts(s).some((p) => p.toolUseId === "child-1"),
+  ),
+  liveCase(
+    "a background task report settling its launching row",
+    [
+      {
+        type: "assistant",
+        uuid: "assistant-agent-1",
+        parent_tool_use_id: null,
+        message: {
+          id: "msg_1",
+          content: [
+            {
+              type: "tool_use",
+              id: "agent-1",
+              name: "Agent",
+              input: { description: "Check", run_in_background: true },
+            },
+          ],
+        },
+      },
+      {
+        type: "user",
+        uuid: "user-launch-1",
+        message: {
+          content: [
+            { type: "tool_result", tool_use_id: "agent-1", content: "Async agent launched" },
+          ],
+        },
+      },
+    ],
+    (s) => assistantParts(s).some((p) => p.toolUseId === "agent-1" && p.toolState === "success"),
+    // The CLI injects the report as a bare-string user turn.
+    [{ type: "user", message: { role: "user", content: taskReport("agent-1") } }],
+    (s) =>
+      assistantParts(s).some(
+        (p) => p.toolUseId === "agent-1" && p.toolOutput?.includes("Background report"),
+      ),
+  ),
+  liveCase(
+    "a background task report with no row to attach to",
+    [],
+    undefined,
+    [{ type: "user", message: { role: "user", content: taskReport(undefined) } }],
+    (s) => s.messages.some((m) => m.role === "system" && m.content === "Background report"),
   ),
   liveCase(
     "tool progress replacing its part",

@@ -1,0 +1,132 @@
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useStore } from "zustand";
+import {
+  BACKEND_PROFILE_CHANGED_EVENT,
+  FALLBACK_MACHINE_COLOR,
+  defaultMachineColor,
+  parseBackendProfile,
+  type BackendProfile,
+} from "@orkestrator/protocol/backend-profile";
+import type { BackendId } from "@orkestrator/protocol/federation";
+import { isMachinePanelRealm } from "@/lib/federation/panel-realm";
+import { listen } from "@/lib/native/events";
+import {
+  getOwnProfile,
+  portalStore,
+  type PortalState,
+  type PortalStore,
+} from "@/lib/portal/portal-store";
+
+/** The machine this realm is bound to: the command node (or leaf) the client connected to. */
+export interface BoundMachine {
+  /** Same as `backendId`: views key every machine by its node identity. */
+  connectionId: string;
+  backendId: BackendId;
+  name: string;
+  colorToken: string;
+}
+
+export interface FederationContextValue {
+  /** The command node's view of its other nodes. */
+  portal: PortalStore;
+  portalState: PortalState;
+  bound: BoundMachine | null;
+  /** This node commands at least one other node, so multi-machine views are shown. */
+  enabled: boolean;
+  /** This realm can show other machines at all (not a single-machine panel). */
+  supported: boolean;
+  kind: "desktop" | "browser" | "none";
+  /** Name and colour of this realm's own machine, for its rows' dots. */
+  boundMachine: { name: string; colorToken: string } | null;
+}
+
+const FederationContext = createContext<FederationContextValue | null>(null);
+
+function clientKind(): FederationContextValue["kind"] {
+  if (typeof window === "undefined" || isMachinePanelRealm()) return "none";
+  // The desktop positions native panel views; every other client (hosted
+  // browser, iOS) shows another node's workspace in a frame.
+  return window.orkestrator?.panels ? "desktop" : "browser";
+}
+
+/**
+ * Multi-machine views of the backend this client is connected to. That
+ * backend is the command node: it keeps the registry, the connections and
+ * the live read model. This provider only reads it, so web, iOS and the
+ * desktop all see the same portal served by the same node.
+ */
+export function FederationProvider({ children }: { children: ReactNode }) {
+  const [kind] = useState(clientKind);
+  const portalState = useStore(portalStore.store);
+  const [profile, setProfile] = useState<BackendProfile | null>(null);
+
+  useEffect(() => {
+    if (kind === "none") return;
+    return portalStore.start();
+  }, [kind]);
+
+  useEffect(() => {
+    if (kind === "none") return;
+    let active = true;
+    let stop: (() => void) | null = null;
+    void getOwnProfile()
+      .then((value) => {
+        if (active) setProfile(value);
+      })
+      .catch(() => undefined);
+    void listen<unknown>(BACKEND_PROFILE_CHANGED_EVENT, ({ payload }) => {
+      try {
+        const next = parseBackendProfile(payload);
+        setProfile((current) => (current && current.revision > next.revision ? current : next));
+      } catch {
+        // A malformed event changes nothing.
+      }
+    }).then((unlisten) => {
+      if (active) stop = unlisten;
+      else unlisten();
+    });
+    return () => {
+      active = false;
+      stop?.();
+    };
+  }, [kind]);
+
+  const value = useMemo<FederationContextValue>(() => {
+    const selfId = portalState.selfId;
+    const bound: BoundMachine | null = selfId
+      ? {
+          connectionId: selfId,
+          backendId: selfId,
+          name: profile?.displayName ?? "This machine",
+          colorToken: profile?.colorToken ?? defaultMachineColor(selfId),
+        }
+      : null;
+    return {
+      portal: portalStore,
+      portalState,
+      bound,
+      supported: kind !== "none",
+      enabled: kind !== "none" && portalState.nodes.length > 0,
+      kind,
+      boundMachine: bound
+        ? { name: bound.name, colorToken: bound.colorToken ?? FALLBACK_MACHINE_COLOR }
+        : null,
+    };
+  }, [kind, portalState, profile]);
+
+  return <FederationContext.Provider value={value}>{children}</FederationContext.Provider>;
+}
+
+const INACTIVE: FederationContextValue = {
+  portal: portalStore,
+  portalState: portalStore.getState(),
+  bound: null,
+  enabled: false,
+  supported: false,
+  kind: "none",
+  boundMachine: null,
+};
+
+export function useFederation(): FederationContextValue {
+  return useContext(FederationContext) ?? INACTIVE;
+}

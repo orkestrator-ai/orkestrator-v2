@@ -953,7 +953,10 @@ export class TerminalWebSocketClient {
 
 export function terminalWebSocketUrl(baseUrl?: string): string {
   const httpUrl = baseUrl
-    ? new URL(TERMINAL_WEBSOCKET_PATH, `${baseUrl}/`)
+    ? // A leaf workspace relayed through its command node keeps the relay prefix.
+      /\/__orkestrator\/nodes\/[^/]+\/?$/.test(new URL(baseUrl).pathname)
+      ? new URL(`${baseUrl.replace(/\/+$/, "")}${TERMINAL_WEBSOCKET_PATH}`)
+      : new URL(TERMINAL_WEBSOCKET_PATH, `${baseUrl}/`)
     : new URL(TERMINAL_WEBSOCKET_PATH, window.location.href);
   httpUrl.protocol = httpUrl.protocol === "https:" ? "wss:" : "ws:";
   return httpUrl.toString();

@@ -12,6 +12,18 @@
 export const BACKEND_INSTANCE_DESCRIPTOR_FILE = "backend-instance.json";
 export const BACKEND_INSTANCE_DESCRIPTOR_TYPE = "orkestrator-backend-instance";
 export const BACKEND_INSTANCE_DESCRIPTOR_MAX_BYTES = 16 * 1024;
+export const BACKEND_INSTANCE_MAX_ENDPOINTS = 8;
+
+/**
+ * One listener a local client may reach. `control` is the loopback control
+ * listener (it also serves maintenance routes); `client` serves only the
+ * ordinary authenticated client API and is the only role an SSH forward may
+ * target.
+ */
+export interface BackendInstanceEndpoint {
+  role: "control" | "client";
+  url: string;
+}
 
 export interface BackendInstanceDescriptor {
   version: 1;
@@ -24,6 +36,11 @@ export interface BackendInstanceDescriptor {
   url: string;
   /** Browser/remote listener URL, when one is serving. */
   browserUrl?: string;
+  /**
+   * Loopback listeners by role (additive; older descriptors omit it). At most
+   * {@link BACKEND_INSTANCE_MAX_ENDPOINTS} entries.
+   */
+  endpoints?: BackendInstanceEndpoint[];
   /** Absolute path of the mode-0600 gateway credential file. */
   authFile: string;
   /** Absolute data directory this backend owns. */
@@ -52,6 +69,22 @@ function isHttpUrl(value: unknown): value is string {
   }
 }
 
+function parseEndpoints(value: unknown): BackendInstanceEndpoint[] {
+  if (!Array.isArray(value) || value.length > BACKEND_INSTANCE_MAX_ENDPOINTS) {
+    throw new Error("Backend instance descriptor field is invalid: endpoints");
+  }
+  return value.map((entry) => {
+    if (
+      !isRecord(entry) ||
+      (entry.role !== "control" && entry.role !== "client") ||
+      !isHttpUrl(entry.url)
+    ) {
+      throw new Error("Backend instance descriptor field is invalid: endpoints");
+    }
+    return { role: entry.role, url: entry.url };
+  });
+}
+
 /** Strict parse; throws a content-free message on any mismatch. */
 export function parseBackendInstanceDescriptor(value: unknown): BackendInstanceDescriptor {
   if (!isRecord(value)) throw new Error("Backend instance descriptor must be an object");
@@ -72,6 +105,7 @@ export function parseBackendInstanceDescriptor(value: unknown): BackendInstanceD
   if (value.browserUrl !== undefined && !isHttpUrl(value.browserUrl)) {
     throw new Error("Backend instance descriptor field is invalid: browserUrl");
   }
+  const endpoints = value.endpoints === undefined ? undefined : parseEndpoints(value.endpoints);
   if (
     !Number.isSafeInteger(value.publicApiSchemaVersion) ||
     (value.publicApiSchemaVersion as number) < 1
@@ -92,6 +126,7 @@ export function parseBackendInstanceDescriptor(value: unknown): BackendInstanceD
     startedAt: text("startedAt", 64),
     url: value.url,
     ...(value.browserUrl !== undefined ? { browserUrl: value.browserUrl as string } : {}),
+    ...(endpoints !== undefined ? { endpoints } : {}),
     authFile,
     dataDir,
     appVersion: text("appVersion", 64),

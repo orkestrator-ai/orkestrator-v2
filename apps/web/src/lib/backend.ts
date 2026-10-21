@@ -16,3 +16,4 @@ export * from "./backend/opencode-provider-auth";
 export * from "./backend/disk-usage";
 export * from "./backend/transcript-artifacts";
 export * from "./backend/changes";
+export * from "./backend/machine-profile";

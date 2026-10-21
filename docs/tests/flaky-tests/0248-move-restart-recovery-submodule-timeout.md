@@ -151,6 +151,12 @@ The aggregate failed this owner and its unchanged owning file passed with one wo
 - **Evidence:** `orkestrator-test-run.tW4jss/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory after aggregate completion.
 - **Assessment:** confirmed intermittent recurrence. Concurrent subprocess contention remains a hypothesis; no implementation, assertion, timeout or skip changed.
 
+## Federated client backend validation — 2026-10-21
+
+- **Original command:** a full `test:workspace` run during the federated multi-backend client work on `implement-remote-doc-007d1ec11a16-r1` (backend machine profile, authenticated hello and loopback client gateway, `0ec079bb`). That change does not touch `environment-move.ts` or its test.
+- **Failure:** this owner's submodule re-link case exceeded the five-second test timeout. The exact test name, elapsed milliseconds, worker counts, suite counts and evidence log path were not captured.
+- **Owning-file rerun:** `apps/backend/src/core/environment-move.test.ts` passed unchanged when rerun alone. The exact rerun command and duration were not captured.
+- **Assessment:** reported recurrence of the known intermittent timeout; shared-host contention remains a hypothesis. No implementation, assertion, timeout or skip changed.
 
 ## Credential snapshot review validation — 2026-10-21
 
@@ -198,3 +204,11 @@ apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.tes
 14.3 seconds. No assertion, timeout, skip or implementation changed. Evidence:
 `orkestrator-test-run.aIlmtw/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
 below the host temporary directory. Scheduling contention remains a hypothesis.
+
+## Transcript-scroll main merge validation — 2026-10-21
+
+- `mise run test:logged -- --name merge-tests -- mise run test` reproduced `restart recovery re-links submodules of an adopted or abandoned copy` at 5038.43 ms against its 5000 ms timeout. Workspace/root/bridges/protocol reservations were 4/1/2/1, with two isolated backend workers; browser and Electron checks also ran on the shared host.
+- The pending submodule subprocess was killed after the deadline and reported as a between-tests error.
+- The unchanged owning file passed: `mise run test:logged -- --name merge-move-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts --parallel=1 --only-failures` (exit 0, 29.0 s logged).
+- Backend counts: 9904 passed, 68 skipped, one failed and one between-tests error across 9973 tests in 570 files (929.21 s). The complete aggregate exited 1 after 1053.9 s; its other failure was the root tmux case (0482), which passed alone.
+- Evidence: host temporary directory `orkestrator-test-run.4IXzMM`. Shared-host contention remains a hypothesis. No source, assertion, timeout or skip changed.

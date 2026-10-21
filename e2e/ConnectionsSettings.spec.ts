@@ -4,7 +4,7 @@ const nickname = "🖥️".repeat(32); // 64 code points, 96 UTF-16 code units.
 
 for (const width of [390, 639, 640, 1024]) {
   for (const { trigger, title } of [
-    { trigger: "Add connection", title: "Add connection" },
+    { trigger: "Add machine", title: "Add machine" },
     { trigger: "Replace token", title: "Replace gateway token" },
     { trigger: "Rename desk.example", title: "Rename connection" },
   ]) {
@@ -43,7 +43,7 @@ for (const flow of ["add", "rename"] as const) {
       await context.grantPermissions(["clipboard-read", "clipboard-write"]);
       await page.goto("/connections-settings");
       if (flow === "add") {
-        await page.getByRole("button", { name: "Add connection" }).click();
+        await page.getByRole("button", { name: "Add machine", exact: true }).click();
         await page.getByLabel("Machine name or HTTPS address").fill("workstation");
         await page.getByLabel("Gateway token", { exact: true }).fill("gateway-token-123456");
       } else {

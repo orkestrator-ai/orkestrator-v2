@@ -26,6 +26,8 @@ import { AgentMailPanel } from "@/components/agent-mail/AgentMailPanel";
 import { SystemUsageIndicator } from "./SystemUsageIndicator";
 import { HostPark, HostSlot } from "./HostSlot";
 import { AppDialogHost } from "./AppDialogHost";
+import { MachinePanelsRegion } from "@/components/federation/MachinePanelsRegion";
+import { isMachinePanelRealm } from "@/lib/federation/panel-realm";
 
 interface AppShellProps {
   children?: React.ReactNode;
@@ -33,6 +35,9 @@ interface AppShellProps {
 
 export function AppShell({ children }: AppShellProps) {
   const isMobile = useMediaQuery(MOBILE_SHELL_MEDIA_QUERY);
+  // A machine panel is one workspace of one machine inside another window:
+  // no title bar, no sidebar, no nested panels.
+  const [machinePanel] = useState(isMachinePanelRealm);
   // The desktop and mobile layouts are different trees, so rendering `children`
   // in each would remount every pane at the 768px breakpoint, closing dialogs
   // and dropping pane state when a window narrows or a phone rotates. The
@@ -117,7 +122,14 @@ export function AppShell({ children }: AppShellProps) {
       <AppDialogHost />
       <AgentMailPanel />
       <HostPark parkRef={contentParkRef} />
-      {isMobile ? (
+      {machinePanel ? (
+        <div className="flex h-full min-h-0 flex-col" style={centralPanelThemeVars}>
+          <ActionBar />
+          <main className="min-h-0 flex-1 overflow-hidden bg-background">
+            <HostSlot host={contentHost} parkRef={contentParkRef} />
+          </main>
+        </div>
+      ) : isMobile ? (
         <MobileAppShellLayout
           selectedProjectId={selectedProjectId}
           selectedEnvironmentId={selectedEnvironmentId}
@@ -201,11 +213,14 @@ export function AppShell({ children }: AppShellProps) {
 
             {/* Main Content Panel */}
             <ResizablePanel defaultSize={filesPanelOpen ? 50 : 78} minSize={30}>
-              <div className="flex h-full flex-col" style={centralPanelThemeVars}>
-                <ActionBar />
-                <main className={cn("flex-1 overflow-hidden bg-background")}>
-                  <HostSlot host={contentHost} parkRef={contentParkRef} />
-                </main>
+              <div className="flex h-full min-w-0">
+                <div className="flex h-full min-w-0 flex-1 flex-col" style={centralPanelThemeVars}>
+                  <ActionBar />
+                  <main className={cn("flex-1 overflow-hidden bg-background")}>
+                    <HostSlot host={contentHost} parkRef={contentParkRef} />
+                  </main>
+                </div>
+                <MachinePanelsRegion />
               </div>
             </ResizablePanel>
 

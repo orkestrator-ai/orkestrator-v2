@@ -365,3 +365,34 @@ describe("preload API factory", () => {
     });
   });
 });
+
+test("workspace-only snapshots publish trusted gateway and stable machine metadata", () => {
+  const exposed = new Map<string, unknown>();
+  const snapshot = {
+    baseUrl: "http://127.0.0.1:45001",
+    connectionId: "workspace:uuid",
+    backendId: "bk_leaf",
+    legacyOrigin: null,
+    panel: true,
+  };
+  expect(
+    exposeActiveConnectionGateway(
+      {
+        exposeInMainWorld: (key, value) => {
+          exposed.set(key, value);
+        },
+      },
+      {
+        sendSync: (channel) =>
+          channel.endsWith("gateway-sync")
+            ? snapshot
+            : { activeConnectionId: "workspace:uuid", connections: [] },
+      },
+    ),
+  ).toBe(true);
+  expect(exposed.get("orkestratorDesktopIdentity")).toMatchObject({ backendId: "bk_leaf" });
+  expect(exposed.get("orkestratorGateway")).toMatchObject({
+    baseUrl: snapshot.baseUrl,
+    desktop: true,
+  });
+});

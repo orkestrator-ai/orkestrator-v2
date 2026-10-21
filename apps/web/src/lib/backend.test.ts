@@ -2252,6 +2252,9 @@ describe("backend command wrapper coverage", () => {
       "getMultiReviewReviewerHistoryPage",
       // Test seam for the cached change-tracking capabilities, not a command.
       "resetChangeTrackingCapabilitiesForTests",
+      // Validate the machine profile they return; covered below.
+      "getBackendProfile",
+      "updateBackendProfile",
     ]);
     const commandWrappers = Object.entries(backendWrappers).flatMap(([name, value]) =>
       typeof value === "function" && !specialWrappers.has(name)
@@ -2266,6 +2269,23 @@ describe("backend command wrapper coverage", () => {
       await wrapper(...args);
       expect(invokeMock.mock.calls.length, `${name} must call invoke`).toBeGreaterThan(0);
     }
+  });
+
+  test("machine profile wrappers validate the profile the machine returns", async () => {
+    const profile = { revision: 2, displayName: "Mac mini", colorToken: "violet", updatedAt: "t" };
+    invokeMock.mockResolvedValueOnce(profile);
+    await expect(backendWrappers.getBackendProfile()).resolves.toEqual(profile);
+    expect(invokeMock).toHaveBeenLastCalledWith("get_backend_profile");
+    invokeMock.mockResolvedValueOnce({ ...profile, revision: 3, colorToken: "teal" });
+    await expect(
+      backendWrappers.updateBackendProfile({ expectedRevision: 2, colorToken: "teal" }),
+    ).resolves.toMatchObject({ revision: 3, colorToken: "teal" });
+    expect(invokeMock).toHaveBeenLastCalledWith("update_backend_profile", {
+      expectedRevision: 2,
+      colorToken: "teal",
+    });
+    invokeMock.mockResolvedValueOnce({ ...profile, colorToken: "#ff0000" });
+    await expect(backendWrappers.getBackendProfile()).rejects.toThrow("palette token");
   });
 
   test("validates and forwards resource revision manifest knowledge", async () => {

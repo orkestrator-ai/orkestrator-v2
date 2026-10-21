@@ -59,6 +59,7 @@ export class OrkestratorGateway {
     this.lifecycle = new GatewayLifecycle(this.context, {
       handle: (request, response, listenerKind) =>
         this.auth.handle(request, response, listenerKind),
+      handleUpgrade: (request, socket, head) => this.auth.handleUpgrade(request, socket, head),
     });
     this.events = new GatewayEvents(this.context);
     this.proxy = new GatewayProxy(this.context);

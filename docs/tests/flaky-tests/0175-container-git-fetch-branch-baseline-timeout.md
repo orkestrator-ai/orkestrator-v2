@@ -9,3 +9,14 @@
 - **Suite counts:** 5278 total, 5262 passed, 1 failed, 15 skipped (305 files, 153.88 s)
 - **Isolated rerun:** `mise run test:logged -- --name git-fetch-alone -- bun test --cwd apps/backend src/core/container-git-fetch-git.test.ts src/core/plan-usage.test.ts` → passed (4.8 s for both files)
 - **Hypothesis:** the case runs real `git` processes against a local remote. Under aggregate load its total wall time crosses the 5-second default, and the dangling process was the in-flight `git` child the timeout abandoned. Host load average was about 8 shortly after the failure. It passed in the preceding full `mise run test` on the same change. The change in progress (multi-account support) does not touch the container git scripts or this test.
+
+## 2026-10-21 recurrence during node profile notification validation
+
+- **Snapshot:** `b2c385c1e` plus the node profile notification fix and its integration tests; the Git scripts and this owning test file were unchanged.
+- **Original command:** `mise run test:logged -- --name full-suite -- mise run test`.
+- **Worker configuration:** four aggregate groups; workspace held four worker slots, with at most two package tasks and two Bun workers per package. Root held one slot, bridges two and the protocol check one.
+- **Failure:** the same branch-baseline case timed out after 5000 ms (reported at 5100.95 ms), with `killed 1 dangling process`. An unhandled `script exited 143` from the case's `shell()` helper followed the timeout.
+- **Suite counts:** backend: 9973 tests across 570 files, 9904 passed, 68 skipped, one failed and one error (467.27 s). The other workspace packages, root/support, bridges and protocol check passed. The full logged command exited 1 after 506.7 s.
+- **Isolated rerun:** `mise run test:logged -- --name container-fetch-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/container-git-fetch-git.test.ts --parallel=1 --only-failures` → all six tests passed unchanged (3.7 s logged).
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.ozsKgo/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Assessment:** consistent with the existing aggregate-load timeout hypothesis; no timeout or assertion was changed. The full aggregate remains a failed validation result, with this isolated pass confirming the recurrence is intermittent.

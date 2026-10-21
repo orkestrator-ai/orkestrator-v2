@@ -57,10 +57,10 @@ it reaches. Some rules of thumb:
 | Score | Meaning | Items |
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
-| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 18 |
-| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 266 |
-| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 280 |
-| **Total** | | **565** |
+| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 16 |
+| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 269 |
+| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 283 |
+| **Total** | | **569** |
 
 ## Very high
 
@@ -91,7 +91,7 @@ it reaches. Some rules of thumb:
 
 - [x] Re-baseline the opt-in preview suites and all preview unit files on current main after #966, #967 and #969 ([service-preview-rollout.md](service-preview-rollout.md), qualification)
 - [x] Run the real Electron window service-preview qualification with the tunnel enabled in an isolated profile ([service-preview-rollout.md](service-preview-rollout.md), qualification)
-- [ ] Cover the remaining real-Electron service-preview cases: windows on different backends, a connection switch, clipboard, overlays, HMR reattach, keyboard and narrow viewport ([service-preview-rollout.md](service-preview-rollout.md), qualification)
+- [x] Cover the remaining real-Electron service-preview cases: windows on different backends, a connection switch, clipboard, overlays, HMR reattach, keyboard and narrow viewport ([service-preview-rollout.md](service-preview-rollout.md), qualification)
 - [ ] Write a two-machine tailnet runbook and run decoy, latency, throttling, reconnect and publication checks ([service-preview-rollout.md](service-preview-rollout.md), qualification)
 - [x] Re-run the annotation Electron and isolated browser suites on current main and record a sign-off ([web-annotation-qualification.md](web-annotation-qualification.md), qualification)
 - [x] Run the live annotation implement test once per provider and record skips explicitly ([web-annotation-qualification.md](web-annotation-qualification.md), qualification)
@@ -138,7 +138,7 @@ it reaches. Some rules of thumb:
 
 - [x] Park Claude `onElicitation` and `onUserDialog` requests as interactions instead of declining them ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md))
 - [x] Check on each platform that the Agent Info policy summary matches the options the adapter received ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), qualification)
-- [ ] Qualify a paused question and approval on each provider's real CLI past ten minutes, then answer ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), qualification)
+- [x] Qualify a paused question and approval on each provider's real CLI past ten minutes, then answer ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), qualification)
 - [x] Keep the Claude CLI open across idle turns with an idle detach instead of draining at turn end ([mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md))
 - [x] Report `authentication-required` readiness on Claude, Pi, ACP and OpenCode; drop the Cursor-only 401 branch ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md))
 - [x] Confirm no auth response body carries a token or key except the login URL, and the URL is never logged ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md), qualification)
@@ -197,7 +197,7 @@ it reaches. Some rules of thumb:
 - [x] Fix flake 0166 (OpenCode probe deadline), which recurred on 2026-10-15 ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
 - [x] Keep split panes mounted across the mobile breakpoint through stable per-pane hosts ([mobile-layout-gaps.md](mobile-layout-gaps.md))
 - [x] Move the environment settings dialog out of the drawer row so it is usable on mobile ([mobile-layout-gaps.md](mobile-layout-gaps.md))
-- [x] Keep MCP editor writes in an agent-test profile out of the host's Codex and OpenCode homes when those credential sources are authorized ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md))
+- [x] Keep MCP editor writes and Codex approval rules in an agent-test profile out of the host's Codex and OpenCode homes when those credential sources are authorized ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md))
 - [ ] Send agent-test container environments the host's Claude access token only, never its refresh token ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md))
 
 ## Medium
@@ -379,6 +379,8 @@ it reaches. Some rules of thumb:
 - [ ] Verify every bridge has per-kind park, render, resolve and fail-closed timeout interaction tests ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), verify)
 - [ ] Verify whether a container Cursor session loads the repository's `.cursor/mcp.json` today ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), verify)
 - [ ] Decide whether Claude MCP OAuth sign-in uses parked `mcp-url` elicitations or a separate MCP flow ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), decision)
+- [ ] Let a real Codex turn raise a question (Plan collaboration mode or `default_mode_request_user_input`), or drop `question` from its capabilities ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md))
+- [ ] Pause a Grok permission and question past ten minutes on a signed-in Grok, then answer ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), qualification)
 - [x] Retire Claude per-turn bookkeeping (continuation watchdog, `backgroundTaskControls`) with the warm runtime ([mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md))
 - [ ] Steer long Claude and Cursor turns, switch environment, return and reload; confirm the snapshot restores it ([mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md), qualification)
 - [x] Measure Claude turn-start and follow-up first-token latency before and after the warm runtime changes ([mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md), qualification)
@@ -412,6 +414,7 @@ it reaches. Some rules of thumb:
 - [ ] Check what a live Cursor resume row shows when every agent is created as `Orkestrator` ([session-lifecycle-consistency.md](session-lifecycle-consistency.md), verify)
 - [x] Close the empty session a resume into a new tab replaces; Grok keeps a process per resume ([session-lifecycle-consistency.md](session-lifecycle-consistency.md))
 - [ ] Run live close retention for Cursor and Pi with both signed in to an isolated profile ([session-lifecycle-consistency.md](session-lifecycle-consistency.md), qualification)
+- [ ] Retry or serialise OpenCode server starts that fail on the shared `opencode.db` lock, and fail the turn instead of waiting silently ([session-lifecycle-consistency.md](session-lifecycle-consistency.md))
 
 ### Transcripts, observation and bandwidth (medium)
 
@@ -589,6 +592,9 @@ it reaches. Some rules of thumb:
 - [ ] Decide whether annotations on legacy URL tabs may keep depending on the legacy route ([service-preview-rollout.md](service-preview-rollout.md), decision)
 - [ ] Decide whether preview tunnel liveness should outlast a reader paused by backpressure, whose ping waits behind queued data ([service-preview-rollout.md](service-preview-rollout.md), decision)
 - [ ] Name service tabs after their service in the tab strip instead of "Browser N" ([service-preview-rollout.md](service-preview-rollout.md))
+- [ ] Give the service tab's address field room in narrow panes (92 px at the narrowest window) ([service-preview-rollout.md](service-preview-rollout.md))
+- [ ] Confirm flake 0620 (keyboard service picker under timer throttling) stays fixed, then consider its switches for every Electron spec ([service-preview-rollout.md](service-preview-rollout.md), verify)
+- [ ] Verify flake 0622, a remote preview attachment held after its window closed in one slow run ([service-preview-rollout.md](service-preview-rollout.md), verify)
 - [ ] Build the web iframe preview surface: minimal sandbox, honoured framing, top-level fallback, safe postMessage ([embedded-service-previews.md](embedded-service-previews.md))
 - [ ] Investigate partitioned (CHIPS) cookies for the `__Host-orkestrator-preview` transport cookie only ([embedded-service-previews.md](embedded-service-previews.md))
 - [ ] Build an optional iOS in-app preview in a dedicated `WKWebView` with its own data store ([embedded-service-previews.md](embedded-service-previews.md))
@@ -911,7 +917,7 @@ it reaches. Some rules of thumb:
 | File | Very high | High | Medium | Low | Total |
 | --- | --- | --- | --- | --- | --- |
 | **Service previews and web annotations** | | | | | |
-| [service-preview-rollout.md](service-preview-rollout.md) |  | 2 | 12 | 9 | 23 |
+| [service-preview-rollout.md](service-preview-rollout.md) |  | 1 | 12 | 12 | 25 |
 | [embedded-service-previews.md](embedded-service-previews.md) |  |  |  | 13 | 13 |
 | [preview-service-discovery.md](preview-service-discovery.md) |  |  | 1 | 5 | 6 |
 | [web-annotation-qualification.md](web-annotation-qualification.md) |  |  | 15 | 4 | 19 |
@@ -938,14 +944,14 @@ it reaches. Some rules of thumb:
 | [mcp-environment-delivery.md](mcp-environment-delivery.md) |  |  | 4 | 10 | 14 |
 | [control-mcp-voice-surface.md](control-mcp-voice-surface.md) |  |  | 9 |  | 9 |
 | **Agent engines and provider SDKs** | | | | | |
-| [agent-interactions-and-permissions.md](agent-interactions-and-permissions.md) |  | 1 | 13 | 6 | 20 |
+| [agent-interactions-and-permissions.md](agent-interactions-and-permissions.md) |  |  | 15 | 6 | 21 |
 | [mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md) |  |  | 3 | 5 | 8 |
 | [session-titles-and-history.md](session-titles-and-history.md) |  |  | 4 | 4 | 8 |
 | [agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md) |  |  | 8 | 6 | 14 |
 | [composer-model-parameters.md](composer-model-parameters.md) |  |  | 3 | 5 | 8 |
 | [opencode-v2.md](opencode-v2.md) |  |  |  | 3 | 3 |
 | [provider-sdk-adoption-backlog.md](provider-sdk-adoption-backlog.md) |  |  | 2 | 15 | 17 |
-| [session-lifecycle-consistency.md](session-lifecycle-consistency.md) |  |  | 7 | 7 | 14 |
+| [session-lifecycle-consistency.md](session-lifecycle-consistency.md) |  |  | 8 | 7 | 15 |
 | **Transcripts, observation and bandwidth** | | | | | |
 | [rich-transcripts.md](rich-transcripts.md) |  |  | 2 |  | 2 |
 | [transcript-history-efficiency.md](transcript-history-efficiency.md) |  | 2 | 13 | 5 | 20 |

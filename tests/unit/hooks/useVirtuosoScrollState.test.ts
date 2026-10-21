@@ -249,7 +249,9 @@ describe("useVirtuosoScrollState", () => {
       }
     });
 
-    test("keeps follow armed when a wheel nudge stays within the bottom threshold", () => {
+    test("releases follow on a one-pixel wheel scroll up from the bottom", () => {
+      // Anything less leaves a band the reader cannot scroll out of: while
+      // still sticky, the next growth pin drags them back to the tail.
       const { result } = renderHook(() => useVirtuosoScrollState());
       const el = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
 
@@ -258,6 +260,23 @@ describe("useVirtuosoScrollState", () => {
         act(() => result.current.scrollProps.scrollerRef(el));
         act(() => {
           wheelUp(el, 699, -1);
+        });
+
+        expect(result.current.scrollProps.followOutput(true)).toBe(false);
+      } finally {
+        document.body.removeChild(el);
+      }
+    });
+
+    test("keeps follow armed when a wheel event does not move the scroller", () => {
+      const { result } = renderHook(() => useVirtuosoScrollState());
+      const el = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
+
+      try {
+        el.scrollTop = 700;
+        act(() => result.current.scrollProps.scrollerRef(el));
+        act(() => {
+          wheelUp(el, 700, -1);
         });
 
         expect(result.current.scrollProps.followOutput(true)).toBe("auto");
@@ -1155,13 +1174,99 @@ describe("useVirtuosoScrollState", () => {
           scroller.dispatchEvent(new Event("pointerdown"));
         });
 
-        // Still within AT_BOTTOM_THRESHOLD (50px) of the 700 target.
+        Object.defineProperty(scroller, "clientHeight", {
+          get: () => 330,
+          configurable: true,
+        });
         scroller.scrollTop = 670;
         act(() => {
           scroller.dispatchEvent(new Event("scroll"));
         });
 
         expect(result.current.scrollProps.followOutput(false)).toBe("auto");
+      } finally {
+        document.body.removeChild(scroller);
+      }
+    });
+
+    test("releases stick intent when a drag moves up only slightly from the bottom", () => {
+      const { result } = renderHook(() => useVirtuosoScrollState());
+      const scroller = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
+
+      try {
+        act(() => result.current.scrollProps.scrollerRef(scroller));
+        scroller.scrollTop = 700;
+        act(() => {
+          scroller.dispatchEvent(new Event("scroll"));
+          scroller.dispatchEvent(new Event("pointerdown"));
+        });
+
+        // Well inside Virtuoso's 50px at-bottom band.
+        scroller.scrollTop = 690;
+        act(() => {
+          scroller.dispatchEvent(new Event("scroll"));
+        });
+
+        expect(result.current.scrollProps.followOutput(true)).toBe(false);
+      } finally {
+        document.body.removeChild(scroller);
+      }
+    });
+
+    test("does not pin a slow wheel scroll back to the bottom between events", () => {
+      // The reported glitch: each small wheel step landed inside the at-bottom
+      // band, stayed sticky, and the next growth pin snapped it back, so only
+      // a flick past the band in one event could escape.
+      const harness = installObservers();
+      const { result, unmount } = renderHook(() => useVirtuosoScrollState());
+      const scroller = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
+      scroller.appendChild(document.createElement("div"));
+
+      try {
+        scroller.scrollTop = 700;
+        act(() => result.current.scrollProps.scrollerRef(scroller));
+        for (const next of [694, 688, 682]) {
+          act(() => {
+            wheelUp(scroller, next, -6);
+          });
+          act(() => {
+            harness.resizeCallback?.([], {} as ResizeObserver);
+          });
+          expect(scroller.scrollTop).toBe(next);
+        }
+        expect(result.current.scrollProps.followOutput(true)).toBe(false);
+      } finally {
+        unmount();
+        document.body.removeChild(scroller);
+        harness.restore();
+      }
+    });
+
+    test("re-engages stick intent when the user scrolls back down to the bottom", () => {
+      // Releasing inside Virtuoso's at-bottom band never toggles its at-bottom
+      // state, so no atBottomStateChange(true) arrives on the way back down.
+      const { result } = renderHook(() => useVirtuosoScrollState());
+      const scroller = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
+
+      try {
+        scroller.scrollTop = 700;
+        act(() => result.current.scrollProps.scrollerRef(scroller));
+        act(() => {
+          wheelUp(scroller, 680);
+        });
+        expect(result.current.scrollProps.followOutput(true)).toBe(false);
+
+        scroller.scrollTop = 690;
+        act(() => {
+          scroller.dispatchEvent(new Event("scroll"));
+        });
+        expect(result.current.scrollProps.followOutput(true)).toBe(false);
+
+        scroller.scrollTop = 700;
+        act(() => {
+          scroller.dispatchEvent(new Event("scroll"));
+        });
+        expect(result.current.scrollProps.followOutput(true)).toBe("auto");
       } finally {
         document.body.removeChild(scroller);
       }
@@ -1190,7 +1295,7 @@ describe("useVirtuosoScrollState", () => {
       }
     });
 
-    test("keeps stick intent when an upward touch drag stays within the bottom threshold", () => {
+    test("releases stick intent on a short upward touch drag near the bottom", () => {
       const { result } = renderHook(() => useVirtuosoScrollState());
       const scroller = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
 
@@ -1200,12 +1305,12 @@ describe("useVirtuosoScrollState", () => {
         act(() => {
           scroller.dispatchEvent(new Event("touchstart"));
         });
-        scroller.scrollTop = 670;
+        scroller.scrollTop = 690;
         act(() => {
           scroller.dispatchEvent(new Event("touchmove"));
         });
 
-        expect(result.current.scrollProps.followOutput(true)).toBe("auto");
+        expect(result.current.scrollProps.followOutput(true)).toBe(false);
       } finally {
         document.body.removeChild(scroller);
       }
@@ -1254,7 +1359,7 @@ describe("useVirtuosoScrollState", () => {
     });
 
     test.each(["ArrowUp", "PageUp", "Home"])(
-      "keeps stick intent when %s leaves the viewport within the bottom threshold",
+      "releases stick intent when %s moves the viewport only slightly",
       (key) => {
         const { result } = renderHook(() => useVirtuosoScrollState());
         const scroller = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
@@ -1264,11 +1369,11 @@ describe("useVirtuosoScrollState", () => {
           act(() => result.current.scrollProps.scrollerRef(scroller));
           act(() => {
             scroller.dispatchEvent(new KeyboardEvent("keydown", { key }));
-            scroller.scrollTop = 670;
+            scroller.scrollTop = 680;
             scroller.dispatchEvent(new Event("scroll"));
           });
 
-          expect(result.current.scrollProps.followOutput(true)).toBe("auto");
+          expect(result.current.scrollProps.followOutput(true)).toBe(false);
         } finally {
           document.body.removeChild(scroller);
         }

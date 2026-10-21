@@ -1,4 +1,6 @@
 import { createInterface } from "node:readline";
+import type { BackendHello } from "@orkestrator/protocol/backend-profile";
+import { checkBackendRoute } from "./backend-hello.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import { cp, lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -311,8 +313,21 @@ const EVENT_RECONNECT_DELAY_MS = 500;
 const EVENT_RECONNECT_MAX_DELAY_MS = 8_000;
 const EVENT_STREAM_HEALTHY_AFTER_MS = 30_000;
 
+export type BackendStreamState = "open" | "closed";
+
+export type BackendListenOptions = {
+  /** Called when the authoritative stream opens or drops (it reconnects by itself). */
+  onStreamState?: (state: BackendStreamState) => void;
+};
+
 export class BackendHttpClient {
   private abortEvents: AbortController | null = null;
+  private listener: {
+    onEvent: (event: string, payload: unknown) => void;
+    options: BackendListenOptions;
+  } | null = null;
+  /** Kept across a route retarget to the same backend generation so replay resumes. */
+  private eventStream = new GatewayEventStreamState();
   private readonly eventReconnectDelayMs: number;
   /**
    * Shared ordering contract for terminal input. After an ambiguous loss only
@@ -340,6 +355,25 @@ export class BackendHttpClient {
         this.request(request.command, { sessionId: request.sessionId, data: request.data }, signal),
       runLifecycle: (operation, signal) => this.request(operation.command, operation.args, signal),
     });
+  }
+
+  /** Origin this client currently reaches. Ephemeral for a tunnelled route. */
+  get origin(): string {
+    return new URL(this.baseUrl).origin;
+  }
+
+  /**
+   * Point this client at another route to the same backend without
+   * replacing it, so the terminal input sequencer and its ambiguous-send
+   * fence survive the route change. The event stream restarts; its replay
+   * cursor is kept only when the caller proved the backend generation did
+   * not change (a cursor from another process lifetime is meaningless).
+   */
+  retarget(baseUrl: string, token: string, options: { preserveCursor: boolean }): void {
+    this.baseUrl = baseUrl;
+    this.token = token;
+    if (!options.preserveCursor) this.eventStream = new GatewayEventStreamState();
+    if (this.listener) this.listen(this.listener.onEvent, this.listener.options);
   }
 
   invoke<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
@@ -392,6 +426,12 @@ export class BackendHttpClient {
     } finally {
       clearTimeout(timeout);
     }
+  }
+
+  /** Authenticated hello; `null` for an older backend without one. */
+  async hello(timeoutMs: number): Promise<BackendHello | null> {
+    const outcome = await checkBackendRoute(this.baseUrl, this.token, { timeoutMs });
+    return outcome.kind === "hello" ? outcome.hello : null;
   }
 
   async getTokenSettings(): Promise<GatewayTokenSettings> {
@@ -452,16 +492,21 @@ export class BackendHttpClient {
     return payload;
   }
 
-  listen(onEvent: (event: string, payload: unknown) => void): void {
+  listen(
+    onEvent: (event: string, payload: unknown) => void,
+    options: BackendListenOptions = {},
+  ): void {
     this.abortEvents?.abort();
     const controller = new AbortController();
     this.abortEvents = controller;
-    void this.consumeEvents(controller.signal, onEvent);
+    this.listener = { onEvent, options };
+    void this.consumeEvents(controller.signal, onEvent, options);
   }
 
   stopListening(): void {
     this.abortEvents?.abort();
     this.abortEvents = null;
+    this.listener = null;
   }
 
   /**
@@ -473,8 +518,9 @@ export class BackendHttpClient {
   private async consumeEvents(
     signal: AbortSignal,
     onEvent: (event: string, payload: unknown) => void,
+    options: BackendListenOptions = {},
   ): Promise<void> {
-    const stream = new GatewayEventStreamState();
+    const stream = this.eventStream;
     const backoff = new ReconnectBackoff({
       initialDelayMs: this.eventReconnectDelayMs,
       maxDelayMs: Math.max(this.eventReconnectDelayMs, EVENT_RECONNECT_MAX_DELAY_MS),
@@ -495,6 +541,7 @@ export class BackendHttpClient {
           return;
         }
         backoff.connected();
+        options.onStreamState?.("open");
         // Terminal output is excluded from authoritative replay. Even a quiet
         // caught-up reconnect must trigger exact snapshot recovery.
         onEvent(TERMINAL_EVENT_STREAM_CONNECTED_EVENT, undefined);
@@ -513,6 +560,7 @@ export class BackendHttpClient {
         console.error("[BackendClient] Event stream disconnected:", error);
       }
       if (signal.aborted) return;
+      options.onStreamState?.("closed");
       // A stream that ends cleanly is retried with the same backoff as a failed
       // one, so a peer that accepts and immediately closes cannot spin this loop.
       await new Promise<void>((resolve) => {

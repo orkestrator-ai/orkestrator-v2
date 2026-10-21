@@ -1,9 +1,9 @@
 import { afterEach, expect, mock, test } from "bun:test";
 import { invoke } from "@/lib/native/backend";
-import { openLeafWorkspace, storeWorkspaceForFrame } from "./workspaces";
-import { browserPanelUrl } from "@/lib/federation/panel-realm";
+import { openLeafWorkspace } from "./workspaces";
+import { writeStoredWorkspace } from "./workspace-target-storage";
 import { desktopConnectionStorageKey } from "@/lib/desktop-storage-key";
-import { createBrowserGatewayApi, machinePanelGatewayOptions } from "@/lib/native/web-gateway";
+import { createBrowserGatewayApi, workspaceTargetGatewayOptions } from "@/lib/native/web-gateway";
 
 const happyDOM = (window as unknown as { happyDOM: { setURL(url: string): void } }).happyDOM;
 const originalFetch = globalThis.fetch;
@@ -39,66 +39,6 @@ test("HTTP 200 HTML and another installation are rejected in favor of relay", as
   expect(workspace.baseUrl).toBe(`${window.location.origin}/__orkestrator/nodes/bk_leaf`);
 });
 
-test("generated URLs isolate storage for two leaves and parent", () => {
-  window.orkestrator = undefined;
-  const keys = [];
-  for (const nodeId of ["bk_a", "bk_b"]) {
-    const url = browserPanelUrl({
-      workspaceId: "w",
-      nodeId,
-      projectId: "shared",
-      environmentId: "shared",
-      connection: { nodeName: nodeId, path: "relay" },
-    });
-    window.history.replaceState(null, "", url);
-    keys.push(desktopConnectionStorageKey("draft"));
-  }
-  happyDOM.setURL(originalHref);
-  expect(new Set([...keys, desktopConnectionStorageKey("draft")]).size).toBe(3);
-});
-
-test("unbound panel gateway rejects commands without any fetch", async () => {
-  const fetchMock = mock(async () => new Response("{}"));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
-  window.orkestrator = undefined;
-  window.history.replaceState(
-    null,
-    "",
-    browserPanelUrl({
-      workspaceId: "missing",
-      nodeId: "bk_leaf",
-      projectId: "shared",
-      environmentId: "shared",
-      connection: { nodeName: "Leaf", path: "relay" },
-    }),
-  );
-  const gateway = createBrowserGatewayApi(machinePanelGatewayOptions());
-  await expect(gateway.invoke("start_environment", { environmentId: "shared" })).rejects.toThrow(
-    "reconnect",
-  );
-  expect(fetchMock).not.toHaveBeenCalled();
-});
-
-test("workspace storage never puts grant in generated URL", () => {
-  const workspace = {
-    workspaceId: "w",
-    nodeId: "bk_a" as never,
-    nodeName: "A",
-    path: "direct" as const,
-    baseUrl: "https://a.test",
-    token: "private-grant",
-    expiresAt: Date.now() + 60_000,
-  };
-  storeWorkspaceForFrame(workspace);
-  expect(
-    browserPanelUrl({
-      workspaceId: workspace.workspaceId,
-      nodeId: workspace.nodeId,
-      connection: workspace,
-    }),
-  ).not.toContain("private-grant");
-});
-
 test("relay requests use the command-node session without exposing a leaf credential", async () => {
   happyDOM.setURL("https://command.test/");
   const fetchMock = mock(async () => new Response(JSON.stringify({ result: [] })));
@@ -121,7 +61,6 @@ test("desktop storage uses verified leaf identity across new workspace IDs", () 
       connectionId: "workspace:one",
       backendId: "bk_leaf",
       legacyOrigin: null,
-      panel: true,
     };
     const first = desktopConnectionStorageKey("workspace-draft");
     localStorage.setItem(first, "remembered draft");
@@ -138,44 +77,45 @@ test("desktop storage uses verified leaf identity across new workspace IDs", () 
   }
 });
 
-test("narrow clients open a newly created leaf environment on its owning node", async () => {
-  const { openMachineWorkspace } = await import("@/lib/federation/open-workspace");
-  const { createFederatedEnvironment } = await import("@/lib/federation/federated-actions");
-  const originalMatchMedia = window.matchMedia;
-  const originalOpen = window.open;
+test("a browser tab stored on a leaf boots as that leaf's client with the command node as portal", async () => {
+  happyDOM.setURL("https://command.test/");
+  const fetchMock = mock(async () => new Response(JSON.stringify({ result: [] })));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const target = {
+    orkestrator: undefined,
+    orkestratorGateway: undefined,
+    orkestratorPortal: undefined,
+    orkestratorWorkspaceTarget: undefined,
+    location: window.location,
+  } as unknown as Window;
+  expect(workspaceTargetGatewayOptions(target)).toEqual({});
+  expect(target.orkestratorPortal).toBeUndefined();
+
+  writeStoredWorkspace({
+    workspaceId: "w1",
+    nodeId: "bk_leaf" as never,
+    nodeName: "Leaf",
+    path: "relay",
+    routeKind: "ssh",
+    via: "Desk",
+    baseUrl: "https://command.test/__orkestrator/nodes/bk_leaf",
+    expiresAt: Date.now() + 60_000,
+  });
   try {
-    happyDOM.setURL("https://command.test/");
-    window.matchMedia = (() => ({ matches: true })) as never;
-    window.open = mock(() => null) as never;
-    invokeMock.mockResolvedValue({
-      workspaceId: "new-workspace",
+    const options = workspaceTargetGatewayOptions(target);
+    expect(options).toEqual({ baseUrl: "https://command.test/__orkestrator/nodes/bk_leaf" });
+    expect(target.orkestratorWorkspaceTarget).toEqual({
       nodeId: "bk_leaf",
       nodeName: "Leaf",
-      grant: { token: "fixture", expiresAt: Date.now() + 60_000 },
-      directOrigins: [],
-      relayBase: "/__orkestrator/nodes/bk_leaf",
+      path: "relay",
+      routeKind: "ssh",
+      via: "Desk",
     });
-    const create = mock(async (nodeId: string) => {
-      expect(nodeId).toBe("bk_leaf");
-      return { id: "new-env" };
-    });
-    const environment = await createFederatedEnvironment({ invokeOnNode: create } as never, {
-      backendId: "bk_leaf" as never,
-      projectId: "p",
-    });
-    openMachineWorkspace({
-      connectionId: "bk_leaf",
-      projectId: "p",
-      environmentId: environment.id,
-      title: "New",
-    });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    const search = new URLSearchParams(window.location.search);
-    expect(search.get("environment")).toBe("new-env");
-    expect(search.get("machine")).toBe("bk_leaf");
-    expect(search.get("panel")).toBe("workspace");
+    await target.orkestratorPortal!.invoke("get_node_summaries");
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(String(url)).toBe("https://command.test/__orkestrator/invoke");
+    expect(init.credentials).toBe("same-origin");
   } finally {
-    window.matchMedia = originalMatchMedia;
-    window.open = originalOpen;
+    writeStoredWorkspace(null);
   }
 });

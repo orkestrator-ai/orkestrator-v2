@@ -5,7 +5,7 @@ import {
   listNodeOutcomes,
   type NodeOutcomeRecord,
 } from "@/lib/portal/portal-store";
-import { listen } from "@/lib/native/events";
+import { portalListen } from "@/lib/portal/portal-transport";
 import { NODE_SUMMARY_CHANGED_EVENT } from "@orkestrator/protocol/node-summaries";
 import { useFederation } from "./FederationProvider";
 
@@ -42,7 +42,7 @@ export function UnknownOutcomesNotice({ connectionId }: { connectionId: string }
     refresh();
     let stop: (() => void) | null = null;
     let active = true;
-    void listen(NODE_SUMMARY_CHANGED_EVENT, refresh).then((unlisten) => {
+    void portalListen(NODE_SUMMARY_CHANGED_EVENT, refresh).then((unlisten) => {
       if (active) stop = unlisten;
       else unlisten();
     });

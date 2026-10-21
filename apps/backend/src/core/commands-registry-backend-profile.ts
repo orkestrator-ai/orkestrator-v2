@@ -18,6 +18,7 @@ export function registerBackendProfileCommands(register: CommandRegistrar): void
   register("update_backend_profile", async (args, context) => {
     const profile = await context.storage.updateBackendProfile(parseBackendProfileUpdate(args));
     context.emit(BACKEND_PROFILE_CHANGED_EVENT, profile);
+    context.nodePortal?.readModel.noteLocalEvent(BACKEND_PROFILE_CHANGED_EVENT, profile);
     return profile;
   });
 }

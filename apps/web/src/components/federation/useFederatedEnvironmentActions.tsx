@@ -31,7 +31,7 @@ import { useFederation } from "./FederationProvider";
 export interface FederatedEnvironmentActions {
   busy: boolean;
   writable: boolean;
-  /** Selects a row of this window's machine; opens another machine's panel. */
+  /** Selects a row of this window's machine; switches to another machine's workspace. */
   open: () => void;
   copyLink: () => void;
   start: () => void;

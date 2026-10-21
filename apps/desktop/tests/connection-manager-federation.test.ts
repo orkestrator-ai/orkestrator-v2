@@ -901,12 +901,49 @@ test("useRoute releases a transport if its requesting scope closes while dialing
   }
 });
 
+test("a window points at a leaf workspace and back to its command node", async () => {
+  const gateways = installGateways({ "https://leaf.example": { installationId: "bk_leaf" } });
+  const connections = manager(new MemoryStore(catalogue([])));
+  try {
+    await connections.initialize();
+    await connections.bind("window", "local");
+    await connections.bind("window:portal", connections.getConnectionId("window"));
+    connections.retargetScopeToWorkspace("window", {
+      workspaceId: "w1",
+      nodeId: "bk_leaf",
+      baseUrl: "https://leaf.example",
+      token,
+    });
+    expect(connections.getConnectionId("window")).toBe("workspace:w1");
+    expect(connections.getConnectionId("window:portal")).toBe("local");
+    expect(connections.getGatewayBaseUrl("window")).toBe("https://leaf.example");
+    expect(connections.getBackendIdentity("window").backendId).toBe("bk_leaf");
+    await connections.invoke("get_projects", {}, "window");
+    expect(gateways.requests.at(-1)?.origin).toBe("https://leaf.example");
+    expect(() =>
+      connections.retargetScopeToWorkspace("other", {
+        workspaceId: "w2",
+        baseUrl: "https://leaf.example",
+        token,
+      }),
+    ).toThrow();
+
+    connections.restoreScopeFrom("window", "window:portal");
+    expect(connections.getConnectionId("window")).toBe("local");
+    expect(connections.getGatewayBaseUrl("window")).toBeNull();
+    expect(connections.backendForConnection("workspace:w1")).toBeNull();
+  } finally {
+    connections.dispose();
+  }
+});
+
 test("workspace retargeting preserves machine identity and confines relay credentials", async () => {
   const gateways = installGateways({ "https://b.example": { installationId: "bk_b" } });
   const connections = manager(new MemoryStore(catalogue([])));
   try {
     await connections.initialize();
-    connections.bindWorkspace("panel", {
+    await connections.bind("panel", "local");
+    connections.retargetScopeToWorkspace("panel", {
       workspaceId: "one",
       nodeId: "bk_c",
       baseUrl: "https://b.example/__orkestrator/nodes/bk_c",

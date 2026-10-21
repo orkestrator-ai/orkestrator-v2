@@ -15,7 +15,7 @@ import {
   resolveNodeActionRequest,
   type NodeActionRequestView,
 } from "@/lib/portal/portal-store";
-import { listenAuthoritative } from "@/lib/native/authoritative-events";
+import { portalListenAuthoritative } from "@/lib/portal/portal-transport";
 import { useFederation } from "./FederationProvider";
 
 export const NODE_ACTION_REQUESTS_CHANGED_EVENT = "node-action-requests-changed";
@@ -64,7 +64,7 @@ export function NodeActionRequestsDialog() {
     if (kind === "none") return;
     let stop: (() => void) | null = null;
     let active = true;
-    void listenAuthoritative(NODE_ACTION_REQUESTS_CHANGED_EVENT, refresh, {
+    void portalListenAuthoritative(NODE_ACTION_REQUESTS_CHANGED_EVENT, refresh, {
       onResync: refresh,
       resyncOnSubscribe: true,
     }).then((unlisten) => {

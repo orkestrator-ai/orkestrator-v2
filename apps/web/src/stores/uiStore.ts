@@ -1,7 +1,8 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { persist, createJSONStorage } from "zustand/middleware";
 import { projectFolderKey } from "@orkestrator/protocol/project-folders";
-import { desktopConnectionStorageKey } from "@/lib/desktop-storage-key";
+import { windowStorageKey } from "@/lib/desktop-storage-key";
+import { createUIStateStorage } from "@/lib/ui-state-storage";
 
 /** Zoom level constraints */
 const ZOOM_MIN = 50;
@@ -96,155 +97,159 @@ interface UIState {
   resetZoom: () => void;
 }
 
-export const useUIStore = create<UIState>()(
-  persist(
-    (set, get) => ({
-      // Initial state
-      selectedProjectId: null,
-      projectSelectionRevision: 0,
-      selectedEnvironmentId: null,
-      sidebarOpen: true,
-      recentProjectIds: [],
-      projectBoardTab: "coordinator",
-      projectBoardNotesOpen: false,
-      sidebarWidth: 280,
-      collapsedProjects: [],
-      collapsedProjectFolders: [],
-      selectedEnvironmentIds: [],
-      expandedSessionsEnvironments: [],
-      environmentSortMode: "project",
-      zoomLevel: ZOOM_DEFAULT,
+export const createUIStore = () =>
+  create<UIState>()(
+    persist(
+      (set, get) => ({
+        // Initial state
+        selectedProjectId: null,
+        projectSelectionRevision: 0,
+        selectedEnvironmentId: null,
+        sidebarOpen: true,
+        recentProjectIds: [],
+        projectBoardTab: "coordinator",
+        projectBoardNotesOpen: false,
+        sidebarWidth: 280,
+        collapsedProjects: [],
+        collapsedProjectFolders: [],
+        selectedEnvironmentIds: [],
+        expandedSessionsEnvironments: [],
+        environmentSortMode: "project",
+        zoomLevel: ZOOM_DEFAULT,
 
-      // Actions
-      selectProject: (projectId) =>
-        set((state) => ({
-          selectedProjectId: projectId,
-          projectSelectionRevision: state.projectSelectionRevision + 1,
-          projectBoardTab: "coordinator",
-          projectBoardNotesOpen: false,
-          selectedEnvironmentId: null,
-          selectedEnvironmentIds: [],
-          recentProjectIds: projectId
-            ? addRecentProject(state.recentProjectIds, projectId)
-            : state.recentProjectIds,
-        })),
+        // Actions
+        selectProject: (projectId) =>
+          set((state) => ({
+            selectedProjectId: projectId,
+            projectSelectionRevision: state.projectSelectionRevision + 1,
+            projectBoardTab: "coordinator",
+            projectBoardNotesOpen: false,
+            selectedEnvironmentId: null,
+            selectedEnvironmentIds: [],
+            recentProjectIds: projectId
+              ? addRecentProject(state.recentProjectIds, projectId)
+              : state.recentProjectIds,
+          })),
 
-      selectEnvironment: (environmentId) => set({ selectedEnvironmentId: environmentId }),
+        selectEnvironment: (environmentId) => set({ selectedEnvironmentId: environmentId }),
 
-      toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
+        toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
 
-      setProjectBoardTab: (tab) => set({ projectBoardTab: tab, projectBoardNotesOpen: false }),
+        setProjectBoardTab: (tab) => set({ projectBoardTab: tab, projectBoardNotesOpen: false }),
 
-      setProjectBoardNotesOpen: (open) => set({ projectBoardNotesOpen: open }),
+        setProjectBoardNotesOpen: (open) => set({ projectBoardNotesOpen: open }),
 
-      selectProjectAndEnvironment: (projectId, environmentId) =>
-        set((state) => ({
-          selectedProjectId: projectId,
-          projectSelectionRevision: state.projectSelectionRevision + 1,
-          selectedEnvironmentId: environmentId,
-          recentProjectIds: addRecentProject(state.recentProjectIds, projectId),
-        })),
+        selectProjectAndEnvironment: (projectId, environmentId) =>
+          set((state) => ({
+            selectedProjectId: projectId,
+            projectSelectionRevision: state.projectSelectionRevision + 1,
+            selectedEnvironmentId: environmentId,
+            recentProjectIds: addRecentProject(state.recentProjectIds, projectId),
+          })),
 
-      setSidebarWidth: (width) => set({ sidebarWidth: width }),
+        setSidebarWidth: (width) => set({ sidebarWidth: width }),
 
-      toggleProjectCollapse: (projectId) =>
-        set((state) => ({
-          collapsedProjects: state.collapsedProjects.includes(projectId)
-            ? state.collapsedProjects.filter((id) => id !== projectId)
-            : [...state.collapsedProjects, projectId],
-        })),
+        toggleProjectCollapse: (projectId) =>
+          set((state) => ({
+            collapsedProjects: state.collapsedProjects.includes(projectId)
+              ? state.collapsedProjects.filter((id) => id !== projectId)
+              : [...state.collapsedProjects, projectId],
+          })),
 
-      setProjectCollapsed: (projectId, collapsed) =>
-        set((state) => ({
-          collapsedProjects: collapsed
-            ? state.collapsedProjects.includes(projectId)
-              ? state.collapsedProjects
-              : [...state.collapsedProjects, projectId]
-            : state.collapsedProjects.filter((id) => id !== projectId),
-        })),
+        setProjectCollapsed: (projectId, collapsed) =>
+          set((state) => ({
+            collapsedProjects: collapsed
+              ? state.collapsedProjects.includes(projectId)
+                ? state.collapsedProjects
+                : [...state.collapsedProjects, projectId]
+              : state.collapsedProjects.filter((id) => id !== projectId),
+          })),
 
-      // Folder identity is the case-folded name, matching how the sidebar tree
-      // groups projects. Comparing these entries literally would leave a
-      // folder stuck collapsed after it was reached by a differently-cased
-      // spelling of its own name.
-      toggleProjectFolderCollapse: (folder) =>
-        set((state) => ({
-          collapsedProjectFolders: isFolderCollapsed(state.collapsedProjectFolders, folder)
-            ? withoutFolder(state.collapsedProjectFolders, folder)
-            : [...state.collapsedProjectFolders, folder],
-        })),
+        // Folder identity is the case-folded name, matching how the sidebar tree
+        // groups projects. Comparing these entries literally would leave a
+        // folder stuck collapsed after it was reached by a differently-cased
+        // spelling of its own name.
+        toggleProjectFolderCollapse: (folder) =>
+          set((state) => ({
+            collapsedProjectFolders: isFolderCollapsed(state.collapsedProjectFolders, folder)
+              ? withoutFolder(state.collapsedProjectFolders, folder)
+              : [...state.collapsedProjectFolders, folder],
+          })),
 
-      setProjectFolderCollapsed: (folder, collapsed) =>
-        set((state) => ({
-          collapsedProjectFolders: collapsed
-            ? isFolderCollapsed(state.collapsedProjectFolders, folder)
-              ? state.collapsedProjectFolders
-              : [...state.collapsedProjectFolders, folder]
-            : withoutFolder(state.collapsedProjectFolders, folder),
-        })),
+        setProjectFolderCollapsed: (folder, collapsed) =>
+          set((state) => ({
+            collapsedProjectFolders: collapsed
+              ? isFolderCollapsed(state.collapsedProjectFolders, folder)
+                ? state.collapsedProjectFolders
+                : [...state.collapsedProjectFolders, folder]
+              : withoutFolder(state.collapsedProjectFolders, folder),
+          })),
 
-      toggleEnvironmentSelection: (environmentId) =>
-        set((state) => ({
-          selectedEnvironmentIds: state.selectedEnvironmentIds.includes(environmentId)
-            ? state.selectedEnvironmentIds.filter((id) => id !== environmentId)
-            : [...state.selectedEnvironmentIds, environmentId],
-        })),
+        toggleEnvironmentSelection: (environmentId) =>
+          set((state) => ({
+            selectedEnvironmentIds: state.selectedEnvironmentIds.includes(environmentId)
+              ? state.selectedEnvironmentIds.filter((id) => id !== environmentId)
+              : [...state.selectedEnvironmentIds, environmentId],
+          })),
 
-      setMultiSelection: (environmentIds) => set({ selectedEnvironmentIds: environmentIds }),
+        setMultiSelection: (environmentIds) => set({ selectedEnvironmentIds: environmentIds }),
 
-      clearMultiSelection: () => set({ selectedEnvironmentIds: [] }),
+        clearMultiSelection: () => set({ selectedEnvironmentIds: [] }),
 
-      toggleSessionsExpanded: (environmentId) =>
-        set((state) => ({
-          expandedSessionsEnvironments: state.expandedSessionsEnvironments.includes(environmentId)
-            ? state.expandedSessionsEnvironments.filter((id) => id !== environmentId)
-            : [...state.expandedSessionsEnvironments, environmentId],
-        })),
+        toggleSessionsExpanded: (environmentId) =>
+          set((state) => ({
+            expandedSessionsEnvironments: state.expandedSessionsEnvironments.includes(environmentId)
+              ? state.expandedSessionsEnvironments.filter((id) => id !== environmentId)
+              : [...state.expandedSessionsEnvironments, environmentId],
+          })),
 
-      setEnvironmentSortMode: (mode) => set({ environmentSortMode: mode }),
+        setEnvironmentSortMode: (mode) => set({ environmentSortMode: mode }),
 
-      isSessionsExpanded: (environmentId) =>
-        get().expandedSessionsEnvironments.includes(environmentId),
+        isSessionsExpanded: (environmentId) =>
+          get().expandedSessionsEnvironments.includes(environmentId),
 
-      collapseEmptyProjects: (projectIds, projectsWithEnvironments) =>
-        set((state) => {
-          // Find projects that have no environments and aren't already collapsed
-          const emptyProjects = projectIds.filter(
-            (id) => !projectsWithEnvironments.has(id) && !state.collapsedProjects.includes(id),
-          );
-          if (emptyProjects.length === 0) {
-            return state; // No change needed
-          }
-          return {
-            collapsedProjects: [...state.collapsedProjects, ...emptyProjects],
-          };
-        }),
+        collapseEmptyProjects: (projectIds, projectsWithEnvironments) =>
+          set((state) => {
+            // Find projects that have no environments and aren't already collapsed
+            const emptyProjects = projectIds.filter(
+              (id) => !projectsWithEnvironments.has(id) && !state.collapsedProjects.includes(id),
+            );
+            if (emptyProjects.length === 0) {
+              return state; // No change needed
+            }
+            return {
+              collapsedProjects: [...state.collapsedProjects, ...emptyProjects],
+            };
+          }),
 
-      setZoomLevel: (level) => set({ zoomLevel: Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, level)) }),
+        setZoomLevel: (level) => set({ zoomLevel: Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, level)) }),
 
-      zoomIn: () =>
-        set((state) => ({
-          zoomLevel: Math.min(ZOOM_MAX, state.zoomLevel + ZOOM_STEP),
-        })),
+        zoomIn: () =>
+          set((state) => ({
+            zoomLevel: Math.min(ZOOM_MAX, state.zoomLevel + ZOOM_STEP),
+          })),
 
-      zoomOut: () =>
-        set((state) => ({
-          zoomLevel: Math.max(ZOOM_MIN, state.zoomLevel - ZOOM_STEP),
-        })),
+        zoomOut: () =>
+          set((state) => ({
+            zoomLevel: Math.max(ZOOM_MIN, state.zoomLevel - ZOOM_STEP),
+          })),
 
-      resetZoom: () => set({ zoomLevel: ZOOM_DEFAULT }),
-    }),
-    {
-      name: desktopConnectionStorageKey("ui-storage"),
-      partialize: (state) => ({
-        sidebarWidth: state.sidebarWidth,
-        sidebarOpen: state.sidebarOpen,
-        collapsedProjects: state.collapsedProjects,
-        collapsedProjectFolders: state.collapsedProjectFolders,
-        recentProjectIds: state.recentProjectIds,
-        environmentSortMode: state.environmentSortMode,
-        zoomLevel: state.zoomLevel,
+        resetZoom: () => set({ zoomLevel: ZOOM_DEFAULT }),
       }),
-    },
-  ),
-);
+      {
+        name: windowStorageKey("ui-storage"),
+        storage: createJSONStorage(() => createUIStateStorage()),
+        partialize: (state) => ({
+          sidebarWidth: state.sidebarWidth,
+          sidebarOpen: state.sidebarOpen,
+          collapsedProjects: state.collapsedProjects,
+          collapsedProjectFolders: state.collapsedProjectFolders,
+          recentProjectIds: state.recentProjectIds,
+          environmentSortMode: state.environmentSortMode,
+          zoomLevel: state.zoomLevel,
+        }),
+      },
+    ),
+  );
+
+export const useUIStore = createUIStore();

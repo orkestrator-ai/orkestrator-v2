@@ -23,11 +23,30 @@ interface Window {
    * Electron only: the machine this renderer is bound to, for presentation
    * storage namespaces. Never a route, port or credential.
    */
+  /**
+   * The command node this client is connected to, while the window's
+   * workspace (`orkestrator`) is on another node. Only the portal layer uses
+   * it; see `lib/portal/portal-transport.ts`.
+   */
+  orkestratorPortal?: {
+    invoke<T = unknown>(command: string, args?: Record<string, unknown>): Promise<T>;
+    listen<T = unknown>(event: string, callback: (payload: T) => void): () => void;
+    eventStreamReady?(event: string): Promise<void>;
+  };
+  /** The node the window's workspace is on, when it is not the command node. */
+  orkestratorWorkspaceTarget?: {
+    nodeId: string;
+    nodeName: string;
+    path: "direct" | "relay";
+    routeKind?: "https" | "ssh";
+    via?: string;
+  };
   orkestratorDesktopIdentity?: {
     connectionId: string;
     backendId: string | null;
     legacyOrigin: string | null;
-    panel: boolean;
+    /** The window's own machine, while its workspace is on another node. */
+    portal?: { connectionId: string; backendId: string | null; legacyOrigin: string | null };
   };
   orkestrator?: {
     /** Electron windows keep focus and renderer storage independent. */
@@ -130,22 +149,9 @@ interface Window {
       }): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
       answerSshPrompt?(promptId: string, answer: string | null): void;
     };
-    /** Electron only: panels showing another node's workspace inside this window. */
-    panels?: {
-      open(input: {
-        connectionId: string;
-        projectId?: string;
-        environmentId?: string;
-      }): Promise<{ panelId: string }>;
-      setBounds(
-        panelId: string,
-        bounds: { x: number; y: number; width: number; height: number },
-      ): Promise<void>;
-      setVisible(panelId: string, visible: boolean): Promise<void>;
-      close(panelId: string): Promise<void>;
-      onEvent(
-        listener: (event: { panelId: string; type: "closed" | "crashed" | "load-failed" }) => void,
-      ): () => void;
+    /** Electron only: which node the window's workspace is on; reload after a change. */
+    workspaceTarget?: {
+      set(nodeId: string | null): Promise<void>;
     };
     process: {
       exit(code?: number): Promise<void>;

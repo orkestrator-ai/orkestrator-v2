@@ -1,3 +1,5 @@
+import { readStoredWorkspace } from "./portal/workspace-target-storage";
+
 /**
  * Keeps persisted presentation state separate per machine inside Electron.
  * Browser clients retain their established storage keys.
@@ -19,8 +21,11 @@ function hashIdentity(identity: string): string {
   return (hash >>> 0).toString(36);
 }
 
-function namespaceFor(): { identity: string; legacyIdentity: string | null } {
-  const desktopIdentity = window.orkestratorDesktopIdentity;
+type DesktopIdentity = NonNullable<Window["orkestratorDesktopIdentity"]>;
+
+function namespaceFor(
+  desktopIdentity: Pick<DesktopIdentity, "connectionId" | "backendId" | "legacyOrigin"> | undefined,
+): { identity: string; legacyIdentity: string | null } {
   if (!desktopIdentity) {
     return { identity: window.orkestratorGateway?.baseUrl ?? "local", legacyIdentity: null };
   }
@@ -40,29 +45,44 @@ function namespaceFor(): { identity: string; legacyIdentity: string | null } {
 }
 
 /**
- * A hosted-browser machine panel is a same-origin frame of the page that
- * hosts it, so it shares that page's localStorage. Its presentation state is
- * namespaced by the machine it is bound to, or identical local IDs on two
- * machines would share remembered selections and layouts.
+ * A hosted-browser tab whose workspace is on another node shares the
+ * command node page's localStorage. Its presentation state is namespaced by
+ * that node, or identical local IDs on two machines would share remembered
+ * selections and layouts.
  */
-function browserPanelMachine(): string | null {
-  try {
-    const search = new URLSearchParams(window.location.search);
-    if (search.get("panel") !== "workspace") return null;
-    const machine = search.get("machine");
-    return machine && machine.length <= 128 ? machine : null;
-  } catch {
-    return null;
-  }
+function browserWorkspaceNode(): string | null {
+  const nodeId = window.orkestratorWorkspaceTarget?.nodeId ?? readStoredWorkspace()?.nodeId;
+  return nodeId && nodeId.length <= 128 ? nodeId : null;
 }
 
+/** Presentation state of the machine the window's workspace is on. */
 export function desktopConnectionStorageKey(baseKey: string): string {
   if (typeof window === "undefined") return baseKey;
   if (window.orkestrator?.isolatedViewState !== true) {
-    const machine = browserPanelMachine();
+    const machine = browserWorkspaceNode();
     return machine ? `${baseKey}:machine:${hashIdentity(`machine:${machine}`)}` : baseKey;
   }
-  const { identity, legacyIdentity } = namespaceFor();
+  return namespacedKey(baseKey, window.orkestratorDesktopIdentity);
+}
+
+/**
+ * Window-level presentation (sidebar, zoom): it stays with the machine the
+ * window was opened on while its workspace moves between nodes, so the
+ * window does not change shape when the user opens another node's
+ * environment.
+ */
+export function windowStorageKey(baseKey: string): string {
+  if (typeof window === "undefined") return baseKey;
+  if (window.orkestrator?.isolatedViewState !== true) return baseKey;
+  const identity = window.orkestratorDesktopIdentity;
+  return namespacedKey(baseKey, identity?.portal ?? identity);
+}
+
+function namespacedKey(
+  baseKey: string,
+  desktopIdentity: Parameters<typeof namespaceFor>[0],
+): string {
+  const { identity, legacyIdentity } = namespaceFor(desktopIdentity);
   const connectionKey = `${baseKey}:desktop:${hashIdentity(identity)}`;
   const migrationKey = `${baseKey}:desktop:migrated-v1`;
   // The first desktop window deliberately retains Electron's legacy default

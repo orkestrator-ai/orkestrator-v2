@@ -72,10 +72,28 @@ export interface NodeSummary {
   environments: NodeEnvironmentSummary[];
 }
 
+/**
+ * The command node's own projects and environments, in the same bounded
+ * form, for a client whose workspace is on another node and whose stores
+ * therefore hold that node's state instead.
+ */
+export interface SelfNodeSummary {
+  nodeId: BackendId;
+  displayName: string;
+  colorToken?: string;
+  /** When the summaries were last read (command-node clock, ms). */
+  loadedAt: number;
+  truncated: boolean;
+  projects: NodeProjectSummary[];
+  environments: NodeEnvironmentSummary[];
+}
+
 export interface NodeSummariesResult {
   /** This command node's own identity: its environments come from the ordinary local reads. */
   selfId: BackendId;
   nodes: NodeSummary[];
+  /** Present only when asked for with `includeSelf`. */
+  self?: SelfNodeSummary;
 }
 
 /** A node-sourced string rendered as text: bounded, no control characters. */

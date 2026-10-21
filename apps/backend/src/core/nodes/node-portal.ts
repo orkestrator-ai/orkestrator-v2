@@ -7,7 +7,11 @@ import type { NodeSummariesResult } from "@orkestrator/protocol/node-summaries";
 
 import { ClientGrantService, MAX_GRANT_TTL_MS, type ClientGrant } from "./client-grants.js";
 import { NodeUnavailableError } from "./node-link.js";
-import { NodeReadModel, type ReadModelPersistence } from "./node-read-model.js";
+import {
+  NodeReadModel,
+  type ReadModelLocal,
+  type ReadModelPersistence,
+} from "./node-read-model.js";
 import { NODE_RELAY_PREFIX, type RelayTarget } from "./node-relay.js";
 import { NodeOutcomeLedger, routeToNode, type RoutedResult } from "./node-routing.js";
 import type { NodeService } from "./node-service.js";
@@ -69,6 +73,8 @@ export class NodePortal {
       nodes: NodeService;
       emit: (event: string, payload: unknown) => void;
       summaries?: ReadModelPersistence;
+      /** This node's own commands, for its self summary. */
+      local?: ReadModelLocal;
       outcomes?: { load(): Promise<unknown>; save(value: unknown): Promise<void> };
       fetchImpl?: typeof fetch;
       now?: () => number;
@@ -78,6 +84,7 @@ export class NodePortal {
       nodes: options.nodes,
       emit: options.emit,
       ...(options.summaries ? { persistence: options.summaries } : {}),
+      ...(options.local ? { local: options.local } : {}),
       ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
       ...(options.now ? { now: options.now } : {}),
     });
@@ -103,11 +110,16 @@ export class NodePortal {
    * Command node: portal reads and routing
    */
 
-  summaries(nodeIds?: unknown): Promise<NodeSummariesResult> {
+  summaries(nodeIds?: unknown, includeSelf?: unknown): Promise<NodeSummariesResult> {
     if (nodeIds !== undefined && (!Array.isArray(nodeIds) || !nodeIds.every(isBackendId))) {
       throw new Error("Expected nodeIds to be node identities.");
     }
-    return this.readModel.summaries(nodeIds as BackendId[] | undefined);
+    if (includeSelf !== undefined && typeof includeSelf !== "boolean") {
+      throw new Error("Expected includeSelf to be a boolean.");
+    }
+    return this.readModel.summaries(nodeIds as BackendId[] | undefined, {
+      includeSelf: includeSelf === true,
+    });
   }
 
   async invokeOnNode(args: Record<string, unknown>): Promise<RoutedResult<unknown>> {

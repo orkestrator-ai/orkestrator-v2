@@ -1,6 +1,5 @@
 import type { GatewayTokenSettings, WebClientStatus } from "@/types";
-import { browserPanelWorkspaceId, isMachinePanelRealm } from "@/lib/federation/panel-realm";
-import { readWorkspaceForFrame } from "@/lib/portal/workspaces";
+import { readStoredWorkspace } from "@/lib/portal/workspace-target-storage";
 import { getGatewayBaseUrl, resolveGatewayApiUrl } from "@/lib/gateway-url";
 import {
   configureDirectGatewayTransport,
@@ -50,7 +49,14 @@ export const TERMINAL_TRANSPORT_STORAGE_KEY = "orkestrator-terminal-transport";
 const TERMINAL_FILTER_NARROW_DELAY_MS = 50;
 
 type EventCallback<T> = (payload: T) => unknown;
-type GatewayWindow = Pick<Window, "location" | "orkestrator" | "orkestratorGateway">;
+type GatewayWindow = Pick<
+  Window,
+  | "location"
+  | "orkestrator"
+  | "orkestratorGateway"
+  | "orkestratorPortal"
+  | "orkestratorWorkspaceTarget"
+>;
 
 const browserGatewayDisposers = new WeakMap<object, (reason?: unknown) => void>();
 
@@ -1323,25 +1329,32 @@ export function installBrowserGatewayApi(
 }
 
 /**
- * A machine panel frame is a same-origin frame of this page bound to another
- * node's workspace: directly to that node with the workspace's client grant,
- * or through this page's command node relay (with this page's own session).
+ * Browser and iOS: a tab whose workspace is on another node is that node's
+ * client — directly with the workspace's client grant, or through the
+ * command node's relay with this page's own session — while the multi-node
+ * views keep the command node that served the page as their portal.
  */
-export function machinePanelGatewayOptions(): BrowserGatewayOptions {
-  if (!isMachinePanelRealm() || window.orkestratorDesktopIdentity?.panel) return {};
-  const workspaceId = browserPanelWorkspaceId();
-  const workspace = workspaceId ? readWorkspaceForFrame(workspaceId) : null;
-  if (!workspace) {
-    return {
-      unavailableReason:
-        "This workspace binding is unavailable. Reopen it from the command node to reconnect.",
-    };
-  }
+export function workspaceTargetGatewayOptions(
+  targetWindow: GatewayWindow = window,
+): BrowserGatewayOptions {
+  if (targetWindow.orkestrator) return {};
+  const workspace = readStoredWorkspace();
+  if (!workspace) return {};
+  targetWindow.orkestratorWorkspaceTarget = {
+    nodeId: workspace.nodeId,
+    nodeName: workspace.nodeName,
+    path: workspace.path,
+    ...(workspace.routeKind ? { routeKind: workspace.routeKind } : {}),
+    ...(workspace.via ? { via: workspace.via } : {}),
+  };
+  targetWindow.orkestratorPortal = createBrowserGatewayApi({
+    baseUrl: targetWindow.location.origin,
+  });
   return workspace.token
     ? { baseUrl: workspace.baseUrl, token: workspace.token }
     : { baseUrl: workspace.baseUrl };
 }
 
 if (typeof window !== "undefined") {
-  installBrowserGatewayApi(window, machinePanelGatewayOptions());
+  installBrowserGatewayApi(window, workspaceTargetGatewayOptions());
 }

@@ -29,27 +29,20 @@ import {
 } from "./app-constants.js";
 import { registerMainIpc } from "./ipc.js";
 import { resolveRuntimeRoots } from "./paths.js";
-import {
-  createMainWindow,
-  installRendererNavigationGuards,
-  trustedRendererUrlFor,
-} from "./window.js";
-import { NodeWorkspaceScopes, openNodeWorkspace } from "./node-workspaces.js";
+import { createMainWindow, trustedRendererUrlFor } from "./window.js";
+import { NodeWorkspaceScopes } from "./node-workspaces.js";
+import { editDesktopConnection, setDesktopWorkspaceTarget } from "./window-workspace-target.js";
 import { importSavedMachinesOnce } from "./command-node-migration.js";
 import { ConnectionManager, DEFAULT_CONNECTION_SCOPE } from "./connection-manager.js";
 import {
   LocalBackendCatalogueStore,
   NativeDeviceCatalogueStore,
 } from "./connection-catalogue-store.js";
-import { registerFederationIpc } from "./federation-ipc.js";
-import { BackendPanelViews, type PanelRecord } from "./backend-panel-views.js";
+import { PORTAL_EVENT_CHANNEL, registerFederationIpc } from "./federation-ipc.js";
 import { SshPromptBroker } from "./ssh-prompt-broker.js";
 import { createSshAdapterContext, SshTunnelSupervisor } from "./ssh/index.js";
 import { createUnavailableLocalBackend } from "./unavailable-local-backend.js";
-import {
-  installRemoteGatewayRequestAuth,
-  installScopedRemoteGatewayRequestAuth,
-} from "./remote-gateway-request-auth.js";
+import { installRemoteGatewayRequestAuth } from "./remote-gateway-request-auth.js";
 import { ensurePinnedToolchains } from "@orkestrator/toolchain/manager";
 import { pinnedArtifactsForPlatforms } from "@orkestrator/toolchain/manifest";
 import {
@@ -128,7 +121,6 @@ import {
   DesktopWindowRequestGate,
   DesktopWindowSlotAllocator,
   releaseBoundWindowIfQuitting,
-  rendererPartitionForPanel,
   rendererPartitionForWindow,
 } from "./desktop-window-lifecycle.js";
 import {
@@ -178,9 +170,6 @@ const isPrimaryInstance = claimSingleInstanceLock(app);
 let backend: BackendHttpClient | null = null;
 let nodeWorkspaceScopes: NodeWorkspaceScopes | null = null;
 let connectionManager: ConnectionManager | null = null;
-let panelViews: BackendPanelViews | null = null;
-/** Backend-scoped panel views, keyed by their own webContents ID. */
-const panelContexts = new Map<number, PanelRecord>();
 let sshPrompts: SshPromptBroker | null = null;
 let connectionListPublish: ReturnType<typeof setTimeout> | null = null;
 type DesktopWindowContext = {
@@ -192,7 +181,21 @@ type DesktopWindowContext = {
   browserPreviewManager: BrowserPreviewManager;
   previewTransport: PreviewTransportManager;
   artifactHosts: ArtifactHostManager;
+  /**
+   * While the window's workspace is on another node: the scope that keeps
+   * the window's own (command node) connection, for the portal channel.
+   */
+  portalScope: string | null;
+  target: WindowWorkspaceTarget | null;
 };
+type WindowWorkspaceTarget = {
+  nodeId: string;
+  nodeName: string;
+  path: "direct" | "relay";
+  routeKind?: "https" | "ssh";
+  via?: string;
+};
+
 let previewPortHints: ReturnType<typeof createPreviewPortHints> | null = null;
 let browserPreviewCaptures: BrowserPreviewCaptureStore | null = null;
 const previewExternalHandoff = new PreviewExternalHandoff((url) => shell.openExternal(url));
@@ -250,7 +253,15 @@ function focusedContext(): DesktopWindowContext | null {
 function followWindowConnection(context: DesktopWindowContext): void {
   if (!connectionManager) return;
   rebindWindowPreviews(context, connectionManager.getConnectionId(context.scope), (connectionId) =>
-    createWindowBrowserPreviews(context.window, context.scope, context.slot, connectionId),
+    createWindowBrowserPreviews(
+      context.window,
+      context.scope,
+      context.slot,
+      connectionId,
+      // A workspace connection is new on every switch; preview site data
+      // stays with the node, as it would for a direct connection.
+      context.target ? `node:${context.target.nodeId}` : connectionId,
+    ),
   );
 }
 
@@ -260,50 +271,21 @@ function contextForEvent(event?: { sender?: { id: number } }): DesktopWindowCont
   return context;
 }
 
-/**
- * IPC context of a requesting renderer: a main window, or a backend-scoped
- * panel inside one. Panels have no native previews or artifact hosts of
- * their own in this release; those features fall back to their non-native
- * presentations there.
- */
+/** IPC context of a requesting main window. */
 type IpcContext = {
   window: BrowserWindow;
   scope: string;
   browserPreviewManager: BrowserPreviewManager | null;
   artifactHosts: ArtifactHostManager | null;
-  panel: PanelRecord | null;
 };
 
 function ipcContextForEvent(event?: { sender?: { id: number } }): IpcContext {
-  const senderId = event?.sender?.id;
-  const windowContext = senderId === undefined ? undefined : windowContexts.get(senderId);
-  if (windowContext) {
-    return {
-      window: windowContext.window,
-      scope: windowContext.scope,
-      browserPreviewManager: windowContext.browserPreviewManager,
-      artifactHosts: windowContext.artifactHosts,
-      panel: null,
-    };
-  }
-  const panel = senderId === undefined ? undefined : panelContexts.get(senderId);
-  const parent = panel ? windowContexts.get(panel.parentWebContentsId) : undefined;
-  if (!panel || !parent) throw new Error("The requesting window is no longer available");
-  return {
-    window: parent.window,
-    scope: panel.scope,
-    browserPreviewManager: null,
-    artifactHosts: null,
-    panel,
-  };
+  return contextForEvent(event);
 }
 
-function emitToWebContents(
-  webContents: { isDestroyed(): boolean; send(channel: string, ...args: unknown[]): void },
-  event: string,
-  payload: unknown,
-): void {
-  if (!webContents.isDestroyed()) webContents.send("orkestrator:event", event, payload);
+/** The scope that holds the window's own connection: the command node it was opened on. */
+function controlScope(context: DesktopWindowContext): string {
+  return context.portalScope ?? context.scope;
 }
 
 function emitToConnection(connectionId: string, event: string, payload: unknown): void {
@@ -312,17 +294,13 @@ function emitToConnection(connectionId: string, event: string, payload: unknown)
     if (connectionManager.getConnectionId(context.scope) === connectionId) {
       emitToWindow(context.window, event, payload);
     }
-  }
-  for (const panel of panelContexts.values()) {
-    // A panel's scope is bound to its node's workspace connection.
-    let panelConnectionId: string | null = null;
-    try {
-      panelConnectionId = connectionManager.getConnectionId(panel.scope);
-    } catch {
-      panelConnectionId = null;
-    }
-    if (panelConnectionId === connectionId) {
-      emitToWebContents(panel.webContents as never, event, payload);
+    // The portal channel of a window whose workspace is on another node.
+    if (
+      context.portalScope &&
+      connectionManager.getConnectionId(context.portalScope) === connectionId &&
+      !context.window.isDestroyed()
+    ) {
+      context.window.webContents.send(PORTAL_EVENT_CHANNEL, event, payload);
     }
   }
 }
@@ -343,6 +321,11 @@ function emitToFocusedWindow(event: string, payload: unknown): void {
 }
 
 function setConnectionTitle(window: BrowserWindow, scope: string): void {
+  const context = windowContexts.get(window.webContents.id);
+  if (context?.target) {
+    applyWindowTitle(window, productName, context.target.nodeName, createMenu);
+    return;
+  }
   const list = connectionManager?.getList(scope);
   const active = list?.connections.find((connection) => connection.active);
   applyWindowTitle(window, productName, active?.name, createMenu);
@@ -398,8 +381,9 @@ function createWindowBrowserPreviews(
   scope: string,
   slot: number,
   connectionId: string,
+  partitionKey = connectionId,
 ) {
-  const partition = browserPreviewPartitionForWindow(slot, connectionId);
+  const partition = browserPreviewPartitionForWindow(slot, partitionKey);
   let manager: BrowserPreviewManager | null = null;
   previewPortHints ??= createPreviewPortHints(
     path.join(app.getPath("userData"), "preview-ports.json"),
@@ -415,7 +399,7 @@ function createWindowBrowserPreviews(
       previewBackend.invoke<T>(command, args),
     tunnelUrl: () => previewBackend.tunnelUrl(),
     isRemote: () => connectionId !== LOCAL_CONNECTION_ID,
-    partitionFor: (target) => browserPreviewServicePartition(slot, connectionId, target),
+    partitionFor: (target) => browserPreviewServicePartition(slot, partitionKey, target),
     sessionFor: (partitionName) => session.fromPartition(partitionName),
     clientKey: createHash("sha256").update(scope).digest("hex").slice(0, 24),
     portHints: previewPortHints,
@@ -599,10 +583,12 @@ async function createWindow(connectionId?: string): Promise<void> {
   if (!connectionManager) throw new Error("Connections are not initialized");
   if (quitReopen.isQuitting()) throw new Error(`${productName} is quitting`);
   const currentContext = focusedContext();
+  // A window on another node's workspace opens new windows on its own
+  // (command node) connection, never on the workspace.
   const inheritedConnectionId =
     connectionId ??
     (currentContext
-      ? connectionManager.getConnectionId(currentContext.scope)
+      ? connectionManager.getConnectionId(controlScope(currentContext))
       : connectionManager.getList().activeConnectionId);
   const scope = randomUUID();
   const slot = windowSlots.allocate();
@@ -665,6 +651,8 @@ async function createWindow(connectionId?: string): Promise<void> {
           browserPreviewManager: browserPreviewRuntime.manager,
           previewTransport: browserPreviewRuntime.previewTransport,
           artifactHosts,
+          portalScope: null,
+          target: null,
         });
         lastFocusedWindowId = webContentsId;
         registered = true;
@@ -673,9 +661,8 @@ async function createWindow(connectionId?: string): Promise<void> {
           event.preventDefault();
           setConnectionTitle(createdWindow, scope);
         });
-        // A reloaded parent no longer knows about its panels or prompts.
+        // A reloaded window no longer knows about its prompts.
         createdWindow.webContents.on("did-navigate", () => {
-          panelViews?.closeAllFor(webContentsId);
           sshPrompts?.cancelFor(webContentsId);
         });
         createdWindow.webContents.on("did-finish-load", () => {
@@ -697,9 +684,11 @@ async function createWindow(connectionId?: string): Promise<void> {
           void closing?.previewTransport.disposeAll().catch((error: unknown) => {
             console.warn("[Previews] Failed to close preview transport:", error);
           });
-          panelViews?.closeAllFor(webContentsId);
           sshPrompts?.cancelFor(webContentsId);
           windowContexts.delete(webContentsId);
+          // Closing never stops the node's work; it only revokes the grant.
+          nodeWorkspaceScopes?.release(scope);
+          if (closing?.portalScope) connectionManager?.release(closing.portalScope);
           connectionManager?.release(scope);
           windowSlots.release(slot);
           if (lastFocusedWindowId === webContentsId) {
@@ -739,23 +728,41 @@ function publishConnectionLists(): void {
       emitToWindow(
         context.window,
         "desktop-connections-changed",
-        connectionManager.getList(context.scope),
+        connectionManager.getList(controlScope(context)),
       );
     } catch {
       // A window still binding its connection receives its list once bound.
     }
   }
-  for (const panel of panelContexts.values()) {
-    try {
-      emitToWebContents(
-        panel.webContents as never,
-        "desktop-connections-changed",
-        connectionManager.getList(panel.scope),
-      );
-    } catch {
-      // A panel still binding its machine receives its list once bound.
-    }
-  }
+}
+
+/**
+ * Point a window's workspace at another node (or back at its command node).
+ * The window then is that node's client, exactly as if it had connected to
+ * it directly: its invoke, events, request credentials and previews follow
+ * the node, and the renderer reloads into it. The window's own connection
+ * stays bound to a portal scope for the multi-node views. The node is
+ * reached with a short-lived workspace grant the command node obtains —
+ * directly when one of its HTTPS routes answers, otherwise over the command
+ * node's own route — renewed while the window shows it, revoked after.
+ */
+async function setWindowWorkspaceTarget(
+  context: DesktopWindowContext,
+  input: { nodeId: string | null },
+): Promise<void> {
+  if (!connectionManager) throw new Error("Connections are not initialized");
+  nodeWorkspaceScopes ??= new NodeWorkspaceScopes((command, args) =>
+    connectionManager!.invoke(command, args, context.scope),
+  );
+  await setDesktopWorkspaceTarget(context, input, {
+    manager: connectionManager,
+    scopes: nodeWorkspaceScopes,
+    committed: (current) => {
+      followWindowConnection(current);
+      setConnectionTitle(current.window, current.scope);
+      publishConnectionLists();
+    },
+  });
 }
 
 function registerIpc(): void {
@@ -764,6 +771,21 @@ function registerIpc(): void {
     return connectionManager;
   };
   const scopeForEvent = (event?: { sender?: { id: number } }) => ipcContextForEvent(event).scope;
+  // A workspace grant cannot administer its node; say where that is done
+  // instead of surfacing the node's refusal.
+  const machineAdminScope = (event?: { sender?: { id: number } }) => {
+    const context = contextForEvent(event);
+    if (context.target) {
+      throw new Error(
+        `${context.target.nodeName}'s web access and gateway token are managed from Settings → Connections → Nodes on the command node.`,
+      );
+    }
+    return context.scope;
+  };
+  // Connection management acts on the window's own (command node)
+  // connection, even while its workspace is on another node.
+  const controlScopeForEvent = (event?: { sender?: { id: number } }) =>
+    controlScope(contextForEvent(event));
   const updateWindowTitle = (event: { sender?: { id: number } } | undefined) => {
     const senderId = event?.sender?.id;
     const context = senderId === undefined ? undefined : windowContexts.get(senderId);
@@ -787,26 +809,28 @@ function registerIpc(): void {
     },
     nativeImageApi: nativeImage,
     getMacOsPermissions,
-    listConnections: (event) => manager().getList(scopeForEvent(event)),
+    listConnections: (event) => manager().getList(controlScopeForEvent(event)),
     probeConnection: (connectionId) => {
       return manager().probe(connectionId);
     },
     connectToRemote: async (input, event) => {
       const context = contextForEvent(event);
-      const list = await manager().connect(input, context.scope);
+      const list = await editDesktopConnection(context, { kind: "connect", input }, manager(), () =>
+        setWindowWorkspaceTarget(context, { nodeId: null }),
+      );
       followWindowConnection(context);
       refreshConnectionTitles();
       publishConnectionLists();
       return list;
     },
     updateConnectionToken: async (connectionId, token, event) => {
-      const list = await manager().updateToken(connectionId, token, scopeForEvent(event));
+      const list = await manager().updateToken(connectionId, token, controlScopeForEvent(event));
       publishConnectionLists();
       return list;
     },
     renameConnection: async (connectionId, nickname, event) => {
       try {
-        return await manager().rename(connectionId, nickname, scopeForEvent(event));
+        return await manager().rename(connectionId, nickname, controlScopeForEvent(event));
       } finally {
         // A durable rename survives the requesting window closing during its save.
         refreshConnectionTitles();
@@ -814,11 +838,13 @@ function registerIpc(): void {
       }
     },
     useConnection: async (connectionId, event) => {
-      if (ipcContextForEvent(event).panel) {
-        throw new Error("A machine panel stays bound to its machine. Open another panel instead.");
-      }
       const context = contextForEvent(event);
-      const list = await manager().use(connectionId, context.scope);
+      const list = await editDesktopConnection(
+        context,
+        { kind: "use", connectionId },
+        manager(),
+        () => setWindowWorkspaceTarget(context, { nodeId: null }),
+      );
       followWindowConnection(context);
       updateWindowTitle(event);
       publishConnectionLists();
@@ -826,7 +852,12 @@ function registerIpc(): void {
     },
     forgetConnection: async (connectionId, event) => {
       const context = contextForEvent(event);
-      const list = await manager().forget(connectionId, context.scope);
+      const list = await editDesktopConnection(
+        context,
+        { kind: "forget", connectionId },
+        manager(),
+        () => setWindowWorkspaceTarget(context, { nodeId: null }),
+      );
       followWindowConnection(context);
       updateWindowTitle(event);
       publishConnectionLists();
@@ -837,19 +868,13 @@ function registerIpc(): void {
     trustedRendererUrl: isDev
       ? (process.env.VITE_DEV_SERVER_URL ?? "http://127.0.0.1:1420")
       : pathToFileURL(path.join(process.resourcesPath, "web", "index.html")).href,
-    getWebClientStatus: (event) => manager().getWebClientStatus(scopeForEvent(event)),
+    getWebClientStatus: (event) => manager().getWebClientStatus(machineAdminScope(event)),
     setWebClientEnabled: (enabled, event) =>
-      manager().setWebClientEnabled(enabled, scopeForEvent(event)),
-    resetWebClientServe: (event) => manager().resetWebClientServe(scopeForEvent(event)),
-    getGatewayTokenSettings: (event) => manager().getTokenSettings(scopeForEvent(event)),
-    setGatewayToken: (token, event) => manager().setToken(token, scopeForEvent(event)),
+      manager().setWebClientEnabled(enabled, machineAdminScope(event)),
+    resetWebClientServe: (event) => manager().resetWebClientServe(machineAdminScope(event)),
+    getGatewayTokenSettings: (event) => manager().getTokenSettings(machineAdminScope(event)),
+    setGatewayToken: (token, event) => manager().setToken(token, machineAdminScope(event)),
   });
-  const ownerWindow = (event: { sender?: { id: number } }) => {
-    const senderId = event.sender?.id;
-    const context = senderId === undefined ? undefined : windowContexts.get(senderId);
-    if (!context) throw new Error("Only a main window can manage machine panels.");
-    return { context, senderId: senderId! };
-  };
   const afterCatalogueChange = <T>(list: T): T => {
     scheduleConnectionListPublish();
     return list;
@@ -861,50 +886,58 @@ function registerIpc(): void {
     ipc: ipcMain,
     trustedRendererUrl: rendererUrl(),
     gatewaySnapshot: (event) => {
-      const context = ipcContextForEvent(event);
+      const context = contextForEvent(event);
       const identity = manager().getBackendIdentity(context.scope);
       return {
         baseUrl: manager().getGatewayBaseUrl(context.scope),
         connectionId: identity.connectionId,
         backendId: identity.backendId,
         legacyOrigin: identity.legacyOrigin,
-        panel: context.panel !== null,
+        ...(context.target && context.portalScope
+          ? {
+              workspaceTarget: context.target,
+              // Window-level presentation stays with the window's own machine.
+              portalIdentity: manager().getBackendIdentity(context.portalScope),
+            }
+          : {}),
       };
     },
     connectSsh: async (event, input) =>
-      afterCatalogueChange(await manager().connectSsh(input, scopeForEvent(event))),
+      afterCatalogueChange(await manager().connectSsh(input, controlScopeForEvent(event))),
     probeSshHostKey: (_event, input) => manager().probeSshHostKey(input),
     trustSshHostKey: (_event, probeId) => manager().trustSshHostKey(probeId),
     removeRoute: async (event, connectionId, routeId) =>
       afterCatalogueChange(
-        await manager().removeRoute(connectionId, routeId, scopeForEvent(event)),
+        await manager().removeRoute(connectionId, routeId, controlScopeForEvent(event)),
       ),
     setRouteOrder: async (event, connectionId, routeIds) =>
       afterCatalogueChange(
-        await manager().setRouteOrder(connectionId, routeIds, scopeForEvent(event)),
+        await manager().setRouteOrder(connectionId, routeIds, controlScopeForEvent(event)),
       ),
     setRouteEnabled: async (event, connectionId, routeId, enabled) =>
       afterCatalogueChange(
-        await manager().setRouteEnabled(connectionId, routeId, enabled, scopeForEvent(event)),
+        await manager().setRouteEnabled(
+          connectionId,
+          routeId,
+          enabled,
+          controlScopeForEvent(event),
+        ),
       ),
     useRoute: async (event, connectionId, routeId) =>
-      afterCatalogueChange(await manager().useRoute(connectionId, routeId, scopeForEvent(event))),
+      afterCatalogueChange(
+        await manager().useRoute(connectionId, routeId, controlScopeForEvent(event)),
+      ),
     setAutoConnect: async (event, connectionId, autoConnect) =>
       afterCatalogueChange(
-        await manager().setAutoConnect(connectionId, autoConnect, scopeForEvent(event)),
+        await manager().setAutoConnect(connectionId, autoConnect, controlScopeForEvent(event)),
       ),
     setFeatures: async (event, features) =>
-      afterCatalogueChange(await manager().setFeatures(features, scopeForEvent(event))),
-    openPanel: async (event, input) => {
-      const { context } = ownerWindow(event);
-      if (!panelViews) throw new Error("Machine panels are not available.");
-      return panelViews.open(context.window as never, input);
+      afterCatalogueChange(await manager().setFeatures(features, controlScopeForEvent(event))),
+    setWorkspaceTarget: async (event, input) => {
+      await setWindowWorkspaceTarget(contextForEvent(event), input);
     },
-    setPanelBounds: (event, panelId, bounds) =>
-      panelViews?.setBounds(ownerWindow(event).senderId, panelId, bounds),
-    setPanelVisible: (event, panelId, visible) =>
-      panelViews?.setVisible(ownerWindow(event).senderId, panelId, visible),
-    closePanel: (event, panelId) => panelViews?.close(ownerWindow(event).senderId, panelId),
+    portalInvoke: (event, command, args) =>
+      manager().invoke(command, args, controlScopeForEvent(event)),
   });
 }
 
@@ -913,91 +946,6 @@ function rendererUrl(): string {
     isDev,
     devServerUrl: process.env.VITE_DEV_SERVER_URL,
     rendererIndexPath: path.join(process.resourcesPath, "web", "index.html"),
-  });
-}
-
-function createPanelViews(): BackendPanelViews {
-  return new BackendPanelViews({
-    WebContentsViewCtor: WebContentsView as never,
-    preloadPath: path.join(__dirname, "preload.js"),
-    rendererUrl: rendererUrl(),
-    partitionFor: (connectionId) => rendererPartitionForPanel(connectionId),
-    // A panel shows another node's workspace: the local backend (this
-    // desktop's command node) issues a grant; the panel reaches the node
-    // directly or over the command node's own route.
-    bindScope: async (scope, nodeId, parentWebContentsId) => {
-      const manager = connectionManager;
-      if (!manager || !backend) throw new Error("The command node is not available");
-      const parentScope = ipcContextForEvent({ sender: { id: parentWebContentsId } }).scope;
-      const commandScope = `${scope}:command`;
-      await manager.bind(commandScope, manager.getConnectionId(parentScope));
-      const invoke = (command: string, args: Record<string, unknown>) =>
-        manager.invoke(command, args, commandScope);
-      const reopen = async () => {
-        const profile = (await invoke("get_backend_profile", {}).catch(() => null)) as {
-          displayName?: string;
-        } | null;
-        return openNodeWorkspace({
-          nodeId,
-          invoke,
-          commandNodeName: profile?.displayName ?? "command node",
-          relay: manager.getGatewayBaseUrl(commandScope)
-            ? () => {
-                const baseUrl = manager.getGatewayBaseUrl(commandScope);
-                const authorization =
-                  baseUrl &&
-                  manager.getRendererRequestAuthorization(
-                    `${baseUrl}/__orkestrator/invoke`,
-                    commandScope,
-                  );
-                return baseUrl && authorization ? { baseUrl, token: authorization.slice(7) } : null;
-              }
-            : undefined,
-        });
-      };
-      try {
-        const binding = await reopen();
-        nodeWorkspaceScopes ??= new NodeWorkspaceScopes(invoke);
-        manager.bindWorkspace(scope, {
-          ...binding,
-          onUnavailable: () => nodeWorkspaceScopes?.invalidate(scope),
-        });
-        nodeWorkspaceScopes.track(scope, binding.workspaceId, {
-          invoke,
-          reopen,
-          epoch: () => manager.epochOf(manager.getConnectionId(commandScope)),
-          retarget: (replacement) => manager.rebindWorkspace(scope, replacement),
-        });
-        return binding.params;
-      } catch (error) {
-        manager.release(commandScope);
-        throw error;
-      }
-    },
-    releaseScope: (scope) => {
-      nodeWorkspaceScopes?.release(scope);
-      connectionManager?.release(scope);
-      connectionManager?.release(`${scope}:command`);
-    },
-    installRequestAuth: (webContents, scope) => {
-      const stop = installScopedRemoteGatewayRequestAuth(
-        webContents.session.webRequest as never,
-        webContents.id,
-        (url) => connectionManager?.getRendererRequestAuthorization(url, scope) ?? null,
-      );
-      webContents.on("destroyed", stop);
-    },
-    installNavigationGuards: (webContents) =>
-      installRendererNavigationGuards(webContents as never, rendererUrl()),
-    register: (panel) => {
-      panelContexts.set(panel.webContents.id, panel);
-      panel.webContents.on("did-finish-load", () => {
-        emitToWebContents(panel.webContents as never, "native-event-stream-connected", undefined);
-      });
-    },
-    unregister: (webContentsId) => {
-      panelContexts.delete(webContentsId);
-    },
   });
 }
 
@@ -1189,7 +1137,6 @@ async function startApplication(): Promise<void> {
         );
       });
   }
-  panelViews = createPanelViews();
   app.on("will-quit", () => connectionManager?.dispose());
 
   createMenu();

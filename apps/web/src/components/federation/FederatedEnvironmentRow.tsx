@@ -4,7 +4,7 @@ import {
   Link2,
   Loader2,
   MoreHorizontal,
-  PanelRight,
+  ExternalLink,
   Play,
   Square,
   Trash2,
@@ -36,7 +36,7 @@ const ACTIVITY_TEXT: Record<FederatedEnvironment["activity"], string> = {
  * One environment in a multi-machine list. The coloured dot sits right
  * before the name and names the owner; activity is a separate label. A row
  * of this window's own machine selects it in place; a row of another
- * machine opens that machine's workspace panel. Actions carry the row's
+ * machine moves the window to that machine and opens it there. Actions carry the row's
  * captured reference, so a confirmation always names — and reaches — the
  * machine it was opened for.
  */
@@ -153,8 +153,8 @@ export function FederatedEnvironmentRow({
               <span>· {statusText}</span>
             </DropdownMenuLabel>
             <DropdownMenuItem onSelect={open}>
-              <PanelRight className="h-3.5 w-3.5" aria-hidden="true" />
-              Open in panel
+              <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+              Open
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={copyLink}>
               <Link2 className="h-3.5 w-3.5" aria-hidden="true" />

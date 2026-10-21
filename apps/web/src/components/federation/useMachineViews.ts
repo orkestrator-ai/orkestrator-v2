@@ -9,7 +9,7 @@ import {
   projectRef,
   type BackendId,
 } from "@orkestrator/protocol/federation";
-import type { NodeSummary } from "@orkestrator/protocol/node-summaries";
+import type { NodeSummary, SelfNodeSummary } from "@orkestrator/protocol/node-summaries";
 import { useEnvironmentStore, useProjectStore } from "@/stores";
 import type { MachineView } from "@/lib/federation/aggregate";
 import {
@@ -107,6 +107,32 @@ function boundEnvironments(
   return byProject;
 }
 
+/**
+ * The command node itself, from its self summary, while the window's
+ * workspace (and so its full stores) is on another node.
+ */
+export function viewFromSelfSummary(self: SelfNodeSummary): MachineView {
+  const environmentsByProject = new Map<string, FederatedEnvironment[]>();
+  for (const environment of self.environments) {
+    const list = environmentsByProject.get(environment.projectId) ?? [];
+    list.push(environment);
+    environmentsByProject.set(environment.projectId, list);
+  }
+  return {
+    connectionId: self.nodeId,
+    backendId: self.nodeId,
+    name: self.displayName,
+    colorToken: self.colorToken ?? FALLBACK_MACHINE_COLOR,
+    bound: false,
+    freshness: "current",
+    transport: "connected",
+    projects: self.projects,
+    environmentsByProject,
+    truncated: self.truncated,
+    loadedAt: self.loadedAt,
+  };
+}
+
 const BOUND_MACHINE_LOADED = 1;
 
 /** The machine this realm is bound to, projected from its own full stores. */
@@ -133,10 +159,22 @@ export function useBoundMachineView(): MachineView | null {
   }, [bound, environments, projects]);
 }
 
-/** The command node's other nodes, from its read model. */
+/**
+ * Every machine but the one the window's workspace is on, from the command
+ * node's read model: its other nodes, and the command node itself while the
+ * workspace is on one of them.
+ */
 export function useRemoteMachineViews(): MachineView[] {
-  const { portalState } = useFederation();
-  return useMemo(() => portalState.nodes.map(viewFromNodeSummary), [portalState.nodes]);
+  const { portalState, bound } = useFederation();
+  const boundId = bound?.backendId ?? null;
+  return useMemo(() => {
+    const nodes = portalState.nodes
+      .filter((node) => node.nodeId !== boundId)
+      .map(viewFromNodeSummary);
+    return portalState.self && portalState.self.nodeId !== boundId
+      ? [viewFromSelfSummary(portalState.self), ...nodes]
+      : nodes;
+  }, [boundId, portalState.nodes, portalState.self]);
 }
 
 /** All machines, this one first. */

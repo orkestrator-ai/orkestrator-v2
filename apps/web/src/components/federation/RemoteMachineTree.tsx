@@ -65,7 +65,6 @@ import { buildProjectTree, isProjectFolderCollapsed } from "@/lib/project-folder
 import { OutcomeUnknownError } from "@/lib/portal/portal-store";
 import { cn } from "@/lib/utils";
 import { useUIStore } from "@/stores";
-import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useFederation } from "./FederationProvider";
 import { MachineDot, machineStatusText } from "./MachineDot";
 import {
@@ -92,12 +91,9 @@ function folderCollapseKey(machine: MachineView, folder: string): string {
   return `${machine.backendId}/${folder}`;
 }
 
-/** The focused panel's environment on this machine, if any. */
+/** The selected environment when this window is working on this machine. */
 function useFocusedEnvironmentId(machine: MachineView): string | null {
-  return useMachineViewStore((state) => {
-    const panel = state.panels.find((candidate) => candidate.id === state.focusedPanelId);
-    return panel?.connectionId === machine.connectionId ? (panel.environmentId ?? null) : null;
-  });
+  return useUIStore((state) => (machine.bound ? state.selectedEnvironmentId : null));
 }
 
 /**
@@ -385,7 +381,7 @@ function RemoteProjectGroup({
 
 /**
  * An environment of another machine, drawn like `SortableEnvironmentItem`
- * around `EnvironmentItem`. Selecting it opens the owner's workspace panel.
+ * around `EnvironmentItem`. Selecting it switches to the owner's workspace.
  */
 function RemoteSortableEnvironmentItem({
   machine,
@@ -425,7 +421,7 @@ function RemoteSortableEnvironmentItem({
   const menuItems: EnvironmentMenuItem[] = [
     {
       key: "open",
-      label: "Open in panel",
+      label: "Open workspace",
       icon: <PanelRight className="h-4 w-4 mr-2" />,
       onSelect: open,
     },

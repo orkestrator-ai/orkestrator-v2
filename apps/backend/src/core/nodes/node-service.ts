@@ -168,6 +168,10 @@ export class NodeService {
     return this.self();
   }
 
+  selfProfile(): Promise<BackendProfile> {
+    return this.storage.getBackendProfile();
+  }
+
   /*
    * Mode
    */

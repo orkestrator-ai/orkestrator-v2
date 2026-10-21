@@ -29,3 +29,12 @@ passed the entire unchanged owner, exit 0 in 1.2 seconds. Evidence:
 `orkestrator-test-run.0OlBGi/bridges.log.gz` below the host temporary directory.
 This confirms an intermittent recurrence; the fixture ordering or contention
 cause remains unconfirmed. No implementation, assertion, timeout or skip changed.
+
+## Remote workspace refreshed main merge — 2026-10-21
+
+- **Command:** `mise run test:logged -- --name refresh-tests -- mise run test`, merging main `f228a6aa9` into pre-merge HEAD `aade0bcd5`.
+- **Workers:** workspace/root/bridges/protocol reservations 4/1/2/1; one isolated Claude worker, alongside component and isolated-stack browser validation.
+- **Failure:** the same fixture write failed with `EISDIR` at line 863 (3.64 ms). Claude reported 1600 passed, five skipped and one failed across 76 files (60.19 seconds); the other bridge packages passed.
+- **Owning-file rerun:** `mise run test:logged -- --name refresh-claude-owner -- bun test --cwd bridges/claude-bridge --preload ../../tests/setup-node.ts ./src/services/session-manager-interactions.test.ts --parallel=1 --only-failures` passed the complete unchanged owner (exit 0, 0.2 seconds logged).
+- **Evidence:** `orkestrator-test-run.Qv1f63/bridges.log.gz` below the host temporary directory after aggregate completion.
+- **Assessment:** confirmed intermittent recurrence. No bridge implementation, assertion, timeout or skip changed.

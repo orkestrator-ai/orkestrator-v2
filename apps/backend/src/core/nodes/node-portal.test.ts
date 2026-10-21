@@ -101,6 +101,56 @@ describe("PT-01/PT-02/UP-01 the portal read model", () => {
     expect(command.events.some((entry) => entry.event === NODE_SUMMARY_CHANGED_EVENT)).toBe(true);
   });
 
+  test("a client on a leaf's workspace can ask for the command node's own summary", async () => {
+    const { command } = await commandWithLeaf();
+    seed(command, [{ id: "c1", name: "home-env" }]);
+
+    expect((await command.portal.summaries()).self).toBeUndefined();
+    const self = (await command.portal.summaries(undefined, true)).self!;
+    expect(self.nodeId).toBe("bk_command" as never);
+    expect(self.displayName).toBe("command machine");
+    expect(self.environments.map((environment) => environment.ref)).toEqual([
+      { backendId: "bk_command", environmentId: "c1" } as never,
+    ]);
+    expect(JSON.stringify(self)).not.toContain("/srv/secret");
+
+    // A local change is announced while a client watches the self summary.
+    const state = seed(command, [
+      { id: "c1", name: "home-env" },
+      { id: "c2", name: "second" },
+    ]);
+    expect(state.environments).toHaveLength(2);
+    command.events.length = 0;
+    command.portal.readModel.noteLocalEvent("resource-changed", {
+      resource: "environment",
+      id: "c2",
+      projectId: "p1",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(command.events).toContainEqual({
+      event: NODE_SUMMARY_CHANGED_EVENT,
+      payload: { nodeId: "bk_command", epoch: 0 },
+    });
+    const names = (await command.portal.summaries(undefined, true)).self!.environments.map(
+      (environment) => environment.name,
+    );
+    expect(names.sort()).toEqual(["home-env", "second"]);
+  });
+
+  test("local changes are not announced when nobody watches the self summary", async () => {
+    const network = new TestNodeNetwork();
+    const command = await network.add("command", { forceRegistration: true });
+    seed(command, [{ id: "c1", name: "home-env" }]);
+    command.events.length = 0;
+    command.portal.readModel.noteLocalEvent("resource-changed", {
+      resource: "environment",
+      id: "c1",
+      projectId: "p1",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(command.events.some((entry) => entry.event === NODE_SUMMARY_CHANGED_EVENT)).toBe(false);
+  });
+
   test("owner order survives hydration and per-project refresh, including home rows and fallback", async () => {
     const { network, command, leaf } = await commandWithLeaf();
     try {

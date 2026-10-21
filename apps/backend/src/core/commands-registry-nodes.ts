@@ -147,8 +147,8 @@ export function registerNodeCommands(register: CommandRegistrar): void {
 
   // Portal (command node).
   register("get_node_summaries", async (args, context) => {
-    assertOnlyKeys(args, ["nodeIds"], "arguments");
-    return portal(context).summaries(args.nodeIds);
+    assertOnlyKeys(args, ["nodeIds", "includeSelf"], "arguments");
+    return portal(context).summaries(args.nodeIds, args.includeSelf);
   });
 
   register("invoke_on_node", async (args, context) => {

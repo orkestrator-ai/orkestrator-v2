@@ -5,7 +5,7 @@ import type {
   NodeView,
 } from "@orkestrator/protocol/command-nodes";
 import { parseNodeRefusal } from "@orkestrator/protocol/command-nodes";
-import { invoke } from "@/lib/native/backend";
+import { portalInvoke as invoke } from "@/lib/portal/portal-transport";
 
 /** A node command's error for display: a refusal's message without its code prefix. */
 export function nodeErrorText(error: unknown): string {
@@ -14,9 +14,11 @@ export function nodeErrorText(error: unknown): string {
 }
 
 /**
- * Command-node commands of the bound backend. The registry, routes and the
- * credentials of other nodes live in that backend; the client only ever
- * sees `NodeView`s, never a node's token.
+ * Command-node commands of the command node this client is connected to,
+ * over the portal channel (so they reach it even while the window's
+ * workspace is on a leaf). The registry, routes and the credentials of
+ * other nodes live in that backend; the client only ever sees `NodeView`s,
+ * never a node's token.
  */
 
 export async function getNodeStatus(): Promise<NodeStatus> {

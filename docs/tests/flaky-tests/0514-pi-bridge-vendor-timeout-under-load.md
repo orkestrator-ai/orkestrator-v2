@@ -50,3 +50,12 @@
 - `mise run test:logged -- --name reorder-pi-vendor-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` also timed out (3 passed, one failed; 32.8 seconds logged) while the workspace and browser suites were still active. This occurrence does not independently establish a flake; vendoring qualification remains unresolved at this point.
 - Evidence: `orkestrator-test-run.U6kMZC/root-and-agent-support-tests.log.gz` after aggregate completion, and `orkestrator-test-run.aSTJ3f/reorder-pi-vendor-owner.log.gz`, below the host temporary directory. No implementation, assertion, deadline or skip in this owner changed.
 - After the browser suite finished, `mise run test:logged -- --name reorder-pi-vendor-after-browser -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed the complete unchanged owner (4 passed, zero failed; 14.3 seconds logged). This later pass confirms intermittence for the recurrence.
+
+## Remote workspace refreshed main merge — 2026-10-21
+
+- **Command:** `mise run test:logged -- --name refresh-tests -- mise run test`, merging main `f228a6aa9` into pre-merge HEAD `aade0bcd5`.
+- **Workers:** workspace/root/bridges/protocol reservations 4/1/2/1; one isolated root worker alongside component and isolated-stack browser validation.
+- **Failure:** runtime staging exceeded its 30-second deadline (30004.00 ms). Root/support reported 3186 passed, one skipped and one failed across 3188 tests in 151 files (317.21 seconds).
+- **Owning-file rerun:** `mise run test:logged -- --name refresh-pi-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed all four unchanged cases (exit 0, 10.6 seconds logged).
+- **Evidence:** `orkestrator-test-run.Qv1f63/root-and-agent-support-tests.log.gz` below the host temporary directory after aggregate completion.
+- **Assessment:** confirmed intermittent recurrence; the cause remains unproven. No Pi implementation, assertion, timeout or skip changed.

@@ -30,14 +30,57 @@ export type IpcRendererLike = {
   send?(channel: string, ...args: unknown[]): void;
 };
 
+type WorkspaceTarget = {
+  nodeId: string;
+  nodeName: string;
+  path: "direct" | "relay";
+  routeKind?: "https" | "ssh";
+  via?: string;
+};
+
+type DesktopIdentity = {
+  connectionId: string;
+  backendId: string | null;
+  legacyOrigin: string | null;
+};
+
 /** Main-process snapshot of the window's machine; never contains a credential. */
 type DesktopGatewaySnapshot = {
   baseUrl: string | null;
   connectionId: string;
   backendId: string | null;
   legacyOrigin: string | null;
-  panel: boolean;
+  workspaceTarget: WorkspaceTarget | null;
+  portalIdentity: DesktopIdentity | null;
 };
+
+function parseWorkspaceTarget(value: unknown): WorkspaceTarget | null {
+  if (!value || typeof value !== "object") return null;
+  const target = value as Record<string, unknown>;
+  if (typeof target.nodeId !== "string" || typeof target.nodeName !== "string") return null;
+  if (target.path !== "direct" && target.path !== "relay") return null;
+  return {
+    nodeId: target.nodeId,
+    nodeName: target.nodeName,
+    path: target.path,
+    ...(target.routeKind === "https" || target.routeKind === "ssh"
+      ? { routeKind: target.routeKind }
+      : {}),
+    ...(typeof target.via === "string" ? { via: target.via } : {}),
+  };
+}
+
+function parseIdentity(value: unknown): DesktopIdentity | null {
+  if (!value || typeof value !== "object") return null;
+  const identity = value as Record<string, unknown>;
+  if (typeof identity.connectionId !== "string") return null;
+  const text = (field: unknown) => (typeof field === "string" && field ? field : null);
+  return {
+    connectionId: identity.connectionId,
+    backendId: text(identity.backendId),
+    legacyOrigin: text(identity.legacyOrigin),
+  };
+}
 
 function readGatewaySnapshot(ipcRenderer: {
   sendSync(channel: string): unknown;
@@ -54,7 +97,8 @@ function readGatewaySnapshot(ipcRenderer: {
       connectionId: value.connectionId,
       backendId: text(value.backendId),
       legacyOrigin: text(value.legacyOrigin),
-      panel: value.panel === true,
+      workspaceTarget: parseWorkspaceTarget(value.workspaceTarget),
+      portalIdentity: parseIdentity(value.portalIdentity),
     };
   } catch {
     return null;
@@ -79,8 +123,11 @@ export function exposeActiveConnectionGateway(
       connectionId: snapshot.connectionId,
       backendId: snapshot.backendId,
       legacyOrigin: snapshot.legacyOrigin,
-      panel: snapshot.panel,
+      ...(snapshot.portalIdentity ? { portal: snapshot.portalIdentity } : {}),
     });
+    if (snapshot.workspaceTarget) {
+      contextBridge.exposeInMainWorld("orkestratorWorkspaceTarget", snapshot.workspaceTarget);
+    }
   }
   const activeConnection = connectionList?.connections.find((connection) => connection.active);
   if (!snapshot?.baseUrl && activeConnection?.kind !== "remote") return false;
@@ -190,49 +237,41 @@ export function createArtifactHostApi(ipcRenderer: IpcRendererLike): ArtifactHos
   };
 }
 
-export type PanelEvent = { panelId: string; type: "closed" | "crashed" | "load-failed" };
-
-/** `window.orkestrator.panels`: backend-scoped workspace panels in this window. */
-export function createPanelsApi(ipcRenderer: IpcRendererLike) {
-  const listeners = new Set<(event: PanelEvent) => void>();
-  let subscribed = false;
+/**
+ * `window.orkestratorPortal`: the window's own command node while its
+ * workspace (`window.orkestrator`) is on another node.
+ */
+export function createPortalApi(ipcRenderer: IpcRendererLike) {
+  const listeners = new Map<string, Set<EventCallback<unknown>>>();
+  ipcRenderer.on("orkestrator:portal-event", (_event, name: string, payload: unknown) => {
+    const callbacks = listeners.get(name);
+    if (!callbacks) return;
+    for (const callback of callbacks) callback(payload);
+  });
   return {
-    open(input: {
-      connectionId: string;
-      projectId?: string;
-      environmentId?: string;
-    }): Promise<{ panelId: string }> {
-      return ipcRenderer.invoke("orkestrator:panels:open", input);
+    invoke<T = unknown>(command: string, args?: Record<string, unknown>): Promise<T> {
+      return ipcRenderer.invoke("orkestrator:portal:invoke", command, args ?? {});
     },
-    setBounds(
-      panelId: string,
-      bounds: { x: number; y: number; width: number; height: number },
-    ): Promise<void> {
-      return ipcRenderer.invoke("orkestrator:panels:set-bounds", panelId, bounds);
-    },
-    setVisible(panelId: string, visible: boolean): Promise<void> {
-      return ipcRenderer.invoke("orkestrator:panels:set-visible", panelId, visible);
-    },
-    close(panelId: string): Promise<void> {
-      return ipcRenderer.invoke("orkestrator:panels:close", panelId);
-    },
-    onEvent(listener: (event: PanelEvent) => void): () => void {
-      if (!subscribed) {
-        subscribed = true;
-        ipcRenderer.on("orkestrator:panels:event", (_event, payload: unknown) => {
-          if (!payload || typeof payload !== "object") return;
-          const { panelId, type } = payload as Record<string, unknown>;
-          if (typeof panelId !== "string") return;
-          if (type !== "closed" && type !== "crashed" && type !== "load-failed") return;
-          for (const callback of listeners) callback({ panelId, type });
-        });
-      }
-      listeners.add(listener);
+    listen<T = unknown>(event: string, callback: EventCallback<T>): () => void {
+      const callbackSet = listeners.get(event) ?? new Set<EventCallback<unknown>>();
+      listeners.set(event, callbackSet);
+      callbackSet.add(callback as EventCallback<unknown>);
       return () => {
-        listeners.delete(listener);
+        callbackSet.delete(callback as EventCallback<unknown>);
+        if (callbackSet.size === 0) listeners.delete(event);
       };
     },
   };
+}
+
+/** Expose the portal channel when the window's workspace is on another node. */
+export function exposePortal(
+  contextBridge: { exposeInMainWorld(key: string, value: unknown): void },
+  ipcRenderer: IpcRendererLike & { sendSync(channel: string): unknown },
+): boolean {
+  if (!readGatewaySnapshot(ipcRenderer)?.workspaceTarget) return false;
+  contextBridge.exposeInMainWorld("orkestratorPortal", createPortalApi(ipcRenderer));
+  return true;
 }
 
 export function createOrkestratorElectronApi(ipcRenderer: IpcRendererLike) {
@@ -390,7 +429,12 @@ export function createOrkestratorElectronApi(ipcRenderer: IpcRendererLike) {
       },
     },
 
-    panels: createPanelsApi(ipcRenderer),
+    /** Which node the window works on; the renderer reloads after a change. */
+    workspaceTarget: {
+      set(nodeId: string | null): Promise<void> {
+        return ipcRenderer.invoke("orkestrator:workspace-target:set", { nodeId });
+      },
+    },
 
     process: {
       exit(code?: number): Promise<void> {

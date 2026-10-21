@@ -849,3 +849,9 @@ remained unchanged.
 The subsequent `mise run test:logged -- --name full-tests-warm -- mise run test`
 passed all four groups (exit 0, 442.9 seconds logged); root/support passed in
 190.9 seconds. Both owning implementations and tests remained unchanged.
+
+## Design qualification second main merge — 2026-10-21
+
+`mise run test:logged -- --name merge2-tests -- mise run test` on `be2e89da` merged into `5f8b2bca` timed out `Pi bridge runtime vendoring > loads Pi's supported SDK from the staged runtime closure` at 30,000.39 ms. Root/support used one Bun worker alongside workspace/bridge groups and other worktrees; host load was about 40–60 by the end, after exceeding 100 in the earlier validation. The overall retry was interrupted at 335.2 seconds after admission delays and is incomplete, rather than a complete one-failure aggregate.
+
+`mise run test:logged -- --name merge2-pi-vendor-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed the complete unchanged owning file, exit 0 in 10.4 seconds. This confirms another intermittent recurrence, without proving the resource-contention hypothesis. No implementation, assertion, timeout or skip changed. Evidence: `orkestrator-test-run.MGM72b/merge2-tests.log.gz` and `orkestrator-test-run.Z2xRFB` below the host temporary root.

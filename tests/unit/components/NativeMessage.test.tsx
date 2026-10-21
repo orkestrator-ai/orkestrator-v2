@@ -1,3 +1,4 @@
+import { buildInitialPromptWithAttachmentReferences } from "@orkestrator/protocol/initial-prompt-attachments";
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useEffect } from "react";
@@ -922,6 +923,104 @@ describe("NativeMessage", () => {
     expect(image.getAttribute("src")).toBe("data:image/avif;base64,image-base64");
   });
 
+  test("renders generated marked attachments without transport text and survives remount", async () => {
+    const content = buildInitialPromptWithAttachmentReferences("Use these", [
+      { name: "shot.png", path: "/tmp/shot.png" },
+      { name: "notes.md", path: "/tmp/notes.md" },
+    ]);
+    const message: NativeMessageType = {
+      id: "marked-ui",
+      role: "user",
+      content,
+      createdAt: "2026-10-21T12:00:00Z",
+      parts: [{ type: "text", content }],
+    };
+    const first = render(<NativeMessage message={message} />);
+    for (const remount of [false, true]) {
+      if (remount) {
+        first.unmount();
+        render(<NativeMessage message={JSON.parse(JSON.stringify(message))} />);
+      }
+      expect(screen.getByText("Use these")).toBeTruthy();
+      expect(screen.getAllByRole("button", { name: "Open full image: shot.png" })).toHaveLength(1);
+      expect(screen.getByRole("button", { name: /Preview file: notes.md/ })).toBeTruthy();
+      expect(document.body.textContent).not.toContain("orkestrator-attachment-paths");
+      expect(document.body.textContent).not.toContain("Attached files have been saved");
+      expect(document.body.textContent).not.toContain("/tmp/");
+    }
+  });
+
+  test("renders an OpenCode image carrier beside a marker-only document without a duplicate thumbnail", async () => {
+    const content = buildInitialPromptWithAttachmentReferences("Use these", [
+      { name: "opencode.png", path: "/workspace/opencode.png" },
+      { name: "notes.md", path: "/workspace/notes.md" },
+    ]);
+    const message: NativeMessageType = {
+      id: "opencode-marked-ui",
+      role: "user",
+      content,
+      createdAt: "2026-10-21T12:00:00Z",
+      parts: [
+        { type: "text", content },
+        {
+          type: "image",
+          imageSource: "attachment",
+          content: "opencode.png",
+          fileUrl: "data:image/png;base64,QUJD",
+        },
+      ],
+    };
+    render(<NativeMessage message={message} />);
+    expect(await screen.findByAltText("Thumbnail: opencode.png")).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "Open full image: opencode.png" })).toHaveLength(
+      1,
+    );
+    expect(screen.getByRole("button", { name: /Preview file: notes.md/ })).toBeTruthy();
+    expect(mockReadFileBase64).not.toHaveBeenCalled();
+  });
+
+  test("keeps a user image named through loading and decode failure, hiding the caption only after load", async () => {
+    let resolveRead!: (value: string) => void;
+    mockReadFileBase64.mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveRead = resolve;
+        }),
+    );
+    const message: NativeMessageType = {
+      id: "caption-states",
+      role: "user",
+      content: "",
+      createdAt: "2026-10-21T12:00:00Z",
+      parts: [{ type: "file", content: "/tmp/caption.png" }],
+    };
+    render(<NativeMessage message={message} />);
+    const tile = screen.getByRole("button", { name: "Open full image: caption.png" });
+    expect(tile.textContent).toContain("caption.png");
+    await waitFor(() => expect(tile.getAttribute("aria-busy")).toBe("true"));
+    resolveRead("QUJD");
+    const image = await screen.findByAltText("Thumbnail: caption.png");
+    fireEvent.load(image);
+    expect(tile.textContent).not.toContain("caption.png");
+    fireEvent.error(image);
+    expect(tile.textContent).toContain("caption.png");
+    expect(tile.textContent).toContain("preview unavailable");
+  });
+
+  test("keeps the filename on an unreadable user image", async () => {
+    mockReadFileBase64.mockRejectedValueOnce(new Error("Missing image"));
+    const message: NativeMessageType = {
+      id: "caption-read-error",
+      role: "user",
+      content: "",
+      createdAt: "2026-10-21T12:00:00Z",
+      parts: [{ type: "file", content: "/tmp/missing-caption.png" }],
+    };
+    render(<NativeMessage message={message} />);
+    expect(await screen.findByText("preview unavailable")).toBeTruthy();
+    expect(screen.getByText("missing-caption.png")).toBeTruthy();
+  });
+
   test("flows adjacent attachment previews and lets them wrap", () => {
     const message: NativeMessageType = {
       id: "msg-attachment-flow",
@@ -948,8 +1047,9 @@ describe("NativeMessage", () => {
     const attachmentButtons = flow?.querySelectorAll("button") ?? [];
     expect(attachmentButtons).toHaveLength(2);
     for (const attachment of attachmentButtons) {
+      expect(attachment.getAttribute("data-image-presentation")).toBe("thumbnail");
       expect(getClassTokens(attachment)).toEqual(
-        expect.arrayContaining(["w-40", "max-w-full", "shrink-0"]),
+        expect.arrayContaining(["max-w-full", "shrink-0"]),
       );
     }
   });
@@ -1344,6 +1444,7 @@ describe("NativeMessage", () => {
     const { container } = render(<NativeMessage message={message} />);
 
     expect(container.querySelector(`img[src="${remoteUrl}"]`) === null).toBe(true);
+    expect(screen.getByText("tracker.png")).toBeTruthy();
     expect(mockReadFileBase64).not.toHaveBeenCalled();
     expect(mockReadContainerFileBase64).not.toHaveBeenCalled();
 
@@ -3177,7 +3278,8 @@ describe("NativeMessage", () => {
     // Only surfaces that eagerly load get the thumbnail tile; without this the
     // chip becomes a large card that never fills in.
     expect(getClassTokens(attachment)).toContain("inline-flex");
-    expect(getClassTokens(attachment)).not.toContain("w-40");
+    expect(attachment.getAttribute("data-image-presentation")).toBe("chip");
+    expect(attachment.textContent).toContain("assistant-shot.png");
     expect(screen.queryByAltText("Thumbnail: assistant-shot.png") === null).toBe(true);
     // The eager effect runs during render, so a missing call here is decisive.
     expect(mockReadFileBase64).not.toHaveBeenCalled();

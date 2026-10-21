@@ -62,7 +62,7 @@ describe("buildInitialPromptWithAttachmentReferences", () => {
     expect(prompt).toContain("Fix the UI");
     expect(prompt).toContain("Attached files have been saved in the workspace");
     expect(prompt).toContain(
-      "- screenshot.png: /workspace/.orkestrator/initial-prompt/screenshot.png",
+      '- {"name":"screenshot.png","path":"/workspace/.orkestrator/initial-prompt/screenshot.png"}',
     );
   });
 
@@ -71,7 +71,11 @@ describe("buildInitialPromptWithAttachmentReferences", () => {
       { name: "only-image.png", path: "/tmp/worktree/.orkestrator/initial-prompt/only-image.png" },
     ]);
 
-    expect(prompt.startsWith("Attached files have been saved in the workspace")).toBe(true);
+    expect(
+      prompt.startsWith(
+        '<orkestrator-attachment-paths source="orkestrator">\nAttached files have been saved',
+      ),
+    ).toBe(true);
     expect(prompt).toContain("/tmp/worktree/.orkestrator/initial-prompt/only-image.png");
   });
 });

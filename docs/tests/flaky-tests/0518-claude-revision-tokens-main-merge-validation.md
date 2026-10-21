@@ -1,7 +1,7 @@
 # Claude revision-token main-merge validation
 
 - **ID:** 0518
-- **Status:** open; validation remains non-green
+- **Status:** open
 - **Observed:** 2026-10-21
 - **Merge:** `origin/main` at `d4171748` into `86ac54bb` on
   `qualify-claude-inactive-tab-revision-tokens-2ead11fcd0c8`.
@@ -137,3 +137,91 @@ failures. Shared host contention is a hypothesis, not a proved cause.
 Credentialed live-provider scenarios retained their opt-ins. CLI scenarios and
 iOS were omitted because those areas did not change. Validation failures are
 reported without weakening coverage or treating failed owner reruns as flakes.
+
+## Follow-up merge of current main — 2026-10-21
+
+The follow-up merges fetched `origin/main` at `539335f9` into `4fee8400`.
+The incoming delta contains 335 paths, including 275 non-Markdown paths whose
+staged contents were verified identical to the fetched main tree. Conflicts
+were limited to the flake index, case 0178 and the todo index. Both branches'
+records were retained. The merged checklist has one very-high, 15 high,
+269 medium and 284 low items (569 total), and its per-file counts agree.
+An incoming link to the untracked `docs/temp/remote.md` plan was made a plain
+historical reference; an extra blank line at EOF was removed from that document.
+All 1,594 local link targets in the incoming documents then resolved.
+
+All checks below used `mise run test:logged -- --name <label> -- <command>`.
+
+| Label | Command | Outcome |
+| --- | --- | --- |
+| `revtok-main2-format` | `mise run format:check` | Passed, 0.5 s. |
+| `revtok-main2-lint` | `mise run lint` | Passed, 1.5 s, with incoming warnings retained. |
+| `revtok-main2-types` | `mise run typecheck` | Passed, 7.5 s. |
+| `revtok-main2-runner` | `bun test ./tests/unit/test-all.test.ts --parallel=1 --only-failures` | Passed, 5.1 s. |
+| `revtok-main2-build` | `mise run build` | Passed, 64.3 s. |
+| `revtok-main2-browser` | `mise run test:browser` | Passed, 221.5 s. |
+| `revtok-main2-isolated` | `mise run test:agent:browser:isolated` | Passed, 478.1 s, including disposable-profile cleanup. |
+| `revtok-main2-docker-build` | `mise run docker:build:dev --profile revtok-main2-docker` | Passed, 102.5 s. |
+| `revtok-main2-cli` | `mise run test:cli:scenarios` | Passed, 25.7 s. |
+| `revtok-main2-electron` | `mise run test:agent:electron` | Passed, 142.3 s (29 passed, one skipped); run ID `revtok-main2-electron`. |
+| `revtok-main2-tests-warm` | `mise run test` | Passed all four groups, 526.0 s, after the registry metadata correction. |
+
+Both root and Claude-bridge `bun install --frozen-lockfile` checks passed with
+the pinned Bun 1.4.3. The test-runner change adds a support fixture to the root
+group, so both first and warm full-suite observations are required.
+
+### First aggregate and owner reruns
+
+`revtok-main2-tests-first` ran `mise run test`, with 4/1/2/1 workspace/root/
+bridge/protocol slots and no admission wait. It exited 1 after 567.4 seconds.
+Workspace passed in 566.9 s, bridges in 184.9 s and protocol regeneration in
+0.745 s. Root/support reported 3,185 passed, one skipped and two failed across
+152 files (317.65 s).
+Component/public browser checks, isolated browser checks and the Docker image
+build also ran during the first aggregate. The subsequent warm full run passed
+all four groups in 526.0 seconds without changing test assertions or deadlines.
+
+- Pi runtime vendoring timed out at 30,000.05 ms. The complete unchanged
+  owning file passed alone in 15.0 seconds under label `revtok-main2-pi-owner`,
+  using `bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures`.
+  This is another confirmed intermittent occurrence, with no assertion or
+  deadline change.
+- The registry test rejected this case's earlier status line, which included
+  explanatory text after `open`. That metadata defect was corrected to the
+  exact `- **Status:** open` contract. The complete
+  `flaky-tests-index.test.ts` owner passed under label
+  `revtok-main2-register-owner` in 0.2 seconds. This was a real documentation
+  defect, not a flake.
+- Evidence: `orkestrator-test-run.N17jIb/revtok-main2-tests-first.log.gz` and
+  `orkestrator-test-run.zKcvZA/summary.json` below the host temporary directory.
+
+### Docker and gateway owner
+
+Profile `revtok-main2-docker` was created with
+`mise run dev:test --profile revtok-main2-docker --fixture --fixture-environments local,container --no-agent-credentials --agent-platforms codex`.
+
+- With `ORKESTRATOR_AGENT_TEST_PROFILE=revtok-main2-docker` and run ID
+  `revtok-main2-docker`, `mise run test:agent:docker` returned nine passed,
+  two credentialed scenarios skipped and one failed in 88.4 seconds.
+  The new command-only seed-file case observed Docker `cat` exit 1 at
+  `browser-gateway.spec.ts:2663`; it expected exit 0. All other ordinary Docker
+  cases, including rebuild and settings rehydration, passed. Evidence:
+  `orkestrator-test-run.Dnyw0Z`.
+- The complete unchanged `browser-gateway.spec.ts` was rerun with the same
+  profile, run ID/label `revtok-main2-gateway-owner`,
+  `ORKESTRATOR_AGENT_TEST_DOCKER=1`, `ORKESTRATOR_AGENT_TEST_REVIEW=0`, and
+  `bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/browser-gateway.spec.ts --workers=1`.
+  Result: 17 passed, four skipped and three failed, 161.1 seconds. It reproduced
+  the seed-file read failure, and also failed the narrow Repository settings
+  click and the 390px host-maintenance navigation case. Evidence:
+  `orkestrator-test-run.OI6aTH`; sanitized artifacts are under
+  `output/agent-testing/revtok-main2-gateway-owner/browser/`.
+- These Docker/gateway observations remain unresolved; this owning-file run
+  does not establish them as flakes. No source, assertion, deadline or skip
+  was changed to conceal the failures.
+- `dev:stop` and `dev:reset` succeeded for `revtok-main2-docker`. Reset removed
+  two exact-owner containers, four volumes, one network and disposable state;
+  its launcher exited on the requested stop.
+
+Live paused-interaction/provider suites retained their explicit credential and
+billing opt-ins. iOS was omitted because no iOS implementation changed.

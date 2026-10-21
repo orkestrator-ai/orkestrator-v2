@@ -1,3 +1,23 @@
+import type { Duplex } from "node:stream";
+import { CONTROLLER_HEADER } from "@orkestrator/protocol/command-nodes";
+import {
+  NODE_RELAY_PREFIX,
+  parseRelayPath,
+  relayHttp,
+  relayUpgrade,
+} from "./core/nodes/node-relay.js";
+import { isWorkspaceExcludedCommand } from "./core/nodes/node-routing.js";
+
+/** Routes a client grant (leaf workspace) may use: the client API only. */
+const GRANT_ALLOWED_PATHS = [
+  /^\/__orkestrator\/hello$/,
+  /^\/__orkestrator\/status$/,
+  /^\/__orkestrator\/invoke$/,
+  /^\/__orkestrator\/events$/,
+  /^\/__orkestrator\/client-metrics$/,
+  /^\/__orkestrator\/proxy\/loopback\/\d+(?:\/.*)?$/,
+  /^\/__orkestrator\/browser\/loopback\/\d+(?:\/.*)?$/,
+];
 import type { GatewayContext } from "./gateway-context.js";
 import type { GatewayHandlers } from "./gateway-handlers.js";
 import type { GatewayLifecycle } from "./gateway-lifecycle.js";
@@ -44,6 +64,15 @@ import {
 } from "./gateway-internals.js";
 import type { ListenerKind, GatewayRequestMetrics } from "./gateway-internals.js";
 import { parseHostUpdaterReport } from "@orkestrator/protocol/host-maintenance";
+import {
+  BACKEND_CAPABILITIES,
+  BACKEND_HELLO_PATH,
+  BACKEND_HELLO_SCHEMA_VERSION,
+  CLIENT_API_VERSION,
+  parseBackendProfile,
+  type BackendHello,
+} from "@orkestrator/protocol/backend-profile";
+import { parseBackendId } from "@orkestrator/protocol/federation";
 
 /** A host updater report is a handful of bounded fields. */
 const HOST_UPDATER_REPORT_MAX_BYTES = 16 * 1024;
@@ -77,6 +106,39 @@ export class GatewayAuth {
     return this.gatewayCredentialMatches(credential);
   }
 
+  /** The request is authenticated by a client grant (a leaf workspace), not the gateway token. */
+  private authenticatedByGrant(request: IncomingMessage): boolean {
+    const credential = getBearerToken(request.headers) ?? getCookie(request.headers, AUTH_COOKIE);
+    return Boolean(credential && this.grantExpiresAt(credential) !== null);
+  }
+
+  private grantExpiresAt(candidate: string): number | null {
+    if (!candidate.startsWith("okg_")) return null;
+    return this.ctx.nodeHooks?.authenticateGrant?.(candidate) ?? null;
+  }
+
+  /**
+   * Terminal upgrades relayed to a leaf (`/__orkestrator/nodes/<id>/terminal`).
+   * The caller must already be authenticated here, from an allowed origin.
+   */
+  handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): boolean {
+    const url = new URL(request.url ?? "/", "http://orkestrator.local");
+    if (!parseRelayPath(url.pathname)) return false;
+    const origin = request.headers.origin;
+    if (
+      !this.ctx.nodeHooks?.relayTarget ||
+      (origin && !this.isOriginAllowed(request, origin)) ||
+      !this.authenticated(request) ||
+      this.authenticatedByGrant(request)
+    ) {
+      socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
+      return true;
+    }
+    const resolve = this.ctx.nodeHooks.relayTarget.bind(this.ctx.nodeHooks);
+    if (!relayUpgrade(request, socket, head, url, resolve)) socket.destroy();
+    return true;
+  }
+
   private authenticatedWithAgentTestSession(request: IncomingMessage): boolean {
     if (!this.ctx.agentTestMode) return false;
     const credential = getBearerToken(request.headers) ?? getCookie(request.headers, AUTH_COOKIE);
@@ -89,6 +151,7 @@ export class GatewayAuth {
 
   gatewayCredentialMatches(candidate: string | null): boolean {
     if (tokenMatches(this.ctx.token, candidate)) return true;
+    if (candidate && this.grantExpiresAt(candidate) !== null) return true;
     if (!this.ctx.agentTestMode || !candidate) return false;
     const session = this.ctx.agentTestSessions.get(candidate);
     if (session === undefined) return false;
@@ -107,6 +170,10 @@ export class GatewayAuth {
    */
   gatewayCredentialExpiresAt(candidate: string | null): number | null {
     if (tokenMatches(this.ctx.token, candidate)) return null;
+    if (candidate) {
+      const grantExpiry = this.grantExpiresAt(candidate);
+      if (grantExpiry !== null) return grantExpiry;
+    }
     if (!this.ctx.agentTestMode || !candidate) return null;
     const session = this.ctx.agentTestSessions.get(candidate);
     return session ? Math.min(session.expiresAt, session.absoluteExpiresAt) : null;
@@ -194,7 +261,9 @@ export class GatewayAuth {
     // Keep the existing renderer served by the backend working without extra
     // configuration, including when TLS is terminated by Tailscale Serve.
     if (request.headers.host && origin.host === request.headers.host) return true;
-    return this.ctx.allowedOrigins.some((rule) => originMatchesRule(origin, rule));
+    if (this.ctx.allowedOrigins.some((rule) => originMatchesRule(origin, rule))) return true;
+    // Portals of attached command nodes reach this leaf directly.
+    return this.ctx.nodeHooks?.isPortalOriginAllowed(originValue) ?? false;
   }
 
   applyCorsHeaders(request: IncomingMessage, response: ServerResponse): boolean {
@@ -362,6 +431,28 @@ export class GatewayAuth {
       return;
     }
 
+    const controllerId = headerValueToString(request.headers[CONTROLLER_HEADER]);
+    if (controllerId) this.ctx.nodeHooks?.noteControllerContact(controllerId);
+
+    // A client grant opens a leaf workspace: the client API only, never
+    // administration, the relay or this node's own settings.
+    const viaGrant = this.authenticatedByGrant(request);
+    if (viaGrant && !GRANT_ALLOWED_PATHS.some((pattern) => pattern.test(url.pathname))) {
+      jsonResponse(response, 403, { error: "A workspace grant cannot use this route." });
+      return;
+    }
+
+    if (url.pathname.startsWith(NODE_RELAY_PREFIX)) {
+      const resolve = this.ctx.nodeHooks?.relayTarget;
+      if (
+        !resolve ||
+        !(await relayHttp(request, response, url, resolve.bind(this.ctx.nodeHooks)))
+      ) {
+        jsonResponse(response, 404, { error: "Not found" });
+      }
+      return;
+    }
+
     if (url.pathname === `${API_PREFIX}/agent-test/session`) {
       this.handleAgentTestSession(request, response, listenerKind);
       return;
@@ -405,8 +496,23 @@ export class GatewayAuth {
       return;
     }
 
+    if (url.pathname === BACKEND_HELLO_PATH) {
+      if (request.method !== "GET") {
+        response.writeHead(405, { allow: "GET" });
+        response.end();
+        return;
+      }
+      await this.handleHello(response, listenerKind);
+      return;
+    }
+
     if (url.pathname === `${API_PREFIX}/invoke`) {
-      await this.handlers.handleInvoke(request, response, requestMetrics);
+      await this.handlers.handleInvoke(
+        request,
+        response,
+        requestMetrics,
+        viaGrant ? { refuseCommand: isWorkspaceExcludedCommand } : undefined,
+      );
       return;
     }
 
@@ -441,6 +547,38 @@ export class GatewayAuth {
       response,
       compressionModeForListener(this.ctx.compression, listenerKind) !== "off",
     );
+  }
+
+  /**
+   * The authenticated client handshake: safe identity, version and
+   * capability metadata, plus which kind of listener answered. A managed SSH
+   * route verifies `endpointRole` is `client` before it trusts the forward.
+   * Never paths, the auth file, the token or the process ID.
+   */
+  async handleHello(response: ServerResponse, listenerKind: ListenerKind): Promise<void> {
+    if (!this.ctx.backendHello) {
+      jsonResponse(response, 404, { error: "Not found" });
+      return;
+    }
+    const identity = await this.ctx.backendHello();
+    const capabilities: Record<string, number> = {
+      [BACKEND_CAPABILITIES.backendProfile]: 1,
+      [BACKEND_CAPABILITIES.summaryReads]: 1,
+    };
+    if (this.ctx.loopbackClientUrl) capabilities[BACKEND_CAPABILITIES.loopbackClientGateway] = 1;
+    if (identity.nodeMode) capabilities[BACKEND_CAPABILITIES.nodeAttachment] = 1;
+    const hello: BackendHello = {
+      schemaVersion: BACKEND_HELLO_SCHEMA_VERSION,
+      installationId: parseBackendId(identity.installationId, "installationId"),
+      generation: identity.generation,
+      appVersion: identity.appVersion,
+      clientApi: { minVersion: 1, maxVersion: CLIENT_API_VERSION },
+      capabilities,
+      profile: parseBackendProfile(identity.profile),
+      endpointRole: listenerKind === "control" ? "control" : "client",
+    };
+    if (identity.nodeMode) hello.nodeMode = identity.nodeMode;
+    jsonResponse(response, 200, hello, { "cache-control": "no-store" });
   }
 
   async handleGatewaySettings(

@@ -91,6 +91,8 @@ import {
   setDockerContainerStateCache,
 } from "./commands-container-exec.js";
 import { copyConfiguredProjectFilesToDirectory } from "./commands-project-files.js";
+import { seedFilesDir } from "./nodes/node-files.js";
+import { readSeedManifest } from "./nodes/node-seed.js";
 import {
   isProjectHomeEnvironment,
   reconcileProjectHomeEnvironment,
@@ -177,7 +179,7 @@ import {
 import type { EnvironmentSetupStartResult } from "./commands-runtime-state.js";
 import type { CommandContext, BackendEmit } from "./commands-context.js";
 import {
-  refreshStagedAgentAccountLogins,
+  startContainerWithAgentAccounts,
   syncContainerAgentAccountsOnStart,
 } from "./agent-accounts-containers.js";
 
@@ -1403,8 +1405,7 @@ async function startContainerRuntimeAdmitted(
       phase: "starting",
       boot: { phase: "starting" },
     });
-    await refreshStagedAgentAccountLogins(context, environment, containerId);
-    await runCommand("docker", ["start", containerId], { timeoutMs: 60_000 });
+    await startContainerWithAgentAccounts(context, environment, containerId);
     await ensureContainerProjectFilesAccess(containerId);
     // Readiness belongs to this boot: nothing is prepared or launched until
     // the entrypoint reports ready for the current PID 1. Legacy images have
@@ -1566,6 +1567,7 @@ export async function startEnvironmentOnce(
           projectPath: project.localPath,
         },
       );
+      const seedRoot = seedFilesDir(storage.getDataDir(), environment.id);
       const worktree = await createLocalWorktree(
         project.localPath,
         project.name,
@@ -1573,7 +1575,10 @@ export async function startEnvironmentOnce(
         environment.delegationBaseCommit ?? repoConfig.defaultBranch,
         repoConfig.filesToCopy,
         worktreeBaseDir,
+        (await pathExists(seedRoot)) ? seedRoot : undefined,
       );
+      // Seed files are copied once; the staging copy is not kept.
+      await fs.rm(seedRoot, { recursive: true, force: true }).catch(() => undefined);
       unpersistedWorktree = {
         projectPath: project.localPath,
         path: worktree.path,
@@ -1634,6 +1639,9 @@ export async function startEnvironmentOnce(
     await syncPrMonitorTracking(context);
     return result;
   } catch (error) {
+    await fs
+      .rm(seedFilesDir(storage.getDataDir(), environment.id), { recursive: true, force: true })
+      .catch(() => undefined);
     logEnvironmentLifecycleFailure("start", environment.id, error);
     const lifecycleError = environmentLifecycleErrorMessage(error);
     if (unpersistedWorktree) {
@@ -2172,6 +2180,8 @@ export async function createLocalWorktree(
   baseBranch?: string,
   filesToCopy?: string[],
   worktreeBaseDir?: string,
+  /** Seed files a command node staged for files this node's project root lacks. */
+  seedRoot?: string,
 ): Promise<{ path: string; branch: string; createdFromCommit: string }> {
   const baseDir = worktreeBaseDir ?? getWorktreeBaseDir();
   assertWorktreePathUnlinked(baseDir);
@@ -2223,14 +2233,21 @@ export async function createLocalWorktree(
     await enableGitScanCaches(worktreePath);
 
     for (const envFile of [".env", ".env.local"]) {
-      const source = path.join(projectPath, envFile);
       const destination = path.join(worktreePath, envFile);
-      if ((await pathExists(source)) && !(await pathExists(destination))) {
-        await fs.copyFile(source, destination);
-      }
+      if (await pathExists(destination)) continue;
+      // The node's own copy wins; a staged seed copy only fills a gap.
+      const own = path.join(projectPath, envFile);
+      const seeded = seedRoot ? path.join(seedRoot, envFile) : null;
+      if (await pathExists(own)) await fs.copyFile(own, destination);
+      else if (seeded && (await pathExists(seeded))) await fs.copyFile(seeded, destination);
     }
 
-    await copyConfiguredProjectFilesToDirectory(projectPath, worktreePath, filesToCopy);
+    await copyConfiguredProjectFilesToDirectory(
+      projectPath,
+      worktreePath,
+      [...new Set([...(filesToCopy ?? []), ...(seedRoot ? await readSeedManifest(seedRoot) : [])])],
+      seedRoot,
+    );
 
     return { path: worktreePath, branch: finalBranch, createdFromCommit };
   } catch (error) {

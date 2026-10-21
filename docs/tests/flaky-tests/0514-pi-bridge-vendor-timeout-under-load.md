@@ -20,6 +20,13 @@
 - All three unchanged owning files then passed with one worker: `mise run test:logged -- --name review-root-owners -- bun test ./tests/unit/pi-bridge-vendor.test.ts ./tests/unit/disk-report.test.ts ./scripts/opencode-live-compatibility-probe.test.ts --parallel=1` (exit 0, 15.7 s). An earlier Pi retry while the complete runs were active had also timed out.
 - Evidence: compressed component logs under the host temporary directory `orkestrator-test-run.BEgua1`; outer artifact `orkestrator-test-run.6duRAm`. Host contention and the already documented shared temporary-root comparisons remain plausible contributors. No implementation, assertion, deadline or skip in these owners changed.
 
+## ScheduleWakeup review recurrence — 2026-10-21
+
+- `mise run test:logged -- --name full-tests -- mise run test` repeated the 30-second deadline (30005.52 ms), with the default root worker allocation (`1x PARALLEL`), alongside browser validation.
+- The root/support group reported 3170 passed, one skipped, and three failed. One failure was a new DOM absence-assertion convention violation in the ScheduleWakeup tests, which was corrected; the other was a firewall fixture deadline.
+- The unchanged owning file passed all four cases with `mise run test:logged -- --name pi-runtime-isolated -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` (14.5 s).
+- Evidence: `orkestrator-test-run.yUSMGF/root-and-agent-support-tests.log.gz` under the host temporary directory. Staging under concurrent host load remains the hypothesis; no Pi implementation or test changed.
+
 ## Image-preview layout validation recurrence — 2026-10-21
 
 - `mise run test:logged -- --name root-tests -- mise run test` repeated the

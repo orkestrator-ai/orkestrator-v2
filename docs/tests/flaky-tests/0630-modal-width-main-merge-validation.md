@@ -161,3 +161,34 @@ All commands used `test:logged`; direct Bun reruns used explicit paths and
 `orkestrator-test-run.TV7Wnr` (isolated browser), below the host temporary
 directory. Electron, Docker opt-in, iOS and billed-provider suites were not
 rerun because this refresh changed none of their owning code.
+
+## ScheduleWakeup follow-up main merge — 2026-10-21
+
+Merged main `01752fea471465b65eb79a442f111c968093a2d0` into pre-merge
+HEAD `6976195373e3cbbb0683128269b0f9bacb05d2ca`. Reviewed every merged path
+relative to that baseline, including the attachment geometry cache, review
+columns, browser fixtures/tests and flake records. Conflict resolutions retain
+both branches' Pi observations and index history; the streaming-selection case
+was renumbered to 0631 because main already uses 0628. Main's modal-width case
+rename to 0630 is retained. No product or test source was edited during resolution.
+
+- `mise run format:check`, `mise run lint`, `mise run typecheck`, and production `mise run build` passed. Lint retained warnings with no errors.
+- Focused complete owners `NativeMessage.test.tsx`, `image-preview-cache.test.ts` and `StructuredReviewReportView.test.tsx` passed (`merge-ui-owners`, 3.3 seconds). The flake-index contract, changed-document local links and tracked-file conflict-marker scans passed.
+- The testing guide's GNU-tool PATH with `mise run test:logged -- --name merge-full-tests -- mise run test` completed in 575.5 seconds. Bridges and protocol regeneration passed. Web passed 8702 tests, desktop 1105, protocol 1722, public web 41, CLI 148 and toolchain 91. Backend reported 9894 passed, 80 skipped and one failed across 9975 tests; root reported 3186 passed, one skipped and one failed across 3188 tests.
+- Both repository failures passed their complete unchanged owners: the firewall GitHub-range deadline in 32.3 seconds (`merge-firewall-owner`, case 0192), and the cooperative validation-worker `incomplete` result in 40.3 seconds (`merge-validation-worker-owner`, case 0227). No assertion, timeout or skip changed. The aggregate exit remains failed.
+- `ORKESTRATOR_E2E_PORT=21521 ORKESTRATOR_PUBLIC_E2E_PORT=24521 mise run test:logged -- --name merge-browser -- mise run test:browser` reported 398 passed, 81 skipped and one failed (268.4 seconds). The changed attachment and review-layout cases passed at both viewport sizes.
+- The mobile native branch-picker test in `e2e/AgentLaunchDialog.spec.ts:7` expected `release/2.0` but retained `rel` after its five-second wait. Its complete unchanged owner reproduced the same failure with `ORKESTRATOR_E2E_PORT=21521 mise run test:logged -- --name merge-branch-picker-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentLaunchDialog.spec.ts --workers=1` (three passed, one failed; 17.8 seconds logged). This is an unresolved validation limitation, not a confirmed flake. The branch-picker test and implementation were not changed by this merge.
+- Public-site browser coverage passed separately with `ORKESTRATOR_PUBLIC_E2E_PORT=24521 mise run test:logged -- --name merge-public-browser -- bunx playwright test --config e2e/public-site/playwright.config.ts` (12.2 seconds), because the component failure prevented the combined task from reaching it.
+- `mise run test:logged -- --name merge-isolated-browser -- mise run test:agent:browser:isolated` passed (516.1 seconds). Its credential-free profile `qa-browser-4f5142bf-dbe` was stopped and reset by the runner. Provider scenarios unavailable without credentials remain explicit skips. No live launcher for this profile remains.
+
+Evidence below the host temporary directory: `orkestrator-test-run.d10zQ4/`
+contains the complete group logs and summary; outer full-suite evidence is
+`orkestrator-test-run.ARLkL2/merge-full-tests.log.gz`. Component browser evidence
+is `orkestrator-test-run.FX8kG3/merge-browser.log.gz`; persistent branch-picker
+owner evidence is `orkestrator-test-run.98Ltem/merge-branch-picker-owner.log.gz`.
+Passing isolated-suite summary is in `orkestrator-test-run.OjQyhR/summary.json`.
+
+Dedicated Electron, Docker lifecycle, billed provider and iOS qualification
+were not selected: the incoming code changes affect attachment/review layout,
+with no Electron, Docker lifecycle or iOS implementation changes. Browser
+coverage includes transcript remount geometry and the isolated app flows.

@@ -16,12 +16,12 @@ lost-update bugs closed by the SQLite migration cannot come back.
   `saveJson` keep their names but route to the database for those stores
   (`saveStore` and `loadStore` in `storage-base.ts`). An earlier idea of a
   shared JSON file store is superseded by this and is not part of the plan.
-- The chain, all in `apps/backend/src/core/` (about 15,000 lines in 14 files):
+- The chain, all in `apps/backend/src/core/` (about 15,000 lines in 15 files):
   `StorageBase` (`storage-base.ts`) → `StorageProjects` → `StorageConfig` →
   `StorageSessions` → `StorageReviews` → `StorageNative` → `StoragePrompts` →
   `StorageBuildPipelines` → `StorageDrafts` → `StorageAgentMail` →
-  `StorageKanban` → `StoragePreviewServices` → `StoragePublicOperations` →
-  `StorageService` (`storage.ts`).
+  `StorageKanban` → `StoragePreviewServices` → `StorageNodes` →
+  `StoragePublicOperations` → `StorageService` (`storage.ts`).
 - `StorageBase` owns the primitives: the database handle, `updateStore`,
   `updateStoreRow`, `serializeMutation`, `atomically` (with its
   `AsyncLocalStorage` scope), `loadJson`/`saveJson`, `announce`, the

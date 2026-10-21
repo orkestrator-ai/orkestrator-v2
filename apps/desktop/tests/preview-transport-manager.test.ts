@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { createServer, request as httpRequest, type Server } from "node:http";
 import { connect as netConnect, type AddressInfo } from "node:net";
 
@@ -17,6 +17,7 @@ import {
 } from "../../backend/src/core/preview-test-support";
 import { PreviewMetrics } from "../../backend/src/preview-metrics";
 import { PreviewTunnelServer } from "../../backend/src/preview-tunnel-server";
+import { connectionPreviewBackend } from "../electron/preview-connection-backend";
 import {
   PreviewTransportManager,
   type PreviewServiceSession,
@@ -161,6 +162,46 @@ describe("PreviewTransportManager (desktop tunnel end to end)", () => {
       request.end();
     });
   }
+
+  test("warns when disposal cannot reach the attachment backend and still closes ingress", async () => {
+    const unavailable = connectionPreviewBackend(() => null);
+    const warn = mock(() => undefined);
+    // Creation reaches the real backend. Teardown exercises the adapter with
+    // no retained client, including its asynchronous unavailable rejection.
+    const releaseManager = new PreviewTransportManager({
+      invoke: (command, args) =>
+        command === "release_preview_attachment"
+          ? unavailable.invoke(command, args)
+          : harnessCommand(command, args),
+      tunnelUrl: unavailable.tunnelUrl,
+      isRemote: () => true,
+      partitionFor: () => "persist:release-failure",
+      sessionFor: () => new FakeSession(),
+      clientKey: "release-failure",
+      logger: { warn },
+    });
+    function harnessCommand<T>(command: string, args: Record<string, unknown>): Promise<T> {
+      const commands = createCommandRegistry();
+      return Promise.resolve(
+        commands.get(command)!(args, {
+          storage: harness.storage,
+          previews: harness.runtime,
+        } as unknown as CommandContext),
+      ) as Promise<T>;
+    }
+    try {
+      const descriptor = await releaseManager.acquire(target(), "tab-release");
+      await expect(releaseManager.disposeAll()).resolves.toBeUndefined();
+      expect(warn).toHaveBeenCalledWith("[Previews] Failed to release preview attachment.");
+      expect(warn).toHaveBeenCalledTimes(1);
+      await expect(get(descriptor.origin)).rejects.toThrow();
+      expect(releaseManager.stats().services).toBe(0);
+      await releaseManager.disposeAll();
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      await releaseManager.disposeAll();
+    }
+  });
 
   test("serves the service through a credentialed loopback ingress", async () => {
     const descriptor = await manager.acquire(target("/app/page?x=1"), "tab-1");

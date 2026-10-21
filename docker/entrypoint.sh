@@ -109,6 +109,42 @@ report_agent_copy_skips() {
     AGENT_COPY_SKIPPED=""
 }
 
+# Codex and Grok refresh tokens are single-use: a container copy that refreshed
+# would spend the token the host still holds and sign the host out, along with
+# every other container. The backend stages these logins access-only
+# (packages/protocol/src/login-snapshots.ts); this blanks the refresh token
+# again in the container's own copy, so a host-mounted home or a copy imported
+# before that change cannot refresh either. Codex's `last_refresh` is set to now
+# so it uses the access token until it expires rather than trying a refresh it
+# cannot make. A file that cannot be read as JSON is removed, never kept whole.
+restrict_imported_login() {
+    local file="$1"
+    local kind="$2"
+    local label="$3"
+
+    [ -f "$file" ] && [ ! -L "$file" ] || return 0
+    if ! node -e '
+        const fs = require("fs");
+        const [file, kind] = process.argv.slice(1);
+        const login = JSON.parse(fs.readFileSync(file, "utf8"));
+        if (!login || typeof login !== "object" || Array.isArray(login)) process.exit(1);
+        if (kind === "grok") {
+          for (const entry of Object.values(login)) {
+            if (entry && typeof entry === "object" && "refresh_token" in entry) entry.refresh_token = "";
+          }
+        } else if (login.tokens && typeof login.tokens === "object") {
+          if ("refresh_token" in login.tokens) login.tokens.refresh_token = "";
+          login.last_refresh = new Date().toISOString();
+        }
+        const temporary = `${file}.${process.pid}.tmp`;
+        fs.writeFileSync(temporary, JSON.stringify(login), { mode: 0o600, flag: "wx" });
+        fs.renameSync(temporary, file);
+    ' "$file" "$kind" 2>/dev/null; then
+        rm -f "$file" "$file".*.tmp
+        log_progress "Warning: removed an unreadable $label login; sign in again inside the container if needed"
+    fi
+}
+
 # Allowlist entries can be nested ("plugins/cache"), so testing only the final
 # component leaves every parent free to be a link: a symlinked "plugins" holding
 # a real "cache" passed that test and let find/cp resolve straight into excluded
@@ -863,6 +899,11 @@ log_progress "OpenCode configuration ready"
 log_progress "Setting up Codex configuration..."
 mkdir -p "$HOME/.codex"
 
+# Invalidate before importing: a backend restart or a later boot failure must
+# never leave a previous account marker certifying the newly imported login.
+# Only idle bridge reconciliation can acknowledge the account actually copied.
+(umask 077; printf '%s' unstaged > /tmp/orkestrator-codex-account)
+
 if [ -d /codex-home ]; then
     # A Codex home contains far more than configuration. Session rollouts, logs,
     # worktrees, generated images and caches routinely grow to multiple GB. A
@@ -896,6 +937,7 @@ if [ -d /codex-home ]; then
     done
 
     chmod 600 "$HOME/.codex/auth.json" 2>/dev/null || true
+    restrict_imported_login "$HOME/.codex/auth.json" codex Codex
     report_agent_copy_skips Codex
     if [ -n "$DEBUG" ]; then
         echo "Copied Codex files:"
@@ -929,6 +971,7 @@ if [ -d /grok-home ]; then
     done
 
     chmod 600 "$HOME/.grok/auth.json" 2>/dev/null || true
+    restrict_imported_login "$HOME/.grok/auth.json" grok Grok
 fi
 
 if [ -d /grok-config ]; then

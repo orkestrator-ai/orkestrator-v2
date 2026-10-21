@@ -258,30 +258,19 @@ export function createBackendProcessEnvironment(
     if (runtime.isolatedCredentialRoot) {
       env.CLAUDE_CONFIG_DIR = path.join(runtime.isolatedCredentialRoot, "claude");
     }
-    if (allowed.has("codex")) {
-      if (inherited.OPENAI_API_KEY) env.OPENAI_API_KEY = inherited.OPENAI_API_KEY;
-      const codexHome =
-        inherited.CODEX_HOME?.trim() ||
-        (inheritedHome ? path.join(inheritedHome, ".codex") : undefined);
-      if (codexHome) env.CODEX_HOME = codexHome;
-    } else if (runtime.isolatedCredentialRoot) {
-      env.CODEX_HOME = path.join(runtime.isolatedCredentialRoot, "codex");
+    // Codex and OpenCode always get the profile's own homes. An authorized
+    // source adds the host's login as a restricted snapshot in them
+    // (`seedAgentTestProviderCredentials` in `scripts/dev/profile-io.ts`), so
+    // a trust grant, an MCP editor save or a session never reaches the host's
+    // `~/.codex` or OpenCode directories, and a refresh cannot rotate its login.
+    if (allowed.has("codex") && inherited.OPENAI_API_KEY) {
+      env.OPENAI_API_KEY = inherited.OPENAI_API_KEY;
     }
-    if (allowed.has("opencode")) {
-      if (inherited.OPENCODE_API_KEY) env.OPENCODE_API_KEY = inherited.OPENCODE_API_KEY;
-      const configHome =
-        inherited.XDG_CONFIG_HOME?.trim() ||
-        (inheritedHome ? path.join(inheritedHome, ".config") : undefined);
-      const dataHome =
-        inherited.XDG_DATA_HOME?.trim() ||
-        (inheritedHome ? path.join(inheritedHome, ".local", "share") : undefined);
-      const stateHome =
-        inherited.XDG_STATE_HOME?.trim() ||
-        (inheritedHome ? path.join(inheritedHome, ".local", "state") : undefined);
-      if (configHome) env.XDG_CONFIG_HOME = configHome;
-      if (dataHome) env.XDG_DATA_HOME = dataHome;
-      if (stateHome) env.XDG_STATE_HOME = stateHome;
-    } else if (runtime.isolatedCredentialRoot) {
+    if (allowed.has("opencode") && inherited.OPENCODE_API_KEY) {
+      env.OPENCODE_API_KEY = inherited.OPENCODE_API_KEY;
+    }
+    if (runtime.isolatedCredentialRoot) {
+      env.CODEX_HOME = path.join(runtime.isolatedCredentialRoot, "codex");
       env.XDG_CONFIG_HOME = path.join(runtime.isolatedCredentialRoot, "xdg-config");
       env.XDG_DATA_HOME = path.join(runtime.isolatedCredentialRoot, "xdg-data");
       env.XDG_STATE_HOME = path.join(runtime.isolatedCredentialRoot, "xdg-state");

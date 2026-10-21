@@ -157,3 +157,50 @@ The aggregate failed this owner and its unchanged owning file passed with one wo
 - **Failure:** this owner's submodule re-link case exceeded the five-second test timeout. The exact test name, elapsed milliseconds, worker counts, suite counts and evidence log path were not captured.
 - **Owning-file rerun:** `apps/backend/src/core/environment-move.test.ts` passed unchanged when rerun alone. The exact rerun command and duration were not captured.
 - **Assessment:** reported recurrence of the known intermittent timeout; shared-host contention remains a hypothesis. No implementation, assertion, timeout or skip changed.
+
+## Credential snapshot review validation — 2026-10-21
+
+`mise run test:logged -- --name full-suite -- mise run test` on
+`fix-agent-test-host-home-writes-c7337a6ddd7f` (base `a8128980`) timed out
+`move_environment > moves a worktree with nested submodules (same disk)`
+at 5084.10 ms against the default 5000 ms budget. Workspace/root/bridges/protocol
+reserved 4/1/2/1 slots; the backend used two isolated Bun workers. The move
+implementation and its tests were unchanged.
+
+`mise run test:logged -- --name environment-move-rerun -- bun test --cwd apps/backend
+--preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts
+--parallel=1 --only-failures` passed the entire unchanged owning file,
+exit 0, in 46.9 seconds.
+
+Evidence: `orkestrator-test-run.9G1j25/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+below the host temporary directory; outer log in `orkestrator-test-run.TM4iwl`.
+Shared host contention remains a hypothesis. No implementation, assertion,
+timeout or skip changed.
+
+The aggregate exited 1 after 735.0 seconds. Backend reported 9,742 passed,
+67 skipped, one failed and one between-tests error across 9,810 tests in
+551 files (696.00 seconds). The timed-out submodule subprocess was terminated
+with SIGTERM and emitted the between-tests `CommandFailedError` about missing
+submodule metadata. The other failing test was the unchanged terminal history
+owner, recorded in [0513](0513-terminal-history-backward-page-count.md).
+All other workspace packages, root/support, bridges and protocol regeneration
+passed.
+
+
+## Preview qualification second main merge — 2026-10-21
+
+`mise run test` after merging `origin/main` at `3cfc33fe` into `bf04abc7`
+repeated `restart recovery re-links submodules of an adopted or abandoned copy`
+at 5,059.80 ms (five-second deadline), with a terminated submodule command
+reported between tests. Workspace/root/bridges/protocol reserved 4/1/2/1
+workers; backend used two isolated workers alongside Docker/browser validation.
+The aggregate exited 1 after 469.0 seconds; backend totals were 9,764 passed,
+67 skipped, two failed and one between-test error. All other packages and groups
+passed. The other failure is recorded in [0624](0624-public-exec-start-refused-in-aggregate.md).
+
+`mise run test:logged -- --name preview-merge2-move-owner -- bun test --cwd
+apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts
+--parallel=1 --only-failures` passed the complete unchanged owner, exit 0 in
+14.3 seconds. No assertion, timeout, skip or implementation changed. Evidence:
+`orkestrator-test-run.aIlmtw/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+below the host temporary directory. Scheduling contention remains a hypothesis.

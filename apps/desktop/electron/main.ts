@@ -68,6 +68,7 @@ import type {
   BrowserPreviewManager,
   BrowserPreviewServiceTransport,
 } from "./browser-preview-manager.js";
+import { connectionPreviewBackend, rebindWindowPreviews } from "./preview-connection-backend.js";
 import { PreviewTransportManager } from "./preview-transport-manager.js";
 import { createPreviewPortHints } from "./preview-port-hints.js";
 import { PreviewExternalHandoff } from "./preview-external-handoff.js";
@@ -186,6 +187,8 @@ type DesktopWindowContext = {
   window: BrowserWindow;
   scope: string;
   slot: number;
+  /** The connection the window's current previews were created for. */
+  previewConnectionId: string;
   browserPreviewManager: BrowserPreviewManager;
   previewTransport: PreviewTransportManager;
   artifactHosts: ArtifactHostManager;
@@ -240,6 +243,14 @@ function focusedContext(): DesktopWindowContext | null {
     windowContexts,
     BrowserWindow.getFocusedWindow(),
     lastFocusedWindowId,
+  );
+}
+
+/** End a window's previews when its connection changed; see `rebindWindowPreviews`. */
+function followWindowConnection(context: DesktopWindowContext): void {
+  if (!connectionManager) return;
+  rebindWindowPreviews(context, connectionManager.getConnectionId(context.scope), (connectionId) =>
+    createWindowBrowserPreviews(context.window, context.scope, context.slot, connectionId),
   );
 }
 
@@ -394,14 +405,16 @@ function createWindowBrowserPreviews(
     path.join(app.getPath("userData"), "preview-ports.json"),
   );
   // Service previews: a loopback ingress per service over the authenticated
-  // tunnel of *this window's* connection. Never borrows another window's backend.
+  // tunnel of the connection this runtime was created for. Never borrows
+  // another window's backend, and outlives a switch only to release on it.
+  const previewBackend = connectionPreviewBackend(
+    () => connectionManager?.backendForConnection(connectionId) ?? null,
+  );
   const previewTransport = new PreviewTransportManager({
-    invoke: <T>(command: string, args: Record<string, unknown>) => {
-      if (!connectionManager) throw new Error("Connections are not initialized");
-      return connectionManager.invoke<T>(command, args, scope);
-    },
-    tunnelUrl: () => connectionManager?.getPreviewTunnelUrl(scope) ?? null,
-    isRemote: () => connectionManager?.getConnectionId(scope) !== LOCAL_CONNECTION_ID,
+    invoke: <T>(command: string, args: Record<string, unknown>) =>
+      previewBackend.invoke<T>(command, args),
+    tunnelUrl: () => previewBackend.tunnelUrl(),
+    isRemote: () => connectionId !== LOCAL_CONNECTION_ID,
     partitionFor: (target) => browserPreviewServicePartition(slot, connectionId, target),
     sessionFor: (partitionName) => session.fromPartition(partitionName),
     clientKey: createHash("sha256").update(scope).digest("hex").slice(0, 24),
@@ -448,8 +461,7 @@ function createWindowBrowserPreviews(
     // through the private preview origin with a one-use grant POSTed by a
     // loopback handoff page. The grant is never part of a URL.
     openServiceExternally: async (target) => {
-      if (!connectionManager) throw new Error("Connections are not initialized");
-      const attachment = await connectionManager.invoke<PreviewAttachmentDescriptor>(
+      const attachment = await previewBackend.invoke<PreviewAttachmentDescriptor>(
         "create_preview_attachment",
         {
           serviceId: target.serviceId,
@@ -457,7 +469,6 @@ function createWindowBrowserPreviews(
           path: target.path,
           clientKey: createHash("sha256").update(scope).digest("hex").slice(0, 24),
         },
-        scope,
       );
       if (attachment.backendInstanceId !== target.backendInstanceId || !attachment.bootstrap) {
         throw new Error("This backend cannot publish the preview to an external browser.");
@@ -650,6 +661,7 @@ async function createWindow(connectionId?: string): Promise<void> {
           window: createdWindow,
           scope,
           slot,
+          previewConnectionId: activeConnectionId,
           browserPreviewManager: browserPreviewRuntime.manager,
           previewTransport: browserPreviewRuntime.previewTransport,
           artifactHosts,
@@ -780,7 +792,9 @@ function registerIpc(): void {
       return manager().probe(connectionId);
     },
     connectToRemote: async (input, event) => {
-      const list = await manager().connect(input, scopeForEvent(event));
+      const context = contextForEvent(event);
+      const list = await manager().connect(input, context.scope);
+      followWindowConnection(context);
       refreshConnectionTitles();
       publishConnectionLists();
       return list;
@@ -804,33 +818,16 @@ function registerIpc(): void {
         throw new Error("A machine panel stays bound to its machine. Open another panel instead.");
       }
       const context = contextForEvent(event);
-      const nextPreviewRuntime = createWindowBrowserPreviews(
-        context.window,
-        context.scope,
-        context.slot,
-        connectionId,
-      );
-      let list: ReturnType<ConnectionManager["getList"]>;
-      try {
-        list = await manager().use(connectionId, context.scope);
-      } catch (error) {
-        nextPreviewRuntime.manager.destroyAll();
-        void nextPreviewRuntime.previewTransport.disposeAll().catch(() => undefined);
-        throw error;
-      }
-      context.browserPreviewManager.destroyAll();
-      // A connection change cancels transport owned for the previous backend.
-      void context.previewTransport.disposeAll().catch((error: unknown) => {
-        console.warn("[Previews] Failed to close preview transport:", error);
-      });
-      context.browserPreviewManager = nextPreviewRuntime.manager;
-      context.previewTransport = nextPreviewRuntime.previewTransport;
+      const list = await manager().use(connectionId, context.scope);
+      followWindowConnection(context);
       updateWindowTitle(event);
       publishConnectionLists();
       return list;
     },
     forgetConnection: async (connectionId, event) => {
-      const list = await manager().forget(connectionId, scopeForEvent(event));
+      const context = contextForEvent(event);
+      const list = await manager().forget(connectionId, context.scope);
+      followWindowConnection(context);
       updateWindowTitle(event);
       publishConnectionLists();
       return list;

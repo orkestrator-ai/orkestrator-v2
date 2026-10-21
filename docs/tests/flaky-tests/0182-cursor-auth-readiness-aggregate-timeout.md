@@ -167,3 +167,11 @@ The ten-second readiness timeout recurred; the unchanged HTTP owning file
 passed alone in 2.3 seconds. Commands and aggregate evidence are recorded in
 [0501](0501-queued-steer-main-merge-validation.md). No implementation, assertion,
 timeout or skip changed.
+
+## Container credential rotation qualification — 2026-10-21
+
+`mise run test` failed only this test, at 10,002 ms in the bridges group,
+while the workspace, root and protocol groups ran beside it on a host at load
+average about 9. The unchanged Cursor bridge suite (`bun run test:bridge` in
+`bridges/cursor-bridge`) then passed alone: 775 passed, 0 failed. No Cursor
+implementation, assertion, timeout or skip changed.

@@ -800,7 +800,11 @@ export class PreviewTransportManager {
     group.attachment = null;
     await this.options
       .invoke("release_preview_attachment", { attachmentId: attachment.attachmentId })
-      .catch(() => undefined);
+      .catch(() => {
+        // Backend errors can contain credentials or request content. Keep this
+        // diagnostic static; the backend lease bounds a failed release.
+        (this.options.logger ?? console).warn("[Previews] Failed to release preview attachment.");
+      });
   }
 
   private async closeGroup(group: ServiceGroup): Promise<void> {

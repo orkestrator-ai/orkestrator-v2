@@ -57,10 +57,10 @@ it reaches. Some rules of thumb:
 | Score | Meaning | Items |
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
-| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 18 |
-| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 262 |
-| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 279 |
-| **Total** | | **560** |
+| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 17 |
+| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 266 |
+| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 283 |
+| **Total** | | **567** |
 
 ## Very high
 
@@ -91,7 +91,7 @@ it reaches. Some rules of thumb:
 
 - [x] Re-baseline the opt-in preview suites and all preview unit files on current main after #966, #967 and #969 ([service-preview-rollout.md](service-preview-rollout.md), qualification)
 - [x] Run the real Electron window service-preview qualification with the tunnel enabled in an isolated profile ([service-preview-rollout.md](service-preview-rollout.md), qualification)
-- [ ] Cover the remaining real-Electron service-preview cases: windows on different backends, a connection switch, clipboard, overlays, HMR reattach, keyboard and narrow viewport ([service-preview-rollout.md](service-preview-rollout.md), qualification)
+- [x] Cover the remaining real-Electron service-preview cases: windows on different backends, a connection switch, clipboard, overlays, HMR reattach, keyboard and narrow viewport ([service-preview-rollout.md](service-preview-rollout.md), qualification)
 - [ ] Write a two-machine tailnet runbook and run decoy, latency, throttling, reconnect and publication checks ([service-preview-rollout.md](service-preview-rollout.md), qualification)
 - [x] Re-run the annotation Electron and isolated browser suites on current main and record a sign-off ([web-annotation-qualification.md](web-annotation-qualification.md), qualification)
 - [x] Run the live annotation implement test once per provider and record skips explicitly ([web-annotation-qualification.md](web-annotation-qualification.md), qualification)
@@ -116,12 +116,14 @@ it reaches. Some rules of thumb:
 - [x] Replace the 1 s Claude state `docker exec` poll with a pushed change signal and a slow safety read ([container-state-observation.md](container-state-observation.md))
 - [x] Record a non-skipped run of the deletion-during-setup real-stack spec on current `main` ([environment-and-disk-cleanup.md](environment-and-disk-cleanup.md), qualification)
 - [x] Run a seeded real-stack pass of the pre-ledger startup sweeps in an isolated dev profile ([environment-and-disk-cleanup.md](environment-and-disk-cleanup.md), qualification)
-- [ ] Stop Docker containers spending the host's single-use Grok refresh token, which signs the host out ([container-network-and-credential-isolation.md](container-network-and-credential-isolation.md))
+- [x] Stop Docker containers spending the host's single-use Grok refresh token, which signs the host out ([container-network-and-credential-isolation.md](container-network-and-credential-isolation.md))
+- [ ] Stop Docker containers spending the host's Claude refresh token: access-only copies need a re-push before the 8-hour token lapses ([container-network-and-credential-isolation.md](container-network-and-credential-isolation.md))
+- [ ] Stop Docker containers spending the host's OpenCode and Pi OAuth refresh tokens, which are staged in full today ([container-network-and-credential-isolation.md](container-network-and-credential-isolation.md))
 
 ### Design canvas (high)
 
 - [x] Run a live Claude and Codex design-tool cycle, including Ask agent, handoff and an environment switch ([design-canvas-qualification.md](design-canvas-qualification.md), qualification)
-- [ ] Rerun the live Claude design cycle's Ask agent, approval and handoff steps on an account that is not rate-limited ([design-canvas-qualification.md](design-canvas-qualification.md), qualification)
+- [x] Rerun the live Claude design cycle's Ask agent, approval and handoff steps on an account that is not rate-limited ([design-canvas-qualification.md](design-canvas-qualification.md), qualification)
 - [x] Verify whether the open design flakes, especially the extra event in 0215, reflect ordering bugs ([design-canvas-qualification.md](design-canvas-qualification.md), verify)
 - [x] Reject a reused design `correlationId` with different input on settled receipts in `submit` and `findCreate` ([design-operation-recovery-edges.md](design-operation-recovery-edges.md))
 
@@ -195,7 +197,8 @@ it reaches. Some rules of thumb:
 - [x] Fix flake 0166 (OpenCode probe deadline), which recurred on 2026-10-15 ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
 - [x] Keep split panes mounted across the mobile breakpoint through stable per-pane hosts ([mobile-layout-gaps.md](mobile-layout-gaps.md))
 - [x] Move the environment settings dialog out of the drawer row so it is usable on mobile ([mobile-layout-gaps.md](mobile-layout-gaps.md))
-- [ ] Keep MCP editor writes in an agent-test profile out of the host's Codex and OpenCode homes when those credential sources are authorized ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md))
+- [x] Keep MCP editor writes in an agent-test profile out of the host's Codex and OpenCode homes when those credential sources are authorized ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md))
+- [ ] Send agent-test container environments the host's Claude access token only, never its refresh token ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md))
 
 ## Medium
 
@@ -282,7 +285,8 @@ it reaches. Some rules of thumb:
 - [ ] Run the container C-scenarios on native arm64 hardware and mark emulation-only evidence ([container-platform-qualification.md](container-platform-qualification.md), qualification)
 - [ ] Measure compressed manifest and layer bytes and cold pull time for a pushed GHCR image ([container-platform-qualification.md](container-platform-qualification.md), qualification)
 - [ ] Qualify session resume after rebuild (C13) for Codex, OpenCode, Pi, Cursor and Grok ([container-platform-qualification.md](container-platform-qualification.md), qualification)
-- [ ] Qualify live credential rotation (C21) while a provider process runs, including account switching ([container-platform-qualification.md](container-platform-qualification.md), qualification)
+- [x] Qualify live credential rotation (C21) while a provider process runs, including account switching ([container-platform-qualification.md](container-platform-qualification.md), qualification)
+- [ ] Qualify live credential rotation (C21) for Claude, Cursor and the Grok bridge-start push while a provider process runs ([container-platform-qualification.md](container-platform-qualification.md), qualification)
 - [ ] Inject readiness failures on a real daemon (firewall, DNS, permissions, status write, Docker restart, C10) ([container-platform-qualification.md](container-platform-qualification.md), qualification)
 - [ ] Run a live daemon disconnect mid-copy and a process kill around the rebuild commit write ([container-platform-qualification.md](container-platform-qualification.md), qualification)
 - [ ] Check the agent-tools port is answered from a container on a host whose reachability path is open (C22) ([container-platform-qualification.md](container-platform-qualification.md), qualification)
@@ -293,6 +297,9 @@ it reaches. Some rules of thumb:
 - [ ] Decide whether `restoreRecoveryCopy` always assigns a new `runtimeGeneration` so stale handles are refused ([container-rebuild-state-preservation.md](container-rebuild-state-preservation.md), decision)
 - [ ] Generate one canonical default allowlist for the backend, renderer and firewall fallbacks ([container-network-and-credential-isolation.md](container-network-and-credential-isolation.md))
 - [ ] Prototype bounded external egress enforcement so restricted containers no longer need `NET_ADMIN` ([container-network-and-credential-isolation.md](container-network-and-credential-isolation.md))
+- [ ] Qualify a Grok container running past the host access token's expiry with a live login: it signs out alone, the host stays signed in ([container-network-and-credential-isolation.md](container-network-and-credential-isolation.md), qualification)
+- [ ] Tell a container user to restart the environment to recover a lapsed host-imported Codex or Grok login ([container-network-and-credential-isolation.md](container-network-and-credential-isolation.md))
+- [ ] Decide whether a host Codex or Grok sign-out removes the access-only copy from a container that never added an account ([container-network-and-credential-isolation.md](container-network-and-credential-isolation.md), decision)
 - [ ] Choose and apply a measured default CPU, memory and PID budget for new container runtimes ([container-resource-budgets-and-performance.md](container-resource-budgets-and-performance.md))
 - [ ] Measure browser, build and provider workloads with and without the experiment budget on Engine and Desktop ([container-resource-budgets-and-performance.md](container-resource-budgets-and-performance.md), qualification)
 - [ ] Record container benchmark numbers for Docker Desktop and arm64 against the regression targets ([container-resource-budgets-and-performance.md](container-resource-budgets-and-performance.md), qualification)
@@ -389,6 +396,7 @@ it reaches. Some rules of thumb:
 - [ ] Show each auth state from fixtures in the per-session card and, later, the settings card ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md), qualification)
 - [ ] Run a Codex sign-out then sign-in round trip on a fixture profile with Codex credentials ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md), qualification)
 - [ ] Confirm an expired Claude login mid-turn shows the `auth` notice and actionable readiness, not a spawn failure ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md), qualification)
+- [ ] Make an agent-test profile select the Claude credential entry for its chosen host account ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md))
 - [ ] Migrate reasoning and speed axes onto generic `parameters`, or record the decision to keep both models ([composer-model-parameters.md](composer-model-parameters.md))
 - [ ] Apply or reject a per-turn `model` on a Codex dispatch; the Codex prompt body drops it, so an explicit dispatch model on an existing session is ignored ([composer-model-parameters.md](composer-model-parameters.md))
 - [ ] Change an extra Cursor model axis, send a turn, reload, and confirm the value returns from the backend ([composer-model-parameters.md](composer-model-parameters.md), qualification)
@@ -581,6 +589,9 @@ it reaches. Some rules of thumb:
 - [ ] Decide whether annotations on legacy URL tabs may keep depending on the legacy route ([service-preview-rollout.md](service-preview-rollout.md), decision)
 - [ ] Decide whether preview tunnel liveness should outlast a reader paused by backpressure, whose ping waits behind queued data ([service-preview-rollout.md](service-preview-rollout.md), decision)
 - [ ] Name service tabs after their service in the tab strip instead of "Browser N" ([service-preview-rollout.md](service-preview-rollout.md))
+- [ ] Give the service tab's address field room in narrow panes (92 px at the narrowest window) ([service-preview-rollout.md](service-preview-rollout.md))
+- [ ] Confirm flake 0620 (keyboard service picker under timer throttling) stays fixed, then consider its switches for every Electron spec ([service-preview-rollout.md](service-preview-rollout.md), verify)
+- [ ] Verify flake 0622, a remote preview attachment held after its window closed in one slow run ([service-preview-rollout.md](service-preview-rollout.md), verify)
 - [ ] Build the web iframe preview surface: minimal sandbox, honoured framing, top-level fallback, safe postMessage ([embedded-service-previews.md](embedded-service-previews.md))
 - [ ] Investigate partitioned (CHIPS) cookies for the `__Host-orkestrator-preview` transport cookie only ([embedded-service-previews.md](embedded-service-previews.md))
 - [ ] Build an optional iOS in-app preview in a dedicated `WKWebView` with its own data store ([embedded-service-previews.md](embedded-service-previews.md))
@@ -640,6 +651,7 @@ it reaches. Some rules of thumb:
 - [ ] Report a cold Codex skill list `stale` until its plugin skills have loaded ([slash-command-catalogue.md](slash-command-catalogue.md))
 - [ ] Use an Agent SDK terminal marker on `SlashCommand` once one exists, and drop the remembered Claude terminal list ([slash-command-catalogue.md](slash-command-catalogue.md), blocked)
 - [ ] Give a dev profile's backend the workspace version so no version reminder covers the composer ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md))
+- [ ] Read OpenCode model preferences from `XDG_STATE_HOME`, as OpenCode writes them ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md))
 
 ### Containers and environments (low)
 
@@ -702,6 +714,7 @@ it reaches. Some rules of thumb:
 - [ ] Qualify the MCP execution and callback scope shown for a remote browser and a restricted network ([mcp-environment-delivery.md](mcp-environment-delivery.md), qualification)
 - [ ] Qualify that MCP environment delivery never interrupts terminal work or background native sessions ([mcp-environment-delivery.md](mcp-environment-delivery.md), qualification)
 - [ ] Decide whether MCP overlay data is included in rebuild recovery copies ([mcp-environment-delivery.md](mcp-environment-delivery.md), decision)
+- [ ] Make the live OpenCode MCP rename probe robust to a model calling the renamed server ([mcp-management.md](mcp-management.md))
 
 ### Agent engines and provider SDKs (low)
 
@@ -866,7 +879,7 @@ it reaches. Some rules of thumb:
 - [ ] Separate container terminals from host terminals in the restart impact ([remote-host-upgrades.md](remote-host-upgrades.md))
 - [ ] Confirm runtime drift counters and advisory notices show and rehydrate in Agent Info on two platforms ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md), qualification)
 - [ ] Confirm the usage panel shows turns and account windows across a reload on two providers ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md), qualification)
-- [ ] Verify agent-test Claude profiles do not treat `~/.claude` as a first run when `CLAUDE_CONFIG_DIR` is unset ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md), verify)
+- [x] Verify agent-test Claude profiles do not treat `~/.claude` as a first run when `CLAUDE_CONFIG_DIR` is unset ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md), verify)
 - [ ] Verify whether a live Codex multi-agent v2 turn should split rows where a cold reload does ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md), verify)
 - [ ] Document `export_build_pipeline_for_downgrade` in storage.md as a downgrade aid, or remove it ([mixed-version-compatibility.md](mixed-version-compatibility.md))
 - [ ] Add content-free usage counters for each legacy compatibility path once the support window is agreed ([mixed-version-compatibility.md](mixed-version-compatibility.md))
@@ -901,7 +914,7 @@ it reaches. Some rules of thumb:
 | File | Very high | High | Medium | Low | Total |
 | --- | --- | --- | --- | --- | --- |
 | **Service previews and web annotations** | | | | | |
-| [service-preview-rollout.md](service-preview-rollout.md) |  | 2 | 12 | 9 | 23 |
+| [service-preview-rollout.md](service-preview-rollout.md) |  | 1 | 12 | 12 | 25 |
 | [embedded-service-previews.md](embedded-service-previews.md) |  |  |  | 13 | 13 |
 | [preview-service-discovery.md](preview-service-discovery.md) |  |  | 1 | 5 | 6 |
 | [web-annotation-qualification.md](web-annotation-qualification.md) |  |  | 15 | 4 | 19 |
@@ -915,16 +928,16 @@ it reaches. Some rules of thumb:
 | **Containers and environments** | | | | | |
 | [container-platform-qualification.md](container-platform-qualification.md) |  |  | 12 | 2 | 14 |
 | [container-rebuild-state-preservation.md](container-rebuild-state-preservation.md) |  |  | 2 | 2 | 4 |
-| [container-network-and-credential-isolation.md](container-network-and-credential-isolation.md) |  | 1 | 2 | 1 | 4 |
+| [container-network-and-credential-isolation.md](container-network-and-credential-isolation.md) |  | 2 | 5 | 1 | 8 |
 | [container-resource-budgets-and-performance.md](container-resource-budgets-and-performance.md) |  |  | 3 | 6 | 9 |
 | [container-state-observation.md](container-state-observation.md) |  |  | 5 | 6 | 11 |
 | [environment-and-disk-cleanup.md](environment-and-disk-cleanup.md) |  |  |  | 6 | 6 |
 | **Design canvas** | | | | | |
-| [design-canvas-qualification.md](design-canvas-qualification.md) |  | 1 | 7 | 6 | 14 |
+| [design-canvas-qualification.md](design-canvas-qualification.md) |  |  | 7 | 6 | 13 |
 | [design-operation-recovery-edges.md](design-operation-recovery-edges.md) |  |  | 1 | 2 | 3 |
 | [design-agent-conversation-links.md](design-agent-conversation-links.md) |  |  | 5 | 3 | 8 |
 | **MCP** | | | | | |
-| [mcp-management.md](mcp-management.md) |  | 2 | 13 | 8 | 23 |
+| [mcp-management.md](mcp-management.md) |  | 2 | 13 | 9 | 24 |
 | [mcp-environment-delivery.md](mcp-environment-delivery.md) |  |  | 4 | 10 | 14 |
 | [control-mcp-voice-surface.md](control-mcp-voice-surface.md) |  |  | 9 |  | 9 |
 | **Agent engines and provider SDKs** | | | | | |

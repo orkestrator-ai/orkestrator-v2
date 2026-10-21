@@ -7,6 +7,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { tmpdir } from "node:os";
 import { createServer } from "node:net";
 import { dismissSidebarTooltip } from "./sidebar-tooltip";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
@@ -1715,6 +1716,84 @@ test("coordinator Multi Review action reconciles a mounted renderer and survives
       await invoke("stop_environment", { environmentId: environment.id }).catch(() => undefined);
       await invoke("delete_environment", { environmentId: environment.id }).catch(() => undefined);
     }
+  }
+});
+
+test("Docker fixture boots and restarts with access-only Codex and Grok imports", async () => {
+  test.skip(process.env.ORKESTRATOR_AGENT_TEST_DOCKER !== "1", "requires a development image");
+  const runtime = resolveRuntimeProfile({
+    repositoryRoot,
+    requestedId: profile,
+    flavor: "agent-test",
+  });
+  const root = await fs.mkdtemp(path.join(tmpdir(), "ork-access-only-boot-"));
+  let containerId: string | undefined;
+  const docker = (args: string[]) => {
+    const result = spawnSync("docker", args, { encoding: "utf8", timeout: 30_000 });
+    expect(result.error, "Docker command did not complete").toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    return result.stdout.trim();
+  };
+  try {
+    for (const provider of ["codex", "grok"]) await fs.mkdir(path.join(root, provider));
+    const codex = JSON.stringify({ tokens: { access_token: "fixture-access", refresh_token: "" } });
+    const grok = JSON.stringify({
+      live: { key: "fixture-access", refresh_token: "", expires_at: "2099-01-01T00:00:00Z" },
+    });
+    await fs.writeFile(path.join(root, "codex/auth.json"), codex, { mode: 0o600 });
+    await fs.writeFile(path.join(root, "grok/auth.json"), grok, { mode: 0o600 });
+    containerId = docker([
+      "create",
+      "--network",
+      "none",
+      "--env",
+      "NETWORK_MODE=full",
+      "--label",
+      "app=orkestrator-v2",
+      "--label",
+      `orkestrator-owner=access-only-${profile}`,
+      "--mount",
+      `type=bind,source=${root}/codex,target=/codex-home,readonly`,
+      "--mount",
+      `type=bind,source=${root}/grok,target=/grok-home,readonly`,
+      runtime.dockerImage,
+    ]);
+    for (let boot = 0; boot < 2; boot++) {
+      docker(["start", containerId]);
+      await expect
+        .poll(
+          () =>
+            docker([
+              "exec",
+              containerId!,
+              "sh",
+              "-c",
+              "jq -r .phase /run/orkestrator/boot-status.json 2>/dev/null || true",
+            ]),
+          { timeout: 60_000 },
+        )
+        .toBe("ready");
+      // Only content-free assertions leave the container; no login is printed.
+      docker([
+        "exec",
+        containerId,
+        "bash",
+        "-euc",
+        `
+        test "$(stat -c %a "$HOME/.codex/auth.json")" = 600
+        test "$(stat -c %a "$HOME/.grok/auth.json")" = 600
+        jq -e '.tokens.access_token == "fixture-access" and .tokens.refresh_token == "" and (.last_refresh | type == "string")' "$HOME/.codex/auth.json" >/dev/null
+        jq -e '.live.key == "fixture-access" and .live.refresh_token == ""' "$HOME/.grok/auth.json" >/dev/null
+        test -f /tmp/.entrypoint-complete
+      `,
+      ]);
+      docker(["stop", "--time", "1", containerId]);
+    }
+    expect(await fs.readFile(path.join(root, "codex/auth.json"), "utf8")).toBe(codex);
+    expect(await fs.readFile(path.join(root, "grok/auth.json"), "utf8")).toBe(grok);
+  } finally {
+    if (containerId) docker(["rm", "--force", containerId]);
+    await fs.rm(root, { recursive: true, force: true });
   }
 });
 

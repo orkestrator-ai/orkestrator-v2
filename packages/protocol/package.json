@@ -42,6 +42,7 @@
     "./container-host-reachability": "./src/container-host-reachability.ts",
     "./container-lifecycle": "./src/container-lifecycle.ts",
     "./container-recovery": "./src/container-recovery.ts",
+    "./login-snapshots": "./src/login-snapshots.ts",
     "./container-resources": "./src/container-resources.ts",
     "./coordinator": "./src/coordinator.ts",
     "./command-nodes": "./src/command-nodes.ts",

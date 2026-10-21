@@ -988,6 +988,16 @@ export class ConnectionManager {
   }
 
   /**
+   * The client of one connection while any window holds it (Local always),
+   * for work that belongs to that connection rather than to a window's
+   * current binding.
+   */
+  backendForConnection(connectionId: string): LocalBackend | null {
+    if (connectionId === LOCAL_CONNECTION_ID) return this.localBackend;
+    return this.remoteConnections.get(connectionId)?.client ?? null;
+  }
+
+  /**
    * Bearer for a renderer request, only to the exact current origin of the
    * scope's bound machine and only for gateway paths. Two tunnels on the
    * same loopback host differ by port, so they never share a credential.

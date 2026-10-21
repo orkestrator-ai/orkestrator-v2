@@ -1,14 +1,14 @@
 # Service preview rollout
 
-Checked against `main` at `2459b05c` (2026-10-15); real-Electron run against
-`a5d338c1` (2026-10-18).
+Checked against `main` at `2459b05c` (2026-10-15); real-Electron runs against
+`a5d338c1` (2026-10-18) and `9b3f53a2` (2026-10-21).
 
 Service previews shipped in #831 (`4f02156b`). Each previewed application gets
 a backend-owned service identity, carried by a desktop tunnel, private HTTPS
 origins or an optional container relay. Every new transport ships off by
 default. Real-stack evidence is single-machine only: Linux and Chromium
 (2026-09-23), macOS re-baselines (2026-10-17), and a real Electron window with
-the desktop tunnel on (2026-10-18). This file covers four things: the platform runs each
+the desktop tunnel on (2026-10-18, remaining cases 2026-10-21). This file covers four things: the platform runs each
 transport needs before it is advertised or enabled, the criteria for flipping
 defaults, the later retirement of the legacy loopback route and its shared
 partitions, and the evidence log where run results are now recorded.
@@ -57,9 +57,10 @@ partitions, and the evidence log where run results are now recorded.
   of these suites, and every preview unit file, were re-baselined on
   2026-10-17 at `31d0fb06` (see the evidence log).
   `e2e/agent-testing/service-preview-electron.spec.ts` (in
-  `mise run test:agent:electron`, so not in CI either) opens two worktree
+  `mise run test:agent:electron`, so not in CI either) opens worktree
   services in the real Electron window with `ORKESTRATOR_PREVIEW_TRANSPORT=1`
-  on a disposable agent-test profile. Agent-test backends keep that variable
+  on a disposable agent-test profile: 13 tests, including a Vite application
+  and a second window on a second, disposable standalone backend. Agent-test backends keep that variable
   and `ORKESTRATOR_PREVIEW_RELAY` (`AGENT_TEST_SAFE_ENV_NAMES` in
   `apps/desktop/electron/backend-process.ts`); before 2026-10-18 they were
   stripped, so the override silently did nothing in an isolated profile.
@@ -118,10 +119,35 @@ partitions, and the evidence log where run results are now recorded.
    `ServiceBrowserTab` now treats an echo of its own earlier save as stale
    (`persistedBases`), but other tab types may follow such echoes. Check
    whether save acknowledgements or layout events are applied out of order in
-   `paneLayoutStore.ts`.
+   `paneLayoutStore.ts`. Related, seen on 2026-10-21: a `save_pane_layout` from
+   outside the renderer (the Electron spec's, with a different tab set) did not
+   reach an open renderer that had already hydrated the environment, even
+   after re-selecting it; the spec now reloads the renderer when it changes the
+   tab set. Check whether another client's layout save should reach an open
+   renderer.
 10. Name service tabs after their service in the tab strip. Every browser tab
     is "Browser N" (`DraggableTab.tsx`), so two service tabs can only be told
     apart by opening them.
+11. Give the address field room in narrow panes. At the narrowest window
+    (800×600, 100 %) the browser pane is 519 CSS px wide, above the 448 px
+    (`@md/browser`) wrap point, so the toolbar stays on one row and the address
+    field is 92 px wide (about a dozen characters of
+    `http://localhost:<port>/`). It works (Cmd/Ctrl+L selects it, it scrolls),
+    but the URL cannot be read. Wrap earlier, or let the picker and buttons
+    shrink first.
+12. Flake [0620](../tests/flaky-tests/0620-service-preview-keyboard-picker-register-item.md):
+    four times on 2026-10-21 the keyboard test could not reach, or open,
+    **Register a service…** from the picker. Likely cause: Radix moves menu
+    focus in a timer, and Chromium throttles timers in a window that other
+    worktrees' windows cover. The spec now waits for focus to move and turns
+    that throttling off; 5 runs and the full Electron suite passed since.
+    Confirm it holds on loaded runs, then consider the same switches for every
+    Electron spec (`electron-launch-switches.ts`).
+13. Flake [0622](../tests/flaky-tests/0622-service-preview-window-close-remote-release.md):
+    once, in a slow run, a remote preview attachment was still held 20 s after
+    its window's `close()`. It did not recur; the spec now times the close
+    and the release separately. If it recurs with the window gone, capture
+    Electron's output and check the close-path release.
 
 ### Qualification
 
@@ -138,14 +164,12 @@ log below.
   zoom (bounds on the host at 80, 100 and 125 %), DevTools, screenshots and an
   annotation capture after reattach; preview renderer crash and reload; stable
   resource counts over repeated open, hide and close, and release after the
-  retirement lease. Still to cover:
-  - no crossing between windows on different backends, and a connection
-    switch (both need a second backend connection in the spec);
-  - clipboard, and overlays hiding a service view (observed with a startup
-    dialog on 2026-10-18, not asserted);
-  - hide or unmount during HMR, then reattach (needs the Vite fixture);
-  - keyboard and narrow-viewport use of the picker, service dialog and
-    diagnostics.
+  retirement lease. The remaining cases passed on 2026-10-21, after fixes:
+  windows on different backends and connection switches (use, connect, and
+  window close), clipboard, overlays, HMR reattach, and keyboard and narrow
+  viewport use of the picker, service dialog and diagnostics. Single machine
+  only; the two-machine run below is still needed for remote backends over a
+  real network.
 - Two-machine tailnet. Gates remote desktop previews by default. No runbook
   exists, so write one first. Cover:
   - a decoy on the client machine that no request ever reaches;
@@ -194,8 +218,9 @@ log below.
 ### Enabling defaults
 
 - Desktop tunnel: change `DEFAULT_PREVIEW_SETTINGS.transport` to `true` only
-  after the remaining real-Electron cases and the two-machine run pass and an observation window
-  with error and resource thresholds is recorded here. An absence of
+  after the two-machine run passes and an observation window with error and
+  resource thresholds is recorded here. The real-Electron cases passed on
+  2026-10-21. An absence of
   complaints is not a metric.
 - Publication cannot be a default: it needs an operator-provided domain,
   certificate, key and listen address. It stays a per-deployment opt-in, gated
@@ -487,6 +512,143 @@ This replaces the 2026-09-23 file lists as the current baseline.
   fixtures. No containers were used. No leftover process or temp root was
   found after an interrupted run.
 
+2026-10-21, remaining real-Electron cases, branch
+`qualify-preview-electron-remaining-cases-0a835a98d18e` from `main` at
+`9b3f53a2`.
+
+| Item | Version |
+| --- | --- |
+| Host | macOS 27.0 (Darwin 27.0.0, arm64), one machine shared with other live-test worktrees (load average 4 to 31) |
+| Bun / Node (mise) | 1.4.3 / 22.23.1 (Bun 1.4.2 on `PATH` for the direct `bunx` and `bun test` runs) |
+| Electron / Playwright | 44.7.0 / 1.64.0 |
+| Vite application | the checked-in `test-fixtures/preview-vite` sources with the repository's Vite 8.3.4 (`ORKESTRATOR_TEST_PREVIEW_VITE_DIR` unset; set, the spec uses that pinned 7.3.6 install) |
+| Profiles | agent-test `service-preview-smoke` (Electron) and `service-preview-remote` (a standalone backend through `BackendProcess`, gateway on loopback), both under one `mkdtemp` root, mock keychain, no provider credentials, removed by the spec |
+
+- Effective capabilities: `transport` on through `ORKESTRATOR_PREVIEW_TRANSPORT=1`
+  on both backends; relay and publication off. The second backend's token is
+  its own disposable `gateway-auth.json` token, read by the spec and never
+  logged.
+- Commands: bridges rebuilt, then `bunx playwright test --config
+  e2e/agent-testing/playwright.electron.config.ts service-preview-electron.spec.ts`
+  (with `--grep` while iterating), then the full Electron suite (below).
+- Defects the run exposed, each fixed with unit tests that fail without the
+  fix:
+  - A connection switch released preview attachments on the wrong backend
+    and window close released none; `connect` and `forget` left the old
+    previews in place (see "A window's previews belong to their connection").
+    Live before the fix: after `connect`, window 2's Local view stayed (1
+    view, expected 0), its released tab still held a Local attachment after
+    the 30-second lease (2, expected 1), and the second backend's service
+    opened in a partition keyed to the Local connection. Tests:
+    `apps/desktop/tests/preview-connection-backend.test.ts` (new),
+    `connection-manager.test.ts`.
+  - Cmd/Ctrl+L did nothing in service tabs, from the app or from inside the
+    view (only plain URL tabs listened). The shortcut is now one hook,
+    `useAddressBarShortcut` (`browser-tab-hooks.ts`), used by both tab types.
+  - **Route details** dropped keyboard focus to the body when it expanded or
+    collapsed (the toggle is replaced by another element). It now keeps focus
+    on the visible toggle.
+  - Closing the service dialog, opened from the picker or **Preview options**,
+    dropped focus to the body (its menu item was gone). Focus now returns to
+    the menu trigger.
+  Tests: `ServiceBrowserTab.test.tsx` (two new) and `PreviewDiagnostics.test.tsx`
+  (new).
+- Results, by case (all from the real window):
+  - Clipboard: a selection copied with the Edit menu's copy role reached the
+    host clipboard ("svc-a"); host text pasted into a field in the page.
+    `navigator.clipboard.readText()` was denied (`NotAllowedError`), and so was
+    a write from a script "gesture"; a write right after a real click in the
+    visible view succeeded. On macOS AppKit sends the menu roles to the OS
+    first responder, so the spec checks the menu has the role and runs the
+    web-contents method the role performs. The host clipboard was snapshotted
+    in main and restored.
+  - Overlays: the service picker menu, **Preview options**, the register
+    service dialog and the project search (Cmd+K) each hid the view while
+    open, and it came back on Escape; the page was never reloaded.
+  - Keyboard: the picker opens with Enter, moves with arrows, chooses with
+    Enter (retargeting the tab to `svc-b` and back), and Escape returns focus
+    to its trigger. In the service dialog, 10 Tab and 4 Shift+Tab presses
+    never left it, Escape closed it without registering anything, and focus
+    returned to the picker. **Route details** expands and collapses with Enter
+    and Space and keeps focus, with the view on its shorter host. Cmd+L from
+    the app and from inside the view focuses and selects the address.
+  - Narrow viewport: the window at its 800×600 minimum, at 100 and 150 % app
+    zoom (CSS viewports 800×600 and 533×400). The picker trigger, address,
+    picker menu, **Edit service** dialog and its Cancel button lay inside the
+    viewport; the view sat on its host within 1.5 DIP and inside the window,
+    also with diagnostics expanded. The address field is 92 CSS px wide there
+    (code item 11).
+  - HMR: a Vite service tab hidden behind another tab, then unmounted (no
+    environment selected), then through a renderer reload while an update
+    was in flight. Each `label.js` write was applied in place (text updated,
+    accept handler ran, same document) and shown on reattach. Both
+    `vite-hmr` upgrades Vite saw carried `Host: localhost:<vite port>` and no
+    ingress header, so none used Vite's direct fallback socket. One write can
+    raise two updates, so the spec checks the count grows.
+  - Different backends and switches: window 1 on Local and window 2 on the
+    second backend used `persist:orkestrator-preview-svc-1-<local>-…` and
+    `…-svc-2-<remote connection>-…`; cookies and localStorage set in each
+    service were absent from the other. Window 1 asking for the second
+    backend's service was refused (`not-found`) and the remote fixture saw no
+    request. Switching window 2 to Local closed its remote view and ingress
+    and released the remote attachment at once (0 on the second backend);
+    switching back reused the partition (its localStorage was there); closing
+    window 2 released it again. Window 1's page was untouched throughout.
+- Spec runs once the test-side fixes below were in: 13/13 in 11 of 14 full
+  runs, then the first full Electron suite failed the same keyboard test once
+  more: flake [0620](../tests/flaky-tests/0620-service-preview-keyboard-picker-register-item.md),
+  stale focus reads under Chromium's timer throttling. After the spec waited
+  for focus and turned the throttling off: 5 of 5 runs passed (55.7 s to
+  1.0 min, load 11 to 17), and the second full suite passed. Earlier failures while writing the spec were
+  test-side and are fixed in it: a pointer parked over the menu, the
+  duplicated HMR update, a hidden `role="dialog"` popover that is always in
+  the DOM, and the renderer keeping its hydrated tab set (code item 9).
+- Later single-spec runs: one failure, flake [0622](../tests/flaky-tests/0622-service-preview-window-close-remote-release.md)
+  (a slow run in which window close did not release on the second backend
+  within 20 s); then 4 of 4 passed with the close and release timed apart
+  (window gone 209 to 217 ms after `close()`).
+- Full Electron suite, `ORKESTRATOR_AGENT_TEST_RUN_ID=svc-preview-0a835-suite2
+  mise run test:logged -- --name agent-electron-0a835-2 -- mise run
+  test:agent:electron`: 28 passed, 1 skipped (the Linux Wayland case), 0
+  failed, 175.3 s. The first suite run (`svc-preview-0a835-suite`), before
+  the 0620 change: 24 passed, 1 failed (0620), 1 skipped, 3 did not run.
+- Repository checks: `mise run check` passed. The first full `mise run test`
+  (`full-tests-0a835`) failed on two things in this change, both fixed: a
+  source-text assertion in `tests/unit/release/package-config.test.ts` on the
+  old `useConnection` code, and two new web assertions that passed a DOM
+  query result to `toBeNull` (`tests/unit/test-diagnostic-bounds.test.ts`).
+  It also hit backend flakes [0239](../tests/flaky-tests/0239-agent-account-duplicate-directory-cleanup.md)
+  and [0341](../tests/flaky-tests/0341-public-exec-restart-cleanup-eperm.md)
+  (recurrences) and new [0621](../tests/flaky-tests/0621-environment-move-nested-submodules-aggregate-timeout.md);
+  each owning file passed alone at load 36. The second full run
+  (`full-tests-0a835-2`) passed in 495.3 s.
+- Cleanup: the spec stops Electron, both backends, the renderer Vite group,
+  the Vite application group and all three fixtures, and removes its
+  temporary root; no process or temporary root was left after the runs. No
+  containers were used.
+
+- Review follow-up (2026-10-21, same worktree): release failures now emit the
+  static diagnostic `[Previews] Failed to release preview attachment.`; the
+  obsolete scope-relative tunnel URL method is removed. A focused transport
+  test proves the unavailable-connection path warns once while closing ingress.
+  Hook tests cover sibling chat listboxes, two preview consumers, closing but
+  still visible overlays, exit-motion completion, and hidden ancestors.
+- `ORKESTRATOR_AGENT_TEST_RUN_ID=preview-review-fixes mise run test:logged --
+  --name review-electron -- mise run test:agent:electron`: 29 passed, 1 skipped
+  (Linux Wayland on macOS), 0 failures, 144.1 s. Added scenarios force capability
+  setup to fail after the second backend starts (process exited and gateway
+  closed before profile cleanup), and forget its active connection (remote
+  view, ingress, sockets and attachment released; the next Local preview uses
+  its Local partition; the other window's page remains intact).
+- Focused desktop and overlay tests, `format:check`, `lint`, and `typecheck`
+  passed through `test:logged`; modified files also have no lint findings.
+  `mise run test:logged -- --name review-full-tests -- mise run test` passed
+  all four non-iOS groups in 441.3 s. No additional Docker, CLI scenario, iOS,
+  or browser component suite was selected: their runtime code was unchanged;
+  the real Electron suite exercises the affected desktop paths.
+  Electron cleanup removed the disposable service-preview profile root after
+  stopping its processes. No production profile or containers were used.
+
 ## Constraints and rationale
 
 - The threat boundaries, the credential and data path, and the resource-owner
@@ -559,6 +721,26 @@ This replaces the 2026-09-23 file lists as the current baseline.
   be dropped, because the page navigated last; the renderer then shows the
   view's path. Older renderers that send no basis keep the
   "only a path not already asked for" rule.
+- A window's previews belong to their connection (2026-10-21). Before, the
+  preview transport resolved "this window's connection" at each call. Main
+  moves the window (and, on close, releases it) before tearing the old
+  transport down, so the old attachments were released on the new backend,
+  which answered `released: false`, or not at all once the window was gone;
+  the issuing backend kept them until the 30-minute idle expiry. `connect`
+  and `forget` also moved the window without rebuilding its previews, so its
+  old views stayed and its next service opened in a partition keyed to the
+  old connection. Now each transport is fixed to the connection it was made
+  for (`connectionPreviewBackend`, keeping the last client it saw for
+  teardown), and `use`, `connect` and `forget` all end the window's previews
+  when its connection changed (`rebindWindowPreviews`). Rejected options:
+  - Disposing the old transport before switching: a failed switch (an
+    unreachable remote) would leave the window on its old connection with its
+    previews gone.
+  - Keeping a remote client alive while any transport references it: the same
+    outcome with shared bookkeeping in `ConnectionManager`; the transport
+    holding its last client only for teardown is enough.
+  Cost: a disposed transport may still reach a remote no window holds, with
+  that connection's own token, for its release calls only.
 - Mixed versions: old clients show service URIs unchanged and refuse them
   (`browser-address.test.ts`). Pre-#831 backends reject Auto mappings
   (`hostPort: 0`).

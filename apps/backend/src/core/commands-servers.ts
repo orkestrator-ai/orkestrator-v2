@@ -82,7 +82,6 @@ import {
   localServerEnvironmentOperations,
   localServerUnresponsiveSince,
   localServerWorkingDirectories,
-  containerBridgeOperations,
   deletingLocalServerEnvironments,
   mergingEnvironments,
   mergeCleanupRecoveryTasks,
@@ -339,26 +338,7 @@ export function getBridgePath(
   return path.join(context.resourceRoot, bridgeName);
 }
 
-export function enqueueContainerBridgeOperation<T>(
-  agent: LocalServerKind,
-  containerId: string,
-  operation: () => Promise<T>,
-): Promise<T> {
-  const key = `${agent}:${containerId}`;
-  const previous = containerBridgeOperations.get(key) ?? Promise.resolve();
-  const result = previous.then(operation, operation);
-  const tail = result.then(
-    () => undefined,
-    () => undefined,
-  );
-  containerBridgeOperations.set(key, tail);
-  void tail.finally(() => {
-    if (containerBridgeOperations.get(key) === tail) {
-      containerBridgeOperations.delete(key);
-    }
-  });
-  return result;
-}
+export { enqueueContainerBridgeOperation } from "./container-bridge-operations.js";
 
 export function assertLocalServerStartAllowed(environmentId: string): void {
   if (isLocalServerShutdownRequested()) {

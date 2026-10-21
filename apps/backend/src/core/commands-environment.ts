@@ -179,7 +179,7 @@ import {
 import type { EnvironmentSetupStartResult } from "./commands-runtime-state.js";
 import type { CommandContext, BackendEmit } from "./commands-context.js";
 import {
-  refreshStagedAgentAccountLogins,
+  startContainerWithAgentAccounts,
   syncContainerAgentAccountsOnStart,
 } from "./agent-accounts-containers.js";
 
@@ -1405,8 +1405,7 @@ async function startContainerRuntimeAdmitted(
       phase: "starting",
       boot: { phase: "starting" },
     });
-    await refreshStagedAgentAccountLogins(context, environment, containerId);
-    await runCommand("docker", ["start", containerId], { timeoutMs: 60_000 });
+    await startContainerWithAgentAccounts(context, environment, containerId);
     await ensureContainerProjectFilesAccess(containerId);
     // Readiness belongs to this boot: nothing is prepared or launched until
     // the entrypoint reports ready for the current PID 1. Legacy images have

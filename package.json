@@ -1,6 +1,6 @@
 {
   "name": "orkestrator-ai",
-  "version": "2.25.1-alpha",
+  "version": "2.26.0-alpha",
   "private": true,
   "workspaces": [
     "apps/*",

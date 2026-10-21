@@ -249,6 +249,7 @@ export class ConnectionManager {
     for (const connectionId of Array.from(this.remoteConnections.keys())) {
       this.teardownRemote(connectionId);
     }
+    void this.sshTunnels?.disposeAll?.().catch(() => undefined);
   }
 
   getList(scope = DEFAULT_CONNECTION_SCOPE): ConnectionList {
@@ -525,6 +526,45 @@ export class ConnectionManager {
         throw error;
       }
     });
+  }
+
+  /**
+   * First-use host-key review: fetch the server's key without offering any
+   * credential, so the user can compare fingerprints before trusting it.
+   */
+  async probeSshHostKey(input: { destination: string; sshPort?: number }): Promise<{
+    probeId: string;
+    destination: string;
+    fingerprints: Array<{ type: string; fingerprint: string }>;
+  }> {
+    if (!this.supportedRouteKinds().includes("ssh") || !this.sshTunnels?.probeHostKey) {
+      throw new Error("SSH routes are not available in this client.");
+    }
+    const destination = validateSshDestination(input.destination);
+    const sshPort =
+      input.sshPort === undefined ? undefined : validatePort(input.sshPort, "SSH port");
+    const result = await this.sshTunnels.probeHostKey({
+      routeId: "host-key-probe",
+      destination,
+      ...(sshPort ? { sshPort } : {}),
+      remoteGatewayPort: 1,
+    });
+    return {
+      probeId: result.probeId,
+      destination: result.destination,
+      fingerprints: result.fingerprints.map((entry) => ({
+        type: entry.keyType,
+        fingerprint: entry.fingerprint,
+      })),
+    };
+  }
+
+  /** Record explicit approval of a probed host key in Orkestrator's own known_hosts. */
+  trustSshHostKey(probeId: string): Promise<{ added: number }> {
+    if (!this.sshTunnels?.trustHostKey) {
+      return Promise.reject(new Error("SSH routes are not available in this client."));
+    }
+    return this.sshTunnels.trustHostKey({ probeId });
   }
 
   async use(connectionId: string, scope = DEFAULT_CONNECTION_SCOPE): Promise<ConnectionList> {

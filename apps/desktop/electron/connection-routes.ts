@@ -35,6 +35,18 @@ export type SshTunnelProvider = {
     release(): void;
     onClosed(listener: (failure: RouteFailure) => void): () => void;
   }>;
+  probeHostKey?(spec: {
+    routeId: string;
+    destination: string;
+    sshPort?: number;
+    remoteGatewayPort: number;
+  }): Promise<{
+    probeId: string;
+    destination: string;
+    fingerprints: Array<{ fingerprint: string; keyType: string; bits: number }>;
+  }>;
+  trustHostKey?(probe: { probeId: string }): Promise<{ added: number }>;
+  disposeAll?(): Promise<void>;
 };
 
 export async function openRoute(
@@ -89,6 +101,7 @@ const SSH_UNSUPPORTED_CODES = new Set([
   "control-endpoint",
   "legacy-backend",
   "no-route",
+  "invalid-route",
 ]);
 
 export type ClassifiedRouteFailure = {

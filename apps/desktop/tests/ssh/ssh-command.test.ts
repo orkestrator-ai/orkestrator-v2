@@ -5,13 +5,13 @@ import {
   buildTunnelArgs,
   formatKnownHostsFilesOption,
   validateSshRoute,
-} from "../../electron/ssh/ssh-command";
+} from "@orkestrator/protocol/node/ssh/ssh-command";
 import {
   assertTunnelSafeConfig,
   parseSshConfigOutput,
   splitKnownHostsFiles,
-} from "../../electron/ssh/ssh-config-inspection";
-import { SshTunnelError } from "../../electron/ssh/tunnel-failures";
+} from "@orkestrator/protocol/node/ssh/ssh-config-inspection";
+import { SshTunnelError } from "@orkestrator/protocol/node/ssh/tunnel-failures";
 
 const HOME = "/home/alice";
 

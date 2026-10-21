@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { readdirSync } from "node:fs";
-import type { ForwardProbeResult } from "../../electron/ssh/port-allocation";
-import { SshTunnelError, type SshTunnelFailure } from "../../electron/ssh/tunnel-failures";
-import { SshTunnelSupervisor } from "../../electron/ssh/tunnel-supervisor";
+import type { ForwardProbeResult } from "@orkestrator/protocol/node/ssh/port-allocation";
+import { SshTunnelError, type SshTunnelFailure } from "@orkestrator/protocol/node/ssh/tunnel-failures";
+import { SshTunnelSupervisor } from "@orkestrator/protocol/node/ssh/tunnel-supervisor";
 import {
   authenticatedTunnel,
   createFakeHarness,

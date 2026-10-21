@@ -9,7 +9,7 @@ import { afterAll, beforeAll, describe, expect } from "bun:test";
 import type { DeviceCatalogue } from "@orkestrator/protocol/device-catalogue";
 import type { ConnectionCatalogueStore } from "../../electron/connection-catalogue-store";
 import { ConnectionManager, type SecureStorage } from "../../electron/connection-manager";
-import type { SshTunnelSupervisor } from "../../electron/ssh/tunnel-supervisor";
+import type { SshTunnelSupervisor } from "@orkestrator/protocol/node/ssh/tunnel-supervisor";
 import { FAKE_INSTALLATION_ID, FakeOrkestratorGateway } from "./fake-orkestrator-gateway";
 import {
   INTEGRATION_TIMEOUT_MS,

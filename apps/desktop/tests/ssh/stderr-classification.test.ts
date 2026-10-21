@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { classifySshStderr, redactSshDiagnostic } from "../../electron/ssh/stderr-classification";
+import { classifySshStderr, redactSshDiagnostic } from "@orkestrator/protocol/node/ssh/stderr-classification";
 import {
   SSH_TUNNEL_FAILURE_CODES,
   SshTunnelError,
   isRetryableTunnelFailure,
   tunnelFailure,
-} from "../../electron/ssh/tunnel-failures";
+} from "@orkestrator/protocol/node/ssh/tunnel-failures";
 
 const CHANGED = `@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 @    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @

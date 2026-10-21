@@ -6,7 +6,7 @@
 import { afterAll, beforeAll, describe, expect } from "bun:test";
 import { readdirSync } from "node:fs";
 import net from "node:net";
-import { allocateLoopbackPort } from "../../electron/ssh/port-allocation";
+import { allocateLoopbackPort } from "@orkestrator/protocol/node/ssh/port-allocation";
 import {
   INTEGRATION_TIMEOUT_MS as TIMEOUT,
   SSH_INTEGRATION_ENABLED,

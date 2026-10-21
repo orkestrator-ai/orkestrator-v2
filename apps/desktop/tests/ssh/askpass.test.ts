@@ -8,7 +8,7 @@ import {
   MAX_ASKPASS_ANSWER_LENGTH,
   MAX_ASKPASS_PROMPT_LENGTH,
   type SshAskpassPrompt,
-} from "../../electron/ssh/askpass";
+} from "@orkestrator/protocol/node/ssh/askpass";
 import { createFakeHarness, type FakeHarness } from "./fakes";
 
 const harnesses: FakeHarness[] = [];

@@ -7,8 +7,8 @@ import {
   createSshAdapterContext,
   type SshAdapterContext,
   type SshChildProcess,
-} from "../../electron/ssh/context";
-import type { ForwardProbeResult } from "../../electron/ssh/port-allocation";
+} from "@orkestrator/protocol/node/ssh/context";
+import type { ForwardProbeResult } from "@orkestrator/protocol/node/ssh/port-allocation";
 
 let nextPid = 40_000;
 

@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { parseFingerprintOutput, parseKnownHostsLines } from "../../electron/ssh/host-trust";
-import { SshTunnelError } from "../../electron/ssh/tunnel-failures";
-import { SshTunnelSupervisor } from "../../electron/ssh/tunnel-supervisor";
+import { parseFingerprintOutput, parseKnownHostsLines } from "@orkestrator/protocol/node/ssh/host-trust";
+import { SshTunnelError } from "@orkestrator/protocol/node/ssh/tunnel-failures";
+import { SshTunnelSupervisor } from "@orkestrator/protocol/node/ssh/tunnel-supervisor";
 import { createFakeHarness, FAST_TIMINGS, ROUTE, type FakeChild, type FakeHarness } from "./fakes";
 
 const KEY_LINE = "[10.0.0.2]:2222 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKtxW6examplekeymaterial0";

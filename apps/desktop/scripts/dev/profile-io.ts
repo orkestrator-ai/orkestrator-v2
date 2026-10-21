@@ -7,6 +7,7 @@ import {
   readStorageDatabaseStore,
 } from "@orkestrator/protocol/node/storage-database";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { constants, type Stats } from "node:fs";
 import {
   chmod,
@@ -478,8 +479,8 @@ export async function seedInstalledAgentToolchains(
   return { seeded, failed };
 }
 
-/** A Grok access token this close to expiry is not worth handing over. */
-const GROK_SNAPSHOT_MIN_VALIDITY_MS = 60_000;
+/** An access token this close to expiry is not worth handing over. */
+const PROVIDER_SNAPSHOT_MIN_VALIDITY_MS = 60_000;
 
 /**
  * Reduce a copy of the host's Grok `auth.json` to what an isolated profile
@@ -511,7 +512,7 @@ export function restrictGrokAuthSnapshot(
     const login = { ...(entry as Record<string, unknown>) };
     if ("expires_at" in login) {
       const expiresAt = typeof login.expires_at === "string" ? Date.parse(login.expires_at) : NaN;
-      if (!(expiresAt - nowMs >= GROK_SNAPSHOT_MIN_VALIDITY_MS)) continue;
+      if (!(expiresAt - nowMs >= PROVIDER_SNAPSHOT_MIN_VALIDITY_MS)) continue;
     }
     if ("refresh_token" in login) login.refresh_token = "";
     kept[key] = login;
@@ -525,14 +526,235 @@ export function restrictGrokAuthSnapshot(
   return { text: JSON.stringify(kept) };
 }
 
+/** Never a real OAuth refresh token; see `restrictCodexAuthSnapshot`. */
+export const CODEX_SNAPSHOT_REFRESH_TOKEN_PREFIX = "orkestrator-agent-test-snapshot-no-refresh-";
+
+function jsonRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function nonBlank(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+/** A JWT's `exp` in milliseconds, or undefined for an opaque token. */
+function jwtExpiryMs(token: string): number | undefined {
+  const payload = token.split(".")[1];
+  if (!payload) return undefined;
+  try {
+    const exp = (
+      JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as { exp?: unknown }
+    ).exp;
+    return typeof exp === "number" && Number.isFinite(exp) ? exp * 1000 : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
- * Copy the provider logins an isolated profile cannot point at, re-read on
- * every start so a refreshed or removed host login wins.
+ * Reduce a copy of the host's Codex `auth.json` to what an isolated profile
+ * may hold: an API key, or the ChatGPT login's access and id tokens with a
+ * placeholder in place of the refresh token.
  *
- * Grok has no documented home-directory override, so an isolated local test
- * cannot point only Grok at the host home. Copy just its credential into the
- * private profile instead, reduced by `restrictGrokAuthSnapshot`; sessions,
- * prompts, logs, and the rest of HOME stay isolated.
+ * ChatGPT refresh tokens rotate: a profile that refreshed with the host's
+ * token would retire it and sign the host's own Codex out. The placeholder is
+ * non-empty because the Codex bridge treats a login without a refresh token
+ * or key as no login, and is derived from the access token so a new snapshot
+ * is a new login identity. `last_refresh` is the copy's time so Codex does
+ * not try its interval refresh; a refresh it still attempts (after a 401)
+ * fails on the placeholder and signs only the profile out. An access token
+ * that has expired, or nearly, is withheld rather than copied.
+ */
+export function restrictCodexAuthSnapshot(
+  text: string,
+  nowMs = Date.now(),
+): { text: string } | { withheld: string } {
+  let parsed: Record<string, unknown> | undefined;
+  try {
+    parsed = jsonRecord(JSON.parse(text));
+  } catch {
+    return { withheld: "the host Codex auth.json is not valid JSON" };
+  }
+  if (!parsed) return { withheld: "the host Codex auth.json has an unknown shape" };
+  const apiKey = nonBlank(parsed.OPENAI_API_KEY);
+  const tokens = jsonRecord(parsed.tokens);
+  const accessToken = nonBlank(tokens?.access_token);
+  if (accessToken) {
+    const expiresAt = jwtExpiryMs(accessToken);
+    if (expiresAt !== undefined && expiresAt - nowMs < PROVIDER_SNAPSHOT_MIN_VALIDITY_MS) {
+      return {
+        withheld:
+          "the host Codex login has expired and the profile may not refresh it; run codex on the host (codex login if it is signed out there), then restart the profile",
+      };
+    }
+    const placeholder = `${CODEX_SNAPSHOT_REFRESH_TOKEN_PREFIX}${createHash("sha256")
+      .update(accessToken)
+      .digest("hex")
+      .slice(0, 16)}`;
+    return {
+      text: JSON.stringify({
+        ...(typeof parsed.auth_mode === "string" ? { auth_mode: parsed.auth_mode } : {}),
+        OPENAI_API_KEY: apiKey ?? null,
+        tokens: {
+          ...(nonBlank(tokens?.id_token) ? { id_token: tokens?.id_token } : {}),
+          access_token: accessToken,
+          refresh_token: placeholder,
+          ...(nonBlank(tokens?.account_id) ? { account_id: tokens?.account_id } : {}),
+        },
+        last_refresh: new Date(nowMs).toISOString(),
+      }),
+    };
+  }
+  if (apiKey) return { text: JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: apiKey }) };
+  return { withheld: "the host Codex auth.json has no API key or ChatGPT access token" };
+}
+
+/**
+ * Reduce a copy of the host's OpenCode `auth.json` to what an isolated profile
+ * may hold: API keys and well-known tokens as they are, and each OAuth login's
+ * access token with its refresh token blanked, for the same reason as Codex
+ * and Grok. Expired OAuth logins and unknown entry types are dropped.
+ */
+export function restrictOpenCodeAuthSnapshot(
+  text: string,
+  nowMs = Date.now(),
+): { text: string } | { withheld: string } {
+  let parsed: Record<string, unknown> | undefined;
+  try {
+    parsed = jsonRecord(JSON.parse(text));
+  } catch {
+    return { withheld: "the host OpenCode auth.json is not valid JSON" };
+  }
+  if (!parsed) return { withheld: "the host OpenCode auth.json has an unknown shape" };
+  const kept: Record<string, unknown> = {};
+  for (const [provider, value] of Object.entries(parsed)) {
+    const entry = jsonRecord(value);
+    if (entry?.type === "api" && nonBlank(entry.key)) {
+      kept[provider] = { type: "api", key: entry.key };
+    } else if (entry?.type === "wellknown" && nonBlank(entry.key) && nonBlank(entry.token)) {
+      kept[provider] = { type: "wellknown", key: entry.key, token: entry.token };
+    } else if (
+      entry?.type === "oauth" &&
+      nonBlank(entry.access) &&
+      typeof entry.expires === "number" &&
+      entry.expires - nowMs >= PROVIDER_SNAPSHOT_MIN_VALIDITY_MS
+    ) {
+      kept[provider] = {
+        type: "oauth",
+        access: entry.access,
+        expires: entry.expires,
+        refresh: "",
+        ...(nonBlank(entry.accountId) ? { accountId: entry.accountId } : {}),
+        ...(nonBlank(entry.enterpriseUrl) ? { enterpriseUrl: entry.enterpriseUrl } : {}),
+      };
+    }
+  }
+  if (Object.keys(kept).length === 0) {
+    return {
+      withheld:
+        "the host OpenCode auth.json has no API key or unexpired login the profile may use; run opencode auth login on the host, then restart the profile",
+    };
+  }
+  return { text: JSON.stringify(kept) };
+}
+
+type RestrictedCredentialSeed = {
+  /** Display name in warnings, for example `Codex`. */
+  provider: string;
+  label: string;
+  authorized: boolean;
+  source: string;
+  destination: string;
+  restrict: (text: string, nowMs?: number) => { text: string } | { withheld: string };
+  /**
+   * `always` removes the destination whenever no snapshot was published.
+   * `seeded` removes it only when an earlier start published one (recorded in
+   * a marker beside it), so a login made inside the profile itself survives a
+   * profile that does not authorize the host's.
+   */
+  revoke: "always" | "seeded";
+};
+
+/**
+ * Publish a restricted snapshot of one host credential file, owner-only, or
+ * revoke the previous snapshot. Never throws and never reports filesystem
+ * errors, which can contain credential data.
+ */
+async function seedRestrictedCredential(
+  seed: RestrictedCredentialSeed,
+  options: ModelCacheSeedOptions & { warn?: (message: string) => void; nowMs?: number },
+): Promise<boolean> {
+  const { provider, destination } = seed;
+  const marker = `${destination}.orkestrator-host-snapshot`;
+  // The host copy lands beside the destination, where the provider never
+  // reads, and only its restricted form is published under the name it loads.
+  const hostCopy = `${destination}.host-copy`;
+  const copied = seed.authorized
+    ? (
+        await seedBoundedFiles(
+          [{ label: seed.label, source: seed.source, destination: hostCopy, replace: true }],
+          options,
+        )
+      ).length > 0
+    : false;
+  let published = false;
+  let withheld: string | undefined;
+  const temporary = `${destination}.${process.pid}.${Date.now()}.tmp`;
+  if (copied) {
+    const restricted = await readFile(hostCopy, "utf8")
+      .then((text) => seed.restrict(text, options.nowMs))
+      .catch(() => ({ withheld: `the host ${provider} auth.json could not be read back` }));
+    if ("text" in restricted) {
+      try {
+        // The marker comes first, so a published snapshot is always revocable.
+        if (seed.revoke === "seeded") await writeFile(marker, "", { mode: 0o600 });
+        await writeFile(temporary, restricted.text, { mode: 0o600, flag: "wx" });
+        await rename(temporary, destination);
+        published = true;
+      } catch {
+        withheld = `the restricted ${provider} snapshot could not be published`;
+      } finally {
+        await rm(temporary, { force: true }).catch(() => {
+          withheld ??= `the temporary ${provider} snapshot could not be removed`;
+        });
+      }
+    } else {
+      withheld = restricted.withheld;
+    }
+  }
+  await rm(hostCopy, { force: true }).catch(() => {
+    withheld ??= `the host ${provider} snapshot copy could not be removed`;
+  });
+  if (withheld) published = false;
+  // An absent or failed refresh must not leave a previous account signed in.
+  if (!published && (seed.revoke === "always" || (await pathExists(marker).catch(() => true)))) {
+    try {
+      await rm(destination, { force: true });
+      await rm(marker, { force: true });
+    } catch {
+      withheld = `the previous ${provider} snapshot could not be removed; reset the profile before using ${provider}`;
+    }
+  }
+  if (withheld)
+    options.warn?.(`Could not seed ${provider} credentials in this profile: ${withheld}.`);
+  return published;
+}
+
+/**
+ * Copy the provider logins an isolated profile may use, re-read on every
+ * start so a refreshed or removed host login wins. Each is reduced so that
+ * no refresh token reaches the profile, and the profile's provider homes stay
+ * its own: nothing the profile does, a Codex trust grant or an MCP editor save
+ * included, writes to the host's provider directories.
+ *
+ * Grok has no documented home-directory override, so its credential is copied
+ * into the profile's isolated HOME, reduced by `restrictGrokAuthSnapshot`.
+ * Codex and OpenCode get their one credential file in the profile's own
+ * `CODEX_HOME` and `XDG_DATA_HOME` (`restrictCodexAuthSnapshot`,
+ * `restrictOpenCodeAuthSnapshot`); their config, sessions and MCP servers stay
+ * the profile's.
  *
  * Cursor's login is Orkestrator's own, in the production data directory: the
  * stored key in `config.json`, else the key minted by the in-app sign-in. Only
@@ -545,66 +767,45 @@ export async function seedAgentTestProviderCredentials(
   options: ModelCacheSeedOptions & { warn?: (message: string) => void; nowMs?: number } = {},
 ): Promise<string[]> {
   const roots = options.roots ?? defaultRuntimeProfileRoots();
-  const grokDestination = path.join(
-    profile.dataDir,
-    "agent-credentials",
-    "home",
-    ".grok",
-    "auth.json",
-  );
-  // The host copy lands beside the destination, where Grok never reads, and
-  // only its restricted form is published under the name Grok loads.
-  const grokHostCopy = `${grokDestination}.host-copy`;
-  const seeded = profile.credentialSources.includes("grok")
-    ? await seedBoundedFiles(
-        [
-          {
-            label: "grok/auth.json",
-            source: path.join(roots.homeDir, ".grok", "auth.json"),
-            destination: grokHostCopy,
-            replace: true,
-          },
-        ],
-        options,
-      )
-    : [];
-  let withheld: string | undefined;
-  const temporary = `${grokDestination}.${process.pid}.${Date.now()}.tmp`;
-  if (seeded.includes("grok/auth.json")) {
-    const restricted = await readFile(grokHostCopy, "utf8")
-      .then((text) => restrictGrokAuthSnapshot(text, options.nowMs))
-      .catch(() => ({ withheld: "the host Grok auth.json could not be read back" }));
-    if ("text" in restricted) {
-      try {
-        await writeFile(temporary, restricted.text, { mode: 0o600, flag: "wx" });
-        await rename(temporary, grokDestination);
-      } catch {
-        // Optional provider state must not prevent the profile from starting.
-        // Do not include filesystem errors, which can contain credential data.
-        withheld = "the restricted Grok snapshot could not be published";
-      } finally {
-        await rm(temporary, { force: true }).catch(() => {
-          withheld ??= "the temporary Grok snapshot could not be removed";
-        });
-      }
-    } else {
-      withheld = restricted.withheld;
-    }
+  const env = options.env ?? process.env;
+  const credentialRoot = path.join(profile.dataDir, "agent-credentials");
+  const hostCodexHome = env.CODEX_HOME?.trim() || path.join(roots.homeDir, ".codex");
+  const hostDataHome = env.XDG_DATA_HOME?.trim() || path.join(roots.homeDir, ".local", "share");
+  const seeds: RestrictedCredentialSeed[] = [
+    {
+      provider: "Grok",
+      label: "grok/auth.json",
+      authorized: profile.credentialSources.includes("grok"),
+      source: path.join(roots.homeDir, ".grok", "auth.json"),
+      destination: path.join(credentialRoot, "home", ".grok", "auth.json"),
+      restrict: restrictGrokAuthSnapshot,
+      revoke: "always",
+    },
+    {
+      provider: "Codex",
+      label: "codex/auth.json",
+      authorized: profile.credentialSources.includes("codex"),
+      source: path.join(hostCodexHome, "auth.json"),
+      // `CODEX_HOME` in `createBackendProcessEnvironment`.
+      destination: path.join(credentialRoot, "codex", "auth.json"),
+      restrict: restrictCodexAuthSnapshot,
+      revoke: "seeded",
+    },
+    {
+      provider: "OpenCode",
+      label: "opencode/auth.json",
+      authorized: profile.credentialSources.includes("opencode"),
+      source: path.join(hostDataHome, "opencode", "auth.json"),
+      // `XDG_DATA_HOME` in `createBackendProcessEnvironment`.
+      destination: path.join(credentialRoot, "xdg-data", "opencode", "auth.json"),
+      restrict: restrictOpenCodeAuthSnapshot,
+      revoke: "seeded",
+    },
+  ];
+  const seeded: string[] = [];
+  for (const seed of seeds) {
+    if (await seedRestrictedCredential(seed, options)) seeded.push(seed.label);
   }
-  await rm(grokHostCopy, { force: true }).catch(() => {
-    withheld ??= "the host Grok snapshot copy could not be removed";
-  });
-  if (withheld && seeded.includes("grok/auth.json")) {
-    seeded.splice(seeded.indexOf("grok/auth.json"), 1);
-  }
-  // An absent or failed refresh must not leave a previous account signed in.
-  if (!seeded.includes("grok/auth.json")) {
-    await rm(grokDestination, { force: true }).catch(() => {
-      withheld =
-        "the previous Grok snapshot could not be removed; reset the profile before using Grok";
-    });
-  }
-  if (withheld) options.warn?.(`Could not seed Grok credentials in this profile: ${withheld}.`);
   if (await seedAgentTestCursorCredential(profile, roots)) seeded.push(CURSOR_SNAPSHOT_LABEL);
   return seeded;
 }

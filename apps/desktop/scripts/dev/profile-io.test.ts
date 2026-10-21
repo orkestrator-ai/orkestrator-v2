@@ -32,6 +32,9 @@ import {
   removeProfileState,
   reserveLoopbackPorts,
   restrictGrokAuthSnapshot,
+  restrictCodexAuthSnapshot,
+  restrictOpenCodeAuthSnapshot,
+  CODEX_SNAPSHOT_REFRESH_TOKEN_PREFIX,
   agentTestCursorSnapshotPath,
   seedAgentTestProviderCredentials,
   seedInstalledAgentToolchains,
@@ -429,6 +432,191 @@ describe("development profile lifecycle primitives", () => {
       expect(await readFile(source, "utf8")).toBe(hostText);
     },
   );
+
+  test("hands a profile the host's Codex login without its refresh token, in its own CODEX_HOME", async () => {
+    const { root, roots, profile } = await modelCacheFixture();
+    const hostCodexHome = path.join(root, "host-codex");
+    await mkdir(hostCodexHome, { recursive: true });
+    const env = { CODEX_HOME: hostCodexHome };
+    const source = path.join(hostCodexHome, "auth.json");
+    const destination = path.join(profile.dataDir, "agent-credentials", "codex", "auth.json");
+    const nowMs = Date.parse("2026-10-21T00:00:00Z");
+    const accessToken = (expSeconds: number) =>
+      `h.${Buffer.from(JSON.stringify({ exp: expSeconds })).toString("base64url")}.s`;
+    const hostLogin = (access: string) =>
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        OPENAI_API_KEY: null,
+        tokens: {
+          id_token: "host-id-token",
+          access_token: access,
+          refresh_token: "host-single-use-refresh",
+          account_id: "account-1",
+        },
+        last_refresh: "2026-10-11T00:00:00Z",
+      });
+    const live = accessToken(nowMs / 1000 + 3600);
+    const hostText = hostLogin(live);
+    await writeFile(source, hostText);
+    const enabled = { ...profile, credentialSources: ["codex" as const] };
+
+    await expect(seedAgentTestProviderCredentials(enabled, { roots, env, nowMs })).resolves.toEqual(
+      ["codex/auth.json"],
+    );
+    const text = await readFile(destination, "utf8");
+    expect(text).not.toContain("host-single-use-refresh");
+    const seeded = JSON.parse(text);
+    expect(seeded).toEqual({
+      auth_mode: "chatgpt",
+      OPENAI_API_KEY: null,
+      tokens: {
+        id_token: "host-id-token",
+        access_token: live,
+        refresh_token: expect.stringMatching(new RegExp(`^${CODEX_SNAPSHOT_REFRESH_TOKEN_PREFIX}`)),
+        account_id: "account-1",
+      },
+      last_refresh: "2026-10-21T00:00:00.000Z",
+    });
+    expect((await stat(destination)).mode & 0o777).toBe(0o600);
+    expect((await readdir(path.dirname(destination))).sort()).toEqual([
+      "auth.json",
+      "auth.json.orkestrator-host-snapshot",
+    ]);
+    // The host file is only read.
+    expect(await readFile(source, "utf8")).toBe(hostText);
+
+    // A host login that has expired is withheld, and the previous copy revoked.
+    await writeFile(source, hostLogin(accessToken(nowMs / 1000 + 30)));
+    const warnings: string[] = [];
+    await expect(
+      seedAgentTestProviderCredentials(enabled, {
+        roots,
+        env,
+        nowMs,
+        warn: (message) => warnings.push(message),
+      }),
+    ).resolves.toEqual([]);
+    await expect(access(destination)).rejects.toThrow();
+    expect(warnings).toEqual([expect.stringContaining("host Codex login has expired")]);
+    expect(warnings[0]).not.toContain("host-single-use-refresh");
+
+    // An API key is copied as an API key, and nothing else.
+    await writeFile(source, JSON.stringify({ OPENAI_API_KEY: "sk-host", extra: "kept-out" }));
+    await seedAgentTestProviderCredentials(enabled, { roots, env, nowMs });
+    expect(JSON.parse(await readFile(destination, "utf8"))).toEqual({
+      auth_mode: "apikey",
+      OPENAI_API_KEY: "sk-host",
+    });
+
+    // Revoking the source removes the snapshot it published.
+    await seedAgentTestProviderCredentials(profile, { roots, env, nowMs });
+    await expect(access(destination)).rejects.toThrow();
+    expect(await readdir(path.dirname(destination))).toEqual([]);
+  });
+
+  test("a profile's own Codex or OpenCode login survives a profile that does not authorize the host's", async () => {
+    const { root, roots, profile } = await modelCacheFixture();
+    const env = {
+      CODEX_HOME: path.join(root, "missing-host-codex"),
+      XDG_DATA_HOME: path.join(root, "missing-host-data"),
+    };
+    const codex = path.join(profile.dataDir, "agent-credentials", "codex", "auth.json");
+    const opencode = path.join(
+      profile.dataDir,
+      "agent-credentials",
+      "xdg-data",
+      "opencode",
+      "auth.json",
+    );
+    for (const file of [codex, opencode]) {
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, '{"profile":"own login"}');
+    }
+    // Neither authorized, nor authorized with no host login: nothing was seeded,
+    // so nothing is revoked.
+    await seedAgentTestProviderCredentials(profile, { roots, env });
+    await seedAgentTestProviderCredentials(
+      { ...profile, credentialSources: ["codex", "opencode"] },
+      { roots, env },
+    );
+    expect(await readFile(codex, "utf8")).toBe('{"profile":"own login"}');
+    expect(await readFile(opencode, "utf8")).toBe('{"profile":"own login"}');
+  });
+
+  test("hands a profile the host's OpenCode keys, never an OAuth refresh token", async () => {
+    const { root, roots, profile } = await modelCacheFixture();
+    const hostDataHome = path.join(root, "host-data");
+    const source = path.join(hostDataHome, "opencode", "auth.json");
+    await mkdir(path.dirname(source), { recursive: true });
+    const destination = path.join(
+      profile.dataDir,
+      "agent-credentials",
+      "xdg-data",
+      "opencode",
+      "auth.json",
+    );
+    const nowMs = Date.parse("2026-10-21T00:00:00Z");
+    const hostText = JSON.stringify({
+      "opencode-go": { type: "api", key: "go-key", note: "dropped" },
+      anthropic: {
+        type: "oauth",
+        access: "oauth-access",
+        refresh: "host-single-use-refresh",
+        expires: nowMs + 3_600_000,
+      },
+      expired: { type: "oauth", access: "old", refresh: "old-refresh", expires: nowMs - 1 },
+      unknown: { type: "future", secret: "x" },
+    });
+    await writeFile(source, hostText);
+    const enabled = { ...profile, credentialSources: ["opencode" as const] };
+
+    await expect(
+      seedAgentTestProviderCredentials(enabled, {
+        roots,
+        env: { XDG_DATA_HOME: hostDataHome },
+        nowMs,
+      }),
+    ).resolves.toEqual(["opencode/auth.json"]);
+    const text = await readFile(destination, "utf8");
+    expect(text).not.toContain("refresh-");
+    expect(text).not.toContain("host-single-use-refresh");
+    expect(JSON.parse(text)).toEqual({
+      "opencode-go": { type: "api", key: "go-key" },
+      anthropic: { type: "oauth", access: "oauth-access", expires: nowMs + 3_600_000, refresh: "" },
+    });
+    expect((await stat(destination)).mode & 0o777).toBe(0o600);
+    expect(await readFile(source, "utf8")).toBe(hostText);
+
+    await seedAgentTestProviderCredentials(profile, {
+      roots,
+      env: { XDG_DATA_HOME: hostDataHome },
+      nowMs,
+    });
+    await expect(access(destination)).rejects.toThrow();
+  });
+
+  test("Codex and OpenCode snapshot reducers refuse what they do not recognise", () => {
+    expect(restrictCodexAuthSnapshot("not json")).toEqual({
+      withheld: "the host Codex auth.json is not valid JSON",
+    });
+    expect(restrictCodexAuthSnapshot("[]")).toEqual({
+      withheld: "the host Codex auth.json has an unknown shape",
+    });
+    expect(restrictCodexAuthSnapshot(JSON.stringify({ tokens: { refresh_token: "r" } }))).toEqual({
+      withheld: "the host Codex auth.json has no API key or ChatGPT access token",
+    });
+    // An opaque access token has no readable expiry; it is still copied without the refresh token.
+    const opaque = restrictCodexAuthSnapshot(
+      JSON.stringify({ tokens: { access_token: "opaque", refresh_token: "r" } }),
+      0,
+    );
+    expect("text" in opaque && JSON.parse(opaque.text).tokens.refresh_token).toStartWith(
+      CODEX_SNAPSHOT_REFRESH_TOKEN_PREFIX,
+    );
+    expect(restrictOpenCodeAuthSnapshot(JSON.stringify({ a: { type: "oauth" } }))).toMatchObject({
+      withheld: expect.stringContaining("no API key or unexpired login"),
+    });
+  });
 
   test("never hands a profile the host's Grok refresh token or an expired login", async () => {
     const { roots, profile } = await modelCacheFixture();

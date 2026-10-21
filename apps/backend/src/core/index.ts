@@ -76,6 +76,7 @@ import {
   ensureContainerHostServicePorts,
 } from "./commands-environment.js";
 import { APP_VERSION, DOCKER_IMAGE } from "./constants.js";
+import type { BackendProfile } from "@orkestrator/protocol/backend-profile";
 import { WorkflowResultService } from "./workflow-result-service.js";
 import { HostMaintenanceService } from "./host-maintenance.js";
 import { readImageStatus, readRestartImpact, readToolStatus } from "./host-maintenance-readers.js";
@@ -1647,6 +1648,30 @@ export class OrkestratorBackend {
       if (port > 0) ports.push(port);
     }
     this.context.previews?.reservePorts("backend", ports);
+  }
+
+  /**
+   * Safe identity for the gateway's authenticated hello handshake: the
+   * installation identity, this process's resource generation, the version
+   * and the canonical machine profile. No paths or credentials.
+   */
+  async backendHelloIdentity(): Promise<{
+    installationId: string;
+    generation: string;
+    appVersion: string;
+    profile: BackendProfile;
+  }> {
+    const storage = this.context.storage;
+    const [identity, profile] = await Promise.all([
+      storage.getPreviewBackendIdentity(),
+      storage.getBackendProfile(),
+    ]);
+    return {
+      installationId: identity.instanceId,
+      generation: storage.getResourceGeneration(),
+      appVersion: APP_VERSION,
+      profile,
+    };
   }
 
   /** Backend-owned preview services, for gateway transport adapters. */

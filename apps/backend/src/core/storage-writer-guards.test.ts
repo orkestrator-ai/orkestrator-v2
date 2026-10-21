@@ -948,6 +948,13 @@ describe("StorageService store writers", () => {
       kind: "whole",
       leases: ["previewSettingsFile"],
     });
+    // The machine profile's compare-and-swap edit and its create-once read
+    // share one lease, through a private helper.
+    expect(stores.get("backendProfileFile")).toMatchObject({
+      kind: "whole",
+      leases: ["backendProfileFile"],
+      paths: 3,
+    });
     expect(stores.get("linearAuthFile")).toMatchObject({
       kind: "whole",
       leases: ["linearAuthFile"],

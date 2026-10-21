@@ -32,6 +32,7 @@ import type {
   CommandRegistryOptions,
   RegistryDependencies,
 } from "./commands-registry-types.js";
+import { registerBackendProfileCommands } from "./commands-registry-backend-profile.js";
 import { registerBuildPipelineCommands } from "./commands-registry-build.js";
 import { registerControlCommands } from "./commands-registry-control.js";
 import { registerCoordinatorCommands } from "./commands-registry-coordinator.js";
@@ -291,6 +292,7 @@ export function createCommandRegistry(
   registerGitHubCommands(register, dependencies);
   registerEnvironmentCommands(register, dependencies);
   registerSystemCommands(register);
+  registerBackendProfileCommands(register);
   registerHostFileCommands(register);
   registerHostMaintenanceCommands(register);
   registerDockerCommands(register, dependencies);

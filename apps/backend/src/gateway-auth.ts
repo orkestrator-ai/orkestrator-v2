@@ -44,6 +44,15 @@ import {
 } from "./gateway-internals.js";
 import type { ListenerKind, GatewayRequestMetrics } from "./gateway-internals.js";
 import { parseHostUpdaterReport } from "@orkestrator/protocol/host-maintenance";
+import {
+  BACKEND_CAPABILITIES,
+  BACKEND_HELLO_PATH,
+  BACKEND_HELLO_SCHEMA_VERSION,
+  CLIENT_API_VERSION,
+  parseBackendProfile,
+  type BackendHello,
+} from "@orkestrator/protocol/backend-profile";
+import { parseBackendId } from "@orkestrator/protocol/federation";
 
 /** A host updater report is a handful of bounded fields. */
 const HOST_UPDATER_REPORT_MAX_BYTES = 16 * 1024;
@@ -405,6 +414,16 @@ export class GatewayAuth {
       return;
     }
 
+    if (url.pathname === BACKEND_HELLO_PATH) {
+      if (request.method !== "GET") {
+        response.writeHead(405, { allow: "GET" });
+        response.end();
+        return;
+      }
+      await this.handleHello(response, listenerKind);
+      return;
+    }
+
     if (url.pathname === `${API_PREFIX}/invoke`) {
       await this.handlers.handleInvoke(request, response, requestMetrics);
       return;
@@ -441,6 +460,36 @@ export class GatewayAuth {
       response,
       compressionModeForListener(this.ctx.compression, listenerKind) !== "off",
     );
+  }
+
+  /**
+   * The authenticated client handshake: safe identity, version and
+   * capability metadata, plus which kind of listener answered. A managed SSH
+   * route verifies `endpointRole` is `client` before it trusts the forward.
+   * Never paths, the auth file, the token or the process ID.
+   */
+  async handleHello(response: ServerResponse, listenerKind: ListenerKind): Promise<void> {
+    if (!this.ctx.backendHello) {
+      jsonResponse(response, 404, { error: "Not found" });
+      return;
+    }
+    const identity = await this.ctx.backendHello();
+    const capabilities: Record<string, number> = {
+      [BACKEND_CAPABILITIES.backendProfile]: 1,
+      [BACKEND_CAPABILITIES.summaryReads]: 1,
+    };
+    if (this.ctx.loopbackClientUrl) capabilities[BACKEND_CAPABILITIES.loopbackClientGateway] = 1;
+    const hello: BackendHello = {
+      schemaVersion: BACKEND_HELLO_SCHEMA_VERSION,
+      installationId: parseBackendId(identity.installationId, "installationId"),
+      generation: identity.generation,
+      appVersion: identity.appVersion,
+      clientApi: { minVersion: 1, maxVersion: CLIENT_API_VERSION },
+      capabilities,
+      profile: parseBackendProfile(identity.profile),
+      endpointRole: listenerKind === "control" ? "control" : "client",
+    };
+    jsonResponse(response, 200, hello, { "cache-control": "no-store" });
   }
 
   async handleGatewaySettings(

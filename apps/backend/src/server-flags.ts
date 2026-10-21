@@ -20,6 +20,7 @@ export const SERVER_VALUE_FLAGS: readonly string[] = Object.freeze([
   "--docker-image",
   "--fallback-host",
   "--host",
+  "--loopback-client-port",
   "--port",
   "--renderer-dev-server-url",
   "--renderer-root",

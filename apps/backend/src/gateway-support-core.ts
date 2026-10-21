@@ -48,6 +48,7 @@ export type GatewayRouteKey =
   | "agent-test-session"
   | "logout"
   | "status"
+  | "hello"
   | "gateway-settings"
   | "web-client-access"
   | "host-updater"
@@ -68,8 +69,24 @@ export interface GatewayStartInfo {
   url: string;
   token: string;
   authFile: string;
+  /** The loopback control listener, when one is serving (then also `url`). */
+  controlUrl?: string;
   browserUrl?: string;
   browserError?: string;
+  /** The loopback client gateway (`--loopback-client-port`), when serving. */
+  loopbackClientUrl?: string;
+  loopbackClientError?: string;
+}
+
+/**
+ * The safe identity metadata the `/__orkestrator/hello` handshake reports.
+ * Never paths, the auth file, the token or the process ID.
+ */
+export interface BackendHelloIdentity {
+  installationId: string;
+  generation: string;
+  appVersion: string;
+  profile: import("@orkestrator/protocol/backend-profile").BackendProfile;
 }
 
 export interface OrkestratorGatewayOptions {
@@ -91,6 +108,17 @@ export interface OrkestratorGatewayOptions {
   agentTestProfile?: string;
   controlBindAddress?: string;
   controlPort?: number;
+  /**
+   * Starts an additional loopback-only (127.0.0.1) client listener on this
+   * port (0 = ephemeral): ordinary authenticated client routes, never the
+   * control-only ones. It is the target an SSH forward may tunnel to.
+   */
+  loopbackClientPort?: number;
+  /**
+   * Identity for the authenticated hello handshake. Without it the gateway
+   * fronts no backend identity and `/__orkestrator/hello` answers 404.
+   */
+  backendHello?: () => Promise<BackendHelloIdentity>;
   env?: NodeJS.ProcessEnv;
   interfaces?: NetworkInterfaceMap;
   logger?: Pick<Console, "debug" | "error" | "info" | "warn">;
@@ -758,6 +786,7 @@ export function classifyGatewayRoute(pathname: string): GatewayRouteKey {
   if (pathname.startsWith(`${API_PREFIX}/agent-test/`)) return "agent-test-bootstrap";
   if (pathname === `${API_PREFIX}/logout`) return "logout";
   if (pathname === `${API_PREFIX}/status`) return "status";
+  if (pathname === `${API_PREFIX}/hello`) return "hello";
   if (pathname === `${API_PREFIX}/gateway-settings`) return "gateway-settings";
   if (pathname === `${API_PREFIX}/web-client-access`) return "web-client-access";
   if (pathname === `${API_PREFIX}/host-updater`) return "host-updater";

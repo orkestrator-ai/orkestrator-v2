@@ -113,6 +113,7 @@ export class NodeMailCollector {
     const name = await this.deps.nodeName(nodeId);
     let after = 0;
     let failed = false;
+    let deliveredPrefix = 0;
     for (let round = 0; round < 20; round += 1) {
       const batch = await link.invoke<{ items: OutboxItem[]; more: boolean }>(
         "collect_node_outbox",
@@ -131,6 +132,7 @@ export class NodeMailCollector {
             requestId: `node:${nodeId}:${item.seq}`,
           });
           delivered.push(item.seq);
+          if (!failed) deliveredPrefix = item.seq;
         } catch (error) {
           console.warn(
             "[nodes] Leaf mail could not be delivered to a coordinator yet:",
@@ -140,7 +142,13 @@ export class NodeMailCollector {
         }
       }
       if (delivered.length) {
-        await link.invoke("ack_node_outbox", { controllerId, upTo: 0, sequences: delivered });
+        // Older leaves understand only upTo. Retain the safe contiguous
+        // acknowledgement while newer leaves can also remove later successes.
+        await link.invoke("ack_node_outbox", {
+          controllerId,
+          upTo: deliveredPrefix,
+          sequences: delivered,
+        });
       }
       after = batch.items.at(-1)?.seq ?? after;
       if (failed) this.retry(nodeId);

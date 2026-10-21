@@ -105,3 +105,24 @@ test("stream resync reconciles a pending outbox", async () => {
   await until(() => delivered === 1);
   collector.dispose();
 });
+
+test("legacy leaves still acknowledge a fully delivered batch", async () => {
+  let pending = [item(1), item(2)];
+  const collector = new NodeMailCollector({
+    selfId: async () => "bk_cmd" as never,
+    nodeName: async () => "Leaf",
+    link: () => ({
+      connected: true,
+      invoke: async <T>(command: string, args: Record<string, unknown> = {}) => {
+        if (command === "collect_node_outbox") return { items: pending, more: false } as T;
+        // The previous leaf protocol ignores the new per-sequence field.
+        pending = pending.filter((entry) => entry.seq > Number(args.upTo));
+        return {} as T;
+      },
+    }),
+    deliver: async () => {},
+  });
+  await collector.collect("bk_leaf" as never);
+  expect(pending).toEqual([]);
+  collector.dispose();
+});

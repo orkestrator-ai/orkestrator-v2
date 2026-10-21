@@ -10,6 +10,7 @@ import {
   reconcileContainerAgentAccount,
   refreshStagedAgentAccountLogins,
   syncContainerAgentAccountsOnStart,
+  syncContainerGrokLogin,
   type ContainerRunners,
 } from "./agent-accounts-containers.js";
 import { SYNC_CONTAINER_CLAUDE_CREDENTIAL_COMMAND } from "./commands-files.js";
@@ -50,7 +51,10 @@ function accountHome(platform: "claude" | "codex", id: string): string {
 }
 
 async function addAccounts(active: { claude?: string; codex?: string }): Promise<void> {
-  await write(path.join(accountHome("codex", CODEX_ID), "auth.json"), '{"account":"codex-2"}');
+  await write(
+    path.join(accountHome("codex", CODEX_ID), "auth.json"),
+    '{"OPENAI_API_KEY":"codex-2"}',
+  );
   await write(
     path.join(accountHome("claude", CLAUDE_ID), ".credentials.json"),
     '{"claudeAiOauth":{"accessToken":"claude-2"}}',
@@ -119,7 +123,7 @@ beforeEach(async () => {
   process.env.CODEX_HOME = path.join(root, "host-codex");
   process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = path.join(root, "host-home");
   process.env[AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV] = path.join(root, "host-claude");
-  await write(path.join(root, "host-codex", "auth.json"), '{"account":"codex-host"}');
+  await write(path.join(root, "host-codex", "auth.json"), '{"OPENAI_API_KEY":"codex-host"}');
   await write(path.join(root, "host-codex", "config.toml"), 'model = "host"');
   await write(path.join(root, "host-claude", "CLAUDE.md"), "host memory");
   await write(
@@ -169,7 +173,7 @@ describe("staging with an active account", () => {
     );
     const read = (relative: string) => fs.readFile(staged(result.revision, relative), "utf8");
 
-    expect(await read("codex-home/auth.json")).toBe('{"account":"codex-2"}');
+    expect(await read("codex-home/auth.json")).toBe('{"OPENAI_API_KEY":"codex-2"}');
     expect(await read("codex-home/config.toml")).toBe('model = "host"');
     expect(await read("claude-config/.credentials.json")).toContain("claude-2");
     expect(await read("claude-config/CLAUDE.md")).toBe("host memory");
@@ -242,8 +246,9 @@ describe("replaceStagedInputFile", () => {
 });
 
 describe("refreshStagedAgentAccountLogins", () => {
-  test("leaves containers alone until an account has been added", async () => {
+  test("leaves Claude alone until an account has been added, but re-reads Codex every start", async () => {
     const revision = await stage();
+    await write(staged(revision, "claude-config/.credentials.json"), "snapshot");
     await write(staged(revision, "codex-home/auth.json"), "snapshot");
     await refreshStagedAgentAccountLogins(
       context,
@@ -251,7 +256,72 @@ describe("refreshStagedAgentAccountLogins", () => {
       "container-1",
       fakeRunners(revision).runners,
     );
-    expect(await fs.readFile(staged(revision, "codex-home/auth.json"), "utf8")).toBe("snapshot");
+    expect(await fs.readFile(staged(revision, "claude-config/.credentials.json"), "utf8")).toBe(
+      "snapshot",
+    );
+    // The snapshot a container was created with cannot refresh, so only the
+    // host's current login keeps it signed in.
+    expect(await fs.readFile(staged(revision, "codex-home/auth.json"), "utf8")).toBe(
+      '{"OPENAI_API_KEY":"codex-host"}',
+    );
+  });
+
+  test("restages Codex and Grok logins access-only, and drops an expired one", async () => {
+    const accessToken = `h.${Buffer.from(
+      JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 }),
+    ).toString("base64url")}.s`;
+    await write(
+      path.join(root, "host-codex", "auth.json"),
+      JSON.stringify({
+        tokens: { access_token: accessToken, refresh_token: "SENTINEL-CODEX-REFRESH" },
+      }),
+    );
+    const grokAuth = path.join(root, "host-home", ".grok", "auth.json");
+    await write(path.join(root, "host-home", ".grok", "config.toml"), "model = 'x'");
+    await write(grokAuth, "{}");
+    const enableGrok = () => {
+      const original = context.storage.loadConfig.bind(context.storage);
+      context.storage.loadConfig = async () =>
+        ({
+          ...(await original()),
+          global: { enabledAgentPlatforms: ["claude", "codex", "grok"] },
+        }) as never;
+      (context.credentialSources as Set<string>).add("grok");
+    };
+    enableGrok();
+    const revision = (
+      await stagePortableInputs(
+        path.join(root, "data"),
+        environment.id,
+        new Set(["codex", "grok"]),
+        defaultInputSourceRoots("agent-test", AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV),
+      )
+    ).revision;
+    await write(staged(revision, "grok-home/auth.json"), "stale");
+    await write(
+      grokAuth,
+      JSON.stringify({
+        live: {
+          key: "grok-access",
+          refresh_token: "SENTINEL-GROK-REFRESH",
+          expires_at: new Date(Date.now() + 6 * 3600_000).toISOString(),
+        },
+      }),
+    );
+    const { runners } = fakeRunners(revision);
+    await refreshStagedAgentAccountLogins(context, environment, "container-1", runners);
+    const codex = JSON.parse(await fs.readFile(staged(revision, "codex-home/auth.json"), "utf8"));
+    expect(codex.tokens.refresh_token).toBe("");
+    const grok = await fs.readFile(staged(revision, "grok-home/auth.json"), "utf8");
+    expect(JSON.parse(grok).live).toMatchObject({ key: "grok-access", refresh_token: "" });
+    expect(grok).not.toContain("SENTINEL");
+
+    await write(
+      grokAuth,
+      JSON.stringify({ old: { key: "k", refresh_token: "r", expires_at: "2026-01-01T00:00:00Z" } }),
+    );
+    await refreshStagedAgentAccountLogins(context, environment, "container-1", runners);
+    await expect(fs.stat(staged(revision, "grok-home/auth.json"))).rejects.toThrow();
   });
 
   test("points a staged revision at the active account, and back at the host", async () => {
@@ -261,7 +331,7 @@ describe("refreshStagedAgentAccountLogins", () => {
 
     await refreshStagedAgentAccountLogins(context, environment, "container-1", runners);
     expect(await fs.readFile(staged(revision, "codex-home/auth.json"), "utf8")).toBe(
-      '{"account":"codex-2"}',
+      '{"OPENAI_API_KEY":"codex-2"}',
     );
     expect(await fs.readFile(staged(revision, "files/claude.json/.claude.json"), "utf8")).toContain(
       "second@example.com",
@@ -273,7 +343,7 @@ describe("refreshStagedAgentAccountLogins", () => {
     }));
     await refreshStagedAgentAccountLogins(context, environment, "container-1", runners);
     expect(await fs.readFile(staged(revision, "codex-home/auth.json"), "utf8")).toBe(
-      '{"account":"codex-host"}',
+      '{"OPENAI_API_KEY":"codex-host"}',
     );
     expect(
       await fs.readFile(staged(revision, "claude-config/.credentials.json"), "utf8"),
@@ -418,6 +488,34 @@ describe("reconcileContainerAgentAccount", () => {
     };
   }
 
+  test("an account's ChatGPT login reaches the container without its refresh token", async () => {
+    const revision = await stage();
+    await addAccounts({ codex: CODEX_ID });
+    const accessToken = `h.${Buffer.from(
+      JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 }),
+    ).toString("base64url")}.s`;
+    await write(
+      path.join(accountHome("codex", CODEX_ID), "auth.json"),
+      JSON.stringify({ tokens: { access_token: accessToken, refresh_token: "SENTINEL-RT" } }),
+    );
+    const fake = fakeRunners(revision);
+    await reconcileContainerAgentAccount(
+      context,
+      "container-1",
+      "codex",
+      bridge(false).control,
+      fake.runners,
+    );
+    const piped = fake.calls.find((call) => call.kind === "pipe");
+    expect(JSON.parse(piped!.stdin!).tokens).toEqual({
+      access_token: accessToken,
+      refresh_token: "",
+    });
+    expect(await fs.readFile(staged(revision, "codex-home/auth.json"), "utf8")).not.toContain(
+      "SENTINEL",
+    );
+  });
+
   test("writes the new login in and replaces an idle bridge", async () => {
     const revision = await stage();
     await addAccounts({ codex: CODEX_ID });
@@ -428,12 +526,12 @@ describe("reconcileContainerAgentAccount", () => {
 
     const piped = fake.calls.find((call) => call.kind === "pipe");
     expect(piped?.command).toContain("/home/node/.codex/auth.json");
-    expect(piped?.stdin).toBe('{"account":"codex-2"}');
+    expect(piped?.stdin).toBe('{"OPENAI_API_KEY":"codex-2"}');
     expect(fake.markers.get("/tmp/orkestrator-codex-account")).toBe(CODEX_ID);
     expect(state.stopped).toBe(1);
     // A restart keeps the account: the entrypoint imports the staged login.
     expect(await fs.readFile(staged(revision, "codex-home/auth.json"), "utf8")).toBe(
-      '{"account":"codex-2"}',
+      '{"OPENAI_API_KEY":"codex-2"}',
     );
 
     await reconcileContainerAgentAccount(context, "container-1", "codex", control, fake.runners);
@@ -598,6 +696,69 @@ describe("reconcileContainerAgentAccount", () => {
       bridge(false).control,
       fake.runners,
     );
+    expect(fake.calls).toEqual([]);
+  });
+});
+
+describe("syncContainerGrokLogin", () => {
+  const grokAuth = () => path.join(root, "host-home", ".grok", "auth.json");
+
+  function enableGrok(): void {
+    context.storage.loadConfig = async () =>
+      ({ global: { enabledAgentPlatforms: ["claude", "codex", "grok"] } }) as never;
+    (context.credentialSources as Set<string>).add("grok");
+  }
+
+  test("pipes the host's current Grok login in, access-only", async () => {
+    enableGrok();
+    await write(
+      grokAuth(),
+      JSON.stringify({
+        live: {
+          key: "grok-access",
+          refresh_token: "SENTINEL-GROK-REFRESH",
+          expires_at: new Date(Date.now() + 6 * 3600_000).toISOString(),
+        },
+      }),
+    );
+    const fake = fakeRunners(null);
+    await syncContainerGrokLogin(context, "container-1", fake.runners);
+    expect(fake.calls).toHaveLength(1);
+    expect(fake.calls[0]!.command).toContain("/home/node/.grok/auth.json");
+    expect(JSON.parse(fake.calls[0]!.stdin!).live).toMatchObject({
+      key: "grok-access",
+      refresh_token: "",
+    });
+    expect(fake.calls[0]!.stdin).not.toContain("SENTINEL");
+  });
+
+  test("an expired or absent host login leaves the container's copy alone", async () => {
+    enableGrok();
+    const fake = fakeRunners(null);
+    await syncContainerGrokLogin(context, "container-1", fake.runners);
+    await write(
+      grokAuth(),
+      JSON.stringify({ old: { key: "k", refresh_token: "r", expires_at: "2026-01-01T00:00:00Z" } }),
+    );
+    await syncContainerGrokLogin(context, "container-1", fake.runners);
+    expect(fake.calls).toEqual([]);
+  });
+
+  test("an unauthorized, revoked or unknown container is never handed a login", async () => {
+    await write(
+      grokAuth(),
+      JSON.stringify({
+        live: { key: "k", expires_at: new Date(Date.now() + 3600_000).toISOString() },
+      }),
+    );
+    const fake = fakeRunners(null);
+    // Grok is not authorized for this agent-test profile.
+    await syncContainerGrokLogin(context, "container-1", fake.runners);
+    enableGrok();
+    environment.revokedInputProviders = ["grok"];
+    await syncContainerGrokLogin(context, "container-1", fake.runners);
+    environment.revokedInputProviders = [];
+    await syncContainerGrokLogin(context, "other-container", fake.runners);
     expect(fake.calls).toEqual([]);
   });
 });

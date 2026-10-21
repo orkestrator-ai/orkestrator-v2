@@ -151,6 +151,69 @@ describe("portable input staging", () => {
     expect(summary.files).toBeLessThanOrEqual(6);
   });
 
+  test("stages single-use Codex and Grok logins access-only, never their refresh tokens", async () => {
+    const { dataDir, roots, home } = await fixtureHome();
+    const now = new Date("2026-10-21T12:00:00Z");
+    const accessToken = `h.${Buffer.from(
+      JSON.stringify({ exp: now.getTime() / 1000 + 3600 }),
+    ).toString("base64url")}.s`;
+    await write(
+      path.join(home, ".codex", "auth.json"),
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: { access_token: accessToken, refresh_token: "SENTINEL-CODEX-REFRESH" },
+      }),
+    );
+    await write(
+      path.join(home, ".grok", "auth.json"),
+      JSON.stringify({
+        live: {
+          key: "grok-access",
+          refresh_token: "SENTINEL-GROK-REFRESH",
+          expires_at: "2026-10-21T18:00:00Z",
+        },
+      }),
+    );
+    await write(path.join(home, ".grok", "config.toml"), "model = 'x'");
+    const staged = await stagePortableInputs(
+      dataDir,
+      "env-inputs",
+      new Set(["codex", "grok"] as const),
+      roots,
+      now,
+    );
+    const codex = JSON.parse(
+      await fs.readFile(path.join(staged.directory, "codex-home", "auth.json"), "utf8"),
+    );
+    expect(codex.tokens).toEqual({ access_token: accessToken, refresh_token: "" });
+    expect(codex.last_refresh).toBe(now.toISOString());
+    const grok = JSON.parse(
+      await fs.readFile(path.join(staged.directory, "grok-home", "auth.json"), "utf8"),
+    );
+    expect(grok.live).toMatchObject({ key: "grok-access", refresh_token: "" });
+    for (const file of await listFiles(staged.directory)) {
+      expect(await fs.readFile(path.join(staged.directory, file), "utf8")).not.toContain(
+        "SENTINEL",
+      );
+      expect((await fs.stat(path.join(staged.directory, file))).mode & 0o077).toBe(0);
+    }
+
+    // An expired login cannot be used without refreshing, so none is staged.
+    await write(
+      path.join(home, ".grok", "auth.json"),
+      JSON.stringify({ old: { key: "k", refresh_token: "r", expires_at: "2026-10-21T11:00:00Z" } }),
+    );
+    const expired = await stagePortableInputs(
+      dataDir,
+      "env-expired",
+      new Set(["grok"] as const),
+      roots,
+      now,
+    );
+    expect(await listFiles(expired.directory)).toEqual(["grok-home/config.toml", "manifest.json"]);
+    expect(expired.providers[0]!.skipped["login-withheld"]).toBe(1);
+  });
+
   test("a symlinked ancestor below the home entry is never followed", async () => {
     const { dataDir, roots, home, root } = await fixtureHome();
     await write(path.join(root, "elsewhere", "secret.md"), "SENTINEL-ELSEWHERE");

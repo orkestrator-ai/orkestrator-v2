@@ -66,6 +66,7 @@ import {
 } from "./commands-helpers.js";
 import {
   reconcileContainerAgentAccount,
+  syncContainerGrokLogin,
   type ContainerBridgeControl,
 } from "./agent-accounts-containers.js";
 
@@ -487,6 +488,7 @@ export function registerServerCommands(
           await syncContainerCursorApiKey(id, cursorApiKey);
           await syncContainerCursorSdkCredentials(id, await cursorSdkStoredApiKey(context));
         }
+        if (provider === "grok") await syncContainerGrokLogin(context, id);
         const hostPort = await getHostPort(id, containerPort);
         if (hostPort && (await checkHttpHealth(hostPort))) {
           const credentialFingerprint =

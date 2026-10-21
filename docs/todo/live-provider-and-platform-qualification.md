@@ -107,7 +107,9 @@ evidence. This file only points at it.
    those providers an isolated home with a credential snapshot (as Grok and
    Cursor already have), or make the MCP editor refuse host-home sources in
    an agent-test profile. A Codex snapshot must not carry a refresh token the
-   copy could rotate.
+   copy could rotate; `restrictCodexAuthSnapshot`
+   (`packages/protocol/src/login-snapshots.ts`) already produces one for
+   containers.
 
 ### Qualification: checks with no other home
 

@@ -206,7 +206,7 @@ export class NodeReadModel {
         prefixes: NODE_SUMMARY_EVENT_PREFIXES,
         ...(this.options.fetchImpl ? { fetchImpl: this.options.fetchImpl } : {}),
         onOpen: () => void this.requestHydrate(view.nodeId),
-        onEvent: (event, payload) => this.handleEvent(view.nodeId, epoch, event, payload),
+        onEvent: (event, payload) => void this.handleEvent(view.nodeId, epoch, event, payload),
       });
       state.stream.start();
       void this.requestHydrate(view.nodeId);
@@ -247,7 +247,12 @@ export class NodeReadModel {
     return state;
   }
 
-  private handleEvent(nodeId: BackendId, epoch: number, event: string, payload: unknown): void {
+  private async handleEvent(
+    nodeId: BackendId,
+    epoch: number,
+    event: string,
+    payload: unknown,
+  ): Promise<void> {
     const state = this.states.get(nodeId);
     if (!state || state.epoch !== epoch) return;
     for (const listener of this.listeners) {
@@ -266,11 +271,13 @@ export class NodeReadModel {
       // The registry's cached profile feeds every view of this node; refresh
       // it now instead of on the next hello, then tell clients.
       try {
-        void this.options.nodes.recordProfile(nodeId, parseBackendProfile(payload));
+        await this.options.nodes.recordProfile(nodeId, parseBackendProfile(payload));
+        if (this.started && this.states.get(nodeId) === state && state.epoch === epoch) {
+          this.noteChanged(nodeId);
+        }
       } catch {
         // A malformed profile event changes nothing; the next hello reconciles.
       }
-      this.noteChanged(nodeId);
       return;
     }
     if (event !== RESOURCE_CHANGED_EVENT || !payload || typeof payload !== "object") return;

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { listen } from "@/lib/native/events";
 import { invoke } from "@/lib/native/backend";
 import { FederationProvider } from "./FederationProvider";
 import { NodeActionRequestsDialog } from "./NodeActionRequestsDialog";
@@ -84,4 +85,47 @@ describe("CO-04 the user confirms a coordinator's deletion request", () => {
     fireEvent.click(screen.getByRole("button", { name: "Reject" }));
     await waitFor(() => expect(resolved).toEqual([{ requestId: "req-2", decision: "reject" }]));
   });
+});
+
+test("pending coordinator approvals appear after stream resync without remount", async () => {
+  const handlers = new Map<string, Set<(event: { payload: unknown }) => void>>();
+  const listenMock = listen as unknown as ReturnType<typeof mock>;
+  listenMock.mockImplementation(
+    async (event: string, handler: (event: { payload: unknown }) => void) => {
+      const listeners = handlers.get(event) ?? new Set();
+      listeners.add(handler);
+      handlers.set(event, listeners);
+      return () => listeners.delete(handler);
+    },
+  );
+  let pending = false;
+  invokeMock.mockImplementation(async (command: string) =>
+    command === "list_node_action_requests"
+      ? pending
+        ? [
+            {
+              requestId: "late",
+              kind: "delete-environment",
+              targets: [{ nodeId: "bk_leaf", nodeName: "Leaf", environmentId: "e" }],
+              state: "pending",
+            },
+          ]
+        : []
+      : undefined,
+  );
+  render(
+    <FederationProvider>
+      <NodeActionRequestsDialog />
+    </FederationProvider>,
+  );
+  await waitFor(() => expect(handlers.has("native-event-stream-connected")).toBe(true));
+  pending = true;
+  await act(async () => {
+    for (const handler of handlers.get("native-event-stream-connected") ?? [])
+      handler({ payload: undefined });
+  });
+  expect((await screen.findByTestId("node-action-request")).textContent).toContain("Leaf");
+  cleanup();
+  listenMock.mockReset();
+  listenMock.mockImplementation(() => Promise.resolve(() => {}));
 });

@@ -33,6 +33,7 @@ import {
   forgetNode,
   getNodeStatus,
   listNodes,
+  listNodeSshPrompts,
   nodeErrorText,
   probeNodeHostKey,
   reconnectNode,
@@ -41,6 +42,7 @@ import {
   updateNode,
 } from "@/lib/backend/command-nodes";
 import { listen } from "@/lib/native/events";
+import { listenAuthoritative } from "@/lib/native/authoritative-events";
 import { EditNodeDialog } from "./EditNodeDialog";
 
 /**
@@ -679,16 +681,40 @@ interface PromptEvent {
 
 /** SSH prompts raised by this node's own tunnels to other nodes. Answers are never stored. */
 export function NodeSshPromptDialog() {
-  const [prompt, setPrompt] = useState<PromptEvent | null>(null);
-  const [answer, setAnswer] = useState("");
+  const [prompts, setPrompts] = useState<PromptEvent[]>([]);
+  const prompt = prompts[0] ?? null;
+  const [draft, setDraft] = useState({ promptId: "", value: "" });
+  const answer = draft.promptId === prompt?.promptId ? draft.value : "";
+  const setAnswer = (value: string) => setDraft({ promptId: prompt?.promptId ?? "", value });
 
   useEffect(() => {
     let stop: (() => void) | null = null;
     let cancelled = false;
-    void listen<PromptEvent>(NODE_SSH_PROMPT_EVENT, ({ payload }) => {
-      if (payload.state === "open") setPrompt(payload);
-      else setPrompt((current) => (current?.promptId === payload.promptId ? null : current));
-    }).then((unlisten) => {
+    let revision = 0;
+    const refresh = async (): Promise<void> => {
+      const before = revision;
+      const snapshot = await listNodeSshPrompts().catch(() => null);
+      if (cancelled || !snapshot) return;
+      if (revision !== before) {
+        void refresh();
+        return;
+      }
+      setPrompts(snapshot.filter((entry) => entry.state === "open"));
+    };
+    void listenAuthoritative<PromptEvent>(
+      NODE_SSH_PROMPT_EVENT,
+      ({ payload }) => {
+        revision++;
+        setPrompts((current) =>
+          payload.state === "open"
+            ? current.some((entry) => entry.promptId === payload.promptId)
+              ? current
+              : [...current, payload]
+            : current.filter((entry) => entry.promptId !== payload.promptId),
+        );
+      },
+      { onResync: refresh, resyncOnSubscribe: true },
+    ).then((unlisten) => {
       if (cancelled) unlisten();
       else stop = unlisten;
     });
@@ -701,7 +727,7 @@ export function NodeSshPromptDialog() {
   const respond = (value: string | null) => {
     if (!prompt) return;
     const id = prompt.promptId;
-    setPrompt(null);
+    setPrompts((current) => current.filter((entry) => entry.promptId !== id));
     setAnswer("");
     void answerNodeSshPrompt(id, value).catch((error: unknown) => toast.error(errorText(error)));
   };
@@ -717,7 +743,7 @@ export function NodeSshPromptDialog() {
           className="space-y-3"
         >
           <DialogHeader>
-            <DialogTitle>SSH needs your answer</DialogTitle>
+            <DialogTitle>SSH needs your answer — {prompt?.nodeId}</DialogTitle>
             <DialogDescription>{prompt?.message}</DialogDescription>
           </DialogHeader>
           {prompt?.kind === "confirm" ? null : (

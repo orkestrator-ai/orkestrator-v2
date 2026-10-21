@@ -69,7 +69,8 @@ export type NodeActionExecutor = (
 
 export class NodeActionRequests {
   private requests: NodeActionRequest[] = [];
-  private loaded = false;
+  private loadPromise: Promise<void> | null = null;
+  private saveQueue: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly options: {
@@ -88,9 +89,13 @@ export class NodeActionRequests {
   }
 
   private async ensureLoaded(): Promise<void> {
-    if (this.loaded) return;
-    this.loaded = true;
-    const raw = await this.options.load().catch(() => null);
+    if (this.loadPromise) return this.loadPromise;
+    this.loadPromise = this.load();
+    return this.loadPromise;
+  }
+
+  private async load(): Promise<void> {
+    const raw = await this.options.load();
     if (Array.isArray(raw)) {
       this.requests = raw
         .filter(
@@ -105,7 +110,10 @@ export class NodeActionRequests {
   }
 
   private async persist(): Promise<void> {
-    await this.options.save(this.requests);
+    const snapshot = structuredClone(this.requests);
+    const save = this.saveQueue.catch(() => undefined).then(() => this.options.save(snapshot));
+    this.saveQueue = save;
+    await save;
     this.options.emit(NODE_ACTION_REQUESTS_CHANGED_EVENT, {
       pending: this.requests.filter((request) => request.state === "pending").length,
     });

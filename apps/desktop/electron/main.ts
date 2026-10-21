@@ -46,7 +46,10 @@ import { BackendPanelViews, type PanelRecord } from "./backend-panel-views.js";
 import { SshPromptBroker } from "./ssh-prompt-broker.js";
 import { createSshAdapterContext, SshTunnelSupervisor } from "./ssh/index.js";
 import { createUnavailableLocalBackend } from "./unavailable-local-backend.js";
-import { installRemoteGatewayRequestAuth } from "./remote-gateway-request-auth.js";
+import {
+  installRemoteGatewayRequestAuth,
+  installScopedRemoteGatewayRequestAuth,
+} from "./remote-gateway-request-auth.js";
 import { ensurePinnedToolchains } from "@orkestrator/toolchain/manager";
 import { pinnedArtifactsForPlatforms } from "@orkestrator/toolchain/manifest";
 import {
@@ -925,34 +928,68 @@ function createPanelViews(): BackendPanelViews {
     // A panel shows another node's workspace: the local backend (this
     // desktop's command node) issues a grant; the panel reaches the node
     // directly or over the command node's own route.
-    bindScope: async (scope, nodeId) => {
-      if (!connectionManager || !backend)
-        throw new Error("The local command node is not available");
-      const local = backend;
-      const profile = (await local.invoke("get_backend_profile").catch(() => null)) as {
-        displayName?: string;
-      } | null;
-      const binding = await openNodeWorkspace({
-        nodeId,
-        invoke: (command, args) => local.invoke(command, args),
-        commandNodeName: profile?.displayName ?? "this computer",
-      });
-      nodeWorkspaceScopes ??= new NodeWorkspaceScopes((command, args) =>
-        local.invoke(command, args),
-      );
-      connectionManager.bindWorkspace(scope, binding);
-      nodeWorkspaceScopes.track(scope, binding.workspaceId);
-      return binding.params;
+    bindScope: async (scope, nodeId, parentWebContentsId) => {
+      const manager = connectionManager;
+      if (!manager || !backend) throw new Error("The command node is not available");
+      const parentScope = ipcContextForEvent({ sender: { id: parentWebContentsId } }).scope;
+      const commandScope = `${scope}:command`;
+      await manager.bind(commandScope, manager.getConnectionId(parentScope));
+      const invoke = (command: string, args: Record<string, unknown>) =>
+        manager.invoke(command, args, commandScope);
+      const reopen = async () => {
+        const profile = (await invoke("get_backend_profile", {}).catch(() => null)) as {
+          displayName?: string;
+        } | null;
+        return openNodeWorkspace({
+          nodeId,
+          invoke,
+          commandNodeName: profile?.displayName ?? "command node",
+          relay: manager.getGatewayBaseUrl(commandScope)
+            ? () => {
+                const baseUrl = manager.getGatewayBaseUrl(commandScope);
+                const authorization =
+                  baseUrl &&
+                  manager.getRendererRequestAuthorization(
+                    `${baseUrl}/__orkestrator/invoke`,
+                    commandScope,
+                  );
+                return baseUrl && authorization ? { baseUrl, token: authorization.slice(7) } : null;
+              }
+            : undefined,
+        });
+      };
+      try {
+        const binding = await reopen();
+        nodeWorkspaceScopes ??= new NodeWorkspaceScopes(invoke);
+        manager.bindWorkspace(scope, {
+          ...binding,
+          onUnavailable: () => nodeWorkspaceScopes?.invalidate(scope),
+        });
+        nodeWorkspaceScopes.track(scope, binding.workspaceId, {
+          invoke,
+          reopen,
+          epoch: () => manager.epochOf(manager.getConnectionId(commandScope)),
+          retarget: (replacement) => manager.rebindWorkspace(scope, replacement),
+        });
+        return binding.params;
+      } catch (error) {
+        manager.release(commandScope);
+        throw error;
+      }
     },
     releaseScope: (scope) => {
-      connectionManager?.release(scope);
       nodeWorkspaceScopes?.release(scope);
+      connectionManager?.release(scope);
+      connectionManager?.release(`${scope}:command`);
     },
-    installRequestAuth: (webContents, scope) =>
-      installRemoteGatewayRequestAuth(
+    installRequestAuth: (webContents, scope) => {
+      const stop = installScopedRemoteGatewayRequestAuth(
         webContents.session.webRequest as never,
+        webContents.id,
         (url) => connectionManager?.getRendererRequestAuthorization(url, scope) ?? null,
-      ),
+      );
+      webContents.on("destroyed", stop);
+    },
     installNavigationGuards: (webContents) =>
       installRendererNavigationGuards(webContents as never, rendererUrl()),
     register: (panel) => {

@@ -96,3 +96,15 @@ export async function probeNodeHostKey(input: { destination: string; sshPort?: n
 export async function trustNodeHostKey(probeId: string): Promise<{ added: number }> {
   return invoke("trust_node_host_key", { probeId });
 }
+
+export function listNodeSshPrompts(): Promise<
+  Array<{
+    promptId: string;
+    nodeId: string;
+    kind: string;
+    message: string;
+    state: "open" | "closed";
+  }>
+> {
+  return invoke("list_node_ssh_prompts");
+}

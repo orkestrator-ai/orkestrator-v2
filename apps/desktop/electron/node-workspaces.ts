@@ -25,6 +25,7 @@ export interface OpenedNodeWorkspace {
 
 export interface WorkspaceBinding {
   workspaceId: string;
+  nodeId: string;
   baseUrl: string;
   token: string;
   /** Non-secret parameters for the panel's info panel. */
@@ -42,6 +43,7 @@ export async function openNodeWorkspace(options: {
   invoke: Invoke;
   commandNodeName: string;
   fetchImpl?: typeof fetch;
+  relay?: () => { baseUrl: string; token: string } | null;
 }): Promise<WorkspaceBinding> {
   const opened = (await options.invoke("open_node_workspace", {
     nodeId: options.nodeId,
@@ -62,15 +64,17 @@ export async function openNodeWorkspace(options: {
     if (await answers(origin)) {
       return {
         workspaceId: opened.workspaceId,
+        nodeId: opened.nodeId,
         baseUrl: origin,
         token: opened.grant.token,
         params: { node: opened.nodeName, path: "direct", route: "https" },
       };
     }
   }
-  if (opened.loopbackOrigin && (await answers(opened.loopbackOrigin))) {
+  if (!options.relay && opened.loopbackOrigin && (await answers(opened.loopbackOrigin))) {
     return {
       workspaceId: opened.workspaceId,
+      nodeId: opened.nodeId,
       baseUrl: opened.loopbackOrigin,
       token: opened.grant.token,
       params: {
@@ -81,6 +85,20 @@ export async function openNodeWorkspace(options: {
       },
     };
   }
+  const relay = options.relay?.();
+  if (relay)
+    return {
+      workspaceId: opened.workspaceId,
+      nodeId: opened.nodeId,
+      baseUrl: `${relay.baseUrl.replace(/\/$/, "")}${opened.relayBase}`,
+      token: relay.token,
+      params: {
+        node: opened.nodeName,
+        path: "relay",
+        via: options.commandNodeName,
+        route: opened.commandRouteKind ?? "https",
+      },
+    };
   await options
     .invoke("close_node_workspace", { workspaceId: opened.workspaceId })
     .catch(() => undefined);
@@ -91,28 +109,107 @@ export async function openNodeWorkspace(options: {
 export class NodeWorkspaceScopes {
   private readonly scopes = new Map<
     string,
-    { workspaceId: string; timer: ReturnType<typeof setInterval> }
+    {
+      workspaceId: string;
+      timer: ReturnType<typeof setInterval>;
+      invoke: Invoke;
+      reopen?: () => Promise<WorkspaceBinding>;
+      retarget?: (binding: WorkspaceBinding) => void;
+      epoch?: () => number;
+      lastEpoch: number;
+      renewedAt: number;
+      running: boolean;
+      failed: boolean;
+    }
   >();
 
   constructor(private readonly invoke: Invoke) {}
 
-  track(scope: string, workspaceId: string): void {
+  track(
+    scope: string,
+    workspaceId: string,
+    options: {
+      invoke?: Invoke;
+      reopen?: () => Promise<WorkspaceBinding>;
+      retarget?: (binding: WorkspaceBinding) => void;
+      epoch?: () => number;
+    } = {},
+  ): void {
     const timer = setInterval(() => {
-      void this.invoke("renew_node_workspace", { workspaceId }).catch(() => undefined);
-    }, WORKSPACE_RENEW_INTERVAL_MS);
-    (timer as { unref?: () => void }).unref?.();
-    this.scopes.set(scope, { workspaceId, timer });
+      const entry = this.scopes.get(scope);
+      if (!entry) return;
+      if (
+        entry.failed ||
+        (entry.epoch?.() ?? 0) !== entry.lastEpoch ||
+        Date.now() - entry.renewedAt >= WORKSPACE_RENEW_INTERVAL_MS
+      ) {
+        void this.reconcile(scope);
+      }
+    }, 5_000);
+    timer.unref?.();
+    this.scopes.set(scope, {
+      workspaceId,
+      timer,
+      invoke: options.invoke ?? this.invoke,
+      ...options,
+      lastEpoch: options.epoch?.() ?? 0,
+      renewedAt: Date.now(),
+      running: false,
+      failed: false,
+    });
   }
 
-  /** The panel closed: revoke its grant. Nothing on the node stops. */
+  async reconcile(scope: string): Promise<void> {
+    const entry = this.scopes.get(scope);
+    if (!entry || entry.running) return;
+    entry.running = true;
+    try {
+      if (!entry.failed && (entry.epoch?.() ?? 0) === entry.lastEpoch) {
+        await entry.invoke("renew_node_workspace", { workspaceId: entry.workspaceId });
+      } else throw new Error("Workspace route changed");
+      entry.renewedAt = Date.now();
+    } catch {
+      entry.failed = true;
+      try {
+        if (!entry.reopen) return;
+        const binding = await entry.reopen();
+        if (this.scopes.get(scope) !== entry) {
+          await entry
+            .invoke("close_node_workspace", { workspaceId: binding.workspaceId })
+            .catch(() => undefined);
+          return;
+        }
+        const oldId = entry.workspaceId;
+        entry.retarget?.(binding);
+        entry.workspaceId = binding.workspaceId;
+        entry.lastEpoch = entry.epoch?.() ?? 0;
+        entry.renewedAt = Date.now();
+        entry.failed = false;
+        await entry.invoke("close_node_workspace", { workspaceId: oldId }).catch(() => undefined);
+      } catch {
+        /* Retry with the same captured command node on the next bounded tick. */
+      }
+    } finally {
+      entry.running = false;
+    }
+  }
+
+  invalidate(scope: string): void {
+    const entry = this.scopes.get(scope);
+    if (entry) {
+      entry.failed = true;
+      void this.reconcile(scope);
+    }
+  }
+
   release(scope: string): void {
     const entry = this.scopes.get(scope);
     if (!entry) return;
     this.scopes.delete(scope);
     clearInterval(entry.timer);
-    void this.invoke("close_node_workspace", { workspaceId: entry.workspaceId }).catch(
-      () => undefined,
-    );
+    void entry
+      .invoke("close_node_workspace", { workspaceId: entry.workspaceId })
+      .catch(() => undefined);
   }
 
   releaseAll(): void {

@@ -16,6 +16,7 @@ export interface CollectorLink {
 }
 
 export interface CollectorDeps {
+  retryDelayMs?: number;
   selfId(): Promise<BackendId>;
   link(nodeId: BackendId): CollectorLink | null;
   nodeName(nodeId: BackendId): Promise<string>;
@@ -36,29 +37,71 @@ export interface CollectorDeps {
 export class NodeMailCollector {
   private readonly running = new Map<BackendId, Promise<void>>();
   private readonly again = new Set<BackendId>();
+  private disposed = false;
+
+  private readonly retries = new Map<
+    BackendId,
+    { timer: ReturnType<typeof setTimeout>; delay: number }
+  >();
+  private readonly delays = new Map<BackendId, number>();
 
   constructor(private readonly deps: CollectorDeps) {}
 
+  private retry(nodeId: BackendId): void {
+    if (this.disposed || this.retries.has(nodeId) || !this.deps.link(nodeId)?.connected) return;
+    const delay = Math.min(
+      60_000,
+      (this.delays.get(nodeId) ?? this.deps.retryDelayMs ?? 1_000) * 2,
+    );
+    this.delays.set(nodeId, delay);
+    const timer = setTimeout(() => {
+      this.retries.delete(nodeId);
+      void this.collect(nodeId);
+    }, delay);
+    timer.unref?.();
+    this.retries.set(nodeId, { timer, delay });
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    for (const { timer } of this.retries.values()) clearTimeout(timer);
+    this.retries.clear();
+    this.delays.clear();
+  }
+
   /** Read-model events from a node's stream. */
   handleNodeEvent(event: string, payload: unknown, nodeId: BackendId): void {
-    if (event !== NODE_OUTBOX_READY_EVENT) return;
-    void this.deps.selfId().then((selfId) => {
-      const target = (payload as { controllerId?: unknown } | null)?.controllerId;
-      if (target === selfId) void this.collect(nodeId);
-    });
+    if (event !== NODE_OUTBOX_READY_EVENT) {
+      if (event === "native-event-stream-connected" || event === "resync")
+        void this.collect(nodeId);
+      return;
+    }
+    void this.deps
+      .selfId()
+      .then((selfId) => {
+        const target = (payload as { controllerId?: unknown } | null)?.controllerId;
+        if (target === selfId) void this.collect(nodeId);
+      })
+      .catch(() => this.retry(nodeId));
   }
 
   /** Collect everything queued for this command node on one node. Coalesced per node. */
   collect(nodeId: BackendId): Promise<void> {
+    if (this.disposed) return Promise.resolve();
     const running = this.running.get(nodeId);
     if (running) {
       this.again.add(nodeId);
       return running;
     }
-    const run = this.collectOnce(nodeId).finally(() => {
-      this.running.delete(nodeId);
-      if (this.again.delete(nodeId)) void this.collect(nodeId);
-    });
+    const run = this.collectOnce(nodeId)
+      .catch(() => {
+        // Content-free, and handled here because callers may be fire-and-forget.
+        this.retry(nodeId);
+      })
+      .finally(() => {
+        this.running.delete(nodeId);
+        if (this.again.delete(nodeId)) void this.collect(nodeId);
+      });
     this.running.set(nodeId, run);
     return run;
   }
@@ -68,13 +111,15 @@ export class NodeMailCollector {
     if (!link?.connected) return;
     const controllerId = await this.deps.selfId();
     const name = await this.deps.nodeName(nodeId);
+    let after = 0;
+    let failed = false;
     for (let round = 0; round < 20; round += 1) {
       const batch = await link.invoke<{ items: OutboxItem[]; more: boolean }>(
         "collect_node_outbox",
-        { controllerId, after: 0 },
+        { controllerId, after },
       );
       if (!batch?.items?.length) return;
-      let delivered = 0;
+      const delivered: number[] = [];
       for (const item of batch.items) {
         try {
           await this.deps.deliver({
@@ -83,21 +128,27 @@ export class NodeMailCollector {
             ...(item.subject ? { subject: item.subject } : {}),
             body: describeLeafMail(item, { nodeId, name }),
             // Stable per item, so a redelivery after a lost ack is deduplicated.
-            requestId: `node:${nodeId}:${item.requestId}`.slice(0, 256),
+            requestId: `node:${nodeId}:${item.seq}`,
           });
-          delivered = item.seq;
+          delivered.push(item.seq);
         } catch (error) {
           console.warn(
             "[nodes] Leaf mail could not be delivered to a coordinator yet:",
             error instanceof Error ? error.name : "unknown",
           );
-          break;
+          failed = true;
         }
       }
-      if (delivered > 0) {
-        await link.invoke("ack_node_outbox", { controllerId, upTo: delivered });
+      if (delivered.length) {
+        await link.invoke("ack_node_outbox", { controllerId, upTo: 0, sequences: delivered });
       }
-      if (delivered < (batch.items.at(-1)?.seq ?? 0) || !batch.more) return;
+      after = batch.items.at(-1)?.seq ?? after;
+      if (failed) this.retry(nodeId);
+      if (!batch.more) {
+        if (!failed) this.delays.delete(nodeId);
+        return;
+      }
     }
+    this.retry(nodeId);
   }
 }

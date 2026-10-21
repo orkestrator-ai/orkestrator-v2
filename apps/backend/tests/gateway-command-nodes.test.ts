@@ -114,11 +114,27 @@ describe("DP-02 client grants at the leaf's gateway", () => {
       body: JSON.stringify({ command: "get_projects", args: {} }),
     });
     expect(ordinary.status).toBe(200);
-    for (const command of ["create_client_grant", "attach_controller", "add_node", "list_nodes"]) {
+    for (const command of [
+      "create_client_grant",
+      "attach_controller",
+      "add_node",
+      "list_nodes",
+      "deliver_node_mail",
+      "record_node_environment_origin",
+      "read_node_file",
+      "begin_node_file_write",
+    ]) {
       const refused = await requestUrl(new URL("/__orkestrator/invoke", info.url).toString(), {
         method: "POST",
         headers,
-        body: JSON.stringify({ command, args: {} }),
+        body: JSON.stringify({
+          command,
+          args: {
+            controllerId: "bk_attached",
+            scope: { seedEnvironmentId: ".." },
+            path: "gateway-auth.json",
+          },
+        }),
       });
       expect(refused.status).toBe(403);
     }
@@ -206,6 +222,26 @@ describe("DP-03 relay through the command node", () => {
         },
       );
       expect(refused.status).toBe(403);
+      for (const command of [
+        "deliver_node_mail",
+        "record_node_environment_origin",
+        "read_node_file",
+        "begin_node_file_write",
+      ]) {
+        const blocked = await requestUrl(
+          new URL("/__orkestrator/nodes/bk_leaf/__orkestrator/invoke", info.url).toString(),
+          {
+            method: "POST",
+            headers: { authorization: `Bearer ${info.token}`, "content-type": "application/json" },
+            body: JSON.stringify({
+              command,
+              args: { controllerId: "bk_command", scope: { seedEnvironmentId: ".." } },
+            }),
+          },
+        );
+        expect(blocked.status).toBe(403);
+      }
+      expect(seen).toHaveLength(1);
       expect(
         (
           await requestUrl(

@@ -941,6 +941,85 @@ describe("Orkestrator control MCP server", () => {
     ).not.toBe(true);
   });
 
+  test("authenticated coordinator transfers authorize both nested endpoints before admission", async () => {
+    overrides.set("get_project_coordinator", () => ({
+      workspace: {
+        id: "coordinator-1",
+        lifecycleState: "ready",
+        conversations: [{ id: "conversation-1", mailboxIncarnationId: "incarnation-1" }],
+      },
+    }));
+    overrides.set("get_node_status", () => ({
+      nodeId: "bk_self",
+      mode: "command",
+      controllers: [],
+    }));
+    overrides.set("get_projects", () => [
+      { id: "project-1", gitUrl: "https://git.test/team/repo.git" },
+    ]);
+    overrides.set("get_environment", (args) => ({
+      id: args.environmentId,
+      projectId: args.environmentId === "other" ? "project-2" : "project-1",
+      projectHome: args.environmentId === "home",
+    }));
+    overrides.set("get_node_summaries", () => ({
+      nodes: [
+        {
+          nodeId: "bk_leaf",
+          view: { displayName: "Leaf" },
+          projects: [{ ref: { projectId: "leaf-project" }, repositoryHint: "git.test/team/repo" }],
+          environments: [
+            { ref: { environmentId: "own" }, projectId: "leaf-project" },
+            { ref: { environmentId: "other" }, projectId: "unrelated" },
+            { ref: { environmentId: "home" }, projectId: "leaf-project", isProjectHome: true },
+          ],
+        },
+      ],
+    }));
+    overrides.set("transfer_node_files", () => ({ status: "completed" }));
+    const credential = server.issueCoordinatorCredential({
+      role: "coordinator",
+      projectId: "project-1",
+      coordinatorId: "coordinator-1",
+      conversationId: "conversation-1",
+      mailboxIncarnationId: "incarnation-1",
+      capabilities: ["environments", "discovery"],
+    });
+    const call = (from: unknown, to: unknown) =>
+      rpc(credential.url, credential.token, "tools/call", {
+        name: "transfer_files",
+        arguments: { from, to, files: ["x.txt"] },
+      });
+    for (const side of ["from", "to"])
+      for (const nodeId of ["bk_self", "bk_leaf"])
+        for (const environmentId of ["other", "home"]) {
+          invocations.length = 0;
+          const endpoints = {
+            from: { nodeId: "bk_self", environmentId: "own" },
+            to: { nodeId: "bk_leaf", environmentId: "own" },
+            [side]: { nodeId, environmentId },
+          };
+          expect((await call(endpoints.from, endpoints.to)).body.result?.isError).toBe(true);
+          expect(invocations.some((entry) => entry.command === "transfer_node_files")).toBe(false);
+        }
+    expect(
+      (
+        await call(
+          { nodeId: "bk_self", projectRoot: true },
+          { nodeId: "bk_leaf", projectRoot: true },
+        )
+      ).body.result?.isError,
+    ).toBe(true);
+    expect(
+      (
+        await call(
+          { nodeId: "bk_self", projectRoot: true },
+          { nodeId: "bk_leaf", environmentId: "own" },
+        )
+      ).body.result?.isError,
+    ).not.toBe(true);
+  });
+
   test("never lets a coordinator credential act on the project home", async () => {
     overrides.set("get_project_coordinator", () => ({
       workspace: {

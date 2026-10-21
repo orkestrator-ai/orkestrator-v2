@@ -1803,6 +1803,7 @@ export class OrkestratorBackend {
     // (never marked failed) and resume on the next start.
     this.webAnnotations.stopReconciler();
     // Closes node links and owned SSH tunnels only; nothing on any node stops.
+    this.nodeCoordination.collector.dispose();
     this.nodePortal.stop();
     const nodesStopped = this.nodes.stop().catch(() => undefined);
     if (this.activityLeaseSweep) {

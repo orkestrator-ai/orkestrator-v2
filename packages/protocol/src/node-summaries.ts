@@ -90,8 +90,8 @@ export function boundedText(value: unknown, max = MAX_TEXT): string {
  */
 export function repositoryHint(gitUrl: unknown): string | undefined {
   if (typeof gitUrl !== "string" || !gitUrl || gitUrl.length > 2048) return undefined;
-  const scp = /^[\w.-]+@([\w.-]+):([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/.exec(gitUrl);
-  if (scp) return `${scp[1]}/${scp[2]}/${scp[3]}`.toLowerCase();
+  const scp = /^[\w.-]+@([\w.-]+):((?:[\w.-]+\/)+[\w.-]+?)(?:\.git)?\/?$/.exec(gitUrl);
+  if (scp) return `${scp[1]}/${scp[2]}`.toLowerCase();
   try {
     const url = new URL(gitUrl);
     if (!["https:", "http:", "ssh:", "git:"].includes(url.protocol)) return undefined;
@@ -100,7 +100,12 @@ export function repositoryHint(gitUrl: unknown): string | undefined {
       .split("/")
       .filter(Boolean);
     if (parts.length < 2) return undefined;
-    return `${url.hostname}/${parts.slice(-2).join("/")}`.toLowerCase();
+    const host =
+      (url.protocol === "ssh:" && url.port === "22") ||
+      (url.protocol === "git:" && url.port === "9418")
+        ? url.hostname
+        : url.host;
+    return `${host}/${parts.join("/")}`.toLowerCase();
   } catch {
     return undefined;
   }

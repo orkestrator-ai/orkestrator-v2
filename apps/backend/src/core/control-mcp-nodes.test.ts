@@ -306,7 +306,7 @@ describe("UP-02/UP-04 collecting leaf mail on the command node", () => {
             more: false,
           } as T;
         }
-        if (command === "ack_node_outbox") acks.push(Number(args.upTo));
+        if (command === "ack_node_outbox") acks.push(...(args.sequences as number[]));
         return {} as T;
       },
     };

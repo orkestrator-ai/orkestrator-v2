@@ -5,6 +5,7 @@ import path from "node:path";
 import { normalizeConfiguredProjectFiles, isPathInsideRoot } from "../commands-project-files.js";
 import { validateRelativeFilePath } from "../path-safety.js";
 import { runCommand } from "../shell.js";
+import { recordSeedFile, SEED_MANIFEST } from "./node-seed.js";
 import type { StorageService } from "../storage.js";
 
 /**
@@ -30,7 +31,10 @@ export type NodeFileScope =
   | { seedEnvironmentId: string };
 
 export function seedFilesDir(dataDir: string, environmentId: string): string {
-  return path.join(dataDir, "node-seed", environmentId.replace(/[^A-Za-z0-9_.-]/g, "_"));
+  if (!/^[A-Za-z0-9_-][A-Za-z0-9_-]{0,199}$/.test(environmentId)) {
+    throw new Error("Invalid seed environment ID.");
+  }
+  return path.join(dataDir, "node-seed", environmentId);
 }
 
 export function parseNodeFileScope(value: unknown): NodeFileScope {
@@ -51,6 +55,9 @@ export class NodeFiles {
   private readonly uploads = new Map<
     string,
     {
+      scope: NodeFileScope;
+      relativePath: string;
+      expiry: ReturnType<typeof setTimeout>;
       target: string;
       temp: string;
       size: number;
@@ -60,12 +67,40 @@ export class NodeFiles {
     }
   >();
 
-  constructor(private readonly storage: StorageService) {}
+  private readonly envWrites = new Map<string, Promise<unknown>>();
+
+  constructor(
+    private readonly storage: StorageService,
+    private readonly options: { uploadTtlMs?: number } = {},
+  ) {}
 
   /** The scope's root directory on this node. */
   async root(scope: NodeFileScope, options: { create?: boolean } = {}): Promise<string> {
     if ("seedEnvironmentId" in scope) {
       const dir = seedFilesDir(this.storage.getDataDir(), scope.seedEnvironmentId);
+      if (!(await this.storage.getEnvironment(scope.seedEnvironmentId))) {
+        throw new Error("That seed environment does not exist on this node.");
+      }
+      const base = path.dirname(dir);
+      const baseLink = await fs.lstat(base).then(
+        (s) => s.isSymbolicLink(),
+        (error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return false;
+          throw error;
+        },
+      );
+      if (baseLink) throw new Error("Seed directories cannot be symbolic links.");
+      await fs.mkdir(base, { recursive: true, mode: 0o700 });
+      if (
+        await fs.lstat(dir).then(
+          (s) => s.isSymbolicLink(),
+          (e) => {
+            if (e.code === "ENOENT") return false;
+            throw e;
+          },
+        )
+      )
+        throw new Error("Seed directories cannot be symbolic links.");
       if (options.create) await fs.mkdir(dir, { recursive: true, mode: 0o700 });
       return dir;
     }
@@ -91,12 +126,43 @@ export class NodeFiles {
   ): Promise<string> {
     const safe = validateRelativeFilePath(relativePath, "file path");
     const root = await fs.realpath(await this.root(scope, { create: forWrite }));
+    if (forWrite && safe.split(/[\\/]/).some((part) => part.toLowerCase() === ".git")) {
+      throw new Error("Writing Git metadata is not allowed.");
+    }
     const target = path.join(root, safe);
     if (forWrite) {
       const parent = path.dirname(target);
-      await fs.mkdir(parent, { recursive: true });
+      // Validate each existing component before creating anything below it.
+      let cursor = root;
+      for (const component of path.relative(root, parent).split(path.sep).filter(Boolean)) {
+        cursor = path.join(cursor, component);
+        const existing = await fs.realpath(cursor).catch((error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return null;
+          throw error;
+        });
+        if (existing && !isPathInsideRoot(existing, root))
+          throw new Error("The file path leaves its scope.");
+        if (
+          existing &&
+          path
+            .relative(root, existing)
+            .split(path.sep)
+            .some((part) => part.toLowerCase() === ".git")
+        )
+          throw new Error("Writing Git metadata is not allowed.");
+        if (!existing) await fs.mkdir(cursor);
+        if (!isPathInsideRoot(await fs.realpath(cursor), root))
+          throw new Error("The file path leaves its scope.");
+      }
       const realParent = await fs.realpath(parent);
       if (!isPathInsideRoot(realParent, root)) throw new Error("The file path leaves its scope.");
+      if (
+        path
+          .relative(root, realParent)
+          .split(path.sep)
+          .some((part) => part.toLowerCase() === ".git")
+      )
+        throw new Error("Writing Git metadata is not allowed.");
       return path.join(realParent, path.basename(target));
     }
     let real: string;
@@ -163,6 +229,8 @@ export class NodeFiles {
       throw new Error("The file is larger than 64 MiB.");
     }
     if (!/^[0-9a-f]{64}$/.test(input.sha256)) throw new Error("Expected a sha256 hash.");
+    if (this.uploads.size >= 64) throw new Error("Too many open file uploads.");
+    if (input.path === SEED_MANIFEST) throw new Error("Protected seed manifest.");
     const target = await this.resolve(input.scope, input.path, true);
     if (!input.overwrite) {
       const exists = await fs.stat(target).then(
@@ -175,7 +243,17 @@ export class NodeFiles {
     const uploadId = randomUUID();
     const temp = path.join(path.dirname(target), `${UPLOAD_PREFIX}${uploadId}`);
     await fs.writeFile(temp, Buffer.alloc(0), { mode: 0o600, flag: "wx" });
+    const expiry = setTimeout(
+      () => {
+        void this.abortWrite(uploadId).catch(() => undefined);
+      },
+      this.options.uploadTtlMs ?? 15 * 60_000,
+    );
+    expiry.unref?.();
     this.uploads.set(uploadId, {
+      scope: input.scope,
+      relativePath: input.path,
+      expiry,
       target,
       temp,
       size: input.size,
@@ -204,29 +282,54 @@ export class NodeFiles {
     const upload = this.uploads.get(uploadId);
     if (!upload) throw new Error("That upload is not open.");
     this.uploads.delete(uploadId);
-    const actual = await sha256File(upload.temp);
-    if (upload.written !== upload.size || actual !== upload.sha256) {
-      await fs.rm(upload.temp, { force: true });
-      throw new Error("The transferred file did not match its size or hash; nothing was written.");
-    }
-    if (!upload.overwrite) {
-      await fs.link(upload.temp, upload.target).catch(async (error: unknown) => {
+    clearTimeout(upload.expiry);
+    try {
+      if ((await this.resolve(upload.scope, upload.relativePath, true)) !== upload.target) {
         await fs.rm(upload.temp, { force: true });
-        throw Object.assign(new Error("The destination appeared during the transfer."), {
-          code: (error as { code?: unknown }).code === "EEXIST" ? "exists" : "failed",
+        throw new Error("The upload destination changed.");
+      }
+      const actual = await sha256File(upload.temp);
+      if (upload.written !== upload.size || actual !== upload.sha256) {
+        await fs.rm(upload.temp, { force: true });
+        throw new Error(
+          "The transferred file did not match its size or hash; nothing was written.",
+        );
+      }
+      if (!upload.overwrite) {
+        await fs.link(upload.temp, upload.target).catch(async (error: unknown) => {
+          await fs.rm(upload.temp, { force: true });
+          throw Object.assign(new Error("The destination appeared during the transfer."), {
+            code: (error as { code?: unknown }).code === "EEXIST" ? "exists" : "failed",
+          });
         });
-      });
-      await fs.rm(upload.temp, { force: true });
-    } else {
-      await fs.rename(upload.temp, upload.target);
+        await fs.rm(upload.temp, { force: true });
+      } else {
+        await fs.rename(upload.temp, upload.target);
+      }
+      if ("seedEnvironmentId" in upload.scope) {
+        const root = await this.root(upload.scope);
+        const previous = this.envWrites.get(root) ?? Promise.resolve();
+        const record = previous
+          .catch(() => undefined)
+          .then(() => recordSeedFile(root, upload.relativePath));
+        this.envWrites.set(root, record);
+        const cleanup = () => {
+          if (this.envWrites.get(root) === record) this.envWrites.delete(root);
+        };
+        void record.then(cleanup, cleanup);
+        await record;
+      }
+      return { bytes: upload.written, sha256: actual };
+    } finally {
+      await fs.rm(upload.temp, { force: true }).catch(() => undefined);
     }
-    return { bytes: upload.written, sha256: actual };
   }
 
   async abortWrite(uploadId: string): Promise<{ aborted: boolean }> {
     const upload = this.uploads.get(uploadId);
     if (!upload) return { aborted: false };
     this.uploads.delete(uploadId);
+    clearTimeout(upload.expiry);
     await fs.rm(upload.temp, { force: true });
     return { aborted: true };
   }
@@ -267,7 +370,21 @@ export class NodeFiles {
     if (input.include.includes("file")) {
       if (!input.path) throw new Error("Name the file to read.");
       const file = await this.resolve({ environmentId: input.environmentId }, input.path, false);
+      const config = await this.storage.getRepositoryConfig(environment.projectId);
+      const configured = normalizeConfiguredProjectFiles(config.filesToCopy);
+      const root = await fs.realpath(await this.root({ environmentId: input.environmentId }));
+      if (
+        isEnvFile(input.path) ||
+        isEnvFile(file) ||
+        configured.includes(input.path) ||
+        configured.includes(path.relative(root, file))
+      ) {
+        throw new Error(
+          "Secret and selected project files require fingerprint comparison or an approved reveal.",
+        );
+      }
       const stats = await fs.stat(file);
+      if (!stats.isFile()) throw new Error("Only regular files can be read.");
       const limit = 256 * 1024;
       const handle = await fs.open(file, fsConstants.O_RDONLY);
       try {
@@ -404,31 +521,52 @@ export class NodeFiles {
       if (/[\r\n]/.test(value)) throw new Error("A value cannot span lines.");
     }
     const file = await this.resolve({ projectId }, relativePath, true);
-    const current = await fs.readFile(file, "utf8").catch(() => "");
-    const lines = current.length ? current.split(/\r?\n/) : [];
-    if (lines.at(-1) === "") lines.pop();
-    const pending = new Map(Object.entries(set));
-    const removing = new Set(remove);
-    let removed = 0;
-    const next: string[] = [];
-    for (const line of lines) {
-      const name = envLineKey(line);
-      if (name && removing.has(name)) {
-        removed += 1;
-        continue;
-      }
-      if (name && pending.has(name)) {
-        next.push(`${name}=${quoteEnv(pending.get(name)!)}`);
-        pending.delete(name);
-        continue;
-      }
-      next.push(line);
-    }
-    for (const [name, value] of pending) next.push(`${name}=${quoteEnv(value)}`);
-    const temp = `${file}${UPLOAD_PREFIX}${randomUUID()}`;
-    await fs.writeFile(temp, `${next.join("\n")}\n`, { mode: 0o600, flag: "wx" });
-    await fs.rename(temp, file);
-    return { set: Object.keys(set).length, removed };
+    const previous = this.envWrites.get(file) ?? Promise.resolve();
+    const run = previous
+      .catch(() => undefined)
+      .then(async () => {
+        const existing = await fs.lstat(file).catch((error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return null;
+          throw error;
+        });
+        if (existing && !existing.isFile())
+          throw new Error("Only regular dotenv files can be updated.");
+        const current = await fs.readFile(file, "utf8").catch((error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return "";
+          throw error;
+        });
+        const lines = current.length ? current.split(/\r?\n/) : [];
+        if (lines.at(-1) === "") lines.pop();
+        const pending = new Map(Object.entries(set));
+        const removing = new Set(remove);
+        let removed = 0;
+        const next: string[] = [];
+        for (const line of lines) {
+          const name = envLineKey(line);
+          if (name && removing.has(name)) {
+            removed += 1;
+            continue;
+          }
+          if (name && Object.hasOwn(set, name) && !pending.has(name)) continue;
+          if (name && pending.has(name)) {
+            next.push(`${name}=${quoteEnv(pending.get(name)!)}`);
+            pending.delete(name);
+            continue;
+          }
+          next.push(line);
+        }
+        for (const [name, value] of pending) next.push(`${name}=${quoteEnv(value)}`);
+        const temp = `${file}${UPLOAD_PREFIX}${randomUUID()}`;
+        await fs.writeFile(temp, `${next.join("\n")}\n`, { mode: 0o600, flag: "wx" });
+        await fs.rename(temp, file);
+        return { set: Object.keys(set).length, removed };
+      });
+    this.envWrites.set(file, run);
+    const cleanup = () => {
+      if (this.envWrites.get(file) === run) this.envWrites.delete(file);
+    };
+    void run.then(cleanup, cleanup);
+    return run;
   }
 }
 

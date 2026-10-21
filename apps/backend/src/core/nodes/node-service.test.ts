@@ -488,6 +488,60 @@ describe("RG-04/RG-05 SSH routes from the command node's backend", () => {
     };
   }
 
+  test("provisional identity adoption retains an interactive SSH lease through attachment", async () => {
+    const network = new TestNodeNetwork();
+    const leaf = await network.add("adopted");
+    let releases = 0;
+    const interactive: boolean[] = [];
+    const command = await network.add("command", {
+      forceRegistration: true,
+      extra: {
+        createSsh: (() => ({
+          acquire: async (_spec: unknown, options: { interactive: boolean }) => {
+            interactive.push(options.interactive);
+            if (!options.interactive) throw new Error("Interactive auth required");
+            return {
+              localOrigin: leaf.origin,
+              release: () => {
+                releases++;
+              },
+              onClosed: () => () => {},
+            };
+          },
+        })) as never,
+      },
+    });
+    await command.service.importDesktopConnections([
+      {
+        importedFrom: "ssh-unverified",
+        fallbackName: "SSH",
+        routes: [
+          {
+            id: "ssh" as never,
+            kind: "ssh",
+            enabled: true,
+            destination: "leaf-host",
+            remoteGatewayPort: 34122,
+          },
+        ],
+        routeOrder: [],
+        token: leaf.token,
+        enabled: true,
+      },
+    ]);
+    const imported = (await command.service.listNodes()).nodes[0]!;
+    await command.service.reconnectNode(imported.nodeId);
+    await settle();
+    const adopted = (await command.service.listNodes()).nodes[0]!;
+    expect(adopted.nodeId).toBe("bk_adopted" as never);
+    expect(adopted.connection.state).toBe("connected");
+    expect(interactive.at(-1)).toBe(true);
+    expect(releases).toBe(0);
+    expect(
+      leaf.service.listControllers().some((entry) => entry.controllerId === "bk_command"),
+    ).toBe(true);
+  });
+
   test("a user-initiated add may prompt; background reconnects run in batch mode", async () => {
     const network = new TestNodeNetwork();
     const leaf = await network.add("leaf");

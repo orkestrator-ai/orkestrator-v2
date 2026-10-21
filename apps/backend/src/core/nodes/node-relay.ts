@@ -5,7 +5,7 @@ import { Readable } from "node:stream";
 
 import { isBackendId, type BackendId } from "@orkestrator/protocol/federation";
 
-import { isNodeExcludedCommand } from "./node-routing.js";
+import { isWorkspaceExcludedCommand } from "./node-routing.js";
 
 /**
  * The relay fallback: a client that cannot reach a leaf directly sends its
@@ -137,7 +137,7 @@ export async function relayHttp(
         json(response, 400, { error: "Expected a JSON command." });
         return true;
       }
-      if (typeof command !== "string" || isNodeExcludedCommand(command)) {
+      if (typeof command !== "string" || isWorkspaceExcludedCommand(command)) {
         json(response, 403, { error: "That command cannot be relayed to another node." });
         return true;
       }

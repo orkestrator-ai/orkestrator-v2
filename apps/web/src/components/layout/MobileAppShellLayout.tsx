@@ -25,7 +25,7 @@ export const MOBILE_TOOLS_TRIGGER_LABEL = "Open tools";
 export const MOBILE_TOOLS_TRIGGER_SELECTOR = `button[aria-label="${MOBILE_TOOLS_TRIGGER_LABEL}"]`;
 
 /** The breakpoint at which `AppShell` swaps in this layout. */
-export const MOBILE_SHELL_MEDIA_QUERY = "(max-width: 767px)";
+export { MOBILE_SHELL_MEDIA_QUERY } from "@/lib/mobile-shell";
 
 interface MobileAppShellLayoutProps {
   selectedProjectId: string | null;

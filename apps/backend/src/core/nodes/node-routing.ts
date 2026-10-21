@@ -62,6 +62,26 @@ export const NODE_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
   "get_control_mcp_settings",
 ]);
 
+export function isWorkspaceExcludedCommand(command: string): boolean {
+  return (
+    isNodeExcludedCommand(command) ||
+    [
+      "deliver_node_mail",
+      "record_node_environment_origin",
+      "stat_node_file",
+      "read_node_file",
+      "begin_node_file_write",
+      "append_node_file_write",
+      "commit_node_file_write",
+      "abort_node_file_write",
+      "read_env_values",
+      "apply_env_keys",
+      "fingerprint_project_files",
+      "get_project_seed_files",
+    ].includes(command)
+  );
+}
+
 export function isNodeExcludedCommand(command: string): boolean {
   return NODE_EXCLUDED_COMMANDS.has(command);
 }

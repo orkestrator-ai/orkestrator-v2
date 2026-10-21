@@ -67,6 +67,7 @@ export function machinePanelConnectionPath(): WorkspaceConnectionPath | null {
 /** Same-origin URL of a panel realm for a frame (hosted browser, iOS). */
 export function browserPanelUrl(input: {
   workspaceId: string;
+  nodeId: string;
   connection: WorkspaceConnectionPath;
   projectId?: string;
   environmentId?: string;
@@ -76,6 +77,7 @@ export function browserPanelUrl(input: {
   url.hash = "";
   url.searchParams.set(PANEL_PARAM, PANEL_VALUE);
   url.searchParams.set("workspace", input.workspaceId);
+  url.searchParams.set("machine", input.nodeId);
   url.searchParams.set("node", input.connection.nodeName);
   url.searchParams.set("path", input.connection.path);
   if (input.connection.routeKind) url.searchParams.set("route", input.connection.routeKind);

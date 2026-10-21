@@ -125,15 +125,18 @@ export class NodeCoordination {
     // Every (re)connect collects whatever waited while the link was down.
     let connected = new Set<string>();
     nodes.subscribe(() => {
-      void nodes.listNodes().then((list) => {
-        const now = new Set(
-          list.nodes
-            .filter((node) => node.connection.state === "connected")
-            .map((node) => node.nodeId),
-        );
-        for (const nodeId of now) if (!connected.has(nodeId)) void this.collector.collect(nodeId);
-        connected = now;
-      });
+      void nodes
+        .listNodes()
+        .then((list) => {
+          const now = new Set(
+            list.nodes
+              .filter((node) => node.connection.state === "connected")
+              .map((node) => node.nodeId),
+          );
+          for (const nodeId of now) if (!connected.has(nodeId)) void this.collector.collect(nodeId);
+          connected = now;
+        })
+        .catch(() => undefined);
     });
     this.files = new NodeFiles(storage);
     this.projectFiles = new NodeProjectFiles({
@@ -258,6 +261,20 @@ export class NodeCoordination {
   }): Promise<void> {
     const storage = this.options.storage;
     let address = input.toCoordinator;
+    if (address) {
+      const workspaces = await storage.listCoordinatorWorkspaces();
+      const valid = workspaces.some((workspace) =>
+        workspace.conversations.some(
+          (conversation) =>
+            coordinatorRuntimeId(workspace.id, conversation.id) === address!.environmentId &&
+            conversation.tabId === address!.tabId,
+        ),
+      );
+      if (!valid)
+        throw Object.assign(new Error("That destination is not a coordinator conversation."), {
+          code: "no-coordinator",
+        });
+    }
     if (!address) {
       const projects = await storage.loadProjects();
       const project = projects.find(
@@ -369,13 +386,17 @@ export class NodeCoordination {
           if (routed.outcome === "unknown") {
             return {
               code: "outcome-unknown",
-              message: `The connection to ${target.nodeName} was lost; check whether “${target.environmentName ?? target.environmentId}” was deleted.`,
+              message: `${done.length ? `Already deleted ${done.join(", ")}. ` : ""}The connection to ${target.nodeName} was lost; check whether “${target.environmentName ?? target.environmentId}” was deleted.`,
               outcomeUnknown: true,
             };
           }
         } catch (error) {
           if (error instanceof NodeOutcomeUnknownError) {
-            return { code: "outcome-unknown", message: error.message, outcomeUnknown: true };
+            return {
+              code: "outcome-unknown",
+              message: `${done.length ? `Already deleted ${done.join(", ")}. ` : ""}${error.message}`,
+              outcomeUnknown: true,
+            };
           }
           throw error;
         }

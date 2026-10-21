@@ -1,5 +1,5 @@
+import { openMachineWorkspace } from "@/lib/federation/open-workspace";
 import { searchMachines } from "@/lib/federation/aggregate";
-import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useFederation } from "./FederationProvider";
 import { MachineDot } from "./MachineDot";
 import { useRemoteMachineViews } from "./useMachineViews";
@@ -21,7 +21,7 @@ export function FederatedSearchSection({
 }) {
   const { enabled } = useFederation();
   const machines = useRemoteMachineViews();
-  const openPanel = useMachineViewStore((state) => state.openPanel);
+  const openPanel = openMachineWorkspace;
   if (!enabled || machines.length === 0 || !query.trim()) return null;
   const { rows, incomplete } = searchMachines(machines, query);
   return (

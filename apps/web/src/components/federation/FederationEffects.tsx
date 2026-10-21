@@ -1,3 +1,4 @@
+import { openMachineWorkspace } from "@/lib/federation/open-workspace";
 import { useEffect, useRef } from "react";
 import { toast } from "sonner";
 import {
@@ -7,7 +8,6 @@ import {
 } from "@orkestrator/protocol/federation";
 import { requestGlobalSettings } from "@/lib/settings-navigation";
 import type { MachineView } from "@/lib/federation/aggregate";
-import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useUIStore } from "@/stores";
 import { useFederation } from "./FederationProvider";
 import { useMachineViews } from "./useMachineViews";
@@ -36,7 +36,7 @@ function FederationEffectsActive() {
 /** `?resource=` names a machine and a resource; never a route, port or token. */
 function useResourceLink(machines: readonly MachineView[]) {
   const handled = useRef(false);
-  const openPanel = useMachineViewStore((state) => state.openPanel);
+  const openPanel = openMachineWorkspace;
   useEffect(() => {
     if (handled.current) return;
     const value = new URLSearchParams(window.location.search).get(FEDERATED_LINK_PARAM);
@@ -103,7 +103,7 @@ function useResourceLink(machines: readonly MachineView[]) {
  * machines are two notifications.
  */
 function useAttentionToasts(machines: readonly MachineView[]) {
-  const openPanel = useMachineViewStore((state) => state.openPanel);
+  const openPanel = openMachineWorkspace;
   const previous = useRef(new Map<string, { waiting: boolean; unread: boolean }>());
   const primed = useRef(new Set<string>());
   useEffect(() => {

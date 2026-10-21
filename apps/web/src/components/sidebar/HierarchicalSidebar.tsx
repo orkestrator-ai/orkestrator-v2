@@ -1,3 +1,4 @@
+import { openMachineWorkspace } from "@/lib/federation/open-workspace";
 import {
   lazy,
   useState,
@@ -528,7 +529,7 @@ export function HierarchicalSidebar() {
   const machineFilter = useMachineViewStore((state) => state.machineFilter);
   const machineGrouping = useMachineViewStore((state) => state.grouping);
   const setMachineGrouping = useMachineViewStore((state) => state.setGrouping);
-  const openMachinePanel = useMachineViewStore((state) => state.openPanel);
+  const openMachinePanel = openMachineWorkspace;
   const visibleMachines = federation.enabled
     ? filterMachines(
         machineViews,
@@ -1295,7 +1296,28 @@ export function HierarchicalSidebar() {
           className={environmentSortMode === "activity" && projects.length > 0 ? "pb-2" : "py-2"}
         >
           {federatedAggregateMode ? (
-            <FederatedAggregateList machines={visibleMachines} mode={federatedAggregateMode} />
+            <FederatedAggregateList
+              machines={visibleMachines}
+              mode={federatedAggregateMode}
+              renderBoundEnvironment={(environmentId) => {
+                const environment = sidebarEnvironments.find((entry) => entry.id === environmentId);
+                return environment ? (
+                  <EnvironmentItem
+                    environment={environment}
+                    subtitle={projectsById.get(environment.projectId)?.name ?? "Unknown project"}
+                    isSelected={selectedEnvironmentId === environment.id}
+                    onSelect={handleSelectEnvironment}
+                    onDelete={deleteEnvironment}
+                    onStart={startEnvironment}
+                    onStop={stopEnvironment}
+                    onRestart={restartEnvironment}
+                    onFork={handleForkEnvironment}
+                    isMultiSelectMode={isMultiSelectMode}
+                    isChecked={selectedEnvironmentIds.includes(environment.id)}
+                  />
+                ) : null;
+              }}
+            />
           ) : (
             <>
               {federation.enabled && boundMachineView && boundMachineVisible ? (

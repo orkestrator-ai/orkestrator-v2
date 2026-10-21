@@ -167,9 +167,10 @@ export function trustHostKey(
   const previous = writeQueues.get(file) ?? Promise.resolve();
   const next = previous.catch(() => undefined).then(() => appendKnownHosts(context, file, lines));
   writeQueues.set(file, next);
-  void next.finally(() => {
+  const cleanup = () => {
     if (writeQueues.get(file) === next) writeQueues.delete(file);
-  });
+  };
+  void next.then(cleanup, cleanup);
   return next;
 }
 

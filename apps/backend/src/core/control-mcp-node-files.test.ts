@@ -27,6 +27,12 @@ function harness(status: NodeStatus = commandStatus, leafHasProject = true) {
         return status as T;
       case "get_projects":
         return [{ id: "p-self", name: "Site", gitUrl: "git@github.com:acme/site.git" }] as T;
+      case "get_environment":
+        return {
+          id: args.environmentId,
+          projectId: args.environmentId === "other" ? "other" : "p-self",
+          projectHome: args.environmentId === "home",
+        } as T;
       case "get_project_coordinator":
         return { workspace: { conversations: [{ id: "conv-1", tabId: "coord-tab" }] } } as T;
       case "get_node_summaries":
@@ -37,6 +43,11 @@ function harness(status: NodeStatus = commandStatus, leafHasProject = true) {
               nodeId: "bk_leaf",
               view: { displayName: "Build box" },
               available: true,
+              environments: [
+                { ref: { environmentId: "e-leaf" }, projectId: "p-leaf" },
+                { ref: { environmentId: "other" }, projectId: "p-other" },
+                { ref: { environmentId: "home" }, projectId: "p-leaf", isProjectHome: true },
+              ],
               projects: leafHasProject
                 ? [
                     {
@@ -75,7 +86,7 @@ describe("CO-07/FL-01 transfer_files", () => {
     const { call, calls } = harness();
     const output = await call("transfer_files", {
       from: { nodeId: "bk_self", projectRoot: true },
-      to: { nodeId: "bk_leaf", projectRoot: true },
+      to: { nodeId: "bk_leaf", environmentId: "e-leaf" },
       files: ["fixtures/data.json"],
       overwrite: false,
     });
@@ -84,7 +95,7 @@ describe("CO-07/FL-01 transfer_files", () => {
     });
     expect(calls.find((entry) => entry.command === "transfer_node_files")!.args).toMatchObject({
       from: { nodeId: "bk_self", scope: { projectId: "p-self" } },
-      to: { nodeId: "bk_leaf", scope: { projectId: "p-leaf" } },
+      to: { nodeId: "bk_leaf", scope: { environmentId: "e-leaf" } },
       files: ["fixtures/data.json"],
       overwrite: false,
     });
@@ -188,4 +199,30 @@ describe("FL-02/FL-07/FL-08 file requests wait for the user", () => {
       ),
     ).toBe(false);
   });
+});
+
+test("nested transfer scopes refuse cross-project and home endpoints before transfer admission", async () => {
+  for (const side of ["from", "to"])
+    for (const nodeId of ["bk_self", "bk_leaf"])
+      for (const environmentId of ["other", "home"]) {
+        const { call, calls } = harness();
+        await expect(
+          call("transfer_files", {
+            from: { nodeId: "bk_self", environmentId: "e-self" },
+            to: { nodeId: "bk_leaf", environmentId: "e-leaf" },
+            [side]: { nodeId, environmentId },
+            files: ["x"],
+          }),
+        ).rejects.toThrow(/cannot access/);
+        expect(calls.some((entry) => entry.command === "transfer_node_files")).toBe(false);
+      }
+  const { call, calls } = harness();
+  await expect(
+    call("transfer_files", {
+      from: { nodeId: "bk_self", projectRoot: true },
+      to: { nodeId: "bk_leaf", projectRoot: true },
+      files: ["x"],
+    }),
+  ).rejects.toThrow(/approval/);
+  expect(calls.some((entry) => entry.command === "transfer_node_files")).toBe(false);
 });

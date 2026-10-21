@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   parseFingerprintOutput,
   parseKnownHostsLines,
+  trustHostKey,
 } from "@orkestrator/protocol/node/ssh/host-trust";
 import { SshTunnelError } from "@orkestrator/protocol/node/ssh/tunnel-failures";
 import { SshTunnelSupervisor } from "@orkestrator/protocol/node/ssh/tunnel-supervisor";
@@ -111,5 +112,21 @@ describe("host-key probe and trust (SH-02)", () => {
     expect(parseFingerprintOutput("3072 SHA256:abc/+= h (RSA)\njunk\n")).toEqual([
       { bits: 3072, fingerprint: "SHA256:abc/+=", keyType: "RSA" },
     ]);
+  });
+});
+
+test("a caught known_hosts write rejection releases the queue without a discarded rejection", async () => {
+  const { harness } = setup();
+  const original = harness.context.fs.writeFile;
+  let fail = true;
+  harness.context.fs.writeFile = async (...args) => {
+    if (fail) throw Object.assign(new Error("write failed"), { code: "EIO" });
+    return original(...args);
+  };
+  await expect(trustHostKey(harness.context, { knownHostsLines: [KEY_LINE] })).rejects.toThrow();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  fail = false;
+  expect(await trustHostKey(harness.context, { knownHostsLines: [KEY_LINE] })).toEqual({
+    added: 1,
   });
 });

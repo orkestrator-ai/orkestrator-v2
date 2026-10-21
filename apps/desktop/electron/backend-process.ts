@@ -336,6 +336,21 @@ export class BackendHttpClient {
    * a typing timer would; input typed during a round trip still coalesces.
    */
   private readonly terminalInput: TerminalInputSequencer;
+  private suspended = false;
+
+  get isSuspended(): boolean {
+    return this.suspended;
+  }
+
+  suspend(): void {
+    this.suspended = true;
+    this.abortEvents?.abort();
+  }
+
+  private endpoint(endpoint: string): URL {
+    if (this.suspended) throw new Error("The connection is awaiting a verified route.");
+    return new URL(`${this.baseUrl.replace(/\/$/, "")}${endpoint}`);
+  }
 
   constructor(
     private baseUrl: string,
@@ -370,6 +385,7 @@ export class BackendHttpClient {
    * not change (a cursor from another process lifetime is meaningless).
    */
   retarget(baseUrl: string, token: string, options: { preserveCursor: boolean }): void {
+    this.suspended = false;
     this.baseUrl = baseUrl;
     this.token = token;
     if (!options.preserveCursor) this.eventStream = new GatewayEventStreamState();
@@ -386,7 +402,7 @@ export class BackendHttpClient {
     args: Record<string, unknown>,
     signal?: AbortSignal,
   ): Promise<T> {
-    const response = await fetch(new URL("/__orkestrator/invoke", this.baseUrl), {
+    const response = await fetch(this.endpoint("/__orkestrator/invoke"), {
       method: "POST",
       headers: { authorization: `Bearer ${this.token}`, "content-type": "application/json" },
       body: JSON.stringify({ command, args }),
@@ -406,7 +422,7 @@ export class BackendHttpClient {
 
   /** WebSocket URL of this backend's desktop preview tunnel. Carries no credential. */
   previewTunnelUrl(): string {
-    const url = new URL("/__orkestrator/preview/tunnel", this.baseUrl);
+    const url = this.endpoint("/__orkestrator/preview/tunnel");
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     return url.toString();
   }
@@ -415,7 +431,7 @@ export class BackendHttpClient {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const response = await fetch(new URL("/__orkestrator/status", this.baseUrl), {
+      const response = await fetch(this.endpoint("/__orkestrator/status"), {
         headers: { authorization: `Bearer ${this.token}` },
         signal: controller.signal,
       });
@@ -469,7 +485,7 @@ export class BackendHttpClient {
     method: "GET" | "POST",
     body?: HostUpdaterReport,
   ): Promise<HostMaintenanceSnapshot> {
-    const response = await fetch(new URL("/__orkestrator/host-updater", this.baseUrl), {
+    const response = await fetch(this.endpoint("/__orkestrator/host-updater"), {
       method,
       headers: {
         authorization: `Bearer ${this.token}`,
@@ -528,7 +544,7 @@ export class BackendHttpClient {
     });
     while (!signal.aborted) {
       try {
-        const url = new URL("/__orkestrator/events", this.baseUrl);
+        const url = this.endpoint("/__orkestrator/events");
         if (stream.cursor) url.searchParams.set(GATEWAY_EVENT_CURSOR_PARAM, stream.cursor);
         const response = await fetch(url, {
           headers: { authorization: `Bearer ${this.token}` },
@@ -579,7 +595,7 @@ export class BackendHttpClient {
     method: "GET" | "PUT",
     body?: { token: string },
   ): Promise<GatewayTokenSettings> {
-    const response = await fetch(new URL("/__orkestrator/gateway-settings", this.baseUrl), {
+    const response = await fetch(this.endpoint("/__orkestrator/gateway-settings"), {
       method,
       headers: {
         authorization: `Bearer ${this.token}`,
@@ -604,7 +620,7 @@ export class BackendHttpClient {
     method: "GET" | "PUT" | "DELETE",
     body?: { enabled: boolean },
   ): Promise<WebClientStatus> {
-    const response = await fetch(new URL("/__orkestrator/web-client-access", this.baseUrl), {
+    const response = await fetch(this.endpoint("/__orkestrator/web-client-access"), {
       method,
       headers: {
         authorization: `Bearer ${this.token}`,

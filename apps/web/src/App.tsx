@@ -96,8 +96,12 @@ import { SshPromptDialog } from "@/components/federation/SshPromptDialog";
 import { FederationEffects } from "@/components/federation/FederationEffects";
 import { NodeActionRequestsDialog } from "@/components/federation/NodeActionRequestsDialog";
 import { NodeSshPromptDialog } from "@/components/settings/connections/NodesSettings";
-import { browserPanelWorkspaceId, machinePanelTarget } from "@/lib/federation/panel-realm";
-import { keepFrameWorkspaceAlive } from "@/lib/portal/workspaces";
+import {
+  browserPanelWorkspaceId,
+  isMachinePanelRealm,
+  machinePanelTarget,
+} from "@/lib/federation/panel-realm";
+import { keepFrameWorkspaceAlive, readWorkspaceForFrame } from "@/lib/portal/workspaces";
 
 export const DOCKER_AVAILABILITY_POLL_INTERVAL_MS = 60_000;
 export const DOCKER_STARTUP_CONFIRMATION_DELAY_MS = 1_500;
@@ -237,6 +241,20 @@ const STARTUP_BLOCKER_PANEL_CLASS_NAME = cn(
 );
 
 function App() {
+  if (isMachinePanelRealm() && !window.orkestratorGateway?.desktop) {
+    const workspaceId = browserPanelWorkspaceId();
+    if (!workspaceId || !readWorkspaceForFrame(workspaceId)) {
+      return (
+        <div role="alert" className="flex h-screen items-center justify-center p-6 text-center">
+          This workspace connection is unavailable. Reopen it from the command node to reconnect.
+        </div>
+      );
+    }
+  }
+  return <ConnectedApp />;
+}
+
+function ConnectedApp() {
   const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
   const selectedProjectId = useUIStore((state) => state.selectedProjectId);
   const zoomLevel = useUIStore((state) => state.zoomLevel);

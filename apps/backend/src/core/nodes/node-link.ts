@@ -127,6 +127,7 @@ export class NodeLink {
   private heartbeatTimer: unknown = null;
   private running = false;
   private connecting: Promise<void> | null = null;
+  private connectingAttempt = 0;
 
   constructor(record: NodeRecord, deps: NodeLinkDeps) {
     this.record = record;
@@ -134,6 +135,10 @@ export class NodeLink {
     this.fetchImpl = deps.fetchImpl ?? fetch;
     this.timers = deps.timers ?? defaultTimers;
     this.state = this.idleState();
+  }
+
+  adoptIdentity(nodeId: BackendId): void {
+    this.record = { ...this.record, nodeId };
   }
 
   get nodeId(): BackendId {
@@ -262,11 +267,17 @@ export class NodeLink {
   }
 
   private connect(interactive: boolean): Promise<void> {
-    if (this.connecting) return this.connecting;
+    if (this.connecting) {
+      if (this.connectingAttempt === this.attempt) return this.connecting;
+      return this.connecting.then(() => {
+        if (this.running) return this.connect(interactive);
+      });
+    }
     const run = this.connectOnce(interactive).finally(() => {
       if (this.connecting === run) this.connecting = null;
     });
     this.connecting = run;
+    this.connectingAttempt = this.attempt;
     return run;
   }
 
@@ -335,9 +346,11 @@ export class NodeLink {
             );
             return;
           }
-          // The service re-keys the record and calls update(); this attempt ends.
-          opened.release();
-          return;
+          // The service re-keys this live link; keep the interactive SSH lease.
+          if (attempt !== this.attempt) {
+            opened.release();
+            return;
+          }
         }
         if (!hasBackendCapability(hello, BACKEND_CAPABILITIES.nodeAttachment)) {
           opened.release();
@@ -492,10 +505,23 @@ export class NodeLink {
       );
     }
     try {
-      const text = await response.text();
-      if (text.length > MAX_INVOKE_RESPONSE_BYTES) {
-        throw new Error("The node's response was too large.");
+      const reader = response.body?.getReader();
+      const chunks: Uint8Array[] = [];
+      let bytes = 0;
+      try {
+        if (reader)
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            bytes += value.byteLength;
+            if (bytes > MAX_INVOKE_RESPONSE_BYTES)
+              throw new Error("The node's response was too large.");
+            chunks.push(value);
+          }
+      } finally {
+        await reader?.cancel().catch(() => undefined);
       }
+      const text = Buffer.concat(chunks).toString("utf8");
       let payload: { result?: T; error?: unknown } = {};
       try {
         payload = JSON.parse(text) as typeof payload;
@@ -514,9 +540,12 @@ export class NodeLink {
         if (refusal) throw new NodeRefusalError(refusal.code, refusal.message);
         throw new Error(message);
       }
+      if (!payload || typeof payload !== "object" || !("result" in payload)) {
+        throw new Error("The node returned an incomplete response.");
+      }
       return payload.result as T;
     } catch (error) {
-      if (controller.signal.aborted && !(error instanceof NodeRefusalError)) {
+      if ((response.ok || controller.signal.aborted) && !(error instanceof NodeRefusalError)) {
         throw new NodeOutcomeUnknownError(`${this.label()} did not finish answering in time.`, {
           cause: error,
         });

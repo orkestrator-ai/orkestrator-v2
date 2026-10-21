@@ -127,6 +127,31 @@ export type ClassifiedRouteFailure = {
 
 export function classifyRouteFailure(error: unknown): ClassifiedRouteFailure {
   const message = sanitizeDiagnostic(error instanceof Error ? error.message : String(error));
+  let cause: unknown = error;
+  const seen = new Set<unknown>();
+  for (let depth = 0; depth < 8 && cause && !seen.has(cause); depth++) {
+    seen.add(cause);
+    const entry = cause as { code?: unknown; message?: unknown; cause?: unknown };
+    if (
+      (typeof entry.code === "string" &&
+        /^(?:ERR_TLS_|CERT_|DEPTH_ZERO_SELF_SIGNED_CERT|SELF_SIGNED_CERT_IN_CHAIN|UNABLE_TO_(?:VERIFY|GET)_)/.test(
+          entry.code,
+        )) ||
+      (typeof entry.message === "string" &&
+        /certificate|cert_has_expired|self.signed|tls.*(?:verify|verification)/i.test(
+          entry.message,
+        ))
+    ) {
+      return {
+        state: "trust-blocked",
+        retryable: false,
+        quarantine: true,
+        code: "trust-blocked",
+        message: "The TLS certificate could not be verified.",
+      };
+    }
+    cause = entry.cause;
+  }
   if (isConnectionCheckError(error)) {
     return {
       state: transportStateForError(error),

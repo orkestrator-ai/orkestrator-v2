@@ -626,7 +626,46 @@ describe("SSH routes", () => {
     expect(gateways.requests.some((request) => request.path === "/__orkestrator/invoke")).toBe(
       false,
     );
+    await expect(connections.invoke("get_projects", {}, "window")).resolves.toMatchObject({
+      origin: "http://127.0.0.1:45004",
+    });
     connections.dispose();
+  });
+
+  test("a lost tunnel fences its old loopback origin after non-retryable handover failure", async () => {
+    const host = { installationId: "bk_s" };
+    const gateways = installGateways({ "http://127.0.0.1:45014": host });
+    const tunnels = fakeTunnels("http://127.0.0.1:45014");
+    const connections = manager(new MemoryStore(catalogue([])), { sshTunnels: tunnels.provider });
+    try {
+      await connections.initialize();
+      await connections.bind("window", "local");
+      const list = await connections.connectSsh(
+        { destination: "leaf", remoteGatewayPort: 34121, token, select: true },
+        "window",
+      );
+      const machine = list.connections.find((entry) => entry.kind === "remote")!;
+      host.installationId = "bk_wrong";
+      tunnels.closers[0]?.({ code: "tunnel-exited", message: "closed" });
+      await until(
+        () =>
+          connections.getList("window").connections.find((entry) => entry.id === machine.id)
+            ?.transport === "trust-blocked",
+      );
+      const before = gateways.requests.length;
+      expect(await connections.probe(machine.id)).toBe(false);
+      await expect(connections.invoke("create_environment", {}, "window")).rejects.toThrow();
+      expect(gateways.requests).toHaveLength(before);
+      expect(
+        connections.getRendererRequestAuthorization(
+          "http://127.0.0.1:45014/__orkestrator/invoke",
+          "window",
+        ),
+      ).toBeNull();
+      expect(tunnels.releases).toHaveBeenCalled();
+    } finally {
+      connections.dispose();
+    }
   });
 
   test("CT-02: two tunnels on one loopback host never share a credential", async () => {
@@ -767,4 +806,133 @@ describe("late catalogue migration", () => {
       await rm(directory, { recursive: true, force: true });
     }
   });
+});
+
+test("disabling an active route fences requests when every alternative is unreachable", async () => {
+  const hosts = {
+    "https://a.example": { installationId: "bk_a" },
+    "https://b.example": { installationId: "bk_a", down: true },
+  };
+  const gateways = installGateways(hosts);
+  const connections = manager(
+    new MemoryStore(
+      catalogue([
+        savedBackend("a", Object.keys(hosts), { verifiedInstallationId: "bk_a" as never }),
+      ]),
+    ),
+  );
+  try {
+    await connections.initialize();
+    await connections.bind("window", "a");
+    await connections.setRouteEnabled("a", "https-a-0", false, "window");
+    await until(
+      () =>
+        connections.getList("window").connections.find((entry) => entry.id === "a")?.transport !==
+        "connected",
+    );
+    const count = gateways.requests.filter(
+      (request) => request.origin === "https://a.example",
+    ).length;
+    await expect(connections.invoke("create_environment", {}, "window")).rejects.toThrow();
+    expect(
+      connections.getRendererRequestAuthorization(
+        "https://a.example/__orkestrator/invoke",
+        "window",
+      ),
+    ).toBeNull();
+    expect(
+      gateways.requests.filter((request) => request.origin === "https://a.example"),
+    ).toHaveLength(count);
+  } finally {
+    connections.dispose();
+  }
+});
+
+test("useRoute releases a transport if its requesting scope closes while dialing", async () => {
+  const gateways = installGateways({
+    "https://a.example": { installationId: "bk_a" },
+    "http://127.0.0.1:45500": { installationId: "bk_a" },
+  });
+  let releaseDial!: () => void;
+  let dialStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    dialStarted = resolve;
+  });
+  const released = mock(() => {});
+  const backend = savedBackend("a", ["https://a.example"], {
+    verifiedInstallationId: "bk_a" as never,
+  });
+  backend.routes.push({
+    id: "ssh" as never,
+    kind: "ssh",
+    enabled: true,
+    destination: "leaf",
+    remoteGatewayPort: 34121,
+    encryptedToken: encrypted(token),
+  });
+  backend.routeOrder.push("ssh" as never);
+  const connections = manager(new MemoryStore(catalogue([backend])), {
+    sshTunnels: {
+      acquire: async () => {
+        dialStarted();
+        await new Promise<void>((resolve) => {
+          releaseDial = resolve;
+        });
+        return {
+          localOrigin: "http://127.0.0.1:45500",
+          release: released,
+          onClosed: () => () => {},
+        };
+      },
+    },
+  });
+  try {
+    await connections.initialize();
+    await connections.bind("window", "a");
+    const selected = connections.useRoute("a", "ssh", "window");
+    await started;
+    connections.release("window");
+    releaseDial();
+    await expect(selected).rejects.toThrow("window");
+    expect(released).toHaveBeenCalledTimes(1);
+    expect(gateways.requests.some((request) => request.origin.includes("45500"))).toBe(true);
+  } finally {
+    connections.dispose();
+  }
+});
+
+test("workspace retargeting preserves machine identity and confines relay credentials", async () => {
+  const gateways = installGateways({ "https://b.example": { installationId: "bk_b" } });
+  const connections = manager(new MemoryStore(catalogue([])));
+  try {
+    await connections.initialize();
+    connections.bindWorkspace("panel", {
+      workspaceId: "one",
+      nodeId: "bk_c",
+      baseUrl: "https://b.example/__orkestrator/nodes/bk_c",
+      token,
+    });
+    expect(connections.getBackendIdentity("panel").backendId).toBe("bk_c");
+    expect(
+      connections.getRendererRequestAuthorization(
+        "https://b.example/__orkestrator/invoke",
+        "panel",
+      ),
+    ).toBeNull();
+    expect(
+      connections.getRendererRequestAuthorization(
+        "https://b.example/__orkestrator/nodes/bk_c/__orkestrator/invoke",
+        "panel",
+      ),
+    ).toBe(`Bearer ${token}`);
+    connections.rebindWorkspace("panel", {
+      baseUrl: "https://b.example/__orkestrator/nodes/bk_c",
+      token,
+    });
+    await connections.invoke("get_projects", {}, "panel");
+    expect(gateways.requests.at(-1)?.path).toBe("/__orkestrator/nodes/bk_c/__orkestrator/invoke");
+    expect(connections.getBackendIdentity("panel").backendId).toBe("bk_c");
+  } finally {
+    connections.dispose();
+  }
 });

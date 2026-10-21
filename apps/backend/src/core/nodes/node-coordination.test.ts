@@ -150,7 +150,7 @@ describe("UP-02/CO-05 collected leaf mail reaches the coordinator on the command
             more: false,
           } as T;
         }
-        if (command === "ack_node_outbox") acks.push(Number(args.upTo));
+        if (command === "ack_node_outbox") acks.push(...(args.sequences as number[]));
         return {} as T;
       },
     };
@@ -187,4 +187,93 @@ describe("UP-02/CO-05 collected leaf mail reaches the coordinator on the command
     expect(message.body).toContain('Reply with send_message and nodeId "bk_leaf"');
     expect(message.body).toContain("All tests pass.");
   });
+});
+
+test("leaf mail addressed to a worker is retained while coordinator mail is delivered", async () => {
+  const world = await MailWorld.create();
+  worlds.push(world);
+  const worker = await world.addEnvironment("worker");
+  const main = await world.main();
+  const acks: number[] = [];
+  const nodes = {
+    listControllers: () => [],
+    mostRecentControllerId: () => undefined,
+    selfIdentity: async () => "bk_cmd",
+    subscribe: () => () => {},
+    listNodes: async () => ({ nodes: [] }),
+    getNode: async () => ({ displayName: "Leaf" }),
+    link: () => ({
+      connected: true,
+      invoke: async <T>(command: string, args: Record<string, unknown>) => {
+        if (command === "collect_node_outbox")
+          return {
+            more: false,
+            items: [worker, main].map((actor, i) => ({
+              seq: i + 1,
+              requestId: `r${i}`,
+              fromEnvironmentId: "leaf-env",
+              fromTabId: "t",
+              body: "mail",
+              bytes: 4,
+              createdAt: "",
+              toCoordinator: { environmentId: actor.environmentId, tabId: actor.tabId },
+            })),
+          } as T;
+        acks.push(...(args.sequences as number[]));
+        return {} as T;
+      },
+    }),
+  };
+  const instance = new NodeCoordination({
+    storage: world.storage,
+    nodes: nodes as never,
+    portal: { readModel: { onNodeEvent: () => () => {} } } as never,
+    invoke: async () => undefined as never,
+    emit: () => {},
+  });
+  await instance.collector.collect("bk_leaf" as never);
+  expect(acks).toEqual([2]);
+  expect(
+    (await world.storage.getAgentMailMailbox(worker.environmentId, worker.tabId, { limit: 10 }))
+      .messages,
+  ).toHaveLength(0);
+  instance.collector.dispose();
+});
+
+test("multi-target unknown deletion reports earlier completed targets", async () => {
+  const world = await MailWorld.create();
+  worlds.push(world);
+  const main = await world.main();
+  const nodes = {
+    selfIdentity: async () => "bk_self",
+    subscribe: () => () => {},
+    listNodes: async () => ({ nodes: [] }),
+  };
+  const instance = new NodeCoordination({
+    storage: world.storage,
+    nodes: nodes as never,
+    portal: {
+      readModel: { onNodeEvent: () => () => {} },
+      invokeOnNode: async () => ({ outcome: "unknown", outcomeId: "unknown" }),
+    } as never,
+    invoke: async () => ({ deleted: true }) as never,
+    emit: () => {},
+  });
+  const request = await instance.actions.create({
+    kind: "delete-environment",
+    requestedBy: {
+      projectId: world.projectId,
+      coordinatorEnvironmentId: main.environmentId,
+      coordinatorTabId: main.tabId,
+    },
+    targets: [
+      { nodeId: "bk_self", nodeName: "Self", environmentId: "first", environmentName: "First" },
+      { nodeId: "bk_leaf", nodeName: "Leaf", environmentId: "second", environmentName: "Second" },
+    ],
+  });
+  const resolved = await instance.actions.resolve(request.requestId, "approve");
+  expect(resolved.state).toBe("outcome-unknown");
+  expect(resolved.result?.message).toContain("Already deleted “First” on Self");
+  expect(resolved.result?.message).toContain("Second");
+  instance.collector.dispose();
 });

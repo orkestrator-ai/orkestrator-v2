@@ -54,7 +54,11 @@ export type BackendPanelViewsOptions = {
    * parameters for the panel's renderer (how it reaches the node, for its
    * info panel).
    */
-  bindScope(scope: string, connectionId: string): Promise<Record<string, string> | void>;
+  bindScope(
+    scope: string,
+    connectionId: string,
+    parentWebContentsId: number,
+  ): Promise<Record<string, string> | void>;
   releaseScope(scope: string): void;
   installRequestAuth(webContents: WebContentsLike, scope: string): void;
   installNavigationGuards(webContents: WebContentsLike): void;
@@ -95,7 +99,11 @@ export class BackendPanelViews {
     }
     const panelId = randomUUID();
     const scope = `panel:${panelId}`;
-    const bindingParams = await this.options.bindScope(scope, input.connectionId);
+    const bindingParams = await this.options.bindScope(
+      scope,
+      input.connectionId,
+      parent.webContents.id,
+    );
     if (parent.isDestroyed()) {
       this.options.releaseScope(scope);
       throw new Error("The window is not available");

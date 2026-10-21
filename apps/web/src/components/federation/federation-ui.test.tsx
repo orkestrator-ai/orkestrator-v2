@@ -140,6 +140,27 @@ afterEach(() => {
   window.location.reload = originalReload;
 });
 
+test("aggregate projections retain bound-machine environment controls", () => {
+  const local = machineView({ bound: true });
+  const remote = machineView({
+    connectionId: "b",
+    backendId: "bk_b" as never,
+    projects: [],
+    environmentsByProject: new Map(),
+  });
+  for (const mode of ["activity", "project", "repository"] as const) {
+    const view = render(
+      <FederatedAggregateList
+        machines={[local, remote]}
+        mode={mode}
+        renderBoundEnvironment={(id) => <button aria-label={`Start local ${id}`}>Start</button>}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Start local env-1" })).toBeTruthy();
+    view.unmount();
+  }
+});
+
 describe("CL-05: machine identity visual rules", () => {
   test("CL-05: a decorative MachineDot is hidden from assistive technology", () => {
     render(<MachineDot colorToken="teal" machineName="Machine A" />);

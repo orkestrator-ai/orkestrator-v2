@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createHash, randomBytes } from "node:crypto";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, symlink, mkdir, readdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import { NodeFileTransfer } from "./node-file-transfer.js";
-import { NodeFiles, parseEnv, type NodeFileScope } from "./node-files.js";
+import { NodeFiles, parseEnv, seedFilesDir, type NodeFileScope } from "./node-files.js";
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -17,6 +17,7 @@ async function node(
   name: string,
   files: Record<string, string | Buffer> = {},
   filesToCopy: string[] = [],
+  uploadTtlMs?: number,
 ) {
   const root = await mkdtemp(path.join(os.tmpdir(), `ork-node-files-${name}-`));
   dirs.push(root);
@@ -28,10 +29,13 @@ async function node(
   const storage = {
     getDataDir: () => dataDir,
     getProject: async (id: string) => (id === "p1" ? { id, localPath: checkout } : null),
-    getEnvironment: async () => null,
+    getEnvironment: async (id: string) =>
+      id === "e1"
+        ? { id, projectId: "p1", environmentType: "local", worktreePath: checkout }
+        : null,
     getRepositoryConfig: async () => ({ filesToCopy }),
   };
-  const files_ = new NodeFiles(storage as never);
+  const files_ = new NodeFiles(storage as never, { uploadTtlMs });
   const commands: Record<string, (args: Record<string, unknown>) => Promise<unknown>> = {
     stat_node_file: (args) => files_.stat(args.scope as NodeFileScope, String(args.path)),
     read_node_file: (args) =>
@@ -207,6 +211,7 @@ describe("CO-06 interrogating an environment's diff, files and tests", () => {
         id === "e1"
           ? { id, projectId: "p1", environmentType: "local", worktreePath: worktree }
           : null,
+      getRepositoryConfig: async () => ({ filesToCopy: [] }),
       listBuildPipelines: async () => [
         {
           id: "bp1",
@@ -234,4 +239,107 @@ describe("CO-06 interrogating an environment's diff, files and tests", () => {
       },
     ]);
   });
+});
+
+describe("node file authorization and atomic dotenv regressions", () => {
+  test("dot segments and unknown seed IDs cannot read backend data", async () => {
+    const a = await node("seed");
+    await Bun.write(path.join(a.dataDir, "gateway-auth.json"), "private");
+    for (const id of [".", "..", "../x", "a/b", "unknown"]) {
+      await expect(
+        a.files.read({ seedEnvironmentId: id }, "gateway-auth.json", 0, 100),
+      ).rejects.toThrow();
+      await expect(
+        a.files.beginWrite({
+          scope: { seedEnvironmentId: id },
+          path: "x",
+          size: 0,
+          sha256: "0".repeat(64),
+          overwrite: true,
+        }),
+      ).rejects.toThrow();
+    }
+    expect(() => seedFilesDir(a.dataDir, "..")).toThrow();
+    expect(await readFile(path.join(a.dataDir, "gateway-auth.json"), "utf8")).toBe("private");
+  });
+
+  test("symlink rejection precedes creation of outside directories; Git writes are protected", async () => {
+    const a = await node("symlink");
+    const outside = path.join(a.dataDir, "outside");
+    await mkdir(outside, { recursive: true });
+    await symlink(outside, path.join(a.checkout, "escape"));
+    const git = path.join(a.checkout, ".git");
+    await mkdir(git);
+    await symlink(git, path.join(a.checkout, "metadata"));
+    for (const target of ["escape/new/sub/x", ".git/config", "metadata/new/sub/x"]) {
+      await expect(
+        a.files.beginWrite({
+          scope: { projectId: "p1" },
+          path: target,
+          size: 0,
+          sha256: "0".repeat(64),
+          overwrite: true,
+        }),
+      ).rejects.toThrow();
+    }
+    expect(await readdir(outside)).toEqual([]);
+    expect(await readdir(git)).toEqual([]);
+  });
+
+  test("environment detail reads refuse dotenv, selected secrets and directories", async () => {
+    const a = await node(
+      "details",
+      { ".env": "KEY=secret", ".env.local": "KEY=secret", "secret.pem": "private" },
+      ["secret.pem"],
+    );
+    for (const file of [".env", ".env.local", "secret.pem", "."]) {
+      await expect(
+        a.files.environmentDetails({ environmentId: "e1", include: ["file"], path: file }),
+      ).rejects.toThrow();
+    }
+  });
+
+  test("parallel updates preserve unrelated keys and remove stale duplicate overrides", async () => {
+    const a = await node("env", { ".env": "# header\nA=old\nA=stale\nKEEP=yes\n" });
+    await Promise.all([
+      a.files.applyEnvKeys("p1", ".env", { A: "approved" }, []),
+      a.files.applyEnvKeys("p1", ".env", { B: "new" }, []),
+    ]);
+    const text = await readFile(path.join(a.checkout, ".env"), "utf8");
+    expect(new Map(parseEnv(text))).toEqual(
+      new Map([
+        ["A", "approved"],
+        ["KEEP", "yes"],
+        ["B", "new"],
+      ]),
+    );
+    expect(text.match(/^A=/gm)).toHaveLength(1);
+    await a.files.applyEnvKeys("p1", ".env.local", { CREATED: "yes" }, []);
+    expect(await readFile(path.join(a.checkout, ".env.local"), "utf8")).toBe("CREATED=yes\n");
+  });
+
+  test("read errors cannot replace an existing dotenv file", async () => {
+    const a = await node("read-error");
+    // A directory produces EISDIR even when tests run as root, unlike chmod.
+    await mkdir(path.join(a.checkout, ".env"));
+    await expect(a.files.applyEnvKeys("p1", ".env", { KEY: "new" }, [])).rejects.toThrow();
+    expect((await stat(path.join(a.checkout, ".env"))).isDirectory()).toBe(true);
+  });
+});
+
+test("abandoned uploads expire and remove worktree temporary files", async () => {
+  const a = await node("expiry", {}, [], 10);
+  const { uploadId } = await a.files.beginWrite({
+    scope: { projectId: "p1" },
+    path: "partial",
+    size: 3,
+    sha256: "0".repeat(64),
+    overwrite: false,
+  });
+  await a.files.appendWrite(uploadId, Buffer.from("a").toString("base64"));
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  expect(
+    (await readdir(a.checkout)).some((entry) => entry.startsWith(".orkestrator-upload-")),
+  ).toBe(false);
+  await expect(a.files.commitWrite(uploadId)).rejects.toThrow("not open");
 });

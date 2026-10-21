@@ -65,11 +65,11 @@ export function exposeActiveConnectionGateway(
   contextBridge: { exposeInMainWorld(key: string, value: unknown): void },
   ipcRenderer: { sendSync(channel: string): unknown },
 ): boolean {
-  let connectionList: ConnectionList;
+  let connectionList: ConnectionList | null = null;
   try {
     connectionList = parseConnectionList(ipcRenderer.sendSync("orkestrator:connections:list-sync"));
   } catch {
-    return false;
+    // A workspace snapshot is authoritative even without a saved catalogue.
   }
   const snapshot = readGatewaySnapshot(ipcRenderer);
   if (snapshot) {
@@ -82,9 +82,9 @@ export function exposeActiveConnectionGateway(
       panel: snapshot.panel,
     });
   }
-  const activeConnection = connectionList.connections.find((connection) => connection.active);
-  if (activeConnection?.kind !== "remote") return false;
-  const baseUrl = snapshot?.baseUrl ?? activeConnection.address;
+  const activeConnection = connectionList?.connections.find((connection) => connection.active);
+  if (!snapshot?.baseUrl && activeConnection?.kind !== "remote") return false;
+  const baseUrl = snapshot?.baseUrl ?? activeConnection?.address;
   if (!baseUrl) return false;
   contextBridge.exposeInMainWorld("orkestratorGateway", {
     enabled: true,

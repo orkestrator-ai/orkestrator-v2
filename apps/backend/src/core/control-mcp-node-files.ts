@@ -120,13 +120,35 @@ export function registerNodeFileTools(
     };
   };
 
-  const endpoint = async (input: z.infer<typeof endpointSchema>, self: NodeStatus) => {
+  const endpoint = async (
+    input: z.infer<typeof endpointSchema>,
+    self: NodeStatus,
+    destination = false,
+  ) => {
+    const project = await projectOn(input.nodeId, self);
+    if (!project.projectId) throw new Error("That node has no copy of this project.");
     if (input.projectRoot) {
-      const project = await projectOn(input.nodeId, self);
-      if (!project.projectId) throw new Error(`${project.nodeName} has no copy of this project.`);
+      if (destination)
+        throw new Error("Project checkout updates require request_project_file_update approval.");
       return { nodeId: input.nodeId, scope: { projectId: project.projectId } };
     }
     if (!input.environmentId) throw new Error("Name an environmentId, or set projectRoot.");
+    const environment =
+      input.nodeId === self.nodeId
+        ? await invoke<unknown>("get_environment", { environmentId: input.environmentId })
+        : (
+            await invoke<NodeSummariesResult>("get_node_summaries", { nodeIds: [input.nodeId] })
+          ).nodes
+            .find((node) => node.nodeId === input.nodeId)
+            ?.environments.find((entry) => entry.ref.environmentId === input.environmentId);
+    if (
+      !isRecord(environment) ||
+      environment.projectId !== project.projectId ||
+      environment.projectHome === true ||
+      environment.isProjectHome === true
+    ) {
+      throw new Error("Coordinator credential cannot access that environment or project home.");
+    }
     return { nodeId: input.nodeId, scope: { environmentId: input.environmentId } };
   };
 
@@ -149,7 +171,7 @@ export function registerNodeFileTools(
       const self = await status();
       const receipt = await invoke<JsonRecord>("transfer_node_files", {
         from: await endpoint(input.from, self),
-        to: await endpoint(input.to, self),
+        to: await endpoint(input.to, self, true),
         files: input.files,
         ...(input.toDirectory ? { toDirectory: input.toDirectory } : {}),
         overwrite: input.overwrite,

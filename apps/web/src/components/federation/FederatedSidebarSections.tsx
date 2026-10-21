@@ -1,3 +1,4 @@
+import { openMachineWorkspace } from "@/lib/federation/open-workspace";
 import { useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { ChevronDown, ChevronRight, FolderGit2, Plus, WifiOff } from "lucide-react";
@@ -13,7 +14,6 @@ import {
 import { createFederatedEnvironment } from "@/lib/federation/federated-actions";
 import { OutcomeUnknownError } from "@/lib/portal/portal-store";
 import { cn } from "@/lib/utils";
-import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useFederation } from "./FederationProvider";
 import { FederatedEnvironmentRow } from "./FederatedEnvironmentRow";
 import { MachineDot, machineStatusText } from "./MachineDot";
@@ -76,12 +76,14 @@ export function MachineSectionHeader({
 function ProjectInstance({
   group,
   showMachineLabel,
+  renderBoundEnvironment,
 }: {
+  renderBoundEnvironment?: (environmentId: string) => ReactNode;
   group: ProjectGroup;
   showMachineLabel: boolean;
 }) {
   const { portal } = useFederation();
-  const openPanel = useMachineViewStore((state) => state.openPanel);
+  const openPanel = openMachineWorkspace;
   const [collapsed, setCollapsed] = useState(false);
   const [creating, setCreating] = useState(false);
   const { machine, project, environments } = group;
@@ -154,16 +156,22 @@ function ProjectInstance({
         ) : null}
       </div>
       {!collapsed
-        ? environments.map((environment) => (
-            <FederatedEnvironmentRow
-              key={environment.key}
-              machine={machine}
-              project={null}
-              environment={environment}
-              showMachineLabel={false}
-              indented
-            />
-          ))
+        ? environments.map((environment) =>
+            machine.bound && renderBoundEnvironment ? (
+              <div key={environment.key}>
+                {renderBoundEnvironment(environment.ref.environmentId)}
+              </div>
+            ) : (
+              <FederatedEnvironmentRow
+                key={environment.key}
+                machine={machine}
+                project={null}
+                environment={environment}
+                showMachineLabel={false}
+                indented
+              />
+            ),
+          )
         : null}
       {!collapsed && environments.length === 0 ? (
         <p className="px-9 py-1 text-xs text-muted-foreground">No environments</p>
@@ -239,7 +247,9 @@ export function RemoteMachineSection({ machine }: { machine: MachineView }) {
 export function FederatedAggregateList({
   machines,
   mode,
+  renderBoundEnvironment,
 }: {
+  renderBoundEnvironment?: (environmentId: string) => ReactNode;
   machines: readonly MachineView[];
   mode: "project" | "repository" | "activity";
 }) {
@@ -250,15 +260,21 @@ export function FederatedAggregateList({
         {rows.length === 0 ? (
           <p className="px-4 py-6 text-center text-sm text-muted-foreground">No environments yet</p>
         ) : (
-          rows.map((row) => (
-            <FederatedEnvironmentRow
-              key={row.environment.key}
-              machine={row.machine}
-              project={row.project}
-              environment={row.environment}
-              showMachineLabel
-            />
-          ))
+          rows.map((row) =>
+            row.machine.bound && renderBoundEnvironment ? (
+              <div key={row.environment.key}>
+                {renderBoundEnvironment(row.environment.ref.environmentId)}
+              </div>
+            ) : (
+              <FederatedEnvironmentRow
+                key={row.environment.key}
+                machine={row.machine}
+                project={row.project}
+                environment={row.environment}
+                showMachineLabel
+              />
+            ),
+          )
         )}
       </div>
     );
@@ -277,7 +293,12 @@ export function FederatedAggregateList({
               </div>
             ) : null}
             {group.projects.map((project) => (
-              <ProjectInstance key={project.project.key} group={project} showMachineLabel />
+              <ProjectInstance
+                key={project.project.key}
+                group={project}
+                showMachineLabel
+                renderBoundEnvironment={renderBoundEnvironment}
+              />
             ))}
           </div>
         ))}
@@ -287,7 +308,12 @@ export function FederatedAggregateList({
   return (
     <div className="py-1" data-testid="federated-project-list">
       {groupByProject(machines).map((group) => (
-        <ProjectInstance key={group.project.key} group={group} showMachineLabel />
+        <ProjectInstance
+          key={group.project.key}
+          group={group}
+          showMachineLabel
+          renderBoundEnvironment={renderBoundEnvironment}
+        />
       ))}
     </div>
   );

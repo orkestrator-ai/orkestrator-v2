@@ -235,12 +235,24 @@ export function registerNodeCommands(register: CommandRegistrar): void {
   });
 
   register("ack_node_outbox", async (args, context) => {
-    assertOnlyKeys(args, ["controllerId", "upTo"], "arguments");
+    assertOnlyKeys(args, ["controllerId", "upTo", "sequences"], "arguments");
     if (!isBackendId(args.controllerId)) throw new Error("Expected controllerId.");
     if (typeof args.upTo !== "number" || !Number.isSafeInteger(args.upTo)) {
       throw new Error("Expected upTo.");
     }
-    return coordination(context).leafMail.ack(args.controllerId, args.upTo);
+    const sequences = args.sequences;
+    if (
+      sequences !== undefined &&
+      (!Array.isArray(sequences) ||
+        sequences.length > 50 ||
+        !sequences.every((seq) => Number.isSafeInteger(seq) && seq > 0))
+    )
+      throw new Error("Invalid mail sequences.");
+    return coordination(context).leafMail.ack(
+      args.controllerId,
+      args.upTo,
+      sequences as number[] | undefined,
+    );
   });
 
   // Action requests (command node): coordinators ask, the user decides.

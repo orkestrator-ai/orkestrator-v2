@@ -133,6 +133,8 @@ type RemoteConnection = {
   generation: string | null;
   streamFailures: number;
   handover: Promise<void> | null;
+  workspaceNodeId?: string;
+  onWorkspaceUnavailable?: () => void;
 };
 
 /** Connection IDs of panel scopes bound to another node's workspace. */
@@ -731,19 +733,26 @@ export class ConnectionManager {
     scope = DEFAULT_CONNECTION_SCOPE,
   ): Promise<ConnectionList> {
     const generation = this.captureScopeGeneration(scope);
-    this.assertScopeGeneration(scope, generation);
-    const backend = this.requireBackend(connectionId);
-    if (!backend.routes.some((route) => route.id === routeId)) {
-      throw new Error("That connection method no longer exists.");
-    }
-    this.blockedRoutes(connectionId).delete(routeId);
-    const established = await this.establish(backend, {
-      interactive: true,
-      onlyRouteId: routeId as RouteId,
+    return this.enqueueScope(scope, async () => {
+      this.assertScopeGeneration(scope, generation);
+      const backend = this.requireBackend(connectionId);
+      if (!backend.routes.some((route) => route.id === routeId)) {
+        throw new Error("That connection method no longer exists.");
+      }
+      this.blockedRoutes(connectionId).delete(routeId);
+      const established = await this.establish(backend, {
+        interactive: true,
+        onlyRouteId: routeId as RouteId,
+      });
+      try {
+        this.assertScopeGeneration(scope, generation);
+      } catch (error) {
+        established.transport.release();
+        throw error;
+      }
+      this.adoptEstablished(connectionId, established, true);
+      return this.getList(scope);
     });
-    this.assertScopeGeneration(scope, generation);
-    this.adoptEstablished(connectionId, established, true);
-    return this.getList(scope);
   }
 
   async setAutoConnect(
@@ -824,7 +833,8 @@ export class ConnectionManager {
       if (!route) throw new Error("That saved connection no longer exists.");
 
       const token = normalizeGatewayToken(value);
-      const reusesTransport = remote?.routeId === route.id;
+      if (!route.enabled) throw new Error("Enable that route before updating its credential.");
+      const reusesTransport = remote?.routeId === route.id && !remote.client.isSuspended;
       const transport = reusesTransport
         ? { baseUrl: remote.client.origin, release: () => undefined }
         : await openRoute(route, { interactive: true, ssh: this.sshTunnels });
@@ -866,7 +876,10 @@ export class ConnectionManager {
       this.assertScopeGeneration(scope, generation);
       this.sessionTokens.set(route.id, token);
       this.statuses.get(connectionId)?.blockedRoutes.delete(route.id);
-      if (remote && remote.routeId === route.id) this.retargetRemote(remote, null, token, false);
+      if (remote && remote.routeId === route.id) {
+        if (reusesTransport) this.retargetRemote(remote, null, token, false);
+        else this.startHandover(connectionId, "credentials-changed");
+      }
       this.emitStateChange();
       return this.getList(scope);
     });
@@ -886,11 +899,14 @@ export class ConnectionManager {
     const backend = this.findBackend(connectionId);
     if (!backend) return false;
     const remote = this.remoteConnections.get(connectionId);
-    if (remote) return this.checkStatus(remote.client.origin, remote.token, timeoutMs);
+    if (remote)
+      return remote.client.isSuspended
+        ? false
+        : this.checkStatus(remote.client.origin, remote.token, timeoutMs);
     // Probing an unconnected machine never opens a tunnel: only an HTTPS
     // route with a credential can be probed cheaply.
     const route = primaryHttpsRoute(backend);
-    if (!route) return false;
+    if (!route?.enabled) return false;
     try {
       const token = await this.resolveToken(route, false);
       if (!token) return false;
@@ -936,7 +952,7 @@ export class ConnectionManager {
   /** Current origin of a scope's bound machine; ephemeral for a tunnelled route. */
   getGatewayBaseUrl(scope = DEFAULT_CONNECTION_SCOPE): string | null {
     const remote = this.remoteForScope(scope);
-    return remote ? remote.client.origin : null;
+    return remote && !remote.client.isSuspended ? remote.transport.baseUrl : null;
   }
 
   handleLocalEvent(event: string, payload: unknown): void {
@@ -981,12 +997,14 @@ export class ConnectionManager {
     scope = DEFAULT_CONNECTION_SCOPE,
   ): string | null {
     const activeRemote = this.remoteForScope(scope);
-    if (!activeRemote) return null;
+    if (!activeRemote || activeRemote.client.isSuspended) return null;
     try {
       const url = new URL(urlValue);
       if (
         url.origin !== activeRemote.client.origin ||
-        !url.pathname.startsWith("/__orkestrator/")
+        !url.pathname.startsWith(
+          `${new URL(activeRemote.transport.baseUrl).pathname.replace(/\/$/, "")}/__orkestrator/`,
+        )
       ) {
         return null;
       }
@@ -1096,9 +1114,10 @@ export class ConnectionManager {
     return {
       connectionId,
       backendId:
-        backend?.verifiedInstallationId && status?.identity !== "conflict"
+        this.remoteConnections.get(connectionId)?.workspaceNodeId ??
+        (backend?.verifiedInstallationId && status?.identity !== "conflict"
           ? backend.verifiedInstallationId
-          : null,
+          : null),
       legacyOrigin: backend ? backendAddress(backend) : null,
     };
   }
@@ -1140,7 +1159,13 @@ export class ConnectionManager {
    */
   bindWorkspace(
     scope: string,
-    input: { workspaceId: string; baseUrl: string; token: string },
+    input: {
+      workspaceId: string;
+      baseUrl: string;
+      token: string;
+      nodeId?: string;
+      onUnavailable?: () => void;
+    },
   ): void {
     if (!scope || scope === DEFAULT_CONNECTION_SCOPE || this.scopeGenerations.has(scope)) {
       throw new Error("Connection scope is already active.");
@@ -1153,6 +1178,8 @@ export class ConnectionManager {
     const client = new BackendHttpClient(input.baseUrl, input.token);
     const remote: RemoteConnection = {
       connectionId,
+      ...(input.nodeId ? { workspaceNodeId: input.nodeId } : {}),
+      ...(input.onUnavailable ? { onWorkspaceUnavailable: input.onUnavailable } : {}),
       routeId: "workspace" as RouteId,
       client,
       token: input.token,
@@ -1174,6 +1201,14 @@ export class ConnectionManager {
       },
       { onStreamState: (state) => this.handleStreamState(connectionId, client, state) },
     );
+  }
+
+  rebindWorkspace(scope: string, input: { baseUrl: string; token: string }): void {
+    const remote = this.remoteForScope(scope);
+    if (!remote?.connectionId.startsWith(WORKSPACE_CONNECTION_PREFIX))
+      throw new Error("Workspace is closed.");
+    remote.transport = { baseUrl: input.baseUrl, release: () => undefined };
+    this.retargetRemote(remote, input.baseUrl, input.token, false);
   }
 
   release(scope: string): void {
@@ -1379,7 +1414,12 @@ export class ConnectionManager {
       const sameRoute =
         existing.routeId === route.id &&
         existing.client.origin === new URL(transport.baseUrl).origin;
-      if (sameRoute && existing.token === token) {
+      if (
+        sameRoute &&
+        existing.token === token &&
+        !existing.client.isSuspended &&
+        generation === existing.generation
+      ) {
         if (existing.transport !== transport) transport.release();
         existing.generation = generation ?? existing.generation;
         return;
@@ -1444,6 +1484,7 @@ export class ConnectionManager {
       transport.onClosed?.((failure) => {
         const remote = this.remoteConnections.get(connectionId);
         if (!remote || remote.transport !== transport) return;
+        remote.client.suspend();
         this.setStatus(connectionId, {
           transport: "reconnecting",
           detail: sanitizeDiagnostic(failure.message),
@@ -1467,6 +1508,11 @@ export class ConnectionManager {
       return;
     }
     remote.streamFailures += 1;
+    if (remote.onWorkspaceUnavailable) {
+      remote.client.suspend();
+      remote.onWorkspaceUnavailable();
+      return;
+    }
     this.setStatus(connectionId, {
       transport: "reconnecting",
       detail: "Connection lost; reconnecting.",
@@ -1492,16 +1538,32 @@ export class ConnectionManager {
    */
   private startHandover(connectionId: string, _reason: string): void {
     const remote = this.remoteConnections.get(connectionId);
-    if (!remote || remote.handover) return;
+    if (!remote) return;
     const backend = this.findBackend(connectionId);
     if (!backend) return;
     remote.epoch = this.nextEpoch++;
+    const activeRoute = backend.routes.find((route) => route.id === remote.routeId);
+    if (!activeRoute?.enabled || _reason === "transport-closed") {
+      remote.client.suspend();
+      remote.unsubscribeTransport?.();
+      remote.unsubscribeTransport = null;
+      remote.transport.release();
+    }
+    if (remote.handover) return;
     remote.handover = (async () => {
       try {
         const established = await this.establish(backend, {
           interactive: false,
           preferRouteId: remote.routeId,
         });
+        if (
+          !this.findBackend(connectionId)?.routes.some(
+            (route) => route.id === established.route.id && route.enabled,
+          )
+        ) {
+          established.transport.release();
+          throw routeError("route-disabled", "The route was disabled while connecting.", true);
+        }
         if (this.remoteConnections.get(connectionId) !== remote) {
           established.transport.release();
           return;
@@ -1510,6 +1572,7 @@ export class ConnectionManager {
         this.setStatus(connectionId, { transport: "connected", detail: undefined });
         this.reconnects.cancel(connectionId);
       } catch (error) {
+        if (!classifyRouteFailure(error).retryable) remote.client.suspend();
         this.recordFailure(connectionId, error);
       } finally {
         if (this.remoteConnections.get(connectionId) === remote) remote.handover = null;

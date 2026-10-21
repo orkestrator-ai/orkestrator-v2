@@ -282,6 +282,7 @@ function FramePanelView({ spec, title }: { spec: MachinePanelSpec; title: string
       title={title}
       src={browserPanelUrl({
         workspaceId: workspace.workspaceId,
+        nodeId: workspace.nodeId,
         connection: workspace,
         ...(spec.projectId ? { projectId: spec.projectId } : {}),
         ...(spec.environmentId ? { environmentId: spec.environmentId } : {}),

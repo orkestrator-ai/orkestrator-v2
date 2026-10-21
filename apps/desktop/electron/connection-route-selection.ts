@@ -77,9 +77,11 @@ export async function establishRoute(
     let token: string | null;
     try {
       token = await context.resolveToken(route);
-    } catch (error) {
-      lastError = error;
-      continue;
+    } catch {
+      throw connectionCheckError(
+        "authentication-required",
+        "The route credential could not be resolved.",
+      );
     }
     if (!token) {
       lastError = connectionCheckError(

@@ -1,3 +1,4 @@
+import { openMachineWorkspace } from "@/lib/federation/open-workspace";
 import { useState } from "react";
 import { toast } from "sonner";
 import {
@@ -42,9 +43,6 @@ import {
   stopFederatedEnvironment,
 } from "@/lib/federation/federated-actions";
 import { OutcomeUnknownError } from "@/lib/portal/portal-store";
-import { browserPanelUrl } from "@/lib/federation/panel-realm";
-import { openLeafWorkspace, storeWorkspaceForFrame } from "@/lib/portal/workspaces";
-import { MOBILE_SHELL_MEDIA_QUERY } from "@/components/layout/MobileAppShellLayout";
 import { cn } from "@/lib/utils";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useUIStore } from "@/stores";
@@ -79,9 +77,9 @@ export function FederatedEnvironmentRow({
   /** Nested under a project heading. */
   indented?: boolean;
 }) {
-  const { portal, kind, boundMachine } = useFederation();
+  const { portal } = useFederation();
   const compact = useMachineViewStore((state) => state.compactMachineLabels);
-  const openPanel = useMachineViewStore((state) => state.openPanel);
+  const openPanel = openMachineWorkspace;
   const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
   const selectProjectAndEnvironment = useUIStore((state) => state.selectProjectAndEnvironment);
   const [pendingDelete, setPendingDelete] = useState<EnvironmentRef | null>(null);
@@ -103,33 +101,6 @@ export function FederatedEnvironmentRow({
   const open = () => {
     if (machine.bound) {
       selectProjectAndEnvironment(environment.projectId, environment.ref.environmentId);
-      return;
-    }
-    // A phone-sized hosted page has no room for side panels: the machine's
-    // workspace opens in its own tab instead (same direct session).
-    if (kind === "browser" && window.matchMedia?.(MOBILE_SHELL_MEDIA_QUERY).matches) {
-      // The tab is opened now (inside the click) and pointed at the workspace
-      // once the command node has issued its grant. The grant goes into that
-      // tab's own session storage, never into its URL.
-      const tab = window.open("about:blank", "_blank");
-      void openLeafWorkspace(machine.backendId, { commandNodeName: boundMachine?.name ?? "" })
-        .then((workspace) => {
-          storeWorkspaceForFrame(workspace, tab ?? window);
-          const url = browserPanelUrl({
-            workspaceId: workspace.workspaceId,
-            connection: workspace,
-            projectId: environment.projectId,
-            environmentId: environment.ref.environmentId,
-          });
-          if (tab) tab.location.href = url;
-          else window.location.href = url;
-        })
-        .catch((error: unknown) => {
-          tab?.close();
-          toast.error(`Could not open ${environment.name} on ${machine.name}`, {
-            description: error instanceof Error ? error.message : String(error),
-          });
-        });
       return;
     }
     openPanel({

@@ -121,13 +121,14 @@ export class NodeProjectFiles {
     const seed = await invoke<Array<{ path: string; exists: boolean }>>("get_project_seed_files", {
       projectId: leafProjectId,
     });
-    const leafMissing = seed.filter((entry) => !entry.exists).map((entry) => entry.path);
+    const selected = await this.selectedFiles(local.id);
+    const leafMissing = seed
+      .filter((entry) => !entry.exists && selected.includes(entry.path))
+      .map((entry) => entry.path);
     const wanted = [
       ...new Set([
         ...leafMissing,
-        ...(await this.selectedFiles(local.id)).filter(
-          (entry) => !seed.some((item) => item.path === entry),
-        ),
+        ...selected.filter((entry) => !seed.some((item) => item.path === entry)),
       ]),
     ];
     const available: string[] = [];

@@ -174,6 +174,7 @@ describe("SSH prompt broker", () => {
 describe("backend panel views", () => {
   function fakes() {
     const views: Array<{
+      options: { webPreferences: Record<string, unknown> };
       webContents: {
         id: number;
         loaded?: string;
@@ -226,7 +227,9 @@ describe("backend panel views", () => {
         send: (_channel: string, payload: unknown) => sent.push(payload),
       },
     };
-    const bindScope = mock(async () => undefined);
+    const bindScope = mock(
+      async (_scope: string, _connectionId: string, _parentWebContentsId: number) => undefined,
+    );
     const releaseScope = mock(() => undefined);
     const register = mock(() => undefined);
     const unregister = mock(() => undefined);
@@ -246,6 +249,26 @@ describe("backend panel views", () => {
     return { panels, parent, views, bindScope, releaseScope, register, unregister, sent };
   }
 
+  test("two panels on the same node retain shared machine storage and independent lifetimes", async () => {
+    const { panels, parent, views, releaseScope } = fakes();
+    const first = await panels.open(parent as never, {
+      connectionId: "leaf",
+      projectId: "p",
+      environmentId: "e1",
+    });
+    await panels.open(parent as never, {
+      connectionId: "leaf",
+      projectId: "p",
+      environmentId: "e2",
+    });
+    expect(views[0]!.options.webPreferences.partition).toBe(
+      views[1]!.options.webPreferences.partition,
+    );
+    panels.close(parent.webContents.id, first.panelId);
+    expect(releaseScope).toHaveBeenCalledTimes(1);
+    expect(views[1]!.webContents.closed).toBe(false);
+  });
+
   test("each panel is its own renderer bound to its own machine scope", async () => {
     const { panels, parent, views, bindScope } = fakes();
     const { panelId } = await panels.open(parent as never, {
@@ -253,7 +276,7 @@ describe("backend panel views", () => {
       projectId: "p1",
       environmentId: "e1",
     });
-    expect(bindScope).toHaveBeenCalledWith(`panel:${panelId}`, "machine-b");
+    expect(bindScope).toHaveBeenCalledWith(`panel:${panelId}`, "machine-b", parent.webContents.id);
     const view = views[0] as never as {
       options: { webPreferences: Record<string, unknown> };
       webContents: { loaded: string };

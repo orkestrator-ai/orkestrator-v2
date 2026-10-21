@@ -243,3 +243,20 @@ describe("CO-04 action requests", () => {
     expect(resolved.result).toEqual({ code: "node-unavailable", message: "node unavailable" });
   });
 });
+
+test("outbox dedupe is scoped to sender and rejects conflicting request reuse", async () => {
+  const { mail } = leaf(["bk_cmd"]);
+  const item = { requestId: "same", fromEnvironmentId: "e1", fromTabId: "t1", body: "one" };
+  const first = await mail.enqueue("bk_cmd" as never, item);
+  expect((await mail.enqueue("bk_cmd" as never, item)).seq).toBe(first.seq);
+  expect((await mail.enqueue("bk_cmd" as never, { ...item, fromTabId: "t2" })).seq).not.toBe(
+    first.seq,
+  );
+  await expect(mail.enqueue("bk_cmd" as never, { ...item, body: "different" })).rejects.toThrow(
+    "Conflicting",
+  );
+  await mail.ack("bk_cmd" as never, 0, [first.seq + 1]);
+  expect((await mail.collect("bk_cmd" as never, 0)).items.map((entry) => entry.seq)).toEqual([
+    first.seq,
+  ]);
+});

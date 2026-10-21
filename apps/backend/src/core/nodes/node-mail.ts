@@ -141,15 +141,28 @@ export class LeafNodeMail {
     const bytes = Buffer.byteLength(item.body, "utf8");
     const queued = await this.store.mutate((state) => {
       const current = state.outbox[controllerId] ?? { nextSeq: 1, items: [] };
+      const duplicate = current.items.find(
+        (entry) =>
+          entry.requestId === item.requestId &&
+          entry.fromEnvironmentId === item.fromEnvironmentId &&
+          entry.fromTabId === item.fromTabId,
+      );
+      if (duplicate) {
+        if (
+          duplicate.body !== item.body ||
+          duplicate.subject !== item.subject ||
+          JSON.stringify(duplicate.toCoordinator) !== JSON.stringify(item.toCoordinator) ||
+          duplicate.repositoryHint !== item.repositoryHint
+        )
+          throw new Error("Conflicting mail request ID.");
+        return { next: null, result: duplicate };
+      }
       const total = current.items.reduce((sum, entry) => sum + entry.bytes, 0);
       if (current.items.length >= MAX_OUTBOX_ITEMS || total + bytes > MAX_OUTBOX_BYTES) {
         throw new Error(
           "The outbox for that command node is full; it will be delivered once the command node collects its mail.",
         );
       }
-      // An identical retry (same request ID) is not queued twice.
-      const duplicate = current.items.find((entry) => entry.requestId === item.requestId);
-      if (duplicate) return { next: null, result: duplicate };
       const entry: OutboxItem = {
         ...item,
         seq: current.nextSeq,
@@ -181,11 +194,17 @@ export class LeafNodeMail {
   }
 
   /** The command node delivered everything up to `upTo`. */
-  async ack(controllerId: BackendId, upTo: number): Promise<{ remaining: number }> {
+  async ack(
+    controllerId: BackendId,
+    upTo: number,
+    sequences?: number[],
+  ): Promise<{ remaining: number }> {
     return this.store.mutate((state) => {
       const current = state.outbox[controllerId];
       if (!current) return { next: null, result: { remaining: 0 } };
-      const items = current.items.filter((entry) => entry.seq > upTo);
+      const items = current.items.filter((entry) =>
+        sequences ? !sequences.includes(entry.seq) : entry.seq > upTo,
+      );
       if (items.length === current.items.length) {
         return { next: null, result: { remaining: items.length } };
       }

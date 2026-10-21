@@ -9,7 +9,7 @@
  * and the path in use is shown in the workspace's info panel.
  */
 
-import { BACKEND_HELLO_PATH } from "@orkestrator/protocol/backend-profile";
+import { BACKEND_HELLO_PATH, parseBackendHello } from "@orkestrator/protocol/backend-profile";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { invoke } from "@/lib/native/backend";
 
@@ -48,7 +48,7 @@ const DIRECT_PROBE_TIMEOUT_MS = 3_000;
 /** Renew well before the 15-minute grant lapses. */
 export const WORKSPACE_RENEW_INTERVAL_MS = 10 * 60_000;
 
-async function reachable(origin: string, token: string): Promise<boolean> {
+async function reachable(origin: string, token: string, nodeId: string): Promise<boolean> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), DIRECT_PROBE_TIMEOUT_MS);
   try {
@@ -58,7 +58,9 @@ async function reachable(origin: string, token: string): Promise<boolean> {
       redirect: "manual",
       signal: controller.signal,
     });
-    return response.ok;
+    if (!response.ok) return false;
+    const hello = parseBackendHello(await response.json());
+    return hello?.installationId === nodeId && hello?.endpointRole === "client";
   } catch {
     return false;
   } finally {
@@ -77,7 +79,7 @@ export async function openLeafWorkspace(
   const opened = await invoke<OpenedNodeWorkspace>("open_node_workspace", { nodeId });
   const probe = options.probe ?? reachable;
   for (const origin of opened.directOrigins) {
-    if (await probe(origin, opened.grant.token)) {
+    if (await probe(origin, opened.grant.token, opened.nodeId)) {
       return {
         workspaceId: opened.workspaceId,
         nodeId,

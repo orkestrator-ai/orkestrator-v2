@@ -6,7 +6,7 @@ import {
   relayHttp,
   relayUpgrade,
 } from "./core/nodes/node-relay.js";
-import { isNodeExcludedCommand } from "./core/nodes/node-routing.js";
+import { isWorkspaceExcludedCommand } from "./core/nodes/node-routing.js";
 
 /** Routes a client grant (leaf workspace) may use: the client API only. */
 const GRANT_ALLOWED_PATHS = [
@@ -511,7 +511,7 @@ export class GatewayAuth {
         request,
         response,
         requestMetrics,
-        viaGrant ? { refuseCommand: isNodeExcludedCommand } : undefined,
+        viaGrant ? { refuseCommand: isWorkspaceExcludedCommand } : undefined,
       );
       return;
     }

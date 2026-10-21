@@ -29,7 +29,7 @@ function storageFor(projectId: string, dir: string, dataDir: string, filesToCopy
     getProject: async (id: string) =>
       id === projectId ? { id, localPath: dir, gitUrl: GIT_URL } : null,
     loadProjects: async () => [{ id: projectId, localPath: dir, gitUrl: GIT_URL }],
-    getEnvironment: async () => null,
+    getEnvironment: async (id: string) => (id === "env-1" ? { id, projectId } : null),
     getRepositoryConfig: async () => ({ filesToCopy }),
   };
 }
@@ -78,6 +78,7 @@ async function world(options: {
   local: Record<string, string>;
   leaf: Record<string, string>;
   filesToCopy?: string[];
+  leafFilesToCopy?: string[];
 }) {
   const local = await checkout("command", options.local);
   const leaf = await checkout("leaf", options.leaf);
@@ -94,7 +95,7 @@ async function world(options: {
       "p-leaf",
       leaf.dir,
       path.join(leaf.root, "data"),
-      options.filesToCopy ?? [],
+      options.leafFilesToCopy ?? options.filesToCopy ?? [],
     ) as never,
   );
   const leafInvoke = fileCommands(leafFiles);
@@ -254,4 +255,19 @@ describe("FL-08/FL-07 approved updates and reveals", () => {
     expect(delivered).toHaveLength(1);
     expect(delivered[0]!.body).toBe("TOKEN (.env on Build box) = abc");
   });
+});
+
+test("only command-selected paths can be seeded and the completed manifest includes command-only files", async () => {
+  const { projectFiles, leaf } = await world({
+    local: { "config/only.json": "selected", "secret.pem": "unselected" },
+    leaf: {},
+    filesToCopy: ["config/only.json"],
+    leafFilesToCopy: ["secret.pem"],
+  });
+  await projectFiles.seedEnvironment("bk_leaf" as never, "p-leaf", "env-1");
+  const root = path.join(leaf.root, "data", "node-seed", "env-1");
+  expect(await readFile(path.join(root, "config/only.json"), "utf8")).toBe("selected");
+  await expect(readFile(path.join(root, "secret.pem"))).rejects.toThrow();
+  const { readSeedManifest } = await import("./node-seed.js");
+  expect(await readSeedManifest(root)).toEqual(["config/only.json"]);
 });

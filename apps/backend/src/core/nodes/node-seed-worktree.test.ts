@@ -82,3 +82,24 @@ describe("FL-03/FL-04/FL-05 seed files in a leaf environment's worktree", () => 
     ).rejects.toThrow("Configured file to copy not found");
   });
 });
+
+test("command-only selected seed files reach a worktree with an empty leaf selection", async () => {
+  const { root, project } = await repository({});
+  const seed = path.join(root, "seed");
+  await fs.mkdir(path.join(seed, "config"), { recursive: true });
+  await fs.writeFile(path.join(seed, "config/command.json"), "command-only");
+  const { recordSeedFile } = await import("./node-seed.js");
+  await recordSeedFile(seed, "config/command.json");
+  const worktree = await createLocalWorktree(
+    project,
+    "site",
+    "command-only",
+    "main",
+    [],
+    path.join(root, "worktrees"),
+    seed,
+  );
+  expect(await fs.readFile(path.join(worktree.path, "config/command.json"), "utf8")).toBe(
+    "command-only",
+  );
+});

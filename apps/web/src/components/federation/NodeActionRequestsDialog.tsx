@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   AlertDialog,
@@ -15,7 +15,7 @@ import {
   resolveNodeActionRequest,
   type NodeActionRequestView,
 } from "@/lib/portal/portal-store";
-import { listen } from "@/lib/native/events";
+import { listenAuthoritative } from "@/lib/native/authoritative-events";
 import { useFederation } from "./FederationProvider";
 
 export const NODE_ACTION_REQUESTS_CHANGED_EVENT = "node-action-requests-changed";
@@ -50,18 +50,24 @@ export function NodeActionRequestsDialog() {
   const [pending, setPending] = useState<NodeActionRequestView[]>([]);
   const [busy, setBusy] = useState(false);
 
+  const revision = useRef(0);
   const refresh = useCallback(() => {
+    const request = ++revision.current;
     void listNodeActionRequests()
-      .then(setPending)
+      .then((value) => {
+        if (revision.current === request) setPending(value);
+      })
       .catch(() => undefined);
   }, []);
 
   useEffect(() => {
     if (kind === "none") return;
-    refresh();
     let stop: (() => void) | null = null;
     let active = true;
-    void listen(NODE_ACTION_REQUESTS_CHANGED_EVENT, refresh).then((unlisten) => {
+    void listenAuthoritative(NODE_ACTION_REQUESTS_CHANGED_EVENT, refresh, {
+      onResync: refresh,
+      resyncOnSubscribe: true,
+    }).then((unlisten) => {
       if (active) stop = unlisten;
       else unlisten();
     });

@@ -92,6 +92,7 @@ import {
 } from "./commands-container-exec.js";
 import { copyConfiguredProjectFilesToDirectory } from "./commands-project-files.js";
 import { seedFilesDir } from "./nodes/node-files.js";
+import { readSeedManifest } from "./nodes/node-seed.js";
 import {
   isProjectHomeEnvironment,
   reconcileProjectHomeEnvironment,
@@ -1639,6 +1640,9 @@ export async function startEnvironmentOnce(
     await syncPrMonitorTracking(context);
     return result;
   } catch (error) {
+    await fs
+      .rm(seedFilesDir(storage.getDataDir(), environment.id), { recursive: true, force: true })
+      .catch(() => undefined);
     logEnvironmentLifecycleFailure("start", environment.id, error);
     const lifecycleError = environmentLifecycleErrorMessage(error);
     if (unpersistedWorktree) {
@@ -2239,7 +2243,12 @@ export async function createLocalWorktree(
       else if (seeded && (await pathExists(seeded))) await fs.copyFile(seeded, destination);
     }
 
-    await copyConfiguredProjectFilesToDirectory(projectPath, worktreePath, filesToCopy, seedRoot);
+    await copyConfiguredProjectFilesToDirectory(
+      projectPath,
+      worktreePath,
+      [...new Set([...(filesToCopy ?? []), ...(seedRoot ? await readSeedManifest(seedRoot) : [])])],
+      seedRoot,
+    );
 
     return { path: worktreePath, branch: finalBranch, createdFromCommit };
   } catch (error) {

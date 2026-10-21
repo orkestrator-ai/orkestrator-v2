@@ -52,6 +52,7 @@ export interface NodeServiceStorage {
   getNodeRegistry(): Promise<NodeRegistry>;
   mutateNodeRegistry<T>(
     mutate: (current: NodeRegistry) => NodeStoreMutation<NodeRegistry, T>,
+    beforeApply?: () => void,
   ): Promise<T>;
   getNodeAttachments(): Promise<NodeAttachments>;
   mutateNodeAttachments<T>(
@@ -660,7 +661,7 @@ export class NodeService {
       link.stop("connecting");
       await link.start({ interactive: true });
     }
-    return this.getNode(view.nodeId);
+    return this.getNode(link?.nodeId ?? view.nodeId);
   }
 
   /**
@@ -796,6 +797,7 @@ export class NodeService {
 
   private async mutateRegistry<T>(
     mutate: (current: NodeRegistry) => NodeStoreMutation<NodeRegistry, T>,
+    beforeApply?: () => void,
   ): Promise<T> {
     let written: NodeRegistry | null = null;
     const result = await this.storage.mutateNodeRegistry((current) => {
@@ -805,6 +807,7 @@ export class NodeService {
     });
     if (written) {
       this.registry = written;
+      beforeApply?.();
       this.applyMode();
       this.publishNodes();
     }
@@ -904,7 +907,7 @@ export class NodeService {
 
   private createLink(record: NodeRecord): NodeLink {
     const nodeId = record.nodeId;
-    return new NodeLink(record, {
+    const link = new NodeLink(record, {
       selfId: this.selfId!,
       attachInfo: async () => ({
         displayName: (await this.storage.getBackendProfile()).displayName,
@@ -915,9 +918,10 @@ export class NodeService {
       ...(this.options.timers ? { timers: this.options.timers } : {}),
       ...(this.options.heartbeatMs ? { heartbeatMs: this.options.heartbeatMs } : {}),
       onChange: () => this.publishNodes(),
-      onVerified: (update) => void this.recordVerified(nodeId, update),
-      onIdentity: (installationId) => this.adoptIdentity(nodeId, installationId),
+      onVerified: (update) => void this.recordVerified(link.nodeId, update),
+      onIdentity: (installationId) => this.adoptIdentity(link.nodeId, installationId),
     });
+    return link;
   }
 
   private async recordVerified(
@@ -966,22 +970,32 @@ export class NodeService {
     if (this.attachments.controllers.some((entry) => entry.controllerId === installationId)) {
       return "refused";
     }
-    const adopted = await this.mutateRegistry((registry) => {
-      if (registry.nodes.some((node) => node.nodeId === installationId)) {
-        return { next: null, result: false };
-      }
-      const node = registry.nodes.find((entry) => entry.nodeId === provisionalId);
-      if (!node) return { next: null, result: false };
-      return {
-        next: {
-          ...registry,
-          nodes: registry.nodes.map((entry) =>
-            entry.nodeId === provisionalId ? { ...entry, nodeId: installationId } : entry,
-          ),
-        },
-        result: true,
-      };
-    });
+    const adopted = await this.mutateRegistry(
+      (registry) => {
+        if (registry.nodes.some((node) => node.nodeId === installationId)) {
+          return { next: null, result: false };
+        }
+        const node = registry.nodes.find((entry) => entry.nodeId === provisionalId);
+        if (!node) return { next: null, result: false };
+        return {
+          next: {
+            ...registry,
+            nodes: registry.nodes.map((entry) =>
+              entry.nodeId === provisionalId ? { ...entry, nodeId: installationId } : entry,
+            ),
+          },
+          result: true,
+        };
+      },
+      () => {
+        const link = this.links.get(provisionalId);
+        if (link) {
+          this.links.delete(provisionalId);
+          this.links.set(installationId, link);
+          link.adoptIdentity(installationId);
+        }
+      },
+    );
     return adopted ? "adopted" : "refused";
   }
 

@@ -117,7 +117,13 @@ export function EnvironmentInputsSection({
                   <span>
                     {providerLabel(entry.provider)} · {entry.files} files ·{" "}
                     {formatBytes(entry.bytes)}
-                    {skipped > 0 ? ` · ${skipped} skipped (links, oversized or unreadable)` : ""}
+                    {skipped > 0 ? ` · ${skipped} skipped` : ""}
+                    {(entry.skipped["login-withheld"] ?? 0) > 0 ? (
+                      <span className="block text-muted-foreground">
+                        Login withheld. Sign in to {providerLabel(entry.provider)} on the host, then
+                        restart the container or sync its login.
+                      </span>
+                    ) : null}
                   </span>
                   {entry.provider !== "git" ? (
                     <Button

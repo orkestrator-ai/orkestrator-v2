@@ -3,6 +3,8 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+import { withDockerScript } from "../../tests/container-lifecycle-fixtures.js";
+import { revokeProviderCredentials } from "./portable-input-status.js";
 import { staleLoginEnvironmentIds } from "./agent-account-bridge-state.js";
 import {
   activeAgentAccountInputRoots,
@@ -141,7 +143,12 @@ beforeEach(async () => {
   liveWork = false;
   const overrides = {
     loadConfig: async () => ({ global: { enabledAgentPlatforms: ["claude", "codex"] } }),
-    loadEnvironments: async () => [environment],
+    loadEnvironments: async () => [structuredClone(environment)],
+    getEnvironment: async () => structuredClone(environment),
+    updateEnvironment: async (_id: string, update: Partial<Environment>) => {
+      environment = { ...environment, ...update };
+      return structuredClone(environment);
+    },
   };
   context = {
     storage: Object.assign(Object.create(storage), overrides),
@@ -731,6 +738,78 @@ describe("syncContainerGrokLogin", () => {
     });
     expect(fake.calls[0]!.stdin).not.toContain("SENTINEL");
   });
+
+  for (const pauseAt of ["authorization", "delivery"] as const) {
+    test(`revocation fences an in-flight Grok sync paused at ${pauseAt}`, async () => {
+      enableGrok();
+      await write(
+        grokAuth(),
+        JSON.stringify({
+          live: { key: "access", expires_at: new Date(Date.now() + 3600_000).toISOString() },
+        }),
+      );
+      const paused = Promise.withResolvers<void>();
+      const resume = Promise.withResolvers<void>();
+      const revoked = Promise.withResolvers<void>();
+      const update = context.storage.updateEnvironment.bind(context.storage);
+      context.storage.updateEnvironment = async (...args) => {
+        const result = await update(...args);
+        revoked.resolve();
+        return result;
+      };
+      const fake = fakeRunners(null);
+      let credentialPresent = false;
+      if (pauseAt === "authorization") {
+        context.storage.getEnvironment = async () => {
+          paused.resolve();
+          await resume.promise;
+          return structuredClone(environment);
+        };
+      } else {
+        fake.runners.pipe = async () => {
+          paused.resolve();
+          await resume.promise;
+          credentialPresent = true;
+        };
+      }
+      await withDockerScript(
+        `#!/bin/sh
+case "$*" in *"rm -f"*) printf 'removed\\n' >> "$FAKE_DOCKER_LOG" ;; esac
+exit 0
+`,
+        async (log) => {
+          // A shortened Docker ID must serialize with revocation's persisted ID.
+          const sync = syncContainerGrokLogin(context, "container-", fake.runners);
+          await paused.promise;
+          // Revocation's own lookup must remain available while sync is paused.
+          context.storage.getEnvironment = async () => structuredClone(environment);
+          let cleanupComplete = false;
+          const revoke = revokeProviderCredentials(environment.id, "grok", context).then(
+            (result) => {
+              cleanupComplete = true;
+              credentialPresent = false;
+              return result;
+            },
+          );
+          try {
+            await revoked.promise;
+            expect(cleanupComplete).toBe(false);
+            expect(await log.read()).toBe("");
+          } finally {
+            resume.resolve();
+          }
+          await sync;
+          expect((await revoke).removed).toBe(true);
+          expect(await log.read()).toContain("removed");
+          expect(credentialPresent).toBe(false);
+          if (pauseAt === "authorization") expect(fake.calls).toEqual([]);
+          // A later sync cannot restore the revoked credential either.
+          await syncContainerGrokLogin(context, "container-1", fake.runners);
+          expect(credentialPresent).toBe(false);
+        },
+      );
+    });
+  }
 
   test("an expired or absent host login leaves the container's copy alone", async () => {
     enableGrok();

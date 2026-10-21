@@ -30,6 +30,10 @@ import {
   type InputSourceRoots,
 } from "./portable-inputs.js";
 import { containerLabel, providerCredentialsAllowed } from "./portable-input-status.js";
+import {
+  containerBridgeOperationId,
+  enqueueContainerBridgeOperation,
+} from "./container-bridge-operations.js";
 import { staleLoginEnvironmentIds } from "./agent-account-bridge-state.js";
 import { prepareAgentAccountHome } from "./agent-accounts-homes.js";
 import { readAddedClaudeCredentials, resolveActiveAgentAccount } from "./agent-accounts-active.js";
@@ -275,6 +279,18 @@ export async function syncContainerGrokLogin(
   containerId: string,
   runners: ContainerRunners = defaultRunners,
 ): Promise<void> {
+  const operationId = await containerBridgeOperationId(context, containerId);
+  return enqueueContainerBridgeOperation("grok", operationId, () =>
+    syncContainerGrokLoginUnlocked(context, containerId, runners),
+  );
+}
+
+/** Caller holds the Grok bridge-operation queue through sync and bridge startup. */
+export async function syncContainerGrokLoginUnlocked(
+  context: CommandContext,
+  containerId: string,
+  runners: ContainerRunners = defaultRunners,
+): Promise<void> {
   try {
     const environment = (await context.storage.loadEnvironments()).find(
       (candidate) =>
@@ -289,7 +305,19 @@ export async function syncContainerGrokLogin(
       "grok",
       await readLoginFile(hostStagingSources(context).grokAuth),
     );
-    if (auth) await runners.pipe(containerId, SYNC_CONTAINER_GROK_AUTH_COMMAND, auth);
+    // Revocation is persisted before its queued cleanup. Re-read after host I/O
+    // so a revoke requested during the read also fences this delivery.
+    const current = await context.storage.getEnvironment(environment.id);
+    const config = await context.storage.loadConfig();
+    if (
+      auth &&
+      current &&
+      current.containerId &&
+      containerIdMatches(current.containerId, containerId) &&
+      providerCredentialsAllowed(context, config.global.enabledAgentPlatforms, current, "grok")
+    ) {
+      await runners.pipe(containerId, SYNC_CONTAINER_GROK_AUTH_COMMAND, auth);
+    }
   } catch (error) {
     logFailure("Failed to sync the Grok login into the container", error);
   }

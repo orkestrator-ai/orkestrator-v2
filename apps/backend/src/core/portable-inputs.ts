@@ -495,6 +495,15 @@ class ProviderCopier {
     this.summary.skipped[reason] = (this.summary.skipped[reason] ?? 0) + count;
   }
 
+  adjustLogin(adjustment: { withheld: boolean; originalBytes: number; bytes: number }): void {
+    const files = adjustment.withheld ? -1 : 0;
+    const bytes = adjustment.bytes - adjustment.originalBytes;
+    this.summary.files += files;
+    this.summary.bytes += bytes;
+    this.total.take(files, bytes);
+    if (adjustment.withheld) this.skip("login-withheld");
+  }
+
   private record(files: number, bytes: number): void {
     this.summary.files += files;
     this.summary.bytes += bytes;
@@ -668,11 +677,15 @@ export async function stagePortableInputs(
         const root = await realpath(source.root).catch(() => null);
         if (!root) continue;
         const stageRoot = path.join(partial, source.stage);
-        for (const file of source.files ?? []) await copier.file(root, file, stageRoot);
-        if (source.accessOnlyLogin && source.files?.includes(source.accessOnlyLogin.file)) {
-          const staged = path.join(stageRoot, source.accessOnlyLogin.file);
-          if (!(await restrictStagedLogin(staged, source.accessOnlyLogin.restrict, now))) {
-            copier.skip("login-withheld");
+        for (const file of source.files ?? []) {
+          await copier.file(root, file, stageRoot);
+          if (source.accessOnlyLogin?.file === file) {
+            const adjustment = await restrictStagedLogin(
+              path.join(stageRoot, file),
+              source.accessOnlyLogin.restrict,
+              now,
+            );
+            if (adjustment) copier.adjustLogin(adjustment);
           }
         }
         for (const directory of source.directories ?? []) {
@@ -739,25 +752,26 @@ export async function stagePortableInputs(
 }
 
 /**
- * Rewrite a just-staged login file access-only, or remove it. Returns false
- * when the login was withheld; an absent file is not a withheld login.
+ * Rewrite a just-staged login file access-only, or remove it, returning the
+ * accounting adjustment. An absent file was never counted and needs no adjustment.
  */
 async function restrictStagedLogin(
   file: string,
   restrict: AccessOnlyLoginRestriction,
   now: Date,
-): Promise<boolean> {
-  const text = await readFile(file, "utf8").catch(() => undefined);
-  if (text === undefined) return true;
-  const restricted = restrict(text, now.getTime());
+): Promise<{ withheld: boolean; originalBytes: number; bytes: number } | undefined> {
+  const contents = await readFile(file).catch(() => undefined);
+  if (contents === undefined) return undefined;
+  const originalBytes = contents.byteLength;
+  const restricted = restrict(contents.toString("utf8"), now.getTime());
   if ("withheld" in restricted) {
     await rm(file, { force: true });
-    return false;
+    return { withheld: true, originalBytes, bytes: 0 };
   }
   // The staged copy is private to this revision and not yet mounted.
   await rm(file, { force: true });
   await writeFile(file, restricted.text, { mode: 0o600, flag: "wx" });
-  return true;
+  return { withheld: false, originalBytes, bytes: Buffer.byteLength(restricted.text) };
 }
 
 /**

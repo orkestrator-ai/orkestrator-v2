@@ -1,3 +1,4 @@
+import { containerBridgeOperationId } from "./container-bridge-operations.js";
 import type { CommandContext } from "./commands-context.js";
 import {
   boundedBackgroundLaunch,
@@ -66,7 +67,7 @@ import {
 } from "./commands-helpers.js";
 import {
   reconcileContainerAgentAccount,
-  syncContainerGrokLogin,
+  syncContainerGrokLoginUnlocked,
   type ContainerBridgeControl,
 } from "./agent-accounts-containers.js";
 
@@ -474,10 +475,11 @@ export function registerServerCommands(
       provider === "cursor"
         ? "[c]ursor-bridge/dist/index.js"
         : "[a]cp-bridge/dist/index.js --provider=grok";
-    register(`start_${provider}_server`, ({ containerId }, context) => {
+    register(`start_${provider}_server`, async ({ containerId }, context) => {
       const id = asString(containerId, "containerId");
       probeContainerAgentTools(context, id);
-      return enqueueContainerBridgeOperation(provider, id, async () => {
+      const operationId = provider === "grok" ? await containerBridgeOperationId(context, id) : id;
+      return enqueueContainerBridgeOperation(provider, operationId, async () => {
         const bridgeConfig = await context.storage.loadConfig();
         const cursorApiKey =
           provider === "cursor" ? resolveCursorApiKey(bridgeConfig.global).apiKey : undefined;
@@ -488,7 +490,7 @@ export function registerServerCommands(
           await syncContainerCursorApiKey(id, cursorApiKey);
           await syncContainerCursorSdkCredentials(id, await cursorSdkStoredApiKey(context));
         }
-        if (provider === "grok") await syncContainerGrokLogin(context, id);
+        if (provider === "grok") await syncContainerGrokLoginUnlocked(context, id);
         const hostPort = await getHostPort(id, containerPort);
         if (hostPort && (await checkHttpHealth(hostPort))) {
           const credentialFingerprint =
@@ -560,9 +562,10 @@ export function registerServerCommands(
         return { ...started, authToken: token };
       });
     });
-    register(`stop_${provider}_server`, ({ containerId }) => {
+    register(`stop_${provider}_server`, async ({ containerId }, context) => {
       const id = asString(containerId, "containerId");
-      return enqueueContainerBridgeOperation(provider, id, () =>
+      const operationId = provider === "grok" ? await containerBridgeOperationId(context, id) : id;
+      return enqueueContainerBridgeOperation(provider, operationId, () =>
         dockerExec(
           id,
           `pkill -f '${bridgePattern}' || true; rm -f ${tokenFile}` +

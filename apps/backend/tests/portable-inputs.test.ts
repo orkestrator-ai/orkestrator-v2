@@ -191,6 +191,18 @@ describe("portable input staging", () => {
       await fs.readFile(path.join(staged.directory, "grok-home", "auth.json"), "utf8"),
     );
     expect(grok.live).toMatchObject({ key: "grok-access", refresh_token: "" });
+    for (const provider of ["codex", "grok"] as const) {
+      const files = await listFiles(path.join(staged.directory, `${provider}-home`));
+      const bytes = (
+        await Promise.all(
+          files.map((file) => fs.stat(path.join(staged.directory, `${provider}-home`, file))),
+        )
+      ).reduce((sum, stat) => sum + stat.size, 0);
+      expect(staged.providers.find((entry) => entry.provider === provider)).toMatchObject({
+        files: files.length,
+        bytes,
+      });
+    }
     for (const file of await listFiles(staged.directory)) {
       expect(await fs.readFile(path.join(staged.directory, file), "utf8")).not.toContain(
         "SENTINEL",
@@ -209,9 +221,59 @@ describe("portable input staging", () => {
       new Set(["grok"] as const),
       roots,
       now,
+      // The withheld login must release its budget before config is copied.
+      { ...INPUT_LIMITS, totalEntries: 1 },
     );
     expect(await listFiles(expired.directory)).toEqual(["grok-home/config.toml", "manifest.json"]);
-    expect(expired.providers[0]!.skipped["login-withheld"]).toBe(1);
+    expect(expired.providers[0]).toEqual({
+      provider: "grok",
+      files: 1,
+      bytes: Buffer.byteLength("model = 'x'"),
+      skipped: { "login-withheld": 1 },
+    });
+    expect((await readInputsManifest(dataDir, "env-expired", expired.revision))?.providers).toEqual(
+      expired.providers,
+    );
+    // Codex is subject to the same withholding and accounting rules.
+    await write(
+      path.join(home, ".codex", "auth.json"),
+      JSON.stringify({
+        tokens: {
+          access_token: `h.${Buffer.from(JSON.stringify({ exp: now.getTime() / 1000 - 3600 })).toString("base64url")}.s`,
+          refresh_token: "SENTINEL",
+        },
+      }),
+    );
+    const expiredCodex = await stagePortableInputs(
+      dataDir,
+      "env-expired-codex",
+      new Set(["codex"]),
+      roots,
+      now,
+    );
+    expect(expiredCodex.providers[0]).toEqual({
+      provider: "codex",
+      files: 0,
+      bytes: 0,
+      skipped: { "login-withheld": 1 },
+    });
+  });
+
+  test("withheld non-UTF-8 logins do not leave negative byte totals", async () => {
+    const { dataDir, roots, home } = await fixtureHome();
+    await write(path.join(home, ".grok", "auth.json"), Buffer.from([0xff]));
+    const staged = await stagePortableInputs(
+      dataDir,
+      "env-invalid-login",
+      new Set(["grok"]),
+      roots,
+    );
+    expect(staged.providers[0]).toEqual({
+      provider: "grok",
+      files: 0,
+      bytes: 0,
+      skipped: { "login-withheld": 1 },
+    });
   });
 
   test("a symlinked ancestor below the home entry is never followed", async () => {

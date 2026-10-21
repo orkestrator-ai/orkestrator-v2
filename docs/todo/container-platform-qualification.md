@@ -380,13 +380,22 @@ live-work guard saw them.
    the container's Codex account marker, and a missing marker reads as the
    host login. Switching back to the host then matched that marker, so
    nothing was pushed and turns kept running on account B until the next
-   restart. Reproduced live. Now the restage records the marker of the
-   account it staged (captured before the login is read) and the start path
-   writes it. When no login was staged it writes a marker that never matches,
-   so the next bridge start pushes the active login or removes the stale
-   copy. Older images and starts with no restage still clear the marker.
-   Re-run live on the fixed backend: the marker named B after the restart, and
-   the switch back pushed the host login.
+   restart. Reproduced live. A first fix recorded the staged account in an
+   in-process map for the start path to write, and was re-run live (the
+   marker named B after the restart, and the switch back pushed the host
+   login). Multi Review then found four ways that hint could still name the
+   wrong login: the marker and the login came from two registry reads; a
+   start of an already-running container restaged without importing; a lost
+   hint cleared the marker; and a failure after `docker start` left the old
+   marker. Now staging never names an account. A real start (the container
+   was stopped) sets the Codex marker to `unstaged`, a value no account
+   matches, right after `docker start` and before any later step can fail;
+   the entrypoint does the same before it imports, so a backend that dies
+   mid-start is covered too. The next idle bridge start then pushes the
+   active login and writes its marker, taking the account, home and
+   generation from one registry read. A start of a running container leaves
+   the login and marker alone. The revised design has unit and registry
+   fixture coverage but has not been re-run live.
 2. **A lapsed Codex login read as "temporarily unavailable".** Codex 0.162.1
    answers `account/read` with an RPC error ("workspace routing discovery
    unauthorized (401)") rather than a signed-out account once its token is
@@ -400,15 +409,22 @@ live-work guard saw them.
 
 ### Decisions
 
-1. **Where to record the staged account.** Options: an in-process map from
-   container to marker, filled by the restage and taken by the start; a marker
-   file inside the staged revision copied by the entrypoint; or writing the
-   current active account's marker at start. The map needs no image change,
-   and capturing before the read keeps a switch during the restage
-   correctable. Writing the current account at start would claim an account
-   switched to after the restage. A backend restart between restage and start
-   loses the entry, which costs one redundant push. Switching later to a file
-   in the revision means an entrypoint change.
+1. **How the start path records the installed Codex account.** Options: an
+   in-process map from container to marker, filled by the restage and taken
+   by the start (the first fix); a marker file inside the staged revision
+   copied by the entrypoint; writing the current active account's marker at
+   start; or never naming an account at start, invalidating the marker on a
+   real start and letting the next idle bridge start reconcile. The map
+   needed no image change, but review showed it can be lost, consumed by an
+   overlapping start, or applied when nothing was imported. A file in the
+   revision still trusts that the entrypoint ran and imported it, and the
+   current account at start can name an account switched to after the
+   restage. We chose invalidation: only a push the backend made itself
+   writes a real marker. It costs one access-only Codex login push on the
+   first bridge start after each real start, for users who have used
+   accounts, and a one-line entrypoint change (the backend write covers
+   older images). Going back to a hint means re-solving the four review
+   findings.
 2. **Codex sign-out detection.** Options: map only `account/read` errors that
    say `unauthorized (401)`, `HTTP 401` or `401 Unauthorized` to signed out;
    or treat every account read failure as signed out. Only the first keeps a

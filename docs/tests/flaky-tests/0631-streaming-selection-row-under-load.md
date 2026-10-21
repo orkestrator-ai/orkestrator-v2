@@ -1,6 +1,6 @@
 # Streaming transcript selection loses row zero before selection setup
 
-- **ID:** 0628
+- **ID:** 0631
 - **Status:** open
 - **Date observed:** 2026-10-21
 - **Test:** `[desktop-chromium] › a selection in the first row survives clipped overscan up to the protection bound`

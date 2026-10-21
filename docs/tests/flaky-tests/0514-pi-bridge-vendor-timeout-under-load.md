@@ -27,6 +27,23 @@
 - The unchanged owning file passed all four cases with `mise run test:logged -- --name pi-runtime-isolated -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` (14.5 s).
 - Evidence: `orkestrator-test-run.yUSMGF/root-and-agent-support-tests.log.gz` under the host temporary directory. Staging under concurrent host load remains the hypothesis; no Pi implementation or test changed.
 
+## Image-preview layout validation recurrence — 2026-10-21
+
+- `mise run test:logged -- --name root-tests -- mise run test` repeated the
+  30-second vendoring timeout (30000.51 ms). The root/support group used one
+  worker and reported 3171 passed, one skipped and two failed across 3174 tests
+  in 330.47 seconds. The other failure was the already registered Virtuoso
+  watch-window case 0381; the aggregate also reported 12 backend failures not
+  classified as flakes by this observation.
+- The unchanged owning file passed alone:
+  `mise run test:logged -- --name pi-vendor-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures`
+  (exit 0, 10.5 seconds).
+- Evidence: the host temporary directory
+  `orkestrator-test-run.awrt02/root-and-agent-support-tests.log.gz`, with outer
+  summary in `orkestrator-test-run.T8dkv2/root-tests.log.gz`.
+- Host contention remains a hypothesis. No vendoring implementation, assertion,
+  timeout or skip changed.
+
 ## Remote sidebar reorder review observation — 2026-10-21
 
 - `mise run test:logged -- --name reorder-suite -- mise run test` hit the 30-second vendoring deadline (30000.07 ms) in the root/support group.

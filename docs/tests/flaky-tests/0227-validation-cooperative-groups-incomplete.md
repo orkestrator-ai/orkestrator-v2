@@ -48,3 +48,12 @@
 ## Agent-mail main merge recurrence — 2026-10-19
 
 The aggregate failed this owner and its unchanged owning file passed with one worker. Exact commands, symptoms, counts, timings and bounded evidence are recorded in [0500](0500-agent-mail-main-merge-validation.md). No implementation, assertion, timeout or skip changed.
+
+## ScheduleWakeup follow-up main merge — 2026-10-21
+
+- **Original command:** the testing guide's GNU-tool PATH with `mise run test:logged -- --name merge-full-tests -- mise run test`.
+- **Workers:** workspace/root/bridge/protocol reservations 4/1/2/1; backend used two isolated workers, alongside component and isolated-stack browser checks.
+- **Failure:** `cooperative parallel groups do not multiply queue or execution deadlines` returned `incomplete` instead of `passed` at line 1167 (1846.13 ms). The preceding queued-state assertions passed.
+- **Owning-file rerun:** `mise run test:logged -- --name merge-validation-worker-owner -- bun test --cwd apps/backend ./src/core/review-validation-worker.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed the complete unchanged owner (exit 0, 40.3 seconds logged).
+- **Evidence:** `orkestrator-test-run.d10zQ4/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory. Aggregate counts are recorded in [0630](0630-modal-width-main-merge-validation.md).
+- **Assessment:** confirms intermittent deadline behavior. Host contention remains an unproven hypothesis; no source, assertion, deadline or skip changed.

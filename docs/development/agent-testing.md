@@ -513,7 +513,13 @@ the newest row without a reload, keeps its transcript token, and settles to
 conditional `unchanged` reads. A reload then repaints the same newest row.
 The model writes each marker as a sum it computes, so only an assistant row
 can contain it. Only the newest row is checked on screen, because the list is
-virtualized; every marker is checked in order in the backend rows.
+virtualized; every marker is checked in order in the conditional reader's
+retained rows. The reader validates delta base tokens and applies the shared
+protocol delta helper. Each case must observe a new task running while the
+foreground is idle, its later completion, and a post-idle transcript update.
+The launching row must have its final state and deferred report output. Forced
+snapshots independently compare against the retained view without repairing it.
+Active idle checks require unchanged polls for both transcript and session state.
 `ORKESTRATOR_AGENT_TEST_REVISION_MODEL` overrides the model (default Haiku).
 Each read the page sends for the session is recorded as a content-free
 timeline annotation in `results.json`.

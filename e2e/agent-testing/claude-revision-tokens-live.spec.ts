@@ -36,7 +36,12 @@ import { expect, test, type Locator, type Page, type Request } from "@playwright
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
-import { DEFAULT_NATIVE_AGENT_LIVE_WINDOW } from "@orkestrator/protocol/native-agent";
+import {
+  TokenReader,
+  TaskCaseEvidence,
+  rowText,
+  type Row,
+} from "./claude-revision-token-reader.js";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 
 type Status = {
@@ -48,30 +53,6 @@ type Status = {
 type Project = { id: string; name: string; localPath: string | null };
 type Environment = { id: string; name: string; worktreePath?: string | null };
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
-type Row = { id?: unknown; role?: unknown; content?: unknown; parts?: unknown };
-type UpdateStatus = "snapshot" | "delta" | "unchanged" | "missing" | "unavailable";
-type TranscriptUpdate = {
-  status: UpdateStatus;
-  token?: string;
-  value?: { messages: Row[] };
-  error?: string;
-};
-type BackgroundTask = { id: string; status: string; toolUseId?: string };
-type StateUpdate = {
-  status: UpdateStatus;
-  token?: string;
-  value?: {
-    turn: { phase: string; error?: string };
-    backgroundTasks?: BackgroundTask[];
-    completionBlockedByBackgroundTasks?: boolean;
-  };
-  error?: string;
-};
-type Identity = {
-  environmentId: string;
-  agent: "claude";
-  logicalSessionKey: string;
-};
 type BrowserRead = {
   at: number;
   command: string;
@@ -97,7 +78,6 @@ const ACTIVE_IDLE_WATCH_MS = 12_000;
 /** A remount, and a dev profile's StrictMode double mount, settles well within this. */
 const REMOUNT_SETTLE_MS = 2_000;
 const SETTLE_TIMEOUT_MS = 8 * 60_000;
-const SETTLED_TASK = new Set(["completed", "failed", "killed"]);
 const SIDE_TAB_TITLE = "Side tab";
 
 test.describe.configure({ mode: "serial" });
@@ -146,20 +126,6 @@ function note(type: string, value: unknown): void {
     type,
     description: typeof value === "string" ? value : JSON.stringify(value),
   });
-}
-
-function rowText(row: Row): string {
-  if (typeof row.content === "string" && row.content) return row.content;
-  if (!Array.isArray(row.parts)) return "";
-  return row.parts
-    .map((part) => {
-      const { text, content } = (part ?? {}) as {
-        text?: unknown;
-        content?: unknown;
-      };
-      return typeof text === "string" ? text : typeof content === "string" ? content : "";
-    })
-    .join("");
 }
 
 function counts(values: string[]): Record<string, number> {
@@ -237,74 +203,6 @@ function readTimeline(reads: BrowserRead[], from: number, to = Number.POSITIVE_I
           read.forced ? "forced" : read.conditional ? "token" : "no-token"
         }`,
     );
-}
-
-/**
- * A client of one session that keeps its last tokens, as a mounted view does.
- * Content checks use separate forced snapshots, which leave these tokens alone.
- */
-class TokenReader {
-  transcriptToken: string | undefined;
-  stateToken: string | undefined;
-  phase: string | undefined;
-  tasks: BackgroundTask[] = [];
-  readonly log: Array<{
-    at: number;
-    transcript: UpdateStatus;
-    state: UpdateStatus;
-    phase?: string;
-    tasks: string;
-  }> = [];
-
-  constructor(
-    private readonly invoke: Invoke,
-    private readonly identity: Identity,
-  ) {}
-
-  async read() {
-    const transcript = await this.invoke<TranscriptUpdate>(TRANSCRIPT_COMMAND, {
-      ...this.identity,
-      viewVersion: 1,
-      liveWindow: DEFAULT_NATIVE_AGENT_LIVE_WINDOW,
-      ...(this.transcriptToken ? { knownToken: this.transcriptToken } : {}),
-    });
-    const state = await this.invoke<StateUpdate>(STATE_COMMAND, {
-      ...this.identity,
-      viewVersion: 1,
-      ...(this.stateToken ? { knownToken: this.stateToken } : {}),
-    });
-    expect(["snapshot", "delta", "unchanged"], transcript.error ?? "").toContain(transcript.status);
-    expect(["snapshot", "unchanged"], state.error ?? "").toContain(state.status);
-    if (transcript.token) this.transcriptToken = transcript.token;
-    if (state.token) this.stateToken = state.token;
-    if (state.status === "snapshot" && state.value) {
-      this.phase = state.value.turn.phase;
-      if (this.phase === "error") {
-        throw new Error(`Claude turn failed: ${state.value.turn.error ?? "no error"}`);
-      }
-      this.tasks = state.value.backgroundTasks ?? [];
-    }
-    const entry = {
-      at: Date.now(),
-      transcript: transcript.status,
-      state: state.status,
-      phase: this.phase,
-      tasks: this.tasks.map((task) => task.status).join(","),
-    };
-    this.log.push(entry);
-    return entry;
-  }
-
-  async forcedRows(): Promise<Row[]> {
-    const update = await this.invoke<TranscriptUpdate>(TRANSCRIPT_COMMAND, {
-      ...this.identity,
-      viewVersion: 1,
-      liveWindow: DEFAULT_NATIVE_AGENT_LIVE_WINDOW,
-      forceSnapshot: true,
-    });
-    expect(update.status, update.error ?? "").toBe("snapshot");
-    return update.value!.messages;
-  }
 }
 
 async function openApp(page: Page, status: Status, fixture: Project, environmentName: string) {
@@ -442,28 +340,22 @@ async function send(page: Page, prompt: string) {
 async function readUntilSettled(reader: TokenReader, finalMarker: string, label: string) {
   const started = Date.now();
   let quiet = 0;
-  let sawTask = false;
-  let sawRunningTask = false;
+  const evidence = new TaskCaseEvidence(reader.tasks);
   let markerAt: number | undefined;
-  let changesAfterIdle = 0;
-  let idleSince: number | undefined;
   while (Date.now() - started < SETTLE_TIMEOUT_MS) {
     const entry = await reader.read();
-    if (reader.tasks.length > 0) sawTask = true;
-    if (reader.tasks.some((task) => !SETTLED_TASK.has(task.status))) sawRunningTask = true;
+    evidence.observe(reader, entry.transcript !== "unchanged");
     const changed = entry.transcript !== "unchanged" || entry.state !== "unchanged";
-    if (entry.phase === "idle" && idleSince === undefined) idleSince = entry.at;
-    if (changed && idleSince !== undefined && entry.at > idleSince) changesAfterIdle += 1;
-    if (changed && markerAt === undefined && entry.transcript !== "unchanged") {
-      const rows = await reader.forcedRows();
-      if (rows.some((row) => row.role === "assistant" && rowText(row).includes(finalMarker))) {
-        markerAt = entry.at;
-      }
-    }
+    if (
+      markerAt === undefined &&
+      reader.rows.some((row) => row.role === "assistant" && rowText(row).includes(finalMarker))
+    )
+      markerAt = entry.at;
     const settled =
       entry.phase === "idle" &&
       markerAt !== undefined &&
-      reader.tasks.every((task) => SETTLED_TASK.has(task.status));
+      evidence.settledTask !== undefined &&
+      reader.tasks.every((task) => ["completed", "failed", "killed"].includes(task.status));
     quiet = settled && !changed ? quiet + 1 : 0;
     if (quiet >= QUIET_READS) break;
     await new Promise((resolve) => setTimeout(resolve, READER_INTERVAL_MS));
@@ -474,19 +366,18 @@ async function readUntilSettled(reader: TokenReader, finalMarker: string, label:
     seconds: Math.round((Date.now() - started) / 1_000),
     transcript: counts(reads.map((entry) => entry.transcript)),
     state: counts(reads.map((entry) => entry.state)),
-    sawTask,
-    sawRunningTask,
+    sawNewTaskComplete: evidence.settledTask !== undefined,
     finalTasks: reader.tasks.map((task) => task.status),
     markerSeconds: markerAt === undefined ? null : Math.round((markerAt - started) / 1_000),
-    changesAfterFirstIdle: changesAfterIdle,
+    changesAfterFirstIdle: evidence.changesAfterIdle,
     trailingQuietReads: quiet,
   });
   expect(markerAt, `${label}: the final marker never reached the reader`).toBeDefined();
-  expect(sawTask, `${label}: no background task was ever reported`).toBe(true);
+  evidence.expectComplete();
   expect(quiet, `${label}: a settled session kept answering changes`).toBeGreaterThanOrEqual(
     QUIET_READS,
   );
-  return { reads };
+  return evidence.settledTask!;
 }
 
 /** The page sent nothing for the session from `from` on. */
@@ -501,8 +392,8 @@ function expectNoReads(reads: BrowserRead[], from: number, what: string) {
  *
  * Only the newest row is checked on screen: the list is virtualized, so an
  * older row may be scrolled out of the DOM; `expectMarkersInOrder` checks
- * the backend rows for every marker. A remount drops the session-state token
- * on purpose (`useNativeAgentSession` re-reads state a mount never saw), and
+ * the conditional reader rows for every marker. A remount drops the
+ * session-state token on purpose (`useNativeAgentSession` re-reads state a mount never saw), and
  * a dev profile renders under `React.StrictMode`, which mounts a view twice,
  * so the idle window starts once that settles. A transcript read keeps its
  * token across a tab switch and an environment switch; only a reload starts
@@ -548,6 +439,9 @@ async function expectViewCatchesUp(
   );
   expect(idle.transcript.unchanged ?? 0, `${label}: active idle reads re-sent content`).toBe(
     total(idle.transcript),
+  );
+  expect(total(idle.state), `${label}: an active idle view stopped reading state`).toBeGreaterThan(
+    0,
   );
   expect(idle.state.unchanged ?? 0, `${label}: active idle state reads re-sent state`).toBe(
     total(idle.state),
@@ -631,14 +525,12 @@ test.describe("Claude content-revision tokens, inactive views and background tas
       await tabs.side.click();
       await expect.poll(() => activeTabId(invoke, environment.id)).toBe("side-tab");
       const tabInactiveAt = Date.now();
-      await readUntilSettled(reader, markers.background, "inactive-tab");
+      const bashTask = await readUntilSettled(reader, markers.background, "inactive-tab");
+      await reader.expectTaskOutput(bashTask, "Bash", `bg-${nonce}`);
+      await reader.expectForcedComparison();
       note("inactive-tab-inactive-timeline", readTimeline(reads, tabInactiveAt));
       expectNoReads(reads, tabInactiveAt + DEACTIVATION_GRACE_MS, "an inactive tab");
-      expectMarkersInOrder(
-        await reader.forcedRows(),
-        [markers.turn1, markers.background],
-        "inactive-tab",
-      );
+      expectMarkersInOrder(reader.rows, [markers.turn1, markers.background], "inactive-tab");
 
       const tabActivatedAt = Date.now();
       await tabs.underTest.click();
@@ -662,7 +554,9 @@ test.describe("Claude content-revision tokens, inactive views and background tas
       await selectEnvironment(page, fixture, other.name);
       await expect(tabs.side).toBeHidden({ timeout: 30_000 });
       const environmentInactiveAt = Date.now();
-      await readUntilSettled(reader, markers.subagent, "inactive-environment");
+      const agentTask = await readUntilSettled(reader, markers.subagent, "inactive-environment");
+      await reader.expectTaskOutput(agentTask, "Agent", `sub-${nonce}`);
+      await reader.expectForcedComparison();
       note("inactive-environment-inactive-timeline", readTimeline(reads, environmentInactiveAt));
       expectNoReads(
         reads,
@@ -670,7 +564,7 @@ test.describe("Claude content-revision tokens, inactive views and background tas
         "a view in an inactive environment",
       );
       const allMarkers = [markers.turn1, markers.background, markers.turn2, markers.subagent];
-      expectMarkersInOrder(await reader.forcedRows(), allMarkers, "inactive-environment");
+      expectMarkersInOrder(reader.rows, allMarkers, "inactive-environment");
 
       const environmentActivatedAt = Date.now();
       await selectEnvironment(page, fixture, environment.name);
@@ -689,7 +583,8 @@ test.describe("Claude content-revision tokens, inactive views and background tas
       await expectViewCatchesUp(page, reads, markers.subagent, "reload", reloadedAt, {
         coldStart: true,
       });
-      const finalRows = await reader.forcedRows();
+      await reader.expectForcedComparison();
+      const finalRows = reader.rows;
       note("final-rows", { rows: finalRows.length });
       expectMarkersInOrder(finalRows, allMarkers, "final");
       const again = await reader.read();

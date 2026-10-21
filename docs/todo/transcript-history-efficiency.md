@@ -181,7 +181,10 @@ spec is `e2e/agent-testing/claude-revision-tokens-live.spec.ts`; how to run
 it is in
 [agent-testing.md](../development/agent-testing.md#live-revision-tokens-with-inactive-views).
 Content-free timelines are the annotations in
-`output/agent-testing/qa-revtok-run{1..4}-results.json`.
+`output/agent-testing/qa-revtok-run<N>/browser/results.json` (N = 1 through 4).
+These run artifacts are local and untracked. The historical runs below predate
+the stricter conditional-content and per-case lifecycle assertions; they do not
+qualify those new assertions.
 
 One session, two cases. In the first, a prompt starts a background Bash
 command (`sleep 45`) and the test switches to a second tab in the pane. In the

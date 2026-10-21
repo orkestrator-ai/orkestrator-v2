@@ -19,3 +19,10 @@ export const staleLoginLocalBridges = new Set<string>();
 
 /** In-process refresh hint; durable login generations and container markers recover missed hints after restart. */
 export const staleLoginEnvironmentIds = new Set<string>();
+
+/**
+ * The Codex account marker each container's last restage put in its staged
+ * login, by container id, until that start writes it into the container.
+ * Lost on restart, which only costs one redundant login push.
+ */
+export const stagedCodexMarkers = new Map<string, string>();

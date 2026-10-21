@@ -5,7 +5,7 @@ import path from "node:path";
 
 import { withDockerScript } from "../../tests/container-lifecycle-fixtures.js";
 import { revokeProviderCredentials } from "./portable-input-status.js";
-import { staleLoginEnvironmentIds } from "./agent-account-bridge-state.js";
+import { stagedCodexMarkers, staleLoginEnvironmentIds } from "./agent-account-bridge-state.js";
 import {
   activeAgentAccountInputRoots,
   markContainersForClaudeLoginRefresh,
@@ -141,6 +141,7 @@ beforeEach(async () => {
   await storage.init();
   environment = { ...createEnvironment("project-1"), containerId: "container-1" };
   liveWork = false;
+  stagedCodexMarkers.clear();
   const overrides = {
     loadConfig: async () => ({ global: { enabledAgentPlatforms: ["claude", "codex"] } }),
     loadEnvironments: async () => [structuredClone(environment)],
@@ -544,6 +545,109 @@ describe("reconcileContainerAgentAccount", () => {
     await reconcileContainerAgentAccount(context, "container-1", "codex", control, fake.runners);
     expect(fake.calls.filter((call) => call.kind === "pipe")).toHaveLength(1);
     expect(state.stopped).toBe(1);
+  });
+
+  test("a restart that restaged another account still switches back to the host", async () => {
+    const revision = await stage();
+    await addAccounts({ codex: CODEX_ID });
+    const fake = fakeRunners(revision);
+    const global = { enabledAgentPlatforms: ["claude", "codex"] } as never;
+    // Restart while the added account is active: the entrypoint imports its login.
+    await refreshStagedAgentAccountLogins(context, environment, "container-1", fake.runners);
+    await syncContainerAgentAccountsOnStart(
+      context,
+      environment,
+      "container-1",
+      global,
+      fake.runners,
+    );
+    expect(fake.markers.get("/tmp/orkestrator-codex-account")).toBe(CODEX_ID);
+
+    await storage.mutateAgentAccounts((store) => ({
+      store: { ...store, active: {} },
+      result: undefined,
+    }));
+    const { state, control } = bridge(true);
+    await reconcileContainerAgentAccount(context, "container-1", "codex", control, fake.runners);
+
+    const piped = fake.calls.filter((call) => call.command.includes(".codex/auth.json")).at(-1);
+    expect(piped?.stdin).toBe('{"OPENAI_API_KEY":"codex-host"}');
+    expect(fake.markers.get("/tmp/orkestrator-codex-account")).toBe("default");
+    expect(state.stopped).toBe(1);
+  });
+
+  test("a restart that staged no login leaves the next bridge start to correct the container", async () => {
+    const revision = await stage();
+    await addAccounts({});
+    const expired = `h.${Buffer.from(
+      JSON.stringify({ exp: Math.floor(Date.now() / 1000) - 3600 }),
+    ).toString("base64url")}.s`;
+    await write(
+      path.join(root, "host-codex", "auth.json"),
+      JSON.stringify({ tokens: { access_token: expired, refresh_token: "r" } }),
+    );
+    const fake = fakeRunners(revision);
+    const global = { enabledAgentPlatforms: ["claude", "codex"] } as never;
+    await refreshStagedAgentAccountLogins(context, environment, "container-1", fake.runners);
+    await syncContainerAgentAccountsOnStart(
+      context,
+      environment,
+      "container-1",
+      global,
+      fake.runners,
+    );
+    // The container kept whatever copy it had, which may be another account's.
+    expect(fake.markers.get("/tmp/orkestrator-codex-account")).toBe("unstaged");
+
+    await reconcileContainerAgentAccount(
+      context,
+      "container-1",
+      "codex",
+      bridge(false).control,
+      fake.runners,
+    );
+    expect(fake.calls.some((call) => call.command === "rm -f /home/node/.codex/auth.json")).toBe(
+      true,
+    );
+    expect(fake.markers.get("/tmp/orkestrator-codex-account")).toBe("default");
+  });
+
+  test("a switch during the restage leaves the marker on the older account", async () => {
+    const revision = await stage();
+    await addAccounts({});
+    context.storage.loadConfig = async () =>
+      ({ global: { enabledAgentPlatforms: ["codex"] } }) as never;
+    const fake = fakeRunners(revision);
+    // Switch right after the first registry read: the marker is captured from
+    // it, the login is read from the account switched to.
+    const loadAgentAccounts = context.storage.loadAgentAccounts.bind(context.storage);
+    let switched = false;
+    context.storage.loadAgentAccounts = async () => {
+      const store = await loadAgentAccounts();
+      if (!switched) {
+        switched = true;
+        await storage.mutateAgentAccounts((current) => ({
+          store: { ...current, active: { codex: CODEX_ID } },
+          result: undefined,
+        }));
+      }
+      return store;
+    };
+    await refreshStagedAgentAccountLogins(context, environment, "container-1", fake.runners);
+    context.storage.loadAgentAccounts = loadAgentAccounts;
+    expect(await fs.readFile(staged(revision, "codex-home/auth.json"), "utf8")).toBe(
+      '{"OPENAI_API_KEY":"codex-2"}',
+    );
+    const global = { enabledAgentPlatforms: ["codex"] } as never;
+    await syncContainerAgentAccountsOnStart(
+      context,
+      environment,
+      "container-1",
+      global,
+      fake.runners,
+    );
+    // The marker names the older account, so the next bridge start re-pushes.
+    expect(fake.markers.get("/tmp/orkestrator-codex-account")).toBe("default");
   });
 
   test("leaves a busy bridge on its account", async () => {

@@ -1,3 +1,4 @@
+import { NativeAttachmentsFixture } from "./NativeAttachmentsFixture";
 import { ChangeTrackingFixture, installChangeTrackingFixture } from "./changeTracking";
 import { ClaudeInteractionsFixture } from "./ClaudeInteractionsFixture";
 import {
@@ -1764,6 +1765,7 @@ function fixtureForPath() {
   if (window.location.pathname === "/native-hydrating-preview") {
     return <NativeHydratingPreviewFixture />;
   }
+  if (window.location.pathname === "/native-attachments") return <NativeAttachmentsFixture />;
   if (window.location.pathname === "/monaco-runtime") return <MonacoRuntimeFixture />;
   if (window.location.pathname === "/claude-interactions") return <ClaudeInteractionsFixture />;
   if (window.location.pathname === "/styles") return <GlobalStylesFixture />;

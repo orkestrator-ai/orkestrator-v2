@@ -34,3 +34,12 @@ The subsequent settled-snapshot aggregate (`stable-final-tests`) did not reprodu
 The subsequent full confirmation run,
 `mise run test:logged -- --name merge-tests-confirm -- mise run test`,
 passed all four groups (exit 0, 282.3 seconds).
+
+## Federated client latest-main warm run — 2026-10-21
+
+- **Command:** the testing guide's GNU-tool PATH with `mise run test:logged -- --name refresh-main-warm-tests -- mise run test`, merging `3da8e0cf` into pre-merge HEAD `8e695b7d`. Workspace/root/bridges/protocol reserved 4/1/2/1 slots; the backend used two isolated workers. A separate gateway owning-file check ran alongside the beginning of the suite.
+- **Failure:** the replay case completed its receipt assertions, then fixture cleanup at `public-api/test-support.ts:143` raised `EPERM` removing the temporary root (9.29 ms). The backend source and owning test were unchanged.
+- **Counts:** backend 9,897 passed, 68 skipped, one failed across 9,966 tests in 569 files (468.26 s). All other packages, root/support, bridges and protocol passed. The aggregate exited 1 after 490.4 seconds.
+- **Owning-file rerun:** `mise run test:logged -- --name refresh-main-receipt-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/public-api/public-api-projects.test.ts --parallel=1 --only-failures` passed the complete unchanged owner, exit 0 in 2.7 seconds.
+- **Evidence:** `orkestrator-test-run.Xoy0uL/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory; outer artifact `orkestrator-test-run.520NxN/refresh-main-warm-tests.log.gz`.
+- **Assessment:** confirmed recurrence of the fixture-cleanup flake. Concurrent filesystem activity remains an unconfirmed hypothesis; no implementation, assertion, timeout or skip changed.

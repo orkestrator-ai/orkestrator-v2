@@ -594,6 +594,69 @@ engines (`bridges/cursor-bridge/src/testing/fake-engine-server.ts`,
 `e2e/fixtures/close-retention-opencode.ts`). Its assertions read each engine's
 own store, so a duplicated or lost prompt fails there.
 
+### Live paused interactions
+
+`e2e/agent-testing/paused-interactions-live.spec.ts` checks that a question or
+approval paused from its card waits past ten minutes on a real CLI, and that
+answering it later lets the turn carry on with the answer. It has its own
+opt-in and config, and uses the profile's host credentials:
+
+```bash
+mise run dev:test --profile qa-pause --fixture --credential-source claude --credential-source codex \
+  --credential-source opencode --credential-source pi --agent-platforms claude,codex,opencode,pi
+# In a second terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-pause ORKESTRATOR_AGENT_TEST_LIVE_PAUSED_INTERACTIONS=1 \
+  ORKESTRATOR_AGENT_TEST_PAUSE_PROVIDERS=claude,codex,opencode,pi \
+  mise run test:logged -- --name paused-interactions-live -- \
+  mise run test:agent:paused-interactions
+mise run dev:stop --profile qa-pause
+mise run dev:reset --profile qa-pause
+```
+
+Each case (a Claude question and approval, a Codex command approval, a Grok
+question and permission, an OpenCode question and permission, a Pi approval)
+gets its own local environment under an `approvals: "ask"` policy and its own
+real turn. Providers run in parallel, and a provider's own cases start one
+after the other. As soon as a request appears, the spec holds its countdown
+through the backend, before starting another case or waiting for a slower
+provider. It then resumes and pauses each countdown from the card, waiting
+for the backend state and enabled controls between actions. OpenCode publishes
+no deadline: its card must be visible before the absence of a countdown is
+asserted within that card. It then checks every 60 s that
+each request is still pending, the turn has not ended and no marker file
+appeared. Once 10.5 minutes have passed since every card was checked, it
+signs in again and reloads, then answers each card. Every turn must finish
+with the chosen codeword, or with the approved command's marker file and done
+token. The whole run takes about 20 minutes.
+
+- `ORKESTRATOR_AGENT_TEST_PAUSE_PROVIDERS` narrows the providers (default
+  `claude,codex,grok,opencode,pi`). Leave out any provider the host is signed
+  out of: a provider that cannot start fails the run.
+- `ORKESTRATOR_AGENT_TEST_PAUSE_WAIT_MS` shortens the wait for a shakedown.
+  Only the default proves the ten-minute claim.
+- `ORKESTRATOR_AGENT_TEST_PAUSE_MODELS` takes `<platform>=<model>` pairs. It
+  defaults to `pi=openai/gpt-6-sol`, because a profile shares only Pi's
+  `auth.json` and Pi's own fallback, `gpt-4`, is refused by a ChatGPT-backed
+  OpenAI login.
+
+The approval card is answered with **Approve** alone. The spec never picks an
+optional or amendment option. Codex's "Approve with command policy" writes a
+rule into the profile's isolated Codex home. Earlier profiles shared the host
+home, as recorded in
+[live-provider-and-platform-qualification.md](../todo/live-provider-and-platform-qualification.md).
+The task remains explicitly opt-in (the environment flag above is required);
+it is not part of the default suite or CI because it spends real provider tokens.
+Two additional cases inject setup failures immediately after creation and
+before layout persistence against real fixture environments, and verify that
+stop/delete removes both the stored environment and any started worktree.
+A one-minute heartbeat covers setup, raising, the long wait, finishing and cleanup,
+including unchanged five-minute polls. `ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS=90000`
+can check it against a shorter watchdog. Environments are registered for stop/delete
+immediately after creation, so setup failures also clean up; cleanup failures fail
+the qualification. Credential-free regression tests for cleanup, immediate holds
+and approval choices run in `mise run test`. The evidence is in
+[agent-interactions-and-permissions.md](../todo/agent-interactions-and-permissions.md#live-pause-record-2026-10-21).
+
 ### Live design-tool cycle
 
 `e2e/agent-testing/design-live.spec.ts` runs the design canvas with a real

@@ -15,6 +15,7 @@ import {
   mockToastSuccess,
   mockToastWarning,
 } from "../../../../../../tests/mocks/sonner";
+import { portalStore } from "@/lib/portal/portal-store";
 import { MachineDetails } from "./MachineDetails";
 import { SshRouteDialog } from "./SshRouteDialog";
 
@@ -37,8 +38,8 @@ async function renderMachineDetails(respond?: (call: InvokeCall) => unknown) {
       <MachineDetails connection={MACHINE_A} duplicateColorWith={[]} />
     </FederationProvider>,
   );
-  // Machine A's runtime exists once its summaries were read.
-  await waitFor(() => expect(fake.callsTo("a", "get_environment_snapshots")).toHaveLength(1));
+  // Machine A is a registered node once the portal has loaded.
+  await waitFor(() => expect(portalStore.getState().nodes).toHaveLength(2));
   return fake;
 }
 

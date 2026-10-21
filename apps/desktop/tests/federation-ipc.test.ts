@@ -21,9 +21,6 @@ function harness() {
       },
     },
     trustedRendererUrl,
-    invokeOn: mock(async () => "ok"),
-    observe: mock(() => ({}) as never),
-    unobserve: mock(() => undefined),
     gatewaySnapshot: mock(() => ({
       baseUrl: "http://127.0.0.1:41234",
       connectionId: "c1",
@@ -59,20 +56,18 @@ describe("federation IPC", () => {
       expect(() => listener(untrusted, "c1", "cmd", {})).toThrow("untrusted renderer");
       expect(channel.startsWith("orkestrator:")).toBe(true);
     }
-    expect(deps.invokeOn).not.toHaveBeenCalled();
+    expect(deps.openPanel).not.toHaveBeenCalled();
   });
 
-  test("routes commands to an explicit machine and validates the command", async () => {
-    const { call, deps } = harness();
-    await expect(call("orkestrator:backends:invoke", "c1", "get_projects", { x: 1 })).resolves.toBe(
-      "ok",
-    );
-    expect(deps.invokeOn).toHaveBeenCalledWith(expect.anything(), "c1", "get_projects", { x: 1 });
-    expect(() => call("orkestrator:backends:invoke", "", "get_projects")).toThrow();
-    expect(() => call("orkestrator:backends:invoke", "c1", 42)).toThrow();
-    // A missing args object becomes empty; never undefined into the backend.
-    await call("orkestrator:backends:invoke", "c1", "get_projects", ["not", "an", "object"]);
-    expect(deps.invokeOn).toHaveBeenLastCalledWith(expect.anything(), "c1", "get_projects", {});
+  test("CL-02/CR-04: the renderer cannot invoke or observe other machines through main", () => {
+    const { handlers } = harness();
+    for (const channel of [
+      "orkestrator:backends:invoke",
+      "orkestrator:backends:observe",
+      "orkestrator:backends:unobserve",
+    ]) {
+      expect(handlers.has(channel)).toBe(false);
+    }
   });
 
   test("never accepts a URL, port or command line for SSH beyond the validated fields", async () => {

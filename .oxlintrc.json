@@ -110,17 +110,17 @@
             "paths": [
               {
                 "name": "@/lib/native/backend",
-                "message": "Federated code reaches a machine through its backend-bound client (lib/federation), never the window's single-backend command transport."
+                "message": "Multi-machine views reach other nodes only through the portal (lib/portal), which the command node routes; never call commands directly from here."
               },
               {
                 "name": "@/lib/backend",
-                "message": "Federated code reaches a machine through its backend-bound client (lib/federation), never the window's single-backend clients."
+                "message": "Multi-machine views reach other nodes only through the portal (lib/portal), which the command node routes."
               }
             ],
             "patterns": [
               {
                 "group": ["@/lib/backend/*"],
-                "message": "Federated code reaches a machine through its backend-bound client (lib/federation)."
+                "message": "Multi-machine views reach other nodes only through the portal (lib/portal)."
               },
               {
                 "group": ["node:*", "bun:*"],

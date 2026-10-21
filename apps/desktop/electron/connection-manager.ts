@@ -104,14 +104,6 @@ export type ConnectionManagerOptions = {
   connectionTimeoutMs?: number;
   onEvent: (event: string, payload: unknown) => void;
   onConnectionEvent?: (connectionId: string, event: string, payload: unknown) => void;
-  /** Events for windows that observe a machine without being bound to it. */
-  onObservedEvent?: (
-    connectionId: string,
-    epoch: number,
-    event: string,
-    payload: unknown,
-    scopes: readonly string[],
-  ) => void;
   /** Machine state (transport, identity, profile) changed; republish lists. */
   onStateChange?: () => void;
   /** Reconnect delays for background recovery, in milliseconds. */
@@ -127,7 +119,6 @@ const MAX_BACKGROUND_ATTEMPTS = 4;
 const STREAM_FAILURES_BEFORE_FALLBACK = 3;
 const DEFAULT_RECONNECT_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 30_000, 60_000];
 const LOCAL_HELLO_TIMEOUT_MS = 3_000;
-const MAX_OBSERVATIONS_PER_SCOPE = 64;
 
 type RemoteConnection = {
   connectionId: string;
@@ -135,8 +126,6 @@ type RemoteConnection = {
   client: BackendHttpClient;
   token: string;
   scopes: Set<string>;
-  /** Federated observation leases per window scope. */
-  observers: Map<string, number>;
   /** Client-local fence: changes on every route change, reconnect and token change. */
   epoch: number;
   transport: OpenedRoute;
@@ -146,26 +135,28 @@ type RemoteConnection = {
   handover: Promise<void> | null;
 };
 
-/**
- * Owns this device's connections to every backend it is authorized to use.
- *
- * Each backend is independent: there is no central coordinator, a slow or
- * offline machine never blocks another, and nothing here starts, stops or
- * moves work. A window *binds* to one machine (its legacy single-backend
- * view) and may additionally *observe* any number of machines for the
- * federated sidebar and backend-scoped panels. See
- * `docs/architecture/federation.md`.
- */
+/** Connection IDs of panel scopes bound to another node's workspace. */
+export const WORKSPACE_CONNECTION_PREFIX = "workspace:";
+
 /** A saved machine and the first gateway token that could be decrypted for it. */
 export type SavedMachineExport = { backend: SavedBackend; token: string | null };
 
+/**
+ * Owns this device's connections to the backends it can use as its target.
+ *
+ * A window *binds* to one target: normally this computer's own backend, the
+ * desktop's command node, which itself connects to the other nodes and
+ * serves the multi-machine views (docs/architecture/command-nodes.md). A
+ * saved machine can still be bound directly. A panel scope can bind to
+ * another node's workspace with a client grant (`bindWorkspace`). Nothing
+ * here starts, stops or moves work.
+ */
 export class ConnectionManager {
   private readonly localBackend: LocalBackend;
   private readonly secureStorage: SecureStorage;
   private readonly platform: NodeJS.Platform;
   private readonly onEvent: (event: string, payload: unknown) => void;
   private readonly onConnectionEvent?: ConnectionManagerOptions["onConnectionEvent"];
-  private readonly onObservedEvent?: ConnectionManagerOptions["onObservedEvent"];
   private readonly onStateChange?: () => void;
   private readonly connectionTimeoutMs: number;
   private readonly store: ConnectionCatalogueStore;
@@ -178,7 +169,6 @@ export class ConnectionManager {
   private readonly statuses = new Map<string, MachineStatus>();
   private readonly scopeGenerations = new Map<string, number>([[DEFAULT_CONNECTION_SCOPE, 1]]);
   /** Observation leases a scope holds on machines it may not be bound to. */
-  private readonly observations = new Map<string, Map<string, number>>();
   private nextScopeGeneration = 1;
   private nextEpoch = 1;
   private secureStorageAvailable = false;
@@ -204,7 +194,6 @@ export class ConnectionManager {
     }
     this.onEvent = options.onEvent;
     this.onConnectionEvent = options.onConnectionEvent;
-    this.onObservedEvent = options.onObservedEvent;
     this.onStateChange = options.onStateChange;
     this.store =
       options.catalogueStore ??
@@ -647,7 +636,6 @@ export class ConnectionManager {
       this.assertScopeGeneration(scope, generation);
       for (const route of backend.routes) this.sessionTokens.delete(route.id);
       for (const activeScope of activeScopes) this.setScopeLocal(activeScope);
-      for (const leases of this.observations.values()) leases.delete(connectionId);
       this.reconnects.cancel(connectionId);
       this.teardownRemote(connectionId);
       this.statuses.delete(connectionId);
@@ -794,13 +782,6 @@ export class ConnectionManager {
           if (route?.kind === "ssh") this.startHandover(remote.connectionId, "ssh-disabled");
         }
       }
-      if (!next.federation) {
-        for (const [observingScope, leases] of this.observations) {
-          for (const connectionId of Array.from(leases.keys())) {
-            this.unobserveAll(observingScope, connectionId);
-          }
-        }
-      }
       this.emitStateChange();
       return this.getList(scope);
     }
@@ -929,34 +910,6 @@ export class ConnectionManager {
     return this.invokeRemote<T>(connectionId, command, args);
   }
 
-  /**
-   * Invoke on a machine the window is bound to or observes. The destination
-   * is always explicit; nothing here falls back to Local or the first entry.
-   */
-  invokeOn<T>(
-    scope: string,
-    connectionId: string,
-    command: string,
-    args: Record<string, unknown> = {},
-  ): Promise<T> {
-    this.captureScopeGeneration(scope);
-    if (
-      this.bindings.get(scope) !== connectionId &&
-      !this.observations.get(scope)?.has(connectionId)
-    ) {
-      return Promise.reject(
-        new Error("This window is not connected to that machine. Reconnect it and try again."),
-      );
-    }
-    if (connectionId === LOCAL_CONNECTION_ID) {
-      if (!this.localBackendAvailable) {
-        return Promise.reject(new Error("The Local backend on this computer is not running."));
-      }
-      return this.localBackend.invoke<T>(command, args);
-    }
-    return this.invokeRemote<T>(connectionId, command, args);
-  }
-
   private async invokeRemote<T>(
     connectionId: string,
     command: string,
@@ -974,64 +927,6 @@ export class ConnectionManager {
     return remote.client.invoke<T>(command, args);
   }
 
-  /**
-   * Start (or share) a federated observation of a machine for a window. The
-   * machine connects in the background; a failure is reported in its
-   * summary state and retried while someone observes it.
-   */
-  observe(scope: string, connectionId: string): ConnectionSummary {
-    this.captureScopeGeneration(scope);
-    if (!this.catalogue.features.federation) {
-      throw new Error("Multi-machine view is turned off in this client.");
-    }
-    if (connectionId !== LOCAL_CONNECTION_ID && !this.findBackend(connectionId)) {
-      throw new Error("That saved connection no longer exists.");
-    }
-    const leases = this.observations.get(scope) ?? new Map<string, number>();
-    if (!leases.has(connectionId) && leases.size >= MAX_OBSERVATIONS_PER_SCOPE) {
-      throw new Error("This window observes too many machines.");
-    }
-    this.observations.set(scope, leases);
-    leases.set(connectionId, (leases.get(connectionId) ?? 0) + 1);
-    if (connectionId !== LOCAL_CONNECTION_ID) {
-      const remote = this.remoteConnections.get(connectionId);
-      if (remote) remote.observers.set(scope, leases.get(connectionId)!);
-      else void this.backgroundActivate(connectionId);
-    }
-    return this.summaryFor(connectionId);
-  }
-
-  unobserve(scope: string, connectionId: string): void {
-    const leases = this.observations.get(scope);
-    const count = leases?.get(connectionId);
-    if (!leases || count === undefined) return;
-    if (count > 1) {
-      leases.set(connectionId, count - 1);
-      const remote = this.remoteConnections.get(connectionId);
-      remote?.observers.set(scope, count - 1);
-      return;
-    }
-    this.unobserveAll(scope, connectionId);
-  }
-
-  private unobserveAll(scope: string, connectionId: string): void {
-    this.observations.get(scope)?.delete(connectionId);
-    const remote = this.remoteConnections.get(connectionId);
-    if (!remote) {
-      if (!this.isWanted(connectionId)) this.reconnects.cancel(connectionId);
-      return;
-    }
-    remote.observers.delete(scope);
-    this.releaseIfUnused(connectionId);
-  }
-
-  /** Scopes observing a machine, for routing its events. */
-  observersOf(connectionId: string): string[] {
-    return Array.from(this.observations.entries())
-      .filter(([, leases]) => leases.has(connectionId))
-      .map(([scope]) => scope);
-  }
-
   /** Connection epoch of a machine, for fencing late renderer work. */
   epochOf(connectionId: string): number {
     if (connectionId === LOCAL_CONNECTION_ID) return 0;
@@ -1044,13 +939,6 @@ export class ConnectionManager {
     return remote ? remote.client.origin : null;
   }
 
-  private summaryFor(connectionId: string): ConnectionSummary {
-    const list = this.getList(DEFAULT_CONNECTION_SCOPE);
-    const summary = list.connections.find((connection) => connection.id === connectionId);
-    if (!summary) throw new Error("That saved connection no longer exists.");
-    return summary;
-  }
-
   handleLocalEvent(event: string, payload: unknown): void {
     if (!this.localBackendAvailable) return;
     if (event === BACKEND_PROFILE_CHANGED_EVENT && this.localHello) {
@@ -1061,7 +949,7 @@ export class ConnectionManager {
         // A malformed profile event changes nothing; the next hello reconciles.
       }
     }
-    this.dispatchConnectionEvent(LOCAL_CONNECTION_ID, 0, event, payload);
+    this.dispatchConnectionEvent(LOCAL_CONNECTION_ID, event, payload);
   }
 
   markLocalBackendUnavailable(): void {
@@ -1244,16 +1132,53 @@ export class ConnectionManager {
     });
   }
 
+  /**
+   * Bind a panel scope to another node's workspace, reached with a client
+   * grant the command node obtained (directly, or over the command node's
+   * own loopback route to it). The grant is held for this scope only, never
+   * saved, and released with the scope.
+   */
+  bindWorkspace(
+    scope: string,
+    input: { workspaceId: string; baseUrl: string; token: string },
+  ): void {
+    if (!scope || scope === DEFAULT_CONNECTION_SCOPE || this.scopeGenerations.has(scope)) {
+      throw new Error("Connection scope is already active.");
+    }
+    const connectionId = `${WORKSPACE_CONNECTION_PREFIX}${input.workspaceId}`;
+    if (this.remoteConnections.has(connectionId)) {
+      throw new Error("That workspace is already open.");
+    }
+    this.scopeGenerations.set(scope, ++this.nextScopeGeneration);
+    const client = new BackendHttpClient(input.baseUrl, input.token);
+    const remote: RemoteConnection = {
+      connectionId,
+      routeId: "workspace" as RouteId,
+      client,
+      token: input.token,
+      scopes: new Set([scope]),
+      epoch: this.nextEpoch++,
+      transport: { baseUrl: input.baseUrl, release: () => undefined },
+      unsubscribeTransport: null,
+      generation: null,
+      streamFailures: 0,
+      handover: null,
+    };
+    this.remoteConnections.set(connectionId, remote);
+    this.bindings.set(scope, connectionId);
+    client.listen(
+      (event, payload) => {
+        if (this.remoteConnections.get(connectionId)?.client === client) {
+          this.handleRemoteEvent(connectionId, event, payload);
+        }
+      },
+      { onStreamState: (state) => this.handleStreamState(connectionId, client, state) },
+    );
+  }
+
   release(scope: string): void {
     this.releaseScopeRemote(scope);
     this.bindings.delete(scope);
-    const leases = this.observations.get(scope);
-    this.observations.delete(scope);
-    for (const connectionId of leases?.keys() ?? []) {
-      const remote = this.remoteConnections.get(connectionId);
-      remote?.observers.delete(scope);
-      this.releaseIfUnused(connectionId);
-    }
     this.scopeQueues.delete(scope);
     if (scope !== DEFAULT_CONNECTION_SCOPE) this.scopeGenerations.delete(scope);
   }
@@ -1291,10 +1216,20 @@ export class ConnectionManager {
     this.secureStorageAvailable = await this.detectSecureStorage();
     this.assertScopeGeneration(scope, generation);
     const existing = this.remoteConnections.get(connectionId);
-    const established = await this.establish(backend, {
-      interactive: true,
-      ...(existing ? { preferRouteId: existing.routeId } : {}),
-    });
+    let established: Established;
+    try {
+      established = await this.establish(backend, {
+        interactive: true,
+        ...(existing ? { preferRouteId: existing.routeId } : {}),
+      });
+    } catch (error) {
+      // The machine list shows why; the caller still gets the error.
+      const failure = classifyRouteFailure(error);
+      if (failure.code !== "cancelled") {
+        this.setStatus(connectionId, { transport: failure.state, detail: failure.message });
+      }
+      throw error;
+    }
     try {
       this.assertScopeGeneration(scope, generation);
     } catch (error) {
@@ -1342,7 +1277,7 @@ export class ConnectionManager {
   }
 
   /**
-   * Connect a machine for observation without user interaction. One attempt
+   * Reconnect a bound machine without user interaction. One attempt
    * per machine is coalesced, and at most four run at once across machines,
    * so one slow host never holds the others.
    */
@@ -1356,13 +1291,12 @@ export class ConnectionManager {
       try {
         const backend = this.findBackend(connectionId);
         if (!backend || this.disposed) throw new Error("That saved connection no longer exists.");
-        if (!this.isWanted(connectionId))
-          throw routeError("cancelled", "No longer observed.", false);
+        if (!this.isWanted(connectionId)) throw routeError("cancelled", "No longer in use.", false);
         this.setStatus(connectionId, { transport: "connecting" });
         const established = await this.establish(backend, { interactive: false });
         if (!this.isWanted(connectionId) || !this.findBackend(connectionId)) {
           established.transport.release();
-          throw routeError("cancelled", "No longer observed.", false);
+          throw routeError("cancelled", "No longer in use.", false);
         }
         const already = this.remoteConnections.get(connectionId);
         if (already) {
@@ -1472,7 +1406,6 @@ export class ConnectionManager {
       client,
       token,
       scopes: new Set(),
-      observers: new Map(this.leasesFor(connectionId)),
       epoch: this.nextEpoch++,
       transport,
       unsubscribeTransport: null,
@@ -1598,20 +1531,13 @@ export class ConnectionManager {
     for (const [scope, boundId] of this.bindings) {
       if (boundId === connectionId && scope) return true;
     }
-    return this.observersOf(connectionId).length > 0;
-  }
-
-  private leasesFor(connectionId: string): Array<[string, number]> {
-    return Array.from(this.observations.entries()).flatMap(([scope, leases]) => {
-      const count = leases.get(connectionId);
-      return count ? [[scope, count] as [string, number]] : [];
-    });
+    return false;
   }
 
   private releaseIfUnused(connectionId: string): void {
     const remote = this.remoteConnections.get(connectionId);
     if (!remote) return;
-    if (remote.scopes.size > 0 || remote.observers.size > 0) return;
+    if (remote.scopes.size > 0) return;
     this.teardownRemote(connectionId);
     this.reconnects.cancel(connectionId);
     const status = this.statuses.get(connectionId);
@@ -1693,9 +1619,8 @@ export class ConnectionManager {
    */
 
   private handleRemoteEvent(connectionId: string, event: string, payload: unknown): void {
-    const remote = this.remoteConnections.get(connectionId);
     if (event === BACKEND_PROFILE_CHANGED_EVENT) this.applyProfileEvent(connectionId, payload);
-    this.dispatchConnectionEvent(connectionId, remote?.epoch ?? 0, event, payload);
+    this.dispatchConnectionEvent(connectionId, event, payload);
   }
 
   private applyProfileEvent(connectionId: string, payload: unknown): void {
@@ -1717,19 +1642,11 @@ export class ConnectionManager {
     }
   }
 
-  private dispatchConnectionEvent(
-    connectionId: string,
-    epoch: number,
-    event: string,
-    payload: unknown,
-  ): void {
+  private dispatchConnectionEvent(connectionId: string, event: string, payload: unknown): void {
     this.onConnectionEvent?.(connectionId, event, payload);
     if (this.connectionIdForScope(DEFAULT_CONNECTION_SCOPE) === connectionId) {
       this.onEvent(event, payload);
     }
-    const observers = this.observersOf(connectionId);
-    if (observers.length > 0)
-      this.onObservedEvent?.(connectionId, epoch, event, payload, observers);
   }
 
   /*

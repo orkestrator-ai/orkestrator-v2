@@ -46,14 +46,10 @@ import { reloadAfterConnectionChange } from "@/lib/client-platform";
 import { publishConnections, subscribeToConnections } from "@/lib/connections";
 import { cn } from "@/lib/utils";
 import { duplicateMachineColors } from "@/lib/federation/aggregate";
-import { useFederation } from "@/components/federation/FederationProvider";
 import { MachineDetails } from "./connections/MachineDetails";
 import { SshRouteDialog } from "./connections/SshRouteDialog";
 import { NodesSettings } from "./connections/NodesSettings";
-import {
-  BrowserMachinesSettings,
-  FederationFeatureToggles,
-} from "./connections/FederationSettingsPanel";
+import { FederationFeatureToggles } from "./connections/FederationSettingsPanel";
 
 type ConnectionsApi = NonNullable<NonNullable<Window["orkestrator"]>["connections"]>;
 type TokenIntent = "replace" | "connect";
@@ -103,7 +99,6 @@ export function ConnectionsSettings() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [sshOpen, setSshOpen] = useState(false);
   const [routeTarget, setRouteTarget] = useState<ConnectionSummary | null>(null);
-  const federation = useFederation();
   // With multi-machine views on, adding a machine adds it beside this one
   // instead of switching (and reloading) this window.
   const addsInPlace = connections?.features?.federation === true;
@@ -303,17 +298,9 @@ export function ConnectionsSettings() {
     }
   };
 
-  if (!api && federation.kind === "browser") {
-    return (
-      <div className="max-w-4xl space-y-8">
-        <NodesSettings />
-        <BrowserMachinesSettings />
-      </div>
-    );
-  }
   if (!api) {
-    // Mobile and other single-target clients: the connected node's own
-    // command-node settings are still served by that node.
+    // Browser and iOS clients: the connected node's command-node settings.
+    // Other machines are registered there; this client keeps none itself.
     return (
       <div className="max-w-4xl space-y-6">
         <NodesSettings />
@@ -570,6 +557,7 @@ export function ConnectionsSettings() {
                           if (kind === "ssh") setSshOpen(true);
                           else openAdd();
                         }}
+                        sshSupported={sshAvailable}
                       />
                     </div>
                   ) : null}

@@ -34,6 +34,7 @@ import {
   installRendererNavigationGuards,
   trustedRendererUrlFor,
 } from "./window.js";
+import { NodeWorkspaceScopes, openNodeWorkspace } from "./node-workspaces.js";
 import { importSavedMachinesOnce } from "./command-node-migration.js";
 import { ConnectionManager, DEFAULT_CONNECTION_SCOPE } from "./connection-manager.js";
 import {
@@ -171,6 +172,7 @@ const applicationLogging =
 const isPrimaryInstance = claimSingleInstanceLock(app);
 
 let backend: BackendHttpClient | null = null;
+let nodeWorkspaceScopes: NodeWorkspaceScopes | null = null;
 let connectionManager: ConnectionManager | null = null;
 let panelViews: BackendPanelViews | null = null;
 /** Backend-scoped panel views, keyed by their own webContents ID. */
@@ -298,29 +300,16 @@ function emitToConnection(connectionId: string, event: string, payload: unknown)
     }
   }
   for (const panel of panelContexts.values()) {
-    if (panel.connectionId === connectionId) {
+    // A panel's scope is bound to its node's workspace connection.
+    let panelConnectionId: string | null = null;
+    try {
+      panelConnectionId = connectionManager.getConnectionId(panel.scope);
+    } catch {
+      panelConnectionId = null;
+    }
+    if (panelConnectionId === connectionId) {
       emitToWebContents(panel.webContents as never, event, payload);
     }
-  }
-}
-
-/** Events of a machine a window observes for its federated views. */
-function emitObservedEvent(
-  connectionId: string,
-  epoch: number,
-  event: string,
-  payload: unknown,
-  scopes: readonly string[],
-): void {
-  for (const context of windowContexts.values()) {
-    if (!scopes.includes(context.scope) || context.window.isDestroyed()) continue;
-    context.window.webContents.send(
-      "orkestrator:backend-event",
-      connectionId,
-      epoch,
-      event,
-      payload,
-    );
   }
 }
 
@@ -871,10 +860,6 @@ function registerIpc(): void {
   registerFederationIpc({
     ipc: ipcMain,
     trustedRendererUrl: rendererUrl(),
-    invokeOn: (event, connectionId, command, args) =>
-      manager().invokeOn(scopeForEvent(event), connectionId, command, args),
-    observe: (event, connectionId) => manager().observe(scopeForEvent(event), connectionId),
-    unobserve: (event, connectionId) => manager().unobserve(scopeForEvent(event), connectionId),
     gatewaySnapshot: (event) => {
       const context = ipcContextForEvent(event);
       const identity = manager().getBackendIdentity(context.scope);
@@ -937,11 +922,32 @@ function createPanelViews(): BackendPanelViews {
     preloadPath: path.join(__dirname, "preload.js"),
     rendererUrl: rendererUrl(),
     partitionFor: (connectionId) => rendererPartitionForPanel(connectionId),
-    bindScope: async (scope, connectionId) => {
-      if (!connectionManager) throw new Error("Connections are not initialized");
-      await connectionManager.bind(scope, connectionId);
+    // A panel shows another node's workspace: the local backend (this
+    // desktop's command node) issues a grant; the panel reaches the node
+    // directly or over the command node's own route.
+    bindScope: async (scope, nodeId) => {
+      if (!connectionManager || !backend)
+        throw new Error("The local command node is not available");
+      const local = backend;
+      const profile = (await local.invoke("get_backend_profile").catch(() => null)) as {
+        displayName?: string;
+      } | null;
+      const binding = await openNodeWorkspace({
+        nodeId,
+        invoke: (command, args) => local.invoke(command, args),
+        commandNodeName: profile?.displayName ?? "this computer",
+      });
+      nodeWorkspaceScopes ??= new NodeWorkspaceScopes((command, args) =>
+        local.invoke(command, args),
+      );
+      connectionManager.bindWorkspace(scope, binding);
+      nodeWorkspaceScopes.track(scope, binding.workspaceId);
+      return binding.params;
     },
-    releaseScope: (scope) => connectionManager?.release(scope),
+    releaseScope: (scope) => {
+      connectionManager?.release(scope);
+      nodeWorkspaceScopes?.release(scope);
+    },
     installRequestAuth: (webContents, scope) =>
       installRemoteGatewayRequestAuth(
         webContents.session.webRequest as never,
@@ -1122,7 +1128,6 @@ async function startApplication(): Promise<void> {
     sshTunnels,
     onEvent: () => undefined,
     onConnectionEvent: emitToConnection,
-    onObservedEvent: emitObservedEvent,
     onStateChange: scheduleConnectionListPublish,
   });
   await connectionManager.initialize();

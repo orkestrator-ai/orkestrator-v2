@@ -1,52 +1,62 @@
-import { useEffect, useMemo, useState } from "react";
-import { FALLBACK_MACHINE_COLOR, defaultMachineColor } from "@orkestrator/protocol/backend-profile";
-import type { ConnectionSummary } from "@orkestrator/protocol/connections";
+import { useMemo } from "react";
+import { FALLBACK_MACHINE_COLOR } from "@orkestrator/protocol/backend-profile";
+import type { NodeConnectionState } from "@orkestrator/protocol/command-nodes";
+import type { ConnectionTransportState } from "@orkestrator/protocol/connections";
 import {
   environmentKey,
   environmentRef,
   projectKey,
   projectRef,
-  provisionalBackendId,
   type BackendId,
 } from "@orkestrator/protocol/federation";
+import type { NodeSummary } from "@orkestrator/protocol/node-summaries";
 import { useEnvironmentStore, useProjectStore } from "@/stores";
 import type { MachineView } from "@/lib/federation/aggregate";
 import {
-  backendIdForConnection,
   boundedText,
   repositoryHint,
   type FederatedEnvironment,
   type FederatedProject,
-  type MachineSummaryState,
-} from "@/lib/federation/backend-runtime";
+} from "@/lib/federation/summaries";
 import type { Environment, Project } from "@/types";
-import { machineDisplayName, useFederation } from "./FederationProvider";
+import { useFederation } from "./FederationProvider";
 
-function colorFor(connection: ConnectionSummary, backendId: BackendId): string {
-  if (connection.profile?.colorToken) return connection.profile.colorToken;
-  // An older backend without a profile: a stable colour from a proved
-  // identity, otherwise a labelled neutral (never a random colour).
-  return connection.identity === "verified"
-    ? defaultMachineColor(backendId)
-    : FALLBACK_MACHINE_COLOR;
-}
+const TRANSPORT_FOR_STATE: Record<NodeConnectionState, ConnectionTransportState> = {
+  connecting: "connecting",
+  connected: "connected",
+  degraded: "connected",
+  unavailable: "unreachable",
+  quarantined: "trust-blocked",
+  "needs-credential": "authentication-required",
+  "needs-update": "incompatible",
+  suspended: "disabled",
+  disabled: "disabled",
+};
 
-function viewFromSummary(state: MachineSummaryState): MachineView {
+/** One node of the portal, as the command node reports it. */
+export function viewFromNodeSummary(node: NodeSummary): MachineView {
+  const environmentsByProject = new Map<string, FederatedEnvironment[]>();
+  for (const environment of node.environments) {
+    const list = environmentsByProject.get(environment.projectId) ?? [];
+    list.push(environment);
+    environmentsByProject.set(environment.projectId, list);
+  }
+  const lastError = node.view.connection.lastError?.message;
   return {
-    connectionId: state.connectionId,
-    backendId: state.backendId,
-    name: machineDisplayName(state.connection),
-    colorToken: colorFor(state.connection, state.backendId),
+    connectionId: node.nodeId,
+    backendId: node.nodeId,
+    name: node.view.displayName,
+    colorToken: node.view.colorToken ?? FALLBACK_MACHINE_COLOR,
     bound: false,
-    freshness: state.freshness,
-    transport: state.connection.transport ?? "connecting",
-    ...(state.connection.transportDetail
-      ? { transportDetail: state.connection.transportDetail }
+    freshness: node.freshness,
+    transport: TRANSPORT_FOR_STATE[node.view.connection.state] ?? "unreachable",
+    ...(lastError && node.view.connection.state !== "connected"
+      ? { transportDetail: lastError }
       : {}),
-    projects: state.projects,
-    environmentsByProject: state.environmentsByProject,
-    truncated: state.truncated,
-    loadedAt: state.loadedAt,
+    projects: node.projects,
+    environmentsByProject,
+    truncated: node.truncated,
+    loadedAt: node.loadedAt,
   };
 }
 
@@ -105,20 +115,16 @@ export function useBoundMachineView(): MachineView | null {
   const environments = useEnvironmentStore((state) => state.environments);
   return useMemo(() => {
     if (!bound) return null;
-    const backendId =
-      bound.backendId && bound.identity === "verified"
-        ? bound.backendId
-        : provisionalBackendId(bound.id);
     return {
-      connectionId: bound.id,
-      backendId,
-      name: machineDisplayName(bound),
-      colorToken: colorFor(bound, backendId),
+      connectionId: bound.connectionId,
+      backendId: bound.backendId,
+      name: bound.name,
+      colorToken: bound.colorToken,
       bound: true,
       freshness: "current",
-      transport: bound.transport ?? "connected",
-      projects: boundProjects(backendId, projects),
-      environmentsByProject: boundEnvironments(backendId, environments),
+      transport: "connected",
+      projects: boundProjects(bound.backendId, projects),
+      environmentsByProject: boundEnvironments(bound.backendId, environments),
       truncated: false,
       // This realm's own stores are its machine's live state.
       loadedAt: BOUND_MACHINE_LOADED,
@@ -126,31 +132,10 @@ export function useBoundMachineView(): MachineView | null {
   }, [bound, environments, projects]);
 }
 
-/** Summaries of every other machine, re-rendered only when one of them changes. */
+/** The command node's other nodes, from its read model. */
 export function useRemoteMachineViews(): MachineView[] {
-  const { registry } = useFederation();
-  const [views, setViews] = useState<MachineView[]>(() =>
-    registry.list().map((runtime) => viewFromSummary(runtime.getSnapshot())),
-  );
-
-  useEffect(() => {
-    let runtimeUnsubscribers: Array<() => void> = [];
-    const publish = () =>
-      setViews(registry.list().map((runtime) => viewFromSummary(runtime.getSnapshot())));
-    const watchRuntimes = () => {
-      for (const unsubscribe of runtimeUnsubscribers) unsubscribe();
-      runtimeUnsubscribers = registry.list().map((runtime) => runtime.store.subscribe(publish));
-      publish();
-    };
-    watchRuntimes();
-    const unsubscribeRegistry = registry.store.subscribe(watchRuntimes);
-    return () => {
-      unsubscribeRegistry();
-      for (const unsubscribe of runtimeUnsubscribers) unsubscribe();
-    };
-  }, [registry]);
-
-  return views;
+  const { portalState } = useFederation();
+  return useMemo(() => portalState.nodes.map(viewFromNodeSummary), [portalState.nodes]);
 }
 
 /** All machines, this one first. */
@@ -167,5 +152,3 @@ export function useMachineView(connectionId: string | null): MachineView | null 
     [connectionId, machines],
   );
 }
-
-export { backendIdForConnection };

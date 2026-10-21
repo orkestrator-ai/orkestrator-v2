@@ -17,7 +17,7 @@ import {
   searchMachines,
   type MachineView,
 } from "./aggregate";
-import type { FederatedEnvironment, FederatedProject } from "./backend-runtime";
+import type { FederatedEnvironment, FederatedProject } from "./summaries";
 
 function project(backendId: string, id: string, name: string, hint?: string): FederatedProject {
   const ref = projectRef(backendId as BackendId, id);

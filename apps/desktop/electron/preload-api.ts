@@ -11,7 +11,6 @@ import {
   type ConnectSshRouteInput,
   type ConnectToRemoteInput,
   type ConnectionList,
-  type ConnectionSummary,
 } from "@orkestrator/protocol/connections";
 import type {
   MacOsPermissionsStatus,
@@ -182,57 +181,6 @@ export function createArtifactHostApi(ipcRenderer: IpcRendererLike): ArtifactHos
       ipcRenderer.invoke(ARTIFACT_HOST_CHANNELS.postTheme, hostId, theme),
     close: (hostId) => ipcRenderer.invoke(ARTIFACT_HOST_CHANNELS.close, hostId),
     onEvent(listener) {
-      subscribe();
-      listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
-    },
-  };
-}
-
-type BackendEventListener = (
-  connectionId: string,
-  epoch: number,
-  event: string,
-  payload: unknown,
-) => void;
-
-/**
- * `window.orkestrator.backends`: commands and events of an explicit machine.
- * The receiving connection, not the payload, says which machine an event
- * came from.
- */
-export function createBackendsApi(ipcRenderer: IpcRendererLike) {
-  const listeners = new Set<BackendEventListener>();
-  let subscribed = false;
-  const subscribe = () => {
-    if (subscribed) return;
-    subscribed = true;
-    ipcRenderer.on(
-      "orkestrator:backend-event",
-      (_event, connectionId: unknown, epoch: unknown, name: unknown, payload: unknown) => {
-        if (typeof connectionId !== "string" || typeof name !== "string") return;
-        if (typeof epoch !== "number") return;
-        for (const listener of listeners) listener(connectionId, epoch, name, payload);
-      },
-    );
-  };
-  return {
-    invoke<T = unknown>(
-      connectionId: string,
-      command: string,
-      args?: Record<string, unknown>,
-    ): Promise<T> {
-      return ipcRenderer.invoke("orkestrator:backends:invoke", connectionId, command, args ?? {});
-    },
-    observe(connectionId: string): Promise<ConnectionSummary> {
-      return ipcRenderer.invoke("orkestrator:backends:observe", connectionId);
-    },
-    unobserve(connectionId: string): Promise<void> {
-      return ipcRenderer.invoke("orkestrator:backends:unobserve", connectionId);
-    },
-    onEvent(listener: BackendEventListener): () => void {
       subscribe();
       listeners.add(listener);
       return () => {
@@ -442,7 +390,6 @@ export function createOrkestratorElectronApi(ipcRenderer: IpcRendererLike) {
       },
     },
 
-    backends: createBackendsApi(ipcRenderer),
     panels: createPanelsApi(ipcRenderer),
 
     process: {

@@ -5,7 +5,8 @@ import type { PanelBounds, PanelOpenInput } from "./federation-ipc.js";
  * Backend-scoped workspace panels inside a desktop window.
  *
  * Each panel is its own renderer (a child view with the standard preload),
- * bound to exactly one machine through its own connection scope. Its stores,
+ * bound to exactly one node through its own connection scope: a leaf
+ * workspace reached with a client grant from the command node. Its stores,
  * caches, event subscriptions and request credentials therefore cannot
  * reach another machine: isolation comes from the realm, not from careful
  * keying. The parent window only positions panels. Closing a panel releases
@@ -48,7 +49,12 @@ export type BackendPanelViewsOptions = {
   /** Exact URL of the renderer, without query. */
   rendererUrl: string;
   partitionFor(connectionId: string): string;
-  bindScope(scope: string, connectionId: string): Promise<void>;
+  /**
+   * Bind the panel's scope to the node. May return non-secret query
+   * parameters for the panel's renderer (how it reaches the node, for its
+   * info panel).
+   */
+  bindScope(scope: string, connectionId: string): Promise<Record<string, string> | void>;
   releaseScope(scope: string): void;
   installRequestAuth(webContents: WebContentsLike, scope: string): void;
   installNavigationGuards(webContents: WebContentsLike): void;
@@ -89,7 +95,7 @@ export class BackendPanelViews {
     }
     const panelId = randomUUID();
     const scope = `panel:${panelId}`;
-    await this.options.bindScope(scope, input.connectionId);
+    const bindingParams = await this.options.bindScope(scope, input.connectionId);
     if (parent.isDestroyed()) {
       this.options.releaseScope(scope);
       throw new Error("The window is not available");
@@ -139,6 +145,8 @@ export class BackendPanelViews {
     url.searchParams.set("panel", "workspace");
     if (input.projectId) url.searchParams.set("project", input.projectId);
     if (input.environmentId) url.searchParams.set("environment", input.environmentId);
+    for (const [name, value] of Object.entries(bindingParams ?? {}))
+      url.searchParams.set(name, value);
     view.webContents.loadURL(url.toString()).catch(() => {
       this.notify(entry, "load-failed");
     });

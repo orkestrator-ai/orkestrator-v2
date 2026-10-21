@@ -380,7 +380,7 @@ describe("identity and routes", () => {
     const connections = manager(store);
     await connections.initialize();
     await connections.bind("window", "local");
-    connections.observe("window", "two");
+    void connections.bind("probe-two", "two").catch(() => undefined);
     await until(() => connections.getList().connections[2]?.identity === "conflict", "conflict");
     // A conflicting entry never borrows the other entry's identity.
     expect(connections.getList().connections[2]?.backendId).toBeUndefined();
@@ -413,12 +413,12 @@ describe("identity and routes", () => {
     const connections = manager(store);
     await connections.initialize();
     await connections.bind("window", "local");
-    connections.observe("window", "a");
+    void connections.bind("probe-a", "a").catch(() => undefined);
     await until(() => connections.getList().connections[1]?.transport === "connected", "fallback");
     expect(connections.getList().connections[1]?.routes?.find((route) => route.active)?.label).toBe(
       "secondary.example",
     );
-    await expect(connections.invokeOn("window", "a", "get_projects")).resolves.toMatchObject({
+    await expect(connections.invoke("get_projects", {}, "probe-a")).resolves.toMatchObject({
       origin: "https://secondary.example",
     });
     expect(gateways.requests.some((request) => request.origin === "https://primary.example")).toBe(
@@ -438,7 +438,7 @@ describe("identity and routes", () => {
     const connections = manager(store, { reconnectDelaysMs: [60_000] });
     await connections.initialize();
     await connections.bind("window", "local");
-    connections.observe("window", "a");
+    void connections.bind("probe-a", "a").catch(() => undefined);
     await until(() => connections.getList().connections[1]?.transport === "unreachable", "fail");
     expect(connections.getList().connections[1]?.routes?.some((route) => route.active)).toBe(false);
     connections.dispose();
@@ -459,11 +459,8 @@ describe("identity and routes", () => {
     const connections = manager(store);
     await connections.initialize();
     await connections.bind("window", "local");
-    connections.observe("window", "a");
-    await until(() => {
-      console.log(JSON.stringify(connections.getList().connections[1]));
-      return connections.getList().connections[1]?.transport === "trust-blocked";
-    }, "block");
+    void connections.bind("probe-a", "a").catch(() => undefined);
+    await until(() => connections.getList().connections[1]?.transport === "trust-blocked", "block");
     const summary = connections.getList().connections[1];
     expect(summary?.routes?.[0]?.blockedReason).toContain("different Orkestrator installation");
     expect(summary?.routes?.some((route) => route.active)).toBe(false);
@@ -471,121 +468,7 @@ describe("identity and routes", () => {
   });
 });
 
-describe("federated observation", () => {
-  test("RT-01: an unreachable machine does not hold up the others", async () => {
-    installGateways({
-      "https://a.example": { installationId: "bk_a", down: true },
-      "https://b.example": { installationId: "bk_b" },
-      "https://c.example": { installationId: "bk_c" },
-    });
-    const store = new MemoryStore(
-      catalogue([
-        savedBackend("a", ["https://a.example"]),
-        savedBackend("b", ["https://b.example"]),
-        savedBackend("c", ["https://c.example"]),
-      ]),
-    );
-    const connections = manager(store, { reconnectDelaysMs: [60_000] });
-    await connections.initialize();
-    await connections.bind("window", "local");
-    for (const id of ["a", "b", "c"]) connections.observe("window", id);
-    await until(
-      () =>
-        connections
-          .getList()
-          .connections.filter((entry) => entry.transport === "connected" && entry.kind === "remote")
-          .length === 2,
-      "b and c",
-    );
-    await expect(connections.invokeOn("window", "b", "get_projects")).resolves.toMatchObject({
-      origin: "https://b.example",
-    });
-    expect(connections.getList().connections.find((entry) => entry.id === "a")?.transport).toBe(
-      "unreachable",
-    );
-    connections.dispose();
-  });
-
-  test("invokeOn requires the window to be bound to or observe the machine", async () => {
-    installGateways({ "https://a.example": { installationId: "bk_a" } });
-    const connections = manager(
-      new MemoryStore(catalogue([savedBackend("a", ["https://a.example"])])),
-    );
-    await connections.initialize();
-    await connections.bind("window", "local");
-    await expect(connections.invokeOn("window", "a", "get_projects")).rejects.toThrow(
-      "not connected to that machine",
-    );
-    await expect(connections.invokeOn("window", "local", "get_projects")).resolves.toMatchObject({
-      local: true,
-    });
-    connections.dispose();
-  });
-
-  test("RT-03: observed events carry their machine and epoch and reach only observers", async () => {
-    const gateways = installGateways({ "https://a.example": { installationId: "bk_a" } });
-    const observed = mock(
-      (
-        _connectionId: string,
-        _epoch: number,
-        _event: string,
-        _payload: unknown,
-        _scopes: readonly string[],
-      ) => undefined,
-    );
-    const connections = manager(
-      new MemoryStore(catalogue([savedBackend("a", ["https://a.example"])])),
-      {
-        onObservedEvent: observed,
-      },
-    );
-    await connections.initialize();
-    await connections.bind("window-1", "local");
-    await connections.bind("window-2", "local");
-    connections.observe("window-1", "a");
-    await until(
-      () => (gateways.eventSignals.get("https://a.example")?.length ?? 0) === 1,
-      "stream",
-    );
-    connections.handleLocalEvent("environment-updated", { id: "local-env" });
-    expect(observed).not.toHaveBeenCalled();
-    connections.observe("window-1", "local");
-    connections.handleLocalEvent("environment-updated", { id: "local-env" });
-    expect(observed).toHaveBeenCalledWith("local", 0, "environment-updated", { id: "local-env" }, [
-      "window-1",
-    ]);
-    connections.dispose();
-  });
-
-  test("OP-06/SH-10: releasing the last observer closes only that connection", async () => {
-    const gateways = installGateways({
-      "https://a.example": { installationId: "bk_a" },
-      "https://b.example": { installationId: "bk_b" },
-    });
-    const connections = manager(
-      new MemoryStore(
-        catalogue([
-          savedBackend("a", ["https://a.example"]),
-          savedBackend("b", ["https://b.example"]),
-        ]),
-      ),
-    );
-    await connections.initialize();
-    await connections.bind("window-1", "local");
-    await connections.bind("window-2", "local");
-    connections.observe("window-1", "a");
-    connections.observe("window-2", "a");
-    connections.observe("window-2", "b");
-    await until(() => (gateways.eventSignals.get("https://b.example")?.length ?? 0) === 1, "b");
-    await until(() => (gateways.eventSignals.get("https://a.example")?.length ?? 0) === 1, "a");
-    connections.release("window-1");
-    expect(gateways.eventSignals.get("https://a.example")?.[0]?.aborted).toBe(false);
-    connections.unobserve("window-2", "a");
-    expect(gateways.eventSignals.get("https://a.example")?.[0]?.aborted).toBe(true);
-    expect(gateways.eventSignals.get("https://b.example")?.[0]?.aborted).toBe(false);
-    connections.dispose();
-  });
-
+describe("machine profiles", () => {
   test("CL-01: a profile event updates the shared summary and the device cache", async () => {
     installGateways({ "https://a.example": { installationId: "bk_a" } });
     const store = new MemoryStore(catalogue([savedBackend("a", ["https://a.example"])]));
@@ -593,7 +476,7 @@ describe("federated observation", () => {
     const connections = manager(store, { onStateChange: changes });
     await connections.initialize();
     await connections.bind("window", "local");
-    connections.observe("window", "a");
+    void connections.bind("probe-a", "a").catch(() => undefined);
     await until(
       () => connections.getList().connections[1]?.profile?.colorToken === "teal",
       "hello",
@@ -648,22 +531,6 @@ describe("federated observation", () => {
       revision: 4,
       cached: true,
     });
-    connections.dispose();
-  });
-
-  test("MG-04: turning federation off ends observations but never touches bindings", async () => {
-    const gateways = installGateways({ "https://a.example": { installationId: "bk_a" } });
-    const connections = manager(
-      new MemoryStore(catalogue([savedBackend("a", ["https://a.example"])])),
-    );
-    await connections.initialize();
-    await connections.bind("window", "local");
-    connections.observe("window", "a");
-    await until(() => (gateways.eventSignals.get("https://a.example")?.length ?? 0) === 1, "a");
-    await connections.setFeatures({ federation: false }, "window");
-    expect(gateways.eventSignals.get("https://a.example")?.[0]?.aborted).toBe(true);
-    expect(() => connections.observe("window", "a")).toThrow("turned off");
-    expect(connections.getList("window").activeConnectionId).toBe("local");
     connections.dispose();
   });
 });
@@ -842,7 +709,7 @@ describe("SSH routes", () => {
     await connections.bind("window", "local");
     expect(connections.getList().supportedRouteKinds).toEqual(["https"]);
     expect(connections.getList().connections[1]?.routes?.[0]?.supported).toBe(false);
-    connections.observe("window", "ssh-only");
+    void connections.bind("probe-ssh-only", "ssh-only").catch(() => undefined);
     await until(() => connections.getList().connections[1]?.transport === "incompatible", "state");
     expect(connections.getList().connections[1]?.transportDetail).toContain("HTTPS route");
     connections.dispose();

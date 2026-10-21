@@ -291,13 +291,20 @@ Other behaviour:
      command-node session.
 
   It reports which path is in use.
-- **Relay.** `/__orkestrator/nodes/<nodeId>/{hello,invoke,events,terminal,
-  proxy/loopback/<port>,browser/loopback/<port>}` on the command node:
+- **Relay.** `/__orkestrator/nodes/<nodeId>/__orkestrator/{hello,invoke,events,
+  terminal,proxy/loopback/<port>,browser/loopback/<port>}` on the command node
+  (the relay base is a prefix, so a client joins its ordinary paths to it):
   - authenticated with the client's command-node credential;
   - forwarded over the node link with the leaf token and the controller
     header;
   - WebSocket upgrades are piped;
   - grant-excluded commands are refused.
+- **Desktop panels.** The desktop is its own command node, so a panel tries
+  the node's direct origins and then the command node's own loopback route to
+  the node (`loopbackOrigin`, an SSH forward on the same computer) with the
+  grant; it never needs the path-prefixed relay. A browser or iOS frame tries
+  the direct origins and then the relay. The grant is kept in the frame's
+  session storage, never in a URL.
 - **Connection path.** The workspace publishes `{nodeId, nodeName, path:
   "direct" | "relay", routeKind, via?}`. The info panel shows it in a new
   "Connection" section of `AgentRuntimePanel`. Environments on the command
@@ -532,7 +539,7 @@ Test names include the requirement ID (for example
 | RM-01 | A node becomes a command node by having a registered subordinate; it is a leaf while attached; otherwise standalone. | 1 | `node-mode.ts` | `node-service.test.ts` RM-01/RM-02 | Done |
 | RM-02 | A setting exposes registration; the desktop's local backend always has it. | 1 | `commandNode.enabled`, `--command-node` | `node-service.test.ts` RM-01/RM-02; `options.test.ts` flag inventory | Done |
 | RM-03 | An attached command node suspends command activity (links closed, registry kept) and resumes when no controllers remain. | 1 | `node-mode.ts`, `NodeLinkManager` | `node-service.test.ts` RM-03/RM-04/LM-05/MG-02 | Done |
-| RM-04 | A controller never sees a subordinate's suspended registry, only that node's own projects and environments. | 1 | Leaf refuses registry commands from grants and controllers; summaries are local only | `node-service.test.ts` RM-03/RM-04 (registry commands refused in leaf mode); summaries in M2 | In progress |
+| RM-04 | A controller never sees a subordinate's suspended registry, only that node's own projects and environments. | 1 | Leaf refuses registry commands from grants and controllers; summaries are local only | `node-service.test.ts` RM-03/RM-04; `node-portal.test.ts` RM-04 (registry and portal commands refused through a leaf-mode node; it relays nothing) | Done |
 | RM-05 | A leaf accepts several controllers and tracks the most recent contact. | 1 | `node-attachments.ts` | `node-service.test.ts` AT-01/AT-04/RM-05 | Done |
 | RM-06 | A leaf can still be the client's direct target with its own UI. | 1 | Unchanged server switcher | Server switcher unchanged; leaf UI shows Controlled by (`nodes-settings.test.tsx` LM) | Done |
 | RM-07 | Two levels only: a subordinate cannot register nodes; cycles are refused. | 1 | Command and leaf checks | `node-service.test.ts` RM-07 (3 tests) | Done |
@@ -541,9 +548,9 @@ Test names include the requirement ID (for example
 
 | ID | Requirement | M | Implementation | Evidence | Status |
 | --- | --- | --- | --- | --- | --- |
-| CL-01 | A client connected to a command node sees one interface over it and its nodes. | 2 | `PortalProvider`, sidebar | | Planned |
-| CL-02 | Clients keep only a target list: no leaf registry and no leaf tokens. | 2 | Removal task M2.7 | | Planned |
-| CL-03 | Web and iOS receive the portal from the command node with no client changes. | 2 | Served bundle | | Planned |
+| CL-01 | A client connected to a command node sees one interface over it and its nodes. | 2 | `PortalProvider`, sidebar | `federation-ui.test.tsx` UI-01 (sections, dots and rows from the command node's summaries); `node-portal.test.ts` PT-01 | Done |
+| CL-02 | Clients keep only a target list: no leaf registry and no leaf tokens. | 2 | Removal task M2.7 | Renderer runtimes, registry, browser machine list and their client tokens removed; `federation-ipc.test.ts` CL-02/CR-04 (no observe/invoke IPC) | Done |
+| CL-03 | Web and iOS receive the portal from the command node with no client changes. | 2 | Served bundle | Portal comes from the bound backend for every client (`FederationProvider` over `get_node_summaries`); browser and iOS frames in `federation-ui.test.tsx` DP-01/DP-03/CR-03 | Done |
 
 ### Registry and routes
 
@@ -571,7 +578,7 @@ Test names include the requirement ID (for example
 
 | ID | Requirement | M | Implementation | Evidence | Status |
 | --- | --- | --- | --- | --- | --- |
-| UP-01 | Every attached command node subscribes to the leaf's event stream. | 2 | `NodeReadModel` | | Planned |
+| UP-01 | Every attached command node subscribes to the leaf's event stream. | 2 | `NodeReadModel` | `node-portal.test.ts` PT-01/PT-02/UP-01 (two command nodes each hold a stream) | Done |
 | UP-02 | Single-destination updates go to the originating command node. | 3 | Origin on thread and environment | | Planned |
 | UP-03 | Otherwise they go to the most recent controller. | 3 | Outbox routing | | Planned |
 | UP-04 | If that controller is unreachable, the update waits in the outbox; never dropped or rerouted. | 3 | `node-outbox.ts` | | Planned |
@@ -590,22 +597,22 @@ Test names include the requirement ID (for example
 
 | ID | Requirement | M | Implementation | Evidence | Status |
 | --- | --- | --- | --- | --- | --- |
-| PT-01 | A live read model of every connected node's projects and environments is fed by subscriptions. | 2 | `NodeReadModel` | | Planned |
-| PT-02 | Every resource is node-qualified; commands are routed to the owner. | 2 | `invoke_on_node` | | Planned |
-| PT-03 | The node colour dot appears before each environment name. | 2 | Sidebar | | Planned |
-| PT-04 | Unavailable nodes keep labelled last-known state with writes disabled. | 2 | `node-summaries.json`, gating | | Planned |
-| PT-05 | Unknown outcomes are recorded against the node and never resubmitted. | 2 | `node-outcomes.json` | | Planned |
+| PT-01 | A live read model of every connected node's projects and environments is fed by subscriptions. | 2 | `NodeReadModel` | `node-portal.test.ts` PT-01 (summaries and a stream-driven change) | Done |
+| PT-02 | Every resource is node-qualified; commands are routed to the owner. | 2 | `invoke_on_node` | `node-portal.test.ts` PT-02 (routing with controller identity); `federation-ui.test.tsx` RT-02/OP-05, UI-04 | Done |
+| PT-03 | The node colour dot appears before each environment name. | 2 | Sidebar | `federation-ui.test.tsx` CL-05 and UI-01 (dot before the name) | Done |
+| PT-04 | Unavailable nodes keep labelled last-known state with writes disabled. | 2 | `node-summaries.json`, gating | `node-portal.test.ts` PT-04 (labelled last-known state, writes refused); `federation-ui.test.tsx` CL-05 (dimmed row) | Done |
+| PT-05 | Unknown outcomes are recorded against the node and never resubmitted. | 2 | `node-outcomes.json` | `node-portal.test.ts` PT-05 (recorded, not resent, dismissable); `federation-ui.test.tsx` OP-02 (UI) | Done |
 
 ### Data plane and chat
 
 | ID | Requirement | M | Implementation | Evidence | Status |
 | --- | --- | --- | --- | --- | --- |
-| DP-01 | Leaf chat, terminals and previews go direct from client to leaf when reachable. | 2 | Leaf workspace | | Planned |
-| DP-02 | Grants are short-lived, revocable, not the gateway token, and exclude administration. | 2 | `ClientGrantService` | | Planned |
-| DP-03 | When the leaf is unreachable, the workspace relays through the command node. | 2 | `node-relay.ts` | | Planned |
-| DP-04 | The info panel shows the path (direct or relay), the route and the node. | 2 | `AgentRuntimePanel` | | Planned |
-| DP-05 | The command node can read leaf chat read-only; the portal shows attention. | 2, 3 | Summaries, `read_environment` | | Planned |
-| DP-06 | The leaf arbitrates its own approvals. | 2 | Unchanged leaf | | Planned |
+| DP-01 | Leaf chat, terminals and previews go direct from client to leaf when reachable. | 2 | Leaf workspace | `node-portal.test.ts` DP-01/DP-02 (grant, direct origins); `node-workspaces.ts` (desktop direct first); `federation-ui.test.tsx` DP-01/DP-03/CR-03 | Done |
+| DP-02 | Grants are short-lived, revocable, not the gateway token, and exclude administration. | 2 | `ClientGrantService` | `node-portal.test.ts` DP-01/DP-02 (15-minute cap, hash-only, revoked on close and detach, attached controllers only); `gateway-command-nodes.test.ts` DP-02 (client API only) | Done |
+| DP-03 | When the leaf is unreachable, the workspace relays through the command node. | 2 | `node-relay.ts` | `gateway-command-nodes.test.ts` DP-03 (HTTP and terminal WebSocket relayed with the node's credential); `federation-ui.test.tsx` DP-01/DP-03/CR-03; desktop uses the command node's loopback route | Done |
+| DP-04 | The info panel shows the path (direct or relay), the route and the node. | 2 | `AgentRuntimePanel` | `connection-path.test.tsx` DP-04 | Done |
+| DP-05 | The command node can read leaf chat read-only; the portal shows attention. | 2, 3 | Summaries, `read_environment` | Portal shows attention from summaries (`FederationEffects` attention toasts); coordinator reads in M3 | In progress |
+| DP-06 | The leaf arbitrates its own approvals. | 2 | Unchanged leaf | Approvals stay in the leaf's own workspace UI (nothing relays or answers them on the command node) | Done |
 | DP-07 | Grants narrowed to one environment and one stream. | — | | | Deferred (deviation 2) |
 
 ### Coordinators
@@ -639,8 +646,8 @@ Test names include the requirement ID (for example
 | ID | Requirement | M | Implementation | Evidence | Status |
 | --- | --- | --- | --- | --- | --- |
 | SC-01 | Command nodes have full control of leaves; no permission model yet. | 1 | Documented | No permission model: any attached controller has the full client API (`commands-registry-nodes.ts`) | Done |
-| SC-02 | Leaves enforce their own approval and execution policies. | 2 | Unchanged | | Planned |
-| SC-03 | Closing, hiding, detaching or forgetting never stops remote work. | 1, 2 | Tests per action | | Planned |
+| SC-02 | Leaves enforce their own approval and execution policies. | 2 | Unchanged | Unchanged leaf policies; routed commands run under the leaf's own command handlers | Done |
+| SC-03 | Closing, hiding, detaching or forgetting never stops remote work. | 1, 2 | Tests per action | `node-service.test.ts` AT-02/RG-07/SC-03; `federation-ui.test.tsx` OP-06/CR-03 and DP-01/DP-03/CR-03 (closing a panel stops nothing) | Done |
 | SC-04 | No tokens, prompts, file contents or `.env` values in logs, metrics, receipts or events. | 1–4 | Redaction tests | | Planned |
 
 ### Migration and carry-over
@@ -650,10 +657,10 @@ Test names include the requirement ID (for example
 | MG-01 | Saved desktop connections are attached as leaves of the local command node on upgrade. | 1 | `import_desktop_connections` | `node-service.test.ts` MG-01/MG-03; `command-node-migration.test.ts` | Done |
 | MG-02 | A migrated machine that commands its own leaves switches to leaf mode. | 1 | RM-03 path | `node-service.test.ts` MG-01/MG-03 (migrated command node switches to leaf mode) | Done |
 | MG-03 | Migration is idempotent and keeps the catalogue for downgrade; undecryptable tokens become `needs-credential`. | 1 | Import | `node-service.test.ts` MG-01/MG-03; `command-node-migration.test.ts` (marker, retry on failure) | Done |
-| CR-01 | Identities, profile, hello, loopback gateway, outcome-unknown, dot, sidebar and projections are reused. | 1–2 | | | Planned |
-| CR-02 | Registry, route logic, SSH supervisor and read model are moved into the backend. | 1–2 | | | Planned |
-| CR-03 | Panels are reworked into grant-authorised leaf workspaces with relay fallback. | 2 | | | Planned |
-| CR-04 | Renderer runtimes and registry, the client federation catalogue and client-held leaf tokens are removed. | 2 | | | Planned |
+| CR-01 | Identities, profile, hello, loopback gateway, outcome-unknown, dot, sidebar and projections are reused. | 1–2 |  | Identity, profile, hello, loopback gateway, dot, sidebar sections and aggregation reused; outcome-unknown moved to the command node | Done |
+| CR-02 | Registry, route logic, SSH supervisor and read model are moved into the backend. | 1–2 |  | Registry and routes (`node-service.ts`, `node-link.ts`), SSH supervisor (`protocol/node/ssh`), read model (`node-read-model.ts`) in the backend | Done |
+| CR-03 | Panels are reworked into grant-authorised leaf workspaces with relay fallback. | 2 |  | `federation-ui.test.tsx` OP-06/CR-03, DP-01/DP-03/CR-03; desktop `node-workspaces.ts` and `bindWorkspace` | Done |
+| CR-04 | Renderer runtimes and registry, the client federation catalogue and client-held leaf tokens are removed. | 2 |  | Removed `backend-runtime`, `registry`, `backend-client`, `browser-machines`, observation IPC and `ConnectionManager` observation; `federation-ipc.test.ts` CL-02/CR-04 | Done |
 
 ## User decisions
 

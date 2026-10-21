@@ -1,4 +1,4 @@
-import { useState, useSyncExternalStore } from "react";
+import { useState } from "react";
 import { ArrowDown, ArrowUp, Loader2, Network, Plus, Terminal, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -50,6 +50,7 @@ export function MachineDetails({
   duplicateColorWith,
   onAddRoute,
   showRoutes = true,
+  sshSupported = false,
 }: {
   connection: ConnectionSummary;
   /** This client manages routes itself (desktop); a browser has one HTTPS route per machine. */
@@ -57,39 +58,34 @@ export function MachineDetails({
   /** Other machines using the same colour, for a suggestion only. */
   duplicateColorWith: readonly string[];
   onAddRoute?: (kind: "https" | "ssh") => void;
+  /** This client can open managed SSH routes. */
+  sshSupported?: boolean;
 }) {
   const api: ConnectionsApi | null = window.orkestrator?.connections ?? null;
-  const { registry, bound, list } = useFederation();
+  const { portal, portalState, bound } = useFederation();
   const [draftName, setDraftName] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [busyRoute, setBusyRoute] = useState<string | null>(null);
-  // The machine's own runtime sees profile events first (from any client);
-  // edits must carry that revision, not a possibly older list snapshot.
-  const runtime = registry.get(connection.id);
-  const liveProfile = useSyncExternalStore(
-    (onChange) => runtime?.store.subscribe(onChange) ?? (() => undefined),
-    () => runtime?.store.getState().connection.profile,
-  );
-  const profile =
-    liveProfile && (!connection.profile || liveProfile.revision >= connection.profile.revision)
-      ? liveProfile
-      : connection.profile;
-  const live = connection.transport === "connected" || connection.id === bound?.id;
-  const sshSupported = list?.supportedRouteKinds?.includes("ssh") ?? false;
+  const isBound = Boolean(bound && connection.backendId === bound.backendId);
+  // A registered node's profile is edited through the command node, which
+  // sees its profile events first; edits carry the freshest revision.
+  const node = portalState.nodes.find((entry) => entry.nodeId === connection.backendId);
+  const profile = connection.profile;
+  const live = connection.transport === "connected" || isBound || node?.available === true;
 
   const saveProfile = async (update: { displayName?: string; colorToken?: string }) => {
     if (!profile) return;
     setSaving(true);
     try {
       const payload = { expectedRevision: profile.revision, ...update };
-      if (connection.id === bound?.id) {
+      if (isBound) {
         await updateBackendProfile(payload as Parameters<typeof updateBackendProfile>[0]);
+      } else if (node && connection.backendId) {
+        await portal.invokeOnNode(connection.backendId, "update_backend_profile", payload);
       } else {
-        const runtime = registry.get(connection.id);
-        if (!runtime) throw new Error("This machine is not connected in this window.");
-        await runtime.mutate("update_backend_profile", payload, {
-          label: "Update machine profile",
-        });
+        throw new Error(
+          "Connect to this machine, or register it as a node in Nodes, to edit its profile.",
+        );
       }
       setDraftName(null);
       toast.success("Saved on the machine", {

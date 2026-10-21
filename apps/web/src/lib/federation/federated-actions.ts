@@ -1,83 +1,65 @@
 /**
- * Explicit-owner actions for machines observed from this renderer.
+ * Explicit-owner actions on another node's resources, sent through the
+ * command node (`invoke_on_node`), which routes them to the owner.
  *
  * Every action takes the concrete reference it was started with, so its
  * destination is captured when the user starts it — a later change of
  * focus, filter or selection cannot retarget it. The command names are the
- * backend's ordinary ones; only the client that carries them differs.
+ * node's ordinary ones. A lost answer is recorded by the command node as
+ * outcome-unknown and surfaces as `OutcomeUnknownError`; it is never resent.
  */
 
 import type { EnvironmentRef, ProjectRef } from "@orkestrator/protocol/federation";
-import type { BackendClientRegistry } from "./registry";
+import type { PortalStore } from "@/lib/portal/portal-store";
 
 export async function startFederatedEnvironment(
-  registry: BackendClientRegistry,
+  portal: PortalStore,
   ref: EnvironmentRef,
 ): Promise<void> {
-  await registry.require(ref.backendId).mutate(
-    "start_environment_background",
-    { environmentId: ref.environmentId },
-    {
-      label: "Start environment",
-    },
-  );
+  await portal.invokeOnNode(ref.backendId, "start_environment_background", {
+    environmentId: ref.environmentId,
+  });
 }
 
 export async function stopFederatedEnvironment(
-  registry: BackendClientRegistry,
+  portal: PortalStore,
   ref: EnvironmentRef,
 ): Promise<void> {
-  await registry.require(ref.backendId).mutate(
-    "stop_environment",
-    { environmentId: ref.environmentId },
-    {
-      label: "Stop environment",
-    },
-  );
+  await portal.invokeOnNode(ref.backendId, "stop_environment", {
+    environmentId: ref.environmentId,
+  });
 }
 
+/** Called only from the user's confirmation, which names the node and the environment. */
 export async function deleteFederatedEnvironment(
-  registry: BackendClientRegistry,
+  portal: PortalStore,
   ref: EnvironmentRef,
 ): Promise<void> {
-  await registry.require(ref.backendId).mutate(
-    "delete_environment",
-    { environmentId: ref.environmentId },
-    {
-      label: "Delete environment",
-    },
-  );
+  await portal.invokeOnNode(ref.backendId, "delete_environment", {
+    environmentId: ref.environmentId,
+  });
 }
 
 /**
  * Creating an environment inside a project instance targets that project's
- * machine. There is no placement or load balancing.
+ * node. There is no placement or load balancing.
  */
 export async function createFederatedEnvironment(
-  registry: BackendClientRegistry,
+  portal: PortalStore,
   ref: ProjectRef,
   input: { name?: string; environmentType?: "local" | "containerized" } = {},
 ): Promise<{ id: string }> {
-  const runtime = registry.require(ref.backendId);
-  const environment = await runtime.mutate<{ id: string }>(
-    "create_environment",
-    {
-      projectId: ref.projectId,
-      ...(input.name ? { name: input.name } : {}),
-      ...(input.environmentType ? { environmentType: input.environmentType } : {}),
-    },
-    { label: "Create environment" },
-  );
-  void runtime.requestHydrate();
-  return environment;
+  return portal.invokeOnNode<{ id: string }>(ref.backendId, "create_environment", {
+    projectId: ref.projectId,
+    ...(input.name ? { name: input.name } : {}),
+    ...(input.environmentType ? { environmentType: input.environmentType } : {}),
+  });
 }
 
 export async function updateFederatedMachineProfile(
-  registry: BackendClientRegistry,
+  portal: PortalStore,
   backendRef: { backendId: ProjectRef["backendId"] },
   update: { expectedRevision: number; displayName?: string; colorToken?: string },
 ): Promise<unknown> {
-  return registry
-    .require(backendRef.backendId)
-    .mutate("update_backend_profile", update, { label: "Update machine profile" });
+  return portal.invokeOnNode(backendRef.backendId, "update_backend_profile", update);
 }

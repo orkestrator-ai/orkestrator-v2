@@ -1,149 +1,125 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useStore } from "zustand";
 import {
-  LOCAL_CONNECTION_ID,
-  connectionDisplayName,
-  type ConnectionList,
-  type ConnectionSummary,
-} from "@orkestrator/protocol/connections";
-import { subscribeToConnections } from "@/lib/connections";
-import { FALLBACK_MACHINE_COLOR, defaultMachineColor } from "@orkestrator/protocol/backend-profile";
-import { createDesktopBackendClient, desktopBackendsApi } from "@/lib/federation/backend-client";
-import { BackendClientRegistry } from "@/lib/federation/registry";
-import type { SummaryPersistence } from "@/lib/federation/backend-runtime";
+  BACKEND_PROFILE_CHANGED_EVENT,
+  FALLBACK_MACHINE_COLOR,
+  defaultMachineColor,
+  parseBackendProfile,
+  type BackendProfile,
+} from "@orkestrator/protocol/backend-profile";
+import type { BackendId } from "@orkestrator/protocol/federation";
 import { isMachinePanelRealm } from "@/lib/federation/panel-realm";
+import { listen } from "@/lib/native/events";
 import {
-  browserFederationList,
-  createBrowserMachineClient,
-  subscribeToBrowserMachines,
-} from "@/lib/federation/browser-machines";
+  getOwnProfile,
+  portalStore,
+  type PortalState,
+  type PortalStore,
+} from "@/lib/portal/portal-store";
+
+/** The machine this realm is bound to: the command node (or leaf) the client connected to. */
+export interface BoundMachine {
+  /** Same as `backendId`: views key every machine by its node identity. */
+  connectionId: string;
+  backendId: BackendId;
+  name: string;
+  colorToken: string;
+}
 
 export interface FederationContextValue {
-  registry: BackendClientRegistry;
-  list: ConnectionList | null;
-  /** The machine this window is bound to (its own workspace realm). */
-  bound: ConnectionSummary | null;
-  /** Multi-machine views are on and this client can observe other machines. */
+  /** The command node's view of its other nodes. */
+  portal: PortalStore;
+  portalState: PortalState;
+  bound: BoundMachine | null;
+  /** This node commands at least one other node, so multi-machine views are shown. */
   enabled: boolean;
-  /** This client can observe other machines at all (desktop or hosted browser). */
+  /** This realm can show other machines at all (not a single-machine panel). */
   supported: boolean;
   kind: "desktop" | "browser" | "none";
-  /** Name and colour of this window's own machine, for its rows' dots. */
+  /** Name and colour of this realm's own machine, for its rows' dots. */
   boundMachine: { name: string; colorToken: string } | null;
 }
 
 const FederationContext = createContext<FederationContextValue | null>(null);
 
-const SUMMARY_KEY_PREFIX = "federation-summary:v1:";
-
-/** Last-known machine summaries in this client's storage (names and states only). */
-function localSummaryPersistence(): SummaryPersistence | null {
-  if (typeof window === "undefined") return null;
-  const key = (backendId: string) => `${SUMMARY_KEY_PREFIX}${backendId}`;
-  return {
-    load: (backendId) => {
-      const text = window.localStorage.getItem(key(backendId));
-      return text ? (JSON.parse(text) as unknown) : null;
-    },
-    save: (backendId, value) => window.localStorage.setItem(key(backendId), JSON.stringify(value)),
-    remove: (backendId) => window.localStorage.removeItem(key(backendId)),
-  };
-}
-
 function clientKind(): FederationContextValue["kind"] {
   if (typeof window === "undefined" || isMachinePanelRealm()) return "none";
-  if (desktopBackendsApi()) return "desktop";
-  // A hosted browser page served by a backend can add other machines
-  // directly over HTTPS; a native mobile shell keeps one machine per view.
-  if (
-    window.orkestratorGateway?.enabled &&
-    !window.__orkestratorClientPlatform?.endsWith("wkwebview")
-  ) {
-    return "browser";
-  }
-  return "none";
+  // The desktop positions native panel views; every other client (hosted
+  // browser, iOS) shows another node's workspace in a frame.
+  return window.orkestrator?.panels ? "desktop" : "browser";
 }
 
 /**
- * Owns the renderer's machine runtimes. It lives above any one workspace:
- * runtimes are created from the connection layer's list and disposed when
- * a machine is forgotten, never when a component unmounts.
+ * Multi-machine views of the backend this client is connected to. That
+ * backend is the command node: it keeps the registry, the connections and
+ * the live read model. This provider only reads it, so web, iOS and the
+ * desktop all see the same portal served by the same node.
  */
 export function FederationProvider({ children }: { children: ReactNode }) {
   const [kind] = useState(clientKind);
-  const registry = useMemo(
-    () =>
-      new BackendClientRegistry((connection) => {
-        if (kind === "desktop") return createDesktopBackendClient(connection.id);
-        if (kind === "browser") return createBrowserMachineClient(connection.id);
-        return null;
-      }, localSummaryPersistence()),
-    [kind],
-  );
-  const [list, setList] = useState<ConnectionList | null>(null);
+  const portalState = useStore(portalStore.store);
+  const [profile, setProfile] = useState<BackendProfile | null>(null);
+
+  useEffect(() => {
+    if (kind === "none") return;
+    return portalStore.start();
+  }, [kind]);
 
   useEffect(() => {
     if (kind === "none") return;
     let active = true;
-    const apply = (next: ConnectionList) => {
-      if (!active) return;
-      setList(next);
-      registry.sync(next, { enabled: next.features?.federation !== false });
-    };
-    if (kind === "desktop") {
-      const api = window.orkestrator?.connections;
-      void api
-        ?.list()
-        .then(apply)
-        .catch(() => undefined);
-      const unsubscribe = subscribeToConnections(apply);
-      return () => {
-        active = false;
-        unsubscribe();
-        registry.dispose();
-      };
-    }
-    apply(browserFederationList());
-    const unsubscribe = subscribeToBrowserMachines(() => apply(browserFederationList()));
+    let stop: (() => void) | null = null;
+    void getOwnProfile()
+      .then((value) => {
+        if (active) setProfile(value);
+      })
+      .catch(() => undefined);
+    void listen<unknown>(BACKEND_PROFILE_CHANGED_EVENT, ({ payload }) => {
+      try {
+        const next = parseBackendProfile(payload);
+        setProfile((current) => (current && current.revision > next.revision ? current : next));
+      } catch {
+        // A malformed event changes nothing.
+      }
+    }).then((unlisten) => {
+      if (active) stop = unlisten;
+      else unlisten();
+    });
     return () => {
       active = false;
-      unsubscribe();
-      registry.dispose();
+      stop?.();
     };
-  }, [kind, registry]);
+  }, [kind]);
 
   const value = useMemo<FederationContextValue>(() => {
-    const bound =
-      list?.connections.find((connection) => connection.id === list.activeConnectionId) ?? null;
-    const others =
-      list?.connections.filter((connection) => connection.id !== list.activeConnectionId) ?? [];
+    const selfId = portalState.selfId;
+    const bound: BoundMachine | null = selfId
+      ? {
+          connectionId: selfId,
+          backendId: selfId,
+          name: profile?.displayName ?? "This machine",
+          colorToken: profile?.colorToken ?? defaultMachineColor(selfId),
+        }
+      : null;
     return {
-      registry,
-      list,
+      portal: portalStore,
+      portalState,
       bound,
       supported: kind !== "none",
-      enabled: kind !== "none" && list?.features?.federation !== false && others.length > 0,
+      enabled: kind !== "none" && portalState.nodes.length > 0,
       kind,
       boundMachine: bound
-        ? {
-            name: machineDisplayName(bound),
-            colorToken:
-              bound.profile?.colorToken ??
-              (bound.backendId && bound.identity === "verified"
-                ? defaultMachineColor(bound.backendId)
-                : FALLBACK_MACHINE_COLOR),
-          }
+        ? { name: bound.name, colorToken: bound.colorToken ?? FALLBACK_MACHINE_COLOR }
         : null,
     };
-  }, [kind, list, registry]);
+  }, [kind, portalState, profile]);
 
   return <FederationContext.Provider value={value}>{children}</FederationContext.Provider>;
 }
 
-const INACTIVE_REGISTRY = new BackendClientRegistry(() => null);
-
 const INACTIVE: FederationContextValue = {
-  registry: INACTIVE_REGISTRY,
-  list: null,
+  portal: portalStore,
+  portalState: portalStore.getState(),
   bound: null,
   enabled: false,
   supported: false,
@@ -153,13 +129,4 @@ const INACTIVE: FederationContextValue = {
 
 export function useFederation(): FederationContextValue {
   return useContext(FederationContext) ?? INACTIVE;
-}
-
-/** Display name of a machine: device alias, then canonical profile, then host. */
-export function machineDisplayName(connection: ConnectionSummary | null | undefined): string {
-  if (!connection) return "This machine";
-  if (connection.nickname) return connection.nickname;
-  if (connection.profile?.displayName) return connection.profile.displayName;
-  if (connection.id === LOCAL_CONNECTION_ID) return "This computer";
-  return connectionDisplayName(connection);
 }

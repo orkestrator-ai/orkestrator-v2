@@ -130,25 +130,7 @@ interface Window {
       }): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
       answerSshPrompt?(promptId: string, answer: string | null): void;
     };
-    /**
-     * Electron only: commands and events of an explicit machine this window
-     * observes. Never resolves a destination from focus.
-     */
-    backends?: {
-      invoke<T = unknown>(
-        connectionId: string,
-        command: string,
-        args?: Record<string, unknown>,
-      ): Promise<T>;
-      observe(
-        connectionId: string,
-      ): Promise<import("@orkestrator/protocol/connections").ConnectionSummary>;
-      unobserve(connectionId: string): Promise<void>;
-      onEvent(
-        listener: (connectionId: string, epoch: number, event: string, payload: unknown) => void,
-      ): () => void;
-    };
-    /** Electron only: backend-scoped workspace panels inside this window. */
+    /** Electron only: panels showing another node's workspace inside this window. */
     panels?: {
       open(input: {
         connectionId: string;

@@ -11,7 +11,7 @@
 
 import type { ConnectionTransportState } from "@orkestrator/protocol/connections";
 import type { BackendId } from "@orkestrator/protocol/federation";
-import type { FederatedEnvironment, FederatedProject, SummaryFreshness } from "./backend-runtime";
+import type { FederatedEnvironment, FederatedProject, SummaryFreshness } from "./summaries";
 
 export interface MachineView {
   connectionId: string;

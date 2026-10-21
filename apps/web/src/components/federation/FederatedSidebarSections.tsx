@@ -11,7 +11,7 @@ import {
   type ProjectGroup,
 } from "@/lib/federation/aggregate";
 import { createFederatedEnvironment } from "@/lib/federation/federated-actions";
-import { OutcomeUnknownError } from "@/lib/federation/operation-recovery";
+import { OutcomeUnknownError } from "@/lib/portal/portal-store";
 import { cn } from "@/lib/utils";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useFederation } from "./FederationProvider";
@@ -80,7 +80,7 @@ function ProjectInstance({
   group: ProjectGroup;
   showMachineLabel: boolean;
 }) {
-  const { registry } = useFederation();
+  const { portal } = useFederation();
   const openPanel = useMachineViewStore((state) => state.openPanel);
   const [collapsed, setCollapsed] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -92,7 +92,7 @@ function ProjectInstance({
     const ref = project.ref;
     setCreating(true);
     try {
-      const environment = await createFederatedEnvironment(registry, ref);
+      const environment = await createFederatedEnvironment(portal, ref);
       openPanel({
         connectionId: machine.connectionId,
         projectId: ref.projectId,

@@ -3,6 +3,13 @@ import { AlertTriangle, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useBlockingOverlay } from "@/components/browser/browser-tab-hooks";
 import { browserPanelUrl } from "@/lib/federation/panel-realm";
+import {
+  closeLeafWorkspace,
+  keepWorkspaceAlive,
+  openLeafWorkspace,
+  storeWorkspaceForFrame,
+  type LeafWorkspace,
+} from "@/lib/portal/workspaces";
 import { cn } from "@/lib/utils";
 import { useMachineViewStore, type MachinePanelSpec } from "@/stores/machineViewStore";
 import { useFederation } from "./FederationProvider";
@@ -32,7 +39,7 @@ export function MachinePanelsRegion() {
 }
 
 function MachinePanel({ spec }: { spec: MachinePanelSpec }) {
-  const { kind, registry } = useFederation();
+  const { kind } = useFederation();
   const machines = useMachineViews();
   const machine = machines.find((candidate) => candidate.connectionId === spec.connectionId);
   const closePanel = useMachineViewStore((state) => state.closePanel);
@@ -97,10 +104,8 @@ function MachinePanel({ spec }: { spec: MachinePanelSpec }) {
           <MissingMachine />
         ) : kind === "desktop" ? (
           <NativePanelView spec={spec} />
-        ) : registry.get(spec.connectionId) ? (
-          <FramePanelView spec={spec} title={`${environmentName} on ${machine.name}`} />
         ) : (
-          <MissingMachine />
+          <FramePanelView spec={spec} title={`${environmentName} on ${machine.name}`} />
         )}
       </div>
     </section>
@@ -110,8 +115,8 @@ function MachinePanel({ spec }: { spec: MachinePanelSpec }) {
 function MissingMachine() {
   return (
     <div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
-      This machine is not saved on this device. Add a connection to it in Settings → Connections to
-      open this workspace.
+      This machine is not registered on the node you are connected to. Add it in Settings →
+      Connections → Nodes to open this workspace.
     </div>
   );
 }
@@ -217,21 +222,72 @@ function NativePanelView({ spec }: { spec: MachinePanelSpec }) {
 }
 
 /**
- * Hosted browser: a same-origin frame of this app, bound to the other
- * machine with this tab's own direct session for it. The frame talks to that
- * machine directly; nothing is relayed through this page's backend.
+ * Browser and iOS: a same-origin frame of this app bound to the node's
+ * workspace. The command node issues a short-lived grant; the frame talks to
+ * the node directly when it can, otherwise through the command node's relay.
+ * Closing the panel revokes the grant; the node's work keeps running.
  */
 function FramePanelView({ spec, title }: { spec: MachinePanelSpec; title: string }) {
+  const { boundMachine } = useFederation();
+  const [workspace, setWorkspace] = useState<LeafWorkspace | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
+  // The name only labels the path; a late profile load must not reopen the workspace.
+  const commandNodeName = useRef(boundMachine?.name ?? "");
+  commandNodeName.current = boundMachine?.name ?? commandNodeName.current;
+
+  useEffect(() => {
+    let disposed = false;
+    let opened: LeafWorkspace | null = null;
+    let stopRenewal: (() => void) | null = null;
+    void openLeafWorkspace(spec.connectionId as never, {
+      commandNodeName: commandNodeName.current,
+    })
+      .then((value) => {
+        if (disposed) {
+          void closeLeafWorkspace(value.workspaceId);
+          return;
+        }
+        opened = value;
+        storeWorkspaceForFrame(value);
+        stopRenewal = keepWorkspaceAlive(value.workspaceId);
+        setWorkspace(value);
+      })
+      .catch((error: unknown) => {
+        if (!disposed) setFailure(error instanceof Error ? error.message : String(error));
+      });
+    return () => {
+      disposed = true;
+      stopRenewal?.();
+      if (opened) void closeLeafWorkspace(opened.workspaceId);
+    };
+  }, [spec.connectionId]);
+
+  if (failure) {
+    return (
+      <div className="flex h-full items-center justify-center p-6 text-center text-sm text-destructive">
+        {failure}
+      </div>
+    );
+  }
+  if (!workspace) {
+    return (
+      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+        Opening…
+      </div>
+    );
+  }
   return (
     <iframe
       className="absolute inset-0 h-full w-full border-0"
       title={title}
       src={browserPanelUrl({
-        machineId: spec.connectionId,
+        workspaceId: workspace.workspaceId,
+        connection: workspace,
         ...(spec.projectId ? { projectId: spec.projectId } : {}),
         ...(spec.environmentId ? { environmentId: spec.environmentId } : {}),
       })}
       data-testid="frame-machine-panel"
+      data-connection-path={workspace.path}
     />
   );
 }

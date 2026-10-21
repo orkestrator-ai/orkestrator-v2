@@ -9,9 +9,10 @@ import {
 } from "@orkestrator/protocol/federation";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import type { MachineView } from "@/lib/federation/aggregate";
-import type { FederatedEnvironment } from "@/lib/federation/backend-runtime";
+import type { FederatedEnvironment } from "@/lib/federation/summaries";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import {
+  OUTCOME_UNKNOWN,
   connectionList,
   installDesktopFake,
   remoteConnection,
@@ -224,24 +225,24 @@ describe("UI-01: machines with identical IDs and project names", () => {
         within(header).getByTestId("machine-dot").getAttribute("data-machine-color"),
       ]),
     ).toEqual([
-      ["a", "teal"],
-      ["b", "rose"],
+      ["bk_a", "teal"],
+      ["bk_b", "rose"],
     ]);
     for (const section of sections) {
       expect(within(section).getByText("app")).toBeTruthy();
     }
     expect(
-      within(rowOf("a")).getByRole("button", { name: /^feature, on Machine A, Working/ }),
+      within(rowOf("bk_a")).getByRole("button", { name: /^feature, on Machine A, Working/ }),
     ).toBeTruthy();
     expect(
-      within(rowOf("b")).getByRole("button", { name: /^feature, on Machine B, Awaiting input/ }),
+      within(rowOf("bk_b")).getByRole("button", { name: /^feature, on Machine B, Awaiting input/ }),
     ).toBeTruthy();
-    expect(within(rowOf("a")).getByTestId("machine-dot").getAttribute("data-machine-color")).toBe(
-      "teal",
-    );
-    expect(within(rowOf("b")).getByTestId("machine-dot").getAttribute("data-machine-color")).toBe(
-      "rose",
-    );
+    expect(
+      within(rowOf("bk_a")).getByTestId("machine-dot").getAttribute("data-machine-color"),
+    ).toBe("teal");
+    expect(
+      within(rowOf("bk_b")).getByTestId("machine-dot").getAttribute("data-machine-color"),
+    ).toBe("rose");
   });
 
   test("UI-01: the project projection keeps same-named projects as separate instances", async () => {
@@ -278,9 +279,9 @@ describe("RT-02/OP-05: actions keep the destination captured when they started",
 
     // The user's focus moves to machine B while the confirmation is open.
     act(() => {
-      useMachineViewStore.getState().setMachineFilter("b");
+      useMachineViewStore.getState().setMachineFilter("bk_b");
       const panelId = useMachineViewStore.getState().openPanel({
-        connectionId: "b",
+        connectionId: "bk_b",
         projectId: "project-1",
         environmentId: "env-1",
         title: "feature",
@@ -312,7 +313,7 @@ describe("UI-04: creating inside a project instance", () => {
     await waitFor(() =>
       expect(useMachineViewStore.getState().panels).toEqual([
         expect.objectContaining({
-          connectionId: "b",
+          connectionId: "bk_b",
           projectId: "project-1",
           environmentId: "env-new",
         }),
@@ -322,7 +323,7 @@ describe("UI-04: creating inside a project instance", () => {
 });
 
 describe("Machine filter is presentation only", () => {
-  test("filter: choosing a machine updates the store without reloading, switching or unobserving", async () => {
+  test("filter: choosing a machine updates the store without reloading, switching or routing anything", async () => {
     const fake = installTwoMachines();
     const reload = mock(() => undefined);
     window.location.reload = reload;
@@ -330,32 +331,28 @@ describe("Machine filter is presentation only", () => {
     await waitFor(() =>
       expect(screen.getByTestId("machines-connectivity").textContent).toBe("3/3"),
     );
-    await waitFor(() => expect(fake.observe).toHaveBeenCalledTimes(2));
 
     await act(async () => {
       fireEvent.pointerDown(screen.getByTestId("machines-filter"), { button: 0, ctrlKey: false });
     });
     fireEvent.click(await screen.findByRole("menuitemradio", { name: /^Machine B, / }));
 
-    await waitFor(() => expect(useMachineViewStore.getState().machineFilter).toBe("b"));
+    await waitFor(() => expect(useMachineViewStore.getState().machineFilter).toBe("bk_b"));
     expect(screen.getByTestId("machines-filter").getAttribute("aria-label")).toMatch(
       /^Machines: Machine B\./,
     );
     expect(reload).not.toHaveBeenCalled();
     expect(fake.connections.use).not.toHaveBeenCalled();
-    expect(fake.unobserve).not.toHaveBeenCalled();
-    const commandsAfterLoad = fake.calls.filter(
-      (call) => call.command !== "get_projects" && call.command !== "get_environment_snapshots",
-    );
-    expect(commandsAfterLoad).toEqual([]);
+    // Nothing was routed to any node.
+    expect(fake.calls).toEqual([]);
   });
 });
 
-describe("OP-06: closing a machine panel releases observation only", () => {
-  test("OP-06: closing a panel closes its native view and never stops anything", async () => {
+describe("OP-06/CR-03: closing a machine panel releases observation only", () => {
+  test("OP-06/CR-03: a desktop panel opens the node's workspace; closing it never stops anything", async () => {
     const fake = installTwoMachines();
     useMachineViewStore.getState().openPanel({
-      connectionId: "a",
+      connectionId: "bk_a",
       projectId: "project-1",
       environmentId: "env-1",
       title: "feature",
@@ -364,7 +361,7 @@ describe("OP-06: closing a machine panel releases observation only", () => {
 
     await waitFor(() => expect(fake.panels.open).toHaveBeenCalledTimes(1));
     expect(fake.panels.open.mock.calls[0]![0]).toEqual({
-      connectionId: "a",
+      connectionId: "bk_a",
       projectId: "project-1",
       environmentId: "env-1",
     });
@@ -419,9 +416,7 @@ describe("SH-03: SSH prompts", () => {
 describe("Unknown outcomes", () => {
   test("OP-02 (UI): UnknownOutcomesNotice: an ambiguous write is shown against its machine, not retried, and can be dismissed", async () => {
     const fake = installTwoMachines(({ command }) =>
-      command === "start_environment_background"
-        ? Promise.reject(new TypeError("fetch failed"))
-        : undefined,
+      command === "start_environment_background" ? OUTCOME_UNKNOWN : undefined,
     );
     renderWithFederation(<RemoteSections />);
     await waitForRows(2);
@@ -446,5 +441,47 @@ describe("Unknown outcomes", () => {
     fireEvent.click(within(notice).getByRole("button", { name: "Dismiss Start environment" }));
     await waitFor(() => expect(screen.queryByTestId("unknown-outcomes") === null).toBe(true));
     expect(fake.callsTo("a", "start_environment_background")).toHaveLength(1);
+  });
+});
+
+describe("DP-01/DP-03/CR-03: browser and iOS panels open a leaf workspace", () => {
+  test("a frame panel binds to a grant from the command node, keeps it out of the URL and revokes it on close", async () => {
+    const fake = installTwoMachines();
+    // A browser client: no native panels.
+    delete (window.orkestrator as { panels?: unknown }).panels;
+    useMachineViewStore.getState().openPanel({
+      connectionId: "bk_a",
+      projectId: "project-1",
+      environmentId: "env-1",
+      title: "feature",
+    });
+    renderWithFederation(<MachinePanelsRegion />);
+    const frame = (await screen.findByTestId("frame-machine-panel")) as HTMLIFrameElement;
+    const url = new URL(frame.src);
+    expect(url.searchParams.get("panel")).toBe("workspace");
+    expect(url.searchParams.get("workspace")).toBe("workspace-1");
+    // No direct origin answered in this fixture: relayed through the command node.
+    expect(url.searchParams.get("path")).toBe("relay");
+    expect(frame.src).not.toContain("okg_");
+    const stored = JSON.parse(sessionStorage.getItem("orkestrator.workspace.workspace-1")!);
+    expect(stored.baseUrl).toBe(`${window.location.origin}/__orkestrator/nodes/bk_a`);
+    expect(stored.token).toBeUndefined();
+    const openCalls = fake.invoke.mock.calls.filter(
+      ([command]) => command === "open_node_workspace",
+    );
+    expect(openCalls).toEqual([["open_node_workspace", { nodeId: "bk_a" }]]);
+
+    fireEvent.click(screen.getByRole("button", { name: /^Close feature panel\./ }));
+    await waitFor(() =>
+      expect(
+        fake.invoke.mock.calls.some(
+          ([command, args]) =>
+            command === "close_node_workspace" &&
+            (args as { workspaceId?: string }).workspaceId === "workspace-1",
+        ),
+      ).toBe(true),
+    );
+    expect(sessionStorage.getItem("orkestrator.workspace.workspace-1")).toBeNull();
+    expect(fake.calls.filter((call) => /^(stop|delete)_/.test(call.command))).toEqual([]);
   });
 });

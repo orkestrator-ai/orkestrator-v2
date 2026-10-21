@@ -1,8 +1,4 @@
-import type {
-  ConnectSshRouteInput,
-  ConnectionList,
-  ConnectionSummary,
-} from "@orkestrator/protocol/connections";
+import type { ConnectSshRouteInput, ConnectionList } from "@orkestrator/protocol/connections";
 import type { FederationFeatureFlags } from "@orkestrator/protocol/device-catalogue";
 import { isTrustedRendererUrl } from "./window.js";
 
@@ -53,14 +49,6 @@ export type GatewaySnapshot = {
 export type FederationIpcDependencies = {
   ipc: IpcMainLike;
   trustedRendererUrl: string;
-  invokeOn(
-    event: IpcEventLike,
-    connectionId: string,
-    command: string,
-    args: Record<string, unknown>,
-  ): Promise<unknown>;
-  observe(event: IpcEventLike, connectionId: string): ConnectionSummary;
-  unobserve(event: IpcEventLike, connectionId: string): void;
   gatewaySnapshot(event: IpcEventLike): GatewaySnapshot;
   connectSsh(event: IpcEventLike, input: ConnectSshRouteInput): Promise<ConnectionList>;
   probeSshHostKey(
@@ -97,7 +85,6 @@ export type FederationIpcDependencies = {
 };
 
 const MAX_ID_LENGTH = 256;
-const MAX_COMMAND_LENGTH = 128;
 
 function id(value: unknown, label: string): string {
   if (typeof value !== "string" || value.length === 0 || value.length > MAX_ID_LENGTH) {
@@ -155,26 +142,6 @@ export function registerFederationIpc(deps: FederationIpcDependencies): void {
     });
   };
 
-  handle("orkestrator:backends:invoke", (event, connectionId, command, args) => {
-    if (
-      typeof command !== "string" ||
-      command.length === 0 ||
-      command.length > MAX_COMMAND_LENGTH
-    ) {
-      throw new Error("Expected command to be a string");
-    }
-    const safeArgs =
-      args && typeof args === "object" && !Array.isArray(args)
-        ? (args as Record<string, unknown>)
-        : {};
-    return deps.invokeOn(event, id(connectionId, "a connection ID"), command, safeArgs);
-  });
-  handle("orkestrator:backends:observe", (event, connectionId) =>
-    deps.observe(event, id(connectionId, "a connection ID")),
-  );
-  handle("orkestrator:backends:unobserve", (event, connectionId) => {
-    deps.unobserve(event, id(connectionId, "a connection ID"));
-  });
   deps.ipc.on?.("orkestrator:connections:gateway-sync", (event) => {
     if (!isTrustedSender(event)) {
       event.returnValue = null;

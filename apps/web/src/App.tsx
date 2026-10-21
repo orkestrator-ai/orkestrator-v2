@@ -94,7 +94,8 @@ import { subscribeToConnections } from "@/lib/connections";
 import { FederationProvider } from "@/components/federation/FederationProvider";
 import { SshPromptDialog } from "@/components/federation/SshPromptDialog";
 import { FederationEffects } from "@/components/federation/FederationEffects";
-import { machinePanelTarget } from "@/lib/federation/panel-realm";
+import { browserPanelWorkspaceId, machinePanelTarget } from "@/lib/federation/panel-realm";
+import { keepFrameWorkspaceAlive } from "@/lib/portal/workspaces";
 
 export const DOCKER_AVAILABILITY_POLL_INTERVAL_MS = 60_000;
 export const DOCKER_STARTUP_CONFIRMATION_DELAY_MS = 1_500;
@@ -309,6 +310,12 @@ function App() {
     if (target.environmentId)
       ui.selectProjectAndEnvironment(target.projectId, target.environmentId);
     else ui.selectProject(target.projectId);
+  }, []);
+  // A workspace opened in its own tab renews its grant itself; a frame's
+  // parent also renews it, which is harmless.
+  useEffect(() => {
+    const workspaceId = browserPanelWorkspaceId();
+    return workspaceId && window.top === window ? keepFrameWorkspaceAlive(workspaceId) : undefined;
   }, []);
   useEffect(() => startPaneLayoutPersistence(), []);
   useEffect(() => {

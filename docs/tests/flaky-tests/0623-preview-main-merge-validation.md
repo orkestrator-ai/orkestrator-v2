@@ -145,3 +145,35 @@ after the outer deadline prevented inner finalization),
 Playwright artifacts are under `output/agent-testing/` with the run IDs above.
 Both manual profiles were stopped and reset; the isolated browser runner also
 stopped/reset its own profile. No manual profile state was retained.
+
+
+## Second main merge — 2026-10-21
+
+Fetched again at the user's request and merged `origin/main` at `3cfc33fe`
+into the preceding merge `bf04abc7`. The incoming scope was 31 paths, including
+container account hand-off, the entrypoint and Codex auth handling. Both index
+conflicts retained all evidence; todo counts were recomputed from merged open
+checkboxes and per-file rows: one very high, 17 high, 266 medium and 283 low,
+567 total. Relative file links (1,224) and heading anchors (18) passed before
+adding this validation evidence; conflict-marker and whitespace scans were clear.
+
+Formatting, lint, all typechecks, the desktop build and workspace Docker image
+build passed. Focused backend account, Codex engine and container marker/runtime
+shell checks passed. The real-browser account scenario passed (one case, 8.0 s).
+`ORKESTRATOR_AGENT_TEST_PROFILE=preview-main-merge2
+ORKESTRATOR_AGENT_TEST_RUN_ID=preview-main-merge2-docker
+ORKESTRATOR_AGENT_TEST_DOCKER=1 mise run test:logged -- --name preview-merge2-docker
+-- mise run test:agent:docker` passed nine cases, with two credentialed probes
+skipped, in 74.1 s. The profile was stopped and reset, removing two exact-owner
+containers, four volumes, one network and its disposable state.
+
+The complete `mise run test` finished in 469.0 s with two backend failures;
+every other package and group passed. Both complete unchanged owning files
+passed separately: submodule recovery in 14.3 s ([0248](0248-move-restart-recovery-submodule-timeout.md))
+and public exec in 31.6 s ([0624](0624-public-exec-start-refused-in-aggregate.md)).
+The aggregate remains non-green; these isolated passes establish intermittence
+without proving a cause. No source, assertion, timeout or skip was changed to
+obtain a pass. Full evidence is in `orkestrator-test-run.aIlmtw` under the host
+temporary directory. Electron, design, CLI scenario and iOS suites were omitted
+because those implementation surfaces did not change in this second merge;
+credentialed provider probes retained their opt-ins.

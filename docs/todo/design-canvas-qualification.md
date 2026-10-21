@@ -2,7 +2,7 @@
 
 Checked against `main` at `2459b05c` (2026-10-15); the flake review against
 `9906db30` (2026-10-16); the live agent cycle against `a5d338c1`
-(2026-10-18).
+(2026-10-18) and its Claude rerun against `9b3f53a2` (2026-10-21).
 
 The design canvas ([`design-canvas.md`](../architecture/design-canvas.md)) is
 complete in code: recoverable operations, safe export, history, incremental
@@ -32,8 +32,10 @@ nobody builds them speculatively.
   runs one fixture-scoped cycle per provider through the real app: launch with
   create, inspect, refine, capture and `save_canvas`; **Ask agent** against a
   stale selection; an approval pending across an environment switch; and an
-  unsent implementation handoff. Codex passed it on 2026-10-18; Claude passed
-  the launch cycle only (see [Live cycle evidence](#live-cycle-evidence-2026-10-18)).
+  unsent implementation handoff. Codex passed it on 2026-10-18 (see
+  [Live cycle evidence](#live-cycle-evidence-2026-10-18)); Claude passed the
+  launch cycle then and the whole cycle on 2026-10-21, twice (see
+  [Claude rerun](#live-cycle-evidence-claude-rerun-2026-10-21)).
 - Component browser spec `e2e/DesignCanvas.spec.ts` runs the real runtime at
   desktop and phone widths. Because `DesignService` loads `bun:sqlite` since
   #969, the spec drives it in a Bun child process (`e2e/design-service-host.ts`,
@@ -57,14 +59,6 @@ nobody builds them speculatively.
 Live-agent and platform runs share prerequisites and batching with other todo
 files; see [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md).
 
-- **Live agents: Claude remainder.** Codex passed the whole cycle and Claude
-  the launch cycle on 2026-10-18. Claude's **Ask agent**, approval and handoff
-  steps could not run: the account the profile used returned
-  `429 rate_limit` on six consecutive runs over half an hour, on the default
-  model and on Haiku alike
-  (flake [0450](../tests/flaky-tests/0450-claude-live-design-account-rate-limit.md)).
-  Rerun `design-live.spec.ts` with `ORKESTRATOR_AGENT_TEST_DESIGN_PROVIDERS=claude`
-  on an account with headroom and record the result below.
 - **Opening prompt of a new design tab needs the tab mounted.** The agent tab
   of **New design workspace** sends its brief from the mounted tab
   (`AgentNativeTab.controller.tsx`, `initialPrompt`) once its projection loads.
@@ -266,6 +260,78 @@ test:agent:browser -- e2e/agent-testing/design-live.spec.ts`, with
   records were updated. Every other workspace package, bridges, and protocol
   verification passed. Electron, Docker and iOS suites were omitted because
   the change concerns local browser qualification and internal interrupt cleanup.
+
+## Live cycle evidence: Claude rerun (2026-10-21)
+
+The Claude steps that the account rate limit blocked on 2026-10-18 (flake
+[0450](../tests/flaky-tests/0450-claude-live-design-account-rate-limit.md))
+now pass.
+
+- **Setup.** Branch `qualify-claude-design-cycle-rerun-dab5ea290ebf` at
+  `9b3f53a2`, all five bridges rebuilt. Profile `qa-design-live-c06`:
+  `mise run dev:test --profile qa-design-live-c06 --fixture --credential-source
+  claude --agent-platforms claude`, started with `CLAUDE_CONFIG_DIR` set to an
+  empty, owner-only scratch directory. Pins: Claude Code 2.1.296 (Agent SDK
+  0.3.296), default model (the transcript reports `claude-opus-5-5`, High).
+  The profile authenticates with the host's default login (its plain
+  Keychain entry, access token only), which the app's last usage read
+  (23:59Z on 2026-10-20) showed at 0% of its five-hour and weekly windows.
+  Command:
+
+  ```bash
+  ORKESTRATOR_AGENT_TEST_PROFILE=qa-design-live-c06 ORKESTRATOR_AGENT_TEST_LIVE_DESIGN=1 \
+    ORKESTRATOR_AGENT_TEST_DESIGN_PROVIDERS=claude ORKESTRATOR_AGENT_TEST_DESIGN_TURN_TIMEOUT_MS=360000 \
+    mise run test:logged -- --name design-live-claude-c06-r1 -- bunx playwright test \
+    --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/design-live.spec.ts --workers=1
+  ```
+
+- **Run 1 passed** (started 00:09:57Z, 80.7 s, no retry). Step times: launch
+  16.0 s, reload 1.6 s, Ask agent 14.0 s, approval 30.0 s, handoff 8.0 s.
+  Launch: `get_canvas_summary`, `create_frame`, `inspect_element`,
+  `replace_element_html`, `capture_frame`, `save_canvas`, and the export landed
+  at the nonce path. Ask agent: the stale-revision notice showed; Claude
+  re-read (`get_canvas_summary`, two `inspect_element`), said the frame had
+  moved on, and replaced only `#title`, so both its edit and the other
+  client's survived. Approval (Ask): the `touch` command parked as **Approve
+  command**; the turn stayed `blocked` with no Stop button through a 15 s
+  environment switch and a renderer reload, with the marker file absent and the
+  canvas revision unchanged. After approval the command ran and
+  `set_element_styles` landed the colour. Handoff: **Implement** opened a
+  second conversation holding the unsent draft across a switch and a reload,
+  nothing was sent, and the canvas linked both conversations. Whole cycle: 11
+  design MCP calls, 0 failed, 19,483 response bytes.
+- **Run 2 passed** (started 00:22:16Z, 80.5 s): the same steps in 17.0, 1.6,
+  13.0, 29.2 and 7.9 s; 10 design MCP calls (one `inspect_element` fewer on
+  Ask), 0 failed, 16,762 response bytes.
+- **Rate limit.** No 429 in either run. An attempt at 00:09Z was stopped by
+  hand after a few seconds, because the shell running it had too short a
+  timeout, and is not counted.
+- **Not recorded.** The spec approves every pending tool request of the
+  approval turn and logs only design calls, so whether Claude also asked
+  before `set_element_styles` (Codex asks an `mcp-form`) is not in the
+  evidence. Nothing in the Claude bridge pre-allows `orkestrator-design`
+  tools in Ask mode.
+- **Observation, not a defect.** The approval screenshot, taken right after
+  the reload, catches the compose dock's 300 ms slide from centred to docked
+  (`NativeComposeDock`), so the "Ready to build!" heading shows faded over the
+  transcript. It is the intended transition after the transcript loads.
+- **Isolation.** Claude's session records went to the scratch config directory
+  (four fixture and worktree project folders), not to any host provider home;
+  no credential file was written there. The profile was stopped and reset,
+  and the scratch directory deleted. Artifacts (results JSON and four
+  screenshots per run) are under `output/agent-testing/qa-design-live-c06/`:
+  run 2 in `browser/`, run 1 in `run-1/`.
+- **Follow-up found while setting up.** At `9b3f53a2`, an agent-test profile
+  took the default host login's token but used the launching shell's
+  `CLAUDE_CONFIG_DIR` as the bridge's configuration directory. Started from a
+  shell on an added account, it ran on one account and wrote into the
+  other's directory, with no way to pick the account with headroom. The
+  merged host-home isolation change now keeps writes in the profile; selecting
+  the matching credential entry remains logged in
+  [agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md).
+- **Repository validation.** No product or test code changed. `mise run
+  check` passed, and so did the flake-index and doc-link unit tests. A full
+  `mise run test` passed all four groups in 647.6 s with no profile live.
 
 ## Constraints and rationale
 

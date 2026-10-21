@@ -1,5 +1,6 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
 
+import { DOCKER_LABEL_APP_VALUE } from "../src/core/constants";
 import { createCommandFixtures } from "./command-fixtures";
 
 const {
@@ -19,6 +20,7 @@ const {
   reserveFreePort,
   startAuthenticatedContainerServer,
   startControllableHealthServer,
+  waitForCondition,
   withFakeDocker,
 } = await createCommandFixtures();
 
@@ -794,6 +796,129 @@ exit 0
       else process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = previousHostHome;
       if (previousImportedAuth === undefined) delete process.env.FAKE_PI_IMPORTED_AUTH;
       else process.env.FAKE_PI_IMPORTED_AUTH = previousImportedAuth;
+    }
+  });
+
+  test("a Pi stop by full container ID waits for a start issued by an abbreviated one", async () => {
+    const hostPort = await reserveFreePort();
+    const dir = await createTempDir("ork-pi-bridge-queue-");
+    const fullId = "container-pi-queue-0123456789abcdef";
+    const environment = createEnvironment({
+      id: "env-container-pi-queue",
+      environmentType: "containerized",
+      containerId: fullId,
+      status: "running",
+    });
+    const { context } = createContext(environment, {
+      globalConfig: { enabledAgentPlatforms: ["pi"] },
+    });
+    context.runtimeFlavor = "agent-test";
+    context.credentialSources = new Set(["pi"]);
+    const hostHome = path.join(dir, "host");
+    const hostAuth = path.join(hostHome, ".pi", "agent", "auth.json");
+    await fs.mkdir(path.dirname(hostAuth), { recursive: true });
+    await fs.writeFile(
+      hostAuth,
+      JSON.stringify({
+        anthropic: {
+          type: "oauth",
+          access: "pi-access",
+          refresh: "SENTINEL-HOST-REFRESH",
+          expires: Date.now() + 8 * 3600_000,
+        },
+      }),
+    );
+    const files = {
+      FAKE_BRIDGE_HOST_PORT: String(hostPort),
+      FAKE_BRIDGE_PID_FILE: path.join(dir, "pid"),
+      FAKE_BRIDGE_TOKEN_FILE: path.join(dir, "token"),
+      FAKE_PI_SYNC_STARTED: path.join(dir, "sync-started"),
+      FAKE_PI_SYNC_RELEASE: path.join(dir, "sync-release"),
+      FAKE_PI_ORDER: path.join(dir, "order"),
+      FAKE_APP_LABEL: DOCKER_LABEL_APP_VALUE,
+      FAKE_FULL_ID: fullId,
+      ORKESTRATOR_AGENT_TEST_HOST_HOME: hostHome,
+    };
+    const previous = Object.fromEntries(Object.keys(files).map((key) => [key, process.env[key]]));
+    Object.assign(process.env, files);
+    const commands = createCommandRegistry();
+
+    // The abbreviated ID passes the registry's ownership probe as an unlabelled
+    // container whose full ID an environment references. The login push blocks
+    // until released, holding the start inside the queue.
+    const dockerScript = `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  inspect)
+    case "$*" in
+      *".Id"*) printf '<no value>\\trunning\\t%s\\t%s\\n' "$FAKE_APP_LABEL" "$FAKE_FULL_ID" ;;
+      *) printf 'running\\n' ;;
+    esac
+    exit 0 ;;
+  port) printf '127.0.0.1:%s\\n' "$FAKE_BRIDGE_HOST_PORT"; exit 0 ;;
+  exec)
+    printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+    case "$*" in
+      *"/home/node/.pi/agent/auth.json"*)
+        cat > /dev/null
+        : > "$FAKE_PI_SYNC_STARTED"
+        while [ ! -f "$FAKE_PI_SYNC_RELEASE" ]; do sleep 0.02; done
+        printf 'sync\\n' >> "$FAKE_PI_ORDER"
+        exit 0 ;;
+      *"cat /tmp/pi-bridge-token"*)
+        cat "$FAKE_BRIDGE_TOKEN_FILE" 2>/dev/null || true
+        exit 0 ;;
+      *pkill*)
+        printf 'stop\\n' >> "$FAKE_PI_ORDER"
+        rm -f "$FAKE_BRIDGE_TOKEN_FILE"
+        pid=$(cat "$FAKE_BRIDGE_PID_FILE" 2>/dev/null || true)
+        if [ -n "$pid" ]; then kill "$pid" 2>/dev/null || true; fi
+        exit 0 ;;
+    esac
+    printf 'launch\\n' >> "$FAKE_PI_ORDER"
+    token=$(printf '%s' "$*" | sed -n "s/.*PI_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p")
+    printf '%s' "$token" > "$FAKE_BRIDGE_TOKEN_FILE"
+    bun -e 'require("node:http").createServer((q,s)=>{s.writeHead(q.url==="/global/health"?200:404,{"content-type":"application/json"});s.end("{}")}).listen(Number(process.env.FAKE_BRIDGE_HOST_PORT),"127.0.0.1")' >/dev/null 2>&1 &
+    printf '%s' "$!" > "$FAKE_BRIDGE_PID_FILE"
+    exit 0 ;;
+esac
+exit 0
+`;
+
+    try {
+      await withFakeDocker(dockerScript, async () => {
+        process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = hostHome;
+        const start = commands.get("start_pi_server")?.(
+          { containerId: "container-pi-queue" },
+          context,
+        );
+        await waitForCondition(() => existsSync(files.FAKE_PI_SYNC_STARTED), "the login push");
+        const stop = commands.get("stop_pi_server")?.({ containerId: fullId }, context);
+        // Both resolve to the persisted ID, so the stop queues behind the start.
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        expect(await fs.readFile(files.FAKE_PI_ORDER, "utf8").catch(() => "")).toBe("");
+        await fs.writeFile(files.FAKE_PI_SYNC_RELEASE, "");
+        await expect(start).resolves.toMatchObject({ hostPort, wasRunning: false });
+        await stop;
+        expect((await fs.readFile(files.FAKE_PI_ORDER, "utf8")).trim().split("\n")).toEqual([
+          "sync",
+          "launch",
+          "stop",
+        ]);
+      });
+    } finally {
+      const pid = await fs.readFile(files.FAKE_BRIDGE_PID_FILE, "utf8").catch(() => "");
+      if (pid) {
+        try {
+          process.kill(Number(pid));
+        } catch {
+          // already gone
+        }
+      }
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
     }
   });
 

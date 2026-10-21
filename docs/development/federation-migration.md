@@ -26,10 +26,12 @@ version-1 snapshot. On macOS that is
 [federation.md](../architecture/federation.md#device-catalogue-version-2)
 for the format.
 
-**One-time migration** (`ConnectionManager.loadCatalogue`, then
-`migrateDesktopConnections`) runs at startup only when **all** of these hold:
+**One-time migration** (`loadOrMigrateCatalogue` in
+`connection-catalogue-store.ts`, then `migrateDesktopConnections`) runs at
+startup when **all** of these hold:
 
-- the native catalogue file does not exist;
+- the native catalogue does not exist yet, or exists without
+  `migratedFromVersion: 1` (a late import, see below);
 - the local backend started;
 - the version-1 list could be read.
 
@@ -49,7 +51,9 @@ It then does the following:
    `migratedFromVersion: 1` and `migratedAt`. At most 64 rows are migrated.
 5. Drops malformed historical rows (bad address and similar) from version 2
    only. They stay in the untouched version-1 list.
-6. Saves the catalogue.
+6. Saves the catalogue. For a late import, the existing native catalogue is
+   kept and only version-1 entries it does not already have (by ID) are
+   added, then `migratedFromVersion: 1` is recorded so it never runs again.
 
 **Migration never merges machines.** Every migrated machine starts
 provisional. Its first successful hello records `verifiedInstallationId` and
@@ -59,14 +63,14 @@ merged automatically. Forget one of them to resolve it.
 
 Edge cases:
 
-- If reading the version-1 list fails, the client starts with an empty
-  catalogue and saves nothing, so the next start tries again. However, any
-  save in the meantime creates the native file, and migration then never
-  runs. Adding a machine is one such save.
-- If Local fails to start on the first launch after upgrading, nothing can be
-  migrated, because the version-1 list lives in Local's `config.json`. With no
-  native catalogue, startup fails as it did before. Remote-only startup needs a
-  native catalogue with at least one machine from an earlier launch.
+- If reading the version-1 list fails, or Local is down, the client starts
+  with what it has (possibly an empty catalogue). Machines added meanwhile are
+  saved natively, and the next start that can read the version-1 list imports
+  its missing entries late (step 6), so nothing is lost.
+- If Local fails to start on the first launch after upgrading and there is no
+  native catalogue yet, startup fails as it did before (there is nothing to
+  show). Remote-only startup needs a native catalogue with at least one
+  machine.
 - A torn or unparsable primary file falls back to
   `device-connections.backup.json`. If both are unreadable, initialization
   fails with "The saved connection catalogue is unreadable. It was left in
@@ -156,11 +160,11 @@ directory. An older backend binary does not use it.
 | Client | Backend | Behaviour |
 | --- | --- | --- |
 | New desktop | New | Hello verifies identity, canonical profile and capabilities. Several routes per machine; SSH when the backend serves `--loopback-client-port`; same-token fallback. |
-| New desktop | Older, without hello | HTTPS works through the authenticated status check (`legacy`). Identity stays provisional: never merged, no fallback. SSH is refused (`legacy-backend`). The colour is neutral and there is no profile editing. The hello is attempted only per connection attempt, with no unknown-command polling. |
+| New desktop | Older, without hello | HTTPS works through the authenticated status check (`legacy`). Identity stays provisional: never merged, no fallback. SSH is refused (`legacy-backend`). The colour is the entry's persisted provisional colour (labelled cached) and there is no profile editing. The hello is attempted only per connection attempt, with no unknown-command polling. |
 | New desktop | Incompatible client API range | `incompatible`, with no retry loop. |
 | New desktop, Local not running | Any | Saved remote machines connect from the native catalogue. Local calls fail with "The Local backend on this computer is not running." This needs a native catalogue with at least one machine. |
 | New hosted browser | New or older | Other machines over direct HTTPS. Each must list the page's origin in `--allowed-origins`. Without a hello, a machine is added provisionally and duplicates cannot be detected. SSH is not available. |
 | Desktop without SSH support (Windows, or `sshRoutes` off) | Any | SSH routes are listed as unsupported. An SSH-only machine reports that it needs the desktop app's SSH support, and never fakes a connection. |
 | Older desktop | New | Unaffected: additive API, and it keeps its version-1 list. |
 | Older browser or CLI | New | Unaffected: additive API. |
-| Any | Two installations sharing a copied ID | Two saved entries that verify the same ID show **conflict**, with fallback off. A new address added with **Add machine** that proves an ID already verified **joins** that machine as another route (the ID-02 path), so a copied ID is not detected there. Automatic fallback between such routes still needs an identical token. There is no repair or re-pair UI. |
+| Any | Two installations sharing a copied ID | Two saved entries that verify the same ID show **conflict**, with fallback off. A new address added with **Add machine** that proves an ID already verified is refused (`identity-duplicate`); the user adds it explicitly as a connection method of that machine instead (the ID-02 path), which re-checks identity. Automatic fallback between routes still needs an identical token. There is no repair or re-pair UI. |

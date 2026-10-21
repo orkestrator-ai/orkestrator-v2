@@ -152,7 +152,10 @@ handshake before a route is used:
   collapsed, at most 64 characters. A device nickname is a separate local
   alias, shown as "(on this device)", and takes precedence for display.
 - Without a profile, a verified ID falls back to `defaultMachineColor`. An
-  unverified machine renders `neutral`.
+  unverified machine shows the `provisionalColor` persisted with its device
+  catalogue entry (derived from the entry ID when it was saved), labelled as
+  cached; the canonical profile replaces it once the machine publishes one.
+  The renderer's fallback for a token it does not know is `neutral`.
 
 ## Device catalogue (version 2)
 
@@ -249,10 +252,13 @@ backend. It stays readable and writable while Local is stopped or crashed.
    become `incompatible`. None of these are hidden by trying another route.
    `useRoute` clears the quarantine and retries interactively.
 
-`connect` (HTTPS) and `connectSsh` add routes. A route that proves an
-installation already verified on this device joins that machine. "Add
-connection method" (`connectionId`) requires the machine to be verified
-already, and the new route must prove the same installation. If two saved
+`connect` (HTTPS) and `connectSsh` add routes. A new address (Add machine)
+that proves an installation already verified on this device is refused
+(`identity-duplicate`) with guidance: matching IDs alone are not trusted to
+merge. "Add connection method" (`connectionId`) requires the machine to be
+verified already, and the new route must prove the same installation. With
+multi-machine views on, adding a machine uses `select: false`: it is added
+beside the window's machine instead of switching the window. If two saved
 entries prove one identity, both show `identity: "conflict"` and fallback is
 disabled. Removing a route is refused for a machine's last route. Use Forget
 for that. Changing the route order never moves a healthy active route.
@@ -549,124 +555,118 @@ routeFallback: false` and has no toggles.
 
 ## Known limitations
 
-These are plan items that are not implemented, or are only partly
-implemented.
+Plan items that are not implemented, or only partly, as of this change.
 
 - **No shared client-runtime package.** The runtime lives in
-  `apps/web/src/lib/federation` and is not used by iOS. The bound machine
-  still uses the legacy singleton stores (`projectStore`, `environmentStore`
-  and others). Isolation between machines comes from realms, not from
-  runtime-scoped store factories.
+  `apps/web/src/lib/federation`. The bound machine keeps the legacy
+  singleton stores (`projectStore`, `environmentStore`, …); isolation between
+  machines comes from separate renderer realms, not from runtime-scoped
+  store factories. Two machines' workspaces are never in one React tree.
 - **Desktop machine panels** have no native browser previews and no live
-  artifact hosts (`browserPreviewManager` and `artifactHosts` are `null` for
-  panel senders). A panel cannot switch machines. Turning `federation` off
-  removes other machines' views, so open panels show "not saved on this
-  device" and close their native views.
-- **Hosted-browser panels** are same-origin frames. They share the page's
-  `localStorage` keys, because per-machine namespacing applies only in
-  Electron. Tokens for other machines last for the tab session only. The
-  other backend must allow the page's origin (`--allowed-origins`).
-- **Mobile**: iOS WKWebView stays single-machine (`kind: "none"`). There is
-  no mobile SSH, and background/resume (MB-01) is not addressed.
-- **SSH**: macOS and Linux desktop only. Windows is not qualified. There is no
-  SSH in browsers. Nothing installs or starts a remote backend, and there is
-  no SSH pairing for the gateway token. There is no ControlMaster
-  multiplexing. No UI removes or rotates a trusted host key: changed-key
-  recovery is manual (see [ssh-routes.md](../development/ssh-routes.md)).
-  Askpass prompts go to the focused main window.
-- **Grants**: the hello never sends `authorizationScopeId`. Grant
-  equivalence is identical token strings, so routes with different tokens
-  never fall back automatically.
-- **Identity conflicts** are shown as a status and message only. There is no
-  merge or re-pair UI. Resolve one by forgetting one of the entries. The hello
-  is trusted as reported. A second installation with a copied ID, added with
-  **Add machine**, joins the first machine as another route instead of
-  raising a conflict (plan ID-04 is met only for two existing entries).
-  Fallback between such routes still needs an identical token.
-- **`autoConnect`** is persisted and settable over IPC, but no UI sets it,
-  the summary does not expose it, and nothing reads it. While federation is
-  on, every saved machine is observed.
-- **`provisionalColor`** exists in the schema but is never written.
-  Unverified machines without a profile render the neutral colour.
-- **Summaries** are capped at 500 projects and 500 environments per project,
-  with a truncation notice and no pagination. The plan's per-environment
-  detail demand (`acquireEnvironmentDemand`) does not exist; detail comes only
-  from panels. Last-known summaries are kept in memory only, so after a
-  restart an unreachable machine shows just its cached name and colour.
-- **Global creation**: the sidebar's **Add project** still targets the
-  window's bound machine, with no machine selector. Per-project **New
-  environment** on other machines targets its owner correctly. Settings for
-  another machine are edited inside its panel.
-- **Repository grouping**: there is no UI for explicit user mappings, and the
-  backend publishes no repository hint. The hint is derived by the client from
-  `gitUrl`.
-- **Revocation**: there is no "revoke this device" action and no revocation
-  signal from the backend. Summaries are purged only when the transport
-  becomes `authentication-required` or `trust-blocked`.
-- **Deep links** are a page query parameter only. Desktop has no OS URL
-  handler, and Copy link exists only on other machines' rows. Attention
-  notices are in-app toasts, not OS notifications.
-- **Route policy**: there is no "prefer fastest" mode (optional in the plan).
-- **Performance**: only a synthetic in-process benchmark exists
-  ([federation-benchmarks.md](../development/federation-benchmarks.md)). The
-  plan's real-backend matrix, p95 approval and completion visibility, bytes per
-  minute, and multi-client runs are not measured.
+  interactive-artifact hosts (`browserPreviewManager` and `artifactHosts`
+  are `null` for panel senders), so those fall back to their non-native
+  presentations there. A panel never switches machines. The panel overlay is
+  hidden while a dialog or menu of the window is open.
+- **Hosted-browser panels** are same-origin frames with a direct session to
+  the other machine; that machine must allow the page's origin
+  (`--allowed-origins`). Tokens for other machines last for the tab session
+  only. Browser previews inside such a frame need the other machine's own
+  preview credentials and are not qualified.
+- **Mobile**: the iOS WKWebView shell stays single-machine (`kind: "none"`);
+  there is no mobile SSH and no federated background/resume handling (MB-01).
+  A phone-width hosted page opens another machine's workspace in a new tab.
+- **SSH**: macOS and Linux desktop only; Windows is not qualified; no SSH in
+  browsers. Nothing installs or starts a remote backend and there is no SSH
+  pairing for the gateway token. No ControlMaster multiplexing. No UI
+  removes or rotates a trusted host key: changed-key recovery is manual (see
+  [ssh-routes.md](../development/ssh-routes.md)). A ProxyJump hop's key is
+  verified by the user's own SSH configuration, outside Orkestrator's
+  known_hosts. Askpass prompts go to the focused main window.
+- **Grants**: the hello never sends `authorizationScopeId`. Grant equivalence
+  is identical token strings, so routes with different tokens never fall back
+  automatically; the user picks a route explicitly.
+- **Identity conflicts**: two saved entries proving one installation are shown
+  as a conflict (and keep provisional identities), and a new address that
+  proves an already-saved installation is refused with guidance to add it as a
+  connection method. There is no merge or re-pair UI; resolve a conflict by
+  forgetting one entry.
+- **Summaries** are capped at 500 projects and 500 environments per project
+  with a truncation notice and no pagination. There is no per-environment
+  detail demand in the main window; detail comes from panels. Last-known
+  summaries persist per machine identity in this client's storage (bounded
+  to 256 KiB) and are purged on credential rejection or forgetting.
+- **Repository grouping** has no UI for explicit user mappings, and backends
+  publish no repository hint; the client derives a credential-free
+  `host/owner/name` from `gitUrl`.
+- **Revocation**: there is no per-device "revoke this device" action (the
+  gateway has one shared token) and no revocation signal from the backend.
+  Protected summaries are purged when the transport becomes
+  `authentication-required` or `trust-blocked`.
+- **Links and notifications**: machine-qualified links are a `?resource=`
+  page parameter (Copy link on other machines' rows); desktop has no OS URL
+  handler. Attention notices for other machines are in-app toasts; the app
+  has no OS notifications.
+- **Route policy**: no "prefer fastest" mode (optional in the plan).
+- **Performance**: only the synthetic in-process benchmark is recorded
+  ([federation-benchmarks.md](../development/federation-benchmarks.md)); the
+  real-backend matrix (p95 approval/completion visibility, bytes per minute,
+  multi-client) is not measured.
 - **Migration edges**: see
-  [federation-migration.md](../development/federation-migration.md). These
-  include first launch with Local failing, and a frozen v1 list after
-  downgrade.
+  [federation-migration.md](../development/federation-migration.md). An older
+  client sees the version-1 list as it was at migration time.
 
 ## Acceptance-ID map
 
 Test names carry the plan's scenario IDs (section 22). Paths are relative to
-the repository root.
+the repository root. Real-sshd suites run only with
+`ORKESTRATOR_SSH_INTEGRATION=1`; see
+[ssh-routes.md](../development/ssh-routes.md#real-sshd-integration-test).
 
 | ID | Tests |
 | --- | --- |
-| ID-01 | `packages/protocol/src/federation.test.ts`, `apps/web/src/lib/federation/federation-runtime.test.ts` |
-| ID-02, ID-03, ID-04 | `apps/desktop/tests/connection-manager-federation.test.ts` |
-| RT-01 | `apps/desktop/tests/connection-manager-federation.test.ts` (also the benchmark) |
+| ID-01 | `packages/protocol/src/federation.test.ts`, `apps/web/src/lib/federation/federation-runtime.test.ts`, `apps/web/src/lib/desktop-storage-key.test.ts` |
+| ID-02 | `apps/desktop/tests/connection-manager-federation.test.ts`, `apps/desktop/tests/ssh/ssh-route-fallback-integration.test.ts` (real OpenSSH) |
+| ID-03, ID-04 | `apps/desktop/tests/connection-manager-federation.test.ts` |
+| ID-05 | `apps/web/src/lib/federation/federation-runtime.test.ts` |
+| RT-01 | `apps/desktop/tests/connection-manager-federation.test.ts`, `scripts/benchmark-federation.ts` |
 | RT-02 | `apps/web/src/lib/federation/federation-runtime.test.ts`, `apps/web/src/components/federation/federation-ui.test.tsx` |
 | RT-03 | `apps/desktop/tests/connection-manager-federation.test.ts`, `apps/web/src/lib/federation/federation-runtime.test.ts` |
 | RT-04, RT-05, RT-06 | `apps/web/src/lib/federation/federation-runtime.test.ts` |
-| OP-02 | `apps/web/src/lib/federation/federation-runtime.test.ts` |
+| OP-01 | `apps/desktop/tests/ssh/ssh-route-fallback-integration.test.ts` (real OpenSSH; lost write not resent after failover) |
+| OP-02 | `apps/web/src/lib/federation/federation-runtime.test.ts`, `apps/web/src/components/federation/federation-ui.test.tsx` |
+| OP-03 | `apps/desktop/tests/backend-terminal-input.test.ts` (fence survives a route retarget) |
 | OP-05 | `apps/web/src/lib/federation/federation-runtime.test.ts`, `apps/web/src/components/federation/federation-ui.test.tsx` |
 | OP-06 | `apps/desktop/tests/connection-manager-federation.test.ts`, `apps/desktop/tests/federation-ipc.test.ts`, `apps/web/src/components/federation/federation-ui.test.tsx` |
 | UI-01 | `apps/web/src/lib/federation/aggregate.test.ts`, `apps/web/src/components/federation/federation-ui.test.tsx` |
 | UI-02 | `apps/web/src/lib/federation/aggregate.test.ts` |
 | UI-04 | `apps/web/src/lib/federation/federation-runtime.test.ts`, `apps/web/src/components/federation/federation-ui.test.tsx` |
 | CL-01 | `apps/desktop/tests/connection-manager-federation.test.ts` |
-| CL-02 | `apps/desktop/tests/connection-manager-federation.test.ts`, `apps/web/src/lib/desktop-storage-key.test.ts` |
+| CL-02 | `apps/desktop/tests/connection-manager-federation.test.ts`, `apps/web/src/lib/desktop-storage-key.test.ts`, `apps/web/src/lib/federation/federation-runtime.test.ts` |
 | CL-03 | `apps/web/src/lib/federation/aggregate.test.ts` |
 | CL-04 | `apps/backend/src/core/backend-profile-store.test.ts`, `apps/web/src/components/settings/connections/connections-machine.test.tsx` |
 | CL-05 | `apps/web/src/components/federation/federation-ui.test.tsx` |
-| SH-01 | `apps/desktop/tests/ssh/ssh-tunnel-integration.test.ts`, `packages/protocol/src/device-catalogue.test.ts` |
+| CT-02 | `apps/desktop/tests/connection-manager-federation.test.ts` |
+| SH-01, SH-05, SH-06, SH-07, SH-10, SH-11 | `apps/desktop/tests/ssh/tunnel-supervisor.test.ts`, `apps/desktop/tests/ssh/ssh-tunnel-integration.test.ts` (real sshd) |
 | SH-02 | `apps/desktop/tests/ssh/host-trust.test.ts`, `apps/desktop/tests/ssh/ssh-tunnel-integration.test.ts`, `apps/web/src/components/settings/connections/connections-machine.test.tsx` |
 | SH-03 | `apps/desktop/tests/ssh/tunnel-supervisor.test.ts`, `apps/desktop/tests/ssh/ssh-tunnel-integration.test.ts`, `apps/desktop/tests/federation-ipc.test.ts`, `apps/web/src/components/federation/federation-ui.test.tsx` |
-| SH-05, SH-07 | `apps/desktop/tests/ssh/tunnel-supervisor.test.ts`, `apps/desktop/tests/ssh/ssh-tunnel-integration.test.ts` |
-| SH-06 | `apps/desktop/tests/ssh/stderr-classification.test.ts`, `apps/desktop/tests/ssh/tunnel-supervisor.test.ts`, `apps/desktop/tests/ssh/ssh-tunnel-integration.test.ts` |
+| SH-04 | `apps/desktop/tests/ssh/ssh-proxyjump-integration.test.ts` (real sshd jump host) |
 | SH-08, SH-09 | `apps/backend/tests/gateway-hello.test.ts`, `apps/desktop/tests/connection-manager-federation.test.ts` |
-| SH-10 | `apps/desktop/tests/ssh/tunnel-supervisor.test.ts`, `apps/desktop/tests/ssh/ssh-tunnel-integration.test.ts`, `apps/desktop/tests/connection-manager-federation.test.ts` |
-| SH-11 | `apps/desktop/tests/ssh/tunnel-supervisor.test.ts`, `apps/desktop/tests/ssh/ssh-tunnel-integration.test.ts` |
-| SH-12 | `packages/protocol/src/device-catalogue.test.ts`, `apps/desktop/tests/ssh/ssh-command.test.ts`, `apps/desktop/tests/ssh/tunnel-supervisor.test.ts`, `apps/desktop/tests/connection-manager-federation.test.ts` |
+| SH-12 | `packages/protocol/src/device-catalogue.test.ts`, `apps/desktop/tests/ssh/ssh-command.test.ts`, `apps/desktop/tests/connection-manager-federation.test.ts` |
 | SH-13 | `apps/desktop/tests/ssh/ssh-command.test.ts`, `apps/desktop/tests/ssh/tunnel-supervisor.test.ts` |
+| SH-14 | `apps/desktop/tests/ssh/ssh-command.test.ts` (argv: `ControlMaster=no`, `ControlPath=none`) |
 | AU-01, AU-02 | `apps/desktop/tests/connection-manager-federation.test.ts` |
 | AU-03 | `apps/web/src/lib/federation/federation-runtime.test.ts` |
-| WB-02 | `apps/desktop/tests/connection-manager-federation.test.ts` (desktop analogue: a client without SSH) |
+| WB-02 | `apps/desktop/tests/connection-manager-federation.test.ts` (client without SSH) |
 | MG-01 | `packages/protocol/src/device-catalogue.test.ts`, `apps/desktop/tests/connection-manager-federation.test.ts`, `apps/web/src/lib/desktop-storage-key.test.ts` |
 | MG-02, MG-04 | `apps/desktop/tests/connection-manager-federation.test.ts` |
-| PF-01, PF-02, PF-03 | `apps/web/src/lib/federation/federation-runtime.test.ts` |
+| MG-03 | `apps/desktop/tests/connection-manager-federation.test.ts` (older backend stays provisional; no profile polling) |
+| PF-01, PF-02, PF-03 | `apps/web/src/lib/federation/federation-runtime.test.ts`, `scripts/benchmark-federation.ts` |
 
-The test labelled `OP-04/UnknownOutcomesNotice` in `federation-ui.test.tsx`
-covers outcome-unknown display. It does not cover the plan's OP-04, two
-clients answering one approval.
-
-No test names these IDs: ID-05, RT-07, OP-01, OP-03, OP-04 (as defined in
-the plan), UI-03, UI-05, UI-06, FS-01, FS-02, CT-01, CT-02, CT-03, WB-01,
-MB-01, MG-03, SH-04 (ProxyJump) and SH-14 (external ControlMaster). The
-SH-14 behaviour (`ControlMaster=no`, `ControlPath=none`) is fixed by
-`buildTunnelArgs` and checked only by argv assertions in `ssh-command.test.ts`.
-ProxyJump detection is unit-tested (`parseSshConfigOutput`), but no jump-host
-connection is exercised. Real-sshd cases run
-only with `ORKESTRATOR_SSH_INTEGRATION=1`; see
-[ssh-routes.md](../development/ssh-routes.md#real-sshd-integration-test).
+Exercised live against two isolated standalone backends in a real browser
+(Playwright), not as repository tests: WB-01 (direct sessions, panel frame
+talks only to its machine), UI-05 (no navigation on filter or reconnect),
+RT-01 offline/reconnect with colour kept, CL-01 colour edit converging via
+the profile event, SH-08/SH-09 on a real loopback client gateway. Not
+covered by tests: RT-07, OP-04 (approval arbitration is unchanged backend
+behaviour), UI-03, UI-06, FS-01, FS-02, CT-01, CT-03 (covered by realm
+isolation by construction, not by a dedicated test) and MB-01.

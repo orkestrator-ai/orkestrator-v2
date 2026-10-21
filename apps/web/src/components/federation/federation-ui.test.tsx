@@ -417,7 +417,7 @@ describe("SH-03: SSH prompts", () => {
 });
 
 describe("Unknown outcomes", () => {
-  test("OP-04/UnknownOutcomesNotice: an ambiguous write is shown against its machine, not retried, and can be dismissed", async () => {
+  test("OP-02 (UI): UnknownOutcomesNotice: an ambiguous write is shown against its machine, not retried, and can be dismissed", async () => {
     const fake = installTwoMachines(({ command }) =>
       command === "start_environment_background"
         ? Promise.reject(new TypeError("fetch failed"))

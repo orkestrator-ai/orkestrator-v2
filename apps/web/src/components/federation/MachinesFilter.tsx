@@ -18,7 +18,7 @@ import { MachineDot, machineStatusText } from "./MachineDot";
 /**
  * The sidebar's machine filter. "All machines" is the default. Changing the
  * filter changes what the sidebar shows — never which machines are
- * connected, and never which machine an open panel or a running action
+ * connected, and never which machine the window works on or a running action
  * belongs to.
  */
 export function MachinesFilter({ machines }: { machines: readonly MachineView[] }) {

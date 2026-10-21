@@ -98,7 +98,7 @@ function useResourceLink(machines: readonly MachineView[]) {
 
 /**
  * Another machine's environment started waiting for input or finished new
- * work. The toast names the machine and opens that machine's panel; it is
+ * work. The toast names the machine and opens the environment there; it is
  * deduplicated by machine-qualified key, so identical local IDs on two
  * machines are two notifications.
  */

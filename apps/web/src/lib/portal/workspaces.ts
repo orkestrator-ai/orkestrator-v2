@@ -1,12 +1,12 @@
 /**
- * Leaf workspaces: another node's workspace (agent chat, terminals,
- * previews) opened from the portal.
+ * Leaf workspaces: the grant a browser or iOS client uses to work on another
+ * node's environments as if it had connected to that node directly.
  *
  * The command node obtains a short-lived client grant from the leaf and
  * hands it to this client with the leaf's direct origins. The client talks
  * to the leaf directly when it can reach it, and otherwise through the
  * command node's relay. Either way it never holds the leaf's gateway token,
- * and the path in use is shown in the workspace's info panel.
+ * and the path in use is shown in the info panel.
  */
 
 import { BACKEND_HELLO_PATH, parseBackendHello } from "@orkestrator/protocol/backend-profile";
@@ -24,7 +24,7 @@ export interface OpenedNodeWorkspace {
   loopbackOrigin?: string;
 }
 
-/** How a workspace realm reaches its node; shown in the info panel. */
+/** How the window reaches its workspace's node; shown in the info panel. */
 export interface WorkspaceConnectionPath {
   nodeName: string;
   path: "direct" | "relay";
@@ -43,7 +43,6 @@ export interface LeafWorkspace extends WorkspaceConnectionPath {
   expiresAt: number;
 }
 
-const STORAGE_PREFIX = "orkestrator.workspace.";
 const DIRECT_PROBE_TIMEOUT_MS = 3_000;
 /** Renew well before the 15-minute grant lapses. */
 export const WORKSPACE_RENEW_INTERVAL_MS = 10 * 60_000;
@@ -104,74 +103,24 @@ export async function openLeafWorkspace(
   };
 }
 
-/** Keep the workspace's grant alive while it is open. Returns the stop function. */
-export function keepWorkspaceAlive(workspaceId: string): () => void {
+/**
+ * Keep the workspace's grant alive while the window works on it. A renewal
+ * the command node refuses (the grant lapsed while the computer slept, the
+ * node restarted) is reported once. Returns the stop function.
+ */
+export function keepWorkspaceAlive(workspaceId: string, onLapsed?: () => void): () => void {
+  let lapsed = false;
   const timer = setInterval(() => {
-    void portalInvoke("renew_node_workspace", { workspaceId }).catch(() => undefined);
+    void portalInvoke("renew_node_workspace", { workspaceId }).catch(() => {
+      if (lapsed) return;
+      lapsed = true;
+      onLapsed?.();
+    });
   }, WORKSPACE_RENEW_INTERVAL_MS);
   return () => clearInterval(timer);
 }
 
 /** Closing revokes the grant; nothing on the node stops. */
 export async function closeLeafWorkspace(workspaceId: string): Promise<void> {
-  forgetWorkspaceForFrame(workspaceId);
   await portalInvoke("close_node_workspace", { workspaceId }).catch(() => undefined);
-}
-
-/**
- * A same-origin frame reads its workspace from this tab's session storage
- * (the grant never goes into a URL).
- */
-export function storeWorkspaceForFrame(workspace: LeafWorkspace, target: Window = window): void {
-  try {
-    target.sessionStorage.setItem(
-      `${STORAGE_PREFIX}${workspace.workspaceId}`,
-      JSON.stringify(workspace),
-    );
-  } catch {
-    // Without session storage the frame cannot bind; it shows an error.
-  }
-}
-
-export function forgetWorkspaceForFrame(workspaceId: string): void {
-  try {
-    window.sessionStorage.removeItem(`${STORAGE_PREFIX}${workspaceId}`);
-  } catch {
-    // Nothing stored.
-  }
-}
-
-export function readWorkspaceForFrame(workspaceId: string): LeafWorkspace | null {
-  try {
-    const text = window.sessionStorage.getItem(`${STORAGE_PREFIX}${workspaceId}`);
-    if (!text) return null;
-    const value = JSON.parse(text) as Partial<LeafWorkspace>;
-    if (
-      typeof value.baseUrl !== "string" ||
-      typeof value.nodeName !== "string" ||
-      (value.path !== "direct" && value.path !== "relay")
-    ) {
-      return null;
-    }
-    return value as LeafWorkspace;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * A workspace tab of its own (a phone opens one instead of a side panel)
- * keeps its grant alive itself, through the command node that served this
- * page: the page origin, with this tab's own session there.
- */
-export function keepFrameWorkspaceAlive(workspaceId: string): () => void {
-  const renew = () =>
-    fetch(new URL("/__orkestrator/invoke", window.location.origin), {
-      method: "POST",
-      credentials: "same-origin",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ command: "renew_node_workspace", args: { workspaceId } }),
-    }).catch(() => undefined);
-  const timer = setInterval(() => void renew(), WORKSPACE_RENEW_INTERVAL_MS);
-  return () => clearInterval(timer);
 }

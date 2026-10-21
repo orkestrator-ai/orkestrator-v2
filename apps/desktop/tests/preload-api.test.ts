@@ -381,7 +381,7 @@ test("workspace-only snapshots publish trusted gateway and stable machine metada
       path: "direct",
       routeKind: "https",
     },
-    pendingSwitch: { switchId: "s1", projectId: "p1", environmentId: "e1" },
+    portalIdentity: { connectionId: "local", backendId: "bk_desk", legacyOrigin: null },
   };
   expect(
     exposeActiveConnectionGateway(
@@ -405,7 +405,7 @@ test("workspace-only snapshots publish trusted gateway and stable machine metada
   });
   expect(exposed.get("orkestratorWorkspaceTarget")).toEqual(snapshot.workspaceTarget);
   expect(exposed.get("orkestratorDesktopIdentity")).toMatchObject({
-    pendingSwitch: snapshot.pendingSwitch,
+    portal: { connectionId: "local", backendId: "bk_desk", legacyOrigin: null },
   });
 });
 

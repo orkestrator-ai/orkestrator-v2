@@ -1,4 +1,6 @@
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
+import { startsOnSelection } from "@/lib/environment-auto-start";
+import { takeAddProjectIntent } from "@/lib/portal/workspace-switch";
 import {
   lazy,
   useState,
@@ -464,7 +466,8 @@ export function HierarchicalSidebar() {
   const dockerAvailable = useDockerAvailability();
   // Poll git diff stats for all environments
   useEnvironmentDiffStats();
-  const [showAddProjectDialog, setShowAddProjectDialog] = useState(false);
+  // "Add a project on <machine>" moved the window to that machine first.
+  const [showAddProjectDialog, setShowAddProjectDialog] = useState(takeAddProjectIntent);
   const [showCreateEnvDialog, setShowCreateEnvDialog] = useState(false);
   const [createEnvProjectId, setCreateEnvProjectId] = useState<string | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -894,11 +897,7 @@ export function HierarchicalSidebar() {
       if (environment) {
         selectProjectAndEnvironment(environment.projectId, environmentId);
         // Auto-start local environments on selection so a terminal can open
-        if (
-          environment.environmentType === "local" &&
-          !environment.worktreePath &&
-          environment.status !== "creating"
-        ) {
+        if (startsOnSelection(environment)) {
           console.info("[HierarchicalSidebar] Auto-starting local environment:", {
             environmentId: environment.id,
             branch: environment.branch,
@@ -1229,8 +1228,8 @@ export function HierarchicalSidebar() {
               </Button>
               {federation.enabled ? (
                 // A project is added on a specific machine, chosen explicitly:
-                // another machine's own panel opens its project launcher, so
-                // its paths are picked on that machine, never on this device.
+                // the window first moves to another machine, so its paths are
+                // picked on that machine, never on this device.
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button variant="ghost" size="icon" className="h-7 w-7" title="Add project">

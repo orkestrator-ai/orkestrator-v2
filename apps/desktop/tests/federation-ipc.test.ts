@@ -84,19 +84,13 @@ describe("federation IPC", () => {
     expect(() => call("orkestrator:connections:connect-ssh", { destination: 3 })).toThrow();
   });
 
-  test("a workspace target names a node and an optional selection, nothing else", async () => {
+  test("a workspace target names a node, nothing else", async () => {
     const { call, deps } = harness();
     await call("orkestrator:workspace-target:set", {
       nodeId: "bk_leaf",
-      projectId: "p1",
-      environmentId: "e1",
       baseUrl: "https://evil.example",
     });
-    expect(deps.setWorkspaceTarget).toHaveBeenCalledWith(expect.anything(), {
-      nodeId: "bk_leaf",
-      projectId: "p1",
-      environmentId: "e1",
-    });
+    expect(deps.setWorkspaceTarget).toHaveBeenCalledWith(expect.anything(), { nodeId: "bk_leaf" });
     await call("orkestrator:workspace-target:set", { nodeId: null });
     expect(deps.setWorkspaceTarget).toHaveBeenLastCalledWith(expect.anything(), { nodeId: null });
     expect(() => call("orkestrator:workspace-target:set", { nodeId: 3 })).toThrow("node ID");

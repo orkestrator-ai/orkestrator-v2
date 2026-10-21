@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { projectFolderKey } from "@orkestrator/protocol/project-folders";
-import { desktopConnectionStorageKey } from "@/lib/desktop-storage-key";
+import { windowStorageKey } from "@/lib/desktop-storage-key";
 
 /** Zoom level constraints */
 const ZOOM_MIN = 50;
@@ -235,7 +235,7 @@ export const useUIStore = create<UIState>()(
       resetZoom: () => set({ zoomLevel: ZOOM_DEFAULT }),
     }),
     {
-      name: desktopConnectionStorageKey("ui-storage"),
+      name: windowStorageKey("ui-storage"),
       partialize: (state) => ({
         sidebarWidth: state.sidebarWidth,
         sidebarOpen: state.sidebarOpen,

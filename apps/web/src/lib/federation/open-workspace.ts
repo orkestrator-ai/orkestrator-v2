@@ -1,36 +1,46 @@
-import type { MachinePanelSpec } from "@/stores/machineViewStore";
-import { useMachineViewStore } from "@/stores/machineViewStore";
-import { openLeafWorkspace, storeWorkspaceForFrame } from "@/lib/portal/workspaces";
-import { browserPanelUrl } from "./panel-realm";
-import { MOBILE_SHELL_MEDIA_QUERY } from "@/lib/mobile-shell";
 import { toast } from "sonner";
+import { portalStore } from "@/lib/portal/portal-store";
+import { workspaceTarget } from "@/lib/portal/portal-transport";
+import { switchWorkspace } from "@/lib/portal/workspace-switch";
+import { useUIStore } from "@/stores/uiStore";
 
-/** Every portal entry point opens the owner workspace, including narrow clients. */
-export function openMachineWorkspace(spec: Omit<MachinePanelSpec, "id">): void {
-  if (
-    !window.orkestratorGateway?.desktop &&
-    window.matchMedia?.(MOBILE_SHELL_MEDIA_QUERY).matches
-  ) {
-    const tab = window.open("about:blank", "_blank");
-    void openLeafWorkspace(spec.connectionId as never)
-      .then((workspace) => {
-        storeWorkspaceForFrame(workspace, tab ?? window);
-        const url = browserPanelUrl({
-          ...spec,
-          workspaceId: workspace.workspaceId,
-          nodeId: workspace.nodeId,
-          connection: workspace,
-        });
-        if (tab) tab.location.href = url;
-        else window.location.href = url;
-      })
-      .catch((error: unknown) => {
-        tab?.close();
-        toast.error("Could not open the node workspace", {
-          description: error instanceof Error ? error.message : String(error),
-        });
-      });
+export interface MachineWorkspaceSpec {
+  /** The node, by identity. */
+  connectionId: string;
+  /** Empty: the node's project launcher (to add a project there). */
+  projectId: string;
+  environmentId?: string;
+  /** For messages while it opens. */
+  title: string;
+}
+
+/**
+ * Every portal entry point opens a node's environment the same way: on the
+ * node the window already works on it is an ordinary selection; on another
+ * node the window moves there and behaves exactly as if it had connected to
+ * that node directly.
+ */
+export function openMachineWorkspace(spec: MachineWorkspaceSpec): void {
+  const selfId = portalStore.getState().selfId;
+  const boundId = workspaceTarget()?.nodeId ?? selfId;
+  if (spec.connectionId === boundId) {
+    const ui = useUIStore.getState();
+    if (!spec.projectId) return;
+    if (spec.environmentId) ui.selectProjectAndEnvironment(spec.projectId, spec.environmentId);
+    else ui.selectProject(spec.projectId);
     return;
   }
-  useMachineViewStore.getState().openPanel(spec);
+  const intent = spec.projectId
+    ? {
+        projectId: spec.projectId,
+        ...(spec.environmentId ? { environmentId: spec.environmentId } : {}),
+      }
+    : { addProject: true };
+  void switchWorkspace(spec.connectionId === selfId ? null : spec.connectionId, intent).catch(
+    (error: unknown) => {
+      toast.error(`Could not open ${spec.title}`, {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    },
+  );
 }

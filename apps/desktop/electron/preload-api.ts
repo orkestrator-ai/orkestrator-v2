@@ -38,7 +38,11 @@ type WorkspaceTarget = {
   via?: string;
 };
 
-type PendingWorkspaceSwitch = { switchId: string; projectId?: string; environmentId?: string };
+type DesktopIdentity = {
+  connectionId: string;
+  backendId: string | null;
+  legacyOrigin: string | null;
+};
 
 /** Main-process snapshot of the window's machine; never contains a credential. */
 type DesktopGatewaySnapshot = {
@@ -47,7 +51,7 @@ type DesktopGatewaySnapshot = {
   backendId: string | null;
   legacyOrigin: string | null;
   workspaceTarget: WorkspaceTarget | null;
-  pendingSwitch: PendingWorkspaceSwitch | null;
+  portalIdentity: DesktopIdentity | null;
 };
 
 function parseWorkspaceTarget(value: unknown): WorkspaceTarget | null {
@@ -66,14 +70,15 @@ function parseWorkspaceTarget(value: unknown): WorkspaceTarget | null {
   };
 }
 
-function parsePendingSwitch(value: unknown): PendingWorkspaceSwitch | null {
+function parseIdentity(value: unknown): DesktopIdentity | null {
   if (!value || typeof value !== "object") return null;
-  const pending = value as Record<string, unknown>;
-  if (typeof pending.switchId !== "string") return null;
+  const identity = value as Record<string, unknown>;
+  if (typeof identity.connectionId !== "string") return null;
+  const text = (field: unknown) => (typeof field === "string" && field ? field : null);
   return {
-    switchId: pending.switchId,
-    ...(typeof pending.projectId === "string" ? { projectId: pending.projectId } : {}),
-    ...(typeof pending.environmentId === "string" ? { environmentId: pending.environmentId } : {}),
+    connectionId: identity.connectionId,
+    backendId: text(identity.backendId),
+    legacyOrigin: text(identity.legacyOrigin),
   };
 }
 
@@ -93,7 +98,7 @@ function readGatewaySnapshot(ipcRenderer: {
       backendId: text(value.backendId),
       legacyOrigin: text(value.legacyOrigin),
       workspaceTarget: parseWorkspaceTarget(value.workspaceTarget),
-      pendingSwitch: parsePendingSwitch(value.pendingSwitch),
+      portalIdentity: parseIdentity(value.portalIdentity),
     };
   } catch {
     return null;
@@ -118,7 +123,7 @@ export function exposeActiveConnectionGateway(
       connectionId: snapshot.connectionId,
       backendId: snapshot.backendId,
       legacyOrigin: snapshot.legacyOrigin,
-      ...(snapshot.pendingSwitch ? { pendingSwitch: snapshot.pendingSwitch } : {}),
+      ...(snapshot.portalIdentity ? { portal: snapshot.portalIdentity } : {}),
     });
     if (snapshot.workspaceTarget) {
       contextBridge.exposeInMainWorld("orkestratorWorkspaceTarget", snapshot.workspaceTarget);
@@ -426,12 +431,8 @@ export function createOrkestratorElectronApi(ipcRenderer: IpcRendererLike) {
 
     /** Which node the window works on; the renderer reloads after a change. */
     workspaceTarget: {
-      set(input: {
-        nodeId: string | null;
-        projectId?: string;
-        environmentId?: string;
-      }): Promise<void> {
-        return ipcRenderer.invoke("orkestrator:workspace-target:set", input);
+      set(nodeId: string | null): Promise<void> {
+        return ipcRenderer.invoke("orkestrator:workspace-target:set", { nodeId });
       },
     },
 

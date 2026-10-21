@@ -29,9 +29,6 @@ type IpcMainLike = {
 export type WorkspaceTargetInput = {
   /** `null` points the window back at its command node. */
   nodeId: string | null;
-  /** Selected once the renderer has reloaded into the node. */
-  projectId?: string;
-  environmentId?: string;
 };
 
 export type HostKeyProbe = {
@@ -53,7 +50,8 @@ export type GatewaySnapshot = {
     routeKind?: "https" | "ssh";
     via?: string;
   };
-  pendingSwitch?: { switchId: string; projectId?: string; environmentId?: string };
+  /** The window's own machine, while its workspace is on another node. */
+  portalIdentity?: { connectionId: string; backendId: string | null; legacyOrigin: string | null };
 };
 
 export type FederationIpcDependencies = {
@@ -258,12 +256,6 @@ export function registerFederationIpc(deps: FederationIpcDependencies): void {
     return withErrorCode(() =>
       deps.setWorkspaceTarget(event, {
         nodeId: input.nodeId === null ? null : id(input.nodeId, "a node ID"),
-        ...(input.projectId === undefined
-          ? {}
-          : { projectId: id(input.projectId, "a project ID") }),
-        ...(input.environmentId === undefined
-          ? {}
-          : { environmentId: id(input.environmentId, "an environment ID") }),
       }),
     );
   });

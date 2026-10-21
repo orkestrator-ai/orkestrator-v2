@@ -186,8 +186,6 @@ type DesktopWindowContext = {
    */
   portalScope: string | null;
   target: WindowWorkspaceTarget | null;
-  /** Selection for the renderer to apply once after a switch. */
-  pendingSwitch: PendingWorkspaceSwitch | null;
 };
 type WindowWorkspaceTarget = {
   nodeId: string;
@@ -196,7 +194,7 @@ type WindowWorkspaceTarget = {
   routeKind?: "https" | "ssh";
   via?: string;
 };
-type PendingWorkspaceSwitch = { switchId: string; projectId?: string; environmentId?: string };
+
 let previewPortHints: ReturnType<typeof createPreviewPortHints> | null = null;
 let browserPreviewCaptures: BrowserPreviewCaptureStore | null = null;
 const previewExternalHandoff = new PreviewExternalHandoff((url) => shell.openExternal(url));
@@ -654,7 +652,6 @@ async function createWindow(connectionId?: string): Promise<void> {
           artifactHosts,
           portalScope: null,
           target: null,
-          pendingSwitch: null,
         });
         lastFocusedWindowId = webContentsId;
         registered = true;
@@ -750,19 +747,11 @@ function publishConnectionLists(): void {
  */
 async function setWindowWorkspaceTarget(
   context: DesktopWindowContext,
-  input: { nodeId: string | null; projectId?: string; environmentId?: string },
+  input: { nodeId: string | null },
 ): Promise<void> {
   const manager = connectionManager;
   if (!manager) throw new Error("Connections are not initialized");
-  const selection = {
-    ...(input.projectId ? { projectId: input.projectId } : {}),
-    ...(input.environmentId ? { environmentId: input.environmentId } : {}),
-  };
-  if (input.nodeId === null && !context.portalScope) return;
-  if (input.nodeId !== null && context.target?.nodeId === input.nodeId) {
-    context.pendingSwitch = { switchId: randomUUID(), ...selection };
-    return;
-  }
+  if ((context.target?.nodeId ?? null) === input.nodeId) return;
   if (context.portalScope) {
     // Back to the command node: its connection is still held by the portal scope.
     nodeWorkspaceScopes?.release(context.scope);
@@ -819,7 +808,6 @@ async function setWindowWorkspaceTarget(
       throw error;
     }
   }
-  context.pendingSwitch = { switchId: randomUUID(), ...selection };
   followWindowConnection(context);
   setConnectionTitle(context.window, context.scope);
   publishConnectionLists();
@@ -946,8 +934,13 @@ function registerIpc(): void {
         connectionId: identity.connectionId,
         backendId: identity.backendId,
         legacyOrigin: identity.legacyOrigin,
-        ...(context.target ? { workspaceTarget: context.target } : {}),
-        ...(context.pendingSwitch ? { pendingSwitch: context.pendingSwitch } : {}),
+        ...(context.target && context.portalScope
+          ? {
+              workspaceTarget: context.target,
+              // Window-level presentation stays with the window's own machine.
+              portalIdentity: manager().getBackendIdentity(context.portalScope),
+            }
+          : {}),
       };
     },
     connectSsh: async (event, input) =>

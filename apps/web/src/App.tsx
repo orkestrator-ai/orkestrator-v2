@@ -96,12 +96,8 @@ import { SshPromptDialog } from "@/components/federation/SshPromptDialog";
 import { FederationEffects } from "@/components/federation/FederationEffects";
 import { NodeActionRequestsDialog } from "@/components/federation/NodeActionRequestsDialog";
 import { NodeSshPromptDialog } from "@/components/settings/connections/NodesSettings";
-import {
-  browserPanelWorkspaceId,
-  isMachinePanelRealm,
-  machinePanelTarget,
-} from "@/lib/federation/panel-realm";
-import { keepFrameWorkspaceAlive, readWorkspaceForFrame } from "@/lib/portal/workspaces";
+import { keepStoredWorkspaceAlive } from "@/lib/portal/workspace-switch";
+import { useWorkspaceSwitchSelection } from "@/hooks/useWorkspaceSwitchSelection";
 
 export const DOCKER_AVAILABILITY_POLL_INTERVAL_MS = 60_000;
 export const DOCKER_STARTUP_CONFIRMATION_DELAY_MS = 1_500;
@@ -241,16 +237,6 @@ const STARTUP_BLOCKER_PANEL_CLASS_NAME = cn(
 );
 
 function App() {
-  if (isMachinePanelRealm() && !window.orkestratorGateway?.desktop) {
-    const workspaceId = browserPanelWorkspaceId();
-    if (!workspaceId || !readWorkspaceForFrame(workspaceId)) {
-      return (
-        <div role="alert" className="flex h-screen items-center justify-center p-6 text-center">
-          This workspace connection is unavailable. Reopen it from the command node to reconnect.
-        </div>
-      );
-    }
-  }
   return <ConnectedApp />;
 }
 
@@ -322,21 +308,10 @@ function ConnectedApp() {
     [],
   );
   useEffect(() => startStoreResourceSync(), []);
-  // A machine panel opens on the workspace it was created for.
-  useEffect(() => {
-    const target = machinePanelTarget();
-    if (!target?.projectId) return;
-    const ui = useUIStore.getState();
-    if (target.environmentId)
-      ui.selectProjectAndEnvironment(target.projectId, target.environmentId);
-    else ui.selectProject(target.projectId);
-  }, []);
-  // A workspace opened in its own tab renews its grant itself; a frame's
-  // parent also renews it, which is harmless.
-  useEffect(() => {
-    const workspaceId = browserPanelWorkspaceId();
-    return workspaceId && window.top === window ? keepFrameWorkspaceAlive(workspaceId) : undefined;
-  }, []);
+  // After a move to another node, the environment the user opened there.
+  useWorkspaceSwitchSelection(startEnvironment);
+  // A browser tab on another node renews that node's workspace grant.
+  useEffect(() => keepStoredWorkspaceAlive(), []);
   useEffect(() => startPaneLayoutPersistence(), []);
   useEffect(() => {
     void migrateLegacyBuildPipelines().catch((error) => {

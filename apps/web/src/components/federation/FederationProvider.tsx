@@ -6,7 +6,6 @@ import {
   type BackendProfile,
 } from "@orkestrator/protocol/backend-profile";
 import type { BackendId } from "@orkestrator/protocol/federation";
-import { isMachinePanelRealm } from "@/lib/federation/panel-realm";
 import {
   getWorkspaceProfile,
   listenWorkspaceProfile,
@@ -35,7 +34,7 @@ export interface FederationContextValue {
   bound: BoundMachine | null;
   /** This node commands at least one other node, so multi-machine views are shown. */
   enabled: boolean;
-  /** This realm can show other machines at all (not a single-machine panel). */
+  /** This client can show other machines at all. */
   supported: boolean;
   kind: "desktop" | "browser" | "none";
   /** Name and colour of this realm's own machine, for its rows' dots. */
@@ -45,10 +44,8 @@ export interface FederationContextValue {
 const FederationContext = createContext<FederationContextValue | null>(null);
 
 function clientKind(): FederationContextValue["kind"] {
-  if (typeof window === "undefined" || isMachinePanelRealm()) return "none";
-  // The desktop positions native panel views; every other client (hosted
-  // browser, iOS) shows another node's workspace in a frame.
-  return window.orkestrator?.panels ? "desktop" : "browser";
+  if (typeof window === "undefined") return "none";
+  return window.orkestrator?.isolatedViewState ? "desktop" : "browser";
 }
 
 /**

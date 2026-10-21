@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, render, screen } from "@testing-library/react";
 import { ConnectionPathPanel } from "./AgentInfoButton.panels";
-import { machinePanelConnectionPath } from "@/lib/federation/panel-realm";
+import { workspaceTarget } from "@/lib/portal/portal-transport";
 
 const happyDOM = (
   window as unknown as {
@@ -45,17 +45,22 @@ describe("DP-04 the info panel shows the connection path", () => {
     expect(screen.getByTestId("connection-path").getAttribute("data-path")).toBe("this-node");
   });
 
-  test("a panel realm reads its non-secret path from its URL", () => {
-    happyDOM.setURL(
-      "http://127.0.0.1:5173/?panel=workspace&workspace=w1&node=Build%20box&path=relay&route=ssh&via=Desk",
-    );
-    expect(machinePanelConnectionPath()).toEqual({
+  test("a window on a leaf reads its non-secret path from its workspace target", () => {
+    expect(workspaceTarget()).toBeNull();
+    window.orkestratorWorkspaceTarget = {
+      nodeId: "bk_build",
       nodeName: "Build box",
       path: "relay",
       routeKind: "ssh",
       via: "Desk",
-    });
-    happyDOM.setURL("http://127.0.0.1:5173/?panel=workspace&path=sideways&node=x");
-    expect(machinePanelConnectionPath()).toBeNull();
+    };
+    try {
+      render(<ConnectionPathPanel path={workspaceTarget()} boundMachineName="Desk" />);
+      expect(screen.getByTestId("connection-path").textContent).toContain(
+        "Relayed through Desk, which reaches Build box over SSH.",
+      );
+    } finally {
+      delete window.orkestratorWorkspaceTarget;
+    }
   });
 });

@@ -1,6 +1,6 @@
 # Docker rebuild preview during design rerun main merge
 
-- **ID:** 0515
+- **ID:** 0518
 - **Status:** open
 - **Date observed:** 2026-10-21
 - **Test:** `Docker fixture rebuild keeps running while another environment is open and rehydrates`
@@ -35,3 +35,20 @@ The native owning-file rerun passed terminal resume but repeated the two main-wi
 The root failures included Pi runtime staging, firewall/runtime shell fixtures, release tagging and renderer settings. The runtime-environment owner was rerun as recorded above; the other failed root files were not independently rerun, so no new flaky classification is asserted for them. The manual resolutions introduce no product or test code changes relative to `origin/main`.
 
 Evidence: `orkestrator-test-run.EQxTI7/merge-tests.log.gz` below the host temporary directory. Partial per-group evidence remains in the private `orkestrator-test-run.ZVg6E6` directory under that same root. Static/build checks and focused backend/Docker successes do not replace the missing aggregate, browser or native-window coverage.
+
+
+## Second main snapshot
+
+While the first validation ran, main advanced. The resolved first merge was committed as `5f8b2bca`, then `origin` was fetched again and `be2e89da` merged. The second merge conflicts were the flake-index additions and todo counts. All entries were retained; this case moved from 0515 to 0518 because main already used 0515–0517, and merged todo counts were recomputed (one very high, 18 high, 266 medium, 280 low; 565 total).
+
+The second merged tree passed `merge2-static` (`mise run check`, 16.7 seconds), the desktop build (2.2 seconds), Docker development image build (13.3 seconds), final-image smoke (8.6 seconds), backend account/container and Docker registry owners (15.5 seconds), Codex engine owner (1.1 seconds), and both container marker/runtime shell owners (7.6 seconds). Thus the earlier runtime shell timeouts passed on the later unchanged-by-resolution owner. The flake-index contract, relative links, heading anchors and conflict-marker checks passed.
+
+Fresh credential-free local/container profile `merge2-main-20261021-dab5ea29` ran `ORKESTRATOR_AGENT_TEST_PROFILE=merge2-main-20261021-dab5ea29 ORKESTRATOR_AGENT_TEST_RUN_ID=merge2-main-20261021-dab5ea29 mise run test:logged -- --name merge2-docker -- mise run test:agent:docker`: exit 0 in 98.5 seconds. No new renderer or Electron code was introduced by the second snapshot, so their earlier unresolved browser/native-window evidence remains the limitation instead of repeating those broad suites. The additional source changes are backend/container lifecycle and Codex account-read handling; product/test code equals the fetched `be2e89da` snapshot.
+
+
+The second aggregate command was `mise run test:logged -- --name merge2-tests -- mise run test`. It was interrupted through the verified owned runner's SIGINT handler after 335.2 seconds because of continuing shared-host admission delays, following the earlier 30-minute attempt. Protocol verification completed before interruption. Root/support had reported the unchanged Pi runtime-vendor test's 30-second timeout and remained incomplete. The runner printed workspace and bridge passes at the interruption boundary; these are not treated as independent completed coverage because cancellation was already in progress. No complete aggregate pass is claimed. Evidence: `orkestrator-test-run.MGM72b/merge2-tests.log.gz` and private inner failure directory `orkestrator-test-run.Z2xRFB` below the host temporary root.
+
+Second-profile cleanup passed: `dev:stop` and `dev:reset` removed two exact-owner containers, four volumes, one network and disposable state for `merge2-main-20261021-dab5ea29`. No profile remains live or deliberately retained.
+
+
+The Pi vendor owner passed unchanged alone (`merge2-pi-vendor-owner`, 10.4 seconds); the recurrence is recorded in [0178](0178-pi-vendor-runtime-aggregate-timeout.md). This does not fill the interrupted aggregate's remaining coverage.

@@ -66,15 +66,6 @@ export function rendererPartitionForWindow(
   return `persist:orkestrator-renderer-${slot}-${connectionPartitionKey(connectionId)}`;
 }
 
-/**
- * Backend-scoped panels share one renderer partition per machine, so a
- * panel's presentation state (drafts, layout preferences) is namespaced by
- * the machine it is bound to rather than by the window that hosts it.
- */
-export function rendererPartitionForPanel(connectionId: string): string {
-  return `persist:orkestrator-panel-${connectionPartitionKey(connectionId)}`;
-}
-
 export function browserPreviewPartitionForWindow(slot: number, connectionId: string): string {
   return `persist:orkestrator-browser-previews-${slot}-${connectionPartitionKey(connectionId)}`;
 }

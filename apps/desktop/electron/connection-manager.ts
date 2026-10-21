@@ -140,6 +140,15 @@ type RemoteConnection = {
 /** Connection IDs of panel scopes bound to another node's workspace. */
 export const WORKSPACE_CONNECTION_PREFIX = "workspace:";
 
+/** Another node's workspace: a client grant and the route chosen for it. */
+export type WorkspaceScopeInput = {
+  workspaceId: string;
+  baseUrl: string;
+  token: string;
+  nodeId?: string;
+  onUnavailable?: () => void;
+};
+
 /** A saved machine and the first gateway token that could be decrypted for it. */
 export type SavedMachineExport = { backend: SavedBackend; token: string | null };
 
@@ -149,9 +158,10 @@ export type SavedMachineExport = { backend: SavedBackend; token: string | null }
  * A window *binds* to one target: normally this computer's own backend, the
  * desktop's command node, which itself connects to the other nodes and
  * serves the multi-machine views (docs/architecture/command-nodes.md). A
- * saved machine can still be bound directly. A panel scope can bind to
- * another node's workspace with a client grant (`bindWorkspace`). Nothing
- * here starts, stops or moves work.
+ * saved machine can still be bound directly. A window's scope can be
+ * pointed at another node's workspace with a client grant
+ * (`retargetScopeToWorkspace`) and back (`restoreScopeFrom`). Nothing here
+ * starts, stops or moves work.
  */
 export class ConnectionManager {
   private readonly localBackend: LocalBackend;
@@ -1162,29 +1172,35 @@ export class ConnectionManager {
   }
 
   /**
-   * Bind a panel scope to another node's workspace, reached with a client
-   * grant the command node obtained (directly, or over the command node's
-   * own loopback route to it). The grant is held for this scope only, never
-   * saved, and released with the scope.
+   * Point a window's live scope at another node's workspace, reached with a
+   * client grant the command node obtained (directly, or over the command
+   * node's own route to it): the window becomes that node's client. The
+   * grant is held for this scope only, never saved, and released when the
+   * scope is pointed back or closed. The caller keeps the window's command
+   * connection bound to a portal scope, so pointing back needs no reconnect.
    */
-  bindWorkspace(
-    scope: string,
-    input: {
-      workspaceId: string;
-      baseUrl: string;
-      token: string;
-      nodeId?: string;
-      onUnavailable?: () => void;
-    },
-  ): void {
-    if (!scope || scope === DEFAULT_CONNECTION_SCOPE || this.scopeGenerations.has(scope)) {
-      throw new Error("Connection scope is already active.");
-    }
+  retargetScopeToWorkspace(scope: string, input: WorkspaceScopeInput): void {
+    this.captureScopeGeneration(scope);
     const connectionId = `${WORKSPACE_CONNECTION_PREFIX}${input.workspaceId}`;
     if (this.remoteConnections.has(connectionId)) {
       throw new Error("That workspace is already open.");
     }
+    this.releaseScopeRemote(scope);
+    // Late work started for the scope's previous machine must not apply.
     this.scopeGenerations.set(scope, ++this.nextScopeGeneration);
+    this.installWorkspace(scope, connectionId, input);
+  }
+
+  /** Point a scope back at the machine another scope is bound to (the window's command node). */
+  restoreScopeFrom(scope: string, sourceScope: string): void {
+    this.captureScopeGeneration(scope);
+    const connectionId = this.connectionIdForScope(sourceScope);
+    this.scopeGenerations.set(scope, ++this.nextScopeGeneration);
+    if (connectionId === LOCAL_CONNECTION_ID) this.setScopeLocal(scope);
+    else this.bindScope(scope, connectionId);
+  }
+
+  private installWorkspace(scope: string, connectionId: string, input: WorkspaceScopeInput): void {
     const client = new BackendHttpClient(input.baseUrl, input.token);
     const remote: RemoteConnection = {
       connectionId,

@@ -1,8 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import {
-  installRemoteGatewayRequestAuth,
-  installScopedRemoteGatewayRequestAuth,
-} from "../electron/remote-gateway-request-auth";
+import { installRemoteGatewayRequestAuth } from "../electron/remote-gateway-request-auth";
 
 function installHarness(options: { browserPreviewOnly?: boolean } = {}) {
   let beforeHeaders: ((details: any, callback: (response: any) => void) => void) | null = null;
@@ -385,36 +382,4 @@ describe("remote gateway renderer request authentication", () => {
       },
     });
   });
-});
-
-test("one session hook resolves simultaneous panel grants by webContents ID", () => {
-  let listener: ((details: any, callback: (response: any) => void) => void) | undefined;
-  const session = {
-    onBeforeSendHeaders: mock((_filter: unknown, next: typeof listener) => {
-      listener = next;
-    }),
-    onHeadersReceived: mock(() => {}),
-  };
-  const closeA = installScopedRemoteGatewayRequestAuth(session as never, 1, () => "Bearer grant-a");
-  const closeB = installScopedRemoteGatewayRequestAuth(session as never, 2, () => "Bearer grant-b");
-  expect(session.onBeforeSendHeaders).toHaveBeenCalledTimes(1);
-  const request = (id: number) => {
-    const callback = mock((_response: { requestHeaders: Record<string, string> }) => {});
-    listener!(
-      {
-        url: "https://leaf.test/__orkestrator/invoke",
-        webContentsId: id,
-        requestHeaders: {},
-        resourceType: "xhr",
-      },
-      callback,
-    );
-    return callback.mock.calls[0]![0] as unknown as { requestHeaders: Record<string, string> };
-  };
-  expect(request(1).requestHeaders.Authorization).toBe("Bearer grant-a");
-  expect(request(2).requestHeaders.Authorization).toBe("Bearer grant-b");
-  closeB();
-  expect(request(1).requestHeaders.Authorization).toBe("Bearer grant-a");
-  expect(request(2).requestHeaders.Authorization).toBeUndefined();
-  closeA();
 });

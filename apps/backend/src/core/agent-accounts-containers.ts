@@ -326,13 +326,19 @@ const PUSHED_LOGINS: Record<
   },
 };
 
+/**
+ * A host file whose logins have all expired still names its rotating
+ * providers, and the merge then blanks any full copy the container holds
+ * without handing it anything new: an expired access token is exactly when
+ * that copy would spend its refresh token.
+ */
 function providerAuthMergePayload(format: "opencode" | "pi", text: string): string | undefined {
   const restricted = restrictProviderAuthEntries(format, text);
-  if ("withheld" in restricted) return undefined;
-  if (Object.keys(restricted.entries).length === 0 && restricted.accessOnly.length === 0) {
+  const entries = "withheld" in restricted ? {} : restricted.entries;
+  if (Object.keys(entries).length === 0 && restricted.accessOnly.length === 0) {
     return undefined;
   }
-  return JSON.stringify({ logins: restricted.entries, accessOnly: restricted.accessOnly });
+  return JSON.stringify({ logins: entries, accessOnly: restricted.accessOnly });
 }
 
 /**

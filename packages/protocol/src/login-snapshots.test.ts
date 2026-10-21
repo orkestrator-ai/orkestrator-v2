@@ -303,6 +303,32 @@ describe("restrictProviderAuthEntries", () => {
     expect(Object.keys(restricted.entries)).toEqual(["openai-codex", "github-copilot", "key"]);
   });
 
+  test("a withheld file still lists its rotating providers, and its text no credential", () => {
+    const restricted = restrictProviderAuthEntries(
+      "opencode",
+      JSON.stringify({
+        openai: { type: "oauth", access: "a", refresh: "SENTINEL", expires: NOW - 1 },
+        "github-copilot": { type: "device", token: "t" },
+      }),
+      NOW,
+    );
+    expect(restricted).toEqual({ withheld: expect.any(String), accessOnly: ["openai"] });
+    expect(restrictProviderAuthEntries("opencode", "[]", NOW)).toEqual({
+      withheld: expect.any(String),
+      accessOnly: [],
+    });
+    // The snapshot form is unchanged: a reason and nothing else.
+    expect(
+      Object.keys(
+        restrictOpenCodeAuthSnapshot(
+          JSON.stringify({ openai: { type: "oauth", access: "a", refresh: "r", expires: 1 } }),
+          NOW,
+        ),
+      ),
+    ).toEqual(["withheld"]);
+    expect(JSON.stringify(restricted)).not.toContain("SENTINEL");
+  });
+
   test("names the non-rotating providers the entrypoint must match", () => {
     expect(nonRotatingOAuthProviders("opencode")).toEqual(["github-copilot"]);
     expect(nonRotatingOAuthProviders("pi")).toEqual(["github-copilot", "meta"]);

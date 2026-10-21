@@ -950,7 +950,51 @@ describe("syncContainerLogin for OpenCode and Pi", () => {
     expect(fake.calls.map((call) => call.stdin).join("")).not.toContain("SENTINEL");
   });
 
-  test("an unauthorized, revoked, expired or absent login is never pushed", async () => {
+  test("expired host logins still strip a full copy's refresh token, handing over nothing", async () => {
+    enable("opencode", "pi");
+    await write(
+      piAuth(),
+      JSON.stringify({
+        anthropic: { type: "oauth", access: "a", refresh: "SENTINEL-PI", expires: 1 },
+        key: { type: "device", token: "t" },
+      }),
+    );
+    await write(
+      opencodeAuth(),
+      JSON.stringify({
+        openai: { type: "oauth", access: "o", refresh: "SENTINEL-OC", expires: 1 },
+      }),
+    );
+    const fake = fakeRunners(null);
+    await syncContainerLogin(context, "pi", "container-1", fake.runners);
+    await syncContainerLogin(context, "opencode", "container-1", fake.runners);
+    expect(fake.calls.map((call) => JSON.parse(call.stdin!))).toEqual([
+      { logins: {}, accessOnly: ["anthropic"] },
+      { logins: {}, accessOnly: ["openai"] },
+    ]);
+    expect(fake.calls.map((call) => call.stdin).join("")).not.toContain("SENTINEL");
+
+    // Run against a container file holding a full copy from before access-only staging.
+    const file = path.join(root, "container", ".pi", "agent", "auth.json");
+    await write(
+      file,
+      JSON.stringify({
+        anthropic: { type: "oauth", access: "old", refresh: "SENTINEL-OLD", expires: 1 },
+        kimi: { type: "oauth", access: "own", refresh: "own-refresh", expires: 2 },
+      }),
+    );
+    const result = spawnSync("bash", ["-c", buildMergeContainerProviderAuthCommand(file)], {
+      input: fake.calls[0]!.stdin!,
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(0);
+    expect(JSON.parse(await fs.readFile(file, "utf8"))).toEqual({
+      anthropic: { type: "oauth", access: "old", refresh: "", expires: 1 },
+      kimi: { type: "oauth", access: "own", refresh: "own-refresh", expires: 2 },
+    });
+  });
+
+  test("an unauthorized, revoked, keyless or absent login is never pushed", async () => {
     const fake = fakeRunners(null);
     await syncContainerLogin(context, "pi", "container-1", fake.runners);
     await write(piAuth(), JSON.stringify({ key: { type: "api_key", key: "k" } }));
@@ -960,10 +1004,10 @@ describe("syncContainerLogin for OpenCode and Pi", () => {
     environment.revokedInputProviders = ["pi"];
     await syncContainerLogin(context, "pi", "container-1", fake.runners);
     environment.revokedInputProviders = [];
-    await write(
-      piAuth(),
-      JSON.stringify({ anthropic: { type: "oauth", access: "a", refresh: "r", expires: 1 } }),
-    );
+    // Nothing usable and no rotating provider to strip.
+    await write(piAuth(), JSON.stringify({ future: { type: "device", token: "t" } }));
+    await syncContainerLogin(context, "pi", "container-1", fake.runners);
+    await write(piAuth(), "not json");
     await syncContainerLogin(context, "pi", "container-1", fake.runners);
     await write(piAuth(), "{}");
     await syncContainerLogin(context, "pi", "container-1", fake.runners);

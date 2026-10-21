@@ -210,15 +210,21 @@ const PROVIDER_AUTH_LABEL: Record<ProviderAuthFormat, { name: string; command: s
  *   `exp` (either alone when only one can be read), is dropped.
  * - Entries of any other type are dropped: OpenCode ignores them anyway, and
  *   Pi rejects the whole file over one.
+ *
+ * A withheld result still carries `accessOnly`, so a copy that already holds
+ * one of those logins in full can be blanked even when the host has nothing
+ * usable to hand over.
  */
 export function restrictProviderAuthEntries(
   format: ProviderAuthFormat,
   text: string,
   nowMs = Date.now(),
-): ProviderAuthEntries | { withheld: string } {
+): ProviderAuthEntries | { withheld: string; accessOnly: string[] } {
   const label = PROVIDER_AUTH_LABEL[format];
   const parsed = parseObject(text);
-  if (!parsed) return { withheld: `the ${label.name} auth.json is not a JSON object` };
+  if (!parsed) {
+    return { withheld: `the ${label.name} auth.json is not a JSON object`, accessOnly: [] };
+  }
   const entries: Record<string, unknown> = {};
   const accessOnly: string[] = [];
   let dropped = 0;
@@ -257,6 +263,7 @@ export function restrictProviderAuthEntries(
   }
   if (Object.keys(entries).length === 0 && dropped > 0) {
     return {
+      accessOnly,
       withheld: `the host ${label.name} logins have expired and a copy may not refresh them; run ${label.command} on the host (and sign in again there if it is signed out), then restart`,
     };
   }
@@ -269,7 +276,7 @@ function restrictProviderAuthSnapshot(
   nowMs: number,
 ): LoginSnapshot {
   const restricted = restrictProviderAuthEntries(format, text, nowMs);
-  if ("withheld" in restricted) return restricted;
+  if ("withheld" in restricted) return { withheld: restricted.withheld };
   return {
     text: JSON.stringify(restricted.entries),
     ...(restricted.dropped > 0 ? { dropped: restricted.dropped } : {}),

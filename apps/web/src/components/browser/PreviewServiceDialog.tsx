@@ -151,7 +151,7 @@ export function PreviewServiceDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="sm:max-w-md">
         <form onSubmit={submit} className="space-y-4">
           <DialogHeader>
             <DialogTitle>

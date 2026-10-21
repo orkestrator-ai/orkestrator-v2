@@ -74,6 +74,8 @@ const STORE_LAYOUTS: Record<string, StoreLayout> = {
   "node-attachments": { kind: "document" },
   "node-summaries": { kind: "document" },
   "node-outcomes": { kind: "document" },
+  "node-mail": { kind: "document" },
+  "node-action-requests": { kind: "document" },
   "agent-accounts": { kind: "document" },
   "public-operations/index": { kind: "document" },
   "environment-cleanup-ledger": { kind: "envelope", collections: ["entries"] },

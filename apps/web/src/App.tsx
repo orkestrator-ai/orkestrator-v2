@@ -94,6 +94,7 @@ import { subscribeToConnections } from "@/lib/connections";
 import { FederationProvider } from "@/components/federation/FederationProvider";
 import { SshPromptDialog } from "@/components/federation/SshPromptDialog";
 import { FederationEffects } from "@/components/federation/FederationEffects";
+import { NodeActionRequestsDialog } from "@/components/federation/NodeActionRequestsDialog";
 import { browserPanelWorkspaceId, machinePanelTarget } from "@/lib/federation/panel-realm";
 import { keepFrameWorkspaceAlive } from "@/lib/portal/workspaces";
 
@@ -1660,6 +1661,7 @@ function App() {
         </TerminalProvider>
         <SshPromptDialog />
         <FederationEffects />
+        <NodeActionRequestsDialog />
       </TooltipProvider>
     </FederationProvider>
   );

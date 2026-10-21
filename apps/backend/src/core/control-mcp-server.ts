@@ -44,6 +44,7 @@ import {
   workflowStatusWakeResult,
 } from "./control-mcp-review-actions.js";
 import { normalizedWorkflow, workflowSummary } from "./control-workflow-summary.js";
+import { NODE_TOOL_CAPABILITIES, registerNodeTools } from "./control-mcp-nodes.js";
 import { withCoordinatorDelegationPresentation } from "./coordinator-delegation-authority.js";
 
 const CONTROL_MCP_PATH = "/mcp";
@@ -106,6 +107,7 @@ const COORDINATOR_TOOL_CAPABILITY = new Map<string, string>([
   ["get_message", "mail"],
   ["get_message_status", "mail"],
   ["ack_message", "mail"],
+  ...NODE_TOOL_CAPABILITIES,
 ]);
 const COORDINATOR_CAPABILITIES = new Set(COORDINATOR_TOOL_CAPABILITY.values());
 
@@ -1329,6 +1331,11 @@ async function createControlMcp(
 
   if (coordinatorScope) {
     registerControlReviewActions(server, invoke, coordinatorScope);
+    registerNodeTools(server, invoke, {
+      projectId: coordinatorScope.projectId,
+      coordinatorId: coordinatorScope.coordinatorId,
+      conversationId: coordinatorScope.conversationId,
+    });
     server.registerTool(
       "get_repository_context",
       {
@@ -2325,6 +2332,8 @@ export class ControlMcpServer {
             "delete_environment",
             "write_file",
             "move_file",
+            // Only the user approves a request; a coordinator only creates one.
+            "resolve_node_action_request",
           ]);
           if (denied.has(command)) throw new Error("Coordinator capability denied");
           return this.invoke<T>(command, args);

@@ -1,3 +1,5 @@
+import { coordinatorNodeContext } from "./nodes/node-context.js";
+import { NodeCoordination } from "./nodes/node-coordination.js";
 import { NodePortal } from "./nodes/node-portal.js";
 import type { GatewayNodeHooks } from "../gateway-support-core.js";
 import { NodeService, errorCode, type NodeServiceOptions } from "./nodes/node-service.js";
@@ -159,6 +161,7 @@ export class OrkestratorBackend {
   /** Command-node registry and leaf attachments. */
   readonly nodes: NodeService;
   readonly nodePortal: NodePortal;
+  readonly nodeCoordination: NodeCoordination;
   /** Origins clients load this node's UI from; registered on attached leaves. */
   private portalOriginsSource: () => string[] = () => [];
   private readonly projectGit: ProjectGitService;
@@ -483,6 +486,14 @@ export class OrkestratorBackend {
       ...(options.nodeLinks?.fetchImpl ? { fetchImpl: options.nodeLinks.fetchImpl } : {}),
     });
     context.nodePortal = this.nodePortal;
+    this.nodeCoordination = new NodeCoordination({
+      storage,
+      nodes: this.nodes,
+      portal: this.nodePortal,
+      invoke: (command, args = {}) => this.invoke(command, args),
+      emit: (event, payload) => options.emit(event, payload),
+    });
+    context.nodeCoordination = this.nodeCoordination;
     const interactionMonitorMode =
       process.env.ORKESTRATOR_AGENT_INTERACTION_OBSERVE_ONLY === "1"
         ? ("observe-only" as const)
@@ -670,6 +681,14 @@ export class OrkestratorBackend {
           this.agentTools.connection(environmentId, projectId, target, tabId),
         artifactLedger,
         artifactDispatch,
+        coordinatorNodeContext: async () => {
+          const status = await this.nodes.status();
+          const list = await this.nodes.listNodes();
+          return coordinatorNodeContext(
+            status,
+            list.nodes.filter((node) => node.connection.state === "connected").length,
+          );
+        },
         coordinatorDelegationAvailable: (platform) =>
           this.controlMcp.getSettings().running &&
           coordinatorProviderQualification(platform).delegation,

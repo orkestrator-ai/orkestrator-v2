@@ -80,6 +80,8 @@ export type CommandContext = {
   nodes?: import("./nodes/node-service.js").NodeService;
   /** Portal read model, routing and workspaces (command node); client grants (leaf). */
   nodePortal?: import("./nodes/node-portal.js").NodePortal;
+  /** Leaf mail, the outbox and user-approved action requests. */
+  nodeCoordination?: import("./nodes/node-coordination.js").NodeCoordination;
   projectGit?: ProjectGitService;
   controlMcp?: {
     getSettings(): ControlMcpSettings;

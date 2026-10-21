@@ -338,8 +338,18 @@ Grants and the relay refuse:
 
 ### Cross-node coordinator tools (command node only)
 
-The existing control tools accept an optional `nodeId`, which defaults to
-this node:
+Built as a separate, node-qualified tool family (`control-mcp-nodes.ts`)
+rather than a `nodeId` argument on every existing tool: the existing tools
+keep their exact local behaviour, and each node tool checks the node's mode,
+the node's copy of the coordinator's project (by repository identity) and
+the environment's ownership on every call. The tools are `list_nodes`,
+`list_node_environments`, `read_node_environment`, `launch_node_environment`,
+`start_node_environment`, `stop_node_environment`, `send_prompt_to_node_tab`,
+`send_node_message` and `request_environment_deletion`; `transfer_files` and
+the project-file tools follow in M4.
+
+The original design below (kept for reference) had existing control tools
+accept an optional `nodeId`, defaulting to this node:
 
 - `list_environments` lists every connected node when `nodeId` is omitted,
   each entry node-qualified.
@@ -411,10 +421,22 @@ interface NodeActionRequest {
   items into its coordinator mailboxes.
 - Environments created by a controller record `origin: {controllerId,
   coordinatorMailboxId}` on the leaf.
+- Built: incoming coordinator mail is stored as ordinary mail from an
+  external sender (prefixed with the command node's name), and the leaf's
+  `send_message` / `reply_message` tools consult the router before local
+  delivery (`storage.nodeMailRouter`). The outbox is the `node-mail` store
+  (sensitive), and the command node's collector delivers into the named
+  conversation, or the project's main coordinator matched by repository.
 
 ### File transfer, leaf projects and project files
 
-- **Leaf chunk commands:**
+- **Built.** Leaf file commands `stat_node_file`, `read_node_file`,
+  `begin_node_file_write` / `append_node_file_write` /
+  `commit_node_file_write` / `abort_node_file_write` (`nodes/node-files.ts`),
+  with scopes `{environmentId}`, `{projectId}` and `{seedEnvironmentId}`;
+  containerized environments are refused for now. The command node's
+  `NodeFileTransfer` runs the same commands locally for itself.
+- **Leaf chunk commands (as designed):**
   - `read_node_file_chunk {scope, path, offset, length ≤ 4 MiB}`;
   - `begin_node_file_write {scope, path, size, sha256, overwrite}`, then
     `append_node_file_chunk`, then `commit_node_file_write` (which checks
@@ -579,19 +601,19 @@ Test names include the requirement ID (for example
 | ID | Requirement | M | Implementation | Evidence | Status |
 | --- | --- | --- | --- | --- | --- |
 | UP-01 | Every attached command node subscribes to the leaf's event stream. | 2 | `NodeReadModel` | `node-portal.test.ts` PT-01/PT-02/UP-01 (two command nodes each hold a stream) | Done |
-| UP-02 | Single-destination updates go to the originating command node. | 3 | Origin on thread and environment | | Planned |
-| UP-03 | Otherwise they go to the most recent controller. | 3 | Outbox routing | | Planned |
-| UP-04 | If that controller is unreachable, the update waits in the outbox; never dropped or rerouted. | 3 | `node-outbox.ts` | | Planned |
+| UP-02 | Single-destination updates go to the originating command node. | 3 | Origin on thread and environment | `node-mail.test.ts` UP-02/UP-03 (origin, thread); `node-coordination.test.ts` CO-05/UP-02 (real mail store, both directions) | Done |
+| UP-03 | Otherwise they go to the most recent controller. | 3 | Outbox routing | `node-mail.test.ts` UP-02/UP-03 (most recent controller; detached origin falls back) | Done |
+| UP-04 | If that controller is unreachable, the update waits in the outbox; never dropped or rerouted. | 3 | `node-outbox.ts` | `node-mail.test.ts` UP-04 (ordered, kept until acknowledged, refused when full); `control-mcp-nodes.test.ts` UP-02/UP-04 (failed delivery stays on the leaf) | Done |
 
 ### Leaf mode
 
 | ID | Requirement | M | Implementation | Evidence | Status |
 | --- | --- | --- | --- | --- | --- |
-| LM-01 | Coordinator context says the node is in leaf mode and names the controller. | 3 | `<orkestrator-node-mode>` | | Planned |
-| LM-02 | Cross-node tools are unavailable in leaf mode. | 3 | Control MCP gating | | Planned |
-| LM-03 | An incoming message is handled as a leaf agent would. | 3 | Context and gating | | Planned |
-| LM-04 | Coordinator conversations are kept, hidden by default, and openable behind a warning naming the controller. | 3 | Renderer | | Planned |
-| LM-05 | Detaching from all controllers restores command mode and tools. | 1, 3 | `node-mode.ts` | `node-service.test.ts` RM-03/LM-05 (links resume); coordinator tools in M3 | In progress |
+| LM-01 | Coordinator context says the node is in leaf mode and names the controller. | 3 | `<orkestrator-node-mode>` | `control-mcp-nodes.test.ts` LM-01/LM-03 (`coordinatorNodeContext`, injected by `trustedSessionInput`) | Done |
+| LM-02 | Cross-node tools are unavailable in leaf mode. | 3 | Control MCP gating | `control-mcp-nodes.test.ts` CO-01/LM-02 (every node tool refuses in leaf mode) | Done |
+| LM-03 | An incoming message is handled as a leaf agent would. | 3 | Context and gating | `control-mcp-nodes.test.ts` LM-01/LM-03 (context says to act as an agent on this node) | Done |
+| LM-04 | Coordinator conversations are kept, hidden by default, and openable behind a warning naming the controller. | 3 | Renderer | `leaf-mode-coordinator-gate.test.tsx` LM-04 | Done |
+| LM-05 | Detaching from all controllers restores command mode and tools. | 1, 3 | `node-mode.ts` | `node-service.test.ts` RM-03/LM-05 (links resume); node tools check the mode on every call, so command mode restores them | Done |
 
 ### Portal
 
@@ -611,7 +633,7 @@ Test names include the requirement ID (for example
 | DP-02 | Grants are short-lived, revocable, not the gateway token, and exclude administration. | 2 | `ClientGrantService` | `node-portal.test.ts` DP-01/DP-02 (15-minute cap, hash-only, revoked on close and detach, attached controllers only); `gateway-command-nodes.test.ts` DP-02 (client API only) | Done |
 | DP-03 | When the leaf is unreachable, the workspace relays through the command node. | 2 | `node-relay.ts` | `gateway-command-nodes.test.ts` DP-03 (HTTP and terminal WebSocket relayed with the node's credential); `federation-ui.test.tsx` DP-01/DP-03/CR-03; desktop uses the command node's loopback route | Done |
 | DP-04 | The info panel shows the path (direct or relay), the route and the node. | 2 | `AgentRuntimePanel` | `connection-path.test.tsx` DP-04 | Done |
-| DP-05 | The command node can read leaf chat read-only; the portal shows attention. | 2, 3 | Summaries, `read_environment` | Portal shows attention from summaries (`FederationEffects` attention toasts); coordinator reads in M3 | In progress |
+| DP-05 | The command node can read leaf chat read-only; the portal shows attention. | 2, 3 | Summaries, `read_environment` | Portal attention from summaries (`FederationEffects`); `control-mcp-nodes.test.ts` (read_node_environment reads state, tabs and transcript) | Done |
 | DP-06 | The leaf arbitrates its own approvals. | 2 | Unchanged leaf | Approvals stay in the leaf's own workspace UI (nothing relays or answers them on the command node) | Done |
 | DP-07 | Grants narrowed to one environment and one stream. | — | | | Deferred (deviation 2) |
 
@@ -619,14 +641,14 @@ Test names include the requirement ID (for example
 
 | ID | Requirement | M | Implementation | Evidence | Status |
 | --- | --- | --- | --- | --- | --- |
-| CO-01 | Cross-node coordination runs only on a top-level command node. | 3 | Mode gating | | Planned |
-| CO-02 | Environments are created on this node by default, or on a named node when asked. | 3 | `launch_environment nodeId` | | Planned |
-| CO-03 | Coordinators start, stop, prompt and answer environments on every connected node, including command nodes in leaf mode. | 3 | Control tools with `nodeId` | | Planned |
-| CO-04 | Deletion happens only on user request, with a confirmation naming node and environment. | 3 | Action requests | | Planned |
-| CO-05 | Node-qualified mail to and from agents on every node; replies are collected. | 3 | Node mail, outbox | | Planned |
-| CO-06 | Read-only interrogation: status, activity, transcripts, diffs, files and test results. | 3 | `read_environment` | | Planned |
+| CO-01 | Cross-node coordination runs only on a top-level command node. | 3 | Mode gating | `control-mcp-nodes.test.ts` CO-01/LM-02 | Done |
+| CO-02 | Environments are created on this node by default, or on a named node when asked. | 3 | `launch_environment nodeId` | `control-mcp-nodes.test.ts` CO-02/CO-06 (launch_node_environment on the node's matched project; launch_environment stays local and is the default in the context line) | Done |
+| CO-03 | Coordinators start, stop, prompt and answer environments on every connected node, including command nodes in leaf mode. | 3 | Control tools with `nodeId` | `control-mcp-nodes.test.ts` (start/stop/prompt tools route with ownership checks); answering a pending question stays with the user in the leaf workspace (DP-06) | Done |
+| CO-04 | Deletion happens only on user request, with a confirmation naming node and environment. | 3 | Action requests | `control-mcp-nodes.test.ts` CO-04 (request only); `node-mail.test.ts` CO-04 (approve executes once, reject/expiry never); `node-action-requests.test.tsx` CO-04 (dialog names node and environment) | Done |
+| CO-05 | Node-qualified mail to and from agents on every node; replies are collected. | 3 | Node mail, outbox | `control-mcp-nodes.test.ts` CO-05; `node-coordination.test.ts` CO-05/UP-02 (both directions over the real mail store) | Done |
+| CO-06 | Read-only interrogation: status, activity, transcripts, diffs, files and test results. | 3 | `read_environment` | `control-mcp-nodes.test.ts` CO-02/CO-06 (list and read on other nodes, reads route no writes) | Done |
 | CO-07 | File transfer through the framework. | 4 | `transfer_files` | | Planned |
-| CO-08 | Existing per-project ownership and the read-only checkout boundary are kept. | 3 | Unchanged policy | | Planned |
+| CO-08 | Existing per-project ownership and the read-only checkout boundary are kept. | 3 | Unchanged policy | Node tools act only on the coordinator's project (matched by repository) and refuse the node's project checkout; `resolve_node_action_request` denied to coordinator credentials | Done |
 
 ### Files and projects
 

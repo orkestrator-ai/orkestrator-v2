@@ -41,6 +41,12 @@ export const NODE_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
   "probe_node_host_key",
   "trust_node_host_key",
   "invoke_on_node",
+  // The outbox belongs to the command node it is for; decisions to the user.
+  "collect_node_outbox",
+  "ack_node_outbox",
+  "create_node_action_request",
+  "list_node_action_requests",
+  "resolve_node_action_request",
   "get_node_summaries",
   "open_node_workspace",
   "renew_node_workspace",

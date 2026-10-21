@@ -12,6 +12,7 @@ import type { CommandRegistrar } from "./commands-registry-types.js";
 import { assertOnlyKeys } from "./commands-validation.js";
 import type { DesktopConnectionImport, NodeService } from "./nodes/node-service.js";
 import type { NodePortal } from "./nodes/node-portal.js";
+import type { NodeCoordination } from "./nodes/node-coordination.js";
 
 /**
  * Command-node and leaf commands. See docs/development/command-nodes-plan.md.
@@ -31,6 +32,13 @@ function portal(context: CommandContext): NodePortal {
   if (!context.nodePortal)
     throw new Error("The command-node portal is not available in this backend.");
   return context.nodePortal;
+}
+
+function coordination(context: CommandContext): NodeCoordination {
+  if (!context.nodeCoordination) {
+    throw new Error("Cross-node coordination is not available in this backend.");
+  }
+  return context.nodeCoordination;
 }
 
 function nodes(context: CommandContext): NodeService {
@@ -180,6 +188,71 @@ export function registerNodeCommands(register: CommandRegistrar): void {
   register("revoke_client_grant", async (args, context) => {
     assertOnlyKeys(args, ["controllerId", "grantId"], "arguments");
     return portal(context).revokeClientGrant(args);
+  });
+
+  // Leaf mail (leaf side, called by an attached command node).
+  register("deliver_node_mail", async (args, context) => {
+    assertOnlyKeys(
+      args,
+      [
+        "controllerId",
+        "coordinatorEnvironmentId",
+        "coordinatorTabId",
+        "requestId",
+        "toEnvironmentId",
+        "toTabId",
+        "subject",
+        "body",
+      ],
+      "arguments",
+    );
+    return coordination(context).deliverIncoming(args);
+  });
+
+  register("record_node_environment_origin", async (args, context) => {
+    assertOnlyKeys(
+      args,
+      ["environmentId", "controllerId", "coordinatorEnvironmentId", "coordinatorTabId"],
+      "arguments",
+    );
+    return coordination(context).recordOrigin(args);
+  });
+
+  register("collect_node_outbox", async (args, context) => {
+    assertOnlyKeys(args, ["controllerId", "after"], "arguments");
+    if (!isBackendId(args.controllerId)) throw new Error("Expected controllerId.");
+    const after =
+      typeof args.after === "number" && Number.isSafeInteger(args.after) ? args.after : 0;
+    return coordination(context).leafMail.collect(args.controllerId, after);
+  });
+
+  register("ack_node_outbox", async (args, context) => {
+    assertOnlyKeys(args, ["controllerId", "upTo"], "arguments");
+    if (!isBackendId(args.controllerId)) throw new Error("Expected controllerId.");
+    if (typeof args.upTo !== "number" || !Number.isSafeInteger(args.upTo)) {
+      throw new Error("Expected upTo.");
+    }
+    return coordination(context).leafMail.ack(args.controllerId, args.upTo);
+  });
+
+  // Action requests (command node): coordinators ask, the user decides.
+  register("create_node_action_request", async (args, context) => {
+    assertOnlyKeys(args, ["kind", "targets", "requestedBy", "reason"], "arguments");
+    return coordination(context).createActionRequest(args);
+  });
+
+  register("list_node_action_requests", async (args, context) => {
+    assertOnlyKeys(args, ["pendingOnly"], "arguments");
+    return coordination(context).actions.list({ pendingOnly: args.pendingOnly === true });
+  });
+
+  register("resolve_node_action_request", async (args, context) => {
+    assertOnlyKeys(args, ["requestId", "decision"], "arguments");
+    if (typeof args.requestId !== "string") throw new Error("Expected requestId.");
+    if (args.decision !== "approve" && args.decision !== "reject") {
+      throw new Error("Expected decision approve or reject.");
+    }
+    return coordination(context).actions.resolve(args.requestId, args.decision);
   });
 
   register("import_desktop_connections", async (args, context) => {

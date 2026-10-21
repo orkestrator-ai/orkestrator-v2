@@ -131,29 +131,26 @@ export class PortalStore {
   }
 
   private async read(): Promise<void> {
-    try {
-      const [status, summaries] = await Promise.all([
-        invoke<NodeStatus>("get_node_status"),
-        invoke<NodeSummariesResult>("get_node_summaries"),
-      ]);
-      if (!status || !summaries || !Array.isArray(summaries.nodes)) {
-        this.store.setState({ loaded: true });
-        return;
-      }
-      this.store.setState({
-        selfId: summaries.selfId ?? status.nodeId,
-        status,
-        nodes: summaries.nodes,
-        loaded: true,
-        unsupported: false,
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.store.setState({
-        loaded: true,
-        unsupported: /unknown command|not available in this backend/i.test(message),
-      });
-    }
+    // Status and summaries are read independently: a leaf workspace realm
+    // (a grant) may read its node's status but never another node's portal.
+    const [status, summaries] = await Promise.allSettled([
+      invoke<NodeStatus>("get_node_status"),
+      invoke<NodeSummariesResult>("get_node_summaries"),
+    ]);
+    const statusValue = status.status === "fulfilled" ? status.value : null;
+    const summariesValue =
+      summaries.status === "fulfilled" && summaries.value && Array.isArray(summaries.value.nodes)
+        ? summaries.value
+        : null;
+    const failure = status.status === "rejected" ? status.reason : null;
+    const message = failure instanceof Error ? failure.message : failure ? String(failure) : "";
+    this.store.setState((state) => ({
+      selfId: summariesValue?.selfId ?? statusValue?.nodeId ?? state.selfId,
+      status: statusValue ?? state.status,
+      nodes: summariesValue?.nodes ?? state.nodes,
+      loaded: true,
+      unsupported: /unknown command|not available in this backend/i.test(message),
+    }));
   }
 
   /**
@@ -201,6 +198,40 @@ export async function listNodeOutcomes(nodeId: string): Promise<NodeOutcomeRecor
 
 export async function dismissNodeOutcome(outcomeId: string): Promise<void> {
   await invoke("dismiss_node_outcome", { outcomeId });
+}
+
+export interface NodeActionRequestView {
+  requestId: string;
+  kind: "delete-environment" | "create-project" | "update-project-files" | "reveal-env-value";
+  targets: Array<{
+    nodeId: string;
+    nodeName: string;
+    environmentId?: string;
+    environmentName?: string;
+    projectName?: string;
+    location?: string;
+    gitRemote?: string;
+    files?: string[];
+    keys?: string[];
+  }>;
+  reason?: string;
+  state: string;
+  result?: { code: string; message: string };
+}
+
+/** Requests from coordinators that wait for this user's decision. */
+export async function listNodeActionRequests(): Promise<NodeActionRequestView[]> {
+  const value = await invoke<NodeActionRequestView[]>("list_node_action_requests", {
+    pendingOnly: true,
+  });
+  return Array.isArray(value) ? value : [];
+}
+
+export async function resolveNodeActionRequest(
+  requestId: string,
+  decision: "approve" | "reject",
+): Promise<NodeActionRequestView> {
+  return invoke<NodeActionRequestView>("resolve_node_action_request", { requestId, decision });
 }
 
 /** One portal per realm: it reads the realm's own bound backend. */

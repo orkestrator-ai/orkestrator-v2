@@ -201,6 +201,28 @@ export function registerAgentMessagingTools(
       consumeRateLimit("send");
       try {
         const { identity } = await assertCallerMailbox(storage, scope, fromTabId);
+        // On a leaf, mail for the coordinator goes to the command node that
+        // started this work (or contacted this node last), via its outbox.
+        const remote = await storage.nodeMailRouter?.route({
+          fromEnvironmentId: scope.environmentId,
+          toEnvironmentId: input.toEnvironmentId,
+          ...(input.replyToMessageId ? { replyToMessageId: input.replyToMessageId } : {}),
+        });
+        if (remote && storage.nodeMailRouter) {
+          const queued = await storage.nodeMailRouter.enqueue(remote, {
+            requestId: input.requestId,
+            fromEnvironmentId: scope.environmentId,
+            fromTabId: identity.tabId,
+            ...(input.subject ? { subject: input.subject } : {}),
+            body: input.body,
+          });
+          return result({
+            identity,
+            message: { outboxSeq: queued.seq, toEnvironmentId: input.toEnvironmentId },
+            placement: "node-outbox",
+            deliveryHint: `queued for the coordinator on ${remote.controllerName ?? "the command node"}; delivered when it collects its mail`,
+          });
+        }
         const message = await storage.sendAgentMail(
           {
             kind: "tab",
@@ -382,6 +404,28 @@ export function registerAgentMessagingTools(
       consumeRateLimit("send");
       try {
         const { identity } = await assertCallerMailbox(storage, scope, fromTabId);
+        // A reply to a command node's coordinator goes back through the outbox.
+        const remote = await storage.nodeMailRouter?.route({
+          fromEnvironmentId: scope.environmentId,
+          toEnvironmentId: "",
+          replyToMessageId: messageId,
+        });
+        if (remote && storage.nodeMailRouter) {
+          const queued = await storage.nodeMailRouter.enqueue(remote, {
+            requestId,
+            fromEnvironmentId: scope.environmentId,
+            fromTabId: identity.tabId,
+            ...(subject ? { subject } : {}),
+            body,
+          });
+          await storage.ackAgentMail(scope.environmentId, identity.tabId, messageId);
+          return result({
+            identity,
+            message: { outboxSeq: queued.seq, replyToMessageId: messageId },
+            placement: "node-outbox",
+            deliveryHint: `queued for the coordinator on ${remote.controllerName ?? "the command node"}`,
+          });
+        }
         const message = await storage.replyAgentMail(
           {
             kind: "tab",

@@ -19,8 +19,32 @@ export interface NodeStoreMutation<TStore, TResult> {
  * - `node-attachments` (leaf): the command nodes attached to this backend
  *   and when each last contacted it. No credentials.
  */
+/**
+ * Where a leaf agent's mail goes when a command node's coordinator should get
+ * it (see `nodes/node-mail.ts`). Set by the backend; absent in fixtures.
+ */
+export interface NodeMailRouter {
+  route(input: {
+    fromEnvironmentId: string;
+    toEnvironmentId: string;
+    replyToMessageId?: string;
+  }): Promise<{ controllerId: string; controllerName?: string } | null>;
+  enqueue(
+    destination: { controllerId: string },
+    item: {
+      requestId: string;
+      fromEnvironmentId: string;
+      fromTabId: string;
+      subject?: string;
+      body: string;
+    },
+  ): Promise<{ seq: number }>;
+}
+
 export class StorageNodes extends StoragePreviewServices {
   private reportedDroppedNodes = false;
+  /** Leaf → command node mail routing; consulted by the agent mail tools. */
+  nodeMailRouter: NodeMailRouter | null = null;
 
   protected nodeRegistryFile(): string {
     return this.file("node-registry.json");
@@ -46,6 +70,40 @@ export class StorageNodes extends StoragePreviewServices {
   async saveNodeSummariesCache(value: unknown): Promise<void> {
     await this.serializeMutation(this.nodeSummariesFile(), "node summaries", () =>
       this.saveJson(this.nodeSummariesFile(), value, { backup: false }),
+    );
+  }
+
+  protected nodeMailFile(): string {
+    return this.file("node-mail.json");
+  }
+
+  protected nodeActionRequestsFile(): string {
+    return this.file("node-action-requests.json");
+  }
+
+  /** Leaf mail state: environment origins, coordinator threads and the outbox. Sensitive (mail bodies). */
+  async loadNodeMail(): Promise<unknown> {
+    return this.loadJson<unknown>(this.nodeMailFile(), () => null);
+  }
+
+  async mutateNodeMail<T>(mutate: (current: unknown) => { next: unknown; result: T }): Promise<T> {
+    return this.serializeMutation(this.nodeMailFile(), "node mail", async () => {
+      const current = await this.loadJson<unknown>(this.nodeMailFile(), () => null);
+      const { next, result } = mutate(current);
+      if (next !== null && next !== undefined)
+        await this.saveSensitiveJson(this.nodeMailFile(), next);
+      return result;
+    });
+  }
+
+  async loadNodeActionRequests(): Promise<unknown> {
+    const value = await this.loadJson<unknown>(this.nodeActionRequestsFile(), () => null);
+    return (value as { requests?: unknown } | null)?.requests ?? null;
+  }
+
+  async saveNodeActionRequests(requests: unknown): Promise<void> {
+    await this.serializeMutation(this.nodeActionRequestsFile(), "node action requests", () =>
+      this.saveJson(this.nodeActionRequestsFile(), { version: 1, requests }),
     );
   }
 

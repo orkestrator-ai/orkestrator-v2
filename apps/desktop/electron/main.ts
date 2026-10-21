@@ -832,6 +832,17 @@ function registerIpc(): void {
     return connectionManager;
   };
   const scopeForEvent = (event?: { sender?: { id: number } }) => ipcContextForEvent(event).scope;
+  // A workspace grant cannot administer its node; say where that is done
+  // instead of surfacing the node's refusal.
+  const machineAdminScope = (event?: { sender?: { id: number } }) => {
+    const context = contextForEvent(event);
+    if (context.target) {
+      throw new Error(
+        `${context.target.nodeName}'s web access and gateway token are managed from Settings → Connections → Nodes on the command node.`,
+      );
+    }
+    return context.scope;
+  };
   // Connection management acts on the window's own (command node)
   // connection, even while its workspace is on another node.
   const controlScopeForEvent = (event?: { sender?: { id: number } }) =>
@@ -909,12 +920,12 @@ function registerIpc(): void {
     trustedRendererUrl: isDev
       ? (process.env.VITE_DEV_SERVER_URL ?? "http://127.0.0.1:1420")
       : pathToFileURL(path.join(process.resourcesPath, "web", "index.html")).href,
-    getWebClientStatus: (event) => manager().getWebClientStatus(scopeForEvent(event)),
+    getWebClientStatus: (event) => manager().getWebClientStatus(machineAdminScope(event)),
     setWebClientEnabled: (enabled, event) =>
-      manager().setWebClientEnabled(enabled, scopeForEvent(event)),
-    resetWebClientServe: (event) => manager().resetWebClientServe(scopeForEvent(event)),
-    getGatewayTokenSettings: (event) => manager().getTokenSettings(scopeForEvent(event)),
-    setGatewayToken: (token, event) => manager().setToken(token, scopeForEvent(event)),
+      manager().setWebClientEnabled(enabled, machineAdminScope(event)),
+    resetWebClientServe: (event) => manager().resetWebClientServe(machineAdminScope(event)),
+    getGatewayTokenSettings: (event) => manager().getTokenSettings(machineAdminScope(event)),
+    setGatewayToken: (token, event) => manager().setToken(token, machineAdminScope(event)),
   });
   const afterCatalogueChange = <T>(list: T): T => {
     scheduleConnectionListPublish();

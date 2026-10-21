@@ -53,6 +53,33 @@ live approvals, revokes its credential, and tombstones its mailbox without
 deleting provider history or the checkout. Removing the project stops
 Coordinator and deletes the isolated runtime, never the user's local repository.
 
+## Multiple machines
+
+On a command node ([command-nodes.md](command-nodes.md)) a coordinator also
+works across the nodes that node controls, through node-qualified tools:
+
+- `list_nodes` and `list_node_environments` show the connected nodes and
+  this project's environments on them (each node's copy of the project is
+  matched by repository identity).
+- `launch_node_environment` creates an environment on a named node; plain
+  `launch_environment` (this node) stays the default. The leaf records which
+  command node and conversation launched it, so the worker's report comes
+  back to this coordinator.
+- `read_node_environment` reads another node's environment directly
+  (state, tabs, transcript); `start_node_environment`,
+  `stop_node_environment`, `send_prompt_to_node_tab` and `send_node_message`
+  act on it. Mail from a leaf agent arrives as ordinary mail naming the
+  node and environment.
+- `request_environment_deletion` only asks: the user confirms in a dialog
+  that names the node and the environment. A coordinator never deletes on
+  its own initiative, here or on its own node.
+
+The coordinator's context says whether its node is a command node. A command
+node attached to another runs in leaf mode: its coordinator's context names
+the controlling node, its node tools refuse, and it handles any message as
+an agent on that node would. Its conversations are kept but hidden behind a
+warning in the project's Coordinator tab.
+
 ## One main coordinator, and side agents
 
 A project has exactly one **main** coordinator conversation

@@ -641,8 +641,9 @@ token. The whole run takes about 20 minutes.
 
 The approval card is answered with **Approve** alone. The spec never picks an
 optional or amendment option. Codex's "Approve with command policy" writes a
-rule into the Codex home, which a profile shares with the host (see
-[live-provider-and-platform-qualification.md](../todo/live-provider-and-platform-qualification.md)).
+rule into the profile's isolated Codex home. Earlier profiles shared the host
+home, as recorded in
+[live-provider-and-platform-qualification.md](../todo/live-provider-and-platform-qualification.md).
 The task remains explicitly opt-in (the environment flag above is required);
 it is not part of the default suite or CI because it spends real provider tokens.
 Two additional cases inject setup failures immediately after creation and

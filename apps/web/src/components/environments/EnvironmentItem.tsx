@@ -58,6 +58,8 @@ import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import { useLocalEnvironmentAvailable } from "@/hooks/useLocalEnvironmentAvailable";
 import { useEnvironmentChangeProjection } from "@/hooks/useChangeProjection";
 import { ChangeCountBadge } from "@/components/changes/ChangeCountBadge";
+import { MachineDot } from "@/components/federation/MachineDot";
+import { useFederation } from "@/components/federation/FederationProvider";
 import {
   changeLabel,
   changeReason,
@@ -268,6 +270,10 @@ export const EnvironmentItem = memo(function EnvironmentItem({
 }: EnvironmentItemProps) {
   const dockerAvailable = useDockerAvailability();
   const localEnvironmentAvailable = useLocalEnvironmentAvailable(environment.projectId);
+  // The owning machine's dot, before the name, whenever this client can show
+  // several machines. Identity, not activity.
+  const { boundMachine: windowMachine, supported: multiMachineClient } = useFederation();
+  const boundMachine = multiMachineClient ? windowMachine : null;
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
 
   // Get Claude activity state for this environment
@@ -579,6 +585,13 @@ export const EnvironmentItem = memo(function EnvironmentItem({
               )}
               <span className="flex min-w-0 flex-1 flex-col">
                 <span className="flex min-w-0 items-center gap-1.5">
+                  {boundMachine ? (
+                    <MachineDot
+                      colorToken={boundMachine.colorToken}
+                      machineName={boundMachine.name}
+                      status="This window"
+                    />
+                  ) : null}
                   <span
                     id={environmentNameId}
                     className={cn(

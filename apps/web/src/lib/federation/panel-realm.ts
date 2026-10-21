@@ -5,7 +5,7 @@
  * one workspace and never hosts further panels or a multi-machine sidebar.
  */
 
-export type PanelRealmTarget = { projectId: string; environmentId?: string };
+export type PanelRealmTarget = { projectId?: string; environmentId?: string };
 
 const PANEL_PARAM = "panel";
 const PANEL_VALUE = "workspace";
@@ -27,7 +27,8 @@ export function machinePanelTarget(): PanelRealmTarget | null {
   const search = params();
   if (search?.get(PANEL_PARAM) !== PANEL_VALUE) return null;
   const projectId = search.get("project");
-  if (!projectId || projectId.length > 256) return null;
+  // No project: the machine's own project launcher (e.g. to add a project).
+  if (!projectId || projectId.length > 256) return {};
   const environmentId = search.get("environment");
   return {
     projectId,
@@ -38,7 +39,7 @@ export function machinePanelTarget(): PanelRealmTarget | null {
 /** Same-origin URL of a panel realm for a hosted-browser frame. */
 export function browserPanelUrl(input: {
   machineId: string;
-  projectId: string;
+  projectId?: string;
   environmentId?: string;
 }): string {
   const url = new URL(window.location.href);
@@ -46,7 +47,7 @@ export function browserPanelUrl(input: {
   url.hash = "";
   url.searchParams.set(PANEL_PARAM, PANEL_VALUE);
   url.searchParams.set("machine", input.machineId);
-  url.searchParams.set("project", input.projectId);
+  if (input.projectId) url.searchParams.set("project", input.projectId);
   if (input.environmentId) url.searchParams.set("environment", input.environmentId);
   return url.toString();
 }

@@ -31,7 +31,8 @@ export type PanelBounds = { x: number; y: number; width: number; height: number 
 
 export type PanelOpenInput = {
   connectionId: string;
-  projectId: string;
+  /** Absent opens the machine's project launcher (e.g. to add a project there). */
+  projectId?: string;
   environmentId?: string;
 };
 
@@ -290,7 +291,7 @@ export function registerFederationIpc(deps: FederationIpcDependencies): void {
     const input = record(value, "panel details");
     return deps.openPanel(event, {
       connectionId: id(input.connectionId, "a connection ID"),
-      projectId: id(input.projectId, "a project ID"),
+      ...(input.projectId === undefined ? {} : { projectId: id(input.projectId, "a project ID") }),
       ...(input.environmentId === undefined
         ? {}
         : { environmentId: id(input.environmentId, "an environment ID") }),

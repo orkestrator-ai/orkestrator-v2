@@ -326,6 +326,20 @@ export function createBrowserMachineClient(id: string): BackendClient | null {
     connectionId: id,
     origin: credentials.origin,
     token: credentials.token,
+    observe: async () => {
+      if (!statuses.get(id)?.hello) {
+        try {
+          const hello = await fetchHello(credentials.origin, credentials.token);
+          if (hello) setStatus(id, { hello });
+        } catch (error) {
+          setStatus(id, {
+            transport: /rejected/.test(String(error)) ? "authentication-required" : "unreachable",
+            detail: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      return browserFederationList().connections.find((connection) => connection.id === id) ?? null;
+    },
     onTransport: (state, detail) => {
       setStatus(id, {
         transport:
@@ -338,17 +352,5 @@ export function createBrowserMachineClient(id: string): BackendClient | null {
       });
     },
   });
-  if (!statuses.get(id)?.hello) {
-    void fetchHello(credentials.origin, credentials.token)
-      .then((hello) => {
-        if (hello) setStatus(id, { hello });
-      })
-      .catch((error: unknown) =>
-        setStatus(id, {
-          transport: "unreachable",
-          detail: error instanceof Error ? error.message : String(error),
-        }),
-      );
-  }
   return client;
 }

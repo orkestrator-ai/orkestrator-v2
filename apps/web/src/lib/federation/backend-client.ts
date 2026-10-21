@@ -23,7 +23,15 @@ export type BackendEventListener = (event: string, payload: unknown, epoch: numb
 export interface BackendClient {
   /** Catalogue entry this client is bound to (stable; never a route or port). */
   readonly connectionId: string;
-  invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
+  /**
+   * `signal` cancels *observation* of the result. A cancelled write may still
+   * have been admitted by the backend; cancellation never implies it did not run.
+   */
+  invoke<T>(
+    command: string,
+    args?: Record<string, unknown>,
+    options?: { signal?: AbortSignal },
+  ): Promise<T>;
   subscribe(listener: BackendEventListener): () => void;
   /** Ask the connection layer to keep this machine connected for this view. */
   observe(): Promise<ConnectionSummary | null>;
@@ -62,8 +70,30 @@ export function createDesktopBackendClient(
   let observed = false;
   return {
     connectionId,
-    invoke: <T>(command: string, args?: Record<string, unknown>) =>
-      api.invoke<T>(connectionId, command, args ?? {}),
+    invoke: <T>(
+      command: string,
+      args?: Record<string, unknown>,
+      options?: { signal?: AbortSignal },
+    ) => {
+      if (options?.signal?.aborted) return Promise.reject(options.signal.reason);
+      const result = api.invoke<T>(connectionId, command, args ?? {});
+      if (!options?.signal) return result;
+      const signal = options.signal;
+      return new Promise<T>((resolve, reject) => {
+        const onAbort = () => reject(signal.reason);
+        signal.addEventListener("abort", onAbort, { once: true });
+        result.then(
+          (value) => {
+            signal.removeEventListener("abort", onAbort);
+            resolve(value);
+          },
+          (error: unknown) => {
+            signal.removeEventListener("abort", onAbort);
+            reject(error);
+          },
+        );
+      });
+    },
     subscribe(listener) {
       ensureDesktopDispatcher(api);
       const listeners = desktopListeners.get(connectionId) ?? new Set();
@@ -100,6 +130,8 @@ export type HttpBackendClientOptions = {
   fetchImpl?: typeof fetch;
   /** Connection-state hook for the runtime (open, closed, auth failure). */
   onTransport?: (state: "open" | "closed" | "unauthorized", detail?: string) => void;
+  /** Performs the authenticated hello before the runtime reads entities. */
+  observe?: () => Promise<ConnectionSummary | null>;
 };
 
 const MAX_INVOKE_RESPONSE_BYTES = 32 * 1024 * 1024;
@@ -176,7 +208,11 @@ export function createHttpBackendClient(options: HttpBackendClientOptions): Back
 
   return {
     connectionId: options.connectionId,
-    async invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+    async invoke<T>(
+      command: string,
+      args?: Record<string, unknown>,
+      invokeOptions?: { signal?: AbortSignal },
+    ): Promise<T> {
       const response = await fetchImpl(new URL("/__orkestrator/invoke", options.origin), {
         method: "POST",
         headers: { ...headers(), "content-type": "application/json" },
@@ -184,6 +220,7 @@ export function createHttpBackendClient(options: HttpBackendClientOptions): Back
         credentials: "omit",
         mode: "cors",
         redirect: "error",
+        ...(invokeOptions?.signal ? { signal: invokeOptions.signal } : {}),
       });
       const text = await response.text();
       if (text.length > MAX_INVOKE_RESPONSE_BYTES) throw new Error("The response was too large.");
@@ -213,7 +250,7 @@ export function createHttpBackendClient(options: HttpBackendClientOptions): Back
       };
     },
     async observe() {
-      return null;
+      return options.observe ? options.observe() : null;
     },
     release() {
       controller?.abort();

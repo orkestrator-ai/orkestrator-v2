@@ -200,6 +200,8 @@ export class BackendRuntime {
   private readonly dirtyProjects = new Set<string>();
   private projectRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   private lastRevision: number | null = null;
+  /** Owned by this runtime: aborted when observation stops, never by a view. */
+  private readAbort = new AbortController();
   private disposed = false;
   private readonly now: () => number;
 
@@ -316,7 +318,7 @@ export class BackendRuntime {
   async read<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
     const prefetched = this.prefetch.read(command, args);
     if (prefetched.found) return prefetched.value as T;
-    return this.api.invoke<T>(command, args);
+    return this.api.invoke<T>(command, args, { signal: this.readAbort.signal });
   }
 
   /**
@@ -358,18 +360,26 @@ export class BackendRuntime {
     this.unsubscribe = this.api.subscribe((event, payload, epoch) =>
       this.handleEvent(event, payload, epoch),
     );
+    // Identity and capabilities first (the connection layer's hello), then
+    // the machine's entities: nothing is published for an unproved peer.
     void this.api
       .observe()
       .then((summary) => {
-        if (summary && !this.disposed) this.updateConnection(summary);
+        if (this.disposed || this.demand === 0) return;
+        if (summary) this.updateConnection(summary);
+        const transport = this.store.getState().connection.transport;
+        if (transport === "authentication-required" || transport === "trust-blocked") return;
+        void this.requestHydrate();
       })
       .catch((error: unknown) => {
         this.store.setState({ lastError: boundedText(errorMessage(error)) });
       });
-    void this.requestHydrate();
   }
 
   private stop(): void {
+    // Abandon in-flight summary reads; a fresh controller serves the next start.
+    this.readAbort.abort(new DOMException("Observation stopped", "AbortError"));
+    this.readAbort = new AbortController();
     this.unsubscribe?.();
     this.unsubscribe = null;
     if (this.projectRefreshTimer) clearTimeout(this.projectRefreshTimer);

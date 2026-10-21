@@ -1,5 +1,10 @@
 import type { ConnectionTransportState } from "@orkestrator/protocol/connections";
-import type { SavedRoute, SavedSshRoute } from "@orkestrator/protocol/device-catalogue";
+import {
+  validatePort,
+  validateSshDestination,
+  type SavedRoute,
+  type SavedSshRoute,
+} from "@orkestrator/protocol/device-catalogue";
 import { isConnectionCheckError, transportStateForError } from "./backend-hello.js";
 
 /**
@@ -178,4 +183,35 @@ export function sanitizeDiagnostic(value: string): string {
       .trim()
       .slice(0, 240)
   );
+}
+
+/**
+ * First-use host-key review: fetch the server's key without offering any
+ * credential, so the user can compare fingerprints before trusting it.
+ */
+export async function probeSshHostKey(
+  ssh: SshTunnelProvider | null,
+  input: { destination: string; sshPort?: number },
+): Promise<{
+  probeId: string;
+  destination: string;
+  fingerprints: Array<{ type: string; fingerprint: string }>;
+}> {
+  if (!ssh?.probeHostKey) throw new Error("SSH routes are not available in this client.");
+  const destination = validateSshDestination(input.destination);
+  const sshPort = input.sshPort === undefined ? undefined : validatePort(input.sshPort, "SSH port");
+  const result = await ssh.probeHostKey({
+    routeId: "host-key-probe",
+    destination,
+    ...(sshPort ? { sshPort } : {}),
+    remoteGatewayPort: 1,
+  });
+  return {
+    probeId: result.probeId,
+    destination: result.destination,
+    fingerprints: result.fingerprints.map((entry) => ({
+      type: entry.keyType,
+      fingerprint: entry.fingerprint,
+    })),
+  };
 }

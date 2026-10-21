@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   BACKEND_PROFILE_CHANGED_EVENT,
+  defaultMachineColor,
   parseBackendProfile,
   type BackendHello,
 } from "@orkestrator/protocol/backend-profile";
@@ -12,12 +13,10 @@ import {
   type ConnectionList,
   type ConnectionSummary,
   type ConnectionTransportState,
-  type StoredDesktopConnections,
 } from "@orkestrator/protocol/connections";
 import {
   describeRoute,
   emptyDeviceCatalogue,
-  migrateDesktopConnections,
   orderedRoutes,
   validateIdentityFile,
   validatePort,
@@ -52,11 +51,14 @@ import {
 } from "./connection-route-selection.js";
 import {
   LocalBackendCatalogueStore,
+  loadOrMigrateCatalogue,
   type ConnectionCatalogueStore,
 } from "./connection-catalogue-store.js";
+import { BackgroundAttemptLimiter, ReconnectScheduler } from "./connection-scheduling.js";
 import {
   classifyRouteFailure,
   openRoute,
+  probeSshHostKey,
   routeError,
   sanitizeDiagnostic,
   type OpenedRoute,
@@ -184,12 +186,8 @@ export class ConnectionManager {
   private readonly scopeQueues = new Map<string, Promise<unknown>>();
   private catalogueQueue: Promise<unknown> = Promise.resolve();
   private readonly activations = new Map<string, Promise<RemoteConnection>>();
-  private readonly reconnectTimers = new Map<
-    string,
-    { timer: ReturnType<typeof setTimeout>; attempt: number }
-  >();
-  private backgroundAttempts = 0;
-  private readonly backgroundWaiters: Array<() => void> = [];
+  private readonly backgroundAttempts = new BackgroundAttemptLimiter(MAX_BACKGROUND_ATTEMPTS);
+  private readonly reconnects: ReconnectScheduler;
   private disposed = false;
 
   constructor(options: ConnectionManagerOptions) {
@@ -211,11 +209,16 @@ export class ConnectionManager {
     this.legacyCatalogue = options.catalogueStore ? (options.legacyCatalogue ?? null) : null;
     this.sshTunnels = options.sshTunnels ?? null;
     this.reconnectDelaysMs = options.reconnectDelaysMs ?? DEFAULT_RECONNECT_DELAYS_MS;
+    this.reconnects = new ReconnectScheduler(this.reconnectDelaysMs, (connectionId) => {
+      if (!this.isWanted(connectionId)) return;
+      if (this.remoteConnections.has(connectionId)) this.startHandover(connectionId, "retry");
+      else void this.backgroundActivate(connectionId);
+    });
   }
 
   async initialize(): Promise<void> {
     this.secureStorageAvailable = await this.detectSecureStorage();
-    this.catalogue = await this.loadCatalogue();
+    this.catalogue = await loadOrMigrateCatalogue(this.store, this.legacyCatalogue);
     this.bindings.set(DEFAULT_CONNECTION_SCOPE, LOCAL_CONNECTION_ID);
     await this.refreshLocalHello();
     if (this.catalogue.activeConnectionId === LOCAL_CONNECTION_ID) return;
@@ -244,8 +247,7 @@ export class ConnectionManager {
   /** Stop every owned connection and tunnel. Remote work is unaffected. */
   dispose(): void {
     this.disposed = true;
-    for (const { timer } of this.reconnectTimers.values()) clearTimeout(timer);
-    this.reconnectTimers.clear();
+    this.reconnects.dispose();
     for (const connectionId of Array.from(this.remoteConnections.keys())) {
       this.teardownRemote(connectionId);
     }
@@ -344,14 +346,22 @@ export class ConnectionManager {
       ) {
         throw identityMismatch(byAddress, address);
       }
-      // A route that proves an installation this device already verified
-      // joins that machine (one machine, several routes). Unverified
-      // answers never deduplicate.
+      // A new address that proves an installation already saved here is not
+      // silently merged: matching IDs alone are not trusted (a copied data
+      // directory can repeat one). The user adds it as another connection
+      // method of that machine explicitly, which checks identity again.
       const byIdentity = hello
         ? this.catalogue.backends.find(
             (backend) => backend.verifiedInstallationId === hello.installationId,
           )
         : undefined;
+      if (!input.connectionId && !byAddress && byIdentity) {
+        throw routeError(
+          "identity-duplicate",
+          `This address answers as ${byIdentity.localAlias || byIdentity.fallbackName}, which is already saved. If it is the same machine, add it from that machine's Details as another connection method.`,
+          false,
+        );
+      }
       const existing = byAddress ?? byIdentity;
       const existingRoute = existing?.routes.find(
         (route): route is SavedHttpsRoute => route.kind === "https" && route.origin === address,
@@ -366,12 +376,15 @@ export class ConnectionManager {
         lastConnectedAt: now,
       };
       const nickname = requestedNickname ?? existing?.localAlias;
+      const newId = randomUUID();
       const base: SavedBackend = existing ?? {
-        id: randomUUID(),
+        id: newId,
         fallbackName: new URL(address).hostname,
         routeOrder: [],
         routes: [],
         autoConnect: true,
+        // Shown until the machine publishes its canonical profile.
+        provisionalColor: defaultMachineColor(newId),
       };
       const routes = existingRoute
         ? base.routes.map((candidate) => (candidate.id === route.id ? route : candidate))
@@ -490,7 +503,14 @@ export class ConnectionManager {
                 (backend) => backend.verifiedInstallationId === hello.installationId,
               )
             : undefined;
-        const owner = target ?? byIdentity;
+        if (byIdentity) {
+          throw routeError(
+            "identity-duplicate",
+            `This SSH route reaches ${byIdentity.localAlias || byIdentity.fallbackName}, which is already saved. Add it from that machine's Details as another connection method.`,
+            false,
+          );
+        }
+        const owner = target;
         const now = new Date().toISOString();
         const savedRoute: SavedSshRoute = {
           ...route,
@@ -504,14 +524,18 @@ export class ConnectionManager {
               routeOrder: [...owner.routeOrder, savedRoute.id],
               lastConnectedAt: now,
             }
-          : {
-              id: randomUUID(),
-              fallbackName: destination,
-              routes: [savedRoute],
-              routeOrder: [savedRoute.id],
-              autoConnect: true,
-              lastConnectedAt: now,
-            };
+          : (() => {
+              const id = randomUUID();
+              return {
+                id,
+                fallbackName: destination,
+                routes: [savedRoute],
+                routeOrder: [savedRoute.id],
+                autoConnect: true,
+                lastConnectedAt: now,
+                provisionalColor: defaultMachineColor(id),
+              };
+            })();
         if (nickname) record = withAlias(record, nickname);
         if (hello) record = this.recordHello(record, hello);
         const committed = record;
@@ -550,35 +574,12 @@ export class ConnectionManager {
     });
   }
 
-  /**
-   * First-use host-key review: fetch the server's key without offering any
-   * credential, so the user can compare fingerprints before trusting it.
-   */
-  async probeSshHostKey(input: { destination: string; sshPort?: number }): Promise<{
-    probeId: string;
-    destination: string;
-    fingerprints: Array<{ type: string; fingerprint: string }>;
-  }> {
-    if (!this.supportedRouteKinds().includes("ssh") || !this.sshTunnels?.probeHostKey) {
-      throw new Error("SSH routes are not available in this client.");
-    }
-    const destination = validateSshDestination(input.destination);
-    const sshPort =
-      input.sshPort === undefined ? undefined : validatePort(input.sshPort, "SSH port");
-    const result = await this.sshTunnels.probeHostKey({
-      routeId: "host-key-probe",
-      destination,
-      ...(sshPort ? { sshPort } : {}),
-      remoteGatewayPort: 1,
-    });
-    return {
-      probeId: result.probeId,
-      destination: result.destination,
-      fingerprints: result.fingerprints.map((entry) => ({
-        type: entry.keyType,
-        fingerprint: entry.fingerprint,
-      })),
-    };
+  /** First-use host-key review; see `probeSshHostKey` in connection-routes. */
+  probeSshHostKey(input: { destination: string; sshPort?: number }) {
+    return probeSshHostKey(
+      this.supportedRouteKinds().includes("ssh") ? this.sshTunnels : null,
+      input,
+    );
   }
 
   /** Record explicit approval of a probed host key in Orkestrator's own known_hosts. */
@@ -644,7 +645,7 @@ export class ConnectionManager {
       for (const route of backend.routes) this.sessionTokens.delete(route.id);
       for (const activeScope of activeScopes) this.setScopeLocal(activeScope);
       for (const leases of this.observations.values()) leases.delete(connectionId);
-      this.cancelReconnect(connectionId);
+      this.reconnects.cancel(connectionId);
       this.teardownRemote(connectionId);
       this.statuses.delete(connectionId);
       this.emitStateChange();
@@ -1014,7 +1015,7 @@ export class ConnectionManager {
     this.observations.get(scope)?.delete(connectionId);
     const remote = this.remoteConnections.get(connectionId);
     if (!remote) {
-      if (!this.isWanted(connectionId)) this.cancelReconnect(connectionId);
+      if (!this.isWanted(connectionId)) this.reconnects.cancel(connectionId);
       return;
     }
     remote.observers.delete(scope);
@@ -1348,7 +1349,7 @@ export class ConnectionManager {
     const pending = this.activations.get(connectionId);
     if (pending) return pending.catch(() => null);
     const attempt = (async () => {
-      await this.acquireBackgroundSlot();
+      await this.backgroundAttempts.acquire();
       try {
         const backend = this.findBackend(connectionId);
         if (!backend || this.disposed) throw new Error("That saved connection no longer exists.");
@@ -1368,14 +1369,14 @@ export class ConnectionManager {
         this.adoptEstablished(connectionId, established, true);
         return this.remoteConnections.get(connectionId)!;
       } finally {
-        this.releaseBackgroundSlot();
+        this.backgroundAttempts.release();
       }
     })();
     this.activations.set(connectionId, attempt);
     attempt.then(
       () => {
         this.activations.delete(connectionId);
-        this.cancelReconnect(connectionId);
+        this.reconnects.cancel(connectionId);
       },
       (error) => {
         this.activations.delete(connectionId);
@@ -1571,7 +1572,7 @@ export class ConnectionManager {
         }
         this.adoptEstablished(connectionId, established, true);
         this.setStatus(connectionId, { transport: "connected", detail: undefined });
-        this.cancelReconnect(connectionId);
+        this.reconnects.cancel(connectionId);
       } catch (error) {
         this.recordFailure(connectionId, error);
       } finally {
@@ -1585,47 +1586,7 @@ export class ConnectionManager {
     const failure = classifyRouteFailure(error);
     if (failure.code === "cancelled") return;
     this.setStatus(connectionId, { transport: failure.state, detail: failure.message });
-    if (failure.retryable && this.isWanted(connectionId)) this.scheduleReconnect(connectionId);
-  }
-
-  private scheduleReconnect(connectionId: string): void {
-    if (this.disposed || this.reconnectTimers.has(connectionId)) return;
-    const attempt = (this.reconnectAttempts.get(connectionId) ?? 0) + 1;
-    this.reconnectAttempts.set(connectionId, attempt);
-    const delay =
-      this.reconnectDelaysMs[Math.min(attempt - 1, this.reconnectDelaysMs.length - 1)] ?? 60_000;
-    const timer = setTimeout(() => {
-      this.reconnectTimers.delete(connectionId);
-      if (!this.isWanted(connectionId)) return;
-      const remote = this.remoteConnections.get(connectionId);
-      if (remote) this.startHandover(connectionId, "retry");
-      else void this.backgroundActivate(connectionId);
-    }, delay);
-    (timer as { unref?: () => void }).unref?.();
-    this.reconnectTimers.set(connectionId, { timer, attempt });
-  }
-
-  private readonly reconnectAttempts = new Map<string, number>();
-
-  private cancelReconnect(connectionId: string): void {
-    const pending = this.reconnectTimers.get(connectionId);
-    if (pending) clearTimeout(pending.timer);
-    this.reconnectTimers.delete(connectionId);
-    this.reconnectAttempts.delete(connectionId);
-  }
-
-  private async acquireBackgroundSlot(): Promise<void> {
-    if (this.backgroundAttempts < MAX_BACKGROUND_ATTEMPTS) {
-      this.backgroundAttempts += 1;
-      return;
-    }
-    await new Promise<void>((resolve) => this.backgroundWaiters.push(resolve));
-    this.backgroundAttempts += 1;
-  }
-
-  private releaseBackgroundSlot(): void {
-    this.backgroundAttempts -= 1;
-    this.backgroundWaiters.shift()?.();
+    if (failure.retryable && this.isWanted(connectionId)) this.reconnects.schedule(connectionId);
   }
 
   private isWanted(connectionId: string): boolean {
@@ -1649,7 +1610,7 @@ export class ConnectionManager {
     if (!remote) return;
     if (remote.scopes.size > 0 || remote.observers.size > 0) return;
     this.teardownRemote(connectionId);
-    this.cancelReconnect(connectionId);
+    this.reconnects.cancel(connectionId);
     const status = this.statuses.get(connectionId);
     if (status) status.transport = "disabled";
   }
@@ -1810,10 +1771,12 @@ export class ConnectionManager {
     if (outcome.kind !== "hello") {
       status.identity = "provisional";
       delete status.hello;
+      if (outcome.latencyMs !== undefined) status.latencyMs = outcome.latencyMs;
       return;
     }
     status.hello = outcome.hello;
     status.lastHelloAt = new Date().toISOString();
+    if (outcome.latencyMs !== undefined) status.latencyMs = outcome.latencyMs;
     const duplicate = this.catalogue.backends.some(
       (backend) =>
         backend.id !== connectionId &&
@@ -1863,30 +1826,6 @@ export class ConnectionManager {
   /*
    * Catalogue
    */
-
-  private async loadCatalogue(): Promise<DeviceCatalogue> {
-    const loaded = await this.store.load();
-    if (loaded) return loaded;
-    if (!this.legacyCatalogue) return emptyDeviceCatalogue();
-    // First start with the native store: migrate the version-1 list once.
-    // The old list is left untouched as the downgrade path.
-    let legacy: StoredDesktopConnections | null = null;
-    try {
-      legacy = await this.legacyCatalogue.loadLegacy();
-    } catch (error) {
-      console.warn(
-        "[Connections] Could not read the previous connection list for migration:",
-        sanitizeDiagnostic(error instanceof Error ? error.message : String(error)),
-      );
-    }
-    if (!legacy) return emptyDeviceCatalogue();
-    const snapshot = (this.store as { snapshotLegacy?: (value: typeof legacy) => Promise<void> })
-      .snapshotLegacy;
-    await snapshot?.call(this.store, legacy).catch(() => undefined);
-    const migrated = migrateDesktopConnections(legacy);
-    await this.store.save(migrated);
-    return migrated;
-  }
 
   private knownAddresses(): string[] {
     const active = this.findBackend(this.catalogue.activeConnectionId);

@@ -50,6 +50,9 @@ export class BackendClientRegistry {
       for (const connection of list.connections) {
         if (connection.id === boundConnectionId) continue;
         if (connection.transport === "disabled" && connection.kind === "local") continue;
+        // A machine the user set not to connect automatically stays saved but
+        // is not observed until they turn it back on.
+        if (connection.autoConnect === false) continue;
         wanted.set(connection.id, connection);
       }
     }

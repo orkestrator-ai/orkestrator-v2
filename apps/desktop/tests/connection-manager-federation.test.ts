@@ -271,7 +271,7 @@ describe("device catalogue persistence", () => {
 });
 
 describe("identity and routes", () => {
-  test("ID-02: a second address proving the same installation joins that machine", async () => {
+  test("ID-02/ID-04: a second address joins a machine only through an explicit add-method", async () => {
     installGateways({
       "https://a.example": { installationId: "bk_a" },
       "https://a-ip.example": { installationId: "bk_a" },
@@ -280,7 +280,14 @@ describe("identity and routes", () => {
     const connections = manager(store);
     await connections.initialize();
     await connections.connect({ address: "https://a.example", token });
-    await connections.connect({ address: "https://a-ip.example", token });
+    // An unqualified add that proves the same installation is refused, not merged.
+    await expect(connections.connect({ address: "https://a-ip.example", token })).rejects.toThrow(
+      "already saved",
+    );
+    const machineId = connections
+      .getList()
+      .connections.find((entry) => entry.kind === "remote")!.id;
+    await connections.connect({ address: "https://a-ip.example", token, connectionId: machineId });
     const remotes = connections.getList().connections.filter((entry) => entry.kind === "remote");
     expect(remotes).toHaveLength(1);
     expect(remotes[0]?.routes?.map((route) => route.label)).toEqual(["a.example", "a-ip.example"]);
@@ -791,5 +798,53 @@ describe("SSH routes", () => {
   test("keeps migrated entries compatible with the legacy catalogue shape", () => {
     const migrated = migrateDesktopConnections({ activeConnectionId: "local", connections: [] });
     expect(migrated.backends).toEqual([]);
+  });
+});
+
+describe("late catalogue migration", () => {
+  test("MG-02/MG-01: entries saved while Local was down are kept and the old list is imported later", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "ork-catalogue-"));
+    try {
+      const store = new NativeDeviceCatalogueStore(directory);
+      installGateways({ "https://new.example": { installationId: "bk_new" } });
+      // First start: Local is down, so nothing can be migrated yet.
+      const first = manager(store, { localBackendAvailable: false });
+      await first.initialize();
+      await first.connect({ address: "https://new.example", token, select: false });
+      first.dispose();
+      // Next start: Local is back; the old list is imported once.
+      const legacy: StoredDesktopConnections = {
+        activeConnectionId: "local",
+        connections: [
+          {
+            id: "old-1",
+            name: "old.example",
+            address: "https://old.example",
+            encryptedToken: encrypted(token),
+            lastConnectedAt: "2026-10-01T00:00:00.000Z",
+          },
+        ],
+      };
+      const invoke = mock(async () => legacy);
+      const legacyStore = new LocalBackendCatalogueStore(
+        { invoke: invoke as unknown as <T>() => Promise<T> },
+        () => true,
+      );
+      const second = manager(store, { legacyCatalogue: legacyStore });
+      await second.initialize();
+      expect(
+        second
+          .getList()
+          .connections.map((entry) => entry.name)
+          .sort(),
+      ).toEqual(["Local", "new.example", "old.example"]);
+      second.dispose();
+      const third = manager(store, { legacyCatalogue: legacyStore });
+      await third.initialize();
+      expect(invoke).toHaveBeenCalledTimes(1);
+      third.dispose();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });

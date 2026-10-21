@@ -1,4 +1,4 @@
-import type { BackendHello } from "@orkestrator/protocol/backend-profile";
+import { defaultMachineColor, type BackendHello } from "@orkestrator/protocol/backend-profile";
 import {
   LOCAL_CONNECTION_ID,
   type ConnectionIdentityState,
@@ -75,7 +75,14 @@ export function backendConnectionSummary(input: {
       }
     : backend.profileCache
       ? { ...backend.profileCache, cached: true }
-      : undefined;
+      : {
+          // No canonical profile yet (unverified or older backend): the
+          // colour persisted with this device's entry, labelled as cached.
+          displayName: backend.localAlias || backend.fallbackName,
+          colorToken: backend.provisionalColor ?? defaultMachineColor(backend.id),
+          revision: 0,
+          cached: true,
+        };
   const routes: ConnectionRouteSummary[] = orderedRoutes(backend).map((route) => {
     const blockedReason = status?.blockedRoutes.get(route.id);
     return {
@@ -113,5 +120,8 @@ export function backendConnectionSummary(input: {
     routes,
     ...(hello ? { generation: hello.generation } : {}),
     ...(status?.lastHelloAt ? { lastHelloAt: status.lastHelloAt } : {}),
+    ...(status?.latencyMs !== undefined ? { latencyMs: status.latencyMs } : {}),
+    ...(hello ? { capabilities: Object.keys(hello.capabilities) } : {}),
+    autoConnect: backend.autoConnect,
   };
 }

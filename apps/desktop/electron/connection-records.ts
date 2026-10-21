@@ -23,6 +23,7 @@ export type MachineStatus = {
   hello?: BackendHello;
   identity: ConnectionIdentityState;
   lastHelloAt?: string;
+  latencyMs?: number;
   /** Routes quarantined by a trust failure, with a sanitized reason. */
   blockedRoutes: Map<string, string>;
 };

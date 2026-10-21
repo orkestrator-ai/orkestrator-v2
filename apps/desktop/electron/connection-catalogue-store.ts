@@ -6,6 +6,7 @@ import {
   type StoredDesktopConnections,
 } from "@orkestrator/protocol/connections";
 import {
+  emptyDeviceCatalogue,
   legacyDesktopConnections,
   migrateDesktopConnections,
   parseDeviceCatalogue,
@@ -180,4 +181,49 @@ export class LocalBackendCatalogueStore implements ConnectionCatalogueStore {
       desktopConnections: parseStoredDesktopConnections(legacyDesktopConnections(catalogue)),
     });
   }
+}
+
+/**
+ * The device catalogue, importing the version-1 list exactly once. The
+ * import also happens late: when the local backend was down (or its list
+ * unreadable) on the first start, the next start that can read it adds the
+ * old entries it does not already have and then records the migration. The
+ * old list is left untouched (and snapshotted) as the downgrade path.
+ */
+export async function loadOrMigrateCatalogue(
+  store: ConnectionCatalogueStore,
+  legacyCatalogue: LocalBackendCatalogueStore | null,
+): Promise<DeviceCatalogue> {
+  const loaded = await store.load();
+  if (loaded?.migratedFromVersion === 1 || !legacyCatalogue) {
+    return loaded ?? emptyDeviceCatalogue();
+  }
+  let legacy: StoredDesktopConnections | null = null;
+  try {
+    legacy = await legacyCatalogue.loadLegacy();
+  } catch {
+    console.warn("[Connections] Could not read the previous connection list for migration.");
+  }
+  if (!legacy) return loaded ?? emptyDeviceCatalogue();
+  await (
+    store as { snapshotLegacy?: (value: StoredDesktopConnections) => Promise<void> }
+  ).snapshotLegacy
+    ?.call(store, legacy)
+    .catch(() => undefined);
+  const imported = migrateDesktopConnections(legacy);
+  const merged: DeviceCatalogue = loaded
+    ? {
+        ...loaded,
+        backends: [
+          ...loaded.backends,
+          ...imported.backends.filter(
+            (backend) => !loaded.backends.some((existing) => existing.id === backend.id),
+          ),
+        ],
+        migratedFromVersion: 1,
+        migratedAt: imported.migratedAt,
+      }
+    : imported;
+  await store.save(merged);
+  return merged;
 }

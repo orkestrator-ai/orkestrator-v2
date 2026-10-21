@@ -79,6 +79,12 @@ export interface ConnectionSummary {
   /** Backend generation from the last successful hello. */
   generation?: string;
   lastHelloAt?: string;
+  /** Round trip of the last authenticated handshake, in milliseconds. */
+  latencyMs?: number;
+  /** Capability names the machine negotiated (names only). */
+  capabilities?: string[];
+  /** Whether multi-machine views connect this machine automatically. */
+  autoConnect?: boolean;
 }
 
 export interface ConnectionList {
@@ -369,6 +375,21 @@ function parseFederatedSummaryFields(
   if (generation) result.generation = generation;
   const lastHelloAt = boundedOptionalText(connection.lastHelloAt, 64);
   if (lastHelloAt) result.lastHelloAt = lastHelloAt;
+  if (
+    typeof connection.latencyMs === "number" &&
+    Number.isFinite(connection.latencyMs) &&
+    connection.latencyMs >= 0
+  ) {
+    result.latencyMs = Math.min(Math.round(connection.latencyMs), 600_000);
+  }
+  if (Array.isArray(connection.capabilities)) {
+    result.capabilities = connection.capabilities
+      .filter(
+        (name): name is string => typeof name === "string" && /^[a-z][a-z0-9-]{0,63}$/.test(name),
+      )
+      .slice(0, 64);
+  }
+  if (typeof connection.autoConnect === "boolean") result.autoConnect = connection.autoConnect;
   if (Array.isArray(connection.routes)) {
     result.routes = connection.routes.slice(0, 8).flatMap((route): ConnectionRouteSummary[] => {
       if (!route || typeof route !== "object" || Array.isArray(route)) return [];

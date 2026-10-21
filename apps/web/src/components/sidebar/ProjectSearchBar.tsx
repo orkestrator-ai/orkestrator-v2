@@ -27,6 +27,8 @@ import {
 } from "@/lib/project-search";
 import { cn } from "@/lib/utils";
 import { FederatedSearchSection } from "@/components/federation/FederatedSearchSection";
+import { useFederation } from "@/components/federation/FederationProvider";
+import { MachineDot } from "@/components/federation/MachineDot";
 import type { Environment, Project } from "@/types";
 
 const FILTER_LABELS: Record<ProjectSearchFilter, string> = {
@@ -64,6 +66,13 @@ function ShortcutHint({ keys, label }: { keys: string; label: string }) {
       <span>{label}</span>
     </span>
   );
+}
+
+/** This window's machine dot, when several machines are in view. */
+function BoundMachineDot() {
+  const { enabled, boundMachine } = useFederation();
+  if (!enabled || !boundMachine) return null;
+  return <MachineDot colorToken={boundMachine.colorToken} machineName={boundMachine.name} />;
 }
 
 function ProjectSearchRow({
@@ -129,6 +138,7 @@ function ProjectSearchRow({
       )}
     >
       <StatusIndicator status={hit.environment.status} className="shrink-0" />
+      <BoundMachineDot />
       <span className="min-w-0 flex-1 truncate text-sm">{hit.environment.name}</span>
       <span className="flex min-w-0 items-center gap-2 overflow-hidden text-[11px] text-zinc-500">
         {age ? <span className="tabular-nums">{age}</span> : null}

@@ -77,9 +77,9 @@ export function transportStateForError(error: unknown): ConnectionTransportState
 
 export type HelloOutcome =
   /** The backend proved its installation identity and capabilities. */
-  | { kind: "hello"; hello: BackendHello }
+  | { kind: "hello"; hello: BackendHello; latencyMs?: number }
   /** An older backend without the handshake: identity stays provisional. */
-  | { kind: "legacy" };
+  | { kind: "legacy"; latencyMs?: number };
 
 const MAX_HELLO_BYTES = 64 * 1024;
 
@@ -102,6 +102,7 @@ export async function checkBackendRoute(
   const fetchImpl = options.fetchImpl ?? fetch;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs);
+  const started = performance.now();
   try {
     const hello = await requestJson(
       fetchImpl,
@@ -120,7 +121,7 @@ export async function checkBackendRoute(
             `This backend (${parsed.appVersion}) does not support this client's API version. Update one of them.`,
           );
         }
-        return { kind: "hello", hello: parsed };
+        return { kind: "hello", hello: parsed, latencyMs: performance.now() - started };
       } catch (error) {
         if (isConnectionCheckError(error)) throw error;
         // A 200 that is not a hello is an older backend serving its renderer
@@ -145,7 +146,7 @@ export async function checkBackendRoute(
           : `Backend check failed with HTTP ${status.status}.`,
       );
     }
-    return { kind: "legacy" };
+    return { kind: "legacy", latencyMs: performance.now() - started };
   } catch (error) {
     if (controller.signal.aborted) {
       const seconds = options.timeoutMs / 1_000;

@@ -304,7 +304,7 @@ function App() {
   // A machine panel opens on the workspace it was created for.
   useEffect(() => {
     const target = machinePanelTarget();
-    if (!target) return;
+    if (!target?.projectId) return;
     const ui = useUIStore.getState();
     if (target.environmentId)
       ui.selectProjectAndEnvironment(target.projectId, target.environmentId);

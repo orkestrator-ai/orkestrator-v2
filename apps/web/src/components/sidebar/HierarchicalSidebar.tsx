@@ -72,6 +72,7 @@ import { ProjectSearchBar } from "./ProjectSearchBar";
 import { ServerConnectionSwitcher } from "./ServerConnectionSwitcher";
 import { useFederation } from "@/components/federation/FederationProvider";
 import { MachinesFilter } from "@/components/federation/MachinesFilter";
+import { MachineDot } from "@/components/federation/MachineDot";
 import {
   FederatedAggregateList,
   MachineSectionHeader,
@@ -527,6 +528,7 @@ export function HierarchicalSidebar() {
   const machineFilter = useMachineViewStore((state) => state.machineFilter);
   const machineGrouping = useMachineViewStore((state) => state.grouping);
   const setMachineGrouping = useMachineViewStore((state) => state.setGrouping);
+  const openMachinePanel = useMachineViewStore((state) => state.openPanel);
   const visibleMachines = federation.enabled
     ? filterMachines(
         machineViews,
@@ -1224,15 +1226,56 @@ export function HierarchicalSidebar() {
               >
                 <RefreshCw className="h-4 w-4" aria-hidden="true" />
               </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7"
-                onClick={() => setShowAddProjectDialog(true)}
-                title="Add project"
-              >
-                <Plus className="h-4 w-4" />
-              </Button>
+              {federation.enabled ? (
+                // A project is added on a specific machine, chosen explicitly:
+                // another machine's own panel opens its project launcher, so
+                // its paths are picked on that machine, never on this device.
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="ghost" size="icon" className="h-7 w-7" title="Add project">
+                      <Plus className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-60">
+                    <DropdownMenuLabel className="text-xs text-muted-foreground">
+                      Add a project on
+                    </DropdownMenuLabel>
+                    {machineViews.map((machine) => (
+                      <DropdownMenuItem
+                        key={machine.connectionId}
+                        disabled={!machine.bound && machine.transport !== "connected"}
+                        onSelect={() => {
+                          if (machine.bound) setShowAddProjectDialog(true);
+                          else
+                            openMachinePanel({
+                              connectionId: machine.connectionId,
+                              projectId: "",
+                              title: "Add project",
+                            });
+                        }}
+                      >
+                        <MachineDot colorToken={machine.colorToken} machineName={machine.name} />
+                        <span className="truncate">{machine.name}</span>
+                        {machine.bound ? (
+                          <span className="ml-auto text-[11px] text-muted-foreground">
+                            This window
+                          </span>
+                        ) : null}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7"
+                  onClick={() => setShowAddProjectDialog(true)}
+                  title="Add project"
+                >
+                  <Plus className="h-4 w-4" />
+                </Button>
+              )}
             </div>
           </>
         )}

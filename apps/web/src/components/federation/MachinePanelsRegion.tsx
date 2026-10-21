@@ -132,7 +132,7 @@ function NativePanelView({ spec }: { spec: MachinePanelSpec }) {
     void api
       .open({
         connectionId: spec.connectionId,
-        projectId: spec.projectId,
+        ...(spec.projectId ? { projectId: spec.projectId } : {}),
         ...(spec.environmentId ? { environmentId: spec.environmentId } : {}),
       })
       .then(({ panelId }) => {
@@ -226,7 +226,7 @@ function FramePanelView({ spec, title }: { spec: MachinePanelSpec; title: string
       title={title}
       src={browserPanelUrl({
         machineId: spec.connectionId,
-        projectId: spec.projectId,
+        ...(spec.projectId ? { projectId: spec.projectId } : {}),
         ...(spec.environmentId ? { environmentId: spec.environmentId } : {}),
       })}
       data-testid="frame-machine-panel"

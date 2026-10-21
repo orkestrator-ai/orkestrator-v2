@@ -224,6 +224,8 @@ export function MachineDetails({
         )}
       </div>
 
+      <MachineDiagnostics connection={connection} />
+
       {connection.kind === "remote" && showRoutes ? (
         <div className="space-y-2">
           <div className="flex items-center justify-between">
@@ -363,6 +365,63 @@ export function MachineDetails({
           ) : null}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * Sanitized connection diagnostics: state, last handshake, round trip,
+ * backend generation and negotiated capabilities. Never credentials, paths
+ * or raw transport errors.
+ */
+function MachineDiagnostics({ connection }: { connection: ConnectionSummary }) {
+  const api: ConnectionsApi | null = window.orkestrator?.connections ?? null;
+  const [busy, setBusy] = useState(false);
+  const lastHello = connection.lastHelloAt ? new Date(connection.lastHelloAt) : null;
+  const rows: Array<[string, string]> = [
+    ["State", (connection.transport ?? "unknown").replace(/-/g, " ")],
+  ];
+  if (lastHello && !Number.isNaN(lastHello.getTime())) {
+    rows.push(["Last handshake", lastHello.toLocaleString()]);
+  }
+  if (connection.latencyMs !== undefined) rows.push(["Round trip", `${connection.latencyMs} ms`]);
+  if (connection.generation) rows.push(["Backend generation", connection.generation.slice(0, 12)]);
+  if (connection.capabilities) {
+    rows.push(["Capabilities", connection.capabilities.join(", ") || "none"]);
+  }
+  return (
+    <div className="space-y-1.5" data-testid="machine-diagnostics">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-medium text-zinc-200">Connection</span>
+        {connection.kind === "remote" &&
+        typeof connection.autoConnect === "boolean" &&
+        api?.setAutoConnect ? (
+          <label className="flex items-center gap-2 text-[11px] text-zinc-400">
+            Connect automatically
+            <Switch
+              checked={connection.autoConnect}
+              disabled={busy}
+              aria-label={`Connect ${connection.name} automatically`}
+              onCheckedChange={(value) => {
+                setBusy(true);
+                void api.setAutoConnect!(connection.id, value)
+                  .then(publishConnections, (error: unknown) =>
+                    toast.error("Could not change the setting", { description: message(error) }),
+                  )
+                  .finally(() => setBusy(false));
+              }}
+            />
+          </label>
+        ) : null}
+      </div>
+      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[11px]">
+        {rows.map(([label, value]) => (
+          <div key={label} className="contents">
+            <dt className="text-zinc-500">{label}</dt>
+            <dd className="truncate font-mono text-zinc-300">{value}</dd>
+          </div>
+        ))}
+      </dl>
     </div>
   );
 }

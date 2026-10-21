@@ -251,7 +251,7 @@ export function createPanelsApi(ipcRenderer: IpcRendererLike) {
   return {
     open(input: {
       connectionId: string;
-      projectId: string;
+      projectId?: string;
       environmentId?: string;
     }): Promise<{ panelId: string }> {
       return ipcRenderer.invoke("orkestrator:panels:open", input);

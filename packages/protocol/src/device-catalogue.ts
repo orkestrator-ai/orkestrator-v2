@@ -16,7 +16,7 @@
 import type { StoredDesktopConnection, StoredDesktopConnections } from "./connections.js";
 import { LOCAL_CONNECTION_ID } from "./connections.js";
 import { isBackendId, isRouteId, type BackendId, type RouteId } from "./federation.js";
-import { MAX_MACHINE_DISPLAY_NAME_LENGTH } from "./backend-profile.js";
+import { defaultMachineColor, MAX_MACHINE_DISPLAY_NAME_LENGTH } from "./backend-profile.js";
 
 export const DEVICE_CATALOGUE_VERSION = 2;
 export const MAX_SAVED_BACKENDS = 64;
@@ -389,6 +389,7 @@ function migrateConnection(connection: StoredDesktopConnection): SavedBackend {
   const routeId = migratedRouteId(connection.id);
   return {
     id: connection.id,
+    provisionalColor: defaultMachineColor(connection.id),
     fallbackName: connection.name,
     ...(connection.nickname ? { localAlias: connection.nickname } : {}),
     routeOrder: [routeId],

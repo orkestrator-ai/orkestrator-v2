@@ -137,7 +137,7 @@ export class BackendPanelViews {
     parent.contentView.addChildView(view);
     const url = new URL(this.options.rendererUrl);
     url.searchParams.set("panel", "workspace");
-    url.searchParams.set("project", input.projectId);
+    if (input.projectId) url.searchParams.set("project", input.projectId);
     if (input.environmentId) url.searchParams.set("environment", input.environmentId);
     view.webContents.loadURL(url.toString()).catch(() => {
       this.notify(entry, "load-failed");

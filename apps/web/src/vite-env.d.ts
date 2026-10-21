@@ -152,7 +152,7 @@ interface Window {
     panels?: {
       open(input: {
         connectionId: string;
-        projectId: string;
+        projectId?: string;
         environmentId?: string;
       }): Promise<{ panelId: string }>;
       setBounds(

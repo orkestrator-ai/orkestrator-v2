@@ -61,11 +61,15 @@ matrix with evidence for every row are in
 - **Relay.** `/__orkestrator/nodes/<id>/__orkestrator/...` forwards HTTP and
   terminal WebSockets with the leaf's credential.
 - **Renderer** (`lib/portal`, `components/federation`):
-  - One `FederationProvider` reads the bound backend's portal.
-  - Desktop panels bind a workspace scope: direct first, then the command
-    node's own loopback route.
-  - Browser and iOS frames read the grant from session storage: direct
-    first, then the relay.
+  - One `FederationProvider` reads the command node's portal over the
+    portal channel (`lib/portal/portal-transport.ts`).
+  - Opening another node's environment moves the window's workspace there
+    (`lib/portal/workspace-switch.ts`) and reloads into it, so it behaves as
+    a direct connection. The desktop re-binds the window's scope in main
+    (`setWindowWorkspaceTarget`: direct first, then the command node's own
+    route); a browser or iOS tab keeps the grant in session storage
+    (`workspaceTargetGatewayOptions`): direct first, then the relay.
+  - While on a leaf, the command node is listed from its self summary.
   - The info panel shows the connection path.
 - **Removed:**
   - renderer per-machine runtimes and the registry;
@@ -147,9 +151,14 @@ refinements".
 
 ## Not verified
 
-- **Live previews of a leaf environment** in a relayed browser frame, and
-  live desktop panels against a remote leaf. Both are covered only by unit
-  and IPC tests.
+- **A window moved to a leaf, live.** Switching is covered by unit, IPC
+  and component tests, not yet run against two real backends.
+- **Previews through the relay.** The relay forwards neither the preview
+  tunnel nor relay-prefixed browser-loopback URLs, so a desktop connected
+  to a *remote* command node that cannot reach a leaf directly has no
+  previews of that leaf's environments. A desktop that is its own command
+  node reaches leaves directly or over its own SSH route and is not
+  affected.
 - **iOS** was not built.
 - **Windows SSH** is not qualified.
 - **Leaf mail on the real stack.** `qa-command-nodes.ts` does not exercise

@@ -168,6 +168,10 @@ export class NodeService {
     return this.self();
   }
 
+  selfProfile(): Promise<BackendProfile> {
+    return this.storage.getBackendProfile();
+  }
+
   /*
    * Mode
    */
@@ -957,6 +961,48 @@ export class NodeService {
       });
     } catch (error) {
       console.warn("[nodes] Could not record a node verification:", errorCode(error));
+    }
+  }
+
+  /**
+   * A node's profile changed while connected: cache it now rather than on
+   * the next hello, so every view shows the new name and colour. An older
+   * revision than the cached one changes nothing.
+   */
+  async recordProfile(nodeId: BackendId, profile: BackendProfile): Promise<void> {
+    try {
+      await this.mutateRegistry((registry) => {
+        const node = registry.nodes.find((entry) => entry.nodeId === nodeId);
+        const cached = node?.profileCache;
+        if (!node || (cached && cached.revision > profile.revision)) {
+          return { next: null, result: undefined };
+        }
+        if (
+          cached &&
+          cached.revision === profile.revision &&
+          cached.displayName === profile.displayName &&
+          cached.colorToken === profile.colorToken
+        ) {
+          return { next: null, result: undefined };
+        }
+        const updated: NodeRecord = {
+          ...node,
+          profileCache: {
+            displayName: profile.displayName,
+            colorToken: profile.colorToken,
+            revision: profile.revision,
+          },
+        };
+        return {
+          next: {
+            ...registry,
+            nodes: registry.nodes.map((entry) => (entry.nodeId === nodeId ? updated : entry)),
+          },
+          result: undefined,
+        };
+      });
+    } catch (error) {
+      console.warn("[nodes] Could not record a node profile:", errorCode(error));
     }
   }
 

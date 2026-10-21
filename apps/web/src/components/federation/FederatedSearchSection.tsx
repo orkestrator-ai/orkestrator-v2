@@ -8,7 +8,7 @@ const MAX_RESULTS = 20;
 
 /**
  * Search results from other machines' summaries. Results are labelled with
- * their machine and open that machine's panel; when a machine is
+ * their machine and open it on that machine; when a machine is
  * unavailable, still loading or truncated, the section says results may be
  * incomplete instead of implying nothing matched there.
  */

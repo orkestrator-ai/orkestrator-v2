@@ -1,4 +1,8 @@
-import { BACKEND_PROFILE_CHANGED_EVENT } from "@orkestrator/protocol/backend-profile";
+import {
+  BACKEND_PROFILE_CHANGED_EVENT,
+  parseBackendProfile,
+  type BackendProfile,
+} from "@orkestrator/protocol/backend-profile";
 import type { NodeListResult, NodeView } from "@orkestrator/protocol/command-nodes";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@orkestrator/protocol/gateway-event-stream";
@@ -12,6 +16,7 @@ import {
   type NodeProjectSummary,
   type NodeSummariesResult,
   type NodeSummary,
+  type SelfNodeSummary,
   type SummaryFreshness,
 } from "@orkestrator/protocol/node-summaries";
 import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
@@ -29,6 +34,8 @@ import { NodeEventStream, type NodeEventTransport } from "./node-event-stream.js
  * - An unavailable node keeps its last-known summaries, labelled stale;
  *   last-known state survives a command-node restart.
  * - Summary reads are bounded and never fetch transcripts or content.
+ * - On request it also summarizes the command node itself, for a client
+ *   whose workspace (and so whose full stores) is on another node.
  */
 
 export interface ReadModelLink {
@@ -40,10 +47,20 @@ export interface ReadModelLink {
 
 export interface ReadModelNodes {
   selfIdentity(): Promise<BackendId>;
+  selfProfile(): Promise<{ displayName: string; colorToken?: string }>;
   listNodes(): Promise<NodeListResult>;
   link(nodeId: BackendId): ReadModelLink | null;
   subscribe(listener: () => void): () => void;
+  /** Cache a node's changed profile so its views show the new name and colour. */
+  recordProfile(nodeId: BackendId, profile: BackendProfile): Promise<void>;
 }
+
+/** The command node's own commands, for its self summary. */
+export interface ReadModelLocal {
+  invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
+}
+
+type SummaryInvoke = ReadModelLocal["invoke"];
 
 export interface ReadModelPersistence {
   load(): Promise<unknown>;
@@ -91,12 +108,19 @@ export class NodeReadModel {
   private readonly listeners = new Set<
     (event: string, payload: unknown, nodeId: BackendId) => void
   >();
+  private readonly self: {
+    id: BackendId | null;
+    summary: SelfNodeSummary | null;
+    stale: boolean;
+    reading: Promise<SelfNodeSummary | null> | null;
+  } = { id: null, summary: null, stale: true, reading: null };
 
   constructor(
     private readonly options: {
       nodes: ReadModelNodes;
       emit: (event: string, payload: unknown) => void;
       persistence?: ReadModelPersistence;
+      local?: ReadModelLocal;
       fetchImpl?: typeof fetch;
       now?: () => number;
     },
@@ -134,7 +158,10 @@ export class NodeReadModel {
     return () => this.listeners.delete(listener);
   }
 
-  async summaries(nodeIds?: readonly string[]): Promise<NodeSummariesResult> {
+  async summaries(
+    nodeIds?: readonly string[],
+    options: { includeSelf?: boolean } = {},
+  ): Promise<NodeSummariesResult> {
     const list = await this.options.nodes.listNodes();
     for (const view of list.nodes) this.views.set(view.nodeId, view);
     const wanted = nodeIds ? new Set(nodeIds) : null;
@@ -161,7 +188,85 @@ export class NodeReadModel {
         environments: state ? [...state.environmentsByProject.values()].flat() : [],
       });
     }
-    return { selfId: await this.options.nodes.selfIdentity(), nodes };
+    const self = options.includeSelf ? await this.readSelf() : null;
+    return { selfId: await this.options.nodes.selfIdentity(), nodes, ...(self ? { self } : {}) };
+  }
+
+  /**
+   * A local change that may alter the self summary. Announced as a summary
+   * change once self summaries have been requested. Notifications are cheap
+   * invalidations; reads remain demand-driven and reconnect reads reconcile gaps.
+   */
+  noteLocalEvent(event: string, payload: unknown): void {
+    if (event === RESOURCE_CHANGED_EVENT) {
+      const resource = (payload as { resource?: unknown } | null)?.resource;
+      if (resource !== "project" && resource !== "environment") return;
+    } else if (event !== BACKEND_PROFILE_CHANGED_EVENT) {
+      return;
+    }
+    this.self.stale = true;
+    if (this.self.id) this.noteChanged(this.self.id);
+  }
+
+  private now(): number {
+    return (this.options.now ?? Date.now)();
+  }
+
+  private readSelf(): Promise<SelfNodeSummary | null> {
+    const local = this.options.local;
+    if (!local) return Promise.resolve(null);
+    if (this.self.summary && !this.self.stale) return Promise.resolve(this.self.summary);
+    if (this.self.reading) return this.self.reading;
+    // Cleared before reading, so a change during the read marks it stale again.
+    this.self.stale = false;
+    const run = (async () => {
+      try {
+        const [nodeId, profile] = await Promise.all([
+          this.options.nodes.selfIdentity(),
+          this.options.nodes.selfProfile(),
+        ]);
+        this.self.id = nodeId;
+        const { projects, truncated: projectsTruncated } = await readProjects(nodeId, local.invoke);
+        const environments = await this.readEnvironments(
+          nodeId,
+          local.invoke,
+          projects.map((project) => project.ref.projectId),
+        );
+        let truncated = projectsTruncated;
+        const rows: NodeEnvironmentSummary[] = [];
+        for (const project of projects) {
+          const result = environments.get(project.ref.projectId);
+          if (!result) {
+            this.self.stale = true;
+            truncated = true;
+            rows.push(
+              ...(this.self.summary?.environments.filter(
+                (row) => row.projectId === project.ref.projectId,
+              ) ?? []),
+            );
+            continue;
+          }
+          truncated ||= result.truncated;
+          rows.push(...result.environments);
+        }
+        this.self.summary = {
+          nodeId,
+          displayName: profile.displayName,
+          ...(profile.colorToken ? { colorToken: profile.colorToken } : {}),
+          loadedAt: this.now(),
+          truncated,
+          projects,
+          environments: rows,
+        };
+      } catch {
+        this.self.stale = true;
+      }
+      return this.self.summary;
+    })().finally(() => {
+      this.self.reading = null;
+    });
+    this.self.reading = run;
+    return run;
   }
 
   /** Start, stop or re-read node subscriptions after any registry or connection change. */
@@ -200,7 +305,7 @@ export class NodeReadModel {
         prefixes: NODE_SUMMARY_EVENT_PREFIXES,
         ...(this.options.fetchImpl ? { fetchImpl: this.options.fetchImpl } : {}),
         onOpen: () => void this.requestHydrate(view.nodeId),
-        onEvent: (event, payload) => this.handleEvent(view.nodeId, epoch, event, payload),
+        onEvent: (event, payload) => void this.handleEvent(view.nodeId, epoch, event, payload),
       });
       state.stream.start();
       void this.requestHydrate(view.nodeId);
@@ -241,7 +346,12 @@ export class NodeReadModel {
     return state;
   }
 
-  private handleEvent(nodeId: BackendId, epoch: number, event: string, payload: unknown): void {
+  private async handleEvent(
+    nodeId: BackendId,
+    epoch: number,
+    event: string,
+    payload: unknown,
+  ): Promise<void> {
     const state = this.states.get(nodeId);
     if (!state || state.epoch !== epoch) return;
     for (const listener of this.listeners) {
@@ -257,8 +367,16 @@ export class NodeReadModel {
       return;
     }
     if (event === BACKEND_PROFILE_CHANGED_EVENT) {
-      // The registry caches the profile on the next hello; tell clients now.
-      this.noteChanged(nodeId);
+      // The registry's cached profile feeds every view of this node; refresh
+      // it now instead of on the next hello, then tell clients.
+      try {
+        await this.options.nodes.recordProfile(nodeId, parseBackendProfile(payload));
+        if (this.started && this.states.get(nodeId) === state && state.epoch === epoch) {
+          this.noteChanged(nodeId);
+        }
+      } catch {
+        // A malformed profile event changes nothing; the next hello reconciles.
+      }
       return;
     }
     if (event !== RESOURCE_CHANGED_EVENT || !payload || typeof payload !== "object") return;
@@ -317,7 +435,11 @@ export class NodeReadModel {
     const link = this.options.nodes.link(nodeId);
     if (!state || !link?.connected) return;
     const epoch = state.epoch;
-    const updates = await this.readEnvironments(nodeId, link, projectIds);
+    const updates = await this.readEnvironments(
+      nodeId,
+      (command, args) => link.invoke(command, args),
+      projectIds,
+    );
     if (this.states.get(nodeId) !== state || state.epoch !== epoch) return;
     for (const [projectId, result] of updates) {
       if (!result) continue;
@@ -351,26 +473,16 @@ export class NodeReadModel {
     if (!link?.connected) return;
     const epoch = state.epoch;
     try {
-      const rawProjects = await link.invoke<unknown>("get_projects");
-      const list = Array.isArray(rawProjects) ? rawProjects : [];
-      const projects = list
-        .slice(0, MAX_SUMMARY_PROJECTS)
-        .flatMap((raw, index) => {
-          const project =
-            raw && typeof raw === "object"
-              ? toNodeProjectSummary(state.nodeId, raw as Record<string, unknown>, index)
-              : null;
-          return project ? [project] : [];
-        })
-        .sort((a, b) => a.order - b.order);
+      const invoke: SummaryInvoke = (command, args) => link.invoke(command, args);
+      const { projects, truncated: projectsTruncated } = await readProjects(state.nodeId, invoke);
       const environments = await this.readEnvironments(
         state.nodeId,
-        link,
+        invoke,
         projects.map((project) => project.ref.projectId),
       );
       if (this.states.get(state.nodeId) !== state || state.epoch !== epoch) return;
       const environmentsByProject = new Map<string, NodeEnvironmentSummary[]>();
-      let truncated = list.length > MAX_SUMMARY_PROJECTS;
+      let truncated = projectsTruncated;
       let failed = false;
       for (const project of projects) {
         const result = environments.get(project.ref.projectId);
@@ -403,7 +515,7 @@ export class NodeReadModel {
 
   private async readEnvironments(
     nodeId: BackendId,
-    link: ReadModelLink,
+    invoke: SummaryInvoke,
     projectIds: string[],
   ): Promise<Map<string, { environments: NodeEnvironmentSummary[]; truncated: boolean } | null>> {
     const results = new Map<
@@ -415,17 +527,19 @@ export class NodeReadModel {
       while (next < projectIds.length) {
         const projectId = projectIds[next++]!;
         try {
-          const raw = await link.invoke<unknown>("get_environment_snapshots", { projectId });
+          const raw = await invoke<unknown>("get_environment_snapshots", { projectId });
           const list = Array.isArray(raw) ? raw : [];
           const environments = list
-            .slice(0, MAX_SUMMARY_ENVIRONMENTS_PER_PROJECT)
-            .flatMap((entry) => {
+            .flatMap((entry, index) => {
               const environment =
                 entry && typeof entry === "object"
-                  ? toNodeEnvironmentSummary(nodeId, entry as Record<string, unknown>)
+                  ? toNodeEnvironmentSummary(nodeId, entry as Record<string, unknown>, index)
                   : null;
               return environment ? [environment] : [];
-            });
+            })
+            // The node's own sidebar order; its storage order is creation order.
+            .sort((a, b) => a.order - b.order)
+            .slice(0, MAX_SUMMARY_ENVIRONMENTS_PER_PROJECT);
           results.set(projectId, {
             environments,
             truncated: list.length > MAX_SUMMARY_ENVIRONMENTS_PER_PROJECT,
@@ -523,6 +637,25 @@ export class NodeReadModel {
       state.freshness = "stale";
     }
   }
+}
+
+async function readProjects(
+  nodeId: BackendId,
+  invoke: SummaryInvoke,
+): Promise<{ projects: NodeProjectSummary[]; truncated: boolean }> {
+  const raw = await invoke<unknown>("get_projects");
+  const list = Array.isArray(raw) ? raw : [];
+  const projects = list
+    .slice(0, MAX_SUMMARY_PROJECTS)
+    .flatMap((entry, index) => {
+      const project =
+        entry && typeof entry === "object"
+          ? toNodeProjectSummary(nodeId, entry as Record<string, unknown>, index)
+          : null;
+      return project ? [project] : [];
+    })
+    .sort((a, b) => a.order - b.order);
+  return { projects, truncated: list.length > MAX_SUMMARY_PROJECTS };
 }
 
 function safeMessage(error: unknown): string {

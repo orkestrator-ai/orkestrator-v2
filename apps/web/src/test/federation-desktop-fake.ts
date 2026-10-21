@@ -2,8 +2,8 @@
  * A fake portal for multi-machine UI tests: the bound backend is a command
  * node that answers `get_node_status` / `get_node_summaries` from fixtures,
  * routes `invoke_on_node` (recorded per node), issues workspaces, and a fake
- * Electron API with workspace panels and an event bus. Not bundled: only
- * tests import this.
+ * Electron API that records workspace-target switches, with an event bus.
+ * Not bundled: only tests import this.
  */
 import { mock } from "bun:test";
 import type { NodeStatus, NodeView } from "@orkestrator/protocol/command-nodes";
@@ -125,7 +125,6 @@ export function installDesktopFake(options: {
 }) {
   const calls: InvokeCall[] = [];
   const listeners = new Map<string, Set<(payload: unknown) => void>>();
-  let nextPanel = 1;
   let nextWorkspace = 1;
   const remotes = options.list.connections.filter((connection) => connection.kind !== "local");
 
@@ -137,12 +136,12 @@ export function installDesktopFake(options: {
         const project = toNodeProjectSummary(nodeId, raw, index);
         return project ? [project] : [];
       });
-      const environments = Object.values(data?.environments ?? {})
-        .flat()
-        .flatMap((raw) => {
-          const environment = toNodeEnvironmentSummary(nodeId, raw);
+      const environments = Object.values(data?.environments ?? {}).flatMap((list) =>
+        list.flatMap((raw, index) => {
+          const environment = toNodeEnvironmentSummary(nodeId, raw, index);
           return environment ? [environment] : [];
-        });
+        }),
+      );
       const view = nodeView(connection);
       return {
         nodeId,
@@ -221,17 +220,7 @@ export function installDesktopFake(options: {
     return undefined;
   });
 
-  const panels = {
-    open: mock(
-      async (_input: { connectionId: string; projectId?: string; environmentId?: string }) => ({
-        panelId: `native-panel-${nextPanel++}`,
-      }),
-    ),
-    setBounds: mock(async () => undefined),
-    setVisible: mock(async () => undefined),
-    close: mock(async (_panelId: string) => undefined),
-    onEvent: mock(() => () => undefined),
-  };
+  const workspaceTarget = { set: mock(async (_nodeId: string | null) => undefined) };
 
   const connections = {
     list: mock(async () => options.list),
@@ -260,7 +249,7 @@ export function installDesktopFake(options: {
       writeImage: mock(async () => undefined),
     },
     connections,
-    panels,
+    workspaceTarget,
     process: { exit: mock(async () => undefined) },
     window: { startDragging: mock(async () => undefined) },
   } as never;
@@ -270,7 +259,7 @@ export function installDesktopFake(options: {
   return {
     calls,
     invoke,
-    panels,
+    workspaceTarget,
     connections,
     listen,
     outcomes,
@@ -293,6 +282,7 @@ export function uninstallDesktopFake(): void {
     selfId: null,
     status: null,
     nodes: [],
+    self: null,
     loaded: false,
     unsupported: false,
     outcomesRevision: 0,

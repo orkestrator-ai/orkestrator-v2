@@ -5,7 +5,7 @@ import {
   listNodeOutcomes,
   type NodeOutcomeRecord,
 } from "@/lib/portal/portal-store";
-import { listen } from "@/lib/native/events";
+import { portalListen } from "@/lib/portal/portal-transport";
 import { NODE_SUMMARY_CHANGED_EVENT } from "@orkestrator/protocol/node-summaries";
 import { useFederation } from "./FederationProvider";
 
@@ -16,6 +16,7 @@ const COMMAND_LABELS: Record<string, string> = {
   stop_environment: "Stop environment",
   delete_environment: "Delete environment",
   create_environment: "Create environment",
+  reorder_environments: "Reorder environments",
   update_backend_profile: "Update machine profile",
 };
 
@@ -41,7 +42,7 @@ export function UnknownOutcomesNotice({ connectionId }: { connectionId: string }
     refresh();
     let stop: (() => void) | null = null;
     let active = true;
-    void listen(NODE_SUMMARY_CHANGED_EVENT, refresh).then((unlisten) => {
+    void portalListen(NODE_SUMMARY_CHANGED_EVENT, refresh).then((unlisten) => {
       if (active) stop = unlisten;
       else unlisten();
     });

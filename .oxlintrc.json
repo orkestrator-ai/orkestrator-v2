@@ -115,6 +115,14 @@
               {
                 "name": "@/lib/backend",
                 "message": "Multi-machine views reach other nodes only through the portal (lib/portal), which the command node routes."
+              },
+              {
+                "name": "@/lib/native/events",
+                "message": "The window's events come from its workspace, which may be a leaf; multi-machine views listen through the portal channel (lib/portal/portal-transport)."
+              },
+              {
+                "name": "@/lib/native/authoritative-events",
+                "message": "The window's events come from its workspace, which may be a leaf; multi-machine views listen through the portal channel (lib/portal/portal-transport)."
               }
             ],
             "patterns": [

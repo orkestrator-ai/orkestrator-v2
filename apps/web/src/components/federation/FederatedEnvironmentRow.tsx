@@ -1,32 +1,15 @@
-import { openMachineWorkspace } from "@/lib/federation/open-workspace";
-import { useState } from "react";
 import { toast } from "sonner";
 import {
   Bell,
   Link2,
   Loader2,
   MoreHorizontal,
-  PanelRight,
+  ExternalLink,
   Play,
   Square,
   Trash2,
 } from "lucide-react";
-import {
-  FEDERATED_LINK_PARAM,
-  encodeResourceLink,
-  type EnvironmentRef,
-} from "@orkestrator/protocol/federation";
 import { Button } from "@/components/ui/button";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -35,19 +18,13 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { isMachineWritable, type MachineView } from "@/lib/federation/aggregate";
+import type { MachineView } from "@/lib/federation/aggregate";
 import type { FederatedEnvironment, FederatedProject } from "@/lib/federation/summaries";
-import {
-  deleteFederatedEnvironment,
-  startFederatedEnvironment,
-  stopFederatedEnvironment,
-} from "@/lib/federation/federated-actions";
-import { OutcomeUnknownError } from "@/lib/portal/portal-store";
 import { cn } from "@/lib/utils";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useUIStore } from "@/stores";
-import { useFederation } from "./FederationProvider";
 import { MachineBadge, MachineDot, machineStatusText } from "./MachineDot";
+import { useFederatedEnvironmentActions } from "./useFederatedEnvironmentActions";
 
 const ACTIVITY_TEXT: Record<FederatedEnvironment["activity"], string> = {
   working: "Working",
@@ -59,7 +36,7 @@ const ACTIVITY_TEXT: Record<FederatedEnvironment["activity"], string> = {
  * One environment in a multi-machine list. The coloured dot sits right
  * before the name and names the owner; activity is a separate label. A row
  * of this window's own machine selects it in place; a row of another
- * machine opens that machine's workspace panel. Actions carry the row's
+ * machine moves the window to that machine and opens it there. Actions carry the row's
  * captured reference, so a confirmation always names — and reaches — the
  * machine it was opened for.
  */
@@ -77,14 +54,10 @@ export function FederatedEnvironmentRow({
   /** Nested under a project heading. */
   indented?: boolean;
 }) {
-  const { portal } = useFederation();
   const compact = useMachineViewStore((state) => state.compactMachineLabels);
-  const openPanel = openMachineWorkspace;
   const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
-  const selectProjectAndEnvironment = useUIStore((state) => state.selectProjectAndEnvironment);
-  const [pendingDelete, setPendingDelete] = useState<EnvironmentRef | null>(null);
-  const [busy, setBusy] = useState(false);
-  const writable = isMachineWritable(machine);
+  const { busy, writable, open, copyLink, start, stop, requestDelete, deleteDialog } =
+    useFederatedEnvironmentActions(machine, environment);
   const live = machine.bound || machine.transport === "connected";
   const statusText = machine.bound
     ? "This window"
@@ -97,38 +70,6 @@ export function FederatedEnvironmentRow({
     ? ACTIVITY_TEXT[environment.activity]
     : `Connection lost; last observed ${ACTIVITY_TEXT[environment.activity].toLowerCase()}`;
   const selected = machine.bound && selectedEnvironmentId === environment.ref.environmentId;
-
-  const open = () => {
-    if (machine.bound) {
-      selectProjectAndEnvironment(environment.projectId, environment.ref.environmentId);
-      return;
-    }
-    openPanel({
-      connectionId: machine.connectionId,
-      projectId: environment.projectId,
-      environmentId: environment.ref.environmentId,
-      title: environment.name,
-    });
-  };
-
-  const run = async (label: string, action: () => Promise<void>) => {
-    setBusy(true);
-    try {
-      await action();
-    } catch (error) {
-      if (error instanceof OutcomeUnknownError) {
-        toast.warning(`${label}: outcome unknown on ${machine.name}`, {
-          description: error.message,
-        });
-      } else {
-        toast.error(`${label} failed on ${machine.name}`, {
-          description: error instanceof Error ? error.message : String(error),
-        });
-      }
-    } finally {
-      setBusy(false);
-    }
-  };
 
   return (
     <div
@@ -212,58 +153,26 @@ export function FederatedEnvironmentRow({
               <span>· {statusText}</span>
             </DropdownMenuLabel>
             <DropdownMenuItem onSelect={open}>
-              <PanelRight className="h-3.5 w-3.5" aria-hidden="true" />
-              Open in panel
+              <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+              Open
             </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => {
-                // A machine-qualified link: machine identity plus resource, never a
-                // route, forwarded port or credential.
-                const url = new URL(window.location.href);
-                url.search = "";
-                url.hash = "";
-                url.searchParams.set(FEDERATED_LINK_PARAM, encodeResourceLink(environment.ref));
-                const text = url.toString();
-                const write =
-                  window.orkestrator?.clipboard?.writeText(text) ??
-                  navigator.clipboard?.writeText(text);
-                void Promise.resolve(write).then(
-                  () =>
-                    toast.success("Copied link", {
-                      description: `${environment.name} on ${machine.name}`,
-                    }),
-                  () => toast.error("Could not copy the link"),
-                );
-              }}
-            >
+            <DropdownMenuItem onSelect={copyLink}>
               <Link2 className="h-3.5 w-3.5" aria-hidden="true" />
               Copy link
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem
-              disabled={!writable || busy}
-              onSelect={() => {
-                const ref = environment.ref;
-                void run("Start", () => startFederatedEnvironment(portal, ref));
-              }}
-            >
+            <DropdownMenuItem disabled={!writable || busy} onSelect={start}>
               <Play className="h-3.5 w-3.5" aria-hidden="true" />
               Start
             </DropdownMenuItem>
-            <DropdownMenuItem
-              disabled={!writable || busy}
-              onSelect={() => {
-                const ref = environment.ref;
-                void run("Stop", () => stopFederatedEnvironment(portal, ref));
-              }}
-            >
+            <DropdownMenuItem disabled={!writable || busy} onSelect={stop}>
               <Square className="h-3.5 w-3.5" aria-hidden="true" />
               Stop
             </DropdownMenuItem>
             <DropdownMenuItem
               disabled={!writable || busy}
               className="text-destructive focus:text-destructive"
-              onSelect={() => setPendingDelete(environment.ref)}
+              onSelect={requestDelete}
             >
               <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
               Delete…
@@ -276,37 +185,7 @@ export function FederatedEnvironmentRow({
           </DropdownMenuContent>
         </DropdownMenu>
       ) : null}
-      <AlertDialog
-        open={pendingDelete !== null}
-        onOpenChange={(next) => !next && setPendingDelete(null)}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              Delete “{environment.name}” on {machine.name}?
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              This deletes the environment on <strong>{machine.name}</strong>, including its
-              container, storage and recovery copies. Environments on other machines are not
-              affected. This cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              onClick={() => {
-                // The reference captured when the dialog opened, whatever is focused now.
-                const ref = pendingDelete;
-                setPendingDelete(null);
-                if (ref) void run("Delete", () => deleteFederatedEnvironment(portal, ref));
-              }}
-            >
-              Delete on {machine.name}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {deleteDialog}
     </div>
   );
 }

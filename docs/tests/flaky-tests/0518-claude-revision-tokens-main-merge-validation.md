@@ -225,3 +225,85 @@ Profile `revtok-main2-docker` was created with
 
 Live paused-interaction/provider suites retained their explicit credential and
 billing opt-ins. iOS was omitted because no iOS implementation changed.
+
+## Third merge of current main — 2026-10-22
+
+Fetched `origin/main` at `3b1c82de45355a7b8df69d0eb4d7ff2cf3831f8b` and
+merged it into pre-merge HEAD `6016905d164d507d982811888bbf91d770ce372e`.
+The incoming delta contains 164 paths, including 135 non-Markdown paths
+whose staged contents match the fetched main tree exactly. Branch-specific
+revision-token readers, isolated-runner behavior and live qualification
+coverage remain intact.
+
+Conflicts were limited to `docs/architecture/command-nodes.md` and the flake
+index. The architecture guide uses main's current wording for the historical
+remote-plan draft, without restoring its broken link. The index retains all
+367 case references from both parents and both branches' observations for
+cases 0248, 0247 and 0178. Case 0178's narrative auto-merged. All 412 local link
+targets in the incoming Markdown resolve, and no conflict markers remain.
+
+All checks below used `mise run test:logged -- --name <label> -- <command>`.
+
+| Label | Command | Outcome |
+| --- | --- | --- |
+| `revtok-main3-format` | `mise run format:check` | Passed, 0.4 s. |
+| `revtok-main3-lint` | `mise run lint` | Passed, 0.8 s; incoming warnings retained. |
+| `revtok-main3-typecheck` | `mise run typecheck` | Passed, 9.6 s. |
+| `revtok-main3-build` | `mise run build` | Passed, 26.5 s. |
+| `revtok-main3-focused` | `bun test ./tests/unit/flaky-tests-index.test.ts ./tests/unit/claude-revision-token-reader.test.ts ./tests/unit/version-drift.test.ts --parallel=1 --only-failures` | Passed, 0.8 s. |
+| `revtok-main3-web-owners` | `bun test --cwd apps/web ./src/lib/portal/workspace-switch.test.ts ./src/lib/portal/portal-transport.test.ts ./src/components/federation/FederationProvider.test.tsx ./src/hooks/useVirtuosoScrollState.test.ts ./src/hooks/useWorkspaceSwitchSelection.test.tsx --parallel=1 --only-failures` | Passed, 4.9 s. |
+| `revtok-main3-public` | `bunx playwright test --config e2e/public-site/playwright.config.ts` | Passed, 12.4 s, after the first component failure prevented the combined task's public stage. |
+| `revtok-main3-browser-retry` | `mise run test:browser` | Passed, 180.1 s, including public-site coverage. |
+| `revtok-main3-electron` | `mise run test:agent:electron` | Passed, 242.7 s. |
+| `revtok-main3-isolated` | `mise run test:agent:browser:isolated` | Passed, 502.8 s; 29 passed, 43 existing opt-in skips. Profile `qa-browser-e1d6c9ea-144` stopped and reset automatically. |
+| `revtok-main3-registry-final` | `bun test ./tests/unit/flaky-tests-index.test.ts --parallel=1 --only-failures` | Passed, 0.5 s after recording the recurrences. |
+
+Root and Claude-bridge frozen installs passed with pinned Bun 1.4.3. No package
+script, test-runner implementation, Docker lifecycle, CLI implementation or
+iOS implementation changed in this incoming delta. Docker, CLI scenario and
+iOS suites were therefore omitted. Billed/provider scenarios retained their
+explicit opt-ins. The ordinary isolated fixture does not qualify the new
+workspace switch against two real backends; the imported command-node handoff
+document retains that limitation.
+
+### Initial aggregate and unchanged owner reruns
+
+`revtok-main3-tests` ran `mise run test` with 4/1/2/1 workspace/root/bridges/
+protocol slots alongside component, isolated browser and Electron checks. It
+exited 1 after 626.6 s. Workspace passed (626.6 s), including all 9,911 backend
+tests (68 existing skips). Protocol passed (0.705 s). Root/support had
+3,200 passed, one skipped, one failed and one error (316.88 s); bridges failed
+only the fake Codex version/invocation case (134.3 s group time).
+
+- Disk-report checkout fixture: five-second deadline at 5044.81 ms and null
+  process status; unchanged complete owner passed in 1.7 s under
+  `revtok-main3-disk-owner`. See case 0259 for command and evidence.
+- Fake Codex process: five-second deadline at 5027.15 ms; unchanged complete
+  owner with the bridge's Node preload passed in 0.2 s under
+  `revtok-main3-codex-owner-node`. See case 0210.
+- First component-browser run: 398 passed, 81 skipped and one failed; the
+  mobile native transcript-paging case observed 244.5 px offset drift instead
+  of less than 3 px. Its complete unchanged eight-case owner passed in 44.9 s;
+  the full component/public task subsequently passed. See case 0483.
+- Aggregate evidence: `orkestrator-test-run.YKWNcv/summary.json` and compressed
+  group logs; wrapper evidence `orkestrator-test-run.xQ6nby`, below the host
+  temporary directory. First component evidence: `orkestrator-test-run.9O0EhD`.
+- The first component logs also contain `source.listen is not a function`
+  fixture console diagnostics from incoming main; a passing retry does not
+  establish console-clean fixtures.
+
+These observations establish intermittent recurrences through complete
+unchanged owning-file passes. Shared-host/render timing remains a hypothesis.
+No implementation, assertion, deadline or skip was changed to conceal a
+failure. The full non-iOS suite was rerun after the owner checks.
+
+### Final full-suite result
+
+`mise run test:logged -- --name revtok-main3-tests-retry -- mise run test`
+passed all four groups in 400.0 s after the browser and Electron checks
+finished. Root/support passed in 173.4 s, bridges in 104.8 s and protocol
+regeneration in 0.444 s. No code, assertion, deadline or skip changed between
+aggregate runs. Summary: `orkestrator-test-run.9g84yw/summary.json` below the
+host temporary directory. The initial failed aggregate and component results
+remain recorded above; their unchanged owners and the final complete runs
+passed.

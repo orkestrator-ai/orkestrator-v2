@@ -3,7 +3,7 @@
 Status: **Agreed 2026-10-21 and built on this branch (milestones 1–4).** This
 is the objective for multi-machine Orkestrator. It supersedes the
 "independent backends, client-side federation" direction in
-`docs/temp/remote.md` (the original plan) and the client-side design
+the earlier `docs/temp/remote.md` draft and the client-side design
 described in [federation.md](federation.md). Where those documents conflict
 with this one, this one wins. Open decisions are listed at the end. The build plan, contracts and the
 requirement matrix with evidence are in
@@ -200,6 +200,42 @@ A command node attached to another command node operates in leaf mode:
 - Each environment shows its node's colour dot before its name. Unavailable
   nodes keep their last-known state, labelled, with writes disabled.
 
+## Opening an environment on another node
+
+Clicking an environment of another node in the portal makes the window that
+node's client, exactly as if it had connected to the node directly. There
+is no second copy of the app and no side panel: the main pane, toolbar,
+title bar (agent info, mail, system usage), files panel, shortcuts,
+previews, settings and background services all work against that node,
+because they are the same code running against a different workspace
+backend.
+
+- **Two channels per window.** The *workspace* transport
+  (`window.orkestrator`) is bound to the node the window works on. The
+  *portal* channel (`window.orkestratorPortal`, used through
+  `lib/portal/portal-transport.ts`) stays on the command node and carries
+  everything multi-node: summaries, cross-node actions, workspaces, the
+  node registry, SSH prompts and action requests. A lint boundary keeps
+  multi-machine views off the workspace transport.
+- **Switching** opens a workspace grant on the command node, re-binds the
+  workspace and reloads the renderer into the node; the environment the
+  user clicked is selected once after the reload. Another environment on
+  the same node is an ordinary, instant selection. The desktop re-binds the
+  window's scope in its main process (its own connection stays on a portal
+  scope); a browser or iOS tab keeps the grant in its session storage and
+  boots its gateway against the node.
+- **The sidebar is symmetric.** The node the window works on is listed from
+  its full stores with the ordinary rows; every other node — including the
+  command node itself, from its self summary (`get_node_summaries` with
+  `includeSelf`) — is listed from the portal's summaries.
+- **Presentation.** Per-node state (layouts, collapsed projects) is
+  namespaced by node identity; window-level state (sidebar, zoom) stays with
+  the window's own machine.
+- **One intentional difference.** A workspace grant cannot perform a
+  node's administrative commands (gateway token, web-client access, control
+  MCP token, node registry); those stay in the command node's
+  Settings → Nodes.
+
 ## Agent chat and the coordinator
 
 An agent in a leaf environment has two separate conversations:
@@ -317,10 +353,13 @@ command node:
   supervisor (today in Electron main), and the per-node read model (today
   renderer `BackendRuntime`s).
 - **Reworked:** machine panels (a workspace bound to one leaf, talking to it
-  directly) become how a client opens a leaf environment's chat, terminals
-  and previews. They are authorised by scoped grants from the command node
-  instead of credentials the client holds, and fall back to a relay through
-  the command node when the leaf is unreachable.
+  directly) became the window's workspace target: opening a leaf
+  environment moves the window itself to the leaf (see
+  [Opening an environment on another node](#opening-an-environment-on-another-node)).
+  It is authorised by scoped grants from the command node instead of
+  credentials the client holds, and falls back to a relay through the
+  command node when the leaf is unreachable. The separate panel realms,
+  frames and child views were removed.
 - **Removed:** renderer-side multi-backend runtimes and registry, the
   client-owned machine catalogue (clients keep only their list of targets),
   and clients holding other nodes' gateway tokens.

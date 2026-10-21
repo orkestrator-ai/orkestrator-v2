@@ -277,14 +277,16 @@ describe("uiStore", () => {
     useUIStore.getState().selectProject("project-2");
     useUIStore.getState().setEnvironmentSortMode("activity");
 
-    const persistedRaw = localStorage.getItem("ui-storage") ?? "{}";
+    const persistedRaw = localStorage.getItem("ui-project-storage") ?? "{}";
+    const presentationRaw = localStorage.getItem("ui-storage") ?? "{}";
     const persisted = JSON.parse(persistedRaw) as {
       state?: Record<string, unknown>;
     };
     expect(persisted.state).toMatchObject({
       recentProjectIds: ["project-2", "project-1"],
-      environmentSortMode: "activity",
     });
+    expect(JSON.parse(presentationRaw).state.environmentSortMode).toBe("activity");
+    expect(JSON.parse(presentationRaw).state).not.toHaveProperty("recentProjectIds");
     expect(persisted.state).not.toHaveProperty("selectedProjectId");
 
     useUIStore.setState({
@@ -293,7 +295,8 @@ describe("uiStore", () => {
       recentProjectIds: [],
       environmentSortMode: "project",
     });
-    localStorage.setItem("ui-storage", persistedRaw);
+    localStorage.setItem("ui-project-storage", persistedRaw);
+    localStorage.setItem("ui-storage", presentationRaw);
     await useUIStore.persist.rehydrate();
 
     expect(useUIStore.getState().recentProjectIds).toEqual(["project-2", "project-1"]);
@@ -336,13 +339,13 @@ describe("uiStore", () => {
   test("persists collapsed folders so a reload reopens the same tree", async () => {
     useUIStore.getState().setProjectFolderCollapsed("Work", true);
 
-    const persistedRaw = localStorage.getItem("ui-storage") ?? "{}";
+    const persistedRaw = localStorage.getItem("ui-project-storage") ?? "{}";
     expect((JSON.parse(persistedRaw) as { state?: Record<string, unknown> }).state).toMatchObject({
       collapsedProjectFolders: ["Work"],
     });
 
     useUIStore.setState({ collapsedProjectFolders: [] });
-    localStorage.setItem("ui-storage", persistedRaw);
+    localStorage.setItem("ui-project-storage", persistedRaw);
     await useUIStore.persist.rehydrate();
 
     expect(useUIStore.getState().collapsedProjectFolders).toEqual(["Work"]);

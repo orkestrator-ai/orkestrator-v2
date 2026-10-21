@@ -1,5 +1,7 @@
+import { RemoteMachineTreeFixture } from "../../apps/web/src/test/RemoteMachineTreeFixture";
 import { NativeAttachmentsFixture } from "./NativeAttachmentsFixture";
 import { ChangeTrackingFixture, installChangeTrackingFixture } from "./changeTracking";
+import { StructuredReviewLayoutFixture } from "./StructuredReviewLayoutFixture";
 import { ClaudeInteractionsFixture } from "./ClaudeInteractionsFixture";
 import {
   AgentLaunchDialog,
@@ -1654,6 +1656,8 @@ function PullRequestCheckStatusFixture() {
 }
 
 function fixtureForPath() {
+  if (window.location.pathname === "/structured-review-layout")
+    return <StructuredReviewLayoutFixture />;
   if (window.location.pathname === "/setup-recovery") {
     return (
       <Suspense fallback={null}>
@@ -1706,6 +1710,7 @@ function fixtureForPath() {
       </Suspense>
     );
   }
+  if (window.location.pathname === "/remote-machine-tree") return <RemoteMachineTreeFixture />;
   if (window.location.pathname === "/connections-settings") return <ConnectionsSettingsFixture />;
   if (window.location.pathname === "/fullscreen-settings") return <FullscreenSettingsFixture />;
   if (window.location.pathname === "/global-settings") return <GlobalSettingsFixture />;

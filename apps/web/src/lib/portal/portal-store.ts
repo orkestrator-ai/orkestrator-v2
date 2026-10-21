@@ -1,6 +1,7 @@
 /**
  * The portal: what the command node this client is connected to knows about
- * its other nodes.
+ * its other nodes. Everything here goes over the portal channel, which stays
+ * on the command node even while the window's workspace is on a leaf.
  *
  * The command node keeps the registry, the links and a live read model of
  * every node's projects and environments; this client only reads that model
@@ -18,18 +19,27 @@ import {
 } from "@orkestrator/protocol/command-nodes";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import {
+  BACKEND_PROFILE_CHANGED_EVENT,
+  parseBackendProfile,
+  type BackendProfile,
+} from "@orkestrator/protocol/backend-profile";
+import {
   NODE_SUMMARY_CHANGED_EVENT,
   type NodeSummariesResult,
   type NodeSummary,
+  type SelfNodeSummary,
 } from "@orkestrator/protocol/node-summaries";
 import { invoke } from "@/lib/native/backend";
 import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
+import { portalInvoke, portalListen, workspaceTarget } from "./portal-transport";
 
 export interface PortalState {
   /** This (command) node's identity, once known. */
   selfId: BackendId | null;
   status: NodeStatus | null;
   nodes: NodeSummary[];
+  /** The command node's own summary, while the workspace is on another node. */
+  self: SelfNodeSummary | null;
   loaded: boolean;
   /** The connected backend has no command-node support (an older backend). */
   unsupported: boolean;
@@ -58,6 +68,7 @@ export class PortalStore {
     selfId: null,
     status: null,
     nodes: [],
+    self: null,
     loaded: false,
     unsupported: false,
     outcomesRevision: 0,
@@ -79,7 +90,7 @@ export class PortalStore {
         NODE_STATUS_CHANGED_EVENT,
         NATIVE_EVENT_STREAM_CONNECTED_EVENT,
       ]) {
-        void listen(event, () => this.scheduleRefresh()).then((stop) => {
+        void portalListen(event, () => this.scheduleRefresh()).then((stop) => {
           if (this.started === 0) stop();
           else this.unlisteners.push(stop);
         });
@@ -131,11 +142,15 @@ export class PortalStore {
   }
 
   private async read(): Promise<void> {
-    // Status and summaries are read independently: a leaf workspace realm
-    // (a grant) may read its node's status but never another node's portal.
+    // Status and summaries are read independently, so an older or
+    // non-command backend still reports its status.
+    const includeSelf = workspaceTarget() !== null;
     const [status, summaries] = await Promise.allSettled([
-      invoke<NodeStatus>("get_node_status"),
-      invoke<NodeSummariesResult>("get_node_summaries"),
+      portalInvoke<NodeStatus>("get_node_status"),
+      portalInvoke<NodeSummariesResult>(
+        "get_node_summaries",
+        includeSelf ? { includeSelf: true } : {},
+      ),
     ]);
     const statusValue = status.status === "fulfilled" ? status.value : null;
     const summariesValue =
@@ -148,6 +163,7 @@ export class PortalStore {
       selfId: summariesValue?.selfId ?? statusValue?.nodeId ?? state.selfId,
       status: statusValue ?? state.status,
       nodes: summariesValue?.nodes ?? state.nodes,
+      self: summariesValue ? (summariesValue.self ?? null) : state.self,
       loaded: true,
       unsupported: /unknown command|not available in this backend/i.test(message),
     }));
@@ -163,7 +179,14 @@ export class PortalStore {
     args: Record<string, unknown> = {},
     requestKey: string = crypto.randomUUID(),
   ): Promise<T> {
-    const routed = await invoke<
+    // The command node's own resources (listed from its self summary while
+    // the workspace is elsewhere) are its ordinary commands.
+    if (nodeId === this.store.getState().selfId) {
+      const result = await portalInvoke<T>(command, args);
+      this.scheduleRefresh();
+      return result;
+    }
+    const routed = await portalInvoke<
       { outcome: "ok"; result: T } | { outcome: "unknown"; requestKey: string; outcomeId: string }
     >("invoke_on_node", { nodeId, command, args, requestKey });
     if (routed.outcome === "unknown") {
@@ -182,22 +205,31 @@ export interface NodeOutcomeRecord {
   recordedAt: string;
 }
 
-/** The bound backend's own machine profile (name and colour). */
-export async function getOwnProfile(): Promise<
-  import("@orkestrator/protocol/backend-profile").BackendProfile
-> {
-  const { parseBackendProfile } = await import("@orkestrator/protocol/backend-profile");
+/** The profile (name and colour) of the machine the window's workspace is on. */
+export async function getWorkspaceProfile(): Promise<BackendProfile> {
   return parseBackendProfile(await invoke<unknown>("get_backend_profile"));
+}
+
+export function listenWorkspaceProfile(
+  onProfile: (profile: BackendProfile) => void,
+): Promise<() => void> {
+  return listen<unknown>(BACKEND_PROFILE_CHANGED_EVENT, ({ payload }) => {
+    try {
+      onProfile(parseBackendProfile(payload));
+    } catch {
+      // A malformed event changes nothing.
+    }
+  });
 }
 
 /** Outcome-unknown records the command node keeps for a node. */
 export async function listNodeOutcomes(nodeId: string): Promise<NodeOutcomeRecord[]> {
-  const value = await invoke<NodeOutcomeRecord[]>("list_node_outcomes", { nodeId });
+  const value = await portalInvoke<NodeOutcomeRecord[]>("list_node_outcomes", { nodeId });
   return Array.isArray(value) ? value : [];
 }
 
 export async function dismissNodeOutcome(outcomeId: string): Promise<void> {
-  await invoke("dismiss_node_outcome", { outcomeId });
+  await portalInvoke("dismiss_node_outcome", { outcomeId });
 }
 
 export interface NodeActionRequestView {
@@ -221,7 +253,7 @@ export interface NodeActionRequestView {
 
 /** Requests from coordinators that wait for this user's decision. */
 export async function listNodeActionRequests(): Promise<NodeActionRequestView[]> {
-  const value = await invoke<NodeActionRequestView[]>("list_node_action_requests", {
+  const value = await portalInvoke<NodeActionRequestView[]>("list_node_action_requests", {
     pendingOnly: true,
   });
   return Array.isArray(value) ? value : [];
@@ -231,8 +263,11 @@ export async function resolveNodeActionRequest(
   requestId: string,
   decision: "approve" | "reject",
 ): Promise<NodeActionRequestView> {
-  return invoke<NodeActionRequestView>("resolve_node_action_request", { requestId, decision });
+  return portalInvoke<NodeActionRequestView>("resolve_node_action_request", {
+    requestId,
+    decision,
+  });
 }
 
-/** One portal per realm: it reads the realm's own bound backend. */
+/** One portal per window: it reads the command node over the portal channel. */
 export const portalStore = new PortalStore();

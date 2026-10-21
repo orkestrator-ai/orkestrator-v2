@@ -3,12 +3,15 @@ import type { FederationFeatureFlags } from "@orkestrator/protocol/device-catalo
 import { isTrustedRendererUrl } from "./window.js";
 
 /**
- * IPC for the federated client: commands to an explicit machine, machine
- * observation, managed SSH routes, route management and backend-scoped
- * panels. Every destination is an explicit connection ID the main process
- * validates against the requesting window; the renderer never supplies a
- * URL, a credential or an SSH command line.
+ * IPC for the multi-machine client: managed SSH routes, route management,
+ * the window's workspace target (which node the window works on) and the
+ * portal channel to the window's own command node. Every destination is
+ * one the main process resolves for the requesting window; the renderer
+ * never supplies a URL, a credential or an SSH command line.
  */
+
+/** Events of the window's command node while its workspace is on another node. */
+export const PORTAL_EVENT_CHANNEL = "orkestrator:portal-event";
 
 type IpcEventLike = {
   senderFrame?: { url: string } | null;
@@ -23,13 +26,9 @@ type IpcMainLike = {
   ): void;
 };
 
-export type PanelBounds = { x: number; y: number; width: number; height: number };
-
-export type PanelOpenInput = {
-  connectionId: string;
-  /** Absent opens the machine's project launcher (e.g. to add a project there). */
-  projectId?: string;
-  environmentId?: string;
+export type WorkspaceTargetInput = {
+  /** `null` points the window back at its command node. */
+  nodeId: string | null;
 };
 
 export type HostKeyProbe = {
@@ -43,7 +42,16 @@ export type GatewaySnapshot = {
   connectionId: string;
   backendId: string | null;
   legacyOrigin: string | null;
-  panel: boolean;
+  /** The node the window's workspace is on, when it is not the command node. */
+  workspaceTarget?: {
+    nodeId: string;
+    nodeName: string;
+    path: "direct" | "relay";
+    routeKind?: "https" | "ssh";
+    via?: string;
+  };
+  /** The window's own machine, while its workspace is on another node. */
+  portalIdentity?: { connectionId: string; backendId: string | null; legacyOrigin: string | null };
 };
 
 export type FederationIpcDependencies = {
@@ -78,10 +86,12 @@ export type FederationIpcDependencies = {
     event: IpcEventLike,
     features: Partial<FederationFeatureFlags>,
   ): Promise<ConnectionList>;
-  openPanel(event: IpcEventLike, input: PanelOpenInput): Promise<{ panelId: string }>;
-  setPanelBounds(event: IpcEventLike, panelId: string, bounds: PanelBounds): void;
-  setPanelVisible(event: IpcEventLike, panelId: string, visible: boolean): void;
-  closePanel(event: IpcEventLike, panelId: string): void;
+  setWorkspaceTarget(event: IpcEventLike, input: WorkspaceTargetInput): Promise<void>;
+  portalInvoke(
+    event: IpcEventLike,
+    command: string,
+    args: Record<string, unknown>,
+  ): Promise<unknown>;
 };
 
 const MAX_ID_LENGTH = 256;
@@ -98,19 +108,6 @@ function record(value: unknown, label: string): Record<string, unknown> {
     throw new Error(`Expected ${label}`);
   }
   return value as Record<string, unknown>;
-}
-
-function bounds(value: unknown): PanelBounds {
-  const { x, y, width, height } = record(value, "panel bounds");
-  if (![x, y, width, height].every((item) => typeof item === "number" && Number.isFinite(item))) {
-    throw new Error("Expected finite panel bounds");
-  }
-  return {
-    x: Math.max(0, Math.round(x as number)),
-    y: Math.max(0, Math.round(y as number)),
-    width: Math.max(0, Math.round(width as number)),
-    height: Math.max(0, Math.round(height as number)),
-  };
 }
 
 /**
@@ -254,24 +251,16 @@ export function registerFederationIpc(deps: FederationIpcDependencies): void {
     return deps.setFeatures(event, features);
   });
 
-  handle("orkestrator:panels:open", (event, value) => {
-    const input = record(value, "panel details");
-    return deps.openPanel(event, {
-      connectionId: id(input.connectionId, "a connection ID"),
-      ...(input.projectId === undefined ? {} : { projectId: id(input.projectId, "a project ID") }),
-      ...(input.environmentId === undefined
-        ? {}
-        : { environmentId: id(input.environmentId, "an environment ID") }),
-    });
+  handle("orkestrator:workspace-target:set", (event, value) => {
+    const input = record(value, "workspace target");
+    return withErrorCode(() =>
+      deps.setWorkspaceTarget(event, {
+        nodeId: input.nodeId === null ? null : id(input.nodeId, "a node ID"),
+      }),
+    );
   });
-  handle("orkestrator:panels:set-bounds", (event, panelId, value) => {
-    deps.setPanelBounds(event, id(panelId, "a panel ID"), bounds(value));
-  });
-  handle("orkestrator:panels:set-visible", (event, panelId, visible) => {
-    if (typeof visible !== "boolean") throw new Error("Expected visible to be a boolean");
-    deps.setPanelVisible(event, id(panelId, "a panel ID"), visible);
-  });
-  handle("orkestrator:panels:close", (event, panelId) => {
-    deps.closePanel(event, id(panelId, "a panel ID"));
+  handle("orkestrator:portal:invoke", (event, command, args) => {
+    if (typeof command !== "string" || !command) throw new Error("Expected a command");
+    return deps.portalInvoke(event, command, args === undefined ? {} : record(args, "arguments"));
   });
 }

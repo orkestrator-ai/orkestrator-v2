@@ -44,6 +44,8 @@ export interface NodeEnvironmentSummary {
   key: string;
   projectId: string;
   name: string;
+  /** The node's own sidebar position within the project. */
+  order: number;
   branch?: string;
   status: string;
   activity: AgentActivity;
@@ -70,10 +72,28 @@ export interface NodeSummary {
   environments: NodeEnvironmentSummary[];
 }
 
+/**
+ * The command node's own projects and environments, in the same bounded
+ * form, for a client whose workspace is on another node and whose stores
+ * therefore hold that node's state instead.
+ */
+export interface SelfNodeSummary {
+  nodeId: BackendId;
+  displayName: string;
+  colorToken?: string;
+  /** When the summaries were last read (command-node clock, ms). */
+  loadedAt: number;
+  truncated: boolean;
+  projects: NodeProjectSummary[];
+  environments: NodeEnvironmentSummary[];
+}
+
 export interface NodeSummariesResult {
   /** This command node's own identity: its environments come from the ordinary local reads. */
   selfId: BackendId;
   nodes: NodeSummary[];
+  /** Present only when asked for with `includeSelf`. */
+  self?: SelfNodeSummary;
 }
 
 /** A node-sourced string rendered as text: bounded, no control characters. */
@@ -127,7 +147,7 @@ export function toNodeProjectSummary(
     ref,
     key: projectKey(ref),
     name: boundedText(raw.name) || "Untitled project",
-    order: typeof raw.order === "number" ? raw.order : index,
+    order: typeof raw.order === "number" && Number.isFinite(raw.order) ? raw.order : index,
     ...(typeof raw.folder === "string" && raw.folder
       ? { folder: boundedText(raw.folder, 64) }
       : {}),
@@ -138,6 +158,7 @@ export function toNodeProjectSummary(
 export function toNodeEnvironmentSummary(
   nodeId: BackendId,
   raw: Record<string, unknown>,
+  index = 0,
 ): NodeEnvironmentSummary | null {
   if (typeof raw.id !== "string" || !raw.id || typeof raw.projectId !== "string") return null;
   const ref = environmentRef(nodeId, raw.id);
@@ -146,6 +167,7 @@ export function toNodeEnvironmentSummary(
     key: environmentKey(ref),
     projectId: raw.projectId,
     name: boundedText(raw.name) || "Environment",
+    order: typeof raw.order === "number" && Number.isFinite(raw.order) ? raw.order : index,
     ...(typeof raw.branch === "string" ? { branch: boundedText(raw.branch) } : {}),
     status: boundedText(raw.status, 32) || "stopped",
     activity: normalizeActivity(raw.agentActivityState),

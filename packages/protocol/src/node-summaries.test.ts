@@ -1,5 +1,9 @@
 import { expect, test } from "bun:test";
-import { repositoryHint, toNodeProjectSummary } from "./node-summaries.js";
+import {
+  repositoryHint,
+  toNodeProjectSummary,
+  toNodeEnvironmentSummary,
+} from "./node-summaries.js";
 import { classifyRouteFailure } from "./node/node-link/routes.js";
 
 test("repository identities retain namespaces and ports and normalize HTTPS/SCP remotes", () => {
@@ -36,4 +40,14 @@ test("raw and wrapped TLS verification failures quarantine without fallback", ()
       });
     }
   }
+});
+
+test("environment summaries use finite owner order or the storage index fallback", () => {
+  const raw = { id: "e", projectId: "p" };
+  expect(toNodeEnvironmentSummary("bk_test" as never, { ...raw, order: -3 }, 8)?.order).toBe(-3);
+  for (const order of [undefined, null, "2", NaN, Infinity, -Infinity]) {
+    expect(toNodeEnvironmentSummary("bk_test" as never, { ...raw, order }, 8)?.order).toBe(8);
+    expect(toNodeProjectSummary("bk_test" as never, { ...raw, order }, 8)?.order).toBe(8);
+  }
+  expect(toNodeEnvironmentSummary("bk_test" as never, raw)?.order).toBe(0);
 });

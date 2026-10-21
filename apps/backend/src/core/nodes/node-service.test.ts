@@ -206,6 +206,33 @@ describe("RG-01/RG-02 the registry and credential handling", () => {
     expect(JSON.stringify(leaf.storage.attachments)).not.toContain(leaf.token);
   });
 
+  test("a live profile change updates the cached name and colour; an older revision does not", async () => {
+    const network = new TestNodeNetwork();
+    const command = await network.add("command", { forceRegistration: true });
+    const leaf = await network.add("leaf");
+    await attach(command, leaf);
+    const updatedAt = "2026-10-21T01:00:00.000Z";
+
+    await command.service.recordProfile("bk_leaf" as never, {
+      revision: 2,
+      displayName: "renamed",
+      colorToken: "rose",
+      updatedAt,
+    });
+    let view = (await command.service.listNodes()).nodes[0]!;
+    expect(view.colorToken).toBe("rose");
+    expect(view.displayName).toBe("renamed");
+
+    await command.service.recordProfile("bk_leaf" as never, {
+      revision: 1,
+      displayName: "stale",
+      colorToken: "amber",
+      updatedAt,
+    });
+    view = (await command.service.listNodes()).nodes[0]!;
+    expect(view.colorToken).toBe("rose");
+  });
+
   test("disabling a node stops its link without touching the node", async () => {
     const network = new TestNodeNetwork();
     const command = await network.add("command", { forceRegistration: true });

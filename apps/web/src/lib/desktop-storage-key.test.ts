@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { desktopConnectionStorageKey } from "./desktop-storage-key";
+import { desktopConnectionStorageKey, windowStorageKey } from "./desktop-storage-key";
 
 afterEach(() => {
   localStorage.clear();
@@ -66,7 +66,6 @@ describe("machine-identity storage keys", () => {
       connectionId: "c1",
       backendId: "bk_desk",
       legacyOrigin: "https://desk.example",
-      panel: false,
     };
     const verifiedKey = desktopConnectionStorageKey("ui-storage");
     expect(verifiedKey).not.toBe(legacyKey);
@@ -83,7 +82,6 @@ describe("machine-identity storage keys", () => {
       connectionId: "ssh-entry",
       backendId: null,
       legacyOrigin: null,
-      panel: true,
     };
     window.orkestratorGateway = { enabled: true, desktop: true, baseUrl: "http://127.0.0.1:41001" };
     const first = desktopConnectionStorageKey("ui-storage");
@@ -92,18 +90,43 @@ describe("machine-identity storage keys", () => {
   });
 });
 
-describe("hosted-browser machine panels", () => {
-  test("ID-01: a panel frame namespaces its state by machine, the page keeps its keys", () => {
-    const happyDOM = (window as unknown as { happyDOM: { setURL(url: string): void } }).happyDOM;
-    const original = window.location.href;
-    happyDOM.setURL("http://127.0.0.1:47101/?panel=workspace&machine=machine-b&project=p");
-    const panelKey = desktopConnectionStorageKey("ui-storage");
-    happyDOM.setURL("http://127.0.0.1:47101/?panel=workspace&machine=machine-c&project=p");
-    const otherPanelKey = desktopConnectionStorageKey("ui-storage");
-    happyDOM.setURL("http://127.0.0.1:47101/");
-    expect(panelKey).toStartWith("ui-storage:machine:");
-    expect(otherPanelKey).not.toBe(panelKey);
-    expect(desktopConnectionStorageKey("ui-storage")).toBe("ui-storage");
-    happyDOM.setURL(original);
+describe("a workspace on another node", () => {
+  afterEach(() => {
+    delete window.orkestratorDesktopIdentity;
+    delete window.orkestratorWorkspaceTarget;
+  });
+
+  test("ID-01: a browser tab on a leaf namespaces its state by that node; the page keeps its keys", () => {
+    window.orkestrator = undefined;
+    window.orkestratorWorkspaceTarget = { nodeId: "machine-b", nodeName: "B", path: "relay" };
+    const leafKey = desktopConnectionStorageKey("pane-layout");
+    window.orkestratorWorkspaceTarget = { nodeId: "machine-c", nodeName: "C", path: "relay" };
+    const otherLeafKey = desktopConnectionStorageKey("pane-layout");
+    delete window.orkestratorWorkspaceTarget;
+    expect(leafKey).toStartWith("pane-layout:machine:");
+    expect(otherLeafKey).not.toBe(leafKey);
+    expect(desktopConnectionStorageKey("pane-layout")).toBe("pane-layout");
+    // Window-level presentation stays with the page.
+    window.orkestratorWorkspaceTarget = { nodeId: "machine-b", nodeName: "B", path: "relay" };
+    expect(windowStorageKey("ui-storage")).toBe("ui-storage");
+  });
+
+  test("a desktop window keeps its own presentation while its workspace is on a leaf", () => {
+    window.orkestrator = { isolatedViewState: true } as Window["orkestrator"];
+    window.orkestratorDesktopIdentity = {
+      connectionId: "local",
+      backendId: null,
+      legacyOrigin: null,
+    };
+    const deskWindow = windowStorageKey("ui-storage");
+    const deskWorkspace = desktopConnectionStorageKey("pane-layout");
+    window.orkestratorDesktopIdentity = {
+      connectionId: "workspace:w1",
+      backendId: "bk_leaf",
+      legacyOrigin: null,
+      portal: { connectionId: "local", backendId: null, legacyOrigin: null },
+    };
+    expect(windowStorageKey("ui-storage")).toBe(deskWindow);
+    expect(desktopConnectionStorageKey("pane-layout")).not.toBe(deskWorkspace);
   });
 });

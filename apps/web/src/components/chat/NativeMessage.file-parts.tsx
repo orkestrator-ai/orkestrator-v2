@@ -18,6 +18,8 @@ import {
   isImagePreviewUnavailable,
   markImagePreviewUnavailable,
   readImagePreviewCache,
+  readImagePreviewDimensions,
+  writeImagePreviewDimensions,
 } from "@/lib/chat/image-preview-cache";
 import { useRichMessageIdentity } from "@/lib/chat/rich-identity";
 import { useTranscriptArtifactCapabilities } from "@/hooks/useTranscriptArtifactCapabilities";
@@ -177,7 +179,12 @@ export function FilePart({
   const [gallery, setGallery] = useState<{ items: GalleryItem[]; index: number } | null>(null);
   const [imageSrc, setImageSrc] = useState<string | null>(() => readImagePreviewCache(cacheKey));
   const [loading, setLoading] = useState(false);
-  const [loadedImageSrc, setLoadedImageSrc] = useState<string | null>(null);
+  const [decodedImage, setDecodedImage] = useState(() => {
+    const dimensions = readImagePreviewDimensions(cacheKey, imageSrc);
+    return dimensions && imageSrc ? { source: imageSrc, ...dimensions } : null;
+  });
+  const loadedImageSrc = decodedImage?.source ?? null;
+  const imageDimensions = decodedImage?.source === imageSrc ? decodedImage : null;
   const [loadError, setLoadError] = useState<"unavailable" | "too-large" | null>(null);
   const imageLoadRef = useRef<Promise<string | null> | null>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -323,20 +330,29 @@ export function FilePart({
           loading && "opacity-50",
         )}
       >
-        {showThumbnailTile && imageSrc ? (
+        {showThumbnailTile && imageSrc && !loadError ? (
           <img
             src={imageSrc}
             alt={`Thumbnail: ${displayName}`}
             referrerPolicy="no-referrer"
-            onLoad={() => {
-              setLoadedImageSrc(imageSrc);
+            width={imageDimensions?.width}
+            height={imageDimensions?.height}
+            onLoad={(event) => {
+              const { naturalWidth: width, naturalHeight: height } = event.currentTarget;
+              writeImagePreviewDimensions(cacheKey, imageSrc, { width, height });
+              setDecodedImage({ source: imageSrc, width, height });
               setLoadError(null);
             }}
             onError={() => {
-              setLoadedImageSrc(null);
+              setDecodedImage(null);
               setLoadError("unavailable");
             }}
-            className="h-48 w-full bg-black/10 object-cover transition-transform duration-200 group-hover:scale-[1.02] motion-reduce:transition-none"
+            // Reserve the placeholder height until decode. Cached dimensions
+            // reserve the final aspect ratio immediately on transcript remounts.
+            className={cn(
+              "block max-h-96 w-full bg-black/10 object-contain",
+              imageDimensions ? "h-auto" : "h-48",
+            )}
           />
         ) : showThumbnailTile ? (
           <span className="flex h-48 w-full items-center justify-center bg-muted/40">

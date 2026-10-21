@@ -1,23 +1,24 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useStore } from "zustand";
 import {
-  BACKEND_PROFILE_CHANGED_EVENT,
   FALLBACK_MACHINE_COLOR,
   defaultMachineColor,
-  parseBackendProfile,
   type BackendProfile,
 } from "@orkestrator/protocol/backend-profile";
 import type { BackendId } from "@orkestrator/protocol/federation";
-import { isMachinePanelRealm } from "@/lib/federation/panel-realm";
-import { listen } from "@/lib/native/events";
 import {
-  getOwnProfile,
+  getWorkspaceProfile,
+  listenWorkspaceProfile,
   portalStore,
   type PortalState,
   type PortalStore,
 } from "@/lib/portal/portal-store";
+import { workspaceTarget } from "@/lib/portal/portal-transport";
 
-/** The machine this realm is bound to: the command node (or leaf) the client connected to. */
+/**
+ * The machine the window's workspace is on: the command node the client
+ * connected to, or the node whose environment the user opened.
+ */
 export interface BoundMachine {
   /** Same as `backendId`: views key every machine by its node identity. */
   connectionId: string;
@@ -33,7 +34,7 @@ export interface FederationContextValue {
   bound: BoundMachine | null;
   /** This node commands at least one other node, so multi-machine views are shown. */
   enabled: boolean;
-  /** This realm can show other machines at all (not a single-machine panel). */
+  /** This client can show other machines at all. */
   supported: boolean;
   kind: "desktop" | "browser" | "none";
   /** Name and colour of this realm's own machine, for its rows' dots. */
@@ -43,10 +44,8 @@ export interface FederationContextValue {
 const FederationContext = createContext<FederationContextValue | null>(null);
 
 function clientKind(): FederationContextValue["kind"] {
-  if (typeof window === "undefined" || isMachinePanelRealm()) return "none";
-  // The desktop positions native panel views; every other client (hosted
-  // browser, iOS) shows another node's workspace in a frame.
-  return window.orkestrator?.panels ? "desktop" : "browser";
+  if (typeof window === "undefined") return "none";
+  return window.orkestrator?.isolatedViewState ? "desktop" : "browser";
 }
 
 /**
@@ -69,18 +68,13 @@ export function FederationProvider({ children }: { children: ReactNode }) {
     if (kind === "none") return;
     let active = true;
     let stop: (() => void) | null = null;
-    void getOwnProfile()
+    void getWorkspaceProfile()
       .then((value) => {
         if (active) setProfile(value);
       })
       .catch(() => undefined);
-    void listen<unknown>(BACKEND_PROFILE_CHANGED_EVENT, ({ payload }) => {
-      try {
-        const next = parseBackendProfile(payload);
-        setProfile((current) => (current && current.revision > next.revision ? current : next));
-      } catch {
-        // A malformed event changes nothing.
-      }
+    void listenWorkspaceProfile((next) => {
+      setProfile((current) => (current && current.revision > next.revision ? current : next));
     }).then((unlisten) => {
       if (active) stop = unlisten;
       else unlisten();
@@ -92,13 +86,13 @@ export function FederationProvider({ children }: { children: ReactNode }) {
   }, [kind]);
 
   const value = useMemo<FederationContextValue>(() => {
-    const selfId = portalState.selfId;
-    const bound: BoundMachine | null = selfId
+    const boundId = (workspaceTarget()?.nodeId as BackendId | undefined) ?? portalState.selfId;
+    const bound: BoundMachine | null = boundId
       ? {
-          connectionId: selfId,
-          backendId: selfId,
+          connectionId: boundId,
+          backendId: boundId,
           name: profile?.displayName ?? "This machine",
-          colorToken: profile?.colorToken ?? defaultMachineColor(selfId),
+          colorToken: profile?.colorToken ?? defaultMachineColor(boundId),
         }
       : null;
     return {
@@ -106,7 +100,7 @@ export function FederationProvider({ children }: { children: ReactNode }) {
       portalState,
       bound,
       supported: kind !== "none",
-      enabled: kind !== "none" && portalState.nodes.length > 0,
+      enabled: kind !== "none" && (portalState.nodes.length > 0 || workspaceTarget() !== null),
       kind,
       boundMachine: bound
         ? { name: bound.name, colorToken: bound.colorToken ?? FALLBACK_MACHINE_COLOR }

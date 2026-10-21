@@ -389,6 +389,8 @@ export class OrkestratorBackend {
     // caller's closure, which is how this survives the gateway not existing yet.
     storage.setResourceChangeListener((change) => {
       options.emit(RESOURCE_CHANGED_EVENT, change);
+      // Created below; a change before then has no self summary to refresh.
+      this.nodePortal?.readModel.noteLocalEvent(RESOURCE_CHANGED_EVENT, change);
     });
     const context = {
       storage,
@@ -475,6 +477,7 @@ export class OrkestratorBackend {
     this.nodePortal = new NodePortal({
       nodes: this.nodes,
       emit: (event, payload) => options.emit(event, payload),
+      local: { invoke: (command, args = {}) => this.invoke(command, args) },
       summaries: {
         load: () => storage.loadNodeSummariesCache(),
         save: (value) => storage.saveNodeSummariesCache(value),

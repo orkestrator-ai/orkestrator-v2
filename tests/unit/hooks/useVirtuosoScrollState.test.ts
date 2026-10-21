@@ -204,6 +204,57 @@ describe("useVirtuosoScrollState", () => {
         document.body.removeChild(scroller);
       }
     });
+
+    test.each([1, 20, 49])(
+      "keeps a %ipx release through delayed and measurement-driven bottom callbacks",
+      (distance) => {
+        const harness = installObservers();
+        const { result, unmount } = renderHook(() => useVirtuosoScrollState());
+        const scroller = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
+        scroller.appendChild(document.createElement("div"));
+
+        try {
+          scroller.scrollTop = 700;
+          act(() => result.current.scrollProps.scrollerRef(scroller));
+          act(() => wheelUp(scroller, 700 - distance, -distance));
+          expect(result.current.isAtBottom).toBe(false);
+          expect(result.current.isAtBottomRef.current).toBe(false);
+
+          // A delayed true callback and a measurement-driven false-to-true
+          // transition must both respect the release inside the 50px band.
+          for (const atBottom of [true, false, true]) {
+            act(() => result.current.scrollProps.atBottomStateChange(atBottom));
+            expect(result.current.isAtBottom).toBe(false);
+            expect(result.current.isAtBottomRef.current).toBe(false);
+            expect(result.current.scrollProps.followOutput(true)).toBe(false);
+            expect(result.current.scrollProps.followOutput(false)).toBe(false);
+          }
+
+          Object.defineProperty(scroller, "scrollHeight", { value: 1020 });
+          act(() => {
+            result.current.scrollProps.totalListHeightChanged(1020);
+            harness.resizeCallback?.([], {} as ResizeObserver);
+          });
+          expect(scroller.scrollTop).toBe(700 - distance);
+          expect(result.current.scrollProps.followOutput(false)).toBe(false);
+
+          // No new Virtuoso boolean transition is needed on the way down.
+          scroller.scrollTop = 720;
+          act(() => scroller.dispatchEvent(new Event("scroll")));
+          expect(result.current.isAtBottom).toBe(true);
+          expect(result.current.isAtBottomRef.current).toBe(true);
+          expect(result.current.scrollProps.followOutput(false)).toBe("auto");
+
+          Object.defineProperty(scroller, "scrollHeight", { value: 1040 });
+          act(() => harness.resizeCallback?.([], {} as ResizeObserver));
+          expect(scroller.scrollTop).toBe(740);
+        } finally {
+          unmount();
+          document.body.removeChild(scroller);
+          harness.restore();
+        }
+      },
+    );
   });
 
   describe("followOutput", () => {
@@ -1791,11 +1842,14 @@ describe("useVirtuosoScrollState", () => {
         expect(result.current.scrollProps.followOutput(false)).toBe(false);
 
         rerender({ isActive: true });
-
-        await act(async () => {
-          await new Promise((resolve) => setTimeout(resolve, 30));
+        // Model the activation jump actually arriving; the released reader's
+        // UI state is now false even inside Virtuoso's wider bottom band.
+        act(() => {
+          el.scrollTop = 700;
+          el.dispatchEvent(new Event("scroll"));
         });
 
+        await waitFor(() => expect(scrollToCalls).toHaveLength(1));
         expect(scrollToIndexCalls).toEqual([{ index: "LAST", align: "end" }]);
         expect(scrollToCalls).toEqual([{ top: 10_000_000, behavior: "auto" }]);
         expect(result.current.scrollProps.followOutput(false)).toBe("auto");
@@ -2105,9 +2159,11 @@ describe("useVirtuosoScrollState", () => {
         });
         rerender({ isActive: true });
 
-        await act(async () => {
-          await new Promise((resolve) => setTimeout(resolve, 30));
+        act(() => {
+          el.scrollTop = 700;
+          el.dispatchEvent(new Event("scroll"));
         });
+        await waitFor(() => expect(scrollToCalls).toHaveLength(1));
 
         // The env switch forces the jump despite wantsStick=false.
         expect(scrollToIndexCalls.length).toBeGreaterThanOrEqual(1);
@@ -2285,6 +2341,8 @@ describe("useVirtuosoScrollState", () => {
         get: () => mockScrollHeight,
         configurable: true,
       });
+      Object.defineProperty(el, "clientHeight", { value: 300 });
+      el.scrollTop = 700;
       document.body.appendChild(el);
 
       const scrollToCalls: any[] = [];
@@ -2338,6 +2396,8 @@ describe("useVirtuosoScrollState", () => {
         get: () => mockScrollHeight,
         configurable: true,
       });
+      Object.defineProperty(el, "clientHeight", { value: 300 });
+      el.scrollTop = 700;
       document.body.appendChild(el);
 
       const scrollToCalls: any[] = [];

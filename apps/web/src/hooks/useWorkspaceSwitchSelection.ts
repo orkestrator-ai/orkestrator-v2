@@ -25,6 +25,8 @@ export function useWorkspaceSwitchSelection(startEnvironment: (id: string) => Pr
     const environment = environments.find((candidate) => candidate.id === pending.environmentId);
     if (!environment) return;
     applied.current = true;
+    // The row the user clicked was visible; keep it so here.
+    ui.setProjectCollapsed(environment.projectId, false);
     ui.selectProjectAndEnvironment(environment.projectId, environment.id);
     if (startsOnSelection(environment)) {
       startEnvironment(environment.id).catch((error: unknown) => {

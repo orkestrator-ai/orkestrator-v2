@@ -261,25 +261,44 @@ export function registerNodeTools(
     {
       title: "Read an environment on a connected node",
       description:
-        "Read one environment on another node directly: its state and tabs, and with tabId a bounded transcript of that tab. Read-only.",
+        "Read one environment on another node directly: its state and tabs; with tabId a bounded transcript of that tab; with include its Git status and diff, a text file (path) and its build pipeline (test) results. Read-only.",
       inputSchema: z.object({
         nodeId: nodeIdSchema,
         environmentId: z.string().trim().min(1).max(200),
         tabId: z.string().trim().min(1).max(200).optional(),
         limit: z.number().int().min(1).max(MAX_TRANSCRIPT_MESSAGES).default(30),
+        include: z
+          .array(z.enum(["diff", "file", "tests"]))
+          .max(3)
+          .optional(),
+        path: z
+          .string()
+          .trim()
+          .min(1)
+          .max(1024)
+          .optional()
+          .describe("The file to read with include file."),
       }),
       annotations: READ,
     },
-    async ({ nodeId, environmentId, tabId, limit }) => {
+    async ({ nodeId, environmentId, tabId, limit, include, path }) => {
       const target = await nodeTarget(nodeId);
       const environment = await target.environment(environmentId);
       const layout = await target.call<unknown>("get_pane_layout", { environmentId });
       const tabs = paneTabs(layout);
+      const details = include?.length
+        ? await target.call<JsonRecord>("read_environment_details", {
+            environmentId,
+            include,
+            ...(path ? { path } : {}),
+          })
+        : null;
       const base = {
         nodeId,
         node: target.nodeName,
         environment: environmentSummary(environment),
         tabs,
+        ...(details ? { details } : {}),
       };
       if (!tabId) return result(base);
       const native = nativeTab(layout, tabId);

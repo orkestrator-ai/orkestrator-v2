@@ -185,3 +185,53 @@ describe("FL-06 fingerprints and .env handling", () => {
     ]);
   });
 });
+
+describe("CO-06 interrogating an environment's diff, files and tests", () => {
+  test("reads git status and diff, a text file and pipeline state, without writing", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "ork-node-details-"));
+    dirs.push(root);
+    const worktree = path.join(root, "worktree");
+    const { runCommand } = await import("../shell.js");
+    await Bun.write(path.join(worktree, "src/app.ts"), "export const a = 1;\n");
+    await runCommand("git", ["init", "-q", "-b", "main"], { cwd: worktree });
+    await runCommand("git", ["add", "."], { cwd: worktree });
+    await runCommand(
+      "git",
+      ["-c", "user.email=qa@example.com", "-c", "user.name=QA", "commit", "-q", "-m", "init"],
+      { cwd: worktree },
+    );
+    await Bun.write(path.join(worktree, "src/app.ts"), "export const a = 2;\n");
+    const files = new NodeFiles({
+      getDataDir: () => root,
+      getEnvironment: async (id: string) =>
+        id === "e1"
+          ? { id, projectId: "p1", environmentType: "local", worktreePath: worktree }
+          : null,
+      listBuildPipelines: async () => [
+        {
+          id: "bp1",
+          environmentId: "e1",
+          status: "running",
+          stages: [{ name: "tests", status: "failed" }],
+        },
+        { id: "bp2", environmentId: "other", status: "done" },
+      ],
+    } as never);
+    const details = await files.environmentDetails({
+      environmentId: "e1",
+      include: ["diff", "file", "tests"],
+      path: "src/app.ts",
+    });
+    expect((details.diff as { status: string }).status).toContain("M src/app.ts");
+    expect((details.diff as { patch: string }).patch).toContain("+export const a = 2;");
+    expect((details.file as { content: string }).content).toBe("export const a = 2;\n");
+    expect(details.tests).toEqual([
+      {
+        id: "bp1",
+        status: "running",
+        stages: [{ name: "tests", status: "failed" }],
+        updatedAt: undefined,
+      },
+    ]);
+  });
+});

@@ -122,3 +122,36 @@ describe("RG-06 nodes in Connections settings", () => {
     );
   });
 });
+
+describe("RG-06 editing a node's routes", () => {
+  test("adds a route, reorders and saves routes and order without showing the token", async () => {
+    const invoke = install(commandStatus, {
+      revision: 1,
+      mode: "command",
+      suspended: false,
+      nodes: [leafView],
+      pendingDetaches: [],
+    });
+    render(<NodesSettings />);
+    await waitFor(() => expect(screen.getByText("Build box")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Edit routes to Build box" }));
+    fireEvent.click(screen.getByRole("button", { name: "SSH" }));
+    fireEvent.change(screen.getByLabelText("New route SSH destination"), {
+      target: { value: "build" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add route" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Move SSH build.* up$/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(invoke.mock.calls.some(([command]) => command === "update_node")).toBe(true),
+    );
+    const args = invoke.mock.calls.find(([command]) => command === "update_node")![1] as {
+      routes: Array<{ kind: string }>;
+      routeOrder: string[];
+      token?: string;
+    };
+    expect(args.routes.map((route) => route.kind)).toEqual(["ssh", "https"]);
+    expect(args.routeOrder).toHaveLength(2);
+    expect(args.token).toBeUndefined();
+  });
+});

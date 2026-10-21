@@ -582,8 +582,8 @@ Test names include the requirement ID (for example
 | RG-02 | Leaf credentials stay on the command node, never in a response, event or log. | 1 | Redaction, `NodeView` | `node-service.test.ts` RG-01/RG-02 (views, status, events carry no token); `command-node-migration.test.ts` | Done |
 | RG-03 | Routes are hello-verified; identity mismatch, certificate and host-key failures block without bypass. | 1 | `NodeLinkManager` | `node-service.test.ts` RG-03; `qa-command-nodes.ts` RG-03 (restart and reconnect with the same identity) | Done |
 | RG-04 | SSH routes run from the backend using host OpenSSH with owned forwards, host-key trust and no remote install. | 1 | Moved supervisor | `node-ssh-integration.test.ts` RG-04 (real sshd: host key refused until trusted through the command node, hello over the forward, attach); `node-service.test.ts` RG-04/RG-05; desktop SSH suites cover the shared supervisor | Done |
-| RG-05 | SSH prompts are relayed through the portal; unattended reconnects use keys or the agent only. | 1 | `node-ssh-prompts.ts` | `node-service.test.ts` RG-04/RG-05 (interactive add, batch reconnect, prompt relay without answer) | Done |
-| RG-06 | The registry is managed from the portal's Connections settings. | 1 | Nodes section | `nodes-settings.test.tsx` RG-06 | Done |
+| RG-05 | SSH prompts are relayed through the portal; unattended reconnects use keys or the agent only. | 1 | `node-ssh-prompts.ts` | `node-service.test.ts` RG-04/RG-05 (interactive add, batch reconnect, prompt relay without answer); the prompt dialog is mounted app-wide | Done |
+| RG-06 | The registry is managed from the portal's Connections settings. | 1 | Nodes section | `nodes-settings.test.tsx` RG-06 (list, forget, edit routes, order and token) | Done |
 | RG-07 | Forgetting a node never stops or deletes anything on it. | 1 | `forget_node` | `node-service.test.ts` AT-02/RG-07/SC-03; `nodes-settings.test.tsx` RG-07 | Done |
 
 ### Attachment
@@ -646,7 +646,7 @@ Test names include the requirement ID (for example
 | CO-03 | Coordinators start, stop, prompt and answer environments on every connected node, including command nodes in leaf mode. | 3 | Control tools with `nodeId` | `control-mcp-nodes.test.ts` (start/stop/prompt tools route with ownership checks); answering a pending question stays with the user in the leaf workspace (DP-06) | Done |
 | CO-04 | Deletion happens only on user request, with a confirmation naming node and environment. | 3 | Action requests | `control-mcp-nodes.test.ts` CO-04 (request only); `node-mail.test.ts` CO-04 (approve executes once, reject/expiry never); `node-action-requests.test.tsx` CO-04 (dialog names node and environment) | Done |
 | CO-05 | Node-qualified mail to and from agents on every node; replies are collected. | 3 | Node mail, outbox | `control-mcp-nodes.test.ts` CO-05; `node-coordination.test.ts` CO-05/UP-02 (both directions over the real mail store) | Done |
-| CO-06 | Read-only interrogation: status, activity, transcripts, diffs, files and test results. | 3 | `read_environment` | `control-mcp-nodes.test.ts` CO-02/CO-06 (list and read on other nodes, reads route no writes) | Done |
+| CO-06 | Read-only interrogation: status, activity, transcripts, diffs, files and test results. | 3 | `read_environment` | `control-mcp-nodes.test.ts` CO-02/CO-06; `node-files.test.ts` CO-06 (git status and diff, a text file and pipeline state via `read_environment_details`, read-only) | Done |
 | CO-07 | File transfer through the framework. | 4 | `transfer_files` | `control-mcp-node-files.test.ts` CO-07/FL-01 (transfer_files returns a receipt only); `qa-command-nodes.ts` FL-01 | Done |
 | CO-08 | Existing per-project ownership and the read-only checkout boundary are kept. | 3 | Unchanged policy | Node tools act only on the coordinator's project (matched by repository) and refuse the node's project checkout; `resolve_node_action_request` denied to coordinator credentials | Done |
 

@@ -95,6 +95,7 @@ import { FederationProvider } from "@/components/federation/FederationProvider";
 import { SshPromptDialog } from "@/components/federation/SshPromptDialog";
 import { FederationEffects } from "@/components/federation/FederationEffects";
 import { NodeActionRequestsDialog } from "@/components/federation/NodeActionRequestsDialog";
+import { NodeSshPromptDialog } from "@/components/settings/connections/NodesSettings";
 import { browserPanelWorkspaceId, machinePanelTarget } from "@/lib/federation/panel-realm";
 import { keepFrameWorkspaceAlive } from "@/lib/portal/workspaces";
 
@@ -1662,6 +1663,8 @@ function App() {
         <SshPromptDialog />
         <FederationEffects />
         <NodeActionRequestsDialog />
+        {/* SSH prompts from this node's own tunnels to the nodes it commands. */}
+        <NodeSshPromptDialog />
       </TooltipProvider>
     </FederationProvider>
   );

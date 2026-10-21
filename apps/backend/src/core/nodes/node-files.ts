@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { normalizeConfiguredProjectFiles, isPathInsideRoot } from "../commands-project-files.js";
 import { validateRelativeFilePath } from "../path-safety.js";
+import { runCommand } from "../shell.js";
 import type { StorageService } from "../storage.js";
 
 /**
@@ -228,6 +229,85 @@ export class NodeFiles {
     this.uploads.delete(uploadId);
     await fs.rm(upload.temp, { force: true });
     return { aborted: true };
+  }
+
+  /**
+   * Read-only details a coordinator interrogates on an environment: its Git
+   * status and diff against HEAD (bounded), one text file (bounded), and its
+   * build pipelines' state (where tests run). Nothing here writes.
+   */
+  async environmentDetails(input: {
+    environmentId: string;
+    include: Array<"diff" | "file" | "tests">;
+    path?: string;
+  }): Promise<Record<string, unknown>> {
+    const environment = await this.storage.getEnvironment(input.environmentId);
+    if (!environment) throw new Error("That environment does not exist on this node.");
+    const details: Record<string, unknown> = { environmentId: input.environmentId };
+    if (input.include.includes("diff")) {
+      const root = await this.root({ environmentId: input.environmentId });
+      const git = async (args: string[], limit: number) => {
+        const { stdout: text } = await runCommand("git", ["-C", root, ...args], {
+          timeoutMs: 20_000,
+        });
+        return { text: text.slice(0, limit), truncated: text.length > limit };
+      };
+      const [status, stat, diff] = await Promise.all([
+        git(["status", "--porcelain=v1"], 16 * 1024),
+        git(["diff", "HEAD", "--stat"], 16 * 1024),
+        git(["diff", "HEAD"], 64 * 1024),
+      ]);
+      details.diff = {
+        status: status.text,
+        stat: stat.text,
+        patch: diff.text,
+        truncated: diff.truncated || status.truncated,
+      };
+    }
+    if (input.include.includes("file")) {
+      if (!input.path) throw new Error("Name the file to read.");
+      const file = await this.resolve({ environmentId: input.environmentId }, input.path, false);
+      const stats = await fs.stat(file);
+      const limit = 256 * 1024;
+      const handle = await fs.open(file, fsConstants.O_RDONLY);
+      try {
+        const buffer = Buffer.alloc(Math.min(limit, stats.size));
+        await handle.read(buffer, 0, buffer.length, 0);
+        details.file = {
+          path: input.path,
+          size: stats.size,
+          content: buffer.toString("utf8"),
+          truncated: stats.size > limit,
+        };
+      } finally {
+        await handle.close();
+      }
+    }
+    if (input.include.includes("tests")) {
+      const pipelines = await this.storage
+        .listBuildPipelines(environment.projectId)
+        .catch(() => []);
+      details.tests = (pipelines as Array<Record<string, unknown>>)
+        .filter((pipeline) => pipeline.environmentId === input.environmentId)
+        .slice(-5)
+        .map((pipeline) => ({
+          id: pipeline.id,
+          status: pipeline.status,
+          ...(typeof pipeline.currentStage === "string"
+            ? { currentStage: pipeline.currentStage }
+            : {}),
+          ...(Array.isArray(pipeline.stages)
+            ? {
+                stages: (pipeline.stages as Array<Record<string, unknown>>).map((stage) => ({
+                  name: stage.name ?? stage.id,
+                  status: stage.status,
+                })),
+              }
+            : {}),
+          updatedAt: pipeline.updatedAt,
+        }));
+    }
+    return details;
   }
 
   /** Which of a project's seed files (`.env`, `.env.local`, selected files) its root has. */

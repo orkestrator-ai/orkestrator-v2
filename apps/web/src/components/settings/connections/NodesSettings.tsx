@@ -1,11 +1,10 @@
 import { type FormEvent, useCallback, useEffect, useState } from "react";
-import { Loader2, Network, Plus, RefreshCw, ShieldAlert, Trash2 } from "lucide-react";
+import { Loader2, Network, Plus, RefreshCw, Settings2, ShieldAlert, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import {
   NODE_SSH_PROMPT_EVENT,
   NODE_STATUS_CHANGED_EVENT,
   NODES_CHANGED_EVENT,
-  parseNodeRefusal,
   type NodeConnectionState,
   type NodeListResult,
   type NodeRoute,
@@ -34,6 +33,7 @@ import {
   forgetNode,
   getNodeStatus,
   listNodes,
+  nodeErrorText,
   probeNodeHostKey,
   reconnectNode,
   setCommandNodeEnabled,
@@ -41,6 +41,7 @@ import {
   updateNode,
 } from "@/lib/backend/command-nodes";
 import { listen } from "@/lib/native/events";
+import { EditNodeDialog } from "./EditNodeDialog";
 
 /**
  * Command-node settings of the backend this client is connected to.
@@ -51,10 +52,7 @@ import { listen } from "@/lib/native/events";
  * the user detach them here.
  */
 
-export function errorText(error: unknown): string {
-  const text = error instanceof Error ? error.message : String(error);
-  return parseNodeRefusal(text)?.message ?? text;
-}
+const errorText = nodeErrorText;
 
 const STATE_TEXT: Record<NodeConnectionState, string> = {
   connecting: "Connecting…",
@@ -272,6 +270,7 @@ export function NodesSettings() {
                 >
                   <RefreshCw className="h-4 w-4" />
                 </Button>
+                <EditNodeButton node={node} onSaved={() => void refresh()} />
                 <ForgetNodeButton
                   node={node}
                   onForget={(withoutDetach) =>
@@ -372,8 +371,27 @@ export function NodesSettings() {
       ) : null}
 
       <AddNodeDialog open={adding} onOpenChange={setAdding} onAdded={() => void refresh()} />
-      <NodeSshPromptDialog />
     </section>
+  );
+}
+
+function EditNodeButton({ node, onSaved }: { node: NodeView; onSaved: () => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        onClick={() => setOpen(true)}
+        aria-label={`Edit routes to ${node.displayName}`}
+      >
+        <Settings2 className="h-4 w-4" />
+      </Button>
+      {open ? (
+        <EditNodeDialog node={node} open={open} onOpenChange={setOpen} onSaved={onSaved} />
+      ) : null}
+    </>
   );
 }
 

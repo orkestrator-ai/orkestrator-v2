@@ -4,7 +4,14 @@ import type {
   NodeStatus,
   NodeView,
 } from "@orkestrator/protocol/command-nodes";
+import { parseNodeRefusal } from "@orkestrator/protocol/command-nodes";
 import { invoke } from "@/lib/native/backend";
+
+/** A node command's error for display: a refusal's message without its code prefix. */
+export function nodeErrorText(error: unknown): string {
+  const text = error instanceof Error ? error.message : String(error);
+  return parseNodeRefusal(text)?.message ?? text;
+}
 
 /**
  * Command-node commands of the bound backend. The registry, routes and the

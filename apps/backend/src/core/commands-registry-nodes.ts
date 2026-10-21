@@ -308,6 +308,21 @@ export function registerNodeCommands(register: CommandRegistrar): void {
     return coordination(context).files.abortWrite(String(args.uploadId));
   });
 
+  register("read_environment_details", async (args, context) => {
+    assertOnlyKeys(args, ["environmentId", "include", "path"], "arguments");
+    const include = Array.isArray(args.include)
+      ? args.include.filter(
+          (entry): entry is "diff" | "file" | "tests" =>
+            entry === "diff" || entry === "file" || entry === "tests",
+        )
+      : [];
+    return coordination(context).files.environmentDetails({
+      environmentId: String(args.environmentId),
+      include,
+      ...(typeof args.path === "string" ? { path: args.path } : {}),
+    });
+  });
+
   register("get_project_seed_files", async (args, context) => {
     assertOnlyKeys(args, ["projectId"], "arguments");
     return coordination(context).files.seedFiles(String(args.projectId));

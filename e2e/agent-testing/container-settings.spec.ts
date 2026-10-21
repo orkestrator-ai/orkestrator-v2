@@ -1,6 +1,8 @@
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
+import { promises as fs } from "node:fs";
+import { environmentStateDirectory } from "../../apps/backend/src/core/environment-state-paths";
 import { loadAppWithDevRetry } from "./dev-startup-retry";
 
 /**
@@ -36,6 +38,16 @@ async function login(page: Page, testInfo: TestInfo) {
 }
 
 async function openContainerSettings(page: Page, narrow: boolean) {
+  if (narrow) {
+    const projects = page.getByRole("button", {
+      name: "Open projects and environments",
+      exact: true,
+    });
+    const drawer = page.getByRole("dialog", { name: "Projects and environments", exact: true });
+    await expect(drawer.or(projects)).toBeVisible({ timeout: 30_000 });
+    if (!(await drawer.isVisible())) await projects.click();
+    await expect(drawer).toBeVisible();
+  }
   const expand = page.getByRole("button", { name: /^Expand project / }).first();
   const collapse = page.getByRole("button", { name: /^Collapse project / }).first();
   await expect(expand.or(collapse)).toBeVisible({ timeout: 30_000 });
@@ -118,3 +130,71 @@ for (const viewport of [
     }
   });
 }
+
+test("Docker fixture withheld login summary survives switching away and reload", async ({
+  page,
+}, testInfo) => {
+  const result = spawnSync("mise", ["run", "dev:status", "--profile", profile, "--json"], {
+    cwd: repositoryRoot,
+    encoding: "utf8",
+  });
+  const status = JSON.parse(result.stdout) as {
+    dataDir: string;
+    browserUrl: string;
+    testProject: string;
+  };
+  await login(page, testInfo);
+  const invoke = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
+    const response = await page.request.post(
+      new URL("/__orkestrator/invoke", status.browserUrl).href,
+      { data: { command, args } },
+    );
+    expect(response.ok()).toBe(true);
+    return (await response.json()).result;
+  };
+  const projects = await invoke<Array<{ id: string; localPath: string }>>("get_projects");
+  const project = projects.find((entry) => entry.localPath === status.testProject)!;
+  const environments = await invoke<Array<{ id: string; name: string }>>("get_environments", {
+    projectId: project.id,
+  });
+  const environment = environments.find((entry) => entry.name === "fixture-container")!;
+  const inputs = await invoke<{ revision: string }>("get_environment_inputs", {
+    environmentId: environment.id,
+  });
+  const file = path.join(
+    environmentStateDirectory(status.dataDir, "portable-inputs", environment.id),
+    inputs.revision,
+    "manifest.json",
+  );
+  const original = await fs.readFile(file, "utf8");
+  // Seed a content-free persisted staging result. The staging unit test proves
+  // expiry produces this record; the real backend and renderer must rehydrate it.
+  const manifest = JSON.parse(original);
+  manifest.providers = [
+    ...manifest.providers.filter((entry: { provider: string }) => entry.provider !== "grok"),
+    { provider: "grok", files: 0, bytes: 0, skipped: { "login-withheld": 1 } },
+  ];
+  try {
+    await fs.writeFile(file, JSON.stringify(manifest), { mode: 0o600 });
+    for (const width of [1280, 390]) {
+      await page.setViewportSize({ width, height: 860 });
+      for (const pass of ["first", "reload"]) {
+        await openContainerSettings(page, width === 390);
+        await openSection(page, "Container", width === 390);
+        await expect(
+          page.getByText(/Login withheld\. Sign in to Grok Build on the host/),
+        ).toBeVisible();
+        await expect(page.getByText(/Grok Build · 0 files · 0 B · 1 skipped/)).toBeVisible();
+        await page.getByRole("button", { name: "Close settings", exact: true }).click();
+        if (pass === "first") {
+          // The inputs view is unmounted while another environment is active.
+          const item = page.getByText("fixture-local", { exact: true }).first();
+          if (await item.isVisible()) await item.click();
+          await page.reload({ waitUntil: "domcontentloaded" });
+        }
+      }
+    }
+  } finally {
+    await fs.writeFile(file, original, { mode: 0o600 });
+  }
+});

@@ -17,6 +17,7 @@ export default defineConfig({
     "web-annotations-gateway.spec.ts",
     "cli-ui.spec.ts",
     "container-settings.spec.ts",
+    "grok-container-login.spec.ts",
     "container-rebuild-cycle.spec.ts",
     "container-approval-stop.spec.ts",
     "terminal-input-resume.spec.ts",

@@ -481,6 +481,15 @@ name appears in `entrypoint.sh`.
   `orkestrator-inputs-revision`; after a successful create, revisions no
   container of the environment still binds are removed (recovery copies keep
   theirs), and the whole root goes with the environment's state directories.
+- Logins whose refresh tokens are single-use are staged access-only: Codex
+  and Grok `auth.json` keep the access token, the refresh token is blanked and
+  an expired login is withheld (counted as `login-withheld`). A copy that
+  refreshed would spend the token the host still holds and sign the host and
+  every other container out. Both are re-read from the host before every
+  start, Grok's also before every Grok bridge start, and the entrypoint blanks
+  the refresh token again in the container's own copy. Claude, OpenCode and
+  Pi logins are still copied whole (follow-ups in
+  [container-network-and-credential-isolation.md](../todo/container-network-and-credential-isolation.md)).
 - The Cursor key is no longer in a staged-inputs container's creation
   environment; the bridge reads the synced owner-only file. The Anthropic API
   key (when used instead of OAuth) still is, because Claude Code in terminals

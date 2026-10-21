@@ -23,12 +23,17 @@ import {
 import { DOCKER_LABEL_INPUTS_REVISION } from "./constants.js";
 import { runCommand } from "./shell.js";
 import {
+  accessOnlyLoginText,
   defaultInputSourceRoots,
   portableInputRevisionDirectory,
   replaceStagedInputFile,
   type InputSourceRoots,
 } from "./portable-inputs.js";
 import { containerLabel, providerCredentialsAllowed } from "./portable-input-status.js";
+import {
+  containerBridgeOperationId,
+  enqueueContainerBridgeOperation,
+} from "./container-bridge-operations.js";
 import { staleLoginEnvironmentIds } from "./agent-account-bridge-state.js";
 import { prepareAgentAccountHome } from "./agent-accounts-homes.js";
 import { readAddedClaudeCredentials, resolveActiveAgentAccount } from "./agent-accounts-active.js";
@@ -47,6 +52,12 @@ import { readAddedClaudeCredentials, resolveActiveAgentAccount } from "./agent-a
  * Only images with staged inputs carry an account across a restart. An older
  * image mounts the host homes directly, so a restart brings the host login
  * back; the marker is cleared on start so the next bridge start re-applies it.
+ *
+ * Codex and Grok refresh tokens are single-use, so a container only ever gets
+ * their logins access-only (`accessOnlyLoginText`): a copy that refreshed
+ * would sign the host out. Both are therefore re-read from the host before
+ * every start, and Grok's, whose access token lasts hours rather than days,
+ * also before every Grok bridge start.
  */
 
 const ACCOUNT_MARKER: Record<AgentAccountPlatform, string> = {
@@ -56,6 +67,9 @@ const ACCOUNT_MARKER: Record<AgentAccountPlatform, string> = {
 const CONTAINER_CODEX_AUTH_FILE = "/home/node/.codex/auth.json";
 const SYNC_CONTAINER_CODEX_AUTH_COMMAND =
   buildSyncContainerClaudeCredentialCommand(CONTAINER_CODEX_AUTH_FILE);
+const CONTAINER_GROK_AUTH_FILE = "/home/node/.grok/auth.json";
+const SYNC_CONTAINER_GROK_AUTH_COMMAND =
+  buildSyncContainerClaudeCredentialCommand(CONTAINER_GROK_AUTH_FILE);
 const MAX_LOGIN_FILE_BYTES = 1024 * 1024;
 
 /** How this module reaches a container; replaced in tests. */
@@ -113,6 +127,7 @@ function hostStagingSources(context: CommandContext): {
   claudeConfigDir: string | undefined;
   claudeJson: string;
   codexHome: string | undefined;
+  grokAuth: string;
 } {
   const roots = defaultInputSourceRoots(
     context.runtimeFlavor,
@@ -124,6 +139,7 @@ function hostStagingSources(context: CommandContext): {
     claudeConfigDir: roots.agentTest ? roots.claudeConfigDir : path.join(roots.home, ".claude"),
     claudeJson: path.join(hostHome, ".claude.json"),
     codexHome: roots.agentTest ? roots.codexHome : path.join(roots.home, ".codex"),
+    grokAuth: path.join(hostHome, ".grok", "auth.json"),
   };
 }
 
@@ -141,8 +157,10 @@ async function accountHasBeenUsed(
 
 /**
  * Rewrite one platform's staged login in a container's revision so its next
- * start imports the active account. A user who never added an account for the
- * platform keeps the snapshot taken when the container was created.
+ * start imports the active account. A Claude user who never added an account
+ * keeps the snapshot taken when the container was created. Codex is always
+ * re-read, access-only: the snapshot a container was created with cannot
+ * refresh, so only the host's current login keeps it signed in.
  */
 async function refreshStagedLogin(
   context: CommandContext,
@@ -152,8 +170,9 @@ async function refreshStagedLogin(
 ): Promise<void> {
   const { global } = await context.storage.loadConfig();
   if (
+    platform === "claude" &&
     !(await accountHasBeenUsed(context, platform)) &&
-    !(platform === "claude" && global.useHostClaudeCredentials === false)
+    global.useHostClaudeCredentials !== false
   )
     return;
   const active = await resolveActiveAgentAccount(context, platform);
@@ -162,7 +181,13 @@ async function refreshStagedLogin(
   if (platform === "codex") {
     const home = active.home ?? host.codexHome;
     const auth = home ? await readLoginFile(path.join(home, "auth.json")) : undefined;
-    await replaceStagedInputFile(dataDir, environment.id, revision, "codex-home/auth.json", auth);
+    await replaceStagedInputFile(
+      dataDir,
+      environment.id,
+      revision,
+      "codex-home/auth.json",
+      accessOnlyLoginText("codex", auth),
+    );
     return;
   }
   if (active.home) await prepareAgentAccountHome("claude", active.home);
@@ -226,8 +251,75 @@ export async function refreshStagedAgentAccountLogins(
       }
       await refreshStagedLogin(context, environment, revision, platform);
     }
+    if (providerCredentialsAllowed(context, global.enabledAgentPlatforms, environment, "grok")) {
+      const auth = await readLoginFile(hostStagingSources(context).grokAuth);
+      await replaceStagedInputFile(
+        context.storage.getDataDir(),
+        environment.id,
+        revision,
+        "grok-home/auth.json",
+        accessOnlyLoginText("grok", auth),
+      );
+    }
   } catch (error) {
     logFailure("Failed to refresh staged agent logins", error);
+  }
+}
+
+/**
+ * Before a Grok bridge starts or is reused in a container: hand it the host's
+ * current login, access-only. Grok's access token lasts about six hours and
+ * the copy can never refresh it, so this is what keeps a long-lived container
+ * signed in while the host's own Grok keeps refreshing. A host with no usable
+ * login leaves the container's copy alone, as the Claude sync does: it is
+ * either still valid or already signed out on its own.
+ */
+export async function syncContainerGrokLogin(
+  context: CommandContext,
+  containerId: string,
+  runners: ContainerRunners = defaultRunners,
+): Promise<void> {
+  const operationId = await containerBridgeOperationId(context, containerId);
+  return enqueueContainerBridgeOperation("grok", operationId, () =>
+    syncContainerGrokLoginUnlocked(context, containerId, runners),
+  );
+}
+
+/** Caller holds the Grok bridge-operation queue through sync and bridge startup. */
+export async function syncContainerGrokLoginUnlocked(
+  context: CommandContext,
+  containerId: string,
+  runners: ContainerRunners = defaultRunners,
+): Promise<void> {
+  try {
+    const environment = (await context.storage.loadEnvironments()).find(
+      (candidate) =>
+        candidate.containerId && containerIdMatches(candidate.containerId, containerId),
+    );
+    if (!environment) return;
+    const { global } = await context.storage.loadConfig();
+    if (!providerCredentialsAllowed(context, global.enabledAgentPlatforms, environment, "grok")) {
+      return;
+    }
+    const auth = accessOnlyLoginText(
+      "grok",
+      await readLoginFile(hostStagingSources(context).grokAuth),
+    );
+    // Revocation is persisted before its queued cleanup. Re-read after host I/O
+    // so a revoke requested during the read also fences this delivery.
+    const current = await context.storage.getEnvironment(environment.id);
+    const config = await context.storage.loadConfig();
+    if (
+      auth &&
+      current &&
+      current.containerId &&
+      containerIdMatches(current.containerId, containerId) &&
+      providerCredentialsAllowed(context, config.global.enabledAgentPlatforms, current, "grok")
+    ) {
+      await runners.pipe(containerId, SYNC_CONTAINER_GROK_AUTH_COMMAND, auth);
+    }
+  } catch (error) {
+    logFailure("Failed to sync the Grok login into the container", error);
   }
 }
 
@@ -349,7 +441,10 @@ async function pushContainerLogin(
   }
   const active = await resolveActiveAgentAccount(context, "codex");
   const home = active.home ?? hostStagingSources(context).codexHome;
-  const auth = home ? await readLoginFile(path.join(home, "auth.json")) : undefined;
+  const auth = accessOnlyLoginText(
+    "codex",
+    home ? await readLoginFile(path.join(home, "auth.json")) : undefined,
+  );
   if (!auth) {
     await runners.exec(containerId, `rm -f ${CONTAINER_CODEX_AUTH_FILE}`);
     return;

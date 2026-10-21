@@ -110,7 +110,8 @@ export type InputSkipReason =
   | "too-many-entries"
   | "aggregate-budget"
   | "unreadable"
-  | "changed-while-reading";
+  | "changed-while-reading"
+  | "login-withheld";
 
 /** Counts only: skipped names are user file names and never leave the backend. */
 export interface ProviderInputSummary {

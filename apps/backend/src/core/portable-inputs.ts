@@ -17,6 +17,7 @@ import os from "node:os";
 import path from "node:path";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
+  restrictClaudeCredentialsSnapshot,
   restrictCodexAuthSnapshot,
   restrictGrokAuthSnapshot,
   type LoginSnapshot,
@@ -78,7 +79,16 @@ export interface InputSource {
    * staged through `restrict` (see `@orkestrator/protocol/login-snapshots`),
    * or not at all when that withholds it.
    */
-  accessOnlyLogin?: { file: string; restrict: AccessOnlyLoginRestriction };
+  accessOnlyLogin?: {
+    file: string;
+    restrict: AccessOnlyLoginRestriction;
+    /**
+     * Withhold without reporting `login-withheld`, for a login another path
+     * delivers. Claude's arrives over stdin from the Keychain or this same file
+     * on every start, so a stale file on a macOS host is no reason to warn.
+     */
+    quiet?: boolean;
+  };
 }
 
 export type AccessOnlyLoginRestriction = (text: string, nowMs?: number) => LoginSnapshot;
@@ -158,6 +168,11 @@ export function portableInputSpec(roots: InputSourceRoots): ProviderInputSpec[] 
           stage: "claude-config",
           target: "/claude-config",
           root: agentTest ? (roots.claudeConfigDir ?? null) : path.join(home, ".claude"),
+          accessOnlyLogin: {
+            file: ".credentials.json",
+            restrict: restrictClaudeCredentialsSnapshot,
+            quiet: true,
+          },
           files: [
             "CLAUDE.md",
             "settings.local.json",
@@ -179,6 +194,11 @@ export function portableInputSpec(roots: InputSourceRoots): ProviderInputSpec[] 
                 target: "/claude-config",
                 root: claudeAccountHome,
                 files: [".credentials.json"],
+                accessOnlyLogin: {
+                  file: ".credentials.json",
+                  restrict: restrictClaudeCredentialsSnapshot,
+                  quiet: true,
+                },
               },
             ]
           : []),
@@ -495,13 +515,16 @@ class ProviderCopier {
     this.summary.skipped[reason] = (this.summary.skipped[reason] ?? 0) + count;
   }
 
-  adjustLogin(adjustment: { withheld: boolean; originalBytes: number; bytes: number }): void {
+  adjustLogin(
+    adjustment: { withheld: boolean; originalBytes: number; bytes: number },
+    quiet = false,
+  ): void {
     const files = adjustment.withheld ? -1 : 0;
     const bytes = adjustment.bytes - adjustment.originalBytes;
     this.summary.files += files;
     this.summary.bytes += bytes;
     this.total.take(files, bytes);
-    if (adjustment.withheld) this.skip("login-withheld");
+    if (adjustment.withheld && !quiet) this.skip("login-withheld");
   }
 
   private record(files: number, bytes: number): void {
@@ -685,7 +708,7 @@ export async function stagePortableInputs(
               source.accessOnlyLogin.restrict,
               now,
             );
-            if (adjustment) copier.adjustLogin(adjustment);
+            if (adjustment) copier.adjustLogin(adjustment, source.accessOnlyLogin.quiet === true);
           }
         }
         for (const directory of source.directories ?? []) {
@@ -774,20 +797,23 @@ async function restrictStagedLogin(
   return { withheld: false, originalBytes, bytes: Buffer.byteLength(restricted.text) };
 }
 
+const ACCESS_ONLY_RESTRICTIONS: Record<"claude" | "codex" | "grok", AccessOnlyLoginRestriction> = {
+  claude: restrictClaudeCredentialsSnapshot,
+  codex: restrictCodexAuthSnapshot,
+  grok: restrictGrokAuthSnapshot,
+};
+
 /**
  * The access-only form of a login a running container or a restaged revision
  * is about to receive, or undefined when it must receive none.
  */
 export function accessOnlyLoginText(
-  provider: "codex" | "grok",
+  provider: "claude" | "codex" | "grok",
   text: string | undefined,
   nowMs = Date.now(),
 ): string | undefined {
   if (text === undefined) return undefined;
-  const restricted = (provider === "codex" ? restrictCodexAuthSnapshot : restrictGrokAuthSnapshot)(
-    text,
-    nowMs,
-  );
+  const restricted = ACCESS_ONLY_RESTRICTIONS[provider](text, nowMs);
   return "text" in restricted ? restricted.text : undefined;
 }
 

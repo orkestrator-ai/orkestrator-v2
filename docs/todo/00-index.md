@@ -58,9 +58,9 @@ it reaches. Some rules of thumb:
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
 | High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 19 |
-| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 263 |
+| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 264 |
 | Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 279 |
-| **Total** | | **562** |
+| **Total** | | **563** |
 
 ## Very high
 
@@ -117,7 +117,8 @@ it reaches. Some rules of thumb:
 - [x] Record a non-skipped run of the deletion-during-setup real-stack spec on current `main` ([environment-and-disk-cleanup.md](environment-and-disk-cleanup.md), qualification)
 - [x] Run a seeded real-stack pass of the pre-ledger startup sweeps in an isolated dev profile ([environment-and-disk-cleanup.md](environment-and-disk-cleanup.md), qualification)
 - [x] Stop Docker containers spending the host's single-use Grok refresh token, which signs the host out ([container-network-and-credential-isolation.md](container-network-and-credential-isolation.md))
-- [ ] Stop Docker containers spending the host's Claude refresh token: access-only copies need a re-push before the 8-hour token lapses ([container-network-and-credential-isolation.md](container-network-and-credential-isolation.md))
+- [x] Stop Docker containers spending the host's Claude refresh token: access-only copies need a re-push before the 8-hour token lapses ([container-network-and-credential-isolation.md](container-network-and-credential-isolation.md))
+- [ ] Qualify the Claude login keeper on a live login: the host refresh near expiry and a running container picking up the renewal ([container-network-and-credential-isolation.md](container-network-and-credential-isolation.md), qualification)
 - [ ] Stop Docker containers spending the host's OpenCode and Pi OAuth refresh tokens, which are staged in full today ([container-network-and-credential-isolation.md](container-network-and-credential-isolation.md))
 
 ### Design canvas (high)
@@ -296,6 +297,7 @@ it reaches. Some rules of thumb:
 - [ ] Generate one canonical default allowlist for the backend, renderer and firewall fallbacks ([container-network-and-credential-isolation.md](container-network-and-credential-isolation.md))
 - [ ] Prototype bounded external egress enforcement so restricted containers no longer need `NET_ADMIN` ([container-network-and-credential-isolation.md](container-network-and-credential-isolation.md))
 - [ ] Qualify a Grok container running past the host access token's expiry with a live login: it signs out alone, the host stays signed in ([container-network-and-credential-isolation.md](container-network-and-credential-isolation.md), qualification)
+- [ ] Keep container MCP OAuth logins signed in now that their refresh tokens stay on the host ([container-network-and-credential-isolation.md](container-network-and-credential-isolation.md))
 - [ ] Choose and apply a measured default CPU, memory and PID budget for new container runtimes ([container-resource-budgets-and-performance.md](container-resource-budgets-and-performance.md))
 - [ ] Measure browser, build and provider workloads with and without the experiment budget on Engine and Desktop ([container-resource-budgets-and-performance.md](container-resource-budgets-and-performance.md), qualification)
 - [ ] Record container benchmark numbers for Docker Desktop and arm64 against the regression targets ([container-resource-budgets-and-performance.md](container-resource-budgets-and-performance.md), qualification)
@@ -652,6 +654,7 @@ it reaches. Some rules of thumb:
 - [ ] Decide whether a resumable copy journal is worth its complexity for very large workspaces ([container-rebuild-state-preservation.md](container-rebuild-state-preservation.md), decision)
 - [ ] Stop seeding OpenCode `snapshot/`, `storage/` and `account.json` from the host; 1.19.0 never reads the copies in a container ([container-rebuild-state-preservation.md](container-rebuild-state-preservation.md))
 - [ ] Optionally switch between restricted and full network mode in place instead of requiring a rebuild ([container-network-and-credential-isolation.md](container-network-and-credential-isolation.md))
+- [ ] Read the host Claude login once per container login keeper pass instead of once per container ([container-network-and-credential-isolation.md](container-network-and-credential-isolation.md), deferred)
 - [ ] Decide between per-platform regression targets and one reference host with a tolerance ([container-resource-budgets-and-performance.md](container-resource-budgets-and-performance.md), decision)
 - [ ] Replace per-member source `sha256sum` with an in-process tar hasher after a safety review ([container-resource-budgets-and-performance.md](container-resource-budgets-and-performance.md), deferred)
 - [ ] Add Bun download-cache BuildKit mounts to `docker/Dockerfile` if image build time matters ([container-resource-budgets-and-performance.md](container-resource-budgets-and-performance.md), deferred)
@@ -724,7 +727,7 @@ it reaches. Some rules of thumb:
 - [ ] Decide whether to offer Claude message-level rewind through the SDK resume-at options ([session-titles-and-history.md](session-titles-and-history.md))
 - [ ] With the backend title service, confirm generated titles, first-message fallback and push-failure retention ([session-titles-and-history.md](session-titles-and-history.md), qualification)
 - [ ] Send Codex `account/login/cancel` when an in-tab sign-in is abandoned ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md))
-- [ ] Update `oauthAccount` in a running container's `$HOME/.claude.json` during account reconcile ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md))
+- [x] Update `oauthAccount` in a running container's `$HOME/.claude.json` during account reconcile ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md))
 - [ ] Report or re-link account entries whose shared symlink a CLI atomic-rename replaced with a file ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md))
 - [ ] Verify with a live switch mid-turn that usage windows no longer fold into the new account's card ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md), verify)
 - [ ] Stop older container images restoring the host login on restart by retiring the legacy host-mount path ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md), blocked)
@@ -918,7 +921,7 @@ it reaches. Some rules of thumb:
 | **Containers and environments** | | | | | |
 | [container-platform-qualification.md](container-platform-qualification.md) |  |  | 12 | 2 | 14 |
 | [container-rebuild-state-preservation.md](container-rebuild-state-preservation.md) |  |  | 2 | 2 | 4 |
-| [container-network-and-credential-isolation.md](container-network-and-credential-isolation.md) |  | 2 | 3 | 1 | 6 |
+| [container-network-and-credential-isolation.md](container-network-and-credential-isolation.md) |  | 2 | 4 | 2 | 8 |
 | [container-resource-budgets-and-performance.md](container-resource-budgets-and-performance.md) |  |  | 3 | 6 | 9 |
 | [container-state-observation.md](container-state-observation.md) |  |  | 5 | 6 | 11 |
 | [environment-and-disk-cleanup.md](environment-and-disk-cleanup.md) |  |  |  | 6 | 6 |
@@ -934,7 +937,7 @@ it reaches. Some rules of thumb:
 | [agent-interactions-and-permissions.md](agent-interactions-and-permissions.md) |  | 1 | 13 | 6 | 20 |
 | [mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md) |  |  | 3 | 5 | 8 |
 | [session-titles-and-history.md](session-titles-and-history.md) |  |  | 4 | 4 | 8 |
-| [agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md) |  |  | 8 | 6 | 14 |
+| [agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md) |  |  | 7 | 5 | 12 |
 | [composer-model-parameters.md](composer-model-parameters.md) |  |  | 3 | 5 | 8 |
 | [opencode-v2.md](opencode-v2.md) |  |  |  | 3 | 3 |
 | [provider-sdk-adoption-backlog.md](provider-sdk-adoption-backlog.md) |  |  | 2 | 15 | 17 |

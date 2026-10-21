@@ -67,6 +67,7 @@ import {
 } from "./commands-helpers.js";
 import {
   reconcileContainerAgentAccount,
+  syncContainerClaudeLoginUnlocked,
   syncContainerGrokLoginUnlocked,
   type ContainerBridgeControl,
 } from "./agent-accounts-containers.js";
@@ -202,8 +203,8 @@ export function registerServerCommands(
       asOpenCodeModelCatalog(args.models),
     );
   });
-  register("start_claude_server", ({ containerId }, context) => {
-    const id = asString(containerId, "containerId");
+  register("start_claude_server", async ({ containerId }, context) => {
+    const id = await containerBridgeOperationId(context, asString(containerId, "containerId"));
     return enqueueContainerBridgeOperation("claude", id, async () => {
       await reconcileContainerAgentAccount(
         context,
@@ -211,6 +212,8 @@ export function registerServerCommands(
         "claude",
         containerBridgeControl(id, CLAUDE_BRIDGE_PORT, "[c]laude-bridge/dist/index.js"),
       );
+      // The container's copy cannot refresh: hand it the host's current token.
+      await syncContainerClaudeLoginUnlocked(context, id, { restrictWhenUnusable: true });
       const connection = await resolveContainerAgentToolConnection(context, id);
       const { global } = await context.storage.loadConfig();
       return startContainerClaudeServer(

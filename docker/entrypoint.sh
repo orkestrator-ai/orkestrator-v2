@@ -109,9 +109,9 @@ report_agent_copy_skips() {
     AGENT_COPY_SKIPPED=""
 }
 
-# Codex and Grok refresh tokens are single-use: a container copy that refreshed
-# would spend the token the host still holds and sign the host out, along with
-# every other container. The backend stages these logins access-only
+# Claude, Codex and Grok refresh tokens are single-use: a container copy that
+# refreshed would spend the token the host still holds and sign the host out,
+# along with every other container. The backend stages these logins access-only
 # (packages/protocol/src/login-snapshots.ts); this blanks the refresh token
 # again in the container's own copy, so a host-mounted home or a copy imported
 # before that change cannot refresh either. Codex's `last_refresh` is set to now
@@ -128,7 +128,13 @@ restrict_imported_login() {
         const [file, kind] = process.argv.slice(1);
         const login = JSON.parse(fs.readFileSync(file, "utf8"));
         if (!login || typeof login !== "object" || Array.isArray(login)) process.exit(1);
-        if (kind === "grok") {
+        if (kind === "claude") {
+          const strip = (entry) => {
+            if (entry && typeof entry === "object") delete entry.refreshToken;
+          };
+          strip(login.claudeAiOauth);
+          if (login.mcpOAuth && typeof login.mcpOAuth === "object") Object.values(login.mcpOAuth).forEach(strip);
+        } else if (kind === "grok") {
           for (const entry of Object.values(login)) {
             if (entry && typeof entry === "object" && "refresh_token" in entry) entry.refresh_token = "";
           }
@@ -662,6 +668,7 @@ else
     # Linux hosts keep the credential on disk, so the mount can carry it.
     if [ -f /claude-config/.credentials.json ] && [ ! -L /claude-config/.credentials.json ]; then
         if publish_claude_credentials /claude-config/.credentials.json; then
+            restrict_imported_login "$HOME/.claude/.credentials.json" claude Claude
             echo "Copied credentials from host"
         else
             echo "No credential on the mount; awaiting the backend credential sync"

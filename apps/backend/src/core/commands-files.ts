@@ -2183,7 +2183,8 @@ export async function syncContainerGitHubCredential(
 }
 
 /**
- * Materializes the host's Claude Code OAuth credential inside a container.
+ * Materializes the host's Claude Code OAuth credential inside a container,
+ * access-only (`restrictClaudeCredentialsSnapshot`; callers restrict it).
  *
  * Unlike Codex, whose token lives in `~/.codex/auth.json` and therefore rides
  * the read-only `/codex-home` mount straight into the container, Claude Code on
@@ -2194,7 +2195,8 @@ export async function syncContainerGitHubCredential(
  * The payload is piped over stdin rather than passed as a `docker create` env
  * var: an env var is readable from `docker inspect` and `/proc/1/environ` for
  * the life of the container, and would go stale the first time the OAuth token
- * refreshed. Syncing on every start also re-arms a refreshed token.
+ * refreshed. The backend re-syncs on every start, every bridge start and every
+ * host renewal (`container-claude-login-keeper.ts`).
  */
 export function buildSyncContainerClaudeCredentialCommand(
   credentialFile = CONTAINER_CLAUDE_CREDENTIAL_FILE,
@@ -2238,22 +2240,6 @@ export async function getHostClaudeCredentials(
     const { stdout } = await runCommand("security", args, { timeoutMs: 10_000 });
     return stdout;
   });
-}
-
-export async function syncContainerClaudeCredential(
-  containerId: string,
-  credentials: string | undefined,
-): Promise<void> {
-  if (!credentials) return;
-  await runCommand(
-    "docker",
-    ["exec", "-i", containerId, "bash", "-lc", SYNC_CONTAINER_CLAUDE_CREDENTIAL_COMMAND],
-    {
-      stdin: credentials,
-      timeoutMs: 30_000,
-      redactValues: [credentials],
-    },
-  );
 }
 
 /**

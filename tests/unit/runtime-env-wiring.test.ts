@@ -719,6 +719,13 @@ report_agent_copy_skips OpenCode
         writeFileSync(join(home, ".claude", ".credentials.json"), options.existing);
       }
 
+      // The image restricts a copied login with node; a host without node uses Bun.
+      const bin = join(dir, "bin");
+      mkdirSync(bin, { recursive: true });
+      if (!Bun.which("node")) {
+        writeFileSync(join(bin, "node"), `#!/bin/sh\nexec ${shellQuote(process.execPath)} "$@"\n`);
+        chmodSync(join(bin, "node"), 0o755);
+      }
       const entrypointPath = join(repoRoot, "docker", "entrypoint.sh");
       const result = runShell(
         `
@@ -731,7 +738,7 @@ eval "$block"
 `,
         {
           HOME: home,
-          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          PATH: `${bin}:${process.env.PATH ?? "/usr/bin:/bin"}`,
           AGENT_TEST_MOUNT: mount,
           ...(options.envValue === undefined ? {} : { CLAUDE_OAUTH_CREDENTIALS: options.envValue }),
         },
@@ -774,6 +781,30 @@ eval "$block"
         expect(result.exitCode).toBe(0);
         expect(result.credential).toContain("from-mount");
         expect(result.stdout).toContain("Copied credentials from host");
+      });
+    });
+
+    test("a credential copied from the mount loses its refresh tokens", () => {
+      withTempDir((dir) => {
+        // A host-mounted ~/.claude, or a revision staged before logins were
+        // access-only, still carries the host's single-use refresh token.
+        const result = runCredentialBlock(dir, {
+          mount: JSON.stringify({
+            claudeAiOauth: {
+              accessToken: "from-mount",
+              refreshToken: "SENTINEL-CLAUDE",
+              expiresAt: 1,
+            },
+            mcpOAuth: { server: { accessToken: "mcp", refreshToken: "SENTINEL-MCP" } },
+          }),
+        });
+
+        expect(result.exitCode).toBe(0);
+        expect(JSON.parse(result.credential ?? "{}")).toEqual({
+          claudeAiOauth: { accessToken: "from-mount", expiresAt: 1 },
+          mcpOAuth: { server: { accessToken: "mcp" } },
+        });
+        expect(result.stdout).not.toContain("SENTINEL");
       });
     });
 
@@ -1128,6 +1159,9 @@ copy_agent_directory "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" skills Codex
 
   test("imported Codex and Grok logins lose their single-use refresh tokens", () => {
     const entrypoint = read("docker/entrypoint.sh");
+    expect(entrypoint).toMatch(
+      /publish_claude_credentials \/claude-config\/\.credentials\.json; then\n\s*restrict_imported_login "\$HOME\/\.claude\/\.credentials\.json" claude Claude/,
+    );
     // Each import is restricted right after it is copied, before any agent runs.
     expect(entrypoint).toMatch(
       /chmod 600 "\$HOME\/\.codex\/auth\.json"[^\n]*\n\s*restrict_imported_login "\$HOME\/\.codex\/auth\.json" codex Codex/,

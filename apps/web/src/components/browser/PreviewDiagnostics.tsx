@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, ChevronDown, ChevronRight, Info, RefreshCw } from "lucide-react";
 import type { BrowserPreviewTransportState } from "@orkestrator/protocol/browser-preview";
 import type { PreviewServiceSnapshot } from "@orkestrator/protocol/preview-services";
@@ -48,12 +48,26 @@ export function PreviewDiagnostics({
   busy,
 }: PreviewDiagnosticsProps) {
   const [expanded, setExpanded] = useState(false);
+  // Expanding or collapsing can swap the toggle for another element; a
+  // keyboard user keeps focus on whichever toggle is shown.
+  const toggleRef = useRef<HTMLButtonElement | null>(null);
+  const refocusToggle = useRef(false);
+  useEffect(() => {
+    if (!refocusToggle.current) return;
+    refocusToggle.current = false;
+    toggleRef.current?.focus();
+  }, [expanded]);
+  const toggle = (next: boolean) => {
+    refocusToggle.current = toggleRef.current === document.activeElement;
+    setExpanded(next);
+  };
   if (!diagnosis && !expanded && mode !== "compatibility") {
     return service ? (
       <button
+        ref={toggleRef}
         type="button"
         className="flex w-full shrink-0 items-center gap-1 border-b border-border/60 bg-muted/10 px-3 py-0.5 text-left text-[11px] text-muted-foreground hover:text-foreground"
-        onClick={() => setExpanded(true)}
+        onClick={() => toggle(true)}
         aria-expanded={false}
       >
         <ChevronRight className="h-3 w-3" />
@@ -105,8 +119,9 @@ export function PreviewDiagnostics({
           <button
             type="button"
             className="flex items-center gap-0.5 text-[11px] opacity-80 hover:opacity-100"
+            ref={toggleRef}
             aria-expanded={expanded}
-            onClick={() => setExpanded((value) => !value)}
+            onClick={() => toggle(!expanded)}
           >
             {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
             Route

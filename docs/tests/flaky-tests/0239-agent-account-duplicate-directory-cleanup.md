@@ -38,3 +38,14 @@ plus the logged isolated PASS. Passing output is deleted by the runner.
 The extra directory after failed progress suggests a cleanup/publication
 ordering race under aggregate load, but the root cause has not been proved.
 No assertion, timeout, production account behavior or skip was changed.
+
+## Recurrence during the remaining real-Electron preview cases (2026-10-21)
+
+- **Command:** `mise run test:logged -- --name full-tests-0a835 -- mise run test`
+  on branch `qualify-preview-electron-remaining-cases-0a835a98d18e` (no
+  backend change), load average 16 to 36.
+- **Failure:** line 796, `codexAccounts` held a second account id after the
+  rejected duplicate (122.22 ms), the same symptom.
+- **Alone:** `bun test --preload ../../tests/setup-node.ts ./src/core/agent-accounts.test.ts --parallel=1`
+  in `apps/backend`: 37 passed (4.55 s) at load 36.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.txKi1Z/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.

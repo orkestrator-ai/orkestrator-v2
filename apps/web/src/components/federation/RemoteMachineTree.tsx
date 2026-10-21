@@ -1,5 +1,5 @@
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useMemo, type ReactNode } from "react";
 import { toast } from "sonner";
 import {
   DndContext,
@@ -17,8 +17,6 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import type { ProjectRef } from "@orkestrator/protocol/federation";
-import type { NodeSummary } from "@orkestrator/protocol/node-summaries";
 import {
   ChevronRight,
   Container,
@@ -59,11 +57,12 @@ import {
 import { UnreadBellIcon } from "@/components/environments/UnreadBellIcon";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { isMachineWritable, type MachineView } from "@/lib/federation/aggregate";
-import { reorderFederatedEnvironments } from "@/lib/federation/federated-actions";
-import { moveId, sameOrder, withOrder } from "@/lib/federation/remote-order";
+import { useStore } from "zustand";
+import { remoteOrdersFor } from "@/lib/federation/remote-order-writes";
+import { moveId, withOrder } from "@/lib/federation/remote-order";
 import type { FederatedEnvironment, FederatedProject } from "@/lib/federation/summaries";
 import { buildProjectTree, isProjectFolderCollapsed } from "@/lib/project-folders";
-import { OutcomeUnknownError, type PortalStore } from "@/lib/portal/portal-store";
+import { OutcomeUnknownError } from "@/lib/portal/portal-store";
 import { cn } from "@/lib/utils";
 import { useUIStore } from "@/stores";
 import { useMachineViewStore } from "@/stores/machineViewStore";
@@ -77,8 +76,6 @@ import {
 const NO_ENVIRONMENTS: readonly FederatedEnvironment[] = [];
 /** Matches `EnvironmentItem`: below this width rows get an explicit actions button. */
 const MOBILE_MEDIA_QUERY = "(max-width: 767px)";
-/** How long a drag is shown before the owner's summary must have caught up. */
-const OPTIMISTIC_ORDER_MS = 10_000;
 
 const ACTIVITY_TEXT: Record<FederatedEnvironment["activity"], string> = {
   working: "Working",
@@ -103,63 +100,6 @@ function useFocusedEnvironmentId(machine: MachineView): string | null {
   });
 }
 
-/** The owner's current order of one project's environments, as the portal reports it. */
-function summaryOrder(nodes: readonly NodeSummary[], ref: ProjectRef): string[] | null {
-  const node = nodes.find((candidate) => candidate.nodeId === ref.backendId);
-  if (!node) return null;
-  return node.environments
-    .filter((environment) => environment.projectId === ref.projectId && !environment.isProjectHome)
-    .sort((left, right) => left.order - right.order)
-    .map((environment) => environment.ref.environmentId);
-}
-
-/**
- * Drags awaiting the owner, per project. An entry is shown until the owner's
- * summary has that order, the write fails, or the summary never catches up.
- */
-function useOptimisticOrders(portal: PortalStore) {
-  const [orders, setOrders] = useState<ReadonlyMap<string, readonly string[]>>(new Map());
-
-  const forget = useCallback((projectId: string, ids: readonly string[]) => {
-    setOrders((current) => {
-      if (current.get(projectId) !== ids) return current;
-      const next = new Map(current);
-      next.delete(projectId);
-      return next;
-    });
-  }, []);
-
-  const remember = useCallback((projectId: string, ids: readonly string[]) => {
-    setOrders((current) => new Map(current).set(projectId, ids));
-  }, []);
-
-  /** Holds the drag until the summary shows it, so rows don't jump back meanwhile. */
-  const settle = useCallback(
-    (ref: ProjectRef, ids: readonly string[]) => {
-      const shown = () => {
-        const actual = summaryOrder(portal.getState().nodes, ref);
-        return actual !== null && sameOrder(actual, ids);
-      };
-      if (shown()) {
-        forget(ref.projectId, ids);
-        return;
-      }
-      const done = () => {
-        clearTimeout(timer);
-        unsubscribe();
-        forget(ref.projectId, ids);
-      };
-      const timer = setTimeout(done, OPTIMISTIC_ORDER_MS);
-      const unsubscribe = portal.store.subscribe(() => {
-        if (shown()) done();
-      });
-    },
-    [forget, portal],
-  );
-
-  return { orders, remember, forget, settle };
-}
-
 /**
  * Another machine's projects and environments, laid out like this window's
  * own sidebar: the owner's folders, project order and environment order.
@@ -173,8 +113,10 @@ export function RemoteMachineTree({ machine }: { machine: MachineView }) {
   const toggleProjectCollapse = useUIStore((state) => state.toggleProjectCollapse);
   const toggleProjectFolderCollapse = useUIStore((state) => state.toggleProjectFolderCollapse);
   const focusedEnvironmentId = useFocusedEnvironmentId(machine);
-  const { orders, remember, forget, settle } = useOptimisticOrders(portal);
+  const orderWrites = useMemo(() => remoteOrdersFor(portal), [portal]);
+  const orders = useStore(orderWrites.store);
   const writable = isMachineWritable(machine);
+  const sortable = writable && !machine.truncated;
 
   const projects = useMemo(
     () => [...machine.projects].sort((left, right) => left.order - right.order),
@@ -182,12 +124,12 @@ export function RemoteMachineTree({ machine }: { machine: MachineView }) {
   );
   const tree = useMemo(() => buildProjectTree(projects), [projects]);
   const environmentsOf = useCallback(
-    (projectId: string) =>
+    (project: FederatedProject) =>
       withOrder(
-        (machine.environmentsByProject.get(projectId) ?? NO_ENVIRONMENTS)
+        (machine.environmentsByProject.get(project.ref.projectId) ?? NO_ENVIRONMENTS)
           .filter((environment) => !environment.isProjectHome)
           .sort((left, right) => left.order - right.order),
-        orders.get(projectId),
+        orders.get(project.key),
         (environment) => environment.ref.environmentId,
       ),
     [machine.environmentsByProject, orders],
@@ -199,42 +141,41 @@ export function RemoteMachineTree({ machine }: { machine: MachineView }) {
   );
 
   const handleDragEnd = ({ active, over }: DragEndEvent) => {
-    if (!over) return;
+    if (!sortable || !over) return;
     const activeId = String(active.id);
     const overId = String(over.id);
     // Environments never move between projects, so both rows share one.
     const project = projects.find((candidate) => {
-      const ids = environmentsOf(candidate.ref.projectId).map(
-        (environment) => environment.ref.environmentId,
-      );
+      const ids = environmentsOf(candidate).map((environment) => environment.ref.environmentId);
       return ids.includes(activeId) && ids.includes(overId);
     });
     if (!project) return;
     const projectId = project.ref.projectId;
     const ids = moveId(
-      environmentsOf(projectId).map((environment) => environment.ref.environmentId),
+      environmentsOf(project).map((environment) => environment.ref.environmentId),
       activeId,
       overId,
     );
     if (!ids) return;
-    remember(projectId, ids);
-    // The project captured at drop time names the owner; nothing falls back here.
-    const ref = project.ref;
-    reorderFederatedEnvironments(portal, ref, ids).then(
-      () => settle(ref, ids),
-      (error: unknown) => {
-        forget(projectId, ids);
-        if (error instanceof OutcomeUnknownError) {
-          toast.warning(`Reorder: outcome unknown on ${machine.name}`, {
-            description: error.message,
-          });
-        } else {
-          toast.error(`Could not reorder environments on ${machine.name}`, {
-            description: error instanceof Error ? error.message : String(error),
-          });
-        }
-      },
-    );
+    // Reorder only visible slots; home rows keep their owner position and are
+    // included in the whole-project payload so the owner never appends them.
+    let nextVisible = 0;
+    const allIds = [...(machine.environmentsByProject.get(projectId) ?? NO_ENVIRONMENTS)]
+      .sort((left, right) => left.order - right.order)
+      .map((environment) =>
+        environment.isProjectHome ? environment.ref.environmentId : ids[nextVisible++]!,
+      );
+    orderWrites.submit(project.ref, allIds, (error: unknown) => {
+      if (error instanceof OutcomeUnknownError) {
+        toast.warning(`Reorder: outcome unknown on ${machine.name}`, {
+          description: error.message,
+        });
+      } else {
+        toast.error(`Could not reorder environments on ${machine.name}`, {
+          description: error instanceof Error ? error.message : String(error),
+        });
+      }
+    });
   };
 
   const renderProject = (project: FederatedProject) => (
@@ -242,11 +183,11 @@ export function RemoteMachineTree({ machine }: { machine: MachineView }) {
       key={project.key}
       machine={machine}
       project={project}
-      environments={environmentsOf(project.ref.projectId)}
+      environments={environmentsOf(project)}
       isCollapsed={collapsedProjects.includes(project.key)}
       onToggleCollapse={() => toggleProjectCollapse(project.key)}
       focusedEnvironmentId={focusedEnvironmentId}
-      sortable={writable}
+      sortable={sortable}
     />
   );
 

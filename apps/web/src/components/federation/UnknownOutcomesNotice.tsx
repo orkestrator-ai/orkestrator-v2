@@ -16,6 +16,7 @@ const COMMAND_LABELS: Record<string, string> = {
   stop_environment: "Stop environment",
   delete_environment: "Delete environment",
   create_environment: "Create environment",
+  reorder_environments: "Reorder environments",
   update_backend_profile: "Update machine profile",
 };
 

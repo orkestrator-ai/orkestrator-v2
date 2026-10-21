@@ -338,7 +338,7 @@ describe("remote machine sections follow the owner's sidebar", () => {
     const folder = document.querySelector('[data-project-folder-content="Work"]') as HTMLElement;
     expect(within(folder).getByText("mid")).toBeTruthy();
     expect(within(folder).getByText("alpha")).toBeTruthy();
-    expect(within(folder).queryByText("zeta")).toBeNull();
+    expect(within(folder).queryByText("zeta") === null).toBe(true);
   });
 
   test("environments of a connected machine can be dragged; an unavailable one is read-only", async () => {

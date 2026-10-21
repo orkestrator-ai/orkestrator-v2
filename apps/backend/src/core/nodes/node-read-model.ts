@@ -418,7 +418,6 @@ export class NodeReadModel {
           const raw = await link.invoke<unknown>("get_environment_snapshots", { projectId });
           const list = Array.isArray(raw) ? raw : [];
           const environments = list
-            .slice(0, MAX_SUMMARY_ENVIRONMENTS_PER_PROJECT)
             .flatMap((entry, index) => {
               const environment =
                 entry && typeof entry === "object"
@@ -427,7 +426,8 @@ export class NodeReadModel {
               return environment ? [environment] : [];
             })
             // The node's own sidebar order; its storage order is creation order.
-            .sort((a, b) => a.order - b.order);
+            .sort((a, b) => a.order - b.order)
+            .slice(0, MAX_SUMMARY_ENVIRONMENTS_PER_PROJECT);
           results.set(projectId, {
             environments,
             truncated: list.length > MAX_SUMMARY_ENVIRONMENTS_PER_PROJECT,

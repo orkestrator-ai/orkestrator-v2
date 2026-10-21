@@ -129,7 +129,7 @@ export function toNodeProjectSummary(
     ref,
     key: projectKey(ref),
     name: boundedText(raw.name) || "Untitled project",
-    order: typeof raw.order === "number" ? raw.order : index,
+    order: typeof raw.order === "number" && Number.isFinite(raw.order) ? raw.order : index,
     ...(typeof raw.folder === "string" && raw.folder
       ? { folder: boundedText(raw.folder, 64) }
       : {}),
@@ -149,7 +149,7 @@ export function toNodeEnvironmentSummary(
     key: environmentKey(ref),
     projectId: raw.projectId,
     name: boundedText(raw.name) || "Environment",
-    order: typeof raw.order === "number" ? raw.order : index,
+    order: typeof raw.order === "number" && Number.isFinite(raw.order) ? raw.order : index,
     ...(typeof raw.branch === "string" ? { branch: boundedText(raw.branch) } : {}),
     status: boundedText(raw.status, 32) || "stopped",
     activity: normalizeActivity(raw.agentActivityState),

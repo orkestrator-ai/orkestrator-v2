@@ -862,3 +862,19 @@ remained unchanged.
   component browser runs ended.
 - **Assessment:** confirms intermittent staging latency; shared-host contention
   is plausible but unproven. No assertion, deadline or skip changed.
+
+## Transcript-scroll review validation — 2026-10-21
+
+- **Original command:** `mise run test:logged -- --name full-tests -- mise run test`, alongside the component browser suite.
+- **Workers:** workspace/root/bridges/protocol reservations of 4/1/2/1 slots; root used `--parallel=1`.
+- **Failure:** `Pi bridge runtime vendoring > loads Pi's supported SDK from the staged runtime closure` timed out at 30001.01 ms. Root/support reported 3178 passed, one skipped and two failed across 3181 tests in 151 files (276.71 seconds). The other failure was a new DOM absence assertion in the scroll-affordance regression; it was corrected and its component and diagnostic-contract owners passed.
+- **Owning-file rerun:** `mise run test:logged -- --name pi-vendor-isolated -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed the unchanged complete owner (four tests, exit 0, 10.7 seconds logged).
+- **Evidence:** `orkestrator-test-run.vcs7Uq/root-and-agent-support-tests.log.gz` under the host temporary root.
+- **Assessment:** confirmed intermittent recurrence. Concurrent browser and aggregate validation was active, but resource contention remains unconfirmed. No Pi implementation, assertion, timeout or skip changed.
+
+The `full-tests-final` aggregate rerun passed the complete root/support group
+in 167.09 seconds (3180 passed, one skipped, zero failed).
+
+## Two-column report main merge — 2026-10-21
+
+Pi staging exceeded 30 seconds in the aggregate and first owning-file rerun; after browser validation ended, the complete unchanged four-test owner passed in 11.6 seconds (`merge-pi-final-owner`). See [0629](0629-two-column-main-merge-validation.md) for commands, worker configuration, counts and evidence. No source, assertion, timeout or skip changed.

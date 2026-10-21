@@ -1,7 +1,7 @@
 # Long transcript fixture exceeds its aggregate deadline
 
-- **ID:** 0625.
-- **Status:** open.
+- **ID:** 0627
+- **Status:** open
 - **Test:** `long transcript fixture > bounded concurrency and queues; caches converge within bounds over 20 scroll/expand cycles`.
 - **Owner:** `apps/web/src/components/chat/rich-transcript.long-fixture.test.tsx:309`.
 - **Observation date:** 2026-10-21.
@@ -19,3 +19,7 @@
 - **Assessment:** confirmed intermittent deadline failure. Host scheduling or
   fixture cost under load may contribute; the rerun does not establish a cause.
   No assertion, timeout or skip changed.
+
+## Two-column report main merge — 2026-10-21
+
+The long fixture exceeded 120 seconds (120,789.83 ms) in the aggregate; the complete unchanged owner passed in 23.5 seconds (`merge-long-transcript-owner`). See [0629](0629-two-column-main-merge-validation.md) for commands, worker configuration, counts and evidence. No source, assertion, timeout or skip changed.

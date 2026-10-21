@@ -27,7 +27,11 @@ import type { ListenerKind, GatewayStartInfo } from "./gateway-internals.js";
  * back into this class for the token settings, so the facade passes a callback
  * bound late to it.
  */
-export type GatewayRequestRouter = Pick<GatewayAuth, "handle">;
+export type GatewayRequestRouter = Pick<GatewayAuth, "handle"> &
+  Partial<Pick<GatewayAuth, "handleUpgrade">>;
+
+/** The loopback client gateway binds IPv4 loopback only. */
+const LOOPBACK_CLIENT_BIND_ADDRESS = "127.0.0.1";
 
 /** Listeners, the durable gateway token, and shutdown. */
 export class GatewayLifecycle {
@@ -48,7 +52,7 @@ export class GatewayLifecycle {
       this.ctx.env.ORKESTRATOR_GATEWAY_HOST ??
       tailscaleBindAddress ??
       this.ctx.fallbackBindAddress;
-    if (!bindAddress && !this.ctx.controlBindAddress) {
+    if (!bindAddress && !this.ctx.controlBindAddress && this.ctx.loopbackClientPort === undefined) {
       this.ctx.logger.warn("[RemoteGateway] No Tailscale address found; gateway not started");
       return null;
     }
@@ -98,32 +102,67 @@ export class GatewayLifecycle {
 
     let browserListener: { bindAddress: string; port: number; url: string } | null = null;
     let browserError: string | undefined;
+    let browserFailure: unknown;
     if (bindAddress) {
       try {
         browserListener = await this.listenWithPortFallback(bindAddress, port);
         this.ctx.logger.info(`[RemoteGateway] Listening on ${browserListener.url}`);
       } catch (error) {
-        if (!controlListener) throw error;
+        if (!controlListener && this.ctx.loopbackClientPort === undefined) throw error;
+        browserFailure = error;
         browserError = error instanceof Error ? error.message : String(error);
         this.ctx.logger.error(`[RemoteGateway] Browser listener unavailable: ${browserError}`);
       }
     } else {
       browserError = "No Tailscale address was found";
       this.ctx.logger.warn(
-        `[RemoteGateway] ${browserError}; desktop control listener remains available`,
+        `[RemoteGateway] ${browserError}; ${controlListener ? "desktop control" : "loopback client"} listener remains available`,
       );
     }
 
-    const primaryListener = controlListener ?? browserListener;
-    if (!primaryListener) return null;
+    // The SSH forwarding target. An additional listener, never a change to
+    // the browser listener's bind policy, and never a control listener: it
+    // routes as "browser", so control-only routes stay 404 here.
+    let loopbackClientListener: { bindAddress: string; port: number; url: string } | null = null;
+    let loopbackClientError: string | undefined;
+    if (this.ctx.loopbackClientPort !== undefined) {
+      try {
+        loopbackClientListener = await this.listen(
+          LOOPBACK_CLIENT_BIND_ADDRESS,
+          this.ctx.loopbackClientPort,
+          "browser",
+        );
+        this.ctx.loopbackClientUrl = loopbackClientListener.url;
+        this.ctx.logger.info(
+          `[RemoteGateway] Loopback client gateway listening on ${loopbackClientListener.url}`,
+        );
+      } catch (error) {
+        loopbackClientError = error instanceof Error ? error.message : String(error);
+        this.ctx.logger.error(
+          `[RemoteGateway] Loopback client gateway unavailable on ${LOOPBACK_CLIENT_BIND_ADDRESS}:${this.ctx.loopbackClientPort}: ${loopbackClientError}`,
+        );
+      }
+    }
+
+    const primaryListener = controlListener ?? browserListener ?? loopbackClientListener;
+    if (!primaryListener) {
+      if (browserFailure) throw browserFailure;
+      if (loopbackClientError) {
+        throw new Error(`Loopback client gateway unavailable: ${loopbackClientError}`);
+      }
+      return null;
+    }
     this.ctx.logger.info(`[RemoteGateway] Auth token stored at ${this.ctx.authFile}`);
 
     return {
       ...primaryListener,
       token: this.ctx.token,
       authFile: this.ctx.authFile,
+      ...(controlListener ? { controlUrl: controlListener.url } : {}),
       browserUrl: browserListener?.url,
       browserError,
+      ...(loopbackClientListener ? { loopbackClientUrl: loopbackClientListener.url } : {}),
+      ...(loopbackClientError ? { loopbackClientError } : {}),
     };
   }
 
@@ -184,6 +223,8 @@ export class GatewayLifecycle {
         // Exact-path routing: the preview tunnel claims only its own path and
         // never steals terminal upgrades; everything unclaimed is destroyed.
         if (this.ctx.previewTunnel?.handleUpgrade(request, socket, head)) return;
+        // A leaf workspace's terminal relayed through this command node.
+        if (this.router.handleUpgrade?.(request, socket, head)) return;
         if (!this.ctx.terminalWebSocket.handleUpgrade(request, socket, head)) socket.destroy();
       } catch {
         this.ctx.logger.warn("[RemoteGateway] WebSocket upgrade failed");
@@ -322,5 +363,6 @@ export class GatewayLifecycle {
     );
     this.ctx.sockets.clear();
     this.ctx.servers.clear();
+    this.ctx.loopbackClientUrl = null;
   }
 }

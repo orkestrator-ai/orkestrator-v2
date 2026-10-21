@@ -36,11 +36,13 @@ describe("ErrorDetailsDialog", () => {
         title: "Build failed",
         message: "compiler output",
         initialPrompt: "retry prompt",
+        context: { project: "orkestrator-v2", environment: "build-env" },
         timestamp,
       },
     });
     render(<ErrorDetailsDialog />);
 
+    expect(screen.getByText("orkestrator-v2 / build-env")).toBeTruthy();
     const copyButtons = screen.getAllByRole("button", { name: "Copy" });
     fireEvent.click(copyButtons[0]!);
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("retry prompt"));
@@ -49,6 +51,7 @@ describe("ErrorDetailsDialog", () => {
       expect(writeText).toHaveBeenCalledWith(
         [
           "Build failed",
+          "orkestrator-v2 / build-env",
           "",
           "compiler output",
           "",

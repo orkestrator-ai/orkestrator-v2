@@ -76,12 +76,12 @@ function withoutAmbientGatewayCredentials(headers: Record<string, string>): Reco
 
 export function installRemoteGatewayRequestAuth(
   webRequest: Pick<WebRequest, "onBeforeSendHeaders" | "onHeadersReceived">,
-  getAuthorization: (url: string) => string | null,
+  getAuthorization: (url: string, webContentsId?: number) => string | null,
   options: { browserPreviewOnly?: boolean } = {},
 ): void {
   const filter = { urls: ["http://*/*", "https://*/*"] };
   webRequest.onBeforeSendHeaders(filter, (details, callback) => {
-    const authorization = getAuthorization(details.url);
+    const authorization = getAuthorization(details.url, details.webContentsId);
     if (!authorization) {
       callback({ requestHeaders: details.requestHeaders });
       return;
@@ -105,7 +105,7 @@ export function installRemoteGatewayRequestAuth(
     });
   });
   webRequest.onHeadersReceived(filter, (details, callback) => {
-    const authorization = getAuthorization(details.url);
+    const authorization = getAuthorization(details.url, details.webContentsId);
     if (
       !authorization ||
       !canAttachGatewayAuthorization(details, options.browserPreviewOnly === true)
@@ -125,4 +125,29 @@ export function installRemoteGatewayRequestAuth(
       },
     });
   });
+}
+
+// Electron keeps one effective listener per session/event. Panels on the same
+// machine deliberately share storage, while authorization belongs to a renderer.
+const scopedSessions = new WeakMap<object, Map<number, (url: string) => string | null>>();
+
+export function installScopedRemoteGatewayRequestAuth(
+  webRequest: Pick<WebRequest, "onBeforeSendHeaders" | "onHeadersReceived">,
+  webContentsId: number,
+  getAuthorization: (url: string) => string | null,
+): () => void {
+  let resolvers = scopedSessions.get(webRequest);
+  if (!resolvers) {
+    resolvers = new Map();
+    scopedSessions.set(webRequest, resolvers);
+    const byContents = resolvers;
+    installRemoteGatewayRequestAuth(webRequest, (url, id) =>
+      id === undefined ? null : (byContents.get(id)?.(url) ?? null),
+    );
+  }
+  resolvers.set(webContentsId, getAuthorization);
+  const current = resolvers;
+  return () => {
+    if (current.get(webContentsId) === getAuthorization) current.delete(webContentsId);
+  };
 }

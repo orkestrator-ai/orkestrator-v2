@@ -949,6 +949,12 @@ describe("TerminalWebSocketClient", () => {
     expect(socket.closes.at(-1)?.reason).toBe("Server sent an input frame");
   });
 
+  test("keeps a command node's relay prefix for a relayed leaf workspace", () => {
+    expect(terminalWebSocketUrl("https://desk.test/__orkestrator/nodes/bk_leaf")).toBe(
+      "wss://desk.test/__orkestrator/nodes/bk_leaf/__orkestrator/terminal",
+    );
+  });
+
   test("builds public and same-origin WebSocket URLs", () => {
     expect(terminalWebSocketUrl("https://example.test/gateway")).toBe(
       "wss://example.test/__orkestrator/terminal",

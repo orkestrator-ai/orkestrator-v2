@@ -330,3 +330,18 @@ test("the live coordinator suite runs only when asked for", () => {
     expect(read(workflow)).not.toContain("test:agent:coordinator");
   }
 });
+
+test("paused interaction qualification has an opt-in task and its helper regressions run by default", () => {
+  const tasks = miseTasks();
+  expect(tasks["test:agent:paused-interactions"]!.run).toBe(
+    "bunx playwright test --config e2e/agent-testing/playwright.paused-interactions.config.ts",
+  );
+  // Discovery loads the spec by default; billed turns still require the explicit flag.
+  expect(tasks["test:agent:paused-interactions"]!.env).toBeUndefined();
+  expect(read("scripts/test-all.ts")).toContain(
+    '"./e2e/agent-testing/paused-interactions-live-support.test.ts"',
+  );
+  expect(read("e2e/agent-testing/playwright.browser.config.ts")).not.toContain(
+    "paused-interactions-live.spec.ts",
+  );
+});

@@ -160,6 +160,21 @@ conformance matrix records but does not resolve.
    `Session acp-sess`, because the id is the `acp-session:` resume token. A Pi
    row without a name would show the start of a file path. Fall back to the
    row's detail, or a short form of the provider's own id.
+5. **Two OpenCode servers starting at once can lose one to "database is
+   locked".** Every local OpenCode server shares the user's
+   `opencode.db` under XDG data. On 2026-10-21, two OpenCode environments
+   whose first turns were dispatched together started their servers in the
+   same second. One exited before it became healthy (`Error: Unexpected error
+   … database is locked`, code 1), and `commands-servers.ts` stopped it as
+   "startup did not complete". The dispatch had already been accepted, and for
+   the five minutes the run waited the tab's turn neither started nor reached
+   `error`. Restoring several OpenCode tabs at app start, or a mixed panel,
+   can start servers together the same way. Retry a startup whose server
+   exits on a locked database, or serialise OpenCode server starts per host,
+   and surface a startup that fails for good as a turn error instead of a
+   silent wait. Found by `paused-interactions-live.spec.ts`, which now starts a
+   provider's cases one after the other (see
+   [agent-interactions-and-permissions.md](agent-interactions-and-permissions.md#live-pause-record-2026-10-21)).
 
 ### Qualification
 

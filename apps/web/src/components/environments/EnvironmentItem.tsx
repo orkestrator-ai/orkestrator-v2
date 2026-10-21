@@ -58,6 +58,8 @@ import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import { useLocalEnvironmentAvailable } from "@/hooks/useLocalEnvironmentAvailable";
 import { useEnvironmentChangeProjection } from "@/hooks/useChangeProjection";
 import { ChangeCountBadge } from "@/components/changes/ChangeCountBadge";
+import { MachineDot } from "@/components/federation/MachineDot";
+import { useFederation } from "@/components/federation/FederationProvider";
 import {
   changeLabel,
   changeReason,
@@ -119,7 +121,7 @@ export function resolveEnvironmentAgentActivity(
  * desktop context menu and the mobile actions dropdown, so an action added
  * here cannot be missing from one surface.
  */
-type EnvironmentMenuItem =
+export type EnvironmentMenuItem =
   | { key: string; separator: true }
   | {
       key: string;
@@ -143,7 +145,7 @@ type MenuItemComponent = ComponentType<{
 type MenuSeparatorComponent = ComponentType<Record<never, never>>;
 
 /** Renders `items` with whichever menu primitive the calling surface uses. */
-function EnvironmentMenuItems({
+export function EnvironmentMenuItems({
   items,
   Item,
   Separator,
@@ -268,6 +270,10 @@ export const EnvironmentItem = memo(function EnvironmentItem({
 }: EnvironmentItemProps) {
   const dockerAvailable = useDockerAvailability();
   const localEnvironmentAvailable = useLocalEnvironmentAvailable(environment.projectId);
+  // The owning machine's dot, before the name, whenever this client can show
+  // several machines. Identity, not activity.
+  const { boundMachine: windowMachine, supported: multiMachineClient } = useFederation();
+  const boundMachine = multiMachineClient ? windowMachine : null;
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
 
   // Get Claude activity state for this environment
@@ -579,6 +585,13 @@ export const EnvironmentItem = memo(function EnvironmentItem({
               )}
               <span className="flex min-w-0 flex-1 flex-col">
                 <span className="flex min-w-0 items-center gap-1.5">
+                  {boundMachine ? (
+                    <MachineDot
+                      colorToken={boundMachine.colorToken}
+                      machineName={boundMachine.name}
+                      status="This window"
+                    />
+                  ) : null}
                   <span
                     id={environmentNameId}
                     className={cn(

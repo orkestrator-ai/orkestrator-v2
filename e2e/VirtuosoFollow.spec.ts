@@ -53,3 +53,36 @@ async function distanceFromBottom(scroller: Locator) {
     (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
   );
 }
+
+test("a small wheel release stays unfollowed through growth inside the bottom band", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "requires desktop wheel input");
+  await page.goto("/virtuoso-follow");
+  const scroller = page.locator('[data-virtuoso-scroller="true"]');
+  const atBottom = page.getByTestId("virtuoso-at-bottom");
+  const decision = page.getByTestId("virtuoso-follow-decision");
+  await expect(atBottom).toHaveText("true");
+  await expect.poll(() => distanceFromBottom(scroller)).toBeLessThan(1);
+
+  await scroller.hover();
+  await page.mouse.wheel(0, -10);
+  await expect(atBottom).toHaveText("false");
+  await expect.poll(() => distanceFromBottom(scroller)).toBeGreaterThanOrEqual(1);
+  await expect.poll(() => distanceFromBottom(scroller)).toBeLessThan(50);
+  const releasedScrollTop = await scroller.evaluate((element) => element.scrollTop);
+
+  await page.getByRole("button", { name: "Append message" }).click();
+  await expect(page.getByTestId("virtuoso-follow-count")).toHaveText("81");
+  await expect(decision).toHaveText("false");
+  await expect
+    .poll(() => scroller.evaluate((element) => element.scrollTop))
+    .toBe(releasedScrollTop);
+  await expect(atBottom).toHaveText("false");
+
+  await scroller.evaluate((element) => element.scrollTo({ top: element.scrollHeight }));
+  await expect(atBottom).toHaveText("true");
+  await page.getByRole("button", { name: "Append message" }).click();
+  await expect(decision).toHaveText("auto");
+  await expect.poll(() => distanceFromBottom(scroller)).toBeLessThan(1);
+});

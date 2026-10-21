@@ -177,3 +177,69 @@ obtain a pass. Full evidence is in `orkestrator-test-run.aIlmtw` under the host
 temporary directory. Electron, design, CLI scenario and iOS suites were omitted
 because those implementation surfaces did not change in this second merge;
 credentialed provider probes retained their opt-ins.
+
+## Federated client main merge — 2026-10-21
+
+Pre-merge HEAD was `723e2d9e`; the incoming merge changed 94 paths, including
+backend, Electron, renderer, Docker, shared protocol and tests. Conflict
+resolution retained both connection-manager accessors and both branches'
+flake histories, consolidating duplicate index rows for the same case file.
+
+Every validation command below used `mise run test:logged -- --name <label> --`.
+The default suite used the testing guide's GNU-tool PATH and 4/1/2/1
+workspace/root/bridges/protocol slots. Bun owners used `--parallel=1`.
+
+| Label | Command | Result |
+| --- | --- | --- |
+| merge-format | `mise run format:check` | Passed, 0.3 s |
+| merge-lint | `mise run lint` | Passed, 0.5 s; existing repository warnings remain |
+| merge-types | `mise run typecheck` | Passed, 9.3 s |
+| merge-build | `mise run build` | Passed, 23.6 s |
+| merge-full | `mise run test` | 554.4 s; all workspace packages and protocol passed. Root failed on duplicate flake-index rows, corrected and its focused owner passed (1.5 s). Claude failed on the approved-exit fixture EISDIR; unchanged owner passed with the matching preload (1.2 s), recorded in 0513. |
+| merge-connections | `bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./tests/connection-manager.test.ts ./tests/preview-connection-backend.test.ts ./tests/preview-transport-manager.test.ts --parallel=1 --only-failures` | Passed, 2.9 s |
+| merge-component-browser | `mise run test:browser` | Passed, 212.5 s, including the public-site suite |
+| merge-electron | `mise run test:agent:electron` | 29 passed, one skipped, 253.1 s |
+| merge-agent-browser | `mise run test:agent:browser:isolated` | 28 passed, 42 skipped, one failed, 494.4 s including cleanup. Narrow Repository settings failed at the 15 s click deadline. |
+| merge-docker-build | `mise run docker:build:dev --profile merge-main-007d-docker` | Passed, 183.6 s |
+| merge-image-smoke | `bash docker/tests/final-image-smoke.sh orkestrator-v2:dev-37410d1d5703` | Passed, 3.6 s |
+| merge-docker | `mise run test:agent:docker` | Nine passed, two skipped, one failed, 73.6 s. Command-only seed-file check expected Docker cat exit 0 but received 1. |
+| merge-gateway-owner | `bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts browser-gateway.spec.ts --workers=1` | Complete unchanged owner: 18 passed, four skipped, two failed, 161.7 s. Seed-file check passed; narrow Repository settings and 390 px host maintenance navigation failed at 15 s click deadlines. |
+
+The gateway owner used `ORKESTRATOR_AGENT_TEST_DOCKER=1`,
+`ORKESTRATOR_AGENT_TEST_PROFILE=merge-main-007d-docker` and run ID
+`merge-main-007d-gateway-owner`. The Docker profile was created with
+`mise run dev:test --profile merge-main-007d-docker --fixture
+--fixture-environments local,container --no-agent-credentials
+--agent-platforms codex`. The isolated browser profile was
+`qa-browser-b8163a78-cfa`; its runner stopped and reset it after the suite.
+
+Compressed logs are below the host temporary directory:
+`orkestrator-test-run.nv2S2E/merge-full.log.gz` (group evidence in
+`orkestrator-test-run.0OlBGi`),
+`orkestrator-test-run.jEX8qK/merge-agent-browser.log.gz`,
+`orkestrator-test-run.9iyt7y/merge-docker.log.gz` and
+`orkestrator-test-run.DA97bD/merge-gateway-owner.log.gz`. Browser failure
+artifacts are under `output/agent-testing/<run-id>/browser/`.
+
+The seed-file failure did not repeat in the owning-file run, but that owner
+was still non-green, so this observation does not independently establish a
+flake. Its first read follows setup start, which can leave work running;
+setup timing is a hypothesis only. The narrow gateway failures remain
+unresolved, matching the navigation family in 0494. No assertion, timeout,
+skip or product implementation was changed to obtain these results.
+
+**Final repository verification:** with the same GNU-tool PATH,
+`mise run test:logged -- --name merge-final-full -- mise run test` passed
+all four groups, exit 0 in 396.0 seconds, after the registry correction.
+The merge target was `448800c662cba3067b3483c452931f22b039a638`. Final
+formatting, conflict-marker and local Markdown link-target checks passed.
+`bun install --frozen-lockfile` under the pinned mise runtime made no changes.
+
+Both disposable application profiles were stopped and reset. The Docker
+reset removed its two exact-owner containers, four volumes and one network;
+no test-profile launcher was retained. The Electron and image-smoke suites
+cleaned up their own temporary resources. Credentialed live-provider checks
+were not opted in; iOS and the separate published-CLI scenario matrix were
+not selected because this incoming merge did not change those implementations.
+The two narrow gateway navigation failures and initial Docker seed-file
+failure remain the validation limitations described above.

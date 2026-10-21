@@ -60,6 +60,16 @@ evidence. This file only points at it.
   an authorized Claude source adds a process-scoped access token. Only Pi
   shares a host file (its `auth.json`, in place). See
   [`credentials-and-models.md`](../development/credentials-and-models.md).
+
+  Codex approval rules previously leaked through the shared home too. On
+  2026-10-21 a profile run of
+  `paused-interactions-live.spec.ts` answered a Codex command approval with
+  the card's optional "Approve with command policy" choice (a harness bug,
+  since fixed). Codex then wrote `prefix_rule(... decision="allow")` into the
+  host's own `~/.codex/rules/default.rules`, and the next run's `touch` ran
+  on the host policy without asking. The file was created by that run and
+  removed afterwards. The isolated Codex home now covers `rules/` as well
+  as `config.toml`.
 - Agent-test isolation: `checkHostTool` (`apps/backend/src/core/host-tools.ts`)
   reports only managed binaries in an agent-test profile, but spawning does
   not match it. `resolveClaudeBinary`, `resolveCodexBinary`,

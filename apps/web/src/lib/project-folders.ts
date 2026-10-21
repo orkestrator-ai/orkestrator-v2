@@ -23,21 +23,21 @@ export {
  * no intermediate state for a client to observe.
  */
 
-export interface ProjectFolderEntry {
+export interface ProjectFolderEntry<P = Project> {
   kind: "folder";
   /** Display name, spelled the way the folder's first member spells it. */
   name: string;
   /** Case-insensitive identity, and the suffix of this folder's drag id. */
   key: string;
-  projects: Project[];
+  projects: P[];
 }
 
-export interface ProjectLeafEntry {
+export interface ProjectLeafEntry<P = Project> {
   kind: "project";
-  project: Project;
+  project: P;
 }
 
-export type ProjectTreeEntry = ProjectFolderEntry | ProjectLeafEntry;
+export type ProjectTreeEntry<P = Project> = ProjectFolderEntry<P> | ProjectLeafEntry<P>;
 
 /** Drag ids for folders are namespaced so they cannot collide with a project id. */
 export const PROJECT_FOLDER_ID_PREFIX = "project-folder:";
@@ -65,9 +65,11 @@ export function parseProjectFolderDragId(id: string): string | null {
  * later member, so members that are not adjacent in `order` still render as
  * one group. Input order is preserved otherwise.
  */
-export function buildProjectTree(projects: readonly Project[]): ProjectTreeEntry[] {
-  const entries: ProjectTreeEntry[] = [];
-  const foldersByKey = new Map<string, ProjectFolderEntry>();
+export function buildProjectTree<P extends Pick<Project, "folder">>(
+  projects: readonly P[],
+): ProjectTreeEntry<P>[] {
+  const entries: ProjectTreeEntry<P>[] = [];
+  const foldersByKey = new Map<string, ProjectFolderEntry<P>>();
   for (const project of projects) {
     const folder = normalizeProjectFolderName(project.folder);
     if (!folder) {
@@ -80,7 +82,7 @@ export function buildProjectTree(projects: readonly Project[]): ProjectTreeEntry
       existing.projects.push(project);
       continue;
     }
-    const entry: ProjectFolderEntry = { kind: "folder", name: folder, key, projects: [project] };
+    const entry: ProjectFolderEntry<P> = { kind: "folder", name: folder, key, projects: [project] };
     foldersByKey.set(key, entry);
     entries.push(entry);
   }

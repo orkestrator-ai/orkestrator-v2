@@ -84,3 +84,7 @@
   passed unchanged (3 tests, exit 0, 1.2 s logged).
 - **Assessment:** confirms the existing intermittent fixture lifecycle timeout.
   Shared-host contention remains a hypothesis; no assertion, timeout or skip changed.
+
+## Two-column report main merge — 2026-10-21
+
+ACP filesystem/terminal generalization hit its 60-second hook deadline (60,013.01 ms); its complete unchanged owner passed with the Node preload in 1.6 seconds (`merge-acp-owner`). See [0629](0629-two-column-main-merge-validation.md) for commands, worker configuration, counts and evidence. No source, assertion, timeout or skip changed.

@@ -1,7 +1,7 @@
 # Reviewer Refresh timeout test misses the next request in aggregate
 
-- **ID:** 0626.
-- **Status:** open.
+- **ID:** 0628
+- **Status:** open
 - **Test:** `MultiReviewReviewerTab > re-arms Refresh after a transcript request times out`.
 - **Owner:** `apps/web/src/components/review/MultiReviewReviewerTab.behavior.test.tsx:556`.
 - **Observation date:** 2026-10-21.

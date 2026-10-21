@@ -1,3 +1,5 @@
+import { RemoteMachineTreeFixture } from "../../apps/web/src/test/RemoteMachineTreeFixture";
+import { NativeAttachmentsFixture } from "./NativeAttachmentsFixture";
 import { ChangeTrackingFixture, installChangeTrackingFixture } from "./changeTracking";
 import { StructuredReviewLayoutFixture } from "./StructuredReviewLayoutFixture";
 import { ClaudeInteractionsFixture } from "./ClaudeInteractionsFixture";
@@ -1708,6 +1710,7 @@ function fixtureForPath() {
       </Suspense>
     );
   }
+  if (window.location.pathname === "/remote-machine-tree") return <RemoteMachineTreeFixture />;
   if (window.location.pathname === "/connections-settings") return <ConnectionsSettingsFixture />;
   if (window.location.pathname === "/fullscreen-settings") return <FullscreenSettingsFixture />;
   if (window.location.pathname === "/global-settings") return <GlobalSettingsFixture />;
@@ -1767,6 +1770,7 @@ function fixtureForPath() {
   if (window.location.pathname === "/native-hydrating-preview") {
     return <NativeHydratingPreviewFixture />;
   }
+  if (window.location.pathname === "/native-attachments") return <NativeAttachmentsFixture />;
   if (window.location.pathname === "/monaco-runtime") return <MonacoRuntimeFixture />;
   if (window.location.pathname === "/claude-interactions") return <ClaudeInteractionsFixture />;
   if (window.location.pathname === "/styles") return <GlobalStylesFixture />;

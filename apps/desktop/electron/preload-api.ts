@@ -8,6 +8,7 @@ import type {
 } from "@orkestrator/protocol/browser-preview";
 import {
   parseConnectionList,
+  type ConnectSshRouteInput,
   type ConnectToRemoteInput,
   type ConnectionList,
 } from "@orkestrator/protocol/connections";
@@ -25,25 +26,75 @@ type EventCallback<T> = (payload: T) => void;
 
 export type IpcRendererLike = {
   invoke<T = unknown>(channel: string, ...args: unknown[]): Promise<T>;
-  on(channel: string, listener: (event: unknown, name: string, payload: unknown) => void): void;
+  on(channel: string, listener: (event: unknown, ...args: any[]) => void): void;
+  send?(channel: string, ...args: unknown[]): void;
 };
+
+/** Main-process snapshot of the window's machine; never contains a credential. */
+type DesktopGatewaySnapshot = {
+  baseUrl: string | null;
+  connectionId: string;
+  backendId: string | null;
+  legacyOrigin: string | null;
+  panel: boolean;
+};
+
+function readGatewaySnapshot(ipcRenderer: {
+  sendSync(channel: string): unknown;
+}): DesktopGatewaySnapshot | null {
+  try {
+    const value = ipcRenderer.sendSync("orkestrator:connections:gateway-sync") as Record<
+      string,
+      unknown
+    > | null;
+    if (!value || typeof value !== "object" || typeof value.connectionId !== "string") return null;
+    const text = (field: unknown) => (typeof field === "string" && field ? field : null);
+    return {
+      baseUrl: text(value.baseUrl),
+      connectionId: value.connectionId,
+      backendId: text(value.backendId),
+      legacyOrigin: text(value.legacyOrigin),
+      panel: value.panel === true,
+    };
+  } catch {
+    return null;
+  }
+}
 
 export function exposeActiveConnectionGateway(
   contextBridge: { exposeInMainWorld(key: string, value: unknown): void },
   ipcRenderer: { sendSync(channel: string): unknown },
 ): boolean {
-  let connectionList: ConnectionList;
+  let connectionList: ConnectionList | null = null;
   try {
     connectionList = parseConnectionList(ipcRenderer.sendSync("orkestrator:connections:list-sync"));
   } catch {
-    return false;
+    // A workspace snapshot is authoritative even without a saved catalogue.
   }
-  const activeConnection = connectionList.connections.find((connection) => connection.active);
-  if (activeConnection?.kind !== "remote" || !activeConnection.address) return false;
+  const snapshot = readGatewaySnapshot(ipcRenderer);
+  if (snapshot) {
+    // Stable storage identity for presentation state: the machine, never a
+    // route or an ephemeral forwarded port.
+    contextBridge.exposeInMainWorld("orkestratorDesktopIdentity", {
+      connectionId: snapshot.connectionId,
+      backendId: snapshot.backendId,
+      legacyOrigin: snapshot.legacyOrigin,
+      panel: snapshot.panel,
+    });
+  }
+  const activeConnection = connectionList?.connections.find((connection) => connection.active);
+  if (!snapshot?.baseUrl && activeConnection?.kind !== "remote") return false;
+  const baseUrl = snapshot?.baseUrl ?? activeConnection?.address;
+  if (!baseUrl) return false;
   contextBridge.exposeInMainWorld("orkestratorGateway", {
     enabled: true,
     desktop: true,
-    baseUrl: activeConnection.address,
+    baseUrl,
+    // A tunnelled route's local port can change after a reconnect; direct
+    // URLs re-resolve it instead of keeping the port from page load.
+    ...(snapshot
+      ? { resolveBaseUrl: () => readGatewaySnapshot(ipcRenderer)?.baseUrl ?? baseUrl }
+      : {}),
   });
   return true;
 }
@@ -131,6 +182,51 @@ export function createArtifactHostApi(ipcRenderer: IpcRendererLike): ArtifactHos
     close: (hostId) => ipcRenderer.invoke(ARTIFACT_HOST_CHANNELS.close, hostId),
     onEvent(listener) {
       subscribe();
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
+}
+
+export type PanelEvent = { panelId: string; type: "closed" | "crashed" | "load-failed" };
+
+/** `window.orkestrator.panels`: backend-scoped workspace panels in this window. */
+export function createPanelsApi(ipcRenderer: IpcRendererLike) {
+  const listeners = new Set<(event: PanelEvent) => void>();
+  let subscribed = false;
+  return {
+    open(input: {
+      connectionId: string;
+      projectId?: string;
+      environmentId?: string;
+    }): Promise<{ panelId: string }> {
+      return ipcRenderer.invoke("orkestrator:panels:open", input);
+    },
+    setBounds(
+      panelId: string,
+      bounds: { x: number; y: number; width: number; height: number },
+    ): Promise<void> {
+      return ipcRenderer.invoke("orkestrator:panels:set-bounds", panelId, bounds);
+    },
+    setVisible(panelId: string, visible: boolean): Promise<void> {
+      return ipcRenderer.invoke("orkestrator:panels:set-visible", panelId, visible);
+    },
+    close(panelId: string): Promise<void> {
+      return ipcRenderer.invoke("orkestrator:panels:close", panelId);
+    },
+    onEvent(listener: (event: PanelEvent) => void): () => void {
+      if (!subscribed) {
+        subscribed = true;
+        ipcRenderer.on("orkestrator:panels:event", (_event, payload: unknown) => {
+          if (!payload || typeof payload !== "object") return;
+          const { panelId, type } = payload as Record<string, unknown>;
+          if (typeof panelId !== "string") return;
+          if (type !== "closed" && type !== "crashed" && type !== "load-failed") return;
+          for (const callback of listeners) callback({ panelId, type });
+        });
+      }
       listeners.add(listener);
       return () => {
         listeners.delete(listener);
@@ -237,7 +333,64 @@ export function createOrkestratorElectronApi(ipcRenderer: IpcRendererLike) {
       openWindow(connectionId: string): Promise<void> {
         return ipcRenderer.invoke("orkestrator:connections:open-window", connectionId);
       },
+      connectSsh(input: ConnectSshRouteInput): Promise<ConnectionList> {
+        return ipcRenderer.invoke("orkestrator:connections:connect-ssh", input);
+      },
+      probeSshHostKey(input: { destination: string; sshPort?: number }): Promise<{
+        probeId: string;
+        destination: string;
+        fingerprints: Array<{ type: string; fingerprint: string }>;
+      }> {
+        return ipcRenderer.invoke("orkestrator:connections:ssh-probe-host-key", input);
+      },
+      trustSshHostKey(probeId: string): Promise<{ added: number }> {
+        return ipcRenderer.invoke("orkestrator:connections:ssh-trust-host-key", probeId);
+      },
+      removeRoute(connectionId: string, routeId: string): Promise<ConnectionList> {
+        return ipcRenderer.invoke("orkestrator:connections:remove-route", connectionId, routeId);
+      },
+      setRouteOrder(connectionId: string, routeIds: string[]): Promise<ConnectionList> {
+        return ipcRenderer.invoke(
+          "orkestrator:connections:set-route-order",
+          connectionId,
+          routeIds,
+        );
+      },
+      setRouteEnabled(
+        connectionId: string,
+        routeId: string,
+        enabled: boolean,
+      ): Promise<ConnectionList> {
+        return ipcRenderer.invoke(
+          "orkestrator:connections:set-route-enabled",
+          connectionId,
+          routeId,
+          enabled,
+        );
+      },
+      useRoute(connectionId: string, routeId: string): Promise<ConnectionList> {
+        return ipcRenderer.invoke("orkestrator:connections:use-route", connectionId, routeId);
+      },
+      setAutoConnect(connectionId: string, autoConnect: boolean): Promise<ConnectionList> {
+        return ipcRenderer.invoke(
+          "orkestrator:connections:set-auto-connect",
+          connectionId,
+          autoConnect,
+        );
+      },
+      setFeatures(features: {
+        federation?: boolean;
+        sshRoutes?: boolean;
+        routeFallback?: boolean;
+      }): Promise<ConnectionList> {
+        return ipcRenderer.invoke("orkestrator:connections:set-features", features);
+      },
+      answerSshPrompt(promptId: string, answer: string | null): void {
+        ipcRenderer.send?.("orkestrator:ssh-prompt-answer", promptId, answer);
+      },
     },
+
+    panels: createPanelsApi(ipcRenderer),
 
     process: {
       exit(code?: number): Promise<void> {

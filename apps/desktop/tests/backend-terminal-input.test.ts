@@ -321,3 +321,35 @@ describe("Electron terminal HTTP input", () => {
     expect(bodies.at(-1)!.args.data).toBe("fresh");
   });
 });
+
+describe("route changes", () => {
+  test("OP-03: a route change keeps the ambiguous-input fence; no keystroke is replayed", async () => {
+    const urls: string[] = [];
+    let failFirst = true;
+    globalThis.fetch = Object.assign(
+      mock(async (url: unknown, init?: RequestInit) => {
+        urls.push(new URL(String(url)).origin);
+        const body = JSON.parse(String(init?.body)) as Body;
+        if (body.command === "terminal_write" && failFirst) {
+          failFirst = false;
+          throw new TypeError("connection reset");
+        }
+        return delivered();
+      }),
+      { preconnect: originalFetch.preconnect },
+    );
+    const client = new BackendHttpClient("http://127.0.0.1:41001/", "fixture-token");
+    const lost = await outcome(
+      client.invoke("terminal_write", { sessionId: "route", data: "rm -rf build\r" }),
+    );
+    expect(lost).toBeInstanceOf(Error);
+    // The tunnel moved to another local port (same backend, same generation).
+    client.retarget("http://127.0.0.1:41002/", "fixture-token", { preserveCursor: true });
+    const after = await outcome(
+      client.invoke("terminal_write", { sessionId: "route", data: "ls\r" }),
+    );
+    // Still fenced: the uncertain write is neither resent nor overtaken.
+    expect(after).toBeInstanceOf(Error);
+    expect(urls).toEqual(["http://127.0.0.1:41001"]);
+  });
+});

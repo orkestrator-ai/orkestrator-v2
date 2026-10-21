@@ -762,6 +762,59 @@ describe("SSH routes", () => {
     connections.dispose();
   });
 
+  test("CT-02: two tunnels on one loopback host never share a credential", async () => {
+    installGateways({
+      "http://127.0.0.1:45011": { installationId: "bk_one", token: "token-for-machine-one" },
+      "http://127.0.0.1:45012": { installationId: "bk_two", token: "token-for-machine-two" },
+    });
+    const origins = ["http://127.0.0.1:45011", "http://127.0.0.1:45012"];
+    let next = 0;
+    const provider: SshTunnelProvider = {
+      acquire: mock(async () => ({
+        localOrigin: origins[next++]!,
+        release: () => undefined,
+        onClosed: () => () => undefined,
+      })),
+    };
+    const connections = manager(new MemoryStore(catalogue([])), { sshTunnels: provider });
+    await connections.initialize();
+    await connections.bind("window-one", "local");
+    await connections.bind("window-two", "local");
+    await connections.connectSsh(
+      {
+        destination: "one",
+        remoteGatewayPort: 34125,
+        token: "token-for-machine-one",
+        select: true,
+      },
+      "window-one",
+    );
+    await connections.connectSsh(
+      {
+        destination: "two",
+        remoteGatewayPort: 34125,
+        token: "token-for-machine-two",
+        select: true,
+      },
+      "window-two",
+    );
+    const path = "/__orkestrator/proxy/loopback/3000/";
+    expect(connections.getRendererRequestAuthorization(`${origins[0]}${path}`, "window-one")).toBe(
+      "Bearer token-for-machine-one",
+    );
+    // Same host, other port: no credential crosses between the machines.
+    expect(
+      connections.getRendererRequestAuthorization(`${origins[1]}${path}`, "window-one"),
+    ).toBeNull();
+    expect(
+      connections.getRendererRequestAuthorization(`${origins[0]}${path}`, "window-two"),
+    ).toBeNull();
+    expect(connections.getRendererRequestAuthorization(`${origins[1]}${path}`, "window-two")).toBe(
+      "Bearer token-for-machine-two",
+    );
+    connections.dispose();
+  });
+
   test("WB-02 analogue: a client without SSH support reports the route unsupported", async () => {
     installGateways({});
     const store = new MemoryStore(

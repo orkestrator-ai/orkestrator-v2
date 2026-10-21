@@ -9,6 +9,15 @@ import type { ConnectionList, ConnectionSummary } from "@orkestrator/protocol/co
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { errorCode } from "./SshRouteDialog";
 import { MachineDot } from "@/components/federation/MachineDot";
 import { useFederation } from "@/components/federation/FederationProvider";
 import { updateBackendProfile } from "@/lib/backend";
@@ -102,6 +111,13 @@ export function MachineDetails({
     }
   };
 
+  const [review, setReview] = useState<{
+    routeId: string;
+    probeId: string;
+    destination: string;
+    fingerprints: Array<{ type: string; fingerprint: string }>;
+  } | null>(null);
+
   const routeAction = async (
     routeId: string,
     action: () => Promise<ConnectionList> | undefined,
@@ -111,10 +127,42 @@ export function MachineDetails({
       const next = await action();
       if (next) publishConnections(next);
     } catch (error) {
-      toast.error("Could not update the connection method", { description: message(error) });
+      const route = (connection.routes ?? []).find((candidate) => candidate.id === routeId);
+      // A first-use host key on an existing SSH route gets the same explicit
+      // fingerprint review as onboarding, never an automatic accept.
+      if (
+        errorCode(error) === "host-key-unknown" &&
+        route?.sshDestination &&
+        api?.probeSshHostKey
+      ) {
+        try {
+          const probe = await api.probeSshHostKey({
+            destination: route.sshDestination,
+            ...(route.sshPort ? { sshPort: route.sshPort } : {}),
+          });
+          setReview({ routeId, ...probe });
+        } catch (probeError) {
+          toast.error("Could not read the SSH host key", { description: message(probeError) });
+        }
+      } else {
+        toast.error("Could not update the connection method", { description: message(error) });
+      }
     } finally {
       setBusyRoute(null);
     }
+  };
+
+  const trustAndRetry = async () => {
+    if (!review || !api?.trustSshHostKey) return;
+    const { routeId, probeId } = review;
+    setReview(null);
+    try {
+      await api.trustSshHostKey(probeId);
+    } catch (error) {
+      toast.error("Could not trust the host key", { description: message(error) });
+      return;
+    }
+    await routeAction(routeId, () => api.useRoute?.(connection.id, routeId));
   };
 
   const routes = connection.routes ?? [];
@@ -225,6 +273,32 @@ export function MachineDetails({
       </div>
 
       <MachineDiagnostics connection={connection} />
+      <Dialog open={review !== null} onOpenChange={(open) => !open && setReview(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Verify the SSH host key</DialogTitle>
+            <DialogDescription>
+              First connection to <span className="font-mono">{review?.destination}</span>. Compare
+              the fingerprint with the machine before trusting it.
+            </DialogDescription>
+          </DialogHeader>
+          <ul className="space-y-1 rounded-md border border-zinc-800 bg-zinc-950/60 p-3 font-mono text-xs">
+            {review?.fingerprints.map((entry) => (
+              <li key={entry.fingerprint}>
+                {entry.type} {entry.fingerprint}
+              </li>
+            ))}
+          </ul>
+          <DialogFooter>
+            <Button type="button" variant="ghost" onClick={() => setReview(null)}>
+              Don’t trust
+            </Button>
+            <Button type="button" onClick={() => void trustAndRetry()}>
+              Trust and connect
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {connection.kind === "remote" && showRoutes ? (
         <div className="space-y-2">

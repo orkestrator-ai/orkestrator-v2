@@ -18,8 +18,10 @@ import { useMachineViews } from "./useMachineViews";
  */
 export function MachinePanelsRegion() {
   const panels = useMachineViewStore((state) => state.panels);
-  const { kind } = useFederation();
-  if (panels.length === 0 || kind === "none") return null;
+  const { kind, enabled } = useFederation();
+  // With multi-machine views off, panels are hidden (and their observation
+  // released); the outer layout is kept for when they are turned back on.
+  if (panels.length === 0 || kind === "none" || !enabled) return null;
   return (
     <div className="flex h-full min-w-0 flex-1" data-testid="machine-panels">
       {panels.map((panel) => (

@@ -16,7 +16,7 @@ import { createStore, type StoreApi } from "zustand/vanilla";
 import type { ConnectionList, ConnectionSummary } from "@orkestrator/protocol/connections";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import type { BackendClient } from "./backend-client";
-import { BackendRuntime } from "./backend-runtime";
+import { BackendRuntime, type SummaryPersistence } from "./backend-runtime";
 
 export type BackendClientFactory = (connection: ConnectionSummary) => BackendClient | null;
 
@@ -36,7 +36,10 @@ export class BackendClientRegistry {
   private readonly runtimes = new Map<string, BackendRuntime>();
   private readonly demandReleases = new Map<string, () => void>();
 
-  constructor(private readonly createClient: BackendClientFactory) {}
+  constructor(
+    private readonly createClient: BackendClientFactory,
+    private readonly persistence: SummaryPersistence | null = null,
+  ) {}
 
   /**
    * Reconcile with the connection layer. Every other saved machine gets a
@@ -59,10 +62,14 @@ export class BackendClientRegistry {
     let changed =
       this.store.getState().boundConnectionId !== boundConnectionId ||
       this.store.getState().enabled !== options.enabled;
+    const saved = new Set(list.connections.map((connection) => connection.id));
     for (const [connectionId, runtime] of Array.from(this.runtimes)) {
       if (wanted.has(connectionId)) continue;
       this.demandReleases.get(connectionId)?.();
       this.demandReleases.delete(connectionId);
+      // Forgotten on this device: drop its cached summaries. Merely hidden
+      // (federation off, auto-connect off) keeps them for next time.
+      if (!saved.has(connectionId)) runtime.forgetLastKnown();
       runtime.dispose();
       this.runtimes.delete(connectionId);
       changed = true;
@@ -75,7 +82,7 @@ export class BackendClientRegistry {
       }
       const client = this.createClient(connection);
       if (!client) continue;
-      const runtime = new BackendRuntime({ client, connection });
+      const runtime = new BackendRuntime({ client, connection, persistence: this.persistence });
       this.runtimes.set(connectionId, runtime);
       this.demandReleases.set(connectionId, runtime.acquireSummaryDemand());
       changed = true;

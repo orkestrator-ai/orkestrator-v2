@@ -9,6 +9,7 @@ import { subscribeToConnections } from "@/lib/connections";
 import { FALLBACK_MACHINE_COLOR, defaultMachineColor } from "@orkestrator/protocol/backend-profile";
 import { createDesktopBackendClient, desktopBackendsApi } from "@/lib/federation/backend-client";
 import { BackendClientRegistry } from "@/lib/federation/registry";
+import type { SummaryPersistence } from "@/lib/federation/backend-runtime";
 import { isMachinePanelRealm } from "@/lib/federation/panel-realm";
 import {
   browserFederationList,
@@ -31,6 +32,22 @@ export interface FederationContextValue {
 }
 
 const FederationContext = createContext<FederationContextValue | null>(null);
+
+const SUMMARY_KEY_PREFIX = "federation-summary:v1:";
+
+/** Last-known machine summaries in this client's storage (names and states only). */
+function localSummaryPersistence(): SummaryPersistence | null {
+  if (typeof window === "undefined") return null;
+  const key = (backendId: string) => `${SUMMARY_KEY_PREFIX}${backendId}`;
+  return {
+    load: (backendId) => {
+      const text = window.localStorage.getItem(key(backendId));
+      return text ? (JSON.parse(text) as unknown) : null;
+    },
+    save: (backendId, value) => window.localStorage.setItem(key(backendId), JSON.stringify(value)),
+    remove: (backendId) => window.localStorage.removeItem(key(backendId)),
+  };
+}
 
 function clientKind(): FederationContextValue["kind"] {
   if (typeof window === "undefined" || isMachinePanelRealm()) return "none";
@@ -59,7 +76,7 @@ export function FederationProvider({ children }: { children: ReactNode }) {
         if (kind === "desktop") return createDesktopBackendClient(connection.id);
         if (kind === "browser") return createBrowserMachineClient(connection.id);
         return null;
-      }),
+      }, localSummaryPersistence()),
     [kind],
   );
   const [list, setList] = useState<ConnectionList | null>(null);

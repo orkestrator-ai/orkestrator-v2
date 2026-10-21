@@ -368,11 +368,11 @@ describe("OP-06: closing a machine panel releases observation only", () => {
       projectId: "project-1",
       environmentId: "env-1",
     });
-    await waitFor(() => expect(screen.queryByText("Opening…")).toBeNull());
+    await waitFor(() => expect(screen.queryByText("Opening…") === null).toBe(true));
 
     fireEvent.click(screen.getByRole("button", { name: /^Close feature panel\./ }));
     await waitFor(() => expect(fake.panels.close).toHaveBeenCalledWith("native-panel-1"));
-    expect(screen.queryByTestId("machine-panels")).toBeNull();
+    expect(screen.queryByTestId("machine-panels") === null).toBe(true);
     expect(useMachineViewStore.getState().panels).toEqual([]);
     expect(fake.calls.filter((call) => call.command.startsWith("stop_"))).toEqual([]);
     expect(fake.calls.filter((call) => call.command.startsWith("delete_"))).toEqual([]);
@@ -397,7 +397,7 @@ describe("SH-03: SSH prompts", () => {
 
     expect(fake.connections.answerSshPrompt).toHaveBeenCalledTimes(1);
     expect(fake.connections.answerSshPrompt).toHaveBeenCalledWith("prompt-1", "s3cret");
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("dialog") === null).toBe(true));
   });
 
   test("SH-03: cancelling a prompt answers null exactly once", async () => {
@@ -412,7 +412,7 @@ describe("SH-03: SSH prompts", () => {
 
     expect(fake.connections.answerSshPrompt).toHaveBeenCalledTimes(1);
     expect(fake.connections.answerSshPrompt).toHaveBeenCalledWith("prompt-2", null);
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("dialog") === null).toBe(true));
   });
 });
 
@@ -436,15 +436,15 @@ describe("Unknown outcomes", () => {
     expect(
       within(screen.getByRole("region", { name: "Machine B projects" })).queryByTestId(
         "unknown-outcomes",
-      ),
-    ).toBeNull();
+      ) === null,
+    ).toBe(true);
     await waitFor(() => expect(mockToastWarning).toHaveBeenCalledTimes(1));
     expect(String(mockToastWarning.mock.calls[0]![0])).toContain("Machine A");
     expect(fake.callsTo("a", "start_environment_background")).toHaveLength(1);
     expect(fake.callsTo("b", "start_environment_background")).toHaveLength(0);
 
     fireEvent.click(within(notice).getByRole("button", { name: "Dismiss Start environment" }));
-    await waitFor(() => expect(screen.queryByTestId("unknown-outcomes")).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId("unknown-outcomes") === null).toBe(true));
     expect(fake.callsTo("a", "start_environment_background")).toHaveLength(1);
   });
 });

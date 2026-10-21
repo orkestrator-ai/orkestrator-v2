@@ -180,7 +180,7 @@ describe("Electron packaging configuration", () => {
     );
     expect(desktopMain.indexOf("await getMacOsPermissions()")).toBeGreaterThan(-1);
     expect(desktopMain.indexOf("await getMacOsPermissions()")).toBeLessThan(
-      desktopMain.indexOf("backend = await backendProcess.start"),
+      desktopMain.indexOf("backend = await startLocal()"),
     );
   });
 

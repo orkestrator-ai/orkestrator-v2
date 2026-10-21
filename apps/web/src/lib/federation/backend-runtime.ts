@@ -180,10 +180,61 @@ export function toFederatedEnvironment(
   };
 }
 
+/** Where a runtime keeps its last-known summaries between sessions. */
+export interface SummaryPersistence {
+  load(backendId: BackendId): unknown;
+  save(backendId: BackendId, value: unknown): void;
+  remove(backendId: BackendId): void;
+}
+
+export const MAX_PERSISTED_SUMMARY_BYTES = 256 * 1024;
+
+type PersistedSummary = {
+  version: 1;
+  savedAt: number;
+  projects: FederatedProject[];
+  environments: Array<[string, FederatedEnvironment[]]>;
+  truncated: boolean;
+};
+
+function parsePersistedSummary(value: unknown, backendId: BackendId): PersistedSummary | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Partial<PersistedSummary>;
+  if (record.version !== 1 || typeof record.savedAt !== "number") return null;
+  if (!Array.isArray(record.projects) || !Array.isArray(record.environments)) return null;
+  const projects = record.projects
+    .slice(0, MAX_SUMMARY_PROJECTS)
+    .flatMap((project) =>
+      project && typeof project === "object" && project.ref?.backendId === backendId
+        ? [project]
+        : [],
+    );
+  const environments = record.environments
+    .slice(0, MAX_SUMMARY_PROJECTS)
+    .flatMap((entry): Array<[string, FederatedEnvironment[]]> => {
+      if (!Array.isArray(entry) || typeof entry[0] !== "string" || !Array.isArray(entry[1])) {
+        return [];
+      }
+      // Never adopt rows recorded for another machine.
+      const rows = (entry[1] as FederatedEnvironment[])
+        .slice(0, MAX_SUMMARY_ENVIRONMENTS_PER_PROJECT)
+        .filter((row) => row?.ref?.backendId === backendId);
+      return [[entry[0], rows]];
+    });
+  return {
+    version: 1,
+    savedAt: record.savedAt,
+    projects,
+    environments,
+    truncated: record.truncated === true,
+  };
+}
+
 export type BackendRuntimeOptions = {
   client: BackendClient;
   connection: ConnectionSummary;
   now?: () => number;
+  persistence?: SummaryPersistence | null;
 };
 
 export class BackendRuntime {
@@ -204,11 +255,13 @@ export class BackendRuntime {
   private readAbort = new AbortController();
   private disposed = false;
   private readonly now: () => number;
+  private readonly persistence: SummaryPersistence | null;
 
   constructor(options: BackendRuntimeOptions) {
     this.connectionId = options.connection.id;
     this.api = options.client;
     this.now = options.now ?? Date.now;
+    this.persistence = options.persistence ?? null;
     const backendId = backendIdForConnection(options.connection);
     this.recovery = new OperationRecovery(backendId);
     this.store = createStore<MachineSummaryState>(() => ({
@@ -223,6 +276,61 @@ export class BackendRuntime {
       truncated: false,
       epoch: 0,
     }));
+    this.restoreLastKnown();
+  }
+
+  /**
+   * Last-known summaries from an earlier session, labelled stale until this
+   * machine answers. Only rows recorded for this exact identity are adopted.
+   */
+  private restoreLastKnown(): void {
+    const state = this.store.getState();
+    if (!this.persistence) return;
+    const transport = state.connection.transport;
+    if (transport === "authentication-required" || transport === "trust-blocked") {
+      this.persistence.remove(state.backendId);
+      return;
+    }
+    let saved: PersistedSummary | null = null;
+    try {
+      saved = parsePersistedSummary(this.persistence.load(state.backendId), state.backendId);
+    } catch {
+      saved = null;
+    }
+    if (!saved) return;
+    this.store.setState({
+      projects: saved.projects,
+      environmentsByProject: new Map(saved.environments),
+      loadedAt: saved.savedAt,
+      truncated: saved.truncated,
+      freshness: "stale",
+    });
+  }
+
+  private persistLastKnown(): void {
+    if (!this.persistence) return;
+    const state = this.store.getState();
+    const value: PersistedSummary = {
+      version: 1,
+      savedAt: state.loadedAt ?? this.now(),
+      projects: state.projects,
+      environments: Array.from(state.environmentsByProject.entries()),
+      truncated: state.truncated,
+    };
+    try {
+      if (JSON.stringify(value).length > MAX_PERSISTED_SUMMARY_BYTES) {
+        this.persistence.remove(state.backendId);
+        return;
+      }
+      this.persistence.save(state.backendId, value);
+    } catch {
+      // Storage full or unavailable: last-known state just isn't kept.
+    }
+  }
+
+  /** The machine was forgotten on this device: its cached summaries go too. */
+  forgetLastKnown(): void {
+    this.persistence?.remove(this.store.getState().backendId);
   }
 
   get id(): BackendId {
@@ -278,6 +386,7 @@ export class BackendRuntime {
       // A rejected credential or broken trust is not an offline state: drop
       // protected content rather than keep showing it as merely stale.
       this.prefetch.clear();
+      this.persistence?.remove(previous.backendId);
       this.store.setState({
         connection,
         projects: [],
@@ -555,6 +664,7 @@ export class BackendRuntime {
             : "stale",
         truncated,
       });
+      this.persistLastKnown();
     } catch (error) {
       if (this.disposed) return;
       this.store.setState((current) => ({

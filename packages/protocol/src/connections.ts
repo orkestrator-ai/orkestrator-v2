@@ -46,6 +46,9 @@ export interface ConnectionRouteSummary {
   blockedReason?: string;
   /** False in a client that cannot use this kind of route (an SSH route in a browser). */
   supported: boolean;
+  /** SSH routes: the user's own destination/alias and optional port (never key material). */
+  sshDestination?: string;
+  sshPort?: number;
 }
 
 export interface ConnectionProfileSummary {
@@ -404,6 +407,13 @@ function parseFederatedSummaryFields(
         return [];
       }
       const blockedReason = boundedOptionalText(record.blockedReason);
+      const sshDestination = boundedOptionalText(record.sshDestination);
+      const sshPort =
+        Number.isSafeInteger(record.sshPort) &&
+        (record.sshPort as number) > 0 &&
+        (record.sshPort as number) <= 65_535
+          ? (record.sshPort as number)
+          : undefined;
       return [
         {
           id,
@@ -413,6 +423,8 @@ function parseFederatedSummaryFields(
           active: record.active === true,
           supported: record.supported !== false,
           ...(blockedReason ? { blockedReason } : {}),
+          ...(sshDestination ? { sshDestination } : {}),
+          ...(sshPort ? { sshPort } : {}),
         },
       ];
     });

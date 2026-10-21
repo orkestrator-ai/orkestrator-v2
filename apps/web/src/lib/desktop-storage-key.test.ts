@@ -91,3 +91,19 @@ describe("machine-identity storage keys", () => {
     expect(desktopConnectionStorageKey("ui-storage")).toBe(first);
   });
 });
+
+describe("hosted-browser machine panels", () => {
+  test("ID-01: a panel frame namespaces its state by machine, the page keeps its keys", () => {
+    const happyDOM = (window as unknown as { happyDOM: { setURL(url: string): void } }).happyDOM;
+    const original = window.location.href;
+    happyDOM.setURL("http://127.0.0.1:47101/?panel=workspace&machine=machine-b&project=p");
+    const panelKey = desktopConnectionStorageKey("ui-storage");
+    happyDOM.setURL("http://127.0.0.1:47101/?panel=workspace&machine=machine-c&project=p");
+    const otherPanelKey = desktopConnectionStorageKey("ui-storage");
+    happyDOM.setURL("http://127.0.0.1:47101/");
+    expect(panelKey).toStartWith("ui-storage:machine:");
+    expect(otherPanelKey).not.toBe(panelKey);
+    expect(desktopConnectionStorageKey("ui-storage")).toBe("ui-storage");
+    happyDOM.setURL(original);
+  });
+});

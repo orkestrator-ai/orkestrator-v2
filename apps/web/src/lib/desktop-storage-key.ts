@@ -39,9 +39,28 @@ function namespaceFor(): { identity: string; legacyIdentity: string | null } {
   };
 }
 
+/**
+ * A hosted-browser machine panel is a same-origin frame of the page that
+ * hosts it, so it shares that page's localStorage. Its presentation state is
+ * namespaced by the machine it is bound to, or identical local IDs on two
+ * machines would share remembered selections and layouts.
+ */
+function browserPanelMachine(): string | null {
+  try {
+    const search = new URLSearchParams(window.location.search);
+    if (search.get("panel") !== "workspace") return null;
+    const machine = search.get("machine");
+    return machine && machine.length <= 128 ? machine : null;
+  } catch {
+    return null;
+  }
+}
+
 export function desktopConnectionStorageKey(baseKey: string): string {
-  if (typeof window === "undefined" || window.orkestrator?.isolatedViewState !== true) {
-    return baseKey;
+  if (typeof window === "undefined") return baseKey;
+  if (window.orkestrator?.isolatedViewState !== true) {
+    const machine = browserPanelMachine();
+    return machine ? `${baseKey}:machine:${hashIdentity(`machine:${machine}`)}` : baseKey;
   }
   const { identity, legacyIdentity } = namespaceFor();
   const connectionKey = `${baseKey}:desktop:${hashIdentity(identity)}`;

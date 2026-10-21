@@ -234,6 +234,76 @@ describe("backend runtimes", () => {
   });
 });
 
+describe("last-known summaries", () => {
+  function memoryPersistence() {
+    const values = new Map<string, unknown>();
+    return {
+      values,
+      load: (id: BackendId) => structuredClone(values.get(id) ?? null),
+      save: (id: BackendId, value: unknown) => values.set(id, structuredClone(value)),
+      remove: (id: BackendId) => values.delete(id),
+    };
+  }
+
+  test("CL-02/offline: summaries survive a restart labelled stale, for the same identity only", async () => {
+    const persistence = memoryPersistence();
+    const first = new BackendRuntime({
+      client: fakeClient("a", sharedIds("A")),
+      connection: summary("a", "bk_a"),
+      persistence,
+    });
+    first.acquireSummaryDemand();
+    await settle(first);
+    first.dispose();
+    // Next session, the machine is unreachable.
+    const second = new BackendRuntime({
+      client: fakeClient("a", sharedIds("A")),
+      connection: summary("a", "bk_a", { transport: "unreachable" }),
+      persistence,
+    });
+    expect(second.getSnapshot().freshness).toBe("stale");
+    expect(second.getSnapshot().environmentsByProject.get("project-1")?.[0]?.name).toBe("A env");
+    // Rows saved for one identity are never adopted by another.
+    persistence.values.set("bk_b", persistence.values.get("bk_a"));
+    const other = new BackendRuntime({
+      client: fakeClient("b", sharedIds("B")),
+      connection: summary("b", "bk_b", { transport: "unreachable" }),
+      persistence,
+    });
+    expect(other.getSnapshot().projects).toEqual([]);
+  });
+
+  test("AU-03: a rejected credential purges the persisted copy too", async () => {
+    const persistence = memoryPersistence();
+    const runtime = new BackendRuntime({
+      client: fakeClient("a", sharedIds("A")),
+      connection: summary("a", "bk_a"),
+      persistence,
+    });
+    runtime.acquireSummaryDemand();
+    await settle(runtime);
+    expect(persistence.values.has("bk_a")).toBe(true);
+    runtime.updateConnection(summary("a", "bk_a", { transport: "authentication-required" }));
+    expect(persistence.values.has("bk_a")).toBe(false);
+  });
+
+  test("ID-05: a backend restart keeps identity and re-reads authoritative summaries", async () => {
+    const data = sharedIds("A");
+    const client = fakeClient("a", data);
+    const runtime = new BackendRuntime({ client, connection: summary("a", "bk_a") });
+    runtime.acquireSummaryDemand();
+    await settle(runtime);
+    data.environments["project-1"]![0]!.name = "after restart";
+    // A restarted backend answers a fresh stream: the client is told to resync.
+    client.emit(NATIVE_EVENT_STREAM_CONNECTED_EVENT, undefined);
+    await runtime.whenIdle();
+    expect(runtime.id as string).toBe("bk_a");
+    expect(runtime.getSnapshot().environmentsByProject.get("project-1")?.[0]?.name).toBe(
+      "after restart",
+    );
+  });
+});
+
 describe("bounded resource use", () => {
   test("PF-01: repeated demand cycles leave no subscriptions behind", async () => {
     const client = fakeClient("a", sharedIds("A"));

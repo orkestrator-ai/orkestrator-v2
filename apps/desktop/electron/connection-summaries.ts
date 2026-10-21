@@ -93,6 +93,12 @@ export function backendConnectionSummary(input: {
       active: activeRouteId === route.id,
       supported: supportedRouteKinds.includes(route.kind),
       ...(blockedReason ? { blockedReason } : {}),
+      ...(route.kind === "ssh"
+        ? {
+            sshDestination: route.destination,
+            ...(route.sshPort ? { sshPort: route.sshPort } : {}),
+          }
+        : {}),
     };
   });
   const identity: ConnectionIdentityState =

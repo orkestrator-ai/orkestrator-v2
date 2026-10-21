@@ -161,7 +161,7 @@ describe("SH-02: first-use SSH host key", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Don’t trust" }));
 
-    await waitFor(() => expect(screen.queryByText("Verify the SSH host key")).toBeNull());
+    await waitFor(() => expect(screen.queryByText("Verify the SSH host key") === null).toBe(true));
     expect(screen.getByLabelText("SSH destination or alias")).toBeTruthy();
     expect(trustSshHostKey).not.toHaveBeenCalled();
     expect(connectSsh).toHaveBeenCalledTimes(1);

@@ -42,6 +42,12 @@ import {
   resolveQuestionToolAnswers,
 } from "@/lib/question-tool";
 import { QuestionToolDetails } from "./QuestionToolDetails";
+import {
+  parseScheduleWakeupArgs,
+  parseScheduleWakeupResult,
+  scheduleWakeupPreview,
+} from "@/lib/schedule-wakeup-tool";
+import { ScheduleWakeupToolDetails } from "./ScheduleWakeupToolDetails";
 import { ArtifactDraftInspectorAction, draftInspectorTool } from "./rich/ArtifactDraftInspector";
 import {
   markdownComponents,
@@ -299,6 +305,16 @@ export function toolRowPreview(
     };
   }
 
+  const wakeup = parseScheduleWakeupArgs(toolName, toolArgs);
+  const wakeupPreview = wakeup ? scheduleWakeupPreview(wakeup) : "";
+  if (wakeupPreview) {
+    return {
+      text: toSingleLinePreview(wakeupPreview),
+      generic: false,
+      monospace: false,
+    };
+  }
+
   // Custom tools such as Codex's `exec` carry raw input rather than a
   // provider-standard argument shape. Keep the collapsed row informative
   // even when the bridge cannot safely derive a more specific command.
@@ -447,6 +463,11 @@ export function ToolPart({
   const answeredQuestions = useMemo(
     () => (questions ? resolveQuestionToolAnswers(questions, toolArgs, toolOutput) : null),
     [questions, toolArgs, toolOutput],
+  );
+  const wakeup = useMemo(() => parseScheduleWakeupArgs(toolName, toolArgs), [toolName, toolArgs]);
+  const wakeupResult = useMemo(
+    () => (wakeup ? parseScheduleWakeupResult(toolOutput) : null),
+    [wakeup, toolOutput],
   );
   // Answer recovery is lossy: results may also contain notes, previews, or
   // provider-specific context. Keep the original result below the questions.
@@ -630,6 +651,8 @@ export function ToolPart({
             {/* Input/Command section */}
             {answeredQuestions ? (
               <QuestionToolDetails questions={answeredQuestions} />
+            ) : wakeup ? (
+              <ScheduleWakeupToolDetails call={wakeup} result={wakeupResult} />
             ) : (
               formattedInput && (
                 <div className="px-3 py-2 border-b border-border/30">

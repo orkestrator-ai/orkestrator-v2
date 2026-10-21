@@ -179,3 +179,22 @@ submodule metadata. The other failing test was the unchanged terminal history
 owner, recorded in [0513](0513-terminal-history-backward-page-count.md).
 All other workspace packages, root/support, bridges and protocol regeneration
 passed.
+
+
+## Preview qualification second main merge — 2026-10-21
+
+`mise run test` after merging `origin/main` at `3cfc33fe` into `bf04abc7`
+repeated `restart recovery re-links submodules of an adopted or abandoned copy`
+at 5,059.80 ms (five-second deadline), with a terminated submodule command
+reported between tests. Workspace/root/bridges/protocol reserved 4/1/2/1
+workers; backend used two isolated workers alongside Docker/browser validation.
+The aggregate exited 1 after 469.0 seconds; backend totals were 9,764 passed,
+67 skipped, two failed and one between-test error. All other packages and groups
+passed. The other failure is recorded in [0624](0624-public-exec-start-refused-in-aggregate.md).
+
+`mise run test:logged -- --name preview-merge2-move-owner -- bun test --cwd
+apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts
+--parallel=1 --only-failures` passed the complete unchanged owner, exit 0 in
+14.3 seconds. No assertion, timeout, skip or implementation changed. Evidence:
+`orkestrator-test-run.aIlmtw/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+below the host temporary directory. Scheduling contention remains a hypothesis.

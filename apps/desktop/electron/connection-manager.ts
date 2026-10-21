@@ -420,14 +420,14 @@ export class ConnectionManager {
     this.localBackendAvailable = false;
   }
 
-  /** Preview tunnel URL for the window's connection, when its client supports it. */
-  getPreviewTunnelUrl(scope = DEFAULT_CONNECTION_SCOPE): string | null {
-    try {
-      const backend = this.currentBackend(scope) as { previewTunnelUrl?: () => string };
-      return backend.previewTunnelUrl?.() ?? null;
-    } catch {
-      return null;
-    }
+  /**
+   * The client of one connection while any window holds it (Local always),
+   * for work that belongs to that connection rather than to a window's
+   * current binding.
+   */
+  backendForConnection(connectionId: string): LocalBackend | null {
+    if (connectionId === LOCAL_CONNECTION_ID) return this.localBackend;
+    return this.remoteConnections.get(connectionId)?.client ?? null;
   }
 
   getRendererRequestAuthorization(

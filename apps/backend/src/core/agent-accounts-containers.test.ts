@@ -1052,7 +1052,7 @@ describe("buildMergeContainerProviderAuthCommand", () => {
     expect(result.stdout + result.stderr).not.toContain("SENTINEL");
   });
 
-  test("creates a missing file, replaces an unreadable one and waits out a held lock", async () => {
+  test("creates a missing file, replaces an unreadable one and never takes a held lock", async () => {
     const file = path.join(root, "container", "opencode", "auth.json");
     expect(merge(file, { logins: { a: { type: "api", key: "k" } }, accessOnly: [] }).status).toBe(
       0,
@@ -1064,14 +1064,20 @@ describe("buildMergeContainerProviderAuthCommand", () => {
     );
     expect(JSON.parse(await fs.readFile(file, "utf8"))).toEqual({ b: { type: "api", key: "j" } });
 
-    // A fresh lock held by a running Pi leaves the file alone; an abandoned one is taken.
+    // A lock is Pi's to judge: its OAuth refresh holds one for up to 30 s with a
+    // 15 s heartbeat, so a fresh lock, one 12 s old and an apparently abandoned
+    // one all leave the file and the lock alone until the next push.
     await fs.mkdir(`${file}.lock`);
-    expect(merge(file, { logins: { c: { type: "api", key: "c" } }, accessOnly: [] }).status).toBe(
-      0,
-    );
-    expect(Object.keys(JSON.parse(await fs.readFile(file, "utf8")))).toEqual(["b"]);
-    const old = new Date(Date.now() - 60_000);
-    await fs.utimes(`${file}.lock`, old, old);
+    for (const ageMs of [0, 12_000, 60_000]) {
+      const at = new Date(Date.now() - ageMs);
+      await fs.utimes(`${file}.lock`, at, at);
+      expect(merge(file, { logins: { c: { type: "api", key: "c" } }, accessOnly: [] }).status).toBe(
+        0,
+      );
+      expect(Object.keys(JSON.parse(await fs.readFile(file, "utf8")))).toEqual(["b"]);
+      expect((await fs.stat(`${file}.lock`)).isDirectory()).toBe(true);
+    }
+    await fs.rmdir(`${file}.lock`);
     merge(file, { logins: { c: { type: "api", key: "c" } }, accessOnly: [] });
     expect(Object.keys(JSON.parse(await fs.readFile(file, "utf8")))).toEqual(["b", "c"]);
     await expect(fs.stat(`${file}.lock`)).rejects.toThrow();

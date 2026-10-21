@@ -350,7 +350,9 @@ function providerAuthMergePayload(format: "opencode" | "pi", text: string): stri
  * imported before access-only staging. Other providers, signed in inside the
  * container, are kept. Pi's lock directory (`auth.json.lock`, from
  * proper-lockfile) is held for the write so a Pi in the container cannot
- * interleave; a lock held for over a second leaves the file alone.
+ * interleave. A lock still held after a second leaves the file alone until
+ * the next push, however old it looks: Pi's asynchronous refresh holds it for
+ * up to 30 s on a 15 s heartbeat, and Pi reclaims a stale one itself.
  */
 export function buildMergeContainerProviderAuthCommand(file: string): string {
   const script = `
@@ -365,8 +367,7 @@ for (let attempt = 0; attempt < 20 && !locked; attempt++) {
   try { fs.mkdirSync(lock); locked = true; }
   catch (error) {
     if (error.code !== "EEXIST") throw error;
-    // proper-lockfile treats a lock untouched for 10 s as abandoned.
-    try { if (Date.now() - fs.statSync(lock).mtimeMs > 10000) fs.rmdirSync(lock); } catch {}
+    // Never reclaim another writer's lock: Pi owns its stale-lock protocol.
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
   }
 }

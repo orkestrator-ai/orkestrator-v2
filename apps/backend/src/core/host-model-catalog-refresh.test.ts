@@ -250,18 +250,27 @@ describe("host model catalogue refresh", () => {
     );
     process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = hostHome;
     process.env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR = configDir;
+    const previousClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+    const profileConfigDir = path.join(appRoot, "profile-claude");
+    process.env.CLAUDE_CONFIG_DIR = profileConfigDir;
     stubBridgeSpawn((spawned) => listenAsBridge(Number(spawned.env.PORT)));
     const refresh = refreshTesting.createHostModelCatalogRefresher({
       fetchClaudeCatalog: mock(async () => ({ source: "fallback", models: [] })) as never,
     });
 
-    await expect(
-      refresh(
-        context({ runtimeFlavor: "agent-test", credentialSources: new Set(["claude"]) }),
-        "claude",
-      ),
-    ).rejects.toThrow(/bundled catalogue/);
-    expect(spawns[0]?.env.CLAUDE_CONFIG_DIR).toBe(configDir);
+    try {
+      await expect(
+        refresh(
+          context({ runtimeFlavor: "agent-test", credentialSources: new Set(["claude"]) }),
+          "claude",
+        ),
+      ).rejects.toThrow(/bundled catalogue/);
+    } finally {
+      if (previousClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = previousClaudeConfigDir;
+    }
+    // Read for the login only: the probe keeps the profile's own config dir.
+    expect(spawns[0]?.env.CLAUDE_CONFIG_DIR).toBe(profileConfigDir);
     expect(spawns[0]?.env.ANTHROPIC_AUTH_TOKEN).toBe("host-oauth-token");
     expect(children[0]?.exited).toBe(true);
   });

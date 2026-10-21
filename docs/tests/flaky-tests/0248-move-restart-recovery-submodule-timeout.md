@@ -150,3 +150,32 @@ The aggregate failed this owner and its unchanged owning file passed with one wo
 - **Suite counts:** backend reported 9166 passed, 41 skipped, two failed and one between-test error across 9209 tests in 491 files (408.13 seconds). The other failure was the merged registry metric capacity, corrected by raising the bounded entry limit from 656 to 657; its unchanged owning test passed. The aggregate exited 1 after 492.1 seconds.
 - **Evidence:** `orkestrator-test-run.tW4jss/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory after aggregate completion.
 - **Assessment:** confirmed intermittent recurrence. Concurrent subprocess contention remains a hypothesis; no implementation, assertion, timeout or skip changed.
+
+
+## Credential snapshot review validation — 2026-10-21
+
+`mise run test:logged -- --name full-suite -- mise run test` on
+`fix-agent-test-host-home-writes-c7337a6ddd7f` (base `a8128980`) timed out
+`move_environment > moves a worktree with nested submodules (same disk)`
+at 5084.10 ms against the default 5000 ms budget. Workspace/root/bridges/protocol
+reserved 4/1/2/1 slots; the backend used two isolated Bun workers. The move
+implementation and its tests were unchanged.
+
+`mise run test:logged -- --name environment-move-rerun -- bun test --cwd apps/backend
+--preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts
+--parallel=1 --only-failures` passed the entire unchanged owning file,
+exit 0, in 46.9 seconds.
+
+Evidence: `orkestrator-test-run.9G1j25/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+below the host temporary directory; outer log in `orkestrator-test-run.TM4iwl`.
+Shared host contention remains a hypothesis. No implementation, assertion,
+timeout or skip changed.
+
+The aggregate exited 1 after 735.0 seconds. Backend reported 9,742 passed,
+67 skipped, one failed and one between-tests error across 9,810 tests in
+551 files (696.00 seconds). The timed-out submodule subprocess was terminated
+with SIGTERM and emitted the between-tests `CommandFailedError` about missing
+submodule metadata. The other failing test was the unchanged terminal history
+owner, recorded in [0512](0512-terminal-history-backward-page-count.md).
+All other workspace packages, root/support, bridges and protocol regeneration
+passed.

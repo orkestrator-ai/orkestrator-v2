@@ -627,6 +627,28 @@ This replaces the 2026-09-23 file lists as the current baseline.
   temporary root; no process or temporary root was left after the runs. No
   containers were used.
 
+- Review follow-up (2026-10-21, same worktree): release failures now emit the
+  static diagnostic `[Previews] Failed to release preview attachment.`; the
+  obsolete scope-relative tunnel URL method is removed. A focused transport
+  test proves the unavailable-connection path warns once while closing ingress.
+  Hook tests cover sibling chat listboxes, two preview consumers, closing but
+  still visible overlays, exit-motion completion, and hidden ancestors.
+- `ORKESTRATOR_AGENT_TEST_RUN_ID=preview-review-fixes mise run test:logged --
+  --name review-electron -- mise run test:agent:electron`: 29 passed, 1 skipped
+  (Linux Wayland on macOS), 0 failures, 144.1 s. Added scenarios force capability
+  setup to fail after the second backend starts (process exited and gateway
+  closed before profile cleanup), and forget its active connection (remote
+  view, ingress, sockets and attachment released; the next Local preview uses
+  its Local partition; the other window's page remains intact).
+- Focused desktop and overlay tests, `format:check`, `lint`, and `typecheck`
+  passed through `test:logged`; modified files also have no lint findings.
+  `mise run test:logged -- --name review-full-tests -- mise run test` passed
+  all four non-iOS groups in 441.3 s. No additional Docker, CLI scenario, iOS,
+  or browser component suite was selected: their runtime code was unchanged;
+  the real Electron suite exercises the affected desktop paths.
+  Electron cleanup removed the disposable service-preview profile root after
+  stopping its processes. No production profile or containers were used.
+
 ## Constraints and rationale
 
 - The threat boundaries, the credential and data path, and the resource-owner

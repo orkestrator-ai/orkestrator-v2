@@ -102,6 +102,8 @@ interface Stack {
   /** Ingress origin per service, from its latest attach (stable via port hints). */
   origins: Partial<Record<Name, string>>;
   remote: RemoteBackend | null;
+  /** Owned before startup/setup awaits, including when capability checks fail. */
+  remoteProcess: BackendProcess | null;
   viteApp: ViteApp | null;
 }
 
@@ -735,6 +737,7 @@ test.beforeAll(async () => {
     origins: {},
     services: {},
     remote: null,
+    remoteProcess: null,
     viteApp: null,
   } as unknown as Stack;
   stack = partial;
@@ -793,7 +796,7 @@ test.afterAll(async () => {
   }
   if (running) await closeElectron().catch(() => undefined);
   stack = null;
-  await current.remote?.process.stop().catch(() => undefined);
+  await current.remoteProcess?.stop().catch(() => undefined);
   if (current.viteApp?.process.pid) {
     try {
       process.kill(-current.viteApp.process.pid, "SIGTERM");
@@ -1815,7 +1818,7 @@ function withEnvironment<T>(values: Record<string, string>, run: () => T): T {
 }
 
 /** A second, disposable backend (agent-test isolation), as a remote connection would reach it. */
-async function startRemoteBackend(): Promise<RemoteBackend> {
+async function startRemoteBackend(validateCapabilities?: () => void): Promise<RemoteBackend> {
   const [rendererPort, gatewayPort] = (await reserveLoopbackPorts(2)) as [number, number];
   const root = path.join(s().temporaryRoot, "remote");
   const profile = resolveRuntimeProfile({
@@ -1832,68 +1835,96 @@ async function startRemoteBackend(): Promise<RemoteBackend> {
   });
   await initializeProfile(profile);
   const backendProcess = new BackendProcess();
-  // The backend's environment is built synchronously when it spawns.
-  await withEnvironment(
-    { ORKESTRATOR_PREVIEW_TRANSPORT: "1", ORKESTRATOR_CONTROL_MCP_PORT: "0" },
-    () =>
-      backendProcess.start({
-        isDev: true,
-        appRoot: repositoryRoot,
-        resourceRoot: repositoryRoot,
-        dataDir: profile.dataDir,
-        gatewayHost: "127.0.0.1",
-        gatewayPort,
-        allowNonTailscaleBind: true,
-        runtimeFlavor: "agent-test",
-        runtimeProfileId: profile.id,
-        worktreeDir: profile.worktreeDir,
-        strictGatewayPort: true,
-        strictDockerOwner: true,
-        onEvent: () => undefined,
-      }),
-  );
-  const info = backendProcess.getInfo();
-  if (!info) throw new Error("The remote backend reported no gateway");
-  const token = (JSON.parse(await readFile(info.authFile, "utf8")) as { token: string }).token;
-  const address = `http://127.0.0.1:${gatewayPort}`;
-  const client = new BackendHttpClient(address, token);
-  const capabilities = await client.invoke<{
-    backendInstanceId: string;
-    surfaces: { desktopTunnel: { available: boolean } };
-  }>("get_preview_capabilities");
-  expect(capabilities.surfaces.desktopTunnel.available).toBe(true);
-  expect(capabilities.backendInstanceId).not.toBe(s().backendInstanceId);
-  const remote = {
-    process: backendProcess,
-    address,
-    token,
-    backendInstanceId: capabilities.backendInstanceId,
-  };
-  s().remote = remote;
+  s().remoteProcess = backendProcess;
+  try {
+    // The backend's environment is built synchronously when it spawns.
+    await withEnvironment(
+      { ORKESTRATOR_PREVIEW_TRANSPORT: "1", ORKESTRATOR_CONTROL_MCP_PORT: "0" },
+      () =>
+        backendProcess.start({
+          isDev: true,
+          appRoot: repositoryRoot,
+          resourceRoot: repositoryRoot,
+          dataDir: profile.dataDir,
+          gatewayHost: "127.0.0.1",
+          gatewayPort,
+          allowNonTailscaleBind: true,
+          runtimeFlavor: "agent-test",
+          runtimeProfileId: profile.id,
+          worktreeDir: profile.worktreeDir,
+          strictGatewayPort: true,
+          strictDockerOwner: true,
+          onEvent: () => undefined,
+        }),
+    );
+    const info = backendProcess.getInfo();
+    if (!info) throw new Error("The remote backend reported no gateway");
+    const token = (JSON.parse(await readFile(info.authFile, "utf8")) as { token: string }).token;
+    const address = `http://127.0.0.1:${gatewayPort}`;
+    const client = new BackendHttpClient(address, token);
+    const capabilities = await client.invoke<{
+      backendInstanceId: string;
+      surfaces: { desktopTunnel: { available: boolean } };
+    }>("get_preview_capabilities");
+    expect(capabilities.surfaces.desktopTunnel.available).toBe(true);
+    expect(capabilities.backendInstanceId).not.toBe(s().backendInstanceId);
+    validateCapabilities?.();
+    const remote = {
+      process: backendProcess,
+      address,
+      token,
+      backendInstanceId: capabilities.backendInstanceId,
+    };
+    s().remote = remote;
 
-  const projectPath = await prepareFixtureRepository(profile, templateRoot);
-  const project = await client.invoke<{ id: string }>("add_project", {
-    gitUrl: path.join(profile.fixtureDir, "origin.git"),
-    localPath: projectPath,
-  });
-  const environment = await client.invoke<{ id: string }>("create_environment", {
-    projectId: project.id,
-    name: "service-preview-remote-fixture",
-    networkAccessMode: "restricted",
-    environmentType: "local",
-  });
-  await client.invoke("start_environment", { environmentId: environment.id });
-  const fixture = await startPreviewFixture({ marker: "svc-remote" });
-  s().services.r = { marker: "svc-remote", fixture, port: fixture.port } as Service;
-  s().services.r = await registerService((command, args) => client.invoke(command, args), {
-    marker: "svc-remote",
-    fixture,
-    port: fixture.port,
-    environmentId: environment.id,
-    backendInstanceId: capabilities.backendInstanceId,
-  });
-  return remote;
+    const projectPath = await prepareFixtureRepository(profile, templateRoot);
+    const project = await client.invoke<{ id: string }>("add_project", {
+      gitUrl: path.join(profile.fixtureDir, "origin.git"),
+      localPath: projectPath,
+    });
+    const environment = await client.invoke<{ id: string }>("create_environment", {
+      projectId: project.id,
+      name: "service-preview-remote-fixture",
+      networkAccessMode: "restricted",
+      environmentType: "local",
+    });
+    await client.invoke("start_environment", { environmentId: environment.id });
+    const fixture = await startPreviewFixture({ marker: "svc-remote" });
+    s().services.r = { marker: "svc-remote", fixture, port: fixture.port } as Service;
+    s().services.r = await registerService((command, args) => client.invoke(command, args), {
+      marker: "svc-remote",
+      fixture,
+      port: fixture.port,
+      environmentId: environment.id,
+      backendInstanceId: capabilities.backendInstanceId,
+    });
+    return remote;
+  } catch (error) {
+    // Stop before any profile cleanup, even if auth/capability setup failed
+    // before a complete RemoteBackend could be published.
+    await backendProcess.stop();
+    throw error;
+  }
 }
+
+test("failed remote capability setup stops its backend before profile cleanup", async () => {
+  let pid: number | undefined;
+  let address = "";
+  await expect(
+    startRemoteBackend(() => {
+      const backend = s().remoteProcess!;
+      pid = backend.getPid();
+      address = `http://127.0.0.1:${backend.getInfo()!.port}`;
+      throw new Error("forced remote capability failure");
+    }),
+  ).rejects.toThrow("forced remote capability failure");
+  expect(pid).toBeDefined();
+  expect(() => process.kill(pid!, 0)).toThrow();
+  await expect(rawIngress(address)).rejects.toThrow();
+  expect(s().remoteProcess!.getInfo()).toBeNull();
+  // The backend has exited while its profile is still present.
+  expect(await realpath(path.join(s().temporaryRoot, "remote"))).toBeTruthy();
+});
 
 function remoteAttachments(): Promise<number> {
   const remote = s().remote!;
@@ -2036,6 +2067,46 @@ test("windows on different backends never share previews, and switches release o
   await waitForService("r");
   expect(await inService<string | null>("r", `localStorage.getItem("iso")`)).toBe("svc-remote");
   expect(await remoteAttachments()).toBe(1);
+
+  // Forget removes the active connection before preview teardown. The old
+  // transport must retain its client to release on the issuing backend.
+  const forgottenIngress = origin("r");
+  const forgotten = await second.evaluate(
+    (id) => (globalThis as any).orkestrator.connections.forget(id),
+    remoteId,
+  );
+  expect(forgotten.activeConnectionId).toBe(LOCAL_CONNECTION_ID);
+  expect(
+    forgotten.connections.some((connection: { id: string }) => connection.id === remoteId),
+  ).toBe(false);
+  await expect.poll(async () => (await viewsOn(forgottenIngress, secondId)).length).toBe(0);
+  await expect.poll(remoteAttachments, { timeout: 20_000 }).toBe(0);
+  await expect
+    .poll(() =>
+      rawIngress(forgottenIngress).then(
+        () => "listening",
+        () => "closed",
+      ),
+    )
+    .toBe("closed");
+  await expect.poll(() => remoteFixture.openSockets(), { timeout: 15_000 }).toBe(0);
+  await attachService("b", "after-forget-local", true, second);
+  await waitForService("b");
+  const [localAfterForget] = await viewsOn(origin("b"), secondId);
+  expect(localAfterForget!.storagePath).toContain(partitionName(2, LOCAL_CONNECTION_ID, "b"));
+  expect(localAfterForget!.storagePath).not.toContain(partitionName(2, remoteId, "r"));
+  expect(await inService<string>("a", "window.__multiKept")).toBe("svc-a");
+
+  // Reconnect for the independent window-close path.
+  await second.evaluate(
+    (input) =>
+      (globalThis as any).orkestrator.connections.connect({ ...input, nickname: "Remote again" }),
+    { address: remote.address, token: remote.token },
+  );
+  await attachService("r", "multi-r-close", true, second);
+  await waitForService("r");
+  expect(await remoteAttachments()).toBe(1);
+  await expect.poll(async () => (await accessStats()).attachments).toBe(localBaseline);
 
   // Closing the window releases on its backend too.
   const closeStarted = Date.now();

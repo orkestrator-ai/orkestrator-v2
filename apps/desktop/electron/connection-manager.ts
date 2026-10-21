@@ -430,16 +430,6 @@ export class ConnectionManager {
     return this.remoteConnections.get(connectionId)?.client ?? null;
   }
 
-  /** Preview tunnel URL for the window's connection, when its client supports it. */
-  getPreviewTunnelUrl(scope = DEFAULT_CONNECTION_SCOPE): string | null {
-    try {
-      const backend = this.currentBackend(scope) as { previewTunnelUrl?: () => string };
-      return backend.previewTunnelUrl?.() ?? null;
-    } catch {
-      return null;
-    }
-  }
-
   getRendererRequestAuthorization(
     urlValue: string,
     scope = DEFAULT_CONNECTION_SCOPE,

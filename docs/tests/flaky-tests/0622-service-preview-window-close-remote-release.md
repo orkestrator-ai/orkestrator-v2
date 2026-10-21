@@ -24,8 +24,12 @@
   drops the connection. Reading the code gives no reason for a 20-second hold.
 - **Hypothesis:** the window closed late under load (the old step started its
   20 s poll at `close()`, not when the window was gone). Not confirmed:
-  Electron's stdout, where a failed release would be logged as
-  `[Previews] Failed to close preview transport`, is not captured by the spec.
+  release failures were silently ignored at the time. The transport now emits
+  `[Previews] Failed to release preview attachment.` on a failed backend release,
+  without backend error content. The spec captures a bounded Electron output
+  tail for shutdown failures; the original window-close failure did not include
+  that diagnostic. Its absence from the original evidence cannot rule out a
+  release failure.
 - **Change:** the step now waits up to 30 s for the window to be gone, then
   polls the release for 20 s. On failure it reports how long the close took,
   how long since `close()`, and the Local backend's access counts. No timeout

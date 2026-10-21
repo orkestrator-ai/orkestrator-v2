@@ -3,7 +3,7 @@
 Status: **Agreed 2026-10-21 and built on this branch (milestones 1–4).** This
 is the objective for multi-machine Orkestrator. It supersedes the
 "independent backends, client-side federation" direction in
-[`docs/temp/remote.md`](../temp/remote.md) and the client-side design
+the earlier `docs/temp/remote.md` draft and the client-side design
 described in [federation.md](federation.md). Where those documents conflict
 with this one, this one wins. Open decisions are listed at the end. The build plan, contracts and the
 requirement matrix with evidence are in
@@ -408,4 +408,3 @@ Built in milestones with tested commits on one branch, reviewed as one PR.
 ## Open decisions
 
 None at present.
-

@@ -42,6 +42,12 @@ import {
   resolveQuestionToolAnswers,
 } from "@/lib/question-tool";
 import { QuestionToolDetails } from "./QuestionToolDetails";
+import {
+  parseScheduleWakeupArgs,
+  parseScheduleWakeupResult,
+  scheduleWakeupPreview,
+} from "@/lib/schedule-wakeup-tool";
+import { ScheduleWakeupToolDetails } from "./ScheduleWakeupToolDetails";
 import { ArtifactDraftInspectorAction, draftInspectorTool } from "./rich/ArtifactDraftInspector";
 import {
   markdownComponents,
@@ -161,11 +167,17 @@ export function toolRowPreview(
     toolName,
     toolArgs,
     toolOutput,
+    toolState,
+    toolDenied,
+    toolError,
     backgroundTask,
   }: {
     toolName?: string;
     toolArgs?: Record<string, unknown>;
     toolOutput?: string;
+    toolState?: "success" | "failure" | "pending";
+    toolDenied?: { reason?: string; source?: string };
+    toolError?: string;
     backgroundTask?: NativeBackgroundTask;
   },
   questions = parseQuestionToolArgs(toolArgs),
@@ -294,6 +306,18 @@ export function toolRowPreview(
   if (questions) {
     return {
       text: toSingleLinePreview(questionToolPreview(questions)),
+      generic: false,
+      monospace: false,
+    };
+  }
+
+  const wakeup = parseScheduleWakeupArgs(toolName, toolArgs);
+  const wakeupPreview = wakeup
+    ? scheduleWakeupPreview(wakeup, toolState === "success" && !toolDenied && !toolError)
+    : "";
+  if (wakeupPreview) {
+    return {
+      text: toSingleLinePreview(wakeupPreview),
       generic: false,
       monospace: false,
     };
@@ -448,6 +472,11 @@ export function ToolPart({
     () => (questions ? resolveQuestionToolAnswers(questions, toolArgs, toolOutput) : null),
     [questions, toolArgs, toolOutput],
   );
+  const wakeup = useMemo(() => parseScheduleWakeupArgs(toolName, toolArgs), [toolName, toolArgs]);
+  const wakeupResult = useMemo(
+    () => (wakeup ? parseScheduleWakeupResult(toolOutput) : null),
+    [wakeup, toolOutput],
+  );
   // Answer recovery is lossy: results may also contain notes, previews, or
   // provider-specific context. Keep the original result below the questions.
   const showToolOutput = Boolean(toolOutput);
@@ -469,7 +498,10 @@ export function ToolPart({
     (legacyChanges && legacyChanges.files.length > 0) ||
     (toolArgs && Object.keys(toolArgs).length > 0);
 
-  const displayInfo = toolRowPreview({ toolName, toolArgs, toolOutput, backgroundTask }, questions);
+  const displayInfo = toolRowPreview(
+    { toolName, toolArgs, toolOutput, toolState, toolDenied: denied, toolError, backgroundTask },
+    questions,
+  );
   const shouldShowToolTitle =
     Boolean(displayToolTitle) &&
     (!displayInfo || displayInfo.generic) &&
@@ -630,6 +662,12 @@ export function ToolPart({
             {/* Input/Command section */}
             {answeredQuestions ? (
               <QuestionToolDetails questions={answeredQuestions} />
+            ) : wakeup ? (
+              <ScheduleWakeupToolDetails
+                call={wakeup}
+                result={wakeupResult}
+                succeeded={toolState === "success" && !denied && !toolError}
+              />
             ) : (
               formattedInput && (
                 <div className="px-3 py-2 border-b border-border/30">

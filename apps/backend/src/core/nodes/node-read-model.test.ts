@@ -15,6 +15,7 @@ function harness() {
       listNodes: async () => ({ nodes: [] }) as never,
       link: () => null,
       subscribe: () => () => undefined,
+      recordProfile: async () => undefined,
     },
     emit: (event) => {
       events.push(event);

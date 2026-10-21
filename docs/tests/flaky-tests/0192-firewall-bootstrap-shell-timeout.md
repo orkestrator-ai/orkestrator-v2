@@ -108,3 +108,13 @@ aggregate-load timeouts.
 ## Agent-mail main merge recurrence — 2026-10-19
 
 The final root/support run with all GNU prerequisites timed out this case at 5004.45 ms. The unchanged complete owning file then passed sequentially with the flake-index contract owner (35.6 seconds, exit 0). Exact commands, counts and evidence are in [0500](0500-agent-mail-main-merge-validation.md). No implementation, assertion, skip or timeout changed.
+
+## ScheduleWakeup follow-up main merge — 2026-10-21
+
+- **Original command:** the testing guide's GNU-tool PATH with `mise run test:logged -- --name merge-full-tests -- mise run test`.
+- **Workers:** workspace/root/bridge/protocol reservations 4/1/2/1; one isolated root worker, alongside component and isolated-stack browser checks.
+- **Failure:** `GitHub ranges come from a fresh backend seed, else live, else this container's cache` exceeded five seconds (5003.85 ms), with one dangling process killed.
+- **Root counts:** 3186 passed, one skipped, one failed across 3188 tests in 151 files (366.62 seconds).
+- **Owning-file rerun:** the same GNU-tool PATH with `mise run test:logged -- --name merge-firewall-owner -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 32.3 seconds logged).
+- **Evidence:** `orkestrator-test-run.d10zQ4/root-and-agent-support-tests.log.gz` below the host temporary directory.
+- **Assessment:** confirms another intermittent shell-fixture deadline. Contention remains an unproven hypothesis; no implementation, assertion, timeout or skip changed.

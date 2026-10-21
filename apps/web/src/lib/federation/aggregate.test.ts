@@ -36,6 +36,7 @@ function environment(
     key: environmentKey(ref),
     projectId,
     name: id,
+    order: 0,
     status: "running",
     activity: "idle",
     hasUnreadWork: false,

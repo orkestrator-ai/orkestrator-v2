@@ -88,6 +88,7 @@ function boundEnvironments(
       key: environmentKey(ref),
       projectId: environment.projectId,
       name: environment.name,
+      order: environment.order,
       ...(environment.branch ? { branch: environment.branch } : {}),
       status: environment.status,
       activity: environment.agentActivityState ?? "idle",

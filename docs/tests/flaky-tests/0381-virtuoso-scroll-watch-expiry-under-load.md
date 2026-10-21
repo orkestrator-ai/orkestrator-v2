@@ -10,3 +10,20 @@
 - **Owning-file rerun:** `mise run test:logged -- --name merge-15f6cd-scroll-owner -- bun test ./tests/unit/hooks/useVirtuosoScrollState.test.ts --parallel=1 --only-failures` passed unchanged, exit 0, in 3.3 seconds.
 - **Evidence:** `orkestrator-test-run.iFuHsy/root-and-agent-support-tests.log.gz` below the host temporary directory.
 - **Assessment:** intermittent timing observation. Host contention is a hypothesis; no scroll implementation, timeout, assertion or skip changed.
+
+## Image-preview layout validation recurrence — 2026-10-21
+
+- `mise run test:logged -- --name root-tests -- mise run test` repeated the
+  watch-window assertion (expected one call, received two; 584.16 ms). The
+  root/support group used one worker and reported 3171 passed, one skipped and
+  two failed across 3174 tests in 330.47 seconds; Pi runtime vendoring was the
+  other failure. The aggregate also reported 12 backend failures outside the
+  image-preview change, which are not classified as flakes by this observation.
+- The unchanged owning file passed alone:
+  `mise run test:logged -- --name virtuoso-owner -- bun test ./tests/unit/hooks/useVirtuosoScrollState.test.ts --parallel=1 --only-failures`
+  (exit 0, 2.4 seconds).
+- Evidence: the host temporary directory
+  `orkestrator-test-run.awrt02/root-and-agent-support-tests.log.gz`, with outer
+  summary in `orkestrator-test-run.T8dkv2/root-tests.log.gz`.
+- Host contention remains a hypothesis. No scroll code, assertions, deadlines
+  or skips changed.

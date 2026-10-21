@@ -95,3 +95,11 @@ Aggregate result: exit 1 after 664.7 seconds logged. Codex bridge reported 2230 
 - **Suite counts:** Codex reported 2230 passed, 34 skipped and one failed across 2265 tests in 82 files (49.00 seconds). The other four bridge packages passed; the bridge group finished in 164.5 seconds.
 - **Evidence:** `orkestrator-test-run.tW4jss/bridges.log.gz` below the host temporary directory after aggregate completion.
 - **Assessment:** confirmed intermittent recurrence. Concurrent subprocess load is a hypothesis; no implementation, assertion, timeout or skip changed.
+
+## Remote sidebar reorder review recurrence — 2026-10-21
+
+- **Original command:** `mise run test:logged -- --name reorder-suite -- mise run test`, default workspace/root/bridges/protocol reservations of 4/1/2/1, on the shared macOS host.
+- **Failure:** the version/invocation case exceeded its 5000 ms deadline (5063.14 ms). The other four bridge packages passed.
+- **Owning-file rerun:** `mise run test:logged -- --name reorder-codex-fake-node-owner -- bun test --cwd bridges/codex-bridge --preload ../../tests/setup-node.ts ./src/testing/fake-codex-app-server.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 0.2 seconds logged).
+- **Evidence:** `orkestrator-test-run.U6kMZC/bridges.log.gz` below the host temporary directory after aggregate completion.
+- **Assessment:** confirmed intermittent recurrence; host contention remains a hypothesis. No implementation, assertion, deadline or skip in the owner changed.

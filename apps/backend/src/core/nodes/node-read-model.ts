@@ -1,4 +1,8 @@
-import { BACKEND_PROFILE_CHANGED_EVENT } from "@orkestrator/protocol/backend-profile";
+import {
+  BACKEND_PROFILE_CHANGED_EVENT,
+  parseBackendProfile,
+  type BackendProfile,
+} from "@orkestrator/protocol/backend-profile";
 import type { NodeListResult, NodeView } from "@orkestrator/protocol/command-nodes";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@orkestrator/protocol/gateway-event-stream";
@@ -47,6 +51,8 @@ export interface ReadModelNodes {
   listNodes(): Promise<NodeListResult>;
   link(nodeId: BackendId): ReadModelLink | null;
   subscribe(listener: () => void): () => void;
+  /** Cache a node's changed profile so its views show the new name and colour. */
+  recordProfile(nodeId: BackendId, profile: BackendProfile): Promise<void>;
 }
 
 /** The command node's own commands, for its self summary. */
@@ -299,7 +305,7 @@ export class NodeReadModel {
         prefixes: NODE_SUMMARY_EVENT_PREFIXES,
         ...(this.options.fetchImpl ? { fetchImpl: this.options.fetchImpl } : {}),
         onOpen: () => void this.requestHydrate(view.nodeId),
-        onEvent: (event, payload) => this.handleEvent(view.nodeId, epoch, event, payload),
+        onEvent: (event, payload) => void this.handleEvent(view.nodeId, epoch, event, payload),
       });
       state.stream.start();
       void this.requestHydrate(view.nodeId);
@@ -340,7 +346,12 @@ export class NodeReadModel {
     return state;
   }
 
-  private handleEvent(nodeId: BackendId, epoch: number, event: string, payload: unknown): void {
+  private async handleEvent(
+    nodeId: BackendId,
+    epoch: number,
+    event: string,
+    payload: unknown,
+  ): Promise<void> {
     const state = this.states.get(nodeId);
     if (!state || state.epoch !== epoch) return;
     for (const listener of this.listeners) {
@@ -356,8 +367,16 @@ export class NodeReadModel {
       return;
     }
     if (event === BACKEND_PROFILE_CHANGED_EVENT) {
-      // The registry caches the profile on the next hello; tell clients now.
-      this.noteChanged(nodeId);
+      // The registry's cached profile feeds every view of this node; refresh
+      // it now instead of on the next hello, then tell clients.
+      try {
+        await this.options.nodes.recordProfile(nodeId, parseBackendProfile(payload));
+        if (this.started && this.states.get(nodeId) === state && state.epoch === epoch) {
+          this.noteChanged(nodeId);
+        }
+      } catch {
+        // A malformed profile event changes nothing; the next hello reconciles.
+      }
       return;
     }
     if (event !== RESOURCE_CHANGED_EVENT || !payload || typeof payload !== "object") return;
@@ -511,14 +530,16 @@ export class NodeReadModel {
           const raw = await invoke<unknown>("get_environment_snapshots", { projectId });
           const list = Array.isArray(raw) ? raw : [];
           const environments = list
-            .slice(0, MAX_SUMMARY_ENVIRONMENTS_PER_PROJECT)
-            .flatMap((entry) => {
+            .flatMap((entry, index) => {
               const environment =
                 entry && typeof entry === "object"
-                  ? toNodeEnvironmentSummary(nodeId, entry as Record<string, unknown>)
+                  ? toNodeEnvironmentSummary(nodeId, entry as Record<string, unknown>, index)
                   : null;
               return environment ? [environment] : [];
-            });
+            })
+            // The node's own sidebar order; its storage order is creation order.
+            .sort((a, b) => a.order - b.order)
+            .slice(0, MAX_SUMMARY_ENVIRONMENTS_PER_PROJECT);
           results.set(projectId, {
             environments,
             truncated: list.length > MAX_SUMMARY_ENVIRONMENTS_PER_PROJECT,

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 
+import { parseBackendProfile } from "@orkestrator/protocol/backend-profile";
 import type { NodeView } from "@orkestrator/protocol/command-nodes";
 import { isBackendId, type BackendId } from "@orkestrator/protocol/federation";
 import type { NodeSummariesResult } from "@orkestrator/protocol/node-summaries";
@@ -147,6 +148,14 @@ export class NodePortal {
           );
         },
       );
+      if (args.command === "update_backend_profile") {
+        // The new name and colour show without waiting for the node's event.
+        try {
+          await this.options.nodes.recordProfile(nodeId, parseBackendProfile(result.result));
+        } catch {
+          // The node's profile event or next hello reconciles.
+        }
+      }
       // Writes refresh that node's summaries sooner than its next event.
       void this.readModel.requestHydrate(nodeId);
     }

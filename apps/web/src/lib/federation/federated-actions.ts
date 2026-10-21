@@ -30,6 +30,18 @@ export async function stopFederatedEnvironment(
   });
 }
 
+/** Persists a drag within one project of its node, in that node's own order. */
+export async function reorderFederatedEnvironments(
+  portal: PortalStore,
+  ref: ProjectRef,
+  environmentIds: readonly string[],
+): Promise<void> {
+  await portal.invokeOnNode(ref.backendId, "reorder_environments", {
+    projectId: ref.projectId,
+    environmentIds: [...environmentIds],
+  });
+}
+
 /** Called only from the user's confirmation, which names the node and the environment. */
 export async function deleteFederatedEnvironment(
   portal: PortalStore,

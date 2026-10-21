@@ -136,12 +136,12 @@ export function installDesktopFake(options: {
         const project = toNodeProjectSummary(nodeId, raw, index);
         return project ? [project] : [];
       });
-      const environments = Object.values(data?.environments ?? {})
-        .flat()
-        .flatMap((raw) => {
-          const environment = toNodeEnvironmentSummary(nodeId, raw);
+      const environments = Object.values(data?.environments ?? {}).flatMap((list) =>
+        list.flatMap((raw, index) => {
+          const environment = toNodeEnvironmentSummary(nodeId, raw, index);
           return environment ? [environment] : [];
-        });
+        }),
+      );
       const view = nodeView(connection);
       return {
         nodeId,

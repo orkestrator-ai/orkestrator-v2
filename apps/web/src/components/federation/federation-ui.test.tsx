@@ -10,6 +10,8 @@ import {
 import type { BackendId } from "@orkestrator/protocol/federation";
 import type { MachineView } from "@/lib/federation/aggregate";
 import type { FederatedEnvironment } from "@/lib/federation/summaries";
+import { reorderFederatedEnvironments } from "@/lib/federation/federated-actions";
+import { portalStore } from "@/lib/portal/portal-store";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import {
   OUTCOME_UNKNOWN,
@@ -100,6 +102,7 @@ function machineView(overrides: Partial<MachineView> = {}): MachineView {
     key: environmentKey(environmentRef(backendId, "env-1")),
     projectId: "project-1",
     name: "feature",
+    order: 0,
     status: "running",
     activity: "working",
     hasUnreadWork: false,
@@ -291,6 +294,88 @@ describe("UI-01: machines with identical IDs and project names", () => {
   });
 });
 
+describe("remote machine sections follow the owner's sidebar", () => {
+  function installOrderedMachine(extra: Parameters<typeof remoteConnection>[3] = {}) {
+    return installDesktopFake({
+      list: connectionList([remoteConnection("a", "Machine A", "teal", extra)]),
+      datasets: {
+        a: {
+          projects: [
+            { id: "p-zeta", name: "zeta", order: 0 },
+            { id: "p-alpha", name: "alpha", order: 2, folder: "Work" },
+            { id: "p-mid", name: "mid", order: 1, folder: "Work" },
+          ],
+          // Storage (creation) order differs from the owner's sidebar order.
+          environments: {
+            "p-zeta": [
+              { id: "e-1", projectId: "p-zeta", name: "first", status: "running", order: 2 },
+              { id: "e-2", projectId: "p-zeta", name: "second", status: "running", order: 0 },
+              { id: "e-3", projectId: "p-zeta", name: "third", status: "running", order: 1 },
+            ],
+          },
+        },
+      },
+    });
+  }
+
+  test("projects, folders and environments keep the owner's order", async () => {
+    installOrderedMachine();
+    renderWithFederation(<RemoteSections />);
+    const rows = await waitForRows(3);
+
+    expect(
+      rows.map((row) => within(row).getAllByRole("button")[1]!.getAttribute("aria-label")),
+    ).toEqual([
+      "second, on Machine A, Idle",
+      "third, on Machine A, Idle",
+      "first, on Machine A, Idle",
+    ]);
+    expect(
+      screen
+        .getAllByTestId("federated-project")
+        .map((project) => project.getAttribute("data-project")),
+    ).toEqual([
+      projectKey(projectRef("bk_a" as BackendId, "p-zeta")),
+      projectKey(projectRef("bk_a" as BackendId, "p-mid")),
+      projectKey(projectRef("bk_a" as BackendId, "p-alpha")),
+    ]);
+    const folder = document.querySelector('[data-project-folder-content="Work"]') as HTMLElement;
+    expect(within(folder).getByText("mid")).toBeTruthy();
+    expect(within(folder).getByText("alpha")).toBeTruthy();
+    expect(within(folder).queryByText("zeta") === null).toBe(true);
+  });
+
+  test("environments of a connected machine can be dragged; an unavailable one is read-only", async () => {
+    installOrderedMachine();
+    const view = renderWithFederation(<RemoteSections />);
+    await waitForRows(3);
+    expect(screen.getAllByRole("button", { name: /^Reorder / })).toHaveLength(3);
+    view.unmount();
+    uninstallDesktopFake();
+
+    installOrderedMachine({ transport: "unreachable" });
+    renderWithFederation(<RemoteSections />);
+    await waitForRows(3);
+    expect(screen.queryAllByRole("button", { name: /^Reorder / })).toHaveLength(0);
+  });
+
+  test("a reorder is routed to the project's own machine", async () => {
+    const fake = installOrderedMachine();
+    await reorderFederatedEnvironments(portalStore, projectRef("bk_a" as BackendId, "p-zeta"), [
+      "e-3",
+      "e-2",
+      "e-1",
+    ]);
+    expect(fake.callsTo("a", "reorder_environments")).toEqual([
+      {
+        connectionId: "a",
+        command: "reorder_environments",
+        args: { projectId: "p-zeta", environmentIds: ["e-3", "e-2", "e-1"] },
+      },
+    ]);
+  });
+});
+
 describe("RT-02/OP-05: actions keep the destination captured when they started", () => {
   test("RT-02/OP-05: a delete confirmed after focusing B still names and reaches A only", async () => {
     const fake = installTwoMachines();
@@ -438,16 +523,20 @@ describe("SH-03: SSH prompts", () => {
 describe("Unknown outcomes", () => {
   test("OP-02 (UI): UnknownOutcomesNotice: an ambiguous write is shown against its machine, not retried, and can be dismissed", async () => {
     const fake = installTwoMachines(({ command }) =>
-      command === "start_environment_background" ? OUTCOME_UNKNOWN : undefined,
+      command === "stop_environment" ? OUTCOME_UNKNOWN : undefined,
     );
     renderWithFederation(<RemoteSections />);
     await waitForRows(2);
 
-    const menu = await openRowActions("Machine A");
-    fireEvent.click(within(menu).getByRole("menuitem", { name: "Start" }));
+    // Remote rows carry the same right-click menu as this window's rows.
+    fireEvent.contextMenu(
+      within(rowOf("bk_a")).getByRole("button", { name: /^feature, on Machine A/ }),
+    );
+    const menu = await screen.findByRole("menu");
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Stop" }));
 
     const notice = await screen.findByTestId("unknown-outcomes");
-    expect(notice.textContent).toContain("Start environment");
+    expect(notice.textContent).toContain("Stop environment");
     const sectionA = screen.getByRole("region", { name: "Machine A projects" });
     expect(within(sectionA).getByTestId("unknown-outcomes")).toBe(notice);
     expect(
@@ -457,12 +546,12 @@ describe("Unknown outcomes", () => {
     ).toBe(true);
     await waitFor(() => expect(mockToastWarning).toHaveBeenCalledTimes(1));
     expect(String(mockToastWarning.mock.calls[0]![0])).toContain("Machine A");
-    expect(fake.callsTo("a", "start_environment_background")).toHaveLength(1);
-    expect(fake.callsTo("b", "start_environment_background")).toHaveLength(0);
+    expect(fake.callsTo("a", "stop_environment")).toHaveLength(1);
+    expect(fake.callsTo("b", "stop_environment")).toHaveLength(0);
 
-    fireEvent.click(within(notice).getByRole("button", { name: "Dismiss Start environment" }));
+    fireEvent.click(within(notice).getByRole("button", { name: "Dismiss Stop environment" }));
     await waitFor(() => expect(screen.queryByTestId("unknown-outcomes") === null).toBe(true));
-    expect(fake.callsTo("a", "start_environment_background")).toHaveLength(1);
+    expect(fake.callsTo("a", "stop_environment")).toHaveLength(1);
   });
 });
 

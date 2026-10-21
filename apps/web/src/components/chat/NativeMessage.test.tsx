@@ -3041,7 +3041,16 @@ describe("NativeMessage task list rendering", () => {
 
     expect(screen.getByText("Use this screenshot")).toBeTruthy();
     expect(screen.queryByText(/attached-files/) === null).toBe(true);
-    expect(await screen.findByAltText("Thumbnail: initial-shot.png")).toBeTruthy();
+    const thumbnail = await screen.findByAltText("Thumbnail: initial-shot.png");
+    Object.defineProperties(thumbnail, {
+      naturalWidth: { value: 1920 },
+      naturalHeight: { value: 1080 },
+    });
+    fireEvent.load(thumbnail);
+    // The whole image fits the tile width; it is never cropped to a fixed height.
+    expect(thumbnail.className).toContain("object-contain");
+    expect(thumbnail.className).toContain("h-auto");
+    expect(thumbnail.className).not.toContain("object-cover");
 
     fireEvent.click(
       screen.getByRole("button", {

@@ -12,7 +12,16 @@ function httpsRoute(node: TestNode): NodeRoute {
 }
 
 /** A leaf with one project and its environments, answering the summary reads. */
-function seed(leaf: TestNode, environments: Array<{ id: string; name: string; status?: string }>) {
+function seed(
+  leaf: TestNode,
+  environments: Array<{
+    id: string;
+    name: string;
+    status?: string;
+    order?: number;
+    projectHome?: boolean;
+  }>,
+) {
   const state = { environments: [...environments] };
   leaf.commands.set("get_projects", () => [
     {
@@ -129,7 +138,8 @@ describe("PT-01/PT-02/UP-01 the portal read model", () => {
   });
 
   test("local changes are not announced when nobody watches the self summary", async () => {
-    const { command } = await commandWithLeaf();
+    const network = new TestNodeNetwork();
+    const command = await network.add("command", { forceRegistration: true });
     seed(command, [{ id: "c1", name: "home-env" }]);
     command.events.length = 0;
     command.portal.readModel.noteLocalEvent("resource-changed", {
@@ -139,6 +149,68 @@ describe("PT-01/PT-02/UP-01 the portal read model", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 80));
     expect(command.events.some((entry) => entry.event === NODE_SUMMARY_CHANGED_EVENT)).toBe(false);
+  });
+
+  test("owner order survives hydration and per-project refresh, including home rows and fallback", async () => {
+    const { network, command, leaf } = await commandWithLeaf();
+    try {
+      const state = seed(leaf, [
+        { id: "last", name: "last", order: 4 },
+        { id: "fallback", name: "fallback" },
+        { id: "home", name: "home", order: 0, projectHome: true },
+        { id: "first", name: "first", order: -1 },
+      ]);
+      await command.portal.readModel.requestHydrate("bk_leaf" as never);
+      const rows = async () => (await command.portal.summaries()).nodes[0]!.environments;
+      expect((await rows()).map((row) => [row.ref.environmentId, row.order])).toEqual([
+        ["first", -1],
+        ["home", 0],
+        ["fallback", 1],
+        ["last", 4],
+      ]);
+      expect((await rows())[1]!.isProjectHome).toBe(true);
+      state.environments[0]!.order = -2;
+      const reads = leaf.received.filter((entry) => entry.command === "get_projects").length;
+      leaf.emit("resource-changed", {
+        resource: "environment",
+        id: "last",
+        projectId: "p1",
+        revision: 1,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      expect((await rows()).map((row) => row.ref.environmentId)).toEqual([
+        "last",
+        "first",
+        "home",
+        "fallback",
+      ]);
+      expect(leaf.received.filter((entry) => entry.command === "get_projects")).toHaveLength(reads);
+    } finally {
+      for (const node of network.nodes.values()) node.portal.stop();
+    }
+  });
+
+  test("the summary cap selects the first 500 owner positions, even from the storage tail", async () => {
+    const { network, command, leaf } = await commandWithLeaf();
+    try {
+      seed(
+        leaf,
+        Array.from({ length: 502 }, (_, index) => ({
+          id: `e${index}`,
+          name: `Environment ${index}`,
+          order: 501 - index,
+        })),
+      );
+      await command.portal.readModel.requestHydrate("bk_leaf" as never);
+      const node = (await command.portal.summaries()).nodes[0]!;
+      expect(node.truncated).toBe(true);
+      expect(node.environments).toHaveLength(500);
+      expect(node.environments.map((row) => row.ref.environmentId)).toEqual(
+        Array.from({ length: 500 }, (_, index) => `e${501 - index}`),
+      );
+    } finally {
+      for (const node of network.nodes.values()) node.portal.stop();
+    }
   });
 
   test("PT-04: an unavailable node keeps labelled last-known state and refuses writes", async () => {

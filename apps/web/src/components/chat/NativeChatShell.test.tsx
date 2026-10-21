@@ -1228,7 +1228,9 @@ describe("NativeChatShell", () => {
       Object.defineProperty(scroller, "clientHeight", { value: 300 });
       scroller.scrollTop = 700;
       fireEvent.scroll(scroller);
-      expect(screen.queryByRole("button", { name: "Scroll to bottom of conversation" })).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Scroll to bottom of conversation" }) === null,
+      ).toBe(true);
 
       fireEvent.wheel(scroller, { deltaY: -1 });
       scroller.scrollTop = 699;
@@ -1237,7 +1239,9 @@ describe("NativeChatShell", () => {
 
       scroller.scrollTop = 700;
       fireEvent.scroll(scroller);
-      expect(screen.queryByRole("button", { name: "Scroll to bottom of conversation" })).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Scroll to bottom of conversation" }) === null,
+      ).toBe(true);
     });
 
     test("offers a scroll-down shortcut only when scrolled away from the bottom", () => {

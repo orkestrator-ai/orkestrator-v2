@@ -1,6 +1,60 @@
+import type { BackendId } from "./federation.js";
+
 export const LOCAL_CONNECTION_ID = "local";
 
 export type ConnectionKind = "local" | "remote";
+
+/**
+ * Transport state of one machine, independent of resource freshness and of
+ * agent activity (see `docs/architecture/federation.md`).
+ */
+export type ConnectionTransportState =
+  | "disabled"
+  | "connecting"
+  | "authenticating"
+  | "connected"
+  | "reconnecting"
+  | "authentication-required"
+  | "trust-blocked"
+  | "incompatible"
+  | "unreachable";
+
+export const CONNECTION_TRANSPORT_STATES: readonly ConnectionTransportState[] = [
+  "disabled",
+  "connecting",
+  "authenticating",
+  "connected",
+  "reconnecting",
+  "authentication-required",
+  "trust-blocked",
+  "incompatible",
+  "unreachable",
+];
+
+/** Whether the client has proved which installation answers this machine's routes. */
+export type ConnectionIdentityState = "verified" | "provisional" | "conflict";
+
+/** Safe, renderer-visible metadata for one saved route. Never contains a token. */
+export interface ConnectionRouteSummary {
+  id: string;
+  kind: "https" | "ssh" | "local";
+  /** Short non-secret description, e.g. a host or `ssh build-machine`. */
+  label: string;
+  enabled: boolean;
+  active: boolean;
+  /** Why the route is quarantined, when a trust or credential failure blocked it. */
+  blockedReason?: string;
+  /** False in a client that cannot use this kind of route (an SSH route in a browser). */
+  supported: boolean;
+}
+
+export interface ConnectionProfileSummary {
+  displayName: string;
+  colorToken: string;
+  revision: number;
+  /** True when shown from the last-known cache rather than a live hello. */
+  cached: boolean;
+}
 
 export interface ConnectionSummary {
   id: string;
@@ -13,6 +67,18 @@ export interface ConnectionSummary {
   active: boolean;
   requiresToken: boolean;
   lastConnectedAt?: string;
+  /** Verified installation identity, when known. */
+  backendId?: BackendId;
+  identity?: ConnectionIdentityState;
+  /** Canonical backend profile (name + colour), live or last-known. */
+  profile?: ConnectionProfileSummary;
+  transport?: ConnectionTransportState;
+  /** Sanitized, bounded diagnostic for the current transport state. */
+  transportDetail?: string;
+  routes?: ConnectionRouteSummary[];
+  /** Backend generation from the last successful hello. */
+  generation?: string;
+  lastHelloAt?: string;
 }
 
 export interface ConnectionList {
@@ -21,6 +87,22 @@ export interface ConnectionList {
   credentialStorage?: "secure" | "session-only";
   /** Whether the desktop-owned Local backend can currently accept work. */
   localAvailable?: boolean;
+  /** Client feature flags (federation, SSH routes, route fallback). */
+  features?: { federation: boolean; sshRoutes: boolean; routeFallback: boolean };
+  /** Route kinds this client can open itself. */
+  supportedRouteKinds?: Array<"https" | "ssh">;
+}
+
+/** Input for adding a managed SSH route (desktop only). */
+export interface ConnectSshRouteInput {
+  destination: string;
+  sshPort?: number;
+  identityFile?: string;
+  remoteGatewayPort: number;
+  token: string;
+  nickname?: string;
+  /** Attach the route to this existing machine instead of onboarding a new one. */
+  connectionId?: string;
 }
 
 export interface ConnectToRemoteInput {
@@ -188,6 +270,7 @@ export function parseConnectionList(value: unknown): ConnectionList {
       ...(connection.lastConnectedAt === undefined
         ? {}
         : { lastConnectedAt: connection.lastConnectedAt }),
+      ...parseFederatedSummaryFields(connection),
     };
   });
   return {
@@ -195,5 +278,111 @@ export function parseConnectionList(value: unknown): ConnectionList {
     connections,
     ...(credentialStorage === undefined ? {} : { credentialStorage }),
     ...(localAvailable === undefined ? {} : { localAvailable }),
+    ...parseListFeatures(root),
   };
+}
+
+function parseListFeatures(root: Record<string, unknown>): Partial<ConnectionList> {
+  const result: Partial<ConnectionList> = {};
+  const features = root.features;
+  if (features && typeof features === "object" && !Array.isArray(features)) {
+    const record = features as Record<string, unknown>;
+    result.features = {
+      federation: record.federation === true,
+      sshRoutes: record.sshRoutes === true,
+      routeFallback: record.routeFallback === true,
+    };
+  }
+  if (Array.isArray(root.supportedRouteKinds)) {
+    result.supportedRouteKinds = root.supportedRouteKinds.filter(
+      (kind): kind is "https" | "ssh" => kind === "https" || kind === "ssh",
+    );
+  }
+  return result;
+}
+
+const MAX_SUMMARY_TEXT = 256;
+
+function boundedOptionalText(value: unknown, max = MAX_SUMMARY_TEXT): string | undefined {
+  if (typeof value !== "string" || !value) return undefined;
+  // oxlint-disable-next-line no-control-regex -- backend-sourced text is rendered as plain text
+  return value.replace(/[\u0000-\u001f\u007f]/g, " ").slice(0, max);
+}
+
+/**
+ * Optional federation fields. Unknown or malformed values are dropped rather
+ * than failing the whole list, so a newer main process cannot break an older
+ * renderer's switcher.
+ */
+function parseFederatedSummaryFields(
+  connection: Record<string, unknown>,
+): Partial<ConnectionSummary> {
+  const result: Partial<ConnectionSummary> = {};
+  if (
+    typeof connection.backendId === "string" &&
+    /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$/.test(connection.backendId)
+  ) {
+    result.backendId = connection.backendId as BackendId;
+  }
+  if (
+    connection.identity === "verified" ||
+    connection.identity === "provisional" ||
+    connection.identity === "conflict"
+  ) {
+    result.identity = connection.identity;
+  }
+  const profile = connection.profile;
+  if (profile && typeof profile === "object" && !Array.isArray(profile)) {
+    const record = profile as Record<string, unknown>;
+    const displayName = boundedOptionalText(record.displayName, 64);
+    const colorToken = boundedOptionalText(record.colorToken, 32);
+    if (displayName && colorToken && Number.isSafeInteger(record.revision)) {
+      result.profile = {
+        displayName,
+        colorToken,
+        revision: record.revision as number,
+        cached: record.cached === true,
+      };
+    }
+  }
+  if (
+    typeof connection.transport === "string" &&
+    (CONNECTION_TRANSPORT_STATES as readonly string[]).includes(connection.transport)
+  ) {
+    result.transport = connection.transport as ConnectionTransportState;
+  }
+  const transportDetail = boundedOptionalText(connection.transportDetail);
+  if (transportDetail) result.transportDetail = transportDetail;
+  const generation = boundedOptionalText(connection.generation, 200);
+  if (generation) result.generation = generation;
+  const lastHelloAt = boundedOptionalText(connection.lastHelloAt, 64);
+  if (lastHelloAt) result.lastHelloAt = lastHelloAt;
+  if (Array.isArray(connection.routes)) {
+    result.routes = connection.routes.slice(0, 8).flatMap((route): ConnectionRouteSummary[] => {
+      if (!route || typeof route !== "object" || Array.isArray(route)) return [];
+      const record = route as Record<string, unknown>;
+      const id = boundedOptionalText(record.id, 128);
+      const label = boundedOptionalText(record.label);
+      if (
+        !id ||
+        !label ||
+        (record.kind !== "https" && record.kind !== "ssh" && record.kind !== "local")
+      ) {
+        return [];
+      }
+      const blockedReason = boundedOptionalText(record.blockedReason);
+      return [
+        {
+          id,
+          kind: record.kind,
+          label,
+          enabled: record.enabled !== false,
+          active: record.active === true,
+          supported: record.supported !== false,
+          ...(blockedReason ? { blockedReason } : {}),
+        },
+      ];
+    });
+  }
+  return result;
 }

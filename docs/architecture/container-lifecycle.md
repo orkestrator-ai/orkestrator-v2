@@ -494,8 +494,11 @@ name appears in `entrypoint.sh`.
   the host before every start. Grok's, OpenCode's and Pi's are also pushed
   before every bridge start, including a reused bridge; OpenCode and Pi merge
   the host's providers into the container's file, keeping a login made inside
-  the container. The entrypoint blanks the refresh tokens again in the
-  container's own copy. Claude logins are still copied whole (follow-up in
+  the container, and a host file of expired logins still blanks any refresh
+  token the container holds for those providers. The entrypoint blanks the
+  refresh tokens again in the container's own copy; for OpenCode and Pi only
+  for providers the mounted host file holds as rotating OAuth, so a login
+  made inside the container survives a restart. Claude logins are still copied whole (follow-up in
   [container-network-and-credential-isolation.md](../todo/container-network-and-credential-isolation.md)).
 - The Cursor key is no longer in a staged-inputs container's creation
   environment; the bridge reads the synced owner-only file. The Anthropic API

@@ -193,7 +193,9 @@ restricted containers no longer need `NET_ADMIN` can the sudo grants shrink or
   - Migration from before the change, fake tokens: a full-shape Pi file
     (Anthropic OAuth, Copilot OAuth, OpenRouter key) written into the
     container, then the container restarted. The entrypoint blanked
-    Anthropic's refresh token and kept Copilot's and the key.
+    Anthropic's refresh token and kept Copilot's and the key. (The
+    entrypoint has since been narrowed to the providers the mounted host
+    file holds as rotating OAuth; a unit test covers both cases.)
   - `pi -p --model anthropic/claude-haiku-4-5` with that expired, access-only
     login exited 1 with "OAuth refresh failed for anthropic" (Anthropic
     answered 400 to the empty token) and left the file unchanged.

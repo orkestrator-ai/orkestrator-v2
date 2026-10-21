@@ -176,6 +176,6 @@ The aggregate exited 1 after 735.0 seconds. Backend reported 9,742 passed,
 551 files (696.00 seconds). The timed-out submodule subprocess was terminated
 with SIGTERM and emitted the between-tests `CommandFailedError` about missing
 submodule metadata. The other failing test was the unchanged terminal history
-owner, recorded in [0512](0512-terminal-history-backward-page-count.md).
+owner, recorded in [0513](0513-terminal-history-backward-page-count.md).
 All other workspace packages, root/support, bridges and protocol regeneration
 passed.

@@ -319,21 +319,24 @@ command node:
 
 ## Delivery outline
 
-1. Contracts: node roles, node-qualified references, registry schema, portal
-   API, data-plane grant, cross-node mail addressing, file-transfer API.
-2. Registry and connections in the command node backend (HTTPS and SSH),
-   with health, identity verification and route fallback.
-3. Aggregated read model, node-qualified command routing and event fan-in.
-4. Portal UI on the existing single-backend client, with node dots,
-   grouping and node-aware actions.
-5. Data plane: direct terminal and preview streams with scoped grants, relay
-   fallback.
-6. Cross-node coordinators: environment placement, control, interrogation,
-   mail routing.
-7. File transfer, and approved project creation and secret transfer on
-   leaves.
-8. Nested command nodes, several command nodes per leaf, migration from the
-   client-side federation, removal of the client-side code.
+Built in milestones with tested commits on one branch, reviewed as one PR.
+
+1. **Registry, attachment and leaf mode** in the backend: node registry and
+   routes (HTTPS and SSH from the backend), hello verification and
+   fallback, attachment records on leaves, leaf mode, two-level rule,
+   migration of saved desktop connections into the local registry.
+2. **Portal:** aggregated read model and node-qualified command routing in
+   the command node; one sidebar served to every client; leaf workspaces
+   opened directly from the client with scoped grants and relay fallback;
+   connection path in the info panel. Removal of the client-side
+   federation runtime and catalogue.
+3. **Cross-node coordinators:** environment placement (own node by default),
+   messages to and from leaf agents with routing to the right command node,
+   direct read access to leaf transcripts and state, deletion only on user
+   request with confirmation.
+4. **Files:** file-transfer framework, project creation on leaves with
+   approval, environment file copying from the leaf's or the command node's
+   project root, and `.env`/selected-file compare and update across leaves.
 
 ## Decided
 
@@ -351,11 +354,11 @@ command node:
 | Hierarchy | Two levels only. A command node attached to another becomes a leaf (leaf mode). |
 | Dial direction | The command node dials out to its leaves. |
 | Projects on leaves | Created only with user approval and an explicit location. |
+| Existing saved desktop connections | On upgrade they are attached as leaves of the desktop's local command node. A saved machine that commands its own leaves switches to leaf mode when attached. |
+| `.env` values for coordinators | Fingerprint-level differences only by default; plain text only on an explicit user request in that conversation. |
+| Leaf origins | Attaching registers the command node's portal origin on the leaf, so clients can reach the leaf directly with scoped grants. |
 
 ## Open decisions
 
-1. Should a coordinator ever be able to see `.env` values in plain text
-   (for example when the user explicitly asks), or only fingerprint-level
-   differences? Assumed: fingerprints only by default; plain text only on an
-   explicit user request in that conversation.
+None at present.
 

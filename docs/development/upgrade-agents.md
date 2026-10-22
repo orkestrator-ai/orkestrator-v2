@@ -386,7 +386,7 @@ Update the traced version only after doing the steps below.
 
 ## Re-check OAuth refresh-token rotation
 
-Containers get Codex, Grok, OpenCode and Pi logins access-only, because a copy
+Containers get Claude, Codex, Grok, OpenCode and Pi logins access-only, because a copy
 that refreshed with the host's refresh token would spend it and sign the host
 out (`packages/protocol/src/login-snapshots.ts`). OpenCode and Pi hold one
 login per model provider, and `NON_ROTATING_OAUTH_PROVIDERS` there lists the

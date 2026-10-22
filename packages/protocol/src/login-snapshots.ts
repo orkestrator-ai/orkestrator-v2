@@ -141,6 +141,65 @@ export function restrictCodexAuthSnapshot(text: string, nowMs = Date.now()): Log
   };
 }
 
+/**
+ * Reduce a copy of a Claude Code `.credentials.json` to what may not rotate the
+ * original.
+ *
+ * Anthropic rotates the Claude.ai refresh token on every refresh, and a
+ * refresh with a token another copy already spent fails with `invalid_grant`
+ * and signs that copy out (anthropics/claude-code#24317, #25609, #54443). The
+ * subscription login (`claudeAiOauth`) therefore keeps its access token, about
+ * eight hours at issue, and loses its refresh token; an expired one is
+ * dropped. The owner keeps such a copy signed in by handing it the original's
+ * current access token again, never by refreshing the copy.
+ *
+ * MCP server logins (`mcpOAuth`) lose their refresh tokens too: Claude Code is
+ * a public OAuth client for them, and OAuth 2.1 requires a public client's
+ * refresh tokens to rotate. Their access tokens are kept, expired or not, as
+ * the server decides whether they still work. Other top-level keys are kept.
+ * A file with neither a usable subscription login nor an MCP login is withheld.
+ */
+export function restrictClaudeCredentialsSnapshot(text: string, nowMs = Date.now()): LoginSnapshot {
+  const parsed = parseObject(text);
+  if (!parsed) return { withheld: "the Claude credential is not a JSON object" };
+  const { claudeAiOauth, mcpOAuth, ...rest } = parsed;
+  const restricted: Record<string, unknown> = { ...rest };
+  if (claudeAiOauth && typeof claudeAiOauth === "object" && !Array.isArray(claudeAiOauth)) {
+    const login = { ...(claudeAiOauth as Record<string, unknown>) };
+    const accessToken = typeof login.accessToken === "string" ? login.accessToken.trim() : "";
+    const expiresAt = login.expiresAt;
+    const usable =
+      accessToken !== "" &&
+      !(
+        typeof expiresAt === "number" &&
+        Number.isFinite(expiresAt) &&
+        expiresAt - nowMs < LOGIN_SNAPSHOT_MIN_VALIDITY_MS
+      );
+    if (usable) {
+      delete login.refreshToken;
+      restricted.claudeAiOauth = login;
+    }
+  }
+  if (mcpOAuth && typeof mcpOAuth === "object" && !Array.isArray(mcpOAuth)) {
+    const servers: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(mcpOAuth)) {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+      const server = { ...(entry as Record<string, unknown>) };
+      delete server.refreshToken;
+      servers[key] = server;
+    }
+    restricted.mcpOAuth = servers;
+  }
+  const hasMcpLogins = Object.keys((restricted.mcpOAuth as object | undefined) ?? {}).length > 0;
+  if (!("claudeAiOauth" in restricted) && !hasMcpLogins) {
+    return {
+      withheld:
+        "the Claude login has expired and a copy may not refresh it; run claude on the host (claude /login if it is signed out there), then restart",
+    };
+  }
+  return { text: JSON.stringify(restricted) };
+}
+
 /** The per-provider login files: OpenCode's `auth.json` and Pi's `agent/auth.json`. */
 export type ProviderAuthFormat = "opencode" | "pi";
 

@@ -1,6 +1,7 @@
 # Container network and credential isolation
 
-Checked against `main` at `2459b05c` (2026-10-15).
+Checked against `main` at `2459b05c` (2026-10-15); Claude credentials
+against `688f9f69` (2026-10-21).
 
 Restricted mode limits where a container can connect with an in-container
 IPv4 ipset firewall. Root sets it up through narrow sudo grants, and the
@@ -90,6 +91,40 @@ restricted containers no longer need `NET_ADMIN` can the sudo grants shrink or
   homes and copy them whole with their old entrypoint; they go away with the
   host-mounts path
   ([0021-container-rebuild-state-preservation.md](0021-container-rebuild-state-preservation.md)).
+- Claude (2026-10-21): containers get the Claude login access-only too
+  (`restrictClaudeCredentialsSnapshot`), on every path that used to pipe or
+  stage it whole. The keeper and the host-side refresh are described in
+  [Container lifecycle](../../architecture/container-lifecycle.md), "Portable
+  inputs". The evidence the design rests on:
+  - Rotation. Anthropic rotates the Claude.ai refresh token on every refresh,
+    and a refresh with a spent one fails with `invalid_grant` ("Refresh token
+    not found or invalid") and signs that copy out (anthropics/claude-code
+    #24317, #25609, #52202 and #54443, including a captured request whose
+    token matched the file on disk). Claude Code 2.1.304's own
+    `CLAUDE_CODE_OAUTH_REFRESH_TOKEN` error says the token "was used for this
+    attempt and cannot be used again". No Anthropic statement exists (#52202
+    asks for one). Not tested with a disposable account: none was available,
+    and the host's own could not be spent.
+  - Access-only behaviour, from the CLI source (2.1.296 and 2.1.304) and a
+    fake login in a 2.23.0 container (Claude Code 2.1.296). A `claudeAiOauth`
+    with no `refreshToken` key counts as logged in and never refreshes
+    (`no_refresh_token`), and the file is never rewritten, including after
+    expiry and after a 401. An empty `refreshToken` is the CLI's dead-login
+    marker, so the key is removed instead. A running CLI drops its cached
+    login when the file's mtime changes, or after a 401.
+  - Host refresh trigger. Claude Code has no refresh-only command and no
+    force flag. `claude auth status` attempted a refresh once and not in
+    repeat runs, so it is not used. Every `-p` run with a refreshable fake
+    login near expiry attempted the refresh, including one for an unknown
+    model with `--setting-sources ""` (which kept a user `SessionStart` hook
+    from running), `--strict-mcp-config`, `--tools ""` and
+    `--no-session-persistence`. The fake access token drew a 401, which also
+    forces a refresh, so whether a real, unexpired token is refreshed
+    proactively there is from the source, not observed.
+  - Cost: a container's own `claude /login` no longer survives a restart while
+    Claude credentials are allowed, because its refresh token is stripped too
+    (as for Codex and Grok). Revoking the environment's Claude credentials
+    keeps it, since nothing is then staged or synced.
 - Rotating OpenCode and Pi OAuth refresh tokens (2026-10-21). OpenCode's
   `auth.json` and Pi's `agent/auth.json` hold one login per model provider
   (`{ type: "oauth", access, refresh, expires }`, expiry in milliseconds, or
@@ -131,39 +166,31 @@ restricted containers no longer need `NET_ADMIN` can the sudo grants shrink or
 
 ### Code
 
-2. One canonical default allowlist. Generate the shell and renderer fallbacks
+1. One canonical default allowlist. Generate the shell and renderer fallbacks
    from the backend list (at image build and from the protocol package), or
    have the renderer read the backend's list, rather than keeping three
    copies. `requiredAgentNetworkDomains` stays the only provider-specific
    addition. Replace the partial drift test with an equality or generation
    check. Never widen a stored user list on a read.
-3. External egress prototype, kept bounded. Enforce egress outside the
+2. External egress prototype, kept bounded. Enforce egress outside the
    workload with no workload `NET_ADMIN`. Prove a working path for non-HTTP
    Git/SSH, provider endpoints and the agent-tools callback, then measure
    overhead and failure recovery. A plain HTTP proxy does not constrain direct
    sockets without network enforcement beside it. Only after the prototype
    replaces the privileged init can `NET_ADMIN`, the `init-firewall.sh` grant
    or `no-new-privileges` be reconsidered.
-4. Optional: change mode in place (restricted to full and back) instead of
+3. Optional: change mode in place (restricted to full and back) instead of
    requiring a rebuild.
-5. Stop containers spending the host's Claude refresh token (high). Every
-   container start pipes in the host's full Claude credential, refresh token
-   included (`syncContainerAgentAccountsOnStart`, `pushContainerLogin`,
-   `.credentials.json` staging), and an added account's goes in the same way.
-   Anthropic OAuth refresh tokens are reported to rotate: Claude Code issues
-   describe a devcontainer copy and the host signing each other out. If so,
-   the first copy to refresh signs out the host and every other container.
-   This was not changed along with Grok and Codex because Claude's access
-   token lasts about eight hours. An access-only copy would sign a long
-   container session out unless something on the host refreshes and
-   re-pushes it. Options: hand containers the access token only and re-push
-   it before each Claude bridge start and when the host token renews (local
-   coordinator bridges already do this with `CLAUDE_CODE_OAUTH_TOKEN`),
-   possibly with a backend-owned host refresh; or steer container users to a
-   long-lived `claude setup-token` token. First confirm rotation with a
-   disposable account: refresh one copy, then check whether the other copy
-   can still refresh. Done when a container refresh can never invalidate the
-   host's Claude login.
+4. Keep container MCP OAuth logins signed in (medium). Claude's `mcpOAuth`
+   entries now reach a container without refresh tokens, so a container's MCP
+   server login lapses with its access token unless the host refreshes it
+   first, which it only does when the host itself uses that server. Either
+   have the keeper refresh near-expiry MCP logins on the host too, or keep a
+   container-owned MCP login separate from the host's.
+5. Read the host Claude login once per keeper pass (low, measure first). Each
+   pass reads the active login (a `security` call on macOS) once to decide on
+   a host refresh and again per running container it syncs. Pass the one read
+   down if a host with many running containers shows it matters.
 6. Re-push access-only logins to running containers when the host's file
    changes (medium). Grok, OpenCode and Pi copies are refreshed only at
    container start and bridge start, so a bridge session that outlives the
@@ -173,8 +200,8 @@ restricted containers no longer need `NET_ADMIN` can the sudo grants shrink or
    poll their mtime) and push to every running container that is authorized
    for the provider, through the same queue and fences as
    `syncContainerLogin`. OpenCode and Pi re-read the file per request, so no
-   bridge restart is needed; check whether Grok does. The Claude item (5)
-   needs the same mechanism and may share it.
+   bridge restart is needed; check whether Grok does. Claude already uses
+   a keeper for renewal delivery; the same mechanism may be shared.
 
 7. Tell a container user how to recover a lapsed Codex login (medium).
    When a container's access-only Codex login lapses, the tab now says
@@ -198,6 +225,39 @@ restricted containers no longer need `NET_ADMIN` can the sudo grants shrink or
 
 ### Qualification
 
+- Claude host refresh and mid-session pickup, live (high; on by default).
+  Nothing has yet run `refreshHostClaudeLogin` against a real login, because
+  doing so spends the host's refresh token. On a host or disposable account
+  whose access token is inside its last four minutes, with a Claude bridge
+  running in a container: confirm the keeper's `-p` run renews the host login
+  (new `expiresAt`, no model request billed, the user's `claude` still signed
+  in afterwards), that the renewal reaches the container, and that the
+  running container CLI uses it without a restart. Also confirm a run with
+  more than five minutes left changes nothing. Re-check the trigger after
+  each Claude Code upgrade.
+- Claude access-only run on 2026-10-21. Host Claude Code 2.1.304 (Keychain
+  login); container image `ghcr.io/orkestrator-ai/orkestrator-v2:2.23.0`
+  (Claude Code 2.1.296) on Docker Desktop 29.8.2 (aarch64), with this
+  change's `docker/entrypoint.sh` bind-mounted. One disposable container,
+  `ork-live-0681-claude-access`, full network mode, removed afterwards; the
+  CLI probes ran in throwaway `ork-live-0680-claude-probe` containers with
+  fake tokens only. No profile or other environment was touched.
+  - Host Keychain item and `~/.claude/.credentials.json`: SHA-256 prefix and
+    modification time recorded before and after. Both were unchanged.
+  - Entrypoint migration: a fake full-shape credential on the
+    `/claude-config` mount was copied with its refresh token removed (mode
+    600, sentinel absent).
+  - `accessOnlyLoginText("claude", …)` over the real host login, pushed with
+    the production stdin command: no `refreshToken` key, no MCP refresh
+    tokens, the host refresh token nowhere in the payload.
+  - In the container, `claude auth status` reported a Claude Max login and
+    `claude -p … --model haiku` answered "pong" (exit 0). The credential file's
+    hash and mtime were unchanged afterwards and it still had no refresh token.
+  - The in-place restrict command removed both refresh tokens from a fake
+    file (mode 600). The `oauthAccount` command replaced the identity, kept
+    the other 25 keys of `~/.claude.json`, and `claude auth status` then named
+    the new (fake) email.
+  - Skipped: the host refresh and a mid-session token pickup (see above).
 - OpenCode and Pi past expiry with live OAuth logins (medium). The
   2026-10-21 run below had none: the host's OpenCode holds API keys only, and
   Pi's only OAuth login (OpenAI) had expired, so staging rightly withheld it.
@@ -337,7 +397,10 @@ restricted containers no longer need `NET_ADMIN` can the sudo grants shrink or
   container when that provider's refresh tokens are single-use or rotating. It
   gets the access token, re-read from the host on start, and signs out on its
   own when that expires. A refresh token that is reused rather than rotated
-  (GitHub Copilot, Pi's Meta) may be copied, like an API key.
+  (GitHub Copilot, Pi's Meta) may be copied, like an API key. Only the host
+  refreshes through the provider's own CLI; Orkestrator never calls a token
+  endpoint or writes a host credential store itself, and an agent-test profile
+  never refreshes the host at all.
 - Credentials go only to enabled, authorized, non-revoked providers.
   Revocation is recorded before anything else, so an interrupted revoke still
   gates staging and syncs. Never promise that removal retracts a credential a

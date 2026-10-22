@@ -353,10 +353,13 @@ place, as described below, and writes nothing else there.
 For a container test environment, the same provider homes (the profile's
 snapshots for Codex and OpenCode, the host's `~/.claude` read-only for Claude)
 are mounted read-only and copied into writable container state using the
-normal production allowlists. Claude's Keychain credential is synchronized separately over stdin.
-Codex and Grok logins reach any container (test or not) access-only, with the
-refresh token blanked and expired logins withheld, because their refresh
-tokens are single-use and a container refresh would sign the host out
+normal production allowlists. Claude's Keychain credential is synchronized
+separately over stdin. Claude, Codex and Grok logins reach any container
+(test or not) access-only, with the refresh token removed or blanked and
+expired logins withheld, because their refresh tokens are single-use and a
+container refresh would sign the host out. An agent-test profile never
+refreshes the host's Claude login for its containers; they sign out when the
+host's access token expires
 ([Container lifecycle](../architecture/container-lifecycle.md), "Portable
 inputs").
 

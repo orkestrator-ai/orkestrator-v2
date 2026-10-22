@@ -498,8 +498,31 @@ name appears in `entrypoint.sh`.
   token the container holds for those providers. The entrypoint blanks the
   refresh tokens again in the container's own copy; for OpenCode and Pi only
   for providers the mounted host file holds as rotating OAuth, so a login
-  made inside the container survives a restart. Claude logins are still copied whole (follow-up in
-  [0018-container-network-and-credential-isolation.md](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md)).
+  made inside the container survives a restart.
+- Claude's `.credentials.json` is access-only the same way
+  (`restrictClaudeCredentialsSnapshot`): `claudeAiOauth` and every `mcpOAuth`
+  entry lose `refreshToken` (the key is removed, because Claude Code treats an
+  empty one as a dead login), and an expired subscription login is withheld
+  (not reported as `login-withheld`: on macOS the on-disk file is often stale
+  beside the Keychain login the stdin sync delivers).
+  That applies to staging, the restage before every start, the stdin sync on
+  every start and account switch, and a new push before every Claude bridge
+  start. With nothing usable to push, the container's own copy has its refresh
+  tokens stripped in place. The entrypoint strips a copy it takes from the
+  `/claude-config` mount. The access token lasts about eight hours, so the
+  backend's `ContainerClaudeLoginKeeper` re-reads the active login every five
+  minutes and pushes it into each running container whose copy differs; the
+  container CLI notices the new file by its mtime. Just before the token
+  expires the keeper has the host's own CLI refresh it
+  (`refreshHostClaudeLogin`: a `-p` request for a model no catalogue knows,
+  with settings, tools, MCP and session persistence off), so the refresh runs
+  through Claude Code's own lock and compare-and-swap save. A start or bridge
+  start that finds the host token expired asks for that refresh at once
+  rather than waiting for the next pass. An agent-test profile never
+  refreshes the host. A switch also rewrites `oauthAccount` in
+  the running container's `~/.claude.json`. Remaining qualification and renewal
+  work is tracked in
+  [0018-container-network-and-credential-isolation.md](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md).
 - The Cursor key is no longer in a staged-inputs container's creation
   environment; the bridge reads the synced owner-only file. The Anthropic API
   key (when used instead of OAuth) still is, because Claude Code in terminals

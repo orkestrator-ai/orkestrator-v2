@@ -17,6 +17,7 @@ import os from "node:os";
 import path from "node:path";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
+  restrictClaudeCredentialsSnapshot,
   restrictCodexAuthSnapshot,
   restrictGrokAuthSnapshot,
   restrictOpenCodeAuthSnapshot,
@@ -37,8 +38,8 @@ import { environmentStateDirectory } from "./environment-state-paths.js";
  * Only enabled providers are staged. Sources are read without following
  * symlinks (every ancestor and the entry itself), each file is re-checked
  * after opening so a swapped path cannot be read, and bounds are enforced
- * while copying. Logins whose refresh token is single-use or rotating (Codex,
- * Grok, and OpenCode and Pi OAuth) are staged access-only (`accessOnlyLogin`),
+ * while copying. Logins whose refresh token is single-use or rotating (Claude,
+ * Codex, Grok, and OpenCode and Pi OAuth) are staged access-only (`accessOnlyLogin`),
  * so no container can spend the host's. A revision is written under a
  * temporary name and renamed into place, so a container never binds a
  * half-written revision.
@@ -83,7 +84,16 @@ export interface InputSource {
    * `@orkestrator/protocol/login-snapshots`), or not at all when that
    * withholds it.
    */
-  accessOnlyLogin?: { file: string; restrict: AccessOnlyLoginRestriction };
+  accessOnlyLogin?: {
+    file: string;
+    restrict: AccessOnlyLoginRestriction;
+    /**
+     * Withhold without reporting `login-withheld`, for a login another path
+     * delivers. Claude's arrives over stdin from the Keychain or this same file
+     * on every start, so a stale file on a macOS host is no reason to warn.
+     */
+    quiet?: boolean;
+  };
 }
 
 export type AccessOnlyLoginRestriction = (text: string, nowMs?: number) => LoginSnapshot;
@@ -163,6 +173,11 @@ export function portableInputSpec(roots: InputSourceRoots): ProviderInputSpec[] 
           stage: "claude-config",
           target: "/claude-config",
           root: agentTest ? (roots.claudeConfigDir ?? null) : path.join(home, ".claude"),
+          accessOnlyLogin: {
+            file: ".credentials.json",
+            restrict: restrictClaudeCredentialsSnapshot,
+            quiet: true,
+          },
           files: [
             "CLAUDE.md",
             "settings.local.json",
@@ -184,6 +199,11 @@ export function portableInputSpec(roots: InputSourceRoots): ProviderInputSpec[] 
                 target: "/claude-config",
                 root: claudeAccountHome,
                 files: [".credentials.json"],
+                accessOnlyLogin: {
+                  file: ".credentials.json",
+                  restrict: restrictClaudeCredentialsSnapshot,
+                  quiet: true,
+                },
               },
             ]
           : []),
@@ -502,14 +522,13 @@ class ProviderCopier {
     this.summary.skipped[reason] = (this.summary.skipped[reason] ?? 0) + count;
   }
 
-  adjustLogin(adjustment: LoginAdjustment): void {
+  adjustLogin(adjustment: LoginAdjustment, quiet = false): void {
     const files = adjustment.withheld ? -1 : 0;
     const bytes = adjustment.bytes - adjustment.originalBytes;
     this.summary.files += files;
     this.summary.bytes += bytes;
     this.total.take(files, bytes);
-    if (adjustment.withheld) this.skip("login-withheld");
-    // Provider logins left out of an OpenCode or Pi file that is still staged.
+    if (adjustment.withheld && !quiet) this.skip("login-withheld");
     if (adjustment.dropped) this.skip("login-withheld", adjustment.dropped);
   }
 
@@ -694,7 +713,7 @@ export async function stagePortableInputs(
               source.accessOnlyLogin.restrict,
               now,
             );
-            if (adjustment) copier.adjustLogin(adjustment);
+            if (adjustment) copier.adjustLogin(adjustment, source.accessOnlyLogin.quiet === true);
           }
         }
         for (const directory of source.directories ?? []) {
@@ -797,6 +816,7 @@ async function restrictStagedLogin(
 }
 
 const ACCESS_ONLY_LOGINS: Record<AccessOnlyLoginProvider, AccessOnlyLoginRestriction> = {
+  claude: restrictClaudeCredentialsSnapshot,
   codex: restrictCodexAuthSnapshot,
   grok: restrictGrokAuthSnapshot,
   opencode: restrictOpenCodeAuthSnapshot,
@@ -804,7 +824,7 @@ const ACCESS_ONLY_LOGINS: Record<AccessOnlyLoginProvider, AccessOnlyLoginRestric
 };
 
 /** Providers whose staged login file a container may only hold access-only. */
-export type AccessOnlyLoginProvider = "codex" | "grok" | "opencode" | "pi";
+export type AccessOnlyLoginProvider = "claude" | "codex" | "grok" | "opencode" | "pi";
 
 /**
  * The access-only form of a login a running container or a restaged revision

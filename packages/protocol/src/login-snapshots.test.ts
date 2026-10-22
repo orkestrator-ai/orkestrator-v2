@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   jwtExpiryMs,
+  restrictClaudeCredentialsSnapshot,
   nonRotatingOAuthProviders,
   PROVIDER_AUTH_MIN_VALIDITY_MS,
   restrictCodexAuthSnapshot,
@@ -144,6 +145,103 @@ describe("jwtExpiryMs", () => {
     expect(jwtExpiryMs(jwt({ iat: 1 }))).toBeUndefined();
     expect(jwtExpiryMs("opaque")).toBeUndefined();
     expect(jwtExpiryMs("a.!!!.c")).toBeUndefined();
+  });
+});
+
+describe("restrictClaudeCredentialsSnapshot", () => {
+  const live = NOW + 8 * 60 * 60_000;
+
+  test("keeps a live subscription login's access token and drops its refresh token", () => {
+    const snapshot = restrictClaudeCredentialsSnapshot(
+      JSON.stringify({
+        claudeAiOauth: {
+          accessToken: "access",
+          refreshToken: "single-use",
+          expiresAt: live,
+          scopes: ["user:inference", "user:profile"],
+          subscriptionType: "max",
+          rateLimitTier: "default_claude_max_20x",
+        },
+        organizationUuid: "org",
+      }),
+      NOW,
+    );
+    expect(text(snapshot)).toEqual({
+      claudeAiOauth: {
+        accessToken: "access",
+        expiresAt: live,
+        scopes: ["user:inference", "user:profile"],
+        subscriptionType: "max",
+        rateLimitTier: "default_claude_max_20x",
+      },
+      organizationUuid: "org",
+    });
+    // Absent, not "": the CLI treats an empty refresh token as a dead login.
+    expect("refreshToken" in (text(snapshot).claudeAiOauth as object)).toBe(false);
+  });
+
+  test("drops MCP server refresh tokens and keeps their access tokens", () => {
+    const snapshot = restrictClaudeCredentialsSnapshot(
+      JSON.stringify({
+        claudeAiOauth: { accessToken: "access", refreshToken: "r", expiresAt: live },
+        mcpOAuth: {
+          "linear|abc": {
+            serverName: "linear",
+            accessToken: "mcp",
+            refreshToken: "mcp-r",
+            expiresAt: 1,
+          },
+          broken: "not an object",
+        },
+      }),
+      NOW,
+    );
+    expect(text(snapshot).mcpOAuth).toEqual({
+      "linear|abc": { serverName: "linear", accessToken: "mcp", expiresAt: 1 },
+    });
+    expect(JSON.stringify(text(snapshot))).not.toContain("mcp-r");
+  });
+
+  test("keeps MCP logins beside an expired or absent subscription login", () => {
+    const snapshot = restrictClaudeCredentialsSnapshot(
+      JSON.stringify({
+        claudeAiOauth: { accessToken: "a", refreshToken: "r", expiresAt: NOW - 1 },
+        mcpOAuth: { s: { accessToken: "mcp", refreshToken: "mcp-r" } },
+      }),
+      NOW,
+    );
+    expect(text(snapshot)).toEqual({ mcpOAuth: { s: { accessToken: "mcp" } } });
+  });
+
+  test("withholds a login that has expired or is about to", () => {
+    for (const expiresAt of [NOW - 1, NOW + 30_000]) {
+      const snapshot = restrictClaudeCredentialsSnapshot(
+        JSON.stringify({ claudeAiOauth: { accessToken: "a", refreshToken: "r", expiresAt } }),
+        NOW,
+      );
+      expect("withheld" in snapshot).toBe(true);
+      expect(JSON.stringify(snapshot)).not.toContain('"r"');
+    }
+  });
+
+  test("keeps a login that records no expiry, and withholds one with no access token", () => {
+    expect(
+      text(
+        restrictClaudeCredentialsSnapshot(
+          JSON.stringify({ claudeAiOauth: { accessToken: "a", refreshToken: "r" } }),
+          NOW,
+        ),
+      ),
+    ).toEqual({ claudeAiOauth: { accessToken: "a" } });
+    for (const input of [
+      JSON.stringify({ claudeAiOauth: { refreshToken: "r" } }),
+      JSON.stringify({ mcpOAuth: {} }),
+      JSON.stringify({ claudeAiOauth: { accessToken: "a", expiresAt: NOW - 1 } }),
+      "not json",
+      "[]",
+    ]) {
+      expect("withheld" in restrictClaudeCredentialsSnapshot(input, NOW)).toBe(true);
+    }
   });
 });
 

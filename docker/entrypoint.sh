@@ -109,9 +109,9 @@ report_agent_copy_skips() {
     AGENT_COPY_SKIPPED=""
 }
 
-# Codex and Grok refresh tokens are single-use, and most OpenCode and Pi OAuth
-# logins rotate theirs: a container copy that refreshed would spend the token
-# the host still holds and sign the host out, along with every other container.
+# Claude, Codex and Grok refresh tokens are single-use, and most OpenCode and Pi
+# OAuth logins rotate theirs: a container copy that refreshed would spend the
+# token the host still holds and sign the host and other containers out.
 # The backend stages these logins access-only
 # (packages/protocol/src/login-snapshots.ts); this blanks the refresh token
 # again in the container's own copy, so a host-mounted home or a copy imported
@@ -143,7 +143,13 @@ restrict_imported_login() {
         const [file, kind, source] = process.argv.slice(1);
         const login = JSON.parse(fs.readFileSync(file, "utf8"));
         if (!login || typeof login !== "object" || Array.isArray(login)) process.exit(1);
-        if (kind === "grok") {
+        if (kind === "claude") {
+          const strip = (entry) => {
+            if (entry && typeof entry === "object") delete entry.refreshToken;
+          };
+          strip(login.claudeAiOauth);
+          if (login.mcpOAuth && typeof login.mcpOAuth === "object") Object.values(login.mcpOAuth).forEach(strip);
+        } else if (kind === "grok") {
           for (const entry of Object.values(login)) {
             if (entry && typeof entry === "object" && "refresh_token" in entry) entry.refresh_token = "";
           }
@@ -297,11 +303,26 @@ publish_claude_credentials() {
         echo "Failed to write Claude credentials" >&2
         return 1
     fi
-    if ! chmod 600 "$temporary_path" || ! mv -f "$temporary_path" "$destination_path"; then
+    # Sanitize the private payload before publication. A concurrent backend
+    # push must win even if it lands while this import is being restricted.
+    restrict_imported_login "$temporary_path" claude Claude
+    if [ ! -f "$temporary_path" ]; then return 1; fi
+    if ! chmod 600 "$temporary_path"; then
+        rm -f "$temporary_path"
+        return 1
+    fi
+    # Atomic create-if-absent, unlike a test followed by rename. The backend
+    # replaces this file atomically, so its newer payload always wins.
+    if ! node -e 'require("fs").linkSync(process.argv[1], process.argv[2])' "$temporary_path" "$destination_path" 2>/dev/null; then
+        if [ -f "$destination_path" ] && [ ! -L "$destination_path" ]; then
+            rm -f "$temporary_path"
+            return 0
+        fi
         rm -f "$temporary_path"
         echo "Failed to publish Claude credentials" >&2
         return 1
     fi
+    rm -f "$temporary_path"
     chmod 600 "$destination_path"
 }
 

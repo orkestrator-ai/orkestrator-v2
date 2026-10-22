@@ -44,7 +44,10 @@ async function fixtureHome() {
   await fs.mkdir(dataDir, { recursive: true });
   // Claude: allowlisted files and extensions, plus state that must never be staged.
   await write(path.join(home, ".claude", "CLAUDE.md"), "memory");
-  await write(path.join(home, ".claude", ".credentials.json"), '{"token":"fixture"}');
+  await write(
+    path.join(home, ".claude", ".credentials.json"),
+    '{"claudeAiOauth":{"accessToken":"fixture","refreshToken":"fixture-refresh"}}',
+  );
   await write(path.join(home, ".claude", "history.jsonl"), "SENTINEL-HISTORY");
   await write(path.join(home, ".claude", "projects", "p", "s.jsonl"), "SENTINEL-TRANSCRIPT");
   await write(path.join(home, ".claude", "commands", "review.md"), "command");
@@ -257,6 +260,48 @@ describe("portable input staging", () => {
       bytes: 0,
       skipped: { "login-withheld": 1 },
     });
+  });
+
+  test("stages Claude's login access-only and withholds an expired one without a warning", async () => {
+    const { dataDir, roots, home } = await fixtureHome();
+    const now = new Date("2026-10-21T12:00:00Z");
+    await write(
+      path.join(home, ".claude", ".credentials.json"),
+      JSON.stringify({
+        claudeAiOauth: {
+          accessToken: "access",
+          refreshToken: "SENTINEL",
+          expiresAt: now.getTime() + 60 * 60_000,
+        },
+        mcpOAuth: { server: { accessToken: "mcp", refreshToken: "SENTINEL" } },
+      }),
+    );
+    const live = await stagePortableInputs(dataDir, "env-claude", new Set(["claude"]), roots, now);
+    const text = await fs.readFile(
+      path.join(live.directory, "claude-config", ".credentials.json"),
+      "utf8",
+    );
+    expect(JSON.parse(text)).toEqual({
+      claudeAiOauth: { accessToken: "access", expiresAt: now.getTime() + 60 * 60_000 },
+      mcpOAuth: { server: { accessToken: "mcp" } },
+    });
+    // A stale on-disk file beside a Keychain login is normal on macOS; the
+    // stdin sync delivers Claude's login, so withholding it is not reported.
+    await write(
+      path.join(home, ".claude", ".credentials.json"),
+      JSON.stringify({
+        claudeAiOauth: { accessToken: "a", refreshToken: "SENTINEL", expiresAt: 1 },
+      }),
+    );
+    const expired = await stagePortableInputs(
+      dataDir,
+      "env-claude-expired",
+      new Set(["claude"]),
+      roots,
+      now,
+    );
+    expect(await listFiles(expired.directory)).not.toContain("claude-config/.credentials.json");
+    expect(expired.providers[0]?.skipped["login-withheld"]).toBeUndefined();
   });
 
   test("stages OpenCode and Pi OAuth logins access-only and keeps their API keys", async () => {

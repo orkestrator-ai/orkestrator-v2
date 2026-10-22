@@ -1,6 +1,8 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
 import os from "node:os";
 
+import { enqueueContainerBridgeOperation } from "../src/core/container-bridge-operations.js";
+
 import { DOCKER_LABEL_APP_VALUE } from "../src/core/constants";
 import { createCommandFixtures } from "./command-fixtures";
 
@@ -1090,6 +1092,105 @@ exit 0
     }
   });
 
+  test("Claude bridge start uses the persisted queue key, reconciles first, then restricts an unusable login before launch", async () => {
+    const hostPort = await reserveFreePort();
+    const dir = await createTempDir("ork-claude-login-start-");
+    const marker = path.join(dir, "account-marker");
+    const healthy = path.join(dir, "healthy");
+    const token = path.join(dir, "bridge-token");
+    const accountId = "11111111-2222-4333-8444-555555555555";
+    const accountHome = path.join(dir, "agent-accounts", "claude", accountId);
+    await fs.mkdir(accountHome, { recursive: true });
+    await fs.writeFile(
+      path.join(accountHome, ".credentials.json"),
+      JSON.stringify({
+        claudeAiOauth: { accessToken: "expired", refreshToken: "NEVER-DELIVER", expiresAt: 1 },
+      }),
+    );
+    await fs.writeFile(path.join(accountHome, ".claude.json"), "{}");
+    const environment = createEnvironment({
+      id: "env-login-start",
+      environmentType: "containerized",
+      containerId: "container-claude-login-start-full",
+      status: "running",
+    });
+    const { context } = createContext(environment, {
+      dataDir: dir,
+      globalConfig: { enabledAgentPlatforms: ["claude"] },
+    });
+    context.storage.loadAgentAccounts = (async () => ({
+      version: 1,
+      accounts: [],
+      active: { claude: accountId },
+    })) as never;
+    const bridge = await startAuthenticatedContainerServer(hostPort, {
+      isHealthy: () => existsSync(healthy),
+      isAuthorized: (request) =>
+        request.headers["x-orkestrator-claude-token"] === readTestCredential(token),
+    });
+    const commands = createCommandRegistry();
+    const released = Promise.withResolvers<void>();
+    const locked = Promise.withResolvers<void>();
+    const held = enqueueContainerBridgeOperation("claude", environment.containerId!, async () => {
+      locked.resolve();
+      await released.promise;
+    });
+    // Paths are private generated fixture paths; no credentials are in argv/logs.
+    const dockerScript = `#!/bin/sh
+case "$1" in
+  inspect)
+    case "$*" in *'{{.Id}}'*) printf '<no value>\\trunning\\torkestrator-v2\\tcontainer-claude-login-start-full\\n'; exit 0 ;; esac
+    printf 'running\\n'; exit 0 ;;
+  port) printf '127.0.0.1:${hostPort}\\n'; exit 0 ;;
+  exec)
+    printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+    case "$*" in
+      *"cat /tmp/orkestrator-claude-account"*) cat '${marker}' 2>/dev/null || true; exit 0 ;;
+      *"printf '%s' '${accountId}'"*) printf '%s' '${accountId}' > '${marker}'; exit 0 ;;
+      *"cat /tmp/claude-bridge-token"*) cat '${token}' 2>/dev/null || true; exit 0 ;;
+      *"cat /tmp/orkestrator-ai/claude-github-env-fingerprint"*) printf '%s' '${commandTesting.CLAUDE_GITHUB_ENV_FINGERPRINT}'; exit 0 ;;
+    esac
+    if [ "$2" = "-d" ]; then
+      value=$(printf '%s' "$*" | sed -n "s/.*CLAUDE_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p")
+      printf '%s' "$value" > '${token}'
+      : > '${healthy}'
+    fi
+    exit 0 ;;
+esac
+exit 0
+`;
+    try {
+      await locked.promise;
+      await withFakeDocker(dockerScript, async (logs) => {
+        const start = commands.get("start_claude_server")!(
+          { containerId: "container-claude-login-start" },
+          context,
+        ) as Promise<ServerStart>;
+        // The shortened ID must wait behind the full persisted ID's queue.
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(await fs.readFile(logs.exec, "utf8").catch(() => "")).toBe("");
+        released.resolve();
+        const result = await start;
+        expect(result).toMatchObject({ hostPort, wasRunning: false });
+        const log = await fs.readFile(logs.exec, "utf8");
+        const reconcile = log.indexOf("rm -f /home/node/.claude/.credentials.json");
+        const stamp = log.indexOf(`printf '%s' '${accountId}'`);
+        const restrict = log.indexOf("let changed = false");
+        const launch = log.indexOf("setsid bun /opt/claude-bridge/dist/index.js");
+        expect(reconcile).toBeGreaterThanOrEqual(0);
+        expect(stamp).toBeGreaterThan(reconcile);
+        expect(restrict).toBeGreaterThan(stamp);
+        expect(launch).toBeGreaterThan(restrict);
+        expect(log).not.toContain("NEVER-DELIVER");
+        expect(log).not.toContain("exec -i container-claude-login-start bash");
+      });
+    } finally {
+      released.resolve();
+      await held;
+      await bridge.close();
+    }
+  });
+
   test.each([
     ["the CLI default", undefined, undefined],
     ["a configured", 8, "export BASH_MAX_TIMEOUT_MS='28800000'"],
@@ -1120,6 +1221,8 @@ case "$1" in
   port) printf '127.0.0.1:%s\\n' "$FAKE_BRIDGE_HOST_PORT"; exit 0 ;;
   exec)
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+    # Only the bridge launch starts a server; credential syncs run first.
+    case "$*" in *setsid*) ;; *) exit 0 ;; esac
     bun -e 'require("node:http").createServer((q,s)=>{s.writeHead(q.url==="/global/health"||q.url==="/global/auth-check"?200:404,{"content-type":"application/json"});s.end("{}")}).listen(Number(process.env.FAKE_BRIDGE_HOST_PORT),"127.0.0.1")' >/dev/null 2>&1 &
     printf '%s' "$!" > "$FAKE_BRIDGE_PID_FILE"
     exit 0 ;;

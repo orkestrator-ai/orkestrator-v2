@@ -1248,3 +1248,39 @@ go; `--older-than <days>` also removes stopped profiles idle for that long.
   processes; it never kills by executable name or port.
 - If reset refuses the target, do not bypass the sentinel or path check. Inspect
   `profile.json` and choose the intended named profile.
+
+## Claude container login renewal qualification
+
+The deterministic tests cover startup refresh with surviving MCP logins, account
+switch fencing, sanitization publication races, and bridge-start ordering. The
+Docker fixture also boots and restarts with a legacy Claude refresh token on a
+read-only mount and verifies that the working credential is access-only.
+
+`apps/backend/tests/claude-container-login-live.test.ts` qualifies the real
+refresh exchange separately. It runs the pinned host CLI, then pushes its
+renewal into a running container while a Claude background task waits past the
+old token's **actual** expiry. The same session must produce a model response
+after expiry; the container is never restarted, and no renderer is mounted.
+Credentials and responses stay out of test output.
+
+Provision an **exclusive disposable account** at
+`<private-root>/agent-accounts/claude/<uuid>` with an on-disk `.credentials.json`.
+Do not borrow a personal login or an agent-test profile's copied refresh token:
+this qualification intentionally rotates the dedicated account's refresh token.
+Wait until the real login has 90–240 seconds remaining; do not edit expiry
+metadata. Build a development image and supply the pinned host toolchain's bin
+directory. Then run:
+
+```bash
+ORKESTRATOR_LIVE_CLAUDE_LOGIN=1 \
+ORKESTRATOR_LIVE_CLAUDE_ACCOUNT_HOME=<private-root>/agent-accounts/claude/<uuid> \
+ORKESTRATOR_LIVE_CLAUDE_IMAGE=orkestrator-v2:dev-<workspace-hash> \
+ORKESTRATOR_LIVE_CLAUDE_TOOLCHAIN_BIN=<pinned-toolchain-bin> \
+  mise run test:logged -- --name claude-login-live -- bun test --cwd apps/backend ./tests/claude-container-login-live.test.ts --parallel=1 --only-failures
+```
+
+The test is skipped without the opt-in. With the opt-in, missing prerequisites,
+provider failures, ineffective refreshes, and failed continuations fail the
+qualification. It removes only its own container and scratch directory; the
+renewed dedicated login remains in its home. A synthetic Docker pass does not
+prove that the provider refresh exchange succeeded.

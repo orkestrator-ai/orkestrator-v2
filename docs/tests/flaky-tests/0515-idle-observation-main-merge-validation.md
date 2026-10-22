@@ -120,3 +120,69 @@ All named disposable profiles were stopped/reset; no launcher was deliberately
 retained. The unresolved gateway and Electron outcomes above remain limitations
 of this validation, even though the affected unit owners, Docker scenarios and
 component-owner reruns passed.
+
+
+## Main refresh — 2026-10-22
+
+Merged `origin/main` at `566758e05ce1223c69de26cc7b9799d9862e7f17` into
+pre-merge HEAD `f7bb5e5a741ac7ba74fa23456d4967219375bc51`. Reviewed all
+426 paths changed from that baseline, including automatic merges. The two
+isolated-runner conflicts retain both the idle-observation and revision-token
+opt-in guards and their independent regression tests. Documentation resolutions
+retain both histories and reconcile the todo totals.
+
+Formatting, lint, all typechecks, production build, frozen root/Claude installs,
+version-drift and flake-index contracts, focused isolated-runner tests, relative
+documentation links and conflict-marker checks passed. Lint retains existing
+backlog warnings. The complete component/public-site browser task passed in
+245.0 seconds on private fixture ports (`oct22-browser`). The complete Electron
+scenario suite passed in 137.0 seconds (`oct22-electron`). The development Docker
+image build passed in 20.8 seconds (`oct22-docker-build`).
+
+The complete non-iOS suite (`oct22-full`) exited 1 after 712.1 seconds. All
+workspace packages except backend passed, as did root/support, bridges and
+protocol regeneration. Backend reported 9915 passed, 68 skipped and one failed:
+the public-exec restart test's temporary-directory cleanup raised `EPERM`.
+Its complete unchanged owning file passed separately in 32.2 seconds; see
+[0341](0341-public-exec-restart-cleanup-eperm.md). The aggregate's nonzero exit
+remains recorded. Only the outer logger had a larger absolute deadline to
+include queueing; inner suite deadlines were unchanged.
+
+`mise run test:logged -- --name oct22-agent-browser -- mise run test:agent:browser:isolated`
+used credential-free Codex profile `qa-browser-8e035383-3a2` and one worker.
+It exited 1 after 535.4 seconds: 27 passed, 51 skipped and two failed. The narrow
+host picker could not click hidden `Repository settings` within 15 seconds
+([0224](0224-host-picker-narrow-tools-popover.md)); the authoritative local
+environment case could not find `origin` within 30 seconds. The supervisor
+stopped and reset its profile. Evidence:
+`orkestrator-test-run.SrEJxw/oct22-agent-browser.log.gz` below the host temporary
+directory, plus `output/agent-testing/qa-browser-8e035383-3a2/browser/`.
+
+
+The complete unchanged gateway owner was rerun in fresh local-only profile
+`merge-idle-oct22` with no agent credentials:
+`ORKESTRATOR_AGENT_TEST_PROFILE=merge-idle-oct22 ORKESTRATOR_AGENT_TEST_RUN_ID=oct22-gateway-owner ORKESTRATOR_AGENT_TEST_DOCKER=0 ORKESTRATOR_AGENT_TEST_REVIEW=0 mise run test:logged -- --name oct22-gateway-owner -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/browser-gateway.spec.ts --workers=1`.
+It exited 1 after 127.0 seconds: 13 passed, 10 skipped and the same narrow
+host-picker failure. The authoritative local-environment case passed unchanged,
+but the complete owner did not, so this does not establish a new flake
+classification. Evidence: `orkestrator-test-run.qlyi8K/oct22-gateway-owner.log.gz`
+and `output/agent-testing/oct22-gateway-owner/browser/`. The profile was stopped
+and reset successfully. No implementation, assertion, timeout or skip changed.
+
+
+The complete Docker scenario task passed in a fresh local/container fixture:
+`ORKESTRATOR_AGENT_TEST_PROFILE=merge-idle-oct22 ORKESTRATOR_AGENT_TEST_RUN_ID=oct22-docker ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS=600000 mise run test:logged -- --name oct22-docker -- mise run test:agent:docker`
+(exit 0, 74.6 seconds; 10 passed, two credentialed skips). This invocation's
+logger silence allowance accommodates the existing rebuild scenario; no test
+deadline changed. Background rebuild, container settings, withheld-login
+rehydration and command-only secret staging passed. The profile was stopped
+and reset. All disposable profiles created for this refresh were cleaned up.
+
+Final formatting and the flake-index consumer test passed. All 427 final changed
+text paths were checked for conflict markers and 1678 relative documentation
+links resolved. Published-CLI and iOS implementation did not change; dedicated
+CLI/iOS scenario suites were omitted, and credentialed provider qualification
+remained opt-in. The unchanged narrow-picker failure is the remaining
+reproducible browser validation limitation; the unit cleanup failure passed its
+complete owning-file rerun. Neither original failing invocation is reported as
+a passing aggregate.

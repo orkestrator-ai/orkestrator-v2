@@ -1,7 +1,9 @@
 import { describe, expect, mock, test } from "bun:test";
 import {
   createOrkestratorElectronApi,
+  createPortalApi,
   exposeActiveConnectionGateway,
+  exposePortal,
   type IpcRendererLike,
 } from "../electron/preload-api";
 
@@ -364,4 +366,73 @@ describe("preload API factory", () => {
       args: ["browser-1"],
     });
   });
+});
+
+test("workspace-only snapshots publish trusted gateway and stable machine metadata", () => {
+  const exposed = new Map<string, unknown>();
+  const snapshot = {
+    baseUrl: "http://127.0.0.1:45001",
+    connectionId: "workspace:uuid",
+    backendId: "bk_leaf",
+    legacyOrigin: null,
+    workspaceTarget: {
+      nodeId: "bk_leaf",
+      nodeName: "Build box",
+      path: "direct",
+      routeKind: "https",
+    },
+    portalIdentity: { connectionId: "local", backendId: "bk_desk", legacyOrigin: null },
+  };
+  expect(
+    exposeActiveConnectionGateway(
+      {
+        exposeInMainWorld: (key, value) => {
+          exposed.set(key, value);
+        },
+      },
+      {
+        sendSync: (channel) =>
+          channel.endsWith("gateway-sync")
+            ? snapshot
+            : { activeConnectionId: "workspace:uuid", connections: [] },
+      },
+    ),
+  ).toBe(true);
+  expect(exposed.get("orkestratorDesktopIdentity")).toMatchObject({ backendId: "bk_leaf" });
+  expect(exposed.get("orkestratorGateway")).toMatchObject({
+    baseUrl: snapshot.baseUrl,
+    desktop: true,
+  });
+  expect(exposed.get("orkestratorWorkspaceTarget")).toEqual(snapshot.workspaceTarget);
+  expect(exposed.get("orkestratorDesktopIdentity")).toMatchObject({
+    portal: { connectionId: "local", backendId: "bk_desk", legacyOrigin: null },
+  });
+});
+
+test("the portal channel is exposed only while the workspace is on another node", async () => {
+  const exposed = new Map<string, unknown>();
+  const ipc = createIpcMock();
+  const onLeaf = {
+    ...ipc.ipc,
+    sendSync: () => ({
+      connectionId: "workspace:w",
+      workspaceTarget: { nodeId: "bk_leaf", nodeName: "Leaf", path: "relay" },
+    }),
+  };
+  expect(
+    exposePortal({ exposeInMainWorld: (key, value) => void exposed.set(key, value) }, onLeaf),
+  ).toBe(true);
+  const portal = exposed.get("orkestratorPortal") as ReturnType<typeof createPortalApi>;
+  await expect(portal.invoke("list_nodes")).resolves.toEqual<IpcEcho>({
+    channel: "orkestrator:portal:invoke",
+    args: ["list_nodes", {}],
+  });
+  const seen: unknown[] = [];
+  portal.listen("nodes-changed", (payload) => void seen.push(payload));
+  ipc.emit("orkestrator:portal-event", "nodes-changed", { revision: 3 });
+  ipc.emit("orkestrator:event", "nodes-changed", { revision: 4 });
+  expect(seen).toEqual([{ revision: 3 }]);
+
+  const onCommandNode = { ...ipc.ipc, sendSync: () => ({ connectionId: "local" }) };
+  expect(exposePortal({ exposeInMainWorld: () => undefined }, onCommandNode)).toBe(false);
 });

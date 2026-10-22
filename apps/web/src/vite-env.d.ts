@@ -12,6 +12,41 @@ interface Window {
     desktop?: boolean;
     /** Backend origin used when the renderer was loaded from a separate host. */
     baseUrl?: string;
+    /**
+     * Electron only: the current origin of the window's machine. A tunnelled
+     * route's local port can change after a reconnect, so direct URLs call
+     * this instead of keeping `baseUrl` from page load.
+     */
+    resolveBaseUrl?: () => string;
+  };
+  /**
+   * Electron only: the machine this renderer is bound to, for presentation
+   * storage namespaces. Never a route, port or credential.
+   */
+  /**
+   * The command node this client is connected to, while the window's
+   * workspace (`orkestrator`) is on another node. Only the portal layer uses
+   * it; see `lib/portal/portal-transport.ts`.
+   */
+  orkestratorPortal?: {
+    invoke<T = unknown>(command: string, args?: Record<string, unknown>): Promise<T>;
+    listen<T = unknown>(event: string, callback: (payload: T) => void): () => void;
+    eventStreamReady?(event: string): Promise<void>;
+  };
+  /** The node the window's workspace is on, when it is not the command node. */
+  orkestratorWorkspaceTarget?: {
+    nodeId: string;
+    nodeName: string;
+    path: "direct" | "relay";
+    routeKind?: "https" | "ssh";
+    via?: string;
+  };
+  orkestratorDesktopIdentity?: {
+    connectionId: string;
+    backendId: string | null;
+    legacyOrigin: string | null;
+    /** The window's own machine, while its workspace is on another node. */
+    portal?: { connectionId: string; backendId: string | null; legacyOrigin: string | null };
   };
   orkestrator?: {
     /** Electron windows keep focus and renderer storage independent. */
@@ -76,6 +111,47 @@ interface Window {
       ): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
       /** Electron only: opens a saved connection without switching this renderer. */
       openWindow?(connectionId: string): Promise<void>;
+      /** Electron only (qualified platforms): adds a managed SSH route. */
+      connectSsh?(
+        input: import("@orkestrator/protocol/connections").ConnectSshRouteInput,
+      ): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
+      probeSshHostKey?(input: { destination: string; sshPort?: number }): Promise<{
+        probeId: string;
+        destination: string;
+        fingerprints: Array<{ type: string; fingerprint: string }>;
+      }>;
+      trustSshHostKey?(probeId: string): Promise<{ added: number }>;
+      removeRoute?(
+        connectionId: string,
+        routeId: string,
+      ): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
+      setRouteOrder?(
+        connectionId: string,
+        routeIds: string[],
+      ): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
+      setRouteEnabled?(
+        connectionId: string,
+        routeId: string,
+        enabled: boolean,
+      ): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
+      useRoute?(
+        connectionId: string,
+        routeId: string,
+      ): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
+      setAutoConnect?(
+        connectionId: string,
+        autoConnect: boolean,
+      ): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
+      setFeatures?(features: {
+        federation?: boolean;
+        sshRoutes?: boolean;
+        routeFallback?: boolean;
+      }): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
+      answerSshPrompt?(promptId: string, answer: string | null): void;
+    };
+    /** Electron only: which node the window's workspace is on; reload after a change. */
+    workspaceTarget?: {
+      set(nodeId: string | null): Promise<void>;
     };
     process: {
       exit(code?: number): Promise<void>;

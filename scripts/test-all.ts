@@ -836,6 +836,7 @@ export function buildConcurrentGroups(
         "./e2e/agent-testing/artifact-sanitizer.test.ts",
         "./e2e/agent-testing/design-live-usage.test.ts",
         "./e2e/agent-testing/design-live-heartbeat.test.ts",
+        "./e2e/agent-testing/paused-interactions-live-support.test.ts",
         "./e2e/agent-testing/mcp-apply-live-support.test.ts",
         "./e2e/agent-testing/mcp-apply-live-safety.test.ts",
         "./e2e/agent-testing/idle-observation-live-support.test.ts",

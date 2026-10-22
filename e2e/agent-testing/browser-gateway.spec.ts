@@ -2611,3 +2611,89 @@ test("persisted diff baselines keep Files, the badge and diff tabs aligned after
     await fs.rm(target, { recursive: true, force: true });
   }
 });
+
+test("Docker fixture consumes command-only seed files and deletes secret staging", async ({
+  page,
+}) => {
+  test.skip(
+    process.env.ORKESTRATOR_AGENT_TEST_DOCKER !== "1",
+    "requires a disposable container fixture",
+  );
+  test.setTimeout(300_000);
+  const status = await profileStatus();
+  expect(status.status).toBe("ready");
+  const invoke = await authenticatedInvoke(page, status);
+  const project = (await invoke<Project[]>("get_projects")).find(
+    (entry) => entry.localPath === status.testProject,
+  )!;
+  const environment = await invoke<Environment>("create_environment", {
+    projectId: project.id,
+    name: `seed-regression-${Date.now()}`,
+    environmentType: "containerized",
+  });
+  const runtime = resolveRuntimeProfile({
+    repositoryRoot,
+    requestedId: profile,
+    flavor: "agent-test",
+  });
+  const staging = path.join(runtime.dataDir, "node-seed", environment.id);
+  const relativePath = ".env.review-seed";
+  const content = "REVIEW_SEED=fixture-only\n";
+  try {
+    const upload = await invoke<{ uploadId: string }>("begin_node_file_write", {
+      scope: { seedEnvironmentId: environment.id },
+      path: relativePath,
+      size: Buffer.byteLength(content),
+      sha256: createHash("sha256").update(content).digest("hex"),
+      overwrite: false,
+    });
+    await invoke("append_node_file_write", {
+      uploadId: upload.uploadId,
+      contentBase64: Buffer.from(content).toString("base64"),
+    });
+    await invoke("commit_node_file_write", { uploadId: upload.uploadId });
+    await invoke("start_environment", { environmentId: environment.id });
+    // Start returns once setup is launched; the workspace consumes seeds later.
+    await expect
+      .poll(
+        async () => {
+          const current = await invoke<Environment & { setupScriptsComplete?: boolean }>(
+            "get_environment",
+            { environmentId: environment.id },
+          );
+          return current.setupScriptsComplete === true;
+        },
+        { timeout: 120_000 },
+      )
+      .toBe(true);
+    const active = await invoke<Environment>("get_environment", { environmentId: environment.id });
+    expect(active.containerId).toBeTruthy();
+    const copied = spawnSync(
+      "docker",
+      ["exec", "--user", "node", active.containerId!, "cat", `/workspace/${relativePath}`],
+      { encoding: "utf8" },
+    );
+    expect(copied.status).toBe(0);
+    expect(createHash("sha256").update(copied.stdout).digest("hex")).toBe(
+      createHash("sha256").update(content).digest("hex"),
+    );
+    expect(
+      await fs.stat(staging).then(
+        () => true,
+        () => false,
+      ),
+    ).toBe(false);
+    // Deletion also clears staging that was never consumed by setup.
+    await fs.mkdir(staging, { recursive: true, mode: 0o700 });
+    await fs.writeFile(path.join(staging, ".env"), content, { mode: 0o600 });
+    await invoke("delete_environment", { environmentId: environment.id });
+    expect(
+      await fs.stat(staging).then(
+        () => true,
+        () => false,
+      ),
+    ).toBe(false);
+  } finally {
+    await invoke("delete_environment", { environmentId: environment.id }).catch(() => undefined);
+  }
+});

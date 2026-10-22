@@ -114,6 +114,13 @@ The client never names a host, port, or container.
   probe-then-close), so origin-keyed storage such as localStorage usually
   survives a restart. If the port is taken, a fresh one is used and that
   storage is lost.
+- A window's previews belong to the connection they were opened on. Their
+  transport invokes and tunnels to that connection's backend, never to
+  whichever backend the window uses now. When the window moves to another
+  connection (choosing one, adding one, or forgetting the current one), its
+  previews end and their attachments are released on the backend that issued
+  them; a window close releases the same way
+  (`apps/desktop/electron/preview-connection-backend.ts`).
 - Remote sessions block navigation to client-local and private addresses, so a
   remote preview cannot reach services on the user's own machine.
 - Close codes: 4401 unauthenticated, 4403 forbidden, 4409 generation changed,
@@ -275,7 +282,7 @@ pooled per service; nothing is replayed after a reconnect.
 | Resource | Owner | Cleanup |
 | --- | --- | --- |
 | Definition, endpoint generation, readiness | Backend `PreviewServiceRegistry` | Definitions persist; runtime state is rebuilt on restart under a new epoch |
-| Attachment and credential hash | Backend `PreviewAccessService` | Release, lease expiry, generation change, service removal, credential rotation, kill switch, shutdown |
+| Attachment and credential hash | Backend `PreviewAccessService` | Release (by the client, on the issuing backend, including after a connection change or window close), lease expiry, generation change, service removal, credential rotation, kill switch, shutdown |
 | Tunnel sockets and upstream TCP | Backend `PreviewTunnelServer` | Closing either leg closes both; revocation closes everything tracked for the attachment |
 | Local ingress listener and ingress secret | Electron `PreviewTransportManager` | Last attachment release plus a short retirement lease, connection change, window close, app quit |
 | Service partition cookies and storage | Electron session | **Reset site data** for that service only (see [service-preview-rollout.md](../todo/service-preview-rollout.md) for retention) |

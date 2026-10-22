@@ -1425,6 +1425,10 @@ exec '${realGit}' "$@"
   const ownedContainerInspect = (owner = FIXTURE_DOCKER_OWNER, state = "running") =>
     `if [ "$1" = "inspect" ]; then
   case "$*" in
+    *'{{.State.Running}}'*)
+      printf '%s\\n' '${state === "running" ? "true" : "false"}'
+      exit 0
+      ;;
     *'index .Config.Labels "orkestrator-owner"'*)
       printf '%s\\t%s\\torkestrator-v2\\t%s\\n' '${owner}' '${state}' "$4"
       exit 0

@@ -328,11 +328,16 @@ export function registerMainIpc({
     if (!input || typeof input !== "object" || Array.isArray(input)) {
       throw new Error("Expected connection details");
     }
-    const { address, token, nickname } = input as {
+    const { address, token, nickname, select, connectionId } = input as {
       address?: unknown;
       token?: unknown;
       nickname?: unknown;
+      select?: unknown;
+      connectionId?: unknown;
     };
+    if (connectionId !== undefined && (typeof connectionId !== "string" || !connectionId)) {
+      throw new Error("Expected a connection ID");
+    }
     if (typeof address !== "string" || typeof token !== "string") {
       throw new Error("Expected an address and gateway token");
     }
@@ -340,7 +345,13 @@ export function registerMainIpc({
       throw new Error("Expected the nickname to be a string");
     }
     return connectToRemote(
-      { address, token, ...(nickname === undefined ? {} : { nickname }) },
+      {
+        address,
+        token,
+        ...(nickname === undefined ? {} : { nickname }),
+        ...(select === false ? { select: false } : {}),
+        ...(typeof connectionId === "string" ? { connectionId, select: false } : {}),
+      },
       event,
     );
   });

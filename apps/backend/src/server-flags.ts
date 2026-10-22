@@ -20,6 +20,7 @@ export const SERVER_VALUE_FLAGS: readonly string[] = Object.freeze([
   "--docker-image",
   "--fallback-host",
   "--host",
+  "--loopback-client-port",
   "--port",
   "--renderer-dev-server-url",
   "--renderer-root",
@@ -36,6 +37,8 @@ export const SERVER_VALUE_FLAGS: readonly string[] = Object.freeze([
 /** Presence-only flags. */
 export const SERVER_BOOLEAN_FLAGS: readonly string[] = Object.freeze([
   "--allow-non-tailscale-bind",
+  // Always allow command-node registration (a standalone command node, or the desktop).
+  "--command-node",
   "--desktop-updater",
   "--desktop-web-client",
   "--strict-docker-owner",

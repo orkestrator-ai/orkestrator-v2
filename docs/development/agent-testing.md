@@ -541,6 +541,115 @@ stays pinned to the tail and snaps back. Measurements land as annotations in
 `results.json`. Override models and trail lengths with the variables named in
 the spec's header.
 
+### Live cold restart
+
+`e2e/agent-testing/cold-restart-live.spec.ts` stops and starts the whole
+profile (backend, bridges and Electron) around real provider turns and checks
+that display tails and build-pipeline histories reconcile with no lost,
+duplicated or stale rows. It has its own opt-in,
+`ORKESTRATOR_AGENT_TEST_LIVE_COLD_RESTART=1`, and restarts the profile with the
+selection stored in its `profile.json`, so run it on its own against a profile
+you started by hand:
+
+```bash
+mise run dev:test --profile qa-cold --fixture --credential-source claude --credential-source codex --agent-platforms claude,codex
+# In a second terminal:
+ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS=900000 \
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-cold ORKESTRATOR_AGENT_TEST_LIVE_COLD_RESTART=1 \
+  mise run test:logged -- --name cold-restart-live -- mise run test:agent:browser -- \
+  e2e/agent-testing/cold-restart-live.spec.ts
+mise run dev:stop --profile qa-cold
+mise run dev:reset --profile qa-cold
+```
+
+Turns follow a trail of files (as in the paging spec), and every prompt
+carries a random tag, so a prompt delivered twice is countable. Reconciliation
+compares ordered row ids, displayed text and parts (excluding measured times and
+publication metadata). Replay checks count prose and tool-call occurrences across
+row splits and re-keying; Codex's live `bash` and replayed `exec_command`/code-mode
+`exec` forms of a single trail read share one canonical operation. When a turn
+has advanced since the captured snapshot, prose counts stop at its last captured
+tool call so newly generated steps are not mistaken for replay. Explicit
+follow-up prompts may intentionally read an earlier stop again.
+
+- **Native conversation** (Codex GPT-6-Luna by default; set
+  `ORKESTRATOR_AGENT_TEST_COLD_RESTART_NATIVE_PLATFORM=claude` for Haiku). After
+  an idle graceful restart, the first transcript read must be the persisted
+  display tail (`freshness: "cached"`) with exactly the conversation's rows,
+  and a client reading on from that cached view must converge on the
+  provider's rows. Then the backend is `SIGKILL`ed mid-turn: the tail may lag
+  by up to the checkpoint age, but must hold the prompt and no row the provider
+  lacks; the turn must settle, every earlier row must survive, and a follow-up
+  finishes the trail. The browser shows each prompt and closing word once.
+- **Build pipeline**. One pipeline's backend is `SIGKILL`ed the moment its
+  build prompt is journaled (`pendingPromptAttempt`), the mid-dispatch window;
+  the prompt must reach the provider once, on the same session. Acceptance may
+  race this live crash. The deterministic pre-acceptance case lives in
+  `apps/backend/src/core/build-pipeline-service-recovery.test.ts`: a subprocess
+  holds `send` after durable admission, is killed with SIGKILL, and a fresh
+  service/storage pair must retry the same request id and session exactly once.
+  A second pipeline is restarted mid-turn after a persist boundary: its committed history must read
+  back straight after the restart without the provider, and the stage
+  continues once on the same session. Both are cancelled once the build turn
+  ends, and an idle restart must return every stage history byte-identical.
+
+Review validation on 2026-10-21 exercised the real profile with Codex Luna and
+GPT-6.1-Sol build turns. The strengthened build check reached final history but
+reported 18 repeated trail reads within one prompt (`mid-turn: a stop was read
+twice in the same prompt`). This remains an unresolved live qualification
+failure; the assertion is retained. An earlier Luna build also failed to return
+its required structured review-preparation result. The credential-free held-send
+SIGKILL regression independently qualifies pre-acceptance same-request-id retry.
+
+The restarts leave the profile running under a detached launcher; stop it
+with `dev:stop` as usual. `dev:status` no longer reports `testProject` after a
+restart, so the spec falls back to the profile's seeded copy.
+
+### Live revision tokens with inactive views
+
+`e2e/agent-testing/claude-revision-tokens-live.spec.ts` checks Claude's
+transcript content-revision tokens while the view under test is off screen.
+It has its own opt-in and uses the host's Claude credentials:
+
+```bash
+mise run dev:test --profile qa-revtok --fixture --credential-source claude --agent-platforms claude
+# In a second terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-revtok ORKESTRATOR_AGENT_TEST_LIVE_REVISION_TOKENS=1 \
+  mise run test:logged -- --name revision-tokens-live -- mise run test:agent:browser -- \
+  e2e/agent-testing/claude-revision-tokens-live.spec.ts
+mise run dev:stop --profile qa-revtok
+mise run dev:reset --profile qa-revtok
+```
+
+One session runs two cases. First, a prompt starts a background Bash command,
+then the test switches to a second tab in the same pane. Second, a prompt
+starts a background subagent, then the test selects another environment. In
+each case the turn ends, the task finishes and Claude answers its report while
+the view is off screen. The test reads the session the way a view does, with
+its last transcript and state tokens. It checks four things. Every change
+reaches it as a delta or snapshot. A settled session answers `unchanged` ten
+times in a row. The off-screen view sends no reads. On return the view shows
+the newest row without a reload, keeps its transcript token, and settles to
+conditional `unchanged` reads. A reload then repaints the same newest row.
+The model writes each marker as a sum it computes, so only an assistant row
+can contain it. Only the newest row is checked on screen, because the list is
+virtualized; every marker is checked in order in the conditional reader's
+retained rows. The reader validates delta base tokens and applies the shared
+protocol delta helper. Each case must observe a new task running while the
+foreground is idle, its later completion, and a post-idle transcript update.
+The launching row must have its final state and deferred report output. Forced
+snapshots independently compare against the retained view without repairing it.
+Active idle checks require unchanged polls for both transcript and session state.
+`ORKESTRATOR_AGENT_TEST_REVISION_MODEL` overrides the model (default Haiku).
+Each read the page sends for the session is recorded as a content-free
+timeline annotation in `results.json`.
+
+A dev profile renders under `React.StrictMode`, so a remount (an environment
+switch or a reload) mounts the view twice and every read is doubled for about
+300 ms. A remount also re-reads session state without a token on purpose
+(`useNativeAgentSession` never trusts a state token it did not read itself).
+The idle checks therefore start 2 s after the newest row appears.
+
 ### Live MCP apply in an inactive environment
 
 `e2e/agent-testing/mcp-apply-inactive.spec.ts` saves and applies MCP server
@@ -614,6 +723,69 @@ engines (`bridges/cursor-bridge/src/testing/fake-engine-server.ts`,
 `e2e/fixtures/close-retention-opencode.ts`). Its assertions read each engine's
 own store, so a duplicated or lost prompt fails there.
 
+### Live paused interactions
+
+`e2e/agent-testing/paused-interactions-live.spec.ts` checks that a question or
+approval paused from its card waits past ten minutes on a real CLI, and that
+answering it later lets the turn carry on with the answer. It has its own
+opt-in and config, and uses the profile's host credentials:
+
+```bash
+mise run dev:test --profile qa-pause --fixture --credential-source claude --credential-source codex \
+  --credential-source opencode --credential-source pi --agent-platforms claude,codex,opencode,pi
+# In a second terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-pause ORKESTRATOR_AGENT_TEST_LIVE_PAUSED_INTERACTIONS=1 \
+  ORKESTRATOR_AGENT_TEST_PAUSE_PROVIDERS=claude,codex,opencode,pi \
+  mise run test:logged -- --name paused-interactions-live -- \
+  mise run test:agent:paused-interactions
+mise run dev:stop --profile qa-pause
+mise run dev:reset --profile qa-pause
+```
+
+Each case (a Claude question and approval, a Codex command approval, a Grok
+question and permission, an OpenCode question and permission, a Pi approval)
+gets its own local environment under an `approvals: "ask"` policy and its own
+real turn. Providers run in parallel, and a provider's own cases start one
+after the other. As soon as a request appears, the spec holds its countdown
+through the backend, before starting another case or waiting for a slower
+provider. It then resumes and pauses each countdown from the card, waiting
+for the backend state and enabled controls between actions. OpenCode publishes
+no deadline: its card must be visible before the absence of a countdown is
+asserted within that card. It then checks every 60 s that
+each request is still pending, the turn has not ended and no marker file
+appeared. Once 10.5 minutes have passed since every card was checked, it
+signs in again and reloads, then answers each card. Every turn must finish
+with the chosen codeword, or with the approved command's marker file and done
+token. The whole run takes about 20 minutes.
+
+- `ORKESTRATOR_AGENT_TEST_PAUSE_PROVIDERS` narrows the providers (default
+  `claude,codex,grok,opencode,pi`). Leave out any provider the host is signed
+  out of: a provider that cannot start fails the run.
+- `ORKESTRATOR_AGENT_TEST_PAUSE_WAIT_MS` shortens the wait for a shakedown.
+  Only the default proves the ten-minute claim.
+- `ORKESTRATOR_AGENT_TEST_PAUSE_MODELS` takes `<platform>=<model>` pairs. It
+  defaults to `pi=openai/gpt-6-sol`, because a profile shares only Pi's
+  `auth.json` and Pi's own fallback, `gpt-4`, is refused by a ChatGPT-backed
+  OpenAI login.
+
+The approval card is answered with **Approve** alone. The spec never picks an
+optional or amendment option. Codex's "Approve with command policy" writes a
+rule into the profile's isolated Codex home. Earlier profiles shared the host
+home, as recorded in
+[live-provider-and-platform-qualification.md](../todo/live-provider-and-platform-qualification.md).
+The task remains explicitly opt-in (the environment flag above is required);
+it is not part of the default suite or CI because it spends real provider tokens.
+Two additional cases inject setup failures immediately after creation and
+before layout persistence against real fixture environments, and verify that
+stop/delete removes both the stored environment and any started worktree.
+A one-minute heartbeat covers setup, raising, the long wait, finishing and cleanup,
+including unchanged five-minute polls. `ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS=90000`
+can check it against a shorter watchdog. Environments are registered for stop/delete
+immediately after creation, so setup failures also clean up; cleanup failures fail
+the qualification. Credential-free regression tests for cleanup, immediate holds
+and approval choices run in `mise run test`. The evidence is in
+[agent-interactions-and-permissions.md](../todo/agent-interactions-and-permissions.md#live-pause-record-2026-10-21).
+
 ### Live design-tool cycle
 
 `e2e/agent-testing/design-live.spec.ts` runs the design canvas with a real
@@ -657,6 +829,16 @@ Never press Escape to clear a sidebar tooltip in a live spec: with nothing
 focused, Escape stops the active tab's running turn (`useEscapeToStop`). A
 Claude CLI rate limit (429) ends the turn on an API error; rerun later rather
 than treating it as a product failure.
+
+The profile's Claude bridge authenticates with the host's **default** Claude
+login (on macOS the plain `Claude Code-credentials` Keychain entry; access
+token only), so check that login's usage in Settings before a run. The bridge
+keeps the profile's own `CLAUDE_CONFIG_DIR`; sessions, settings and project
+state stay there. The launching shell's `CLAUDE_CONFIG_DIR` is recorded only
+as a host credential source, so a scratch configuration directory is no longer
+needed to isolate session writes. Selecting the matching Keychain login when
+the shell names an added account remains tracked in
+[agent-accounts-and-sign-in.md](../todo/agent-accounts-and-sign-in.md).
 
 ### Live coordinator suite
 

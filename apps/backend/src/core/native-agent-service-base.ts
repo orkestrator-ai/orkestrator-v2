@@ -838,6 +838,7 @@ export abstract class NativeAgentServiceBase {
         `Launch base: every launch_environment call must include baseBranch and baseCommit. By default start workers from the latest commit of the base branch ${baseBranch}: call get_launch_options and pass coordinatorBase.baseBranch and coordinatorBase.baseCommit unchanged. ` +
         `Use checkoutBase, the branch and commit of this checkout shown below, only when the user asks to build on the current checkout. If coordinatorBase is unavailable, report that instead of guessing values.\n`;
       const side = coordinator.conversation.role === "side";
+      const nodeLine = (await this.options.coordinatorNodeContext?.().catch(() => null)) ?? "";
       const delegation = side
         ? `Side agent: you are ${coordinator.conversation.title}, a side agent of this project's coordinator. You can read the project and Orkestrator state, but you cannot launch environments or jobs. Exchange mail only with the main coordinator: send_message to toEnvironmentId "${COORDINATOR_MAIL_ADDRESS}". Workers and other agents cannot reach you.\n`
         : this.options.coordinatorDelegationAvailable?.(coordinator.conversation.agent)
@@ -858,6 +859,7 @@ export abstract class NativeAgentServiceBase {
           `Role: read-only coordinator. Research, inspect and plan here; delegate all file changes, commands that mutate the checkout, builds, and fixes to worker environments through approved Orkestrator controls. Never attempt to alter the project checkout directly.\n` +
           `Scope: keep your own work to quick reads, searches and lookups. Anything more serious (a multi-file investigation, running builds or tests, reproducing a bug, writing or reviewing code in depth) belongs in a worker environment you launch, even when it only reads.\n` +
           coordinatorResearchLine(research) +
+          nodeLine +
           `Tools: report a tool as unavailable or denied only after you called it and the call was refused; never assume a refusal you have not seen.\n` +
           delegation +
           `Repository context revision: ${workspace.repositoryContextRevision}\n` +

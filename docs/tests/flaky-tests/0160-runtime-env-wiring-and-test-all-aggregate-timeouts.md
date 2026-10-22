@@ -88,3 +88,15 @@ unchanged `runtime-env-wiring.test.ts` passed alone in 20.8 seconds. Exact
 commands and evidence are in
 [0515](0515-idle-observation-main-merge-validation.md). No assertion, deadline
 or skip changed; shared-host contention remains a hypothesis.
+
+## Preview qualification main merge, 2026-10-21
+
+`mise run test:logged -- --name merge-tests -- mise run test` repeated a
+five-second timeout in `Codex setup copies the complete allowlist, secures auth,
+and excludes plugin runtime state` (5,374.65 ms; shell exit status was null).
+The complete unchanged owner passed with `mise run test:logged -- --name
+preview-main-merge-runtime-owner -- bun test ./tests/unit/runtime-env-wiring.test.ts
+--parallel=1 --only-failures` (exit 0, 51.4 s). The aggregate used one root
+worker beside workspace and bridge groups and other host validation. No timeout
+or assertion changed. Full-run evidence and other unresolved failures are in
+[0623](0623-preview-main-merge-validation.md).

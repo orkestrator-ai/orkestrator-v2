@@ -124,10 +124,34 @@ qualification that was never run.
    invariant in `AGENTS.md`. Find a boundary app-server reports (a response or
    step identity on items), or bound the calls one row may hold, and keep the
    rollout reload splitting at the same place.
+5. Give Codex replayed rows stable ids, or prove nothing depends on them.
+   Every rollout replay mints new row ids (`createMessageId()` in
+   `bridges/codex-bridge/src/history/rollout.ts`), and the bridge persists no
+   messages, so every row changes id whenever the bridge process restarts. In
+   the 2026-10-21 cold-restart runs all 8 rows of an idle conversation and all
+   25 to 30 rows of a crashed one came back under new ids; Claude's cold
+   hydration also re-keyed 8 of 8 and 17 of 26. A fresh client is safe: it
+   paints the cached tail and replaces it with the provider's snapshot, and no
+   row showed twice. A client that stays mounted across a bridge-only restart
+   (an environment or bridge restart while the backend lives) still holds
+   retained history and held places keyed by the old ids. Derive replayed ids
+   from rollout identity (turn id plus item or response position, as the live
+   stream would assign them), or qualify that a mounted tab with retained
+   history shows no duplicates and keeps its place across a bridge-only
+   restart.
+6. Stop a Codex turn promptly when its backend dies. In every 2026-10-21
+   crash run the Codex turn read two to five more stops after the backend was
+   `SIGKILL`ed, and in the run whose log was kept the bridge was still alive
+   when the next backend started (5 to 7 s later) and was killed by the orphan
+   reaper (`apps/backend/src/core/local-server-reaper.ts`). The parent
+   watchdog (`startParentWatchdog` in `bridges/codex-bridge/src/index.ts`)
+   should end the bridge and its app-server child well before that. If the app is not reopened, a turn keeps
+   running unsupervised. Measure the watchdog's detection and shutdown time
+   and make the bridge interrupt the turn as soon as its parent is gone.
 
 ### Deferred until measured
 
-5. Frontend retained-history structure, only if browser profiling at an 8 MiB
+7. Frontend retained-history structure, only if browser profiling at an 8 MiB
    retained history shows material long tasks or input latency:
    - keep retained pages as immutable entries separate from the live window,
      and assemble display arrays only when membership, order or an entry
@@ -136,10 +160,10 @@ qualification that was never run.
      `nativeAgentProjectionStore.ts` and `useNativeAgentSession.ts`;
    - derive search and annotation indexes by revision.
    Add no worker until repeated work is gone and transfer cost is measured.
-6. Bridge-to-backend part deltas. Bridges still send whole lightweight summary
+8. Bridge-to-backend part deltas. Bridges still send whole lightweight summary
    snapshots on change; patches cover only the backend-to-client hop. Measure
    that hop's bytes and CPU before designing an incremental bridge protocol.
-7. Per-message provider revisions. `native-agent-projection-entries.ts` still
+9. Per-message provider revisions. `native-agent-projection-entries.ts` still
    walks each provider row once per changed read to compare it with its kept
    copy (read-only, no encoding). Removing the walk needs a trustworthy
    per-message revision from every bridge.
@@ -156,21 +180,149 @@ credentials and platforms CI lacks, batch with
   blocks, the case that first lost the place and then pinned the list to the
   tail; the fixes were proved live on Codex and in unit tests, but every Claude
   attempt after them hit the account's 429 rate limit.
-- Claude inactive-tab and background-task runs against content-revision tokens.
 - A Cursor run long enough to reach the producer trim thresholds while its
   environment is inactive; return and check the bounded window, sub-agent
   lifecycle and controls.
-- Cold restart: populate display tails and pipeline histories, restart backend
-  and bridges, confirm the cached preview paints and authoritative state
-  reconciles. Also restart a pipeline between dispatch and completion.
+- Hit the pre-acceptance build-pipeline dispatch window live. In the
+  2026-10-21 cold-restart runs the backend was killed while the prompt was
+  journaled (`pendingPromptAttempt`), but each time the provider already
+  showed the build session running, so the retry under the same request id
+  before acceptance was proved only by unit tests. A fault hook that holds the
+  bridge's prompt route would make the window deterministic.
 - Electron window and Docker environments with real providers; native iOS
   only where the wrapper changes.
 - Browser long-task, input-latency and heap/RSS profiling at an 8 MiB
   retained history, including hidden and resumed documents. This is the gate
-  for item 5.
+  for item 7.
 - Activity-sweep p50/p95 for 1, 10 and 100 sessions against real bridges.
 - Re-measure display-tail cost and the maximum checkpoint age with workload
   `d` now that tails are SQLite rows.
+
+## Qualification results (2026-10-21): cold restart
+
+Real cold restarts of the whole profile (backend, bridges and Electron), idle,
+mid-turn and mid-dispatch, on `9b3f53a2` plus this change, on a loaded macOS
+arm64 host (load average about 10 on 18 cores). Profile `qa-cold-c5a8`
+(`dev:test --fixture --credential-source claude --credential-source codex
+--agent-platforms claude,codex`), Codex 0.162.1 on GPT-6-Luna (low) and Claude
+Haiku (`claude-haiku-5-5`). The spec is
+`e2e/agent-testing/cold-restart-live.spec.ts`; how to run it is in
+[agent-testing.md](../development/agent-testing.md#live-cold-restart). A
+graceful restart is `dev:stop` and a fresh launcher; a crash `SIGKILL`s this
+profile's backend first, so nothing drains. Each turn follows a trail of files
+and each prompt carries a random tag, so lost, duplicated and reordered rows
+are countable without reading prose. Measurements are Playwright
+annotations, summarised below; the final Codex run's and the Claude run's
+`results.json` are kept in `output/agent-testing/qa-cold-c5a8/evidence/`.
+Restarts took 4.9 to 9.5 s.
+
+| Scenario | Result |
+| --- | --- |
+| Native Codex, idle graceful restart | Pass. The first read after the restart was the persisted tail (`freshness: "cached"`) with exactly the 8 rows from before. A client following updates from it (never forcing) converged on the provider's rows: no lost or added content, no repeated prompt. All 8 rows came back under new ids (Code item 5). The browser showed the prompt and the closing word in exactly one row each, before and after the restart and after a reload. |
+| Native Codex, backend `SIGKILL` mid-turn | Pass after the fix below. The crash came 16 to 17 s after the sixth stop. The cached tail held 23 to 26 of the 25 to 30 rows that existed then, never a row the provider lacked, and always the prompt (the 10 s checkpoint age bound held). The turn went `recovering` then `error` (restarted mid-turn). The provider kept every stop read before the crash and the client converged on it. A follow-up finished the trail, and every prompt and closing word showed once in the browser. |
+| Native Claude, idle and crash | Pass. Same checks. Cold hydration split a thinking part into its own row (9 rows for 8) and re-keyed the rows, with no content lost. After the crash the cached tail lagged 7 rows (Haiku reads about a stop a second) and the turn settled straight to `error`. |
+| Build pipeline, backend `SIGKILL` with the build prompt journaled | Pass (3 runs). Each kill landed while `pendingPromptAttempt` was set and the session already showed running. After the restart the stage kept its session, the task prompt reached the provider once, at most one restart continuation was sent, no prompt repeated, and the build finished the trail. The pre-acceptance half of the window was not isolated live (see Qualification). |
+| Build pipeline, graceful restart mid-turn | Pass (2 runs). The committed history was readable straight after the restart, before the provider answered, with all earlier content. By then the supervisor had already committed the bridge's replay, so ids differed (Code item 5). The stage continued once on the same session and finished, and the final history held every earlier row's content once. |
+| Build pipelines, idle graceful restart | Pass. With both pipelines cancelled, every stage history (2 or 3 sessions) came back byte-identical. |
+
+Fixed in this change:
+
+- **A crash erased the interrupted Codex turn's last row.** On restart the
+  bridge recovers an unresolved dispatch (`recoverUnresolvedDispatches` in
+  `bridges/codex-bridge/src/app-server-runtime-lifecycle.ts`). It reused the
+  replay's last assistant row as the recovered turn's render target, and a
+  render replaces its row's parts, so finalizing the interrupted turn wiped
+  that row. Live, this was the step note and the read of stop 21. The model
+  still had stop 21 in context and went on to stop 22, so the transcript
+  skipped a stop. Recovery now reuses the last row only when it is an empty
+  assistant row, and otherwise opens a fresh one. Covered by `bridge-process
+  recovery keeps the replayed rows of the interrupted turn` in
+  `app-server-runtime-lifecycle.test.ts`.
+- **The spec's second restart saw a zombie launcher.** The launcher an
+  earlier restart starts is the Playwright worker's child, and `spawnSync`
+  blocked the worker's event loop, so the dead launcher stayed a zombie that
+  `dev:stop` reported as surviving. The spec runs `dev:stop` asynchronously.
+  `multi-review-live.spec.ts` uses the same pattern but restarts only once.
+
+Findings that are not defects:
+
+- A client that holds the persisted tail's token gets `snapshot` answers marked
+  `cached` (the in-memory entry) and then `unchanged`, so its view never reads
+  `current` although its rows are the provider's. The web client treats
+  `cached` as current (`useNativeAgentSession.ts`), so nothing shows.
+- A backend-served page in an agent-test profile shows the "server now runs
+  44.7.0" banner; that is
+  [test-suite-and-ci-health.md](test-suite-and-ci-health.md) item 8.
+
+Validation: `mise run check` passed. The Codex bridge suite passed with the new
+test (2,200 passed, 34 skipped) once `PORT` was unset. With the agent tab's
+inherited `PORT` the `item-to-parts` file cannot start, registered as
+environmental flake
+[0660](../tests/flaky-tests/0660-codex-item-to-parts-inherited-port.md).
+The final run of the whole spec on Codex passed (261 s), and the Claude native
+case passed separately (150 s). The profile was stopped and reset afterwards.
+A full `env -u PORT mise run test` (707 s) failed only on a recurrence of
+[0248](../tests/flaky-tests/0248-move-restart-recovery-submodule-timeout.md)
+(5137.87 ms), whose unchanged owning file passed with the documented command.
+
+## Qualification results (2026-10-21): Claude revision tokens
+
+Claude's content-revision tokens with the view off screen, run on
+`9b3f53a2` plus this change on a loaded macOS arm64 host. Profile
+`qa-revtok-2ead` (`dev:test --fixture --credential-source claude
+--agent-platforms claude`), Claude Agent SDK 0.3.296, model Claude Haiku. The
+spec is `e2e/agent-testing/claude-revision-tokens-live.spec.ts`; how to run
+it is in
+[agent-testing.md](../development/agent-testing.md#live-revision-tokens-with-inactive-views).
+Content-free timelines are the annotations in
+`output/agent-testing/qa-revtok-run<N>/browser/results.json` (N = 1 through 4).
+These run artifacts are local and untracked. The historical runs below predate
+the stricter conditional-content and per-case lifecycle assertions; they do not
+qualify those new assertions.
+
+One session, two cases. In the first, a prompt starts a background Bash
+command (`sleep 45`) and the test switches to a second tab in the pane. In the
+second, a prompt starts a background subagent (`sleep 40` inside it) and the
+test selects another environment. In both, the turn ends, the task finishes
+and Claude answers the task report while the view is off screen. The test
+reads the session as a view does, with its last transcript and state tokens,
+every 2 s.
+
+| Check | Result |
+| --- | --- |
+| No missed update | Pass (runs 3 and 4; runs 1 and 2 passed it before failing on spec checks). Every change reached the reader as a delta or snapshot, including the task report folding onto its launching row and Claude's answer to it. The background task went from running to `completed` in session state, and the answer row arrived 50 to 56 s after the switch for the Bash case. |
+| No needless re-read | Pass. Once settled, ten reads in a row answered `unchanged` for transcript and state in every case and run. Overall the inactive-tab case took 1 snapshot, 4 or 5 deltas and 31 or 32 `unchanged` answers over about 72 s. A final read of the settled session with its token answered `unchanged`. |
+| The off-screen view does not poll | Pass. From 2 s after the tab switch or environment switch, the page sent nothing for the session (the empty `inactive-*-inactive-timeline` annotations). |
+| State on return, tab switch | Pass. The kept view sent its old token, got one transcript snapshot (the content had moved), showed the newest row within 120 to 220 ms, and then sent only conditional reads answered `unchanged`, about every 1.5 s. |
+| State on return, environment switch | Pass. The remounted view restored its transcript token, so its first transcript read was conditional (a snapshot, because the content had moved) and the rest `unchanged`. The newest row showed within 300 to 355 ms. |
+| Reload | Pass. The cold client read once without a token per mount, showed the newest row within about 1.9 s, and then settled to `unchanged`. All four markers were in the backend rows in order. |
+
+Bridge unit coverage: the mutation matrix in
+`bridges/claude-bridge/src/services/session-manager-transcript-revision.test.ts`
+gained two rows, a task report settling its launching row and a report with
+no row to attach to. Both pass, and the suite records no marker repair.
+
+Findings that are not defects:
+
+- A dev profile renders under `React.StrictMode`
+  (`apps/web/src/renderer-entry.tsx`), so a remount mounts the view twice and
+  every read is doubled for about 300 ms. A production build mounts once.
+- A remount re-reads session state without a token on purpose: the shared
+  cache carries tokens but not the state value, and `useNativeAgentSession`
+  does not let a mount claim state it never read. Transcript tokens are kept.
+- Haiku once ran the requested foreground `sleep 8` in the background, saying
+  the harness had blocked it. The spec now uses a foreground `echo`.
+
+Spec fixes made during the runs: run 1 asserted that idle reads after an
+environment switch kept their state token (see the remount note above). Run 2
+looked for an older row on screen after the reload, but the list is
+virtualized and the row had scrolled out of the DOM. Neither was a product
+defect.
+
+Not run here: a production build (no StrictMode double mount), an Electron
+window, a container environment, and Codex, whose background terminals
+change an idle view in the same way. The profile was stopped and reset
+afterwards.
 
 ## Qualification results (2026-10-18)
 
@@ -303,9 +455,18 @@ reset afterwards.
 
 ## Open questions
 
-- Do items 5, 6 and 7 justify their complexity once profiling exists?
+- Do items 7, 8 and 9 justify their complexity once profiling exists?
 
 ## Needs verification
+
+- Why a re-activated Claude view takes two or three session-state and
+  discovery snapshots before it settles to `unchanged`. In the 2026-10-21
+  run a tab switch took one state snapshot and three discovery snapshots in
+  about 150 ms, and an environment switch took two state snapshots and three
+  discovery snapshots per mounted view. Transcript reads were unaffected.
+  Find out whether the discovery value is still filling in (a catalogue
+  arriving after adopt) or whether a token is being dropped, and stop the
+  repeats if it is the latter.
 
 - Whether Grok's ACP `session/new` "Invalid params" rejection, seen in the
   September live run, is fixed. #874 (MCP headers in ACP `{name,value}` form)

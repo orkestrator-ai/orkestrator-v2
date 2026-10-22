@@ -3,7 +3,9 @@ import {
   clearImagePreviewCache,
   imagePreviewCacheKey,
   readImagePreviewCache,
+  readImagePreviewDimensions,
   writeImagePreviewCache,
+  writeImagePreviewDimensions,
 } from "./image-preview-cache";
 
 describe("image preview cache", () => {
@@ -41,6 +43,27 @@ describe("image preview cache", () => {
     expect(
       readImagePreviewCache(imagePreviewCacheKey(undefined, "/w/missing.png", undefined)),
     ).toBeNull();
+  });
+
+  test("keeps dimensions with their exact cached source and clears them on replacement or eviction", () => {
+    const source = "data:image/png;base64,first";
+    writeImagePreviewCache("image", source);
+    writeImagePreviewDimensions("image", source, { width: 1920, height: 1080 });
+    writeImagePreviewCache("image", source);
+    expect(readImagePreviewDimensions("image", source)).toEqual({ width: 1920, height: 1080 });
+    expect(readImagePreviewDimensions("image", "other")).toBeNull();
+    writeImagePreviewDimensions("image", source, { width: 0, height: 0 });
+    expect(readImagePreviewDimensions("image", source)?.width).toBe(1920);
+    writeImagePreviewCache("image", "replacement");
+    expect(readImagePreviewDimensions("image", "replacement")).toBeNull();
+    writeImagePreviewDimensions("image", "replacement", { width: 400, height: 1600 });
+    for (let index = 0; index < 32; index++) writeImagePreviewCache(`other-${index}`, source);
+    expect(readImagePreviewDimensions("image", "replacement")).toBeNull();
+    writeImagePreviewDimensions("missing", source, { width: 1, height: 1 });
+    expect(readImagePreviewDimensions("missing", source)).toBeNull();
+    writeImagePreviewDimensions("other-31", source, { width: 1, height: 1 });
+    clearImagePreviewCache();
+    expect(readImagePreviewDimensions("other-31", source)).toBeNull();
   });
 
   test("evicts the least recently used entry beyond the count bound", () => {

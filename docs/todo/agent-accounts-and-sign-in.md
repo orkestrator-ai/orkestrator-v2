@@ -1,6 +1,7 @@
 # Agent accounts and sign-in
 
-Checked against `main` at `2459b05c` (2026-10-15).
+Checked against `main` at `2459b05c` (2026-10-15); account-switching gap 5
+against `9b3f53a2` (2026-10-21).
 
 Each platform should report a normalized sign-in state. Sign-in should happen
 in the app wherever the vendor has an API for it, and losing auth mid-turn
@@ -131,6 +132,26 @@ Each was checked against the current code.
    file inside the account directory, and that file stops being shared for that
    account. `linkSharedEntries` leaves it alone on purpose, because the content
    is the account's now. Nothing reports that it happened.
+5. **An agent-test profile can use the wrong Claude account** when `dev:test`
+   is started from a shell whose `CLAUDE_CONFIG_DIR` names an added account
+   (for example, an Orkestrator agent tab). The desktop records that directory
+   as `ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR`, but
+   `getHostClaudeCredentials` is called without
+   `claudeKeychainService(configDir)`, so the token comes from the plain
+   `Claude Code-credentials` Keychain entry, the default host login. The
+   profile spends the default login's quota instead of the selected account's.
+   Found on 2026-10-21 while preparing the live design rerun (see
+   [design-canvas-qualification.md](design-canvas-qualification.md#live-cycle-evidence-claude-rerun-2026-10-21)).
+   At that baseline the bridge also wrote sessions into the host account's
+   configuration directory, and the run used an empty scratch directory to
+   avoid it. The merged host-home isolation change fixes those writes:
+   `applyClaudeHostCredentialEnvironment` now keeps the profile's own
+   `CLAUDE_CONFIG_DIR`. Account selection remains: decide whether the profile
+   follows the shell's account or always the default, pass the desktop's
+   knowledge of whether `CLAUDE_CONFIG_DIR` was explicit through to the
+   backend (an explicit `~/.claude` has a hashed Keychain entry too), and use
+   the matching credential entry for both local launches and container sync,
+   with tests.
 
 ### Qualification
 

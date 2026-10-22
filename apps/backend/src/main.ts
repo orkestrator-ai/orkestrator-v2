@@ -14,7 +14,7 @@ import { startReparentWatchdog } from "@orkestrator/protocol/parent-watchdog";
 import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
 import { startStandaloneTailscaleServe, TailscaleServeManager } from "./tailscale-serve.js";
 import { configureSshAgentSocketEnvironment } from "./ssh-agent-socket.js";
-import { publishInstanceDescriptor } from "./instance-descriptor.js";
+import { instanceEndpoints, publishInstanceDescriptor } from "./instance-descriptor.js";
 import { PUBLIC_API_SCHEMA_VERSION } from "@orkestrator/protocol/public-api";
 import { leaseActivatedToolchainSet } from "@orkestrator/toolchain/manager";
 import path from "node:path";
@@ -102,6 +102,7 @@ const backend = new OrkestratorBackend({
   hostRollbackEvidence: () =>
     standaloneLayoutForService ? readLauncherState(standaloneLayoutForService).rollback : null,
   emit: (event, payload) => gateway?.emit(event, payload),
+  commandNode: options.commandNode,
 });
 await backend.init();
 
@@ -119,6 +120,9 @@ gateway = new OrkestratorGateway({
   port: options.port,
   controlBindAddress: options.controlHost,
   controlPort: options.controlPort,
+  loopbackClientPort: options.loopbackClientPort,
+  backendHello: () => backend.backendHelloIdentity(),
+  nodeHooks: backend.nodeGateway(),
   compression: options.compression,
   allowNonTailscaleBind:
     options.allowNonTailscaleBind || options.tailscaleServe || options.desktopWebClient,
@@ -148,6 +152,7 @@ backend.previews?.reservePorts(
   [
     gatewayInfo.port,
     gatewayInfo.browserUrl ? Number(new URL(gatewayInfo.browserUrl).port) : 0,
+    gatewayInfo.loopbackClientUrl ? Number(new URL(gatewayInfo.loopbackClientUrl).port) : 0,
   ].filter((port) => port > 0),
 );
 
@@ -191,6 +196,18 @@ if (managedWebClient) {
     throw error;
   }
 }
+
+// Command nodes register these on their leaves, so a client that loaded this
+// node's portal can reach a leaf directly.
+backend.setPortalOriginsSource(() =>
+  [
+    gatewayInfo.browserUrl,
+    info.browserUrl,
+    managedWebClient?.getStatus().url ?? undefined,
+    ...(options.allowedOrigins ?? []),
+    options.rendererDevServerUrl,
+  ].filter((origin): origin is string => Boolean(origin)),
+);
 
 // Transcript artifacts: the executable-content origin must differ from, and
 // may be framed only by, the application's own page origins.
@@ -268,6 +285,7 @@ try {
       startedAt: new Date().toISOString(),
       url: info.url,
       ...(info.browserUrl && info.browserUrl !== info.url ? { browserUrl: info.browserUrl } : {}),
+      endpoints: instanceEndpoints(gatewayInfo),
       authFile: info.authFile,
       dataDir: options.dataDir,
       appVersion: APP_VERSION,
@@ -293,6 +311,8 @@ process.stdout.write(
     authFile: info.authFile,
     browserUrl: info.browserUrl,
     browserError: info.browserError,
+    loopbackClientUrl: info.loopbackClientUrl,
+    loopbackClientError: info.loopbackClientError,
     controlMcpUrl: backend.getControlMcpInfo()?.url,
     controlMcpFile: backend.getControlMcpInfo()?.descriptorFile,
   })}\n`,

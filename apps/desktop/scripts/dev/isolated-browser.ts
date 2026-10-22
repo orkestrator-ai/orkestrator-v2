@@ -160,6 +160,7 @@ export async function runIsolatedBrowser(options: IsolatedBrowserOptions = {}): 
     ORKESTRATOR_AGENT_TEST_LIVE_MULTI_REVIEW: "0",
     ORKESTRATOR_AGENT_TEST_LIVE_DESIGN: "0",
     ORKESTRATOR_AGENT_TEST_LIVE_IDLE_OBSERVATION: "0",
+    ORKESTRATOR_AGENT_TEST_LIVE_REVISION_TOKENS: "0",
     // The browser suite deliberately fills a scheduler to test queueing. Keep
     // that simulated host inside the outer task's two-slot reservation, or its
     // nested weight-2 command would wait for the task that is waiting for it.

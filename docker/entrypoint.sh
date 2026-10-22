@@ -899,6 +899,11 @@ log_progress "OpenCode configuration ready"
 log_progress "Setting up Codex configuration..."
 mkdir -p "$HOME/.codex"
 
+# Invalidate before importing: a backend restart or a later boot failure must
+# never leave a previous account marker certifying the newly imported login.
+# Only idle bridge reconciliation can acknowledge the account actually copied.
+(umask 077; printf '%s' unstaged > /tmp/orkestrator-codex-account)
+
 if [ -d /codex-home ]; then
     # A Codex home contains far more than configuration. Session rollouts, logs,
     # worktrees, generated images and caches routinely grow to multiple GB. A

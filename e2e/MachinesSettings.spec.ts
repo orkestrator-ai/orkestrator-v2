@@ -1,6 +1,21 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
 
 const name = "🖥️".repeat(32); // 64 code points, 96 UTF-16 code units.
+const unbreakableName = "W".repeat(64);
+
+async function expectNoHorizontalOverflow(dialog: Locator) {
+  expect(
+    await dialog.evaluate((element) =>
+      [element, ...element.querySelectorAll("*")].some(
+        (node) =>
+          (node === element ||
+            ["dialog-header", "dialog-title"].includes(node.getAttribute("data-slot") ?? "") ||
+            ["auto", "scroll"].includes(getComputedStyle(node).overflowX)) &&
+          node.scrollWidth > node.clientWidth + 1,
+      ),
+    ),
+  ).toBe(false);
+}
 
 for (const width of [390, 639, 640, 1024]) {
   test(`every machine keeps its actions on screen at ${width}px`, async ({ page }) => {
@@ -24,16 +39,30 @@ for (const width of [390, 639, 640, 1024]) {
     );
   });
 
-  for (const { trigger, title, cap } of [
+  for (const { trigger, title, cap, machineName } of [
     { trigger: /^Add machine$/, title: "Add machine", cap: 512 },
     { trigger: /^Settings for Desk/, title: /^Desk with/, cap: 672 },
     { trigger: /^Updates for Desk/, title: /^Updates for Desk/, cap: 672 },
+    {
+      trigger: new RegExp(`^Settings for ${unbreakableName}$`),
+      title: unbreakableName,
+      cap: 672,
+      machineName: unbreakableName,
+    },
+    {
+      trigger: new RegExp(`^Updates for ${unbreakableName}`),
+      title: `Updates for ${unbreakableName}`,
+      cap: 672,
+      machineName: unbreakableName,
+    },
   ]) {
     test(`${trigger.source} keeps the viewport gutter and responsive cap at ${width}px`, async ({
       page,
     }) => {
       await page.setViewportSize({ width, height: 900 });
-      await page.goto("/machines-settings");
+      await page.goto(
+        machineName ? `/machines-settings?machineName=${machineName}` : "/machines-settings",
+      );
       await page.getByRole("button", { name: trigger }).click();
       const dialog = page.getByRole("dialog", { name: title });
       await expect(dialog).toBeVisible();
@@ -52,19 +81,68 @@ for (const width of [390, 639, 640, 1024]) {
       const heading = (await dialog.getByRole("heading", { name: title }).boundingBox())!;
       expect(heading.x - box.x).toBeGreaterThanOrEqual(16);
       expect(heading.y - box.y).toBeGreaterThanOrEqual(16);
-      expect(
-        await dialog.evaluate((element) =>
-          [element, ...element.querySelectorAll("*")].some(
-            (node) =>
-              ["auto", "scroll"].includes(getComputedStyle(node).overflowX) &&
-              node.scrollWidth > node.clientWidth,
-          ),
-        ),
-      ).toBe(false);
+      await expectNoHorizontalOverflow(dialog);
 
       await page.keyboard.press("Escape");
       await expect(dialog).toBeHidden();
     });
+  }
+}
+
+for (const width of [390, 1024]) {
+  for (const height of [300, 400]) {
+    for (const kind of ["settings", "updates"] as const) {
+      test(`${kind} pins its header and scrolls to the end at ${width}x${height}`, async ({
+        page,
+      }) => {
+        await page.setViewportSize({ width, height });
+        await page.goto(`/machines-settings?machineName=${unbreakableName}`);
+        const title = kind === "settings" ? unbreakableName : `Updates for ${unbreakableName}`;
+        await page
+          .getByRole("button", {
+            name: new RegExp(
+              `^${kind === "settings" ? "Settings" : "Updates"} for ${unbreakableName}`,
+            ),
+          })
+          .click();
+        const dialog = page.getByRole("dialog", { name: title, exact: true });
+        const header = dialog.locator('[data-slot="dialog-header"]');
+        const body = dialog.getByTestId(`machine-${kind}`);
+        const lastControl =
+          kind === "settings"
+            ? body.getByRole("button", { name: `Remove ${unbreakableName}`, exact: true })
+            : body.getByRole("button", { name: "Pull the release image", exact: true });
+        await expect(lastControl).toBeAttached();
+        // Wait for the opening animation before comparing header positions.
+        await expect
+          .poll(async () => (await dialog.boundingBox())?.height)
+          .toBeCloseTo(height * 0.88, 0);
+        const box = (await dialog.boundingBox())!;
+        expect(box.y).toBeGreaterThanOrEqual(0);
+        expect(box.y + box.height).toBeLessThanOrEqual(height);
+        await expectNoHorizontalOverflow(dialog);
+        const headerBefore = (await header.boundingBox())!;
+        await expect(body).toBeInViewport({ ratio: 1 });
+        await expect(lastControl).not.toBeInViewport();
+
+        await body.hover();
+        await page.mouse.wheel(0, 10_000);
+        await expect.poll(() => body.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+        await expect(lastControl).toBeInViewport({ ratio: 1 });
+        const headerAfter = (await header.boundingBox())!;
+        expect(headerAfter.y).toBeCloseTo(headerBefore.y, 1);
+        expect(headerAfter.height).toBeCloseTo(headerBefore.height, 1);
+        await expect(header).toBeInViewport({ ratio: 1 });
+        expect(await dialog.evaluate((element) => element.scrollTop)).toBe(0);
+        // The final control must fit inside the body, below the pinned header.
+        const bodyBox = (await body.boundingBox())!;
+        const controlBox = (await lastControl.boundingBox())!;
+        expect(controlBox.y).toBeGreaterThanOrEqual(bodyBox.y);
+        expect(controlBox.y + controlBox.height).toBeLessThanOrEqual(bodyBox.y + bodyBox.height);
+        await dialog.getByRole("button", { name: "Close", exact: true }).click();
+        await expect(dialog).toBeHidden();
+      });
+    }
   }
 }
 

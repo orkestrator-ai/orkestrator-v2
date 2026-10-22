@@ -197,7 +197,10 @@ export class CodexCommandCatalogue {
         this.skillsDigest = commandBindingRevision([
           String(read.fresh),
           read.snapshot
-            ? JSON.stringify([read.snapshot.truncated, read.snapshot.bindings.map(skillCommandRow)])
+            ? JSON.stringify([
+                read.snapshot.truncated,
+                read.snapshot.bindings.map((binding) => skillCommandRow(binding)),
+              ])
             : "none",
         ]);
         this.bumpIfChanged();
@@ -215,6 +218,10 @@ export class CodexCommandCatalogue {
     const composite = commandBindingRevision([this.templatesDigest, this.skillsDigest]);
     if (composite === this.compositeDigest) return;
     this.compositeDigest = composite;
+    this.revisionValue += 1;
+  }
+
+  markPolicyChanged(): void {
     this.revisionValue += 1;
   }
 
@@ -250,7 +257,7 @@ export class CodexCommandCatalogue {
     return [...BUILTINS.map(builtinRow), ...templates.effective.map(templateCommandRow)];
   }
 
-  private async collect(): Promise<CollectedCatalogue> {
+  private async collect(projectResources = true): Promise<CollectedCatalogue> {
     this.deferredBumps += 1;
     let templates: TemplateScan;
     let skillRead: Awaited<ReturnType<SkillInventory["read"]>>;
@@ -263,7 +270,9 @@ export class CodexCommandCatalogue {
     const candidates = [
       ...BUILTINS.map(builtinRow),
       ...templates.effective.map(templateCommandRow),
-      ...(skillRead.snapshot?.bindings.map(skillCommandRow) ?? []),
+      ...(skillRead.snapshot?.bindings.map((binding) =>
+        skillCommandRow(binding, projectResources),
+      ) ?? []),
     ];
     const commands: NativeAgentSlashCommand[] = [];
     let bytes = 0;
@@ -296,8 +305,8 @@ export class CodexCommandCatalogue {
    * attaches no thread and never starts a turn; skills come from `skills/list`
    * for the bridge's working directory.
    */
-  async list(): Promise<BridgeCommandCatalogueResponse> {
-    const collected = await this.collect();
+  async list(projectResources = true): Promise<BridgeCommandCatalogueResponse> {
+    const collected = await this.collect(projectResources);
     this.listedTemplates = new Map(
       collected.templates.effective.map((entry) => [entry.id, entry.fingerprint]),
     );
@@ -336,7 +345,10 @@ export class CodexCommandCatalogue {
    * backend claims about it — kind, spelling, binding revision — must still
    * agree. Any mismatch refuses; it never falls back to a prompt.
    */
-  async resolveSelected(command: NativeAgentBridgeCommandInvocation): Promise<CommandPlan> {
+  async resolveSelected(
+    command: NativeAgentBridgeCommandInvocation,
+    projectResources = true,
+  ): Promise<CommandPlan> {
     const stale = (name: string) => ({
       kind: "refused" as const,
       message: `${name} changed since it was selected. Choose it again from the menu.`,
@@ -405,7 +417,11 @@ export class CodexCommandCatalogue {
       const binding = read.snapshot.byId.get(command.id);
       if (!binding) return this.unknownSelection();
       return (
-        checkRow(skillCommandRow(binding)) ?? { kind: "skill", binding, args: command.arguments }
+        checkRow(skillCommandRow(binding, projectResources)) ?? {
+          kind: "skill",
+          binding,
+          args: command.arguments,
+        }
       );
     }
 
@@ -424,7 +440,21 @@ export class CodexCommandCatalogue {
    * stay ordinary text; a recognised command that cannot run is refused.
    * `$name` stays provider-native text: Codex resolves its own mentions.
    */
-  async resolveTyped(prompt: string): Promise<CommandPlan> {
+  async resolveTyped(prompt: string, projectResources = true): Promise<CommandPlan> {
+    if (!projectResources) {
+      const mention = parseCommandToken(prompt, ["$"]);
+      if (mention) {
+        const read = await this.skills.read();
+        if (!read.fresh) return { kind: "refused", message: "Codex skills could not be verified." };
+        const binding = read.snapshot?.bindings.find(
+          (candidate) => `$${candidate.name}` === mention.token,
+        );
+        if (binding) {
+          const unavailable = skillUnavailability(binding, projectResources);
+          if (unavailable) return { kind: "refused", message: unavailable.message };
+        }
+      }
+    }
     const token = parseCommandToken(prompt, ["/"]);
     if (!token) return { kind: "text" };
     const typed = token.token;
@@ -433,7 +463,7 @@ export class CodexCommandCatalogue {
     if (builtin) return { kind: "builtin", builtin: builtin.kind };
 
     if (typed.toLowerCase().startsWith(SKILL_ALIAS_PREFIX)) {
-      return this.resolveTypedSkill(typed, token.arguments);
+      return this.resolveTypedSkill(typed, token.arguments, projectResources);
     }
 
     const scan = await this.scanTemplates();
@@ -450,7 +480,11 @@ export class CodexCommandCatalogue {
     return { kind: "template", entry, args: token.arguments };
   }
 
-  private async resolveTypedSkill(typed: string, args: string): Promise<CommandPlan> {
+  private async resolveTypedSkill(
+    typed: string,
+    args: string,
+    projectResources: boolean,
+  ): Promise<CommandPlan> {
     const read = await this.skills.read();
     if (!read.snapshot) {
       return {
@@ -476,7 +510,7 @@ export class CodexCommandCatalogue {
       };
     }
     const binding = matches[0]!;
-    const unavailable = skillUnavailability(binding);
+    const unavailable = skillUnavailability(binding, projectResources);
     if (unavailable) return { kind: "refused", message: unavailable.message };
     return { kind: "skill", binding, args };
   }
@@ -495,8 +529,8 @@ export class CodexCommandCatalogue {
   }
 
   /** `/help`: the same qualified catalogue the picker shows, bounded. */
-  async helpText(): Promise<string> {
-    const collected = await this.collect();
+  async helpText(projectResources = true): Promise<string> {
+    const collected = await this.collect(projectResources);
     const lines: string[] = ["Available Codex slash commands:"];
     const describe = (row: NativeAgentSlashCommand, label: string) => {
       const hint = row.argumentHint ? ` ${row.argumentHint}` : "";

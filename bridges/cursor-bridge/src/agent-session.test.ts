@@ -805,7 +805,11 @@ describe("ensureAgent", () => {
       });
       interactive.agentMcp = connection;
       await ensureAgent(interactive);
-      expect(mcpServerNames(created[0])).toEqual(["orkestrator", "review-untrusted"]);
+      expect(mcpServerNames(created[0])).toEqual(["orkestrator"]);
+      expect(interactive.mcpServerNames?.sort()).toEqual(["orkestrator", "review-untrusted"]);
+      expect(created[0]?.local).toMatchObject({
+        settingSources: ["user", "project", "team", "plugins"],
+      });
 
       const state = newSessionState(undefined, {
         id: "coordinator-read-only",

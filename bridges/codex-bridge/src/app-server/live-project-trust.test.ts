@@ -266,6 +266,51 @@ describeLive("live project resources", () => {
     }
   }, 180_000);
 
+  test("new repository skills are excluded after a skills change and reload", async () => {
+    const setup = await fixture();
+    const engine = engineFor(setup, await resolveCodexBinary());
+    const config: EngineTurnConfig = {
+      mode: "build",
+      cwd: setup.workspace,
+      sandbox: "workspace-write",
+      approvalPolicy: "never",
+      policy: policy(false),
+    };
+    const canary = "NEW-REPOSITORY-SKILL-CANARY";
+    let changed = false;
+    const unsubscribe = engine.subscribe((event) => {
+      if (event.kind === "skills.changed") changed = true;
+    });
+    try {
+      await engine.start();
+      const thread = await engine.startThread({ config });
+      await turnRequest(engine, setup, thread.handle, config, "TURN-BEFORE-NEW-SKILL");
+      const dir = join(setup.workspace, ".agents", "skills", "new-canary");
+      await mkdir(dir, { recursive: true });
+      await writeFile(
+        join(dir, "SKILL.md"),
+        `---\nname: new-canary\ndescription: ${canary}\n---\nUnused.\n`,
+      );
+      const deadline = Date.now() + 10_000;
+      while (!changed && Date.now() < deadline) await Bun.sleep(100);
+      expect(changed).toBe(true);
+      const reloaded = await engine.reloadThread(thread.handle, { config });
+      const request = await turnRequest(
+        engine,
+        setup,
+        reloaded.handle,
+        config,
+        "TURN-AFTER-NEW-SKILL",
+      );
+      expect(request).not.toContain(canary);
+      expect(canariesIn(request)).toEqual([]);
+    } finally {
+      unsubscribe();
+      await engine.stop();
+      await setup.stop();
+    }
+  }, 180_000);
+
   test("pinning a linked worktree wins over its trusted main checkout", async () => {
     const setup = await fixture({ worktree: true });
     const engine = engineFor(setup, await resolveCodexBinary());

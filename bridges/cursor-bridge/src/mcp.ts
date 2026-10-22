@@ -126,6 +126,24 @@ export async function cursorMcpServers(
   return servers;
 }
 
+/**
+ * Project settings load their own MCP servers in the SDK. Supplying those
+ * servers inline too starts each process twice in SDK 1.0.37, despite its
+ * documented name precedence. Keep the full resolution for inventory, but
+ * inject only backend-owned entries when the SDK loads project settings.
+ */
+export function cursorInlineMcpServers(
+  servers: Record<string, McpServerConfig>,
+  projectSettingsLoaded: boolean,
+): Record<string, McpServerConfig> {
+  if (!projectSettingsLoaded) return servers;
+  return Object.fromEntries(
+    Object.entries(servers).filter(
+      ([name]) => name === AGENT_MCP_SERVER || name === ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME,
+    ),
+  );
+}
+
 const MAX_MCP_DESCRIPTION_BYTES = 4_000;
 const MAX_MCP_SCHEMA_BYTES = 20_000;
 /** Model-facing MCP tool result budget, measured in UTF-8 bytes. */

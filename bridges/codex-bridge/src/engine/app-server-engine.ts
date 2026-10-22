@@ -1505,7 +1505,8 @@ export class AppServerEngine implements CodexEngine {
   /**
    * Thread configuration only app-server can supply: with project resources
    * off, the checkout's own skills, which the untrusted pin does not reach.
-   * An app-server without `skills/list` has no skills to keep out.
+   * Failure to establish the inventory refuses the thread, including an older
+   * app-server without skills/list.
    */
   private async projectResourceThreadConfig(
     generation: EngineGeneration,
@@ -1516,9 +1517,12 @@ export class AppServerEngine implements CodexEngine {
     try {
       listed = await this.supervisor.requestOnGeneration(generation, "skills/list", {
         cwds: [config.cwd ?? this.options.cwd],
+        forceReload: true,
       } satisfies SkillsListParams);
     } catch (error) {
-      if (error instanceof AppServerRpcError && error.code === JSON_RPC_METHOD_NOT_FOUND) return {};
+      if (error instanceof AppServerRpcError && error.code === JSON_RPC_METHOD_NOT_FOUND) {
+        throw new Error("Codex cannot enforce disabled project resources without skills/list");
+      }
       throw error;
     }
     return codexProjectSkillsConfig(listed);
@@ -2310,21 +2314,28 @@ export class AppServerEngine implements CodexEngine {
    * Releases a thread. Deliberately `thread/unsubscribe`, never `thread/delete`:
    * closing a tab must not destroy the user's conversation or its descendants.
    */
-  async unsubscribeThread(handle: string): Promise<void> {
+  async unsubscribeThread(handle: string, requireConfirmation = false): Promise<void> {
     const binding = this.bindings.get(handle);
-    this.accountProofTurns.delete(binding?.threadId ?? handle);
-    this.rolloutPaths.delete(binding?.threadId ?? handle);
-    this.bindings.delete(handle);
-    if (!binding) return;
+    const threadId = binding?.threadId ?? handle;
+    if (!binding && !requireConfirmation) {
+      this.accountProofTurns.delete(threadId);
+      this.rolloutPaths.delete(threadId);
+      return;
+    }
     try {
-      await this.supervisor.request("thread/unsubscribe", { threadId: binding.threadId });
+      await this.supervisor.request("thread/unsubscribe", { threadId });
     } catch (error) {
-      // Already gone, or the process died — either way there is nothing to free.
+      // Policy changes must prove that a loaded thread released its old config.
+      // Keep the binding on failure so a retry can still unsubscribe it.
+      if (requireConfirmation) throw error;
       console.warn(
         "[codex-bridge] thread/unsubscribe failed:",
         error instanceof Error ? error.message : error,
       );
     }
+    this.accountProofTurns.delete(threadId);
+    this.rolloutPaths.delete(threadId);
+    this.bindings.delete(handle);
   }
 
   /**

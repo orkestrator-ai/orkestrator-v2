@@ -33,3 +33,13 @@
 - **Isolated rerun:** `mise run test:logged -- --name container-fetch-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/container-git-fetch-git.test.ts --parallel=1 --only-failures` → all six tests passed unchanged (3.7 s logged).
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.ozsKgo/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - **Assessment:** consistent with the existing aggregate-load timeout hypothesis; no timeout or assertion was changed. The full aggregate remains a failed validation result, with this isolated pass confirming the recurrence is intermittent.
+
+
+## Agent interaction and permission review — 2026-10-22
+
+- **Original command:** `mise run test:logged -- --name full-tests -- mise run test`.
+- **Workers:** workspace/root/bridges/protocol reserved 4/1/2/1 slots. Other worktrees also held host capacity.
+- **Failure:** `container status and fetch scripts against a local remote > a branch baseline follows origin/<ref> only when the policy fetches` exceeded 5000 ms (5169.99 ms), with one dangling child killed.
+- **Isolated rerun:** `mise run test:logged -- --name git-fetch-isolated -- bun test --cwd apps/backend ./src/core/container-git-fetch-git.test.ts --parallel=1 --only-failures` passed the complete unchanged six-test owner (11.6 s logged, exit 0).
+- **Evidence:** `orkestrator-test-run.rkxXtB/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` beneath the host temporary directory; passing focused output was removed by `test:logged`.
+- **Assessment:** another confirmed intermittent recurrence. Neither the owning test nor the container Git implementation changed. Shared-host load remains a hypothesis; no deadline, assertion or skip was changed.

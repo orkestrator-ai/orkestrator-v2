@@ -1086,8 +1086,21 @@ export class CodexRuntimeSessions {
         // engine update must leave both memory and the durable session record on
         // the last configuration the engine actually accepted.
         await this.ctx.options.engine.configureThread(attached.engineHandle, nextConfig);
+        if (
+          session.config.policy?.projectResources !== nextConfig.policy?.projectResources ||
+          (session.config.cwd ?? this.ctx.options.cwd) !== (nextConfig.cwd ?? this.ctx.options.cwd)
+        ) {
+          // A loaded resume ignores trust and skill overrides. Confirm the old
+          // thread is unsubscribed before publishing the new resource policy.
+          await this.lifecycle.detachThread(attached, true);
+        }
       }
     } catch (error) {
+      if (attached) {
+        await this.ctx.options.engine
+          .configureThread(attached.engineHandle, session.config)
+          .catch(() => undefined);
+      }
       if (attached && requestedModelChanged) {
         attached.modelId = previousConfirmedModel;
       }
@@ -1101,6 +1114,9 @@ export class CodexRuntimeSessions {
       return "unavailable";
     }
 
+    if (session.config.policy?.projectResources !== nextConfig.policy?.projectResources) {
+      this.ctx.commandCatalogue.markPolicyChanged();
+    }
     session.config = nextConfig;
     session.configurationRevision += 1;
     this.ctx.registry.touch(sessionId);

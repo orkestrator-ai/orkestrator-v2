@@ -43,6 +43,7 @@ import { hydrateComposer, modelSelection } from "./models.js";
 import { renderToolCall } from "./tool-rendering.js";
 import {
   cursorMcpServers,
+  cursorInlineMcpServers,
   hostOrkestratorCustomTools,
   mcpConnectionKey,
   retireMcpObservations,
@@ -500,7 +501,9 @@ async function attach(state: SessionState): Promise<SDKAgent> {
           return denied.length > 0 ? { disallowedTools: denied } : {};
         })()
       : {}),
-    ...(!hosted && allowHttpMcp && state.mcpServerNames.length > 0 ? { mcpServers } : {}),
+    ...(!hosted && allowHttpMcp && state.mcpServerNames.length > 0
+      ? { mcpServers: cursorInlineMcpServers(mcpServers, !readOnly && policy.projectResources) }
+      : {}),
   };
   const releaseWarmWorkspace = await prewarmCursorWorkspace(options, policy.sandbox);
   state.workspaceWarmRelease = releaseWarmWorkspace;

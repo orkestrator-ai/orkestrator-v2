@@ -155,7 +155,11 @@ function harness(
   engineOptions: Partial<ConstructorParameters<typeof AppServerEngine>[0]> = {},
 ): Harness {
   const children: ScriptedChild[] = [];
-  const merged = { initialize: INITIALIZE, ...handlers };
+  const merged = {
+    initialize: INITIALIZE,
+    "skills/list": () => ({ data: [{ errors: [], skills: [] }] }),
+    ...handlers,
+  };
   let index = 0;
 
   const engine = new AppServerEngine({
@@ -520,7 +524,33 @@ describe("thread lifecycle", () => {
         .child()
         .requests.filter((request) => request.method === "skills/list")
         .map((r) => r.params),
-    ).toEqual(Array(3).fill({ cwds: ["/tmp/workspace"] }));
+    ).toEqual(Array(3).fill({ cwds: ["/tmp/workspace"], forceReload: true }));
+  });
+
+  test("fails closed when skills/list is not supported", async () => {
+    const h = harness({
+      "skills/list": () => {
+        const error = new Error("unknown skills/list");
+        (error as Error & { rpcCode: number }).rpcCode = -32601;
+        throw error;
+      },
+    });
+    await h.engine.start();
+    await expect(
+      h.engine.startThread({
+        config: {
+          ...BUILD,
+          policy: {
+            id: "interactive-host",
+            sandbox: "none",
+            approvals: "auto-approve",
+            projectResources: false,
+            networkAccess: "full",
+          },
+        },
+      }),
+    ).rejects.toThrow("without skills/list");
+    expect(h.child().requests.some((r) => r.method === "thread/start")).toBe(false);
   });
 
   test("refuses a thread whose project skills cannot be listed", async () => {
@@ -2367,7 +2397,11 @@ describe("runtime health", () => {
   });
 
   test("every sub-request failing still returns a renderable snapshot", async () => {
-    const h = harness();
+    const h = harness({
+      "skills/list": () => {
+        throw new Error("skills unavailable");
+      },
+    });
     await h.engine.start();
 
     const health = (await h.engine.getRuntimeHealth()) as Record<string, unknown>;

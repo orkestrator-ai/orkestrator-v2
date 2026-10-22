@@ -50,6 +50,12 @@ describe("permissionDetail", () => {
     expect(
       permissionDetail({ toolCall: { toolCallId: "1" } }, { kind: "edit", locationPath: "/w/x" }),
     ).toEqual({ kind: "file-change", paths: ["/w/x"] });
+    expect(
+      permissionDetail(
+        { toolCall: { kind: "other" } },
+        { kind: "execute", input: { command: "make" } },
+      ),
+    ).toEqual({ kind: "command", command: "make" });
     // Without a kind anywhere, a known tool name still classifies it.
     expect(
       permissionDetail({
@@ -60,18 +66,38 @@ describe("permissionDetail", () => {
 
   test("reads through Grok's use_tool wrapper", () => {
     expect(
-      permissionDetail({
-        toolCall: {
-          toolCallId: "1",
-          kind: "execute",
-          rawInput: {
-            variant: "UseTool",
-            tool_name: "bash",
-            tool_input: JSON.stringify({ command: "rm -rf build" }),
+      permissionDetail(
+        {
+          toolCall: {
+            toolCallId: "1",
+            kind: "other",
+            rawInput: {
+              variant: "UseTool",
+              tool_name: "bash",
+              tool_input: JSON.stringify({ command: "rm -rf build" }),
+            },
           },
         },
-      }),
+        { kind: "other", name: "use_tool" },
+      ),
     ).toEqual({ kind: "command", command: "rm -rf build" });
+  });
+
+  test("infers a file change through a generic use_tool kind", () => {
+    expect(
+      permissionDetail(
+        {
+          toolCall: {
+            kind: "other",
+            rawInput: {
+              tool_name: "write",
+              tool_input: { file_path: "/w/new.ts" },
+            },
+          },
+        },
+        { kind: "other", name: "use_tool" },
+      ),
+    ).toEqual({ kind: "file-change", paths: ["/w/new.ts"] });
   });
 
   test("anything else, or a command or file change without its detail, stays a permission", () => {
@@ -100,6 +126,8 @@ describe("permissionDetail", () => {
       },
     });
     expect(many.kind === "file-change" && many.paths.length).toBe(20);
+    expect(many).toMatchObject({ pathsOmitted: 30 });
+    expect(long).toMatchObject({ commandTruncated: true });
   });
 });
 
@@ -110,7 +138,12 @@ describe("published approvals", () => {
   });
 
   test("carry the kind and what the call runs beside the agent's options", () => {
-    const child = { respond: () => undefined } as unknown as AcpProcess;
+    const responses: unknown[] = [];
+    const child = {
+      respond: (_id: number, response: unknown) => {
+        responses.push(response);
+      },
+    } as unknown as AcpProcess;
     const state = {
       id: "detail-test",
       acpSessionId: "vendor-session",
@@ -142,5 +175,25 @@ describe("published approvals", () => {
       expect.objectContaining({ title: "Fetch a page", kind: "permission" }),
     ]);
     expect(publicApprovals(state)[1]).not.toHaveProperty("command");
+    parkPermission(state, child, 3, {
+      sessionId: "vendor-session",
+      options: OPTIONS,
+      toolCall: { kind: "execute", rawInput: { command: "x".repeat(4096) + " SECRET-SUFFIX" } },
+    });
+    parkPermission(state, child, 4, {
+      sessionId: "vendor-session",
+      options: OPTIONS,
+      toolCall: {
+        kind: "edit",
+        locations: Array.from({ length: 25 }, (_, index) => ({ path: `/w/${index}` })),
+      },
+    });
+    expect(publicApprovals(state)[2]).toMatchObject({ commandTruncated: true });
+    expect(publicApprovals(state)[3]).toMatchObject({ pathsOmitted: 5 });
+    const incomplete = [...state.approvals.values()].slice(2);
+    for (const approval of incomplete) approval.respond("allow");
+    expect(responses).toEqual(
+      Array(2).fill({ outcome: { outcome: "selected", optionId: "reject" } }),
+    );
   });
 });

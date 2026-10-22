@@ -31,6 +31,64 @@ function emptyClaudeFamily(url: string) {
 }
 
 describe("provider-neutral interaction adapters", () => {
+  test("Grok discloses bridge-truncated approval details and refuses positive answers", async () => {
+    let approvals = [
+      {
+        id: "long-command",
+        title: "Run command",
+        kind: "command",
+        command: "x".repeat(4096),
+        commandTruncated: true,
+      },
+      {
+        id: "many-files",
+        title: "Edit files",
+        kind: "file-change",
+        paths: Array.from({ length: 20 }, (_, i) => `/w/${i}`),
+        pathsOmitted: 5,
+      },
+    ].map((entry) => ({
+      ...entry,
+      requestedAt: Date.now(),
+      expiresAt: Date.now() + 60_000,
+      options: [
+        { optionId: "allow", name: "Allow once", kind: "allow_once" },
+        { optionId: "reject", name: "Reject", kind: "reject_once" },
+      ],
+    }));
+    const upstream: string[] = [];
+    const { provider } = httpProvider((url) => {
+      if (url.endsWith("/approvals")) return Response.json({ approvals });
+      if (url.endsWith("/interactions")) return Response.json({ interactions: [] });
+      upstream.push(url);
+      approvals = approvals.filter((entry) => !url.endsWith(`/${entry.id}`));
+      return Response.json({ status: "applied" });
+    }, grokConnection);
+    const { requests } = await provider.interactions!.listPendingInteractions("session-1");
+    expect(requests.map((r) => r.kind)).toEqual(["command-approval", "file-approval"]);
+    expect(requests[0]!.presentation.body).toContain("Command details were truncated");
+    expect(requests[1]!.presentation.body).toContain("5 additional file paths were omitted");
+    for (const request of requests) {
+      expect(request.presentation.confirmDisabled).toBe(true);
+      expect(
+        await provider.interactions!.resolveInteraction(
+          "session-1",
+          request.id,
+          answerResolution(request),
+        ),
+      ).toMatchObject({ result: "rejected" });
+    }
+    expect(upstream).toEqual([]);
+    expect(
+      await provider.interactions!.resolveInteraction(
+        "session-1",
+        requests[0]!.id,
+        declineResolution(requests[0]!),
+      ),
+    ).toMatchObject({ result: "applied" });
+    expect(upstream).toHaveLength(1);
+  });
+
   test("normalizes Grok plan and question requests and maps their exact outcomes", async () => {
     const requestedAt = Date.now();
     const expiresAt = requestedAt + 60_000;

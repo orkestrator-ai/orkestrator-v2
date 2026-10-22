@@ -3432,6 +3432,49 @@ describe("command catalogue dispatch", () => {
   const turnStarts = (h: Awaited<ReturnType<typeof harness>>) =>
     h.child().requests.filter((request) => request.method === "turn/start");
 
+  test.each([false, true])(
+    "session resource policy overlays catalogue and dispatch: %s",
+    async (projectResources) => {
+      const { h, sessionId, row } = await withSkills(() => [deploy()]);
+      await h.runtime.updateConfig(sessionId, {
+        mode: "build",
+        policy: {
+          id: "interactive-host",
+          sandbox: "none",
+          approvals: "auto-approve",
+          projectResources,
+          networkAccess: "full",
+        },
+      });
+      const listed = (await h.runtime.getCommandCatalogue(sessionId)).commands.find(
+        (entry) => entry.id === row!.id,
+      )!;
+      expect(listed.availability?.state === "unavailable").toBe(!projectResources);
+      const selected = await h.runtime.prompt(sessionId, {
+        prompt: "$deploy",
+        requestId: "selected-policy",
+        attachments: [],
+        command: selection(row!, ""),
+      });
+      if (projectResources) {
+        expect(selected).toMatchObject({ ok: true });
+        expect(turnStarts(h)).toHaveLength(1);
+        return;
+      }
+      expect(selected).toMatchObject({ ok: false, status: 422 });
+      for (const [index, prompt] of ["/skill:deploy", "$deploy"].entries()) {
+        await h.runtime.prompt(sessionId, {
+          prompt,
+          requestId: `typed-policy-${index}`,
+          attachments: [],
+        });
+        expect(h.runtime.getJournal().classify(`typed-policy-${index}`).record).toBeUndefined();
+      }
+      expect(turnStarts(h)).toHaveLength(0);
+      expect(h.runtime.getJournal().classify("selected-policy").record).toBeUndefined();
+    },
+  );
+
   test("a selected skill sends one text item, the private skill binding and the images", async () => {
     const { h, sessionId, row } = await withSkills(() => [deploy()]);
     expect(JSON.stringify(row)).not.toContain(DEPLOY_PATH);
@@ -4262,5 +4305,118 @@ describe("search configuration recovery", () => {
     const resume = requests.findLast((r) => r.method === "thread/resume")!;
     expect(resume.params.config).toMatchObject({ web_search: "disabled" });
     expect(methodBefore(requests, resume)).toBe("thread/unsubscribe");
+  });
+});
+
+describe("project resource reconfiguration", () => {
+  const policy = (projectResources: boolean) =>
+    ({
+      id: "interactive-host",
+      sandbox: "none",
+      approvals: "auto-approve",
+      projectResources,
+      networkAccess: "full",
+    }) as const;
+  async function complete(h: Harness) {
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+  }
+  test.each([true, false])(
+    "applies a policy-only change from %s before another turn",
+    async (initial) => {
+      const path = "/tmp/ws/.agents/skills/repo/SKILL.md";
+      const h = await harness({
+        "skills/list": () => ({
+          data: [{ errors: [], skills: [{ name: "repo", path, scope: "repo", enabled: true }] }],
+        }),
+      });
+      const { sessionId } = h.runtime.createSession({ mode: "build", policy: policy(initial) });
+      await h.runtime.prompt(sessionId, {
+        prompt: "first",
+        requestId: "policy-first",
+        attachments: [],
+      });
+      await complete(h);
+      expect(
+        await h.runtime.updateConfig(sessionId, { mode: "build", policy: policy(!initial) }),
+      ).toBe("updated");
+      expect(h.child().requests.at(-1)?.method).toBe("thread/unsubscribe");
+      expect(h.runtime.getStatus(sessionId)?.policy?.projectResources).toBe(!initial);
+      await h.runtime.prompt(sessionId, {
+        prompt: "second",
+        requestId: "policy-second",
+        attachments: [],
+      });
+      const load = h.child().requests.findLast((r) => r.method === "thread/resume")!;
+      const config = (load.params.config ?? {}) as Record<string, unknown>;
+      if (initial) {
+        expect(config).toMatchObject({
+          projects: { "/tmp/ws": { trust_level: "untrusted" } },
+          skills: { config: [{ path, enabled: false }] },
+        });
+      } else {
+        expect(config.projects).toBeUndefined();
+        expect(config.skills).toBeUndefined();
+      }
+      expect(h.child().requests.indexOf(load)).toBeLessThan(
+        h.child().requests.findLastIndex((r) => r.method === "turn/start"),
+      );
+    },
+  );
+  test("a failed policy unsubscribe keeps the confirmed policy and is retryable", async () => {
+    let fail = true;
+    const h = await harness({
+      "thread/unsubscribe": () => {
+        if (fail) throw new Error("unsubscribe unavailable");
+        return {};
+      },
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build", policy: policy(true) });
+    await h.runtime.prompt(sessionId, {
+      prompt: "first",
+      requestId: "before-refusal",
+      attachments: [],
+    });
+    await complete(h);
+    expect(await h.runtime.updateConfig(sessionId, { mode: "build", policy: policy(false) })).toBe(
+      "unavailable",
+    );
+    expect(h.runtime.getStatus(sessionId)?.policy?.projectResources).toBe(true);
+    fail = false;
+    expect(await h.runtime.updateConfig(sessionId, { mode: "build", policy: policy(false) })).toBe(
+      "updated",
+    );
+    expect(h.runtime.getStatus(sessionId)?.policy?.projectResources).toBe(false);
+    expect(h.child().requests.filter((r) => r.method === "thread/unsubscribe")).toHaveLength(2);
+  });
+
+  test("skills changed refreshes exclusions before the next attached turn", async () => {
+    const skills: Array<Record<string, unknown>> = [];
+    const h = await harness({ "skills/list": () => ({ data: [{ errors: [], skills }] }) });
+    const { sessionId } = h.runtime.createSession({ mode: "build", policy: policy(false) });
+    await h.runtime.prompt(sessionId, {
+      prompt: "first",
+      requestId: "skills-first",
+      attachments: [],
+    });
+    await complete(h);
+    const path = "/tmp/ws/.agents/skills/new/SKILL.md";
+    skills.push({ name: "new", path, scope: "repo", enabled: true });
+    h.child().notify("skills/changed", {});
+    await h.drain();
+    await h.runtime.prompt(sessionId, {
+      prompt: "second",
+      requestId: "skills-second",
+      attachments: [],
+    });
+    const resume = h.child().requests.findLast((r) => r.method === "thread/resume")!;
+    expect(resume.params.config).toMatchObject({ skills: { config: [{ path, enabled: false }] } });
+    expect(methodBefore(h.child().requests, resume)).toBe("thread/unsubscribe");
+    expect(h.child().requests.findLast((r) => r.method === "skills/list")?.params.forceReload).toBe(
+      true,
+    );
   });
 });

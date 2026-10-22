@@ -89,33 +89,25 @@ const cleanReview: StructuredReviewReport = {
 };
 
 describe("conflict resolution resume prompt", () => {
-  test("preserves the narrow prose-only exception and required documentation checks", () => {
+  test("scopes validation to conflicted files and skips tests for documentation-only conflicts", () => {
     const prompt = resumePromptFor("resolving-conflicts");
 
     expect(prompt).toContain("Incorporate any messages sent while the pipeline was paused");
+    expect(prompt).toContain("Scope validation to the files that had merge conflicts");
     expect(prompt).toContain(
-      "Skip tests, typechecking, and builds only when every changed path is prose documentation with no test, build, or tooling consumers and repository instructions permit skipping those checks",
+      "If every conflicted file is prose documentation not consumed by tests, builds, or tooling, do not run tests, typechecking, or builds",
     );
-    expect(prompt).toContain("Always run repository-required checks");
-    expect(prompt).toContain("documentation, formatting, and link checks");
     expect(prompt).toContain("confirm no conflict markers remain");
+    expect(prompt).not.toContain("all paths changed by the merge");
   });
 
-  test("recovers the full merge scope and validates auto-merged code and consumed Markdown", () => {
+  test("recovers the conflicted files from merge state on resume", () => {
     const prompt = resumePromptFor("resolving-conflicts");
 
-    expect(prompt).toContain("original pre-merge HEAD");
-    expect(prompt).toContain("recover that baseline from merge metadata or history");
-    expect(prompt).toContain("if the full scope cannot be established, run relevant validation");
-    expect(prompt).toContain("including auto-merged changes and conflict resolutions");
-    expect(prompt).toContain(
-      "If documentation conflicts accompany auto-merged code, configuration, or tests, run relevant tests, typechecking, and build validation for the merged result",
-    );
-    expect(prompt).toContain("source files (including .ts and .mdx under docs/)");
-    expect(prompt).toContain(
-      "Markdown consumed by tests, builds, or tooling require relevant validation",
-    );
-    expect(prompt).not.toContain("when every conflicted file is documentation");
+    expect(prompt).toContain("recover the conflicted files from merge state");
+    expect(prompt).toContain("differ from both HEAD and MERGE_HEAD");
+    expect(prompt).toContain("if they cannot be established, run relevant validation");
+    expect(prompt).toContain("source files under docs/ (such as .ts or .mdx) count as code");
   });
 });
 

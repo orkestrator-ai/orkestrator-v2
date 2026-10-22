@@ -356,36 +356,28 @@ describe("createResolveConflictsPrompt", () => {
     expect(result).toContain("Do NOT use --no-verify");
   });
 
-  test("limits skipped validation to unconsumed prose and preserves required checks", () => {
+  test("skips tests, typechecking, and builds when only documentation conflicted", () => {
     const result = createResolveConflictsPrompt("main");
+    expect(result).toContain("Scope validation to the files that had merge conflicts");
     expect(result).toContain(
-      "Skip tests, typechecking, and builds only when every changed path is prose documentation with no test, build, or tooling consumers and repository instructions permit skipping those checks",
+      "auto-merged changes were already validated on their own branches and do not by themselves require re-running tests",
     );
-    expect(result).toContain("Always run repository-required checks");
-    expect(result).toContain("documentation, formatting, and link checks");
+    expect(result).toContain(
+      "If every conflicted file is prose documentation not consumed by tests, builds, or tooling, do not run tests, typechecking, or builds",
+    );
     expect(result).toContain("confirm no conflict markers remain");
+    expect(result).not.toContain("all paths changed by the merge");
+    expect(result).not.toContain("repository instructions permit skipping");
   });
 
-  test("requires validation for auto-merged code even when only documentation conflicted", () => {
+  test("requires targeted validation when code conflicted", () => {
     const result = createResolveConflictsPrompt("main");
     expect(result).toContain(
-      "all paths changed by the merge relative to the original pre-merge HEAD",
+      "If any conflicted file is source, configuration, a test, or Markdown consumed by tests, builds, or tooling, run validation targeted at the resolved files and their dependents",
     );
-    expect(result).toContain("including auto-merged changes and conflict resolutions");
-    expect(result).toContain("if the full scope cannot be established, run relevant validation");
-    expect(result).toContain(
-      "If documentation conflicts accompany auto-merged code, configuration, or tests, run relevant tests, typechecking, and build validation for the merged result",
-    );
-    expect(result).not.toContain("If every conflicted file is documentation");
-  });
-
-  test("requires relevant checks for source under docs and Markdown consumed by tooling", () => {
-    const result = createResolveConflictsPrompt("main");
     expect(result).toContain("File role takes precedence over location or extension");
-    expect(result).toContain("source files (including .ts and .mdx under docs/)");
-    expect(result).toContain(
-      "Markdown consumed by tests, builds, or tooling require relevant validation",
-    );
+    expect(result).toContain("source files under docs/ (such as .ts or .mdx) count as code");
+    expect(result).toContain("recover the conflicted files from merge state");
   });
 
   test("includes conflict marker instructions", () => {

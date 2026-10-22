@@ -11,3 +11,5 @@
 - **Isolated rerun:** `mise run test:logged -- --name environment-item-isolated -- bun test ./tests/unit/components/EnvironmentItem.test.tsx --parallel=1 --only-failures` passed the complete unchanged owning file (exit 0, 4.5 seconds logged).
 - **Evidence:** `orkestrator-test-run.GB1K1o/recurring-full-suite.log.gz` and the inner aggregate's `orkestrator-test-run.IGYJrv` below the host temporary directory.
 - **Hypothesis:** delayed timers or host scheduling are plausible given the simultaneous long stalls in independent groups; no specific cause is established. No tooltip implementation, assertion, timeout or skip changed.
+
+- **Aggregate retry:** `mise run test:logged -- --name recurring-full-suite-final -- mise run test` passed every non-iOS group (exit 0, 437.1 seconds logged), without changing either failing owner. The flake remains open because the underlying cause has not been fixed.

@@ -11,3 +11,5 @@
 - **Isolated rerun:** `mise run test:logged -- --name artifact-engines-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/transcript-artifacts/content-server.engines.test.ts --parallel=1 --only-failures` passed the complete unchanged owning file (exit 0, 76.3 seconds logged).
 - **Evidence:** `orkestrator-test-run.GB1K1o/recurring-full-suite.log.gz` and the inner aggregate's `orkestrator-test-run.IGYJrv` below the host temporary directory.
 - **Hypothesis:** simultaneous long stalls in independent groups suggest delayed timers or host scheduling, but the exact cause is unproven. There was no assertion showing a dropped real click (resolved case 0505) or an unnamed hook timeout (0507). No policy implementation, assertion, deadline or skip changed.
+
+- **Aggregate retry:** `mise run test:logged -- --name recurring-full-suite-final -- mise run test` passed every non-iOS group (exit 0, 437.1 seconds logged), without changing either failing owner. The flake remains open because the underlying cause has not been fixed.

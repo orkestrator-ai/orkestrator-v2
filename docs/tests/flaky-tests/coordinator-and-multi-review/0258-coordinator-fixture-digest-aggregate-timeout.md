@@ -129,3 +129,13 @@ The unchanged owning file passed alone (48 pass, 2.3 s, after failing twice more
 - **Isolated rerun:** `mise run test:logged -- --name desktop-fixture-digest -- bun test --cwd apps/desktop ./scripts/dev/coordinator-live.test.ts --parallel=1 --only-failures`
   passed in 1.8 s. The owning file was unchanged on the branch. No timeout,
   assertion or skip changed.
+
+
+## Sidebar collision main merge — 2026-10-22
+
+- **Merge parents:** feature `8106d7821` and main `7b1066bc1`.
+- **Original command:** `mise run test:logged -- --name merge-final-full-suite -- mise run test`, Bun 1.4.3 on macOS arm64. Workspace/root/bridges/protocol reserved 4/1/2/1 workers; component browser validation ran alongside the aggregate.
+- **Failure:** `fixture tree digest > names every class of change a coordinator could make` exceeded its 5000 ms deadline (5039.55 ms). Desktop reported 1,175 passed, 14 skipped and one failed.
+- **Complete unchanged owner:** `mise run test:logged -- --name merge-coordinator-fixture-owner -- bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./scripts/dev/coordinator-live.test.ts --parallel=1 --only-failures` passed the complete unchanged owner, exit 0 in 1.5 seconds logged.
+- **Evidence:** `orkestrator-test-run.jPvcE5/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory after aggregate completion.
+- **Assessment:** confirmed intermittent recurrence; contention remains a hypothesis. No owning implementation, assertion, timeout or skip changed.

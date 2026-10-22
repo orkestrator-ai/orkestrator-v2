@@ -340,12 +340,19 @@ describe("HierarchicalSidebar", () => {
           groupId,
           ...(mode === "project" ? [rootId] : []),
         ];
+        const dragData = (id: string) => ({
+          current:
+            id === rootId
+              ? undefined
+              : { sortable: { containerId: id.startsWith("env-") ? "environments" : "projects" } },
+        });
         const args = (activeId: string, x = 0) =>
           ({
-            active: { id: activeId },
+            active: { id: activeId, data: dragData(activeId) },
             collisionRect: rect(x),
             droppableRects: new Map(containers.map((id, index) => [id, rect(index * 100)])),
-            droppableContainers: containers.map((id) => ({ id })),
+            droppableContainers: containers.map((id) => ({ id, data: dragData(id) })),
+            pointerCoordinates: null,
           }) as Parameters<CollisionDetection>[0];
         for (const activeId of [projectId, groupId]) {
           // The environment is nearest; the next valid project must win.

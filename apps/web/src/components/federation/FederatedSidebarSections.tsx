@@ -2,7 +2,6 @@ import { useMemo, useState, type ReactNode } from "react";
 import {
   DndContext,
   closestCenter,
-  type CollisionDetection,
   KeyboardSensor,
   PointerSensor,
   useSensor,
@@ -41,7 +40,6 @@ import {
   buildProjectTree,
   normalizeProjectFolderName,
   parseProjectFolderDragId,
-  PROJECT_ROOT_DROP_ID,
   projectFolderKey,
   projectSortableIds,
   resolveProjectArrangement,
@@ -51,6 +49,7 @@ import {
   type ProjectArrangement,
 } from "@/lib/project-folders";
 import { cn } from "@/lib/utils";
+import { sidebarCollisionDetection } from "@/lib/sidebar-collision";
 import { sidebarFolderKey, useMachineViewStore } from "@/stores/machineViewStore";
 import { useFederation } from "./FederationProvider";
 import { MachineDot, machineStatusText } from "./MachineDot";
@@ -356,21 +355,6 @@ export function MergedProjectList({
         )
       : projectSortableIds(tree, [], isFolderCollapsed);
   const isProjectDrag = (id: string) => parseProjectFolderDragId(id) !== null || projectIds.has(id);
-  // Expanded projects' environment rows are droppables too, and usually the
-  // closest ones; a project dropped on one would go nowhere.
-  const collisionDetection: CollisionDetection = (args) =>
-    closestCenter(
-      isProjectDrag(String(args.active.id))
-        ? {
-            ...args,
-            droppableContainers: args.droppableContainers.filter((container) => {
-              const id = String(container.id);
-              return id === PROJECT_ROOT_DROP_ID || isProjectDrag(id);
-            }),
-          }
-        : args,
-    );
-
   const apply = (arrangement: ProjectArrangement | null) => {
     const update =
       mode === "project"
@@ -436,7 +420,7 @@ export function MergedProjectList({
       ) : null}
       <DndContext
         sensors={sensors}
-        collisionDetection={collisionDetection}
+        collisionDetection={sidebarCollisionDetection}
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
         onDragCancel={() => setDraggingProject(false)}

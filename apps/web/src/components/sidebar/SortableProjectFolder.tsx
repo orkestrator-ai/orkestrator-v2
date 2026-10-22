@@ -94,7 +94,10 @@ export function SortableProjectFolder({
     transition,
     isDragging,
     isOver,
-  } = useSortable({ id: sortableId ?? projectFolderDragId(name) });
+  } = useSortable({
+    id: sortableId ?? projectFolderDragId(name),
+    data: { sidebarGroup: true },
+  });
   const canHighlightDrop =
     !repository || (active && parseProjectFolderDragId(String(active.id)) !== null);
   const destination = openMachineName ? ` on ${openMachineName}` : "";

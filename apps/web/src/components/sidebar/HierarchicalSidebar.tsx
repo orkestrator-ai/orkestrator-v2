@@ -106,7 +106,10 @@ import {
 import { cn } from "@/lib/utils";
 import { withoutProjectHomes } from "@/lib/project-home";
 import { LazyDialogLoadingFallback, LazyLoadBoundary } from "@/components/LazyLoadBoundary";
-import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
+import {
+  useDockerAvailability,
+  useDockerAvailabilityReady,
+} from "@/contexts/DockerAvailabilityContext";
 import {
   buildProjectTree,
   isProjectFolderCollapsed,
@@ -437,6 +440,7 @@ export async function deleteProjectAndEnvironments(
 
 export function HierarchicalSidebar() {
   const dockerAvailable = useDockerAvailability();
+  const dockerReady = useDockerAvailabilityReady();
   // Poll git diff stats for all environments
   useEnvironmentDiffStats();
   // "Add a project on <machine>" moved the window to that machine first.
@@ -789,14 +793,29 @@ export function HierarchicalSidebar() {
   };
 
   // The dialog reads its defaults (environment type, ports) when it opens, so
-  // after a workspace switch it waits for this machine's projects and config.
+  // after a workspace switch it waits for this machine's projects, config and
+  // initial Docker probe. An unfinished probe must not force a local default.
   useEffect(() => {
-    if (!pendingCreateEnvProjectId || !configLoaded || !projectsLoaded || projectsLoading) return;
+    if (
+      !pendingCreateEnvProjectId ||
+      !configLoaded ||
+      !projectsLoaded ||
+      projectsLoading ||
+      !dockerReady
+    )
+      return;
     setPendingCreateEnvProjectId(null);
     if (!projects.some((project) => project.id === pendingCreateEnvProjectId)) return;
     setCreateEnvProjectId(pendingCreateEnvProjectId);
     setShowCreateEnvDialog(true);
-  }, [configLoaded, pendingCreateEnvProjectId, projects, projectsLoaded, projectsLoading]);
+  }, [
+    configLoaded,
+    dockerReady,
+    pendingCreateEnvProjectId,
+    projects,
+    projectsLoaded,
+    projectsLoading,
+  ]);
 
   // "New environment" from a machine section that turned out to be this one.
   useEffect(

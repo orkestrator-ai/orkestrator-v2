@@ -49,6 +49,8 @@ import path from "node:path";
 import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
 import { prepareFixtureRepository } from "../../apps/desktop/scripts/dev/fixture";
 import { initializeProfile, reserveLoopbackPorts } from "../../apps/desktop/scripts/dev/profile-io";
+import { closeElectron, electronProcessTree } from "./design-electron-cleanup";
+import { stopProcessGroup, waitForStopped, withCleanup } from "../process-cleanup";
 import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
 import { dismissStartupDialogs } from "./electron-startup-dialogs";
 
@@ -83,71 +85,6 @@ async function waitForUrl(url: string): Promise<void> {
       { timeout: 60_000 },
     )
     .toBe(true);
-}
-
-function childPids(parent: number): number[] {
-  const processes = spawnSync("ps", ["-axo", "pid=,ppid="], { encoding: "utf8" });
-  if (processes.status !== 0) return [];
-  return processes.stdout
-    .split("\n")
-    .map((line) => line.trim().split(/\s+/).map(Number))
-    .filter(([pid, ppid]) => ppid === parent && Number.isInteger(pid))
-    .map(([pid]) => pid!);
-}
-
-/** `node_modules/.bin/electron` is a wrapper; the real tree is its descendants. */
-function descendantPids(root: number): number[] {
-  const out: number[] = [];
-  const queue = [root];
-  while (queue.length > 0 && out.length < 512) {
-    for (const pid of childPids(queue.shift()!)) {
-      out.push(pid);
-      queue.push(pid);
-    }
-  }
-  return out;
-}
-
-function alive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/** Quit normally, then wait for (or, after a bounded wait, stop) the exact launched tree. */
-async function closeElectron(app: ElectronApplication): Promise<void> {
-  const child = app.process();
-  const children = child.pid ? descendantPids(child.pid) : [];
-  const exited =
-    child.exitCode !== null || child.signalCode !== null
-      ? Promise.resolve(true)
-      : new Promise<boolean>((resolve) => child.once("exit", () => resolve(true)));
-  await Promise.race([
-    app.evaluate(({ app: electronApp }) => electronApp.quit()).catch(() => undefined),
-    new Promise((resolve) => setTimeout(resolve, 5_000)),
-  ]);
-  const graceful = await Promise.race([
-    exited,
-    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 30_000)),
-  ]);
-  if (!graceful) {
-    child.kill("SIGTERM");
-    await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 5_000))]);
-    for (const pid of children.filter(alive)) {
-      try {
-        process.kill(pid, "SIGKILL");
-      } catch {}
-    }
-  }
-  // Playwright's close can wait forever on a connection whose process is gone.
-  await Promise.race([
-    app.close().catch(() => undefined),
-    new Promise((resolve) => setTimeout(resolve, 10_000)),
-  ]);
-  await expect.poll(() => children.filter(alive).length, { timeout: 20_000 }).toBe(0);
 }
 
 /** The bytes `portableBytes` (backend `design/records.ts`) writes for a revision. */
@@ -220,7 +157,7 @@ test("design canvas opens, edits, exports, downloads, takes shortcuts and opens 
   const hostDir = path.join(temporaryRoot, "host-designs");
   await mkdir(downloadDir, { recursive: true });
   await mkdir(hostDir, { recursive: true });
-  try {
+  await withCleanup(async () => {
     vite = spawn("bun", ["run", "dev"], {
       cwd: webRoot,
       detached: true,
@@ -691,16 +628,25 @@ test("design canvas opens, edits, exports, downloads, takes shortcuts and opens 
 
     await invoke("stop_environment", { environmentId: environment.id }).catch(() => undefined);
     await invoke("delete_environment", { environmentId: environment.id }).catch(() => undefined);
-  } finally {
-    try {
-      if (app) await closeElectron(app).catch(() => undefined);
-    } finally {
-      if (vite?.pid) {
-        try {
-          process.kill(-vite.pid, "SIGTERM");
-        } catch {}
-      }
-      await rm(temporaryRoot, { recursive: true, force: true });
-    }
-  }
+  }, [
+    async () => {
+      let owned: number[] | undefined = app ? undefined : [];
+      await withCleanup(async () => {
+        if (app) {
+          owned = electronProcessTree(app);
+          await closeElectron(app, owned);
+        }
+      }, [
+        async () => {
+          if (vite) await stopProcessGroup(vite);
+        },
+        async () => {
+          // Retain the profile if forced termination could not prove the tree stopped.
+          if (!owned) throw new Error("Cannot remove profile without an owned-process snapshot");
+          await waitForStopped([...owned, ...(vite?.pid ? [-vite.pid] : [])], 0);
+          await rm(temporaryRoot, { recursive: true, force: true });
+        },
+      ]);
+    },
+  ]);
 });

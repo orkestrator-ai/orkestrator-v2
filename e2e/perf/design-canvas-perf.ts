@@ -48,7 +48,7 @@
  * output/benchmarks/design-canvas/<run-id>.json and a summary table to stdout.
  * Single-machine timings are evidence for this host only, not thresholds.
  */
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   copyFileSync,
@@ -65,6 +65,9 @@ import { chromium, type Browser, type CDPSession, type Page } from "@playwright/
 import { DESIGN_EVENT } from "../../packages/protocol/src/design-canvas";
 import { startDesignServiceHost, type DesignServiceHost } from "../design-service-client";
 import { DESIGN_FIXTURE_ENVIRONMENT } from "../design-service-protocol";
+
+import { startOwnedPreview } from "./preview-server";
+import { stopProcessGroup } from "../process-cleanup";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const ENV = DESIGN_FIXTURE_ENVIRONMENT;
@@ -159,20 +162,6 @@ function run(command: string[], cwd: string, logFile: string): Promise<void> {
   });
 }
 
-async function waitForUrl(url: string, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const response = await fetch(url);
-      if (response.ok) return;
-    } catch {
-      // not up yet
-    }
-    await sleep(250);
-  }
-  throw new Error(`Fixture server did not start: ${url}`);
-}
-
 /** Exports `rev`'s web sources into `workDir/source` (see the header). */
 function exportRevision(rev: string, workDir: string): string {
   const root = path.join(workDir, "source");
@@ -230,16 +219,22 @@ async function startServer(
       webDir,
       path.join(workDir, "build.log"),
     );
-  // A fresh process group: stopping the group stops the server without
-  // matching processes by name or port.
-  const child = spawn(
-    process.execPath,
-    [vite, "preview", ...common, "--host", "127.0.0.1", "--port", String(port), "--strictPort"],
-    { cwd: webDir, stdio: "ignore", detached: true },
-  );
-  const url = `http://127.0.0.1:${port}`;
-  await waitForUrl(url, 60_000);
-  return { url, process: child as ChildProcess };
+  return startOwnedPreview({
+    command: [
+      process.execPath,
+      vite,
+      "preview",
+      ...common,
+      "--host",
+      "127.0.0.1",
+      "--port",
+      String(port),
+      "--strictPort",
+    ],
+    cwd: webDir,
+    outDir,
+    port,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -1696,8 +1691,11 @@ async function main() {
     console.log(`[perf] report ${path.relative(repositoryRoot, reportFile)}`);
   } finally {
     for (const host of hosts) await host.close().catch(() => undefined);
-    if (server?.process.pid) process.kill(-server.process.pid, "SIGTERM");
-    rmSync(workDir, { recursive: true, force: true });
+    try {
+      if (server) await stopProcessGroup(server.process);
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
   }
 }
 

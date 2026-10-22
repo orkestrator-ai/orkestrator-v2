@@ -183,6 +183,17 @@ describe("DesignCanvasTab", () => {
     );
     expect(document.querySelector(`[data-frame-id="${frameB}"]`)).not.toBeNull();
     expect(screen.getByText("Deleted A. Undo with Ctrl/⌘ + Z")).toBeTruthy();
+    // Removing the focused title must leave a usable keyboard target in the workspace.
+    await waitFor(() => {
+      const active = document.activeElement;
+      expect(active?.isConnected).toBe(true);
+      expect(active === document.body).toBe(false);
+      expect(active?.closest('[aria-label="Design canvas"]')).not.toBeNull();
+      expect(
+        active?.getAttribute("role") === "treeitem" ||
+          active?.getAttribute("aria-label") === "Toggle layers",
+      ).toBe(true);
+    });
   });
 
   test("Backspace deletes the selected frame; Escape and the canvas background deselect it", async () => {
@@ -480,6 +491,92 @@ describe("DesignCanvasTab", () => {
     const footer = screen.getByRole("contentinfo");
     expect(within(footer).getByRole("status").textContent).toBe("Saved in workspace");
   });
+
+  test.each([false, true])(
+    "inspector re-keying restores focus to its new fields (narrow=%s)",
+    async (narrow) => {
+      globalThis.ResizeObserver = class {
+        constructor(private callback: ResizeObserverCallback) {}
+        observe(target: Element) {
+          if (target.getAttribute("aria-label") === "Design canvas") {
+            Object.defineProperty(target, "clientWidth", {
+              value: narrow ? 600 : 1200,
+              configurable: true,
+            });
+            this.callback([], this as unknown as ResizeObserver);
+          }
+        }
+        unobserve() {}
+        disconnect() {}
+      } as unknown as typeof ResizeObserver;
+      let selector = "body > p";
+      const ask = spyOn(DesignFrameBridge.prototype, "ask").mockImplementation(
+        (operation) =>
+          Promise.resolve(
+            operation.op === "hitTest"
+              ? {
+                  selector,
+                  tag: "p",
+                  text: "x",
+                  attributes: {},
+                  styles: {},
+                  rect: { x: 0, y: 0, width: 20, height: 20 },
+                }
+              : undefined,
+          ) as Promise<never>,
+      );
+      try {
+        render(
+          <DesignCanvasTab
+            canvasId={canvasId}
+            environmentId="env-1"
+            isActive
+            ownsGlobalShortcuts
+          />,
+        );
+        await screen.findByRole("button", { name: "Move frame A" });
+        fireEvent.load(screen.getByTitle("A"));
+        await waitFor(() =>
+          expect(ask.mock.calls.some(([operation]) => operation.op === "render")).toBe(true),
+        );
+        expect(
+          document.querySelector('[aria-label="Design canvas"]')?.hasAttribute("data-narrow"),
+        ).toBe(narrow);
+        if (narrow) {
+          expect(
+            document.querySelector('[aria-label="Design canvas"]')?.getAttribute("data-narrow"),
+          ).toBe("true");
+          const row = screen.getAllByRole("treeitem")[0]!;
+          act(() => row.focus());
+          expect(document.activeElement).toBe(row);
+          fireEvent.click(screen.getByRole("button", { name: "Select element in A" }));
+          const inspector = await screen.findByRole("complementary", { name: "Element inspector" });
+          await waitFor(() => expect(inspector.contains(document.activeElement)).toBe(true));
+          expect(screen.queryByRole("navigation", { name: "Design hierarchy" }) === null).toBe(
+            true,
+          );
+        } else {
+          fireEvent.click(screen.getByRole("button", { name: "Select element in A" }));
+        }
+        const inspector = await screen.findByRole("complementary", { name: "Element inspector" });
+        const field = inspector.querySelector<HTMLInputElement>("[data-inspector-fields] input")!;
+        expect(field).not.toBeNull();
+        act(() => field.focus());
+        selector = "body > h1";
+        fireEvent.click(screen.getByRole("button", { name: "Select element in A" }));
+        await waitFor(() => expect(field.isConnected).toBe(false));
+        const replacement = screen.getByRole("complementary", { name: "Element inspector" });
+        expect(replacement.contains(document.activeElement)).toBe(true);
+        expect(
+          document.activeElement?.matches(
+            "[data-inspector-fields] input, [data-inspector-fields] button",
+          ),
+        ).toBe(true);
+      } finally {
+        ask.mockRestore();
+      }
+    },
+  );
 
   test("closing the inspector by keyboard keeps focus in the workspace, not on <body>", async () => {
     const element: DesignElement = {

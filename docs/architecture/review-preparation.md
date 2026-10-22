@@ -261,4 +261,4 @@ admission, isolation), `multi-review-service-efficiency.test.ts` and
 `structured-review/budgets.test.ts` (reports) and
 `review-consolidation-evidence.test.ts` (consolidation input). Open
 scale and cost work is in
-[multi-review-scale-and-cost.md](../todo/multi-review-scale-and-cost.md).
+[0027-multi-review-scale-and-cost.md](../todo/coordinator-and-multi-review/0027-multi-review-scale-and-cost.md).

@@ -50,7 +50,7 @@ hints that never overtake their commit. This case was not rerun. Its symptoms
 (Playwright action timeouts, a disabled picker, an unmounted page) are client
 or profile timing, and nothing here implicates the design change feed. It
 stays open; see the follow-up in
-[design-canvas-qualification.md](../../todo/design-canvas-qualification.md).
+[0036-design-canvas-qualification.md](../../todo/design-canvas/0036-design-canvas-qualification.md).
 
 ## Execution-policy conformance main merge recurrence — 2026-10-17
 

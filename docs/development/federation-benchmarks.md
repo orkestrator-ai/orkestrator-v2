@@ -61,5 +61,5 @@ The plan's full matrix needs real backends and is **not** covered here:
 
 No transport defaults (SSE or SSH compression, terminal transport) were
 changed by the federation work, so the existing single-backend bandwidth
-measurements in `docs/todo/remote-client-bandwidth.md` still apply to the
+measurements in `docs/todo/transcripts-and-observation/0052-remote-client-bandwidth.md` still apply to the
 bound machine's own window.

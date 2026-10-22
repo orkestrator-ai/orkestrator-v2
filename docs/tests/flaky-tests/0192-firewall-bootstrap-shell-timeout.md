@@ -118,3 +118,12 @@ The final root/support run with all GNU prerequisites timed out this case at 500
 - **Owning-file rerun:** the same GNU-tool PATH with `mise run test:logged -- --name merge-firewall-owner -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 32.3 seconds logged).
 - **Evidence:** `orkestrator-test-run.d10zQ4/root-and-agent-support-tests.log.gz` below the host temporary directory.
 - **Assessment:** confirms another intermittent shell-fixture deadline. Contention remains an unproven hypothesis; no implementation, assertion, timeout or skip changed.
+
+## Design canvas qualification recurrence — 2026-10-22
+
+- **Original command:** `mise run test:logged -- --name full-suite -- mise run test` (default PATH, no GNU-tool override) on branch `todo-0036-design-canvas-qualification-1477f37ca3cf`, while other worktrees and a production Orkestrator instance loaded the host (load averages 11–44).
+- **Failure:** nine `container firewall policy` cases exceeded five seconds (5003–5006 ms), among them `firewall uses stored domains and tolerates a repeated GitHub bootstrap range`, `policy 2 narrows host access to named ports and records what it applied`, `policy 3 allows address, protocol and port tuples` and six blocked-HTTPS-probe allowlist cases.
+- **Root counts:** 3210 passed, one skipped, nine failed across 3220 tests in 154 files (297.1 seconds). Workspace, bridges and codex-lockfile groups passed.
+- **Owning-file rerun:** `mise run test:logged -- --name firewall-policy-alone -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1` passed unchanged (exit 0, 37.5 seconds logged).
+- **Evidence:** `orkestrator-test-run.9G0J8K/root-and-agent-support-tests.log.gz` below the host temporary directory.
+- **Assessment:** the same shell-fixture deadlines under host load; the branch does not touch the firewall or its fixtures. No implementation, assertion, timeout or skip changed.

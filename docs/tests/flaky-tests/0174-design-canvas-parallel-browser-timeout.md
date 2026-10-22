@@ -155,3 +155,13 @@ The aggregate failed this owner and its unchanged owning file passed with one wo
 - `mise run test:logged -- --name merge-browser -- mise run test:browser` ran nine workers and reported 373 passed, 81 skipped and two failures in 427.3 s; the desktop canvas exceeded its 30-second deadline. The other failure was Monaco startup (0517).
 - The unchanged desktop owner passed with one worker in `mise run test:logged -- --name merge-browser-owners -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts e2e/MonacoRuntime.spec.ts --project=desktop-chromium --workers=1` (one passed, Monaco failed, 36.4 s logged).
 - Evidence: host temporary directories `orkestrator-test-run.2Itj5O` and `orkestrator-test-run.SL0qW8`. Shared-host load is a hypothesis; no source, assertion, timeout or skip changed.
+
+## Controlled-load reproduction attempt — 2026-10-22
+
+Branch `todo-0036-design-canvas-qualification-1477f37ca3cf` from `b83ae534`, on an Apple M5 Max (18 cores) shared with other worktrees and a production Orkestrator instance.
+
+- **Command:** `ORKESTRATOR_E2E_PORT=47371 bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts e2e/DesignCanvasAccessibility.spec.ts --workers=6 --repeat-each=3`.
+  - Run three times at host load averages 41–64.
+  - Run once more with 18 `yes` busy processes added (load about 60).
+- **Result:** this case passed in every run, 24 in total across both viewports, along with the full nine-worker `mise run test:browser` runs. The only failures were in the new accessibility spec, and were fixed in the same change (see [0036](../../todo/design-canvas/0036-design-canvas-qualification.md#accessibility)).
+- **Assessment:** host CPU contention alone did not reproduce the timeout, so there is still no basis for choosing between a client wait on an observable state and a product fix. The case stays open. No implementation, assertion, timeout or skip changed.

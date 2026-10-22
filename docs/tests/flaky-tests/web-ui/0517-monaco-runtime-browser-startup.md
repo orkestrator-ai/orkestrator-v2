@@ -26,3 +26,11 @@
 - `mise run test:logged -- --name merge-browser -- mise run test:browser` ran nine workers against the initial `c17f1c8d5` merge: 399 passed, 81 skipped, two failed (362.5 s). The desktop editor was absent at the five-second deadline at line 25.
 - After refreshing the pending merge to `7e051d955`, `mise run test:logged -- --name merge-monaco-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/MonacoRuntime.spec.ts --workers=1` passed the complete unchanged owner, exit 0 in 4.0 s.
 - Evidence: `orkestrator-test-run.mgE8Fb/merge-browser.log.gz` under the host temporary directory. No assertion, deadline or skip changed; startup or host contention remains a hypothesis.
+
+
+## Repository-sidebar review validation — 2026-10-22
+
+- **Original command:** `mise run test:logged -- --name browser-suite -- mise run test:browser`, nine workers alongside repository validation on the shared host. The component suite reported 437 passed, 85 skipped and four failed in 9.4 minutes. The desktop Monaco editor was absent at the existing five-second deadline; both canvas viewport cases and a sidebar test reload wait were the other failures.
+- **Complete unchanged owner:** `mise run test:logged -- --name monaco-runtime-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/MonacoRuntime.spec.ts --workers=1 --output=output/playwright/monaco-owner` passed both viewport cases, exit 0 in 6.2 seconds.
+- **Evidence:** host temporary directory `orkestrator-test-run.QC9tF3/browser-suite.log.gz`; original trace under `output/playwright/test-results/MonacoRuntime-*`. Sidebar fixes are commit `6d6f9b83f` and the final focused sidebar browser rerun passed all 30 cases.
+- **Assessment:** confirmed intermittent recurrence. Host or fixture startup contention remains a hypothesis. No Monaco implementation, assertion, timeout or skip changed; the original aggregate remains failed.

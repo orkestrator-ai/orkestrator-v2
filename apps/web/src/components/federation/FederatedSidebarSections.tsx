@@ -214,7 +214,7 @@ function MachineSection({
   return (
     <section
       ref={setNodeRef}
-      style={{ transform: CSS.Transform.toString(transform), transition }}
+      style={{ transform: CSS.Translate.toString(transform), transition }}
       className={cn(isDragging && "relative z-50 opacity-50")}
       aria-label={`${machine.name} projects`}
       data-testid={machine.bound ? "bound-machine-section" : "remote-machine-section"}

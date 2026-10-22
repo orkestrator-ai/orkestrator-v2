@@ -70,7 +70,7 @@ mock.module("@dnd-kit/sortable", () => ({
 
 mock.module("@dnd-kit/utilities", () => ({
   CSS: {
-    Transform: {
+    Translate: {
       toString: (transform: unknown) => {
         sortableTransformInput = transform;
         return sortableTransformString;

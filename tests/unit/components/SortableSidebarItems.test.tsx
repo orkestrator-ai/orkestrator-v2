@@ -10,7 +10,11 @@ import { useConfigStore } from "../../../apps/web/src/stores/configStore";
 
 const realSortableSnapshot = { ...realSortable };
 const realEnvironmentItemSnapshot = { ...realEnvironmentItem };
-const sortableState = { isDragging: false, dragPointerDown: mock(() => {}) };
+const sortableState = {
+  isDragging: false,
+  transform: null as { x: number; y: number; scaleX: number; scaleY: number } | null,
+  dragPointerDown: mock(() => {}),
+};
 const openInBrowser = mock(async (_url: string) => {});
 // The preload already replaces sonner with shared spies; asserting on those
 // avoids a competing module mock that could leak into other suites.
@@ -26,7 +30,7 @@ mock.module("@dnd-kit/sortable", () => ({
     attributes: { "data-sortable-attributes": "true" },
     listeners: { onPointerDown: () => sortableState.dragPointerDown() },
     setNodeRef: () => {},
-    transform: null,
+    transform: sortableState.transform,
     transition: null,
     isDragging: sortableState.isDragging,
   })),
@@ -87,6 +91,7 @@ describe("sortable sidebar items", () => {
   afterEach(() => {
     cleanup();
     sortableState.isDragging = false;
+    sortableState.transform = null;
     sortableState.dragPointerDown.mockClear();
     openInBrowser.mockClear();
     openInBrowser.mockImplementation(async () => {});
@@ -121,6 +126,28 @@ describe("sortable sidebar items", () => {
     ) as HTMLElement;
     expect(selectedRow.className).toContain("before:bg-primary");
     expect(screen.getByRole("button", { name: "Feature Env" })).toBeTruthy();
+  });
+
+  test("dragged rows move without stretching to the row they hover", () => {
+    // dnd-kit scales the dragged item to the size of the item it is over;
+    // rows of different heights must not distort the dragged row.
+    sortableState.isDragging = true;
+    sortableState.transform = { x: 0, y: 40, scaleX: 1, scaleY: 3.5 };
+
+    const { container } = render(
+      <SortableEnvironmentItem
+        environment={environment}
+        isSelected={false}
+        onSelect={() => {}}
+        onDelete={() => {}}
+        onStart={() => {}}
+        onStop={() => {}}
+        onRestart={() => {}}
+      />,
+    );
+
+    const row = container.firstElementChild as HTMLElement;
+    expect(row.style.transform).toBe("translate3d(0px, 40px, 0)");
   });
 
   test("SortableEnvironmentItem activates dragging from the grip handle only", () => {

@@ -362,7 +362,7 @@ export function RemoteProjectGroup({
   return (
     <div
       ref={setNodeRef}
-      style={{ transform: CSS.Transform.toString(transform), transition }}
+      style={{ transform: CSS.Translate.toString(transform), transition }}
       className={cn("px-2", isDragging && "opacity-50 z-50")}
       data-testid="federated-project"
       data-project={project.key}
@@ -486,7 +486,7 @@ function RemoteSortableEnvironmentItem({
   return (
     <div
       ref={setNodeRef}
-      style={{ transform: CSS.Transform.toString(transform), transition }}
+      style={{ transform: CSS.Translate.toString(transform), transition }}
       className={cn(isDragging && "opacity-50 z-50")}
       data-testid="federated-environment-row"
       data-machine={machine.connectionId}

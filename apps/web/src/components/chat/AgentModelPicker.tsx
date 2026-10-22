@@ -382,7 +382,7 @@ function SortableModelRow({
     <div
       ref={setNodeRef}
       data-favorite-sortable={modelKey}
-      style={{ transform: CSS.Transform.toString(transform), transition }}
+      style={{ transform: CSS.Translate.toString(transform), transition }}
       className={cn("select-none", isDragging && "z-10 opacity-50")}
       onContextMenu={(event) => event.preventDefault()}
       {...attributes}

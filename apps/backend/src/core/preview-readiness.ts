@@ -21,7 +21,7 @@ export interface PreviewReadinessOptions {
   headersTimeoutMs?: number;
   /** Extra CA bundle (PEM) for HTTPS upstream verification. */
   ca?: () => string | undefined;
-  /** Relay-backed targets are probed through the relay (step 13). */
+  /** Relay-backed targets are probed through the container relay. */
   relayConnect?: (target: ResolvedPreviewTarget, signal: AbortSignal) => Promise<Duplex>;
 }
 

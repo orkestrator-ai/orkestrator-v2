@@ -917,6 +917,12 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
       capability: "discovery",
       confirmation: "never",
       input: schema({
+        submittedInput: {
+          type: "object",
+          description:
+            "With action, namespace and requestId: validate the original mutation scope and canonical intent before returning its receipt.",
+          additionalProperties: true,
+        },
         operationId: {
           ...operationId,
           description: "Operation ID. Or pass requestId instead.",

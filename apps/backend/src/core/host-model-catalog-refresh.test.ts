@@ -301,7 +301,6 @@ describe("host model catalogue refresh", () => {
     expect(spawns[0]?.env.CURSOR_BRIDGE_AUTH_FILE).toBe(
       path.join(storage.getDataDir(), "cursor-sdk", "auth.json"),
     );
-    expect(spawns[0]?.env.CURSOR_BRIDGE_PROJECT_SETTINGS).toBe("0");
     expect(spawns[0]?.env.CURSOR_API_KEY).toBe("cursor-test-key");
     expect(spawns[0]?.env.ACP_PROVIDER).toBeUndefined();
   });

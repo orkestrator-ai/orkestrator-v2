@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import * as backend from "@/lib/backend";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT, listen } from "@/lib/native/events";
 import { appVersionSkew, BUNDLED_APP_VERSION, normalizeBackendVersion } from "@/lib/app-version";
-import { requestGlobalSettings } from "@/lib/settings-navigation";
+import { requestCurrentMachineUpdates } from "@/lib/settings-navigation";
 import { describeVersionReminder, versionClientKind } from "@/lib/version-reminder";
 
 export const VERSION_REMINDER_TOAST_ID = "orkestrator-version-reminder";
@@ -107,7 +107,7 @@ export function BackendVersionReminder() {
             ? {
                 action: {
                   label: "Update backend",
-                  onClick: () => requestGlobalSettings("updates"),
+                  onClick: requestCurrentMachineUpdates,
                 },
               }
             : {}),

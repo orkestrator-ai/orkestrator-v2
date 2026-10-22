@@ -6,9 +6,6 @@
  * `app-server/item-adapter.ts`) precisely so this file — and its tests — stay
  * engine-neutral. Two engines rendering the same conversation identically is the
  * parity requirement that makes rollback safe.
- *
- * `index.ts` re-exports `itemToParts` and `stringifyUnknown`, so existing
- * importers are unaffected.
  */
 import { readFile } from "node:fs/promises";
 import type { FileUpdateChange, McpToolCallItem, PatchApplyStatus } from "../codex-item-types.js";

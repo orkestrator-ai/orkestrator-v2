@@ -1,6 +1,9 @@
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
 import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtemp, realpath, rm, symlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   COORDINATOR_RESEARCH_MCP_ENV,
   COORDINATOR_WEB_RESEARCH_ENV,
@@ -10,6 +13,7 @@ import {
   CODEX_MAX_CONCURRENT_THREADS_ENV,
   DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
   MAX_CODEX_CONCURRENT_THREADS,
+  MAX_CODEX_DISABLED_SKILLS,
   ORKESTRATOR_AGENT_MCP_TOKEN_ENV,
   ORKESTRATOR_AGENT_MCP_URL_ENV,
   codexAppServerConfigOverrides,
@@ -17,6 +21,8 @@ import {
   codexHostedNetworkLockGaps,
   codexNetworkDeniedConfig,
   codexNetworkDeniedSearchMode,
+  codexProjectSkillsConfig,
+  codexProjectTrustConfig,
   codexReadOnlyTurnPolicy,
   resolveCodexMaxConcurrentThreads,
 } from "./codex-config.js";
@@ -572,5 +578,91 @@ describe("Codex app-server configuration", () => {
     ]) {
       expect(resolveCodexMaxConcurrentThreads(value)).toBe(DEFAULT_CODEX_MAX_CONCURRENT_THREADS);
     }
+  });
+});
+
+describe("codexProjectTrustConfig", () => {
+  const policy = {
+    id: "interactive-host",
+    sandbox: "none",
+    approvals: "auto-approve",
+    networkAccess: "full",
+  } as const;
+
+  test("pins the cwd untrusted as a nested table when project resources are off", () => {
+    expect(
+      codexProjectTrustConfig({ ...policy, projectResources: false }, "/no/such/checkout"),
+    ).toEqual({ projects: { "/no/such/checkout": { trust_level: "untrusted" } } });
+  });
+
+  test("leaves Codex's own trust decision alone when project resources are on or unknown", () => {
+    expect(codexProjectTrustConfig({ ...policy, projectResources: true }, "/checkout")).toEqual({});
+    expect(codexProjectTrustConfig(undefined, "/checkout")).toEqual({});
+    expect(codexProjectTrustConfig({ ...policy, projectResources: false }, undefined)).toEqual({});
+    expect(codexProjectTrustConfig({ ...policy, projectResources: false }, "relative")).toEqual({});
+  });
+
+  test("pins both the given path and its canonical form", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-trust-pin-"));
+    try {
+      const link = join(root, "link");
+      await symlink(root, link);
+      const canonical = await realpath(root);
+      const pinned = codexProjectTrustConfig({ ...policy, projectResources: false }, link) as {
+        projects: Record<string, unknown>;
+      };
+      expect(Object.keys(pinned.projects).sort()).toEqual([canonical, link].sort());
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("codexProjectSkillsConfig", () => {
+  const listed = (skills: unknown[]) => ({ data: [{ cwd: "/w", errors: [], skills }] });
+
+  test("disables repo, unknown-scope and already-disabled skills, keeping enabled user skills", () => {
+    expect(
+      codexProjectSkillsConfig(
+        listed([
+          { name: "repo", path: "/w/.agents/skills/repo/SKILL.md", scope: "repo", enabled: true },
+          { name: "user", path: "/u/skills/user/SKILL.md", scope: "user", enabled: true },
+          { name: "system", path: "/c/skills/.system/s/SKILL.md", scope: "system", enabled: true },
+          { name: "off", path: "/u/skills/off/SKILL.md", scope: "user", enabled: false },
+          { name: "new", path: "/x/new/SKILL.md", scope: "workspace", enabled: true },
+        ]),
+      ),
+    ).toEqual({
+      skills: {
+        config: [
+          { path: "/w/.agents/skills/repo/SKILL.md", enabled: false },
+          { path: "/u/skills/off/SKILL.md", enabled: false },
+          { path: "/x/new/SKILL.md", enabled: false },
+        ],
+      },
+    });
+  });
+
+  test("adds nothing when every listed skill is the user's and enabled", () => {
+    expect(
+      codexProjectSkillsConfig(
+        listed([{ name: "user", path: "/u/skills/user/SKILL.md", scope: "user", enabled: true }]),
+      ),
+    ).toEqual({});
+    expect(codexProjectSkillsConfig({ data: [] })).toEqual({});
+  });
+
+  test("refuses what it cannot disable", () => {
+    expect(() => codexProjectSkillsConfig({})).toThrow("no skill inventory");
+    expect(() =>
+      codexProjectSkillsConfig(listed([{ name: "repo", scope: "repo", enabled: true }])),
+    ).toThrow("without a path");
+    const many = Array.from({ length: MAX_CODEX_DISABLED_SKILLS + 1 }, (_, index) => ({
+      name: `s${index}`,
+      path: `/w/.codex/skills/s${index}/SKILL.md`,
+      scope: "repo",
+      enabled: true,
+    }));
+    expect(() => codexProjectSkillsConfig(listed(many))).toThrow("more than");
   });
 });

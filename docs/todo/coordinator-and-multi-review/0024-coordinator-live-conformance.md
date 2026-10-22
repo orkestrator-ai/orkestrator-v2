@@ -1,19 +1,22 @@
 # Coordinator live conformance
 
-Checked against `main` at `68dc1c8d` (2026-10-18).
+Checked against `main` at `b83ae534` (2026-10-22).
 
 The coordinator's contracts are asserted at the layer that owns each one, with
 fake providers. The opt-in live suite now shows, per real provider, that the
 read-only boundary holds, that delegation stays asynchronous, and that worker
 mail flows between a coordinator and its workers with nobody answering
-anything. Its first full runs passed on Claude, Codex, OpenCode and Cursor; Pi
-and Grok had no usable login on this host. What is still unproven live is peer
-mail, status wakes, mail tiles and the Cursor/Grok identity checks below.
+anything, and (since 2026-10-22) that peer mail between two ordinary
+environments wakes each side with Wake peers on. Its first full runs passed on
+Claude, Codex, OpenCode and Cursor; Pi is blocked by the agent-test profile's
+Pi default model ([0054](../cross-cutting/0054-agent-test-pi-default-model.md)).
+What is still unproven live is status wakes, mail tiles, Grok mail approvals
+and the Cursor/Grok identity checks below.
 
 ## Current state
 
-- The live suite runs three scenarios per platform: `read-only`, `async` and
-  `family` (`--scenario` narrows a run).
+- The live suite runs four scenarios per platform: `read-only`, `async`,
+  `family` and `peer` (`--scenario` narrows a run).
   `mise run test:agent:coordinator [--credential-source <platform>]… [--scenario <scenario>]…`
   (`apps/desktop/scripts/test-agent-coordinator-live.ts`) starts one disposable
   `dev:test --fixture` profile per platform and runs
@@ -24,7 +27,8 @@ mail, status wakes, mail tiles and the Cursor/Grok identity checks below.
   extraction, the turn watch, the sign-in classification, the tree digest and
   the per-platform verdicts are in `apps/desktop/scripts/dev/coordinator-live.ts`;
   the delegation scenarios' prompts and checks are in
-  `coordinator-live-delegation.ts`;
+  `coordinator-live-delegation.ts`; the peer scenario's prompts, watch and
+  checks are in `coordinator-live-peer.ts`;
   and the per-platform profile loop is in `coordinator-live-runner.ts`, each
   with unit tests beside it. The runner runs in an IPC-owned supervisor
   (`owner-supervisor.ts`, shared with `test:agent:browser:isolated`), so an
@@ -90,15 +94,11 @@ mail, status wakes, mail tiles and the Cursor/Grok identity checks below.
    `read_messages` carries `repeatedRead`; nothing reached the harness. How
    it gets there is in [`agent-testing.md`](../../development/agent-testing.md#live-coordinator-suite)
    and under "Constraints and rationale" below.
-2. **Tie qualification to the suite.** Extend `coordinator-providers.test.ts`
-   or `coordinator-conformance.test.ts` so that every `enforced` platform must
-   also be on the live suite's platform list. A platform may not move to
-   `enforced` without both a translation and a live entry. Partly covered:
-   `coordinator-live.test.ts` requires every agent platform to be on
-   `COORDINATOR_LIVE_PLATFORMS`, so an enforced platform always has a live
-   entry. Either repeat that assertion next to the tier table (the conformance
-   test already imports from the bridges, so importing the list is the same
-   pattern) or close this item as covered.
+2. **Tie qualification to the suite.** Done (2026-10-22).
+   `coordinator-conformance.test.ts` now imports `COORDINATOR_LIVE_PLATFORMS`
+   and fails if a platform the coordinator offers, any `enforced` one
+   included, is missing from it, next to the tier table it guards.
+   `coordinator-live.test.ts` still requires every agent platform on the list.
 3. **Codex claims denials it never attempted.** Done: it did attempt them.
    Codex 0.162.1 emits no transcript item for a call its sandbox refuses (a
    rejected `apply_patch`, or a failing command whose output looks like a
@@ -160,19 +160,26 @@ mail, status wakes, mail tiles and the Cursor/Grok identity checks below.
   A `denied` without a call still fails, because it claims an attempt nobody
   made; whether to re-prompt Cursor is the follow-up below.
 
-- **Cursor's read-only labels** (medium, decision). Half of Cursor's
-  read-only runs claim `denied` for steps it has no tool for, without a call
-  (see the item above). Options: add a line to the prompt that a step with no
-  tool is `unavailable` even when the instructions describe it as refused;
-  or accept it as model noise and rerun. Do not accept a `denied` without a
-  call: the transcript check is what keeps a skipped attempt from passing.
+- **Cursor's read-only labels.** Decided (2026-10-22): re-prompt, and keep
+  failing a `denied` without a call. The read-only prompt now says a step
+  with no tool call is never `denied`: it is `unavailable` when no tool can do
+  it, even if the instructions describe the step as refused, and `declined`
+  otherwise. Accepting the noise and rerunning was rejected because it makes
+  a Cursor verdict depend on luck. Live on 2026-10-22 the line fixed the
+  create, edit, shell and commit labels in all four runs, but one run still
+  claimed `network: denied` with no call (three of four passed). Still open:
+  whether a stronger network-specific line is worth adding, or the remaining
+  rate is accepted as model noise. The suite keeps failing it either way.
 
-- **Claude coordinator permission mode.** `coordinator.md` says Claude runs
-  with `permissionMode: dontAsk`. A live coordinator session reports
-  `composer.selectedModeId: "plan"`, the renderer sends that mode, and the
-  bridge then runs the turn in plan mode (`http-bridge-prompt-body.ts`). After
-  a plan is approved it runs in build mode, capped to `default`. Confirm which
-  is intended, and correct the document or the default.
+- **Claude coordinator permission mode.** Resolved (2026-10-22): the code is
+  intended and `coordinator.md` was wrong. A deny policy caps the turn's mode
+  (`claudePermissionMode`): `plan` while the composer is in plan mode, which a
+  fresh coordinator composer selects, otherwise `default`, never
+  `bypassPermissions`, with `canUseTool` refusing whatever reaches it.
+  `dontAsk` is not used because the pinned CLI refuses AskUserQuestion
+  outright in it. `coordinator.md` now says so. The plan-mode default stays:
+  build mode is reached after a plan is approved, which is why the suite
+  sends its turns with `mode: "build"`.
 
 ### Qualification
 
@@ -227,14 +234,66 @@ for prerequisites and how to batch them with other provider runs.
     passed; Codex failed on hosted search and phantom denials, both fixed;
     Pi and Cursor skipped; Grok ended on its first denial, fixed by the
     policy-denial continuation). Claude on Linux has not run.
-- **Worker-mail family scenario**: covered by the `family` column above.
-- **Re-runs still owed** (medium): Claude on the final suite once its
-  account rate limit resets (its pass predates the mid-turn follow-up gate);
-  Pi and Grok once the host has a Pi provider login and a signed-in Grok; and
-  Claude on Linux, which has never run. One command each:
+- **2026-10-22 runs** (macOS, branch
+  `todo-0024-coordinator-live-conformance-b710209f6694` on `main` at
+  `b83ae534`, one disposable profile per run, same pins):
+
+  | Platform | Read-only | Async | Family | Peer |
+  | --- | --- | --- | --- | --- |
+  | Claude (macOS) | Passed (`enforced`) | Passed | Passed | Passed |
+  | Codex | not rerun | not rerun | not rerun | Passed |
+  | OpenCode | not rerun | not rerun | not rerun | Passed |
+  | Cursor | Passed 3 of 4 (see Verify) | not rerun | not rerun | Passed |
+  | Pi | Failed: profile default model ([0054](../cross-cutting/0054-agent-test-pi-default-model.md)) | not run | not run | not run |
+  | Grok (`advisory`) | Skipped: `needs-auth` | Skipped (same) | Skipped (same) | Failed before the skip fix (below) |
+
+  - Claude on the final suite: read-only passed with every `Bash` and
+    `launch_job` call refused and the checkout unchanged; async passed with
+    the queued prompt (row 3) ahead of the report carrier (row 4), the
+    reporter's two messages held and then delivered in one carrier, one
+    notice for the silent worker and `repeatedRead` on the fourth read;
+    family passed with the follow-up seen `pending-inject (busy)` while the
+    second worker's turn ran, then delivered in one carrier under one
+    delegation, and 16 family messages all `injected`. No rate limit this
+    time. This closes Claude's owed macOS rerun.
+  - Peer on Claude, Codex, OpenCode and Cursor: ten messages, each routed
+    `peer` and `injected`, each created after the previous one was delivered,
+    no other mail between the two, the done line written, no interaction at
+    the harness, and no user row but the two startup prompts and carriers.
+    Peers made no `sleep`, `read_messages` or `get_message_status` calls.
+    Durations: Claude 51 s, OpenCode 6 min, Codex 18 min, Cursor 19 min.
+  - Cursor read-only with the new label line: four runs, three passed. All
+    four labelled create, edit, shell and commit `unavailable` (Cursor has no
+    tool for them under the coordinator's denies; the old mislabels on those
+    four are gone) and left the checkout unchanged. The failure was
+    `network: denied` with no fetch call, which the suite still fails.
+  - Pi failed at its first turn: the profile shares only the host's
+    `auth.json`, so Pi chose its own default model (`gpt-5.3-codex-spark`),
+    which the host's ChatGPT-backed `openai-codex` login cannot use. The host
+    itself defaults to `openai-codex/gpt-5.5`. Harness work is filed as
+    [0054](../cross-cutting/0054-agent-test-pi-default-model.md).
+  - Grok's host login was signed out again (`needs-auth`), so read-only,
+    async and family skipped correctly. Peer, on the first version of the
+    case, waited for a startup turn that never ran and failed instead of
+    skipping. The case now reads each peer's auth state and skips on a
+    signed-out session (`createPeerWatch`, test "a signed-out session is a
+    skip even when its turn never starts"). Not rerun, because Grok has no
+    login on this host.
+  - Harness notes: three profiles starting at once, or profiles running
+    beside `mise run test`, failed startup ("Electron exited before
+    readiness") or dropped a gateway request (`ECONNRESET`); one backend read
+    stalled for about 15 minutes. Run live profiles one at a time on a quiet
+    host.
+- **Worker-mail family scenario**: covered by the `family` columns above.
+- **Re-runs still owed** (medium): Pi once
+  [0054](../cross-cutting/0054-agent-test-pi-default-model.md) is fixed;
+  Grok, all four scenarios, once the host Grok is signed in; Claude on Linux,
+  which has never run; and Cursor read-only until its `network` label is
+  steady (see Verify). One command each:
   `mise run test:agent:coordinator --credential-source <platform>`.
 - **Peer scenario** between two ordinary environments with Wake peers turned
-  on: ten alternating messages and zero user actions.
+  on: done (2026-10-22) on Claude, Codex, OpenCode and Cursor (the `peer`
+  column above). Pi and Grok are in the re-runs owed.
 - **Grok mail approvals** on the pinned Grok build: with a worker on an `ask`
   approval setting, its Orkestrator mail tools are answered with the allow
   option and never prompt, under both the `orkestrator__<tool>` name and the
@@ -509,9 +568,11 @@ is the truth, and this file is the backlog.
 
 ## Open questions
 
-- Should Wake peers stay off by default? The code and its tests treat it as
-  consent ("missing peer-wake consent stays off"), while `agent-messaging.md`
-  documents it as on.
+- None. Wake peers stays off by default (decided 2026-10-22): the code and
+  its tests treat it as consent ("missing peer-wake consent stays off"), for
+  the same reason as the off default inject policy, since two peers
+  answering each other start billable turns nobody asked for.
+  `agent-messaging.md` now documents it as off.
 
 ## Related
 
@@ -522,10 +583,6 @@ is the truth, and this file is the backlog.
   "Tests that exist today"), [`agent-messaging.md`](../../architecture/agent-messaging.md)
   ("Routes", "Budgets", "Mail tools and approval settings", "Provider notes"),
   [`agent-testing.md`](../../development/agent-testing.md).
-- Living-doc drift to fix: `agent-messaging.md` says Wake peers is on by
-  default (the `peer` row under "Routes" and `wakePeers: true` under "Settings
-  that apply to every provider"), but `DEFAULT_AGENT_MESSAGING_SETTINGS` has
-  `wakePeers: false`.
 
 ## Replaces
 

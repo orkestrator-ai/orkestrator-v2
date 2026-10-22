@@ -200,42 +200,43 @@ function folderTrustVerdict(value: unknown): boolean | undefined {
   return undefined;
 }
 
+function trimTrailingSlash(folder: string): string {
+  return folder.length > 1 && folder.endsWith("/") ? folder.slice(0, -1) : folder;
+}
+
+/** The store's decision for exactly `folder`; keys are compared as written. */
 function folderTrustEntry(store: Record<string, unknown>, folder: string): boolean | undefined {
   const folders = store.folders;
-  if (isRecord(folders)) return folderTrustVerdict(folders[folder]);
+  if (isRecord(folders)) {
+    for (const [configuredPath, value] of Object.entries(folders)) {
+      if (trimTrailingSlash(configuredPath) === folder) return folderTrustVerdict(value);
+    }
+    return undefined;
+  }
   if (Array.isArray(folders)) {
     for (const item of folders) {
-      if (isRecord(item) && item.path === folder) return folderTrustVerdict(item);
+      if (
+        isRecord(item) &&
+        typeof item.path === "string" &&
+        trimTrailingSlash(item.path) === folder
+      ) {
+        return folderTrustVerdict(item);
+      }
     }
   }
   return undefined;
 }
 
-async function folderTrustAliases(store: Record<string, unknown>): Promise<Map<string, boolean>> {
-  const aliases = new Map<string, boolean>();
-  const folders = store.folders;
-  const entries: Array<[string, unknown]> = isRecord(folders)
-    ? Object.entries(folders)
-    : Array.isArray(folders)
-      ? folders
-          .filter((item): item is Record<string, unknown> => isRecord(item))
-          .filter((item) => typeof item.path === "string")
-          .map((item) => [item.path as string, item])
-      : [];
-  for (const [configuredPath, value] of entries) {
-    const decision = folderTrustVerdict(value);
-    if (decision === undefined) continue;
-    const canonical = await realpathOr(configuredPath);
-    if (canonical !== configuredPath && !aliases.has(canonical)) aliases.set(canonical, decision);
-  }
-  return aliases;
-}
-
 /**
- * Grok's folder-trust store (`$GROK_HOME/trusted_folders.toml`). A grant
- * covers the folder and its subdirectories. The store's layout is not
- * documented, so only recognisable decisions are reported; anything else is
- * "unknown".
+ * Grok's folder-trust store (`$GROK_HOME/trusted_folders.toml`), as the pinned
+ * Grok 1.0.52 reads it (checked with `grok inspect` in an isolated
+ * `GROK_HOME`): the decision belongs to the repository, keyed by its root with
+ * symlinks resolved, and for a linked worktree by its main checkout. A grant
+ * on a parent folder does not cover a repository below it, a worktree's own
+ * entry is ignored, and a key spelled through a symlink does not match. The
+ * worktree passed in is a checkout root, so no walk is needed. The store's
+ * layout is not documented, so only recognisable decisions are reported;
+ * anything else is "unknown".
  */
 export async function grokFolderTrust(
   input: GrokPolicyInput,
@@ -253,36 +254,28 @@ export async function grokFolderTrust(
       reason: "[folder_trust] enabled = false in Grok's config.toml turns the gate off.",
     };
   }
+  const main = await mainCheckoutOf(worktree, read);
   const store = await readToml(read, path.join(input.grokHome, "trusted_folders.toml"));
-  if (store) {
-    const aliases = await folderTrustAliases(store);
-    const own = await realpathOr(worktree);
-    let folder = own;
-    for (;;) {
-      const decision = folderTrustEntry(store, folder) ?? aliases.get(folder);
-      if (decision === true) {
-        return {
-          trust: "allowed",
-          reason:
-            folder === own
-              ? "You trusted this folder in Grok, so it loads project servers."
-              : "You trusted a parent folder in Grok, which covers this worktree.",
-        };
-      }
-      if (decision === false) {
-        return {
-          trust: "excluded",
-          reason: "You declined to trust this folder in Grok, so it skips project servers.",
-        };
-      }
-      const parent = path.dirname(folder);
-      if (parent === folder) break;
-      folder = parent;
-    }
+  const decision = store ? folderTrustEntry(store, await realpathOr(main ?? worktree)) : undefined;
+  const which = main ? "this worktree's main checkout" : "this repository";
+  if (decision === true) {
+    return {
+      trust: "allowed",
+      reason: main
+        ? "You trusted this worktree's main checkout in Grok, which covers its worktrees, so it loads project servers."
+        : "You trusted this repository in Grok, so it loads project servers.",
+    };
+  }
+  if (decision === false) {
+    return {
+      trust: "excluded",
+      reason: `You declined to trust ${which} in Grok, so it skips project servers.`,
+    };
   }
   return {
     trust: "unknown",
-    reason:
-      "Grok loads project servers only for folders you have trusted in Grok (--trust or /hooks-trust).",
+    reason: main
+      ? "Grok loads project servers only for repositories you have trusted in Grok (--trust or /hooks-trust); for a worktree that is its main checkout."
+      : "Grok loads project servers only for repositories you have trusted in Grok (--trust or /hooks-trust).",
   };
 }

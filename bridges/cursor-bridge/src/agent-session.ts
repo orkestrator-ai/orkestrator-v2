@@ -43,6 +43,7 @@ import { hydrateComposer, modelSelection } from "./models.js";
 import { renderToolCall } from "./tool-rendering.js";
 import {
   cursorMcpServers,
+  cursorInlineMcpServers,
   hostOrkestratorCustomTools,
   mcpConnectionKey,
   retireMcpObservations,
@@ -500,7 +501,9 @@ async function attach(state: SessionState): Promise<SDKAgent> {
           return denied.length > 0 ? { disallowedTools: denied } : {};
         })()
       : {}),
-    ...(!hosted && allowHttpMcp && state.mcpServerNames.length > 0 ? { mcpServers } : {}),
+    ...(!hosted && allowHttpMcp && state.mcpServerNames.length > 0
+      ? { mcpServers: cursorInlineMcpServers(mcpServers, !readOnly && policy.projectResources) }
+      : {}),
   };
   const releaseWarmWorkspace = await prewarmCursorWorkspace(options, policy.sandbox);
   state.workspaceWarmRelease = releaseWarmWorkspace;
@@ -589,12 +592,10 @@ async function disposeIfClosed(state: SessionState, agent: SDKAgent): Promise<vo
   throw new SessionClosedError();
 }
 
-let warnedLegacyPolicy = false;
-
 export function resolveCursorExecutionPolicy(
   policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy,
 ): import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy {
-  const fallback: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy =
+  const resolved: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy =
     policy ??
     ({
       id: "interactive-host",
@@ -603,8 +604,8 @@ export function resolveCursorExecutionPolicy(
       projectResources: false,
       networkAccess: "full",
     } as const);
-  // Process authority first, so neither a request body nor the deprecated env
-  // overrides below can widen what a coordinator bridge runs under.
+  // Process authority first, so a request body cannot widen what a
+  // coordinator bridge runs under.
   if (process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY === "coordinator-read-only") {
     return {
       id: "coordinator-read-only",
@@ -621,21 +622,6 @@ export function resolveCursorExecutionPolicy(
       note: "Cursor applies these restrictions, but its SDK exposes no approval callback to verify them.",
     };
   }
-  const sandboxOverride = process.env.CURSOR_BRIDGE_SANDBOX;
-  const resourcesOverride = process.env.CURSOR_BRIDGE_PROJECT_SETTINGS;
-  if ((sandboxOverride !== undefined || resourcesOverride !== undefined) && !warnedLegacyPolicy) {
-    warnedLegacyPolicy = true;
-    console.warn(
-      "[cursor-bridge] CURSOR_BRIDGE_SANDBOX/CURSOR_BRIDGE_PROJECT_SETTINGS are deprecated; configure the session execution policy instead.",
-    );
-  }
-  const resolved: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy = {
-    ...fallback,
-    ...(sandboxOverride !== undefined
-      ? { sandbox: sandboxOverride === "1" ? "provider" : "none" }
-      : {}),
-    ...(resourcesOverride !== undefined ? { projectResources: resourcesOverride === "1" } : {}),
-  };
   const notes = resolved.note ? [resolved.note] : [];
   // Its public network control is the provider sandbox switch rather than an
   // independent network policy. Restricted requests therefore force that

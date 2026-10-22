@@ -184,6 +184,7 @@ export interface ThreadContext {
    * resume in the same generation cannot certify configuration was applied.
    */
   promptThreadConfig?: string;
+  projectSkillsRevision?: number;
   bridgeSessionIds: Set<string>;
   /** The one canonical transcript for this Codex thread. */
   messages: NormalizedMessage[];

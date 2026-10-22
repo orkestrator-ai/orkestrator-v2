@@ -95,12 +95,14 @@ rejected before anything is spawned.
 
 ## 3. Add the route
 
-Go to Settings → Connections:
+Go to Settings → Machines:
 
-- **Add over SSH** onboards a new machine.
-- **Details → + SSH** (under "Connection methods on this device") adds a
-  route to a machine that is already verified. That route must prove the same
-  installation, or nothing is saved.
+- **Add machine → SSH** onboards a new machine. The command node this client
+  is connected to registers it and runs the tunnel itself; on a backend
+  without command nodes the desktop saves it on this device instead.
+- **Settings (the machine's gear) → On this device → + SSH** adds a route this
+  device uses to a machine that is already verified. That route must prove
+  the same installation, or nothing is saved.
 
 Enter the destination, an optional SSH port, an optional identity file, the
 remote client gateway port, the gateway token and an optional nickname for

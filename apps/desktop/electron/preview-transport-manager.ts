@@ -317,6 +317,21 @@ export class PreviewTransportManager {
     return { services: this.groups.size, ingressSockets: sockets, pooledUpstreams: pooled };
   }
 
+  /** Service partitions this transport's services hold, starting ones included. */
+  partitionsInUse(): string[] {
+    return Array.from(this.groups.values(), (group) => group.partition);
+  }
+
+  /** The full service list of this transport's own backend, for partition retention. */
+  listServices(): Promise<unknown> {
+    if (this.disposed) return Promise.reject(previewFailure("backend-unavailable"));
+    return this.options.invoke("get_preview_services", {});
+  }
+
+  get closed(): boolean {
+    return this.disposed;
+  }
+
   async disposeAll(): Promise<void> {
     this.disposed = true;
     await Promise.all(Array.from(this.groups.values()).map((group) => this.retire(group)));

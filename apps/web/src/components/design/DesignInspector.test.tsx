@@ -220,6 +220,40 @@ describe("DesignInspector", () => {
     expect(document.activeElement).toBe(applyButton());
   });
 
+  test("an acknowledgement never pulls focus off the field being edited", () => {
+    const view = render(<DesignInspector {...props()} />);
+    type("width", "50px");
+    textbox("width").focus();
+    fireEvent.submit(textbox("width").closest("form")!);
+    expect(onApply).toHaveBeenCalledWith({ width: "50px" });
+    view.rerender(<DesignInspector {...props({ status: { pending: true } })} />);
+    view.rerender(<DesignInspector {...props({ status: { pending: false } })} />);
+    expect(textbox("width").value).toBe("");
+    expect(document.activeElement).toBe(textbox("width"));
+  });
+
+  test("a selection going stale moves focus from its disabled field to Reselect", () => {
+    const view = render(<DesignInspector {...props()} />);
+    type("width", "50px");
+    textbox("width").focus();
+    view.rerender(<DesignInspector {...props({ validity: "stale" })} />);
+    expect(textbox("width").disabled || textbox("width").matches(":disabled")).toBe(true);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Reselect" }));
+  });
+
+  test("a stale selection does not take focus that is elsewhere", () => {
+    const outside = document.createElement("button");
+    document.body.append(outside);
+    try {
+      const view = render(<DesignInspector {...props()} />);
+      outside.focus();
+      view.rerender(<DesignInspector {...props({ validity: "stale" })} />);
+      expect(document.activeElement).toBe(outside);
+    } finally {
+      outside.remove();
+    }
+  });
+
   test("a refused apply keeps the draft", () => {
     onApply.mockImplementation(() => undefined);
     render(<DesignInspector {...props()} />);

@@ -95,7 +95,7 @@ import { FederationProvider } from "@/components/federation/FederationProvider";
 import { SshPromptDialog } from "@/components/federation/SshPromptDialog";
 import { FederationEffects } from "@/components/federation/FederationEffects";
 import { NodeActionRequestsDialog } from "@/components/federation/NodeActionRequestsDialog";
-import { NodeSshPromptDialog } from "@/components/settings/connections/NodesSettings";
+import { NodeSshPromptDialog } from "@/components/settings/machines/NodeSshPromptDialog";
 import { keepStoredWorkspaceAlive, takeWorkspaceStartupError } from "@/lib/portal/workspace-switch";
 import { useWorkspaceSwitchSelection } from "@/hooks/useWorkspaceSwitchSelection";
 
@@ -909,6 +909,8 @@ function ConnectedApp() {
   // Global keyboard shortcuts for zoom (CMD+/CMD- on Mac, Ctrl+/Ctrl- on Windows/Linux)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // A focused surface that owns the key (the design canvas's Ctrl/⌘+0) claimed it first.
+      if (e.defaultPrevented) return;
       // Handle CMD (Mac) or Ctrl (Windows/Linux) key combinations
       // Require exactly one modifier key (not both)
       const hasModifier = e.metaKey || e.ctrlKey;

@@ -246,3 +246,29 @@ below the host temporary directory. Scheduling contention remains a hypothesis.
 - The unchanged owning file passed: `mise run test:logged -- --name merge-move-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts --parallel=1 --only-failures` (exit 0, 29.0 s logged).
 - Backend counts: 9904 passed, 68 skipped, one failed and one between-tests error across 9973 tests in 570 files (929.21 s). The complete aggregate exited 1 after 1053.9 s; its other failure was the root tmux case (0482), which passed alone.
 - Evidence: host temporary directory `orkestrator-test-run.4IXzMM`. Shared-host contention remains a hypothesis. No source, assertion, timeout or skip changed.
+
+## MCP external-edit watch review fixes — 2026-10-22
+
+- **Original command:** `mise run test:logged -- --name full-suite -- mise run test`; workspace/root/bridges/protocol reserved 4/1/2/1 slots, with two isolated backend workers.
+- **Failure:** `restart recovery re-links submodules of an adopted or abandoned copy` timed out after 5000 ms (5081.66 ms), followed by a terminated submodule command reported as an unhandled error between tests.
+- **Owning-file rerun:** `mise run test:logged -- --name environment-move-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 31.8 s logged).
+- **Evidence:** `orkestrator-test-run.jhZR27/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
+- **Assessment:** confirmed recurrence. The host load average exceeded 50 during validation; scheduling contention is plausible but unproven. No move implementation, assertion, timeout or skip changed.
+
+The aggregate exited 1 after 822.1 s. Backend counts were 9918 passed, 80 skipped, three failed and two between-test errors across 10001 tests in 572 files (757.16 s). The other failures are recorded in 0248, 0512 and 0673; root firewall fixture timeouts are recorded in 0192. All other workspace packages, bridges and protocol regeneration passed.
+
+## Sidebar main-merge validation — 2026-10-22
+
+- Initial merge of `c17f1c8d5` into `b0f24b642`: `mise run test:logged -- --name merge-suite -- mise run test` reserved workspace/root/bridges/protocol workers 4/1/2/1. Backend reported 9,967 passed, 69 skipped, two failed and one error (556.4 s).
+- `restart recovery re-links submodules of an adopted or abandoned copy` exceeded five seconds (5,064.82 ms); the submodule child then reported missing `nested` directories after fixture cleanup and was terminated.
+- After refreshing the pending merge to `7e051d955`, `mise run test:logged -- --name merge-environment-move-owner -- bun test --cwd apps/backend ./src/core/environment-move.test.ts --parallel=1 --only-failures` passed the complete unchanged owner, exit 0 in 23.9 s.
+- Evidence: `orkestrator-test-run.9ak22c/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory. Browser, Docker and another worktree's tests overlapped the initial aggregate. No assertion, deadline or skip changed; host contention remains a hypothesis.
+
+## Recurring-work qualification main merge — 2026-10-22
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test` after merging `origin/main` (`3b469e885`) into pre-merge HEAD `61866a15b208019ee787038202be0e3381a42343`. Workspace reserved four slots (two package tasks with two Bun workers each), root/support one, bridges two and protocol verification one. Browser/Electron checks and the Docker image build overlapped parts of the run.
+- **Failure:** `restart recovery re-links submodules of an adopted or abandoned copy` exceeded its five-second deadline at 5056.41 ms. Its recursive submodule-status subprocess received SIGTERM, producing an unhandled error between tests.
+- **Suite counts:** backend 10019 passed, 98 skipped, one failed and one error across 10118 tests in 581 files (577.57 s). Workspace had 12 of 13 successful tasks; root/support, bridges and generated-protocol groups passed. Aggregate exit 1 (656.5 s logged).
+- **Complete unchanged owner:** `mise run test:logged -- --name merge-submodule-owner -- bun test --cwd apps/backend ./src/core/environment-move.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed all 37 tests, exit 0 (20.5 s logged).
+- **Evidence:** `orkestrator-test-run.bej67B/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
+- **Assessment:** confirmed recurrence of this deadline failure. No implementation, test assertion, deadline or skip changed.

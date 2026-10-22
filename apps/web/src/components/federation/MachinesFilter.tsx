@@ -87,9 +87,9 @@ export function MachinesFilter({ machines }: { machines: readonly MachineView[] 
           })}
         </DropdownMenuRadioGroup>
         <DropdownMenuSeparator />
-        <DropdownMenuItem onSelect={() => requestGlobalSettings("connections")}>
+        <DropdownMenuItem onSelect={() => requestGlobalSettings("machines")}>
           <Settings2 className="h-3.5 w-3.5" aria-hidden="true" />
-          Manage connections…
+          Manage machines…
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

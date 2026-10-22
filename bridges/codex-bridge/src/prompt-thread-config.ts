@@ -14,6 +14,8 @@ export function promptThreadConfig(config: EngineTurnConfig): string {
           config.workflowResultTool,
         ]
       : []),
+    config.policy?.projectResources,
+    config.cwd,
     codexNetworkDeniedConfig(config.policy),
   ]);
 }

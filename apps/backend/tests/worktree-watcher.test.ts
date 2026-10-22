@@ -431,6 +431,38 @@ describe("linked worktree metadata coverage", () => {
     expect(hints).toHaveLength(3);
   });
 
+  // Bun on Linux reports a removed watch root as `rename` with an undefined
+  // name, although Node types it `string | null`. Every watch must read it as
+  // "unknown" rather than throw from the platform's dispatch.
+  test("an undefined filename from any watch is an unknown change, not a crash", async () => {
+    const { watches, start } = recordingWatches();
+    const hints: unknown[] = [];
+    const watcher = startWorktreeWatcher({
+      worktreePath: "/wt",
+      comparisonRef: "main",
+      settleMs: 10,
+      startWatch: start,
+      resolveGitPaths: async () => linkedPaths,
+      onChange: (hint) => hints.push(hint),
+    });
+    cleanups.push(() => watcher.close());
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(watches.size).toBe(4);
+
+    for (const target of ["/wt", "/repo/.git/worktrees/wt", "/repo/.git", "/repo/.git/refs"]) {
+      expect(() => watches.get(target)!.emit("rename", undefined as unknown as null)).not.toThrow();
+      await waitForSettle(10);
+    }
+    expect(hints).toEqual([
+      { fileList: true, tree: true, overflow: false },
+      { fileList: true, tree: false, overflow: false },
+      { fileList: true, tree: false, overflow: false },
+      { fileList: true, tree: false, overflow: false },
+    ]);
+    expect(watcher.watching).toBe(true);
+  });
+
   test("a failing metadata watch closes everything so the owner falls back", async () => {
     const { watches, start } = recordingWatches();
     const errors: unknown[] = [];

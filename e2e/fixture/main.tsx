@@ -13,7 +13,7 @@ import { AgentUsageFixture } from "./AgentUsageFixture";
 import { AddProjectDialogFixture } from "./AddProjectDialogFixture";
 import { BackgroundTaskOutcomeFixture } from "./BackgroundTaskOutcomeFixture";
 import { CodexSubagentCardsFixture } from "./CodexSubagentCardsFixture";
-import { ConnectionsSettingsFixture } from "./ConnectionsSettingsFixture";
+import { MachinesSettingsFixture } from "./MachinesSettingsFixture";
 import { DesignCanvasFixture } from "./DesignCanvasFixture";
 import { MenuPlacementFixture } from "./MenuPlacementFixture";
 import { ComposerIconPickersFixture } from "./ComposerIconPickersFixture";
@@ -104,6 +104,10 @@ import { useVirtuosoScrollState } from "../../apps/web/src/hooks/useVirtuosoScro
 
 const RichTranscriptPerfFixture = lazy(async () => ({
   default: (await import("./RichTranscriptPerfFixture")).RichTranscriptPerfFixture,
+}));
+
+const DesignLibraryPerfFixture = lazy(async () => ({
+  default: (await import("./DesignLibraryPerfFixture")).DesignLibraryPerfFixture,
 }));
 
 const TranscriptPagingFixture = lazy(async () => ({
@@ -1711,7 +1715,7 @@ function fixtureForPath() {
     );
   }
   if (window.location.pathname === "/remote-machine-tree") return <RemoteMachineTreeFixture />;
-  if (window.location.pathname === "/connections-settings") return <ConnectionsSettingsFixture />;
+  if (window.location.pathname === "/machines-settings") return <MachinesSettingsFixture />;
   if (window.location.pathname === "/fullscreen-settings") return <FullscreenSettingsFixture />;
   if (window.location.pathname === "/global-settings") return <GlobalSettingsFixture />;
   if (window.location.pathname === "/github-cli-setup") return <GitHubCliSetupFixture />;
@@ -1792,6 +1796,12 @@ function fixtureForPath() {
     return (
       <Suspense fallback={null}>
         <RichTranscriptPerfFixture />
+      </Suspense>
+    );
+  if (window.location.pathname === "/design-library-perf")
+    return (
+      <Suspense fallback={null}>
+        <DesignLibraryPerfFixture />
       </Suspense>
     );
   if (window.location.pathname === "/virtuoso-follow") return <VirtuosoFollowFixture />;

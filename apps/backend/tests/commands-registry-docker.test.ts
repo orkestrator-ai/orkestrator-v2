@@ -474,7 +474,8 @@ printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 ${ownedContainerInspect()}
 if [ "$1" = "start" ]; then exit 0; fi
 if [ "$1" = "exec" ]; then
-  if [ "$2" = "--user" ]; then exit 0; fi
+  # Only stdin syncs (\`exec -i\`) carry a payload; argument-only execs are not syncs.
+  if [ "$2" != "-i" ]; then exit 0; fi
   cat >> "$FAKE_DOCKER_EXEC_LOG.stdin"
   printf '\\n--sync--\\n' >> "$FAKE_DOCKER_EXEC_LOG.stdin"
   exit 0

@@ -13,7 +13,11 @@ import {
   type PreviewFixture,
 } from "../../../test-fixtures/preview-app/server.ts";
 import { createPreviewHarness, type PreviewHarness } from "./core/preview-test-support.js";
-import { PREVIEW_RELAY_SCRIPT, RELAY_FRAME } from "./preview-relay-script.js";
+import {
+  PREVIEW_RELAY_SCRIPT,
+  RELAY_FRAME,
+  RELAY_PROTOCOL_VERSION,
+} from "./preview-relay-script.js";
 import { frame, PreviewRelaySupervisor, type RelayProcess } from "./preview-relay-supervisor.js";
 
 /** Run the relay as a local process: same script, same stdio protocol, no Docker. */
@@ -27,6 +31,20 @@ function localSpawn(spawned: RelayProcess[]) {
   };
 }
 
+/** The largest payload either end accepts in one frame (MAX_PAYLOAD + 1024). */
+const MAX_FRAME_PAYLOAD = 32 * 1024 + 1024;
+
+/** Only the header of a frame one byte over the bound: no payload follows yet. */
+function oversizedHeader(channel: number): Buffer {
+  const header = Buffer.alloc(9);
+  header.writeUInt8(RELAY_FRAME.data, 0);
+  header.writeUInt32BE(channel, 1);
+  header.writeUInt32BE(MAX_FRAME_PAYLOAD + 1, 5);
+  return header;
+}
+
+type FakeHello = "answer" | "silent" | "wrong-nonce" | "oversized";
+
 /**
  * A scripted relay process: answers hello (or not) and opens every channel.
  * Once `broken`, stdin fails writes with EPIPE like a dead `docker exec`.
@@ -34,11 +52,12 @@ function localSpawn(spawned: RelayProcess[]) {
 class FakeRelayProcess extends EventEmitter {
   broken = false;
   killed: NodeJS.Signals | null = null;
+  readonly opened: number[] = [];
   readonly stdout = new PassThrough();
   readonly stdin: Writable;
   private buffer = Buffer.alloc(0);
 
-  constructor(private readonly hello: "answer" | "silent" | "wrong-nonce") {
+  constructor(private readonly hello: FakeHello) {
     super();
     this.stdin = new Writable({
       write: (chunk: Buffer, _encoding, callback) => {
@@ -66,11 +85,14 @@ class FakeRelayProcess extends EventEmitter {
       const id = this.buffer.readUInt32BE(1);
       const payload = this.buffer.subarray(9, 9 + length);
       this.buffer = this.buffer.subarray(9 + length);
-      if (type === RELAY_FRAME.hello && this.hello !== "silent") {
+      if (type === RELAY_FRAME.hello && this.hello === "oversized") {
+        this.stdout.write(oversizedHeader(0));
+      } else if (type === RELAY_FRAME.hello && this.hello !== "silent") {
         const { nonce } = JSON.parse(payload.toString("utf8")) as { nonce: string };
         const answer = this.hello === "answer" ? nonce : "0".repeat(nonce.length);
         this.stdout.write(frame(RELAY_FRAME.ready, 0, Buffer.from(answer)));
       } else if (type === RELAY_FRAME.open) {
+        this.opened.push(id);
         this.stdout.write(frame(RELAY_FRAME.opened, id));
       }
     }
@@ -262,7 +284,8 @@ describe("PreviewRelaySupervisor (local relay process)", () => {
 
 describe("PreviewRelaySupervisor (scripted relay process)", () => {
   let processes: FakeRelayProcess[];
-  let behaviours: Array<"answer" | "silent" | "wrong-nonce">;
+  let behaviours: FakeHello[];
+  let warnings: string[];
   let supervisor: PreviewRelaySupervisor;
   let now: number;
   const signal = new AbortController().signal;
@@ -271,6 +294,7 @@ describe("PreviewRelaySupervisor (scripted relay process)", () => {
   beforeEach(() => {
     processes = [];
     behaviours = [];
+    warnings = [];
     now = 1_000;
     supervisor = new PreviewRelaySupervisor({
       spawn: () => {
@@ -281,6 +305,7 @@ describe("PreviewRelaySupervisor (scripted relay process)", () => {
       allowedPorts: () => [3000],
       helloTimeoutMs: 20,
       now: () => now,
+      logger: { warn: (...args: unknown[]) => warnings.push(args.map(String).join(" ")) },
     });
   });
 
@@ -330,6 +355,221 @@ describe("PreviewRelaySupervisor (scripted relay process)", () => {
       channel.destroy();
     });
   }
+  test("an oversized frame closes the relay on its header, releases everything, and logs nothing", async () => {
+    const channel = await supervisor.connect(target, signal);
+    const fake = processes[0]!;
+    const id = fake.opened[0]!;
+
+    // A frame exactly at the bound is still delivered.
+    const delivered = new Promise<Buffer>((resolve) => channel.once("data", resolve));
+    fake.stdout.write(frame(RELAY_FRAME.data, id, Buffer.alloc(MAX_FRAME_PAYLOAD, 0x61)));
+    expect((await delivered).length).toBe(MAX_FRAME_PAYLOAD);
+
+    let failure: unknown;
+    channel.once("error", (error) => {
+      failure = error;
+    });
+    const closed = new Promise<void>((resolve) => channel.once("close", () => resolve()));
+    // One byte over: rejected as soon as the header is complete, split across
+    // reads, without waiting for (or buffering) the announced payload.
+    const secret = "relay-frame-secret-content";
+    const header = oversizedHeader(id);
+    fake.stdout.write(header.subarray(0, 5));
+    fake.stdout.write(Buffer.concat([header.subarray(5), Buffer.from(secret)]));
+    await closed;
+
+    expect(previewErrorFromUnknown(failure)).toMatchObject({
+      category: "internal",
+      message: "The container relay sent a malformed frame.",
+    });
+    expect(`${String(failure)} ${JSON.stringify(previewErrorFromUnknown(failure))}`).not.toContain(
+      secret,
+    );
+    expect(channel.destroyed).toBe(true);
+    expect(fake.killed).toBe("SIGTERM");
+    expect(fake.stdin.writableEnded).toBe(true);
+    expect(supervisor.stats()).toMatchObject({ relays: 0, channels: 0, crashes: 1 });
+    expect(supervisor.healthy("env-a")).toBe(false);
+
+    // The backend stops reading a relay it shut down: whatever it still sends
+    // before SIGTERM lands is drained and discarded, never accumulated.
+    expect(fake.stdout.listenerCount("data")).toBe(0);
+    fake.stdout.write(Buffer.concat([Buffer.from(secret), randomBytes(1024 * 1024)]));
+    await Bun.sleep(10);
+    expect(fake.stdout.readableLength).toBe(0);
+    expect(warnings.filter((line) => line.includes(secret))).toEqual([]);
+
+    now += 1_001;
+    const again = await supervisor.connect(target, signal);
+    expect(processes).toHaveLength(2);
+    again.destroy();
+  });
+
+  test("an oversized frame instead of ready fails the pending connect as malformed", async () => {
+    behaviours.push("oversized");
+    const error = await rejection(supervisor.connect(target, signal));
+    expect(previewErrorFromUnknown(error)).toMatchObject({
+      category: "internal",
+      message: "The container relay sent a malformed frame.",
+    });
+    expect(processes[0]!.killed).toBe("SIGTERM");
+    expect(processes[0]!.stdout.listenerCount("data")).toBe(0);
+    expect(supervisor.stats()).toMatchObject({ relays: 0, channels: 0, crashes: 1 });
+    expect(supervisor.healthy("env-a")).toBe(false);
+  });
+});
+
+/** Run the relay script locally and collect what it writes and how it exits. */
+function runRelayScript(script = PREVIEW_RELAY_SCRIPT) {
+  const child = spawn(process.execPath, ["-e", script], { stdio: ["pipe", "pipe", "pipe"] });
+  const stdout: Buffer[] = [];
+  const stderr: Buffer[] = [];
+  child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+  child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+  // Writes after the relay exited fail with EPIPE; the exit code is the result.
+  child.stdin.on("error", () => undefined);
+  const exited = new Promise<number | null>((resolve) =>
+    child.once("exit", (code) => resolve(code)),
+  );
+  return {
+    child,
+    exited,
+    stdout: () => Buffer.concat(stdout),
+    stderr: () => Buffer.concat(stderr).toString("utf8"),
+  };
+}
+
+function helloFrame(fields: Record<string, unknown>): Buffer {
+  return frame(RELAY_FRAME.hello, 0, Buffer.from(JSON.stringify(fields)));
+}
+
+/** Read frames from a relay's stdout until `count` have arrived. */
+async function readFrames(relay: ReturnType<typeof runRelayScript>, count: number) {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const frames: Array<{ type: number; id: number; payload: string }> = [];
+    let buffer = relay.stdout();
+    while (buffer.length >= 9 && buffer.length >= 9 + buffer.readUInt32BE(5)) {
+      const length = buffer.readUInt32BE(5);
+      frames.push({
+        type: buffer.readUInt8(0),
+        id: buffer.readUInt32BE(1),
+        payload: buffer.subarray(9, 9 + length).toString("utf8"),
+      });
+      buffer = buffer.subarray(9 + length);
+    }
+    if (frames.length >= count) return frames;
+    await Bun.sleep(10);
+  }
+  throw new Error(`expected ${count} relay frames`);
+}
+
+describe("relay script protocol faults (local process)", () => {
+  let relays: Array<ReturnType<typeof runRelayScript>>;
+
+  beforeEach(() => {
+    relays = [];
+  });
+
+  afterEach(() => {
+    for (const relay of relays) {
+      if (relay.child.exitCode === null && relay.child.signalCode === null) relay.child.kill();
+    }
+  });
+
+  function start(script?: string) {
+    const relay = runRelayScript(script);
+    relays.push(relay);
+    return relay;
+  }
+
+  test("the backend's protocol version is accepted and answered with the nonce", async () => {
+    const relay = start();
+    relay.child.stdin.write(
+      helloFrame({ version: RELAY_PROTOCOL_VERSION, nonce: "nonce-ok", allow: [] }),
+    );
+    expect(await readFrames(relay, 1)).toEqual([
+      { type: RELAY_FRAME.ready, id: 0, payload: "nonce-ok" },
+    ]);
+    relay.child.stdin.end();
+    expect(await relay.exited).toBe(0);
+  });
+
+  for (const version of [RELAY_PROTOCOL_VERSION + 1, 0, String(RELAY_PROTOCOL_VERSION), null]) {
+    test(`a hello with version ${JSON.stringify(version)} exits 3 without answering`, async () => {
+      const relay = start();
+      const nonce = "nonce-must-not-echo";
+      relay.child.stdin.write(helloFrame({ version, nonce, allow: [3000] }));
+      expect(await relay.exited).toBe(3);
+      expect(relay.stdout().length).toBe(0);
+      expect(relay.stderr()).not.toContain(nonce);
+    });
+  }
+
+  test("an oversized frame exits 4 on its header; one at the bound is accepted", async () => {
+    const relay = start();
+    relay.child.stdin.write(helloFrame({ version: RELAY_PROTOCOL_VERSION, nonce: "n", allow: [] }));
+    // At the bound: a data frame for an unknown channel is read and ignored,
+    // and the relay keeps serving (a disallowed open is refused with EACCES).
+    relay.child.stdin.write(frame(RELAY_FRAME.data, 9, Buffer.alloc(MAX_FRAME_PAYLOAD, 0x61)));
+    const port = Buffer.alloc(2);
+    port.writeUInt16BE(3000, 0);
+    relay.child.stdin.write(frame(RELAY_FRAME.open, 7, port));
+    expect((await readFrames(relay, 2))[1]).toEqual({
+      type: RELAY_FRAME.openFailed,
+      id: 7,
+      payload: "EACCES",
+    });
+
+    // One byte over, header only: the relay does not wait for the payload.
+    relay.child.stdin.write(oversizedHeader(9));
+    expect(await relay.exited).toBe(4);
+  });
+});
+
+describe("protocol version mismatch (local relay process)", () => {
+  test("a relay that rejects the backend's version fails connect fast, not at the hello timeout", async () => {
+    // The relay a different build would run: it accepts only another version.
+    const otherVersion = PREVIEW_RELAY_SCRIPT.replace(
+      `hello.version !== ${RELAY_PROTOCOL_VERSION}`,
+      `hello.version !== ${RELAY_PROTOCOL_VERSION + 1}`,
+    );
+    expect(otherVersion).not.toBe(PREVIEW_RELAY_SCRIPT);
+    const exits: Array<number | null> = [];
+    let spawns = 0;
+    const now = 1_000;
+    const supervisor = new PreviewRelaySupervisor({
+      spawn: () => {
+        spawns += 1;
+        const child = spawn(process.execPath, ["-e", otherVersion], {
+          stdio: ["pipe", "pipe", "ignore"],
+        });
+        child.on("exit", (code) => exits.push(code));
+        return child;
+      },
+      allowedPorts: () => [3000],
+      // Far beyond the test timeout: only the relay's exit can settle connect.
+      helloTimeoutMs: 60_000,
+      now: () => now,
+    });
+    const target = { environmentId: "env-v", containerId: "container-v", port: 3000 };
+    try {
+      const error = await rejection(supervisor.connect(target, new AbortController().signal));
+      expect(previewErrorFromUnknown(error)).toMatchObject({
+        category: "backend-unavailable",
+        message: "The container relay stopped.",
+      });
+      expect(exits).toEqual([3]);
+      expect(supervisor.stats()).toMatchObject({ relays: 0, channels: 0, crashes: 1 });
+      expect(supervisor.healthy("env-v")).toBe(false);
+      // Inside the backoff the relay is not respawned in a tight loop.
+      expect(
+        category(await rejection(supervisor.connect(target, new AbortController().signal))),
+      ).toBe("backend-unavailable");
+      expect(spawns).toBe(1);
+    } finally {
+      supervisor.dispose();
+    }
+  });
 });
 
 describe("relay-backed preview services", () => {

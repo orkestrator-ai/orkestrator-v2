@@ -584,7 +584,7 @@ Test names include the requirement ID (for example
 | RG-03 | Routes are hello-verified; identity mismatch, certificate and host-key failures block without bypass. | 1 | `NodeLinkManager` | `node-service.test.ts` RG-03; `qa-command-nodes.ts` RG-03 (restart and reconnect with the same identity) | Done |
 | RG-04 | SSH routes run from the backend using host OpenSSH with owned forwards, host-key trust and no remote install. | 1 | Moved supervisor | `node-ssh-integration.test.ts` RG-04 (real sshd: host key refused until trusted through the command node, hello over the forward, attach); `node-service.test.ts` RG-04/RG-05; desktop SSH suites cover the shared supervisor | Done |
 | RG-05 | SSH prompts are relayed through the portal; unattended reconnects use keys or the agent only. | 1 | `node-ssh-prompts.ts` | `node-service.test.ts` RG-04/RG-05 (interactive add, batch reconnect, prompt relay without answer); the prompt dialog is mounted app-wide | Done |
-| RG-06 | The registry is managed from the portal's Connections settings. | 1 | Nodes section | `nodes-settings.test.tsx` RG-06 (list, forget, edit routes, order and token) | Done |
+| RG-06 | The registry is managed from the portal's Machines settings. | 1 | Machines settings | `MachinesSettings.test.tsx` (list, add, remove, edit routes, order and token) | Done |
 | RG-07 | Forgetting a node never stops or deletes anything on it. | 1 | `forget_node` | `node-service.test.ts` AT-02/RG-07/SC-03; `nodes-settings.test.tsx` RG-07 | Done |
 
 ### Attachment

@@ -57,9 +57,10 @@ import type {
 } from "../app-server/interactions.js";
 import { reduceHistoricalTurns, reduceNotification } from "../app-server/event-reducer.js";
 import type { SkillsListParams, UserInput } from "../app-server/generated/typescript/v2/index.js";
-import { redactSecrets } from "../app-server/redaction.js";
+import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
 import {
   AppServerRpcError,
+  JSON_RPC_METHOD_NOT_FOUND,
   classifyDispatchFailure,
   isPaginatedHistoryUnsupportedError,
   isSafeToRetryImmediately,
@@ -74,6 +75,8 @@ import {
   codexHostedNetworkLockGaps,
   codexNetworkDeniedConfig,
   codexNetworkDeniedSearchMode,
+  codexProjectSkillsConfig,
+  codexProjectTrustConfig,
 } from "../codex-config.js";
 import { type McpToolAvailability, waitForMcpToolAvailability } from "./mcp-tool-availability.js";
 import {
@@ -573,6 +576,10 @@ function mcpFailureReason(notice: RuntimeNotice): string | undefined {
 
 /** Most skill load failures one health snapshot reports. */
 const MAX_SKILL_LOAD_NOTICES = 16;
+
+/** Servers per `mcpServerStatus/list` page, and the most pages one read follows. */
+const MCP_STATUS_PAGE_SIZE = 100;
+const MCP_STATUS_MAX_PAGES = 10;
 
 /** Stable, path-free identity for skills sharing a directory name. */
 function skillPathFingerprint(path: string): string {
@@ -1499,13 +1506,43 @@ export class AppServerEngine implements CodexEngine {
 
   // --------------------------------------------------------------- threads
 
-  private toThreadParams(config: EngineTurnConfig): Record<string, unknown> {
+  /**
+   * Thread configuration only app-server can supply: with project resources
+   * off, the checkout's own skills, which the untrusted pin does not reach.
+   * Failure to establish the inventory refuses the thread, including an older
+   * app-server without skills/list.
+   */
+  private async projectResourceThreadConfig(
+    generation: EngineGeneration,
+    config: EngineTurnConfig,
+  ): Promise<Record<string, unknown>> {
+    if (!config.policy || config.policy.projectResources) return {};
+    let listed: unknown;
+    try {
+      listed = await this.supervisor.requestOnGeneration(generation, "skills/list", {
+        cwds: [config.cwd ?? this.options.cwd],
+        forceReload: true,
+      } satisfies SkillsListParams);
+    } catch (error) {
+      if (error instanceof AppServerRpcError && error.code === JSON_RPC_METHOD_NOT_FOUND) {
+        throw new Error("Codex cannot enforce disabled project resources without skills/list");
+      }
+      throw error;
+    }
+    return codexProjectSkillsConfig(listed);
+  }
+
+  private toThreadParams(
+    config: EngineTurnConfig,
+    extraConfig: Record<string, unknown> = {},
+  ): Record<string, unknown> {
     const approveAgentMcpTools =
       (config.policy?.approvals === "auto-approve" &&
         (config.approvalPolicy ?? "never") === "never" &&
         config.sandbox !== "read-only") ||
       (config.policy?.id === "coordinator-read-only" && Boolean(config.permissionProfile)) ||
       Boolean(config.workflowResultTool && config.agentMcp);
+    const cwd = config.cwd ?? this.options.cwd;
     const threadConfig: Record<string, unknown> = {
       // A sandbox's network switch stops commands, not hosted web search, which
       // runs on OpenAI's servers: off, or `cached` (no live page fetches) when
@@ -1514,6 +1551,10 @@ export class AppServerEngine implements CodexEngine {
       // process carries the same setting as process configuration, which
       // `assertHostedNetworkLock` reads back.
       ...codexNetworkDeniedConfig(config.policy),
+      // Project resources off: this thread does not load the checkout's own
+      // `.codex` configuration, even where the user trusts it in Codex.
+      ...codexProjectTrustConfig(config.policy, cwd),
+      ...extraConfig,
       ...(config.agentMcp
         ? {
             // Replace the complete server table. The app-server process may
@@ -1566,7 +1607,7 @@ export class AppServerEngine implements CodexEngine {
         : {}),
     };
     return {
-      cwd: config.cwd ?? this.options.cwd,
+      cwd,
       // Passed explicitly on every call rather than relying on inherited state.
       approvalPolicy: config.approvalPolicy ?? "never",
       approvalsReviewer: config.approvalsReviewer ?? "user",
@@ -1625,22 +1666,24 @@ export class AppServerEngine implements CodexEngine {
 
   async startThread(options: StartThreadOptions): Promise<EngineThread> {
     const generation = await this.assertHostedNetworkLock(options.config);
+    const extra = await this.projectResourceThreadConfig(generation, options.config);
     const response = await this.supervisor.requestOnGeneration<{
       thread: Record<string, unknown>;
       model?: unknown;
       activePermissionProfile?: { id?: unknown } | null;
-    }>(generation, "thread/start", this.toThreadParams(options.config));
+    }>(generation, "thread/start", this.toThreadParams(options.config, extra));
     this.assertPermissionProfile(response.activePermissionProfile, options.config);
     return this.bindThread(response.thread, options.config, response.model);
   }
 
   async resumeThread(threadId: string, options: ResumeThreadOptions): Promise<EngineThread> {
     const generation = await this.assertHostedNetworkLock(options.config);
+    const extra = await this.projectResourceThreadConfig(generation, options.config);
     const response = await this.supervisor.requestOnGeneration<{
       thread: Record<string, unknown>;
       model?: unknown;
       activePermissionProfile?: { id?: unknown } | null;
-    }>(generation, "thread/resume", { threadId, ...this.toThreadParams(options.config) });
+    }>(generation, "thread/resume", { threadId, ...this.toThreadParams(options.config, extra) });
     this.assertPermissionProfile(response.activePermissionProfile, options.config);
     const thread = this.bindThread(response.thread, options.config, response.model);
     // app-server reconstructs turn history on resume by default.
@@ -1693,6 +1736,7 @@ export class AppServerEngine implements CodexEngine {
     lastTurnId?: string,
   ): Promise<EngineThread> {
     const generation = await this.assertHostedNetworkLock(config);
+    const extra = await this.projectResourceThreadConfig(generation, config);
     const response = await this.supervisor.requestOnGeneration<{
       thread: Record<string, unknown>;
       model?: unknown;
@@ -1700,7 +1744,7 @@ export class AppServerEngine implements CodexEngine {
     }>(generation, "thread/fork", {
       threadId,
       ...(lastTurnId ? { lastTurnId } : {}),
-      ...this.toThreadParams(config),
+      ...this.toThreadParams(config, extra),
     });
     this.assertPermissionProfile(response.activePermissionProfile, config);
     return this.bindThread(response.thread, config, response.model);
@@ -1809,11 +1853,7 @@ export class AppServerEngine implements CodexEngine {
     rateLimits: unknown;
   }> {
     const [mcp, skills, hooks, rateLimits] = await Promise.allSettled([
-      this.supervisor.request("mcpServerStatus/list", {
-        limit: 100,
-        detail: "full",
-        ...(threadId ? { threadId } : {}),
-      }),
+      this.listMcpServerStatus(threadId),
       this.supervisor.request("skills/list", {
         cwds: [this.options.cwd],
       }),
@@ -1893,12 +1933,35 @@ export class AppServerEngine implements CodexEngine {
     };
   }
 
+  /**
+   * Every page of `mcpServerStatus/list`, merged into one response in the
+   * server's order. Bounded by `MCP_STATUS_MAX_PAGES`; past it the merged
+   * response keeps the last `nextCursor`, so a reader can tell it is partial.
+   */
+  private async listMcpServerStatus(threadId?: string | null): Promise<unknown> {
+    const data: unknown[] = [];
+    let cursor: string | undefined;
+    let last: Record<string, unknown> = {};
+    for (let page = 0; page < MCP_STATUS_MAX_PAGES; page += 1) {
+      const response = await this.supervisor.request("mcpServerStatus/list", {
+        ...(cursor ? { cursor } : {}),
+        limit: MCP_STATUS_PAGE_SIZE,
+        detail: "full",
+        ...(threadId ? { threadId } : {}),
+      });
+      last = objectRecord(response);
+      // An unrecognised shape is passed through as the single answer.
+      if (!Array.isArray(last.data)) return page === 0 ? response : { ...last, data };
+      data.push(...last.data);
+      cursor = typeof last.nextCursor === "string" && last.nextCursor ? last.nextCursor : undefined;
+      if (!cursor) break;
+    }
+    // The last page's own `nextCursor` stays: set only when the bound cut it short.
+    return { ...last, data };
+  }
+
   async listMcpServers(threadId?: string | null): Promise<unknown> {
-    const response = await this.supervisor.request("mcpServerStatus/list", {
-      limit: 100,
-      detail: "full",
-      ...(threadId ? { threadId } : {}),
-    });
+    const response = await this.listMcpServerStatus(threadId);
     const root = objectRecord(response);
     if (!Array.isArray(root.data)) return response;
     return {
@@ -2274,21 +2337,28 @@ export class AppServerEngine implements CodexEngine {
    * Releases a thread. Deliberately `thread/unsubscribe`, never `thread/delete`:
    * closing a tab must not destroy the user's conversation or its descendants.
    */
-  async unsubscribeThread(handle: string): Promise<void> {
+  async unsubscribeThread(handle: string, requireConfirmation = false): Promise<void> {
     const binding = this.bindings.get(handle);
-    this.accountProofTurns.delete(binding?.threadId ?? handle);
-    this.rolloutPaths.delete(binding?.threadId ?? handle);
-    this.bindings.delete(handle);
-    if (!binding) return;
+    const threadId = binding?.threadId ?? handle;
+    if (!binding && !requireConfirmation) {
+      this.accountProofTurns.delete(threadId);
+      this.rolloutPaths.delete(threadId);
+      return;
+    }
     try {
-      await this.supervisor.request("thread/unsubscribe", { threadId: binding.threadId });
+      await this.supervisor.request("thread/unsubscribe", { threadId });
     } catch (error) {
-      // Already gone, or the process died — either way there is nothing to free.
+      // Policy changes must prove that a loaded thread released its old config.
+      // Keep the binding on failure so a retry can still unsubscribe it.
+      if (requireConfirmation) throw error;
       console.warn(
         "[codex-bridge] thread/unsubscribe failed:",
         error instanceof Error ? error.message : error,
       );
     }
+    this.accountProofTurns.delete(threadId);
+    this.rolloutPaths.delete(threadId);
+    this.bindings.delete(handle);
   }
 
   /**

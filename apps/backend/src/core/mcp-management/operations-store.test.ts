@@ -162,6 +162,63 @@ describe("McpOperationStore retention", () => {
     expect(kept).toContain(pending.snapshot.operationId);
   });
 
+  test.each(["restart-required", "pending-next-turn"] as const)(
+    "%s remains protected for the external-edit window, until held or settled",
+    (state) => {
+      const at = new Date(NOW).toISOString();
+      const watched = operation(
+        { provider: "opencode" },
+        {
+          state,
+          runtimes: [
+            { runtimeId: "r", environmentId: "e", label: "runtime", state, updatedAt: at },
+          ],
+        },
+      );
+      watched.recovery.applyQueuedAt = at;
+      expect(isFinishedOperation(watched, NOW)).toBe(false);
+      expect(isFinishedOperation(watched, NOW + EVIDENCE_WINDOW_MS)).toBe(false);
+      expect(isFinishedOperation(watched, NOW + EVIDENCE_WINDOW_MS + 1)).toBe(true);
+      watched.recovery.runtimes = [
+        { runtimeId: "r", environmentId: "e", agent: "codex", reloaded: true },
+      ];
+      expect(isFinishedOperation(watched, NOW)).toBe(true);
+      watched.recovery.runtimes = [];
+      watched.snapshot.apply.runtimes[0]!.state = "cancelled";
+      expect(isFinishedOperation(watched, NOW)).toBe(true);
+    },
+  );
+
+  test("count pressure keeps all unfinished watches until their bounded window expires", async () => {
+    const target = store();
+    await target.load();
+    for (let index = 0; index < MCP_MANAGEMENT_LIMITS.retainedOperations + 1; index += 1) {
+      const at = new Date(NOW).toISOString();
+      const watched = operation(
+        { provider: "opencode" },
+        {
+          state: "restart-required",
+          runtimes: [
+            {
+              runtimeId: "r",
+              environmentId: "e",
+              label: "runtime",
+              state: "restart-required",
+              updatedAt: at,
+            },
+          ],
+        },
+      );
+      watched.recovery.applyQueuedAt = at;
+      await target.put(watched);
+    }
+    expect(target.list()).toHaveLength(MCP_MANAGEMENT_LIMITS.retainedOperations + 1);
+    const expired = store(NOW + EVIDENCE_WINDOW_MS + 1);
+    await expired.load();
+    await expired.put(operation());
+    expect(expired.list()).toHaveLength(MCP_MANAGEMENT_LIMITS.retainedOperations);
+  });
+
   test("drops finished records older than seven days but never unfinished ones", async () => {
     const old = new Date(NOW - MCP_MANAGEMENT_LIMITS.operationRetentionMs - 60_000).toISOString();
     const target = store();

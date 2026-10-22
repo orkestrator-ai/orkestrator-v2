@@ -66,3 +66,10 @@ Original command: `mise run test:logged -- --name merge2-tests -- mise run test`
 Aggregate result: `merge2-tests` exited 1 after 1132.1 seconds logged. Backend reported 9081 passed, 41 skipped and 11 failed across 9133 tests in 485 files (1118.57 seconds). Every other workspace package passed; root/support passed 3084 tests with one skip, and protocol regeneration passed. Evidence: `orkestrator-test-run.0J1rem/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
 
 The unchanged owner pass confirms intermittence. No implementation, assertion, timeout or skip changed.
+
+## Service preview rollout full suite — 2026-10-22
+
+- Command: `mise run test:logged -- --name full-tests-0042 -- mise run test` on branch `todo-0042-service-preview-rollout-a6b636a9b237` (`b83ae534` plus the service preview rollout working tree, which does not touch this test's code), macOS 26.6.2 arm64, default `mise run test` groups, host load average 15 to 60 (above 400 earlier in the hour).
+- Failure: `terminal history > normalizes lines, CRLF, Unicode, and ANSI across transport chunks and pages` at 5013.95 ms. Backend: 9909 passed, 84 skipped, 4 failed across 9997 tests in 572 files (630.59 s); the other failures were 0213, 0175 and 0165 (two cases).
+- Evidence: `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.iQtiOF/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- Isolated rerun: `mise exec -- bun test --cwd apps/backend ./src/core/terminal-history.test.ts --parallel=1` passed unchanged (25 passed) at load 11.

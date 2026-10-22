@@ -92,7 +92,8 @@ async function holdLease(
 
 /** Reaches the private queue map so its cleanup can be asserted directly. */
 function creationQueueSize(storage: StorageService): number {
-  const tails = (storage as unknown as { mutationTails: Map<string, unknown> }).mutationTails;
+  const tails = (storage as unknown as { context: { mutationTails: Map<string, unknown> } }).context
+    .mutationTails;
   return [...tails.keys()].filter((key) => key.startsWith(CREATION_LEASE_PREFIX)).length;
 }
 

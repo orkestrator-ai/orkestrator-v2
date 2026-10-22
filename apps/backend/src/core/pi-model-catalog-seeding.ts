@@ -138,7 +138,6 @@ async function runDiscovery(context: CommandContext): Promise<AgentModel[]> {
     HOSTNAME: "127.0.0.1",
     CWD: cwd,
     PI_BRIDGE_TOKEN: authToken,
-    PI_BRIDGE_PROJECT_RESOURCES: "0",
     ORKESTRATOR_PARENT_PID: String(process.pid),
   };
   // The same credential policy as an environment's Pi bridge, so the catalogue

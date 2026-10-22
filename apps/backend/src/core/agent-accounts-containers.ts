@@ -6,6 +6,7 @@ import {
   DEFAULT_AGENT_ACCOUNT_ID,
   type AgentAccountPlatform,
 } from "@orkestrator/protocol/agent-accounts";
+import { restrictProviderAuthEntries } from "@orkestrator/protocol/login-snapshots";
 
 import type { CommandContext } from "./commands-context.js";
 import type { AppConfig, Environment } from "./models.js";
@@ -58,11 +59,12 @@ import {
  * back. A real start invalidates the Codex marker so the next idle bridge
  * request reconciles the imported copy, even if startup later fails.
  *
- * Codex and Grok refresh tokens are single-use, so a container only ever gets
- * their logins access-only (`accessOnlyLoginText`): a copy that refreshed
- * would sign the host out. Both are therefore re-read from the host before
- * every start, and Grok's, whose access token lasts hours rather than days,
- * also before every Grok bridge start.
+ * Codex and Grok refresh tokens are single-use, and most OpenCode and Pi
+ * OAuth logins rotate theirs, so a container only ever gets these logins
+ * access-only (`accessOnlyLoginText`): a copy that refreshed would sign the
+ * host out. All four are therefore re-read from the host before every start.
+ * Grok, OpenCode and Pi access tokens can last only hours, so theirs are also
+ * pushed before every bridge start (`syncContainerLogin`).
  */
 
 const ACCOUNT_MARKER: Record<AgentAccountPlatform, string> = {
@@ -77,6 +79,8 @@ const SYNC_CONTAINER_CODEX_AUTH_COMMAND =
 const CONTAINER_GROK_AUTH_FILE = "/home/node/.grok/auth.json";
 const SYNC_CONTAINER_GROK_AUTH_COMMAND =
   buildSyncContainerClaudeCredentialCommand(CONTAINER_GROK_AUTH_FILE);
+const CONTAINER_OPENCODE_AUTH_FILE = "/home/node/.local/share/opencode/auth.json";
+const CONTAINER_PI_AUTH_FILE = "/home/node/.pi/agent/auth.json";
 const MAX_LOGIN_FILE_BYTES = 1024 * 1024;
 
 /** How this module reaches a container; replaced in tests. */
@@ -135,6 +139,8 @@ function hostStagingSources(context: CommandContext): {
   claudeJson: string;
   codexHome: string | undefined;
   grokAuth: string;
+  opencodeAuth: string | undefined;
+  piAuth: string;
 } {
   const roots = defaultInputSourceRoots(
     context.runtimeFlavor,
@@ -147,6 +153,10 @@ function hostStagingSources(context: CommandContext): {
     claudeJson: path.join(hostHome, ".claude.json"),
     codexHome: roots.agentTest ? roots.codexHome : path.join(roots.home, ".codex"),
     grokAuth: path.join(hostHome, ".grok", "auth.json"),
+    opencodeAuth: roots.agentTest
+      ? roots.xdgDataHome && path.join(roots.xdgDataHome, "opencode", "auth.json")
+      : path.join(roots.home, ".local", "share", "opencode", "auth.json"),
+    piAuth: path.join(hostHome, ".pi", "agent", "auth.json"),
   };
 }
 
@@ -259,20 +269,30 @@ export async function refreshStagedAgentAccountLogins(
       }
       await refreshStagedLogin(context, environment, revision, platform);
     }
-    if (providerCredentialsAllowed(context, global.enabledAgentPlatforms, environment, "grok")) {
-      const auth = await readLoginFile(hostStagingSources(context).grokAuth);
+    for (const provider of PUSHED_LOGIN_PROVIDERS) {
+      if (
+        !providerCredentialsAllowed(context, global.enabledAgentPlatforms, environment, provider)
+      ) {
+        continue;
+      }
+      const login = PUSHED_LOGINS[provider];
+      const source = login.hostFile(context);
+      const auth = source ? await readLoginFile(source) : undefined;
       await replaceStagedInputFile(
         context.storage.getDataDir(),
         environment.id,
         revision,
-        "grok-home/auth.json",
-        accessOnlyLoginText("grok", auth),
+        login.staged,
+        accessOnlyLoginText(provider, auth),
       );
     }
   } catch (error) {
     logFailure("Failed to refresh staged agent logins", error);
   }
 }
+
+const PUSHED_LOGIN_PROVIDERS = ["grok", "opencode", "pi"] as const;
+type PushedLoginProvider = (typeof PUSHED_LOGIN_PROVIDERS)[number];
 
 /**
  * Keep credential staging and its start hand-off together. A no-op start must
@@ -312,30 +332,156 @@ export async function startContainerWithAgentAccounts(
 }
 
 /**
- * Before a Grok bridge starts or is reused in a container: hand it the host's
- * current login, access-only. Grok's access token lasts about six hours and
- * the copy can never refresh it, so this is what keeps a long-lived container
- * signed in while the host's own Grok keeps refreshing. A host with no usable
- * login leaves the container's copy alone, as the Claude sync does: it is
- * either still valid or already signed out on its own.
+ * Where each pushed login comes from and goes. Grok's file holds one login and
+ * is replaced. OpenCode's and Pi's hold one login per model provider, and the
+ * user may have signed in to another provider inside the container, so the
+ * host's providers are merged in (`buildMergeContainerProviderAuthCommand`).
  */
-export async function syncContainerGrokLogin(
+const PUSHED_LOGINS: Record<
+  PushedLoginProvider,
+  {
+    label: string;
+    staged: string;
+    hostFile: (context: CommandContext) => string | undefined;
+    /** The stdin for `command`, or undefined when the container gets nothing. */
+    payload: (text: string) => string | undefined;
+    command: string;
+  }
+> = {
+  grok: {
+    label: "Grok",
+    staged: "grok-home/auth.json",
+    hostFile: (context) => hostStagingSources(context).grokAuth,
+    payload: (text) => accessOnlyLoginText("grok", text),
+    command: SYNC_CONTAINER_GROK_AUTH_COMMAND,
+  },
+  opencode: {
+    label: "OpenCode",
+    staged: "opencode-data/auth.json",
+    hostFile: (context) => hostStagingSources(context).opencodeAuth,
+    payload: (text) => providerAuthMergePayload("opencode", text),
+    command: buildMergeContainerProviderAuthCommand(CONTAINER_OPENCODE_AUTH_FILE),
+  },
+  pi: {
+    label: "Pi",
+    staged: "pi-config/agent/auth.json",
+    hostFile: (context) => hostStagingSources(context).piAuth,
+    payload: (text) => providerAuthMergePayload("pi", text),
+    command: buildMergeContainerProviderAuthCommand(CONTAINER_PI_AUTH_FILE),
+  },
+};
+
+/**
+ * A host file whose logins have all expired still names its rotating
+ * providers, and the merge then blanks any full copy the container holds
+ * without handing it anything new: an expired access token is exactly when
+ * that copy would spend its refresh token.
+ */
+function providerAuthMergePayload(format: "opencode" | "pi", text: string): string | undefined {
+  const restricted = restrictProviderAuthEntries(format, text);
+  const entries = "withheld" in restricted ? {} : restricted.entries;
+  if (Object.keys(entries).length === 0 && restricted.accessOnly.length === 0) {
+    return undefined;
+  }
+  return JSON.stringify({ logins: entries, accessOnly: restricted.accessOnly });
+}
+
+/**
+ * Merge the host's access-only provider logins (`{ logins, accessOnly }` on
+ * stdin) into a container's OpenCode or Pi `auth.json`. The host's entries
+ * replace the container's for the same provider. Every provider in
+ * `accessOnly` (a host OAuth login with a rotating refresh token) also loses
+ * any refresh token the container's copy still holds, such as a full copy
+ * imported before access-only staging. Other providers, signed in inside the
+ * container, are kept. Pi's lock directory (`auth.json.lock`, from
+ * proper-lockfile) is held for the write so a Pi in the container cannot
+ * interleave. A lock still held after a second leaves the file alone until
+ * the next push, however old it looks: Pi's asynchronous refresh holds it for
+ * up to 30 s on a 15 s heartbeat, and Pi reclaims a stale one itself.
+ */
+export function buildMergeContainerProviderAuthCommand(file: string): string {
+  const script = `
+const fs = require("fs");
+const path = require("path");
+const file = process.argv[1];
+const payload = JSON.parse(fs.readFileSync(0, "utf8"));
+const lock = file + ".lock";
+fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+let locked = false;
+for (let attempt = 0; attempt < 20 && !locked; attempt++) {
+  try { fs.mkdirSync(lock); locked = true; }
+  catch (error) {
+    if (error.code !== "EEXIST") throw error;
+    // Never reclaim another writer's lock: Pi owns its stale-lock protocol.
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+  }
+}
+if (!locked) process.exit(0);
+try {
+  let current = {};
+  try {
+    if (!fs.lstatSync(file).isSymbolicLink()) {
+      const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) current = parsed;
+    }
+  } catch {}
+  const next = { ...current, ...payload.logins };
+  for (const provider of payload.accessOnly) {
+    const entry = next[provider];
+    if (entry && typeof entry === "object" && entry.type === "oauth") {
+      next[provider] = { ...entry, refresh: "" };
+    }
+  }
+  const temporary = path.join(path.dirname(file), ".auth.json." + process.pid + ".tmp");
+  try {
+    fs.writeFileSync(temporary, JSON.stringify(next, null, 2), { mode: 0o600, flag: "wx" });
+    fs.renameSync(temporary, file);
+  } finally {
+    fs.rmSync(temporary, { force: true });
+  }
+} finally {
+  fs.rmdirSync(lock);
+}`;
+  return `set -e
+umask 077
+node -e ${quoteShell(script)} ${quoteShell(file)}
+`;
+}
+
+/**
+ * Before a Grok, OpenCode or Pi bridge starts or is reused in a container:
+ * hand it the host's current login, access-only. Their access tokens can last
+ * only hours (Grok about six, Anthropic about eight) and the copy can never
+ * refresh them, so this is what keeps a long-lived container signed in while
+ * the host's own agent keeps refreshing. Pi reloads the file and OpenCode's
+ * OAuth plugins read it (`Auth.get`) on each request, so a bridge that is
+ * reused picks a renewed login up too; only a provider first signed in after
+ * an OpenCode server started waits for that server to restart, as on the
+ * host. A host with no usable login leaves the container's copy alone, as the
+ * Claude sync does: it is either still valid or already signed out on its
+ * own. OpenCode and Pi still strip a refresh token the copy holds for one of
+ * the host's rotating providers (`providerAuthMergePayload`).
+ */
+export async function syncContainerLogin(
   context: CommandContext,
+  provider: PushedLoginProvider,
   containerId: string,
   runners: ContainerRunners = defaultRunners,
 ): Promise<void> {
   const operationId = await containerBridgeOperationId(context, containerId);
-  return enqueueContainerBridgeOperation("grok", operationId, () =>
-    syncContainerGrokLoginUnlocked(context, containerId, runners),
+  return enqueueContainerBridgeOperation(provider, operationId, () =>
+    syncContainerLoginUnlocked(context, provider, containerId, runners),
   );
 }
 
-/** Caller holds the Grok bridge-operation queue through sync and bridge startup. */
-export async function syncContainerGrokLoginUnlocked(
+/** Caller holds the provider's bridge-operation queue through sync and bridge startup. */
+export async function syncContainerLoginUnlocked(
   context: CommandContext,
+  provider: PushedLoginProvider,
   containerId: string,
   runners: ContainerRunners = defaultRunners,
 ): Promise<void> {
+  const login = PUSHED_LOGINS[provider];
   try {
     const environment = (await context.storage.loadEnvironments()).find(
       (candidate) =>
@@ -343,28 +489,27 @@ export async function syncContainerGrokLoginUnlocked(
     );
     if (!environment) return;
     const { global } = await context.storage.loadConfig();
-    if (!providerCredentialsAllowed(context, global.enabledAgentPlatforms, environment, "grok")) {
+    if (!providerCredentialsAllowed(context, global.enabledAgentPlatforms, environment, provider)) {
       return;
     }
-    const auth = accessOnlyLoginText(
-      "grok",
-      await readLoginFile(hostStagingSources(context).grokAuth),
-    );
+    const source = login.hostFile(context);
+    const text = source ? await readLoginFile(source) : undefined;
+    const payload = text === undefined ? undefined : login.payload(text);
     // Revocation is persisted before its queued cleanup. Re-read after host I/O
     // so a revoke requested during the read also fences this delivery.
     const current = await context.storage.getEnvironment(environment.id);
     const config = await context.storage.loadConfig();
     if (
-      auth &&
+      payload &&
       current &&
       current.containerId &&
       containerIdMatches(current.containerId, containerId) &&
-      providerCredentialsAllowed(context, config.global.enabledAgentPlatforms, current, "grok")
+      providerCredentialsAllowed(context, config.global.enabledAgentPlatforms, current, provider)
     ) {
-      await runners.pipe(containerId, SYNC_CONTAINER_GROK_AUTH_COMMAND, auth);
+      await runners.pipe(containerId, login.command, payload);
     }
   } catch (error) {
-    logFailure("Failed to sync the Grok login into the container", error);
+    logFailure(`Failed to sync the ${login.label} login into the container`, error);
   }
 }
 

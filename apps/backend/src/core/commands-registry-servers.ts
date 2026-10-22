@@ -68,7 +68,7 @@ import {
 } from "./commands-helpers.js";
 import {
   reconcileContainerAgentAccount,
-  syncContainerGrokLoginUnlocked,
+  syncContainerLoginUnlocked,
   type ContainerBridgeControl,
 } from "./agent-accounts-containers.js";
 
@@ -99,9 +99,11 @@ export function registerServerCommands(
   dependencies: RegistryDependencies,
 ): void {
   const { claudeModelCatalogRefreshes, validatedClaudeModelCatalogs, commands } = dependencies;
-  register("start_opencode_server", ({ containerId }, context) => {
+  register("start_opencode_server", async ({ containerId }, context) => {
     const id = asString(containerId, "containerId");
-    return enqueueContainerBridgeOperation("opencode", id, async () => {
+    const operationId = await containerBridgeOperationId(context, id);
+    return enqueueContainerBridgeOperation("opencode", operationId, async () => {
+      await syncContainerLoginUnlocked(context, "opencode", id);
       const started = await startContainerOpenCodeServer(id);
       const connection = await resolveContainerAgentToolConnection(context, id);
       if (connection) {
@@ -116,9 +118,10 @@ export function registerServerCommands(
       return started;
     });
   });
-  register("stop_opencode_server", ({ containerId }) => {
+  register("stop_opencode_server", async ({ containerId }, context) => {
     const id = asString(containerId, "containerId");
-    return enqueueContainerBridgeOperation("opencode", id, () => {
+    const operationId = await containerBridgeOperationId(context, id);
+    return enqueueContainerBridgeOperation("opencode", operationId, () => {
       cancelOpenCodeAgentToolsConfiguration(`container:${id}`);
       // Bracketing avoids matching the `bash -lc` shell carrying this command.
       return dockerExec(
@@ -495,7 +498,7 @@ export function registerServerCommands(
           await syncContainerCursorApiKey(id, cursorApiKey);
           await syncContainerCursorSdkCredentials(id, await cursorSdkStoredApiKey(context));
         }
-        if (provider === "grok") await syncContainerGrokLoginUnlocked(context, id);
+        if (provider === "grok") await syncContainerLoginUnlocked(context, "grok", id);
         const hostPort = await getHostPort(id, containerPort);
         if (hostPort && (await checkHttpHealth(hostPort))) {
           const credentialFingerprint =
@@ -626,19 +629,21 @@ function probeContainerAgentTools(context: CommandContext, containerId: string):
  * Structurally the same as the ACP bridges above — one prebuilt bridge under
  * `/opt`, a token file the backend reads back, a log file — but it is not part
  * of that loop because nothing about it is per-provider: Pi is one platform
- * with one executable and no vendor credential for the backend to sync. Its
- * credentials are the user's own provider keys, which reach the container as a
- * bind-mounted `~/.pi` (see `commands-containers.ts`).
+ * with one executable. Its credentials are the user's own provider logins in
+ * `~/.pi/agent/auth.json`, staged with the rest of `~/.pi` and pushed again,
+ * access-only, before every start (`syncContainerLoginUnlocked`).
  */
 function registerPiServerCommands(register: CommandRegistrar): void {
   const tokenFile = "/tmp/pi-bridge-token";
   const logFile = "/tmp/pi-bridge.log";
   const processPattern = "[p]i-bridge/dist/index.js";
 
-  register("start_pi_server", ({ containerId }, context) => {
+  register("start_pi_server", async ({ containerId }, context) => {
     const id = asString(containerId, "containerId");
     probeContainerAgentTools(context, id);
-    return enqueueContainerBridgeOperation("pi", id, async () => {
+    const operationId = await containerBridgeOperationId(context, id);
+    return enqueueContainerBridgeOperation("pi", operationId, async () => {
+      await syncContainerLoginUnlocked(context, "pi", id);
       const config = await context.storage.loadConfig();
       const hostPort = await getHostPort(id, PI_BRIDGE_PORT);
       if (hostPort && (await checkHttpHealth(hostPort))) {
@@ -677,9 +682,10 @@ function registerPiServerCommands(register: CommandRegistrar): void {
     });
   });
 
-  register("stop_pi_server", ({ containerId }) => {
+  register("stop_pi_server", async ({ containerId }, context) => {
     const id = asString(containerId, "containerId");
-    return enqueueContainerBridgeOperation("pi", id, () =>
+    const operationId = await containerBridgeOperationId(context, id);
+    return enqueueContainerBridgeOperation("pi", operationId, () =>
       dockerExec(id, `pkill -f '${processPattern}' || true; rm -f ${tokenFile}`).then(
         () => undefined,
       ),

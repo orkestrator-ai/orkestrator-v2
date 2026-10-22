@@ -11,11 +11,19 @@
  * never touching the host. The owner re-copies from the host, which refreshes
  * its own login, on each start.
  *
- * Both functions only read JSON and return a replacement text, or a reason to
- * copy nothing. A reason never contains credential material.
+ * OpenCode and Pi keep one login per model provider in one file, and several
+ * of those providers rotate their refresh tokens too (see
+ * `restrictProviderAuthEntries`).
+ *
+ * Every function only reads JSON and returns a replacement text, or a reason
+ * to copy nothing. A reason never contains credential material.
  */
 
-export type LoginSnapshot = { text: string } | { withheld: string };
+/**
+ * `dropped` counts provider logins left out of a file that still holds others
+ * (OpenCode and Pi only).
+ */
+export type LoginSnapshot = { text: string; dropped?: number } | { withheld: string };
 
 /** An access token this close to expiry is not worth handing over. */
 export const LOGIN_SNAPSHOT_MIN_VALIDITY_MS = 60_000;
@@ -131,4 +139,161 @@ export function restrictCodexAuthSnapshot(text: string, nowMs = Date.now()): Log
       last_refresh: new Date(nowMs).toISOString(),
     }),
   };
+}
+
+/** The per-provider login files: OpenCode's `auth.json` and Pi's `agent/auth.json`. */
+export type ProviderAuthFormat = "opencode" | "pi";
+
+/**
+ * OAuth providers whose stored `refresh` is a long-lived token that refreshing
+ * reuses rather than rotates, so a copy that refreshes cannot spend the host's.
+ * Checked against OpenCode 1.19.0 and Pi 1.2.0 (2026-10-21):
+ *
+ * - `github-copilot`: `refresh` is the GitHub OAuth token. OpenCode sends it
+ *   directly (`access` is the same token, `expires` 0); Pi exchanges it for a
+ *   Copilot token that lasts about 30 minutes and keeps it unchanged.
+ * - `meta` (Pi): `refresh` is the Meta identity token, which mints a day-long
+ *   API key and cannot itself be renewed.
+ *
+ * Every other OAuth provider is treated as rotating. Anthropic, OpenAI (Codex
+ * and ChatGPT), xAI, Kimi and Radius all return a new refresh token on
+ * refresh, and the OpenAI and xAI ones are known to be single-use. Pi's
+ * OpenRouter login stores an empty `refresh` that never expires, so blanking it
+ * changes nothing.
+ */
+const NON_ROTATING_OAUTH_PROVIDERS: Record<ProviderAuthFormat, ReadonlySet<string>> = {
+  opencode: new Set(["github-copilot"]),
+  pi: new Set(["github-copilot", "meta"]),
+};
+
+/** Entry types that hold a static key and are copied as they are. */
+const STATIC_KEY_TYPES: Record<ProviderAuthFormat, ReadonlySet<string>> = {
+  opencode: new Set(["api", "wellknown"]),
+  pi: new Set(["api_key"]),
+};
+
+/**
+ * Pi refreshes an OAuth login with less than five minutes left, and OpenCode's
+ * xAI login with less than two, so a copy needs more than that to be any use.
+ */
+export const PROVIDER_AUTH_MIN_VALIDITY_MS = 6 * 60_000;
+
+export interface ProviderAuthEntries {
+  /** The entries a copy may hold, keyed by provider. */
+  entries: Record<string, unknown>;
+  /**
+   * Every provider the source holds as an OAuth login with a rotating refresh
+   * token, kept or dropped. A copy must not keep a refresh token for any of
+   * them, whoever wrote it.
+   */
+  accessOnly: string[];
+  /** Entries left out: expired OAuth logins and entries of an unknown type. */
+  dropped: number;
+}
+
+const PROVIDER_AUTH_LABEL: Record<ProviderAuthFormat, { name: string; command: string }> = {
+  opencode: { name: "OpenCode", command: "opencode" },
+  pi: { name: "Pi", command: "pi" },
+};
+
+/**
+ * Reduce a copy of an OpenCode or Pi login file to what may not rotate the
+ * original. Both store `{ type: "oauth", access, refresh, expires }` (expiry
+ * in milliseconds) per provider and re-read the file before each request, so
+ * a refreshed copy reaches a running agent without a restart.
+ *
+ * - Static keys (OpenCode `api` and `wellknown`, Pi `api_key`) are kept.
+ * - Non-rotating OAuth logins (`NON_ROTATING_OAUTH_PROVIDERS`) are kept whole.
+ * - Other OAuth logins keep their access token with `refresh` blanked (still a
+ *   string, which both schemas require). One whose access token expires within
+ *   `PROVIDER_AUTH_MIN_VALIDITY_MS`, by the earlier of `expires` and a JWT
+ *   `exp` (either alone when only one can be read), is dropped.
+ * - Entries of any other type are dropped: OpenCode ignores them anyway, and
+ *   Pi rejects the whole file over one.
+ *
+ * A withheld result still carries `accessOnly`, so a copy that already holds
+ * one of those logins in full can be blanked even when the host has nothing
+ * usable to hand over.
+ */
+export function restrictProviderAuthEntries(
+  format: ProviderAuthFormat,
+  text: string,
+  nowMs = Date.now(),
+): ProviderAuthEntries | { withheld: string; accessOnly: string[] } {
+  const label = PROVIDER_AUTH_LABEL[format];
+  const parsed = parseObject(text);
+  if (!parsed) {
+    return { withheld: `the ${label.name} auth.json is not a JSON object`, accessOnly: [] };
+  }
+  const entries: Record<string, unknown> = {};
+  const accessOnly: string[] = [];
+  let dropped = 0;
+  for (const [provider, value] of Object.entries(parsed)) {
+    const entry =
+      value && typeof value === "object" && !Array.isArray(value)
+        ? (value as Record<string, unknown>)
+        : undefined;
+    const type = typeof entry?.type === "string" ? entry.type : undefined;
+    if (entry && type && STATIC_KEY_TYPES[format].has(type)) {
+      entries[provider] = entry;
+      continue;
+    }
+    if (!entry || type !== "oauth") {
+      dropped += 1;
+      continue;
+    }
+    if (NON_ROTATING_OAUTH_PROVIDERS[format].has(provider)) {
+      entries[provider] = entry;
+      continue;
+    }
+    accessOnly.push(provider);
+    const access = typeof entry.access === "string" ? entry.access : "";
+    const stored =
+      typeof entry.expires === "number" && Number.isFinite(entry.expires) ? entry.expires : NaN;
+    const claimed = access ? jwtExpiryMs(access) : undefined;
+    const expiresAt =
+      claimed !== undefined && Number.isFinite(stored)
+        ? Math.min(stored, claimed)
+        : (claimed ?? stored);
+    if (!access || !(expiresAt - nowMs >= PROVIDER_AUTH_MIN_VALIDITY_MS)) {
+      dropped += 1;
+      continue;
+    }
+    entries[provider] = { ...entry, refresh: "" };
+  }
+  if (Object.keys(entries).length === 0 && dropped > 0) {
+    return {
+      accessOnly,
+      withheld: `the host ${label.name} logins have expired and a copy may not refresh them; run ${label.command} on the host (and sign in again there if it is signed out), then restart`,
+    };
+  }
+  return { entries, accessOnly, dropped };
+}
+
+function restrictProviderAuthSnapshot(
+  format: ProviderAuthFormat,
+  text: string,
+  nowMs: number,
+): LoginSnapshot {
+  const restricted = restrictProviderAuthEntries(format, text, nowMs);
+  if ("withheld" in restricted) return { withheld: restricted.withheld };
+  return {
+    text: JSON.stringify(restricted.entries),
+    ...(restricted.dropped > 0 ? { dropped: restricted.dropped } : {}),
+  };
+}
+
+/** `restrictProviderAuthEntries` for OpenCode's `auth.json`, as file text. */
+export function restrictOpenCodeAuthSnapshot(text: string, nowMs = Date.now()): LoginSnapshot {
+  return restrictProviderAuthSnapshot("opencode", text, nowMs);
+}
+
+/** `restrictProviderAuthEntries` for Pi's `agent/auth.json`, as file text. */
+export function restrictPiAuthSnapshot(text: string, nowMs = Date.now()): LoginSnapshot {
+  return restrictProviderAuthSnapshot("pi", text, nowMs);
+}
+
+/** Names the entrypoint needs to blank a container copy the same way. */
+export function nonRotatingOAuthProviders(format: ProviderAuthFormat): readonly string[] {
+  return [...NON_ROTATING_OAUTH_PROVIDERS[format]];
 }

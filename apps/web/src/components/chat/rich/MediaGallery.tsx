@@ -22,6 +22,7 @@ import { toast } from "sonner";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { openInBrowser } from "@/lib/backend";
 import { artifactFilename, downloadBase64 } from "@/lib/chat/artifact-download";
+import { useDialogFocusReturn } from "@/lib/chat/rich-markdown/dialog-focus";
 import type { GalleryItem } from "@/lib/chat/rich-markdown/media-gallery-registry";
 import { dataUrlBase64, dataUrlMime, fileExtension } from "@/lib/chat/rich-markdown/media-types";
 import { cn } from "@/lib/utils";
@@ -73,6 +74,7 @@ export function MediaGalleryDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  const focusReturn = useDialogFocusReturn();
   const [index, setIndex] = useState(() =>
     Math.min(Math.max(0, initialIndex), Math.max(0, items.length - 1)),
   );
@@ -236,6 +238,7 @@ export function MediaGalleryDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
+        {...focusReturn}
         showCloseButton={false}
         aria-label={`Image preview: ${title}`}
         onKeyDown={onKeyDown}

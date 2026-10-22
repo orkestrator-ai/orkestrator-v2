@@ -128,6 +128,8 @@ export function installDesktopFake(options: {
   datasets: Record<string, MachineDataset>;
   /** Answer a routed command; return `undefined` to fall through to the default. */
   respond?: (call: InvokeCall) => unknown;
+  /** Override a command-node response before the standard fixture behavior. */
+  respondPortal?: (command: string, args: Record<string, unknown>) => unknown;
   /** The sidebar order the command node has stored. */
   layout?: Partial<PortalLayout>;
 }) {
@@ -183,6 +185,8 @@ export function installDesktopFake(options: {
 
   const invoke = nativeInvoke as unknown as ReturnType<typeof mock>;
   invoke.mockImplementation(async (command: string, args: Record<string, unknown> = {}) => {
+    const response = options.respondPortal?.(command, args);
+    if (response !== undefined) return response;
     if (command === "get_node_status") return structuredClone(status);
     if (command === "get_node_summaries") return { selfId: SELF_NODE_ID, nodes: summaries() };
     if (command === "list_nodes") {
@@ -251,7 +255,28 @@ export function installDesktopFake(options: {
     return undefined;
   });
 
-  const workspaceTarget = { set: mock(async (_nodeId: string | null) => undefined) };
+  type ViewEvent =
+    | { viewId: string; type: "message"; message: unknown }
+    | { viewId: string; type: "closed" | "crashed" | "load-failed" };
+  const viewListeners = new Set<(event: ViewEvent) => void>();
+  let nextView = 1;
+  // Workspace realms: the window places them and passes messages; nothing else.
+  const workspaceViews = {
+    open: mock(async (_input: { nodeId: string; request: Record<string, unknown> }) => ({
+      viewId: `view-${nextView++}`,
+    })),
+    setBounds: mock(async (_viewId: string, _bounds: unknown) => undefined),
+    setVisible: mock(async (_viewId: string, _visible: boolean) => undefined),
+    capture: mock(
+      async (_viewId: string): Promise<string | null> => "data:image/jpeg;base64,c3RpbGw=",
+    ),
+    send: mock(async (_viewId: string, _message: unknown) => undefined),
+    close: mock(async (_viewId: string) => undefined),
+    onEvent: mock((callback: (event: ViewEvent) => void) => {
+      viewListeners.add(callback);
+      return () => viewListeners.delete(callback);
+    }),
+  };
 
   const connections = {
     list: mock(async () => options.list),
@@ -280,7 +305,7 @@ export function installDesktopFake(options: {
       writeImage: mock(async () => undefined),
     },
     connections,
-    workspaceTarget,
+    workspaceViews,
     process: { exit: mock(async () => undefined) },
     window: { startDragging: mock(async () => undefined) },
   } as never;
@@ -290,11 +315,15 @@ export function installDesktopFake(options: {
   return {
     calls,
     invoke,
-    workspaceTarget,
+    workspaceViews,
     connections,
     listen,
     outcomes,
     layout: () => layout,
+    /** An event of a realm the window opened, as the main process sends it. */
+    emitViewEvent(event: ViewEvent) {
+      for (const listener of Array.from(viewListeners)) listener(event);
+    },
     emit(event: string, payload: unknown) {
       for (const listener of Array.from(listeners.get(event) ?? [])) listener(payload);
     },

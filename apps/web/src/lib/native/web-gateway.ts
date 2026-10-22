@@ -1,5 +1,8 @@
 import type { GatewayTokenSettings, WebClientStatus } from "@/types";
-import { readStoredWorkspace } from "@/lib/portal/workspace-target-storage";
+import {
+  clearLegacyWorkspaceTarget,
+  readStoredWorkspace,
+} from "@/lib/portal/workspace-target-storage";
 import { getGatewayBaseUrl, resolveGatewayApiUrl } from "@/lib/gateway-url";
 import {
   configureDirectGatewayTransport,
@@ -1329,17 +1332,21 @@ export function installBrowserGatewayApi(
 }
 
 /**
- * Browser and iOS: a tab whose workspace is on another node is that node's
- * client — directly with the workspace's client grant, or through the
- * command node's relay with this page's own session — while the multi-node
- * views keep the command node that served the page as their portal.
+ * Browser and iOS: a workspace realm (a frame showing another node's
+ * workspace in the window's central region) is that node's client —
+ * directly with the workspace's client grant, or through the command node's
+ * relay with this page's own session — while its portal stays the command
+ * node that served the page. The window itself is always the command node's.
  */
 export function workspaceTargetGatewayOptions(
   targetWindow: GatewayWindow = window,
 ): BrowserGatewayOptions {
   if (targetWindow.orkestrator) return {};
   const workspace = readStoredWorkspace();
-  if (!workspace) return {};
+  if (!workspace) {
+    if (targetWindow === window && window.top === window) clearLegacyWorkspaceTarget();
+    return {};
+  }
   targetWindow.orkestratorWorkspaceTarget = {
     nodeId: workspace.nodeId,
     nodeName: workspace.nodeName,

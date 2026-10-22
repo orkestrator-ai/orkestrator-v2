@@ -29,7 +29,7 @@ function isVisuallyPresent(element: Element): boolean {
   return true;
 }
 
-function isBlockingOverlay(element: Element): boolean {
+export function isBlockingOverlay(element: Element): boolean {
   const isClosing =
     element.getAttribute("aria-hidden") === "true" ||
     element.getAttribute("data-state") === "closed";

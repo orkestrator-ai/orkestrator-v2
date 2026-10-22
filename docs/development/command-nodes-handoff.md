@@ -69,13 +69,16 @@ matrix with evidence for every row are in
 - **Renderer** (`lib/portal`, `components/federation`):
   - One `FederationProvider` reads the command node's portal over the
     portal channel (`lib/portal/portal-transport.ts`).
-  - Opening another node's environment moves the window's workspace there
-    (`lib/portal/workspace-switch.ts`) and reloads into it, so it behaves as
-    a direct connection. The desktop re-binds the window's scope in main
-    (`setWindowWorkspaceTarget`: direct first, then the command node's own
-    route); a browser or iOS tab keeps the grant in session storage
-    (`workspaceTargetGatewayOptions`): direct first, then the relay.
-  - While on a leaf, the command node is listed from its self summary.
+  - The window always stays on its command node. Opening another node's
+    environment shows that node's workspace realm in the central region
+    (`lib/federation/workspace-realm.ts`, `stores/remoteWorkspaceStore.ts`,
+    `components/federation/RemoteWorkspaceRegion.tsx`), without reloading.
+    The desktop binds a realm's child view to the node in main
+    (`workspace-views.ts`, `setDesktopWorkspaceTarget`: direct first, then
+    the command node's own route); a browser or iOS window keeps each
+    realm's grant in session storage under its workspace ID
+    (`workspaceTargetGatewayOptions` in the frame): direct first, then the
+    relay.
   - The info panel shows the connection path.
 - **Removed:**
   - renderer per-machine runtimes and the registry;

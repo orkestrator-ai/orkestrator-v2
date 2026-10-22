@@ -79,6 +79,8 @@ import { OutcomeUnknownError } from "@/lib/portal/portal-store";
 import { cn } from "@/lib/utils";
 import { sidebarCollisionDetection } from "@/lib/sidebar-collision";
 import { sidebarFolderKey, useMachineViewStore } from "@/stores/machineViewStore";
+import { useRemoteEnvironmentShown } from "@/stores/remoteWorkspaceStore";
+import { SELECTED_ENVIRONMENT_ROW_CLASS } from "@/components/sidebar/SortableEnvironmentItem";
 import { useFederation } from "./FederationProvider";
 import { MachineDot, machineStatusText } from "./MachineDot";
 import {
@@ -482,6 +484,7 @@ function RemoteSortableEnvironmentItem({
     disabled: !sortable,
   });
   const live = machine.transport === "connected";
+  const shown = useRemoteEnvironmentShown(machine.connectionId, environment.ref.environmentId);
 
   return (
     <div
@@ -490,10 +493,12 @@ function RemoteSortableEnvironmentItem({
       className={cn(isDragging && "opacity-50 z-50")}
       data-testid="federated-environment-row"
       data-machine={machine.connectionId}
+      data-selected={shown || undefined}
     >
       <div
         className={cn(
-          "group/sortable mx-1 flex items-center rounded-lg border border-transparent transition-colors hover:bg-environment-hover",
+          "group/sortable mx-1 flex items-center rounded-lg border border-transparent transition-colors",
+          shown ? SELECTED_ENVIRONMENT_ROW_CLASS : "hover:bg-environment-hover",
           !live && "opacity-60",
         )}
       >
@@ -534,6 +539,7 @@ export function RemoteEnvironmentItem({
 }) {
   const { busy, writable, open, copyLink, start, stop, requestDelete, deleteDialog } =
     useFederatedEnvironmentActions(machine, environment);
+  const shown = useRemoteEnvironmentShown(machine.connectionId, environment.ref.environmentId);
   const isMobile = useMediaQuery(MOBILE_MEDIA_QUERY);
 
   const live = machine.transport === "connected";
@@ -607,7 +613,11 @@ export function RemoteEnvironmentItem({
               type="button"
               onClick={open}
               aria-label={`${environment.name}, on ${machine.name}, ${activityText}`}
-              className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left text-muted-foreground transition-colors group-hover:text-foreground"
+              aria-current={shown ? "true" : undefined}
+              className={cn(
+                "flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left transition-colors",
+                shown ? "text-foreground" : "text-muted-foreground group-hover:text-foreground",
+              )}
             >
               {environment.deleting ? (
                 <Loader2 className="h-4 w-4 shrink-0 animate-spin text-destructive" />

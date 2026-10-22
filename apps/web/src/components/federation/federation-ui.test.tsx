@@ -16,6 +16,11 @@ import { reorderFederatedEnvironments } from "@/lib/federation/federated-actions
 import { portalStore } from "@/lib/portal/portal-store";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import {
+  startRemoteWorkspaceSelectionSync,
+  useRemoteWorkspaceStore,
+} from "@/stores/remoteWorkspaceStore";
+import { useUIStore } from "@/stores/uiStore";
+import {
   OUTCOME_UNKNOWN,
   connectionList,
   installDesktopFake,
@@ -38,6 +43,7 @@ import { SshPromptDialog } from "./SshPromptDialog";
 import { useMachineViews } from "./useMachineViews";
 
 const INITIAL_MACHINE_VIEW_STATE = useMachineViewStore.getState();
+const INITIAL_REMOTE_WORKSPACE_STATE = useRemoteWorkspaceStore.getState();
 const originalReload = window.location.reload;
 
 const MACHINE_A = remoteConnection("a", "Machine A", "teal");
@@ -214,6 +220,7 @@ beforeEach(() => {
   localStorage.removeItem("machine-view-storage");
   sessionStorage.clear();
   useMachineViewStore.setState(INITIAL_MACHINE_VIEW_STATE, true);
+  useRemoteWorkspaceStore.setState(INITIAL_REMOTE_WORKSPACE_STATE, true);
   reload = mock(() => undefined);
   window.location.reload = reload;
 });
@@ -532,12 +539,16 @@ describe("UI-04: creating inside a project instance", () => {
     await waitForRows(2);
 
     fireEvent.click(screen.getByRole("button", { name: "New environment in app on Machine B" }));
-    // The window moves to that machine and opens its New Environment dialog
-    // there; nothing is created until the user submits it.
-    await waitFor(() => expect(fake.workspaceTarget.set).toHaveBeenCalledWith("bk_b"));
-    expect(JSON.parse(sessionStorage.getItem("orkestrator.workspace-switch-intent")!)).toEqual({
+    // The central region shows Machine B's workspace, which opens its own New
+    // Environment dialog; the window stays where it is and nothing is created
+    // until the user submits it.
+    await waitFor(() => expect(useRemoteWorkspaceStore.getState().active?.nodeId).toBe("bk_b"));
+    expect(useRemoteWorkspaceStore.getState().requests.bk_b?.request).toEqual({
+      type: "select",
+      projectId: "project-1",
       createEnvironmentProjectId: "project-1",
     });
+    expect(reload).not.toHaveBeenCalled();
     expect(fake.calls.filter((call) => call.command === "create_environment")).toEqual([]);
   });
 });
@@ -598,7 +609,7 @@ describe("The command node in the machines menu", () => {
 
     await waitFor(() => expect(fake.connections.use).toHaveBeenCalledWith(MACHINE_B.id));
     await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
-    expect(fake.workspaceTarget.set).not.toHaveBeenCalled();
+    expect(fake.workspaceViews.open).not.toHaveBeenCalled();
   });
 });
 
@@ -639,7 +650,7 @@ describe("The command node in a browser tab", () => {
 });
 
 describe("OP-06/CR-03: opening another machine's environment", () => {
-  test("OP-06/CR-03: the desktop window moves to that machine; nothing is stopped", async () => {
+  test("OP-06/CR-03: the central region shows it; the window stays and nothing is stopped", async () => {
     const fake = installTwoMachines();
     renderWithFederation(<RemoteSections />);
     await waitForRows(2);
@@ -647,29 +658,39 @@ describe("OP-06/CR-03: opening another machine's environment", () => {
     fireEvent.click(
       within(rowOf("bk_a")).getByRole("button", { name: /^feature, on Machine A, Working/ }),
     );
-    await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
-    expect(fake.workspaceTarget.set).toHaveBeenCalledWith("bk_a");
-    expect(JSON.parse(sessionStorage.getItem("orkestrator.workspace-switch-intent")!)).toEqual({
-      projectId: "project-1",
-      environmentId: "env-1",
-    });
+    await waitFor(() =>
+      expect(useRemoteWorkspaceStore.getState().active).toEqual({
+        nodeId: "bk_a",
+        projectId: "project-1",
+        environmentId: "env-1",
+      }),
+    );
+    // The row is the selected one, like this window's own rows.
+    await waitFor(() => expect(rowOf("bk_a").getAttribute("data-selected")).toBe("true"));
+    expect(rowOf("bk_b").getAttribute("data-selected")).toBeNull();
+    expect(reload).not.toHaveBeenCalled();
     expect(fake.calls.filter((call) => /^(stop|delete)_/.test(call.command))).toEqual([]);
   });
 
-  test("a machine that cannot be reached leaves the window where it is", async () => {
-    const fake = installTwoMachines();
-    fake.workspaceTarget.set.mockImplementationOnce(async () => {
-      throw new Error("Machine A cannot be reached from this computer right now.");
-    });
+  test("selecting one of this window's own environments brings the central region back", async () => {
+    installTwoMachines();
     renderWithFederation(<RemoteSections />);
     await waitForRows(2);
-    fireEvent.click(
-      within(rowOf("bk_a")).getByRole("button", { name: /^feature, on Machine A, Working/ }),
-    );
-    await waitFor(() => expect(fake.workspaceTarget.set).toHaveBeenCalledTimes(1));
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(reload).not.toHaveBeenCalled();
-    expect(sessionStorage.getItem("orkestrator.workspace-switch-intent")).toBeNull();
+    const stop = startRemoteWorkspaceSelectionSync();
+    try {
+      fireEvent.click(
+        within(rowOf("bk_a")).getByRole("button", { name: /^feature, on Machine A, Working/ }),
+      );
+      await waitFor(() => expect(useRemoteWorkspaceStore.getState().active).not.toBeNull());
+      // The window's own selection was cleared for it.
+      expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
+      act(() => useUIStore.getState().selectProjectAndEnvironment("local-project", "local-env"));
+      expect(useRemoteWorkspaceStore.getState().active).toBeNull();
+      // Machine A's realm stays open behind it, so going back is instant.
+      expect(useRemoteWorkspaceStore.getState().realms).toEqual(["bk_a"]);
+    } finally {
+      stop();
+    }
   });
 });
 
@@ -742,90 +763,6 @@ describe("Unknown outcomes", () => {
     fireEvent.click(within(notice).getByRole("button", { name: "Dismiss Stop environment" }));
     await waitFor(() => expect(screen.queryByTestId("unknown-outcomes") === null).toBe(true));
     expect(fake.callsTo("a", "stop_environment")).toHaveLength(1);
-  });
-});
-
-describe("While the window works on a leaf", () => {
-  test("the command node is listed like any other machine and opening it moves the window back", async () => {
-    const fake = installTwoMachines();
-    const original = fake.invoke.getMockImplementation()!;
-    fake.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
-      const value = await original(command, args);
-      if (command !== "get_node_summaries") return value;
-      return {
-        ...value,
-        self: {
-          nodeId: "bk_self",
-          displayName: "Desk",
-          colorToken: "violet",
-          loadedAt: 1,
-          truncated: false,
-          projects: [
-            {
-              ref: { backendId: "bk_self", projectId: "home" },
-              key: "bk_self/home",
-              name: "home",
-              order: 0,
-            },
-          ],
-          environments: [
-            {
-              ref: { backendId: "bk_self", environmentId: "desk-env" },
-              key: "bk_self/desk-env",
-              projectId: "home",
-              name: "desk-work",
-              status: "running",
-              activity: "idle",
-              hasUnreadWork: false,
-              deleting: false,
-              isProjectHome: false,
-            },
-          ],
-        },
-      };
-    });
-    window.orkestratorWorkspaceTarget = { nodeId: "bk_a", nodeName: "Machine A", path: "direct" };
-    try {
-      renderWithFederation(<RemoteSections />);
-      // Machine A is the window's own now; Desk (the command node) and B are listed.
-      await waitForRows(2);
-      expect(
-        screen
-          .getAllByTestId("federated-environment-row")
-          .map((row) => row.getAttribute("data-machine")),
-      ).toEqual(["bk_self", "bk_b"]);
-      fireEvent.click(screen.getByRole("button", { name: /^desk-work, on Desk/ }));
-      await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
-      expect(fake.workspaceTarget.set).toHaveBeenCalledWith(null);
-    } finally {
-      delete window.orkestratorWorkspaceTarget;
-    }
-  });
-});
-
-describe("DP-01/DP-03/CR-03: browser and iOS tabs move to a leaf workspace", () => {
-  test("the tab stores a grant from the command node, never in a URL, and reloads into the leaf", async () => {
-    const fake = installTwoMachines();
-    // A browser client: no desktop workspace binding.
-    delete (window.orkestrator as { workspaceTarget?: unknown }).workspaceTarget;
-    renderWithFederation(<RemoteSections />);
-    await waitForRows(2);
-
-    fireEvent.click(
-      within(rowOf("bk_a")).getByRole("button", { name: /^feature, on Machine A, Working/ }),
-    );
-    await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
-    const openCalls = fake.invoke.mock.calls.filter(
-      ([command]) => command === "open_node_workspace",
-    );
-    expect(openCalls).toEqual([["open_node_workspace", { nodeId: "bk_a" }]]);
-    const stored = JSON.parse(sessionStorage.getItem("orkestrator.workspace-target")!);
-    // No direct origin answered in this fixture: relayed through the command node.
-    expect(stored.path).toBe("relay");
-    expect(stored.baseUrl).toBe(`${window.location.origin}/__orkestrator/nodes/bk_a`);
-    expect(stored.token).toBeUndefined();
-    expect(window.location.href).not.toContain("okg_");
-    expect(fake.calls.filter((call) => /^(stop|delete)_/.test(call.command))).toEqual([]);
   });
 });
 

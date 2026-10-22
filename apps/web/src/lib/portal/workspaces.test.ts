@@ -1,7 +1,7 @@
 import { afterEach, expect, mock, test } from "bun:test";
 import { invoke } from "@/lib/native/backend";
 import { openLeafWorkspace } from "./workspaces";
-import { writeStoredWorkspace } from "./workspace-target-storage";
+import { removeRealmWorkspace, writeRealmWorkspace } from "./workspace-target-storage";
 import { desktopConnectionStorageKey } from "@/lib/desktop-storage-key";
 import { createBrowserGatewayApi, workspaceTargetGatewayOptions } from "@/lib/native/web-gateway";
 
@@ -77,7 +77,7 @@ test("desktop storage uses verified leaf identity across new workspace IDs", () 
   }
 });
 
-test("a browser tab stored on a leaf boots as that leaf's client with the command node as portal", async () => {
+test("a browser realm boots as its leaf's client with the command node as portal; its window never does", async () => {
   happyDOM.setURL("https://command.test/");
   const fetchMock = mock(async () => new Response(JSON.stringify({ result: [] })));
   globalThis.fetch = fetchMock as unknown as typeof fetch;
@@ -91,7 +91,8 @@ test("a browser tab stored on a leaf boots as that leaf's client with the comman
   expect(workspaceTargetGatewayOptions(target)).toEqual({});
   expect(target.orkestratorPortal).toBeUndefined();
 
-  writeStoredWorkspace({
+  // The grant is in the tab; only the realm's URL names it.
+  writeRealmWorkspace({
     workspaceId: "w1",
     nodeId: "bk_leaf" as never,
     nodeName: "Leaf",
@@ -101,6 +102,8 @@ test("a browser tab stored on a leaf boots as that leaf's client with the comman
     baseUrl: "https://command.test/__orkestrator/nodes/bk_leaf",
     expiresAt: Date.now() + 60_000,
   });
+  expect(workspaceTargetGatewayOptions(target)).toEqual({});
+  happyDOM.setURL("https://command.test/?realm=workspace&workspace=w1");
   try {
     const options = workspaceTargetGatewayOptions(target);
     expect(options).toEqual({ baseUrl: "https://command.test/__orkestrator/nodes/bk_leaf" });
@@ -116,6 +119,7 @@ test("a browser tab stored on a leaf boots as that leaf's client with the comman
     expect(String(url)).toBe("https://command.test/__orkestrator/invoke");
     expect(init.credentials).toBe("same-origin");
   } finally {
-    writeStoredWorkspace(null);
+    removeRealmWorkspace("w1");
+    happyDOM.setURL("https://command.test/");
   }
 });

@@ -1,5 +1,4 @@
-import { useEffect, useRef, useState, type RefObject } from "react";
-import { takeSidebarScroll } from "@/lib/portal/workspace-switch";
+import { useEffect, useRef, useState } from "react";
 import { useUIStore } from "@/stores/uiStore";
 
 /** Defaults apply once per project, after its authoritative environment result. */
@@ -44,21 +43,4 @@ export function useSidebarHydration(
     );
   }, [environments, projects, ready]);
   return ready;
-}
-
-/** Consume the offset only after rows and collapse/layout state have hydrated. */
-export function useSidebarScrollRestore(
-  ref: RefObject<HTMLDivElement | null>,
-  ready: boolean,
-): void {
-  const [pending, setPending] = useState(takeSidebarScroll);
-  useEffect(() => {
-    if (pending === null || !ready) return;
-    const frame = requestAnimationFrame(() => {
-      if (!ref.current) return;
-      ref.current.scrollTop = pending;
-      setPending(null);
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [pending, ready, ref]);
 }

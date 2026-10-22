@@ -1,8 +1,7 @@
-import { afterEach, expect, mock, spyOn, test } from "bun:test";
+import { afterEach, expect, mock, test } from "bun:test";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import { useRef } from "react";
 import { useUIStore } from "@/stores/uiStore";
-import { useSidebarHydration, useSidebarScrollRestore } from "./useSidebarHydration";
+import { useSidebarHydration } from "./useSidebarHydration";
 
 const initial = useUIStore.getState();
 afterEach(() => {
@@ -48,44 +47,6 @@ test("new projects on a seeded client get defaults without resetting existing ch
   await waitFor(() => expect(load).toHaveBeenCalledTimes(1));
   rerender({ projects: [{ id: "old" }, { id: "new" }] });
   await waitFor(() => expect(useUIStore.getState().collapsedProjects).toEqual(["new"]));
-});
-
-test("saved scroll is restored once after delayed rows and layout hydrate", async () => {
-  sessionStorage.setItem("orkestrator.workspace-switch-sidebar-scroll", "700");
-  const element = document.createElement("div");
-  let height = 100;
-  let top = 0;
-  Object.defineProperty(element, "scrollTop", {
-    get: () => top,
-    set: (value: number) => {
-      top = Math.min(value, height);
-    },
-  });
-  let frame: FrameRequestCallback | undefined;
-  spyOn(globalThis, "requestAnimationFrame").mockImplementation((callback) => {
-    frame = callback;
-    return 1;
-  });
-  spyOn(globalThis, "cancelAnimationFrame").mockImplementation(() => {
-    frame = undefined;
-  });
-  const { rerender } = renderHook(
-    ({ ready }) => {
-      const ref = useRef(element);
-      useSidebarScrollRestore(ref, ready);
-    },
-    { initialProps: { ready: false } },
-  );
-  expect(frame).toBeUndefined();
-  expect(top).toBe(0);
-  height = 1000;
-  rerender({ ready: true });
-  act(() => frame?.(0));
-  expect(top).toBe(700);
-  top = 50;
-  rerender({ ready: false });
-  rerender({ ready: true });
-  expect(top).toBe(50);
 });
 
 test("a project expanded by default collapses when empty on a later mount; an explicit expansion survives", async () => {

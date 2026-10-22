@@ -409,7 +409,7 @@ test("workspace-only snapshots publish trusted gateway and stable machine metada
   });
 });
 
-test("the portal channel is exposed only while the workspace is on another node", async () => {
+test("the portal channel is exposed only in a workspace realm", async () => {
   const exposed = new Map<string, unknown>();
   const ipc = createIpcMock();
   const onLeaf = {

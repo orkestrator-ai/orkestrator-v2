@@ -67,6 +67,15 @@ export function rendererPartitionForWindow(
   return `persist:orkestrator-renderer-${slot}-${connectionPartitionKey(connectionId)}`;
 }
 
+/**
+ * A workspace realm's renderer storage: per window slot and node, so the
+ * node's presentation state (drafts, layouts) stays with it, as it would for
+ * a window connected to that node directly.
+ */
+export function rendererPartitionForRealm(slot: number, nodeId: string): string {
+  return `persist:orkestrator-realm-${slot}-${connectionPartitionKey(nodeId)}`;
+}
+
 export function browserPreviewPartitionForWindow(slot: number, connectionId: string): string {
   return `persist:orkestrator-browser-previews-${slot}-${connectionPartitionKey(connectionId)}`;
 }

@@ -1,3 +1,5 @@
+import { isWorkspaceRealm, postToShell } from "@/lib/federation/workspace-realm";
+
 /** Cross-tree navigation into the global settings surface. */
 export const GLOBAL_SETTINGS_REQUEST_EVENT = "orkestrator:open-global-settings";
 
@@ -36,6 +38,11 @@ export function isGlobalSettingsSection(value: unknown): value is GlobalSettings
 
 export function requestGlobalSettings(section: GlobalSettingsSection): void {
   if (typeof window === "undefined") return;
+  // Settings belong to the command node: a realm asks its window.
+  if (isWorkspaceRealm()) {
+    postToShell({ type: "settings", section });
+    return;
+  }
   window.dispatchEvent(
     new CustomEvent<GlobalSettingsSection>(GLOBAL_SETTINGS_REQUEST_EVENT, { detail: section }),
   );

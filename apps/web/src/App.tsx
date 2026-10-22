@@ -96,8 +96,9 @@ import { SshPromptDialog } from "@/components/federation/SshPromptDialog";
 import { FederationEffects } from "@/components/federation/FederationEffects";
 import { NodeActionRequestsDialog } from "@/components/federation/NodeActionRequestsDialog";
 import { NodeSshPromptDialog } from "@/components/settings/machines/NodeSshPromptDialog";
-import { keepStoredWorkspaceAlive, takeWorkspaceStartupError } from "@/lib/portal/workspace-switch";
-import { useWorkspaceSwitchSelection } from "@/hooks/useWorkspaceSwitchSelection";
+import { WorkspaceRealmHost } from "@/components/federation/WorkspaceRealmHost";
+import { isWorkspaceRealm } from "@/lib/federation/workspace-realm";
+import { readStoredWorkspace } from "@/lib/portal/workspace-target-storage";
 
 export const DOCKER_AVAILABILITY_POLL_INTERVAL_MS = 60_000;
 export const DOCKER_STARTUP_CONFIRMATION_DELAY_MS = 1_500;
@@ -245,10 +246,20 @@ const STARTUP_BLOCKER_PANEL_CLASS_NAME = cn(
 );
 
 function App() {
+  // A browser or iOS realm boots on the grant its window keeps for it.
+  if (isWorkspaceRealm() && !window.orkestrator?.isolatedViewState && !readStoredWorkspace()) {
+    return (
+      <div role="alert" className="flex h-screen items-center justify-center p-6 text-center">
+        This workspace connection is unavailable. Open the environment again from the sidebar to
+        reconnect.
+      </div>
+    );
+  }
   return <ConnectedApp />;
 }
 
 function ConnectedApp() {
+  const [workspaceRealm] = useState(isWorkspaceRealm);
   const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
   const selectedProjectId = useUIStore((state) => state.selectedProjectId);
   const zoomLevel = useUIStore((state) => state.zoomLevel);
@@ -318,14 +329,6 @@ function ConnectedApp() {
     [],
   );
   useEffect(() => startStoreResourceSync(), []);
-  // After a move to another node, the environment the user opened there.
-  useWorkspaceSwitchSelection(startEnvironment);
-  // A browser tab on another node renews that node's workspace grant.
-  useEffect(() => keepStoredWorkspaceAlive(), []);
-  useEffect(() => {
-    const message = takeWorkspaceStartupError();
-    if (message) toast.error(message);
-  }, []);
   useEffect(() => startPaneLayoutPersistence(), []);
   useEffect(() => {
     void migrateLegacyBuildPipelines().catch((error) => {
@@ -831,6 +834,8 @@ function ConnectedApp() {
   // clients fall back to CSS `zoom`, which sizes correctly as long as the shell
   // measures itself against its container instead of viewport units.
   useEffect(() => {
+    // A workspace realm is shown at its window's zoom.
+    if (workspaceRealm) return;
     let active = true;
     const rootStyle = document.documentElement.style;
     const applyCssFallback = () => {
@@ -855,7 +860,7 @@ function ConnectedApp() {
     return () => {
       active = false;
     };
-  }, [zoomLevel]);
+  }, [workspaceRealm, zoomLevel]);
 
   // Surface Claude credential refresh/push failures as a non-blocking toast.
   // The backend de-dupes (only emits after repeated failures or actual push
@@ -946,10 +951,13 @@ function ConnectedApp() {
   // Derived state for dialog visibility - makes conditions easier to read
   // When Docker is down, let its outage warning lead; host-tool onboarding is
   // shown after the user chooses to continue without containers.
+  // Host tool onboarding (missing CLIs, sign-ins) is about the machine's own
+  // setup; a workspace realm in another machine's window does not nag for it.
   const hostToolWarningsVisible =
-    (dockerCheckStatus === "error" && dockerAvailable === null) ||
-    dockerAvailable === true ||
-    (dockerAvailable === false && dockerWarningDismissed);
+    !workspaceRealm &&
+    ((dockerCheckStatus === "error" && dockerAvailable === null) ||
+      dockerAvailable === true ||
+      (dockerAvailable === false && dockerWarningDismissed));
 
   const isCheckingCliTools = hostToolWarningsVisible && hostToolCheckStatus === "checking";
 
@@ -1167,6 +1175,8 @@ function ConnectedApp() {
             available={dockerAvailable === true}
             ready={dockerAvailable !== null || dockerCheckStatus === "error"}
           >
+            {/* Another node's workspace in a command node's window. */}
+            {workspaceRealm && <WorkspaceRealmHost />}
             <AppShell>
               {localBackendUnavailableMessage && (
                 <div
@@ -1262,8 +1272,9 @@ function ConnectedApp() {
           <ErrorDetailsDialog />
           <HostPathPickerDialog />
           <ContainerHostReachabilityNotice />
-          <BackendVersionReminder />
-          <HostUpdateBanner />
+          {/* The window around a realm shows its own command node's. */}
+          {!workspaceRealm && <BackendVersionReminder />}
+          {!workspaceRealm && <HostUpdateBanner />}
 
           {macOsPermissionsReady && dockerCheckStatus === "error" && dockerAvailable === null && (
             <div
@@ -1676,11 +1687,16 @@ function ConnectedApp() {
             </AlertDialogContent>
           </AlertDialog>
         </TerminalProvider>
-        <SshPromptDialog />
-        <FederationEffects />
-        <NodeActionRequestsDialog />
-        {/* SSH prompts from this node's own tunnels to the nodes it commands. */}
-        <NodeSshPromptDialog />
+        {/* Multi-machine prompts and effects belong to the window, not its realms. */}
+        {!workspaceRealm && (
+          <>
+            <SshPromptDialog />
+            <FederationEffects />
+            <NodeActionRequestsDialog />
+            {/* SSH prompts from this node's own tunnels to the nodes it commands. */}
+            <NodeSshPromptDialog />
+          </>
+        )}
       </TooltipProvider>
     </FederationProvider>
   );

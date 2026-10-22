@@ -51,6 +51,9 @@ import {
 import { cn } from "@/lib/utils";
 import { sidebarCollisionDetection } from "@/lib/sidebar-collision";
 import { sidebarFolderKey, useMachineViewStore } from "@/stores/machineViewStore";
+import { useRemoteEnvironmentShown } from "@/stores/remoteWorkspaceStore";
+import { SELECTED_ENVIRONMENT_ROW_CLASS } from "@/components/sidebar/SortableEnvironmentItem";
+import type { FederatedEnvironment } from "@/lib/federation/summaries";
 import { useFederation } from "./FederationProvider";
 import { MachineDot, machineStatusText } from "./MachineDot";
 import {
@@ -516,26 +519,44 @@ export function FederatedActivityList({
           row.machine.bound ? (
             <div key={row.environment.key}>{renderBoundRow(row.environment.ref.environmentId)}</div>
           ) : (
-            <div
+            <RemoteActivityRow
               key={row.environment.key}
-              className={cn(
-                "mx-1 flex items-center rounded-lg border border-transparent transition-colors hover:bg-environment-hover",
-                row.machine.transport !== "connected" && "opacity-60",
-              )}
-              data-testid="federated-environment-row"
-              data-machine={row.machine.connectionId}
-            >
-              <div className="min-w-0 flex-1 pl-2">
-                <RemoteEnvironmentItem
-                  machine={row.machine}
-                  environment={row.environment}
-                  subtitle={row.project?.name ?? "Unknown project"}
-                />
-              </div>
-            </div>
+              machine={row.machine}
+              environment={row.environment}
+              subtitle={row.project?.name ?? "Unknown project"}
+            />
           ),
         )
       )}
+    </div>
+  );
+}
+
+/** Another machine's environment in the activity list. */
+function RemoteActivityRow({
+  machine,
+  environment,
+  subtitle,
+}: {
+  machine: MachineView;
+  environment: FederatedEnvironment;
+  subtitle: string;
+}) {
+  const shown = useRemoteEnvironmentShown(machine.connectionId, environment.ref.environmentId);
+  return (
+    <div
+      className={cn(
+        "mx-1 flex items-center rounded-lg border border-transparent transition-colors",
+        shown ? SELECTED_ENVIRONMENT_ROW_CLASS : "hover:bg-environment-hover",
+        machine.transport !== "connected" && "opacity-60",
+      )}
+      data-testid="federated-environment-row"
+      data-machine={machine.connectionId}
+      data-selected={shown || undefined}
+    >
+      <div className="min-w-0 flex-1 pl-2">
+        <RemoteEnvironmentItem machine={machine} environment={environment} subtitle={subtitle} />
+      </div>
     </div>
   );
 }

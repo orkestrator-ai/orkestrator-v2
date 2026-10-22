@@ -264,7 +264,7 @@ export function createPortalApi(ipcRenderer: IpcRendererLike) {
   };
 }
 
-/** Expose the portal channel when the window's workspace is on another node. */
+/** Expose the portal channel in a workspace realm: its window's command node. */
 export function exposePortal(
   contextBridge: { exposeInMainWorld(key: string, value: unknown): void },
   ipcRenderer: IpcRendererLike & { sendSync(channel: string): unknown },
@@ -272,6 +272,60 @@ export function exposePortal(
   if (!readGatewaySnapshot(ipcRenderer)?.workspaceTarget) return false;
   contextBridge.exposeInMainWorld("orkestratorPortal", createPortalApi(ipcRenderer));
   return true;
+}
+
+type WorkspaceViewEvent =
+  | { viewId: string; type: "message"; message: unknown }
+  | { viewId: string; type: "closed" | "crashed" | "load-failed" };
+
+export function createWorkspaceViewsApi(ipcRenderer: IpcRendererLike) {
+  const listeners = new Set<(event: WorkspaceViewEvent) => void>();
+  ipcRenderer.on("orkestrator:workspace-views:event", (_event, payload: WorkspaceViewEvent) => {
+    for (const listener of listeners) listener(payload);
+  });
+  return {
+    open(input: { nodeId: string; request: Record<string, unknown> }): Promise<{ viewId: string }> {
+      return ipcRenderer.invoke("orkestrator:workspace-views:open", input);
+    },
+    setBounds(
+      viewId: string,
+      bounds: { x: number; y: number; width: number; height: number },
+    ): Promise<void> {
+      return ipcRenderer.invoke("orkestrator:workspace-views:set-bounds", viewId, bounds);
+    },
+    setVisible(viewId: string, visible: boolean): Promise<void> {
+      return ipcRenderer.invoke("orkestrator:workspace-views:set-visible", viewId, visible);
+    },
+    capture(viewId: string): Promise<string | null> {
+      return ipcRenderer.invoke("orkestrator:workspace-views:capture", viewId);
+    },
+    send(viewId: string, message: Record<string, unknown>): Promise<void> {
+      return ipcRenderer.invoke("orkestrator:workspace-views:send", viewId, message);
+    },
+    close(viewId: string): Promise<void> {
+      return ipcRenderer.invoke("orkestrator:workspace-views:close", viewId);
+    },
+    onEvent(callback: (event: WorkspaceViewEvent) => void): () => void {
+      listeners.add(callback);
+      return () => listeners.delete(callback);
+    },
+  };
+}
+
+export function createWorkspaceRealmApi(ipcRenderer: IpcRendererLike) {
+  const listeners = new Set<(message: unknown) => void>();
+  ipcRenderer.on("orkestrator:workspace-realm:message", (_event, message: unknown) => {
+    for (const listener of listeners) listener(message);
+  });
+  return {
+    post(message: Record<string, unknown>): void {
+      void ipcRenderer.invoke("orkestrator:workspace-realm:post", message).catch(() => undefined);
+    },
+    onMessage(callback: (message: unknown) => void): () => void {
+      listeners.add(callback);
+      return () => listeners.delete(callback);
+    },
+  };
 }
 
 export function createOrkestratorElectronApi(ipcRenderer: IpcRendererLike) {
@@ -429,12 +483,15 @@ export function createOrkestratorElectronApi(ipcRenderer: IpcRendererLike) {
       },
     },
 
-    /** Which node the window works on; the renderer reloads after a change. */
-    workspaceTarget: {
-      set(nodeId: string | null): Promise<void> {
-        return ipcRenderer.invoke("orkestrator:workspace-target:set", { nodeId });
-      },
-    },
+    /**
+     * Other nodes' workspaces in this window's central region. The main
+     * process binds each realm to its node; the window places it and passes
+     * messages, and never learns a route or a credential.
+     */
+    workspaceViews: createWorkspaceViewsApi(ipcRenderer),
+
+    /** In a workspace realm: messages to and from its window. */
+    workspaceRealm: createWorkspaceRealmApi(ipcRenderer),
 
     process: {
       exit(code?: number): Promise<void> {

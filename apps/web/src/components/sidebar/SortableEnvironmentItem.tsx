@@ -18,6 +18,16 @@ interface SortableEnvironmentItemProps {
   isChecked?: boolean;
 }
 
+/**
+ * The selected environment row. The accent bar and the drag grip occupy the
+ * same few pixels, so they take turns: the bar fades out exactly as the grip
+ * fades in. `hover:` rather than `group-hover/sortable:` because the group and
+ * the pseudo-element are the same element, and `group-*` only reaches
+ * descendants.
+ */
+export const SELECTED_ENVIRONMENT_ROW_CLASS =
+  "relative overflow-hidden border-transparent bg-linear-to-r from-selected to-selected-edge text-selected-foreground before:absolute before:inset-y-1 before:left-1 before:w-0.5 before:rounded-full before:bg-primary before:transition-opacity hover:before:opacity-0";
+
 export function SortableEnvironmentItem({
   environment,
   isSelected,
@@ -46,12 +56,7 @@ export function SortableEnvironmentItem({
         className={cn(
           "group/sortable mx-1 flex items-center rounded-lg border border-transparent transition-colors",
           isSelected && !isMultiSelectMode
-            ? // The accent bar and the drag grip occupy the same few pixels, so
-              // they take turns: the bar fades out exactly as the grip fades in.
-              // `hover:` rather than `group-hover/sortable:` because the group
-              // and the pseudo-element are the same element, and `group-*`
-              // only reaches descendants.
-              "relative overflow-hidden border-transparent bg-linear-to-r from-selected to-selected-edge text-selected-foreground before:absolute before:inset-y-1 before:left-1 before:w-0.5 before:rounded-full before:bg-primary before:transition-opacity hover:before:opacity-0"
+            ? SELECTED_ENVIRONMENT_ROW_CLASS
             : "hover:bg-environment-hover",
         )}
       >

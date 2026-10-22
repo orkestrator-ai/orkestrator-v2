@@ -910,3 +910,10 @@ in 167.09 seconds (3180 passed, one skipped, zero failed).
 ## Two-column report main merge — 2026-10-21
 
 Pi staging exceeded 30 seconds in the aggregate and first owning-file rerun; after browser validation ended, the complete unchanged four-test owner passed in 11.6 seconds (`merge-pi-final-owner`). See [0629](0629-two-column-main-merge-validation.md) for commands, worker configuration, counts and evidence. No source, assertion, timeout or skip changed.
+
+## Service preview rollout second full suite — 2026-10-22
+
+- Command: `mise run test:logged -- --name full-tests-0042-2 -- mise run test` on branch `todo-0042-service-preview-rollout-a6b636a9b237` (`b83ae534` plus the service preview rollout working tree), macOS 26.6.2 arm64, default groups, load average 10 to 22.
+- Failure: 30000.24 ms. Root and agent-support: 3240 passed, 1 skipped, 2 failed across 3243 tests in 155 files (283.56 s); the workspace, bridges and protocol groups passed. The other failure was 0192.
+- Evidence: `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.fDVMln/root-and-agent-support-tests.log.gz`.
+- Isolated rerun: `mise exec -- bun test tests/unit/pi-bridge-vendor.test.ts` passed unchanged (4 passed, 20.4 s).

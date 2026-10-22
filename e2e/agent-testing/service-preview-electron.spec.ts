@@ -591,11 +591,15 @@ async function closeStartupDialogs(): Promise<void> {
   await expect(s().window.getByRole("dialog")).toHaveCount(0, { timeout: 30_000 });
 }
 
-/** The pane tab strip entry for a service tab, in layout order. */
+/**
+ * The pane tab strip entry for a service tab, in layout order. Service tabs
+ * are named after their service (its label is the fixture marker).
+ */
 function uiTab(name: Name) {
   const index = uiTabOrder.indexOf(name) + 1;
+  const label = s().services[name]!.marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return s()
-    .window.getByRole("button", { name: new RegExp(`^Browser ${index} `) })
+    .window.getByRole("button", { name: new RegExp(`^${label} ${index} `) })
     .first();
 }
 

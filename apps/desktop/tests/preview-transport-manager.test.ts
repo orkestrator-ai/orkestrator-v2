@@ -18,8 +18,10 @@ import {
 import { PreviewMetrics } from "../../backend/src/preview-metrics";
 import { PreviewTunnelServer } from "../../backend/src/preview-tunnel-server";
 import { connectionPreviewBackend } from "../electron/preview-connection-backend";
+import { liveServicePartitionSuffixes } from "../electron/preview-partition-retention";
 import {
   PreviewTransportManager,
+  previewServicePartitionSuffix,
   type PreviewServiceSession,
 } from "../electron/preview-transport-manager";
 import {
@@ -377,6 +379,21 @@ describe("PreviewTransportManager (desktop tunnel end to end)", () => {
     const descriptor = await manager.acquire(target(), "tab-1");
     await manager.resetSiteData(target());
     expect(sessions.get(descriptor.partition)!.cleared).toBe(1);
+  });
+
+  test("reports held partitions and its own backend's full service list for retention", async () => {
+    const suffix = previewServicePartitionSuffix(target());
+    const descriptor = await manager.acquire(target(), "tab-1");
+    expect(manager.partitionsInUse()).toEqual([descriptor.partition]);
+    expect(liveServicePartitionSuffixes(await manager.listServices())).toEqual(new Set([suffix]));
+
+    await harness.runtime.registry.remove(serviceId, undefined);
+    expect(liveServicePartitionSuffixes(await manager.listServices())).toEqual(new Set());
+
+    await manager.disposeAll();
+    expect(manager.closed).toBe(true);
+    expect(manager.partitionsInUse()).toEqual([]);
+    await expect(manager.listServices()).rejects.toThrow();
   });
 });
 

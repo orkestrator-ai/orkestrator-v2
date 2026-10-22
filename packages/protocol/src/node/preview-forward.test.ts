@@ -19,6 +19,7 @@ import {
   forwardPreviewRequest,
   forwardPreviewUpgrade,
   type PreviewForwardLimits,
+  type PreviewForwardResult,
 } from "./preview-forward.js";
 import {
   crossSiteViolation,
@@ -233,17 +234,22 @@ describe("forwardPreviewRequest and forwardPreviewUpgrade", () => {
   let ingressPort: number;
   let limits: PreviewForwardLimits;
   let connectFailure: Error | null;
+  let connectDelayMs: number;
   let connects: number;
+  const results: PreviewForwardResult[] = [];
   const openUpstreams = new Set<Socket>();
 
   beforeEach(async () => {
     fixture = await startPreviewFixture({ marker: "fixture-a" });
     limits = { ...DEFAULT_PREVIEW_FORWARD_LIMITS };
     connectFailure = null;
+    connectDelayMs = 0;
     connects = 0;
+    results.length = 0;
     const hooks = {
       connect: async () => {
         connects += 1;
+        if (connectDelayMs) await Bun.sleep(connectDelayMs);
         if (connectFailure) throw connectFailure;
         const socket = connect(fixture.port, "127.0.0.1");
         openUpstreams.add(socket);
@@ -254,7 +260,13 @@ describe("forwardPreviewRequest and forwardPreviewUpgrade", () => {
     };
     ingress = createServer((request, response) => {
       const origin = `http://127.0.0.1:${ingressPort}`;
-      void forwardPreviewRequest(request, response, policyFor(fixture.port, origin), limits, hooks);
+      void forwardPreviewRequest(
+        request,
+        response,
+        policyFor(fixture.port, origin),
+        limits,
+        hooks,
+      ).then((result) => results.push(result));
     });
     ingress.on("upgrade", (request: IncomingMessage, socket: Socket, head: Buffer) => {
       const origin = `http://127.0.0.1:${ingressPort}`;
@@ -276,6 +288,21 @@ describe("forwardPreviewRequest and forwardPreviewUpgrade", () => {
     await new Promise<void>((resolve) => ingress.close(() => resolve()));
     for (const socket of openUpstreams) socket.destroy();
     await fixture.close();
+  });
+
+  test("reports the time from upstream connect to the response head", async () => {
+    connectDelayMs = 40;
+    expect((await get("/health")).status).toBe(200);
+    await Bun.sleep(10);
+    const completed = results.at(-1)!;
+    expect(completed.outcome).toBe("completed");
+    expect(completed.firstByteMs).toBeGreaterThanOrEqual(35);
+
+    connectFailure = previewFailure("connection-refused");
+    expect((await get("/health")).status).toBeGreaterThanOrEqual(500);
+    await Bun.sleep(10);
+    expect(results.at(-1)!.outcome).toBe("failed");
+    expect(results.at(-1)!.firstByteMs).toBeUndefined();
   });
 
   function get(

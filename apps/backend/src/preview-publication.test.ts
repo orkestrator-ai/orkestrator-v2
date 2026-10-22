@@ -182,6 +182,10 @@ describe("PreviewPublicationManager (private HTTPS origins)", () => {
       "plain=published-app; Path=/",
       "widened=1; Path=/",
     ]);
+    // Both forwarded requests timed their upstream connect and response head.
+    const { histograms } = harness.runtime.metrics.snapshot();
+    expect(histograms["http.connect_ms"]?.count).toBe(2);
+    expect(histograms["http.first_byte_ms"]?.count).toBe(2);
   });
 
   test("grants are one-use and sessions are bound to their own host", async () => {

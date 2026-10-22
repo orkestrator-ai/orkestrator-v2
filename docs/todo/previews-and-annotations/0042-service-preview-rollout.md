@@ -1,14 +1,17 @@
 # Service preview rollout
 
 Checked against `main` at `2459b05c` (2026-10-15); real-Electron runs against
-`a5d338c1` (2026-10-18) and `9b3f53a2` (2026-10-21).
+`a5d338c1` (2026-10-18) and `9b3f53a2` (2026-10-21); partition retention,
+fault tests and single-machine runs against `b83ae534` (2026-10-22).
 
 Service previews shipped in #831 (`4f02156b`). Each previewed application gets
 a backend-owned service identity, carried by a desktop tunnel, private HTTPS
 origins or an optional container relay. Every new transport ships off by
 default. Real-stack evidence is single-machine only: Linux and Chromium
 (2026-09-23), macOS re-baselines (2026-10-17), and a real Electron window with
-the desktop tunnel on (2026-10-18, remaining cases 2026-10-21). This file covers four things: the platform runs each
+the desktop tunnel on (2026-10-18, remaining cases 2026-10-21), and a
+hostile service worker in Chromium and Auto mappings on Docker Desktop for
+macOS (2026-10-22). This file covers four things: the platform runs each
 transport needs before it is advertised or enabled, the criteria for flipping
 defaults, the later retirement of the legacy loopback route and its shared
 partitions, and the evidence log where run results are now recorded.
@@ -43,17 +46,24 @@ partitions, and the evidence log where run results are now recorded.
 - Partitions (`apps/desktop/electron/desktop-window-lifecycle.ts`): legacy URL
   tabs share `browserPreviewPartitionForWindow`, one per window slot and
   connection. Each service gets `browserPreviewServicePartition`
-  (`persist:orkestrator-preview-svc-<slot>-<connection>-<hash>`). Only an
-  explicit `PreviewTransportManager.resetSiteData` clears one. Nothing is
-  cleared when a service is removed, an environment deleted, or a connection
-  forgotten (`forgetConnection` in `main.ts`). Legacy URL tabs are never
-  converted to service tabs.
+  (`persist:orkestrator-preview-svc-<slot>-<connection>-<hash>`).
+  `PreviewTransportManager.resetSiteData` clears one on request. Since
+  2026-10-22 `PreviewPartitionRetention`
+  (`apps/desktop/electron/preview-partition-retention.ts`) clears a service's
+  partition once its service is gone from the backend's full list (removed, or
+  its environment deleted), and every preview partition of a forgotten
+  connection, then removes the directories on the next start; see
+  [browser-previews.md](../../architecture/browser-previews.md). The shared
+  legacy partitions of live connections are never cleared. Legacy URL tabs are
+  never converted to service tabs.
 - Tests: the only real browser is Chromium. `e2e/preview/private-origin.spec.ts`
   has six tests on an isolated stack (`apps/backend/src/preview-browser-harness.ts`,
   throwaway CA). Its config has no `projects`, and sibling isolation checks
   only localStorage and cookies. The opt-in Docker, relay, Vite and benchmark
   suites are listed in [`testing-guide.md`](../../development/testing-guide.md)
-  §"Opt-in preview checks". They have no mise task and do not run in CI. All
+  §"Opt-in preview checks"; since 2026-10-22 they are `mise run
+  test:preview:docker`, `test:preview:browser` and `test:preview:bench`. None
+  runs in `mise run test` or CI. All
   of these suites, and every preview unit file, were re-baselined on
   2026-10-17 at `31d0fb06` (see the evidence log).
   `e2e/agent-testing/service-preview-electron.spec.ts` (in
@@ -69,30 +79,28 @@ partitions, and the evidence log where run results are now recorded.
 
 ### Code
 
-1. A hostile service-worker route in `test-fixtures/preview-app/server.ts`
-   that registers a worker intercepting `/__orkestrator_preview/session`. The
-   fixture's benign `/sw.js` (2026-10-18) is the starting point.
-2. Relay fault tests for an oversized frame (handled in
-   `EnvironmentRelay.onData`) and a protocol-version mismatch (the relay
-   script exits). Stdin errors, a silent relay and a wrong nonce are already
-   covered.
+1. Done 2026-10-22: the hostile service-worker route (see the evidence log).
+2. Done 2026-10-22: relay fault tests for an oversized frame and a
+   protocol-version mismatch, which found and fixed an unbounded stdout buffer
+   after a relay shut down (see the evidence log).
 3. Optional: Playwright `firefox` and `webkit` projects in
    `playwright.preview.config.ts`, as early signal only (not Safari or iOS
-   evidence). Optional: new mise tasks for the opt-in suites (for example
-   `test:preview:docker` and `test:preview:browser`), with `testing-guide.md`
-   updated to use them.
-4. Partition retention. Electron has to own this, because the backend knows
-   nothing about client partitions.
-   - Clear a service's partition when its definition is removed or its
-     environment deleted. Reconcile against the `tombstones` that
-     `get_preview_services` returns. The window is bounded
-     (`PREVIEW_LIMITS.tombstoneRetention` is 256, and `tombstoneFloor` marks
-     its start), so a client whose cursor is older must diff against the full
-     definition list.
-   - Clear a connection's partitions when the connection is forgotten.
+   evidence). The mise tasks for the opt-in suites were added on 2026-10-22.
+4. Partition retention. Removed services, deleted environments and forgotten
+   connections are done (2026-10-22, `PreviewPartitionRetention`). It diffs
+   against the full, unfiltered definition list rather than tombstones:
+   tombstones live only in memory, so every backend restart (new epoch) would
+   need the full diff anyway, and the list is bounded
+   (`snapshotMaxBytes`). Remaining:
    - Once legacy URL tabs are retired, set a retention window for the shared
-     window/connection partitions, then clean up only partitions this install
-     created.
+     window/connection partitions of live connections, then clean up only
+     partitions this install created.
+   - Partitions keyed to a workspace node (`node:<id>`) are reconciled against
+     that node's services, but nothing clears them when the node itself is
+     removed from the command node.
+   - Not exercised in a real Electron window: the retention passes run 60 s
+     after a window's transport starts, longer than the Electron spec waits.
+     Unit tests cover it with fake and real directories.
 5. Optional: when a legacy URL tab's port maps unambiguously to a current
    service in the same environment and generation, offer "Open as service".
    Keep ambiguous tabs as they are, with "Choose service". Never infer
@@ -100,12 +108,8 @@ partitions, and the evidence log where run results are now recorded.
 6. After the support window (see Open questions), remove compatibility mode
    from `ServiceBrowserTab` and retire the legacy route and its rewrite
    helpers, as a separate reviewed change.
-7. Reword the comments that cite deleted plan steps or the old evidence log:
-   `PREVIEW_LIMITS` (`packages/protocol/src/preview-services.ts`),
-   `preview-header-policy.ts`, and in `apps/backend/src/`
-   `core/preview-access.ts`, `core/preview-target-resolver.ts`,
-   `core/preview-readiness.ts`, `core/preview-docker.test.ts` and
-   `preview-bench.test.ts`.
+7. Done 2026-10-22: comments citing deleted plan steps reworded (the listed
+   files and `apps/web/src/vite-env.d.ts`).
 8. Verify whether legacy URL tabs (`BrowserTab`, `attachUrl` in
    `browser-preview-manager.ts`) have the stale-path bug fixed for service
    tabs on 2026-10-18: `attachUrl` loads whenever the attach URL differs from
@@ -125,9 +129,10 @@ partitions, and the evidence log where run results are now recorded.
    after re-selecting it; the spec now reloads the renderer when it changes the
    tab set. Check whether another client's layout save should reach an open
    renderer.
-10. Name service tabs after their service in the tab strip. Every browser tab
-    is "Browser N" (`DraggableTab.tsx`), so two service tabs can only be told
-    apart by opening them.
+10. Done 2026-10-22: service tabs are named "<service label> N" once their
+    environment's service list is loaded (`DraggableTab.tsx`); other browser
+    tabs stay "Browser N". The Electron spec now finds service tabs by that
+    name.
 11. Give the address field room in narrow panes. At the narrowest window
     (800×600, 100 %) the browser pane is 519 CSS px wide, above the 448 px
     (`@md/browser`) wrap point, so the toolbar stays on one row and the address
@@ -170,8 +175,10 @@ log below.
   viewport use of the picker, service dialog and diagnostics. Single machine
   only; the two-machine run below is still needed for remote backends over a
   real network.
-- Two-machine tailnet. Gates remote desktop previews by default. No runbook
-  exists, so write one first. Cover:
+- Two-machine tailnet. Gates remote desktop previews by default. The runbook
+  is [preview-two-machine-runbook.md](../../development/preview-two-machine-runbook.md)
+  and the latency tool `scripts/preview-latency-baseline.ts` (2026-10-22,
+  self-tested on loopback only). Not run. Cover:
   - a decoy on the client machine that no request ever reaches;
   - real-latency baselines for the direct, legacy, tunnel and private-origin
     routes;
@@ -193,12 +200,19 @@ log below.
   2026-10-17 the opt-in Docker suite passed on Docker Desktop 4.93.0 for macOS
   (binding inspection, a same-port host decoy, recreation onto a reused port
   and the exec relay). That run used Docker-assigned host ports, not
-  Orkestrator's Auto mapping (`hostPort: 0`). Windows and Auto mappings are
-  still open.
-- Hostile service worker (needs code item 1). Bootstrap and re-bootstrap with
-  the worker installed. The documented outcome is that re-sign-in is blocked
-  until site data is cleared, and that no other service and no control
-  authority is ever reached.
+  Orkestrator's Auto mapping (`hostPort: 0`). On 2026-10-22 an Auto mapping
+  passed on Docker Desktop 4.88.1 for macOS (published with the backend's own
+  `publishedPortArguments`, seeded, resolved from Docker's binding and
+  followed through recreation). Windows is still open.
+- Hostile service worker. Real Chromium on private origins passed on
+  2026-10-22 (see the evidence log): re-sign-in is blocked until site data is
+  cleared, the worker never sees a grant, its captured session code is
+  refused by other hosts, and no control authority is reached. It did reach a
+  sibling service with a credentialed read, which contradicts "no other
+  service is ever reached"; that is
+  [0054-preview-cross-service-reads.md](0054-preview-cross-service-reads.md).
+  Still open: Electron's **Reset site data** with a worker installed on a
+  desktop-tunnel service, and Firefox and Safari.
 - Compatibility cases not yet run in a real browser:
   - a streaming or router framework fixture alongside the pinned Vite 7.3.6;
   - SPA deep links and history;
@@ -210,10 +224,13 @@ log below.
   - an IPv6-only target (resolver level only).
 - Performance thresholds. Set them from the two-machine baseline (first byte,
   connect time, HMR delivery, peak queue and decode bytes, socket counts)
-  before any cohort counts as passing. `PreviewMetrics`
-  (`apps/backend/src/preview-metrics.ts`) has `http.connect_ms`,
-  `http.first_byte_ms` and `tunnel.open_ms` histograms but nothing for HMR
-  delivery or reconnects.
+  before any cohort counts as passing. Not set: no two-machine baseline
+  exists. `PreviewMetrics` (`apps/backend/src/preview-metrics.ts`) has
+  `http.connect_ms`, `http.first_byte_ms` (declared but never recorded until
+  2026-10-22; now recorded per private-origin request) and `tunnel.open_ms`
+  histograms, but nothing for HMR delivery or reconnects, and nothing for the
+  desktop ingress, which lives in Electron. `scripts/preview-latency-baseline.ts`
+  measures connect and first byte per route from the client side.
 
 ### Enabling defaults
 
@@ -649,6 +666,129 @@ This replaces the 2026-09-23 file lists as the current baseline.
   Electron cleanup removed the disposable service-preview profile root after
   stopping its processes. No production profile or containers were used.
 
+2026-10-22, partition retention, fault tests and single-machine runs, branch
+`todo-0042-service-preview-rollout-a6b636a9b237` from `main` at `b83ae534`.
+Single machine; nothing here is two-machine, Firefox, Safari, iOS or Windows
+evidence.
+
+| Item | Version |
+| --- | --- |
+| Host | macOS 26.6.2 (arm64), one machine shared with other live worktrees (load average 15 to 458 during the runs) |
+| Bun / Node (mise) | 1.4.3 / 24.21.0 |
+| Docker | Docker Desktop 4.88.1, engine 29.7.2; `orkestrator-v2:latest` (`sha256:262fff6c6d0c`, Node 24.21.0 inside) re-tagged `orkestrator-v2:preview-0042-034418` for the run, tag removed after |
+| Browser | Chrome for Testing headless shell 156.0.8078.4 (Playwright 1.64.0) |
+
+- Effective capabilities were the defaults (`transport`, `relay` and
+  publication off); each suite enables what it tests on its own harness. No
+  defaults were changed and the legacy route was not touched.
+- Relay faults (`preview-relay-supervisor.test.ts`, no Docker needed): an
+  oversized frame is refused on its 9-byte header, split or not, and closes
+  the relay (frame at the limit still delivered; channel error
+  "malformed frame", no content in the error or logs; relay killed and
+  released; a new relay after the backoff); an oversized frame in place of
+  the ready reply rejects the connect. The relay script exits 3 on an
+  unsupported version (2, 0, `"1"`, `null`) without writing to stdout or
+  printing the nonce, and 4 on an oversized frame header; a supervisor
+  running a script that only accepts version 2 fails the connect at once
+  with `backend-unavailable` (not the hello timeout) and does not respawn
+  inside the backoff. The run found a real gap: after shutdown
+  `EnvironmentRelay` kept its stdout listener and appended whatever the relay
+  still wrote to an unbounded buffer. Fixed in `preview-relay-supervisor.ts`
+  (listener removed, output drained and discarded); two assertions failed
+  without the fix. 23 passed, 1 skipped (Docker) in each of 5 runs.
+- Docker Desktop for macOS, `ORKESTRATOR_TEST_DOCKER_PREVIEW_IMAGE=orkestrator-v2:preview-0042-034418
+  mise run test:preview:docker`: 26 passed, 0 skipped, in each of 3 runs.
+  New journey: an Auto mapping (`hostPort: 0`, `hostPortMode: "auto"`)
+  published with the backend's own `publishedPortArguments`, seeded as a
+  generated service, resolved from Docker's binding (equal to `docker port`,
+  never the container port where a host decoy listened), and followed
+  through recreation onto a new Auto port with an impostor on the old one. No
+  containers were left behind.
+- Hostile service worker, real Chromium on private origins
+  (`e2e/preview/private-origin.spec.ts`, "a hostile service worker blocks
+  re-sign-in until site data is cleared and reaches no other authority";
+  fixture routes `/sw-hostile/install` and `/sw-hostile.js`). The harness now
+  also runs a real `OrkestratorGateway` on a throwaway token behind a request
+  recorder. Observed:
+  - Re-bootstrap with a new grant while the worker is installed: the worker
+    answers `/__orkestrator_preview/session?code=…` itself, the browser keeps
+    its old session cookie and the new attachment gets none. The worker sees
+    the one-use session code, never the grant, and every response it gets is
+    opaque or a failed fetch.
+  - The captured code presented at the sibling's or the bootstrap host's
+    session path is refused (and used up). Kept and redeemed once from a
+    clean browser context, it yields a session for the same service only.
+  - Control authority: the gateway saw the worker's requests without its
+    `SameSite=Strict` cookie or any Authorization header and answered 401
+    (GET), 403 "Origin not allowed" (POST) and 403 (preflight); it ran no
+    command.
+  - Sibling service: the credentialed POST and the CORS bearer request were
+    refused before forwarding, but a credentialed `no-cors` `GET /echo`
+    reached the sibling application (same-site hosts, `SameSite=Lax` cookie,
+    reads not checked). Recorded as
+    [0054-preview-cross-service-reads.md](0054-preview-cross-service-reads.md);
+    the spec asserts the observed read.
+  - After `Storage.clearDataForOrigin` for the app origin only: no worker,
+    no app cookies, the sibling's cookie intact, and a fresh bootstrap signs
+    in normally.
+  `mise run test:logged -- --name preview-browser-hostile-sw -- bunx
+  playwright test --config e2e/preview/playwright.preview.config.ts`: 6
+  passed, 1 skipped (Vite HMR: `ORKESTRATOR_TEST_PREVIEW_VITE_DIR` unset), 3
+  runs; the new test 5 of 5 with `--repeat-each=5`. Harness directories and
+  throwaway PKI were removed.
+- Loopback bench, `mise run test:preview:bench` (200 samples after 10
+  warm-ups, as before): direct p50 0.24 / p95 0.40 ms, desktop tunnel 0.94 /
+  1.43 ms, private origin 1.91 / 2.65 ms at load about 37; a later run at
+  load about 27: 0.35 / 2.64, 1.18 / 7.43, 2.12 / 7.46. Not comparable with
+  other machines.
+- Two-machine tool, loopback self-test only
+  (`scripts/preview-latency-baseline.ts` against
+  `apps/backend/src/preview-baseline-harness.ts`, 200 samples after 10
+  warm-ups, `GET /health`, first byte p50 / p95 / max in ms): direct 0.24 /
+  0.64 / 1.3, legacy 0.65 / 3.41 / 8.92, desktop tunnel 1.05 / 2.42 / 3.71,
+  private origin 2.04 / 6.35 / 20.14, 0 failures; attachments back to 0 after
+  release. Its userspace throttle (20 ms one way, 512 KiB/s) and a slow reader
+  on `/endless` at 64 KiB/s kept `tunnel.queued_bytes` at 262,176 (the 256 KiB
+  limit plus one header). This is the first legacy-route number, on loopback.
+- `http.first_byte_ms` was declared but never recorded. `forwardPreviewRequest`
+  now reports the time from upstream connect to the response head, and
+  `PreviewHttpProxy` records it (`preview-forward.test.ts`,
+  `preview-publication.test.ts`).
+- Partition retention and service tab names: unit tests only
+  (`apps/desktop/tests/preview-partition-retention.test.ts`, 13 tests, one on
+  real directories; a retention case in `preview-transport-manager.test.ts`;
+  `DraggableTab.test.tsx`). Desktop preview unit files with
+  `connection-manager.test.ts` and `desktop-window-lifecycle.test.ts`: 291
+  passed (a first run at load about 458 had 2 tests time out at 5 s; the
+  rerun passed all).
+- Real Electron, `bunx playwright test --config
+  e2e/agent-testing/playwright.electron.config.ts service-preview-electron.spec.ts`
+  (bridges as built; `ORKESTRATOR_PREVIEW_TRANSPORT=1` on a disposable
+  agent-test profile, as before). The first run failed one test: the spec
+  found service tabs by "Browser N", which the new service tab names
+  replaced. With the spec finding tabs by service name ("svc-a 1",
+  "svc-b 2", "preview-vite …"): 14 passed in each of 2 runs (68.1 s and
+  58.7 s, load 24 to 45). The full `mise run test:agent:electron` suite was not
+  run.
+- Repository checks: `mise run format:check`, `mise run lint`, `mise run
+  typecheck` and `tsc -p e2e/tsconfig.json` passed. The first full `mise run
+  test` (`full-tests-0042`, 722.5 s) failed only on known aggregate timeouts:
+  [0213](../../tests/flaky-tests/0213-terminal-history-aggregate-timeout.md),
+  [0175](../../tests/flaky-tests/0175-container-git-fetch-branch-baseline-timeout.md),
+  [0192](../../tests/flaky-tests/0192-firewall-bootstrap-shell-timeout.md) and
+  two split cases of
+  [0165](../../tests/flaky-tests/0165-coordinator-bound-discard-timeout.md)
+  (reopened). Each unchanged owning file passed alone at load 11. The second
+  full run (`full-tests-0042-2`, 644.4 s) passed the workspace, bridges and
+  protocol groups and failed only the root group on
+  [0178](../../tests/flaky-tests/0178-pi-vendor-runtime-aggregate-timeout.md)
+  and another 0192 case; both owners passed alone.
+- Not run: two machines, Firefox, Safari and iOS, Docker Desktop on Windows,
+  real private DNS and certificates, the hostile worker against Electron's
+  **Reset site data**, the Vite HMR case of the Chromium spec, a retention
+  pass in a real Electron window, the full `mise run test:agent:electron`
+  suite.
+
 ## Constraints and rationale
 
 - The threat boundaries, the credential and data path, and the resource-owner
@@ -766,13 +906,20 @@ This replaces the 2026-09-23 file lists as the current baseline.
 ## Needs verification
 
 - How much disk the `orkestrator-preview-svc-*` partitions take on a
-  long-lived profile, which decides how urgent retention is.
+  long-lived profile. One data point (2026-10-22, the maintainer's macOS
+  production profile, read-only `du`): 2 service partitions, 5.8 and 9.4 MB,
+  mostly Chromium caches (GPU and Dawn caches, Code Cache, Cache) created even
+  after light use; 16 shared legacy partitions, 93 MB in total. Retention of
+  service partitions now exists; the shared legacy ones (code item 4) are the
+  larger share. A profile with many services over months is still unmeasured.
 
 ## Related
 
 - [browser-previews.md](../../architecture/browser-previews.md) (operator guide),
   [remote-gateway.md](../../architecture/remote-gateway.md) §"Service previews".
-- [0046-embedded-service-previews.md](0046-embedded-service-previews.md),
+- [0054-preview-cross-service-reads.md](0054-preview-cross-service-reads.md)
+  (found by the hostile service-worker run),
+  [0046-embedded-service-previews.md](0046-embedded-service-previews.md),
   [0045-preview-service-discovery.md](0045-preview-service-discovery.md),
   [0044-web-annotation-qualification.md](0044-web-annotation-qualification.md) (same
   Electron harness; annotations run inside service tabs).

@@ -13,6 +13,11 @@ import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useAgentMailStore } from "@/stores/agentMailStore";
+import { usePreviewServiceStore } from "@/stores/previewServiceStore";
+import {
+  formatPreviewServiceUri,
+  type PreviewRegistrySnapshot,
+} from "@orkestrator/protocol/preview-services";
 import { loopedReviewFixture } from "@/test/looped-review-fixture";
 import {
   MULTI_REVIEW_FIX_TAB_TITLE,
@@ -459,6 +464,48 @@ describe("DraggableTab title precedence", () => {
   test("browser tabs use the browser label", () => {
     renderTab({ id: "browser-a", type: "browser", browserData: { url: "" } }, 1);
     expect(screen.getByText("Browser 2")).toBeDefined();
+  });
+
+  test("service tabs are named after their service once it is known", () => {
+    const ref = {
+      backendInstanceId: "backend-instance-1",
+      environmentId: "env-1",
+      serviceId: "service-web-1",
+      path: "/app",
+    };
+    const url = formatPreviewServiceUri(ref);
+    try {
+      // Not loaded yet, or another service: the generic label.
+      renderTab({ id: "svc-a", type: "browser", browserData: { url } }, 0);
+      expect(screen.getByText("Browser 1")).toBeDefined();
+      cleanup();
+
+      usePreviewServiceStore.setState({
+        environments: {
+          "env-1": {
+            loading: false,
+            error: null,
+            snapshot: {
+              services: [{ definition: { serviceId: ref.serviceId, label: "storybook" } }],
+            } as unknown as PreviewRegistrySnapshot,
+          },
+        },
+      });
+      renderTab({ id: "svc-a", type: "browser", browserData: { url } }, 0);
+      expect(screen.getByText("storybook 1")).toBeDefined();
+      cleanup();
+      renderTab(
+        {
+          id: "svc-b",
+          type: "browser",
+          browserData: { url: formatPreviewServiceUri({ ...ref, serviceId: "service-api-22" }) },
+        },
+        1,
+      );
+      expect(screen.getByText("Browser 2")).toBeDefined();
+    } finally {
+      usePreviewServiceStore.getState().reset();
+    }
   });
 
   test("looped-review tabs show their default title and workflow icon", () => {

@@ -64,6 +64,7 @@ import type {
 import { connectionPreviewBackend, rebindWindowPreviews } from "./preview-connection-backend.js";
 import { PreviewTransportManager } from "./preview-transport-manager.js";
 import { createPreviewPortHints } from "./preview-port-hints.js";
+import { PreviewPartitionRetention } from "./preview-partition-retention.js";
 import { PreviewExternalHandoff } from "./preview-external-handoff.js";
 import type { PreviewAttachmentDescriptor } from "@orkestrator/protocol/preview-access";
 import {
@@ -118,6 +119,7 @@ import {
   browserPreviewPartitionForWindow,
   browserPreviewServicePartition,
   cleanupFailedDesktopWindow,
+  connectionPartitionKey,
   DesktopWindowRequestGate,
   DesktopWindowSlotAllocator,
   releaseBoundWindowIfQuitting,
@@ -197,6 +199,7 @@ type WindowWorkspaceTarget = {
 };
 
 let previewPortHints: ReturnType<typeof createPreviewPortHints> | null = null;
+let previewPartitionRetention: PreviewPartitionRetention | null = null;
 let browserPreviewCaptures: BrowserPreviewCaptureStore | null = null;
 const previewExternalHandoff = new PreviewExternalHandoff((url) => shell.openExternal(url));
 const windowContexts = new Map<number, DesktopWindowContext>();
@@ -376,6 +379,21 @@ function browserPreviewCaptureStore(): BrowserPreviewCaptureStore {
   return store;
 }
 
+/** Clears preview partitions of removed services and forgotten connections. */
+function previewRetention(): PreviewPartitionRetention {
+  previewPartitionRetention ??= new PreviewPartitionRetention({
+    partitionsDir: path.join(app.getPath("userData"), "Partitions"),
+    pendingFile: path.join(app.getPath("userData"), "preview-partitions-pending.json"),
+    sessionFor: (partitionName) => session.fromPartition(partitionName),
+    inUse: () =>
+      Array.from(windowContexts.values()).flatMap((context) =>
+        context.previewTransport.partitionsInUse(),
+      ),
+    logger: console,
+  });
+  return previewPartitionRetention;
+}
+
 function createWindowBrowserPreviews(
   createdWindow: BrowserWindow,
   scope: string,
@@ -405,6 +423,10 @@ function createWindowBrowserPreviews(
     portHints: previewPortHints,
     onStateChange: (serviceKey) => manager?.refreshService(serviceKey),
     logger: console,
+  });
+  previewRetention().schedule(connectionPartitionKey(partitionKey), previewTransport, {
+    delayMs: 60_000,
+    intervalMs: 30 * 60_000,
   });
   const transport: BrowserPreviewServiceTransport = {
     acquire: (target, holderId) => previewTransport.acquire(target, holderId),
@@ -859,6 +881,14 @@ function registerIpc(): void {
         () => setWindowWorkspaceTarget(context, { nodeId: null }),
       );
       followWindowConnection(context);
+      // Every window has left the connection; its preview site data is unreachable.
+      void previewRetention()
+        .forgetConnection(connectionPartitionKey(connectionId), {
+          includeShared: !Array.from(windowContexts.values()).some(
+            (other) => other.previewConnectionId === connectionId,
+          ),
+        })
+        .catch(() => undefined);
       updateWindowTitle(event);
       publishConnectionLists();
       return list;
@@ -1139,6 +1169,10 @@ async function startApplication(): Promise<void> {
   }
   app.on("will-quit", () => connectionManager?.dispose());
 
+  // Before any window exists, so no session holds a partition being removed.
+  await previewRetention()
+    .sweepPending()
+    .catch(() => undefined);
   createMenu();
   registerIpc();
   const queuedNewWindows = windowRequestGate.markReady();

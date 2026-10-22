@@ -59,3 +59,13 @@
 - **Owning-file rerun:** `mise run test:logged -- --name refresh-pi-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed all four unchanged cases (exit 0, 10.6 seconds logged).
 - **Evidence:** `orkestrator-test-run.Qv1f63/root-and-agent-support-tests.log.gz` below the host temporary directory after aggregate completion.
 - **Assessment:** confirmed intermittent recurrence; the cause remains unproven. No Pi implementation, assertion, timeout or skip changed.
+
+## Coordinator peer conformance review recurrence — 2026-10-22
+
+- **Original command:** `mise run test:logged -- --name full-suite -- mise run test` (Bun 1.4.3, macOS arm64).
+- **Workers:** workspace/root/bridges/protocol reservations 4/1/2/1; one isolated root worker on a shared host running another checkout's aggregate suite.
+- **Failure:** the supported-SDK staging case exceeded its 30-second deadline (30000.65 ms). Root/support reported 3216 passed, one skipped and three failed across 3220 tests in 298.35 seconds; the other two failures were firewall fixture deadlines (0192). Workspace, bridges and protocol groups passed.
+- **First owning-file rerun:** `mise run test:logged -- --name pi-vendor-isolated -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` also timed out while the aggregate remained active (3 passed, one failed, 30.6 seconds logged). Evidence: `orkestrator-test-run.MQIkI6/pi-vendor-isolated.log.gz` below the host temporary directory.
+- **After the aggregate finished:** `mise run test:logged -- --name pi-vendor-after-suite -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed all four unchanged cases (exit 0, 12.3 seconds logged).
+- **Aggregate evidence:** `orkestrator-test-run.Aiu72Z/root-and-agent-support-tests.log.gz`, with outer summary in `orkestrator-test-run.4usC0x/full-suite.log.gz`, below the host temporary directory.
+- **Assessment:** the final isolated pass confirms intermittence. Host contention remains a hypothesis; no vendoring implementation, assertion, timeout or skip changed.

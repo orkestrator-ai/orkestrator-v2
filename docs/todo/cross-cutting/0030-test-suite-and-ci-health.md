@@ -1,14 +1,17 @@
 # Test suite and CI health
 
-Checked against `main` at `830c3abb` (2026-10-15).
+Checked against `main` at `b83ae534` (2026-10-22).
 
 `mise run test` should be fast and green, and stay that way, without weakening
 what it proves. Every test file has exactly one owner, waits are controlled
 rather than slept, and setup matches what each assertion needs. Most of the
 2026-09-21 streamlining review landed in #815, and #966 moved the backend and
-desktop suites into their packages. What remains is a set of slow owners, one
-untracked skipped test, and two desktop test gaps. More urgently, CI is not
-reliably green on `main`, and nothing requires it to be.
+desktop suites into their packages. On 2026-10-22 the cause of every red `main`
+run since 2026-10-20 was fixed on branch `todo-0030-test-suite-ci-health`, along
+with the skipped settings test, the root group's long pole, the Codex
+import-time server and the `BackendProcess` startup gaps. What remains is
+applying the approved ruleset once `main` is green, some slow backend owners,
+the Electron main-process bookkeeping tests and two dev-tooling defects.
 
 ## Current state
 
@@ -21,10 +24,37 @@ reliably green on `main`, and nothing requires it to be.
   test whose name never reached the log. The test job also uploads the
   compressed logs (`test-logs-<run>-<attempt>`) when it fails.
 - **`main` is unprotected.** `gh api repos/{owner}/{repo}/branches/main/protection`
-  answers 404 "Branch not protected", and the repository has no rulesets
-  (checked at `7ccb193e`). The maintainer approved the ruleset in item 1 on
-  2026-10-15.
-- **`main` is intermittently red.** Lint and typecheck pass on every run. #999
+  answers 404 "Branch not protected", and `gh api repos/{owner}/{repo}/rulesets`
+  returns `[]` (rechecked on 2026-10-22). The maintainer approved the ruleset in
+  item 1 on 2026-10-15.
+- **`main` was red on every CI run from 2026-10-20 to 2026-10-22** (fixed on
+  the branch, not yet merged). The last green `main` run was `0f39f1de` (#1108,
+  run 39497188149). Lint and typecheck passed throughout; only "Unit and
+  integration tests" failed. Across the 17 failing runs examined (`d9bc8b84`,
+  #1107, through `c66604e2`, #1120):
+  - **Linux worktree-watcher crash (every run, since #1107).** Bun on Linux
+    reports a removed watch root as `rename` with an `undefined` filename,
+    although Node types it `string | null`. `worktree-watcher.ts` checked only
+    for `null`, so `filename.replaceAll` threw from `fs.watch` dispatch whenever
+    a test removed a watched worktree. That failed nine backend cases
+    (`commands-integration`, `commands-registry-environments`,
+    `environment-move`, `public-api-launch`,
+    `commands-environment-worktree-location`) and both packaged-CLI scenarios
+    (`cli-client.test.ts`: the real backend exited 1). macOS never emits the
+    event, so local runs stayed green. The same throw would hit a Linux host
+    whose watched worktree is removed. A probe in `oven/bun:1.4.3` confirmed the
+    event; the watcher now normalises the name once for every listener. In a
+    Linux container replicating the CI job (non-root, `CI` and `GITHUB_ACTIONS`
+    set, two workers), the six backend owners failed 9 cases before the fix and
+    passed 203 after; the CLI owner failed 2 and passed 9.
+  - **Claude plan-mode fixture race** (flakes 0385, 0473, 0513, now resolved;
+    two runs): see the flake cases for the root cause.
+  - **Coordinator OpenCode reconcile join** (flake 0671, resolved; one run):
+    the test counted on a race the product correctly dedupes.
+  - **Cursor HTTP hook timeouts** (flake 0182, open; one run on 2026-10-19) and
+    a **Chromium page crash** in `preview-interactive.test.ts` (flake 0672,
+    open; one run on 2026-10-21). Both owners pass alone.
+- **Earlier red runs (2026-10-14 to 2026-10-18).** #999
   (`cefcaf69`) made the backend suite finish on CI. Of the four `main` and
   pull-request runs that then completed it, only `5c7517eb` (#1001, run
   38778314321) passed. It was the first green `lint.yml` run on `main` since
@@ -128,7 +158,9 @@ reliably green on `main`, and nothing requires it to be.
 - **Controlled time.** `tests/helpers/controlled-timeout.ts`
   (`installControlledTimeout`, with collision detection and `assertDrained`) is
   tested by `tests/unit/controlled-timeout.test.ts`. The `GlobalSettings`,
-  `GlobalSettingsDefaults` and `PersistentTerminal` suites use it.
+  `GlobalSettingsDefaults`, `PersistentTerminal`, `AddProjectDialog` and desktop
+  `BackendProcess` suites use it. The testing guide now documents it, the timer
+  rules and how the ownership guard derives owners.
 - **Task graph.** `apps/web`, `apps/web-public`, `apps/desktop` and
   `packages/protocol` set `test:workspace.dependsOn: []` in their `turbo.json`.
   Backend and CLI inherit the root `dependsOn: ["build"]`, because
@@ -137,9 +169,10 @@ reliably green on `main`, and nothing requires it to be.
   `test:workspace` in one invocation. `planWorkers` caps the aggregate at
   `MAX_AGGREGATE_TEST_WORKERS` (8) with `MIN_BRIDGE_WORKERS` (2). Bridge
   `test:bridge` scripts preload `tests/setup-node.ts`.
-- **Timing.** These come from 18 local Bun timing profiles written on
-  2026-10-15. They are cumulative per-file times, and host contention is
-  unknown.
+- **Timing.** The package rows come from 18 local Bun timing profiles written
+  on 2026-10-15 (cumulative per-file times, host contention unknown). The file
+  rows were remeasured alone on 2026-10-22 (macOS arm64, Bun 1.4.3, one file at
+  a time on an otherwise busy host).
 
   | Owner or file | Cumulative time |
   | --- | ---: |
@@ -147,27 +180,35 @@ reliably green on `main`, and nothing requires it to be.
   | Web package (about 427 files) | 183–315 s |
   | Root group (about 136 files) | 148–204 s |
   | ACP bridge | 60–140 s |
-  | `tests/unit/components/AddProjectDialog.test.tsx` | 55–57 s in every profile |
-  | `apps/backend/src/core/review-validation-worker.test.ts` | 40–48 s |
-  | `apps/backend/src/core/public-api/public-api-exec.test.ts` | 31–36 s |
-  | `apps/backend/tests/tmux-session.test.ts` | 23–27 s |
-  | `apps/backend/tests/commands-integration.test.ts` | 23–107 s |
-  | `apps/web/src/components/terminal/PersistentTerminal.test.tsx` | about 21 s |
+  | `tests/unit/components/AddProjectDialog.test.tsx` | 2.1 s (was 55–57 s) |
+  | `apps/backend/src/core/review-validation-worker.test.ts` | 47.0 s (46 tests) |
+  | `apps/backend/src/core/public-api/public-api-exec.test.ts` | 35.7 s (17 tests) |
+  | `apps/backend/tests/commands-integration.test.ts` | 34.8 s (55 tests) |
+  | `apps/backend/tests/tmux-session.test.ts` | 28.6 s (71 tests) |
+  | `apps/web/src/components/terminal/PersistentTerminal.test.tsx` | 21.2 s (135 tests) |
 
 ## Outstanding work
 
 ### Code
 
-1. **Confirm `main` stays green, then apply the approved ruleset.** Every
-   failure the completed CI runs have shown so far is fixed, registered or
-   mitigated (see Current state). Once `main` passes three `CI` runs in a
-   row, create the ruleset below with
-   `gh api -X POST repos/orkestrator-ai/orkestrator-v2/rulesets --input <file>`,
-   then check it with `gh api repos/{owner}/{repo}/rulesets`. If a run fails
-   first, fix or register the failure and restart the count; the 0246 launch
-   log says why the real-Chromium case failed. The maintainer approved this
-   ruleset on 2026-10-15. Track production-budget timeout warnings separately;
-   green functional runs alone do not resolve flake 0246:
+1. **Confirm `main` stays green, then apply the approved ruleset.** This is a
+   repository settings change for the maintainer; agents prepare it and do not
+   apply it. Every failure the completed CI runs have shown so far is fixed,
+   registered or mitigated (see Current state), but the fixes are not on `main`
+   until the `todo-0030-test-suite-ci-health` branch merges, and no CI run has
+   exercised them yet: the Linux evidence comes from a container replica, not
+   GitHub Actions. Once `main` passes three `CI` runs in a row, apply the
+   ruleset below. If a run fails first, fix or register the failure and
+   restart the count. The maintainer approved this ruleset on 2026-10-15; its
+   inputs were rechecked on 2026-10-22 against the check runs of `c66604e2`.
+
+   - Required checks: `oxfmt and oxlint`, `Typecheck` and
+     `Unit and integration tests` from `.github/workflows/ci.yml`, all reported
+     by `github-actions` (app 15368). `tests/unit/ci-workflows.test.ts` fails if
+     a context below stops matching a `ci.yml` job name.
+   - Ruleset settings: target `main` (`~DEFAULT_BRANCH`), enforcement active,
+     block deletion and force pushes, strict up-to-date checks off, enforce on
+     branch creation, Admin role (`actor_id` 5) may always bypass.
 
    ```json
    {
@@ -195,15 +236,34 @@ reliably green on `main`, and nothing requires it to be.
    }
    ```
 
+   - Apply from a checkout of `main` that contains this file. The command
+     extracts the first `json` block, as `tests/unit/ci-workflows.test.ts` does:
+
+     ```sh
+     bun -e 'const doc = await Bun.file("docs/todo/cross-cutting/0030-test-suite-and-ci-health.md").text();
+     process.stdout.write(doc.match(/\x60{3}json\s+([\s\S]*?)\x60{3}/)[1]);' |
+       gh api -X POST repos/orkestrator-ai/orkestrator-v2/rulesets --input -
+     ```
+
+   - Verify: `gh api repos/orkestrator-ai/orkestrator-v2/rulesets` lists
+     "main: required CI", and
+     `gh api repos/orkestrator-ai/orkestrator-v2/rules/branches/main` returns
+     the deletion, non-fast-forward and required-status-checks rules. Undo
+     with `gh api -X DELETE repos/orkestrator-ai/orkestrator-v2/rulesets/<id>`.
+
+   Why these settings:
+
    - The three contexts are the `ci.yml` job names, reported by
-     `github-actions` (app 15368), as checked on `7ccb193e`. `actor_id` 5 is
-     the repository Admin role.
+     `github-actions` (app 15368), as checked on `7ccb193e` and again on
+     `c66604e2` (2026-10-22). `actor_id` 5 is the repository Admin role.
    - Strict up-to-date checks stay off at first: about 226 pull requests a
      month and a 12-minute test job would serialise merges. Revisit with a
      merge queue, which needs a `merge_group:` trigger in `ci.yml`.
    - Repository admins may bypass, because version bumps are pushed to `main`
-     directly (44 such pushes since 2026-09-15). Moving them to pull requests
-     would allow pull-request-only bypass.
+     directly (44 such pushes since 2026-09-15; version bumps and release fixes
+     were still pushed directly up to 2026-10-19). No workflow pushes to
+     `main`. Moving the bumps to pull requests would allow pull-request-only
+     bypass.
    - The Bundled Bun and Container checks are not required: that workflow is
      path-filtered, so a required check would stay pending on unrelated pull
      requests.
@@ -211,45 +271,72 @@ reliably green on `main`, and nothing requires it to be.
      `apps/backend/src/core/commands-review.ts`) is refused until the three
      checks pass. That is intended; the maintainer chose not to add `--admin`
      or `--auto`.
-2. **`AddProjectDialog.test.tsx`**, which is new since the review and the root
-   group's long pole. It runs about 47 tests (including `test.each` rows) in
-   55 s, with real 1.2 s, 2.15 s and 2.3 s sleeps and 3 s `waitFor` timeouts.
-   Find the timers behind remote detection and validation, and drive them with
-   `installControlledTimeout` where that is faithful.
-3. **Remaining literal waits.**
+2. **Done (2026-10-22): `AddProjectDialog.test.tsx`.** 17 cases waited out the
+   real 2 s typed-path debounce (`PATH_DETECTION_DEBOUNCE_MS`). It is captured
+   with `installControlledTimeout`; host-picker lookups use a zero delay and
+   stay real. The file went from 56.5 s to 2.1 s; setting the debounce to 1 s,
+   dropping its `clearTimeout` or debouncing picker lookups each fail cases.
+3. **Remaining literal waits.** Deferred on 2026-10-22: these are quiet-window
+   negative assertions over several different retry, probe and bootstrap
+   timers, so each needs its production timer identified first, and together
+   they cost about 10 s inside the web package, which is not the aggregate's
+   critical path.
    - `PersistentTerminal.test.tsx`: 14 waits, about 7.9 s.
    - `apps/web/src/components/native-agent/AgentNativeTab.test.tsx`: 33 waits,
      about 2.4 s, including fifteen 120 ms resource-event waits.
    - Convert a wait only where the production timer can be captured or an
      explicit completion signal exists; otherwise record why it stays. The
      ActionBar suite's residual waits (about 0.3 s) are not worth converting.
-4. **Backend slow owners.** `review-validation-worker.test.ts` still has 23
-   literal waits and has grown from about 30 s. Profile
-   `public-api-exec.test.ts`, `commands-integration.test.ts` and
-   `tmux-session.test.ts` with process and Git spawn counts before narrowing
-   any fixture. `createGitWorktreeWithOrigin` (`apps/backend/tests/command-fixtures.ts`)
-   was judged necessary for `commands-integration`; revisit only with counts.
-5. **Skipped test.** `stops retrying a persistently failing GitHub credential
-   propagation` is a `test.skip` in `tests/unit/components/GlobalSettings.test.tsx`
-   with a real 3 s sleep, and nothing else tracks it. Fix the behaviour and
-   re-enable it with its original intent, or delete it with a recorded reason.
-6. **Desktop test gaps** (see Needs verification):
-   - `BackendProcess.launch` (`apps/desktop/electron/backend-process.ts`): no
-     test covers the 30 s readiness timeout, an invalid auth file, the child
-     exiting between readiness and client setup, or `stop()` racing startup.
-     Only "child exits before readiness" is tested
-     (`apps/desktop/tests/backend-process.test.ts`).
+4. **Backend slow owners.** Per-test profiles from 2026-10-22 (alone, macOS):
+   - `review-validation-worker.test.ts` (47.0 s): spread across many cases
+     that drive a real worker child through queue timeouts and heartbeats; the
+     slowest, `a command that expires while queued keeps no stale queue
+     explanation`, takes 6.3 s on a 6 s queue timeout. Parent-side controlled
+     time cannot reach the child, so shortening these needs a fixture boundary
+     the child honours.
+   - `public-api-exec.test.ts` (35.7 s): three cases that ignore SIGTERM cost
+     19.7 s, because `exec-worker.ts` escalates to SIGKILL after a hard-coded
+     5 s inside the worker process. Shortening them needs a test-only grace
+     override in that child, which counts as changing a production constant;
+     decide that before doing it.
+   - `commands-integration.test.ts` (34.8 s, no case over 2.2 s) and
+     `tmux-session.test.ts` (28.6 s): no single dominant case. Profile with
+     process and Git spawn counts before narrowing any fixture.
+     `createGitWorktreeWithOrigin` (`apps/backend/tests/command-fixtures.ts`)
+     was judged necessary for `commands-integration`; revisit only with counts.
+5. **Done (2026-10-22): skipped settings test.** `stops retrying a
+   persistently failing GitHub credential propagation` was skipped in #717
+   together with a `[DEBUG] auto-save effect ran` `console.log` left in
+   `GlobalSettings.tsx`. The behaviour was already correct; the test runs again
+   with its original intent, stepping the controlled debounce per attempt
+   instead of a 3 s sleep (0.6 s), and fails if the retry bound is 1 or 3. The
+   debug log is gone.
+6. **Desktop test gaps.**
+   - Done (2026-10-22): `BackendProcess.launch`. "BackendProcess startup
+     failure boundaries" in `apps/desktop/tests/backend-process.test.ts` covers
+     the 30 s readiness deadline (controlled), an auth file without a valid
+     token, the child exiting between readiness and client setup (held there by
+     a FIFO auth file) and `stop()` during startup. Each fails when its product
+     branch is removed. Line coverage had already executed most of `launch`, so
+     it could not show these gaps; the behaviours were the gap.
    - `apps/desktop/electron/main.ts` window and connection bookkeeping:
      `windowContexts`, `contextForEvent`, `emitToConnection`, and the
      `useConnection` handler that swaps the window's preview runtime and rolls
      it back on failure. `apps/desktop/tests/main-ipc.test.ts` replaces
      `useConnection` and `forgetConnection` with mocks. The menu helpers in
-     `window-menu.ts` are tested.
+     `window-menu.ts` are tested. Confirmed on 2026-10-22:
+     `main-startup-switches.test.ts` loads `main.ts` in a child Bun process only
+     through the `app.setPath` boundary; it does not exercise `windowContexts`,
+     `contextForEvent`, `emitToConnection`, or `useConnection`. Testing that
+     bookkeeping needs it extracted from the Electron entry point first.
 7. **Flakes.** Resolve the gateway-auth part of flake 0006 once the registry
    criteria are met; the file now runs in well under a second. Flakes 0166
    (OpenCode probe deadline) and 0171 (Multi Review slow-reviewer benchmark)
    were resolved on 2026-10-15 with a controlled deadline and an ordering
-   check. Resolve 0246 (real-Chromium launch) as item 1 describes.
+   check. 0246 (real-Chromium launch) is resolved with a warm-up launch.
+   New on 2026-10-22: 0182 (Cursor HTTP hooks) recurred once on CI, and 0672
+   (Chromium page crash in `preview-interactive.test.ts`) is open after one CI
+   occurrence. Both owners pass alone.
 8. **Dev profiles report Electron's version as the backend's.** Found on
    2026-10-17 during the container qualification. The dev launcher starts
    Electron on `apps/desktop/dist/electron/main.js`
@@ -258,7 +345,10 @@ reliably green on `main`, and nothing requires it to be.
    `ORKESTRATOR_VERSION`. Every `mise run dev` and `dev:test` browser therefore
    shows "Orkestrator has been updated … the server now runs 44.7.0" over the
    bottom-right of the page. Pass the package version in dev, or point
-   Electron at `apps/desktop` so it reads `package.json`.
+   Electron at `apps/desktop` so it reads `package.json`. Not done on
+   2026-10-22: pointing Electron at a directory also changes its app name,
+   which may move `userData`, so either fix needs a real `dev:test` run to
+   verify.
 
 9. **Electron specs leak their Vite server on a timeout.** The
    `e2e/agent-testing/*-electron.spec.ts` helpers spawn a detached Vite dev server
@@ -270,17 +360,29 @@ reliably green on `main`, and nothing requires it to be.
    the group from a fixture teardown or a worker-exit hook as well, and bound
    the `close()` wait.
 
-10. **The Codex bridge listens on import.** Found on 2026-10-21 during the
-    cold-restart qualification
-    ([flake 0660](../../tests/flaky-tests/0660-codex-item-to-parts-inherited-port.md)).
-    `bridges/codex-bridge/src/item-to-parts.test.ts` imports `./index.js`,
-    which starts the bridge's HTTP server on `env.PORT`. An Orkestrator agent
-    tab exports `PORT` (its own bridge's port), so the suite errors with
-    "Failed to start server" whenever it runs from such a tab. Start the server
-    only when `index.ts` is the entry point, or move `itemToParts` out of it.
+10. **Done (2026-10-22): the Codex bridge listened on import in a test.**
+    `item-to-parts.test.ts` now imports the renderer from `./messages/`
+    instead of `./index.js`, and the re-export that existed only for it is
+    gone ([flake 0660](../../tests/flaky-tests/0660-codex-item-to-parts-inherited-port.md),
+    resolved). The entry point still starts its server on import; that is
+    harmless under the suite preload (`CODEX_BRIDGE_NO_SERVER=1`) and was not
+    changed, because `import.meta.main` is not reliable across the Bun and
+    Node runtimes the bundle runs under.
 
 ### Qualification
 
+- The 2026-10-22 CI fixes need GitHub Actions evidence: after the branch
+  merges, three consecutive green `CI` runs on `main` (item 1). The Linux
+  evidence so far is from an `oven/bun:1.4.3` container (arm64, four CPUs,
+  non-root, `CI` and `GITHUB_ACTIONS` set) running the affected owners, not
+  the full `mise run test` on an x64 runner. The whole backend package there
+  (one worker) passed 9,806, skipped 146 and failed 33 in 878 s, with no
+  watcher error; the 33 are container-script, media, worker and Node-parity
+  cases that no real CI run failed, consistent with the slim image lacking
+  runner tools such as `node`. They were not investigated one by one.
+- Local `mise run test` on the branch (macOS, host load 21–27) failed only
+  open flakes 0192 and 0175; both owners passed alone. Bridges, web, CLI and
+  the rest of the backend passed.
 - There is no controlled before-and-after comparison; the streamlining
   validation table was never filled. The 401.9 s (review) and 283.3 s (#815)
   aggregate figures predate #966 and #969.
@@ -313,7 +415,7 @@ reliably green on `main`, and nothing requires it to be.
 - Test-result caching stays off while the flake registry is active. Keep the
   8-worker aggregate ceiling and memory admission.
 - Never change production debounce or retry constants to make tests cheaper.
-- **Timer rules.**
+- **Timer rules** (also in the testing guide's "Controlled time").
   - A negative assertion needs evidence that its deadline has passed. Do not
     shorten a sleep without that.
   - Fake time in the parent cannot advance a child process; use an explicit
@@ -352,9 +454,9 @@ reliably green on `main`, and nothing requires it to be.
 
 ## Needs verification
 
-- Both desktop gaps (item 6) were found by searching the tests for the failure
-  strings and handlers. Confirm with coverage before writing tests.
-- The root cause of the `AddProjectDialog` cost.
+- Whether the backend package's fixture timings still meet the five-minute
+  no-progress watchdog on CI now that the watcher crash no longer ends those
+  cases early. The container replica ran only the affected owners.
 - Current wall-clock group times, which need Turbo `--summarize` from a quiet
   run.
 
@@ -364,7 +466,11 @@ reliably green on `main`, and nothing requires it to be.
   [0006](../../tests/flaky-tests/0006-2026-09-08-coordinator-action-validation.md),
   [0166](../../tests/flaky-tests/0166-opencode-probe-deadline-exit-code.md),
   [0171](../../tests/flaky-tests/0171-multi-review-admission-benchmark-load.md),
-  [0246](../../tests/flaky-tests/0246-design-renderer-real-chromium-launch-deadline.md).
+  [0246](../../tests/flaky-tests/0246-design-renderer-real-chromium-launch-deadline.md),
+  [0182](../../tests/flaky-tests/0182-cursor-auth-readiness-aggregate-timeout.md),
+  [0385](../../tests/flaky-tests/0385-claude-enter-plan-fixture-directory-race.md),
+  [0671](../../tests/flaky-tests/0671-coordinator-opencode-reconcile-join-race.md),
+  [0672](../../tests/flaky-tests/0672-preview-interactive-chromium-page-crash.md).
 - [0031-live-provider-and-platform-qualification.md](0031-live-provider-and-platform-qualification.md)
   for runs CI cannot do.
 - [0023-environment-and-disk-cleanup.md](../containers-and-environments/0023-environment-and-disk-cleanup.md) for test
@@ -375,16 +481,14 @@ reliably green on `main`, and nothing requires it to be.
   Renderer windows keep `sandbox: false` as a documented exception for ESM
   preloads (`apps/desktop/electron/window.ts`); emitting CJS preloads would
   allow `sandbox: true`.
-- Living-doc drift to fix:
-  - [`testing-guide.md`](../../development/testing-guide.md), "Caching and
-    duration history", says `test:workspace` "still depends on" `build`. Only
-    backend and CLI do now; describe the overrides and the single Turbo
-    invocation instead. The guide also does not describe
-    `tests/helpers/controlled-timeout.ts`, the timer rules, or how the
-    ownership guard derives owners (it mentions only the import rule).
-  - The flake registry has two entries numbered 0163
-    (`0163-claude-credential-injection-aggregate-hang.md` and
-    `0163-desktop-isolated-browser-aggregate-timeout.md`).
+- Living-doc drift:
+  - Fixed on 2026-10-22: [`testing-guide.md`](../../development/testing-guide.md)
+    now describes the per-package `test:workspace` build dependencies, controlled
+    time and its rules, and how the ownership guard derives owners.
+  - The flake registry reuses 14 IDs, each on two case files: 0147, 0151,
+    0161, 0162, 0163, 0164, 0176 and 0512–0518. Renumbering means rewriting
+    prose references across case files; new entries take the next free number
+    (0671 and 0672 on 2026-10-22).
 
 ## Replaces
 

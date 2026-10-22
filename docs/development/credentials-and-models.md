@@ -238,7 +238,14 @@ Pi fronts other vendors' models, so its login is one credential per provider
 in `~/.pi/agent/auth.json`, written by `/login` in a Pi terminal, plus any
 provider API-key variable. A local Pi bridge leaves `PI_AGENT_DIR` unset and
 reads that directory as `pi` does. Containers mount `~/.pi` as a portable
-input and the entrypoint copies a bounded allowlist. The bridge never serves
+input and the entrypoint copies a bounded allowlist. A container's
+`auth.json` is access-only: OAuth logins other than GitHub Copilot and Meta
+have their refresh token blanked (Anthropic, OpenAI and xAI rotate theirs),
+expired ones are left out, and the host's current copy is pushed again before
+every Pi bridge start (`restrictPiAuthSnapshot` in
+`packages/protocol/src/login-snapshots.ts`). OpenCode's `auth.json` is handled
+the same way. Run `pi` (or `opencode`) on the host to refresh a login a
+container needs. The bridge never serves
 sign-in itself; see [agent-engines.md](../architecture/agent-engines.md) § Pi.
 
 `PI_BRIDGE_AUTH_FILE` moves the credential file alone out of the agent
@@ -346,10 +353,13 @@ place, as described below, and writes nothing else there.
 For a container test environment, the same provider homes (the profile's
 snapshots for Codex and OpenCode, the host's `~/.claude` read-only for Claude)
 are mounted read-only and copied into writable container state using the
-normal production allowlists. Claude's Keychain credential is synchronized separately over stdin.
-Codex and Grok logins reach any container (test or not) access-only, with the
-refresh token blanked and expired logins withheld, because their refresh
-tokens are single-use and a container refresh would sign the host out
+normal production allowlists. Claude's Keychain credential is synchronized
+separately over stdin. Claude, Codex and Grok logins reach any container
+(test or not) access-only, with the refresh token removed or blanked and
+expired logins withheld, because their refresh tokens are single-use and a
+container refresh would sign the host out. An agent-test profile never
+refreshes the host's Claude login for its containers; they sign out when the
+host's access token expires
 ([Container lifecycle](../architecture/container-lifecycle.md), "Portable
 inputs").
 

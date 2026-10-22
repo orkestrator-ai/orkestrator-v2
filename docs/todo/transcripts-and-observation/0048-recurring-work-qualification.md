@@ -262,7 +262,7 @@ Storage accounting, settled at `9906db30`:
   reuses values already decoded: a write diffing against cached rows,
   `storeRowStats`, the build-pipeline control-record and live-tag caches, and
   the file stat cache. A database fetch for an internal lookup is still a
-  read. `StorageDatabase` reports `read` or `stat`, and `storage-base.ts` maps
+  read. `StorageDatabase` reports `read` or `stat`, and `storage-context.ts` maps
   them one to one.
 - Why: the counter exists to catch extra reads. A cached whole-store read
   still parses every row, and whether the cache is warm depends on unrelated

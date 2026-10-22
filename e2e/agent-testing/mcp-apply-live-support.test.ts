@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   dispatchProbeTurn,
   hasRunningSleep,
+  invokeCommand,
   judgeProbe,
   parseProbeLog,
   probePrompt,
@@ -308,5 +309,72 @@ describe("mcp apply live support", () => {
         scopePrefix("claude-local", 1),
       ]).size,
     ).toBe(3);
+  });
+
+  describe("invokeCommand", () => {
+    const reset = new Error(
+      "apiRequestContext.post: read ECONNRESET\nCall log:\n  - cookie: orkestrator_gateway_auth=SECRET",
+    );
+
+    test("retries a read whose connection reset", async () => {
+      let calls = 0;
+      const result = await invokeCommand(
+        "get_mcp_operation",
+        async () => {
+          calls += 1;
+          if (calls < 3) throw reset;
+          return "ok";
+        },
+        async () => {},
+      );
+      expect(result).toBe("ok");
+      expect(calls).toBe(3);
+    });
+
+    test("never retries a mutation, and drops the call log with its cookie", async () => {
+      let calls = 0;
+      const error = await invokeCommand(
+        "mutate_mcp_definition",
+        async () => {
+          calls += 1;
+          throw reset;
+        },
+        async () => {},
+      ).catch((caught: Error) => caught);
+      expect(calls).toBe(1);
+      expect((error as Error).message).toBe(
+        "mutate_mcp_definition: apiRequestContext.post: read ECONNRESET",
+      );
+    });
+
+    test("does not retry a read that failed for another reason", async () => {
+      let calls = 0;
+      await expect(
+        invokeCommand(
+          "get_mcp_operation",
+          async () => {
+            calls += 1;
+            throw new Error("Timeout 240000ms exceeded");
+          },
+          async () => {},
+        ),
+      ).rejects.toThrow("get_mcp_operation: Timeout 240000ms exceeded");
+      expect(calls).toBe(1);
+    });
+
+    test("gives up after the last attempt", async () => {
+      let calls = 0;
+      await expect(
+        invokeCommand(
+          "list_mcp_management_targets",
+          async () => {
+            calls += 1;
+            throw reset;
+          },
+          async () => {},
+        ),
+      ).rejects.toThrow("list_mcp_management_targets: apiRequestContext.post: read ECONNRESET");
+      expect(calls).toBe(3);
+    });
   });
 });

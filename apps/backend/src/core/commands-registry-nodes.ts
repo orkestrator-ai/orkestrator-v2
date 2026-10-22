@@ -6,6 +6,10 @@ import {
   type NodeRecord,
 } from "@orkestrator/protocol/command-nodes";
 import { isBackendId } from "@orkestrator/protocol/federation";
+import {
+  PORTAL_LAYOUT_CHANGED_EVENT,
+  parsePortalLayoutUpdate,
+} from "@orkestrator/protocol/portal-layout";
 
 import type { CommandContext } from "./commands-context.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
@@ -58,6 +62,18 @@ export function registerNodeCommands(register: CommandRegistrar): void {
   register("get_node_status", async (args, context) => {
     assertOnlyKeys(args, [], "arguments");
     return nodes(context).status();
+  });
+
+  // The portal sidebar's cross-machine order, shared by every client of this node.
+  register("get_portal_layout", async (args, context) => {
+    assertOnlyKeys(args, [], "arguments");
+    return context.storage.getPortalLayout();
+  });
+
+  register("update_portal_layout", async (args, context) => {
+    const layout = await context.storage.updatePortalLayout(parsePortalLayoutUpdate(args));
+    context.emit(PORTAL_LAYOUT_CHANGED_EVENT, layout);
+    return layout;
   });
 
   register("set_command_node_enabled", async (args, context) => {

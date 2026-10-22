@@ -48,6 +48,7 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | Real stack, live approval | The Docker profile above started with `--credential-source claude`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> ORKESTRATOR_AGENT_TEST_LIVE_CONTAINER_APPROVAL=1 mise run test:agent:docker` | C11 approval half (`container-approval-stop.spec.ts`, a real Claude turn) |
 | Real stack, local | `mise run test:agent:browser:isolated` | C30 |
 | Provider resume | `scripts/qualify-session-resume.sh <profile> <agent> [environment-name]` | C13 |
+| Egress gateway prototype | `scripts/qualify-egress-gateway.sh [image]` | None yet: the external egress design in [0018](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md), item 3 |
 
 The image must carry a manifest (`mise run docker:build` or
 `docker/build.sh <tag>`). The network and firewall suites need outbound
@@ -63,6 +64,13 @@ environment onto a new runtime generation and checks the resumed session
 repeats it: exit 0 pass, 1 fail, 2 setup error. A provider that passes is
 added to `RESUME_QUALIFIED_PROVIDERS` (`container-replacement.ts`); until then
 the rebuild preview marks its resume unverified.
+
+`qualify-egress-gateway.sh` starts a gateway container that owns a network
+namespace and runs the working tree's `init-firewall.sh` with `NET_ADMIN`,
+joins a workload to it with no added capability, and checks policy 3
+egress, root tampering, live edits, published and host-service ports, and
+restarts of either side: exit 0 pass, 1 fail, 2 setup error. The backend does
+not create this topology yet.
 
 ## Docker Desktop on Apple Silicon (2026-10-17)
 

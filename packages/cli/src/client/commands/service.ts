@@ -192,7 +192,7 @@ export const serviceCommands: CommandSpec[] = [
           ]),
           "",
           started
-            ? "The service is running. Remote clients can update it from Settings → Updates or `orkestrator host update`."
+            ? "The service is running. Remote clients can update it from Settings → Machines or `orkestrator host update`."
             : `The unit is written but not loaded; load it with: ${serviceManagerCommands(unit).load.at(-1)!.join(" ")}`,
           ...(unit.manager === "systemd"
             ? ["Run `loginctl enable-linger $USER` so it keeps running after you log out."]

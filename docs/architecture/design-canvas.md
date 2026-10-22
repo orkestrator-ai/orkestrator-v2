@@ -7,10 +7,12 @@ Status: Living — HTML/CSS design workspace with recoverable operations
 and [0038-design-agent-conversation-links.md](../todo/design-canvas/0038-design-agent-conversation-links.md).
 
 Use **New design workspace** (the paintbrush in the environment toolbar). The
-dialog has two modes: **New design** (optionally with Claude or Codex, or a
-blank canvas with no agent) and **Import** (`.orkdes`). There is no library
-or status panel: a saved design is an `.orkdes` file in the repository, and
-clicking one anywhere a file opens (file tree, quick open, chat links) opens it
+dialog has three tabs: **New design** (optionally with Claude or Codex, or a
+blank canvas with no agent), **Open design** (a host `.orkdes` picker,
+`design_import_host_file`, with an upload fallback) and **Saved designs**
+(`DesignLibrary.tsx`: search, rename, duplicate, trash, restore and purge of
+this environment's private canvases). A design saved to the repository is an
+`.orkdes` file, and clicking one anywhere a file opens (file tree, quick open, chat links) opens it
 in the design canvas instead of a text tab. A canvas this environment already
 made from that exact file content is reused; any other file is imported as a new
 canvas that remembers the file as its save location (`design_open_file`,
@@ -326,7 +328,8 @@ credentials or prompts.
 ## Tests
 
 Backend: the `core/design/` `service`, `operations`, `history`, `lifecycle`,
-`sync`, `records`, `exports`, `export-writer`, `renderer` and `mcp` tests, and
+`sync`, `records`, `exports`, `export-writer`, `renderer`, `mcp`,
+`cross-process` and `host-file` tests, and
 `commands-registry-design` (a happy-dom runtime renderer from `design/test-support.ts`
 plus one real-Chromium renderer test). Backend tests reach a storage bound
 (change log, history entries) by lowering it with `withDesignLimit`, not with
@@ -340,4 +343,11 @@ command registry at desktop and phone widths;
 `e2e/agent-testing/design-live.spec.ts` (opt-in, `ORKESTRATOR_AGENT_TEST_LIVE_DESIGN=1`)
 runs the full tool cycle, Ask agent, an approval and the handoff with real
 Claude and Codex.
-`scripts/benchmark-design.ts` measures transfer, commit and latency fixtures.
+`e2e/DesignCanvasAccessibility.spec.ts` runs a keyboard-only journey with focus
+survival, accessibility-tree, reduced-motion, zoom and narrow-pane checks, and
+`e2e/agent-testing/design-canvas-electron.spec.ts` (`mise run test:agent:electron`)
+drives the canvas in the real Electron window. The opt-in
+`core/design/export-container.test.ts` (`ORKESTRATOR_TEST_DOCKER_DESIGN_IMAGE`)
+exports from a running container and interrupts it.
+`scripts/benchmark-design.ts` measures transfer, commit and latency fixtures,
+and `e2e/perf/design-canvas-perf.ts` measures the client in a real browser.

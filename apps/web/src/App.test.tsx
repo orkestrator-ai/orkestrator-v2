@@ -3426,6 +3426,33 @@ describe("App startup checks and global events", () => {
     });
     expect(useUIStore.getState().zoomLevel).toBe(100);
 
+    // A key a focused surface already claimed (the design canvas's Ctrl/⌘+0)
+    // is left to it.
+    const claim = (event: KeyboardEvent) => {
+      if (event.key === "0") event.preventDefault();
+    };
+    window.addEventListener("keydown", claim, { capture: true });
+    try {
+      act(() => {
+        keydown("=", { metaKey: true });
+        document.body.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "0",
+            metaKey: true,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      });
+      expect(useUIStore.getState().zoomLevel).toBe(110);
+    } finally {
+      window.removeEventListener("keydown", claim, { capture: true });
+    }
+    act(() => {
+      keydown("0", { metaKey: true });
+    });
+    expect(useUIStore.getState().zoomLevel).toBe(100);
+
     act(() => {
       appEventCallbacks.get("claude-credentials-error")?.({
         payload: { kind: "push_failed", message: "Unable to sync credentials" },

@@ -567,10 +567,41 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
     const expiresAt = Number.isSafeInteger(request.expiresAt)
       ? (request.expiresAt as number)
       : createdAt + AGENT_INTERACTION_DEFAULT_TIMEOUT_MS;
-    return this.interactionRequest(sessionId, providerRequestId, "approval", request, {
-      kind: "permission",
+    // The bridge derives the kind from ACP's `toolCall.kind` and sends what
+    // the call runs. A bridge that predates it, or a command or file change
+    // missing that detail, stays a generic permission.
+    const command = request.kind === "command" ? nonEmptyString(request.command) : null;
+    const rawPaths =
+      request.kind === "file-change" && Array.isArray(request.paths)
+        ? request.paths.filter((path): path is string => nonEmptyString(path) !== null)
+        : [];
+    const paths = rawPaths
+      .slice(0, MAX_RENDERED_FILE_CHANGES)
+      .map((path) => truncatedText(path, "File", MAX_RENDERED_FILE_CHANGE_TEXT_LENGTH));
+    const kind = command ? "command-approval" : paths.length > 0 ? "file-approval" : "permission";
+    const incomplete =
+      request.commandTruncated === true ||
+      (Number.isSafeInteger(request.pathsOmitted) && (request.pathsOmitted as number) > 0);
+    const body = truncatedJoinedText([
+      ...(request.commandTruncated === true
+        ? ["Command details were truncated. This operation cannot be approved."]
+        : []),
+      ...(Number.isSafeInteger(request.pathsOmitted) && (request.pathsOmitted as number) > 0
+        ? [
+            `${request.pathsOmitted} additional file paths were omitted. This operation cannot be approved.`,
+          ]
+        : []),
+      ...(command ? [`Command: ${truncatedText(command, "Command")}`] : []),
+      ...paths.map((path) => `File: ${path}`),
+      ...(rawPaths.length > paths.length
+        ? [`… and ${rawPaths.length - paths.length} more files`]
+        : []),
+    ]);
+    const mapped = this.interactionRequest(sessionId, providerRequestId, "approval", request, {
+      kind,
       presentation: {
         title: boundedText(title, "Approval requested"),
+        ...(body ? { body } : {}),
         questions: [
           {
             id: "decision",
@@ -601,12 +632,16 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
           },
         ],
         confirmLabel: "Continue",
+        confirmDisabled: incomplete,
         declineLabel: "Deny",
       },
       createdAt,
       updatedAt: createdAt,
       expiresAt,
     });
+    const identity = this.providerInteractionIds.get(mapped.id);
+    if (identity) identity.actionable = !incomplete;
+    return mapped;
   }
 
   private mapGrokInteraction(sessionId: string, raw: unknown): AgentInteractionRequest {
@@ -993,7 +1028,7 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
           { method: target.method, body: target.body },
           this.fetchImpl,
         );
-      } catch (error) {
+      } catch {
         const reconciled = await this.listPendingInteractions(sessionId).catch(() => null);
         if (reconciled && !reconciled.requests.some((item) => item.id === interactionId)) {
           return outcome("applied", sessionId, interactionId, reconciled.revision);
@@ -1222,7 +1257,11 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
     }
 
     if (this.agent === "cursor" || this.agent === "grok") {
-      if (request.kind !== "permission") {
+      if (
+        request.kind !== "permission" &&
+        request.kind !== "command-approval" &&
+        request.kind !== "file-approval"
+      ) {
         throw new ProviderUnavailableError("ACP returned an unsupported interaction kind");
       }
       if (request.presentation.questions.length === 0) {

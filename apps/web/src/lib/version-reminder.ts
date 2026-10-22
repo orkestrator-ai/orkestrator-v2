@@ -29,7 +29,7 @@ export interface VersionReminder {
   description: string;
   /**
    * `reload` when reloading the page loads a matching renderer; `update` when
-   * the backend's host can be updated from here (Settings → Updates).
+   * the backend's host can be updated from here (Settings → Machines).
    */
   action: "reload" | "update" | null;
 }

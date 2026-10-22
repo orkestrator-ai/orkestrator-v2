@@ -41,7 +41,7 @@ import { AppServerRuntime, SESSION_CLOSING_ERROR } from "./app-server-runtime.js
 import { AppServerEngine, type AppServerEngineOptions } from "./engine/app-server-engine.js";
 import { codexAppServerConfigOverrides } from "./codex-config.js";
 import { APPROVAL_DECISIONS, isApprovalDecision } from "./app-server/approvals.js";
-import { redactSecrets } from "./app-server/redaction.js";
+import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
 import { parseInteractionAnswer, type InteractionAnswer } from "./app-server/interactions.js";
 import type { ParkedHoldResponse } from "./app-server-runtime-approvals.js";
 import type { AgentInteractionHold } from "@orkestrator/protocol/agent-interactions";
@@ -107,19 +107,6 @@ function isScopedAgentMcp(value: unknown): value is { url: string; token: string
     return false;
   }
 }
-
-// The normalized message model and the item renderer live in ./messages so both
-// engines share one implementation. Re-exported here because existing importers
-// (and item-to-parts.test.ts) resolve them from this module.
-export { itemToParts, stringifyUnknown } from "./messages/normalization.js";
-export type {
-  FileChangeDiffContext,
-  MessageRole,
-  NormalizedMessage,
-  NormalizedPart,
-  ToolDiffMetadata,
-  ToolState,
-} from "./messages/types.js";
 
 interface SseEvent {
   type:

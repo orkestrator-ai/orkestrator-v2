@@ -13,6 +13,7 @@
 
 import { createStore, type StoreApi } from "zustand/vanilla";
 import {
+  isNodeReadCommand,
   NODE_STATUS_CHANGED_EVENT,
   NODES_CHANGED_EVENT,
   type NodeStatus,
@@ -183,7 +184,7 @@ export class PortalStore {
     // the workspace is elsewhere) are its ordinary commands.
     if (nodeId === this.store.getState().selfId) {
       const result = await portalInvoke<T>(command, args);
-      this.scheduleRefresh();
+      if (!isNodeReadCommand(command)) this.scheduleRefresh();
       return result;
     }
     const routed = await portalInvoke<
@@ -193,7 +194,7 @@ export class PortalStore {
       this.store.setState((state) => ({ outcomesRevision: state.outcomesRevision + 1 }));
       throw new OutcomeUnknownError(nodeId, command, routed.requestKey);
     }
-    this.scheduleRefresh();
+    if (!isNodeReadCommand(command)) this.scheduleRefresh();
     return routed.result;
   }
 }

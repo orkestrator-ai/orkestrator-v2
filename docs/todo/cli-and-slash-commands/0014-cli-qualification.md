@@ -1,15 +1,17 @@
 # CLI qualification
 
-Checked against `main` at `a5d338c1` (2026-10-18).
+Checked against `main` at `b83ae534` (2026-10-22).
 
 Most shipped CLI behaviour has evidence at every layer: unit and contract
 tests, real-backend tests, packaged scenarios on Linux (local and container),
 live Claude, Codex and OpenCode runs, and a real browser. What is missing is
-request-specific completion for Pi, Cursor and Grok, the macOS packaging and
-profile checks, and other-provider browser cards. The credential-free,
-container and live Claude, Codex and OpenCode matrices were re-run at
-`a5d338c1` on macOS with Docker Desktop and passed (see "Evidence log"). Until Pi, Cursor and Grok are qualified, scripts on those providers
-cannot use `run wait` as a success signal.
+the live qualification run for Pi, Cursor and Grok (the scenario can now
+drive them; see Qualification item 1), the macOS packaging and profile
+checks, and other-provider browser cards. The credential-free, container and
+live Claude, Codex and OpenCode matrices were re-run at `a5d338c1` on macOS
+with Docker Desktop and passed (see "Evidence log"). Until Pi, Cursor and
+Grok are qualified, scripts on those providers cannot use `run wait` as a
+success signal.
 
 ## Current state
 
@@ -23,8 +25,16 @@ cannot use `run wait` as a success signal.
   `--provider`, `--environment-type`, `--docker-image`, `--keep-on-failure`
   and `--list`. There is no option to target an already running profile.
 - `packages/cli/scripts/build.ts` bundles only `claude-bridge` and
-  `codex-bridge`; OpenCode runs its own server. Pi, Cursor and Grok therefore
-  cannot run the `live-session` scenario at all.
+  `codex-bridge`; OpenCode runs its own server. The published package is
+  unchanged. For a live Pi, Cursor or Grok run the harness gives the scenario
+  backend its own resource root (`prepareProviderRuntime` in
+  `packages/cli/scenarios/provider-runtime.ts`): the packaged Claude and
+  Codex bridges plus the provider's bridge as this worktree built it
+  (`bridges/<bridge>/dist` and `package.json`, the desktop layout). It also
+  enables the provider in the fresh data directory (`agent-platforms.json`)
+  and, for Grok, installs the pinned binary with `orkestrator toolchain
+  install --tool grok` (Grok never falls back to `PATH`). The CLI, backend
+  and Claude/Codex bridges under test stay the packaged ones.
 - Scenarios in `packages/cli/scenarios/cases.ts`: `read-only`,
   `local-lifecycle`, `retry-and-retention`, `setup-failure`, `client-exit`,
   `exec`, `wrong-profile` (credential-free) and `live-session` (opt-in).
@@ -44,8 +54,18 @@ cannot use `run wait` as a success signal.
   (`isolateProviderHomes` in `packages/cli/scenarios/provider-homes.ts`). Before
   2026-10-18 the harness inherited the operator's `HOME` and provider
   variables, so live runs wrote sessions into the host's `~/.claude`,
-  `~/.codex` and OpenCode directories. It covers Claude, Codex and OpenCode
-  only; Pi, Cursor and Grok need the same when they become runnable.
+  `~/.codex` and OpenCode directories. Since 2026-10-22 it also points
+  `PI_CODING_AGENT_DIR` and `GROK_HOME` into the disposable home on every
+  run, and stages credentials for a live Pi, Cursor or Grok run: Pi's
+  `api_key` entries only (OAuth entries are dropped; a file with none is
+  refused), the host's `CURSOR_API_KEY`, and `XAI_API_KEY` or Grok's
+  `auth.json` through `restrictGrokAuthSnapshot` (refresh token blanked,
+  expired logins refused). Pi and Grok runs also set
+  `ORKESTRATOR_AGENT_TEST_HOST_HOME` to the disposable home so container
+  input staging reads the staged files, not the host's (not yet exercised by
+  a container run). `CURSOR_API_KEY`,
+  `XAI_API_KEY` and the `GROK_AUTH_*` overrides are cleared for every other
+  run.
 - Each isolated backend also starts with a decoy parent agent tool connection
   (`INHERITED_AGENT_TOOL_ENV`). The startup regression checks both the login
   shell and a catalogue probe cannot see it. The backend drops any inherited `ORKESTRATOR_AGENT_MCP_URL`
@@ -56,42 +76,57 @@ cannot use `run wait` as a success signal.
 
 ### Code
 
-1. **Make Pi, Cursor and Grok qualifiable.** Either let `run-scenarios.ts`
-   and the harness target an already running full `dev:test` profile for
-   `live-session`, or bundle the Pi, ACP and Cursor bridges into the package.
-   When a provider passes, flip its `PROVIDER_COMPLETION` entry and update the
-   matrix in `public-cli.md`. Extend `isolateProviderHomes` with each
-   provider's one credential file (Pi `auth.json`, Grok, Cursor) so their live
-   runs stay out of the host homes too.
+1. **Done (2026-10-22): make Pi, Cursor and Grok runnable in
+   `live-session`.** Scenario-only bridge overlay, platform enablement,
+   pinned Grok binary and credential staging, as described in "Current
+   state". Covered by `packages/cli/tests/scenario-provider-homes.test.ts`;
+   a credential-free packaged run reached each bridge (see "Evidence log").
+   Flipping `PROVIDER_COMPLETION` and the `public-cli.md` matrix waits on
+   Qualification item 1.
 2. **Record the resolved model per live run.** The run manifest holds IDs,
    stages and exit codes only. An unpinned OpenCode run therefore leaves no
    record of the model it used (2026-10-18), so the evidence log cannot pin
    it. Add the session's resolved provider model to the manifest entry for
    `session start`.
-3. **Settle a local exec whose launcher failed before the worker existed.**
-   On 2026-10-18 the exec control's `bun` failed to start (a mise shim, now
-   avoided by `resolveBunBinary`) and the operation stayed `running` with
-   `execution.state: pending` and the launcher's error as its reason, with no
-   `exec-runs/<operation>` directory. `environment exec --wait` then waited out
-   the caller's whole budget (10 minutes in the scenario). The control's "never
-   start a second worker" rule is right, but a missing run directory after the
-   control exited is evidence the worker never started; settle that as
-   failed rather than pending.
-4. **Do not let `session start --wait` fail on a slow admission.** Under
-   load (three live container runs at once, load average about 38) a container
-   OpenCode `session.start` was not answered within the CLI's 60 s
-   `DEFAULT_REQUEST_TIMEOUT_MS`, and `--wait` exited 4 `transport-uncertain`
-   (flake [0440](../../tests/flaky-tests/0440-cli-live-opencode-container-start-transport-timeout.md)).
-   That is truthful, but a waiting command already holds the request key: it
-   could reconcile with `run get --request-id` and keep waiting, or admission
-   could answer before the provider server is ready.
+3. **Done (2026-10-22): settle a provably unstarted local exec.** A local
+   controller that exits before claiming `state.json` can settle `failed`
+   (`exec-failed`, evidence `none`, "worker never started"). A timeout or
+   Docker client failure cannot prove controller exit. Those unconfirmed
+   launches remain pending even when status finds no state yet; reconciliation
+   accepts a late claim and never starts a second worker. Failed status reads
+   do not prove non-execution. Covered by local launcher tests, unreadable
+   claims and stubbed Docker transport/timeout/missing-state/late-claim paths
+   in `public-api-exec.test.ts`.
+4. **Done (2026-10-22): `session start --wait` and `session prompt --wait`
+   survive a slow admission.** A `transport-uncertain` submission under
+   `--wait` is now looked up by its saved request key and namespace, with
+   server validation of the submitted scope and canonical intent
+   (`submitForWait` in `packages/cli/src/client/commands/common.ts`),
+   repeating while the key is `not-found` or reads fail with
+   `connection-failed`, then observed to the end in the same `--timeout`
+   deadline measured before submission, with a warning naming the recovery.
+   Ordinary successful admission retains the full observation duration;
+   definitive lookup errors and interruption retain recovery-key details.
+   Nothing is resubmitted; if the key never appears in the budget the original
+   exit 4 stands. Without
+   `--wait` the behaviour is unchanged. Covered by `client-waits.test.ts`.
+   Not re-run live under load; flake
+   [0440](../../tests/flaky-tests/0440-cli-live-opencode-container-start-transport-timeout.md)
+   stays open until it is. Other `--wait` mutations (`environment exec`,
+   `environment start`) still exit 4 on a lost response.
 
 ### Qualification
 
 1. **Live `live-session` for Pi, Cursor and Grok**, local and container. Each
    run needs the file assertion plus a follow-up turn. Look specifically for
    OpenCode-style false success: an idle status after a failed turn, or idle
-   just after the prompt is accepted and before any answer exists.
+   just after the prompt is accepted and before any answer exists. The
+   scenario can now run them (Code item 1); `PROVIDER_COMPLETION` reports
+   them `unsupported`, so a run is expected to end with `--wait` exiting on
+   `capability-unavailable` until a provider is flipped: qualify by flipping
+   the entry locally, running the scenario, and committing the flip only
+   with a passing run. Check after each run that the host `~/.pi/agent`,
+   `~/.grok` and Cursor state are untouched.
 2. **macOS.** The credential-free matrix and the container matrix on Docker
    Desktop (including the `exec` scenario) passed on 2026-10-18. Still open:
    - Packed install: `mise run smoke:cli`.
@@ -131,6 +166,13 @@ credential setup is in
   token. Credential-free runs clear inherited credential-source and host-home
   controls. Regression coverage includes fresh/stale OAuth refusal and host
   credential survival after scenario cleanup.
+- Pi, Cursor and Grok: build the provider's bridge first (`mise run
+  build:pi-bridge`, `build:cursor-bridge` or `build:acp-bridge`); the
+  harness refuses an unbuilt one. Pi needs an `api_key` entry in its
+  `auth.json` (`PI_CODING_AGENT_DIR` or `~/.pi/agent`); Cursor needs
+  `CURSOR_API_KEY` in the environment; Grok takes `XAI_API_KEY` or a host
+  login with at least a minute of validity left, and downloads its pinned
+  binary into the scenario data directory on every run.
 - Pin the model with `ORKESTRATOR_SCENARIO_MODEL`. Codex's default model was
   unsupported on the test account, and the disposable Codex home carries no
   `config.toml`, so the host's configured model is not inherited. The case
@@ -148,6 +190,71 @@ Record each run with its date, commit, platform and versions, provider pins,
 command, result and limitations. Run artifacts are
 `output/cli-scenarios/<run>/manifest.json` (git-ignored; IDs, stages and exit
 codes only).
+
+- **2026-10-22, macOS, review fixes.** Recovery now validates the submitted
+  canonical intent and scope on the server, refuses saved intent conflicts,
+  preserves definitive lookup and interruption errors, and shares an absolute
+  recovery deadline without shortening ordinary successful observation. Exec
+  transport failures retain uncertainty until the worker reports. Grok API
+  keys cross private staging into only Grok container startup and are removed
+  by credential revocation.
+  - Passing: format check, lint, workspace typecheck, complete CLI package
+    suite, focused public exec/session/account regressions, and the real
+    Docker fixture suite (71.7 s; credential-free Codex-only profile, including
+    inactive-view rebuild and rehydration). The disposable profile was stopped
+    and reset. No live provider turn was run.
+  - Packaged CLI scenarios: local 7/7 and container 5/5, using the worktree
+    image `orkestrator-v2:dev-6b1b2e970fa3`; no cleanup errors.
+  - The first complete suite failed in Pi runtime vendoring, two firewall
+    fixture deadlines and a Claude plan-preference sentinel. Complete owning
+    files subsequently passed unchanged (Pi 21.8 s, firewall 40.1 s, Claude
+    0.2 s); recurrences are recorded in cases 0514, 0192 and 0385. The first
+    Pi isolated retry failed too; only its later isolated pass established
+    intermittence. All workspace packages and protocol regeneration passed
+    in that initial complete run.
+  - Initial Docker attempts used an incorrect profile that enabled unsigned-in
+    Claude and blocked the UI, plus a logger idle allowance shorter than the
+    rebuild scenario's own deadline. The passing run selected Codex without
+    credentials and used a 540 s logger idle allowance for the existing 480 s
+    rebuild test; no test timeout, assertion or skip changed.
+  - Final complete suite: exit 1 in 651.6 s, solely on the unchanged
+    `storage helper > reports unknown content and foreign markers without
+    touching data` five-second timeout. The complete owning file passed alone
+    (3.4 s); registered as confirmed flake
+    [0672](../../tests/flaky-tests/0672-container-storage-marker-aggregate-timeout.md).
+    Root/support, all bridges and protocol regeneration passed. The aggregate
+    remains failed; isolated passes do not replace its result. Evidence:
+    `orkestrator-test-run.TfxXYL` below the host temporary directory.
+  - Standalone component/public browser, Electron and iOS suites were omitted:
+    no renderer, Electron or iOS implementation changed. Docker's real-stack
+    browser flows and the packaged CLI scenarios supplied the scenario checks.
+
+- **2026-10-22, macOS.** `main` at `b83ae534` plus this branch's changes.
+  macOS (Darwin 25.6.0, arm64), Bun 1.4.3. Credential-free only; no live
+  provider turn was run.
+  - Bridge overlay smoke (ad hoc script over `startIsolatedBackend` with
+    `credentialSource` pi, cursor and grok, empty `PI_CODING_AGENT_DIR` and
+    `GROK_HOME`, no `CURSOR_API_KEY` or `XAI_API_KEY`): each packaged backend
+    enabled the provider, created and readied a local environment, and
+    `session start --wait` failed with the provider bridge's own sign-in
+    error (`pi-bridge/src/credentials.ts`, `cursor-bridge/src/credentials.ts`,
+    `acp-bridge/src/acp-credentials.ts`). Grok's pinned binary installed
+    through `toolchain install --tool grok`. This shows the scenario reaches
+    each bridge; it is not qualification.
+  - Credential-free, local (`mise run test:cli:scenarios`), host load
+    average 150 to 400 from other worktrees: 5/7 pass (`read-only`,
+    `local-lifecycle`, `retry-and-retention`, `exec`, `wrong-profile`).
+    `setup-failure` and `client-exit` failed in `environment start`,
+    `environment launch` and `run wait` stages this branch does not touch.
+    Rerun alone: `client-exit` passed, `setup-failure` failed again after
+    1052 s at load 400. Only `client-exit` is registered as flake
+    [0671](../../tests/flaky-tests/0671-cli-scenarios-environment-start-under-extreme-load.md);
+    `setup-failure` remains unconfirmed and needs a quiet-host rerun.
+  - Package and backend tests: `packages/cli` suite 161/161 pass;
+    `public-api-exec.test.ts` 19/19 pass.
+  - Not run: live Pi, Cursor and Grok (no API-key credentials in this
+    environment, and live runs on the host's own logins were not
+    authorized); container runs for them; flake 0440 under load.
 
 - **2026-10-18, macOS.** `main` at `a5d338c1` plus this branch's fixes.
   macOS 27.0 (Darwin 27.0.0, arm64), Bun 1.4.3, Docker Desktop with Engine
@@ -238,8 +345,12 @@ codes only).
 ## Open questions
 
 - Bundle more bridges into the package, or qualify against dev profiles?
-  Bundling widens what the published package ships; targeting a profile keeps
-  the package small but makes the scenario depend on a running stack.
+  Decided 2026-10-22: neither, for qualification. The harness overlays the
+  worktree-built bridge on the packaged resources for that run only
+  (`provider-runtime.ts`). Still open: whether the published package should
+  ship the Pi, ACP and Cursor bridges at all. Without them a standalone
+  `orkestrator serve` cannot run those providers in local environments
+  (Pi's vendored SDK is about 174 MB, Cursor's about 45 MB).
 - Should qualified providers be re-run after every agent SDK or binary
   upgrade? [`upgrade-agents.md`](../../development/upgrade-agents.md) has no such
   step, and

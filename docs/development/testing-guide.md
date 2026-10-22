@@ -303,6 +303,20 @@ fixtures. Run it alone with
 Record results in the evidence log of
 [0042-service-preview-rollout.md](../todo/previews-and-annotations/0042-service-preview-rollout.md#evidence-log).
 
+### Opt-in design checks
+
+Design export from a real running container (the shipped helper over
+`docker exec -i`, `/workspace` on a `volume-nocopy` named volume, interrupted
+by killing the client, stopping or restarting the container and emptying the
+workspace) is skipped unless its image variable is set. The container and
+volume carry a throwaway owner label and are removed by id.
+
+```bash
+ORKESTRATOR_TEST_DOCKER_DESIGN_IMAGE=orkestrator-v2:latest \
+  mise run test:logged -- --name design-export-container -- bun test --cwd apps/backend \
+  ./src/core/design/export-container.test.ts
+```
+
 ### CLI scenarios
 
 The published client has targeted scenarios that start isolated backends

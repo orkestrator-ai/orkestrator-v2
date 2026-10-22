@@ -259,6 +259,16 @@ function InspectorBody({
     const root = aside.current;
     const active = document.activeElement;
     if (!root || (active && active !== document.body && !root.contains(active))) return;
+    // An acknowledgement only restores focus that was lost (to <body> or a
+    // control disabled while applying); it never pulls focus off the field the
+    // user is in.
+    if (
+      request === "apply" &&
+      active &&
+      active !== document.body &&
+      !(active instanceof HTMLElement && active.matches(":disabled"))
+    )
+      return;
     if (typeof request === "object") {
       const field = Array.from(root.querySelectorAll<HTMLElement>("[data-property]")).find(
         (candidate) => candidate.dataset.property === request.property,
@@ -274,6 +284,24 @@ function InspectorBody({
         )
         ?.focus();
   });
+
+  // A selection that goes stale disables every field: move keyboard focus from
+  // the disabled control (or <body>) to the recovery action instead of losing it.
+  const recoveryButton = useRef<HTMLButtonElement>(null);
+  const closeButton = useRef<HTMLButtonElement>(null);
+  const wasEditable = useRef(editable);
+  useLayoutEffect(() => {
+    const became = wasEditable.current && !editable;
+    wasEditable.current = editable;
+    if (!became) return;
+    const root = aside.current;
+    const active = document.activeElement;
+    if (!root) return;
+    if (active && active !== document.body && !root.contains(active)) return;
+    if (active instanceof HTMLElement && root.contains(active) && !active.matches(":disabled"))
+      return;
+    (recoveryButton.current ?? closeButton.current)?.focus();
+  }, [editable]);
 
   // Content re-rendered by the frame view drops any local preview.
   useEffect(() => {
@@ -429,6 +457,7 @@ function InspectorBody({
             Ask agent
           </Button>
           <Button
+            ref={closeButton}
             type="button"
             variant="ghost"
             size="icon"
@@ -465,6 +494,7 @@ function InspectorBody({
           <div className="flex gap-2">
             {validity === "stale" && (
               <Button
+                ref={recoveryButton}
                 type="button"
                 size="sm"
                 variant="outline"

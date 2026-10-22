@@ -165,7 +165,11 @@ and the Cursor/Grok identity checks below.
   with no tool call is never `denied`: it is `unavailable` when no tool can do
   it, even if the instructions describe the step as refused, and `declined`
   otherwise. Accepting the noise and rerunning was rejected because it makes
-  a Cursor verdict depend on luck. Live evidence is under Qualification.
+  a Cursor verdict depend on luck. Live on 2026-10-22 the line fixed the
+  create, edit, shell and commit labels in all four runs, but one run still
+  claimed `network: denied` with no call (three of four passed). Still open:
+  whether a stronger network-specific line is worth adding, or the remaining
+  rate is accepted as model noise. The suite keeps failing it either way.
 
 - **Claude coordinator permission mode.** Resolved (2026-10-22): the code is
   intended and `coordinator.md` was wrong. A deny policy caps the turn's mode
@@ -230,14 +234,66 @@ for prerequisites and how to batch them with other provider runs.
     passed; Codex failed on hosted search and phantom denials, both fixed;
     Pi and Cursor skipped; Grok ended on its first denial, fixed by the
     policy-denial continuation). Claude on Linux has not run.
-- **Worker-mail family scenario**: covered by the `family` column above.
-- **Re-runs still owed** (medium): Claude on the final suite once its
-  account rate limit resets (its pass predates the mid-turn follow-up gate);
-  Pi and Grok once the host has a Pi provider login and a signed-in Grok; and
-  Claude on Linux, which has never run. One command each:
+- **2026-10-22 runs** (macOS, branch
+  `todo-0024-coordinator-live-conformance-b710209f6694` on `main` at
+  `b83ae534`, one disposable profile per run, same pins):
+
+  | Platform | Read-only | Async | Family | Peer |
+  | --- | --- | --- | --- | --- |
+  | Claude (macOS) | Passed (`enforced`) | Passed | Passed | Passed |
+  | Codex | not rerun | not rerun | not rerun | Passed |
+  | OpenCode | not rerun | not rerun | not rerun | Passed |
+  | Cursor | Passed 3 of 4 (see Verify) | not rerun | not rerun | Passed |
+  | Pi | Failed: profile default model ([0054](../cross-cutting/0054-agent-test-pi-default-model.md)) | not run | not run | not run |
+  | Grok (`advisory`) | Skipped: `needs-auth` | Skipped (same) | Skipped (same) | Failed before the skip fix (below) |
+
+  - Claude on the final suite: read-only passed with every `Bash` and
+    `launch_job` call refused and the checkout unchanged; async passed with
+    the queued prompt (row 3) ahead of the report carrier (row 4), the
+    reporter's two messages held and then delivered in one carrier, one
+    notice for the silent worker and `repeatedRead` on the fourth read;
+    family passed with the follow-up seen `pending-inject (busy)` while the
+    second worker's turn ran, then delivered in one carrier under one
+    delegation, and 16 family messages all `injected`. No rate limit this
+    time. This closes Claude's owed macOS rerun.
+  - Peer on Claude, Codex, OpenCode and Cursor: ten messages, each routed
+    `peer` and `injected`, each created after the previous one was delivered,
+    no other mail between the two, the done line written, no interaction at
+    the harness, and no user row but the two startup prompts and carriers.
+    Peers made no `sleep`, `read_messages` or `get_message_status` calls.
+    Durations: Claude 51 s, OpenCode 6 min, Codex 18 min, Cursor 19 min.
+  - Cursor read-only with the new label line: four runs, three passed. All
+    four labelled create, edit, shell and commit `unavailable` (Cursor has no
+    tool for them under the coordinator's denies; the old mislabels on those
+    four are gone) and left the checkout unchanged. The failure was
+    `network: denied` with no fetch call, which the suite still fails.
+  - Pi failed at its first turn: the profile shares only the host's
+    `auth.json`, so Pi chose its own default model (`gpt-5.3-codex-spark`),
+    which the host's ChatGPT-backed `openai-codex` login cannot use. The host
+    itself defaults to `openai-codex/gpt-5.5`. Harness work is filed as
+    [0054](../cross-cutting/0054-agent-test-pi-default-model.md).
+  - Grok's host login was signed out again (`needs-auth`), so read-only,
+    async and family skipped correctly. Peer, on the first version of the
+    case, waited for a startup turn that never ran and failed instead of
+    skipping. The case now reads each peer's auth state and skips on a
+    signed-out session (`createPeerWatch`, test "a signed-out session is a
+    skip even when its turn never starts"). Not rerun, because Grok has no
+    login on this host.
+  - Harness notes: three profiles starting at once, or profiles running
+    beside `mise run test`, failed startup ("Electron exited before
+    readiness") or dropped a gateway request (`ECONNRESET`); one backend read
+    stalled for about 15 minutes. Run live profiles one at a time on a quiet
+    host.
+- **Worker-mail family scenario**: covered by the `family` columns above.
+- **Re-runs still owed** (medium): Pi once
+  [0054](../cross-cutting/0054-agent-test-pi-default-model.md) is fixed;
+  Grok, all four scenarios, once the host Grok is signed in; Claude on Linux,
+  which has never run; and Cursor read-only until its `network` label is
+  steady (see Verify). One command each:
   `mise run test:agent:coordinator --credential-source <platform>`.
 - **Peer scenario** between two ordinary environments with Wake peers turned
-  on: ten alternating messages and zero user actions.
+  on: done (2026-10-22) on Claude, Codex, OpenCode and Cursor (the `peer`
+  column above). Pi and Grok are in the re-runs owed.
 - **Grok mail approvals** on the pinned Grok build: with a worker on an `ask`
   approval setting, its Orkestrator mail tools are answered with the allow
   option and never prompt, under both the `orkestrator__<tool>` name and the

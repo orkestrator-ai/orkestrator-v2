@@ -324,9 +324,11 @@ the Electron main-process bookkeeping tests and two dev-tooling defects.
      `useConnection` handler that swaps the window's preview runtime and rolls
      it back on failure. `apps/desktop/tests/main-ipc.test.ts` replaces
      `useConnection` and `forgetConnection` with mocks. The menu helpers in
-     `window-menu.ts` are tested. Confirmed on 2026-10-22: the desktop tests do
-     not load `main.ts` at all. Testing it needs the bookkeeping extracted from
-     the Electron entry point first.
+     `window-menu.ts` are tested. Confirmed on 2026-10-22:
+     `main-startup-switches.test.ts` loads `main.ts` in a child Bun process only
+     through the `app.setPath` boundary; it does not exercise `windowContexts`,
+     `contextForEvent`, `emitToConnection`, or `useConnection`. Testing that
+     bookkeeping needs it extracted from the Electron entry point first.
 7. **Flakes.** Resolve the gateway-auth part of flake 0006 once the registry
    criteria are met; the file now runs in well under a second. Flakes 0166
    (OpenCode probe deadline) and 0171 (Multi Review slow-reviewer benchmark)

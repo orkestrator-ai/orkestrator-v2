@@ -1,6 +1,16 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { type ChildProcess, spawn } from "node:child_process";
-import { access, chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  access,
+  chmod,
+  mkdir,
+  mkdtemp,
+  open,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { createServer } from "node:http";
 import { createServer as createNetServer } from "node:net";
 import os from "node:os";
@@ -1827,8 +1837,9 @@ ${body}
   test(
     "rejects an auth file without a valid token and stops the child",
     async () => {
-      const backend = await fakeBackend(`${READY_LINE}\nexec sleep 30`);
-      await writeFile(backend.auth, JSON.stringify({ token: "short" }));
+      const backend = await fakeBackend(
+        `printf '%s' '{"token":"short"}' > "$AUTH"\n${READY_LINE}\nexec sleep 30`,
+      );
       const pid = await backend.pid();
 
       await expect(backend.started).rejects.toThrow(
@@ -1845,8 +1856,9 @@ ${body}
   test(
     "rejects a child that exits between readiness and client setup",
     async () => {
-      // The auth file is a FIFO, so reading it holds startup after readiness
-      // until the test writes the token: the exit is guaranteed to land first.
+      // Opening the FIFO writer proves startup processed readiness and opened
+      // its reader. Keep the child alive until then, and hold back the token
+      // until its exit is observed so client setup must see the dead child.
       const fifoRoot = await mkdtemp(path.join(os.tmpdir(), "orkestrator-startup-fifo-"));
       directories.push(fifoRoot);
       const fifo = path.join(fifoRoot, "auth.fifo");
@@ -1855,11 +1867,17 @@ ${body}
           .once("error", reject)
           .once("exit", (code) => (code === 0 ? resolve() : reject(new Error(`mkfifo ${code}`)))),
       );
-      const backend = await fakeBackend(`${READY_LINE}\nexit 0`, fifo);
-      await backend.pid();
-      await waitUntil(() => backend.backendProcess.getPid() === undefined, "the child's exit");
+      const backend = await fakeBackend(`${READY_LINE}\nexec sleep 30`, fifo);
+      const pid = await backend.pid();
+      const writer = await open(fifo, "w");
+      try {
+        process.kill(pid, "SIGTERM");
+        await waitUntil(() => backend.backendProcess.getPid() === undefined, "the child's exit");
+        await writer.writeFile(JSON.stringify({ token: TOKEN }));
+      } finally {
+        await writer.close();
+      }
 
-      await writeFile(fifo, JSON.stringify({ token: TOKEN }));
       await expect(backend.started).rejects.toThrow("Backend service exited during startup");
       expect(backend.backendProcess.getInfo()).toBeNull();
       // Startup never completed, so this is a failed start, not a crash.

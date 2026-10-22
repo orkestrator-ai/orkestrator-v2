@@ -4,6 +4,8 @@ import {
   keepStoredWorkspaceAlive,
   recoverStoredWorkspace,
   switchWorkspace,
+  takeAddProjectIntent,
+  takeCreateEnvironmentIntent,
   takeSwitchSelection,
   takeSidebarScroll,
   takeWorkspaceStartupError,
@@ -61,6 +63,18 @@ test("desktop competing selection cannot overwrite or clear the accepted intent"
   expect(takeSwitchSelection()).toEqual({ projectId: "pA", environmentId: "eA" });
   expect(set).toHaveBeenCalledTimes(1);
   expect(reload).toHaveBeenCalledTimes(1);
+});
+
+test("each part of a switch intent is taken once, whichever reader runs first", () => {
+  sessionStorage.setItem(
+    "orkestrator.workspace-switch-intent",
+    JSON.stringify({ addProject: true, createEnvironmentProjectId: "pA" }),
+  );
+  expect(takeSwitchSelection()).toBeNull();
+  expect(takeCreateEnvironmentIntent()).toBe("pA");
+  expect(takeCreateEnvironmentIntent()).toBeNull();
+  expect(takeAddProjectIntent()).toBe(true);
+  expect(sessionStorage.getItem("orkestrator.workspace-switch-intent")).toBeNull();
 });
 
 test("expired startup opens immediately and failed recovery returns to command node with an outcome", async () => {

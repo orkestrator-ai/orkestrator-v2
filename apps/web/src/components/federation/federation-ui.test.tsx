@@ -476,23 +476,19 @@ describe("RT-02/OP-05: actions keep the destination captured when they started",
 });
 
 describe("UI-04: creating inside a project instance", () => {
-  test("UI-04: New environment in a project on a machine creates on that machine only", async () => {
-    const fake = installTwoMachines(({ command }) =>
-      command === "create_environment" ? { id: "env-new" } : undefined,
-    );
+  test("UI-04: New environment in a project on a machine opens that machine's dialog", async () => {
+    const fake = installTwoMachines();
     renderWithFederation(<RemoteSections />);
     await waitForRows(2);
 
     fireEvent.click(screen.getByRole("button", { name: "New environment in app on Machine B" }));
-    await waitFor(() => expect(fake.callsTo("b", "create_environment")).toHaveLength(1));
-    expect(fake.callsTo("b", "create_environment")[0]!.args).toEqual({ projectId: "project-1" });
-    expect(fake.callsTo("a", "create_environment")).toHaveLength(0);
-    // The window then moves to that machine and opens the new environment there.
+    // The window moves to that machine and opens its New Environment dialog
+    // there; nothing is created until the user submits it.
     await waitFor(() => expect(fake.workspaceTarget.set).toHaveBeenCalledWith("bk_b"));
     expect(JSON.parse(sessionStorage.getItem("orkestrator.workspace-switch-intent")!)).toEqual({
-      projectId: "project-1",
-      environmentId: "env-new",
+      createEnvironmentProjectId: "project-1",
     });
+    expect(fake.calls.filter((call) => call.command === "create_environment")).toEqual([]);
   });
 });
 

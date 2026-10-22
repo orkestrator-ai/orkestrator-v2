@@ -836,6 +836,17 @@ passed all four groups (424.5 seconds logged); root/support passed in 200.4
 seconds. The unrelated NativeMessage interaction was corrected; Pi staging
 remained unchanged.
 
+## Idle-observation main merge recurrence — 2026-10-21
+
+`Pi bridge runtime vendoring > loads Pi's supported SDK from the staged runtime closure`
+timed out at 30001.93 ms in the aggregate retry's one-worker root/support group
+(3158 passed, one skipped, one failed; 333.7 seconds). The entire unchanged
+owning file passed alone with
+`mise run test:logged -- --name merge-pi-vendor-rerun -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1`
+(exit 0, 13.6 seconds). The retry command and aggregate evidence are in
+[0515](0515-idle-observation-main-merge-validation.md). No implementation,
+assertion, timeout or skip changed.
+
 ## Cold restart review qualification — 2026-10-21
 
 - **Original command:** `mise run test:logged -- --name review-full-suite -- mise run test`, alongside isolated live cold-restart validation.

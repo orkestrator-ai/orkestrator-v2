@@ -58,9 +58,9 @@ it reaches. Some rules of thumb:
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
 | High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 14 |
-| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 272 |
-| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 285 |
-| **Total** | | **572** |
+| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 273 |
+| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 288 |
+| **Total** | | **576** |
 
 ## Very high
 
@@ -155,7 +155,7 @@ it reaches. Some rules of thumb:
 - [x] Run a live multi-review: progress probes, reviewer windows, detail expansion, pages and scroll anchoring ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
 - [x] Qualify Claude inactive-tab and background-task runs against content-revision tokens ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
 - [x] Qualify cold restart: display tails and pipeline histories reconcile, including a mid-dispatch restart ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
-- [ ] Qualify idle observation live per provider: missed final event, approvals, sub-agents, reconnect, hidden ([native-agent-idle-observation.md](native-agent-idle-observation.md), qualification)
+- [ ] Qualify idle observation live per provider: missed final event, approvals, sub-agents, background tasks, reconnect, hidden/no-renderer, detach/reattach ([native-agent-idle-observation.md](native-agent-idle-observation.md), qualification)
 - [x] Back off gateway terminal fallback reconnect timers with `ReconnectBackoff`, resetting after healthy streams ([client-reconnect-and-freshness.md](client-reconnect-and-freshness.md))
 - [x] Fix `storageReads` = 0 since #969 by charging cached row reads, and add a test asserting it ([recurring-work-qualification.md](recurring-work-qualification.md))
 - [ ] Run the live isolated-profile recurring-work qualification: 10 environments, clients, outage, CPU/RSS ([recurring-work-qualification.md](recurring-work-qualification.md), qualification)
@@ -452,6 +452,7 @@ it reaches. Some rules of thumb:
 - [ ] Subscribe the backend to HTTP-bridge event streams and set `idleBackoffWakeup` per provider ([native-agent-idle-observation.md](native-agent-idle-observation.md))
 - [ ] Announce Claude background-task and Codex async-question/terminal changes, then qualify quiet backoff ([native-agent-idle-observation.md](native-agent-idle-observation.md))
 - [ ] Mark mail presence stale or unknown before any HTTP-bridge observation group backs off ([native-agent-idle-observation.md](native-agent-idle-observation.md))
+- [ ] Re-run the live idle-observation spec on Grok and Pi once their host logins are current; both were signed out on 2026-10-21 ([native-agent-idle-observation.md](native-agent-idle-observation.md), qualification)
 - [ ] Decide when the Codex circuit breaker closes and make its backoff sleep cancellable on shutdown ([client-reconnect-and-freshness.md](client-reconnect-and-freshness.md))
 - [ ] Expose gateway and desktop transport connection state and drive `ReadCoordinator.setDisconnected` ([client-reconnect-and-freshness.md](client-reconnect-and-freshness.md))
 - [ ] Show stale, degraded, unsupported and container remote freshness in PR, diff-badge and Files views ([client-reconnect-and-freshness.md](client-reconnect-and-freshness.md))
@@ -798,6 +799,9 @@ it reaches. Some rules of thumb:
 - [ ] Measure data-saving mode bytes and request counts against the quiet-backoff baseline ([remote-client-bandwidth.md](remote-client-bandwidth.md), qualification)
 - [ ] Share native session reads across hook instances through a store keyed by session and view window ([native-agent-idle-observation.md](native-agent-idle-observation.md))
 - [ ] Decide whether to retire the B08 interaction observer or fold it into the observation broker ([native-agent-idle-observation.md](native-agent-idle-observation.md), decision)
+- [ ] Find the `native-agent-session` hints that still reset an idle OpenCode view's quiet backoff (16.5 reads/min against Cursor's 12) ([native-agent-idle-observation.md](native-agent-idle-observation.md))
+- [ ] Exercise Codex sub-agents and Codex, Cursor and OpenCode background shells in the live idle spec; the models ran none on 2026-10-21 ([native-agent-idle-observation.md](native-agent-idle-observation.md), qualification)
+- [ ] Decide whether a silently lost activity announcement may hold a backed-off idle view past the 3 s budget (9.7 to 10.9 s live) ([native-agent-idle-observation.md](native-agent-idle-observation.md), decision)
 - [ ] Adopt jittered `reconnectDelayMs` for terminal WebSocket reconnects and denied-subscription retries ([client-reconnect-and-freshness.md](client-reconnect-and-freshness.md))
 - [ ] Check in a real browser that freshness indicators appear, clear and do not flicker ([client-reconnect-and-freshness.md](client-reconnect-and-freshness.md), qualification)
 - [ ] Decide whether to instrument or drop the 19 uninstrumented `external(...)` catalogue kinds ([recurring-work-qualification.md](recurring-work-qualification.md))
@@ -961,7 +965,7 @@ it reaches. Some rules of thumb:
 | [rich-transcripts.md](rich-transcripts.md) |  |  | 2 |  | 2 |
 | [transcript-history-efficiency.md](transcript-history-efficiency.md) |  |  | 16 | 6 | 22 |
 | [remote-client-bandwidth.md](remote-client-bandwidth.md) |  |  | 4 | 9 | 13 |
-| [native-agent-idle-observation.md](native-agent-idle-observation.md) |  | 1 | 3 | 2 | 6 |
+| [native-agent-idle-observation.md](native-agent-idle-observation.md) |  | 1 | 4 | 5 | 10 |
 | [client-reconnect-and-freshness.md](client-reconnect-and-freshness.md) |  |  | 6 | 2 | 8 |
 | [recurring-work-qualification.md](recurring-work-qualification.md) |  | 4 | 9 | 19 | 32 |
 | **Multi Review** | | | | | |

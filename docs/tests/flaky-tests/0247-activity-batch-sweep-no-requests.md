@@ -119,6 +119,28 @@ Recorded evidence only; no test changed.
 - **Assessment:** matches the existing aggregate-only empty-request symptom. Host contention or local-port failures remain hypotheses. No activity-sweep source, assertion, timeout or skip changed.
 
 
+## Idle-observation review validation — 2026-10-21
+
+- **Original command:** `mise run test:logged -- --name full-suite-warm -- mise run test`
+  on `qualify-idle-observation-per-provider-faa8f79fb369`, using the aggregate's
+  two isolated Bun backend workers. The preceding full suite passed (444.2 s).
+- **Failure:** `activity sweep over the batch route > missing unmaps only that session; unavailable leaves every mapping uncertain`
+  retained `provider-1` at line 177 (8.57 ms), with an activity reconciliation
+  error. This assertion does not establish whether a request reached the fake
+  bridge.
+- **Suite counts:** backend 9,744 passed, 67 skipped, one failed across 9,812
+  tests in 551 files (361.75 s). Every other workspace package, root/support,
+  bridges and protocol verification passed. The aggregate exited 1 in 382.3 s.
+- **Isolated rerun:** `mise run test:logged -- --name activity-batch-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/native-agent-service-activity-batch.test.ts --parallel=1 --only-failures`
+  passed the unchanged owning file (seven tests, exit 0, 0.3 s).
+- **Evidence:** `orkestrator-test-run.8ydoTB/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+  and outer `orkestrator-test-run.3APBbj/full-suite-warm.log.gz`, under the host
+  temporary directory.
+- **Assessment:** the isolated pass establishes intermittence and matches the
+  previously recorded retained-mapping symptom. The local-port/host-load
+  hypothesis remains unconfirmed. No activity-sweep source, assertion, timeout
+  or skip changed.
+
 ## Claude revision-token review fixes — 2026-10-21
 
 - **Original command:** `mise run test:logged -- --name full-tests-cold -- mise run test` on macOS arm64 with Bun 1.4.3 and concurrent host validation.

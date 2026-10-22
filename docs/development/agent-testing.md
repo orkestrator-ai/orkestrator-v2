@@ -410,6 +410,26 @@ how those scopes were covered with an access-only credential seeded into the
 profile. Run one provider at a time (flake 0420). Each provider writes
 `output/agent-testing/<run>/mcp-apply-live/<provider>.json`.
 
+The live idle-observation spec (`e2e/agent-testing/idle-observation-live.spec.ts`)
+has its own opt-in, `ORKESTRATOR_AGENT_TEST_LIVE_IDLE_OBSERVATION=1`. For each
+provider in `ORKESTRATOR_AGENT_TEST_IDLE_PLATFORMS` (default all six) it runs
+one native tab through a missed final event, a parked approval, a sub-agent, a
+background shell, a cut event stream with the browser offline, a hidden
+document, a turn that completes with no renderer connected, and an idle wait
+past the 10 min idle detach. Each case must settle with no stuck Stop button
+or sidebar "working", inside the latency budgets. The faults are injected in
+the page (an `EventSource` and `document.visibilityState` wrapper), not in the
+product. `ORKESTRATOR_AGENT_TEST_IDLE_CASES` narrows the cases,
+`ORKESTRATOR_AGENT_TEST_IDLE_DETACH_WAIT_MS` shortens the idle wait for a
+cadence-only check, and `ORKESTRATOR_AGENT_TEST_IDLE_MODELS` takes
+`<platform>=<model>` pairs. Providers run in parallel with `--workers=4
+--fully-parallel`; run one provider alone to measure a lost announcement,
+because another environment's announcement also recovers a view (stamp gap).
+Each provider writes
+`output/agent-testing/<run>/idle-observation-live/<platform>.json`. The
+recorded run and its credential setup are in
+[native-agent-idle-observation.md](../todo/native-agent-idle-observation.md#live-qualification-record-2026-10-21).
+
 The live Multi Review cycle (`e2e/agent-testing/multi-review-live.spec.ts`)
 has its own opt-in, `ORKESTRATOR_AGENT_TEST_LIVE_MULTI_REVIEW=1`, and uses the
 host's Claude and Codex credentials. Each case runs a real two-reviewer review

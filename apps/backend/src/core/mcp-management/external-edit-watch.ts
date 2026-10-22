@@ -40,6 +40,27 @@ import type { StoredOperation } from "./operations-store.js";
 export const EXTERNAL_EDIT_RECHECK_MS = 60_000;
 export const EXTERNAL_EDIT_READS_PER_TICK = 4;
 
+/**
+ * Shared by the watch and retention: saved operations inside the bounded window
+ * with waiting runtimes neither the reload queue nor the evidence pass reads.
+ * Retention conservatively keeps these even while a rollout gate pauses reads.
+ */
+export function operationAwaitsExternalEdit(stored: StoredOperation, nowMs: number): boolean {
+  const { snapshot, recovery } = stored;
+  if (snapshot.phase !== "saved") return false;
+  const queuedAt = Date.parse(recovery.applyQueuedAt ?? "");
+  if (!Number.isFinite(queuedAt) || nowMs - queuedAt > EVIDENCE_WINDOW_MS) return false;
+  const runtimes = snapshot.apply.runtimes;
+  if (runtimes.some((runtime) => runtime.state === "queued" || runtime.state === "applying")) {
+    return false;
+  }
+  if (operationAwaitsEvidence(stored, nowMs)) return false;
+  const held = heldRuntimes(stored);
+  return runtimes.some(
+    (runtime) => STILL_TO_TAKE_EFFECT.has(runtime.state) && !held.has(runtime.runtimeId),
+  );
+}
+
 export interface ExternalEditWatchDeps {
   now: () => number;
   /** A provider whose apply is paused by the rollout gate is not watched. */
@@ -61,24 +82,9 @@ export class ExternalEditWatch {
     return operations.some((stored) => this.watched(stored, nowMs));
   }
 
-  /**
-   * Saved operations inside the window with a runtime that could still take
-   * the change, which neither the reload queue nor the evidence pass reads.
-   */
   private watched(stored: StoredOperation, nowMs: number): boolean {
-    const { snapshot, recovery } = stored;
-    if (snapshot.phase !== "saved") return false;
-    if (this.deps.blocked(snapshot.provider)) return false;
-    const queuedAt = Date.parse(recovery.applyQueuedAt ?? "");
-    if (!Number.isFinite(queuedAt) || nowMs - queuedAt > EVIDENCE_WINDOW_MS) return false;
-    const runtimes = snapshot.apply.runtimes;
-    if (runtimes.some((runtime) => runtime.state === "queued" || runtime.state === "applying")) {
-      return false;
-    }
-    if (operationAwaitsEvidence(stored, nowMs)) return false;
-    const held = heldRuntimes(stored);
-    return runtimes.some(
-      (runtime) => STILL_TO_TAKE_EFFECT.has(runtime.state) && !held.has(runtime.runtimeId),
+    return (
+      !this.deps.blocked(stored.snapshot.provider) && operationAwaitsExternalEdit(stored, nowMs)
     );
   }
 

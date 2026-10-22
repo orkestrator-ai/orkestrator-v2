@@ -9,10 +9,14 @@ import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import { mcpManagementErrorFromUnknown } from "@orkestrator/protocol/mcp-management";
+import {
+  MCP_MANAGEMENT_LIMITS,
+  mcpManagementErrorFromUnknown,
+} from "@orkestrator/protocol/mcp-management";
 
 import { EVIDENCE_RECHECK_MS, EVIDENCE_WINDOW_MS } from "./evidence.js";
 import { EXTERNAL_EDIT_RECHECK_MS } from "./external-edit-watch.js";
+import { McpOperationStore } from "./operations-store.js";
 import { CHANGED_OUTSIDE_REASON, MERGED_NOTE, REPLACED_BY_SAVE_REASON } from "./external-edits.js";
 import {
   createFixture,
@@ -389,6 +393,111 @@ describe("waiting runtimes no evidence pass polls", () => {
     change(document.mcp);
     fixture.write(OPENCODE, JSON.stringify(document, null, 2));
   }
+
+  test.each(["count", "bytes"] as const)(
+    "OpenCode watch survives %s pressure and restart, then retires an outside edit",
+    async (pressure) => {
+      session("opencode");
+      const saved = await saveAndApply("opencode", "opencode:user-opencode.json");
+      fixture.service.dispose();
+      const file = path.join(fixture.dataDir, "mcp-management/operations.json");
+      const history = new McpOperationStore(
+        file,
+        async () => Buffer.alloc(32),
+        () => fixture.now.value,
+      );
+      await history.load();
+      const original = history.get(saved.operationId)!;
+      const count = pressure === "count" ? MCP_MANAGEMENT_LIMITS.retainedOperations + 5 : 25;
+      const finishedIds: string[] = [];
+      for (let index = 0; index < count; index += 1) {
+        const finished = structuredClone(original);
+        finished.snapshot.operationId = `finished-${index}`;
+        finished.snapshot.requestId = `finished-request-${index}`;
+        finished.snapshot.apply = { state: "not-requested", runtimes: [], omitted: 0 };
+        if (pressure === "bytes") finished.snapshot.message = "m".repeat(200 * 1024);
+        finishedIds.push(finished.snapshot.operationId);
+        await history.put(finished);
+      }
+      expect(history.get(saved.operationId)).toBeDefined();
+      expect(history.get(finishedIds[0]!)).toBeUndefined();
+      expect(history.list().length).toBeLessThanOrEqual(MCP_MANAGEMENT_LIMITS.retainedOperations);
+      expect(readFileSync(file).byteLength).toBeLessThanOrEqual(
+        MCP_MANAGEMENT_LIMITS.operationStoreMaxBytes,
+      );
+
+      fixture.service = fixture.newService();
+      await fixture.service.init();
+      pauseScheduler(fixture);
+      expect((await operation(saved.operationId)).apply.state).toBe("restart-required");
+      editOpencode((mcp) => delete mcp.fixture);
+      await fixture.service.tick();
+      expect((await operation(saved.operationId)).apply.runtimes[0]).toMatchObject({
+        state: "cancelled",
+        cancelReason: "superseded-external",
+      });
+    },
+  );
+
+  test("restart arms the scheduler for external edits alone, and expiry leaves it idle", async () => {
+    session("opencode");
+    const saved = await saveAndApply("opencode", "opencode:user-opencode.json");
+    fixture.service.dispose();
+    fixture.service = fixture.newService();
+    await fixture.service.init();
+    const scheduler = fixture.service as unknown as { timer: ReturnType<typeof setTimeout> | null };
+    expect(scheduler.timer).not.toBeNull();
+    pauseScheduler(fixture);
+    expect((await operation(saved.operationId)).apply.state).toBe("restart-required");
+    expect(fixture.evidenceReads).toEqual([]);
+    expect(fixture.reloads).toEqual([]);
+
+    fixture.service.dispose();
+    fixture.now.value += EVIDENCE_WINDOW_MS + 1;
+    fixture.service = fixture.newService();
+    await fixture.service.init();
+    expect((fixture.service as unknown as typeof scheduler).timer).toBeNull();
+  });
+
+  test("container restart-required watches the host source of its saved change", async () => {
+    fixture.environment.environmentType = "containerized";
+    session("codex");
+    const saved = await saveAndApply("codex", "codex:user");
+    expect(saved.apply.runtimes[0]!.state).toBe("restart-required");
+    fixture.write("home/.codex/config.toml", "");
+    await fixture.service.tick();
+    expect((await operation(saved.operationId)).apply.runtimes[0]).toMatchObject({
+      state: "cancelled",
+      cancelReason: "superseded-external",
+    });
+    expect(fixture.reloads).toEqual([]);
+  });
+
+  test("mixed local queued and container restart-required: watch resumes after the local reload", async () => {
+    environment("env-2");
+    fixture.extraEnvironments[0]!.environmentType = "containerized";
+    session("codex");
+    session("codex", "env-env-2:tab-b", "env-2");
+    fixture.activity.set(`env-1:codex:${KEY}`, "working");
+    const saved = await saveAndApply("codex", "codex:user");
+    expect(saved.apply.runtimes.map((runtime) => runtime.state)).toEqual([
+      "queued",
+      "restart-required",
+    ]);
+    await fixture.service.tick();
+    expect(fixture.reloads).toEqual([]);
+    fixture.activity.set(`env-1:codex:${KEY}`, "idle");
+    await fixture.service.tick();
+    expect(fixture.reloads).toEqual(["env-1"]);
+    fixture.write("home/.codex/config.toml", "");
+    fixture.now.value += EXTERNAL_EDIT_RECHECK_MS;
+    await fixture.service.tick();
+    const runtimes = (await operation(saved.operationId)).apply.runtimes;
+    expect(runtimes[0]).toMatchObject({ state: "pending-next-turn" });
+    expect(runtimes[0]!.cancelReason).toBeUndefined();
+    expect(runtimes[1]).toMatchObject({ state: "cancelled", cancelReason: "superseded-external" });
+    expect(fixture.reloads).toEqual(["env-1"]);
+  });
 
   test("OpenCode restart-required: retired on the watch's slow cadence", async () => {
     session("opencode");

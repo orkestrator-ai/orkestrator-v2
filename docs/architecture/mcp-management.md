@@ -426,9 +426,11 @@ unknown and changes nothing:
   "Retry apply" for the operation and says to open the server again or save
   the change again instead.
 
-Operations whose runtimes no pass polls (OpenCode and container
-`restart-required`, Codex after its reload) are only re-checked when applied
-again.
+Codex runtimes whose app-server already reloaded the change are held and
+intentionally skipped by the watch: that process keeps the change until its
+next reload. Their source is re-checked when applied again. Operations eligible
+for the watch survive history count and byte pressure until their apply window
+expires, just like operations awaiting runtime evidence.
 
 ### Digest privacy
 

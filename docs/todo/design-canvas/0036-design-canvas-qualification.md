@@ -116,24 +116,25 @@ files; see [0031-live-provider-and-platform-qualification.md](../cross-cutting/0
   across acknowledgment, drawers, culling and errors, reduced motion, 200%
   zoom and narrow panes, with observations in the header of
   `e2e/DesignCanvasAccessibility.spec.ts`. The nine focus, announcement and
-  layer-loading defects it found were fixed. Still open: a human pass with VoiceOver and
-  NVDA over the layer tree, frame list, inspector and both status regions
+  layer-loading defects it found were fixed. Still open: a human pass with
+  VoiceOver and NVDA over the layer tree, frame list, inspector and both
+  status regions
   (verbosity, live-region timing during nudge bursts, `aria-description` on
   frame titles, Preview-mode frames, rotor and browse-mode navigation). The
   400% zoom layout defect and the other findings are in
   [0054-design-canvas-accessibility-findings.md](0054-design-canvas-accessibility-findings.md).
 - **Large-canvas client performance.** Done on 2026-10-22 on one host and
-  build (see [Client performance](#client-performance)). Two observations
-  stay open because more cycles are needed to settle them: post-GC heap
-  growth of about 40–60 KiB per activate, deactivate and cull cycle at every
-  size, and one-off jumps in the renderer-wide listener count that then stay
-  flat. Before calling the client leak-free, rerun the leak check with at
-  least 100 cycles (`--cycles 100`).
+  build, including a 100-cycle leak check on the committed fixes that
+  converged at every size (see [Client performance](#client-performance)).
+  Other hosts (Linux, a slower laptop) and the Electron renderer are not
+  measured; the numbers are host evidence, not thresholds.
 - **Mixed versions and migration on real binaries.** Old client with new
   backend and the reverse. Migrate a copied legacy `.orkdes` fixture, and check
   the explicit downgrade path (export before running an older backend). Cover
   a migrated record, an interrupted migration, a future record version and a
-  corrupted record with an older backup.
+  corrupted record with an older backup. Not attempted on 2026-10-22: it
+  needs real old desktop and backend binaries, which are batched with
+  [0034](../cross-cutting/0034-mixed-version-compatibility.md).
 - **Browser design flakes under controlled parallel load.**
   [0174](../../tests/flaky-tests/0174-design-canvas-parallel-browser-timeout.md)
   (`e2e/DesignCanvas.spec.ts` timeouts with six workers) and
@@ -566,8 +567,8 @@ in the phone project.
   where most acknowledgment outliers fall. The JSON report is
   `output/benchmarks/design-canvas/2026-10-22T03-42-27-643Z.json` (numbers
   only).
-- **Not included.** The measured build predates the focus fixes above; see
-  the recheck below.
+- **Not included.** The measured build predates the focus and layer fixes
+  above; see the recheck after the leak check.
 
 | Metric | 1 frame | 16 frames | 64 frames |
 | --- | --- | --- | --- |
@@ -606,6 +607,26 @@ in the phone project.
   - The post-GC heap grew about 0.45–0.75 MiB over 12 cycles at every size.
   - At 1 frame only, Chrome's renderer process count rose from 5 to 9 and then
     plateaued; this looks like sandbox-process handling.
+- **Recheck with the fixes and 100 cycles.** `--runs 1 --samples 20 --moves 3
+  --html-samples 5 --cycles 100 --skip-library --rev HEAD` on `60a75b73` (load1
+  4–19). Report: `output/benchmarks/design-canvas/2026-10-22T04-53-02-132Z.json`.
+  - Gestures held. Preview p50/p95 ms: 12.1/29.75, 11.7/30.4 and 10.7/28.42.
+    Acknowledgment p50/p95 ms: 21.35/220.31, 21.95/29.74 and 26.05/50.65.
+    Pan p95 was 16.7–16.8 ms with no dropped frames, and live iframes stayed
+    at 1/8/8.
+  - The leak check converged at 1, 16 and 64 frames.
+    - After the first (warm-up) cycle, listeners, DOM nodes, iframes, timers,
+      animation frames and blob URLs were flat for the remaining 99 cycles.
+      At 1 frame the warm-up added 34 listeners and 177 nodes once.
+    - Post-GC heap growth slowed each quarter: 10.35 → 10.76 → 10.90 → 11.00
+      → 11.04 MiB at 1 frame, and +1.03–1.07 MiB in total at 16 and 64.
+      That looks like warm-up, not a leak.
+- **Decision.** Nothing here makes a case for a client optimisation:
+  geometry edits never touch iframes, culling holds at 8 live iframes, and
+  panning stays at 60 fps. The backend items under
+  [Deferred until measured](#deferred-until-measured) stay deferred; these
+  client numbers do not measure repeated captures, render-worker contention
+  or full-record rewrites.
 
 ## Constraints and rationale
 

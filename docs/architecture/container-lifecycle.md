@@ -481,13 +481,24 @@ name appears in `entrypoint.sh`.
   `orkestrator-inputs-revision`; after a successful create, revisions no
   container of the environment still binds are removed (recovery copies keep
   theirs), and the whole root goes with the environment's state directories.
-- Logins whose refresh tokens are single-use are staged access-only: Codex
-  and Grok `auth.json` keep the access token, the refresh token is blanked and
-  an expired login is withheld (counted as `login-withheld`). A copy that
-  refreshed would spend the token the host still holds and sign the host and
-  every other container out. Both are re-read from the host before every
-  start, Grok's also before every Grok bridge start, and the entrypoint blanks
-  the refresh token again in the container's own copy.
+- Logins whose refresh tokens are single-use or rotating are staged
+  access-only: Codex and Grok `auth.json` keep the access token, the refresh
+  token is blanked and an expired login is withheld (counted as
+  `login-withheld`). A copy that refreshed would spend the token the host
+  still holds and sign the host and every other container out. OpenCode's
+  `auth.json` and Pi's `agent/auth.json` hold one login per model provider and
+  are restricted per entry: API keys are kept, OAuth logins keep their access
+  token with `refresh` blanked, and an expired one is dropped (also counted as
+  `login-withheld`). GitHub Copilot (both) and Meta (Pi) reuse their refresh
+  token rather than rotate it and are kept whole. All four are re-read from
+  the host before every start. Grok's, OpenCode's and Pi's are also pushed
+  before every bridge start, including a reused bridge; OpenCode and Pi merge
+  the host's providers into the container's file, keeping a login made inside
+  the container, and a host file of expired logins still blanks any refresh
+  token the container holds for those providers. The entrypoint blanks the
+  refresh tokens again in the container's own copy; for OpenCode and Pi only
+  for providers the mounted host file holds as rotating OAuth, so a login
+  made inside the container survives a restart.
 - Claude's `.credentials.json` is access-only the same way
   (`restrictClaudeCredentialsSnapshot`): `claudeAiOauth` and every `mcpOAuth`
   entry lose `refreshToken` (the key is removed, because Claude Code treats an
@@ -509,9 +520,9 @@ name appears in `entrypoint.sh`.
   start that finds the host token expired asks for that refresh at once
   rather than waiting for the next pass. An agent-test profile never
   refreshes the host. A switch also rewrites `oauthAccount` in
-  the running container's `~/.claude.json`. OpenCode and Pi logins are still
-  copied whole (follow-ups in
-  [0018-container-network-and-credential-isolation.md](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md)).
+  the running container's `~/.claude.json`. Remaining qualification and renewal
+  work is tracked in
+  [0018-container-network-and-credential-isolation.md](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md).
 - The Cursor key is no longer in a staged-inputs container's creation
   environment; the bridge reads the synced owner-only file. The Anthropic API
   key (when used instead of OAuth) still is, because Claude Code in terminals

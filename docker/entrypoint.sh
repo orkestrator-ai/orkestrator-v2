@@ -109,23 +109,38 @@ report_agent_copy_skips() {
     AGENT_COPY_SKIPPED=""
 }
 
-# Claude, Codex and Grok refresh tokens are single-use: a container copy that
-# refreshed would spend the token the host still holds and sign the host out,
-# along with every other container. The backend stages these logins access-only
+# Claude, Codex and Grok refresh tokens are single-use, and most OpenCode and Pi
+# OAuth logins rotate theirs: a container copy that refreshed would spend the
+# token the host still holds and sign the host and other containers out.
+# The backend stages these logins access-only
 # (packages/protocol/src/login-snapshots.ts); this blanks the refresh token
 # again in the container's own copy, so a host-mounted home or a copy imported
 # before that change cannot refresh either. Codex's `last_refresh` is set to now
 # so it uses the access token until it expires rather than trying a refresh it
-# cannot make. A file that cannot be read as JSON is removed, never kept whole.
+# cannot make. OpenCode and Pi keep API keys and the OAuth logins whose refresh
+# token is reused rather than rotated (NON_ROTATING_OAUTH_PROVIDERS there).
+# Their files also hold logins made inside the container, which are its own to
+# refresh, so only the providers the mounted host file (source root and
+# relative path, the 4th and 5th arguments) holds as rotating OAuth are
+# blanked, and nothing is touched when there is no such file. A file that
+# cannot be read as JSON is removed, never kept whole.
 restrict_imported_login() {
     local file="$1"
     local kind="$2"
     local label="$3"
+    local source_root="${4:-}"
+    local source_relative="${5:-}"
+    local source=""
 
     [ -f "$file" ] && [ ! -L "$file" ] || return 0
+    if [ "$kind" = opencode ] || [ "$kind" = pi ]; then
+        agent_source_path_has_symlink "$source_root" "$source_relative" && return 0
+        source="$source_root/$source_relative"
+        [ -f "$source" ] || return 0
+    fi
     if ! node -e '
         const fs = require("fs");
-        const [file, kind] = process.argv.slice(1);
+        const [file, kind, source] = process.argv.slice(1);
         const login = JSON.parse(fs.readFileSync(file, "utf8"));
         if (!login || typeof login !== "object" || Array.isArray(login)) process.exit(1);
         if (kind === "claude") {
@@ -138,6 +153,17 @@ restrict_imported_login() {
           for (const entry of Object.values(login)) {
             if (entry && typeof entry === "object" && "refresh_token" in entry) entry.refresh_token = "";
           }
+        } else if (kind === "opencode" || kind === "pi") {
+          const reusable = { opencode: ["github-copilot"], pi: ["github-copilot", "meta"] }[kind];
+          const rotating = (entries) =>
+            Object.entries(entries && typeof entries === "object" && !Array.isArray(entries) ? entries : {})
+              .filter(([provider, entry]) => entry && typeof entry === "object" && entry.type === "oauth" && !reusable.includes(provider))
+              .map(([provider]) => provider);
+          let host = [];
+          try { host = rotating(JSON.parse(fs.readFileSync(source, "utf8"))); } catch {}
+          for (const provider of rotating(login)) {
+            if (host.includes(provider)) login[provider].refresh = "";
+          }
         } else if (login.tokens && typeof login.tokens === "object") {
           if ("refresh_token" in login.tokens) login.tokens.refresh_token = "";
           login.last_refresh = new Date().toISOString();
@@ -145,7 +171,7 @@ restrict_imported_login() {
         const temporary = `${file}.${process.pid}.tmp`;
         fs.writeFileSync(temporary, JSON.stringify(login), { mode: 0o600, flag: "wx" });
         fs.renameSync(temporary, file);
-    ' "$file" "$kind" 2>/dev/null; then
+    ' "$file" "$kind" "$source" 2>/dev/null; then
         rm -f "$file" "$file".*.tmp
         log_progress "Warning: removed an unreadable $label login; sign in again inside the container if needed"
     fi
@@ -899,6 +925,7 @@ if [ -d /opencode-data ]; then
     done
 
     chmod 600 "$HOME/.local/share/opencode/auth.json" 2>/dev/null || true
+    restrict_imported_login "$HOME/.local/share/opencode/auth.json" opencode OpenCode /opencode-data auth.json
     report_agent_copy_skips OpenCode
     if [ -n "$DEBUG" ]; then
         echo "Copied OpenCode data files:"
@@ -1038,6 +1065,7 @@ if [ -d /pi-config/agent ]; then
     done
 
     chmod 600 "$HOME/.pi/agent/auth.json" 2>/dev/null || true
+    restrict_imported_login "$HOME/.pi/agent/auth.json" pi Pi /pi-config/agent auth.json
     # The bridge's MCP client reads user servers from here; definitions can
     # carry literal header or environment values, so keep it owner-only.
     if [ -f "$HOME/.pi/agent/mcp.json" ] && [ ! -L "$HOME/.pi/agent/mcp.json" ]; then

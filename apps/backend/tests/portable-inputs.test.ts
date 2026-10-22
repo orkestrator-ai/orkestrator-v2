@@ -304,6 +304,96 @@ describe("portable input staging", () => {
     expect(expired.providers[0]?.skipped["login-withheld"]).toBeUndefined();
   });
 
+  test("stages OpenCode and Pi OAuth logins access-only and keeps their API keys", async () => {
+    const { dataDir, roots, home } = await fixtureHome();
+    const now = new Date("2026-10-21T12:00:00Z");
+    const live = now.getTime() + 8 * 3600_000;
+    await write(
+      path.join(home, ".local", "share", "opencode", "auth.json"),
+      JSON.stringify({
+        "opencode-go": { type: "api", key: "go-key" },
+        openai: { type: "oauth", access: "oc", refresh: "SENTINEL-OC", expires: live },
+        "github-copilot": { type: "oauth", access: "gho", refresh: "gho", expires: 0 },
+      }),
+    );
+    await write(
+      path.join(home, ".pi", "agent", "auth.json"),
+      JSON.stringify({
+        anthropic: { type: "oauth", access: "pi", refresh: "SENTINEL-PI", expires: live },
+        openai: { type: "oauth", access: "old", refresh: "SENTINEL-OLD", expires: 1 },
+        openrouter: { type: "api_key", key: "or-key" },
+      }),
+    );
+    await write(path.join(home, ".pi", "agent", "settings.json"), "{}");
+    const staged = await stagePortableInputs(
+      dataDir,
+      "env-provider-logins",
+      new Set(["opencode", "pi"] as const),
+      roots,
+      now,
+    );
+    expect(
+      JSON.parse(
+        await fs.readFile(path.join(staged.directory, "opencode-data", "auth.json"), "utf8"),
+      ),
+    ).toEqual({
+      "opencode-go": { type: "api", key: "go-key" },
+      openai: { type: "oauth", access: "oc", refresh: "", expires: live },
+      "github-copilot": { type: "oauth", access: "gho", refresh: "gho", expires: 0 },
+    });
+    expect(
+      JSON.parse(
+        await fs.readFile(path.join(staged.directory, "pi-config", "agent", "auth.json"), "utf8"),
+      ),
+    ).toEqual({
+      anthropic: { type: "oauth", access: "pi", refresh: "", expires: live },
+      openrouter: { type: "api_key", key: "or-key" },
+    });
+    for (const [provider, stage] of [
+      ["opencode", "opencode-data"],
+      ["pi", "pi-config"],
+    ] as const) {
+      const files = await listFiles(path.join(staged.directory, stage));
+      const bytes = (
+        await Promise.all(files.map((file) => fs.stat(path.join(staged.directory, stage, file))))
+      ).reduce((sum, stat) => sum + stat.size, 0);
+      expect(staged.providers.find((entry) => entry.provider === provider)).toEqual({
+        provider,
+        files: files.length,
+        bytes,
+        // The expired Pi OpenAI login is reported; the file itself is still staged.
+        skipped: provider === "pi" ? { "login-withheld": 1 } : {},
+      });
+    }
+    for (const file of await listFiles(staged.directory)) {
+      expect(await fs.readFile(path.join(staged.directory, file), "utf8")).not.toContain(
+        "SENTINEL",
+      );
+    }
+
+    // Expired OAuth logins only: nothing is staged for them.
+    await write(
+      path.join(home, ".pi", "agent", "auth.json"),
+      JSON.stringify({ anthropic: { type: "oauth", access: "a", refresh: "r", expires: 1 } }),
+    );
+    const expired = await stagePortableInputs(
+      dataDir,
+      "env-provider-expired",
+      new Set(["pi"] as const),
+      roots,
+      now,
+    );
+    expect(await listFiles(expired.directory)).toEqual([
+      "manifest.json",
+      "pi-config/agent/settings.json",
+    ]);
+    expect(expired.providers[0]).toMatchObject({
+      provider: "pi",
+      files: 1,
+      skipped: { "login-withheld": 1 },
+    });
+  });
+
   test("withheld non-UTF-8 logins do not leave negative byte totals", async () => {
     const { dataDir, roots, home } = await fixtureHome();
     await write(path.join(home, ".grok", "auth.json"), Buffer.from([0xff]));

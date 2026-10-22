@@ -125,45 +125,83 @@ restricted containers no longer need `NET_ADMIN` can the sudo grants shrink or
     Claude credentials are allowed, because its refresh token is stripped too
     (as for Codex and Grok). Revoking the environment's Claude credentials
     keeps it, since nothing is then staged or synced.
+- Rotating OpenCode and Pi OAuth refresh tokens (2026-10-21). OpenCode's
+  `auth.json` and Pi's `agent/auth.json` hold one login per model provider
+  (`{ type: "oauth", access, refresh, expires }`, expiry in milliseconds, or
+  an API key). Both CLIs re-read the file before each request: Pi reloads its
+  auth storage, and OpenCode's OAuth plugins call `Auth.get`, a file read, on
+  every request. An OpenCode server only learns of a provider first signed in
+  after it started when it restarts, as on the host. Checked against
+  the pinned sources (OpenCode 1.19.0 plugins, Pi 1.2.0 `pi-ai`): Anthropic,
+  OpenAI (Codex and ChatGPT), xAI, Kimi and Radius store the new refresh token
+  on every refresh, so they rotate (OpenAI's and xAI's are known single-use).
+  GitHub Copilot keeps the GitHub OAuth token as `refresh` and only exchanges
+  it for a 30-minute Copilot token (OpenCode uses it directly, `expires` 0),
+  and Pi's Meta keeps a non-renewable identity token that mints day-long keys.
+  `restrictOpenCodeAuthSnapshot` and `restrictPiAuthSnapshot` (same module)
+  keep API keys and those two non-rotating logins whole, blank every other
+  OAuth login's `refresh` and drop one with less than six minutes left (Pi
+  refreshes five minutes early), and drop entries of unknown type (Pi rejects
+  the whole file over one). Staging, the restage before every start and a push
+  before every OpenCode and Pi bridge start (`syncContainerLogin`, also on a
+  reused bridge) apply it. The push merges the host's providers into the
+  container's file (`buildMergeContainerProviderAuthCommand`, under Pi's lock
+  directory): a provider the user signed in to inside the container keeps its
+  own login, and any refresh token the container still holds for a provider
+  the host has as rotating OAuth is blanked, even when every host login has
+  expired and nothing new is handed over. The merge never takes a lock it
+  finds held, however old: Pi's asynchronous refresh holds it for up to 30
+  seconds with a 15-second heartbeat, and Pi clears a stale one itself, so a
+  held lock only skips that push until the next bridge start. The entrypoint
+  blanks rotating refresh tokens again on every start, for the providers the
+  mounted host file holds as rotating OAuth; a login made inside the
+  container keeps its refresh token, and with no host file the container's
+  own file is left alone. Access tokens last hours (Anthropic
+  about eight, xAI about six) to days (OpenAI about ten), so a bridge session
+  that outlives one signs out until the next bridge start or container start
+  picks up the host's refreshed login; the host must have refreshed it, by
+  running `pi` or `opencode` there.
 
 ## Outstanding work
 
 ### Code
 
-2. One canonical default allowlist. Generate the shell and renderer fallbacks
+1. One canonical default allowlist. Generate the shell and renderer fallbacks
    from the backend list (at image build and from the protocol package), or
    have the renderer read the backend's list, rather than keeping three
    copies. `requiredAgentNetworkDomains` stays the only provider-specific
    addition. Replace the partial drift test with an equality or generation
    check. Never widen a stored user list on a read.
-3. External egress prototype, kept bounded. Enforce egress outside the
+2. External egress prototype, kept bounded. Enforce egress outside the
    workload with no workload `NET_ADMIN`. Prove a working path for non-HTTP
    Git/SSH, provider endpoints and the agent-tools callback, then measure
    overhead and failure recovery. A plain HTTP proxy does not constrain direct
    sockets without network enforcement beside it. Only after the prototype
    replaces the privileged init can `NET_ADMIN`, the `init-firewall.sh` grant
    or `no-new-privileges` be reconsidered.
-4. Optional: change mode in place (restricted to full and back) instead of
+3. Optional: change mode in place (restricted to full and back) instead of
    requiring a rebuild.
-5. Stop containers spending the host's OpenCode and Pi OAuth refresh tokens
-   (high). Both are staged in full (`opencode-data/auth.json`,
-   `pi-config/agent/auth.json`). Pi's OAuth providers rotate refresh tokens:
-   agent-test profiles share Pi's file in place for this reason (see
-   [credentials and models](../../development/credentials-and-models.md)).
-   OpenCode's OAuth entries (Anthropic, OpenAI, GitHub Copilot) carry the
-   same providers' rotating tokens. API-key entries are safe to copy. Apply
-   the same access-only treatment per entry type, or stage API-key entries
-   only.
-6. Keep container MCP OAuth logins signed in (medium). Claude's `mcpOAuth`
+4. Keep container MCP OAuth logins signed in (medium). Claude's `mcpOAuth`
    entries now reach a container without refresh tokens, so a container's MCP
    server login lapses with its access token unless the host refreshes it
    first, which it only does when the host itself uses that server. Either
    have the keeper refresh near-expiry MCP logins on the host too, or keep a
    container-owned MCP login separate from the host's.
-7. Read the host Claude login once per keeper pass (low, measure first). Each
+5. Read the host Claude login once per keeper pass (low, measure first). Each
    pass reads the active login (a `security` call on macOS) once to decide on
    a host refresh and again per running container it syncs. Pass the one read
    down if a host with many running containers shows it matters.
+6. Re-push access-only logins to running containers when the host's file
+   changes (medium). Grok, OpenCode and Pi copies are refreshed only at
+   container start and bridge start, so a bridge session that outlives the
+   access token (Anthropic about eight hours, xAI about six) signs out
+   mid-session even though the host has since refreshed. Watch the host's
+   `~/.grok/auth.json`, OpenCode `auth.json` and Pi `agent/auth.json` (or
+   poll their mtime) and push to every running container that is authorized
+   for the provider, through the same queue and fences as
+   `syncContainerLogin`. OpenCode and Pi re-read the file per request, so no
+   bridge restart is needed; check whether Grok does. Claude already uses
+   a keeper for renewal delivery; the same mechanism may be shared.
 
 7. Tell a container user how to recover a lapsed Codex login (medium).
    When a container's access-only Codex login lapses, the tab now says
@@ -220,6 +258,42 @@ restricted containers no longer need `NET_ADMIN` can the sudo grants shrink or
     the other 25 keys of `~/.claude.json`, and `claude auth status` then named
     the new (fake) email.
   - Skipped: the host refresh and a mid-session token pickup (see above).
+- OpenCode and Pi past expiry with live OAuth logins (medium). The
+  2026-10-21 run below had none: the host's OpenCode holds API keys only, and
+  Pi's only OAuth login (OpenAI) had expired, so staging rightly withheld it.
+  With a fresh host Pi or OpenCode OAuth login (Anthropic or OpenAI), check in
+  a container that a turn works with the access-only copy, that it signs out
+  alone past `expires` (or with `expires` edited in the container's copy),
+  that a bridge restart after a host `pi`/`opencode` run signs it back in, and
+  that the host file's hash changes only when the host itself refreshes.
+- Run on 2026-10-21 (rotating OpenCode and Pi tokens). Container image
+  `ghcr.io/orkestrator-ai/orkestrator-v2:2.23.0` (OpenCode 1.19.0, Pi 1.2.0,
+  matching the pins) on Docker Desktop 29.8.2 (aarch64), full network mode,
+  with this change's `docker/entrypoint.sh` bind-mounted over the image's. One
+  disposable container, `ork-live-0690-oc-pi`, removed afterwards with its
+  temporary data directory. No profile or other environment was touched.
+  - Host `~/.local/share/opencode/auth.json`, `~/.pi/agent/auth.json`,
+    `~/.grok/auth.json`, `~/.codex/auth.json` and `~/.claude/.credentials.json`:
+    SHA-256 prefix and mtime recorded before and after. All unchanged.
+  - `stagePortableInputs` for OpenCode and Pi from the real host home: the
+    OpenCode file was staged with its two API keys unchanged. Pi's file was
+    withheld (`login-withheld: 1`): its only login, OpenAI OAuth, had expired.
+  - Boot reached "Container Ready". `opencode auth list` showed both keys, and
+    `opencode run -m opencode/big-pickle` answered "pong" with the Zen key.
+  - Migration from before the change, fake tokens: a full-shape Pi file
+    (Anthropic OAuth, Copilot OAuth, OpenRouter key) written into the
+    container, then the container restarted. The entrypoint blanked
+    Anthropic's refresh token and kept Copilot's and the key. (The
+    entrypoint has since been narrowed to the providers the mounted host
+    file holds as rotating OAuth; a unit test covers both cases.)
+  - `pi -p --model anthropic/claude-haiku-4-5` with that expired, access-only
+    login exited 1 with "OAuth refresh failed for anthropic" (Anthropic
+    answered 400 to the empty token) and left the file unchanged.
+  - The pre-bridge merge command, run with `docker exec -i` in the image:
+    the host's (fake) Anthropic login replaced the container's, a stale full
+    copy of an OpenAI Codex login had its refresh token blanked, a login the
+    container made itself (Kimi) and an API key were kept, and no lock or
+    temporary file was left.
 - Grok past expiry with a live login (medium). The 2026-10-21 run below could
   not use a real Grok login: the host's access token had expired about eight
   hours earlier, so staging rightly withheld it. Repeat on a host whose Grok
@@ -320,11 +394,13 @@ restricted containers no longer need `NET_ADMIN` can the sudo grants shrink or
 - Do not describe a root workload as unable to change its firewall.
 - Published ports stay on loopback and authenticated.
 - A container never holds a refresh token it shares with the host or another
-  container when that provider's refresh tokens are single-use. It gets the
-  access token, re-read from the host on start, and signs out on its own when
-  that expires. Only the host refreshes, through the provider's own CLI;
-  Orkestrator never calls a token endpoint or writes a host credential store
-  itself, and an agent-test profile never refreshes the host at all.
+  container when that provider's refresh tokens are single-use or rotating. It
+  gets the access token, re-read from the host on start, and signs out on its
+  own when that expires. A refresh token that is reused rather than rotated
+  (GitHub Copilot, Pi's Meta) may be copied, like an API key. Only the host
+  refreshes through the provider's own CLI; Orkestrator never calls a token
+  endpoint or writes a host credential store itself, and an agent-test profile
+  never refreshes the host at all.
 - Credentials go only to enabled, authorized, non-revoked providers.
   Revocation is recorded before anything else, so an interrupted revoke still
   gates staging and syncs. Never promise that removal retracts a credential a

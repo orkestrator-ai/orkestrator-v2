@@ -257,3 +257,50 @@ under `output/agent-testing/qa-browser-47055d41-4c9/browser/`. The one-shot
 runner stopped and reset that profile and removed its disposable state. The
 later documentation merge received text/conflict/link inspection only, with
 no new test, typecheck or build invocation.
+
+
+## OpenCode and Pi access-only main merge — 2026-10-22
+
+Merged `88121331c` into pre-merge HEAD `b07fea92a`. The complete scope is 22
+incoming paths, including credential code, protocol, shell entrypoint and tests.
+The 13 conflicted files retain both Claude's access-only staging/keeper and
+main's OpenCode/Pi access-only provider merge, including API keys and the
+non-rotating OAuth exceptions. Both sets of tests and qualification evidence
+are retained; completed Claude and OpenCode/Pi work is removed from the backlog.
+
+Validation through `test:logged`:
+
+- `merge-latest-protocol`: pass (0.3 s).
+- `merge-latest-backend-owners`: pass (29.5 s), the complete account-container,
+  registry-server, registry-coverage and portable-input owners.
+- `merge-latest-runtime-env`: pass (7.1 s), including both providers' entrypoint
+  migration and the existing Claude stripping path.
+- `merge-latest-static`: pass (14.4 s), `mise run check` (format, lint, types).
+  Final `format:check` also passed (0.6 s).
+- `merge-latest-docker-image`: pass (62.2 s), checkout-specific dev image.
+- `merge-latest-docker`: pass (81.2 s), credential-free fixture profile
+  `merge-claude-main-latest`. Stopped/reset afterwards: two exact-owner
+  containers, four volumes, one network and disposable state removed.
+- `merge-latest-full-suite`: exit 1 (462.3 s). All test tasks passed with zero
+  failures: backend 9,965 pass/69 skip; web 8,719 pass/10 skip; desktop 1,112
+  pass/14 skip; protocol 1,739 pass; CLI 148 pass; toolchain 91 pass; public
+  web 41 pass. Root/support, bridges and protocol lockfile groups passed too.
+  The sole failed task was `@orkestrator/web#build`: `ENOTEMPTY` cleaning
+  `apps/web/dist/assets` while a separate build wrote the same output. That
+  separate build also failed precompression with a missing generated asset.
+  This was overlapping validation, not an established test flake.
+- After the competing build tasks ended, `merge-latest-build-retry`
+  (`mise run build`) passed (25.4 s), including production web, backend and
+  desktop. The aggregate command itself was not rerun; its nonzero result is
+  retained above rather than described as a green aggregate.
+
+Failure artifacts: `orkestrator-test-run.b9Y3ik` (inner aggregate),
+`orkestrator-test-run.Tnhu0q` (outer logged aggregate), and
+`orkestrator-test-run.bQSOvL` (initial separate build), under the host temporary
+directory. The first focused invocation used the wrong working directory;
+a corrected invocation accidentally selected the package-wide script and was
+stopped. The explicit owning-file invocation above is the focused result.
+No assertions, timeouts or skips were changed. No additional component-browser,
+Electron, CLI-scenario or iOS suites were selected: this merge changes container
+credentials and protocol helpers, with Docker coverage above. Live provider
+refresh/expiry qualification remains outstanding as documented in the backlog.

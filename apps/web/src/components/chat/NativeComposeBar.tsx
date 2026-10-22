@@ -117,21 +117,26 @@ export function NativeComposeBar({
       ? "Design context"
       : `${annotations.length} design contexts`
     : `${annotations.length} annotation${annotations.length === 1 ? "" : "s"}`;
-  const [gallery, setGallery] = useState<{ items: GalleryItem[]; index: number } | null>(null);
+  const [gallery, setGallery] = useState<{
+    items: GalleryItem[];
+    index: number;
+    initialSource: string;
+  } | null>(null);
   const openImagePreview = (attachmentId: string) => {
     const images = attachments.filter(
       (attachment) => attachment.type === "image" && attachment.previewUrl,
     );
+    const index = images.findIndex((image) => image.id === attachmentId);
+    const initialSource = images[index]?.previewUrl;
+    if (!initialSource) return;
     setGallery({
       items: images.map((image) => ({
         title: image.name,
         element: () => null,
         load: () => Promise.resolve(image.previewUrl ?? null),
       })),
-      index: Math.max(
-        0,
-        images.findIndex((image) => image.id === attachmentId),
-      ),
+      index,
+      initialSource,
     });
   };
   return (
@@ -400,6 +405,7 @@ export function NativeComposeBar({
           open
           items={gallery.items}
           initialIndex={gallery.index}
+          initialSource={gallery.initialSource}
           onOpenChange={(open) => {
             if (!open) setGallery(null);
           }}

@@ -89,7 +89,9 @@ import {
   isTranscriptUpdateKind,
   isTrimNotice,
   rememberHistoryMessage,
+  toolArgumentPath,
   trimPartsTo,
+  truncateUtf8,
   turnRequiresCompleteOutput,
 } from "./acp-transcript.js";
 import {
@@ -1370,6 +1372,88 @@ export function parkGrokInteraction(
   schedulePersist();
 }
 
+/** What a parked permission request asks to run: the card's kind and its detail. */
+export type AcpApprovalDetail =
+  | { kind: "command"; command: string }
+  | { kind: "file-change"; paths: string[] }
+  | { kind: "permission" };
+
+const MAX_APPROVAL_COMMAND_BYTES = 4_096;
+const MAX_APPROVAL_PATHS = 20;
+const FILE_CHANGE_TOOL_KINDS = new Set(["edit", "delete", "move"]);
+
+/** The tool call as the bridge already recorded it, for a request that names only its id. */
+export interface RecordedApprovalTool {
+  name?: string | null;
+  kind?: string;
+  input?: unknown;
+  locationPath?: string;
+}
+
+/**
+ * The approval kind of an ACP permission request, from its ACP `toolCall.kind`
+ * (or the kind recorded for the same call, or one inferred from a known tool
+ * name): `execute` is a command, `edit`, `delete` and `move` a file change,
+ * anything else a generic permission. A command or file change without the
+ * command or paths a person needs to judge it stays a permission, so the card
+ * never claims detail it does not have. Grok's `use_tool` wrapper is read
+ * through to the tool it runs.
+ */
+export function permissionDetail(
+  params: JsonObject,
+  recorded: RecordedApprovalTool = {},
+): AcpApprovalDetail {
+  const call = isObject(params.toolCall) ? params.toolCall : {};
+  const rawInput = call.rawInput === undefined ? recorded.input : call.rawInput;
+  const wrapped =
+    isObject(rawInput) && wrappedToolName(rawInput) ? unwrappedToolInput(rawInput) : undefined;
+  const input = wrapped ?? (isObject(rawInput) ? rawInput : undefined);
+  const kind =
+    (typeof call.kind === "string" ? call.kind : undefined) ??
+    recorded.kind ??
+    permissionToolNames(params, recorded)
+      .map((name) => PERMISSION_KIND_BY_TOOL[name.toLowerCase()])
+      .find((value) => value !== undefined);
+  if (kind === "execute") {
+    const raw = input?.command ?? input?.cmd;
+    const command = Array.isArray(raw)
+      ? raw.filter((part): part is string => typeof part === "string").join(" ")
+      : typeof raw === "string"
+        ? raw
+        : "";
+    return command.trim()
+      ? { kind: "command", command: truncateUtf8(command.trim(), MAX_APPROVAL_COMMAND_BYTES) }
+      : { kind: "permission" };
+  }
+  if (kind && FILE_CHANGE_TOOL_KINDS.has(kind)) {
+    const located = Array.isArray(call.locations)
+      ? call.locations.flatMap((location) =>
+          isObject(location) ? [boundedString(location.path, MAX_TOOL_PATH_BYTES)] : [],
+        )
+      : [recorded.locationPath];
+    const paths = [...new Set([...located, toolArgumentPath(input)])].filter(
+      (path): path is string => typeof path === "string" && path.trim().length > 0,
+    );
+    return paths.length > 0
+      ? { kind: "file-change", paths: paths.slice(0, MAX_APPROVAL_PATHS) }
+      : { kind: "permission" };
+  }
+  return { kind: "permission" };
+}
+
+/** A `use_tool` wrapper's `tool_input`, an object or a JSON string. */
+function unwrappedToolInput(input: JsonObject): JsonObject | undefined {
+  let value: unknown = input.tool_input;
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value) as unknown;
+    } catch {
+      return undefined;
+    }
+  }
+  return isObject(value) ? value : undefined;
+}
+
 export function parkPermission(
   state: SessionState,
   child: AcpProcess,
@@ -1436,9 +1520,20 @@ export function parkPermission(
     }
     finish();
   };
+  const recorded =
+    typeof toolCallId === "string"
+      ? findToolPart(state, toolCallId, turnStartIndex(state))?.part
+      : undefined;
+  const source = recorded ? acpToolSourceStates.get(recorded) : undefined;
   state.approvals.set(id, {
     id,
     title: permissionTitle(params),
+    detail: permissionDetail(params, {
+      name: recorded?.toolName,
+      kind: source?.kind,
+      input: source?.toolArgs ?? recorded?.toolArgs,
+      locationPath: source?.locationPath,
+    }),
     options,
     requestedAt,
     respond: finish,

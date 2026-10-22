@@ -84,7 +84,7 @@ export function MachineSettingsDialog({
         )}
         overlayClassName={Z_FULLSCREEN_DIALOG}
       >
-        <DialogHeader className="border-b border-zinc-800 px-6 pt-6 pb-4">
+        <DialogHeader className="m-0 shrink-0 border-b border-zinc-800 px-6 pt-6 pb-4 sm:m-0">
           <DialogTitle className="flex items-center gap-2.5">
             <MachineStatusDot
               colorToken={machine.colorToken}

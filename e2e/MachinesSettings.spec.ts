@@ -48,6 +48,20 @@ for (const width of [390, 639, 640, 1024]) {
       expect(box.x).toBeGreaterThanOrEqual(8);
       expect(width - box.x - box.width).toBeGreaterThanOrEqual(8);
 
+      // The header keeps its inset and nothing in the dialog scrolls sideways.
+      const heading = (await dialog.getByRole("heading", { name: title }).boundingBox())!;
+      expect(heading.x - box.x).toBeGreaterThanOrEqual(16);
+      expect(heading.y - box.y).toBeGreaterThanOrEqual(16);
+      expect(
+        await dialog.evaluate((element) =>
+          [element, ...element.querySelectorAll("*")].some(
+            (node) =>
+              ["auto", "scroll"].includes(getComputedStyle(node).overflowX) &&
+              node.scrollWidth > node.clientWidth,
+          ),
+        ),
+      ).toBe(false);
+
       await page.keyboard.press("Escape");
       await expect(dialog).toBeHidden();
     });

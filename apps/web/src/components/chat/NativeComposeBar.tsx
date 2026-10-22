@@ -1,4 +1,4 @@
-import type { KeyboardEvent, ReactNode, RefObject } from "react";
+import { useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { AlertCircle, ArrowUp, FileText, MessageSquareText, Square, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -11,6 +11,8 @@ import {
   type MentionableInputComboboxAria,
   type MentionableInputRef,
 } from "@/components/chat/MentionableInput";
+import { MediaGalleryDialog } from "@/components/chat/rich/MediaGallery";
+import type { GalleryItem } from "@/lib/chat/rich-markdown/media-gallery-registry";
 import { cn } from "@/lib/utils";
 import type { FileMention } from "@/types";
 import {
@@ -115,6 +117,23 @@ export function NativeComposeBar({
       ? "Design context"
       : `${annotations.length} design contexts`
     : `${annotations.length} annotation${annotations.length === 1 ? "" : "s"}`;
+  const [gallery, setGallery] = useState<{ items: GalleryItem[]; index: number } | null>(null);
+  const openImagePreview = (attachmentId: string) => {
+    const images = attachments.filter(
+      (attachment) => attachment.type === "image" && attachment.previewUrl,
+    );
+    setGallery({
+      items: images.map((image) => ({
+        title: image.name,
+        element: () => null,
+        load: () => Promise.resolve(image.previewUrl ?? null),
+      })),
+      index: Math.max(
+        0,
+        images.findIndex((image) => image.id === attachmentId),
+      ),
+    });
+  };
   return (
     <>
       <div
@@ -208,32 +227,55 @@ export function NativeComposeBar({
                 </TooltipContent>
               </Tooltip>
             ) : null}
-            {attachments.map((attachment) => (
-              <div
-                key={attachment.id}
-                className="group relative flex items-center gap-1.5 rounded border border-border bg-muted/50 px-2 py-1 text-xs"
-              >
-                {attachment.type === "image" && attachment.previewUrl ? (
-                  <img
-                    src={attachment.previewUrl}
-                    alt={attachment.name}
-                    className="h-6 w-6 rounded object-cover"
-                  />
-                ) : (
-                  <FileText className="h-4 w-4 text-muted-foreground" />
-                )}
-                <span className="max-w-[120px] truncate">{attachment.name}</span>
-                <button
-                  type="button"
-                  onClick={() => onRemoveAttachment(attachment.id)}
-                  disabled={disabled || isSending}
-                  className="ml-1 rounded-full p-0.5 hover:bg-muted"
-                  aria-label={`Remove ${attachment.name}`}
+            {attachments.map((attachment) =>
+              attachment.type === "image" && attachment.previewUrl ? (
+                <div
+                  key={attachment.id}
+                  data-testid="compose-image-attachment"
+                  className="relative h-12 w-12 shrink-0 overflow-hidden rounded-md border border-border bg-muted"
                 >
-                  <X className="h-3 w-3" />
-                </button>
-              </div>
-            ))}
+                  <button
+                    type="button"
+                    onClick={() => openImagePreview(attachment.id)}
+                    className="block h-full w-full outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                    aria-label={`Preview ${attachment.name}`}
+                    title={attachment.name}
+                  >
+                    <img
+                      src={attachment.previewUrl}
+                      alt={attachment.name}
+                      className="h-full w-full object-cover"
+                    />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onRemoveAttachment(attachment.id)}
+                    disabled={disabled || isSending}
+                    className="absolute right-0.5 top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-background/90 text-foreground shadow-sm hover:bg-background disabled:cursor-not-allowed disabled:opacity-50"
+                    aria-label={`Remove ${attachment.name}`}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              ) : (
+                <div
+                  key={attachment.id}
+                  className="group relative flex items-center gap-1.5 rounded border border-border bg-muted/50 px-2 py-1 text-xs"
+                >
+                  <FileText className="h-4 w-4 text-muted-foreground" />
+                  <span className="max-w-[120px] truncate">{attachment.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => onRemoveAttachment(attachment.id)}
+                    disabled={disabled || isSending}
+                    className="ml-1 rounded-full p-0.5 hover:bg-muted"
+                    aria-label={`Remove ${attachment.name}`}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              ),
+            )}
           </div>
         ) : null}
 
@@ -353,6 +395,16 @@ export function NativeComposeBar({
         </div>
       </div>
       {footer}
+      {gallery ? (
+        <MediaGalleryDialog
+          open
+          items={gallery.items}
+          initialIndex={gallery.index}
+          onOpenChange={(open) => {
+            if (!open) setGallery(null);
+          }}
+        />
+      ) : null}
     </>
   );
 }

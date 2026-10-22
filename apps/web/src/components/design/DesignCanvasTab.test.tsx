@@ -109,6 +109,51 @@ describe("DesignCanvasTab", () => {
     input.remove();
   });
 
+  test("Ctrl/⌘+0 resets the owning canvas to 100% ahead of the app-wide zoom shortcut", async () => {
+    // Stands in for App's window listener, which is registered before any canvas mounts.
+    const appZoomReset = mock((event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      if ((event.metaKey || event.ctrlKey) && event.key === "0") event.preventDefault();
+    });
+    window.addEventListener("keydown", appZoomReset);
+    try {
+      render(
+        <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
+      );
+      const title = await screen.findByRole("button", { name: "Move frame A" });
+      const zoomLabel = () =>
+        screen
+          .getByRole("button", { name: /^Zoom \d+%\. Reset to 100%$/ })
+          .getAttribute("aria-label");
+      fireEvent.click(screen.getByRole("button", { name: "Zoom out" }));
+      fireEvent.click(screen.getByRole("button", { name: "Zoom out" }));
+      await waitFor(() => expect(zoomLabel()).not.toBe("Zoom 100%. Reset to 100%"));
+
+      title.focus();
+      const event = new KeyboardEvent("keydown", {
+        key: "0",
+        metaKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      act(() => {
+        title.dispatchEvent(event);
+      });
+      expect(event.defaultPrevented).toBe(true);
+      await waitFor(() => expect(zoomLabel()).toBe("Zoom 100%. Reset to 100%"));
+      expect(appZoomReset).toHaveBeenCalledTimes(1);
+
+      // In a text field the key stays the app's.
+      const input = document.createElement("input");
+      document.body.append(input);
+      fireEvent.keyDown(input, { key: "0", ctrlKey: true });
+      expect(appZoomReset.mock.calls.at(-1)![0].defaultPrevented).toBe(true);
+      input.remove();
+    } finally {
+      window.removeEventListener("keydown", appZoomReset);
+    }
+  });
+
   test("selecting a frame title outlines the frame and Delete removes it", async () => {
     render(
       <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
@@ -431,5 +476,50 @@ describe("DesignCanvasTab", () => {
     );
     expect(await screen.findByText("Saved in workspace")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Export design to repository" })).toBeTruthy();
+    // The save state is a polite live region, so acknowledgements are announced.
+    const footer = screen.getByRole("contentinfo");
+    expect(within(footer).getByRole("status").textContent).toBe("Saved in workspace");
+  });
+
+  test("closing the inspector by keyboard keeps focus in the workspace, not on <body>", async () => {
+    const element: DesignElement = {
+      selector: "body > p",
+      tag: "p",
+      text: "x",
+      attributes: {},
+      styles: {},
+      rect: { x: 0, y: 0, width: 20, height: 20 },
+    };
+    const ask = spyOn(DesignFrameBridge.prototype, "ask").mockImplementation(
+      (operation) =>
+        Promise.resolve(operation.op === "hitTest" ? element : undefined) as Promise<never>,
+    );
+    try {
+      render(
+        <DesignCanvasTab canvasId={canvasId} environmentId="env-1" isActive ownsGlobalShortcuts />,
+      );
+      await screen.findByRole("button", { name: "Move frame A" });
+      fireEvent.load(screen.getByTitle("A"));
+      await waitFor(() =>
+        expect(ask.mock.calls.some(([operation]) => operation.op === "render")).toBe(true),
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Select element in A" }));
+      const close = await screen.findByRole("button", { name: "Close inspector" });
+      act(() => close.focus());
+      fireEvent.click(close);
+      await waitFor(() =>
+        expect(screen.queryByRole("complementary", { name: "Element inspector" }) === null).toBe(
+          true,
+        ),
+      );
+      const active = document.activeElement;
+      expect(active === null || active === document.body).toBe(false);
+      expect(
+        active?.getAttribute("role") === "treeitem" ||
+          active?.getAttribute("aria-label") === "Toggle layers",
+      ).toBe(true);
+    } finally {
+      ask.mockRestore();
+    }
   });
 });

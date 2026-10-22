@@ -909,6 +909,8 @@ function ConnectedApp() {
   // Global keyboard shortcuts for zoom (CMD+/CMD- on Mac, Ctrl+/Ctrl- on Windows/Linux)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // A focused surface that owns the key (the design canvas's Ctrl/⌘+0) claimed it first.
+      if (e.defaultPrevented) return;
       // Handle CMD (Mac) or Ctrl (Windows/Linux) key combinations
       // Require exactly one modifier key (not both)
       const hasModifier = e.metaKey || e.ctrlKey;

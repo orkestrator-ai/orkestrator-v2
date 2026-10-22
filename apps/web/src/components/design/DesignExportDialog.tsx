@@ -84,6 +84,10 @@ export function DesignExportDialog({
   api?: DesignExportApi;
 }) {
   const { environmentId, canvasId } = projection;
+  // Opened from a toolbar button, not a DialogTrigger: Radix would return focus
+  // to its (absent) trigger, dropping it to <body>. Return it to the opener.
+  const opener = useRef<HTMLElement | null>(null);
+  const closeButton = useRef<HTMLButtonElement>(null);
   const [folder, setFolder] = useState(DESIGN_DEFAULT_FOLDER);
   const [file, setFile] = useState("");
   const name = file ? joinPath(folder, file) : "";
@@ -235,6 +239,10 @@ export function DesignExportDialog({
 
   const doExport = async () => {
     if (!preview || !target || !canExport) return;
+    // The export button is disabled while writing (and after, once the preview
+    // finds the file), which would drop keyboard focus to <body>. Move it first
+    // to Cancel, which stays enabled and becomes Done.
+    if (document.activeElement instanceof HTMLButtonElement) closeButton.current?.focus();
     const id = epochs.current.session;
     setFailure(null);
     setReceipt(null);
@@ -292,7 +300,20 @@ export function DesignExportDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       {/* Pinned near the top so a status line changing size below the fields never moves them. */}
-      <DialogContent className="top-[12vh] max-h-[calc(88dvh-1rem)] translate-y-0 sm:max-w-lg">
+      <DialogContent
+        className="top-[12vh] max-h-[calc(88dvh-1rem)] translate-y-0 sm:max-w-lg"
+        onOpenAutoFocus={() => {
+          opener.current =
+            document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        }}
+        onCloseAutoFocus={(event) => {
+          const target = opener.current;
+          opener.current = null;
+          if (!target?.isConnected) return;
+          event.preventDefault();
+          target.focus();
+        }}
+      >
         <DialogHeader>
           <DialogTitle>Export design to repository</DialogTitle>
           <DialogDescription>
@@ -510,7 +531,7 @@ export function DesignExportDialog({
         </div>
 
         <DialogFooter className="flex-wrap gap-2">
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>
+          <Button ref={closeButton} variant="ghost" onClick={() => onOpenChange(false)}>
             {receipt ? "Done" : "Cancel"}
           </Button>
           {unsettled > 0 ? (

@@ -8,11 +8,15 @@ import {
   isSignInError,
   isSignedOut,
   transcriptAssistantText,
+  transcriptToolCalls,
+  type CoordinatorTranscriptMessage,
   type CoordinatorLiveCheck,
   type CoordinatorTurnProjection,
   type TurnAnswer,
 } from "./coordinator-live.js";
 import {
+  coordinatorWaitCounts,
+  orkestratorToolCalls,
   isCarrierText,
   transcriptUserTexts,
   type DelegationMailMessage,
@@ -200,7 +204,11 @@ export function createPeerWatch(input: {
             invoke<{ state: NativeAgentAuthState } | null>(
               "get_native_agent_auth_status",
               identity(environmentId),
-            ).catch(() => null),
+            ).catch((error: unknown) => {
+              const message = error instanceof Error ? error.message : String(error);
+              if (isSignInError(message)) throw new PeerSignInError(message);
+              throw new Error(`${platform}: peer authentication status unavailable`);
+            }),
           ]);
           return { environmentId, mail: page.messages ?? [], projection, auth };
         }),
@@ -243,7 +251,6 @@ export function createPeerWatch(input: {
       let nextHeartbeat = started + 60_000;
       for (;;) {
         const observation = await watch.observe();
-        if (done(observation)) return observation;
         const [, state] = [...signedOut][0] ?? [];
         if (state !== undefined) throw new PeerSignInError(state);
         const [failed, error] = [...errors][0] ?? [];
@@ -253,6 +260,7 @@ export function createPeerWatch(input: {
             `${platform}: a peer failed its turn while waiting for ${label}: ${error}`,
           );
         }
+        if (done(observation)) return observation;
         const now = Date.now();
         const phases = Object.values(observation.phases).join("/");
         if (now - started >= timeoutMs) {
@@ -289,17 +297,35 @@ export function createPeerWatch(input: {
 
 /**
  * The exchange is over once the opener has written the done line, both peers
- * are idle, and no peer mail is still waiting to be delivered.
+ * are idle, ten peer messages exist, and no mail is waiting to be delivered.
  */
 export function peerExchangeFinished(
   observation: PeerObservation,
-  openerAssistantText: string,
+  openerMessages: readonly CoordinatorTranscriptMessage[],
 ): boolean {
   const idle = Object.values(observation.phases).every((phase) => phase === "idle");
   const pending = observation.mail.some(
     (message) => message.placement === "pending-inject" || message.placement === "inject-held",
   );
-  return openerAssistantText.includes(PEER_DONE_MARKER) && idle && !pending;
+  return (
+    observation.mail.filter((message) => message.route === "peer").length === PEER_MESSAGE_COUNT &&
+    peerDoneLine(openerMessages) &&
+    Object.keys(observation.phases).length === 2 &&
+    idle &&
+    !pending
+  );
+}
+
+/** Only the final assistant row can finish the exchange. */
+function peerDoneLine(messages: readonly CoordinatorTranscriptMessage[]): boolean {
+  const last = messages.findLast((message) => message.role === "assistant");
+  return (
+    transcriptAssistantText(last ? [last] : [])
+      .trim()
+      .split("\n")
+      .at(-1)
+      ?.trim() === PEER_DONE_MARKER
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -375,10 +401,11 @@ export function evaluatePeerScenario(input: PeerScenarioInput): CoordinatorLiveC
     ),
   );
 
-  // Ten alternating messages, each sent after the one before it was
-  // delivered: the delivery is what woke its recipient to answer.
+  // Each reply must name the previous message as its parent. Confirmation
+  // (`injectedAt`) can lag the actual dispatch, even arriving after a reply;
+  // it is not a delivery boundary. The stored parent proves the causal link.
   const used = new Set<string>();
-  let previousDeliveredAt = Number.NEGATIVE_INFINITY;
+  let previous: DelegationMailMessage | undefined;
   let alternatingUpTo = 0;
   for (let index = 1; index <= PEER_MESSAGE_COUNT; index += 1) {
     const body = peerBody(input.probe, index);
@@ -395,22 +422,49 @@ export function evaluatePeerScenario(input: PeerScenarioInput): CoordinatorLiveC
       message.placement !== "injected" ||
       !Number.isFinite(createdAt) ||
       !Number.isFinite(deliveredAt) ||
-      createdAt < previousDeliveredAt ||
+      (previous !== undefined &&
+        (message.replyToMessageId !== previous.id || createdAt < Date.parse(previous.createdAt))) ||
       deliveredAt < createdAt
     ) {
       break;
     }
     used.add(message.id);
-    previousDeliveredAt = deliveredAt;
+    previous = message;
     alternatingUpTo = index;
   }
-  const openerText = transcriptAssistantText(input.transcripts[opener] ?? []);
-  const doneLine = openerText.includes(PEER_DONE_MARKER);
+  const doneLine = peerDoneLine(input.transcripts[opener] ?? []);
   checks.push(
     check(
       "ten-alternating",
       alternatingUpTo === PEER_MESSAGE_COUNT && exchange.length === PEER_MESSAGE_COUNT && doneLine,
-      `${alternatingUpTo} of ${PEER_MESSAGE_COUNT} in order, each sent after the previous was delivered; ${exchange.length} messages between the peers; done line ${doneLine}`,
+      `${alternatingUpTo} of ${PEER_MESSAGE_COUNT} in order, each replying to its earlier parent; ${exchange.length} messages between the peers; done line ${doneLine}`,
+    ),
+  );
+
+  const calls = Object.values(input.transcripts).flatMap((messages) =>
+    transcriptToolCalls(messages),
+  );
+  const messageCalls = new Set(
+    ["send_message", "reply_message", "ack_message"].flatMap((tool) =>
+      orkestratorToolCalls(calls, tool),
+    ),
+  );
+  const waits = coordinatorWaitCounts(calls.filter((call) => !messageCalls.has(call)));
+  const waitingTools = calls.filter(
+    (call) =>
+      /(?:^|[_.])(wait(?:_agent)?|sleep|poll|monitor|schedule_?wakeup|cron(?:create|list|delete))(?:$|[_.])/i.test(
+        call.name,
+      ) ||
+      (call.name === "exec" &&
+        /\b(?:tools|functions)\.[\w.]*(?:read_messages|get_message_status|list_environments|sleep|wait|wait_agent|poll|monitor)\s*\(/i.test(
+          call.args,
+        )),
+  ).length;
+  checks.push(
+    check(
+      "no-wait-or-poll",
+      Object.values(waits).every((count) => count === 0) && waitingTools === 0,
+      `${waits.sleepCalls} shell waits, ${waitingTools} waiting tools, ${waits.readMessagesCalls} mailbox reads, ${waits.getMessageStatusCalls} status reads, ${waits.listEnvironmentsCalls} environment reads`,
     ),
   );
 

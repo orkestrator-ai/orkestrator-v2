@@ -110,6 +110,8 @@ describe("coordinator read-only conformance", () => {
     for (const platform of enforced) expect(live.has(platform)).toBe(true);
     expect(COORDINATOR_LIVE_SCENARIOS).toContain("read-only");
     expect(COORDINATOR_LIVE_SCENARIOS).toContain("async");
+    expect(COORDINATOR_LIVE_SCENARIOS).toContain("family");
+    expect(COORDINATOR_LIVE_SCENARIOS).toContain("peer");
   });
 
   // Hosted web search reaches the internet from the vendor's servers, so a

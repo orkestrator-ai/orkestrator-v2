@@ -31,6 +31,7 @@ function exchange(): DelegationMailMessage[] {
     return {
       id: `message-${index}`,
       createdAt: at(index * 10),
+      ...(index > 1 ? { replyToMessageId: `message-${index - 1}` } : {}),
       injectedAt: at(index * 10 + 2),
       from: { kind: "tab", environmentId: from, tabId: PEER_TAB_ID },
       toEnvironmentId: to,
@@ -153,7 +154,7 @@ describe("peer scenario", () => {
     expect(failed(evaluatePeerScenario(input({ mail })))).toContain("routed-as-peer");
   });
 
-  test("the wrong sender, a reply before delivery or an extra message fail alternation", () => {
+  test("the wrong sender, a reply before its parent or an extra message fail alternation", () => {
     const swapped = exchange();
     swapped[2] = {
       ...swapped[2]!,
@@ -163,8 +164,8 @@ describe("peer scenario", () => {
     expect(failed(evaluatePeerScenario(input({ mail: swapped })))).toContain("ten-alternating");
 
     const early = exchange();
-    // Message 6 written before message 5 reached its sender: not a wake.
-    early[5] = { ...early[5]!, createdAt: at(51) };
+    // A reply cannot predate the message it answers.
+    early[5] = { ...early[5]!, createdAt: at(49) };
     expect(failed(evaluatePeerScenario(input({ mail: early })))).toContain("ten-alternating");
 
     const extra: DelegationMailMessage = {
@@ -176,6 +177,83 @@ describe("peer scenario", () => {
     expect(failed(evaluatePeerScenario(input({ mail: [...exchange(), extra] })))).toContain(
       "ten-alternating",
     );
+  });
+
+  test("late dispatch confirmation does not invalidate a reply to the delivered parent", () => {
+    const mail = exchange();
+    // Dispatch happened at t=12; the reply at t=20 preceded reconciliation at t=25.
+    mail[0] = { ...mail[0]!, injectedAt: at(25) };
+    expect(failed(evaluatePeerScenario(input({ mail })))).toEqual([]);
+  });
+
+  test("a reply without the earlier parent, or with the wrong parent, fails", () => {
+    for (const replyToMessageId of [undefined, "message-8"]) {
+      const mail = exchange();
+      mail[1] = { ...mail[1]!, replyToMessageId };
+      expect(failed(evaluatePeerScenario(input({ mail })))).toContain("ten-alternating");
+    }
+  });
+
+  test.each([
+    ["mcp__orkestrator__read_messages", {}],
+    ["orkestrator_get_message_status", {}],
+    ["list_environments", {}],
+    ["exec_command", { cmd: "sleep 2" }],
+    ["clock__sleep", { duration_ms: 100 }],
+    ["wait_agent", {}],
+    ["Monitor", {}],
+    ["ScheduleWakeup", {}],
+    ["CronCreate", {}],
+    ["exec", { code: "await tools.mcp__orkestrator__read_messages({})" }],
+    ["exec", { code: "await tools.clock__sleep({duration_ms: 1000})" }],
+  ])("forbidden waiting or polling via %s fails conformance", (toolName, toolArgs) => {
+    const transcripts = input().transcripts;
+    expect(
+      failed(
+        evaluatePeerScenario(
+          input({
+            transcripts: {
+              ...transcripts,
+              [RESPONDER]: [
+                ...transcripts[RESPONDER]!,
+                {
+                  role: "assistant",
+                  parts: [{ type: "tool", toolName, toolArgs, toolState: "completed" }],
+                },
+              ],
+            },
+          }),
+        ),
+      ),
+    ).toContain("no-wait-or-poll");
+  });
+
+  test("send and reply tool arguments mentioning waiting are not waits", () => {
+    const transcripts = input().transcripts;
+    expect(
+      failed(
+        evaluatePeerScenario(
+          input({
+            transcripts: {
+              ...transcripts,
+              [RESPONDER]: [
+                {
+                  role: "assistant",
+                  parts: [
+                    {
+                      type: "tool",
+                      toolName: "mcp__orkestrator__reply_message",
+                      toolArgs: { body: "sleep 2" },
+                      toolState: "completed",
+                    },
+                  ],
+                },
+              ],
+            },
+          }),
+        ),
+      ),
+    ).toEqual([]);
   });
 
   test("a short exchange or a missing done line fails", () => {
@@ -224,12 +302,13 @@ describe("peer scenario", () => {
       phases: { [OPENER]: "idle", [RESPONDER]: "idle" },
       mail: exchange(),
     };
-    expect(peerExchangeFinished(observation, PEER_DONE_MARKER)).toBe(true);
-    expect(peerExchangeFinished(observation, "")).toBe(false);
+    const done = [row("assistant", PEER_DONE_MARKER)];
+    expect(peerExchangeFinished(observation, done)).toBe(true);
+    expect(peerExchangeFinished(observation, [])).toBe(false);
     expect(
       peerExchangeFinished(
         { ...observation, phases: { ...observation.phases, [RESPONDER]: "running" } },
-        PEER_DONE_MARKER,
+        done,
       ),
     ).toBe(false);
     expect(
@@ -238,9 +317,32 @@ describe("peer scenario", () => {
           ...observation,
           mail: [...exchange(), { ...exchange()[0]!, id: "late", placement: "pending-inject" }],
         },
-        PEER_DONE_MARKER,
+        done,
       ),
     ).toBe(false);
+  });
+  test("an early done marker cannot finish a short exchange or a later acknowledgement", () => {
+    const observation = {
+      at: 0,
+      phases: { [OPENER]: "idle", [RESPONDER]: "idle" },
+      mail: exchange(),
+    };
+    const early = [row("assistant", PEER_DONE_MARKER), row("assistant", "ready")];
+    expect(peerExchangeFinished({ ...observation, mail: exchange().slice(0, 1) }, early)).toBe(
+      false,
+    );
+    expect(
+      peerExchangeFinished({ ...observation, mail: exchange().slice(0, 1) }, early.slice(0, 1)),
+    ).toBe(false);
+    expect(peerExchangeFinished(observation, early)).toBe(false);
+    expect(
+      peerExchangeFinished(observation, [row("assistant", `I will write ${PEER_DONE_MARKER}`)]),
+    ).toBe(false);
+    expect(
+      failed(
+        evaluatePeerScenario(input({ transcripts: { ...input().transcripts, [OPENER]: early } })),
+      ),
+    ).toContain("ten-alternating");
   });
 });
 
@@ -354,6 +456,29 @@ describe("peer watch", () => {
       pollIntervalMs: 1,
     });
     await expect(signedIn.until("the startup turn", () => false, 5)).rejects.toThrow(/timed out/);
+  });
+
+  test("a throwing auth read classifies sign-in or unavailable even without a startup turn", async () => {
+    for (const reason of ["authentication required", "bridge unreachable"]) {
+      const base = backend({ [RESPONDER]: "idle" });
+      const watch = createPeerWatch({
+        invoke: async <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
+          if (command === "get_native_agent_auth_status") throw new Error(reason);
+          return base.invoke<T>(command, args);
+        },
+        platform: "codex",
+        peers: [{ environmentId: RESPONDER }],
+        pollIntervalMs: 1,
+      });
+      const error = await watch
+        .until("startup", () => true, 1_000)
+        .catch((caught: unknown) => caught);
+      if (reason === "authentication required") expect(error).toBeInstanceOf(PeerSignInError);
+      else {
+        expect(error).not.toBeInstanceOf(PeerSignInError);
+        expect(String(error)).toContain("authentication status unavailable");
+      }
+    }
   });
 
   test("the wait times out with the label and the peers' phases", async () => {

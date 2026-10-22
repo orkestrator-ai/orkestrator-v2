@@ -98,17 +98,7 @@ import {
   type DelegationRecord,
 } from "../../apps/desktop/scripts/dev/coordinator-live-delegation";
 import { coordinatorLiveBudgets } from "../../apps/desktop/scripts/dev/coordinator-live-budgets";
-import {
-  PeerSignInError,
-  createPeerWatch,
-  evaluatePeerScenario,
-  peerEnvironmentInput,
-  peerEnvironmentNames,
-  peerExchangeFinished,
-  peerOpenerPrompt,
-  peerResponderPrompt,
-  type PeerProbe,
-} from "../../apps/desktop/scripts/dev/coordinator-live-peer";
+import { runPeerScenario } from "../../apps/desktop/scripts/dev/coordinator-live-peer-orchestration";
 import {
   createDelegationWatch,
   removeLaunchedEnvironments,
@@ -841,96 +831,21 @@ async function peerCase(input: {
   const { entry, summary, skip, cleanup } = input;
   const { platform } = entry;
   const { invoke, fixture } = await openProfile(input.page);
-  const projectId = fixture.id;
-  const config = await invoke<{ global: Record<string, unknown> }>("get_config");
-  const enabled = config.global.enabledAgentPlatforms;
-  if (Array.isArray(enabled) && !enabled.includes(platform)) {
-    skip(`${platform} is not enabled in this profile (start it with --agent-platforms)`);
-  }
-
-  // Wake peers is off by default; the scenario is about the route it opens.
-  const previous = await invoke<Record<string, unknown>>("get_agent_messaging_settings");
-  await invoke("update_agent_messaging_settings", { settings: { ...previous, wakePeers: true } });
-  cleanup.push(() => invoke("update_agent_messaging_settings", { settings: previous }));
-  await removeLaunchedEnvironments(invoke, projectId, cleanup);
-
-  const probe: PeerProbe = { platform, token: randomBytes(6).toString("hex") };
-  const names = peerEnvironmentNames(probe);
-  const launch = async (name: string, prompt: string) => {
-    const environment = await invoke<{ id: string }>(
-      "create_environment",
-      peerEnvironmentInput({ projectId, name, platform, prompt }),
-    );
-    await invoke("start_environment", { environmentId: environment.id });
-    return environment.id;
-  };
-  const responder = await launch(names.responder, peerResponderPrompt(probe));
-  const watch = createPeerWatch({
+  const { checks, transcripts, escaped, mail, observations } = await runPeerScenario({
     invoke,
-    platform,
-    peers: [{ environmentId: responder }],
+    projectId: fixture.id,
+    probe: { platform, token: randomBytes(6).toString("hex") },
+    skip,
+    cleanup,
     log: (line) => console.log(line),
   });
-  let finished: string | undefined;
-  let opener: string | undefined;
-  try {
-    // The responder's startup turn ends before the first message is sent, so
-    // that message has to wake an idle tab.
-    let idleReads = 0;
-    await watch.until(
-      "the responder's startup turn",
-      (observation) => {
-        idleReads = observation.phases[responder] === "idle" ? idleReads + 1 : 0;
-        const replied = watch
-          .projection(responder)
-          ?.messages.some((message) => message.role === "assistant");
-        return idleReads >= 2 && replied === true;
-      },
-      budgets.step,
-    );
-    opener = await launch(names.opener, peerOpenerPrompt(probe, responder));
-    watch.add({ environmentId: opener });
-    let quietReads = 0;
-    await watch.until("the peer exchange to finish", (observation) => {
-      const openerText = transcriptAssistantText(watch.projection(opener!)?.messages ?? []);
-      quietReads = peerExchangeFinished(observation, openerText) ? quietReads + 1 : 0;
-      return quietReads >= 2;
-    });
-  } catch (error) {
-    if (error instanceof PeerSignInError) {
-      skip(`no usable ${platform} credential in this profile (${error.message.slice(0, 300)})`);
-    }
-    finished = error instanceof Error ? error.message.slice(0, 500) : String(error);
-  }
-
-  const settings = await invoke<Record<string, unknown>>("get_agent_messaging_settings");
-  const mail = await watch.mailWithBodies();
-  const transcripts: Record<string, CoordinatorTranscriptMessage[]> = {};
-  for (const environmentId of opener ? [opener, responder] : [responder]) {
-    transcripts[environmentId] = watch.projection(environmentId)?.messages ?? [];
-  }
-  const escaped = watch.escaped();
-  const checks: CoordinatorLiveCheck[] = [
-    { name: "finished", passed: finished === undefined, ...(finished ? { detail: finished } : {}) },
-    ...evaluatePeerScenario({
-      probe,
-      responder: { environmentId: responder },
-      ...(opener ? { opener: { environmentId: opener } } : {}),
-      settings,
-      defaults: DEFAULT_AGENT_MESSAGING_SETTINGS,
-      mail,
-      transcripts,
-      escapedInteractions: escaped,
-      harnessPrompts: 0,
-    }),
-  ];
   const calls = Object.values(transcripts).flatMap((messages) => transcriptToolCalls(messages));
   summary.toolCalls = calls.map(({ name, state }) => ({ name, state }));
   if (escaped.length > 0) summary.escapedInteractions = escaped;
   const failures = recordChecks(summary, checks, {
     peerMessages: mail.filter((message) => message.route === "peer").length,
     ...coordinatorWaitCounts(calls),
-    observations: watch.observations.length,
+    observations: observations.length,
   });
   expect(failures, `${platform}: the peer-mail scenario`).toEqual([]);
 }

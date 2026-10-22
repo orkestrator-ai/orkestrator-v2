@@ -118,3 +118,14 @@ The final root/support run with all GNU prerequisites timed out this case at 500
 - **Owning-file rerun:** the same GNU-tool PATH with `mise run test:logged -- --name merge-firewall-owner -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 32.3 seconds logged).
 - **Evidence:** `orkestrator-test-run.d10zQ4/root-and-agent-support-tests.log.gz` below the host temporary directory.
 - **Assessment:** confirms another intermittent shell-fixture deadline. Contention remains an unproven hypothesis; no implementation, assertion, timeout or skip changed.
+
+## Coordinator peer conformance review recurrence — 2026-10-22
+
+- **Original command:** `mise run test:logged -- --name full-suite -- mise run test` (Bun 1.4.3, macOS arm64).
+- **Workers:** workspace/root/bridges/protocol reservations 4/1/2/1; one isolated root worker on a shared host running another checkout's aggregate suite.
+- **Failures:** `policy 2 narrows host access to named ports and records what it applied` and `policy 3 allows address, protocol and port tuples` returned a null exit code and exceeded five seconds (5003.20 ms and 5005.68 ms).
+- **Root counts:** 3216 passed, one skipped and three failed across 3220 tests (298.35 seconds). The other failure was Pi vendoring (0514). Workspace, bridges and protocol groups passed.
+- **First owning-file rerun:** `mise run test:logged -- --name firewall-policy-isolated -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` passed both original failing cases, but `firewall uses stored domains and tolerates a repeated GitHub bootstrap range` exceeded its five-second deadline (5025.72 ms): 23 passed, one failed, 45.5 seconds logged. Evidence: `orkestrator-test-run.O9XqXs/firewall-policy-isolated.log.gz` below the host temporary directory.
+- **After the aggregate finished:** `mise run test:logged -- --name firewall-policy-after-suite -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` passed all 24 unchanged cases (exit 0, 27.3 seconds logged).
+- **Aggregate evidence:** `orkestrator-test-run.Aiu72Z/root-and-agent-support-tests.log.gz`, with outer summary in `orkestrator-test-run.4usC0x/full-suite.log.gz`, below the host temporary directory.
+- **Assessment:** the final isolated pass confirms intermittence. Host contention remains a hypothesis; no firewall implementation, assertion, timeout or skip changed.

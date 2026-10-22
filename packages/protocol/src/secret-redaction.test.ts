@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { redactSecrets } from "./redaction.js";
+import { redactSecrets } from "./secret-redaction.js";
 
 describe("redactSecrets", () => {
   test("removes an Authorization bearer token but keeps the header name", () => {

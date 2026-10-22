@@ -2201,6 +2201,56 @@ describe("runtime health", () => {
     expect(health.protocol.serverRequests).toMatchObject({ pending: 0, awaitingUser: 0 });
   });
 
+  test("follows every MCP status page, for the inventory and the health snapshot", async () => {
+    const pages: Record<string, { data: unknown[]; nextCursor: string | null }> = {
+      "": { data: [{ name: "a", tools: {} }], nextCursor: "p2" },
+      p2: { data: [{ name: "b", tools: {} }], nextCursor: "p3" },
+      p3: { data: [{ name: "c", tools: {} }], nextCursor: null },
+    };
+    const h = harness({
+      ...HEALTH_HANDLERS,
+      "mcpServerStatus/list": (params) => pages[String(params.cursor ?? "")]!,
+    });
+    await h.engine.start();
+
+    const inventory = (await h.engine.listMcpServers("t1")) as {
+      data: Array<{ name: string }>;
+      nextCursor: string | null;
+    };
+    expect(inventory.data.map((entry) => entry.name)).toEqual(["a", "b", "c"]);
+    expect(inventory.nextCursor).toBeNull();
+    const calls = h
+      .child()
+      .requests.filter((entry) => entry.method === "mcpServerStatus/list")
+      .map((entry) => entry.params);
+    expect(calls.map((params) => params.cursor)).toEqual([undefined, "p2", "p3"]);
+    expect(calls.every((params) => params.threadId === "t1")).toBe(true);
+
+    const health = (await h.engine.getRuntimeHealth("t1")) as {
+      mcp: { data: Array<{ name: string }> };
+    };
+    expect(health.mcp.data.map((entry) => entry.name)).toEqual(["a", "b", "c"]);
+  });
+
+  test("stops at the MCP status page bound and keeps the cursor", async () => {
+    let served = 0;
+    const h = harness({
+      "mcpServerStatus/list": () => {
+        served += 1;
+        return { data: [{ name: `s${served}`, tools: {} }], nextCursor: `after-${served}` };
+      },
+    });
+    await h.engine.start();
+
+    const inventory = (await h.engine.listMcpServers()) as {
+      data: unknown[];
+      nextCursor: string | null;
+    };
+    expect(served).toBe(10);
+    expect(inventory.data).toHaveLength(10);
+    expect(inventory.nextCursor).toBe("after-10");
+  });
+
   test("scopes the MCP list to the whole environment when no thread is given", async () => {
     const h = harness(HEALTH_HANDLERS);
     await h.engine.start();

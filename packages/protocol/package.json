@@ -119,6 +119,7 @@
     "./review-workflow": "./src/review-workflow.ts",
     "./runtime-health": "./src/runtime-health.ts",
     "./node/runtime-profile-status": "./src/node/runtime-profile-status.ts",
+    "./secret-redaction": "./src/secret-redaction.ts",
     "./session-activity-batch": "./src/session-activity-batch.ts",
     "./startup-launch": "./src/startup-launch.ts",
     "./ssh-agent-socket": "./src/ssh-agent-socket.ts",

@@ -11,7 +11,8 @@ import path from "node:path";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { mcpManagementErrorFromUnknown } from "@orkestrator/protocol/mcp-management";
 
-import { EVIDENCE_RECHECK_MS } from "./evidence.js";
+import { EVIDENCE_RECHECK_MS, EVIDENCE_WINDOW_MS } from "./evidence.js";
+import { EXTERNAL_EDIT_RECHECK_MS } from "./external-edit-watch.js";
 import { CHANGED_OUTSIDE_REASON, MERGED_NOTE, REPLACED_BY_SAVE_REASON } from "./external-edits.js";
 import {
   createFixture,
@@ -377,5 +378,73 @@ describe("a change still in a file that changed after it was saved", () => {
     expect(again.apply.state).toBe("queued");
     await fixture.service.tick();
     expect(fixture.reloads).toEqual(["env-1", "env-1"]);
+  });
+});
+
+describe("waiting runtimes no evidence pass polls", () => {
+  const OPENCODE = "home/.config/opencode/opencode.json";
+
+  function editOpencode(change: (mcp: Record<string, unknown>) => void): void {
+    const document = JSON.parse(fixture.read(OPENCODE));
+    change(document.mcp);
+    fixture.write(OPENCODE, JSON.stringify(document, null, 2));
+  }
+
+  test("OpenCode restart-required: retired on the watch's slow cadence", async () => {
+    session("opencode");
+    const saved = await saveAndApply("opencode", "opencode:user-opencode.json");
+    expect(saved.apply.runtimes[0]!.state).toBe("restart-required");
+    // A first pass reads the file as the save left it.
+    await fixture.service.tick();
+    expect((await operation(saved.operationId)).apply.runtimes[0]!.state).toBe("restart-required");
+
+    editOpencode((mcp) => delete mcp.fixture);
+    await fixture.service.tick();
+    // Not read again before its recheck interval.
+    expect((await operation(saved.operationId)).apply.runtimes[0]!.state).toBe("restart-required");
+    fixture.now.value += EXTERNAL_EDIT_RECHECK_MS;
+    await fixture.service.tick();
+    const retired = await operation(saved.operationId);
+    expect(retired.apply.state).toBe("cancelled");
+    expect(retired.apply.runtimes[0]).toMatchObject({
+      state: "cancelled",
+      reason: CHANGED_OUTSIDE_REASON,
+      cancelReason: "superseded-external",
+    });
+  });
+
+  test("OpenCode restart-required: a change still in the file is flagged, not retired", async () => {
+    session("opencode");
+    const saved = await saveAndApply("opencode", "opencode:user-opencode.json");
+    editOpencode((mcp) => (mcp.other = { type: "local", command: ["y"] }));
+    await fixture.service.tick();
+    const flagged = await operation(saved.operationId);
+    expect(flagged.apply.runtimes[0]!.state).toBe("restart-required");
+    expect(flagged.message).toContain(MERGED_NOTE);
+  });
+
+  test("Codex pending-next-turn after its reload is held, so the watch leaves it", async () => {
+    session("codex");
+    const saved = await saveAndApply("codex", "codex:user");
+    await fixture.service.tick();
+    expect(fixture.reloads).toEqual(["env-1"]);
+    // The app-server loaded the change at its reload and keeps it until its
+    // next one, so a later removal neither retires it nor flags the file.
+    fixture.write("home/.codex/config.toml", "");
+    fixture.now.value += EXTERNAL_EDIT_RECHECK_MS;
+    await fixture.service.tick();
+    const held = await operation(saved.operationId);
+    expect(held.apply.runtimes[0]).toMatchObject({ state: "pending-next-turn" });
+    expect(held.apply.runtimes[0]!.cancelReason).toBeUndefined();
+    expect(held.message ?? "").not.toContain(MERGED_NOTE);
+  });
+
+  test("the watch stops once the apply window has passed", async () => {
+    session("opencode");
+    const saved = await saveAndApply("opencode", "opencode:user-opencode.json");
+    fixture.now.value += EVIDENCE_WINDOW_MS + 1;
+    editOpencode((mcp) => delete mcp.fixture);
+    await fixture.service.tick();
+    expect((await operation(saved.operationId)).apply.runtimes[0]!.state).toBe("restart-required");
   });
 });

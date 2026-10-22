@@ -57,7 +57,7 @@ import type {
 } from "../app-server/interactions.js";
 import { reduceHistoricalTurns, reduceNotification } from "../app-server/event-reducer.js";
 import type { SkillsListParams, UserInput } from "../app-server/generated/typescript/v2/index.js";
-import { redactSecrets } from "../app-server/redaction.js";
+import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
 import {
   AppServerRpcError,
   classifyDispatchFailure,
@@ -573,6 +573,10 @@ function mcpFailureReason(notice: RuntimeNotice): string | undefined {
 
 /** Most skill load failures one health snapshot reports. */
 const MAX_SKILL_LOAD_NOTICES = 16;
+
+/** Servers per `mcpServerStatus/list` page, and the most pages one read follows. */
+const MCP_STATUS_PAGE_SIZE = 100;
+const MCP_STATUS_MAX_PAGES = 10;
 
 /** Stable, path-free identity for skills sharing a directory name. */
 function skillPathFingerprint(path: string): string {
@@ -1809,11 +1813,7 @@ export class AppServerEngine implements CodexEngine {
     rateLimits: unknown;
   }> {
     const [mcp, skills, hooks, rateLimits] = await Promise.allSettled([
-      this.supervisor.request("mcpServerStatus/list", {
-        limit: 100,
-        detail: "full",
-        ...(threadId ? { threadId } : {}),
-      }),
+      this.listMcpServerStatus(threadId),
       this.supervisor.request("skills/list", {
         cwds: [this.options.cwd],
       }),
@@ -1893,12 +1893,35 @@ export class AppServerEngine implements CodexEngine {
     };
   }
 
+  /**
+   * Every page of `mcpServerStatus/list`, merged into one response in the
+   * server's order. Bounded by `MCP_STATUS_MAX_PAGES`; past it the merged
+   * response keeps the last `nextCursor`, so a reader can tell it is partial.
+   */
+  private async listMcpServerStatus(threadId?: string | null): Promise<unknown> {
+    const data: unknown[] = [];
+    let cursor: string | undefined;
+    let last: Record<string, unknown> = {};
+    for (let page = 0; page < MCP_STATUS_MAX_PAGES; page += 1) {
+      const response = await this.supervisor.request("mcpServerStatus/list", {
+        ...(cursor ? { cursor } : {}),
+        limit: MCP_STATUS_PAGE_SIZE,
+        detail: "full",
+        ...(threadId ? { threadId } : {}),
+      });
+      last = objectRecord(response);
+      // An unrecognised shape is passed through as the single answer.
+      if (!Array.isArray(last.data)) return page === 0 ? response : { ...last, data };
+      data.push(...last.data);
+      cursor = typeof last.nextCursor === "string" && last.nextCursor ? last.nextCursor : undefined;
+      if (!cursor) break;
+    }
+    // The last page's own `nextCursor` stays: set only when the bound cut it short.
+    return { ...last, data };
+  }
+
   async listMcpServers(threadId?: string | null): Promise<unknown> {
-    const response = await this.supervisor.request("mcpServerStatus/list", {
-      limit: 100,
-      detail: "full",
-      ...(threadId ? { threadId } : {}),
-    });
+    const response = await this.listMcpServerStatus(threadId);
     const root = objectRecord(response);
     if (!Array.isArray(root.data)) return response;
     return {

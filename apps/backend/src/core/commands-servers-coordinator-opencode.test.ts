@@ -157,16 +157,18 @@ process.on("SIGTERM", () => process.exit(0));
     expect(await posted()).toEqual([SCOPED_URL]);
     expect(commandTesting.openCodeAgentToolsState(`local:${runtimeId}`)).toBe("connected");
 
-    // Expire the memo so the healthy-reuse and status paths both re-POST.
+    // Expire the memo so the healthy-reuse and status paths both re-POST. Each
+    // schedules its re-POST without waiting, and a reconcile still in flight is
+    // joined rather than repeated, so settle one before starting the next. The
+    // fake server records each POST before it answers.
     commandTesting.setOpenCodeAgentToolsMemoWindowsMs(0, 0);
     const reused = await startLocalServerUnlocked(runtimeId, context, "opencode");
     expect(reused.wasRunning).toBe(true);
+    await commandTesting.openCodeAgentToolsConfigurationSettled(`local:${runtimeId}`);
     await readLocalServerStatus(runtimeId, context, "opencode");
-    for (let attempt = 0; attempt < 200 && (await posted()).length < 3; attempt += 1) {
-      await Bun.sleep(10);
-    }
+    await commandTesting.openCodeAgentToolsConfigurationSettled(`local:${runtimeId}`);
     const urls = await posted();
-    expect(urls.length).toBeGreaterThanOrEqual(3);
+    expect(urls).toHaveLength(3);
     // Never the tab credential: it would leave the coordinator with mail and
     // ticket tools but none of its delegation tools.
     expect(new Set(urls)).toEqual(new Set([SCOPED_URL]));

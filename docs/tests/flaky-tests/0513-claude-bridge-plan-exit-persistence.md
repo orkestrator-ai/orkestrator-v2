@@ -1,7 +1,7 @@
 # Claude bridge plan-exit persistence under the aggregate suite
 
 - **ID:** 0513
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-21
 - **Test:** `plan approval flow > keeps plan mode enabled when an approved exit cannot be persisted`
 - **File:** `bridges/claude-bridge/src/services/session-manager-interactions.test.ts:846`
@@ -42,3 +42,32 @@ cause remains unconfirmed. No implementation, assertion, timeout or skip changed
 ## Agent-interactions main merge recurrence, 2026-10-22
 
 `mise run test:logged -- --name merge-tests-retry -- mise run test` repeated `plan approval flow > keeps plan mode enabled when an approved exit cannot be persisted` with EISDIR at `session-manager-interactions.test.ts:863` (1.15 ms) in the one-worker Claude bridge package. `mise run test:logged -- --name merge-claude-interactions-owner -- bun --cwd=bridges/claude-bridge test ./src/services/session-manager-interactions.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed the complete unchanged owner (0.2 s). Evidence is in `orkestrator-test-run.f3gD5p/bridges.log.gz` under the host temporary directory. No test, timeout, skip or implementation was changed.
+
+## Resolution — 2026-10-22
+
+- **Status:** resolved. Same cause and fix for 0385, 0473 and 0513.
+- **Root cause:** `writeTurnInFlightMark` (`session-manager-turn-interruption.ts`)
+  records the turn-in-flight mark with an un-awaited `updateSessionPreferences`
+  call when a prompt starts. The preference write resolves the Claude home when
+  it runs (`withPreferenceFileLock` calls `claudeSessionPreferencesDir()`), not
+  when it was queued. The fixtures switch to a fresh temporary home and replace
+  `.claude` with a file within about a millisecond of the prompt starting, so the
+  write's `mkdir -p .claude/orkestrator/session-preferences` could land first and
+  the fixture's `writeFile` hit `EISDIR`. Instrumenting the fixture showed the
+  racing directory held only `orkestrator/` (a recursive mkdir in flight), with
+  the stack in `updateSessionPreferences`. In 0473 the home is switched after the
+  prompt starts, which is why a rerun with the matching preload could also fail.
+- **Fix:** `fix(ci): stop the Linux watcher crash and two fixture races keeping
+  main red`. `blockClaudeConfigDir` in `session-manager-test-harness.ts` removes
+  whatever `.claude` exists and writes the blocking file with `wx`, retrying
+  (bounded) only when a concurrent mkdir won; once the file is in place no writer
+  can create the directory, which is the state under test. All nine fixtures that
+  replace `.claude` after setup use it; the assertions are unchanged. A version
+  that waited for every queued preference write instead hung when a previous
+  test left a write parked under controlled time, so it was not used.
+- **Verification:** before the fix,
+  `bun test --preload ../../tests/setup-node.ts ./src/services/session-manager-interactions.test.ts ./src/services/session-manager-system-events.test.ts --rerun-each 30`
+  (from `bridges/claude-bridge`, macOS arm64, Bun 1.4.3) failed 10, 8 and 11
+  times in three runs of 2,130 cases, all EISDIR. After: 0 failures in three runs
+  (2,130 passed each). The Claude bridge package (`bun run test:bridge`) passed.
+  CI also hit this on `main` runs 39690434421 and 39701903157.

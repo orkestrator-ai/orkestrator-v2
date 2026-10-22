@@ -1,6 +1,4 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { writeFile } from "node:fs/promises";
-import { join } from "node:path";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 
 import {
@@ -22,6 +20,7 @@ import {
   track,
   waitFor,
   withTemporaryClaudeHome,
+  blockClaudeConfigDir,
 } from "./session-manager-test-harness.js";
 import {
   CONTINUATION_SILENCE_MS,
@@ -338,7 +337,7 @@ describe("a warm Claude CLI between turns", () => {
     const admission = admitPrompt(older.session.id)!;
     const newer = await idleAfterOneTurn("fills cap during admission");
     await withTemporaryClaudeHome("claude-idle-admission-", async (directory) => {
-      await writeFile(join(directory, ".claude"), "not a directory");
+      await blockClaudeConfigDir(directory);
       await expect(applyPromptPlanMode(admission, true)).rejects.toBeTruthy();
     });
     expect(older.session.status).toBe("idle");

@@ -34,6 +34,17 @@
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.ozsKgo/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - **Assessment:** consistent with the existing aggregate-load timeout hypothesis; no timeout or assertion was changed. The full aggregate remains a failed validation result, with this isolated pass confirming the recurrence is intermittent.
 
+## CI-health branch aggregate — 2026-10-22
+
+- **Original command:** `mise run test:logged -- --name full-suite -- mise run test`
+  (with `PORT` unset) on `todo-0030-test-suite-ci-health`, macOS arm64, Bun
+  1.4.3, host load average 21–27 from other sessions.
+- **Failure:** timed out at 5,052.49 ms. Backend reported 9,904 passed and 1
+  failed across 9,985 tests in 571 files (604.7 s).
+- **Isolated rerun:** `mise run test:logged -- --name container-fetch-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/container-git-fetch-git.test.ts --parallel=1 --only-failures`
+  passed unchanged (5.8 s).
+- **Evidence:** orkestrator-test-run.UPlMVd orkestrator-test-run.FNlm01 under the host temporary directory.
+- No implementation, assertion, timeout or skip changed.
 
 ## Agent interaction and permission review — 2026-10-22
 

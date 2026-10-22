@@ -108,19 +108,6 @@ function isScopedAgentMcp(value: unknown): value is { url: string; token: string
   }
 }
 
-// The normalized message model and the item renderer live in ./messages so both
-// engines share one implementation. Re-exported here because existing importers
-// (and item-to-parts.test.ts) resolve them from this module.
-export { itemToParts, stringifyUnknown } from "./messages/normalization.js";
-export type {
-  FileChangeDiffContext,
-  MessageRole,
-  NormalizedMessage,
-  NormalizedPart,
-  ToolDiffMetadata,
-  ToolState,
-} from "./messages/types.js";
-
 interface SseEvent {
   type:
     | "session.updated"

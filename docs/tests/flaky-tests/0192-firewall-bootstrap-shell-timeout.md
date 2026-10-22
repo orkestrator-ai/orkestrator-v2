@@ -119,6 +119,21 @@ The final root/support run with all GNU prerequisites timed out this case at 500
 - **Evidence:** `orkestrator-test-run.d10zQ4/root-and-agent-support-tests.log.gz` below the host temporary directory.
 - **Assessment:** confirms another intermittent shell-fixture deadline. Contention remains an unproven hypothesis; no implementation, assertion, timeout or skip changed.
 
+## CI-health branch aggregate — 2026-10-22
+
+- **Original command:** `mise run test:logged -- --name full-suite -- mise run test`
+  (with `PORT` unset) on `todo-0030-test-suite-ci-health`, macOS arm64, Bun
+  1.4.3, host load average 21–27 from other sessions.
+- **Failure:** 11 `container firewall policy` cases timed out at 5,000 ms,
+  including `GitHub ranges come from a fresh backend seed, else live, else this
+  container's cache` (5,003.98 ms) and `firewall uses stored domains and
+  tolerates a repeated GitHub bootstrap range`. Root/support reported 3,209
+  passed and 11 failed (234.7 s).
+- **Isolated rerun:** `mise run test:logged -- --name firewall-owner -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures`
+  passed unchanged (22.7 s).
+- **Evidence:** orkestrator-test-run.UPlMVd orkestrator-test-run.FNlm01 under the host temporary directory.
+- No implementation, assertion, timeout or skip changed.
+
 ## Canonical allowlist change — 2026-10-22
 
 - **Original command:** `mise run test:logged -- --name changed -- mise run test:changed`, on a host whose load average was about 69 from other worktrees' suites.

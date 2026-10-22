@@ -1,0 +1,17 @@
+# Coordinator and Multi Review
+
+The two multi-agent features: the Coordinator (read-only enforcement, async delegation, agent mail) and Multi Review (reviewer panels, consolidation, the flow graph).
+
+Files are ranked by criticality, most critical first. Criticality rates each
+file as a whole: the impact of leaving its remaining work undone
+([rating a file](../../README.md#rating-a-file)). The items themselves live
+in the files. **Finished** is Yes only when every item in the file is done.
+
+| Rank | File | Criticality | Finished | Covers | Why this rating |
+| --- | --- | --- | --- | --- | --- |
+| 1 | [0024-coordinator-live-conformance.md](0024-coordinator-live-conformance.md) | High | No | Opt-in live suite proving read-only enforcement, async delegation and mail wake-ups on every qualified platform. | Status wake-ups and mail tiles are shipped but unproven live on each platform. |
+| 2 | [0025-multi-review-panel-value.md](0025-multi-review-panel-value.md) | High | No | Prove compact consolidation and prompt-prefix savings, add an overlap metric, then decide presets, lenses and adaptive stopping. | Compact consolidation and prompt-prefix savings are unproven on real providers, so every panel may be spending more than it needs. |
+| 3 | [0026-coordinator-read-only-adapters.md](0026-coordinator-read-only-adapters.md) | Medium | No | Per-platform decisions and adapter work so the coordinator read-only policy gives the same outcome everywhere. | Read-only coordinator outcomes still differ by platform; it is close to an isolation boundary, so it leads the medium files. |
+| 4 | [0027-multi-review-scale-and-cost.md](0027-multi-review-scale-and-cost.md) | Medium | No | Fix the post-SQLite fence-check regression, retire rollback gates and fallbacks, make the benchmark deterministic, collect scale evidence. | Rollback gates, the transcript fallback and scale evidence remain; the earlier regressions are fixed. |
+| 5 | [0028-coordinator-consistency-gaps.md](0028-coordinator-consistency-gaps.md) | Medium | No | Smaller coordinator parity gaps (OpenCode/Grok steer, poll guards, conversation limits) and deliberately deferred product surfaces. | One functional gap (auto-closing empty coordinator drafts); the rest is deliberately deferred product surface. |
+| 6 | [0029-multi-review-flow-graph.md](0029-multi-review-flow-graph.md) | Low | No | Flow graph follow-ups: live qualification of provisional findings, and gaps found building them. | Every redesign follow-up is built; only live qualification of provisional findings and minor gaps remain. |

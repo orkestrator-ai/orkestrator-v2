@@ -16,7 +16,7 @@ run side by side in one platform, so bridge keys, tab records and the agent
 settings tiers are unchanged by accounts.
 
 Outstanding work and known gaps are in
-[agent-accounts-and-sign-in.md](../todo/agent-accounts-and-sign-in.md).
+[0003-agent-accounts-and-sign-in.md](../todo/agent-engines/0003-agent-accounts-and-sign-in.md).
 
 ## Account directories
 
@@ -272,7 +272,7 @@ message's `providerID/modelID` as `modelId` for this
 
 The CLI on the user's PATH is not used: it may be OpenCode 2.x, which keeps
 its logins in its database and never writes `auth.json`. See
-[opencode-v2.md](../todo/opencode-v2.md) for what moves with 2.x.
+[0008-opencode-v2.md](../todo/agent-engines/0008-opencode-v2.md) for what moves with 2.x.
 
 ## Credentials in auth answers
 

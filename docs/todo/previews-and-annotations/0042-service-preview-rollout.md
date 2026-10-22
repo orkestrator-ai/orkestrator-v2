@@ -140,7 +140,7 @@ partitions, and the evidence log where run results are now recorded.
     `http://localhost:<port>/`). It works (Cmd/Ctrl+L selects it, it scrolls),
     but the URL cannot be read. Wrap earlier, or let the picker and buttons
     shrink first.
-12. Flake [0620](../../tests/flaky-tests/0620-service-preview-keyboard-picker-register-item.md):
+12. Flake [0620](../../tests/flaky-tests/previews-annotations-and-gateway/0620-service-preview-keyboard-picker-register-item.md):
     four times on 2026-10-21 the keyboard test could not reach, or open,
     **Register a service…** from the picker. Likely cause: Radix moves menu
     focus in a timer, and Chromium throttles timers in a window that other
@@ -148,7 +148,7 @@ partitions, and the evidence log where run results are now recorded.
     that throttling off; 5 runs and the full Electron suite passed since.
     Confirm it holds on loaded runs, then consider the same switches for every
     Electron spec (`electron-launch-switches.ts`).
-13. Flake [0622](../../tests/flaky-tests/0622-service-preview-window-close-remote-release.md):
+13. Flake [0622](../../tests/flaky-tests/previews-annotations-and-gateway/0622-service-preview-window-close-remote-release.md):
     once, in a slow run, a remote preview attachment was still held 20 s after
     its window's `close()`. It did not recur; the spec now times the close
     and the release separately. If it recurs with the window gone, capture
@@ -326,7 +326,7 @@ baseline by the 2026-10-17 run below.
 - Format, lint, and typecheck passed. The complete non-iOS command
   `PATH="/opt/homebrew/bin:$PATH" mise run test:logged -- --name full-tests-host-python -- mise run test`
   passed every group and package except the backend's existing
-  [0187 Git-excludes timeout](../../tests/flaky-tests/0187-workspace-artifact-git-excludes-timeout.md).
+  [0187 Git-excludes timeout](../../tests/flaky-tests/environments-and-containers/0187-workspace-artifact-git-excludes-timeout.md).
   Its unchanged owning file passed alone in 33.0 seconds; the recurrence and
   compressed failure evidence are recorded in that case.
 
@@ -412,14 +412,14 @@ This replaces the 2026-09-23 file lists as the current baseline.
   failed in all six runs after the fix, in the suite and alone: four times at
   the native OS-focus assertion and twice earlier at the 5-second window-title
   check. It is recorded as environmental
-  ([0271](../../tests/flaky-tests/0271-electron-native-focus-shared-macos-desktop.md)).
-  Flake [0157](../../tests/flaky-tests/0157-electron-first-window-startup-timeout.md)
+  ([0271](../../tests/flaky-tests/electron-and-desktop/0271-electron-native-focus-shared-macos-desktop.md)).
+  Flake [0157](../../tests/flaky-tests/electron-and-desktop/0157-electron-first-window-startup-timeout.md)
   has the same symptom; the Keychain cause is recorded there.
-- Flakes: [0184](../../tests/flaky-tests/0184-preview-tunnel-stopped-reader-queue.md)
+- Flakes: [0184](../../tests/flaky-tests/previews-annotations-and-gateway/0184-preview-tunnel-stopped-reader-queue.md)
   was a real bound overrun (the capacity check ran once per 512 KiB upstream
   read, not per frame) and is fixed in the tunnel server;
-  [0195](../../tests/flaky-tests/0195-preview-handoff-container-reconciliation.md)
-  and [0221](../../tests/flaky-tests/0221-preview-first-chunk-timing.md) were
+  [0195](../../tests/flaky-tests/previews-annotations-and-gateway/0195-preview-handoff-container-reconciliation.md)
+  and [0221](../../tests/flaky-tests/previews-annotations-and-gateway/0221-preview-first-chunk-timing.md) were
   test ordering and timing problems and are fixed in their tests. Before and
   after stress counts are in each case file.
 - Cleanup: no containers from the re-tagged image remained. The two
@@ -493,7 +493,7 @@ This replaces the 2026-09-23 file lists as the current baseline.
   hides native views, and `dismissStartupDialogs` runs only before a locator
   action or assertion, never during main-process polls. The visibility polls
   now give it one on every read. The same cause fits flake
-  [0272](../../tests/flaky-tests/0272-annotation-home-reload-native-view.md); its
+  [0272](../../tests/flaky-tests/previews-annotations-and-gateway/0272-annotation-home-reload-native-view.md); its
   Home test got the same change.
 - Full Electron suite on the loaded host: the service-preview spec passed 7/7.
   `electron-main.spec.ts` (two tests) and `terminal-input-resume-electron.spec.ts`
@@ -501,18 +501,18 @@ This replaces the 2026-09-23 file lists as the current baseline.
   test failed as in 0272, all at load average 34 to 56 and again alone. At
   load 12 to 17 the two title specs passed alone with `main`'s product code
   and with this branch's, so the title checks are recorded as flake
-  [0470](../../tests/flaky-tests/0470-electron-launch-title-timeout-under-load.md).
+  [0470](../../tests/flaky-tests/electron-and-desktop/0470-electron-launch-title-timeout-under-load.md).
   With the 0272 change the annotation spec passed 10/10 twice alone. A second
   full run (`ORKESTRATOR_AGENT_TEST_RUN_ID=svc-preview-c6ca-suite2`) had 21
   passed, 1 skipped (the Linux Wayland case) and 0 failed, in 2.7 min.
 - Repository checks: `mise run check` passed. The first full `mise run test`
   failed only on a case-file status format in this change (fixed) and the
   known aggregate timeouts
-  [0258](../../tests/flaky-tests/0258-coordinator-fixture-digest-aggregate-timeout.md)
-  and [0178](../../tests/flaky-tests/0178-pi-vendor-runtime-aggregate-timeout.md),
+  [0258](../../tests/flaky-tests/coordinator-and-multi-review/0258-coordinator-fixture-digest-aggregate-timeout.md)
+  and [0178](../../tests/flaky-tests/agent-bridges/0178-pi-vendor-runtime-aggregate-timeout.md),
   both of which passed alone. The second full run passed (323 s). After
   merging `main` at `68dc1c8d`, `mise run check` passed and the full run
-  failed only on flake [0180](../../tests/flaky-tests/0180-worktree-tracked-edit-cache-hit.md)
+  failed only on flake [0180](../../tests/flaky-tests/environments-and-containers/0180-worktree-tracked-edit-cache-hit.md)
   (passed alone) and on two tests broken on `main` itself by the README
   rewrite (#1077): `tiptap-extensions.test.ts` "accepts the repository
   Markdown files that previously failed" and `tests/unit/install-script.test.ts`
@@ -613,14 +613,14 @@ This replaces the 2026-09-23 file lists as the current baseline.
     window 2 released it again. Window 1's page was untouched throughout.
 - Spec runs once the test-side fixes below were in: 13/13 in 11 of 14 full
   runs, then the first full Electron suite failed the same keyboard test once
-  more: flake [0620](../../tests/flaky-tests/0620-service-preview-keyboard-picker-register-item.md),
+  more: flake [0620](../../tests/flaky-tests/previews-annotations-and-gateway/0620-service-preview-keyboard-picker-register-item.md),
   stale focus reads under Chromium's timer throttling. After the spec waited
   for focus and turned the throttling off: 5 of 5 runs passed (55.7 s to
   1.0 min, load 11 to 17), and the second full suite passed. Earlier failures while writing the spec were
   test-side and are fixed in it: a pointer parked over the menu, the
   duplicated HMR update, a hidden `role="dialog"` popover that is always in
   the DOM, and the renderer keeping its hydrated tab set (code item 9).
-- Later single-spec runs: one failure, flake [0622](../../tests/flaky-tests/0622-service-preview-window-close-remote-release.md)
+- Later single-spec runs: one failure, flake [0622](../../tests/flaky-tests/previews-annotations-and-gateway/0622-service-preview-window-close-remote-release.md)
   (a slow run in which window close did not release on the second backend
   within 20 s); then 4 of 4 passed with the close and release timed apart
   (window gone 209 to 217 ms after `close()`).
@@ -634,9 +634,9 @@ This replaces the 2026-09-23 file lists as the current baseline.
   source-text assertion in `tests/unit/release/package-config.test.ts` on the
   old `useConnection` code, and two new web assertions that passed a DOM
   query result to `toBeNull` (`tests/unit/test-diagnostic-bounds.test.ts`).
-  It also hit backend flakes [0239](../../tests/flaky-tests/0239-agent-account-duplicate-directory-cleanup.md)
-  and [0341](../../tests/flaky-tests/0341-public-exec-restart-cleanup-eperm.md)
-  (recurrences) and new [0621](../../tests/flaky-tests/0621-environment-move-nested-submodules-aggregate-timeout.md);
+  It also hit backend flakes [0239](../../tests/flaky-tests/backend-services-and-tooling/0239-agent-account-duplicate-directory-cleanup.md)
+  and [0341](../../tests/flaky-tests/backend-services-and-tooling/0341-public-exec-restart-cleanup-eperm.md)
+  (recurrences) and new [0621](../../tests/flaky-tests/environments-and-containers/0621-environment-move-nested-submodules-aggregate-timeout.md);
   each owning file passed alone at load 36. The second full run
   (`full-tests-0a835-2`) passed in 495.3 s.
 - Cleanup: the spec stops Electron, both backends, the renderer Vite group,
@@ -773,15 +773,15 @@ evidence.
 - Repository checks: `mise run format:check`, `mise run lint`, `mise run
   typecheck` and `tsc -p e2e/tsconfig.json` passed. The first full `mise run
   test` (`full-tests-0042`, 722.5 s) failed only on known aggregate timeouts:
-  [0213](../../tests/flaky-tests/0213-terminal-history-aggregate-timeout.md),
-  [0175](../../tests/flaky-tests/0175-container-git-fetch-branch-baseline-timeout.md),
-  [0192](../../tests/flaky-tests/0192-firewall-bootstrap-shell-timeout.md) and
+  [0213](../../tests/flaky-tests/backend-services-and-tooling/0213-terminal-history-aggregate-timeout.md),
+  [0175](../../tests/flaky-tests/environments-and-containers/0175-container-git-fetch-branch-baseline-timeout.md),
+  [0192](../../tests/flaky-tests/environments-and-containers/0192-firewall-bootstrap-shell-timeout.md) and
   two split cases of
-  [0165](../../tests/flaky-tests/0165-coordinator-bound-discard-timeout.md)
+  [0165](../../tests/flaky-tests/coordinator-and-multi-review/0165-coordinator-bound-discard-timeout.md)
   (reopened). Each unchanged owning file passed alone at load 11. The second
   full run (`full-tests-0042-2`, 644.4 s) passed the workspace, bridges and
   protocol groups and failed only the root group on
-  [0178](../../tests/flaky-tests/0178-pi-vendor-runtime-aggregate-timeout.md)
+  [0178](../../tests/flaky-tests/agent-bridges/0178-pi-vendor-runtime-aggregate-timeout.md)
   and another 0192 case; both owners passed alone.
 - Not run: two machines, Firefox, Safari and iOS, Docker Desktop on Windows,
   real private DNS and certificates, the hostile worker against Electron's

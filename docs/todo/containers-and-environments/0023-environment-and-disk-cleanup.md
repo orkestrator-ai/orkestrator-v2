@@ -113,7 +113,7 @@ was stopped and reset afterwards.
 | Deletion during local setup, as shipped | Pass, not skipped. But the backend logged `no setup commands found`: the fixture has no `orkestrator-ai.json`, so no setup was running when deletion ran. |
 | Deletion during local setup, with a running setup (spec extended, see below) | Pass (5.5–6.0 s, four runs). `pgrep` found the setup shell before deletion; its PTY exited 137 on deletion, the worktree path stayed absent 1.5 s later, and no setup process survived. |
 | Negative control: `terminateTerminalSessionsForEnvironment` stubbed out | Fail, as intended. The surviving setup re-created the worktree path. A relative-path loop had passed this control because it cannot re-create a removed cwd; the spec now writes by absolute path, as turbo does. |
-| One-shot `mise run test:agent:browser:isolated` (profile `qa-browser-8311cc1a-7e5`) | The deletion spec passed, not skipped. Suite: 25 passed, 15 opt-in skips (the Docker spec among them), 1 failed. The failure was the known narrow host-picker flake [0224](../../tests/flaky-tests/0224-host-picker-narrow-tools-popover.md), which failed once and passed twice when run alone. |
+| One-shot `mise run test:agent:browser:isolated` (profile `qa-browser-8311cc1a-7e5`) | The deletion spec passed, not skipped. Suite: 25 passed, 15 opt-in skips (the Docker spec among them), 1 failed. The failure was the known narrow host-picker flake [0224](../../tests/flaky-tests/previews-annotations-and-gateway/0224-host-picker-narrow-tools-popover.md), which failed once and passed twice when run alone. |
 | Seeded pre-ledger sweeps, restart without `--fixture` | Pass. Logged and observed: stray workspaces removed 1 (only a nested `.turbo/turbo-build.log`) and kept 1 (also holds `notes.txt`, logged once), a fresh stray kept silently; orphan branches deleted 2 (one merged into `main`, one with no new commits), kept 1 (unmerged commit), the non-scheme branch untouched; temp files removed 1 (`qa-store.json.4999999.tmp`, dead PID, 2 h old), kept PID 1, fresh and non-PID names; orphan bridge state directories removed 1, a fresh one kept. |
 | Seeded pre-ledger sweeps, an earlier restart with `--fixture` | Not valid: `deleted 0, kept 2`. `dev:test --fixture` deletes and re-creates the fixture repository (`apps/desktop/scripts/dev/fixture.ts`) after Electron is ready, concurrently with the backend's background startup sweep, which counted the vanishing branches as kept. |
 | Isolation | The backend held only the profile's `orkestrator.sqlite`. The main workspaces root, the main data directory's temp files and the other profiles were unchanged. |
@@ -179,9 +179,9 @@ protocol and every workspace package except backend passed. Backend reported
 8612 passed, 41 skipped, eight timeouts and one late SQLite error. The two
 unchanged owning files then passed separately with `--parallel=1`: lifecycle
 in 18.9 seconds and coordinator in 20.2 seconds. The existing flaky-test cases
-[0194](../../tests/flaky-tests/0194-environment-lifecycle-deletion-aggregate-timeout.md),
-[0226](../../tests/flaky-tests/0226-deletion-reap-failure-aggregate-timeout.md) and
-[0165](../../tests/flaky-tests/0165-coordinator-bound-discard-timeout.md) record
+[0194](../../tests/flaky-tests/environments-and-containers/0194-environment-lifecycle-deletion-aggregate-timeout.md),
+[0226](../../tests/flaky-tests/environments-and-containers/0226-deletion-reap-failure-aggregate-timeout.md) and
+[0165](../../tests/flaky-tests/coordinator-and-multi-review/0165-coordinator-bound-discard-timeout.md) record
 the exact commands, failures, worker counts and compressed evidence. This
 aggregate run is not a clean full-suite pass.
 

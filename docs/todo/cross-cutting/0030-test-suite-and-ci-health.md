@@ -363,7 +363,7 @@ the Electron main-process bookkeeping tests and two dev-tooling defects.
 10. **Done (2026-10-22): the Codex bridge listened on import in a test.**
     `item-to-parts.test.ts` now imports the renderer from `./messages/`
     instead of `./index.js`, and the re-export that existed only for it is
-    gone ([flake 0660](../../tests/flaky-tests/0660-codex-item-to-parts-inherited-port.md),
+    gone ([flake 0660](../../tests/flaky-tests/agent-bridges/0660-codex-item-to-parts-inherited-port.md),
     resolved). The entry point still starts its server on import; that is
     harmless under the suite preload (`CODEX_BRIDGE_NO_SERVER=1`) and was not
     changed, because `import.meta.main` is not reliable across the Bun and
@@ -463,14 +463,14 @@ the Electron main-process bookkeeping tests and two dev-tooling defects.
 ## Related
 
 - [Flake registry](../../tests/flaky-tests/0000-index.md); entries
-  [0006](../../tests/flaky-tests/0006-2026-09-08-coordinator-action-validation.md),
-  [0166](../../tests/flaky-tests/0166-opencode-probe-deadline-exit-code.md),
-  [0171](../../tests/flaky-tests/0171-multi-review-admission-benchmark-load.md),
-  [0246](../../tests/flaky-tests/0246-design-renderer-real-chromium-launch-deadline.md),
-  [0182](../../tests/flaky-tests/0182-cursor-auth-readiness-aggregate-timeout.md),
-  [0385](../../tests/flaky-tests/0385-claude-enter-plan-fixture-directory-race.md),
-  [0671](../../tests/flaky-tests/0671-coordinator-opencode-reconcile-join-race.md),
-  [0672](../../tests/flaky-tests/0672-preview-interactive-chromium-page-crash.md).
+  [0006](../../tests/flaky-tests/aggregate-validation-runs/0006-2026-09-08-coordinator-action-validation.md),
+  [0166](../../tests/flaky-tests/agent-bridges/0166-opencode-probe-deadline-exit-code.md),
+  [0171](../../tests/flaky-tests/coordinator-and-multi-review/0171-multi-review-admission-benchmark-load.md),
+  [0246](../../tests/flaky-tests/design-canvas-and-artifacts/0246-design-renderer-real-chromium-launch-deadline.md),
+  [0182](../../tests/flaky-tests/agent-bridges/0182-cursor-auth-readiness-aggregate-timeout.md),
+  [0385](../../tests/flaky-tests/agent-bridges/0385-claude-enter-plan-fixture-directory-race.md),
+  [0671](../../tests/flaky-tests/coordinator-and-multi-review/0671-coordinator-opencode-reconcile-join-race.md),
+  [0672](../../tests/flaky-tests/design-canvas-and-artifacts/0672-preview-interactive-chromium-page-crash.md).
 - [0031-live-provider-and-platform-qualification.md](0031-live-provider-and-platform-qualification.md)
   for runs CI cannot do.
 - [0023-environment-and-disk-cleanup.md](../containers-and-environments/0023-environment-and-disk-cleanup.md) for test

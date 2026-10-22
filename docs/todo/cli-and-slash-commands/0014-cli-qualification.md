@@ -111,7 +111,7 @@ success signal.
    exit 4 stands. Without
    `--wait` the behaviour is unchanged. Covered by `client-waits.test.ts`.
    Not re-run live under load; flake
-   [0440](../../tests/flaky-tests/0440-cli-live-opencode-container-start-transport-timeout.md)
+   [0440](../../tests/flaky-tests/backend-services-and-tooling/0440-cli-live-opencode-container-start-transport-timeout.md)
    stays open until it is. Other `--wait` mutations (`environment exec`,
    `environment start`) still exit 4 on a lost response.
 
@@ -221,7 +221,7 @@ codes only).
     `storage helper > reports unknown content and foreign markers without
     touching data` five-second timeout. The complete owning file passed alone
     (3.4 s); registered as confirmed flake
-    [0672](../../tests/flaky-tests/0672-container-storage-marker-aggregate-timeout.md).
+    [0672](../../tests/flaky-tests/environments-and-containers/0672-container-storage-marker-aggregate-timeout.md).
     Root/support, all bridges and protocol regeneration passed. The aggregate
     remains failed; isolated passes do not replace its result. Evidence:
     `orkestrator-test-run.TfxXYL` below the host temporary directory.
@@ -248,7 +248,7 @@ codes only).
     `environment launch` and `run wait` stages this branch does not touch.
     Rerun alone: `client-exit` passed, `setup-failure` failed again after
     1052 s at load 400. Only `client-exit` is registered as flake
-    [0671](../../tests/flaky-tests/0671-cli-scenarios-environment-start-under-extreme-load.md);
+    [0671](../../tests/flaky-tests/backend-services-and-tooling/0671-cli-scenarios-environment-start-under-extreme-load.md);
     `setup-failure` remains unconfirmed and needs a quiet-host rerun.
   - Package and backend tests: `packages/cli` suite 161/161 pass;
     `public-api-exec.test.ts` 19/19 pass.

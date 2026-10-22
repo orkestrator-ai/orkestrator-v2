@@ -381,7 +381,7 @@ Storage accounting, settled at `9906db30`:
 
 ## Needs verification
 
-- Whether open flake [0177](../../tests/flaky-tests/0177-driven-observation-baseline-timeout.md)
+- Whether open flake [0177](../../tests/flaky-tests/native-agents-and-transcripts/0177-driven-observation-baseline-timeout.md)
   (`recurring-baseline.test.ts` timeout) is load-only.
 
 ## Related

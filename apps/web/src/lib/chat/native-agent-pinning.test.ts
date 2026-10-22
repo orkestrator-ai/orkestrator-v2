@@ -720,7 +720,7 @@ describe("pinNativeAgentParts", () => {
      * rather than rescanning the window per card. This asserts the behaviour
      * that refactor has to preserve at the scale where it matters — every card
      * still resolving independently across a long transcript — deliberately
-     * without a wall-clock deadline, which `docs/tests/flaky-tests/0000-index.md` records as the
+     * without a wall-clock deadline, which the flake registry in `docs/tests/flaky-tests/` records as the
      * repository's most reliable source of parallel-run flakes.
      */
     const size = 2_000;

@@ -207,6 +207,21 @@ export async function runClientProcess(argv: readonly string[], version: string)
     cwd: process.cwd(),
     now: () => Date.now(),
     stdinIsTty: Boolean(process.stdin.isTTY),
+    question: async (prompt) => {
+      const { createInterface } = await import("node:readline/promises");
+      // Prompts go to stderr so stdout stays the command's own output.
+      const reader = createInterface({ input: process.stdin, output: process.stderr });
+      try {
+        return await new Promise<string | null>((resolve, reject) => {
+          reader.once("close", () => resolve(null));
+          // A terminal reader swallows Ctrl-C; treat it as declining to answer.
+          reader.once("SIGINT", () => resolve(null));
+          reader.question(prompt).then(resolve, reject);
+        });
+      } finally {
+        reader.close();
+      }
+    },
   };
   try {
     return await runClient(argv, { io, version, signal: controller.signal });

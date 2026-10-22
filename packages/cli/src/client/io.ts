@@ -14,6 +14,11 @@ export interface ClientIo {
   now(): number;
   /** Whether stdin is an interactive terminal (prompt input then needs a file). */
   stdinIsTty: boolean;
+  /**
+   * Asks one question on stderr and reads one line from an interactive stdin.
+   * Resolves null at end of input. Absent where nothing can answer.
+   */
+  question?(prompt: string): Promise<string | null>;
 }
 
 export async function readStreamBounded(

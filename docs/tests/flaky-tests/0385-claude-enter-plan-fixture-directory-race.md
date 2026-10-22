@@ -103,3 +103,13 @@ assertion, timeout or skip was changed for validation.
 - **Assessment:** confirmed recurrence of the existing fixture-directory race. The first full aggregate in this merge passed all bridge packages. No Claude source, assertions, deadlines or skips changed; concurrent fixture work remains a hypothesis.
 - **Bridge-group rerun:** `mise run test:logged -- --name merge-bridges-rerun -- bunx turbo run test:bridge --cwd . '--filter=./bridges/*' --concurrency=2 --continue=dependencies-successful --output-logs=new-only --log-order=stream` passed all five unchanged bridge packages (exit 0, 77.5 seconds).
 - **Final aggregate result:** exit 1 in 370.1 seconds, with only the bridge fixture above failing. All workspace packages, root/support and Codex protocol generation passed. Formatting, lint, typechecking, the application build, isolated browser suite, Electron suite and Docker suite also passed. Disposable browser and Docker profiles were stopped and reset. iOS and standalone CLI scenarios were omitted because the merge does not change those areas; ordinary CLI tests ran in the workspace suite.
+
+
+## Machines settings main merge — 2026-10-22
+
+- **Original command:** the testing guide's GNU-tool PATH with `mise run test:logged -- --name latest-tests -- mise run test`, merging `7e051d955` into `814afe472`. Workspace/root/bridges/protocol reserved 4/1/2/1 slots; Claude used one isolated worker alongside browser validation.
+- **Failure:** `denies EnterPlanMode when its durable preference cannot be written` hit `EISDIR` writing the fixture's `.claude` at line 827 (1.50 ms), before invoking the intended tool path.
+- **Complete unchanged owner:** `mise run test:logged -- --name latest-claude-owner -- bun test --cwd bridges/claude-bridge --preload ../../tests/setup-node.ts ./src/services/session-manager-interactions.test.ts --parallel=1 --only-failures` passed, exit 0 in 0.2 s.
+- **Aggregate result:** workspace, root/support and protocol passed; the bridge group failed only this case. Claude reported 1602 passed, five skipped and one failed across 76 files (39.04 s). The complete aggregate exited 1 in 481.2 s.
+- **Evidence:** `orkestrator-test-run.Eapjgt/bridges.log.gz` and outer `orkestrator-test-run.l1ORHc/latest-tests.log.gz` below the host temporary directory.
+- **Assessment:** confirmed intermittent fixture recurrence. No implementation, assertion, timeout or skip changed.

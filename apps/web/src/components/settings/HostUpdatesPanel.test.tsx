@@ -10,8 +10,22 @@ import type {
 } from "@orkestrator/protocol/host-maintenance";
 
 import * as backend from "@/lib/backend";
+import { connectedHostClient } from "@/test/host-maintenance-client";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
-import { UpdatesSettings, describeRestartImpact } from "./UpdatesSettings";
+import { HostUpdatesPanel, describeRestartImpact } from "./HostUpdatesPanel";
+import { useHostMaintenance } from "./useHostMaintenance";
+
+function UpdatesSettings() {
+  const { snapshot, error, accept } = useHostMaintenance({ detail: true });
+  return (
+    <HostUpdatesPanel
+      client={connectedHostClient}
+      snapshot={snapshot}
+      error={error}
+      accept={accept}
+    />
+  );
+}
 
 function snapshot(overrides: Partial<HostMaintenanceSnapshot> = {}): HostMaintenanceSnapshot {
   return hostMaintenanceSnapshotFixture({

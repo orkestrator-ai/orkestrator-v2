@@ -404,6 +404,40 @@ files were removed.
 - **Scope limitation:** dedicated Electron, Docker lifecycle, iOS and billed-provider qualification were not selected because this merge changes none of their owning implementations; unavailable provider/Docker browser scenarios remain explicit skips.
 
 
+## Machines settings review validation — 2026-10-22
+
+- **Scope:** branch `machines-settings-13fae198a6c1-r1`; maintenance navigation,
+  machine labels, discovery fallback and saved-connection controls. The failing
+  host-path scenarios were unchanged.
+- **Original command:** `mise run test:logged -- --name isolated-browser -- mise run test:agent:browser:isolated`,
+  one worker, credential-free Codex profile `qa-browser-a27914dd-603`.
+  Result: 27 passed, 42 skipped, two failed (exit 1, 424.0 seconds including
+  lifecycle). The narrow picker timed out after 15000 ms clicking hidden or
+  unstable `Repository settings` at `browser-gateway.spec.ts:240`. Separately,
+  `typed project paths detect a remote and preserve newer manual URL edits`
+  could not find the Add project dialog's Git URL input after its 2300 ms wait.
+- **Complete owning-file rerun:** `mise run test:logged -- --name gateway-recheck -- bun output/machines-validation/recheck.ts`
+  used `runIsolatedBrowser` with the normal browser configuration restricted to
+  the complete `browser-gateway.spec.ts`, one worker and fresh credential-free
+  profile `qa-browser-97da0d2c-6a8`. Result: 14 passed, nine skipped, one failed
+  (exit 1, 139.1 seconds). The narrow picker repeated its 15000 ms timeout;
+  the typed-path case passed. Since the complete owner remains non-green,
+  this does not establish a new flake classification for the typed-path case.
+- **Evidence:** host temporary-directory logs
+  `orkestrator-test-run.uYTFen/isolated-browser.log.gz` and
+  `orkestrator-test-run.Z58n1W/gateway-recheck.log.gz`; results and traces under
+  `output/agent-testing/<profile>/browser/` for the profiles above. Both profiles
+  were stopped and reset, and the temporary runner/config were removed.
+- **Relevant validation:** both 1280px and 390px maintenance cases passed in
+  both runs, proving completion with Settings closed and recovery after reload.
+  All 36 Machines component-browser cases, focused renderer/routing tests,
+  recurring-work checks, formatting, lint, typechecks and the complete non-iOS
+  suite passed. The Machines Unicode correction uses macOS line-end navigation
+  before Backspace; its original mobile failures reproduced alone before that
+  fix. No assertion, timeout or skip was loosened. Dedicated Electron, Docker
+  lifecycle, iOS and billed-provider suites were omitted because their owning
+  implementations did not change.
+
 ## Idle-observation refreshed main merge — 2026-10-22
 
 The narrow picker repeated the hidden `Repository settings` click timeout at
@@ -416,3 +450,15 @@ owner, but the owner remains non-green. Commands, evidence and cleanup are
 recorded in [0515](0515-idle-observation-main-merge-validation.md), under
 “Main refresh”. No implementation, assertion, deadline or skip changed; this
 recurrence remains unresolved rather than a newly confirmed flake.
+
+
+## Machines settings refreshed main merge — 2026-10-22
+
+- **Merge:** `origin/main` at `7e051d955` into `814afe472` on `machines-settings-13fae198a6c1-r1`. The pending merge was refreshed after two new main commits appeared; the original non-IOS and browser attempts were interrupted and are not final coverage.
+- **Full browser command:** `mise run test:logged -- --name latest-browser -- mise run test:agent:browser:isolated`, one worker, fresh credential-free Codex profile `qa-browser-e19f73e8-d2d`. Result: 28 passed, 51 skipped, one failed; exit 1 in 426.2 s including lifecycle. The narrow picker repeated the 15000 ms hidden/unstable `Repository settings` click timeout at line 240.
+- **Complete unchanged owner:** `mise run test:logged -- --name latest-gateway-owner-fixed -- bun output/merge-main-validation/gateway-owner.ts` used `runIsolatedBrowser`, the normal browser config restricted to the complete `browser-gateway.spec.ts`, and fresh credential-free profile `merge-main-gateway-13fae198`. Result: 14 passed, nine skipped, one failed; exit 1 in 159.1 s. The same narrow-picker timeout repeated. Both 1280px and 390px maintenance-rehydration cases passed in both runs; capped-file-tree and persisted-diff cases also passed.
+- **Earlier partial browser observation:** the interrupted `merge-browser` run on `c17f1c8d5` (`qa-browser-7fef7575-0d6`) had missed the capped-tree `build` folder at line 776. The refreshed suite and owning-file runs passed that case, but the owner remains non-green, so this observation does not independently establish a new flaky classification.
+- **Evidence:** host temporary-directory logs `orkestrator-test-run.8VFQmt/latest-browser.log.gz`, `orkestrator-test-run.s6XsZB/latest-gateway-owner-fixed.log.gz`, and the interrupted `orkestrator-test-run.gd1T9F/merge-browser.log.gz`. Sanitized results/traces remain under `output/agent-testing/<profile>/browser/` for the profiles above.
+- **Other verification:** formatting, lint, all typechecks, `build:all`, documentation command contracts, 1348 local Markdown links and the recurring-work harness passed. The updated non-IOS aggregate passed workspace, root/support and protocol; its sole failure was the Claude EnterPlanMode fixture race (0385), whose unchanged complete owner passed. Earlier Pi, disk-report and long-transcript deadline recurrences passed their complete unchanged owners (0514, 0259, 0627).
+- **Docker and cleanup:** the development image built successfully. The full Docker fixture suite on `merge-main-docker-latest-13fae198` passed 10 cases with two live-provider skips (74.9 s); stop/reset removed two exact-owner containers, four volumes, one network and disposable state. The earlier Docker profile was also stopped/reset. Every browser profile above was stopped/reset, and temporary rerun scripts/configs were removed. No launcher or disposable state was deliberately retained.
+- **Scope limitation:** dedicated Electron, CLI scenario and iOS suites were omitted because their owning implementations did not change; billed-provider scenarios retained their explicit opt-ins. No implementation, assertion, timeout or skip was changed. The narrow-picker recurrence remains unresolved.

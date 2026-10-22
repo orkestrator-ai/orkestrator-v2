@@ -237,8 +237,9 @@ test("a repository group names each member by its machine and shows a machine do
       />,
     );
   });
-  const heading = screen.getByTitle("Open acme/app");
+  const heading = screen.getByRole("button", { name: "Open acme/app on Machine A" });
   expect(heading.getAttribute("aria-expanded")).toBeNull();
+  expect(heading.getAttribute("title")).toBe(`Open ${hint} on Machine A`);
   expect(within(heading).getByTestId("machine-dot").getAttribute("data-machine-color")).toBe(
     "teal",
   );

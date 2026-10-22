@@ -333,10 +333,10 @@ export function repositoryArrangementUpdate(
   };
 }
 
-/** The label of a repository group: its last two path segments. */
+/** Shorten a repository hint by dropping only its host, preserving every namespace. */
 export function repositoryLabel(hint: string): string {
   const parts = hint.split("/");
-  return parts.length >= 2 ? parts.slice(-2).join("/") : hint;
+  return parts.length > 2 ? parts.slice(1).join("/") : hint;
 }
 
 /** Repository hints are identities, not user-entered folder names. */

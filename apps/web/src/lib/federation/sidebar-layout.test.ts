@@ -5,6 +5,7 @@ import {
   resolveProjectArrangement,
   resolveRenameProjectFolder,
   buildProjectTree,
+  PROJECT_ROOT_DROP_ID,
 } from "@/lib/project-folders";
 import type { MachineView } from "./aggregate";
 import {
@@ -18,6 +19,7 @@ import {
   placeShown,
   registryOrder,
   repositoryArrangementUpdate,
+  repositoryLabel,
   repositoryMemberLabel,
   repositoryOpenTarget,
   repositoryProjectList,
@@ -347,4 +349,31 @@ test("case-only inherited folder rename persists without changing owner spelling
     mergedProjectList(machines, new Set(["bk_a"]), layout(update), null).shown[0]?.folder,
   ).toBe("WORK");
   expect(owned.folder).toBe("Work");
+});
+
+test("repository labels preserve namespaces with shared trailing segments", () => {
+  expect(repositoryLabel("gitlab.example/team-a/shared/app")).toBe("team-a/shared/app");
+  expect(repositoryLabel("gitlab.example/team-b/shared/app")).toBe("team-b/shared/app");
+  expect(repositoryLabel("github.com/acme/app")).toBe("acme/app");
+  expect(repositoryLabel("acme/app")).toBe("acme/app");
+  expect(repositoryLabel("app")).toBe("app");
+});
+
+test("project drops on repository headers and the root cannot change repository membership or order", () => {
+  const machines = [
+    machine("bk_a", [
+      project("bk_a", "a", 0, { repositoryHint: "gitlab.example/team-a/shared/app" }),
+      project("bk_a", "b", 1, { repositoryHint: "gitlab.example/team-b/shared/app" }),
+    ]),
+  ];
+  const list = repositoryProjectList(machines, new Set(["bk_a"]), layout(), null);
+  for (const overId of [
+    "project-folder:gitlab.example/team-a/shared/app",
+    "project-folder:gitlab.example/team-b/shared/app",
+    PROJECT_ROOT_DROP_ID,
+  ]) {
+    const arrangement = resolveRepositoryArrangement(key("bk_a", "a"), overId, list.shown);
+    expect(arrangement).toBeNull();
+    expect(repositoryArrangementUpdate(list, machines, arrangement)).toBeNull();
+  }
 });

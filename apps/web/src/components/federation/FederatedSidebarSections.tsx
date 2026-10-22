@@ -483,6 +483,7 @@ export function MergedProjectList({
                         })
                     : undefined
                 }
+                openMachineName={opens?.machine.name}
                 badge={
                   opens ? (
                     <MachineDot

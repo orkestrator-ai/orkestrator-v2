@@ -25,6 +25,10 @@ import {
   nativeAgentPolicyDeniesWebSearch,
 } from "@orkestrator/protocol/native-agent";
 import { coordinatorWebResearchEnv } from "@orkestrator/protocol/coordinator-web-research";
+import {
+  COORDINATOR_LIVE_PLATFORMS,
+  COORDINATOR_LIVE_SCENARIOS,
+} from "../../../desktop/scripts/dev/coordinator-live.js";
 import { coordinatorProviderQualification } from "./coordinator-providers.js";
 import { resolveNativeAgentExecutionPolicy } from "./native-agent-execution-policy.js";
 import {
@@ -87,6 +91,25 @@ describe("coordinator read-only conformance", () => {
       enabled: true,
       allowUnsandboxedCommands: false,
     });
+  });
+
+  // The live suite is the expensive half of every claim this table makes. A
+  // platform the coordinator offers, and above all one at `enforced`, has to
+  // have a live entry that runs every scenario, or its tier is a claim nothing
+  // ever checks against a real provider.
+  test("every offered platform, enforced ones included, is on the live suite's list", () => {
+    const live = new Set(COORDINATOR_LIVE_PLATFORMS.map((entry) => entry.platform));
+    const offered = everyPlatform.filter(
+      (platform) =>
+        coordinatorProviderQualification(platform, { host, enabledPlatforms: everyPlatform })
+          .available,
+    );
+    expect(offered.filter((platform) => !live.has(platform))).toEqual([]);
+    const enforced = everyPlatform.filter((platform) => tierOf(platform) === "enforced");
+    expect(enforced.length).toBeGreaterThan(0);
+    for (const platform of enforced) expect(live.has(platform)).toBe(true);
+    expect(COORDINATOR_LIVE_SCENARIOS).toContain("read-only");
+    expect(COORDINATOR_LIVE_SCENARIOS).toContain("async");
   });
 
   // Hosted web search reaches the internet from the vendor's servers, so a

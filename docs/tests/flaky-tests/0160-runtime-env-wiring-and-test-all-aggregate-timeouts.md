@@ -79,6 +79,15 @@ case passing consistently.
 - **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.Gj6LAK/root-and-agent-support-tests.log.gz`.
 - **Assessment:** recurrence confirmed; shared-host process contention remains a hypothesis. No assertion, timeout or skip changed.
 
+## Idle-observation main merge recurrence — 2026-10-21
+
+`container runtime environment wiring > Codex setup copies the complete allowlist, secures auth, and excludes plugin runtime state`
+exceeded the five-second deadline at 5056.80 ms in the three-file, one-worker
+`merge-root-owners` run (124 passed, one failed, 86.7 seconds). The entire
+unchanged `runtime-env-wiring.test.ts` passed alone in 20.8 seconds. Exact
+commands and evidence are in
+[0515](0515-idle-observation-main-merge-validation.md). No assertion, deadline
+or skip changed; shared-host contention remains a hypothesis.
 
 ## Preview qualification main merge, 2026-10-21
 

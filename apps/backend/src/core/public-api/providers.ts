@@ -24,7 +24,7 @@ import type {
  * providers keep every other action; their runs report `unsupported` rather
  * than a completion the backend has not proven for them. Qualification
  * evidence is summarised in docs/architecture/public-cli.md; providers still
- * to qualify are tracked in docs/todo/cli-qualification.md.
+ * to qualify are tracked in docs/todo/cli-and-slash-commands/0014-cli-qualification.md.
  * Withdraw one provider here (to `unqualified`) if its mapping fails; its run
  * evidence stays readable.
  */

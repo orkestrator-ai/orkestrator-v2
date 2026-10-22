@@ -9,7 +9,7 @@
  * the real renderer mounts. Every page byte crosses the per-service loopback
  * ingress and the backend tunnel; nothing loads the legacy loopback route.
  *
- * Covers (docs/todo/service-preview-rollout.md, "Real Electron window"):
+ * Covers (docs/todo/previews-and-annotations/0042-service-preview-rollout.md, "Real Electron window"):
  * credentialed ingress and header injection for HTTP and WebSocket requests,
  * including worker-originated fetches; cookie, localStorage, IndexedDB and
  * service-worker isolation between two services; hide and reattach, and a
@@ -570,7 +570,7 @@ async function showServiceTabs(active: Name, names: Name[] = ["a", "b"]): Promis
     },
   });
   // An open renderer keeps the tab set it already hydrated rather than this
-  // external save (docs/todo/service-preview-rollout.md, code item 9), so a
+  // external save (docs/todo/previews-and-annotations/0042-service-preview-rollout.md, code item 9), so a
   // different set needs a fresh renderer.
   const reload = names.join() !== uiTabOrder.join();
   uiTabOrder = names;

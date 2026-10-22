@@ -20,3 +20,9 @@
 - The same unchanged owner failed both the one-worker combined rerun with DesignCanvas (36.4 s logged, one pass/one failure) and `mise run test:logged -- --name merge-monaco-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/MonacoRuntime.spec.ts --project=desktop-chromium --workers=1` (one failure, 20.2 s logged). Those focused reruns still failed at the same deadline.
 - Evidence: host temporary directories `orkestrator-test-run.2Itj5O`, `orkestrator-test-run.SL0qW8` and `orkestrator-test-run.PRdnBF`. No source, assertion, timeout or skip changed.
 - After the complete aggregate ended, the unchanged owner passed: `mise run test:logged -- --name merge-monaco-after-aggregate -- bunx playwright test --config e2e/playwright.config.ts e2e/MonacoRuntime.spec.ts --project=desktop-chromium --workers=1` (exit 0, 3.9 s logged). Shared-host or startup contention remains a hypothesis.
+
+## Sidebar main-merge validation — 2026-10-22
+
+- `mise run test:logged -- --name merge-browser -- mise run test:browser` ran nine workers against the initial `c17f1c8d5` merge: 399 passed, 81 skipped, two failed (362.5 s). The desktop editor was absent at the five-second deadline at line 25.
+- After refreshing the pending merge to `7e051d955`, `mise run test:logged -- --name merge-monaco-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/MonacoRuntime.spec.ts --workers=1` passed the complete unchanged owner, exit 0 in 4.0 s.
+- Evidence: `orkestrator-test-run.mgE8Fb/merge-browser.log.gz` under the host temporary directory. No assertion, deadline or skip changed; startup or host contention remains a hypothesis.

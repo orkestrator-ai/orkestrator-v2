@@ -343,6 +343,35 @@ assertion, timeout or skip was changed for validation.
 - **Evidence:** `orkestrator-test-run.Ow1M3o/merge-browser.log.gz` and `orkestrator-test-run.MWfKgp/merge-gateway-owner.log.gz` below the host temporary directory; browser artifacts under `output/agent-testing/<profile>/browser/` for the two profiles above.
 - **Disposition:** existing narrow-picker limitation remains unresolved. Both supervisors stopped and reset their profiles. No source, assertion, deadline or skip changed.
 
+
+## Idle-observation review validation (2026-10-21)
+
+The narrow host-picker timeout recurred while validating the idle-observation
+assertions and isolated-runner opt-in default:
+
+- `ORKESTRATOR_AGENT_TEST_LIVE_IDLE_OBSERVATION=1 mise run test:logged -- --name isolated-browser -- mise run test:agent:browser:isolated`
+  on credential-free Codex fixture `qa-browser-b58be031-38c`: 28 passed,
+  44 skipped, one failed (402.7 s including startup/cleanup). The failure was
+  the same 15 s click on hidden `Repository settings` at
+  `browser-gateway.spec.ts:239`, after `Open tools`. All six idle-observation
+  live cases stayed skipped despite the inherited opt-in. Evidence:
+  `orkestrator-test-run.ObH8th/isolated-browser.log.gz` in the host temporary
+  directory and `output/agent-testing/qa-browser-b58be031-38c/browser/`.
+- The complete unchanged owning file was rerun with one worker in a fresh
+  credential-free Codex fixture, `qa-browser-50d29a4f-6e8`, using
+  `runIsolatedBrowser` with a temporary config selecting only
+  `browser-gateway.spec.ts` (`mise run test:logged -- --name gateway-owner -- bun output/idle-review/gateway-run.ts`).
+  It reproduced the same narrow click failure: 14 passed, seven skipped, one
+  failed (144.8 s). Evidence: `orkestrator-test-run.BevcYq/gateway-owner.log.gz`
+  in the host temporary directory and
+  `output/agent-testing/qa-browser-50d29a4f-6e8/browser/`.
+
+The owning-file failure leaves this recurrence reproducible in isolation; this
+run does not establish a new flaky classification. The existing late-selection
+hypothesis remains unconfirmed by this run. No assertions were skipped or
+weakened. Both profiles were stopped/reset, and the temporary runner/config
+files were removed.
+
 ## Command-node review validation recurrence — 2026-10-21
 
 - `mise run test:logged -- --name review-real-browser-confirm -- mise run test:agent:browser:isolated` reported 28 passed, 39 skipped and one failed (649.2 seconds including lifecycle). The narrow host picker reproduced the hidden `Repository settings` button after `Open tools` at line 239, with a 15-second click timeout.
@@ -395,3 +424,25 @@ The full isolated browser run on feature branch
 No assertion, timeout, skip, or production tools-popover behavior was changed
 for this recurrence. The isolated runner stopped and reset its profile; the
 manual reproduction profile was also stopped and reset after owner validation.
+
+## Idle-observation refreshed main merge — 2026-10-22
+
+The narrow picker repeated the hidden `Repository settings` click timeout at
+`browser-gateway.spec.ts:240` (15000 ms) in both the full isolated browser run
+and the complete unchanged gateway owner on a fresh credential-free local-only
+profile. The full run reported 27 passed, 51 skipped and two failed; the owner
+reported 13 passed, 10 skipped and this single failure (127.0 seconds). The
+other full-run failure, local-environment `origin` visibility, passed in the
+owner, but the owner remains non-green. Commands, evidence and cleanup are
+recorded in [0515](0515-idle-observation-main-merge-validation.md), under
+“Main refresh”. No implementation, assertion, deadline or skip changed; this
+recurrence remains unresolved rather than a newly confirmed flake.
+
+## Sidebar refreshed main merge — 2026-10-22
+
+- Pre-merge HEAD: `b0f24b642`; final merged main: `7e051d955`. The two documentation conflicts retained both branches' evidence, and the auto-merged gateway test kept the sidebar helpers and the newer Docker credential/seed checks.
+- The initial `c17f1c8d5` merge passed `mise run test:logged -- --name merge-isolated-browser -- mise run test:agent:browser:isolated` (553.6 s).
+- The refreshed result's `mise run test:logged -- --name latest-isolated-browser -- mise run test:agent:browser:isolated` used profile `qa-browser-c741106c-c2a`: 28 passed, 51 opt-in skips and this one failure (436.3 s). The existing `Repository settings` click at line 241 exceeded 15,000 ms because the button was hidden. Evidence: `orkestrator-test-run.PltXEf/latest-isolated-browser.log.gz` under the host temporary directory; browser artifacts under `output/agent-testing/qa-browser-c741106c-c2a/browser/`.
+- A fresh credential-free local fixture, `qa-sidebar-main-owner`, reproduced the same failure in the complete unchanged owner: `ORKESTRATOR_AGENT_TEST_PROFILE=qa-sidebar-main-owner mise run test:logged -- --name latest-gateway-owner -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/browser-gateway.spec.ts --workers=1` reported 13 passed, 10 skipped, one failed (122.0 s). Evidence: `orkestrator-test-run.rOneqe/latest-gateway-owner.log.gz` under the host temporary directory. This remains an unresolved limitation, not a newly confirmed flake.
+- The refreshed complete non-iOS suite passed (447.3 s), as did format, lint, all typechecks, production build, focused storage/coordinator owners and Docker fixture (70.7 s). The initial component-browser run had 399 passed, 81 skipped and two failures; both complete unchanged owners passed separately (0174 and 0517), and the public-site suite passed separately. Initial aggregate disk-report, Mermaid and submodule-recovery failures also passed their complete owners (0259, 0512 and 0248).
+- All disposable profiles were stopped and reset. No implementation, assertion, timeout or skip was changed to address these validation recurrences. Dedicated native Electron and iOS suites were omitted because no owning implementation changed; billed-provider qualification remained opt-in.

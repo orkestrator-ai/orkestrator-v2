@@ -6,7 +6,7 @@ import { afterEach, expect, test } from "bun:test";
 import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { COORDINATOR_LIVE_PLATFORMS } from "./coordinator-live.js";
+import { COORDINATOR_LIVE_PLATFORMS, COORDINATOR_LIVE_SCENARIOS } from "./coordinator-live.js";
 import { COORDINATOR_LIVE_ROOT_ENV, runCoordinatorLive } from "./coordinator-live-runner.js";
 
 const roots: string[] = [];
@@ -162,7 +162,7 @@ test("every scenario runs by default, each in its own summary, combined per plat
   });
   expect(run.exitCode).toBe(0);
   const tests = (await f.events()).filter((event) => event.task === "playwright");
-  expect(tests.map((event) => event.scenarios)).toEqual(["read-only,async,family"]);
+  expect(tests.map((event) => event.scenarios)).toEqual(["read-only,async,family,peer"]);
   expect(run.results[0]).toMatchObject({
     platform: "claude",
     verdict: "passed",
@@ -170,6 +170,7 @@ test("every scenario runs by default, each in its own summary, combined per plat
       { scenario: "read-only", verdict: "passed" },
       { scenario: "async", verdict: "passed" },
       { scenario: "family", verdict: "passed" },
+      { scenario: "peer", verdict: "passed" },
     ],
   });
 });
@@ -283,12 +284,14 @@ test("runner budgets cover selected Playwright timeouts, underlying waits and cl
       ORKESTRATOR_AGENT_TEST_COORDINATOR_TURN_TIMEOUT_MS: "900000",
       ORKESTRATOR_AGENT_TEST_COORDINATOR_STEP_TIMEOUT_MS: "1200000",
       ORKESTRATOR_AGENT_TEST_COORDINATOR_FAMILY_TIMEOUT_MS: "3000000",
+      ORKESTRATOR_AGENT_TEST_COORDINATOR_PEER_TIMEOUT_MS: "2400000",
     },
   ]) {
     const budgets = coordinatorLiveBudgets(env);
     expect(budgets.waits.async).toBe(7 * budgets.step);
     expect(budgets.waits.family).toBe(2 * budgets.step + budgets.family);
-    const all = ["read-only", "async", "family"] as const;
+    expect(budgets.waits.peer).toBe(2 * budgets.step + budgets.peer);
+    const all = COORDINATOR_LIVE_SCENARIOS;
     for (const scenario of all) {
       expect(budgets.tests[scenario]).toBeGreaterThanOrEqual(
         budgets.waits[scenario] + budgets.overhead,

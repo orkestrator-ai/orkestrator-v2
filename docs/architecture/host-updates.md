@@ -15,7 +15,7 @@ From there it can:
 - pull the release container image.
 
 Real-release qualification is still open in
-[remote-host-upgrades.md](../todo/remote-host-upgrades.md).
+[0033-remote-host-upgrades.md](../todo/cross-cutting/0033-remote-host-upgrades.md).
 
 ## Who does what
 

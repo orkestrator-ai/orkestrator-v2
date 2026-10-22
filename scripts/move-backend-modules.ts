@@ -1,6 +1,6 @@
 /**
  * Moves backend modules and rewrites every reference to them, for the
- * `core/` domain-folder slices in docs/todo/backend-core-domain-folders.md.
+ * `core/` domain-folder slices in docs/todo/backend-structure/0012-backend-core-domain-folders.md.
  *
  *   bun scripts/move-backend-modules.ts --prefix design- --into design [--dry-run]
  *   bun scripts/move-backend-modules.ts --map moves.json [--dry-run]

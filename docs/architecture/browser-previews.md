@@ -2,7 +2,7 @@
 
 Status: Living. Shipped in #831 (`4f02156b`). Rollout gates, the evidence log
 and remaining work are in
-[service-preview-rollout.md](../todo/service-preview-rollout.md).
+[0042-service-preview-rollout.md](../todo/previews-and-annotations/0042-service-preview-rollout.md).
 
 A browser tab previews a **service**: a backend-owned identity for one
 application port in one environment. It does not preview a host port. The tab
@@ -285,7 +285,7 @@ pooled per service; nothing is replayed after a reconnect.
 | Attachment and credential hash | Backend `PreviewAccessService` | Release (by the client, on the issuing backend, including after a connection change or window close), lease expiry, generation change, service removal, credential rotation, kill switch, shutdown |
 | Tunnel sockets and upstream TCP | Backend `PreviewTunnelServer` | Closing either leg closes both; revocation closes everything tracked for the attachment |
 | Local ingress listener and ingress secret | Electron `PreviewTransportManager` | Last attachment release plus a short retirement lease, connection change, window close, app quit |
-| Service partition cookies and storage | Electron session | **Reset site data** for that service only (see [service-preview-rollout.md](../todo/service-preview-rollout.md) for retention) |
+| Service partition cookies and storage | Electron session | **Reset site data** for that service only (see [0042-service-preview-rollout.md](../todo/previews-and-annotations/0042-service-preview-rollout.md) for retention) |
 | Browser preview session cookie | Browser holds the value; backend owns validity | Server-side idle and absolute expiry, revocation |
 
 ## Operator controls
@@ -429,7 +429,7 @@ the private `Host` instead. Inbound forwarding headers are always discarded.
   - a two-machine tailnet run.
 
   See the evidence log in
-  [service-preview-rollout.md](../todo/service-preview-rollout.md).
+  [0042-service-preview-rollout.md](../todo/previews-and-annotations/0042-service-preview-rollout.md).
 - Application script on one service host can set a parent-domain cookie for
   its own application cookie names (never the reserved ones). Mutually
   untrusted services need separate preview domains.

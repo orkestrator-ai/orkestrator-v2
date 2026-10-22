@@ -50,7 +50,7 @@ hints that never overtake their commit. This case was not rerun. Its symptoms
 (Playwright action timeouts, a disabled picker, an unmounted page) are client
 or profile timing, and nothing here implicates the design change feed. It
 stays open; see the follow-up in
-[design-canvas-qualification.md](../../todo/design-canvas-qualification.md).
+[0036-design-canvas-qualification.md](../../todo/design-canvas/0036-design-canvas-qualification.md).
 
 ## Execution-policy conformance main merge recurrence — 2026-10-17
 
@@ -155,3 +155,9 @@ The aggregate failed this owner and its unchanged owning file passed with one wo
 - `mise run test:logged -- --name merge-browser -- mise run test:browser` ran nine workers and reported 373 passed, 81 skipped and two failures in 427.3 s; the desktop canvas exceeded its 30-second deadline. The other failure was Monaco startup (0517).
 - The unchanged desktop owner passed with one worker in `mise run test:logged -- --name merge-browser-owners -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts e2e/MonacoRuntime.spec.ts --project=desktop-chromium --workers=1` (one passed, Monaco failed, 36.4 s logged).
 - Evidence: host temporary directories `orkestrator-test-run.2Itj5O` and `orkestrator-test-run.SL0qW8`. Shared-host load is a hypothesis; no source, assertion, timeout or skip changed.
+
+## Sidebar main-merge validation — 2026-10-22
+
+- `mise run test:logged -- --name merge-browser -- mise run test:browser` ran nine workers against the initial `c17f1c8d5` merge: 399 passed, 81 skipped, two failed (362.5 s). The desktop canvas exceeded 30 s while clicking Switch tab at line 234; Monaco was the other failure.
+- `mise run test:logged -- --name merge-canvas-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts --workers=1` passed the complete unchanged owner, exit 0 in 14.0 s.
+- Evidence: `orkestrator-test-run.mgE8Fb/merge-browser.log.gz` under the host temporary directory. No assertion, deadline or skip changed; host contention remains a hypothesis.

@@ -9,7 +9,7 @@ permissions, name conflicts or signal delivery, so lifecycle, storage, network
 and image changes are also qualified against a real daemon. How the lifecycle
 works is in [container-lifecycle.md](../architecture/container-lifecycle.md);
 the platforms and providers still waiting for evidence are in
-[container-platform-qualification.md](../todo/container-platform-qualification.md).
+[0019-container-platform-qualification.md](../todo/containers-and-environments/0019-container-platform-qualification.md).
 
 ## Rules
 
@@ -101,7 +101,7 @@ This run caught two problems. Three of the opt-in Docker suites (lifecycle,
 network and the benchmark harness) had not kept up with account switching
 (#889). And a stopped container lost its agent tabs
 from view when it was started again. Both are fixed. Detail and decisions are
-in [container-platform-qualification.md](../todo/container-platform-qualification.md).
+in [0019-container-platform-qualification.md](../todo/containers-and-environments/0019-container-platform-qualification.md).
 
 ## Provider-state review evidence (2026-10-16)
 

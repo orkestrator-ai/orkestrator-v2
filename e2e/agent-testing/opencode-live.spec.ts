@@ -6,7 +6,7 @@
  * `ORKESTRATOR_AGENT_TEST_LIVE_OPENCODE=1`. The model is pinned through
  * `ORKESTRATOR_AGENT_TEST_OPENCODE_MODEL` (required with the opt-in): the
  * shipped default `opencode/claude-sonnet-5` is rejected when its provider is
- * not connected (docs/todo/live-provider-and-platform-qualification.md),
+ * not connected (docs/todo/cross-cutting/0031-live-provider-and-platform-qualification.md),
  * so pin a model from a provider the host login has connected until that is
  * fixed. The build-pipeline case also needs a model that emits reasoning.
  *
@@ -82,7 +82,7 @@ function requirePinnedModel(): string {
       "ORKESTRATOR_AGENT_TEST_LIVE_OPENCODE=1 requires ORKESTRATOR_AGENT_TEST_OPENCODE_MODEL " +
         "as <provider>/<model> from a provider your OpenCode login has connected, for example " +
         "opencode-go/deepseek-v4.1-flash. The default opencode/claude-sonnet-5 fails when its " +
-        "provider is not connected (docs/todo/live-provider-and-platform-qualification.md).",
+        "provider is not connected (docs/todo/cross-cutting/0031-live-provider-and-platform-qualification.md).",
     );
   }
   return model;
@@ -463,7 +463,7 @@ test.describe("live OpenCode", () => {
           .toBe(true);
         const forkKey = `env-${target.id}:${forkTabId!}`;
         // The model is deliberately not asserted on the fork: forks currently
-        // lose it (docs/todo/live-provider-and-platform-qualification.md).
+        // lose it (docs/todo/cross-cutting/0031-live-provider-and-platform-qualification.md).
         await expect
           .poll(async () => assistantText((await projection(forkKey))?.messages ?? []), {
             timeout: 60_000,

@@ -1710,7 +1710,7 @@ test("coordinator Multi Review action reconciles a mounted renderer and survives
   }
 });
 
-test("Docker fixture boots and restarts with access-only Codex and Grok imports", async () => {
+test("Docker fixture boots and restarts with access-only Claude, Codex and Grok imports", async () => {
   test.skip(process.env.ORKESTRATOR_AGENT_TEST_DOCKER !== "1", "requires a development image");
   const runtime = resolveRuntimeProfile({
     repositoryRoot,
@@ -1726,7 +1726,16 @@ test("Docker fixture boots and restarts with access-only Codex and Grok imports"
     return result.stdout.trim();
   };
   try {
-    for (const provider of ["codex", "grok"]) await fs.mkdir(path.join(root, provider));
+    for (const provider of ["claude", "codex", "grok"]) await fs.mkdir(path.join(root, provider));
+    const claude = JSON.stringify({
+      claudeAiOauth: {
+        accessToken: "fixture-access",
+        refreshToken: "fixture-refresh",
+        expiresAt: Date.now() + 3600_000,
+      },
+      mcpOAuth: { fixture: { accessToken: "fixture-mcp", refreshToken: "fixture-mcp-refresh" } },
+    });
+    await fs.writeFile(path.join(root, "claude/.credentials.json"), claude, { mode: 0o600 });
     const codex = JSON.stringify({ tokens: { access_token: "fixture-access", refresh_token: "" } });
     const grok = JSON.stringify({
       live: { key: "fixture-access", refresh_token: "", expires_at: "2099-01-01T00:00:00Z" },
@@ -1747,6 +1756,8 @@ test("Docker fixture boots and restarts with access-only Codex and Grok imports"
       `type=bind,source=${root}/codex,target=/codex-home,readonly`,
       "--mount",
       `type=bind,source=${root}/grok,target=/grok-home,readonly`,
+      "--mount",
+      `type=bind,source=${root}/claude,target=/claude-config,readonly`,
       runtime.dockerImage,
     ]);
     for (let boot = 0; boot < 2; boot++) {
@@ -1771,6 +1782,8 @@ test("Docker fixture boots and restarts with access-only Codex and Grok imports"
         "bash",
         "-euc",
         `
+        test "$(stat -c %a "$HOME/.claude/.credentials.json")" = 600
+        jq -e '.claudeAiOauth.accessToken == "fixture-access" and (.claudeAiOauth | has("refreshToken") | not) and .mcpOAuth.fixture.accessToken == "fixture-mcp" and (.mcpOAuth.fixture | has("refreshToken") | not)' "$HOME/.claude/.credentials.json" >/dev/null
         test "$(stat -c %a "$HOME/.codex/auth.json")" = 600
         test "$(stat -c %a "$HOME/.grok/auth.json")" = 600
         jq -e '.tokens.access_token == "fixture-access" and .tokens.refresh_token == "" and (.last_refresh | type == "string")' "$HOME/.codex/auth.json" >/dev/null
@@ -1780,6 +1793,7 @@ test("Docker fixture boots and restarts with access-only Codex and Grok imports"
       ]);
       docker(["stop", "--time", "1", containerId]);
     }
+    expect(await fs.readFile(path.join(root, "claude/.credentials.json"), "utf8")).toBe(claude);
     expect(await fs.readFile(path.join(root, "codex/auth.json"), "utf8")).toBe(codex);
     expect(await fs.readFile(path.join(root, "grok/auth.json"), "utf8")).toBe(grok);
   } finally {
@@ -2644,6 +2658,19 @@ test("Docker fixture consumes command-only seed files and deletes secret staging
     });
     await invoke("commit_node_file_write", { uploadId: upload.uploadId });
     await invoke("start_environment", { environmentId: environment.id });
+    // Start returns once setup is launched; the workspace consumes seeds later.
+    await expect
+      .poll(
+        async () => {
+          const current = await invoke<Environment & { setupScriptsComplete?: boolean }>(
+            "get_environment",
+            { environmentId: environment.id },
+          );
+          return current.setupScriptsComplete === true;
+        },
+        { timeout: 120_000 },
+      )
+      .toBe(true);
     const active = await invoke<Environment>("get_environment", { environmentId: environment.id });
     expect(active.containerId).toBeTruthy();
     const copied = spawnSync(

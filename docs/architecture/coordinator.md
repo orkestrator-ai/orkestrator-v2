@@ -8,9 +8,9 @@ Orkestrator controls to delegate implementation to isolated worker environments.
 It cannot edit the project checkout itself.
 
 What is still missing — mainly provider parity — lives in
-[coordinator-read-only-adapters.md](../todo/coordinator-read-only-adapters.md),
-[coordinator-live-conformance.md](../todo/coordinator-live-conformance.md) and
-[coordinator-consistency-gaps.md](../todo/coordinator-consistency-gaps.md).
+[0026-coordinator-read-only-adapters.md](../todo/coordinator-and-multi-review/0026-coordinator-read-only-adapters.md),
+[0024-coordinator-live-conformance.md](../todo/coordinator-and-multi-review/0024-coordinator-live-conformance.md) and
+[0028-coordinator-consistency-gaps.md](../todo/coordinator-and-multi-review/0028-coordinator-consistency-gaps.md).
 Engine internals live in [`agent-engines.md`](agent-engines.md). Control MCP
 operator detail lives in [`control-mcp.md`](control-mcp.md). Qualification
 invariants for agents live in `AGENTS.md` under **Coordinator qualification**.
@@ -210,7 +210,12 @@ What each enforced platform actually does:
   (`disabled`, or `cached` when research is on, never `live`), and the bridge
   refuses a thread unless `config/read` reports that mode.
 - **Claude** runs with the SDK command sandbox on and `allowUnsandboxedCommands`
-  off, `permissionMode: dontAsk`, an allowlist that excludes every writing tool
+  off, a permission mode capped by the deny policy (`plan` while the composer
+  is in plan mode, which a fresh coordinator composer selects, otherwise
+  `default`; never `bypassPermissions`, see `claudePermissionMode`), with
+  `canUseTool` refusing whatever reaches it. Not `dontAsk`: the pinned CLI
+  refuses AskUserQuestion outright in `dontAsk`, so a coordinator could not ask
+  the user anything. Then an allowlist that excludes every writing tool
   and WebFetch (and WebSearch unless research is on), `settingSources: []`, a private
   `CLAUDE_CONFIG_DIR` holding only the credential, and a bridge-owned
   `PreToolUse` hook. The hook is the real boundary for shell: it allows a fixed
@@ -325,7 +330,9 @@ another. Use `capabilityPolicy`, which names the operation rather than the tool.
 Before moving a platform to `enforced`, run the live read-only suite for it
 (`mise run test:agent:coordinator --credential-source <platform>`) and keep the
 summary it writes. The unit tests show that the bridge translates the policy.
-Only a live run shows that the provider holds it.
+Only a live run shows that the provider holds it. `coordinator-conformance.test.ts`
+fails if a platform the coordinator offers, enforced ones included, is missing
+from the live suite's platform list (`COORDINATOR_LIVE_PLATFORMS`).
 
 Where a platform cannot honour an axis, report it in the policy's `note` and
 leave the tier at `provider-configured`. Do not silently drop the axis, and do
@@ -805,19 +812,20 @@ guarantee, not by one end-to-end scenario replayed per platform:
   `idle` at turn end and how it translates `capabilityPolicy`
 
 - the same contracts against real providers: `mise run
-  test:agent:coordinator` runs three scenarios per platform in a disposable
+  test:agent:coordinator` runs four scenarios per platform in a disposable
   profile. `read-only` attempts every class of mutation and checks that the
   checkout digest is unchanged and that read and discovery tools still answer.
   `async` launches real workers and checks the async launch result, that a
   queued prompt runs before pending worker mail, one carrier per delegation, one
   notice for a silent worker and the poll guard. `family` runs a two-worker
   exchange of sixteen messages, including a follow-up to a busy worker, with
-  nobody answering anything. It is opt-in and never runs in `mise run test` or
-  CI. See "Live coordinator suite" in
+  nobody answering anything. `peer` has two ordinary environments exchange
+  ten messages with Wake peers on and no coordinator involved. It is opt-in
+  and never runs in `mise run test` or CI. See "Live coordinator suite" in
   [`agent-testing.md`](../development/agent-testing.md).
 - an OpenCode coordinator keeps its scoped Control MCP credential on its server
   through every later reconcile, and does not start until it is connected:
   `commands-servers-coordinator-opencode.test.ts`
 
 The runs that qualify each platform, and the scenarios still to add, are in
-[coordinator-live-conformance.md](../todo/coordinator-live-conformance.md).
+[0024-coordinator-live-conformance.md](../todo/coordinator-and-multi-review/0024-coordinator-live-conformance.md).

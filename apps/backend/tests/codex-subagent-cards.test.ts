@@ -1,7 +1,7 @@
 /**
  * Codex sub-agent cards through the real bridge and backend projection.
  *
- * The qualification in docs/todo/live-provider-and-platform-qualification.md
+ * The qualification in docs/todo/cross-cutting/0031-live-provider-and-platform-qualification.md
  * ("Codex sub-agent cards"), automated: the scenario of the duplicate-card
  * incident (#602, #972) — three path-only spawns that succeed, one rejected at
  * capacity, child ids known only from live activity — driven by a fake

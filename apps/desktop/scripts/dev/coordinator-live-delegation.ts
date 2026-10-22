@@ -45,6 +45,7 @@ export interface DelegationMailMessage {
   toTabId: string;
   placement: AgentMailPlacement | string;
   placementReason?: string;
+  replyToMessageId?: string;
   injectRequestId?: string;
   injectedAt?: string;
   coordinatorDelegationId?: string;

@@ -119,3 +119,19 @@ failure was the separately recorded receipt-fixture cleanup recurrence in 0261.
 ## Two-column report main merge — 2026-10-21
 
 Disk reporting exceeded five seconds (5,027.73 ms) in the aggregate; the complete unchanged owner passed in 4.4 seconds (`merge-disk-owner`). See [0629](0629-two-column-main-merge-validation.md) for commands, worker configuration, counts and evidence. No source, assertion, timeout or skip changed.
+
+## Claude revision-token third main merge — 2026-10-22
+
+- **Original command:** `mise run test:logged -- --name revtok-main3-tests -- mise run test`; workspace/root/bridges/protocol reservations 4/1/2/1 alongside browser and Electron checks.
+- **Failure:** the checkout fixture exceeded 5000 ms (5044.81 ms); `report.status` was null rather than 0, also producing an error between tests. Root/support reported 3200 passed, one skipped, one failed and one error across 152 files (316.88 s).
+- **Unchanged whole owner:** `mise run test:logged -- --name revtok-main3-disk-owner -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures` passed in 1.7 s.
+- **Evidence:** `orkestrator-test-run.YKWNcv/root-and-agent-support-tests.log.gz` below the host temporary directory after aggregate completion.
+- **Assessment:** confirmed intermittent recurrence; shared-host contention remains a hypothesis. No implementation, assertion, timeout or skip changed.
+
+## Sidebar main-merge validation — 2026-10-22
+
+- Initial merge of `c17f1c8d5` into `b0f24b642`: `mise run test:logged -- --name merge-suite -- mise run test` reserved workspace/root/bridges/protocol workers 4/1/2/1. Root/support reported 3,223 passed, one skipped, one failed and one error (414.0 s). This fixture exceeded 5,000 ms (5,017.25 ms); `report.status` was null instead of zero.
+- `mise run test:logged -- --name merge-disk-report-owner -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures` passed the complete unchanged owner, exit 0 in 1.6 s.
+- Evidence: `orkestrator-test-run.9ak22c/root-and-agent-support-tests.log.gz` and outer `orkestrator-test-run.ucJqhJ/merge-suite.log.gz` under the host temporary directory. Browser and Docker validation and another worktree's tests ran alongside the initial aggregate. Contention remains a hypothesis; no assertion, deadline or skip changed.
+
+The refreshed merge of `7e051d955` passed `mise run test:logged -- --name latest-merge-suite -- mise run test` in 447.3 s, including the root/support group unchanged. Formatting, lint, every typecheck, the production build, focused storage/coordinator owners and the refreshed Docker fixture also passed. The real-stack browser result is recorded in 0224.

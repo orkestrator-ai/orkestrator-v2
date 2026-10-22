@@ -159,7 +159,7 @@ size. The test is unchanged apart from its comment.
 - The owning file passed alone (11 tests), and with every preview file.
 - A slow but still-reading client is still closed, not paused, by one large
   read. That was tracked as code item 4 in
-  [service-preview-rollout.md](../../todo/service-preview-rollout.md).
+  [0042-service-preview-rollout.md](../../todo/previews-and-annotations/0042-service-preview-rollout.md).
 
 ## Follow-up (2026-10-17): pause instead of close
 

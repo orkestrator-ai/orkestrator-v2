@@ -1,65 +1,41 @@
-# PersistentTerminal launch-readiness tests that prove less than their names
+# PersistentTerminal launch-readiness regression coverage
 
-Checked against `main` at `4a6ff755` (2026-10-22).
+Status: completed on 2026-10-22 on `speed-up-review-68ad8937158f-r1`.
 
-Two `PersistentTerminal` tests pass without exercising the behaviour they are
-named after, so a regression in non-first-tab launch readiness could ship with
-a green suite.
+## Original gaps
 
-## Current state
+Found while replacing real sleeps with controlled time, checked against `main`
+at `4a6ff755` (2026-10-22):
 
-- Found on 2026-10-22 while moving `apps/web/src/components/terminal/PersistentTerminal.test.tsx`
-  from real sleeps to controlled time (branch `speed-up-review-68ad8937158f-r1`).
-  That change kept both tests' original meaning rather than fixing them.
-- **"marks a non-first tab ready after %s"** (`it.each`, about line 3040). In
-  this mock setup the launch is already scheduled before any terminal output
-  arrives. The assertion that `initialCommands` were not written before the
-  output passes only because the 300 ms bootstrap delay has not elapsed, not
-  because the output gates the launch. The three cases (a zsh prompt, a
-  workspace path, substantial shell output) therefore do not show that any of
-  them is what makes the tab ready.
-- **"resets launch readiness when the terminal moves to a replacement
-  container"** (about line 3322). After the rerender with `containerId`
-  `container-2`, the second `waitFor(... toContain("echo ready\n"))` passes
-  immediately: `"echo ready\n"` from the first launch is still in what
-  `bootstrapWrites()` reads, even after `writeMock.mockClear()`. No second
-  launch into the replacement container is proven.
-- The readiness logic under test lives in
-  `apps/web/src/components/terminal/PersistentTerminal.tsx` (launch bootstrap
-  delay about line 74, launch scheduling about line 1920).
+- The three non-first-tab readiness cases only asserted that commands had not
+  been written before the 300 ms bootstrap timer fired. The mock persisted a
+  fresh PTY immediately, which activated the reconnection readiness shortcut
+  before any output arrived.
+- The replacement-container case retained the first bootstrap in the invocation
+  history and never released another bootstrap timer, so it proved no second
+  launch.
+
+## Completed work and evidence
+
+- Both tests hold session persistence so a fresh PTY cannot activate the
+  restored-session shortcut. Each advances the bootstrap clock before output
+  and asserts that no command was sent.
+- Each non-first-tab fixture then feeds its matching output, releases the
+  newly scheduled bootstrap, and asserts command delivery.
+- The container replacement clears the invocation history and changes to a new
+  PTY id. The hook mock scopes its bootstrapped state to the PTY and container.
+  The test asserts a second request for that PTY only after the replacement
+  prompt and another clock release.
+- The complete `PersistentTerminal.test.tsx` file passes (135 tests).
+- Mutation verification: disabling non-first-tab output readiness makes all
+  three output cases fail. Removing the container-change readiness reset makes
+  the replacement case fail at its pre-output assertion. Both mutations were
+  restored; component behavior needed no change.
 
 ## Outstanding work
 
-### Code
-
-1. **Make the non-first-tab readiness cases depend on the output.** Arrange
-   the mocks so the launch is not scheduled until terminal output arrives
-   (or advance past the bootstrap delay first), then assert that nothing is
-   written before the output and the commands are written after it, for each
-   of the three cases. Confirm by removing the readiness check in
-   `PersistentTerminal.tsx` locally and seeing all three cases fail.
-2. **Prove the second launch after a container move.** Clear or snapshot the
-   source `bootstrapWrites()` reads before the rerender (or count writes per
-   container), then assert a new `echo ready` write after the replacement
-   prompt. Confirm by breaking the readiness reset on container change and
-   seeing the test fail.
-
-## Constraints and rationale
-
-- Fix the tests, not the component, unless the corrected tests show a real
-  bug; if they do, record it here before changing behaviour.
-- Keep the controlled-time helpers (`installTerminalClocks`,
-  `releaseBootstrapAttempt`) the file now uses rather than reintroducing
-  sleeps.
-
-## Open questions
-
-- None.
+None.
 
 ## Related
 
 - [0030-test-suite-and-ci-health.md](0030-test-suite-and-ci-health.md)
-
-## Replaces
-
-- Nothing; found during the 2026-10-22 test-suite speed-up.

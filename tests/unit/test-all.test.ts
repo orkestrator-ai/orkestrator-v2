@@ -227,7 +227,7 @@ describe("scripts/test-all.ts", () => {
     expect(workspaceGroup.args).toContain("--concurrency=2");
     expect(workspaceGroup.env).toEqual({
       [WORKSPACE_WORKERS_ENV]: "2",
-      [BACKEND_WORKERS_ENV]: "3",
+      [BACKEND_WORKERS_ENV]: "2",
     });
     expect(rootGroup.args).toContain("--parallel=1");
     expect(rootGroup.args.slice(0, 2)).toEqual(["test", "./tests"]);
@@ -414,12 +414,13 @@ describe("scripts/test-all.ts", () => {
     expect(largeUi).toEqual(cappedUi);
   });
 
-  test("the backend package gets its own bounded share of a large host", async () => {
-    // Backend workers are Node-preloaded integration suites, not happy-dom UI
-    // workers, so they scale with the host instead of the UI budget.
+  test("the backend package stays capped at two workers on large hosts", async () => {
+    // Keep backend subprocess and port-reservation suites at the two-worker
+    // ceiling even when the host has spare capacity.
     expect(planWorkers(4).backend).toBe(planWorkers(4).workspace);
+    expect(MAX_BACKEND_TEST_WORKERS).toBe(2);
     expect(planWorkers(8).backend).toBe(2);
-    expect(planWorkers(12).backend).toBe(4);
+    expect(planWorkers(12).backend).toBe(2);
     expect(planWorkers(18).backend).toBe(MAX_BACKEND_TEST_WORKERS);
     expect(planWorkers(64).backend).toBe(MAX_BACKEND_TEST_WORKERS);
 

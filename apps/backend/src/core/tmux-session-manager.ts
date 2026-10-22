@@ -126,9 +126,9 @@ export type SessionManagerTmuxLayerTypes = [
 export type TmuxSessionTimingOptions = {
   /** Waits until the poll loop's next tick is due. */
   pollTick?: (intervalMs: number) => Promise<void>;
-  /** Clock read by the slash-command settle and confirmation deadlines. */
+  /** Clock read by startup readiness and slash-command deadlines. */
   now?: () => number;
-  /** Pause between those deadline loops' checks. */
+  /** Pause before startup readiness and between deadline checks. */
   sleep?: (delayMs: number) => Promise<void>;
 };
 
@@ -546,7 +546,7 @@ export class TmuxSession {
   }
 
   private async sendInitialPromptWhenReady(prompt: string, launchedNew: boolean): Promise<void> {
-    if (launchedNew) await delay(800);
+    if (launchedNew) await this.sleep(800);
     await this.waitForTuiInputReady();
     await this.submit(prompt);
     // Hooks fire asynchronously; set busy immediately so status() is accurate before the hook lands.
@@ -560,16 +560,27 @@ export class TmuxSession {
   }
 
   private async waitForTuiInputReady(): Promise<void> {
-    const deadline = Date.now() + 10 * 60 * 1000;
-    while (Date.now() < deadline) {
+    const deadline = this.now() + 10 * 60 * 1000;
+    while (this.now() < deadline) {
       if (!(await this.tmuxAlive().catch(() => false))) {
         throw new Error("tmux session stopped before Claude was ready");
       }
-      const snapshot = await this.capturePane().catch(() => "");
+      let snapshot: string;
+      try {
+        snapshot = await this.capturePane();
+      } catch {
+        await this.sleep(500);
+        continue;
+      }
       if (paneHasClaudeExited(snapshot))
         throw new Error("Claude exited before the initial prompt was sent");
-      if (!paneHasSelectionPrompt(snapshot)) return;
-      await delay(500);
+      if (!paneHasSelectionPrompt(snapshot)) {
+        if (!(await this.tmuxAlive().catch(() => false))) {
+          throw new Error("tmux session stopped before Claude was ready");
+        }
+        return;
+      }
+      await this.sleep(500);
     }
     throw new Error("timed out waiting for Claude to leave its startup prompt");
   }

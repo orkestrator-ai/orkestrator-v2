@@ -169,6 +169,10 @@ function workflowFiles(): string[] {
 }
 
 describe("mise task surface", () => {
+  test.each(["test:full", "test:all"])("%s explicitly runs every test area", (task) => {
+    expect(miseTasks()[task]?.env?.ORKESTRATOR_TEST_AREAS).toBe("all");
+  });
+
   test("every command the repository used to expose as a root script is a mise task", () => {
     const tasks = miseTasks();
 

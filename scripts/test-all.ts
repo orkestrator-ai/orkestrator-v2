@@ -758,12 +758,10 @@ export const WORKSPACE_WORKERS_ENV = "ORKESTRATOR_TEST_WORKERS";
 export const BACKEND_WORKERS_ENV = "ORKESTRATOR_BACKEND_TEST_WORKERS";
 
 /**
- * The backend package holds most of the suite's test time and was its long
- * pole on two workers: 522s alone on an 18-core host, against 231s on four and
- * 154s on six. It takes a third of the host, never less than the other
- * packages and never more than six.
+ * Keep port-reservation and subprocess-deadline suites at the previous pool size
+ * until their higher-concurrency failure rate has been measured on an idle host.
  */
-export const MAX_BACKEND_TEST_WORKERS = 6;
+export const MAX_BACKEND_TEST_WORKERS = 2;
 export const ALLOW_MISSING_PROTOCOL_BINARY_ENV = "CODEX_PROTOCOL_CHECK_ALLOW_MISSING_BINARY";
 
 /**

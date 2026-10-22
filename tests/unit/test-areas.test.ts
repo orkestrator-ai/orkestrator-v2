@@ -97,6 +97,18 @@ describe("importClosure", () => {
   });
 });
 
+test("unresolvable workspace exports fail open while built-ins resolve without files", () => {
+  const root = fixture({
+    "entry.ts": 'import "fs"; import "node:path"; import "bun"; import "bun:test";',
+    "workspace.ts": 'import "@scope/lib/shared";',
+    "packages/lib/package.json": '{"name":"@scope/lib","exports":{"./shared":"./missing.ts"}}',
+  });
+  mkdirSync(path.join(root, "node_modules/@scope"), { recursive: true });
+  symlinkSync(path.join(root, "packages/lib"), path.join(root, "node_modules/@scope/lib"));
+  expect(Array.from(importClosure(root, ["entry.ts"]))).toEqual(["entry.ts"]);
+  expect(() => importClosure(root, ["workspace.ts"])).toThrow("Cannot resolve @scope/lib/shared");
+});
+
 describe("changedFilesSince", () => {
   function git(root: string, ...args: string[]) {
     const result = spawnSync("git", args, { cwd: root, encoding: "utf8" });
@@ -151,6 +163,27 @@ describe("selectTestAreas", () => {
       reason: "apps/backend/src/shared.ts changed",
     });
   });
+
+  test.each(["deleted", "broken symlink"])(
+    "runs an area for a %s transitive dependency",
+    (kind) => {
+      const root = areaFixture();
+      const changed = "apps/backend/src/shared.ts";
+      const git = (...args: string[]) => {
+        const result = spawnSync("git", args, { cwd: root, encoding: "utf8" });
+        if (result.status !== 0) throw new Error(result.stderr);
+      };
+      git("init", "--quiet", "--initial-branch=main");
+      git("add", ".");
+      git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "--quiet", "-m", "base");
+      rmSync(path.join(root, changed));
+      if (kind === "broken symlink") symlinkSync("missing.ts", path.join(root, changed));
+      expect(changedFilesSince(root, "main")).toEqual([changed]);
+      const [decision] = selectTestAreas({ root, env: {}, areas: [AREA] });
+      expect(decision?.run).toBe(true);
+      expect(decision?.reason).toContain("import graph unavailable");
+    },
+  );
 
   test("runs an area when its preload or a declared non-import trigger changed", () => {
     expect(select(["tests/setup-node.ts"]).run).toBe(true);
@@ -234,6 +267,55 @@ describe("areaIgnoreEnvironment", () => {
 });
 
 describe("repository area wiring", () => {
+  test("backend test:workspace applies every generated ignore flag to discovery", () => {
+    const backend = JSON.parse(
+      readFileSync(path.join(repositoryRoot, "apps/backend/package.json"), "utf8"),
+    );
+    const source = (name: string) =>
+      `import { test } from "bun:test"; test(${JSON.stringify(name)}, () => console.log(${JSON.stringify("SELECTED:" + name)}));`;
+    const root = fixture({
+      "apps/backend/package.json": JSON.stringify({
+        scripts: { "test:workspace": backend.scripts["test:workspace"] },
+      }),
+      "tests/setup-node.ts": "export {};",
+      "apps/backend/src/core/transcript-artifacts/nested/ignored.test.ts": source("artifacts"),
+      "apps/backend/tests/tmux-ignored.test.ts": source("tmux-tests"),
+      "apps/backend/src/core/tmux-ignored.test.ts": source("tmux-src"),
+      "apps/backend/src/kept.test.ts": source("src-kept"),
+      "apps/backend/tests/kept.test.ts": source("tests-kept"),
+    });
+    const run = (env: Record<string, string>) => {
+      const result = spawnSync(process.execPath, ["run", "test:workspace"], {
+        cwd: path.join(root, "apps/backend"),
+        env: {
+          ...process.env,
+          ORKESTRATOR_TEST_TIMINGS_DIR: "",
+          ORKESTRATOR_BACKEND_TEST_WORKERS: "1",
+          ...env,
+        },
+        encoding: "utf8",
+        timeout: 15_000,
+      });
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      return result.stdout
+        .split("\n")
+        .filter((line) => line.startsWith("SELECTED:"))
+        .sort();
+    };
+    expect(run({ ORKESTRATOR_BACKEND_TEST_IGNORE: "" })).toEqual([
+      "SELECTED:artifacts",
+      "SELECTED:src-kept",
+      "SELECTED:tests-kept",
+      "SELECTED:tmux-src",
+      "SELECTED:tmux-tests",
+    ]);
+    expect(
+      run(
+        areaIgnoreEnvironment(TEST_AREAS.map((area) => ({ area, run: false, reason: "fixture" }))),
+      ),
+    ).toEqual(["SELECTED:src-kept", "SELECTED:tests-kept"]);
+  });
+
   const turbo = JSON.parse(readFileSync(path.join(repositoryRoot, "turbo.json"), "utf8"));
 
   for (const area of TEST_AREAS) {

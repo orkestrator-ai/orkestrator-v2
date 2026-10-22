@@ -106,6 +106,8 @@ export async function stageRuntimeClosure(options: {
   packageRoot: string;
   destination: string;
   entryPackages: readonly string[];
+  /** Copy seam for failure and in-flight worker verification. */
+  copy?: typeof cp;
 }): Promise<{ packageCount: number; unavailable: string[] }> {
   await rm(options.destination, { recursive: true, force: true });
   await mkdir(path.join(options.destination, ".bun"), { recursive: true });
@@ -141,17 +143,27 @@ export async function stageRuntimeClosure(options: {
   const storeRoots = new Map<string, string>();
   for (const instance of packages.values()) storeRoots.set(instance.storeKey, instance.storeRoot);
   const pendingCopies = Array.from(storeRoots);
+  let failed = false;
+  let copyError: unknown;
   const copyWorker = async () => {
-    for (let next = pendingCopies.shift(); next; next = pendingCopies.shift()) {
+    while (!failed) {
+      const next = pendingCopies.shift();
+      if (!next) return;
       const [storeKey, storeRoot] = next;
-      await cp(storeRoot, path.join(options.destination, ".bun", storeKey), {
-        recursive: true,
-        dereference: false,
-        verbatimSymlinks: true,
-      });
+      try {
+        await (options.copy ?? cp)(storeRoot, path.join(options.destination, ".bun", storeKey), {
+          recursive: true,
+          dereference: false,
+          verbatimSymlinks: true,
+        });
+      } catch (error) {
+        if (!failed) copyError = error;
+        failed = true;
+      }
     }
   };
   await Promise.all(Array.from({ length: COPY_CONCURRENCY }, copyWorker));
+  if (failed) throw copyError;
 
   // Every copy has finished before any link below is created. A project-local
   // store entry links to its siblings by their local names, which for a

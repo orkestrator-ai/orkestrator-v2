@@ -16,6 +16,7 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
+import { isBuiltin } from "node:module";
 
 export interface TestArea {
   name: string;
@@ -129,14 +130,16 @@ export function importClosure(root: string, entries: string[]): Set<string> {
       transpilers.set(loader, transpiler);
     }
     for (const { path: specifier } of transpiler.scanImports(readFileSync(file, "utf8"))) {
-      if (specifier.startsWith("node:") || specifier.startsWith("bun:")) continue;
+      if (isBuiltin(specifier) || specifier === "bun" || specifier.startsWith("bun:")) continue;
       let resolved: string;
       try {
         resolved = realpathSync(Bun.resolveSync(specifier, path.dirname(file)));
-      } catch {
-        // Built-ins and optional packages do not resolve to a repository file.
-        // A broken relative import fails the test itself, so nothing is lost.
-        continue;
+      } catch (error) {
+        // An incomplete graph cannot justify skipping tests. In particular,
+        // deleted relative imports and broken workspace links must fail open.
+        throw new Error(`Cannot resolve ${specifier} imported by ${relative(file)}`, {
+          cause: error,
+        });
       }
       if (inRepository(resolved) && !resolved.split(path.sep).includes("node_modules")) {
         pending.push(resolved);

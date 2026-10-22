@@ -195,7 +195,7 @@ or start a production backend.
 
 | Group | Contents | Scheduling |
 | --- | --- | --- |
-| Workspace | Web, backend, desktop, public web, CLI, toolchain, and protocol package tests | Turbo runs at most two package tasks; each package gets two Bun workers when the budget is six or more, except the backend, which gets a third of the host's slots (at least that, at most six) |
+| Workspace | Web, backend, desktop, public web, CLI, toolchain, and protocol package tests | Turbo runs at most two package tasks; each package gets two Bun workers when the budget is six or more, including the backend, capped at two while port and deadline-sensitive tests need higher-concurrency qualification |
 | Root | Root renderer and repository-contract tests plus agent artifact and fixture-server support tests | Receives the remaining worker budget: one worker on a large host, up to two on smaller ones |
 | Bridges | ACP, Claude, Codex, Cursor, and Pi bridge tests | Turbo runs two bridge tasks, each with one Bun worker |
 | Protocol | Regeneration check for the committed Codex protocol lockfile | One independent command |
@@ -203,10 +203,11 @@ or start a production backend.
 All cooperating runs share a host budget: one worker slot per logical core by
 default (`ORKESTRATOR_TEST_HOST_WORKERS` may raise it to four per core), plus a
 memory admission budget of 65% of physical memory. This suite still plans at
-most eight UI-capable Bun workers of its own, plus the backend's larger pool,
-whose Node-preloaded integration suites do not load happy-dom; the larger host budget lets other worktrees
-and review validations run beside it. The protocol check reserves one slot too. Groups run together
-when they fit; smaller machines queue groups instead of spawning extra workers.
+most eight Bun workers of its own, including the backend pool, whose
+Node-preloaded integration suites do not load happy-dom. The larger host budget
+lets other worktrees and review validations run beside it. The protocol check
+reserves one slot too. Groups run together when they fit; smaller machines queue
+groups instead of spawning extra workers.
 The per-suite plan includes the protocol slot in its eight-slot ceiling.
 Each ordinary group reserves an estimated 1 GiB per worker (bounded by the host
 memory budget). These are admission estimates, not operating-system CPU or

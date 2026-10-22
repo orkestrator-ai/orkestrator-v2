@@ -93,18 +93,27 @@ let composeBarOptions:
 
 mock.module("@/hooks/useTerminal", () => ({
   useTerminal: (options: MockUseTerminalOptions) => {
-    const [locallyBootstrapped, setLocallyBootstrapped] = useState(false);
-    const markBootstrapped = useCallback((sessionId: string) => {
-      const accepted = markBootstrappedMock(sessionId);
-      if (accepted) setLocallyBootstrapped(true);
-      return accepted;
-    }, []);
+    const [locallyBootstrapped, setLocallyBootstrapped] = useState<{
+      sessionId: string;
+      containerId?: string | null;
+    } | null>(null);
+    const markBootstrapped = useCallback(
+      (sessionId: string) => {
+        const accepted = markBootstrappedMock(sessionId);
+        if (accepted) setLocallyBootstrapped({ sessionId, containerId: options.containerId });
+        return accepted;
+      },
+      [options.containerId],
+    );
     lastUseTerminalOptions = options;
     useTerminalOptionsHistory.push(options);
     terminalOnData = options.onData;
     return {
       sessionId: useTerminalSessionId,
-      bootstrapped: useTerminalBootstrapped || locallyBootstrapped,
+      bootstrapped:
+        useTerminalBootstrapped ||
+        (locallyBootstrapped?.sessionId === useTerminalSessionId &&
+          locallyBootstrapped?.containerId === options.containerId),
       isConnected: useTerminalIsConnected,
       isConnecting: useTerminalIsConnecting,
       error: null,
@@ -506,6 +515,13 @@ function createTerminalData(options?: {
   } as unknown as Parameters<typeof PersistentTerminal>[0]["terminalData"];
 }
 
+const originalSetTerminalSession = useTerminalSessionStore.getState().setSession;
+
+/** Keep a fresh PTY from becoming a restored-session shortcut during readiness assertions. */
+function holdSessionPersistence(): void {
+  useTerminalSessionStore.setState({ setSession: mock(() => {}) });
+}
+
 describe("PersistentTerminal", () => {
   beforeEach(() => {
     composeBarPropsMock.mockClear();
@@ -657,6 +673,7 @@ describe("PersistentTerminal", () => {
 
   afterEach(() => {
     cleanup();
+    useTerminalSessionStore.setState({ setSession: originalSetTerminalSession });
     terminalClocks?.restore();
     terminalClocks = undefined;
     delete window.orkestrator;
@@ -3038,6 +3055,7 @@ describe("PersistentTerminal", () => {
     ["a workspace path", "ready in /workspace/project"],
     ["substantial shell output", "x".repeat(101)],
   ])("marks a non-first tab ready after %s", async (_label, output) => {
+    holdSessionPersistence();
     const clocks = installTerminalClocks(BOOTSTRAP_DELAY_MS);
     render(
       <PersistentTerminal
@@ -3056,7 +3074,10 @@ describe("PersistentTerminal", () => {
     );
 
     await waitFor(() => expect(terminalOnData).toBeDefined());
-    expect(bootstrapWrites()).not.toContain("echo non-first-ready\n");
+    await settleTerminal();
+    await advanceClock(clocks.at(BOOTSTRAP_DELAY_MS));
+    expect(bootstrapWrites()).toEqual([]);
+    expect(clocks.pending()).toBe(0);
     act(() => {
       void terminalOnData?.(new TextEncoder().encode(output));
     });
@@ -3320,6 +3341,7 @@ describe("PersistentTerminal", () => {
   });
 
   it("resets launch readiness when the terminal moves to a replacement container", async () => {
+    holdSessionPersistence();
     const terminalData = createTerminalData();
     const clocks = installTerminalClocks(BOOTSTRAP_DELAY_MS);
     const view = render(
@@ -3340,12 +3362,13 @@ describe("PersistentTerminal", () => {
 
     await waitFor(() => expect(terminalOnData).toBeDefined());
     act(() => {
-      void terminalOnData?.(new TextEncoder().encode("workspace $ "));
+      void terminalOnData?.(new TextEncoder().encode("❯ "));
     });
     await releaseBootstrapAttempt(clocks);
     await waitFor(() => expect(bootstrapWrites()).toContain("echo ready\n"), { timeout: 1_000 });
 
-    writeMock.mockClear();
+    invokeMock.mockClear();
+    useTerminalSessionId = "session-container-2";
     view.rerender(
       <PersistentTerminal
         terminalData={terminalData}
@@ -3362,10 +3385,21 @@ describe("PersistentTerminal", () => {
       />,
     );
 
+    await settleTerminal();
+    await advanceClock(clocks.at(BOOTSTRAP_DELAY_MS));
+    expect(bootstrapWrites()).toEqual([]);
+    expect(lastUseTerminalOptions?.containerId).toBe("container-2");
     act(() => {
-      void terminalOnData?.(new TextEncoder().encode("replacement $ "));
+      void terminalOnData?.(new TextEncoder().encode("replacement ❯ "));
     });
-    await waitFor(() => expect(bootstrapWrites()).toContain("echo ready\n"), { timeout: 1_000 });
+    await settleTerminal();
+    expect(bootstrapWrites()).toEqual([]);
+    await releaseBootstrapAttempt(clocks);
+    expect(bootstrapWrites()).toEqual(["echo ready\n"]);
+    expect(invokeMock).toHaveBeenCalledWith("bootstrap_terminal_session", {
+      sessionId: "session-container-2",
+      data: "echo ready\n",
+    });
   });
 
   it("sends compose images sequentially before normalized single-line text", async () => {

@@ -24,6 +24,9 @@ export type LiveSample = {
 };
 
 export type KindRates = {
+  /** Actual interval during which this kind was observed. */
+  observedMs: number;
+  partial: boolean;
   startedPerMinute: number;
   changedPerMinute: number;
   failedPerMinute: number;
@@ -144,10 +147,9 @@ const perMinute = (delta: number, windowMs: number) =>
   windowMs > 0 ? Math.round((delta / windowMs) * 60_000 * 100) / 100 : 0;
 
 /**
- * Rates between the first and last sample that read metrics (and, for
- * processes, the first and last that read `ps`). Counters are monotonic
- * within one backend lifetime, so a negative delta means the backend
- * restarted mid-window; that kind is reported as `NaN` rather than hidden.
+ * Per-kind rates use its first and last observed counters, marking shortened
+ * intervals partial. A disappearance inside that interval or a counter decrease
+ * invalidates its rate (`NaN`). Processes use the first and last `ps` readings.
  */
 export function summarizeWindow(samples: readonly LiveSample[]): WindowSummary {
   const withMetrics = samples.filter((sample) => sample.kinds !== null);
@@ -156,27 +158,55 @@ export function summarizeWindow(samples: readonly LiveSample[]): WindowSummary {
   const windowMs = first && last ? last.atMs - first.atMs : 0;
   const kinds: Record<string, KindRates> = {};
   if (first && last && windowMs > 0) {
-    for (const [kind, end] of Object.entries(last.kinds!)) {
-      const start = first.kinds![kind];
-      const delta = (field: "started" | "changed" | "failed" | "bytes") => {
-        const value = end[field] - (start?.[field] ?? 0);
-        return value < 0 ? Number.NaN : value;
+    const observedKinds = new Set(withMetrics.flatMap((sample) => Object.keys(sample.kinds!)));
+    for (const kind of observedKinds) {
+      const readings = withMetrics.filter((sample) => sample.kinds![kind] !== undefined);
+      const head = readings[0]!;
+      const tail = readings.at(-1)!;
+      const observedMs = tail.atMs - head.atMs;
+      const partial = head !== first || tail !== last || readings.length !== withMetrics.length;
+      // A disappearance is evidence of reset. Do not bridge that gap or hide
+      // a reset whose counters have already caught up by the final sample.
+      const invalid =
+        observedMs <= 0 ||
+        withMetrics.some(
+          (sample) => sample.atMs >= head.atMs && sample.atMs <= tail.atMs && !sample.kinds![kind],
+        );
+      const rate = (values: number[]) => {
+        if (invalid || values.some((value, index) => index > 0 && value < values[index - 1]!))
+          return Number.NaN;
+        return perMinute(values.at(-1)! - values[0]!, observedMs);
       };
+      const delta = (field: "started" | "changed" | "failed" | "bytes") =>
+        rate(readings.map((sample) => sample.kinds![kind]![field]));
       const units: Record<string, number> = {};
-      for (const [unit, count] of Object.entries(end.workUnits)) {
-        const value = count - (start?.workUnits[unit] ?? 0);
-        if (value !== 0) units[unit] = value < 0 ? Number.NaN : perMinute(value, windowMs);
+      for (const unit of new Set(
+        readings.flatMap((sample) => Object.keys(sample.kinds![kind]!.workUnits)),
+      )) {
+        const value = rate(readings.map((sample) => sample.kinds![kind]!.workUnits[unit] ?? 0));
+        if (value !== 0) units[unit] = value;
       }
       const rates: KindRates = {
-        startedPerMinute: perMinute(delta("started"), windowMs),
-        changedPerMinute: perMinute(delta("changed"), windowMs),
-        failedPerMinute: perMinute(delta("failed"), windowMs),
-        bytesPerMinute: perMinute(delta("bytes"), windowMs),
+        observedMs,
+        partial,
+        startedPerMinute: delta("started"),
+        changedPerMinute: delta("changed"),
+        failedPerMinute: delta("failed"),
+        bytesPerMinute: delta("bytes"),
         workUnitsPerMinute: units,
       };
-      if (rates.startedPerMinute !== 0 || Object.keys(units).length > 0) kinds[kind] = rates;
+      if (
+        partial ||
+        rates.startedPerMinute !== 0 ||
+        rates.changedPerMinute !== 0 ||
+        rates.failedPerMinute !== 0 ||
+        rates.bytesPerMinute !== 0 ||
+        Object.keys(units).length > 0
+      )
+        kinds[kind] = rates;
     }
   }
+
   const processes: WindowSummary["processes"] = {};
   for (const name of ["backend", "electron"] as const) {
     const readings = samples.flatMap((sample) =>

@@ -453,21 +453,40 @@ export class StorageDatabase {
    * Returns the items as an array in stored order (record keys are dropped).
    */
   readStoreRowsByOwner(store: string, owner: string): unknown[] | null {
-    const cached = this.loadCached(store, "read");
-    if (!cached) return null;
-    if (cached.mode === "document") {
-      const layout = this.layoutFor(store);
-      const ownerOf =
-        layout.kind === "record" || layout.kind === "array" ? layout.owner : undefined;
-      const value = this.assemble(store, cached);
-      const items = Array.isArray(value) ? value : isPlainRecord(value) ? Object.values(value) : [];
-      return items.filter((item) => ownerOf?.(item) === owner);
-    }
-    const rows = this.db
-      .query("SELECT value FROM store_rows WHERE store = ? AND owner = ? ORDER BY position, key")
-      .all(store, owner) as Array<{ value: string }>;
-    this.fetched(rows.reduce((length, row) => length + row.value.length, 0));
-    return rows.map((row) => JSON.parse(row.value) as unknown);
+    return this.db
+      .transaction(() => {
+        const header = this.readStoreHeader(store);
+        if (!header) return null;
+        if (header.mode === "document") {
+          const cached = this.loadCachedInTransaction(store, header.revision, "read");
+          const layout = this.layoutFor(store);
+          const ownerOf =
+            layout.kind === "record" || layout.kind === "array" ? layout.owner : undefined;
+          const value = this.assemble(store, cached);
+          const items = Array.isArray(value)
+            ? value
+            : isPlainRecord(value)
+              ? Object.values(value)
+              : [];
+          return items.filter((item) => ownerOf?.(item) === owner);
+        }
+        // Do not populate the whole-store cache for an owner-scoped read.
+        // The header and selected rows must come from the same snapshot.
+        this.observe?.("read");
+        const rows = this.db
+          .query(
+            "SELECT value FROM store_rows WHERE store = ? AND owner = ? ORDER BY position, key",
+          )
+          .all(store, owner) as Array<{ value: string }>;
+        this.fetched(rows.reduce((length, row) => length + row.value.length, 0));
+        try {
+          return rows.map((row) => JSON.parse(row.value) as unknown);
+        } catch (error) {
+          if (error instanceof SyntaxError) throw new StoreCorruptError(store);
+          throw error;
+        }
+      })
+      .deferred();
   }
 
   /**

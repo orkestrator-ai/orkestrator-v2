@@ -194,3 +194,126 @@ describe("storage read accounting", () => {
     results.closeStorage();
   });
 });
+
+describe("scoped storage read accounting", () => {
+  test.each([
+    ["kanban", "projectId", false],
+    ["kanban", "projectId", true],
+    ["sessions", "environmentId", false],
+    ["sessions", "environmentId", true],
+  ] as const)(
+    "%s owner reads charge selected rows once (%s, warm: %s)",
+    async (store, ownerField, warm) => {
+      const { storage, dataDir } = await storageIn();
+      const db = openBackendDatabase(dataDir);
+      const selected = [
+        { id: "a", [ownerField]: "p1" },
+        { id: "c", [ownerField]: "p1" },
+      ];
+      db.writeStore(store, [selected[0], { id: "b", [ownerField]: "p2" }, selected[1]]);
+      // A separate connection starts cold; warming it must not change scoped cost.
+      const reader = openBackendDatabase(dataDir);
+      try {
+        if (warm) reader.readStore(store);
+        expect(
+          await costDuring("tab-cleanup", () => {
+            expect(reader.readStoreRowsByOwner(store, "p1")).toEqual(selected);
+          }),
+        ).toEqual({
+          units: { "storage-read": 1 },
+          bytes: selected.reduce((sum, row) => sum + JSON.stringify(row).length, 0),
+        });
+        expect(
+          await costDuring("tab-cleanup", () => {
+            expect(reader.readStoreRowsByOwner(store, "missing")).toEqual([]);
+          }),
+        ).toEqual({ units: { "storage-read": 1 }, bytes: 0 });
+      } finally {
+        reader.close();
+        db.close();
+        storage.close();
+      }
+    },
+  );
+
+  test("keyed row reads charge only the selected row, including missing rows", async () => {
+    const { storage, dataDir } = await storageIn();
+    const db = openBackendDatabase(dataDir);
+    const row = { id: "one", projectId: "p1" };
+    db.writeStore("kanban", [row, { id: "two", projectId: "p2" }]);
+    try {
+      expect(
+        await costDuring("tab-cleanup", () => {
+          expect(db.readStoreRow("kanban", "one")).toEqual(row);
+          expect(db.readStoreRow("kanban", "missing")).toBeUndefined();
+        }),
+      ).toEqual({ units: { "storage-read": 2 }, bytes: JSON.stringify(row).length });
+    } finally {
+      db.close();
+      storage.close();
+    }
+  });
+
+  test("document fallbacks charge a cold document once and cached owner reads fetch no bytes", async () => {
+    const { storage, dataDir } = await storageIn();
+    const db = openBackendDatabase(dataDir);
+    const document = JSON.stringify([
+      { id: "one", projectId: "p1" },
+      { id: "two", projectId: "p2" },
+    ]);
+    db.transaction(() => db.writeRawDocumentInTransaction("kanban", document));
+    try {
+      expect(
+        await costDuring("tab-cleanup", () => db.readStoreRowsByOwner("kanban", "p1")),
+      ).toEqual({ units: { "storage-read": 1 }, bytes: document.length });
+      expect(
+        await costDuring("tab-cleanup", () => db.readStoreRowsByOwner("kanban", "p1")),
+      ).toEqual({ units: { "storage-read": 1 }, bytes: 0 });
+      expect(
+        await costDuring("tab-cleanup", () => {
+          expect(db.readStoreRow("kanban", "one")).toEqual({ id: "one", projectId: "p1" });
+          expect(db.readStoreRow("kanban", "missing")).toBeUndefined();
+        }),
+      ).toEqual({ units: { "storage-read": 2 }, bytes: document.length * 2 });
+    } finally {
+      db.close();
+      storage.close();
+    }
+  });
+
+  test("a foreign workflow-result write rebuilds the index with one content read and row stats", async () => {
+    const { storage, dataDir } = await storageIn();
+    const results = new WorkflowResultService(dataDir);
+    const other = new WorkflowResultService(dataDir);
+    const slot = {
+      kind: "feature-plan-state" as const,
+      environmentId: "env-1",
+      projectId: "p1",
+      provider: "codex" as const,
+    };
+    try {
+      await results.prepare({ ...slot, resultKey: "one" });
+      await other.prepare({ ...slot, resultKey: "two" });
+      const db = openBackendDatabase(dataDir);
+      const expectedBytes =
+        (db.readStoreHeader("workflow-results")?.document?.length ?? 0) +
+        (
+          db.db
+            .query("SELECT value FROM store_rows WHERE store = ?")
+            .all("workflow-results") as Array<{ value: string }>
+        ).reduce((sum, row) => sum + row.value.length, 0);
+      db.close();
+      expect(expectedBytes).toBeGreaterThan(0);
+      expect(
+        await costDuring("feature-planning-tick", () => results.deleteByEnvironment("env-other")),
+      ).toEqual({ units: { "storage-read": 1, "storage-stat": 2 }, bytes: expectedBytes });
+      expect(
+        await costDuring("feature-planning-tick", () => results.deleteByEnvironment("env-other")),
+      ).toEqual({ units: { "storage-stat": 2 }, bytes: 0 });
+    } finally {
+      results.closeStorage();
+      other.closeStorage();
+      storage.close();
+    }
+  });
+});

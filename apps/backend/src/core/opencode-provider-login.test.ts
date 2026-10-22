@@ -17,6 +17,8 @@ import {
   type OpenCodeProviderLoginDependencies,
 } from "./opencode-provider-login.js";
 
+import { openCodeSdkFetch } from "./http-bridge-transport.js";
+
 const SECRET_KEY = AUTH_SECRET_CANARIES.openAiApiKey;
 
 const context = {
@@ -123,6 +125,7 @@ function harness(
       },
     },
   };
+  const createClient = mock(() => client);
   const onLoginChanged = mock(() => {});
   const login = createOpenCodeProviderLogin({
     withServer: async (_context, use) => {
@@ -133,11 +136,11 @@ function harness(
         servers.push("stopped");
       }
     },
-    createClient: (() => client) as unknown as typeof createOpencodeClient,
+    createClient: createClient as unknown as typeof createOpencodeClient,
     onLoginChanged,
     ...options,
   });
-  return { login, calls, servers, onLoginChanged };
+  return { login, calls, servers, onLoginChanged, createClient };
 }
 
 afterEach(() => {
@@ -241,13 +244,14 @@ describe("normalizeOpenCodeProviderAuth", () => {
 
 describe("OpenCode provider login", () => {
   test("lists providers through one private server", async () => {
-    const { login, servers } = harness();
+    const { login, servers, createClient } = harness();
     const [first, second] = await Promise.all([
       login.listProviders(context),
       login.listProviders(context),
     ]);
     expect(first).toBe(second);
     expect(servers).toEqual(["started", "stopped"]);
+    expect(createClient).toHaveBeenCalledWith(expect.objectContaining({ fetch: openCodeSdkFetch }));
     expectNoCanary(first, "provider list");
   });
 
@@ -405,7 +409,7 @@ describe("OpenCode provider login", () => {
 
   test("runs an automatic OAuth sign-in to completion", async () => {
     const approved = deferred<unknown>();
-    const { login, calls, servers, onLoginChanged } = harness({
+    const { login, calls, servers, onLoginChanged, createClient } = harness({
       authorize: {
         data: { url: CANARY_LOGIN_URL, method: "auto", instructions: "Enter code: ABCD-EFGH" },
       },
@@ -443,6 +447,7 @@ describe("OpenCode provider login", () => {
     expect(done.userCode).toBeUndefined();
     expect(done.completedAt).toBeDefined();
     expect(calls.map((call) => call.route)).toEqual(["authorize", "callback"]);
+    expect(createClient).toHaveBeenCalledWith(expect.objectContaining({ fetch: openCodeSdkFetch }));
     expect(calls[1]!.input).toEqual({ providerID: "openai", method: 1 });
     expect(servers).toEqual(["started", "stopped"]);
     expect(onLoginChanged).toHaveBeenCalledTimes(1);

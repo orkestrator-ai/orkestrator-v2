@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, mock, test } from "bun:test";
 import { openCodeSdkFetch } from "./http-bridge-transport.js";
 import { createOpenCodeSdkClient } from "./opencode-sdk-client.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
@@ -57,6 +57,88 @@ describe("openCodeSdkFetch", () => {
         "provider-request": 1,
       });
     } finally {
+      await server.stop(true);
+    }
+  });
+  test("disables Bun's idle timeout while preserving request headers and caller cancellation", async () => {
+    const original = globalThis.fetch;
+    const fetchMock = mock(async () => new Response("ok"));
+    const replacement = Object.assign(fetchMock, { preconnect: original.preconnect });
+    const controller = new AbortController();
+    const request = new Request("http://127.0.0.1:1/oauth", {
+      signal: controller.signal,
+      headers: { "x-test": "kept" },
+    });
+    try {
+      globalThis.fetch = replacement as typeof fetch;
+      await openCodeSdkFetch(request, { signal: controller.signal, method: "POST" });
+      expect(fetchMock).toHaveBeenCalledWith(request, {
+        signal: controller.signal,
+        method: "POST",
+        timeout: false,
+      });
+      expect(request.headers.get("x-test")).toBe("kept");
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  test("SDK event-stream reconnects charge each HTTP attempt and cancellation stops the stream", async () => {
+    let requests = 0;
+    const paths: string[] = [];
+    let cancelled!: () => void;
+    const cancellation = new Promise<void>((resolve) => {
+      cancelled = resolve;
+    });
+    const server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        paths.push(new URL(request.url).pathname);
+        requests += 1;
+        if (requests === 1) return new Response("retry", { status: 503 });
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(
+                new TextEncoder().encode(
+                  'data: {"id":"event-1","type":"server.connected","properties":{}}\n\n',
+                ),
+              );
+            },
+            cancel() {
+              cancelled();
+            },
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        );
+      },
+    });
+    const controller = new AbortController();
+    try {
+      const client = createOpenCodeSdkClient({ baseUrl: `http://127.0.0.1:${server.port}` });
+      await recurringWorkMetrics.observe("native-activity-sweep", async () => {
+        const events = await client.event.subscribe(undefined, {
+          signal: controller.signal,
+          sseDefaultRetryDelay: 1,
+          sseMaxRetryAttempts: 3,
+        });
+        const stream = events.stream;
+        expect((await stream.next()).value).toEqual({
+          id: "event-1",
+          type: "server.connected",
+          properties: {},
+        });
+        controller.abort();
+        expect((await stream.next()).done).toBe(true);
+      });
+      await cancellation;
+      expect(paths).toEqual(["/event", "/event"]);
+      expect(recurringWorkMetrics.snapshot().kinds["native-activity-sweep"]?.workUnits).toEqual({
+        "provider-request": 2,
+      });
+      expect(recurringWorkMetrics.snapshot().unattributed.workUnits).toEqual({});
+    } finally {
+      controller.abort();
       await server.stop(true);
     }
   });

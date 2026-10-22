@@ -3,10 +3,13 @@ import {
   mkdtempSync,
   mkdirSync,
   openSync,
+  closeSync,
   readFileSync,
   writeFileSync,
   appendFileSync,
 } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -63,7 +66,7 @@ const ARM_ENV: Record<Arm, Record<string, string>> = {
   "metrics-off": { ORKESTRATOR_RECURRING_METRICS: "0" },
 };
 
-type Options = {
+export type Options = {
   arms: Arm[];
   repeats: number;
   settleMs: number;
@@ -77,7 +80,7 @@ type Options = {
   keepProfiles: boolean;
 };
 
-function parseOptions(argv: string[]): Options {
+export function parseOptions(argv: string[]): Options {
   const options: Options = {
     arms: ["candidate", "rollback"],
     repeats: 1,
@@ -127,10 +130,14 @@ function parseOptions(argv: string[]): Options {
   return options;
 }
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const sleep = async (ms: number, signal?: AbortSignal): Promise<void> => {
+  await delay(ms, undefined, { signal });
+};
 const log = (message: string) => console.error(`[recurring-live-ab] ${message}`);
 
-type Status = {
+export type Status = {
+  startedAt?: string;
+  processStartTimes?: { launcher?: number };
   status?: string;
   browserUrl?: string;
   authFile?: string;
@@ -157,7 +164,7 @@ function readStatus(profile: string): Status | null {
 }
 
 /** Gateway access for one profile; the token stays inside this closure. */
-function gatewayFor(status: Status) {
+function gatewayFor(status: Status, signal?: AbortSignal) {
   if (!status.browserUrl || !status.authFile) throw new Error("Profile has no browser gateway");
   const origin = new URL(status.browserUrl);
   if (origin.hostname !== "127.0.0.1" && origin.hostname !== "localhost") {
@@ -171,7 +178,9 @@ function gatewayFor(status: Status) {
         const response = await fetch(`${origin.origin}/__orkestrator/metrics`, {
           headers: { authorization: `Bearer ${token}` },
           redirect: "error",
-          signal: AbortSignal.timeout(10_000),
+          signal: signal
+            ? AbortSignal.any([signal, AbortSignal.timeout(10_000)])
+            : AbortSignal.timeout(10_000),
         });
         if (!response.ok) return null;
         return (await response.json()) as Record<string, unknown>;
@@ -185,6 +194,17 @@ function gatewayFor(status: Status) {
 function recurringKinds(metrics: Record<string, unknown> | null) {
   const block = metrics?.recurringWork as { metrics?: { kinds?: unknown } } | undefined;
   return block?.metrics ? pickKindCounters(block.metrics.kinds) : null;
+}
+
+/** A malformed/missing counter is not a usable cumulative baseline. */
+function diffChanged(metrics: Record<string, unknown> | null): number | null {
+  const block = metrics?.recurringWork as
+    | { metrics?: { kinds?: Record<string, { changed?: unknown }> } }
+    | undefined;
+  const changed = block?.metrics?.kinds?.["diff-scan"]?.changed;
+  return typeof changed === "number" && Number.isSafeInteger(changed) && changed >= 0
+    ? changed
+    : null;
 }
 
 /**
@@ -276,7 +296,7 @@ function trackedFileWriter(
   const file = listed.stdout.split("\n").find((name) => /^[\w./-]+\.(?:md|ts)$/.test(name)) ?? null;
   if (!file) return null;
   return () => {
-    cli([
+    const written = cli([
       "environment",
       "exec",
       environment.id,
@@ -286,44 +306,80 @@ function trackedFileWriter(
       "-c",
       `printf '\\n<!-- recurring-live-ab probe -->\\n' >> '${file}'`,
     ]);
+    if (written.status !== 0) throw new Error("Freshness probe write failed");
   };
 }
 
-type Freshness = { environment: "local" | "container"; latenciesMs: number[]; timeouts: number };
+type Freshness = {
+  environment: "local" | "container";
+  latenciesMs: number[];
+  timeouts: number;
+  unusable: number;
+};
 
-async function measureFreshness(
+const freshnessRuntime = {
+  fixtureEnvironments,
+  trackedFileWriter,
+  now: () => performance.now(),
+  sleep,
+};
+
+export async function measureFreshness(
   gateway: ReturnType<typeof gatewayFor>,
   cli: ReturnType<typeof cliRunner>,
   probes: number,
+  signal?: AbortSignal,
+  runtime = freshnessRuntime,
 ): Promise<Freshness[]> {
   const results: Freshness[] = [];
-  for (const environment of fixtureEnvironments(cli)) {
-    const write = trackedFileWriter(cli, environment);
+  for (const environment of runtime.fixtureEnvironments(cli)) {
+    signal?.throwIfAborted();
+    const write = runtime.trackedFileWriter(cli, environment);
     if (!write) {
       log(`no tracked file found in the ${environment.kind} environment; skipping freshness`);
       continue;
     }
     const timeoutMs = environment.kind === "local" ? 30_000 : 60_000;
-    const entry: Freshness = { environment: environment.kind, latenciesMs: [], timeouts: 0 };
+    const entry: Freshness = {
+      environment: environment.kind,
+      latenciesMs: [],
+      timeouts: 0,
+      unusable: 0,
+    };
     for (let probe = 0; probe < probes; probe += 1) {
-      const before = recurringKinds(await gateway.metrics())?.["diff-scan"]?.changed ?? 0;
-      const startedAt = performance.now();
+      signal?.throwIfAborted();
+      const before = diffChanged(await gateway.metrics());
+      signal?.throwIfAborted();
+      // A missing baseline cannot establish that a subsequent cumulative
+      // count belongs to this edit. Leave the fixture alone and reject it.
+      if (before === null) {
+        entry.unusable += 1;
+        continue;
+      }
+      const startedAt = runtime.now();
       write();
       let seen = false;
-      while (performance.now() - startedAt < timeoutMs) {
-        const changed = recurringKinds(await gateway.metrics())?.["diff-scan"]?.changed ?? 0;
-        if (changed > before) {
-          entry.latenciesMs.push(Math.round(performance.now() - startedAt));
+      let reset = false;
+      while (runtime.now() - startedAt < timeoutMs) {
+        signal?.throwIfAborted();
+        const metrics = await gateway.metrics();
+        signal?.throwIfAborted();
+        const changed = diffChanged(metrics);
+        if (metrics && (changed === null || changed < before)) {
+          reset = true;
+          break;
+        }
+        if (changed !== null && changed > before) {
+          entry.latenciesMs.push(Math.round(runtime.now() - startedAt));
           seen = true;
           break;
         }
-        await sleep(100);
+        await runtime.sleep(100, signal);
       }
-      if (!seen) entry.timeouts += 1;
-      // Let the scan settle, then start the next probe at a random point of
-      // the 15 s container poll: a fixed gap would phase-lock every write to
-      // the same offset after a scan and report one latency over and over.
-      await sleep(3_000 + Math.floor(Math.random() * 15_000));
+      if (reset) entry.unusable += 1;
+      else if (!seen) entry.timeouts += 1;
+      // Randomize the next write within the container poll's cadence.
+      await runtime.sleep(3_000 + Math.floor(Math.random() * 15_000), signal);
     }
     results.push(entry);
   }
@@ -342,7 +398,7 @@ type RunResult = {
   error?: string;
 };
 
-function countGuardLines(logDir: string | undefined): number | null {
+export function countGuardLines(logDir: string | undefined): number | null {
   if (!logDir) return null;
   const result = spawnSync(
     "grep",
@@ -359,13 +415,61 @@ function countGuardLines(logDir: string | undefined): number | null {
     .reduce((total, count) => total + count, 0);
 }
 
-async function runArm(
+function startProfile(
+  profile: string,
+  options: Options,
+  logDir: string,
+  env: NodeJS.ProcessEnv,
+): ChildProcess {
+  const output = openSync(path.join(logDir, `${profile}.log`), "a", 0o600);
+  try {
+    // Spawn the launcher directly so its manifest PID is the child we own,
+    // rather than a descendant of an opaque mise wrapper.
+    return spawn(
+      "bun",
+      [
+        "apps/desktop/scripts/dev-test.ts",
+        "--profile",
+        profile,
+        "--fixture",
+        "--fixture-environments",
+        options.fixtureEnvironments,
+        "--no-agent-credentials",
+      ],
+      { env, stdio: ["ignore", output, output] },
+    );
+  } finally {
+    closeSync(output);
+  }
+}
+
+const armRuntime = {
+  readStatus,
+  startProfile,
+  mise,
+  gatewayFor,
+  processSamples,
+  cliRunner,
+  measureFreshness,
+  countGuardLines,
+  now: () => performance.now(),
+  sleep,
+};
+
+export async function runArm(
   options: Options,
   arm: Arm,
   repeat: number,
   logDir: string,
+  signal?: AbortSignal,
+  invocation: string = randomUUID(),
+  runtime = armRuntime,
 ): Promise<RunResult> {
-  const profile = `${options.profilePrefix}-${arm}-${repeat}`;
+  // Runtime profile IDs are normalized and truncated to 48 characters.
+  // Reserve the unique suffix and arm/repeat before trimming the prefix.
+  const suffix = `-${invocation.replaceAll("-", "").slice(0, 20)}-${arm}-${repeat}`;
+  const prefix = options.profilePrefix.slice(0, 48 - suffix.length).replace(/-+$/, "");
+  const profile = `${prefix}${suffix}`;
   const env: NodeJS.ProcessEnv = { ...process.env };
   for (const name of POLICY_SWITCHES) delete env[name];
   Object.assign(env, ARM_ENV[arm]);
@@ -378,60 +482,121 @@ async function runArm(
     freshness: [],
     guardLines: null,
   };
-  const output = openSync(path.join(logDir, `${profile}.log`), "a");
-  log(`${profile}: starting`);
-  const startedAt = performance.now();
-  const child: ChildProcess = spawn(
-    "mise",
-    [
-      "run",
-      "dev:test",
-      "--profile",
-      profile,
-      "--fixture",
-      "--fixture-environments",
-      options.fixtureEnvironments,
-      "--no-agent-credentials",
-    ],
-    { env, stdio: ["ignore", output, output] },
-  );
+  let child: ChildProcess | undefined;
   let exited = false;
-  child.once("exit", () => {
-    exited = true;
-  });
-  let status: Status | null = null;
+  let spawnError: Error | undefined;
+  let owner: Status | null = null;
+  const startedAt = runtime.now();
+  const owned = (status: Status | null): status is Status => {
+    if (
+      !status ||
+      !child?.pid ||
+      status.pids?.launcher !== child.pid ||
+      status.processStartTimes?.launcher === undefined ||
+      !status.startedAt
+    )
+      return false;
+    return (
+      !owner ||
+      (status.startedAt === owner.startedAt &&
+        status.processStartTimes.launcher === owner.processStartTimes?.launcher)
+    );
+  };
+  const checkedStatus = () => {
+    const current = runtime.readStatus(profile);
+    if (!owned(current))
+      throw new Error("Profile launcher ownership changed or could not be verified");
+    owner ??= current;
+    return current;
+  };
+  const cleanup = async () => {
+    if (child) {
+      // Cleanup is deliberately not cancelled. Re-read identity before each
+      // destructive command; a reused or replaced manifest is never ours.
+      try {
+        const current = runtime.readStatus(profile);
+        if (owned(current)) {
+          owner ??= current;
+          log(`${profile}: stopping`);
+          if (runtime.mise(["dev:stop", "--profile", profile]).status !== 0)
+            throw new Error("Owned profile stop failed");
+        } else if (!exited) child.kill("SIGTERM");
+        for (let waited = 0; !exited && waited < 60_000; waited += 1_000)
+          await runtime.sleep(1_000);
+        if (!exited) throw new Error("Owned launcher did not exit after stopping");
+        if (owner && !options.keepProfiles) {
+          checkedStatus();
+          if (runtime.mise(["dev:reset", "--profile", profile]).status !== 0)
+            throw new Error("Owned profile reset failed");
+        }
+      } catch (error) {
+        result.error = [result.error, error instanceof Error ? error.message : String(error)]
+          .filter(Boolean)
+          .join("; ");
+      }
+    }
+  };
   try {
-    while (performance.now() - startedAt < options.readyTimeoutMs) {
+    signal?.throwIfAborted();
+    const existing = runtime.readStatus(profile);
+    if (!existing || existing.status !== "missing")
+      throw new Error("Refusing to reuse an existing or unreadable profile");
+    log(`${profile}: starting`);
+    child = runtime.startProfile(profile, options, logDir, env);
+    child.once("exit", () => {
+      exited = true;
+    });
+    child.once("error", (error) => {
+      spawnError = error;
+      exited = true;
+    });
+    let status: Status | null = null;
+    while (runtime.now() - startedAt < options.readyTimeoutMs) {
+      signal?.throwIfAborted();
+      if (spawnError) throw spawnError;
       if (exited) throw new Error("dev:test exited before the profile was ready");
-      status = readStatus(profile);
-      if (status?.status === "ready" && status.live?.launcher) break;
-      status = null;
-      await sleep(5_000);
+      const current = runtime.readStatus(profile);
+      if (current && current.status !== "missing") {
+        if (!owned(current)) throw new Error("Profile launcher ownership could not be verified");
+        owner ??= current;
+        if (current.status === "ready" && current.live?.launcher) {
+          status = current;
+          break;
+        }
+        if (current.status === "failed") throw new Error("Profile startup failed");
+      }
+      await runtime.sleep(5_000, signal);
     }
     if (!status) throw new Error("profile did not become ready in time");
-    result.readyAfterMs = Math.round(performance.now() - startedAt);
+    result.readyAfterMs = Math.round(runtime.now() - startedAt);
     log(`${profile}: ready after ${Math.round(result.readyAfterMs / 1000)} s; settling`);
-    const gateway = gatewayFor(status);
-    await sleep(options.settleMs);
+    const gateway = runtime.gatewayFor(status, signal);
+    await runtime.sleep(options.settleMs, signal);
     const samples: LiveSample[] = [];
-    const windowStart = performance.now();
+    const windowStart = runtime.now();
     for (;;) {
-      const atMs = Math.round(performance.now() - windowStart);
+      signal?.throwIfAborted();
+      status = checkedStatus();
+      if (exited || !status.live?.launcher || status.status !== "ready")
+        throw new Error("Profile stopped during sampling");
+      const atMs = Math.round(runtime.now() - windowStart);
       samples.push({
         atMs,
         kinds: recurringKinds(await gateway.metrics()),
-        processes: processSamples(status.pids),
+        processes: runtime.processSamples(status.pids),
       });
       if (atMs >= options.windowMs) break;
-      await sleep(Math.min(options.sampleMs, Math.max(0, options.windowMs - atMs)));
+      await runtime.sleep(Math.min(options.sampleMs, Math.max(0, options.windowMs - atMs)), signal);
     }
     result.summary = summarizeWindow(samples);
     if (arm !== "metrics-off" && options.freshnessProbes > 0) {
+      checkedStatus();
       log(`${profile}: freshness probes`);
-      const freshness = await measureFreshness(
+      const freshness = await runtime.measureFreshness(
         gateway,
-        cliRunner(profile),
+        runtime.cliRunner(profile),
         options.freshnessProbes,
+        signal,
       );
       result.freshness = freshness.map((entry) => ({
         ...entry,
@@ -439,31 +604,56 @@ async function runArm(
         p95Ms: percentile(entry.latenciesMs, 95),
       }));
     }
-    result.guardLines = countGuardLines(status.logDir);
+    signal?.throwIfAborted();
+    checkedStatus();
+    result.guardLines = runtime.countGuardLines(status.logDir);
   } catch (error) {
     result.error = error instanceof Error ? error.message : String(error);
     log(`${profile}: ${result.error}`);
   } finally {
-    log(`${profile}: stopping`);
-    mise(["dev:stop", "--profile", profile]);
-    for (let waited = 0; !exited && waited < 60_000; waited += 1_000) await sleep(1_000);
-    if (!exited) child.kill("SIGTERM");
-    if (!options.keepProfiles) mise(["dev:reset", "--profile", profile, "--stop-first"]);
+    await cleanup();
   }
   return result;
 }
 
+/** Signal handlers stay installed until the run's asynchronous cleanup settles. */
+export async function withTerminationSignals(
+  run: (signal: AbortSignal) => Promise<number>,
+): Promise<number> {
+  const controller = new AbortController();
+  let exitCode: number | undefined;
+  const interrupt = () => {
+    exitCode ??= 130;
+    controller.abort(new Error("Benchmark interrupted"));
+  };
+  const terminate = () => {
+    exitCode ??= 143;
+    controller.abort(new Error("Benchmark terminated"));
+  };
+  process.on("SIGINT", interrupt);
+  process.on("SIGTERM", terminate);
+  try {
+    const result = await run(controller.signal);
+    return exitCode ?? result;
+  } finally {
+    process.off("SIGINT", interrupt);
+    process.off("SIGTERM", terminate);
+  }
+}
+
 function printSummary(results: RunResult[]): void {
   const lines = [
-    "| Arm | Repeat | Kind | Starts/min | Work units/min |",
-    "| --- | --- | --- | --- | --- |",
+    "| Arm | Repeat | Kind | Observed ms | Partial | Starts/min | Work units/min |",
+    "| --- | --- | --- | --- | --- | --- | --- |",
   ];
   for (const run of results) {
     for (const [kind, rates] of Object.entries(run.summary?.kinds ?? {}).sort()) {
       const units = Object.entries(rates.workUnitsPerMinute)
         .map(([unit, count]) => `${unit} ${count}`)
         .join(", ");
-      lines.push(`| ${run.arm} | ${run.repeat} | ${kind} | ${rates.startedPerMinute} | ${units} |`);
+      lines.push(
+        `| ${run.arm} | ${run.repeat} | ${kind} | ${rates.observedMs} | ${rates.partial} | ${rates.startedPerMinute} | ${units} |`,
+      );
     }
   }
   lines.push(
@@ -484,22 +674,22 @@ function printSummary(results: RunResult[]): void {
   }
   lines.push(
     "",
-    "| Arm | Repeat | Environment | p50 ms | p95 ms | Probes | Timeouts |",
-    "| --- | --- | --- | --- | --- | --- | --- |",
+    "| Arm | Repeat | Environment | p50 ms | p95 ms | Probes | Timeouts | Unusable |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- |",
   );
   for (const run of results) {
     for (const entry of run.freshness) {
       lines.push(
         `| ${run.arm} | ${run.repeat} | ${entry.environment} | ${entry.p50Ms ?? "—"} | ${entry.p95Ms ?? "—"} | ${
-          entry.latenciesMs.length + entry.timeouts
-        } | ${entry.timeouts} |`,
+          entry.latenciesMs.length + entry.timeouts + entry.unusable
+        } | ${entry.timeouts} | ${entry.unusable} |`,
       );
     }
   }
   console.log(lines.join("\n"));
 }
 
-async function main(): Promise<number> {
+async function main(signal: AbortSignal): Promise<number> {
   const options = parseOptions(process.argv.slice(2));
   const out = path.resolve(options.out);
   const logDir = path.join(path.dirname(out), "recurring-live-ab-logs");
@@ -508,9 +698,11 @@ async function main(): Promise<number> {
     encoding: "utf8",
   }).stdout.trim();
   const results: RunResult[] = [];
-  for (let repeat = 1; repeat <= options.repeats; repeat += 1) {
+  const invocation = randomUUID();
+  for (let repeat = 1; repeat <= options.repeats && !signal.aborted; repeat += 1) {
     for (const arm of options.arms) {
-      results.push(await runArm(options, arm, repeat, logDir));
+      if (signal.aborted) break;
+      results.push(await runArm(options, arm, repeat, logDir, signal, invocation));
       writeFileSync(
         out,
         `${JSON.stringify(
@@ -532,4 +724,8 @@ async function main(): Promise<number> {
   return results.some((run) => run.error) ? 1 : 0;
 }
 
-process.exitCode = await main();
+export const __testing = { armRuntime, freshnessRuntime };
+
+if (import.meta.main) {
+  process.exitCode = await withTerminationSignals(main);
+}

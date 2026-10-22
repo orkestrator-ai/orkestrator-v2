@@ -422,7 +422,19 @@ each fixture environment and waits for the `diff-scan` `changed` counter to
 move. Probes start at random offsets across one 15 s container poll period,
 so they are not phase-locked to the poll. Last, it counts `Unhandled promise rejection (continuing)` guard lines in
 the profile logs, stops the profile with `dev:stop` and resets it with
-`dev:reset --stop-first`. Arms are `candidate` (defaults), `rollback`
+`dev:reset`. Each invocation adds a unique suffix to its profile names and
+checks the owned launcher PID and start identity before sampling, stopping or
+resetting. SIGINT and SIGTERM cancel active waits and requests, then wait for
+owned-profile cleanup before exiting (130 and 143 respectively). Existing or
+unverifiable profiles are refused. `--keep-profiles` retains stopped state.
+
+Freshness probes require a valid pre-write metrics baseline; failed baselines
+and counter resets are reported as unusable, outside the latency percentiles.
+Kind rates use their first and last observed samples and label shortened
+intervals partial; kinds that disappear remain in the report. A reset or
+disappearance inside an observed interval invalidates that rate.
+
+Arms are `candidate` (defaults), `rollback`
 (`ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=all`,
 `ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0`) and `metrics-off`
 (`ORKESTRATOR_RECURRING_METRICS=0`, CPU and RSS only). Build the CLI first; the

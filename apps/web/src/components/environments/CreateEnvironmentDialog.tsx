@@ -1,4 +1,6 @@
 import { agentSettingsTiers, resolvedActionDefault } from "@/lib/agent-settings";
+import { useFederation } from "@/components/federation/FederationProvider";
+import { MachineDot } from "@/components/federation/MachineDot";
 import {
   resolveAgentPlatformSettings,
   resolveDefaultAgent,
@@ -313,6 +315,7 @@ export function CreateEnvironmentDialog({
   defaultPortMappings = EMPTY_PORT_MAPPINGS,
   localEnvironmentAvailable = true,
 }: CreateEnvironmentDialogProps) {
+  const federation = useFederation();
   const dockerAvailable = useDockerAvailability();
   const config = useConfigStore((state) => state.config);
   const repoConfig = projectId ? config.repositories[projectId] : undefined;
@@ -1585,6 +1588,20 @@ export function CreateEnvironmentDialog({
                   {projectName}
                 </span>
               )}
+              {federation.enabled && federation.boundMachine ? (
+                // With several machines in view, the dialog names the machine
+                // the environment is created on.
+                <span
+                  className="flex items-center gap-1.5 text-sm font-normal text-muted-foreground"
+                  data-testid="create-environment-machine"
+                >
+                  <MachineDot
+                    colorToken={federation.boundMachine.colorToken}
+                    machineName={federation.boundMachine.name}
+                  />
+                  on {federation.boundMachine.name}
+                </span>
+              ) : null}
             </DialogTitle>
           </div>
           <DialogDescription className="sr-only">

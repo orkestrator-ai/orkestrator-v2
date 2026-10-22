@@ -74,3 +74,56 @@ The aggregate failed this owner and its unchanged owning file passed with one wo
 - **Follow-up aggregate:** `mise run test:logged -- --name full-tests-gnu -- mise run test`,
   using the testing guide's GNU-tool PATH, passed the complete root/support
   group unchanged (273.8 seconds).
+
+## Structured review layout validation recurrence — 2026-10-21
+
+- **Command:** `mise run test:logged -- --name complete-tests -- mise run test`;
+  root used one worker alongside workspace/bridge/protocol groups (4/2/1
+  slots), browser checks and another worktree's validation.
+- **Failure:** `reports an isolated checkout and only fixes named legacy Turbo artifacts`
+  timed out after 5,042.09 ms; the child status was `null` instead of zero,
+  also producing an error between tests.
+- **Root counts:** 3,151 passed, one skipped, three failed and one error across
+  3,155 tests in 150 files (536.90 s).
+- **Evidence:** `orkestrator-test-run.RzbPLB/root-and-agent-support-tests.log.gz`
+  under the host temporary directory.
+- **First owning-file rerun:** `mise run test:logged -- --name disk-report-rerun -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures`
+  also timed out (four passed, one failed, one error; 6.2 s logged). Evidence:
+  `orkestrator-test-run.DQ2WbV/disk-report-rerun.log.gz`.
+- **Final owning-file rerun:** `mise run test:logged -- --name disk-report-final-rerun -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures`
+  passed unchanged (five tests, exit 0, 1.3 s logged) after the root and
+  component browser runs ended.
+- **Assessment:** confirms intermittent process/filesystem latency under load;
+  the specific cause remains unproven. No assertion, deadline or skip changed.
+
+## Command-node review validation recurrence — 2026-10-21
+
+- `mise run test:logged -- --name review-final-full -- mise run test` reproduced the existing failure while another checkout's complete suite ran on the same host. The root/support group reported 3147 passed, one skipped, four failed and one error across 3152 tests (530.0 s).
+- The failures were the Pi vendoring 30-second deadline, the disk-report five-second deadline, and two compatibility-probe temporary-root list assertions (setup and CLI-version deadline cases). The other checkout independently reported the Pi and disk deadlines and a compatibility-probe temporary-root assertion.
+- All three unchanged owning files then passed with one worker: `mise run test:logged -- --name review-root-owners -- bun test ./tests/unit/pi-bridge-vendor.test.ts ./tests/unit/disk-report.test.ts ./scripts/opencode-live-compatibility-probe.test.ts --parallel=1` (exit 0, 15.7 s). An earlier Pi retry while the complete runs were active had also timed out.
+- Evidence: compressed component logs under the host temporary directory `orkestrator-test-run.BEgua1`; outer artifact `orkestrator-test-run.6duRAm`. Host contention and the already documented shared temporary-root comparisons remain plausible contributors. No implementation, assertion, deadline or skip in these owners changed.
+
+## Federated client latest-main refresh — 2026-10-21
+
+- **Original command:** the testing guide's GNU-tool PATH with `mise run test:logged -- --name refresh-main-tests -- mise run test`, merging `3da8e0cf` into pre-merge HEAD `8e695b7d`. Workspace/root/bridges/protocol reserved 4/1/2/1 slots; root used one isolated Bun worker. Component and isolated-stack browser checks ran alongside the suite.
+- **Failure:** `disk report > reports an isolated checkout and only fixes named legacy Turbo artifacts` exceeded the five-second deadline (5032.26 ms), with `report.status` null rather than 0 and an error between tests. The disk-report source and owning test were unchanged.
+- **Suite counts:** root/support reported 3,172 passed, one skipped, one failed and one error across 3,174 tests in 151 files (308.47 s).
+- **Owning-file rerun:** `mise run test:logged -- --name refresh-main-disk-report-owner -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures` passed the complete unchanged owner, exit 0 in 1.1 seconds.
+- **Evidence:** `orkestrator-test-run.ATUpLq/root-and-agent-support-tests.log.gz` below the host temporary directory; outer log `orkestrator-test-run.7Cy5zX/refresh-main-tests.log.gz`.
+- **Assessment:** confirmed intermittent recurrence. Shared-host process or filesystem contention remains a hypothesis; no source, assertion, timeout or skip changed.
+
+The subsequent `refresh-main-warm-tests` complete-suite observation passed
+the root/support group unchanged in 179.1 seconds. That aggregate's only
+failure was the separately recorded receipt-fixture cleanup recurrence in 0261.
+
+## Two-column report main merge — 2026-10-21
+
+Disk reporting exceeded five seconds (5,027.73 ms) in the aggregate; the complete unchanged owner passed in 4.4 seconds (`merge-disk-owner`). See [0629](0629-two-column-main-merge-validation.md) for commands, worker configuration, counts and evidence. No source, assertion, timeout or skip changed.
+
+## Claude revision-token third main merge — 2026-10-22
+
+- **Original command:** `mise run test:logged -- --name revtok-main3-tests -- mise run test`; workspace/root/bridges/protocol reservations 4/1/2/1 alongside browser and Electron checks.
+- **Failure:** the checkout fixture exceeded 5000 ms (5044.81 ms); `report.status` was null rather than 0, also producing an error between tests. Root/support reported 3200 passed, one skipped, one failed and one error across 152 files (316.88 s).
+- **Unchanged whole owner:** `mise run test:logged -- --name revtok-main3-disk-owner -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures` passed in 1.7 s.
+- **Evidence:** `orkestrator-test-run.YKWNcv/root-and-agent-support-tests.log.gz` below the host temporary directory after aggregate completion.
+- **Assessment:** confirmed intermittent recurrence; shared-host contention remains a hypothesis. No implementation, assertion, timeout or skip changed.

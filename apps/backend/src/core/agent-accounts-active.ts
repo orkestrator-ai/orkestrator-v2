@@ -34,6 +34,8 @@ export interface ResolvedAgentAccount {
   accountId: string;
   /** Absent for the host login, which launches with no directory override. */
   home?: string;
+  /** Captured with the identity and home, so copied logins cannot acquire a newer marker. */
+  loginGeneration?: string;
 }
 
 export function stripInheritedAgentCredentials(env: NodeJS.ProcessEnv): void {
@@ -47,10 +49,13 @@ export async function resolveActiveAgentAccount(
   const store = await context.storage.loadAgentAccounts();
   const accountId = store.active[platform];
   initializeActivePlanUsageAccount(platform, accountId ?? DEFAULT_AGENT_ACCOUNT_ID);
-  if (!accountId) return { accountId: DEFAULT_AGENT_ACCOUNT_ID };
+  const loginGeneration = store.loginGeneration?.[platform];
   return {
-    accountId,
-    home: agentAccountHome(context.storage.agentAccountsDirectory(), platform, accountId),
+    accountId: accountId ?? DEFAULT_AGENT_ACCOUNT_ID,
+    ...(accountId
+      ? { home: agentAccountHome(context.storage.agentAccountsDirectory(), platform, accountId) }
+      : {}),
+    ...(loginGeneration ? { loginGeneration } : {}),
   };
 }
 

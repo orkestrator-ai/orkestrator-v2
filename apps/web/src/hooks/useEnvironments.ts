@@ -10,7 +10,9 @@ import {
   useClaudeOptionsStore,
   useConfigStore,
   useEnvironmentStore,
+  formatErrorContext,
   useErrorDialogStore,
+  useProjectStore,
   useTerminalSessionStore,
   useUIStore,
   usePaneLayoutStore,
@@ -22,6 +24,7 @@ import { useSessionStore } from "@/stores/sessionStore";
 import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import * as backend from "@/lib/backend";
 import { clearStoredPaneSelection } from "@/lib/pane-selection-storage";
+import type { ErrorContext } from "@/stores";
 import type {
   Environment,
   EnvironmentType,
@@ -63,6 +66,23 @@ function getErrorMessage(err: unknown, fallback: string): string {
  */
 function truncateForToast(message: string, maxLength = 50): string {
   return message.length > maxLength ? `${message.slice(0, maxLength)}...` : message;
+}
+
+/**
+ * Name the project and environment an error belongs to, so a generic lifecycle
+ * message says which of many environments it is about.
+ */
+function describeEnvironment(environmentId: string): ErrorContext {
+  const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId);
+  const project = environment
+    ? useProjectStore.getState().getProjectById(environment.projectId)
+    : undefined;
+  return { project: project?.name, environment: environment?.name ?? environmentId };
+}
+
+/** Toast description that leads with the environment's identity. */
+function describeForToast(context: ErrorContext, message: string): string {
+  return `${formatErrorContext(context)}: ${truncateForToast(message)}`;
 }
 
 /** Payload emitted when an environment is renamed in the background */
@@ -365,12 +385,15 @@ export function reconcileEnvironmentLifecycleErrors(): void {
       continue;
     }
     store.setError(message);
+    const context = describeEnvironment(environment.id);
     toast.error("Failed to start environment", {
-      description: truncateForToast(message),
+      description: describeForToast(context, message),
       action: {
         label: "Details",
         onClick: () =>
-          useErrorDialogStore.getState().showError("Failed to start environment", message),
+          useErrorDialogStore
+            .getState()
+            .showError("Failed to start environment", message, undefined, context),
       },
     });
   }
@@ -900,11 +923,12 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
       } catch (err) {
         const message = getErrorMessage(err, "Failed to delete environment");
         setError(message);
+        const context = describeEnvironment(environmentId);
         toast.error("Failed to delete environment", {
-          description: truncateForToast(message),
+          description: describeForToast(context, message),
           action: {
             label: "Details",
-            onClick: () => showError("Failed to delete environment", message),
+            onClick: () => showError("Failed to delete environment", message, undefined, context),
           },
         });
         throw new Error(message);
@@ -1017,11 +1041,13 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
         setError(message);
         updateStatusInStore(environmentId, "error");
         if (!options?.suppressFailureToast) {
+          const context = describeEnvironment(environmentId);
           toast.error("Failed to start environment", {
-            description: truncateForToast(message),
+            description: describeForToast(context, message),
             action: {
               label: "Details",
-              onClick: () => showError("Failed to start environment", message, initialPrompt),
+              onClick: () =>
+                showError("Failed to start environment", message, initialPrompt, context),
             },
           });
         }
@@ -1056,11 +1082,12 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
         setError(message);
         // Revert to running if stop failed
         updateStatusInStore(environmentId, "running");
+        const context = describeEnvironment(environmentId);
         toast.error("Failed to stop environment", {
-          description: truncateForToast(message),
+          description: describeForToast(context, message),
           action: {
             label: "Details",
-            onClick: () => showError("Failed to stop environment", message),
+            onClick: () => showError("Failed to stop environment", message, undefined, context),
           },
         });
         throw new Error(message);
@@ -1184,11 +1211,12 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
         const message = getErrorMessage(err, "Failed to restart environment");
         setError(message);
         updateStatusInStore(environmentId, "error");
+        const context = describeEnvironment(environmentId);
         toast.error("Failed to restart environment", {
-          description: truncateForToast(message),
+          description: describeForToast(context, message),
           action: {
             label: "Details",
-            onClick: () => showError("Failed to restart environment", message),
+            onClick: () => showError("Failed to restart environment", message, undefined, context),
           },
         });
         throw new Error(message);

@@ -1998,6 +1998,205 @@ describe("native agent progressive remainder", () => {
     );
   });
 
+  test("announces an expired discovery renewal only when its value changed", async () => {
+    // Every section expires after 30 s and the idle view's own read renews it.
+    // An announcement for an unchanged renewal re-read the view and reset its
+    // quiet backoff (live qualification, 2026-10-21).
+    let now = 1_000;
+    let health = { summary: { state: "ready" }, notices: [], authoritative: true };
+    const runtimeHealth = mock(async () => health);
+    const stub = createProviderStub("cursor");
+    Object.assign(stub.provider, { runtimeHealth });
+    await withService(
+      {
+        prefix: "orkestrator-progressive-discovery-renewal-",
+        provider: async () => stub.provider,
+        now: () => now,
+      },
+      async ({ service, storage }) => {
+        const input = {
+          environmentId: "env-1",
+          agent: "cursor" as const,
+          logicalSessionKey: "env-env-1:discovery-renewal",
+          viewVersion: 1 as const,
+          sections: ["runtime" as const],
+        };
+        await service.ensureSession(input);
+        const announced = spyOn(storage, "announceNativeAgentSessionProjection");
+        const readyRevision = async () => {
+          let revision = -1;
+          await waitForCondition(async () => {
+            const update = await service.getDiscoveryUpdate(input);
+            if (update.status !== "snapshot") return false;
+            const runtime = update.value.sections.runtime;
+            revision = runtime?.revision ?? -1;
+            return runtime?.availability === "ready";
+          });
+          return revision;
+        };
+
+        const first = await readyRevision();
+        expect(runtimeHealth).toHaveBeenCalledTimes(1);
+        expect(announced).toHaveBeenCalledTimes(1);
+
+        now += 31_000;
+        expect(await readyRevision()).toBe(first);
+        expect(runtimeHealth).toHaveBeenCalledTimes(2);
+        expect(announced).toHaveBeenCalledTimes(1);
+
+        health = { summary: { state: "detached" }, notices: [], authoritative: true };
+        now += 31_000;
+        await service.getDiscoveryUpdate(input);
+        await waitForCondition(async () => announced.mock.calls.length === 2);
+        expect(await readyRevision()).toBe(first + 1);
+        expect(announced).toHaveBeenLastCalledWith("env-1", {
+          agent: "cursor",
+          logicalSessionKey: "env-env-1:discovery-renewal",
+        });
+      },
+    );
+  });
+
+  test.each([false, true])(
+    "announces discovery timeout semantics once and announces recovery (cached: %s)",
+    async (cached) => {
+      let now = 1_000;
+      let held = false;
+      const health = { summary: { state: "attached" }, notices: [], authoritative: true };
+      let release: (value: typeof health) => void = () => {};
+      let reject: (error: Error) => void = () => {};
+      const runtimeHealth = mock(() =>
+        held
+          ? new Promise<typeof health>((resolve, fail) => {
+              release = resolve;
+              reject = fail;
+            })
+          : Promise.resolve(health),
+      );
+      const stub = createProviderStub("cursor");
+      Object.assign(stub.provider, { runtimeHealth });
+      await withService(
+        {
+          prefix: "orkestrator-discovery-timeout-",
+          provider: async () => stub.provider,
+          now: () => now,
+        },
+        async ({ service, storage }) => {
+          const input = {
+            environmentId: "env-1",
+            agent: "cursor" as const,
+            logicalSessionKey: "env-env-1:discovery-timeout",
+            viewVersion: 1 as const,
+            sections: ["runtime" as const],
+          };
+          await service.ensureSession(input);
+          const section = async () => {
+            const update = await service.getDiscoveryUpdate(input);
+            if (update.status !== "snapshot") throw new Error("expected discovery snapshot");
+            return update.value.sections.runtime;
+          };
+          if (cached) {
+            await section();
+            await waitForCondition(async () => (await section())?.availability === "ready");
+            now += 31_000;
+          }
+          const announced = spyOn(storage, "announceNativeAgentSessionProjection");
+          held = true;
+          try {
+            await section();
+            await Bun.sleep(2_100);
+            const first = await section();
+            expect(first?.availability).toBe(cached ? "stale" : "unavailable");
+            expect(first?.error).toBe("Discovery timed out");
+            expect(first?.value).toEqual(
+              cached ? { summary: health.summary, notices: [] } : undefined,
+            );
+            expect(announced).toHaveBeenCalledTimes(1);
+
+            // Finish the timed-out read with the same error, then expire its
+            // fallback so a second actual read reaches the deadline too.
+            reject(new Error("Discovery timed out"));
+            await Bun.sleep(20);
+            now += 5_001;
+            const reads = runtimeHealth.mock.calls.length;
+            await section();
+            await waitForCondition(() => runtimeHealth.mock.calls.length === reads + 1);
+            await Bun.sleep(2_100);
+            const repeated = await section();
+            expect(repeated).toEqual(first);
+            expect(announced).toHaveBeenCalledTimes(1);
+
+            // A late successful result changes availability and contents and
+            // must wake readers even after its own deadline has fired.
+            release({ ...health, summary: { state: "detached" } });
+            await waitForCondition(async () => (await section())?.availability === "ready");
+            const recovered = await section();
+            expect(recovered?.value?.summary.state).toBe("detached");
+            expect(recovered?.revision).toBe((first?.revision ?? 0) + 1);
+            expect(recovered?.error).toBeUndefined();
+            expect(announced).toHaveBeenCalledTimes(2);
+            expect(announced).toHaveBeenLastCalledWith("env-1", {
+              agent: "cursor",
+              logicalSessionKey: input.logicalSessionKey,
+            });
+          } finally {
+            release(health);
+            announced.mockRestore();
+          }
+        },
+      );
+    },
+    15_000,
+  );
+
+  test("announces an expired model catalogue renewal only when the catalogue changed", async () => {
+    let now = 1_000;
+    let catalog = [{ platform: "codex", id: "gpt-6.1-sol", label: "GPT-6.1-Sol" }];
+    const invoke = async <T>(command: string): Promise<T> => {
+      if (command !== "get_native_agent_model_catalog") {
+        throw new Error(`Unexpected backend command: ${command}`);
+      }
+      return catalog as T;
+    };
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-progressive-catalog-renewal-",
+        provider: async () => stub.provider,
+        invoke,
+        now: () => now,
+      },
+      async ({ service, storage }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:catalog-renewal",
+        };
+        await service.ensureSession(identity);
+        await service.getProjection(identity);
+        const announced = spyOn(storage, "announceNativeAgentSessionProjection");
+        // The environment-wide hint is the catalogue renewal's own.
+        const catalogueAnnouncements = () =>
+          announced.mock.calls.filter((call) => call.length === 1 || call[1] === undefined);
+
+        now += 31_000;
+        await service.getProjection(identity);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(catalogueAnnouncements()).toHaveLength(0);
+
+        catalog = [...catalog, { platform: "codex", id: "gpt-6-luna", label: "GPT-6-Luna" }];
+        now += 31_000;
+        await service.getProjection(identity);
+        await waitForCondition(async () => catalogueAnnouncements().length === 1);
+        expect(
+          (await service.getProjection(identity))?.composer?.models.map((model) => model.id),
+        ).toEqual(["gpt-6.1-sol", "gpt-6-luna"]);
+      },
+    );
+  });
+
   test("held discovery does not delay a progressive transcript snapshot", async () => {
     const discoveryHeld = new Promise<never>(() => undefined);
     const slashCommands = mock(async () => discoveryHeld);

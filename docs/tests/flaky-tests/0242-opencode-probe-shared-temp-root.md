@@ -43,3 +43,28 @@
 - **Disposition:** isolated pass confirms an intermittent recurrence. The
   existing contention hypothesis remains unconfirmed; no implementation,
   assertion, timeout or skip changed.
+
+## Structured review layout validation recurrence — 2026-10-21
+
+- **Command:** `mise run test:logged -- --name complete-tests -- mise run test`;
+  root used one worker while workspace, bridge, protocol and browser checks
+  ran concurrently, with other worktree validations active.
+- **Failure:** `kills the server when the overall deadline expires` at line 399
+  observed `[]` instead of its initial temporary-root list (88.65 ms). The
+  server-exit assertion passed.
+- **Root counts:** 3,151 passed, one skipped, three failed and one error across
+  3,155 tests in 150 files (536.90 s).
+- **Owning-file rerun:** `mise run test:logged -- --name opencode-probe-rerun -- bun test ./scripts/opencode-live-compatibility-probe.test.ts --parallel=1 --only-failures`
+  passed unchanged (exit 0, 1.4 s logged).
+- **Evidence:** `orkestrator-test-run.RzbPLB/root-and-agent-support-tests.log.gz`
+  under the host temporary directory.
+- **Assessment:** confirms the shared temporary-root observation recurrence;
+  cross-worktree cleanup interference remains plausible but unproven. No test
+  or product code changed.
+
+## Command-node review validation recurrence — 2026-10-21
+
+- `mise run test:logged -- --name review-final-full -- mise run test` reproduced the existing failure while another checkout's complete suite ran on the same host. The root/support group reported 3147 passed, one skipped, four failed and one error across 3152 tests (530.0 s).
+- The failures were the Pi vendoring 30-second deadline, the disk-report five-second deadline, and two compatibility-probe temporary-root list assertions (setup and CLI-version deadline cases). The other checkout independently reported the Pi and disk deadlines and a compatibility-probe temporary-root assertion.
+- All three unchanged owning files then passed with one worker: `mise run test:logged -- --name review-root-owners -- bun test ./tests/unit/pi-bridge-vendor.test.ts ./tests/unit/disk-report.test.ts ./scripts/opencode-live-compatibility-probe.test.ts --parallel=1` (exit 0, 15.7 s). An earlier Pi retry while the complete runs were active had also timed out.
+- Evidence: compressed component logs under the host temporary directory `orkestrator-test-run.BEgua1`; outer artifact `orkestrator-test-run.6duRAm`. Host contention and the already documented shared temporary-root comparisons remain plausible contributors. No implementation, assertion, deadline or skip in these owners changed.

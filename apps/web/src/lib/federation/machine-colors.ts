@@ -1,0 +1,50 @@
+/**
+ * Theme mapping for the machine palette. The backend stores a semantic token,
+ * never CSS; this is the one place tokens become colours. A token this build
+ * does not know renders as the labelled neutral fallback and is never
+ * rewritten. Machine colours identify the owning backend only: they never
+ * pulse, never turn red on failure and never signal activity.
+ */
+
+import {
+  FALLBACK_MACHINE_COLOR,
+  MACHINE_COLOR_TOKENS,
+  machineColorForDisplay,
+  type MachineColorToken,
+} from "@orkestrator/protocol/backend-profile";
+
+// Full class strings so Tailwind keeps them.
+const DOT_CLASSES: Record<MachineColorToken | typeof FALLBACK_MACHINE_COLOR, string> = {
+  violet: "bg-violet-500 dark:bg-violet-400",
+  blue: "bg-blue-500 dark:bg-blue-400",
+  teal: "bg-teal-500 dark:bg-teal-400",
+  green: "bg-emerald-500 dark:bg-emerald-400",
+  amber: "bg-amber-500 dark:bg-amber-400",
+  orange: "bg-orange-500 dark:bg-orange-400",
+  rose: "bg-rose-500 dark:bg-rose-400",
+  slate: "bg-slate-500 dark:bg-slate-400",
+  neutral: "bg-transparent border border-dashed border-muted-foreground",
+};
+
+const LABELS: Record<MachineColorToken | typeof FALLBACK_MACHINE_COLOR, string> = {
+  violet: "Violet",
+  blue: "Blue",
+  teal: "Teal",
+  green: "Green",
+  amber: "Amber",
+  orange: "Orange",
+  rose: "Rose",
+  slate: "Slate",
+  neutral: "Unknown colour",
+};
+
+export function machineDotClass(token: string | undefined): string {
+  return DOT_CLASSES[machineColorForDisplay(token)];
+}
+
+export function machineColorLabel(token: string | undefined): string {
+  return LABELS[machineColorForDisplay(token)];
+}
+
+export const MACHINE_COLOR_CHOICES: ReadonlyArray<{ token: MachineColorToken; label: string }> =
+  MACHINE_COLOR_TOKENS.map((token) => ({ token, label: LABELS[token] }));

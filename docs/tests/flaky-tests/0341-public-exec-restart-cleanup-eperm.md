@@ -19,3 +19,24 @@
 - **Hypothesis:** fixture teardown or filesystem contention could explain the
   temporary-directory removal failure; the cause is unconfirmed. No public
   API implementation, assertion, timeout or skip changed.
+
+## Recurrence during the remaining real-Electron preview cases (2026-10-21)
+
+- **Command:** `mise run test:logged -- --name full-tests-0a835 -- mise run test`
+  on branch `qualify-preview-electron-remaining-cases-0a835a98d18e` (no
+  backend change), load average 16 to 36.
+- **Failure:** `EPERM: operation not permitted, rm '/tmp/ork-public-api-…'`
+  from `cleanup` (`test-support.ts:143`), the same symptom (1095.80 ms).
+- **Alone:** `bun test --preload ../../tests/setup-node.ts ./src/core/public-api/public-api-exec.test.ts --parallel=1`
+  in `apps/backend`: 17 passed (32.85 s) at load 36.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.txKi1Z/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+## Idle-observation main refresh — 2026-10-22
+
+- **Merge:** `origin/main` at `566758e05` into `f7bb5e5a` on the idle-observation qualification branch.
+- **Original command:** `ORKESTRATOR_TEST_GROUP_TIMEOUT_MS=3600000 mise run test:logged -- --name oct22-full -- env -u ORKESTRATOR_TEST_GROUP_TIMEOUT_MS mise run test`; only the outer logger's allowance includes queueing. Inner group deadlines were unchanged.
+- **Workers:** workspace/root/bridges/protocol reserved 4/1/2/1 slots; backend used two isolated workers. Component and isolated browser checks also ran on the host.
+- **Failure:** the same restart case hit cleanup `EPERM` at `test-support.ts:143` after 1076.38 ms. Backend reported 9915 passed, 68 skipped and one failed across 9984 tests in 571 files (595.43 seconds). All other workspace packages, root/support, bridges and protocol passed; aggregate exit 1 in 712.1 seconds.
+- **Isolated rerun:** `mise run test:logged -- --name oct22-public-exec-owner -- bun test --cwd apps/backend ./src/core/public-api/public-api-exec.test.ts --parallel=1` passed the entire unchanged owning file, exit 0, in 32.2 seconds.
+- **Evidence:** `orkestrator-test-run.HnWfCT/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and outer `orkestrator-test-run.MmnVTZ/oct22-full.log.gz`, below the host temporary directory.
+- **Assessment:** intermittent cleanup failure confirmed; no implementation, assertion, timeout or skip changed.

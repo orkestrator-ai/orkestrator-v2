@@ -144,8 +144,8 @@ describe("ConnectionsSettings", () => {
     render(<ConnectionsSettings />);
     await screen.findByText("desk.tailnet.ts.net");
 
-    fireEvent.click(screen.getByRole("button", { name: "Add connection" }));
-    const dialog = screen.getByRole("dialog", { name: "Add connection" });
+    fireEvent.click(screen.getByRole("button", { name: "Add machine" }));
+    const dialog = screen.getByRole("dialog", { name: "Add machine" });
     const overlay = document.querySelector<HTMLElement>('[data-slot="dialog-overlay"]')!;
     expect(dialog.className).toContain("z-[80]");
     expect(dialog.className).not.toContain("z-50");
@@ -172,7 +172,7 @@ describe("ConnectionsSettings", () => {
     render(<ConnectionsSettings />);
     await screen.findByText("desk.tailnet.ts.net");
 
-    fireEvent.click(screen.getByRole("button", { name: "Add connection" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add machine" }));
     fireEvent.change(screen.getByLabelText("Machine name or HTTPS address"), {
       target: { value: "workstation" },
     });
@@ -218,7 +218,7 @@ describe("ConnectionsSettings", () => {
     render(<ConnectionsSettings />);
     await screen.findByText("desk.tailnet.ts.net");
     if (flow === "add") {
-      fireEvent.click(screen.getByRole("button", { name: "Add connection" }));
+      fireEvent.click(screen.getByRole("button", { name: "Add machine" }));
       fireEvent.change(screen.getByLabelText("Machine name or HTTPS address"), {
         target: { value: "workstation" },
       });
@@ -301,7 +301,7 @@ describe("ConnectionsSettings", () => {
     expect(screen.queryByRole("button", { name: "Rename desk.tailnet.ts.net" }) === null).toBe(
       true,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Add connection" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add machine" }));
     expect(screen.queryByLabelText(/Nickname/) === null).toBe(true);
   });
 
@@ -313,7 +313,7 @@ describe("ConnectionsSettings", () => {
     render(<ConnectionsSettings />);
     await screen.findByText("desk.tailnet.ts.net");
 
-    fireEvent.click(screen.getByRole("button", { name: "Add connection" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add machine" }));
     fireEvent.change(screen.getByLabelText("Machine name or HTTPS address"), {
       target: { value: "workstation" },
     });
@@ -486,14 +486,18 @@ describe("ConnectionsSettings", () => {
     render(<ConnectionsSettings />);
     await screen.findByText("desk.tailnet.ts.net");
 
-    fireEvent.click(screen.getByRole("button", { name: "Remove desk.tailnet.ts.net" }));
-    const dialog = screen.getByRole("alertdialog", { name: "Remove desk.tailnet.ts.net?" });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Forget desk.tailnet.ts.net on this device" }),
+    );
+    const dialog = screen.getByRole("alertdialog", {
+      name: "Forget desk.tailnet.ts.net on this device?",
+    });
     const overlay = document.querySelector<HTMLElement>('[data-slot="alert-dialog-overlay"]')!;
     expect(dialog.className).toContain("z-[80]");
     expect(dialog.className).not.toContain("z-50");
     expect(overlay.className).toContain("z-[80]");
     expect(overlay.className).not.toContain("z-50");
-    fireEvent.click(screen.getByRole("button", { name: "Remove connection" }));
+    fireEvent.click(screen.getByRole("button", { name: "Forget on this device" }));
 
     await waitFor(() => expect(api.forget).toHaveBeenCalledWith("remote-1"));
     await waitFor(() => expect(screen.queryByText("desk.tailnet.ts.net") === null).toBe(true));
@@ -515,8 +519,10 @@ describe("ConnectionsSettings", () => {
     render(<ConnectionsSettings />);
     await screen.findByText("desk.tailnet.ts.net");
 
-    fireEvent.click(screen.getByRole("button", { name: "Remove desk.tailnet.ts.net" }));
-    fireEvent.click(screen.getByRole("button", { name: "Remove connection" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Forget desk.tailnet.ts.net on this device" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Forget on this device" }));
 
     await waitFor(() => expect(api.forget).toHaveBeenCalledWith("remote-1"));
     expect(reload).not.toHaveBeenCalled();
@@ -531,8 +537,10 @@ describe("ConnectionsSettings", () => {
     render(<ConnectionsSettings />);
     await screen.findByText("desk.tailnet.ts.net");
 
-    fireEvent.click(screen.getByRole("button", { name: "Remove desk.tailnet.ts.net" }));
-    fireEvent.click(screen.getByRole("button", { name: "Remove connection" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Forget desk.tailnet.ts.net on this device" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Forget on this device" }));
 
     await waitFor(() =>
       expect(mockToastError).toHaveBeenCalledWith("Could not remove connection", {

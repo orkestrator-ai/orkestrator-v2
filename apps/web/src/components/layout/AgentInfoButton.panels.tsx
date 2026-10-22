@@ -1,3 +1,4 @@
+import type { WorkspaceConnectionPath } from "@/lib/portal/workspaces";
 import { useEffect, useId, useState, type ComponentType, type SVGProps } from "react";
 import { ChevronRight, CircuitBoard, Cpu, HardDrive, MemoryStick } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
@@ -1502,6 +1503,43 @@ export function McpServersPanel({
           ))}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * How this client reaches the environment's node (command-nodes.md,
+ * "Showing the connection path"): directly to the leaf, or relayed through
+ * the command node, with the route in use and the node it belongs to.
+ */
+export function ConnectionPathPanel({
+  path,
+  boundMachineName,
+}: {
+  /** Set in a leaf workspace realm; absent for this client's own node. */
+  path: WorkspaceConnectionPath | null;
+  /** Shown for an environment on the node this client is connected to. */
+  boundMachineName: string | null;
+}) {
+  if (!path && !boundMachineName) return null;
+  const route = path?.routeKind === "ssh" ? "SSH" : path?.routeKind === "https" ? "HTTPS" : null;
+  const text = !path
+    ? `On ${boundMachineName}, the node this client is connected to.`
+    : path.path === "direct"
+      ? `Direct to ${path.nodeName}${route ? ` over ${route}` : ""}.`
+      : `Relayed through ${path.via ?? "the command node"}, which reaches ${path.nodeName}${
+          route ? ` over ${route}` : ""
+        }.`;
+  return (
+    <div
+      className="mb-4 rounded-lg border border-border/60 px-3 py-2 text-xs"
+      data-testid="connection-path"
+      data-path={path?.path ?? "this-node"}
+    >
+      <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground/70">
+        Connection
+      </div>
+      <div className="mt-1 text-foreground">{text}</div>
     </div>
   );
 }

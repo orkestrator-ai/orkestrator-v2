@@ -162,7 +162,10 @@ import {
   describeRewindTarget,
   formatCount,
   summarizeRewindPreview,
+  ConnectionPathPanel,
 } from "./AgentInfoButton.panels";
+import { useFederation } from "@/components/federation/FederationProvider";
+import { workspaceTarget } from "@/lib/portal/portal-transport";
 
 export {
   describeRewindTarget,
@@ -175,6 +178,10 @@ export {
 
 export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonProps) {
   const [open, setOpen] = useState(false);
+  const federation = useFederation();
+  // How this window reaches the node its workspace is on, when that is not
+  // the command node it connected to.
+  const [connectionPath] = useState(workspaceTarget);
   const [handoffOpen, setHandoffOpen] = useState(false);
   const [runtimeNoticeDialogId, setRuntimeNoticeDialogId] = useState<string | null>(null);
   const [busyState, setBusyState] = useState<SessionActionState | null>(null);
@@ -849,6 +856,10 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
         </header>
 
         <div className="max-h-[min(76vh,42rem)] overflow-y-auto p-4">
+          <ConnectionPathPanel
+            path={connectionPath}
+            boundMachineName={federation.enabled ? (federation.boundMachine?.name ?? null) : null}
+          />
           <SystemUsagePanel
             usage={systemUsage.sample}
             stale={systemUsage.stale}

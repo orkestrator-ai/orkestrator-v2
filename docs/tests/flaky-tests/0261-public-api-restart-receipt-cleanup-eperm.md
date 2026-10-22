@@ -47,3 +47,21 @@ passed all four groups (exit 0, 282.3 seconds).
   passed unchanged (25 pass, 3.2 seconds).
 - **Assessment:** Recurrence of the registered cleanup flake; cause still
   unestablished.
+
+## Federated client latest-main warm run — 2026-10-21
+
+- **Command:** the testing guide's GNU-tool PATH with `mise run test:logged -- --name refresh-main-warm-tests -- mise run test`, merging `3da8e0cf` into pre-merge HEAD `8e695b7d`. Workspace/root/bridges/protocol reserved 4/1/2/1 slots; the backend used two isolated workers. A separate gateway owning-file check ran alongside the beginning of the suite.
+- **Failure:** the replay case completed its receipt assertions, then fixture cleanup at `public-api/test-support.ts:143` raised `EPERM` removing the temporary root (9.29 ms). The backend source and owning test were unchanged.
+- **Counts:** backend 9,897 passed, 68 skipped, one failed across 9,966 tests in 569 files (468.26 s). All other packages, root/support, bridges and protocol passed. The aggregate exited 1 after 490.4 seconds.
+- **Owning-file rerun:** `mise run test:logged -- --name refresh-main-receipt-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/public-api/public-api-projects.test.ts --parallel=1 --only-failures` passed the complete unchanged owner, exit 0 in 2.7 seconds.
+- **Evidence:** `orkestrator-test-run.Xoy0uL/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory; outer artifact `orkestrator-test-run.520NxN/refresh-main-warm-tests.log.gz`.
+- **Assessment:** confirmed recurrence of the fixture-cleanup flake. Concurrent filesystem activity remains an unconfirmed hypothesis; no implementation, assertion, timeout or skip changed.
+
+## Lifecycle error-context coverage validation — 2026-10-21
+
+- **Command:** `mise run test:logged -- --name full-suite -- mise run test` at `5442a172b` plus renderer regression tests. Workspace/root/bridges/protocol reserved 4/1/2/1 slots; backend used two isolated workers.
+- **Failure:** the same replay case failed during fixture cleanup at `public-api/test-support.ts:143`, with `EPERM` removing its temporary root (9.75 ms).
+- **Counts:** backend 9,897 passed, 68 skipped, one failed across 9,966 tests in 569 files (368.71 s). The aggregate exited 1 after 435.3 seconds; the other failure was the desktop shutdown timing flake in case 0350. Root/support, bridges and protocol passed.
+- **Owning-file rerun:** `mise run test:logged -- --name public-api-projects-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/public-api/public-api-projects.test.ts --parallel=1 --only-failures` passed unchanged, exit 0 in 2.7 seconds.
+- **Evidence:** `orkestrator-test-run.7BXWb1/full-suite.log.gz` and `orkestrator-test-run.wdkpxS/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
+- **Assessment:** recurrence of the recorded cleanup flake; concurrent filesystem activity remains an unconfirmed hypothesis. No implementation, assertions, timeouts or skips changed in this owner.

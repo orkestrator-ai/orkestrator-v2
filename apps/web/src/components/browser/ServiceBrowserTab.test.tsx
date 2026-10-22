@@ -88,6 +88,7 @@ interface Backend {
 
 function installBackend(backend: Backend, native = true) {
   let stateListener: ((state: BrowserPreviewState) => void) | undefined;
+  let focusAddressListener: ((tabId: string) => void) | undefined;
   invokeMock.mockClear();
   invokeMock.mockImplementation(async (command: string, args: Record<string, unknown> = {}) => {
     switch (command) {
@@ -159,6 +160,12 @@ function installBackend(backend: Backend, native = true) {
     listen: (event: string, callback: (payload: unknown) => void) => {
       if (event === "browser-preview-state")
         stateListener = callback as (state: BrowserPreviewState) => void;
+      if (event === "browser-preview-focus-address") {
+        focusAddressListener = callback as (tabId: string) => void;
+        return () => {
+          if (focusAddressListener === callback) focusAddressListener = undefined;
+        };
+      }
       return () => undefined;
     },
     ...(native ? { browserPreview } : {}),
@@ -166,6 +173,8 @@ function installBackend(backend: Backend, native = true) {
   return {
     browserPreview,
     emitState: (state: BrowserPreviewState) => act(() => stateListener?.(state)),
+    /** Main's Cmd/Ctrl+L from inside a native preview view. */
+    focusAddress: (tabId: string) => act(() => focusAddressListener?.(tabId)),
   };
 }
 
@@ -578,6 +587,55 @@ describe("service browser tabs", () => {
     fireEvent.change(input, { target: { value: "/settings?tab=2" } });
     fireEvent.submit(input.closest("form")!);
     await waitFor(() => expect(tabUrl()).toBe(serviceUri("/settings?tab=2")));
+  });
+
+  test("Cmd/Ctrl+L from the app or from inside the native view focuses and selects the address", async () => {
+    const { focusAddress } = installBackend({
+      capabilities: fixturePreviewCapabilities(),
+      services: [fixturePreviewService()],
+    });
+    seedTab(serviceUri());
+    renderTab();
+    const input = (await screen.findByLabelText("Browser address")) as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe("http://localhost:3000/"));
+    const selected = () =>
+      document.activeElement === input &&
+      input.selectionStart === 0 &&
+      input.selectionEnd === input.value.length;
+
+    fireEvent.keyDown(window, { key: "l", metaKey: true });
+    expect(selected()).toBe(true);
+    input.blur();
+    fireEvent.keyDown(window, { key: "L", ctrlKey: true, shiftKey: true });
+    expect(document.activeElement).not.toBe(input);
+
+    focusAddress("another-tab");
+    expect(document.activeElement).not.toBe(input);
+    focusAddress("browser-1");
+    expect(selected()).toBe(true);
+  });
+
+  test("closing the service dialog returns focus to the menu trigger it was opened from", async () => {
+    installBackend({
+      capabilities: fixturePreviewCapabilities(),
+      services: [fixturePreviewService()],
+    });
+    seedTab(serviceUri());
+    renderTab();
+    await screen.findByLabelText("Browser address");
+    for (const [trigger, item, title] of [
+      [/^Preview service /, /Register a service/, "Register preview service"],
+      [/^Preview options$/, /Edit service/, "Edit preview service"],
+    ] as const) {
+      const button = await screen.findByRole("button", { name: trigger });
+      button.focus();
+      fireEvent.pointerDown(button, { button: 0, ctrlKey: false });
+      fireEvent.click(await screen.findByRole("menuitem", { name: item }));
+      const dialog = await screen.findByRole("dialog", { name: title });
+      fireEvent.keyDown(dialog, { key: "Escape" });
+      await waitFor(() => expect(screen.queryByRole("dialog") === null).toBe(true));
+      await waitFor(() => expect(document.activeElement).toBe(button));
+    }
   });
 
   test("web clients get the top-level preview instead of an embedded frame", async () => {

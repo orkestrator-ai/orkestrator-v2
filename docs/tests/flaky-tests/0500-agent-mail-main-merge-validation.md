@@ -139,3 +139,42 @@ The real-stack `mise run test:logged -- --name merge-isolated-browser -- mise ru
 
 
 After the metrics-capacity correction, `merge-final-format`, `merge-final-lint`, `merge-final-typecheck` and `merge-final-build` passed. `mise run test:logged -- --name merge-final-tests -- mise run test`, with the same explicit tool PATH, finished in 608.1 seconds logged (including 84.5 seconds waiting for an earlier cancelled run's reservation). Root/support, every bridge, protocol regeneration and every workspace package except backend passed. Backend had 9166 passed, 41 skipped and two failures: [0180](0180-worktree-tracked-edit-cache-hit.md) and [0503](0503-backend-resource-event-aggregate-timeout.md); both unchanged owning files passed alone in 0.5 and 0.4 seconds respectively. The merged-registry budget regression passed unchanged after the production limit correction. Evidence: `orkestrator-test-run.cM59au/` and outer `orkestrator-test-run.NdOLPH/`, below the host temporary directory. The earlier native branch-suggestion browser failures remain unresolved; no test assertion, timeout or skip was changed.
+
+## ScheduleWakeup main merge validation — 2026-10-21
+
+Merged `origin/main` at `2e2330f30967a7080c1a9ec893336e0b3d227302`
+into pre-merge HEAD `c5e1a72d1f6895338057d30ecd6614409d034442`.
+All 56 paths changed from that baseline were inspected, including this note,
+auto-merged code and tests, and the two flake-document conflict resolutions. The colliding
+streaming-selection record was retained as 0628; both Pi observations were kept.
+
+`ORKESTRATOR_E2E_PORT=64990 ORKESTRATOR_PUBLIC_E2E_PORT=64991 mise run test:logged -- --name merge-browser -- mise run test:browser`
+reported 387 passed, 81 skipped and two failed with nine workers (206.6 seconds
+logged). Both failures were the unchanged native branch-suggestion case in
+`e2e/AgentLaunchDialog.spec.ts:7`: the input remained `rel` instead of
+`release/2.0` at the 5000 ms deadline, in both viewport projects.
+
+`ORKESTRATOR_E2E_PORT=64990 mise run test:logged -- --name merge-native-branch-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentLaunchDialog.spec.ts --workers=1`
+reproduced both failures (two passed, two failed; 22.7 seconds logged).
+This remains unresolved validation, not a newly confirmed flake. No source,
+assertion, timeout or skip was changed to address it. Evidence under the host
+temporary directory: `orkestrator-test-run.cXd5rK/merge-browser.log.gz` and
+`orkestrator-test-run.RkJ3tY/merge-native-branch-owner.log.gz`.
+
+The component failure prevented the chained public-site suite from starting.
+`ORKESTRATOR_PUBLIC_E2E_PORT=64991 mise run test:logged -- --name merge-public-browser -- bunx playwright test --config e2e/public-site/playwright.config.ts --workers=1`
+passed separately (17.9 seconds logged).
+
+Formatting, lint (zero errors; existing warnings), all typechecks, the complete
+non-iOS suite (592.8 seconds logged, all four groups passed), and all workspace
+production builds passed. All 398 local file links and four local Markdown
+anchors in the changed documents resolved. Electron-native, Docker opt-in,
+iOS and billed-provider suites were outside this merge's changed-code scope.
+
+The isolated application browser suite reported 28 passed, 42 skipped and one
+failed (412.7 seconds including lifecycle). The complete gateway owner on a
+fresh profile repeated the narrow host-picker failure (14 passed, nine skipped,
+one failed; 146.0 seconds). Both profiles were stopped and reset. This remains
+unresolved validation, with evidence and exact commands in case 0224; the
+native branch-picker failures above also remain unresolved. The original
+nonzero browser-suite exit statuses are retained.

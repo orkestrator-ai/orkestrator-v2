@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import type { VirtuosoHandle, StateSnapshot } from "react-virtuoso";
 import { useUIStore } from "@/stores/uiStore";
 
-/** Pixels from bottom to consider "at bottom" */
+/** Virtuoso's reporting band; UI and follow intent use true-bottom geometry. */
 const AT_BOTTOM_THRESHOLD = 50;
 
 /**
@@ -11,6 +11,17 @@ const AT_BOTTOM_THRESHOLD = 50;
  * overscroll both produce tiny negative deltas that are not intent.
  */
 const USER_SCROLL_UP_TOLERANCE_PX = 2;
+
+/**
+ * How far above the true bottom a user's upward scroll has to end to release
+ * stick intent; a downward scroll that ends closer re-engages it. Kept far
+ * tighter than AT_BOTTOM_THRESHOLD: while the reader is still flagged sticky,
+ * every growth pin (streaming tokens, Virtuoso mounting rows as they scroll)
+ * drags them back, so any band here is a band the reader cannot scroll out of
+ * without flicking past it in one event. Sub-pixel scroll positions at the
+ * bottom stay under one pixel.
+ */
+const STICK_RELEASE_DISTANCE_PX = 1;
 
 /** Maximum persisted scroll states to retain (LRU eviction) */
 const MAX_PERSISTED_STATES = 200;
@@ -179,7 +190,7 @@ interface UseVirtuosoScrollStateReturn {
  * - Intent-based "stick" that survives transient content growth (new footer
  *   content pushing the viewport off-bottom doesn't disengage stick — only
  *   a user-initiated scroll up does)
- * - "At bottom" state tracking for UI affordances (via atBottomStateChange)
+ * - True-bottom state tracking for UI affordances (via callbacks and scroll events)
  * - Scroll position persistence across tab switches; if the user was sticky
  *   when leaving, returning snaps them to the new bottom instead of the old
  *   scroll position
@@ -296,27 +307,36 @@ export function useVirtuosoScrollState(
     });
   }, [isActive, persistKey]);
 
-  const atBottomStateChange = useCallback((atBottom: boolean) => {
-    setIsAtBottom(atBottom);
-    isAtBottomRef.current = atBottom;
-    // Reaching bottom re-engages stick intent. We intentionally do NOT flip
-    // intent false when atBottom becomes false — that transition is usually
-    // caused by content growing below the viewport, not by user action.
-    if (atBottom) {
+  /** An explicit jump to one row is still settling (see indexJumpOperationRef). */
+  const isJumpingToRow = useCallback(
+    () =>
+      indexJumpOperationRef.current !== null &&
+      indexJumpOperationRef.current === scrollOperationRef.current,
+    [],
+  );
+
+  const atBottomStateChange = useCallback(
+    (atBottom: boolean) => {
       const el = scrollerElRef.current;
       const distanceFromBottom = el ? el.scrollHeight - el.clientHeight - el.scrollTop : 0;
-      // Virtuoso can briefly report at-bottom while reconciling an appended
-      // item's measured height. Do not let that transient callback undo an
-      // explicit user release while the browser geometry is still away from
-      // the tail.
-      const jumpingToRow =
-        indexJumpOperationRef.current !== null &&
-        indexJumpOperationRef.current === scrollOperationRef.current;
-      if (distanceFromBottom <= AT_BOTTOM_THRESHOLD && !jumpingToRow) {
-        wantsStickRef.current = true;
+      const atTrueBottom = atBottom && distanceFromBottom < STICK_RELEASE_DISTANCE_PX;
+      setIsAtBottom(atTrueBottom);
+      isAtBottomRef.current = atTrueBottom;
+      // Reaching bottom re-engages stick intent. We intentionally do NOT flip
+      // intent false when atBottom becomes false — that transition is usually
+      // caused by content growing below the viewport, not by user action.
+      if (atTrueBottom) {
+        // Virtuoso can briefly report at-bottom while reconciling an appended
+        // item's measured height. Do not let that transient callback undo an
+        // explicit user release while the browser geometry is still away from
+        // the tail.
+        if (!isJumpingToRow()) {
+          wantsStickRef.current = true;
+        }
       }
-    }
-  }, []);
+    },
+    [isJumpingToRow],
+  );
 
   // User intent is authoritative here. Virtuoso 4.18 invokes a functional
   // followOutput with `isAtBottom || scrollingInProgress`, so its argument can
@@ -612,6 +632,8 @@ export function useVirtuosoScrollState(
 
     const releaseStickIntent = () => {
       wantsStickRef.current = false;
+      setIsAtBottom(false);
+      isAtBottomRef.current = false;
       // A retry or post-scroll watcher started before this gesture must not
       // yank the reader back to the bottom after their intent is known.
       scrollOperationRef.current += 1;
@@ -644,14 +666,38 @@ export function useVirtuosoScrollState(
       const st = scrollerEl.scrollTop;
       const previous = lastObservedScrollTopRef.current;
       lastObservedScrollTopRef.current = st;
+      const distanceFromBottom = scrollerEl.scrollHeight - scrollerEl.clientHeight - st;
+      // Virtuoso need not emit another callback while scrolling within its
+      // wider at-bottom band. Keep the UI and retry loops in sync with the
+      // same true-bottom geometry that releases and restores follow intent.
+      const atTrueBottom = distanceFromBottom < STICK_RELEASE_DISTANCE_PX;
+      setIsAtBottom(atTrueBottom);
+      isAtBottomRef.current = atTrueBottom;
+
+      // Releasing inside Virtuoso's at-bottom band leaves it reporting
+      // at-bottom, so atBottomStateChange never fires a fresh `true` when the
+      // reader comes back down. Re-engage on arriving at the true bottom.
+      if (
+        !wantsStickRef.current &&
+        st > previous &&
+        distanceFromBottom < STICK_RELEASE_DISTANCE_PX &&
+        !isJumpingToRow()
+      ) {
+        wantsStickRef.current = true;
+        return;
+      }
 
       if (!pointerHeld && !userScrollUpPending) return;
-      if (st >= previous - USER_SCROLL_UP_TOLERANCE_PX) return;
+      // A wheel or key press already says which way the user is going, so any
+      // upward movement counts; a held pointer alone needs the tolerance to
+      // rule out sub-pixel noise. Requiring a larger step here would let a
+      // slow trackpad scroll be pinned back between every event.
+      const tolerance = userScrollUpPending ? 0 : USER_SCROLL_UP_TOLERANCE_PX;
+      if (st >= previous - tolerance) return;
       // A shrinking scrollHeight or a growing viewport also lowers scrollTop
       // while leaving the user at the bottom. Only a move that actually ends
       // away from the bottom is intent to stop following.
-      const distanceFromBottom = scrollerEl.scrollHeight - scrollerEl.clientHeight - st;
-      if (distanceFromBottom > AT_BOTTOM_THRESHOLD) {
+      if (distanceFromBottom >= STICK_RELEASE_DISTANCE_PX) {
         releaseStickIntent();
       }
     };
@@ -663,7 +709,7 @@ export function useVirtuosoScrollState(
       const distanceFromBottom = scrollerEl.scrollHeight - scrollerEl.clientHeight - st;
       if (
         st < lastScrollTopRef.current - USER_SCROLL_UP_TOLERANCE_PX &&
-        distanceFromBottom > AT_BOTTOM_THRESHOLD
+        distanceFromBottom >= STICK_RELEASE_DISTANCE_PX
       ) {
         releaseStickIntent();
       }
@@ -707,7 +753,7 @@ export function useVirtuosoScrollState(
       scrollerEl.removeEventListener("touchmove", handleTouchMove);
       scrollerEl.removeEventListener("keydown", handleKeyDown);
     };
-  }, [scrollerEl]);
+  }, [scrollerEl, isJumpingToRow]);
 
   // ResizeObserver fallback: when content grows (e.g. footer gains a thinking
   // indicator or question card) and the user still wants stick, pin to the new

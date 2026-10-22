@@ -196,7 +196,16 @@ describe("useVirtuosoScrollState scrollToIndex", () => {
     result.current.virtuosoRef.current = handle as never;
     expect(result.current.scrollToIndex(3)).toBe(true);
     el.scrollTop = 1500;
+    act(() => {
+      // A cached-height correction can arrive at the bottom through a native
+      // scroll event before Virtuoso reports its at-bottom transition.
+      el.dispatchEvent(new Event("scroll"));
+    });
+    expect(result.current.scrollProps.followOutput(false)).toBe(false);
+    act(() => result.current.scrollProps.totalListHeightChanged(2000));
+    expect(result.current.scrollProps.followOutput(false)).toBe(false);
     act(() => result.current.scrollProps.atBottomStateChange(true));
+    expect(result.current.scrollProps.followOutput(true)).toBe(false);
     el.scrollTop = 500;
     // Even a stale at-bottom boolean cannot override the final geometry.
     await waitFor(() => expect(handle.scrollToIndex).toHaveBeenCalledTimes(4));

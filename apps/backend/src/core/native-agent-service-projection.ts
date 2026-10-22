@@ -3322,6 +3322,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     }
   }
 
+  /** Store one discovery section; true when what a view would show changed. */
   private storeProgressiveDiscovery(
     key: string,
     entry: {
@@ -3330,7 +3331,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       expiresAt: number;
       error?: string;
     },
-  ): void {
+  ): boolean {
     const previous = this.progressiveDiscoveryCache.get(key);
     const semantic = JSON.stringify({
       value: entry.value,
@@ -3344,13 +3345,13 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           error: previous.error,
         })
       : undefined;
+    const changed = previousSemantic !== semantic;
     const bytes = Buffer.byteLength(semantic);
     if (previous) this.progressiveDiscoveryBytes -= previous.bytes;
     this.progressiveDiscoveryCache.delete(key);
     this.progressiveDiscoveryCache.set(key, {
       ...entry,
-      revision:
-        previousSemantic === semantic ? (previous?.revision ?? 0) : (previous?.revision ?? 0) + 1,
+      revision: changed ? (previous?.revision ?? 0) + 1 : (previous?.revision ?? 0),
       bytes,
     });
     this.progressiveDiscoveryBytes += bytes;
@@ -3364,6 +3365,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       if (removed) this.progressiveDiscoveryBytes -= removed.bytes;
       this.progressiveDiscoveryCache.delete(oldest);
     }
+    return changed;
   }
 
   private scheduleProgressiveDiscovery(
@@ -3422,12 +3424,13 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     const deadline = setTimeout(() => {
       if (settled || this.stopped || (this.projectionEpochs.get(sessionKey) ?? 0) !== epoch) return;
       const previous = this.progressiveDiscoveryCache.get(cacheKey);
-      this.storeProgressiveDiscovery(cacheKey, {
+      const changed = this.storeProgressiveDiscovery(cacheKey, {
         value: previous?.value,
         availability: previous?.value === undefined ? "unavailable" : "stale",
         expiresAt: this.now() + 5_000,
         error: "Discovery timed out",
       });
+      if (!changed) return;
       this.storage.announceNativeAgentSessionProjection(input.environmentId, {
         agent: input.agent,
         logicalSessionKey: input.logicalSessionKey,
@@ -3438,11 +3441,16 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         settled = true;
         clearTimeout(deadline);
         if (this.stopped || (this.projectionEpochs.get(sessionKey) ?? 0) !== epoch) return;
-        this.storeProgressiveDiscovery(cacheKey, {
+        const changed = this.storeProgressiveDiscovery(cacheKey, {
           value,
           availability: "ready",
           expiresAt: this.now() + 30_000,
         });
+        // Every section expires after 30 s and an idle view's own read renews
+        // it. Announcing an unchanged renewal would wake that view (and reset
+        // its quiet backoff) four times per expiry for nothing: a view reads
+        // only values, and they did not change.
+        if (!changed) return;
         this.storage.announceNativeAgentSessionProjection(input.environmentId, {
           agent: input.agent,
           logicalSessionKey: input.logicalSessionKey,
@@ -4068,8 +4076,10 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           // transcript-critical path. The next projection poll observes the
           // refreshed catalogue.
           void this.refreshProjectionModelCatalog(input.environmentId)
-            .then(() => {
-              if (!this.stopped) {
+            .then((refreshed) => {
+              // The same catalogue changes no view; announcing it would wake
+              // every idle view of the environment once per TTL.
+              if (!this.stopped && JSON.stringify(refreshed) !== JSON.stringify(cached.models)) {
                 this.storage.announceNativeAgentSessionProjection(input.environmentId);
               }
             })

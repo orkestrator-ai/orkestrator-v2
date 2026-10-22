@@ -76,6 +76,12 @@ export type CommandContext = {
   deleteWorkflowResultsByEnvironment?: (environmentId: string) => Promise<unknown>;
   workflowResultRollout?: import("./workflow-result-rollout.js").WorkflowResultRollout;
   coordinators?: CoordinatorService;
+  /** Command-node registry and leaf attachments (docs/architecture/command-nodes.md). */
+  nodes?: import("./nodes/node-service.js").NodeService;
+  /** Portal read model, routing and workspaces (command node); client grants (leaf). */
+  nodePortal?: import("./nodes/node-portal.js").NodePortal;
+  /** Leaf mail, the outbox and user-approved action requests. */
+  nodeCoordination?: import("./nodes/node-coordination.js").NodeCoordination;
   projectGit?: ProjectGitService;
   controlMcp?: {
     getSettings(): ControlMcpSettings;

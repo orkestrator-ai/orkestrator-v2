@@ -152,9 +152,14 @@ describe("Electron packaging configuration", () => {
     // Closing a window destroys its previews and the preview transport it owns.
     expect(desktopMain).toContain("closing?.browserPreviewManager.destroyAll()");
     expect(desktopMain).toContain("closing?.previewTransport.disposeAll()");
-    // A connection switch builds previews in the new connection's partition.
-    expect(desktopMain).toContain("browserPreviewPartitionForWindow(slot, connectionId)");
-    expect(desktopMain).toContain("const nextPreviewRuntime = createWindowBrowserPreviews(");
+    // A connection switch builds previews in the new connection's partition,
+    // after use, connect and forget alike, and when the window's workspace
+    // moves to another node.
+    expect(desktopMain).toContain("browserPreviewPartitionForWindow(slot, partitionKey)");
+    expect(desktopMain).toContain(
+      "rebindWindowPreviews(context, connectionManager.getConnectionId",
+    );
+    expect(desktopMain.match(/followWindowConnection\((?:context|current)\);/g)).toHaveLength(4);
     expect(desktopMain.indexOf("registerIpc();")).toBeLessThan(
       desktopMain.indexOf("windowRequestGate.markReady()"),
     );
@@ -180,7 +185,7 @@ describe("Electron packaging configuration", () => {
     );
     expect(desktopMain.indexOf("await getMacOsPermissions()")).toBeGreaterThan(-1);
     expect(desktopMain.indexOf("await getMacOsPermissions()")).toBeLessThan(
-      desktopMain.indexOf("backend = await backendProcess.start"),
+      desktopMain.indexOf("backend = await startLocal()"),
     );
   });
 

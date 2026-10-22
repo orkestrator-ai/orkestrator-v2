@@ -118,12 +118,74 @@ equivalent environment variable unless noted.
 | `--data-dir` | `ORKESTRATOR_DATA_DIR` | Application data directory. |
 | `--docker-image` | `ORKESTRATOR_DOCKER_IMAGE` | Image tag. Default `orkestrator-v2:latest`. |
 | `--control-host` / `--control-port` | | Loopback Control MCP listener. |
+| `--loopback-client-port` | `ORKESTRATOR_LOOPBACK_CLIENT_PORT` | Additional `127.0.0.1` client gateway, the SSH forwarding target. `0` picks a free port. |
 
 Local-only development bind:
 
 ```bash
 bun run --cwd apps/backend start --host 127.0.0.1 --port 34121 --allow-non-tailscale-bind
 ```
+
+## Loopback client gateway (SSH forwarding target)
+
+A desktop client can reach a backend on another machine through a managed SSH
+local forward. That forward needs a listener on the remote machine's loopback
+that serves the ordinary client API and nothing more.
+`--loopback-client-port <port>` (or `ORKESTRATOR_LOOPBACK_CLIENT_PORT`) starts
+one. It is an **additional** listener bound to `127.0.0.1` only. It does not
+change where the Tailscale or browser listener binds, so an installation that
+binds only to its tailnet address keeps doing so.
+
+- It routes like the browser listener: the same gateway token, the same CORS
+  rules, and the same terminal WebSocket and preview tunnel upgrades.
+  Control-only routes (`/__orkestrator/host-updater`,
+  `/__orkestrator/web-client-access`) answer `404` there.
+- SSH login never replaces gateway authentication. A request without the
+  gateway token gets `401` on this listener too.
+- If the port is busy, only this listener fails. The backend logs
+  `[RemoteGateway] Loopback client gateway unavailable …` and keeps serving.
+- Its URL appears as `loopbackClientUrl` in the `orkestrator-backend-ready`
+  line, and as a `client` entry in the instance descriptor's `endpoints`
+  array. A browser listener bound to loopback is listed there as a `client`
+  too. The control listener is listed as `control`.
+- While it is serving, the authenticated hello
+  (`GET /__orkestrator/hello`) advertises the `loopback-client-gateway`
+  capability. The hello's `endpointRole` is `client` on this listener and on
+  the browser listener, and `control` on the control listener.
+
+**Never tunnel the control listener.** The descriptor's primary `url` is often
+the loopback control listener. It also serves the host updater channel and
+Electron's web-access control, which are not part of the client API. A managed
+SSH route must target a `client` endpoint and must refuse to keep a forward
+whose hello reports `endpointRole: "control"`.
+
+Example remote service and forward:
+
+```bash
+orkestrator serve --loopback-client-port 34125
+ssh -N -L 127.0.0.1:44001:127.0.0.1:34125 build-machine
+```
+
+## Machine profile and hello
+
+Each backend owns a small machine profile: a display name, a palette colour
+token (never CSS) and a compare-and-swap `revision`. It lives in the
+`backend-profile` store. The first read creates it once, named after the host
+(`.local` removed, `Orkestrator` if that is blank), with a colour derived from
+the installation identity.
+
+- `get_backend_profile` (no arguments) returns it.
+- `update_backend_profile` takes `{ expectedRevision, displayName?,
+  colorToken? }`. A stale revision fails with a message starting with
+  `backend-profile-conflict:` and writes nothing. On success the revision goes
+  up by one and the backend emits `backend-profile-changed` with the new
+  profile.
+
+`GET /__orkestrator/hello` is the authenticated handshake on every listener
+(contract: `packages/protocol/src/backend-profile.ts`). It returns the
+installation identity, the generation, the app version, the client API range,
+capabilities, the profile and `endpointRole`. It never includes data paths,
+the auth file, the token or the process ID.
 
 ## Vercel-hosted public client
 

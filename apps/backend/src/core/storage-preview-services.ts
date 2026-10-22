@@ -1,5 +1,17 @@
 import { createHash, randomBytes } from "node:crypto";
+import os from "node:os";
 import path from "node:path";
+
+import {
+  BACKEND_PROFILE_CONFLICT_CODE,
+  defaultMachineColor,
+  MAX_MACHINE_DISPLAY_NAME_LENGTH,
+  normalizeMachineDisplayName,
+  parseBackendProfile,
+  parseBackendProfileUpdate,
+  type BackendProfile,
+  type BackendProfileUpdate,
+} from "@orkestrator/protocol/backend-profile";
 
 import {
   isOpaquePreviewId,
@@ -40,6 +52,47 @@ export interface PreviewBackendIdentity {
   instanceId: string;
   /** True when this call minted a new identity (first run or copied data). */
   created: boolean;
+}
+
+/**
+ * Raised by `updateBackendProfile` when `expectedRevision` is stale. The
+ * message starts with {@link BACKEND_PROFILE_CONFLICT_CODE}, which is all that
+ * crosses the gateway; `current` is for in-process callers.
+ */
+export class BackendProfileConflictError extends Error {
+  constructor(readonly current: BackendProfile) {
+    super(
+      `${BACKEND_PROFILE_CONFLICT_CODE}: The machine profile changed; reload it and try again.`,
+    );
+    this.name = "BackendProfileConflictError";
+  }
+}
+
+const DEFAULT_MACHINE_DISPLAY_NAME = "Orkestrator";
+
+/**
+ * The first-run machine name: the host name without a trailing `.local`,
+ * bounded and stripped of control characters, else "Orkestrator".
+ */
+export function defaultMachineDisplayName(hostname: string = os.hostname()): string {
+  const base = hostname.trim().replace(/\.local\.?$/i, "");
+  try {
+    return (
+      normalizeMachineDisplayName(
+        Array.from(base).slice(0, MAX_MACHINE_DISPLAY_NAME_LENGTH).join(""),
+      ) ?? DEFAULT_MACHINE_DISPLAY_NAME
+    );
+  } catch {
+    return DEFAULT_MACHINE_DISPLAY_NAME;
+  }
+}
+
+function storedBackendProfile(value: unknown): BackendProfile | null {
+  try {
+    return parseBackendProfile(value);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -196,6 +249,10 @@ export class StoragePreviewServices extends StorageKanban {
     return this.file("backend-identity.json");
   }
 
+  protected backendProfileFile(): string {
+    return this.file("backend-profile.json");
+  }
+
   private enqueuePreview<T>(
     file: string,
     description: string,
@@ -291,6 +348,69 @@ export class StoragePreviewServices extends StorageKanban {
       });
       return { instanceId, created: true };
     });
+  }
+
+  /**
+   * The canonical machine profile every client renders for this backend.
+   * Created once, on the first read, from the host name and a colour derived
+   * from the installation identity; later reads return what is stored.
+   */
+  async getBackendProfile(): Promise<BackendProfile> {
+    const stored = storedBackendProfile(
+      await this.loadJson<unknown>(this.backendProfileFile(), () => null),
+    );
+    if (stored) return stored;
+    const { instanceId } = await this.getPreviewBackendIdentity();
+    return this.serializeMutation(this.backendProfileFile(), "backend profile", () =>
+      this.loadOrCreateBackendProfile(instanceId),
+    );
+  }
+
+  /**
+   * Compare-and-swap edit. A stale `expectedRevision` throws
+   * {@link BackendProfileConflictError} and writes nothing.
+   */
+  async updateBackendProfile(update: BackendProfileUpdate): Promise<BackendProfile> {
+    const parsed = parseBackendProfileUpdate(update);
+    const { instanceId } = await this.getPreviewBackendIdentity();
+    return this.serializeMutation(this.backendProfileFile(), "backend profile", async () => {
+      const current = await this.loadOrCreateBackendProfile(instanceId);
+      if (current.revision !== parsed.expectedRevision) {
+        throw new BackendProfileConflictError(current);
+      }
+      const next: BackendProfile = {
+        revision: current.revision + 1,
+        displayName: parsed.displayName ?? current.displayName,
+        colorToken: parsed.colorToken ?? current.colorToken,
+        updatedAt: new Date().toISOString(),
+      };
+      await this.saveJson(this.backendProfileFile(), { version: 1, ...next });
+      return next;
+    });
+  }
+
+  /** Call only under the backend profile lease. */
+  private async loadOrCreateBackendProfile(installationId: string): Promise<BackendProfile> {
+    const raw = await this.loadJson<unknown>(this.backendProfileFile(), () => null);
+    const stored = storedBackendProfile(raw);
+    if (stored) return stored;
+    // An unreadable record is replaced, but past its revision, so an edit
+    // based on the old one still conflicts instead of applying blindly.
+    const previousRevision =
+      isRecord(raw) && Number.isSafeInteger(raw.revision) && (raw.revision as number) > 0
+        ? (raw.revision as number)
+        : 0;
+    if (raw !== null) {
+      console.warn("[backend] The stored machine profile was invalid; restoring the default");
+    }
+    const profile: BackendProfile = {
+      revision: previousRevision + 1,
+      displayName: defaultMachineDisplayName(),
+      colorToken: defaultMachineColor(installationId),
+      updatedAt: new Date().toISOString(),
+    };
+    await this.saveJson(this.backendProfileFile(), { version: 1, ...profile });
+    return profile;
   }
 
   async loadPreviewSettings(): Promise<PreviewSettings> {

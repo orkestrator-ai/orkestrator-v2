@@ -1,4 +1,5 @@
 import type { GatewayTokenSettings, WebClientStatus } from "@/types";
+import { readStoredWorkspace } from "@/lib/portal/workspace-target-storage";
 import { getGatewayBaseUrl, resolveGatewayApiUrl } from "@/lib/gateway-url";
 import {
   configureDirectGatewayTransport,
@@ -48,7 +49,14 @@ export const TERMINAL_TRANSPORT_STORAGE_KEY = "orkestrator-terminal-transport";
 const TERMINAL_FILTER_NARROW_DELAY_MS = 50;
 
 type EventCallback<T> = (payload: T) => unknown;
-type GatewayWindow = Pick<Window, "location" | "orkestrator" | "orkestratorGateway">;
+type GatewayWindow = Pick<
+  Window,
+  | "location"
+  | "orkestrator"
+  | "orkestratorGateway"
+  | "orkestratorPortal"
+  | "orkestratorWorkspaceTarget"
+>;
 
 const browserGatewayDisposers = new WeakMap<object, (reason?: unknown) => void>();
 
@@ -72,6 +80,7 @@ async function readBrowserClipboardImage(): Promise<{
 }
 
 export interface BrowserGatewayOptions {
+  unavailableReason?: string;
   baseUrl?: string;
   token?: string;
   replaceExisting?: boolean;
@@ -215,8 +224,10 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   let browserTerminalEventSourceOpen = false;
   let bearerToken = options.token?.trim() || undefined;
   const baseUrl = normalizedBaseUrl(options.baseUrl);
-  const apiUrl = (pathname: string): string =>
-    baseUrl ? `${baseUrl}${pathname}` : resolveGatewayApiUrl(pathname);
+  const apiUrl = (pathname: string): string => {
+    if (options.unavailableReason) throw new Error(options.unavailableReason);
+    return baseUrl ? `${baseUrl}${pathname}` : resolveGatewayApiUrl(pathname);
+  };
 
   const requestHeaders = (headers?: Record<string, string>): Record<string, string> | undefined => {
     const result = { ...headers };
@@ -224,7 +235,9 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     return Object.keys(result).length > 0 ? result : undefined;
   };
 
-  const credentials = bearerToken || baseUrl ? ("omit" as const) : ("same-origin" as const);
+  const crossOrigin =
+    baseUrl && new URL(baseUrl, window.location.href).origin !== window.location.origin;
+  const credentials = bearerToken || crossOrigin ? ("omit" as const) : ("same-origin" as const);
   const websocketTerminalsEnabled = terminalTransportEnabled(options);
   let terminalSocket: TerminalWebSocketClient | null = null;
   let disposeAgentTestActivity: () => void = () => undefined;
@@ -1157,6 +1170,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     },
 
     listen<T = unknown>(event: string, callback: EventCallback<T>): () => void {
+      if (options.unavailableReason) return () => undefined;
       const callbackSet = listeners.get(event) ?? new Set<EventCallback<unknown>>();
       listeners.set(event, callbackSet);
       callbackSet.add(callback as EventCallback<unknown>);
@@ -1302,18 +1316,45 @@ export function installBrowserGatewayApi(
     targetWindow.orkestrator = createBrowserGatewayApi({
       ...options,
       baseUrl,
-      reportBootMetrics: true,
+      reportBootMetrics: !options.unavailableReason,
       // Only an isolated development profile can hold an agent-test session, and
       // its Vite instance is the only one given a profile id. Probing anywhere
       // else would spend a request per boot on a route that is always 404 —
       // including on every production gateway client.
       agentTestSessionActivity:
         options.agentTestSessionActivity ??
-        Boolean(import.meta.env.VITE_ORKESTRATOR_PROFILE?.trim()),
+        (!options.unavailableReason && Boolean(import.meta.env.VITE_ORKESTRATOR_PROFILE?.trim())),
     });
   }
 }
 
+/**
+ * Browser and iOS: a tab whose workspace is on another node is that node's
+ * client — directly with the workspace's client grant, or through the
+ * command node's relay with this page's own session — while the multi-node
+ * views keep the command node that served the page as their portal.
+ */
+export function workspaceTargetGatewayOptions(
+  targetWindow: GatewayWindow = window,
+): BrowserGatewayOptions {
+  if (targetWindow.orkestrator) return {};
+  const workspace = readStoredWorkspace();
+  if (!workspace) return {};
+  targetWindow.orkestratorWorkspaceTarget = {
+    nodeId: workspace.nodeId,
+    nodeName: workspace.nodeName,
+    path: workspace.path,
+    ...(workspace.routeKind ? { routeKind: workspace.routeKind } : {}),
+    ...(workspace.via ? { via: workspace.via } : {}),
+  };
+  targetWindow.orkestratorPortal = createBrowserGatewayApi({
+    baseUrl: targetWindow.location.origin,
+  });
+  return workspace.token
+    ? { baseUrl: workspace.baseUrl, token: workspace.token }
+    : { baseUrl: workspace.baseUrl };
+}
+
 if (typeof window !== "undefined") {
-  installBrowserGatewayApi();
+  installBrowserGatewayApi(window, workspaceTargetGatewayOptions());
 }

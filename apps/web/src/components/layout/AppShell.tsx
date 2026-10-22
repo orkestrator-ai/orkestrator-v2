@@ -26,13 +26,47 @@ import { AgentMailPanel } from "@/components/agent-mail/AgentMailPanel";
 import { SystemUsageIndicator } from "./SystemUsageIndicator";
 import { HostPark, HostSlot } from "./HostSlot";
 import { AppDialogHost } from "./AppDialogHost";
+import { RemoteWorkspaceRegion } from "@/components/federation/RemoteWorkspaceRegion";
+import { useFederation } from "@/components/federation/FederationProvider";
+import { isWorkspaceRealm } from "@/lib/federation/workspace-realm";
+import {
+  useRemoteWorkspaceStore,
+  type RemoteWorkspaceSelection,
+} from "@/stores/remoteWorkspaceStore";
 
 interface AppShellProps {
   children?: React.ReactNode;
 }
 
+/** Names of the other node's project and environment the central region shows. */
+function useRemoteWorkspaceNames(active: RemoteWorkspaceSelection | null) {
+  const { portalState } = useFederation();
+  return useMemo(() => {
+    if (!active) return null;
+    const node = portalState.nodes.find((candidate) => candidate.nodeId === active.nodeId);
+    const project = node?.projects.find(
+      (candidate) => candidate.ref.projectId === active.projectId,
+    );
+    const environment = node?.environments.find(
+      (candidate) => candidate.ref.environmentId === active.environmentId,
+    );
+    return { projectName: project?.name ?? null, environmentName: environment?.name ?? null };
+  }, [active, portalState.nodes]);
+}
+
 export function AppShell({ children }: AppShellProps) {
   const isMobile = useMediaQuery(MOBILE_SHELL_MEDIA_QUERY);
+  // Another node's workspace inside a command node's window: only the
+  // central region, without the window's title bar and sidebar.
+  const [workspaceRealm] = useState(isWorkspaceRealm);
+  // In the window: the other node whose workspace the central region shows.
+  // The title bar, toolbar row and sidebar around it stay the command node's.
+  const remoteWorkspace = useRemoteWorkspaceStore((state) =>
+    workspaceRealm ? null : state.active,
+  );
+  const remoteNames = useRemoteWorkspaceNames(remoteWorkspace);
+  const [centralColumn, setCentralColumn] = useState<HTMLDivElement | null>(null);
+  const [mobileContent, setMobileContent] = useState<HTMLDivElement | null>(null);
   // The desktop and mobile layouts are different trees, so rendering `children`
   // in each would remount every pane at the 768px breakpoint, closing dialogs
   // and dropping pane state when a window narrows or a phone rotates. The
@@ -91,9 +125,9 @@ export function AppShell({ children }: AppShellProps) {
   };
 
   const windowTitle = getApplicationTitle(
-    activeProjectName,
+    remoteNames ? remoteNames.projectName : activeProjectName,
     isMobile,
-    activeEnvironmentName,
+    remoteNames ? remoteNames.environmentName : activeEnvironmentName,
     import.meta.env.VITE_ORKESTRATOR_PROFILE?.trim() || null,
   );
   const activeTab = useMemo(() => {
@@ -107,8 +141,55 @@ export function AppShell({ children }: AppShellProps) {
   }, [paneEnvironments, selectedEnvironmentId]);
 
   useEffect(() => {
-    document.title = windowTitle;
-  }, [windowTitle]);
+    // A realm's document title is not shown; the window's is.
+    if (!workspaceRealm) document.title = windowTitle;
+  }, [windowTitle, workspaceRealm]);
+
+  if (workspaceRealm) {
+    return (
+      <div className="flex h-full w-full flex-col overflow-hidden">
+        <OpenFileDialog />
+        <AppDialogHost />
+        <HostPark parkRef={contentParkRef} />
+        <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
+          <ResizablePanel defaultSize={filesPanelOpen ? 70 : 100} minSize={30}>
+            <div className="flex h-full flex-col" style={centralPanelThemeVars}>
+              {/*
+                What the window's title bar shows for its own node's
+                environments: the agent of the active tab, and the machine it
+                runs on — this node.
+              */}
+              <ActionBar
+                trailing={
+                  isMobile ? undefined : (
+                    <>
+                      <SystemUsageIndicator />
+                      <span aria-hidden="true" className="mx-1 h-3 w-px self-center bg-border/50" />
+                      <AgentInfoButton activeTab={activeTab} />
+                    </>
+                  )
+                }
+              />
+              <main className="min-h-0 flex-1 overflow-hidden bg-background">
+                <HostSlot host={contentHost} parkRef={contentParkRef} />
+              </main>
+            </div>
+          </ResizablePanel>
+          {filesPanelOpen && !isMobile && (
+            <>
+              <ResizableHandle />
+              <ResizablePanel defaultSize={30} minSize="240px" maxSize="500px">
+                <FilesPanel />
+              </ResizablePanel>
+            </>
+          )}
+        </ResizablePanelGroup>
+        {createPortal(children, contentHost)}
+      </div>
+    );
+  }
+
+  const remoteShown = remoteWorkspace !== null;
 
   return (
     <div className="flex h-full w-full flex-col overflow-hidden">
@@ -136,7 +217,13 @@ export function AppShell({ children }: AppShellProps) {
           initialSidebarOpen={!desktopShown}
           onTitleBarMouseDown={handleTitleBarMouseDown}
         >
-          <HostSlot host={contentHost} parkRef={contentParkRef} />
+          <div
+            ref={setMobileContent}
+            className={cn("h-full w-full", remoteShown && "invisible")}
+            aria-hidden={remoteShown || undefined}
+          >
+            <HostSlot host={contentHost} parkRef={contentParkRef} />
+          </div>
         </MobileAppShellLayout>
       ) : (
         <>
@@ -174,15 +261,20 @@ export function AppShell({ children }: AppShellProps) {
               style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
               onMouseDown={(event) => event.stopPropagation()}
             >
-              <SystemUsageIndicator />
-              <span
-                aria-hidden="true"
-                data-testid="title-bar-usage-separator"
-                className="mx-2 h-3 w-px self-center bg-border/50"
-              />
+              {/* Another node's agent and machine are shown by its workspace's toolbar. */}
+              {!remoteShown && (
+                <>
+                  <SystemUsageIndicator />
+                  <span
+                    aria-hidden="true"
+                    data-testid="title-bar-usage-separator"
+                    className="mx-2 h-3 w-px self-center bg-border/50"
+                  />
+                </>
+              )}
               <div className="flex items-center gap-1">
                 <AgentMailButton />
-                <AgentInfoButton activeTab={activeTab} />
+                {!remoteShown && <AgentInfoButton activeTab={activeTab} />}
               </div>
             </div>
           </div>
@@ -200,8 +292,17 @@ export function AppShell({ children }: AppShellProps) {
             )}
 
             {/* Main Content Panel */}
-            <ResizablePanel defaultSize={filesPanelOpen ? 50 : 78} minSize={30}>
-              <div className="flex h-full flex-col" style={centralPanelThemeVars}>
+            <ResizablePanel defaultSize={filesPanelOpen && !remoteShown ? 50 : 78} minSize={30}>
+              {/*
+                Under another node's workspace this window's own stays mounted
+                (its selection cleared), hidden; that workspace covers it.
+              */}
+              <div
+                ref={setCentralColumn}
+                className={cn("flex h-full flex-col", remoteShown && "invisible")}
+                aria-hidden={remoteShown || undefined}
+                style={centralPanelThemeVars}
+              >
                 <ActionBar />
                 <main className={cn("flex-1 overflow-hidden bg-background")}>
                   <HostSlot host={contentHost} parkRef={contentParkRef} />
@@ -209,8 +310,8 @@ export function AppShell({ children }: AppShellProps) {
               </div>
             </ResizablePanel>
 
-            {/* Files Panel (conditional) */}
-            {filesPanelOpen && (
+            {/* Files Panel (conditional); another node's workspace has its own. */}
+            {filesPanelOpen && !remoteShown && (
               <>
                 <ResizableHandle />
                 <ResizablePanel defaultSize={22} minSize="240px" maxSize="500px">
@@ -221,6 +322,8 @@ export function AppShell({ children }: AppShellProps) {
           </ResizablePanelGroup>
         </>
       )}
+      {/* Outside both layouts, so a realm is never moved (a moved frame reloads). */}
+      <RemoteWorkspaceRegion anchor={isMobile ? mobileContent : centralColumn} />
       {/* After the layouts, so a slot holds the host before content effects run. */}
       {createPortal(children, contentHost)}
     </div>

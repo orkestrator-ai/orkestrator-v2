@@ -1,0 +1,198 @@
+/**
+ * A workspace realm is the central workspace of one other node, embedded in
+ * a window that stays on its command node.
+ *
+ * The window (title bar, toolbar, sidebar, settings, the portal) never leaves
+ * the command node. Opening an environment of another node shows that node's
+ * workspace in the window's central region instead: on the desktop a child
+ * view with its own connection scope, in a browser or the iOS app a
+ * same-origin frame. Either way the realm runs this client's own code against
+ * the node's workspace grant, so its stores, events and credentials reach only
+ * that node, and the window never reloads.
+ *
+ * The realm and its window talk only through the small messages below.
+ */
+
+const REALM_PARAM = "realm";
+const REALM_VALUE = "workspace";
+const MAX_ID_LENGTH = 256;
+
+/** What the window asks its realm to show. */
+export interface RealmSelectRequest {
+  type: "select";
+  projectId?: string;
+  environmentId?: string;
+  /** Open the node's Add Project dialog. */
+  addProject?: true;
+  /** Open the node's New Environment dialog for this project. */
+  createEnvironmentProjectId?: string;
+}
+
+export type ShellToRealmMessage =
+  | RealmSelectRequest
+  /** The window's sidebar was shown or hidden (the realm's toolbar toggles it). */
+  | { type: "sidebar"; open: boolean };
+
+/** What a realm tells its window. */
+export type RealmToShellMessage =
+  /** The realm listens for requests now; anything asked while it loaded is sent again. */
+  | { type: "ready" }
+  /** The realm's own selection changed (a new environment, a deleted one, a shortcut). */
+  | { type: "selection"; projectId: string | null; environmentId: string | null }
+  /** Open a project or environment of any node, as the window's sidebar would. */
+  | { type: "open"; nodeId: string; projectId: string; environmentId?: string; title: string }
+  /** Show or hide the window's sidebar. */
+  | { type: "sidebar"; open: boolean }
+  /** Open the window's settings: they belong to the command node. */
+  | { type: "settings"; section: string };
+
+function params(): URLSearchParams | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return new URLSearchParams(window.location.search);
+  } catch {
+    return null;
+  }
+}
+
+function boundedId(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 && value.length <= MAX_ID_LENGTH
+    ? value
+    : undefined;
+}
+
+/** Whether this renderer is a realm inside a command node's window. */
+export function isWorkspaceRealm(): boolean {
+  return params()?.get(REALM_PARAM) === REALM_VALUE;
+}
+
+/** Browser and iOS frames: the workspace whose grant this realm uses. */
+export function realmWorkspaceId(): string | null {
+  const search = params();
+  if (search?.get(REALM_PARAM) !== REALM_VALUE) return null;
+  return boundedId(search.get("workspace")) ?? null;
+}
+
+/** Query parameters that open a realm on `request`. */
+export function realmSearchParams(request: Omit<RealmSelectRequest, "type">): URLSearchParams {
+  const search = new URLSearchParams();
+  search.set(REALM_PARAM, REALM_VALUE);
+  if (request.projectId) search.set("project", request.projectId);
+  if (request.environmentId) search.set("environment", request.environmentId);
+  if (request.addProject) search.set("addProject", "1");
+  if (request.createEnvironmentProjectId)
+    search.set("createEnvironment", request.createEnvironmentProjectId);
+  return search;
+}
+
+/** What the realm was opened on, from its URL. */
+export function realmInitialRequest(): RealmSelectRequest | null {
+  const search = params();
+  if (search?.get(REALM_PARAM) !== REALM_VALUE) return null;
+  const request = parseShellMessage({
+    type: "select",
+    projectId: search.get("project") ?? undefined,
+    environmentId: search.get("environment") ?? undefined,
+    addProject: search.get("addProject") === "1" ? true : undefined,
+    createEnvironmentProjectId: search.get("createEnvironment") ?? undefined,
+  });
+  return request?.type === "select" ? request : null;
+}
+
+export function parseShellMessage(value: unknown): ShellToRealmMessage | null {
+  if (!value || typeof value !== "object") return null;
+  const message = value as Record<string, unknown>;
+  if (message.type === "sidebar") {
+    return typeof message.open === "boolean" ? { type: "sidebar", open: message.open } : null;
+  }
+  if (message.type !== "select") return null;
+  const projectId = boundedId(message.projectId);
+  const environmentId = boundedId(message.environmentId);
+  const createEnvironmentProjectId = boundedId(message.createEnvironmentProjectId);
+  return {
+    type: "select",
+    ...(projectId ? { projectId } : {}),
+    ...(projectId && environmentId ? { environmentId } : {}),
+    ...(message.addProject === true ? { addProject: true as const } : {}),
+    ...(createEnvironmentProjectId ? { createEnvironmentProjectId } : {}),
+  };
+}
+
+export function parseRealmMessage(value: unknown): RealmToShellMessage | null {
+  if (!value || typeof value !== "object") return null;
+  const message = value as Record<string, unknown>;
+  if (message.type === "open") {
+    const nodeId = boundedId(message.nodeId);
+    const projectId = boundedId(message.projectId);
+    if (!nodeId || !projectId) return null;
+    const environmentId = boundedId(message.environmentId);
+    const title = typeof message.title === "string" ? message.title.slice(0, 200) : "";
+    return { type: "open", nodeId, projectId, ...(environmentId ? { environmentId } : {}), title };
+  }
+  if (message.type === "ready") return { type: "ready" };
+  if (message.type === "sidebar") {
+    return typeof message.open === "boolean" ? { type: "sidebar", open: message.open } : null;
+  }
+  if (message.type === "settings") {
+    return typeof message.section === "string" && /^[a-z-]{1,40}$/.test(message.section)
+      ? { type: "settings", section: message.section }
+      : null;
+  }
+  if (message.type !== "selection") return null;
+  const projectId = boundedId(message.projectId) ?? null;
+  const environmentId = projectId ? (boundedId(message.environmentId) ?? null) : null;
+  return { type: "selection", projectId, environmentId };
+}
+
+/** Envelope of frame messages, so a page's other messages are never mistaken for ours. */
+const FRAME_ENVELOPE = "orkestrator-workspace-realm";
+
+type FrameEnvelope = { kind: typeof FRAME_ENVELOPE; workspaceId: string; message: unknown };
+
+export function frameEnvelope(workspaceId: string, message: unknown): FrameEnvelope {
+  return { kind: FRAME_ENVELOPE, workspaceId, message };
+}
+
+export function readFrameEnvelope(
+  value: unknown,
+): { workspaceId: string; message: unknown } | null {
+  if (!value || typeof value !== "object") return null;
+  const envelope = value as Partial<FrameEnvelope>;
+  const workspaceId = boundedId(envelope.workspaceId);
+  if (envelope.kind !== FRAME_ENVELOPE || !workspaceId) return null;
+  return { workspaceId, message: envelope.message };
+}
+
+/** Realm side: tell the window. */
+export function postToShell(message: RealmToShellMessage): void {
+  const desktop = window.orkestrator?.workspaceRealm;
+  if (desktop) {
+    desktop.post(message);
+    return;
+  }
+  const workspaceId = realmWorkspaceId();
+  if (!workspaceId || window.parent === window) return;
+  window.parent.postMessage(frameEnvelope(workspaceId, message), window.location.origin);
+}
+
+/** Realm side: requests from the window. */
+export function onShellMessage(handler: (message: ShellToRealmMessage) => void): () => void {
+  const desktop = window.orkestrator?.workspaceRealm;
+  if (desktop) {
+    return desktop.onMessage((value) => {
+      const message = parseShellMessage(value);
+      if (message) handler(message);
+    });
+  }
+  const workspaceId = realmWorkspaceId();
+  if (!workspaceId) return () => undefined;
+  const listener = (event: MessageEvent) => {
+    if (event.origin !== window.location.origin || event.source !== window.parent) return;
+    const envelope = readFrameEnvelope(event.data);
+    if (envelope?.workspaceId !== workspaceId) return;
+    const message = parseShellMessage(envelope.message);
+    if (message) handler(message);
+  };
+  window.addEventListener("message", listener);
+  return () => window.removeEventListener("message", listener);
+}

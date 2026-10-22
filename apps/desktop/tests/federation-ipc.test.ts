@@ -35,7 +35,13 @@ function harness() {
     useRoute: mock(async () => ({}) as never),
     setAutoConnect: mock(async () => ({}) as never),
     setFeatures: mock(async () => ({}) as never),
-    setWorkspaceTarget: mock(async () => undefined),
+    openWorkspaceView: mock(async () => ({ viewId: "v1" })),
+    setWorkspaceViewBounds: mock(() => undefined),
+    setWorkspaceViewVisible: mock(() => undefined),
+    captureWorkspaceView: mock(async () => null),
+    sendToWorkspaceView: mock(() => undefined),
+    closeWorkspaceView: mock(() => undefined),
+    postFromWorkspaceRealm: mock(() => undefined),
     portalInvoke: mock(async () => ({ ok: true })),
   };
   registerFederationIpc(deps as never);
@@ -52,7 +58,7 @@ describe("federation IPC", () => {
       expect(() => listener(untrusted, "c1", "cmd", {})).toThrow("untrusted renderer");
       expect(channel.startsWith("orkestrator:")).toBe(true);
     }
-    expect(deps.setWorkspaceTarget).not.toHaveBeenCalled();
+    expect(deps.openWorkspaceView).not.toHaveBeenCalled();
     expect(deps.portalInvoke).not.toHaveBeenCalled();
   });
 
@@ -84,16 +90,46 @@ describe("federation IPC", () => {
     expect(() => call("orkestrator:connections:connect-ssh", { destination: 3 })).toThrow();
   });
 
-  test("a workspace target names a node, nothing else", async () => {
+  test("a workspace realm opens on a node and IDs, nothing else", async () => {
     const { call, deps } = harness();
-    await call("orkestrator:workspace-target:set", {
+    await call("orkestrator:workspace-views:open", {
       nodeId: "bk_leaf",
       baseUrl: "https://evil.example",
+      request: { projectId: "p", environmentId: "e", url: "https://evil.example" },
     });
-    expect(deps.setWorkspaceTarget).toHaveBeenCalledWith(expect.anything(), { nodeId: "bk_leaf" });
-    await call("orkestrator:workspace-target:set", { nodeId: null });
-    expect(deps.setWorkspaceTarget).toHaveBeenLastCalledWith(expect.anything(), { nodeId: null });
-    expect(() => call("orkestrator:workspace-target:set", { nodeId: 3 })).toThrow("node ID");
+    expect(deps.openWorkspaceView).toHaveBeenCalledWith(expect.anything(), {
+      nodeId: "bk_leaf",
+      search: { project: "p", environment: "e" },
+    });
+    await call("orkestrator:workspace-views:open", {
+      nodeId: "bk_leaf",
+      request: { addProject: true, createEnvironmentProjectId: "p" },
+    });
+    expect(deps.openWorkspaceView).toHaveBeenLastCalledWith(expect.anything(), {
+      nodeId: "bk_leaf",
+      search: { addProject: "1", createEnvironment: "p" },
+    });
+    expect(() => call("orkestrator:workspace-views:open", { nodeId: 3 })).toThrow("node ID");
+  });
+
+  test("a workspace realm is placed with finite bounds and small messages", () => {
+    const { call, deps } = harness();
+    call("orkestrator:workspace-views:set-bounds", "v1", { x: 1, y: 2, width: 3, height: -4 });
+    expect(deps.setWorkspaceViewBounds).toHaveBeenCalledWith(expect.anything(), "v1", {
+      x: 1,
+      y: 2,
+      width: 3,
+      height: 0,
+    });
+    expect(() =>
+      call("orkestrator:workspace-views:set-bounds", "v1", { x: "1", y: 0, width: 1, height: 1 }),
+    ).toThrow();
+    expect(() => call("orkestrator:workspace-views:set-visible", "v1", "yes")).toThrow();
+    call("orkestrator:workspace-realm:post", { type: "ready" });
+    expect(deps.postFromWorkspaceRealm).toHaveBeenCalledWith(expect.anything(), { type: "ready" });
+    expect(() =>
+      call("orkestrator:workspace-views:send", "v1", { type: "select", pad: "x".repeat(5000) }),
+    ).toThrow("too large");
   });
 
   test("the portal channel carries a command and its arguments only", async () => {

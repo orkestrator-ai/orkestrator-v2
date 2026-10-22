@@ -1,0 +1,415 @@
+import { expect, test } from "@playwright/test";
+import { _electron as electron } from "playwright";
+import type { ElectronApplication } from "playwright";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
+import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
+import { prepareFixtureRepository } from "../../apps/desktop/scripts/dev/fixture";
+import { initializeProfile, reserveLoopbackPorts } from "../../apps/desktop/scripts/dev/profile-io";
+import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
+import { dismissStartupDialogs } from "./electron-startup-dialogs";
+
+/**
+ * Another node's workspace in a desktop window's central region
+ * (docs/architecture/command-nodes.md, "Opening an environment on another
+ * node"), through the real main process, preload and IPC: the window stays on
+ * its command node and never reloads; the leaf's workspace is a child view
+ * bound to the leaf, placed over the central region, and hidden — not closed
+ * — when one of the window's own environments is selected again.
+ */
+
+type Project = { id: string; name: string };
+type Environment = { id: string; name: string; status?: string; worktreePath?: string | null };
+
+const repositoryRoot = path.resolve(import.meta.dirname, "../..");
+const packageRoot = path.join(repositoryRoot, "apps", "desktop");
+const webRoot = path.join(repositoryRoot, "apps", "web");
+const electronExecutable = path.join(packageRoot, "node_modules", ".bin", "electron");
+
+async function waitForUrl(url: string): Promise<void> {
+  await expect
+    .poll(
+      async () =>
+        fetch(url)
+          .then((response) => response.ok)
+          .catch(() => false),
+      { timeout: 30_000 },
+    )
+    .toBe(true);
+}
+
+function run(command: string, args: string[], cwd: string): void {
+  const result = spawnSync(command, args, { cwd, encoding: "utf8" });
+  expect(result.status, `${command} ${args.join(" ")}: ${result.stderr}`).toBe(0);
+}
+
+/** A standalone backend from source: the leaf the desktop's command node attaches. */
+async function startLeaf(root: string) {
+  const [port] = (await reserveLoopbackPorts(1)) as [number];
+  const token = randomBytes(24).toString("base64url");
+  const dir = path.join(root, "leaf");
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  const child = spawn(
+    "bun",
+    [
+      "apps/backend/src/main.ts",
+      "--data-dir",
+      path.join(dir, "data"),
+      "--host",
+      "127.0.0.1",
+      "--allow-non-tailscale-bind",
+      "--port",
+      String(port),
+      "--strict-gateway-port",
+      "--runtime-flavor",
+      "agent-test",
+      "--worktree-dir",
+      path.join(dir, "worktrees"),
+    ],
+    {
+      cwd: repositoryRoot,
+      stdio: ["ignore", "pipe", "ignore"],
+      env: {
+        ...process.env,
+        ORKESTRATOR_GATEWAY_TOKEN: token,
+        ORKESTRATOR_CONTROL_MCP_PORT: "0",
+      },
+    },
+  );
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("the leaf did not start")), 90_000);
+    let buffer = "";
+    child.stdout?.on("data", (chunk: Buffer) => {
+      buffer += chunk.toString();
+      if (buffer.includes('"orkestrator-backend-ready"')) {
+        clearTimeout(timer);
+        child.stdout?.resume();
+        resolve();
+      }
+      buffer = buffer.slice(-4096);
+    });
+    child.once("exit", (code) => {
+      clearTimeout(timer);
+      reject(new Error(`the leaf exited early (${code})`));
+    });
+  });
+  const origin = `http://127.0.0.1:${port}`;
+  const invoke = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
+    const response = await fetch(`${origin}/__orkestrator/invoke`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ command, args }),
+    });
+    const payload = (await response.json()) as { result?: T; error?: string };
+    if (!response.ok) throw new Error(`leaf ${command}: ${payload.error ?? response.status}`);
+    return payload.result as T;
+  };
+  // One project with one local environment, named so its rows are easy to find.
+  const repo = path.join(dir, "repos", "leaf-app");
+  const bare = path.join(dir, "repos", "leaf-app.git");
+  await mkdir(repo, { recursive: true });
+  run("git", ["init", "-q", "-b", "main"], repo);
+  run(
+    "git",
+    [
+      "-c",
+      "user.email=qa@example.com",
+      "-c",
+      "user.name=QA",
+      "commit",
+      "-q",
+      "--allow-empty",
+      "-m",
+      "init",
+    ],
+    repo,
+  );
+  run("git", ["init", "-q", "--bare", "-b", "main", bare], dir);
+  run("git", ["remote", "add", "origin", bare], repo);
+  run("git", ["push", "-q", "-u", "origin", "main"], repo);
+  const project = await invoke<Project>("add_project", { gitUrl: bare, localPath: repo });
+  const environment = await invoke<Environment>("create_environment", {
+    projectId: project.id,
+    name: "leaf-env",
+    environmentType: "local",
+  });
+  const profile = await invoke<{ revision: number }>("get_backend_profile");
+  await invoke("update_backend_profile", {
+    expectedRevision: profile.revision,
+    displayName: "Leaf",
+    colorToken: "blue",
+  });
+  const { nodeId } = await invoke<{ nodeId: string }>("get_node_status");
+  return { child, origin, token, invoke, nodeId, project, environment };
+}
+
+test.beforeAll(() => {
+  const build = spawnSync("bun", ["scripts/electron-bundle.ts"], {
+    cwd: packageRoot,
+    encoding: "utf8",
+  });
+  expect(build.status, `${build.stdout}\n${build.stderr}`).toBe(0);
+});
+
+test("a leaf's workspace opens in the window's central region without moving or reloading the window", async () => {
+  test.setTimeout(300_000);
+  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "orkestrator-electron-realm-"));
+  let vite: ChildProcess | null = null;
+  let app: ElectronApplication | null = null;
+  let leafChild: ChildProcess | null = null;
+  const [rendererPort, gatewayPort] = (await reserveLoopbackPorts(2)) as [number, number];
+  const profile = resolveRuntimeProfile({
+    repositoryRoot,
+    requestedId: "electron-realm",
+    flavor: "agent-test",
+    rendererPort,
+    gatewayPort,
+    roots: {
+      developmentRoot: path.join(temporaryRoot, "dev"),
+      productionDataDir: path.join(temporaryRoot, "production"),
+      homeDir: temporaryRoot,
+    },
+  });
+  const profilePath = await initializeProfile(profile);
+  const projectPath = await prepareFixtureRepository(
+    profile,
+    path.join(repositoryRoot, "test-fixtures", "agent-project"),
+  );
+  const rendererUrl = `http://127.0.0.1:${rendererPort}`;
+  try {
+    const leaf = await startLeaf(temporaryRoot);
+    leafChild = leaf.child;
+    vite = spawn("bun", ["run", "dev"], {
+      cwd: webRoot,
+      detached: true,
+      stdio: "ignore",
+      env: {
+        ...process.env,
+        VITE_DEV_HOST: "127.0.0.1",
+        VITE_DEV_PORT: String(rendererPort),
+        VITE_ORKESTRATOR_PROFILE: profile.id,
+      },
+    });
+    await waitForUrl(rendererUrl);
+    app = await electron.launch({
+      executablePath: electronExecutable,
+      args: [
+        ...ELECTRON_TEST_SWITCHES,
+        path.join(repositoryRoot, "apps", "desktop", "dist", "electron", "main.js"),
+      ],
+      cwd: repositoryRoot,
+      env: {
+        ...process.env,
+        ELECTRON_DEV: "1",
+        VITE_DEV_SERVER_URL: rendererUrl,
+        ORKESTRATOR_RUNTIME_PROFILE_FILE: profilePath,
+      },
+    });
+    const electronApp = app;
+    dismissStartupDialogs(electronApp);
+    const window = await electronApp.firstWindow();
+    window.setDefaultTimeout(20_000);
+    await expect(window).toHaveTitle(profile.electronTitle, { timeout: 60_000 });
+    const invoke = <T>(command: string, args: Record<string, unknown> = {}) =>
+      window.evaluate(
+        ({ command, args }) =>
+          (
+            globalThis as typeof globalThis & {
+              orkestrator: {
+                invoke<R>(command: string, args?: Record<string, unknown>): Promise<R>;
+              };
+            }
+          ).orkestrator.invoke<T>(command, args),
+        { command, args },
+      );
+
+    // The desktop's Local backend is the command node: one environment of its
+    // own, and the leaf attached.
+    const project = await invoke<Project>("add_project", {
+      gitUrl: path.join(profile.fixtureDir, "origin.git"),
+      localPath: projectPath,
+    });
+    const own = await invoke<Environment>("create_environment", {
+      projectId: project.id,
+      name: `desk-env-${Date.now()}`,
+      environmentType: "local",
+    });
+    await invoke("add_node", {
+      routes: [{ id: "loopback", kind: "https", enabled: true, origin: leaf.origin }],
+      token: leaf.token,
+    });
+    await expect
+      .poll(
+        async () =>
+          (
+            await invoke<{ nodes: Array<{ environments: unknown[] }> }>("get_node_summaries")
+          ).nodes.some((node) => node.environments.length > 0),
+        { timeout: 60_000 },
+      )
+      .toBe(true);
+    await window.reload();
+    const leafRow = window.locator(
+      `[data-testid="federated-environment-row"][data-machine="${leaf.nodeId}"]`,
+    );
+    await expect(leafRow).toBeVisible({ timeout: 60_000 });
+    await window.keyboard.press("Escape");
+
+    // A reload of the window would drop this marker.
+    await window.evaluate(() => {
+      (globalThis as unknown as { __realmQa?: number }).__realmQa = 1;
+    });
+    const sameWindow = async () => {
+      expect(
+        await window.evaluate(() => (globalThis as unknown as { __realmQa?: number }).__realmQa),
+      ).toBe(1);
+      expect(
+        await window.evaluate(
+          () =>
+            (globalThis as unknown as { orkestratorWorkspaceTarget?: unknown })
+              .orkestratorWorkspaceTarget ?? null,
+        ),
+      ).toBeNull();
+    };
+
+    await leafRow.getByRole("button", { name: /^leaf-env, on / }).click();
+    await expect(leafRow).toHaveAttribute("data-selected", "true");
+
+    // The main process opened one realm, bound to the leaf, over the central region.
+    const realmState = () =>
+      electronApp.evaluate(async ({ BrowserWindow, webContents }) => {
+        const realm = webContents
+          .getAllWebContents()
+          .find((contents) => contents.getURL().includes("realm=workspace"));
+        if (!realm) return null;
+        const owner = BrowserWindow.getAllWindows()[0]!;
+        const view = owner.contentView.children.find(
+          (child) => (child as { webContents?: { id: number } }).webContents?.id === realm.id,
+        ) as { getBounds(): Electron.Rectangle; getVisible(): boolean } | undefined;
+        const realmInfo = (await realm.executeJavaScript(
+          `({
+            target: window.orkestratorWorkspaceTarget ?? null,
+            toolbar: Boolean(document.querySelector("[data-mobile-toolbar]")),
+            sidebar: Boolean(document.querySelector('[data-testid="project-search-bar"]')),
+          })`,
+        )) as { target: { nodeId: string } | null; toolbar: boolean; sidebar: boolean };
+        return {
+          count: webContents
+            .getAllWebContents()
+            .filter((contents) => contents.getURL().includes("realm=workspace")).length,
+          bounds: view?.getBounds() ?? null,
+          visible: view?.getVisible() ?? false,
+          zoom: owner.webContents.getZoomFactor(),
+          ...realmInfo,
+        };
+      });
+    await expect
+      .poll(async () => (await realmState())?.toolbar ?? false, { timeout: 60_000 })
+      .toBe(true);
+    const opened = (await realmState())!;
+    expect(opened.count).toBe(1);
+    expect(opened.target?.nodeId).toBe(leaf.nodeId);
+    expect(opened.sidebar).toBe(false);
+    expect(opened.visible).toBe(true);
+    const region = await window
+      .locator('[data-testid="remote-workspace-region"]')
+      .evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return { x: rect.left, y: rect.top, width: rect.width, height: rect.height };
+      });
+    expect(opened.bounds).toEqual({
+      x: Math.round(region.x * opened.zoom),
+      y: Math.round(region.y * opened.zoom),
+      width: Math.round(region.width * opened.zoom),
+      height: Math.round(region.height * opened.zoom),
+    });
+    await expect(window).toHaveTitle(/leaf-app/);
+    await sameWindow();
+
+    // A sidebar menu that stays clear of the central region leaves the
+    // workspace live.
+    await leafRow
+      .getByRole("button", { name: /^leaf-env, on / })
+      .click({ button: "right", position: { x: 20, y: 8 } });
+    await expect(window.getByRole("menu")).toBeVisible();
+    await window.waitForTimeout(300);
+    expect((await realmState())?.visible).toBe(true);
+    await expect(window.getByTestId("workspace-realm-still")).toHaveCount(0);
+    await window.keyboard.press("Escape");
+    await expect(window.getByRole("menu")).toHaveCount(0);
+
+    // A dialog over the region: the workspace steps aside, leaving a still of
+    // itself under the dialog, and comes back when the dialog closes.
+    await window.evaluate(() =>
+      globalThis.dispatchEvent(
+        new CustomEvent("orkestrator:open-global-settings", { detail: "general" }),
+      ),
+    );
+    await expect(window.getByRole("dialog")).toBeVisible();
+    await expect(window.getByTestId("workspace-realm-still")).toHaveAttribute(
+      "src",
+      /^data:image\/jpeg;base64,/,
+    );
+    await expect.poll(async () => (await realmState())?.visible).toBe(false);
+    await window.screenshot({
+      path: test.info().outputPath("settings-over-leaf-workspace.png"),
+    });
+    await window.keyboard.press("Escape");
+    await expect(window.getByRole("dialog")).toHaveCount(0);
+    await expect.poll(async () => (await realmState())?.visible).toBe(true);
+    await expect(window.getByTestId("workspace-realm-still")).toHaveCount(0);
+
+    // Selecting it started the leaf's local environment, as the leaf's own sidebar would.
+    await expect
+      .poll(
+        async () =>
+          (
+            await leaf.invoke<Environment>("get_environment", {
+              environmentId: leaf.environment.id,
+            })
+          ).status,
+        { timeout: 60_000 },
+      )
+      .toBe("running");
+
+    // The window's own environment brings the central region back; the realm stays open.
+    const expand = window.getByRole("button", { name: `Expand project ${project.name}` });
+    const ownRow = window.getByText(own.name, { exact: true }).first();
+    await expect(expand.or(ownRow)).toBeVisible({ timeout: 30_000 });
+    if (await expand.isVisible()) await expand.click();
+    await ownRow.click();
+    await expect.poll(async () => (await realmState())?.visible, { timeout: 20_000 }).toBe(false);
+    expect((await realmState())?.count).toBe(1);
+    await expect(leafRow).not.toHaveAttribute("data-selected", "true");
+    await sameWindow();
+
+    // And back again: the same realm, shown, with no reload anywhere.
+    await leafRow.getByRole("button", { name: /^leaf-env, on / }).click();
+    await expect.poll(async () => (await realmState())?.visible, { timeout: 20_000 }).toBe(true);
+    expect((await realmState())?.count).toBe(1);
+    await sameWindow();
+
+    await invoke("stop_environment", { environmentId: own.id }).catch(() => undefined);
+    await leaf
+      .invoke("stop_environment", { environmentId: leaf.environment.id })
+      .catch(() => undefined);
+  } finally {
+    await app?.close().catch(() => undefined);
+    if (vite?.pid) {
+      try {
+        process.kill(-vite.pid, "SIGTERM");
+      } catch {}
+    }
+    if (leafChild && leafChild.exitCode === null) {
+      const exited = new Promise<void>((resolve) => leafChild!.once("exit", () => resolve()));
+      leafChild.kill("SIGTERM");
+      const timer = setTimeout(() => leafChild?.kill("SIGKILL"), 10_000);
+      await exited;
+      clearTimeout(timer);
+    }
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+});

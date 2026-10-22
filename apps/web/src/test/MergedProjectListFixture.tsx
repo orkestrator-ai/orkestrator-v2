@@ -8,6 +8,7 @@ import { FederationProvider } from "@/components/federation/FederationProvider";
 import { MergedProjectList } from "@/components/federation/FederatedSidebarSections";
 import type { MachineView } from "@/lib/federation/aggregate";
 import { portalLayoutStore } from "@/lib/portal/portal-layout";
+import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useUIStore } from "@/stores/uiStore";
 
 const hintA = "gitlab.example/team-a/shared/app";
@@ -87,11 +88,6 @@ function install() {
   window.orkestrator = {
     ...window.orkestrator!,
     listen: () => () => {},
-    workspaceTarget: {
-      set: async (nodeId) => {
-        localStorage.setItem("merged-open", JSON.stringify({ nodeId }));
-      },
-    },
     invoke: async <T,>(commandName: string, args?: Record<string, unknown>) => {
       if (commandName === "get_node_status") return { nodeId: "bk_self", mode: "command" } as T;
       if (commandName === "get_node_summaries") return { selfId: "bk_self", nodes: [] } as T;
@@ -119,6 +115,12 @@ export function MergedProjectListFixture() {
   const [store] = useState(() => (instance ??= install()));
   const state = useStore(store);
   const selected = useUIStore((value) => value.selectedProjectId);
+  // What the central region shows: another node's workspace, and what it asked for.
+  const shown = useRemoteWorkspaceStore((value) => value.active);
+  const latest = useRemoteWorkspaceStore((value) =>
+    value.active ? value.requests[value.active.nodeId]?.request : undefined,
+  );
+  const { type: _type, ...request } = latest ?? { type: "select" };
   const params = new URLSearchParams(location.search);
   const shownIds = new Set(params.has("fallback") ? ["bk_remote"] : ["bk_remote", "bk_self"]);
   return (
@@ -126,10 +128,10 @@ export function MergedProjectListFixture() {
       <output data-testid="updates">{JSON.stringify(state.updates)}</output>
       <output data-testid="reorders">{JSON.stringify(state.reorders)}</output>
       <output data-testid="selected">{selected}</output>
-      <output data-testid="opened">{localStorage.getItem("merged-open")}</output>
-      <output data-testid="intent">
-        {sessionStorage.getItem("orkestrator.workspace-switch-intent")}
+      <output data-testid="opened">
+        {shown ? JSON.stringify({ nodeId: shown.nodeId }) : null}
       </output>
+      <output data-testid="intent">{latest ? JSON.stringify(request) : null}</output>
       <FederationProvider>
         <MergedProjectList
           machines={[remote, command]}

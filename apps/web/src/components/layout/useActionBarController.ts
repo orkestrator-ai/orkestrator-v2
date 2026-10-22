@@ -65,7 +65,12 @@ import { findProjectHomeEnvironment } from "@/lib/project-home";
 import { prTargetBranchSuggestions } from "@/lib/pr-target-branches";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import { toast } from "sonner";
-import { onGlobalSettingsRequest, type GlobalSettingsSection } from "@/lib/settings-navigation";
+import {
+  onGlobalSettingsRequest,
+  requestGlobalSettings,
+  type GlobalSettingsSection,
+} from "@/lib/settings-navigation";
+import { isWorkspaceRealm } from "@/lib/federation/workspace-realm";
 import type { ResolveLaunchResult } from "./ActionBar.types";
 
 /**
@@ -205,6 +210,11 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   );
 
   const updateGlobalSettingsOpen = useCallback((open: boolean) => {
+    // Settings belong to the command node: a workspace realm opens its window's.
+    if (open && isWorkspaceRealm()) {
+      requestGlobalSettings("general");
+      return;
+    }
     setGlobalSettingsOpen(open);
     if (!open) setGlobalSettingsDefaultSection(undefined);
   }, []);

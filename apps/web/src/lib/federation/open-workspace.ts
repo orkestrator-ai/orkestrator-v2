@@ -1,7 +1,6 @@
-import { toast } from "sonner";
 import { portalStore } from "@/lib/portal/portal-store";
-import { workspaceTarget } from "@/lib/portal/portal-transport";
-import { switchWorkspace } from "@/lib/portal/workspace-switch";
+import { isWorkspaceRealm, postToShell } from "@/lib/federation/workspace-realm";
+import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useUIStore } from "@/stores/uiStore";
 
 export interface MachineWorkspaceSpec {
@@ -35,19 +34,31 @@ export function onCreateEnvironmentRequest(listener: (projectId: string) => void
 }
 
 /**
- * Every portal entry point opens a node's environment the same way: on the
- * node the window already works on it is an ordinary selection; on another
- * node the window moves there and behaves exactly as if it had connected to
- * that node directly.
+ * Every portal entry point opens a node's environment the same way. The
+ * window always stays on its command node: one of its own environments is an
+ * ordinary selection, and another node's is shown in the central region by
+ * that node's workspace realm, without reloading anything around it.
  *
- * Creating an environment always goes through the node's own New Environment
- * dialog, so its defaults, agent settings and start apply as they would from
- * the node's own sidebar.
+ * Creating an environment on another node goes through that node's own New
+ * Environment dialog, so its defaults (the command node's inherited settings
+ * laid over the node's own) and start apply as they would there.
  */
 export function openMachineWorkspace(spec: MachineWorkspaceSpec): void {
+  // A realm is one node's workspace; the window decides what it shows.
+  if (isWorkspaceRealm()) {
+    if (spec.projectId)
+      postToShell({
+        type: "open",
+        nodeId: spec.connectionId,
+        projectId: spec.projectId,
+        ...(spec.environmentId ? { environmentId: spec.environmentId } : {}),
+        title: spec.title,
+      });
+    return;
+  }
   const selfId = portalStore.getState().selfId;
-  const boundId = workspaceTarget()?.nodeId ?? selfId;
-  if (spec.connectionId === boundId) {
+  if (!selfId || spec.connectionId === selfId) {
+    useRemoteWorkspaceStore.getState().showLocal();
     const ui = useUIStore.getState();
     if (!spec.projectId) return;
     if (spec.createEnvironment) requestCreateEnvironment(spec.projectId);
@@ -55,19 +66,15 @@ export function openMachineWorkspace(spec: MachineWorkspaceSpec): void {
     else ui.selectProject(spec.projectId);
     return;
   }
-  const intent = !spec.projectId
-    ? { addProject: true }
-    : spec.createEnvironment
-      ? { createEnvironmentProjectId: spec.projectId }
-      : {
-          projectId: spec.projectId,
-          ...(spec.environmentId ? { environmentId: spec.environmentId } : {}),
-        };
-  void switchWorkspace(spec.connectionId === selfId ? null : spec.connectionId, intent).catch(
-    (error: unknown) => {
-      toast.error(`Could not open ${spec.title}`, {
-        description: error instanceof Error ? error.message : String(error),
-      });
-    },
+  useRemoteWorkspaceStore.getState().open(
+    spec.connectionId,
+    !spec.projectId
+      ? { addProject: true }
+      : spec.createEnvironment
+        ? { projectId: spec.projectId, createEnvironmentProjectId: spec.projectId }
+        : {
+            projectId: spec.projectId,
+            ...(spec.environmentId ? { environmentId: spec.environmentId } : {}),
+          },
   );
 }

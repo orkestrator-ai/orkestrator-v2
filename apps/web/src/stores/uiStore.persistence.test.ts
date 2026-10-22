@@ -1,17 +1,40 @@
 import { afterEach, expect, test } from "bun:test";
 import { createUIStore } from "./uiStore";
 import { desktopConnectionStorageKey } from "@/lib/desktop-storage-key";
-import { writeStoredWorkspace } from "@/lib/portal/workspace-target-storage";
+import { writeRealmWorkspace } from "@/lib/portal/workspace-target-storage";
 
 const originalNative = window.orkestrator;
+const happyDOM = (window as unknown as { happyDOM: { setURL(url: string): void } }).happyDOM;
+const originalHref = window.location.href;
+
+/** This document as the realm of a node's workspace, or (`null`) as the window. */
+function realmOn(nodeId: string | null) {
+  if (!nodeId) {
+    happyDOM.setURL(originalHref);
+    return;
+  }
+  writeRealmWorkspace({
+    workspaceId: `w-${nodeId}`,
+    nodeId: nodeId as never,
+    nodeName: nodeId,
+    path: "relay",
+    baseUrl: "https://command.test/relay",
+    expiresAt: Date.now() + 900000,
+  });
+  const url = new URL(originalHref);
+  url.search = `?realm=workspace&workspace=w-${nodeId}`;
+  happyDOM.setURL(url.toString());
+}
+
 afterEach(() => {
+  realmOn(null);
   window.orkestrator = originalNative;
   delete window.orkestratorWorkspaceTarget;
   localStorage.clear();
   sessionStorage.clear();
 });
 
-test("cold stored leaf hydrates actual stores before gateway initialization and round trips independently", () => {
+test("a realm hydrates its node's stores before gateway initialization, apart from its window's", () => {
   window.orkestrator = undefined;
   delete window.orkestratorWorkspaceTarget;
   localStorage.clear();
@@ -21,14 +44,7 @@ test("cold stored leaf hydrates actual stores before gateway initialization and 
   command.getState().setSidebarWidth(345);
   command.getState().setZoomLevel(120);
   const visit = (nodeId: string) => {
-    writeStoredWorkspace({
-      workspaceId: nodeId,
-      nodeId: nodeId as never,
-      nodeName: nodeId,
-      path: "relay",
-      baseUrl: "https://command.test/relay",
-      expiresAt: Date.now() + 900000,
-    });
+    realmOn(nodeId);
     return createUIStore();
   };
   const a = visit("A");
@@ -50,7 +66,7 @@ test("cold stored leaf hydrates actual stores before gateway initialization and 
   expect(visit("A").getState().collapsedProjects).toEqual([]);
   expect(visit("A").getState().collapsedProjectFolders).toEqual(["Folder"]);
   expect(localStorage.getItem(aKey)).toContain("same-id");
-  writeStoredWorkspace(null);
+  realmOn(null);
   const back = createUIStore();
   expect(back.getState().recentProjectIds).toEqual(["command-project"]);
   expect(back.getState().collapsedProjects).toEqual(["same-id"]);

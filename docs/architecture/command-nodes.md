@@ -124,8 +124,9 @@ There is no deeper hierarchy.
 - **The command node changes only when the user changes it**: with the
   switch on the "Command node" row of the sidebar's machines menu, in
   Settings → Machines, or by opening a machine in a new window. Opening an
-  environment on another machine, or creating one there, moves the window's
-  workspace and never its command node. Saving a machine on a device
+  environment on another machine, or creating one there, shows that
+  machine's workspace in the window's central region and never changes the
+  window's command node. Saving a machine on a device
   (`connect` with `select: false`) does not switch to it on any client.
 
 ## Settings
@@ -245,40 +246,69 @@ A command node attached to another command node operates in leaf mode:
 
 ## Opening an environment on another node
 
-Clicking an environment of another node in the portal makes the window that
-node's client, exactly as if it had connected to the node directly. There
-is no second copy of the app and no side panel: the main pane, toolbar,
-title bar (agent info, mail, system usage), files panel, shortcuts,
-previews, settings and background services all work against that node,
-because they are the same code running against a different workspace
-backend.
+The window always stays on its command node. Its title bar, toolbar row,
+sidebar, settings and background services are the command node's and never
+reload. Clicking an environment (or a project) of another node shows that
+node's workspace in the window's **central region**: the toolbar for the
+environment, its tabs and panes, and the files panel. Only that region gets
+its data from the other node; it runs this client's own code, served by the
+command node.
 
-- **Two channels per window.** The *workspace* transport
-  (`window.orkestrator`) is bound to the node the window works on. The
-  *portal* channel (`window.orkestratorPortal`, used through
-  `lib/portal/portal-transport.ts`) stays on the command node and carries
-  everything multi-node: summaries, cross-node actions, workspaces, the
-  node registry, SSH prompts and action requests. A lint boundary keeps
-  multi-machine views off the workspace transport.
-- **Switching** opens a workspace grant on the command node, re-binds the
-  workspace and reloads the renderer into the node; the environment the
-  user clicked is selected once after the reload. Another environment on
-  the same node is an ordinary, instant selection. The desktop re-binds the
-  window's scope in its main process (its own connection stays on a portal
-  scope); a browser or iOS tab keeps the grant in its session storage and
-  boots its gateway against the node.
-- **The sidebar is symmetric.** The node the window works on is listed from
-  its full stores with the ordinary rows; every other node — including the
-  command node itself, from its self summary (`get_node_summaries` with
-  `includeSelf`) — is listed from the portal's summaries. Both are drawn with
-  the same row layout, so a row lines up the same whichever node owns it.
+- **Workspace realms.** The central region of another node is a *realm*: a
+  separate renderer of this client bound to that node's workspace and to
+  nothing else (`lib/federation/workspace-realm.ts`). On the desktop it is a
+  child view of the window with its own connection scope
+  (`apps/desktop/electron/workspace-views.ts`); in a browser or the iOS app it
+  is a same-origin frame of the page the command node served. Its stores,
+  events and credentials therefore reach only that node, by construction.
+  The realm shows no title bar or sidebar of its own.
+- **Two channels per realm.** The realm's *workspace* transport
+  (`window.orkestrator`) is bound to its node. Its *portal* channel
+  (`window.orkestratorPortal`, used through `lib/portal/portal-transport.ts`)
+  stays on the window's command node, for what a workspace needs from it
+  (the command node's inherited settings, coordinator links). A lint
+  boundary keeps multi-machine views off the workspace transport.
+- **Opening** asks the command node for a workspace grant. The desktop binds
+  the realm's scope in its main process (direct first, then the command
+  node's own route); a browser or iOS window keeps the grant in its tab's
+  session storage under the workspace's ID, which is all the frame's URL
+  carries, and the frame boots its gateway against the node (direct first,
+  then the relay). The window renews the grant while the realm is open and
+  revokes it when the realm closes.
+- **Switching** never reloads the window. Another environment of a node whose
+  realm is open is a message to that realm and an instant selection there.
+  The window keeps a few realms open, hidden (`MAX_OPEN_REALMS`), so going
+  back to a node is instant too. Selecting one of the command node's own
+  environments returns the central region to the window's own workspace,
+  whose selection was cleared while another node's was shown.
+- **What crosses between a window and its realm** is a handful of bounded
+  messages: what to show (a project, an environment, the node's Add Project
+  or New Environment dialog), the realm's own selection (for the sidebar's
+  highlight), the sidebar's open state (the realm's toolbar toggles it),
+  requests to open settings (they belong to the command node), and a ready
+  handshake so nothing asked while a realm loads is lost.
+- **Creating on another node** opens that node's New Environment dialog in
+  its realm, so the node's defaults — the command node's inherited settings
+  laid over its own — and start apply as they would there.
+- **The title bar** shows the shown environment's name. The agent info and
+  system usage, which describe the environment's agent and the machine it
+  runs on, are shown at the end of the realm's toolbar.
+- **Native views** a realm opens (browser previews, live artifacts) are
+  children of the window placed in the realm's coordinates, and shown only
+  while the realm is (`realmChildViewClass`). The window hides a realm while
+  one of its own dialogs or menus is open, as it does for previews.
+- **The sidebar is symmetric.** The command node is listed from the window's
+  full stores with the ordinary rows; every other node is listed from the
+  portal's summaries. Both are drawn with the same row layout, so a row lines
+  up the same whichever node owns it, and the row whose workspace the central
+  region shows is the selected one, whichever node owns it.
 - **The sidebar order is the command node's.** The command node keeps the
   cross-machine order every client shows (`get_portal_layout`,
   `update_portal_layout`, `portal-layout-changed`;
   `@orkestrator/protocol/portal-layout`): the machine order ("by machine"),
   the merged project order and the folders projects sit in there ("by
   project"), and the repository order ("by repository"). Which node the
-  window works on never moves anything. Until the user drags something, the
+  central region shows never moves anything. Until the user drags something, the
   command node comes first, then the other nodes in registry order; in the
   merged lists the command node's projects (with its folders) come first and
   every other node's follow. Anything new goes after whatever precedes it in
@@ -291,8 +321,8 @@ backend.
 - **Presentation.** Per-node state (layouts) is namespaced by node identity;
   window-level state (sidebar, zoom, and what is collapsed in the
   multi-machine sidebar, by machine-qualified key) stays with the window's own
-  machine, so moving the window to another node leaves the sidebar as it was,
-  scroll position included.
+  machine. A realm's presentation state (layouts, drafts) is namespaced by its
+  node.
 - **One intentional difference.** A workspace grant cannot perform a
   node's administrative commands (gateway token, web-client access, control
   MCP token, node registry); those stay in the command node's
@@ -415,13 +445,14 @@ command node:
   supervisor (today in Electron main), and the per-node read model (today
   renderer `BackendRuntime`s).
 - **Reworked:** machine panels (a workspace bound to one leaf, talking to it
-  directly) became the window's workspace target: opening a leaf
-  environment moves the window itself to the leaf (see
+  directly) became workspace realms in the window's central region: opening
+  a leaf environment shows the leaf's workspace there while the window stays
+  on its command node (see
   [Opening an environment on another node](#opening-an-environment-on-another-node)).
-  It is authorised by scoped grants from the command node instead of
-  credentials the client holds, and falls back to a relay through the
-  command node when the leaf is unreachable. The separate panel realms,
-  frames and child views were removed.
+  They are authorised by scoped grants from the command node instead of
+  credentials the client holds, and fall back to a relay through the command
+  node when the leaf is unreachable. (For a while the whole window moved to
+  the leaf and reloaded; that was replaced by realms.)
 - **Removed:** renderer-side multi-backend runtimes and registry, the
   client-owned machine catalogue (clients keep only their list of targets),
   and clients holding other nodes' gateway tokens.

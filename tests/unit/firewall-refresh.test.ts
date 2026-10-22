@@ -263,12 +263,24 @@ describe("firewall allowlist refresh and edits", () => {
   test("an empty stored list means the image defaults", () => {
     withFixture((fixture) => {
       writeFileSync(join(fixture.dir, "policy", "allowed-domains"), "\n");
-      // The defaults are read from the installed init script.
-      fixtureScript(fixture.dir, "init-firewall.sh");
+      // The defaults are the installed list generated from the canonical one.
       const answers = "registry.npmjs.org 192.0.2.40 600\n";
       expect(fixture.run(["--refresh"], answers).exitCode).toBe(0);
       expect(fixture.members().has("192.0.2.40")).toBe(true);
       expect(fixture.status().domainsRevision).toBe(allowedDomainsRevision([]));
+    });
+  });
+
+  test("a missing default list allows nothing beyond GitHub", () => {
+    withFixture((fixture) => {
+      writeFileSync(join(fixture.dir, "policy", "allowed-domains"), "\n");
+      rmSync(join(fixture.dir, "lib", "default-allowed-domains"));
+      const answers = "registry.npmjs.org 192.0.2.40 600\n";
+      expect(fixture.run(["--refresh"], answers).exitCode).toBe(0);
+      const members = fixture.members();
+      expect(members.has("192.0.2.40")).toBe(false);
+      expect(members.has("192.0.2.10")).toBe(false);
+      expect(members.get("203.0.113.0/24")).toBe(0);
     });
   });
 

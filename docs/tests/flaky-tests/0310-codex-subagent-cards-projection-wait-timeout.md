@@ -23,3 +23,12 @@
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.6fSEkJ`.
 - **Hypothesis:** host contention delaying the fake app-server's child
   notifications past the wait deadline. Not confirmed.
+
+## Egress qualification review recurrence — 2026-10-22
+
+- **Original command:** `mise run test:logged -- --name complete-tests -- mise run test`, Bun 1.4.3 on macOS arm64; workspace/root/bridges/protocol reservations 4/1/2/1. Other worktrees also ran suites.
+- **Failure:** the same owning test failed its card snapshot at line 140 (714.12 ms). Some pending children retained fallback names (`lint_check`, `type_check`) and empty actions instead of their hydrated names and tool actions. This differs from the original wait timeout but also observes a child projection before complete hydration.
+- **Backend counts:** 9903 passed, 80 skipped and one failed across 9984 tests in 571 files (537.46 seconds).
+- **Owning-file rerun:** `mise run test:logged -- --name codex-subagent-cards-isolated -- bun test --cwd apps/backend ./tests/codex-subagent-cards.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed unchanged (exit 0, 0.9 seconds logged).
+- **Evidence:** `orkestrator-test-run.MSqERJ/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory. The passing owner output was deleted by the logged runner.
+- **Assessment:** confirms an intermittent projection snapshot mismatch in the existing owner. Asynchronous hydration under contention is a hypothesis; no backend/bridge implementation, test assertion, timeout or skip changed.

@@ -1035,14 +1035,16 @@ else is rejected outright. `full` mode skips the firewall entirely.
   providers, so a self-hosted endpoint or a regional mirror is a host only the
   user knows and belongs in `allowedDomains` rather than being guessed at.
 - A new install persists `DEFAULT_ALLOWED_DOMAINS`
-  (`apps/backend/src/core/storage-shared-core.ts`): GitHub, npm, Bun, the
+  (`packages/protocol/src/network-allowlist.ts`): GitHub, npm, Bun, the
   Anthropic API, Sentry/Statsig, the VS Code marketplace, Context7, and
-  Playwright's CDN. `docker/init-firewall.sh` and `configStore.ts` carry their
-  own, broader default lists as fallbacks; the three are not identical, so read
-  the one that applies before assuming a host is reachable. They are not required
-  to match, but `tests/unit/version-drift.test.ts` does require the hosts the
-  image itself depends on to appear in all three, so a new one cannot be added to
-  only one list.
+  Playwright's CDN. It is the only default list. The renderer seeds its
+  unloaded config from the same constant, and the firewall's fallback for a
+  container with no `ALLOWED_DOMAINS`, `docker/default-allowed-domains`, is
+  generated from it plus every platform's required hosts
+  (`bun scripts/generate-default-allowed-domains.ts`).
+  `tests/unit/version-drift.test.ts` fails when the committed file is stale or
+  a copy of the list reappears elsewhere. A stored user list is never widened
+  to match the defaults.
 - DNS (to Docker's resolvers and the upstreams its embedded resolver names)
   and localhost are always allowed. There is no general outbound SSH
   exception: SSH reaches GitHub's published ranges and, under policy 3, only

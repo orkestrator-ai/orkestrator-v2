@@ -119,6 +119,26 @@ The final root/support run with all GNU prerequisites timed out this case at 500
 - **Evidence:** `orkestrator-test-run.d10zQ4/root-and-agent-support-tests.log.gz` below the host temporary directory.
 - **Assessment:** confirms another intermittent shell-fixture deadline. Contention remains an unproven hypothesis; no implementation, assertion, timeout or skip changed.
 
+## Canonical allowlist change — 2026-10-22
+
+- **Original command:** `mise run test:logged -- --name changed -- mise run test:changed`, on a host whose load average was about 69 from other worktrees' suites.
+- **Failure:** ten `container firewall policy` cases (including `firewall uses stored domains and tolerates a repeated GitHub bootstrap range` and `root bootstrap records network policy once and ignores later caller values`, which runs no allowlist code) each exceeded five seconds.
+- **Root counts:** 1433 passed, one skipped, 22 failed across 1456 tests in 38 files (167.4 seconds); the other twelve failures are 0199's file.
+- **Owning-file reruns:** `bun test ./tests/unit/firewall-refresh.test.ts ./tests/unit/firewall-policy.test.ts --parallel=1` through `test:logged` still timed out three policy cases at five seconds (36 passed, 78.98 seconds, load still high). The same command with `--timeout 30000` passed all 39 (39.75 seconds). Before the aggregate run, the same two files passed at the default deadline (27.2 seconds logged).
+- **Evidence:** `/tmp/orkestrator-test-run.pQullD/root-and-agent-support-tests.log.gz`.
+- **Assessment:** another load-bound shell-fixture deadline; the change touched the firewall's default list, but the timed-out cases include one that never reads it and all pass with a longer deadline. No assertion, timeout or skip changed.
+
+## Egress qualification review observation — 2026-10-22
+
+- **Original command:** `mise run test:logged -- --name complete-tests -- mise run test`, Bun 1.4.3 on macOS arm64; workspace/root/bridges/protocol reservations 4/1/2/1 with one isolated root worker. Other worktrees also ran suites.
+- **Failures:** ten existing firewall-policy cases exceeded five seconds (5004–5012 ms): the policy-3 tuple case, eight blocked-probe selection cases (policy 2 and policy 3), and the GitHub seed/live/cache case. Each shell result was `null` instead of exit code zero.
+- **Root counts:** 3216 passed, one skipped and 11 failed across 3228 tests in 156 files (305.32 seconds); the remaining failure was Pi vendoring. The new default-boot and egress qualification regressions passed.
+- **Owning-file rerun:** `mise run test:logged -- --name firewall-policy-isolated -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` still timed out `policy 3 allowlist example.org,example.com chooses blocked HTTPS probe example.net` at 5003.58 ms (23 passed, one failed; 43.8 seconds logged).
+- **Evidence:** `orkestrator-test-run.MSqERJ/root-and-agent-support-tests.log.gz` after aggregate completion and `orkestrator-test-run.3n8i8Z/firewall-policy-isolated.log.gz` below the host temporary directory.
+- **Assessment:** this observation does not independently confirm a flake because the unchanged owner also failed alone. The registered fixture timeout remains a validation limitation; host contention is a hypothesis. No existing firewall implementation, assertion, timeout or skip changed.
+- **After aggregate completion:** `mise run test:logged -- --name firewall-policy-after-aggregate -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` also exceeded five seconds in the uppercase policy-3 blocked-probe case (5018.89 ms; 23 passed, one failed; 47.9 seconds logged). Evidence: `orkestrator-test-run.kK9Fhh/firewall-policy-after-aggregate.log.gz`. This leaves the existing owner unresolved at its unchanged deadline.
+- **Aggregate outcome:** exit 1 after 624.2 seconds, with root/support, bridges and workspace groups failing; Codex protocol regeneration passed. All new regressions, static checks, live egress qualification and the isolated Docker scenario suite passed.
+
 ## CLI qualification review — 2026-10-22
 
 - `mise run test:logged -- --name review-complete-suite -- mise run test`, with workspace/root/bridges/protocol reservations 4/1/2/1 and one root worker, timed out both `policy 2 allowlist example.org,example.com chooses blocked HTTPS probe example.net` (5005.48 ms) and its policy 3 counterpart (5007.47 ms). Both expected process exit 0 and received null.

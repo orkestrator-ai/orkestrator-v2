@@ -52,3 +52,7 @@
   a lost key, and a dialog that opened and closed apart.
 - **Evidence:** `output/agent-testing/svc-preview-0a835-final2-1`,
   `-final3-4`, `-final3-5` (failures) and `-diag-1` to `-diag-6` (passes).
+
+## Agent-interactions main merge recurrence, 2026-10-22
+
+`mise run test:logged -- --name merge-electron -- mise run test:agent:electron` failed the keyboard picker case alongside three other cases (18 passed, 4 failed, 1 skipped, 7 did not run; 846.4 s). `mise run test:logged -- --name merge-electron-owner-service-preview-electron -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts --workers=1 service-preview-electron.spec.ts` passed the complete unchanged owner (64.2 s). Original evidence: `orkestrator-test-run.oTkYDB/merge-electron.log.gz` under the host temporary directory. No assertion, timeout, skip or implementation changed.

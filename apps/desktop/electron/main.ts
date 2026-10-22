@@ -777,7 +777,7 @@ function registerIpc(): void {
     const context = contextForEvent(event);
     if (context.target) {
       throw new Error(
-        `${context.target.nodeName}'s web access and gateway token are managed from Settings → Connections → Nodes on the command node.`,
+        `${context.target.nodeName}'s web access and gateway token are managed from Settings → Machines on the command node.`,
       );
     }
     return context.scope;

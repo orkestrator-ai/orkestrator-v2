@@ -59,7 +59,8 @@ function install() {
     calls: string[][];
     pending: Array<(outcome: "ok" | "reject" | "unknown") => void>;
     owner: string[];
-  }>(() => ({ calls: [], pending: [], owner: ["a", "home", "b", "c"] }));
+    arrangements: unknown[];
+  }>(() => ({ calls: [], pending: [], owner: ["a", "home", "b", "c"], arrangements: [] }));
   const outcomes: NodeOutcomeRecord[] = [];
   window.orkestrator = {
     ...window.orkestrator!,
@@ -71,6 +72,17 @@ function install() {
       if (command === "get_backend_profile")
         return { revision: 1, displayName: "Self", colorToken: "teal", updatedAt: "t" } as T;
       if (command === "list_node_outcomes") return [...outcomes] as T;
+      if (command === "invoke_on_node" && args?.command === "arrange_projects") {
+        // The owner applies the arrangement and publishes it at once.
+        const arrangement = args.args as { projectIds: string[] };
+        state.setState((current) => ({ arrangements: [...current.arrangements, args.args] }));
+        node.projects = node.projects.map((project) => ({
+          ...project,
+          order: arrangement.projectIds.indexOf(project.ref.projectId),
+        }));
+        void portalStore.refresh();
+        return { outcome: "ok", result: {} } as T;
+      }
       if (command === "invoke_on_node" && args?.command === "reorder_environments") {
         const ids = (args.args as { environmentIds: string[] }).environmentIds;
         state.setState((current) => ({ calls: [...current.calls, ids] }));
@@ -162,6 +174,7 @@ export function RemoteMachineTreeFixture() {
       <output data-testid="pending">{state.pending.length}</output>
       <output data-testid="owner">{JSON.stringify(state.owner)}</output>
       <output data-testid="overlay">{overlay.size}</output>
+      <output data-testid="arrangements">{JSON.stringify(state.arrangements)}</output>
       <FederationProvider>
         <Tree visible={visible} />
       </FederationProvider>

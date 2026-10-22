@@ -113,6 +113,23 @@ describe("native agent capability table", () => {
     ]);
   });
 
+  test("pins Codex and Grok interaction capabilities", () => {
+    expect(nativeAgentCapabilities("codex").interactions?.kinds).toEqual([
+      "command-approval",
+      "file-approval",
+      "permission",
+      "mcp-form",
+      "mcp-url",
+    ]);
+    expect(nativeAgentCapabilities("grok").interactions?.kinds).toEqual([
+      "question",
+      "plan-approval",
+      "command-approval",
+      "file-approval",
+      "permission",
+    ]);
+  });
+
   test("publishes the provider differences the shared controller branches on", () => {
     expect(nativeAgentCapabilities("claude").backgroundTasks).toBe(true);
     expect(nativeAgentCapabilities("claude").composer.localSettings).toBe(true);

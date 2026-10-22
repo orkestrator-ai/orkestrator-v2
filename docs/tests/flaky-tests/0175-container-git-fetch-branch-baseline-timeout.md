@@ -45,3 +45,13 @@
   passed unchanged (5.8 s).
 - **Evidence:** orkestrator-test-run.UPlMVd orkestrator-test-run.FNlm01 under the host temporary directory.
 - No implementation, assertion, timeout or skip changed.
+
+## Agent interaction and permission review — 2026-10-22
+
+- **Original command:** `mise run test:logged -- --name full-tests -- mise run test`.
+- **Workers:** workspace/root/bridges/protocol reserved 4/1/2/1 slots. Other worktrees also held host capacity.
+- **Failure:** `container status and fetch scripts against a local remote > a branch baseline follows origin/<ref> only when the policy fetches` exceeded 5000 ms (5169.99 ms), with one dangling child killed.
+- **Isolated rerun:** `mise run test:logged -- --name git-fetch-isolated -- bun test --cwd apps/backend ./src/core/container-git-fetch-git.test.ts --parallel=1 --only-failures` passed the complete unchanged six-test owner (11.6 s logged, exit 0).
+- **Suite counts:** backend: 9901 passed, 80 skipped, five failed and one error across 9986 tests in 571 files (821.53 s). Three Codex fixture failures were fixed separately; the PATH timeout is tracked in 0671.
+- **Evidence:** `orkestrator-test-run.rkxXtB/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` beneath the host temporary directory; passing focused output was removed by `test:logged`.
+- **Assessment:** another confirmed intermittent recurrence. Neither the owning test nor the container Git implementation changed. Shared-host load remains a hypothesis; no deadline, assertion or skip was changed.

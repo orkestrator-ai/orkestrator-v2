@@ -96,7 +96,12 @@ export class OutputWriter {
   /** Exit status after a signal stopped observation; the receipt stays usable. */
   interrupted(
     signal: "SIGINT" | "SIGTERM",
-    context: { action: string; receipt?: PublicReceipt; connection?: PublicConnectionIdentity },
+    context: {
+      action: string;
+      receipt?: PublicReceipt;
+      connection?: PublicConnectionIdentity;
+      details?: Record<string, unknown>;
+    },
   ): number {
     const code = signal === "SIGINT" ? 130 : 143;
     const message = `Observation stopped by ${signal}; the operation continues in the backend.`;
@@ -107,7 +112,12 @@ export class OutputWriter {
           action: context.action,
           ok: false,
           ...(context.connection ? { connection: context.connection } : {}),
-          error: { code: "observation-interrupted", message, exitCode: code, details: { signal } },
+          error: {
+            code: "observation-interrupted",
+            message,
+            exitCode: code,
+            details: { ...context.details, signal },
+          },
           ...(context.receipt ? { receipt: context.receipt } : {}),
         })}\n`,
       );

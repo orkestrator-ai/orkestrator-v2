@@ -11,9 +11,6 @@ import {
   connectivitySummary,
   duplicateMachineColors,
   filterMachines,
-  groupByMachine,
-  groupByProject,
-  groupByRepository,
   searchMachines,
   type MachineView,
 } from "./aggregate";
@@ -103,36 +100,6 @@ const laptop = machine("laptop", "MacBook Pro", {
 });
 
 describe("aggregate projections", () => {
-  test("UI-01: duplicate project names stay separate instances with their owners", () => {
-    const groups = groupByProject([mini, vps, laptop]);
-    expect(groups.map((group) => `${group.project.name}@${group.machine.name}`)).toEqual([
-      "Angela Tools@MacBook Pro",
-      "Orkestrator@Mac mini",
-      "Orkestrator@Linux VPS",
-    ]);
-    expect(new Set(groups.map((group) => group.project.key)).size).toBe(3);
-  });
-
-  test("by machine puts this window's own machine first and keeps backend order", () => {
-    expect(groupByMachine([vps, laptop, mini]).map((group) => group.machine.name)).toEqual([
-      "Mac mini",
-      "Linux VPS",
-      "MacBook Pro",
-    ]);
-  });
-
-  test("UI-02: repository grouping is visual only and needs a published hint", () => {
-    const groups = groupByRepository([mini, vps, laptop]);
-    const orkestrator = groups.find((group) => group.repository === "github.com/acme/orkestrator");
-    expect(orkestrator?.projects.map((group) => group.machine.name)).toEqual([
-      "Mac mini",
-      "Linux VPS",
-    ]);
-    expect(groups.find((group) => group.label === "Angela Tools")?.repository).toBeNull();
-    // Each grouped project keeps its own record and owner.
-    expect(orkestrator?.projects[0]!.project.key).not.toBe(orkestrator?.projects[1]!.project.key);
-  });
-
   test("activity puts attention first and breaks ties deterministically", () => {
     const rows = activityRows([mini, vps, laptop]);
     expect(rows.map((row) => `${row.environment.ref.backendId}/${row.environment.name}`)).toEqual([

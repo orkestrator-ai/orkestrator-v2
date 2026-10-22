@@ -113,18 +113,6 @@ evidence. This file only points at it.
    dismisses it with a locator handler. Pass the workspace package version in
    development, or skip the reminder for agent-test profiles.
 
-4. **Agent-test containers still receive the host's Claude refresh token.**
-   A container environment in a profile that authorizes Claude is sent the
-   host's complete Claude credential JSON over stdin
-   (`syncContainerAgentAccountsOnStart` in
-   `apps/backend/src/core/agent-accounts-containers.ts`, through
-   `readRuntimeHostClaudeCredentials`), refresh token included, so the
-   container's Claude can refresh and rotate the host's login. Local bridges
-   get only the access token (`applyClaudeHostCredentialEnvironment`). Send an
-   agent-test container the access token only, as the local path and the CLI
-   scenario harness do, and decide whether production containers should
-   share a rotating refresh token with the host at all. Not run live here.
-
 ### Qualification: checks with no other home
 
 - **Electron terminal input resume.** Re-run `mise run test:agent:electron` for

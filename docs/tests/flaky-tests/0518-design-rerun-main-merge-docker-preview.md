@@ -52,3 +52,8 @@ Second-profile cleanup passed: `dev:stop` and `dev:reset` removed two exact-owne
 
 
 The Pi vendor owner passed unchanged alone (`merge2-pi-vendor-owner`, 10.4 seconds); the recurrence is recorded in [0178](0178-pi-vendor-runtime-aggregate-timeout.md). This does not fill the interrupted aggregate's remaining coverage.
+
+
+## 2026-10-22 main merge recurrence
+
+`main2-docker` (`mise run test:agent:docker` through `test:logged`) finished in 262.8 seconds with nine passed, two opt-in live-provider skips and one failure: the rebuilt preview did not show `Before a rebuild` after reload within 15 seconds (`container-rebuild-cycle.spec.ts:102`). The complete unchanged owner passed in 45.2 seconds using the credential-free `merge-main2-7fac-docker` fixture profile and its rebuilt checkout-specific image: `ORKESTRATOR_AGENT_TEST_PROFILE=merge-main2-7fac-docker ORKESTRATOR_AGENT_TEST_RUN_ID=main2-docker-owner-7fac ORKESTRATOR_AGENT_TEST_DOCKER=1 mise run test:logged -- --name main2-docker-owner -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/container-rebuild-cycle.spec.ts --workers=1`. Aggregate evidence: `orkestrator-test-run.fXSZxE/main2-docker.log.gz` under the host temporary directory. The profile was stopped and reset. No implementation, assertion, timeout or skip changed.

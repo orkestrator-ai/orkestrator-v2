@@ -58,6 +58,7 @@ import {
   normalizeAgentMessagingSettings,
 } from "@orkestrator/protocol/agent-mail";
 import { DEFAULT_CLAUDE_MODE } from "@orkestrator/protocol/startup-launch";
+import { DEFAULT_ALLOWED_DOMAINS } from "@orkestrator/protocol/network-allowlist";
 import {
   DEFAULT_DEBUG_LOG_RETENTION_DAYS,
   normalizeDebugLogRetentionDays,
@@ -524,28 +525,6 @@ export const MAX_PERSISTED_NATIVE_AGENT_PENDING_DISPATCH_BYTES = 32 * 1024 * 102
 // Worst-case JSON escaping for a 64 KiB instruction plus bounded ids and fields.
 export const MAX_PERSISTED_NATIVE_AGENT_PENDING_STEER_BYTES = 400 * 1024;
 export const MAX_SESSIONS_PER_ENVIRONMENT = 20;
-
-export const DEFAULT_ALLOWED_DOMAINS = [
-  "github.com",
-  "api.github.com",
-  "registry.npmjs.org",
-  "nodejs.org",
-  "bun.sh",
-  "mise.jdx.dev",
-  "mise-versions.jdx.dev",
-  "aube.jdx.dev",
-  "api.anthropic.com",
-  "sentry.io",
-  "statsig.anthropic.com",
-  "statsig.com",
-  "marketplace.visualstudio.com",
-  "vscode.blob.core.windows.net",
-  "update.code.visualstudio.com",
-  "mcp.context7.com",
-  // Playwright browser downloads. The image ships its own pinned Chromium, so
-  // this only matters when a project pins a different Playwright version.
-  "cdn.playwright.dev",
-];
 
 export function nowIso(): string {
   return new Date().toISOString();

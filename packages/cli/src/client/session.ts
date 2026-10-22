@@ -81,8 +81,9 @@ export class ClientSession {
   async readWithReceipt<T = unknown>(
     action: PublicActionName,
     input: Record<string, unknown>,
+    timeoutMs?: number,
   ): Promise<{ result: T; receipt?: PublicReceipt }> {
-    const response = await this.call(action, input, undefined, false);
+    const response = await this.call(action, input, undefined, false, timeoutMs);
     if (!response.ok) throw envelopeError(response);
     return { result: response.result as T, receipt: response.receipt };
   }
@@ -122,6 +123,16 @@ export class ClientSession {
       .update(canonicalJson({ action, input }))
       .digest("hex");
     const existing = await this.receipts.find(installationId, action, key);
+    if (existing && existing.intentDigest !== intentDigest) {
+      throw new CliError(
+        "request-conflict",
+        "This saved request ID was used for a different intent",
+        {
+          action,
+          details: { requestId: key, namespace: existing.namespace },
+        },
+      );
+    }
     const namespace = existing?.namespace ?? capabilities.requestKeys.currentNamespace;
     const now = new Date().toISOString();
     const local: LocalReceipt = {
@@ -169,6 +180,7 @@ export class ClientSession {
     input: Record<string, unknown>,
     request: { requestId: string; namespace: string } | undefined,
     mutation: boolean,
+    timeoutMs?: number,
   ): Promise<PublicActionResponse> {
     const body: PublicActionRequest = {
       schemaVersion: PUBLIC_API_SCHEMA_VERSION,
@@ -180,7 +192,7 @@ export class ClientSession {
     const raw = await this.transport.invoke(
       PUBLIC_ACTION_COMMAND,
       body as unknown as Record<string, unknown>,
-      { mutation, signal: this.options.signal },
+      { mutation, signal: this.options.signal, timeoutMs },
     );
     if (!isPublicActionResponse(raw)) {
       throw new CliError(

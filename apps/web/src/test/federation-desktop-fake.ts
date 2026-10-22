@@ -128,6 +128,8 @@ export function installDesktopFake(options: {
   datasets: Record<string, MachineDataset>;
   /** Answer a routed command; return `undefined` to fall through to the default. */
   respond?: (call: InvokeCall) => unknown;
+  /** Override a command-node response before the standard fixture behavior. */
+  respondPortal?: (command: string, args: Record<string, unknown>) => unknown;
   /** The sidebar order the command node has stored. */
   layout?: Partial<PortalLayout>;
 }) {
@@ -183,6 +185,8 @@ export function installDesktopFake(options: {
 
   const invoke = nativeInvoke as unknown as ReturnType<typeof mock>;
   invoke.mockImplementation(async (command: string, args: Record<string, unknown> = {}) => {
+    const response = options.respondPortal?.(command, args);
+    if (response !== undefined) return response;
     if (command === "get_node_status") return structuredClone(status);
     if (command === "get_node_summaries") return { selfId: SELF_NODE_ID, nodes: summaries() };
     if (command === "list_nodes") {

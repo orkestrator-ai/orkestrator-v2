@@ -6,7 +6,10 @@ import {
   WORKSPACE_VIEWS_EVENT_CHANNEL,
   WorkspaceViews,
   type WorkspaceViewBounds,
+  type WorkspaceViewsOptions,
 } from "../electron/workspace-views";
+
+import { RealmContexts } from "../electron/realm-contexts";
 
 type Listener = (...args: unknown[]) => void;
 
@@ -31,6 +34,9 @@ function fakeContents() {
     send: (...args: unknown[]) => void contents.sent.push(args),
     setZoomFactor: (factor: number) => {
       contents.zoom = factor;
+    },
+    emit: (event: string) => {
+      for (const listener of listeners.get(event) ?? []) listener();
     },
     on: (event: string, listener: Listener) => {
       listeners.set(event, [...(listeners.get(event) ?? []), listener]);
@@ -69,10 +75,11 @@ function fakeParent(zoom = 1) {
   };
 }
 
-function harness() {
+function harness(overrides: Partial<WorkspaceViewsOptions> = {}) {
   const bound: string[] = [];
   const released: string[] = [];
   const registered: number[] = [];
+  const unregistered: number[] = [];
   const views = new WorkspaceViews({
     WebContentsViewCtor: FakeView as never,
     preloadPath: "/app/preload.js",
@@ -83,9 +90,10 @@ function harness() {
     installRequestAuth: () => undefined,
     installNavigationGuards: () => undefined,
     register: (record) => void registered.push(record.webContents.id),
-    unregister: () => undefined,
+    unregister: (record) => void unregistered.push(record.webContents.id),
+    ...overrides,
   });
-  return { views, bound, released, registered };
+  return { views, bound, released, registered, unregistered };
 }
 
 describe("workspace realms in a desktop window", () => {
@@ -164,6 +172,183 @@ describe("workspace realms in a desktop window", () => {
     expect(parent.children).toEqual([]);
     expect(parent.webContents.sent).toEqual([]);
   });
+  for (const failure of ["crashed", "load-failed", "closed"] as const) {
+    test(`${failure} disposes the realm before notification and frees capacity`, async () => {
+      let rejectLoad!: (error: Error) => void;
+      class FailingView extends FakeView {
+        constructor(options: { webPreferences: Record<string, unknown> }) {
+          super(options);
+          if (failure === "load-failed") {
+            this.webContents.loadURL.mockImplementation(
+              () =>
+                new Promise<void>((_, reject) => {
+                  rejectLoad = reject;
+                }),
+            );
+          }
+        }
+      }
+      const { views, released, unregistered } = harness({
+        maxViewsPerWindow: 1,
+        WebContentsViewCtor: FailingView as never,
+      });
+      const parent = fakeParent();
+      const { viewId } = await views.open(parent as never, { nodeId: "bk_a", search: {} });
+      const view = parent.children[0] as FakeView;
+      await expect(views.open(parent as never, { nodeId: "bk_b", search: {} })).rejects.toThrow(
+        "Too many",
+      );
+      views.setBounds(parent.webContents.id, viewId, { x: 1, y: 1, width: 100, height: 100 });
+      views.setVisible(parent.webContents.id, viewId, true);
+      const record = views.viewForWebContents(view.webContents.id)!;
+      const order: string[] = [];
+      record.layout.subscribe(() => order.push("hidden"));
+      parent.webContents.send = (...args: unknown[]) => {
+        expect(parent.children).toHaveLength(0);
+        expect(released).toEqual([record.scope]);
+        expect(unregistered).toEqual([view.webContents.id]);
+        order.push("notified");
+        parent.webContents.sent.push(args);
+      };
+      if (failure === "load-failed") {
+        rejectLoad(new Error("load failed"));
+        await Promise.resolve();
+      } else if (failure === "crashed") view.webContents.emit("render-process-gone");
+      else view.webContents.close();
+      expect(order).toEqual(["hidden", "notified"]);
+      expect(parent.webContents.sent).toEqual([
+        [WORKSPACE_VIEWS_EVENT_CHANNEL, { viewId, type: failure }],
+      ]);
+      expect(view.webContents.destroyed).toBe(true);
+      expect(views.viewForWebContents(view.webContents.id)).toBeNull();
+      // Late failure callbacks cannot release or notify a second time.
+      view.webContents.emit("render-process-gone");
+      expect(released).toHaveLength(1);
+      expect(parent.webContents.sent).toHaveLength(1);
+      await views.open(parent as never, { nodeId: "bk_b", search: {} });
+      expect(parent.children).toHaveLength(1);
+      parent.webContents.send = () => undefined;
+      views.closeAllFor(parent.webContents.id);
+    });
+  }
+
+  test("terminal disposal unregisters the main-process context and its hosts before scope release", async () => {
+    const events: string[] = [];
+    const contexts = new RealmContexts(
+      () => events.push("prompts"),
+      () => {
+        throw new Error("unexpected disposal rejection");
+      },
+    );
+    const { views } = harness({
+      register: (record) =>
+        contexts.register({
+          contents: { id: record.webContents.id, isDestroyed: () => false, isFocused: () => true },
+          realm: { parentWebContentsId: record.parentWebContentsId, viewId: record.viewId },
+          browserPreviewManager: { destroyAll: () => void events.push("previews") },
+          artifactHosts: { dispose: () => void events.push("artifacts") },
+          previewTransport: {
+            disposeAll: async () => {
+              events.push("transports");
+            },
+          },
+        }),
+      unregister: (record) => contexts.unregister(record.webContents.id),
+      releaseScope: () => {
+        expect(Array.from(contexts.values())).toHaveLength(0);
+        events.push("scope");
+      },
+    });
+    const parent = fakeParent();
+    await views.open(parent as never, { nodeId: "bk_a", search: {} });
+    const view = parent.children[0] as FakeView;
+    expect(contexts.get(view.webContents.id)?.realm?.parentWebContentsId).toBe(
+      parent.webContents.id,
+    );
+    view.webContents.emit("render-process-gone");
+    expect(events).toEqual(["previews", "artifacts", "transports", "prompts", "scope"]);
+    expect(parent.children).toHaveLength(0);
+  });
+
+  test("navigation invalidates a pending binding while new document opens remain possible", async () => {
+    let resolveBind!: () => void;
+    const { views, released, registered } = harness({
+      maxViewsPerWindow: 1,
+      bindScope: () =>
+        new Promise<void>((resolve) => {
+          resolveBind = resolve;
+        }),
+    });
+    const parent = fakeParent();
+    const stale = views.open(parent as never, { nodeId: "bk_a", search: {} });
+    const rejected = stale.catch((error: unknown) => error);
+    await expect(views.open(parent as never, { nodeId: "bk_b", search: {} })).rejects.toThrow(
+      "Too many",
+    );
+    const resolveStale = resolveBind;
+    views.closeAllFor(parent.webContents.id);
+    const fresh = views.open(parent as never, { nodeId: "bk_b", search: {} });
+    resolveStale();
+    expect(await rejected).toBeInstanceOf(Error);
+    expect(parent.children).toHaveLength(0);
+    expect(registered).toHaveLength(0);
+    expect(released).toHaveLength(1);
+    resolveBind();
+    const opened = await fresh;
+    expect(parent.children).toHaveLength(1);
+    expect(released).not.toContain(`realm:${opened.viewId}`);
+    views.closeAllFor(parent.webContents.id);
+  });
+
+  test("a destroyed parent releases a deferred binding without creating a view", async () => {
+    let resolveBind!: () => void;
+    const { views, released, registered } = harness({
+      bindScope: () =>
+        new Promise<void>((resolve) => {
+          resolveBind = resolve;
+        }),
+    });
+    const parent = fakeParent();
+    const pending = views.open(parent as never, { nodeId: "bk_a", search: {} });
+    const rejected = pending.catch((error: unknown) => error);
+    parent.isDestroyed = () => true;
+    resolveBind();
+    expect(await rejected).toBeInstanceOf(Error);
+    expect(released).toHaveLength(1);
+    expect(registered).toHaveLength(0);
+    expect(parent.children).toHaveLength(0);
+  });
+
+  for (const stage of ["binding", "construction", "auth", "registration", "attachment"] as const) {
+    test(`failure during ${stage} releases all allocated resources`, async () => {
+      const parent = fakeParent();
+      const fail = () => {
+        throw new Error("fixture failure");
+      };
+      const { views, released, unregistered } = harness({
+        ...(stage === "binding" ? { bindScope: async () => fail() } : {}),
+        ...(stage === "construction"
+          ? {
+              WebContentsViewCtor: class {
+                constructor() {
+                  fail();
+                }
+              } as never,
+            }
+          : {}),
+        ...(stage === "auth" ? { installRequestAuth: fail } : {}),
+        ...(stage === "registration" ? { register: fail } : {}),
+      });
+      if (stage === "attachment") parent.contentView.addChildView = fail;
+      await expect(views.open(parent as never, { nodeId: "bk_a", search: {} })).rejects.toThrow(
+        "fixture failure",
+      );
+      expect(parent.children).toHaveLength(0);
+      expect(released).toHaveLength(1);
+      expect(unregistered).toHaveLength(stage === "binding" || stage === "construction" ? 0 : 1);
+      expect(parent.webContents.sent).toHaveLength(0);
+    });
+  }
 });
 
 describe("native views a realm opens", () => {

@@ -22,6 +22,7 @@ import { dismissStartupDialogs } from "./electron-startup-dialogs";
  * — when one of the window's own environments is selected again.
  */
 
+type CaptureFixture = { pending: boolean; release(): void; restore(): void };
 type Project = { id: string; name: string };
 type Environment = { id: string; name: string; status?: string; worktreePath?: string | null };
 
@@ -359,6 +360,71 @@ test("a leaf's workspace opens in the window's central region without moving or 
     });
     await window.keyboard.press("Escape");
     await expect(window.getByRole("dialog")).toHaveCount(0);
+    await expect.poll(async () => (await realmState())?.visible).toBe(true);
+    await expect(window.getByTestId("workspace-realm-still")).toHaveCount(0);
+
+    // A slow still capture must not intercept input intended for a shell dialog.
+    await electronApp.evaluate(({ webContents }) => {
+      const realm = webContents
+        .getAllWebContents()
+        .find((contents) => contents.getURL().includes("realm=workspace"))!;
+      const capture = realm.capturePage.bind(realm);
+      const fixture: CaptureFixture = {
+        pending: false,
+        release: () => undefined,
+        restore: () => {
+          realm.capturePage = capture;
+        },
+      };
+      (
+        globalThis as typeof globalThis & { realmCaptureFixture?: CaptureFixture }
+      ).realmCaptureFixture = fixture;
+      realm.capturePage = (...args) => {
+        fixture.pending = true;
+        const image = capture(...args);
+        return new Promise((resolve, reject) => {
+          fixture.release = () => {
+            void image.then(resolve, reject);
+          };
+        });
+      };
+    });
+    await window.evaluate((region) => {
+      const dialog = document.createElement("div");
+      dialog.setAttribute("role", "dialog");
+      dialog.setAttribute("data-state", "open");
+      Object.assign(dialog.style, {
+        position: "fixed",
+        zIndex: "1000",
+        background: "white",
+        padding: "20px",
+        left: `${region.x + region.width / 2}px`,
+        top: `${region.y + region.height / 2}px`,
+      });
+      const button = document.createElement("button");
+      button.textContent = "Dismiss during capture";
+      button.onclick = () => dialog.remove();
+      dialog.appendChild(button);
+      document.body.appendChild(dialog);
+    }, region);
+    await expect
+      .poll(() =>
+        electronApp.evaluate(
+          () =>
+            (globalThis as typeof globalThis & { realmCaptureFixture?: CaptureFixture })
+              .realmCaptureFixture?.pending,
+        ),
+      )
+      .toBe(true);
+    await expect.poll(async () => (await realmState())?.visible).toBe(false);
+    await window.getByRole("button", { name: "Dismiss during capture", exact: true }).click();
+    await expect(window.getByRole("dialog")).toHaveCount(0);
+    await electronApp.evaluate(() => {
+      const runtime = globalThis as typeof globalThis & { realmCaptureFixture?: CaptureFixture };
+      runtime.realmCaptureFixture!.restore();
+      runtime.realmCaptureFixture!.release();
+      delete runtime.realmCaptureFixture;
+    });
     await expect.poll(async () => (await realmState())?.visible).toBe(true);
     await expect(window.getByTestId("workspace-realm-still")).toHaveCount(0);
 

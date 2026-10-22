@@ -52,7 +52,11 @@ import { PORTAL_EVENT_CHANNEL, registerFederationIpc } from "./federation-ipc.js
 import { SshPromptBroker } from "./ssh-prompt-broker.js";
 import { createSshAdapterContext, SshTunnelSupervisor } from "./ssh/index.js";
 import { createUnavailableLocalBackend } from "./unavailable-local-backend.js";
-import { installRemoteGatewayRequestAuth } from "./remote-gateway-request-auth.js";
+import {
+  createRealmRequestAuthInstaller,
+  installRemoteGatewayRequestAuth,
+} from "./remote-gateway-request-auth.js";
+import { RealmContexts } from "./realm-contexts.js";
 import { ensurePinnedToolchains } from "@orkestrator/toolchain/manager";
 import { pinnedArtifactsForPlatforms } from "@orkestrator/toolchain/manifest";
 import {
@@ -223,7 +227,14 @@ let browserPreviewCaptures: BrowserPreviewCaptureStore | null = null;
 const previewExternalHandoff = new PreviewExternalHandoff((url) => shell.openExternal(url));
 const windowContexts = new Map<number, DesktopWindowContext>();
 /** Workspace realms, by their own renderer's ID. */
-const realmContexts = new Map<number, DesktopWindowContext>();
+const realmContexts = new RealmContexts<DesktopWindowContext>(
+  (id) => sshPrompts?.cancelFor(id),
+  (error) => console.warn("[Previews] Failed to close preview transport:", error),
+);
+const installRealmRequestAuth = createRealmRequestAuthInstaller(
+  (id) => realmContexts.get(id)?.scope,
+  (url, scope) => connectionManager?.getRendererRequestAuthorization(url, scope) ?? null,
+);
 /** A realm's node binding, from its scope's bind until its context exists. */
 const realmBindings = new Map<
   string,
@@ -369,12 +380,7 @@ function emitToFocusedWindow(event: string, payload: unknown): void {
 function emitToFocusedRenderer(event: string, payload: unknown): void {
   const context = focusedContext();
   if (!context) return;
-  const realm = Array.from(realmContexts.values()).find(
-    (candidate) =>
-      candidate.realm?.parentWebContentsId === context.contents.id &&
-      !candidate.contents.isDestroyed() &&
-      candidate.contents.isFocused(),
-  );
+  const realm = realmContexts.focused(context.contents.id);
   emitToContents((realm ?? context).contents, event, payload);
 }
 
@@ -889,12 +895,8 @@ function createWorkspaceViews(): WorkspaceViews {
       if (binding?.portalScope) connectionManager?.release(binding.portalScope);
       connectionManager?.release(scope);
     },
-    installRequestAuth: (webContents, scope) => {
-      installRemoteGatewayRequestAuth(
-        (webContents as unknown as Electron.WebContents).session.webRequest,
-        (url) => connectionManager?.getRendererRequestAuthorization(url, scope) ?? null,
-      );
-    },
+    installRequestAuth: (webContents) =>
+      installRealmRequestAuth(webContents as unknown as Electron.WebContents),
     installNavigationGuards: (webContents) =>
       installRendererNavigationGuards(webContents as never, rendererUrl()),
     register: (record, parentWindow) => registerRealm(record, parentWindow.webContents.id),
@@ -923,7 +925,7 @@ function registerRealm(record: WorkspaceViewRecord, parentWebContentsId: number)
     `node:${binding.target.nodeId}`,
     owner,
   );
-  realmContexts.set(contents.id, {
+  realmContexts.register({
     window: parent.window,
     contents,
     scope: record.scope,
@@ -944,17 +946,7 @@ function registerRealm(record: WorkspaceViewRecord, parentWebContentsId: number)
 }
 
 function unregisterRealm(record: WorkspaceViewRecord): void {
-  const context = realmContexts.get(record.webContents.id);
-  realmContexts.delete(record.webContents.id);
-  if (!context) return;
-  context.browserPreviewManager.destroyAll();
-  context.artifactHosts.dispose();
-  // Owned local listeners and tunnel connections end with the realm; the
-  // node's services and applications keep running.
-  void context.previewTransport.disposeAll().catch((error: unknown) => {
-    console.warn("[Previews] Failed to close preview transport:", error);
-  });
-  sshPrompts?.cancelFor(record.webContents.id);
+  realmContexts.unregister(record.webContents.id);
 }
 
 /** A window's command node changed: its realms belonged to the previous one. */

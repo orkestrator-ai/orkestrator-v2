@@ -185,6 +185,7 @@ type ViewEntry = WorkspaceViewRecord & {
 export class WorkspaceViews {
   private readonly views = new Map<string, ViewEntry>();
   private readonly maxViews: number;
+  private readonly pending = new Map<string, { parentId: number; cancelled: boolean }>();
 
   constructor(private readonly options: WorkspaceViewsOptions) {
     this.maxViews = options.maxViewsPerWindow ?? DEFAULT_MAX_VIEWS;
@@ -195,15 +196,26 @@ export class WorkspaceViews {
     const owned = Array.from(this.views.values()).filter(
       (entry) => entry.parentWebContentsId === parent.webContents.id,
     );
-    if (owned.length >= this.maxViews) {
+    const pendingCount = Array.from(this.pending.values()).filter(
+      (open) => open.parentId === parent.webContents.id && !open.cancelled,
+    ).length;
+    if (owned.length + pendingCount >= this.maxViews) {
       throw new Error("Too many machines are open in this window. Close one and try again.");
     }
     const viewId = randomUUID();
     const scope = `realm:${viewId}`;
-    await this.options.bindScope(scope, input.nodeId, parent.webContents.id);
-    if (parent.isDestroyed()) {
+    const pending = { parentId: parent.webContents.id, cancelled: false };
+    this.pending.set(scope, pending);
+    try {
+      await this.options.bindScope(scope, input.nodeId, parent.webContents.id);
+      if (pending.cancelled || parent.isDestroyed() || parent.webContents.isDestroyed()) {
+        throw new Error("The window is not available");
+      }
+    } catch (error) {
       this.options.releaseScope(scope);
-      throw new Error("The window is not available");
+      throw error;
+    } finally {
+      this.pending.delete(scope);
     }
     let view: ViewLike;
     try {
@@ -233,35 +245,31 @@ export class WorkspaceViews {
       cssBounds: null,
       visible: false,
     };
-    view.setBackgroundColor?.("#00000000");
-    view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
-    view.setVisible(false);
-    view.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-    this.options.installNavigationGuards(view.webContents);
-    this.options.installRequestAuth(view.webContents, scope);
     this.views.set(viewId, entry);
     try {
+      view.setBackgroundColor?.("#00000000");
+      view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+      view.setVisible(false);
+      view.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+      this.options.installNavigationGuards(view.webContents);
+      this.options.installRequestAuth(view.webContents, scope);
       this.options.register(entry, parent);
+      view.webContents.on("render-process-gone", () => this.dispose(entry, "crashed"));
+      view.webContents.on("destroyed", () => this.dispose(entry, "closed"));
+      parent.contentView.addChildView(view as never);
+      // The realm renders at the window's zoom so it reads as one window.
+      this.applyZoom(entry);
+      const url = new URL(this.options.rendererUrl);
+      url.search = "";
+      url.searchParams.set("realm", "workspace");
+      for (const [name, value] of Object.entries(input.search)) url.searchParams.set(name, value);
+      void view.webContents.loadURL(url.toString()).catch(() => {
+        this.dispose(entry, "load-failed");
+      });
     } catch (error) {
       this.dispose(entry, "closed", false);
       throw error;
     }
-    view.webContents.on("render-process-gone", () => {
-      this.notify(entry, { viewId, type: "crashed" });
-    });
-    view.webContents.on("destroyed", () => {
-      if (this.views.get(viewId) === entry) this.dispose(entry, "closed");
-    });
-    parent.contentView.addChildView(view as never);
-    // The realm renders at the window's zoom so it reads as one window.
-    this.applyZoom(entry);
-    const url = new URL(this.options.rendererUrl);
-    url.search = "";
-    url.searchParams.set("realm", "workspace");
-    for (const [name, value] of Object.entries(input.search)) url.searchParams.set(name, value);
-    view.webContents.loadURL(url.toString()).catch(() => {
-      this.notify(entry, { viewId, type: "load-failed" });
-    });
     return { viewId };
   }
 
@@ -312,6 +320,9 @@ export class WorkspaceViews {
 
   /** The parent window closed or navigated: every realm it owned goes with it. */
   closeAllFor(parentWebContentsId: number): void {
+    for (const pending of this.pending.values()) {
+      if (pending.parentId === parentWebContentsId) pending.cancelled = true;
+    }
     for (const entry of Array.from(this.views.values())) {
       if (entry.parentWebContentsId === parentWebContentsId) this.dispose(entry, "closed", false);
     }
@@ -371,7 +382,11 @@ export class WorkspaceViews {
     return entry;
   }
 
-  private dispose(entry: ViewEntry, reason: "closed", notify = true): void {
+  private dispose(
+    entry: ViewEntry,
+    reason: "closed" | "crashed" | "load-failed",
+    notify = true,
+  ): void {
     if (this.views.get(entry.viewId) !== entry) return;
     this.views.delete(entry.viewId);
     entry.layout.update({ x: 0, y: 0 }, false);

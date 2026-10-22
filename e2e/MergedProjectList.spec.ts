@@ -46,19 +46,28 @@ for (const activation of ["click", "Enter", "Space"] as const) {
       const button = heading(page, "team-a/shared/app", fallback ? "Remote" : "Command");
       await expect(button).toBeVisible();
       await expect(page.getByTestId("federated-environment-row")).toHaveCount(fallback ? 6 : 8);
-      const reloaded = fallback ? page.waitForEvent("load") : null;
+      const navigations: string[] = [];
+      page.on("framenavigated", (frame) => {
+        if (frame === page.mainFrame()) navigations.push(frame.url());
+      });
+      const documentId = await page.evaluate(() => {
+        const marker = crypto.randomUUID();
+        document.documentElement.dataset.documentId = marker;
+        return marker;
+      });
       if (activation === "click") await button.click();
       else {
         await button.focus();
         await button.press(activation);
       }
       if (fallback) {
-        await reloaded;
         await expect(page.getByTestId("opened")).toHaveText('{"nodeId":"bk_remote"}');
         await expect(page.getByTestId("intent")).toHaveText('{"projectId":"p"}');
       } else {
         await expect(page.getByTestId("selected")).toHaveText("local");
       }
+      expect(navigations).toEqual([]);
+      await expect(page.locator("html")).toHaveAttribute("data-document-id", documentId);
       await expect(page.getByTestId("updates")).toHaveText("[]");
       await expect(page.locator('[aria-pressed="true"]')).toHaveCount(0);
     });

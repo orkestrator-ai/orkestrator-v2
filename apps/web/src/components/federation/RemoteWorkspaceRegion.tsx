@@ -38,7 +38,7 @@ import { useOverlayOverRegion } from "./useOverlayOverRegion";
 
 type Rect = { x: number; y: number; width: number; height: number };
 
-/** How long an overlay waits for a still of the workspace under it. */
+/** How long to wait for a backdrop after the live view steps aside. */
 const STILL_CAPTURE_TIMEOUT_MS = 250;
 
 /**
@@ -154,6 +154,7 @@ function useRealmRequests(nodeId: string, send: ((message: ShellToRealmMessage) 
   const sidebarOpen = useUIStore((state) => state.sidebarOpen);
   const delivered = useRef(0);
   const ready = useRef(false);
+  const selection = useRef<Omit<RealmSelectRequest, "type">>({});
   // The latest values, for the callbacks below; kept current after each render.
   const latest = useRef({ request, sidebarOpen, send });
   useLayoutEffect(() => {
@@ -164,6 +165,7 @@ function useRealmRequests(nodeId: string, send: ((message: ShellToRealmMessage) 
     const { request: current, send: deliver } = latest.current;
     if (!deliver || !ready.current || !current || current.seq <= delivered.current) return;
     delivered.current = current.seq;
+    selection.current = selectRequest(current);
     deliver(current.request);
   }, []);
 
@@ -178,8 +180,15 @@ function useRealmRequests(nodeId: string, send: ((message: ShellToRealmMessage) 
   /** A new realm document: it was opened on the latest request and is not listening yet. */
   const restart = useCallback(() => {
     ready.current = false;
-    delivered.current = latest.current.request?.seq ?? 0;
-    return selectRequest(latest.current.request);
+    const request = latest.current.request;
+    if (request && request.seq > delivered.current) {
+      delivered.current = request.seq;
+      selection.current = selectRequest(request);
+      return selection.current;
+    }
+    // Dialogs are one-shot requests; a replacement resumes only the selection.
+    const { projectId, environmentId } = selection.current;
+    return { projectId, environmentId };
   }, []);
 
   const onMessage = useCallback(
@@ -191,6 +200,10 @@ function useRealmRequests(nodeId: string, send: ((message: ShellToRealmMessage) 
         latest.current.send?.({ type: "sidebar", open: latest.current.sidebarOpen });
         flush();
       } else if (message.type === "selection") {
+        selection.current = {
+          projectId: message.projectId ?? undefined,
+          environmentId: message.environmentId ?? undefined,
+        };
         useRemoteWorkspaceStore.getState().noteRealmSelection(nodeId, message);
       } else if (message.type === "sidebar") {
         const ui = useUIStore.getState();
@@ -267,8 +280,8 @@ function NativeRealm({
   const [loaded, setLoaded] = useState(false);
   const [attempt, setAttempt] = useState(0);
   // A native view paints above the page, so it steps aside for this window's
-  // dialogs and menus that reach over it — leaving a still of itself behind,
-  // so the overlay opens over the workspace rather than over a blank.
+  // dialogs and menus that reach over it. A captured still fills in the
+  // backdrop when available; the overlay must be usable immediately.
   const overlay = useOverlayOverRegion(shown && viewId ? rect : null);
   const [still, setStill] = useState<{ overlay: number; url: string | null } | null>(null);
   const send = useMemo(
@@ -293,6 +306,8 @@ function NativeRealm({
         onMessage(event.message);
         return;
       }
+      // Also close defensively when paired with a main process that only notifies.
+      if (event.type !== "closed" && opened) void api.close(opened).catch(() => undefined);
       opened = null;
       setViewId(null);
       // Closed by the window's main process (its command node changed): gone.
@@ -330,7 +345,7 @@ function NativeRealm({
     if (overlay === null || !api || !viewId) return;
     let current = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    // A slow capture must not leave the overlay covered for long.
+    // Bound how long this overlay episode waits for a backdrop.
     const giveUp = new Promise<null>((resolve) => {
       timer = setTimeout(() => resolve(null), STILL_CAPTURE_TIMEOUT_MS);
     });
@@ -343,7 +358,7 @@ function NativeRealm({
       clearTimeout(timer);
     };
   }, [api, overlay, viewId]);
-  const covered = overlay !== null && still?.overlay === overlay;
+  const covered = overlay !== null;
 
   useEffect(() => {
     if (!api || !viewId) return;
@@ -352,7 +367,7 @@ function NativeRealm({
     void api.setVisible(viewId, visible).catch(() => undefined);
   }, [api, covered, rect, shown, viewId]);
 
-  if (shown && covered && still?.url) {
+  if (shown && covered && still?.overlay === overlay && still.url) {
     return (
       <img
         src={still.url}
@@ -429,7 +444,12 @@ function FrameRealm({ nodeId, shown }: { nodeId: string; shown: boolean }) {
         void closeLeafWorkspace(workspace.workspaceId);
         return;
       }
-      writeRealmWorkspace(workspace);
+      try {
+        writeRealmWorkspace(workspace);
+      } catch (error) {
+        await closeLeafWorkspace(workspace.workspaceId);
+        throw error;
+      }
       const previous = current;
       current = workspace;
       stopRenewal?.();

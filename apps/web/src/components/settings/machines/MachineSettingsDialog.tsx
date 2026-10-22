@@ -79,12 +79,12 @@ export function MachineSettingsDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         className={cn(
-          "flex max-h-[88vh] flex-col gap-0 p-0 sm:p-0 sm:max-w-[min(42rem,calc(100%-2rem))]",
+          "flex max-h-[88vh] flex-col gap-0 overflow-hidden p-0 sm:p-0 sm:max-w-[min(42rem,calc(100%-2rem))]",
           Z_FULLSCREEN_DIALOG,
         )}
         overlayClassName={Z_FULLSCREEN_DIALOG}
       >
-        <DialogHeader className="border-b border-zinc-800 px-6 pt-6 pb-4">
+        <DialogHeader className="m-0 shrink-0 border-b border-zinc-800 px-6 pt-6 pb-4 sm:m-0">
           <DialogTitle className="flex items-center gap-2.5">
             <MachineStatusDot
               colorToken={machine.colorToken}
@@ -92,13 +92,16 @@ export function MachineSettingsDialog({
               label={`${machine.name}: ${machine.statusText}`}
               decorative
             />
-            {machine.name}
+            <span className="min-w-0 break-all">{machine.name}</span>
           </DialogTitle>
           <DialogDescription>
             {[machine.address, machine.via].filter(Boolean).join(" · ")}
           </DialogDescription>
         </DialogHeader>
-        <div className="flex-1 space-y-7 overflow-y-auto px-6 py-5" data-testid="machine-settings">
+        <div
+          className="min-h-0 flex-1 space-y-7 overflow-y-auto px-6 py-5"
+          data-testid="machine-settings"
+        >
           <ProfileSection machine={machine} onChanged={onChanged} />
           <StatusSection machine={machine} snapshot={snapshot} api={api} onChanged={onChanged} />
           {node ? <NodeRoutesSection key={node.nodeId} node={node} onSaved={onChanged} /> : null}

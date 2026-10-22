@@ -33,7 +33,9 @@ const connections: ConnectionList = {
 const deskNode = {
   nodeId: "bk_desk",
   enabled: true,
-  displayName: "Desk with a rather long machine name",
+  displayName:
+    new URLSearchParams(window.location.search).get("machineName") ??
+    "Desk with a rather long machine name",
   colorToken: "teal",
   fallbackName: "desk",
   routes: [{ id: "https", kind: "https", enabled: true, origin: "https://desk.tailnet.ts.net" }],

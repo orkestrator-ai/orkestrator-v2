@@ -1,4 +1,4 @@
-import { closestCenter, type ClientRect, type CollisionDetection } from "@dnd-kit/core";
+import { closestCenter, type CollisionDetection } from "@dnd-kit/core";
 
 /**
  * Collision detection for the sidebar's nested sortable lists.
@@ -14,8 +14,10 @@ import { closestCenter, type ClientRect, type CollisionDetection } from "@dnd-ki
  * Among those, the row under the pointer wins. A project's droppable spans its
  * header and every environment below it, so comparing centres would favour a
  * neighbour over a tall group the pointer is plainly on. Nested rows (a folder
- * and its members) both contain the pointer, so the smallest one wins. With no
- * pointer — the keyboard sensor — centres are compared as before.
+ * and its members) both contain the pointer: project drags prefer the smallest
+ * row, while whole-group drags prefer the enclosing group. A pointer outside
+ * all candidates has no target, so cross-project environment drops stay no-ops.
+ * With no pointer — the keyboard sensor — centres are compared as before.
  */
 export const sidebarCollisionDetection: CollisionDetection = (args) => {
   const activeContainer = args.active.data.current?.sortable?.containerId;
@@ -27,25 +29,25 @@ export const sidebarCollisionDetection: CollisionDetection = (args) => {
   const pointer = args.pointerCoordinates;
   if (!pointer) return closestCenter({ ...args, droppableContainers });
 
+  const draggingGroup = args.active.data.current?.sidebarGroup === true;
   let best: {
     id: (typeof droppableContainers)[number]["id"];
-    distance: number;
     area: number;
   } | null = null;
   for (const container of droppableContainers) {
     const rect = args.droppableRects.get(container.id);
     if (!rect) continue;
-    const distance = distanceToRect(pointer, rect);
+    if (
+      pointer.x < rect.left ||
+      pointer.x > rect.right ||
+      pointer.y < rect.top ||
+      pointer.y > rect.bottom
+    )
+      continue;
     const area = rect.width * rect.height;
-    if (!best || distance < best.distance || (distance === best.distance && area < best.area)) {
-      best = { id: container.id, distance, area };
+    if (!best || (draggingGroup ? area > best.area : area < best.area)) {
+      best = { id: container.id, area };
     }
   }
   return best ? [{ id: best.id }] : [];
 };
-
-function distanceToRect(point: { x: number; y: number }, rect: ClientRect): number {
-  const dx = Math.max(rect.left - point.x, 0, point.x - rect.right);
-  const dy = Math.max(rect.top - point.y, 0, point.y - rect.bottom);
-  return Math.hypot(dx, dy);
-}

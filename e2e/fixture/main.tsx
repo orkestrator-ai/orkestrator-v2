@@ -102,6 +102,10 @@ import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { ReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 import { useVirtuosoScrollState } from "../../apps/web/src/hooks/useVirtuosoScrollState";
 
+const SidebarDragFixture = lazy(async () => ({
+  default: (await import("../../apps/web/src/test/SidebarDragFixture")).SidebarDragFixture,
+}));
+
 const RichTranscriptPerfFixture = lazy(async () => ({
   default: (await import("./RichTranscriptPerfFixture")).RichTranscriptPerfFixture,
 }));
@@ -1711,6 +1715,13 @@ function fixtureForPath() {
     return (
       <Suspense fallback={null}>
         <TerminalLinksFixture />
+      </Suspense>
+    );
+  }
+  if (window.location.pathname === "/sidebar-drag") {
+    return (
+      <Suspense fallback={null}>
+        <SidebarDragFixture />
       </Suspense>
     );
   }

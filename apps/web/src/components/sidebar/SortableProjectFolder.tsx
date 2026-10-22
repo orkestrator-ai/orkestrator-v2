@@ -74,7 +74,10 @@ export function SortableProjectFolder({
   const renameInputId = useId();
 
   const { attributes, listeners, setNodeRef, transform, transition, isDragging, isOver } =
-    useSortable({ id: sortableId ?? projectFolderDragId(name) });
+    useSortable({
+      id: sortableId ?? projectFolderDragId(name),
+      data: { sidebarGroup: true },
+    });
 
   useEffect(() => {
     if (isRenaming) setDraftName(name);

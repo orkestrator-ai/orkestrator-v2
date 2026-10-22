@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import type { ClientRect } from "@dnd-kit/core";
 import { sidebarCollisionDetection } from "@/lib/sidebar-collision";
-import { PROJECT_ROOT_DROP_ID } from "@/lib/project-folders";
+import {
+  PROJECT_ROOT_DROP_ID,
+  projectFolderDragId,
+  resolveProjectArrangement,
+} from "@/lib/project-folders";
+import { resolveRepositoryArrangement, type MergedProject } from "@/lib/federation/sidebar-layout";
 
 type Args = Parameters<typeof sidebarCollisionDetection>[0];
 
@@ -63,9 +68,50 @@ describe("sidebarCollisionDetection", () => {
 
   test("an environment drag only targets environments of its own project", () => {
     expect(overId(layout("env-a3", "envs-a", { x: 40, y: 30 }))).toBe("env-a1");
-    expect(overId(layout("env-a3", "envs-a", { x: 40, y: 10 }))).toBe("env-a1");
-    expect(overId(layout("env-a3", "envs-a", { x: 40, y: 160 }))).toBe("env-a3");
+    expect(overId(layout("env-a3", "envs-a", { x: 40, y: 10 }))).toBeUndefined();
+    expect(overId(layout("env-a3", "envs-a", { x: 40, y: 160 }))).toBeUndefined();
   });
+
+  test("a non-boundary environment over another project cannot snap to a source sibling", () => {
+    expect(overId(layout("env-a1", "envs-a", { x: 40, y: 160 }))).toBeUndefined();
+    expect(overId(layout("env-a2", "envs-a", { x: 40, y: 160 }))).toBeUndefined();
+    expect(overId(layout("env-a2", "envs-a", { x: 300, y: 60 }))).toBeUndefined();
+    expect(overId(layout("env-a2", "envs-a", { x: 40, y: 210 }))).toBeUndefined();
+  });
+
+  for (const repository of [false, true]) {
+    test(`${repository ? "repository groups" : "folders"} move as blocks over expanded members`, () => {
+      const source = repository ? "github.com/acme/source" : "Source";
+      const target = repository ? "github.com/acme/target" : "Target";
+      const sourceId = repository ? `project-folder:${source}` : projectFolderDragId(source);
+      const targetId = repository ? `project-folder:${target}` : projectFolderDragId(target);
+      const args = layout(sourceId, PROJECTS, { x: 40, y: 160 });
+      args.active.data.current!.sidebarGroup = true;
+      for (const [id, top] of [
+        [sourceId, 0],
+        [targetId, 100],
+      ] as const) {
+        args.droppableRects.set(id, rect(top, 120));
+        args.droppableContainers.push(droppable(id, PROJECTS) as never);
+      }
+      const targetHit = overId(args);
+      expect(targetHit).toBe(targetId);
+      const projects = [
+        { id: "project-a", name: "A", folder: source },
+        { id: "project-d", name: "D", folder: source },
+        { id: "project-b", name: "B", folder: target },
+        { id: "project-c", name: "C", folder: target },
+      ];
+      const arrangement = repository
+        ? resolveRepositoryArrangement(sourceId, String(targetHit), projects as MergedProject[])
+        : resolveProjectArrangement(sourceId, String(targetHit), projects);
+      expect(arrangement).toEqual({
+        projectIds: ["project-b", "project-c", "project-a", "project-d"],
+        folders: {},
+      });
+      expect(projects.map((project) => project.folder)).toEqual([source, source, target, target]);
+    });
+  }
 
   test("nested rows resolve to the innermost one under the pointer", () => {
     const args = layout("project-b", PROJECTS, { x: 40, y: 160 });

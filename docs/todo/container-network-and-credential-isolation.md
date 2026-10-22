@@ -165,6 +165,26 @@ restricted containers no longer need `NET_ADMIN` can the sudo grants shrink or
    a host refresh and again per running container it syncs. Pass the one read
    down if a host with many running containers shows it matters.
 
+7. Tell a container user how to recover a lapsed Codex login (medium).
+   When a container's access-only Codex login lapses, the tab now says
+   "You've been signed out of Codex. Sign in again to keep working.", and the
+   failed turn shows Codex's raw "workspace routing discovery unauthorized
+   (401)". For a container that imports the host login, the fix is to run
+   `codex` on the host and restart the environment, which restages the host's
+   current login. Signing in inside the container works only until the next
+   restart blanks that login's refresh token. Show the restart guidance for
+   containers whose Codex credentials come from the host, and say the same
+   for Grok.
+8. Decide whether a host sign-out reaches a container that never added an
+   account (medium). When the host's Codex or Grok login is missing or
+   expired, the restage stages nothing and the container keeps the
+   access-only copy it already had. If the host signed out deliberately, a
+   still-valid copy keeps working until it expires (Codex access tokens last
+   ten days from issue). A container that has used agent accounts now has its
+   copy removed at the next bridge start. Options: remove the copy on every
+   restage that stages nothing, or keep today's "leave it to expire"
+   behaviour and document it.
+
 ### Qualification
 
 - Claude host refresh and mid-session pickup, live (high; on by default).
@@ -207,7 +227,22 @@ restricted containers no longer need `NET_ADMIN` can the sudo grants shrink or
   expiry (about six hours, or edit `expires_at` in the container's copy).
   Confirm that the container signs out on its own, that a bridge restart
   after a host `grok` run signs it back in, and that the host's `auth.json`
-  hash changes only when the host itself refreshes.
+  hash changes only when the host itself refreshes. Tried again on
+  2026-10-21 at 07:38Z and 07:58Z: still skipped, because the host Grok access
+  token expired at 2026-10-20T16:24:55Z and refreshing it would have spent the
+  host's own refresh token. The profile launcher withheld the login and the
+  opt-in live spec (`grok-container-login.spec.ts`) skipped explicitly. The
+  Codex half of the same property passed live that day (next item).
+- Codex past expiry, run on 2026-10-21 (details in
+  [container-platform-qualification.md](container-platform-qualification.md),
+  "Results, 2026-10-21"). With the container's own access token past its
+  `exp`, Codex 0.162.1 tried a refresh with the blank refresh token, OpenAI
+  answered 400 `empty_string`, and turns failed. The container held no
+  refresh token, so nothing on the host could be spent; the host
+  `~/.codex/auth.json` and `~/.grok/auth.json` hashes and mtimes were
+  unchanged. A restart restaged the host login and signed it back in. The
+  bridge reported that sign-out as "temporarily unavailable" until this
+  change; it now reports `needs-auth`.
 - Run on 2026-10-21 (single-use refresh tokens). Host Grok 1.0.62; container
   image `ghcr.io/orkestrator-ai/orkestrator-v2:2.23.0` (Grok 1.0.52,
   codex-cli 0.162.1) on Docker Desktop 29.8.2 (aarch64), with this change's

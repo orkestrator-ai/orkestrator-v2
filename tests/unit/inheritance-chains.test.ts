@@ -64,12 +64,13 @@ const PINNED_CHAINS: ReadonlyArray<{ classes: readonly string[]; plan: string; r
       "StorageAgentMail",
       "StorageKanban",
       "StoragePreviewServices",
+      "StorageNodes",
       "StoragePublicOperations",
       "StorageService",
     ],
     plan: "docs/todo/storage-service-repositories.md",
     reason:
-      "StorageService split by size into 14 layers; the todo replaces it with per-store repositories over a shared StorageContext.",
+      "StorageService split by size into 15 layers; the todo replaces it with per-store repositories over a shared StorageContext.",
   },
   {
     classes: [

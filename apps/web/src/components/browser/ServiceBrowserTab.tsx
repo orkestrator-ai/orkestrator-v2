@@ -68,7 +68,7 @@ import type { BrowserTabData } from "@/types/paneLayout";
 import { AnnotatedPreviewArea, AnnotationsButton } from "./annotations/BrowserAnnotationsLayout";
 import { currentPageForService } from "./annotations/format";
 import { useBrowserAnnotations } from "./annotations/useBrowserAnnotations";
-import { errorMessage, useBlockingOverlay } from "./browser-tab-hooks";
+import { errorMessage, useAddressBarShortcut, useBlockingOverlay } from "./browser-tab-hooks";
 import { PreviewDiagnostics } from "./PreviewDiagnostics";
 import { PreviewServiceDialog } from "./PreviewServiceDialog";
 import { PreviewServicePicker, ReadinessDot } from "./PreviewServicePicker";
@@ -201,9 +201,22 @@ function ServicePreview({
   const locallyPersistedRequest = useRef<string | null>(null);
   const previewHostRef = useRef<HTMLDivElement | null>(null);
   const addressInputRef = useRef<HTMLInputElement | null>(null);
+  const pickerTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const optionsTriggerRef = useRef<HTMLButtonElement | null>(null);
+  // The menu trigger a dialog was opened from: its menu item is gone by the
+  // time the dialog closes, so Radix would otherwise drop focus on the body.
+  const dialogOpenerRef = useRef<HTMLElement | null>(null);
   const nativeAttachedRef = useRef(false);
   const previousRefresh = useRef(refreshRequestId);
   const hasBlockingOverlay = useBlockingOverlay(nativeBrowserPreview);
+  useAddressBarShortcut({
+    tabId,
+    environmentId,
+    isActive,
+    // On the web the shortcut belongs to the user's own browser.
+    enabled: nativeBrowserPreview,
+    inputRef: addressInputRef,
+  });
   const [nativeAttached, setNativeAttached] = useState(false);
   const serviceLabel = service?.definition.label;
   const currentPage = useMemo(
@@ -670,8 +683,12 @@ function ServicePreview({
               services={services}
               selectedServiceId={serviceRef.serviceId}
               onSelect={selectService}
-              onRegister={() => setDialog("register")}
+              onRegister={() => {
+                dialogOpenerRef.current = pickerTriggerRef.current;
+                setDialog("register");
+              }}
               onManual={() => retarget("")}
+              triggerRef={pickerTriggerRef}
             />
             <input
               ref={addressInputRef}
@@ -714,6 +731,7 @@ function ServicePreview({
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
+              ref={optionsTriggerRef}
               type="button"
               variant="ghost"
               size="icon"
@@ -774,7 +792,10 @@ function ServicePreview({
             <DropdownMenuSeparator />
             <DropdownMenuItem
               disabled={!service}
-              onSelect={() => setDialog("edit")}
+              onSelect={() => {
+                dialogOpenerRef.current = optionsTriggerRef.current;
+                setDialog("edit");
+              }}
               className="gap-2"
             >
               <Pencil className="h-3.5 w-3.5" />
@@ -866,6 +887,13 @@ function ServicePreview({
         <PreviewServiceDialog
           open
           onOpenChange={(open) => !open && setDialog(null)}
+          onCloseAutoFocus={(event) => {
+            const opener = dialogOpenerRef.current;
+            dialogOpenerRef.current = null;
+            if (!opener?.isConnected) return;
+            event.preventDefault();
+            opener.focus();
+          }}
           environmentId={serviceRef.environmentId}
           environmentType={environment?.environmentType === "local" ? "local" : "containerized"}
           existing={dialog === "edit" ? (service?.definition ?? null) : null}

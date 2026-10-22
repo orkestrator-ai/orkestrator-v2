@@ -1,7 +1,8 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import App from "./App";
 import "./lib/native/web-gateway";
+import App from "./App";
+import { recoverStoredWorkspace } from "./lib/portal/workspace-switch";
 import { renderReactRoot } from "./lib/app-renderer";
 import { startApp } from "./lib/app-startup";
 import { createReactRootErrorOptions } from "./lib/react-root-errors";
@@ -28,5 +29,6 @@ function renderApp(reportStartupError?: () => void): void {
 export async function startRenderer({
   reportStartupError,
 }: { reportStartupError?: () => void } = {}): Promise<void> {
+  if (await recoverStoredWorkspace()) return;
   await startApp({ render: () => renderApp(reportStartupError) });
 }

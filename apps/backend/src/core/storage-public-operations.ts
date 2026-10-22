@@ -34,7 +34,7 @@ import {
   projectRevision,
   repositorySettingsRevision,
 } from "./public-api/revisions.js";
-import { StoragePreviewServices } from "./storage-preview-services.js";
+import { StorageNodes } from "./storage-nodes.js";
 import { StoreCorruptError } from "./storage-database.js";
 import { normalizeAgentSettings } from "@orkestrator/protocol/agent-settings";
 import { withoutUrlCredentials } from "@orkestrator/protocol/git-remote-url";
@@ -74,7 +74,7 @@ export type PublicOperationLookup =
  * the key reservation and the record publication happen in one critical
  * section before any side effect runs.
  */
-export class StoragePublicOperations extends StoragePreviewServices {
+export class StoragePublicOperations extends StorageNodes {
   protected publicOperationLimits: {
     maxOperationsPerNamespace: number;
     maxNamespaceBytes: number;

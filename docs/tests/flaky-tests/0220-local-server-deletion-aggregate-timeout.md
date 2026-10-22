@@ -1,7 +1,7 @@
 # Local-server deletion aggregate timeout
 
 - **ID:** 0220
-- **Status:** resolved
+- **Status:** open
 - **Date observed:** 2026-10-15
 - **Test:** `Electron backend command registry > deletes an environment only
   after all three local server kinds exit`
@@ -236,3 +236,14 @@ The subsequent full run, `mise run test:logged -- --name merge-tests-installed -
     pass for the file.
 
 - **Consolidation (2026-10-20):** the per-process data directory and the copied origin/worktree template were moved from the owning test files into `apps/backend/tests/command-fixtures.ts`, so every command-fixture file now gets its own data directory (removed in the fixture's `afterAll` after cancelling scheduled cleanup and closing the ledger). The 28 command-fixture files plus the coordinator and worktree-snapshot owners passed together afterwards: 582 passed, 1 skipped, 0 failed.
+
+## Idle-observation main merge recurrence — 2026-10-21
+
+Reopened after `deletes an environment only after all three local server kinds exit`
+exceeded its five-second deadline at 5088.99 ms in the six-file, one-worker
+`merge-backend-owners` run (200 passed, two failed). The entire unchanged owning
+file passed alone in 72.1 seconds. The previous ledger fix remains in place;
+this observation does not establish that its earlier cause returned. Exact
+commands, the second failure and evidence are in
+[0515](0515-idle-observation-main-merge-validation.md). No assertion, deadline
+or skip changed.

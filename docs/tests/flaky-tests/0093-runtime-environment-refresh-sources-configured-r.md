@@ -42,3 +42,11 @@ did not hold.
 ## Agent-mail main merge recurrence — 2026-10-19
 
 The aggregate failed this owner and its unchanged owning file passed with one worker. Exact commands, symptoms, counts, timings and bounded evidence are recorded in [0500](0500-agent-mail-main-merge-validation.md). No implementation, assertion, timeout or skip changed.
+
+## Container credential qualification main merge — 2026-10-21
+
+- **Command:** `mise run test:logged -- --name merge-suite -- mise run test`, merging `origin/main` (`d4171748`) into `5eb444af`. Workspace/root/bridge/protocol reserved 4/1/2/1 slots; the Codex bridge used one Bun worker. Browser, Electron and Docker validation also ran on the host.
+- **Failure:** the configured runtime-helper case exceeded 15,000 ms (15,045.89 ms); Codex reported 2,242 passed, 34 skipped and one failed across 2,277 tests in 84 files (74.02 seconds); the bridges group exited 1 after 173.6 seconds.
+- **Owning-file rerun:** `mise run test:logged -- --name merge-runtime-env-owner -- bun test --cwd bridges/codex-bridge --preload ../../tests/setup-node.ts ./src/runtime-env.test.ts --parallel=1 --only-failures` passed the entire unchanged file, exit 0, in 0.1 seconds.
+- **Evidence:** `orkestrator-test-run.0xWTT4/bridges.log.gz` below the host temporary directory; outer run `orkestrator-test-run.s48Tpm`.
+- **Assessment:** confirmed recurrence; process-start contention remains a hypothesis. No implementation, assertion, timeout or skip changed.

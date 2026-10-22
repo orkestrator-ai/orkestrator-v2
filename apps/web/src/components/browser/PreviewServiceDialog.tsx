@@ -22,6 +22,8 @@ import * as backend from "@/lib/backend";
 export interface PreviewServiceDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Where focus goes on close; call `preventDefault` to replace Radix's choice. */
+  onCloseAutoFocus?: (event: Event) => void;
   environmentId: string;
   environmentType: "containerized" | "local";
   /** Edit an existing definition (compare-and-set on its revision). */
@@ -70,6 +72,7 @@ const TARGETS: Array<{
 export function PreviewServiceDialog({
   open,
   onOpenChange,
+  onCloseAutoFocus,
   environmentId,
   environmentType,
   existing,
@@ -151,7 +154,7 @@ export function PreviewServiceDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="sm:max-w-md" onCloseAutoFocus={onCloseAutoFocus}>
         <form onSubmit={submit} className="space-y-4">
           <DialogHeader>
             <DialogTitle>

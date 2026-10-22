@@ -228,11 +228,18 @@ Reconnects are still covered by the coordinator's reconnect reconcile and
 Quiet idle-view backoff relies on this, so it is enabled only for providers
 whose idle view cannot change without an announced transition
 (`NATIVE_QUIET_BACKOFF_QUALIFIED_PLATFORMS`) and only against a backend that
-advertises `observationEventVersions`. Coverage:
+advertises `observationEventVersions`. A view's own reads must not invalidate
+it: a discovery-section renewal (every 30 s) and an expired model-catalogue
+refresh announce a `native-agent-session` change only when their content
+changed, since any such hint re-reads the view and restarts its backoff.
+Coverage:
 `apps/web/src/lib/native-observation-events.test.ts` (gap, reset, duplicate,
 legacy, malformed), `apps/web/src/hooks/useNativeAgentSession.observation.test.tsx`
 (quiet schedule, immediate read on an announcement, gap re-read, older backend
-and unqualified provider keep the baseline), `packages/protocol/src/native-agent-observation.test.ts`.
+and unqualified provider keep the baseline), `packages/protocol/src/native-agent-observation.test.ts`,
+`apps/backend/src/core/native-agent-service-progressive.test.ts` (unchanged
+discovery and catalogue renewals stay silent). The live per-provider run is
+`e2e/agent-testing/idle-observation-live.spec.ts`.
 
 ## Worktree snapshot revisions (step 03)
 

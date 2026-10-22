@@ -1,6 +1,6 @@
 # Native agent idle observation
 
-Checked against `main` at `2459b05c` (2026-10-15).
+Checked against `main` at `9b3f53a2` (2026-10-21).
 
 An idle native session still costs a no-touch activity read on every 2 s
 backend sweep for each HTTP-bridge provider, and a 1,500 ms client read for
@@ -34,6 +34,13 @@ let several views of one session share their reads.
   activity transition with a generation and revision stamp, and
   `apps/web/src/lib/native-observation-events.ts` turns announcements into
   invalidations and a gap into a re-read of every view.
+- A discovery section (models, commands, MCP, runtime) expires after 30 s and
+  an idle view's own read renews it. The backend announces a renewal, and an
+  expired environment model-catalogue refresh, only when its content changed
+  (`storeProgressiveDiscovery` reports the change). Before this, every renewal
+  announced a `native-agent-session` change, which re-read the view, reset its
+  quiet backoff and woke the backend observation group (`session-mutation`):
+  an idle Cursor view read 37.5 times a minute instead of 12.
 - Claude and Codex are not qualified and keep 1,500 ms when idle. Claude
   background-task output, and Codex async questions and background terminals,
   change an idle view without an announced transition.
@@ -79,22 +86,166 @@ let several views of one session share their reads.
 4. If HTTP groups ever back off, represent mail presence explicitly as stale
    or unknown. A slower observation must never read as permission to inject
    into an active session.
+5. Find the `native-agent-session` hints that still reach an idle OpenCode
+   view after the discovery fix. Live, an idle OpenCode view read 16.5 times a
+   minute (four gaps of 2 to 6 s in two minutes) against Cursor's 12 with every
+   gap at the 15 s step; 13 hints named the environment in 160 s.
 
 ### Qualification
 
-Live coverage per provider (Claude, Codex, Cursor, Pi, Grok, OpenCode) in an
-isolated `dev:test` profile with credentials, batched with
-[live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md):
+The live run of 2026-10-21 is recorded below. What it left open:
 
-- a missed final event;
-- a parked approval;
-- background sub-agents;
-- reconnect, and idle detach then reattach;
-- completion while the client is hidden;
-- completion with no renderer connected, then rehydration on another client.
+- Grok and Pi: re-run `e2e/agent-testing/idle-observation-live.spec.ts` once
+  their host logins are current. Both were signed out (expired host logins) and
+  were skipped.
+- Cases the models did not exercise: Codex sub-agents (no sub-agent tool call;
+  the separate live sub-agent card run is in
+  [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md)),
+  and background shells on Codex, Cursor and OpenCode (each ran the command in
+  the foreground). Cursor's approval case ran under an `approvals: "ask"`
+  policy and still ran the command without asking, which is the documented
+  Cursor mapping (it reports `ask` as the auto-approval it runs).
+- Completion with no renderer was observed for a local environment only; a
+  container environment was not part of this run. Re-run with the corrected
+  exact-prompt assertion to qualify missing/duplicate prompt protection.
+- Re-run the background-shell indicator/output and detach cases with the
+  corrected assertions. The original background checks could match the user
+  prompt, and the detach case recorded cadence and session continuity without
+  requiring detachment. Neither is qualification evidence for those behaviors.
+  Shortened detach waits are cadence-only (`not-exercised`); a full wait must
+  observe `detached` before dispatch and `attached` afterwards through no-touch
+  runtime discovery. Providers without session detach telemetry on that route
+  are also `not-exercised`, pending an observable lifecycle.
 
-Today's evidence is fake providers, a real HTTP server for the no-touch proof
-and the real OpenCode SDK client for the event stream only.
+## Live qualification record (2026-10-21)
+
+Run on macOS 27.0 (Apple Silicon), Bun 1.4.2, at `9b3f53a2` plus this change,
+in the disposable profile `idleqa-faa8` with the pins in
+[live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md)
+(Claude CLI 2.1.296, Codex 0.162.1, OpenCode 1.19.0, Cursor SDK 1.0.37).
+
+### Method
+
+- **Spec.** `e2e/agent-testing/idle-observation-live.spec.ts`, opt-in
+  `ORKESTRATOR_AGENT_TEST_LIVE_IDLE_OBSERVATION=1`. One fresh local fixture
+  environment and one native tab per provider; a warm-up turn, then the cases
+  below in order. Each case records backend truth (the projection read idle
+  with the reply and no running task) beside what the page shows (the reply,
+  no Stop button) and the sidebar icon, and writes
+  `output/agent-testing/<run>/idle-observation-live/<platform>.json`.
+- **Fault seams, page side only.** An init script wraps `EventSource` to drop
+  every frame that names the environment (dropped after delivery, so neither
+  the gateway cursor nor a replay can restore it: stronger than any real loss)
+  or to cut the stream, and wraps `document.visibilityState`. Offline is
+  Playwright's `context.setOffline`.
+- **Credentials, least privilege.** `dev:test --fixture --credential-source
+  claude --credential-source cursor --credential-source grok --agent-platforms
+  claude,codex,opencode,cursor,grok,pi`, so the Codex and OpenCode homes stay
+  inside the profile. Codex got the host's access and id tokens with a dummy
+  refresh token and a fresh `last_refresh` (the access token was valid for
+  nine more days, so nothing could rotate the host's login); OpenCode got its
+  one `opencode-go` API-key entry. Both were written owner-only, never
+  printed. Pi was not authorized: its host login had expired and refreshing it
+  would have written the host's `auth.json`. The host Codex `auth.json` hash
+  was the same before and after.
+- **Commands.** Bridges rebuilt first (`mise run build:<platform>-bridge`).
+
+  ```bash
+  ORKESTRATOR_AGENT_TEST_PROFILE=idleqa-faa8 ORKESTRATOR_AGENT_TEST_RUN_ID=<run> \
+    ORKESTRATOR_AGENT_TEST_LIVE_IDLE_OBSERVATION=1 \
+    ORKESTRATOR_AGENT_TEST_IDLE_MODELS=opencode=opencode-go/deepseek-v4.1-flash \
+    bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts \
+    e2e/agent-testing/idle-observation-live.spec.ts --workers=4 --fully-parallel
+  ```
+
+  Sequential diagnostic runs used `ORKESTRATOR_AGENT_TEST_IDLE_PLATFORMS`,
+  `ORKESTRATOR_AGENT_TEST_IDLE_CASES` and
+  `ORKESTRATOR_AGENT_TEST_IDLE_DETACH_WAIT_MS=150000`.
+
+### Results
+
+Final run `idleqa-final-1` (four workers, 19.2 min, exit 1: 1 failed, 3
+passed, 2 skipped), then OpenCode alone (`idleqa-oc-final`, 4.9
+min, passed) after the dispatch-mode fix below. Times are the page's lag
+behind backend truth unless stated.
+
+| Case | Claude | Codex | Cursor | OpenCode | Grok | Pi |
+| --- | --- | --- | --- | --- | --- | --- |
+| Missed final event (every frame naming the environment dropped) | passed, 365 ms | passed, 12 ms | passed, 344 ms | passed alone, 8.8 s (see below); failed once in the final run (flake 0670) | skipped | skipped |
+| Parked approval | passed: card 126 ms after parking, sidebar `waiting`, survived 10 s hidden, settled 314 ms after approving | passed: card 20 ms | not exercised: under `approvals: "ask"` Cursor ran the command without asking (documented mapping) | passed under `approvals: "ask"`: `permission` card 139 ms | skipped | skipped |
+| Sub-agents | passed: `Agent` tool, one background task, none left running | not exercised: no sub-agent call | passed: `task` tool | passed: `task` tool | skipped | skipped |
+| Background shell | unverified: original indicator/output checks could match the prompt; re-run required | not exercised: ran in the foreground | not exercised | not exercised | skipped | skipped |
+| Stream cut and offline through completion | passed, 122 ms after online | passed, 127 ms | passed, 142 ms | passed, 182 ms | skipped | skipped |
+| Hidden for the whole turn | passed: no reads while hidden, 318 ms after visible | passed, 191 ms | passed, 163 ms | passed, 219 ms | skipped | skipped |
+| No renderer, then a second client | passed: backend aggregate idle 4 ms after the projection, rehydrated in 3.6 s | passed, 3.1 s | passed, 3.8 s | passed, 3.9 s | skipped | skipped |
+| Idle 10.5 min, then follow-up | cadence/continuity only: 120.5 reads/min (1.5 s), settled 303 ms, same session; detach unverified | cadence only: 126.8 reads/min; detach unverified | cadence only: 13.8 reads/min, gaps at the 15 s step; detach unverified | cadence only: 27.9 reads/min (code item 5); detach unverified | skipped | skipped |
+
+Grok and Pi: both sessions reported `needs-auth` ("Grok is not signed in",
+"Pi is not signed in"); the profile also printed that the host Grok login had
+expired. Recorded as skipped, not passed.
+
+### Review follow-up validation (2026-10-21)
+
+The assertions were tightened after review: no-renderer rehydration requires
+exactly one exact submitted user prompt; hidden-page reads must be zero after
+the drain window; a background case needs its running task card and fresh tool
+result output (including lazily fetched result details). Detach uses no-touch
+runtime discovery and requires detached then attached state where the provider
+exposes it. Approval preparation and headless polling now restore their
+environment/page even on failure. The overall qualification remains open.
+
+- `qa-browser-0b1487c9-eb4`, Codex, disposable local fixture: hidden passed
+  (zero reads while hidden, visible lag 142 ms); no-renderer passed (one exact
+  prompt row, aggregate idle lag 4 ms, rehydration 3.17 s). A deliberately
+  shortened detach wait was `not-exercised`, with follow-up continuity checked.
+- `qa-browser-88278b44-d08`, Claude, background only: **failed** with the new
+  output assertion. A running task card was observed in 280 ms and the view
+  settled, but fresh tool-result output did not contain the emitted marker.
+  The submitted prompt no longer counts as output evidence. This is pending
+  qualification, not a passing background-output observation. The failure's
+  trace also exceeded the artifact sanitizer's 16 MiB bound; no trace was kept.
+- Both live profiles were stopped and reset by the isolated runner.
+
+### Findings
+
+- **Fixed: unchanged discovery renewals reset quiet backoff.** In the first
+  sequential run an idle Cursor view received 26 `native-agent-session` hints
+  in 150 s and read 37.5 times a minute, with most gaps under 6 s. Every 30 s
+  discovery renewal announced a change even when nothing changed. After the
+  fix (announce only a changed section, and only a changed expired model
+  catalogue): 12 reads a minute, all gaps at the 15 s step, 6 hints in the
+  same window. Tests: `native-agent-service-progressive.test.ts` ("announces an
+  expired discovery renewal only when its value changed", "announces an
+  expired model catalogue renewal only when the catalogue changed"). Each
+  fails with its guard removed.
+- **Lost-announcement bound, measured.** Alone, with every frame dropped and
+  the turn dispatched from outside the view while it sat at the 15 s step:
+  Cursor 10.9 s, OpenCode 9.7 s and 8.8 s. That is inside the backoff design
+  but over the 3 s budget; see Open questions. In parallel runs another
+  environment's announcement produced a stamp gap that re-read every view, so
+  the same case settled in under 0.6 s. Claude and Codex (1.5 s baseline,
+  unqualified) settled within 0.4 s.
+- **No stuck working and no missed completion** in any exercised case: the
+  Stop button and the sidebar always cleared, and the second client never
+  replayed a prompt.
+- **Not a defect: Claude reports a finished background task in a turn of its
+  own.** One parallel run measured the sidebar 6.5 s behind the projection;
+  the spec now follows the session until it is quiet, and the sidebar reached
+  idle with the last busy read in every later run.
+- **Flake 0670 (environmental).** One OpenCode turn stayed `running` for 240 s:
+  OpenCode's own log shows its model stream open with no output until the spec
+  cancelled it, so `running` was the truth.
+- **Harness fixes during the run.** OpenCode dispatches went out in plan mode
+  (a dispatch without a mode defaults Claude, Codex and OpenCode to plan) and
+  the tab's `initialAgentModel` did not pin the model, so the final OpenCode
+  rows were rerun with build mode and the model pinned through
+  `ensure_native_agent_session`.
+
+### Cleanup
+
+Every case deleted its environments; the profile was stopped and reset
+(`mise run dev:stop --profile idleqa-faa8`, `mise run dev:reset --profile
+idleqa-faa8`). Nothing outside the profile was written.
 
 ## Constraints and rationale
 
@@ -117,6 +268,14 @@ and the real OpenCode SDK client for the event stream only.
 - An older backend without stamped announcements keeps the baseline cadence.
 
 ## Open questions
+
+- A silently lost activity announcement can hold a backed-off idle view (Cursor,
+  Pi, Grok, OpenCode) up to the 15 s backoff step before it shows the completed
+  turn: 9.7 to 10.9 s live, against the 3 s budget. The real transport cannot
+  lose a frame silently (gateway replay cursors, a stamp gap re-reads every
+  view), so the live seam is stronger than any real loss. Decide whether that
+  bound is accepted or whether a view that saw a recent dispatch should skip
+  the backoff.
 
 - Is subscribing to bridge event streams worth it for Cursor, Pi and Grok,
   which already have client quiet backoff, or only for Claude and Codex?

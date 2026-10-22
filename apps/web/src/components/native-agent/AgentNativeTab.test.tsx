@@ -1,3 +1,4 @@
+import { extractMarkedAttachmentReferences } from "@orkestrator/protocol/initial-prompt-attachments";
 import { nativeAgentSteerRejectionMessage } from "@orkestrator/protocol/native-agent";
 /**
  * Contract suite for the single pane-level native agent tab.
@@ -3568,9 +3569,6 @@ describe("AgentNativeTab", () => {
       expect(ensureNativeAgentSessionMock).not.toHaveBeenCalled();
       expect(getNativeAgentProjectionMock).not.toHaveBeenCalled();
       expect(dispatchNativeAgentIntentMock.mock.calls[0]?.[0]).toMatchObject({
-        prompt: expect.stringMatching(
-          /\[@widget\.ts\]\(src\/widget\.ts\)[\s\S]*layout\.png: \/workspace\/\.orkestrator\/clipboard\/layout\.png/,
-        ),
         sessionMode: "build",
         parameterValues: { thinking: "adaptive", context1m: false },
         attachments: [
@@ -3580,6 +3578,12 @@ describe("AgentNativeTab", () => {
             filename: "layout.png",
           },
         ],
+      });
+      expect(
+        extractMarkedAttachmentReferences(dispatchNativeAgentIntentMock.mock.calls[0]![0].prompt),
+      ).toEqual({
+        prompt: "Review [@widget.ts](src/widget.ts)",
+        attachments: [{ name: "layout.png", path: "/workspace/.orkestrator/clipboard/layout.png" }],
       });
       expect(dispatchNativeAgentIntentMock.mock.calls[0]?.[0].executionProfileId).toBeUndefined();
       const sessionKey = createSessionKey("env-1", "tab-first-prompt");

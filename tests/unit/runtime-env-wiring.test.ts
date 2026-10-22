@@ -1844,6 +1844,8 @@ printf "continued"
       const source = join(dir, "source");
       const home = join(dir, "home");
       const destination = join(home, ".codex");
+      const marker = join(dir, "account-marker");
+      writeFileSync(marker, "previous-account", { mode: 0o600 });
       const files = [
         "auth.json",
         "config.toml",
@@ -1877,18 +1879,21 @@ printf "continued"
 set -e
 log_progress() { :; }
 eval "$(sed -n '/^agent_copy_warn() {/,/^}$/p; /^report_agent_copy_skips() {/,/^}$/p; /^agent_source_path_has_symlink() {/,/^}$/p; /^agent_destination_path_has_symlink() {/,/^}$/p; /^copy_agent_file() {/,/^}$/p; /^copy_agent_directory() {/,/^}$/p; /^restrict_imported_login() {/,/^}$/p' ${shellQuote(entrypoint)})"
-codex_setup="$(sed -n '/^# Set up Codex configuration$/,/^log_progress "Codex configuration ready"$/p' ${shellQuote(entrypoint)} | sed "s#/codex-home#\\$AGENT_TEST_SOURCE#g")"
+codex_setup="$(sed -n '/^# Set up Codex configuration$/,/^log_progress "Codex configuration ready"$/p' ${shellQuote(entrypoint)} | sed "s#/codex-home#\\$AGENT_TEST_SOURCE#g; s#/tmp/orkestrator-codex-account#\\$AGENT_TEST_MARKER#g")"
 eval "$codex_setup"
 `,
         {
           HOME: home,
           PATH: process.env.PATH ?? "/usr/bin:/bin",
           AGENT_TEST_SOURCE: source,
+          AGENT_TEST_MARKER: marker,
         },
       );
 
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toBe("");
+      expect(readFileSync(marker, "utf8")).toBe("unstaged");
+      expect(statSync(marker).mode & 0o777).toBe(0o600);
       for (const file of files) {
         expect(readFileSync(join(destination, file), "utf8")).toBe(contents(file));
       }

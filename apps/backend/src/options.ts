@@ -23,6 +23,11 @@ export type BackendOptions = {
   port?: number;
   controlHost?: string;
   controlPort?: number;
+  /**
+   * Additional loopback-only client gateway (127.0.0.1) for SSH forwarding;
+   * 0 selects an ephemeral port. Never a control listener.
+   */
+  loopbackClientPort?: number;
   compression?: GatewayCompressionMode;
   allowNonTailscaleBind: boolean;
   allowedOrigins?: string[];
@@ -48,6 +53,11 @@ export type BackendOptions = {
   strictDockerOwner: boolean;
   strictGatewayPort: boolean;
   credentialSources: AgentPlatform[];
+  /**
+   * `--command-node`: command-node registration is always enabled. The
+   * desktop passes it for its local backend, which is always a command node.
+   */
+  commandNode: boolean;
 };
 
 function valueAfter(args: string[], name: string): string | undefined {
@@ -120,6 +130,10 @@ export function parseOptions(
   const portValue = valueAfter(args, "--port") ?? env.ORKESTRATOR_GATEWAY_PORT;
   const port = parsePortOption(portValue, "--port");
   const controlPort = parsePortOption(valueAfter(args, "--control-port"), "--control-port");
+  const loopbackClientPort = parsePortOption(
+    valueAfter(args, "--loopback-client-port") ?? env.ORKESTRATOR_LOOPBACK_CLIENT_PORT,
+    "--loopback-client-port",
+  );
   const cliCompression = valueAfter(args, "--compression");
   const compression = parseGatewayCompressionMode(
     cliCompression ?? env.ORKESTRATOR_GATEWAY_COMPRESSION,
@@ -165,6 +179,7 @@ export function parseOptions(
     port,
     controlHost: valueAfter(args, "--control-host"),
     controlPort,
+    loopbackClientPort,
     compression,
     // "--unsafe-allow-non-tailscale-bind" is the pre-rename spelling; unknown
     // flags are ignored, so dropping it would strand existing service units.
@@ -180,6 +195,7 @@ export function parseOptions(
     tailscaleServe: args.includes("--tailscale-serve") || env.ORKESTRATOR_TAILSCALE_SERVE === "1",
     desktopWebClient: args.includes("--desktop-web-client"),
     desktopUpdater: args.includes("--desktop-updater"),
+    commandNode: args.includes("--command-node") || env.ORKESTRATOR_COMMAND_NODE === "1",
     standaloneUpdaterDir: valueAfter(args, "--standalone-updater"),
     tailscaleServePort,
     tailscaleExecutable:

@@ -368,6 +368,7 @@ function MessagePartContent({
           filename={part.filename}
           containerId={containerId}
           eagerPreview={eagerImagePreview}
+          hideThumbnailCaption={eagerImagePreview}
         />
       );
     case "compaction":

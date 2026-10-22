@@ -18,6 +18,8 @@ import {
   isImagePreviewUnavailable,
   markImagePreviewUnavailable,
   readImagePreviewCache,
+  readImagePreviewDimensions,
+  writeImagePreviewDimensions,
 } from "@/lib/chat/image-preview-cache";
 import { useRichMessageIdentity } from "@/lib/chat/rich-identity";
 import { useTranscriptArtifactCapabilities } from "@/hooks/useTranscriptArtifactCapabilities";
@@ -135,6 +137,7 @@ export function FilePart({
   eagerPreview = false,
   detailRef,
   alwaysImage = false,
+  hideThumbnailCaption = false,
   onLoadUnavailable,
 }: {
   path: string;
@@ -156,6 +159,11 @@ export function FilePart({
    */
   alwaysImage?: boolean;
   /**
+   * Show a thumbnail tile as the image alone. A user's own attachment needs no
+   * filename caption; the name stays available to assistive technology.
+   */
+  hideThumbnailCaption?: boolean;
+  /**
    * The bytes could not be resolved, so the owner should stop showing this row.
    *
    * Supplied only by a preview the renderer synthesized rather than one the
@@ -171,6 +179,12 @@ export function FilePart({
   const [gallery, setGallery] = useState<{ items: GalleryItem[]; index: number } | null>(null);
   const [imageSrc, setImageSrc] = useState<string | null>(() => readImagePreviewCache(cacheKey));
   const [loading, setLoading] = useState(false);
+  const [decodedImage, setDecodedImage] = useState(() => {
+    const dimensions = readImagePreviewDimensions(cacheKey, imageSrc);
+    return dimensions && imageSrc ? { source: imageSrc, ...dimensions } : null;
+  });
+  const loadedImageSrc = decodedImage?.source ?? null;
+  const imageDimensions = decodedImage?.source === imageSrc ? decodedImage : null;
   const [loadError, setLoadError] = useState<"unavailable" | "too-large" | null>(null);
   const imageLoadRef = useRef<Promise<string | null> | null>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -252,9 +266,13 @@ export function FilePart({
     }
     let cancelled = false;
 
-    void loadImage().then((source) => {
-      if (!cancelled && source) setImageSrc(source);
-    });
+    // Start the asynchronous read after effect setup, and skip it if the row
+    // unmounts before then. Loading state belongs to the read, not setup.
+    void Promise.resolve()
+      .then(() => (cancelled ? null : loadImage()))
+      .then((source) => {
+        if (!cancelled && source) setImageSrc(source);
+      });
 
     return () => {
       cancelled = true;
@@ -302,39 +320,63 @@ export function FilePart({
         onClick={handleClick}
         aria-label={`Open full image: ${displayName}`}
         aria-busy={loading}
+        data-image-presentation={showThumbnailTile ? "thumbnail" : "chip"}
         className={cn(
           "text-xs my-0 rounded-md border transition-colors",
           showThumbnailTile
-            ? "group relative block w-40 max-w-full shrink-0 overflow-hidden bg-muted/50 border-border hover:border-foreground/25 cursor-zoom-in"
+            ? "group relative block w-80 max-w-full shrink-0 overflow-hidden bg-muted/50 border-border hover:border-foreground/25 cursor-zoom-in"
             : "inline-flex items-center gap-1.5 py-1.5 px-2.5 bg-muted/50 border-border hover:bg-muted hover:border-border/80 cursor-zoom-in",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
           loading && "opacity-50",
         )}
       >
-        {showThumbnailTile && imageSrc ? (
+        {showThumbnailTile && imageSrc && !loadError ? (
           <img
             src={imageSrc}
             alt={`Thumbnail: ${displayName}`}
             referrerPolicy="no-referrer"
-            className="h-24 w-full bg-black/10 object-cover transition-transform duration-200 group-hover:scale-[1.02] motion-reduce:transition-none"
+            width={imageDimensions?.width}
+            height={imageDimensions?.height}
+            onLoad={(event) => {
+              const { naturalWidth: width, naturalHeight: height } = event.currentTarget;
+              writeImagePreviewDimensions(cacheKey, imageSrc, { width, height });
+              setDecodedImage({ source: imageSrc, width, height });
+              setLoadError(null);
+            }}
+            onError={() => {
+              setDecodedImage(null);
+              setLoadError("unavailable");
+            }}
+            // Reserve the placeholder height until decode. Cached dimensions
+            // reserve the final aspect ratio immediately on transcript remounts.
+            className={cn(
+              "block max-h-96 w-full bg-black/10 object-contain",
+              imageDimensions ? "h-auto" : "h-48",
+            )}
           />
         ) : showThumbnailTile ? (
-          <span className="flex h-24 w-full items-center justify-center bg-muted/40">
+          <span className="flex h-48 w-full items-center justify-center bg-muted/40">
             <ImageIcon className="size-5 text-muted-foreground" />
           </span>
         ) : (
           <ImageIcon className="w-3.5 h-3.5 text-muted-foreground" />
         )}
-        <span
-          className={cn(
-            "font-mono truncate text-muted-foreground",
-            showThumbnailTile
-              ? "block border-t border-border/60 px-2 py-1.5 text-left"
-              : "max-w-[240px]",
-          )}
-        >
-          {displayName}
-        </span>
+        {showThumbnailTile &&
+        hideThumbnailCaption &&
+        loadedImageSrc === imageSrc &&
+        imageSrc &&
+        !loadError ? null : (
+          <span
+            className={cn(
+              "font-mono truncate text-muted-foreground",
+              showThumbnailTile
+                ? "block border-t border-border/60 px-2 py-1.5 text-left"
+                : "max-w-[240px]",
+            )}
+          >
+            {displayName}
+          </span>
+        )}
         {loadError && !onLoadUnavailable && (
           <span
             className={cn(

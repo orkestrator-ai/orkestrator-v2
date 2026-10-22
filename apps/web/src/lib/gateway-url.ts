@@ -7,17 +7,32 @@ function isLoopbackHost(hostname: string): boolean {
   );
 }
 
+/**
+ * The configured gateway origin. A desktop window on a tunnelled route asks
+ * the native layer each time, because a reconnect can move the tunnel to
+ * another local port; a forwarded-port URL is never kept in durable state.
+ */
+function configuredGatewayBaseUrl(): string | undefined {
+  if (typeof window === "undefined") return undefined;
+  const gateway = window.orkestratorGateway;
+  if (!gateway) return undefined;
+  let resolved: string | undefined;
+  try {
+    resolved = gateway.resolveBaseUrl?.();
+  } catch {
+    resolved = undefined;
+  }
+  return (resolved || gateway.baseUrl)?.replace(/\/$/, "");
+}
+
 export function getGatewayBaseUrl(): string {
   if (typeof window === "undefined") return "";
-  return window.orkestratorGateway?.baseUrl?.replace(/\/$/, "") ?? window.location.origin;
+  return configuredGatewayBaseUrl() ?? window.location.origin;
 }
 
 export function resolveGatewayApiUrl(pathname: string): string {
   const normalizedPath = pathname.startsWith("/") ? pathname : `/${pathname}`;
-  const configuredBaseUrl =
-    typeof window !== "undefined"
-      ? window.orkestratorGateway?.baseUrl?.replace(/\/$/, "")
-      : undefined;
+  const configuredBaseUrl = configuredGatewayBaseUrl();
   return configuredBaseUrl ? `${configuredBaseUrl}${normalizedPath}` : normalizedPath;
 }
 

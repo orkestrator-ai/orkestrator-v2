@@ -57,7 +57,8 @@ import {
  *
  * Only images with staged inputs carry an account across a restart. An older
  * image mounts the host homes directly, so a restart brings the host login
- * back; the marker is cleared on start so the next bridge start re-applies it.
+ * back. A real start invalidates the Codex marker so the next idle bridge
+ * request reconciles the imported copy, even if startup later fails.
  *
  * Claude, Codex and Grok refresh tokens are single-use, so a container only
  * ever gets their logins access-only (`accessOnlyLoginText`): a copy that
@@ -72,6 +73,8 @@ const ACCOUNT_MARKER: Record<AgentAccountPlatform, string> = {
   claude: "/tmp/orkestrator-claude-account",
   codex: "/tmp/orkestrator-codex-account",
 };
+/** Never equal to an account marker: the next bridge start re-applies the login. */
+const UNSTAGED_CODEX_MARKER = "unstaged";
 const CONTAINER_CODEX_AUTH_FILE = "/home/node/.codex/auth.json";
 const SYNC_CONTAINER_CODEX_AUTH_COMMAND =
   buildSyncContainerClaudeCredentialCommand(CONTAINER_CODEX_AUTH_FILE);
@@ -168,27 +171,27 @@ async function accountHasBeenUsed(
  * start imports the active account. Every login is re-read access-only, including
  * default-account revisions created before refresh tokens were restricted.
  * Only the host's current login can keep an access-only snapshot signed in.
+ * Staging never acknowledges an installed account: only reconciliation can
+ * prove which login was delivered into the running container.
  */
 async function refreshStagedLogin(
   context: CommandContext,
   environment: Environment,
   revision: string,
   platform: AgentAccountPlatform,
+  selected?: ResolvedAgentAccount,
 ): Promise<void> {
   const { global } = await context.storage.loadConfig();
-  const active = await resolveActiveAgentAccount(context, platform);
+  const active = selected ?? (await resolveActiveAgentAccount(context, platform));
   const host = hostStagingSources(context);
   const dataDir = context.storage.getDataDir();
   if (platform === "codex") {
     const home = active.home ?? host.codexHome;
-    const auth = home ? await readLoginFile(path.join(home, "auth.json")) : undefined;
-    await replaceStagedInputFile(
-      dataDir,
-      environment.id,
-      revision,
-      "codex-home/auth.json",
-      accessOnlyLoginText("codex", auth),
+    const auth = accessOnlyLoginText(
+      "codex",
+      home ? await readLoginFile(path.join(home, "auth.json")) : undefined,
     );
+    await replaceStagedInputFile(dataDir, environment.id, revision, "codex-home/auth.json", auth);
     return;
   }
   if (active.home) await prepareAgentAccountHome("claude", active.home);
@@ -267,6 +270,43 @@ export async function refreshStagedAgentAccountLogins(
     }
   } catch (error) {
     logFailure("Failed to refresh staged agent logins", error);
+  }
+}
+
+/**
+ * Keep credential staging and its start hand-off together. A no-op start must
+ * leave the installed login and marker alone, especially while a bridge is busy.
+ * On a real start the imported login is unknown until idle reconciliation; do
+ * not acknowledge it from a restage hint, which may be lost or superseded.
+ */
+export async function startContainerWithAgentAccounts(
+  context: CommandContext,
+  environment: Environment | null,
+  containerId: string,
+  runners: ContainerRunners = defaultRunners,
+): Promise<void> {
+  const state = await runCommand("docker", [
+    "inspect",
+    "--format",
+    "{{.State.Running}}",
+    containerId,
+  ]);
+  const wasRunning = state.stdout.trim() === "true";
+  if (!wasRunning && environment) {
+    await refreshStagedAgentAccountLogins(context, environment, containerId, runners);
+  }
+  try {
+    await runCommand("docker", ["start", containerId], { timeoutMs: 60_000 });
+  } finally {
+    // Docker may have started even when its client failed. Try before project
+    // access setup or readiness waiting can fail. A stopped container refuses
+    // exec and retains its old marker; the entrypoint also invalidates before
+    // importing, including when no backend survives to finish this operation.
+    if (!wasRunning) {
+      await writeMarker(runners, containerId, "codex", UNSTAGED_CODEX_MARKER).catch(
+        (error: unknown) => logFailure("Failed to invalidate the Codex account marker", error),
+      );
+    }
   }
 }
 
@@ -425,8 +465,9 @@ export const SYNC_CONTAINER_CLAUDE_ACCOUNT_COMMAND = `
 /** Identity reads follow host dotfile links, bounded by the staging file limit. */
 async function activeClaudeOAuthAccount(
   context: CommandContext,
+  selected?: ResolvedAgentAccount,
 ): Promise<{ oauthAccount?: unknown } | undefined> {
-  const active = await resolveActiveAgentAccount(context, "claude");
+  const active = selected ?? (await resolveActiveAgentAccount(context, "claude"));
   let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
   try {
     handle = await fs.open(
@@ -618,6 +659,12 @@ async function currentAccountMarker(
   return generation ? `${accountId}:${generation}` : accountId;
 }
 
+function accountMarker(active: ResolvedAgentAccount): string {
+  return active.loginGeneration
+    ? `${active.accountId}:${active.loginGeneration}`
+    : active.accountId;
+}
+
 async function writeMarker(
   runners: ContainerRunners,
   containerId: string,
@@ -644,9 +691,9 @@ async function readMarker(
 /**
  * The environment start path's credential step, replacing the host-only
  * Claude sync. Claude's login is piped in on every start, as it always was,
- * now for the active account. Codex imports its staged login in the
- * entrypoint, so only its marker is cleared: on an older image that re-import
- * came from the host, and the next bridge start re-applies the account.
+ * now for the active account. Codex is reconciled on the next idle bridge
+ * request after a real start invalidates its marker. This later step must not
+ * infer an import from staging or overwrite a marker on a no-op start.
  */
 export async function syncContainerAgentAccountsOnStart(
   context: CommandContext,
@@ -659,8 +706,9 @@ export async function syncContainerAgentAccountsOnStart(
     try {
       // Capture before reading/copying: a concurrent renewal must not stamp
       // an older credential with the newer generation.
-      const marker = await currentAccountMarker(context, "claude");
-      const credentials = await freshContainerClaudeCredentials(context, global);
+      const active = await resolveActiveAgentAccount(context, "claude");
+      const marker = accountMarker(active);
+      const credentials = await freshContainerClaudeCredentials(context, global, active);
       if (credentials) {
         await pipeClaudeLogin(runners, containerId, credentials);
       } else if (
@@ -680,14 +728,6 @@ export async function syncContainerAgentAccountsOnStart(
       logFailure("Failed to sync Claude credentials into container", error);
     }
   }
-  if (
-    providerCredentialsAllowed(context, global.enabledAgentPlatforms, environment, "codex") &&
-    (await accountHasBeenUsed(context, "codex").catch(() => false))
-  ) {
-    await runners
-      .exec(containerId, `rm -f ${ACCOUNT_MARKER.codex}`)
-      .catch((error: unknown) => logFailure("Failed to reset the Codex account marker", error));
-  }
 }
 
 /** Write one platform's active login into a running container. */
@@ -697,20 +737,21 @@ async function pushContainerLogin(
   containerId: string,
   platform: AgentAccountPlatform,
   global: AppConfig["global"],
+  active: ResolvedAgentAccount,
 ): Promise<void> {
   if (platform === "claude") {
     if (global.useHostClaudeCredentials === false) {
       await removeClaudeLogin(runners, containerId);
       return;
     }
-    const credentials = await freshContainerClaudeCredentials(context, global);
+    const credentials = await freshContainerClaudeCredentials(context, global, active);
     if (credentials) {
       await pipeClaudeLogin(runners, containerId, credentials);
     } else {
       // Signed out beats silently staying on the previous account.
       await removeClaudeLogin(runners, containerId);
     }
-    const identity = await activeClaudeOAuthAccount(context);
+    const identity = await activeClaudeOAuthAccount(context, active);
     if (identity === undefined) return;
     await runners
       .pipe(containerId, SYNC_CONTAINER_CLAUDE_ACCOUNT_COMMAND, JSON.stringify(identity))
@@ -719,7 +760,6 @@ async function pushContainerLogin(
       );
     return;
   }
-  const active = await resolveActiveAgentAccount(context, "codex");
   const home = active.home ?? hostStagingSources(context).codexHome;
   const auth = accessOnlyLoginText(
     "codex",
@@ -779,8 +819,7 @@ export async function reconcileContainerAgentAccount(
     return;
   }
   const active = await resolveActiveAgentAccount(context, platform);
-  const generation = (await context.storage.loadAgentAccounts()).loginGeneration?.[platform];
-  const expectedMarker = generation ? `${active.accountId}:${generation}` : active.accountId;
+  const expectedMarker = accountMarker(active);
   const markerMatches = (await readMarker(runners, containerId, platform)) === expectedMarker;
   if (
     markerMatches &&
@@ -792,11 +831,11 @@ export async function reconcileContainerAgentAccount(
     return;
   }
   const running = await bridge.isRunning();
-  await pushContainerLogin(context, runners, containerId, platform, global);
+  await pushContainerLogin(context, runners, containerId, platform, global, active);
   const revision = await runners.label(containerId, DOCKER_LABEL_INPUTS_REVISION);
   if (revision) {
-    await refreshStagedLogin(context, environment, revision, platform).catch((error: unknown) =>
-      logFailure("Failed to refresh the staged login", error),
+    await refreshStagedLogin(context, environment, revision, platform, active).catch(
+      (error: unknown) => logFailure("Failed to refresh the staged login", error),
     );
   }
   if (running) await bridge.stop();

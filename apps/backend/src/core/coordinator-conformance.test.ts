@@ -39,7 +39,7 @@ import {
  * A platform reaches `enforced` only if its bridge actually translates the
  * coordinator policy into something the provider or the OS holds. These
  * assertions are the cheap, always-run half of that; the expensive half is the
- * real-stack read-only suite described in `docs/todo/coordinator-live-conformance.md`.
+ * real-stack read-only suite described in `docs/todo/coordinator-and-multi-review/0024-coordinator-live-conformance.md`.
  */
 const coordinatorPolicy = resolveNativeAgentExecutionPolicy(
   { environmentType: "local", networkAccessMode: "restricted" },

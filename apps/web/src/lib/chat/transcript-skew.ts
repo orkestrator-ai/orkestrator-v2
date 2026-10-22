@@ -44,7 +44,7 @@ interface LegacyTranscriptShape {
 /**
  * Shapes older backends send that this renderer no longer reads. Retire an
  * entry once the mixed-version support window no longer covers backends older
- * than its `displayRowsSince` (`docs/todo/mixed-version-compatibility.md`).
+ * than its `displayRowsSince` (`docs/todo/cross-cutting/0034-mixed-version-compatibility.md`).
  */
 const LEGACY_TRANSCRIPT_SHAPES = {
   /*

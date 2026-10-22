@@ -10,7 +10,7 @@ external process stays authoritative; browser demand only affects
 presentation reads and optional sampling, never execution or durable
 delivery. Outstanding qualification, measured candidates and rollback-switch
 removal are tracked in
-[recurring-work-qualification.md](../todo/recurring-work-qualification.md).
+[0048-recurring-work-qualification.md](../todo/transcripts-and-observation/0048-recurring-work-qualification.md).
 
 ## Vocabulary and diagnostics
 

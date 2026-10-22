@@ -1,8 +1,8 @@
 # MCP server management
 
 Status: living. Outstanding work is in
-[mcp-management.md](../todo/mcp-management.md) and
-[mcp-environment-delivery.md](../todo/mcp-environment-delivery.md).
+[0039-mcp-management.md](../todo/mcp/0039-mcp-management.md) and
+[0040-mcp-environment-delivery.md](../todo/mcp/0040-mcp-environment-delivery.md).
 
 Users add, edit, rename, remove and (where the provider has a saved switch)
 enable or disable the MCP servers each agent platform connects to, without
@@ -519,7 +519,7 @@ worktrees; nothing reads or writes the operator's configuration):
 | Real browser | 2026-09-24, `dev:test` profile `agent-mcp-settings-qa` with the fixture project, Playwright at 1440×900 and 390×844: section and pickers for all six platforms, Control MCP kept separate, add → edit → rename → remove of a Claude project-scope server in a fixture worktree (previews named the worktree path and the execution warning; the file ended `{"mcpServers": {}}`), keyboard open/Escape with focus return, reload rehydration, discard prompt on a dirty target switch, platform-settings deep link. Found that every MCP dialog rendered behind the fullscreen settings layer (default `z-50` under `z-[60]`); fixed with the fullscreen dialog layers and pinned by `McpEditorFlows.test.tsx`; the fix was confirmed in that browser session by raising the layer, not by a second full pass. The agent-panel link was not exercised (no live session in the fixture). Operator MCP files were hashed before and after and were unchanged. |
 
 Live providers (2026-10-18, `e2e/agent-testing/mcp-apply-live.spec.ts`, record
-in [the todo file](../todo/mcp-management.md#live-apply-record-2026-10-18)):
+in [the todo file](../todo/mcp/0039-mcp-management.md#live-apply-record-2026-10-18)):
 Claude, Codex, OpenCode and Cursor have historical add, edit, rename, remove
 and restart observations across their writable scopes. Codex's reload reaches
 existing threads at their next turn; OpenCode needs the restart its outcome

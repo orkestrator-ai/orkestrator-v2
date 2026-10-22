@@ -21,10 +21,10 @@
  * `gpt-6.1-sol`, as in the build-pipeline steering case): a new profile's
  * default Codex model is not offered to a ChatGPT login, and a stored model
  * missing from the catalogue still runs (tracked in
- * docs/todo/slash-command-qualification.md). Claude tabs use the profile's
+ * docs/todo/cli-and-slash-commands/0015-slash-command-qualification.md). Claude tabs use the profile's
  * default model.
  *
- * What it checks (docs/todo/slash-command-qualification.md, item 2):
+ * What it checks (docs/todo/cli-and-slash-commands/0015-slash-command-qualification.md, item 2):
  *
  * - A selected command sent just before switching away completes while its
  *   environment is inactive, through an inventory change, a catalogue refresh

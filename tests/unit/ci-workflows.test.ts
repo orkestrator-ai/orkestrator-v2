@@ -28,7 +28,7 @@ describe("CI workflow contracts", () => {
   }
 
   test("CI provides every documented required status-check context", () => {
-    const document = read("docs/todo/test-suite-and-ci-health.md");
+    const document = read("docs/todo/cross-cutting/0030-test-suite-and-ci-health.md");
     const ruleset = JSON.parse(document.match(/```json\s+([\s\S]*?)```/)![1]!) as {
       rules: { parameters?: { required_status_checks?: { context: string }[] } }[];
     };

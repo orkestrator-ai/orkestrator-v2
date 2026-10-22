@@ -118,5 +118,5 @@ mise exec -- bun test tests/unit/efficiency/harness.test.ts
   long tasks, input latency and visibility latency; peak heap, RSS and
   event-loop lag; workloads with several active review sessions. Those gaps
   are tracked in
-  [transcript-history-efficiency.md](../todo/transcript-history-efficiency.md)
-  and [remote-client-bandwidth.md](../todo/remote-client-bandwidth.md).
+  [0050-transcript-history-efficiency.md](../todo/transcripts-and-observation/0050-transcript-history-efficiency.md)
+  and [0052-remote-client-bandwidth.md](../todo/transcripts-and-observation/0052-remote-client-bandwidth.md).

@@ -119,6 +119,21 @@ The final root/support run with all GNU prerequisites timed out this case at 500
 - **Evidence:** `orkestrator-test-run.d10zQ4/root-and-agent-support-tests.log.gz` below the host temporary directory.
 - **Assessment:** confirms another intermittent shell-fixture deadline. Contention remains an unproven hypothesis; no implementation, assertion, timeout or skip changed.
 
+## MCP external-edit watch review fixes — 2026-10-22
+
+- **Original command:** `mise run test:logged -- --name full-suite -- mise run test`; workspace/root/bridges/protocol reserved 4/1/2/1 slots, with one isolated root worker.
+- **Failures:** five-second deadlines in `container firewall policy`:
+  - `policy 3 allows address, protocol and port tuples` (5003.75 ms).
+  - `policy 2 allowlist example.org,example.com chooses blocked HTTPS probe example.net` (5007.32 ms).
+  - `policy 3 allowlist example.org,example.com chooses blocked HTTPS probe example.net` (5002.49 ms).
+  - `policy 3 allowlist example.com:443 chooses blocked HTTPS probe example.net` (5003.21 ms).
+  - `policy 3 allowlist example.com:443/tcp chooses blocked HTTPS probe example.net` (5004.44 ms).
+- **Root counts:** 3218 passed, one skipped and five failed across 3224 tests in 154 files (277.79 s). Complete aggregate exit 1 after 822.1 s. Backend also hit the recorded 0248, 0512 and 0673 timing failures; all other workspace packages, bridges and protocol regeneration passed.
+- **Initial owning-file reruns:** `mise run test:logged -- --name firewall-policy-owner -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` passed all five original failures but timed out `policy 3 allowlist  EXAMPLE.COM:443/tcp  chooses blocked HTTPS probe example.net` (5012.26 ms; 23 passed, one failed, 46.2 s). `mise run test:logged -- --name firewall-policy-owner-final -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` instead timed out `policy capture records policy 3 and refuses an unknown version` (5003.95 ms; 23 passed, one failed, 24.8 s). The aggregate was still running during these reruns.
+- **After-aggregate rerun:** `mise run test:logged -- --name firewall-policy-after-aggregate -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` passed the complete unchanged file (exit 0, 37.9 s logged).
+- **Evidence:** `orkestrator-test-run.jhZR27/root-and-agent-support-tests.log.gz`, `orkestrator-test-run.6wl0bW/firewall-policy-owner.log.gz` and `orkestrator-test-run.rhzy0n/firewall-policy-owner-final.log.gz` below the host temporary directory.
+- **Assessment:** confirmed intermittent fixture deadlines. Different cases timed out on successive runs; host load exceeded 50 during validation. Scheduling contention remains an unproven explanation. No implementation, assertion, timeout or skip changed.
+
 ## Design canvas qualification recurrence — 2026-10-22
 
 - **Original command:** `mise run test:logged -- --name full-suite -- mise run test` (default PATH, no GNU-tool override) on branch `todo-0036-design-canvas-qualification-1477f37ca3cf`, while other worktrees and a production Orkestrator instance loaded the host (load averages 11–44).

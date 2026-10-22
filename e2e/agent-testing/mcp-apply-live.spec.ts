@@ -62,6 +62,7 @@ import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import {
   dispatchProbeTurn,
   hasRunningSleep,
+  invokeCommand,
   judgeProbe,
   parseProbeLog,
   PROBE_SERVER_NAME,
@@ -188,9 +189,14 @@ async function signIn(page: Page, status: Status): Promise<Invoke> {
   const response = await page.goto(login.loginUrl, { waitUntil: "domcontentloaded" });
   expect(response?.ok() ?? false).toBe(true);
   return async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
-    const invokeResponse = await page.request.post(
-      new URL("/__orkestrator/invoke", status.browserUrl!).href,
-      { data: { command, args }, timeout: Math.max(240_000, TURN_TIMEOUT_MS) },
+    const invokeResponse = await invokeCommand(
+      command,
+      () =>
+        page.request.post(new URL("/__orkestrator/invoke", status.browserUrl!).href, {
+          data: { command, args },
+          timeout: Math.max(240_000, TURN_TIMEOUT_MS),
+        }),
+      () => new Promise((resolve) => setTimeout(resolve, 1_000)),
     );
     if (!invokeResponse.ok()) {
       throw new Error(`${command}: ${(await invokeResponse.text()).slice(0, 1_000)}`);
@@ -439,7 +445,12 @@ test.describe("live MCP apply", () => {
 
         for (const tab of tabs) {
           try {
-            await call("ensure_native_agent_session", identity(tab));
+            // Without a model the session is created on the provider's first
+            // available one, and Pi keeps it when a later model has no login.
+            await call("ensure_native_agent_session", {
+              ...identity(tab),
+              ...(model ? { model } : {}),
+            });
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             if (signedOut(message)) skip(`${label} is not signed in: ${message.slice(0, 300)}`);
@@ -470,6 +481,12 @@ test.describe("live MCP apply", () => {
                 prompt,
                 requestId,
                 mode: "build",
+                // The tab's `initialAgentModel` seeds only the UI composer; a
+                // dispatch without a model takes the provider's first available
+                // one (for Pi, a model a ChatGPT login refuses). Pi ids are
+                // `provider/modelId`: a ChatGPT login is `openai-codex/…`;
+                // `openai/…` needs an API key and silently keeps the fallback.
+                ...(model ? { model } : {}),
               }),
             randomUUID,
             () => new Promise((resolve) => setTimeout(resolve, 5_000)),

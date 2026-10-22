@@ -13,6 +13,7 @@ import { createHmac, randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import { operationAwaitsEvidence } from "./evidence.js";
+import { operationAwaitsExternalEdit } from "./external-edit-watch.js";
 import { McpSourceStore } from "./source-store.js";
 
 import {
@@ -86,7 +87,8 @@ export function isFinishedOperation(entry: StoredOperation, nowMs = Date.now()):
     entry.snapshot.phase !== "pending" &&
     entry.snapshot.phase !== "reconciling" &&
     isTerminalApplyState(entry.snapshot.apply.state) &&
-    !operationAwaitsEvidence(entry, nowMs)
+    !operationAwaitsEvidence(entry, nowMs) &&
+    !operationAwaitsExternalEdit(entry, nowMs)
   );
 }
 

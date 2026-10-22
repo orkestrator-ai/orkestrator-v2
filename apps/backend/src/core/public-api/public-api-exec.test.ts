@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, jest, test } from "bun:test";
+import { afterEach, describe, expect, jest, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -87,6 +87,84 @@ async function output(
 }
 
 describe("environment.exec", () => {
+  test.each([false, true])(
+    "a container transport failure (timeout=%s) permits a late remote claim",
+    async (timedOut) => {
+      const { harness } = await setup();
+      await harness.storage.updateEnvironment("env-exec", {
+        environmentType: "containerized",
+        containerId: "stub-container",
+      });
+      const shell = await import("../shell.js");
+      const original = shell.runCommand;
+      let starts = 0;
+      let claimProbes = 0;
+      let status: "error" | "missing" | "running" | "exited" = "error";
+      const controller = spyOn(shell, "runCommand").mockImplementation(
+        async (command, args, options) => {
+          if (command !== "docker") return original(command, args, options);
+          // A probe can see no claim while the remote controller is still starting.
+          if (args?.includes("sh")) {
+            claimProbes += 1;
+            return { stdout: "unclaimed\n", stderr: "" };
+          }
+          const payload = JSON.parse(String(options?.stdin));
+          if (payload.action === "start") {
+            starts += 1;
+            throw new shell.CommandFailedError("transport lost", { timedOut });
+          }
+          if (status === "error") throw new Error("status unavailable");
+          return {
+            stdout: JSON.stringify({ status, ...(status === "exited" ? { exitCode: 0 } : {}) }),
+            stderr: "",
+          };
+        },
+      );
+      try {
+        const started = await exec(harness, "late-remote", { argv: ["true"] });
+        expect(started.receipt?.state).toBe("running");
+        const operationId = started.receipt!.operationId;
+        expect((await harness.call("run.get", { operationId })).receipt?.state).toBe("running");
+        status = "missing";
+        expect((await harness.call("run.get", { operationId })).receipt?.state).toBe("running");
+        status = "running";
+        expect((await harness.call("run.get", { operationId })).receipt?.execution?.state).toBe(
+          "running",
+        );
+        status = "error";
+        expect((await harness.call("run.get", { operationId })).receipt?.state).toBe("running");
+        status = "exited";
+        expect((await harness.call("run.get", { operationId })).receipt?.state).toBe("succeeded");
+        expect(starts).toBe(1);
+        expect(claimProbes).toBe(0);
+      } finally {
+        controller.mockRestore();
+      }
+    },
+  );
+
+  test("an unreadable local claim cannot prove that the command never started", async () => {
+    const { harness } = await setup();
+    const shell = await import("../shell.js");
+    const controller = spyOn(shell, "runCommand").mockRejectedValue(
+      new Error("launcher unavailable"),
+    );
+    const claim = spyOn(fs, "lstat").mockRejectedValue(
+      Object.assign(new Error("denied"), { code: "EACCES" }),
+    );
+    try {
+      const started = await exec(harness, "unknown-claim", { argv: ["true"] });
+      expect(started.receipt?.state).toBe("running");
+      expect(
+        (await harness.call("run.get", { operationId: started.receipt!.operationId })).receipt
+          ?.state,
+      ).toBe("running");
+    } finally {
+      claim.mockRestore();
+      controller.mockRestore();
+    }
+  });
+
   test("container exec passes large stdin through docker exec", async () => {
     const image = process.env.ORKESTRATOR_TEST_DOCKER_EXEC_IMAGE;
     if (!image) return;

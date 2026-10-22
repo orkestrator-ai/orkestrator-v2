@@ -59,3 +59,10 @@
 - **Owning-file rerun:** `mise run test:logged -- --name refresh-pi-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed all four unchanged cases (exit 0, 10.6 seconds logged).
 - **Evidence:** `orkestrator-test-run.Qv1f63/root-and-agent-support-tests.log.gz` below the host temporary directory after aggregate completion.
 - **Assessment:** confirmed intermittent recurrence; the cause remains unproven. No Pi implementation, assertion, timeout or skip changed.
+
+
+## CLI qualification review — 2026-10-22
+
+- `mise run test:logged -- --name review-complete-suite -- mise run test`, with workspace/root/bridges/protocol reservations 4/1/2/1, hit the 30-second staging deadline (30000.12 ms). An initial unchanged owning-file rerun also timed out (31.1 s logged); that rerun alone did not establish a flake.
+- `mise run test:logged -- --name review-pi-final-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` subsequently passed the complete unchanged owner (exit 0, 21.8 s). The final complete-suite retry's root/support group also passed (229.4 s).
+- Evidence: `orkestrator-test-run.GxEUIl/root-and-agent-support-tests.log.gz` and the initial isolated failure in `orkestrator-test-run.rF75sE`, below the host temporary directory. Only the later isolated pass confirms intermittence. No Pi code, assertion, timeout or skip changed.

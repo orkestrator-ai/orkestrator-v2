@@ -540,7 +540,8 @@ export function registerServerCommands(
               ? `export CURSOR_BRIDGE_TOKEN=${quoteShell(token)}
           export CURSOR_BRIDGE_STATE_DIR=/tmp/orkestrator-cursor-sdk-state
           export CURSOR_BRIDGE_AUTH_FILE=${CONTAINER_CURSOR_SDK_AUTH_FILE}`
-              : `export ACP_PROVIDER=grok
+              : `if [ -s "$HOME/.grok/xai-api-key" ]; then export XAI_API_KEY="$(cat "$HOME/.grok/xai-api-key")"; else unset XAI_API_KEY; fi
+          export ACP_PROVIDER=grok
           export ACP_STATE_DIR=/tmp/orkestrator-acp-state/grok
           export ACP_AGENT_PATH="$(command -v grok 2>/dev/null || echo grok)"
           export ACP_PROVIDER_CONFIG='{"id":"grok","name":"Grok","executable":"grok","argv":["--always-approve","agent","{{model}}","{{effort}}","stdio"],"env":{},"requiresAuthenticate":true,"authMethodEnv":"GROK_AUTH_METHOD_ID","modeMap":{"agent":"build","build":"build","plan":"plan","ask":"plan"},"extensionPrefixes":["x.ai/","_x.ai/"],"acknowledgedExtensionMethods":[],"modelUpdateMethods":["x.ai/models/update","_x.ai/models/update"],"sessionUpdateMethods":["x.ai/session/update","_x.ai/session/update"]}'

@@ -171,6 +171,7 @@ export async function isolateProviderHomes(
   if (options.credentialSource === "grok") {
     if (hostEnv.XAI_API_KEY?.trim()) {
       env.XAI_API_KEY = hostEnv.XAI_API_KEY.trim();
+      await writeFile(path.join(env.GROK_HOME!, "xai-api-key"), env.XAI_API_KEY, { mode: 0o600 });
     } else {
       const source = path.join(
         hostEnv.GROK_HOME?.trim() || path.join(hostHome, ".grok"),

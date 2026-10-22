@@ -118,3 +118,10 @@ The final root/support run with all GNU prerequisites timed out this case at 500
 - **Owning-file rerun:** the same GNU-tool PATH with `mise run test:logged -- --name merge-firewall-owner -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 32.3 seconds logged).
 - **Evidence:** `orkestrator-test-run.d10zQ4/root-and-agent-support-tests.log.gz` below the host temporary directory.
 - **Assessment:** confirms another intermittent shell-fixture deadline. Contention remains an unproven hypothesis; no implementation, assertion, timeout or skip changed.
+
+
+## CLI qualification review — 2026-10-22
+
+- `mise run test:logged -- --name review-complete-suite -- mise run test`, with workspace/root/bridges/protocol reservations 4/1/2/1 and one root worker, timed out both `policy 2 allowlist example.org,example.com chooses blocked HTTPS probe example.net` (5005.48 ms) and its policy 3 counterpart (5007.47 ms). Both expected process exit 0 and received null.
+- `mise run test:logged -- --name review-firewall-rerun -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` passed the complete unchanged owner (exit 0, 40.1 s).
+- Evidence: `orkestrator-test-run.GxEUIl/root-and-agent-support-tests.log.gz` below the host temporary directory after aggregate completion. This confirms intermittent shell-fixture deadlines; no firewall code, assertion, timeout or skip changed.

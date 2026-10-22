@@ -88,26 +88,27 @@ success signal.
    record of the model it used (2026-10-18), so the evidence log cannot pin
    it. Add the session's resolved provider model to the manifest entry for
    `session start`.
-3. **Done (2026-10-22): settle an exec whose launcher failed before the
-   worker existed.** The control spawns a worker only after claiming
-   `state.json`, so `actions-exec.ts` now checks that claim (on the host for
-   local environments, with `docker exec … test -e` for containers, neither
-   needing Bun) when the control fails. An unclaimed operation settles
-   `failed` (`exec-failed`, `execution.evidence: none`, reason "worker never
-   started") at once, or on the next reconciliation if the control timed out
-   and might still have been dying. A claimed one keeps the old rule: pending
-   until the worker's own state answers, never a second worker. Covered by
-   two launcher tests in `public-api-exec.test.ts` (the first fails without
-   the fix). The container branch has no automated test (the Docker exec
-   test is gated on `ORKESTRATOR_TEST_DOCKER_EXEC_IMAGE`).
+3. **Done (2026-10-22): settle a provably unstarted local exec.** A local
+   controller that exits before claiming `state.json` can settle `failed`
+   (`exec-failed`, evidence `none`, "worker never started"). A timeout or
+   Docker client failure cannot prove controller exit. Those unconfirmed
+   launches remain pending even when status finds no state yet; reconciliation
+   accepts a late claim and never starts a second worker. Failed status reads
+   do not prove non-execution. Covered by local launcher tests, unreadable
+   claims and stubbed Docker transport/timeout/missing-state/late-claim paths
+   in `public-api-exec.test.ts`.
 4. **Done (2026-10-22): `session start --wait` and `session prompt --wait`
    survive a slow admission.** A `transport-uncertain` submission under
-   `--wait` is now looked up by its saved request key and namespace
+   `--wait` is now looked up by its saved request key and namespace, with
+   server validation of the submitted scope and canonical intent
    (`submitForWait` in `packages/cli/src/client/commands/common.ts`),
    repeating while the key is `not-found` or reads fail with
    `connection-failed`, then observed to the end in the same `--timeout`
-   budget, with a warning naming the recovery. Nothing is resubmitted; if the
-   key never appears in the budget the original exit 4 stands. Without
+   deadline measured before submission, with a warning naming the recovery.
+   Ordinary successful admission retains the full observation duration;
+   definitive lookup errors and interruption retain recovery-key details.
+   Nothing is resubmitted; if the key never appears in the budget the original
+   exit 4 stands. Without
    `--wait` the behaviour is unchanged. Covered by `client-waits.test.ts`.
    Not re-run live under load; flake
    [0440](../../tests/flaky-tests/0440-cli-live-opencode-container-start-transport-timeout.md)
@@ -190,6 +191,44 @@ command, result and limitations. Run artifacts are
 `output/cli-scenarios/<run>/manifest.json` (git-ignored; IDs, stages and exit
 codes only).
 
+- **2026-10-22, macOS, review fixes.** Recovery now validates the submitted
+  canonical intent and scope on the server, refuses saved intent conflicts,
+  preserves definitive lookup and interruption errors, and shares an absolute
+  recovery deadline without shortening ordinary successful observation. Exec
+  transport failures retain uncertainty until the worker reports. Grok API
+  keys cross private staging into only Grok container startup and are removed
+  by credential revocation.
+  - Passing: format check, lint, workspace typecheck, complete CLI package
+    suite, focused public exec/session/account regressions, and the real
+    Docker fixture suite (71.7 s; credential-free Codex-only profile, including
+    inactive-view rebuild and rehydration). The disposable profile was stopped
+    and reset. No live provider turn was run.
+  - Packaged CLI scenarios: local 7/7 and container 5/5, using the worktree
+    image `orkestrator-v2:dev-6b1b2e970fa3`; no cleanup errors.
+  - The first complete suite failed in Pi runtime vendoring, two firewall
+    fixture deadlines and a Claude plan-preference sentinel. Complete owning
+    files subsequently passed unchanged (Pi 21.8 s, firewall 40.1 s, Claude
+    0.2 s); recurrences are recorded in cases 0514, 0192 and 0385. The first
+    Pi isolated retry failed too; only its later isolated pass established
+    intermittence. All workspace packages and protocol regeneration passed
+    in that initial complete run.
+  - Initial Docker attempts used an incorrect profile that enabled unsigned-in
+    Claude and blocked the UI, plus a logger idle allowance shorter than the
+    rebuild scenario's own deadline. The passing run selected Codex without
+    credentials and used a 540 s logger idle allowance for the existing 480 s
+    rebuild test; no test timeout, assertion or skip changed.
+  - Final complete suite: exit 1 in 651.6 s, solely on the unchanged
+    `storage helper > reports unknown content and foreign markers without
+    touching data` five-second timeout. The complete owning file passed alone
+    (3.4 s); registered as confirmed flake
+    [0672](../../tests/flaky-tests/0672-container-storage-marker-aggregate-timeout.md).
+    Root/support, all bridges and protocol regeneration passed. The aggregate
+    remains failed; isolated passes do not replace its result. Evidence:
+    `orkestrator-test-run.TfxXYL` below the host temporary directory.
+  - Standalone component/public browser, Electron and iOS suites were omitted:
+    no renderer, Electron or iOS implementation changed. Docker's real-stack
+    browser flows and the packaged CLI scenarios supplied the scenario checks.
+
 - **2026-10-22, macOS.** `main` at `b83ae534` plus this branch's changes.
   macOS (Darwin 25.6.0, arm64), Bun 1.4.3. Credential-free only; no live
   provider turn was run.
@@ -208,9 +247,9 @@ codes only).
     `setup-failure` and `client-exit` failed in `environment start`,
     `environment launch` and `run wait` stages this branch does not touch.
     Rerun alone: `client-exit` passed, `setup-failure` failed again after
-    1052 s at load 400. Recorded as flake
+    1052 s at load 400. Only `client-exit` is registered as flake
     [0671](../../tests/flaky-tests/0671-cli-scenarios-environment-start-under-extreme-load.md);
-    rerun on a quiet host.
+    `setup-failure` remains unconfirmed and needs a quiet-host rerun.
   - Package and backend tests: `packages/cli` suite 161/161 pass;
     `public-api-exec.test.ts` 19/19 pass.
   - Not run: live Pi, Cursor and Grok (no API-key credentials in this

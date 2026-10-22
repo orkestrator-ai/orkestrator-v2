@@ -74,19 +74,21 @@ async function submitRun<T>(
   input: Record<string, unknown>,
   options: Record<string, unknown>,
 ) {
-  const startedAt = Date.now();
   const submitted =
     options.wait === true
       ? await submitForWait<T>(context, action, input, options, waitBudget(options))
       : await submit<T>(context, action, input, options);
-  return { ...submitted, startedAt };
+  return {
+    ...submitted,
+    recoveryDeadline: "deadline" in submitted ? (submitted.deadline as number) : undefined,
+  };
 }
 
 async function finishRun(
   context: CommandContext,
   parsed: ParsedCommand,
   base: CommandOutcome,
-  startedAt: number,
+  recoveryDeadline: number | undefined,
   /** For a recovered submission: the result and IDs, read from the final receipt. */
   fromReceipt?: (receipt: PublicReceipt) => Pick<CommandOutcome, "result" | "ids">,
 ): Promise<CommandOutcome> {
@@ -99,7 +101,9 @@ async function finishRun(
     session,
     base.receipt,
     // Recovering a lost response spends part of the same budget.
-    Math.max(0, waitBudget(parsed.options) - (Date.now() - startedAt)),
+    recoveryDeadline === undefined
+      ? waitBudget(parsed.options)
+      : Math.max(0, recoveryDeadline - Date.now()),
     { continueOnInteraction: parsed.options["continue-on-interaction"] === true },
   );
   const failure = receiptFailure(final);
@@ -302,7 +306,7 @@ export const sessionCommands: CommandSpec[] = [
         throw new CliError("invalid-input", "--environment and --agent are required");
       }
       const prompt = await readPrompt(context.io, options);
-      const { session, result, receipt, warnings, startedAt } = await submitRun<{
+      const { session, result, receipt, warnings, recoveryDeadline } = await submitRun<{
         sessionId: string;
         tabId: string;
         runId: string;
@@ -344,7 +348,7 @@ export const sessionCommands: CommandSpec[] = [
               ])
             : [],
         },
-        startedAt,
+        recoveryDeadline,
         result ? undefined : fromReceipt,
       );
     },
@@ -371,7 +375,9 @@ export const sessionCommands: CommandSpec[] = [
       const options = parsed.options;
       validateWaitOptions(options);
       const prompt = await readPrompt(context.io, options);
-      const { session, result, receipt, warnings, startedAt } = await submitRun<{ runId: string }>(
+      const { session, result, receipt, warnings, recoveryDeadline } = await submitRun<{
+        runId: string;
+      }>(
         context,
         "session.prompt",
         {
@@ -396,7 +402,7 @@ export const sessionCommands: CommandSpec[] = [
           ids: [runId],
           human: receipt ? receiptLines(receipt) : [`run ${runId}`],
         },
-        startedAt,
+        recoveryDeadline,
       );
     },
   },

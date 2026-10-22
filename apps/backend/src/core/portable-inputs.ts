@@ -273,6 +273,7 @@ export function portableInputSpec(roots: InputSourceRoots): ProviderInputSpec[] 
           target: "/grok-home",
           root: path.join(hostHome, ".grok"),
           files: [
+            "xai-api-key",
             "auth.json",
             "config.toml",
             "trusted_folders.toml",

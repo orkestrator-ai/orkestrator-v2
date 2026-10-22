@@ -1,10 +1,11 @@
-# CLI credential-free scenarios fail around `environment start` at extreme host load
+# CLI `client-exit` fails around `environment start` at extreme host load
 
 - **ID:** 0671
 - **Status:** open
 - **Date observed:** 2026-10-22
 - **File:** `packages/cli/scenarios/cases.ts` (`setup-failure`, `client-exit`), driven by `packages/cli/scripts/run-scenarios.ts`.
-- **Test:** `setup-failure` and `client-exit` (local only).
+- **Test:** `client-exit` (local only). Only this isolated-passing case is registered as a flake.
+- **Related unconfirmed observation:** `setup-failure` failed again alone; the historical evidence below does not register it as a flake.
 - **Original command:** `mise run test:cli:scenarios` on the `todo-0014-cli-qualification` branch (based on `b83ae534`), macOS (Darwin 25.6.0, arm64), Bun 1.4.3, with other worktrees busy on the same host.
 - **Failure:**
   - `setup-failure`: `run wait` on the `environment launch` operation exited 4 `connection-failed` after 53 s (a read the backend did not answer in time), so the scenario failed with `undefined is not an object (evaluating 'receipt.state')`. `environment create` alone took 21.6 s in the same run.

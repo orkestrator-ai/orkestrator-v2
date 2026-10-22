@@ -103,3 +103,10 @@ assertion, timeout or skip was changed for validation.
 - **Assessment:** confirmed recurrence of the existing fixture-directory race. The first full aggregate in this merge passed all bridge packages. No Claude source, assertions, deadlines or skips changed; concurrent fixture work remains a hypothesis.
 - **Bridge-group rerun:** `mise run test:logged -- --name merge-bridges-rerun -- bunx turbo run test:bridge --cwd . '--filter=./bridges/*' --concurrency=2 --continue=dependencies-successful --output-logs=new-only --log-order=stream` passed all five unchanged bridge packages (exit 0, 77.5 seconds).
 - **Final aggregate result:** exit 1 in 370.1 seconds, with only the bridge fixture above failing. All workspace packages, root/support and Codex protocol generation passed. Formatting, lint, typechecking, the application build, isolated browser suite, Electron suite and Docker suite also passed. Disposable browser and Docker profiles were stopped and reset. iOS and standalone CLI scenarios were omitted because the merge does not change those areas; ordinary CLI tests ran in the workspace suite.
+
+
+## CLI qualification review — 2026-10-22
+
+- `mise run test:logged -- --name review-complete-suite -- mise run test` repeated the EnterPlanMode sentinel `EISDIR` at line 827 (4.34 ms), with workspace/root/bridges/protocol reservations 4/1/2/1 and one Bun worker per bridge.
+- `mise run test:logged -- --name review-claude-rerun -- bun test --cwd bridges/claude-bridge --preload ../../tests/setup-node.ts ./src/services/session-manager-interactions.test.ts --parallel=1 --only-failures` passed the complete unchanged owner (exit 0, 0.2 s).
+- Evidence: `orkestrator-test-run.GxEUIl/bridges.log.gz` below the host temporary directory after aggregate completion. No Claude implementation, assertion, timeout or skip changed; the cause remains unproven.

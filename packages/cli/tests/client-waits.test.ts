@@ -3,9 +3,11 @@ import {
   publicErrorEnvelope,
   publicSuccessEnvelope,
   type PublicReceipt,
+  type PublicErrorCode,
 } from "@orkestrator/protocol/public-api";
 import { PUBLIC_API_FIXTURES } from "@orkestrator/protocol/testing/public-api-fixtures";
 import {
+  captureIo,
   createSandbox,
   defaultResponder,
   envelope,
@@ -13,6 +15,8 @@ import {
   type ClientSandbox,
   type FakeGateway,
 } from "./support/client-harness.js";
+
+import { runClient } from "../src/client/main.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -173,19 +177,47 @@ describe("waiting through a lost submission response", () => {
   ];
 
   /** `session.start` admits but its response is lost; `run.get` finds it later. */
-  async function lostStart(byKey: Array<PublicReceipt | null>, byId: PublicReceipt[]) {
+  async function lostStart(
+    byKey: Array<PublicReceipt | null>,
+    byId: PublicReceipt[],
+    options: {
+      action?: "session.start" | "session.prompt";
+      mutationDelay?: number;
+      lookupError?: PublicErrorCode;
+      lookupDelay?: number;
+      lookupFailures?: number;
+      successfulSubmission?: boolean;
+      onLookup?: () => void;
+    } = {},
+  ) {
     const box = await createSandbox();
     const lookups: Array<Record<string, unknown>> = [];
     let starts = 0;
-    const gateway = await startFakeGateway((request) => {
+    const gateway = await startFakeGateway(async (request) => {
       const action = String(request.body.args.action);
       const input = request.body.args.input as Record<string, unknown>;
-      if (action === "session.start") {
+      if (action === (options.action ?? "session.start")) {
         starts += 1;
+        if (options.mutationDelay) await Bun.sleep(options.mutationDelay);
+        if (options.successfulSubmission)
+          return envelope(
+            publicSuccessEnvelope(action, { sessionId: "ses_slow", runId: OPERATION }, byId[0]),
+          );
         return new Response("upstream timeout", { status: 504 });
       }
       if (action === "run.get" && input.requestId !== undefined) {
         lookups.push(input);
+        options.onLookup?.();
+        if (options.lookupDelay) await Bun.sleep(options.lookupDelay);
+        if (options.lookupFailures && lookups.length <= options.lookupFailures)
+          return new Response(JSON.stringify({ error: "unavailable" }), { status: 503 });
+        if (options.lookupError)
+          return envelope(
+            publicErrorEnvelope("run.get", {
+              code: options.lookupError,
+              message: "lookup refused",
+            }),
+          );
         const next = byKey.shift();
         return next
           ? envelope(publicSuccessEnvelope("run.get", null, next))
@@ -244,6 +276,11 @@ describe("waiting through a lost submission response", () => {
     expect(lookups).toHaveLength(2);
     expect(lookups[0]).toMatchObject({ requestId: "slow-start", action: "session.start" });
     expect(typeof lookups[0]!.namespace).toBe("string");
+    expect(lookups[0]!.submittedInput).toEqual({
+      environmentId: "env",
+      agent: "codex",
+      prompt: "hello",
+    });
     expect(starts()).toBe(1);
   });
 
@@ -256,6 +293,109 @@ describe("waiting through a lost submission response", () => {
     expect(error.details).toMatchObject({ requestId: "slow-start" });
     expect(starts()).toBe(1);
   });
+
+  test.each(["history-expired", "auth-failed", "identity-mismatch", "request-conflict"] as const)(
+    "preserves definitive %s lookup errors and recovery details",
+    async (code) => {
+      const { box } = await lostStart([], [], { lookupError: code });
+      const result = await box.run([...START, "--wait", "--timeout", "10s"]);
+      expect(JSON.parse(result.out).error).toMatchObject({
+        code,
+        details: { requestId: "slow-start", namespace: expect.any(String) },
+      });
+    },
+  );
+
+  test("signal interruption during recovery retains the key and interruption error", async () => {
+    const controller = new AbortController();
+    const { box } = await lostStart([], [], { onLookup: () => controller.abort("SIGTERM") });
+    const io = captureIo(box.env);
+    const code = await runClient([...START, "--wait"], {
+      io,
+      version: "test",
+      signal: controller.signal,
+    });
+    expect(code).toBe(143);
+    expect(JSON.parse(io.out.join("")).error).toMatchObject({
+      code: "observation-interrupted",
+      details: { requestId: "slow-start" },
+    });
+  });
+
+  test("connection failures are retried without another submission", async () => {
+    const { box, starts, lookups } = await lostStart([finished], [finished], { lookupFailures: 1 });
+    expect((await box.run([...START, "--wait", "--timeout", "10s"])).code).toBe(0);
+    expect(lookups).toHaveLength(2);
+    expect(starts()).toBe(1);
+  });
+
+  test("prompt recovery reconstructs the run ID from its receipt", async () => {
+    const final = { ...finished, action: "session.prompt" as const };
+    const { box, lookups } = await lostStart([final], [final], { action: "session.prompt" });
+    const result = await box.run([
+      "--json",
+      "session",
+      "prompt",
+      "ses_slow",
+      "--prompt",
+      "hello",
+      "--wait",
+      "--request-id",
+      "slow-start",
+    ]);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.out).result.runId).toBe(OPERATION);
+    expect(lookups[0]!.submittedInput).toEqual({ sessionId: "ses_slow", prompt: "hello" });
+  });
+
+  test("submission and an absent-key lookup share one deadline", async () => {
+    const { box, lookups } = await lostStart([], [], { mutationDelay: 180 });
+    const started = Date.now();
+    const result = await box.run([...START, "--wait", "--timeout", "300ms"]);
+    expect(JSON.parse(result.out).error.code).toBe("transport-uncertain");
+    expect(lookups).toHaveLength(1);
+    expect(Date.now() - started).toBeLessThan(450);
+  });
+
+  test("a stalled lookup is bounded by the remaining deadline", async () => {
+    const { box } = await lostStart([], [], { mutationDelay: 120, lookupDelay: 600 });
+    const started = Date.now();
+    const result = await box.run([...START, "--wait", "--timeout", "250ms"]);
+    expect(JSON.parse(result.out).error.code).toBe("transport-uncertain");
+    expect(Date.now() - started).toBeLessThan(500);
+  });
+
+  test("recovery and final observation share the remaining deadline", async () => {
+    const { box } = await lostStart([admitted], [dispatched], { mutationDelay: 160 });
+    const started = Date.now();
+    const result = await box.run([...START, "--wait", "--timeout", "300ms"]);
+    expect(JSON.parse(result.out).error.code).toBe("deadline-exceeded");
+    expect(Date.now() - started).toBeLessThan(450);
+  });
+
+  test("ordinary admission retains the full observation duration", async () => {
+    const { box } = await lostStart([], [dispatched, finished], {
+      mutationDelay: 300,
+      successfulSubmission: true,
+    });
+    const result = await box.run([...START, "--wait", "--timeout", "400ms"]);
+    expect(result.code).toBe(0);
+  });
+
+  test.each(["--prompt", "--environment"])(
+    "locally known changed %s is refused before sending and preserves its saved digest",
+    async (field) => {
+      const { box, starts } = await lostStart([finished, finished], [finished]);
+      expect((await box.run([...START, "--wait"])).code).toBe(0);
+      const changed = [...START];
+      changed[changed.indexOf(field) + 1] = "changed";
+      const result = await box.run([...changed, "--wait"]);
+      expect(JSON.parse(result.out).error.code).toBe("request-conflict");
+      expect(starts()).toBe(1);
+      expect((await box.run([...START, "--wait"])).code).toBe(0);
+      expect(starts()).toBe(2);
+    },
+  );
 
   test("without --wait a lost response is reported, not looked up", async () => {
     const { box, lookups } = await lostStart([finished], [finished]);

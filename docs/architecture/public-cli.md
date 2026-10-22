@@ -225,9 +225,13 @@ nothing ran.
 `session start --wait` and `session prompt --wait` do this themselves when the
 submission's response is lost (`transport-uncertain`, for example an admission
 slower than the client's 60 s request timeout). They look the run up by its
-saved key until it appears, then keep waiting, within the same `--timeout`
-budget; a warning names the recovery. If the key never appears, exit 4
-stands. Nothing is resubmitted.
+saved key and server-validated canonical intent and scope until it appears,
+then keep waiting. Recovery shares one `--timeout` deadline measured from
+before submission; a warning names the recovery. Ordinary successful
+submissions get the full observation duration after admission. If the key
+never appears, exit 4 stands. Definitive lookup errors and signal interruptions
+remain visible with the saved key details. A locally known changed intent is
+refused before sending. Nothing is resubmitted.
 
 ### Retention and expiry
 
@@ -430,9 +434,11 @@ environment. At most four commands run per environment.
 The worker outlives the client and the backend; a backend restart reconciles
 it by its heartbeat (a recycled PID cannot impersonate it). A worker that stops
 reporting is `interrupted` and never re-run. If the launcher fails, the
-backend checks whether it claimed the run (`state.json`) without needing Bun:
-unclaimed means no worker was started, and the run fails at once (`exec-failed`,
-"worker never started"); claimed stays pending until the worker reports, and a
+backend can prove a local controller exited before claiming the run
+(`state.json`) and fail it at once (`exec-failed`, "worker never started").
+A timeout or container transport failure cannot prove the controller stopped:
+an unconfirmed launch stays pending with an unknown outcome, even if a later
+status read finds no state yet. A late worker claim can still reconcile; a
 second worker is never started. `run cancel OP` targets that exact
 worker and drains its descendants. `run output OP [--stream stderr] [--tail N]`
 reads a bounded window. By default a non-zero exit is exit 1 with the child's
@@ -462,7 +468,9 @@ or settings into the operator's own `~/.claude`, `~/.codex` or OpenCode
 directories. `PI_CODING_AGENT_DIR` and `GROK_HOME` are disposable too. A
 live run stages only API-key credentials for Codex, OpenCode, Pi (`api_key`
 entries; OAuth entries are dropped) or Cursor (`CURSOR_API_KEY`), and Grok's
-login with its refresh token blanked (or `XAI_API_KEY`) (mode 0600); OAuth `auth.json` files are refused, even when fresh, because a
+login with its refresh token blanked (or `XAI_API_KEY`, staged as a private
+`.grok/xai-api-key` file and read only by Grok container bridge startup)
+(mode 0600); OAuth `auth.json` files are refused, even when fresh, because a
 refresh (including one triggered by a 401) could rotate the host's login and
 leave its replacement in a disposable home. For Codex, supply a test API key
 through `CODEX_API_KEY` or `OPENAI_API_KEY`, or an API-key-only `auth.json` in

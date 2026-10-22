@@ -1212,7 +1212,7 @@ describe("syncContainerGrokLogin", () => {
       }
       await withDockerScript(
         `#!/bin/sh
-case "$*" in *"rm -f"*) printf 'removed\\n' >> "$FAKE_DOCKER_LOG" ;; esac
+case "$*" in *"rm -f"*) printf 'removed: %s\\n' "$*" >> "$FAKE_DOCKER_LOG" ;; esac
 exit 0
 `,
         async (log) => {
@@ -1239,6 +1239,7 @@ exit 0
           await sync;
           expect((await revoke).removed).toBe(true);
           expect(await log.read()).toContain("removed");
+          expect(await log.read()).toContain("/home/node/.grok/xai-api-key");
           expect(credentialPresent).toBe(false);
           if (pauseAt === "authorization") expect(fake.calls).toEqual([]);
           // A later sync cannot restore the revoked credential either.

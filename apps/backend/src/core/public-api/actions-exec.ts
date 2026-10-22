@@ -3,7 +3,7 @@ import path from "node:path";
 import { PUBLIC_API_LIMITS } from "@orkestrator/protocol/public-api";
 import type { PublicExecOutputWindow } from "@orkestrator/protocol/public-api-resources";
 import type { Environment } from "../models.js";
-import { CommandFailedError, runCommand } from "../shell.js";
+import { CommandFailedError } from "../shell.js";
 import { requireEnvironment } from "./actions-discovery.js";
 import { loadOperation } from "./actions-runs.js";
 import { assertReadyForAgents } from "./actions-sessions.js";
@@ -50,39 +50,17 @@ const inFlight = new Map<string, Promise<OperationPatch | null>>();
  * control starts a worker only after that claim, so once the control process
  * has exited, a missing claim proves no worker exists or ever will. Read
  * without Bun: a launcher that cannot start is exactly when this matters.
- * `undefined` when the answer is unknown.
+ * Container transports never prove remote exit, so they always return unknown.
  */
 async function workerClaimed(
   environment: Environment,
   directory: string,
 ): Promise<boolean | undefined> {
-  const statePath = path.posix.join(directory, "state.json");
-  if (environment.environmentType === "local") {
-    return fs.lstat(path.join(directory, "state.json")).then(
-      () => true,
-      (error: NodeJS.ErrnoException) => (error.code === "ENOENT" ? false : undefined),
-    );
-  }
-  if (!environment.containerId) return undefined;
-  try {
-    const { stdout } = await runCommand(
-      "docker",
-      [
-        "exec",
-        environment.containerId,
-        "sh",
-        "-c",
-        'if [ -e "$1" ]; then echo claimed; else echo unclaimed; fi',
-        "sh",
-        statePath,
-      ],
-      { timeoutMs: 10_000 },
-    );
-    const answer = stdout.trim();
-    return answer === "claimed" ? true : answer === "unclaimed" ? false : undefined;
-  } catch {
-    return undefined;
-  }
+  if (environment.environmentType !== "local") return undefined;
+  return fs.lstat(path.join(directory, "state.json")).then(
+    () => true,
+    (error: NodeJS.ErrnoException) => (error.code === "ENOENT" ? false : undefined),
+  );
 }
 
 function neverStarted(error: unknown) {
@@ -140,10 +118,9 @@ async function reconcileExec(
         operationId: record.operationId,
         directory,
       })) as ExecState;
-    } catch (error) {
-      // The control that started this operation has exited by now; without
-      // its claim no worker can ever report, so do not wait for one.
-      if ((await workerClaimed(environment, directory)) === false) return neverStarted(error);
+    } catch {
+      // A failed status read proves nothing about the original controller,
+      // especially across Docker transport loss. Never infer non-execution here.
       if (environment.status !== "running") {
         return {
           state: "interrupted",
@@ -160,6 +137,8 @@ async function reconcileExec(
       }
       return null;
     }
+    // An unconfirmed controller may claim later, even after status said missing.
+    if (state.status === "missing" && record.result?.launch === "unconfirmed") return null;
     const { patch } = executionFromState(state);
     if (!patch.state && JSON.stringify(patch.execution) === JSON.stringify(record.execution))
       return null;

@@ -90,6 +90,10 @@ export { isolateProviderHomes } from "./provider-homes.js";
 /** Start an isolated backend through the packaged launcher (`serve`). */
 export async function startIsolatedBackend(options: {
   root: string;
+  /** Packaged distribution under test; defaults to this worktree. */
+  packageRoot?: string;
+  hostEnv?: NodeJS.ProcessEnv;
+  hostHome?: string;
   env?: Record<string, string>;
   extraArgs?: string[];
   /** The explicitly authorized live provider (see `isolateProviderHomes`). */
@@ -102,6 +106,8 @@ export async function startIsolatedBackend(options: {
   ) {
     throw new Error("Select live credentials through credentialSource, not extraArgs");
   }
+  const packageRoot = options.packageRoot ?? PACKAGE_ROOT;
+  const launcher = path.join(packageRoot, "bin", "orkestrator.js");
   const dataDir = path.join(options.root, "data");
   const worktreeDir = path.join(options.root, "worktrees");
   await mkdir(dataDir, { recursive: true, mode: 0o700 });
@@ -110,14 +116,14 @@ export async function startIsolatedBackend(options: {
   const runtime = await prepareProviderRuntime({
     root: options.root,
     dataDir,
-    packageRoot: PACKAGE_ROOT,
+    packageRoot,
     ...(options.credentialSource ? { provider: options.credentialSource } : {}),
   });
   if (runtime.toolchainTools.length > 0) {
     const install = spawnSync(
       process.execPath,
       [
-        BIN,
+        launcher,
         "toolchain",
         "install",
         "--json",
@@ -129,14 +135,14 @@ export async function startIsolatedBackend(options: {
     );
     if (install.status !== 0)
       throw new Error(
-        `toolchain install ${runtime.toolchainTools.join(",")} failed:\n${`${install.stdout}${install.stderr}`.slice(-2_000)}`,
+        `toolchain install ${runtime.toolchainTools.join(",")} failed (exit ${install.status ?? "unknown"})`,
       );
   }
   const logFile = path.join(options.root, "backend.log");
   const child = Bun.spawn(
     [
       process.execPath,
-      BIN,
+      launcher,
       "serve",
       "--host",
       "127.0.0.1",

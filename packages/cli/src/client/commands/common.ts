@@ -100,7 +100,14 @@ export async function submitForWait<T>(
   input: Record<string, unknown>,
   options: Record<string, unknown>,
   timeoutMs: number,
-): Promise<{ session: ClientSession; result?: T; receipt?: PublicReceipt; warnings?: string[] }> {
+): Promise<{
+  session: ClientSession;
+  result?: T;
+  receipt?: PublicReceipt;
+  warnings?: string[];
+  deadline?: number;
+}> {
+  const deadline = Date.now() + timeoutMs;
   const session = await context.session();
   try {
     return {
@@ -121,12 +128,18 @@ export async function submitForWait<T>(
     try {
       receipt = await observe<PublicReceipt>(
         async () => {
+          if (Date.now() >= deadline) throw new ObservationStopped("deadline");
           try {
-            const found = await session.readWithReceipt("run.get", {
-              requestId,
-              action,
-              namespace,
-            });
+            const found = await session.readWithReceipt(
+              "run.get",
+              {
+                requestId,
+                action,
+                namespace,
+                submittedInput: input,
+              },
+              Math.max(1, deadline - Date.now()),
+            );
             return found.receipt ? { done: true, value: found.receipt } : { done: false };
           } catch (lookup) {
             // Not admitted yet, or the backend is too busy to answer a read.
@@ -138,14 +151,31 @@ export async function submitForWait<T>(
             throw lookup;
           }
         },
-        { timeoutMs, signal: context.signal },
+        { timeoutMs: Math.max(0, deadline - Date.now()), signal: context.signal },
       );
-    } catch {
-      throw error;
+    } catch (lookup) {
+      const stopped = context.signal?.aborted
+        ? new ObservationStopped("signal", signalName(context.signal))
+        : lookup;
+      if (stopped instanceof ObservationStopped && stopped.reason === "deadline") throw error;
+      const failure =
+        stopped instanceof ObservationStopped
+          ? stoppedError(stopped, action, undefined, "admission")
+          : stopped;
+      if (failure instanceof CliError) {
+        throw new CliError(failure.code, failure.message, {
+          action,
+          receipt: failure.receipt,
+          retryable: failure.retryable,
+          details: { ...error.details, ...failure.details },
+        });
+      }
+      throw failure;
     }
     return {
       session,
       receipt,
+      deadline,
       warnings: [`The ${action} response was lost; found the operation by its request key`],
     };
   }
@@ -155,8 +185,9 @@ export async function submitForWait<T>(
 export async function readOperation(
   session: ClientSession,
   operationId: string,
+  timeoutMs?: number,
 ): Promise<PublicReceipt> {
-  const { receipt } = await session.readWithReceipt("run.get", { operationId });
+  const { receipt } = await session.readWithReceipt("run.get", { operationId }, timeoutMs);
   if (!receipt) throw new CliError("response-invalid", "run.get returned no receipt");
   return receipt;
 }
@@ -222,10 +253,28 @@ export async function waitForOperation(
   options: { continueOnInteraction?: boolean } = {},
 ): Promise<PublicReceipt> {
   let latest = initial;
+  const deadline = Date.now() + timeoutMs;
   try {
     return await observe<PublicReceipt>(
       async () => {
-        latest = await readOperation(session, initial.operationId);
+        if (Date.now() >= deadline) throw new ObservationStopped("deadline");
+        try {
+          latest = await readOperation(
+            session,
+            initial.operationId,
+            Math.max(1, deadline - Date.now()),
+          );
+        } catch (error) {
+          if (context.signal?.aborted)
+            throw new ObservationStopped("signal", signalName(context.signal));
+          if (
+            Date.now() >= deadline &&
+            error instanceof CliError &&
+            error.code === "connection-failed"
+          )
+            throw new ObservationStopped("deadline");
+          throw error;
+        }
         if (isTerminalReceipt(latest)) return { done: true as const, value: latest };
         const execution: PublicExecutionState | undefined = latest.execution;
         if (execution?.state === "waiting-for-input" && !options.continueOnInteraction) {

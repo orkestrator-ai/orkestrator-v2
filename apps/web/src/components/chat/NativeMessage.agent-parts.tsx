@@ -1165,6 +1165,8 @@ export function BackgroundTaskCard({
               </div>
             ) : null}
           </div>
+          {/* The rail sits before the chevron so every card's chevron lines up at the edge. */}
+          <BackgroundTaskRail usage={usage} durationLabel={durationLabel} />
           <ChevronRight
             className={cn(
               "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
@@ -1174,7 +1176,6 @@ export function BackgroundTaskCard({
             )}
           />
         </CollapsibleTrigger>
-        <BackgroundTaskRail usage={usage} durationLabel={durationLabel} />
       </div>
 
       {stopError ? (
@@ -1701,7 +1702,9 @@ export function TaskGroupPart({
                 </div>
               ) : null}
             </div>
-            {backgroundUsage ? null : (
+            {backgroundUsage ? (
+              <BackgroundTaskRail usage={backgroundUsage} durationLabel={durationLabel} />
+            ) : (
               <AgentUsageStats
                 hasExternalUsage={hasExternalUsage}
                 tokenOnlyUsage={tokenOnlyUsage}
@@ -1720,9 +1723,6 @@ export function TaskGroupPart({
             />
           </div>
         </CollapsibleTrigger>
-        {backgroundUsage ? (
-          <BackgroundTaskRail usage={backgroundUsage} durationLabel={durationLabel} />
-        ) : null}
       </div>
       {stopError ? (
         <div role="alert" className="px-3 pb-2 text-xs text-destructive">

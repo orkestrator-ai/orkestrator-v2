@@ -19,7 +19,6 @@ import {
 import { isMachineWritable, type MachineView } from "@/lib/federation/aggregate";
 import type { FederatedEnvironment, FederatedProject } from "@/lib/federation/summaries";
 import {
-  createFederatedEnvironment,
   deleteFederatedEnvironment,
   startFederatedEnvironment,
   stopFederatedEnvironment,
@@ -158,40 +157,17 @@ export function useFederatedEnvironmentActions(
   };
 }
 
-/** "New environment" inside a project instance: always on the project's own machine. */
-export function useCreateFederatedEnvironment(
-  machine: MachineView,
-  project: FederatedProject,
-): { creating: boolean; create: () => Promise<void> } {
-  const { portal } = useFederation();
-  const [creating, setCreating] = useState(false);
-
-  const create = async () => {
-    // The project instance's own machine; there is no placement.
-    const ref = project.ref;
-    setCreating(true);
-    try {
-      const environment = await createFederatedEnvironment(portal, ref);
-      openMachineWorkspace({
-        connectionId: machine.connectionId,
-        projectId: ref.projectId,
-        environmentId: environment.id,
-        title: project.name,
-      });
-    } catch (error) {
-      if (error instanceof OutcomeUnknownError) {
-        toast.warning(`Create environment: outcome unknown on ${machine.name}`, {
-          description: error.message,
-        });
-      } else {
-        toast.error(`Could not create an environment on ${machine.name}`, {
-          description: error instanceof Error ? error.message : String(error),
-        });
-      }
-    } finally {
-      setCreating(false);
-    }
-  };
-
-  return { creating, create };
+/**
+ * "New environment" inside a project instance: always on the project's own
+ * machine, and always through that machine's New Environment dialog. The
+ * window moves to the machine first when it is another one, so the dialog's
+ * defaults, agent settings and start are the machine's own.
+ */
+export function newFederatedEnvironment(machine: MachineView, project: FederatedProject): void {
+  openMachineWorkspace({
+    connectionId: machine.connectionId,
+    projectId: project.ref.projectId,
+    createEnvironment: true,
+    title: project.name,
+  });
 }

@@ -79,6 +79,8 @@ const DEFAULT_CONFIG: AppConfig = {
 interface ConfigState {
   // State
   config: AppConfig;
+  /** Whether the backend's config has arrived; `config` holds defaults until then. */
+  hasLoaded: boolean;
   isLoading: boolean;
   error: string | null;
 
@@ -98,6 +100,7 @@ interface ConfigState {
 export const useConfigStore = create<ConfigState>()((set, get) => ({
   // Initial state
   config: DEFAULT_CONFIG,
+  hasLoaded: false,
   isLoading: false,
   error: null,
 
@@ -106,7 +109,14 @@ export const useConfigStore = create<ConfigState>()((set, get) => ({
   // reordered but identical config would republish and rerender every
   // subscriber) and erases undefined-valued fields, which this store treats as
   // distinct from absent ones (see updateGlobalConfig's reviewInstruction).
-  setConfig: (config) => set((state) => (deepEqualJson(state.config, config) ? state : { config })),
+  setConfig: (config) =>
+    set((state) =>
+      deepEqualJson(state.config, config)
+        ? state.hasLoaded
+          ? state
+          : { hasLoaded: true }
+        : { config, hasLoaded: true },
+    ),
 
   updateGlobalConfig: (updates) =>
     set((state) => {

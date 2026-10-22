@@ -99,3 +99,13 @@
 - Merge: `90e3e5226` into `4902a9282`; original command `mise run test:logged -- --name machines-merge-suite -- mise run test`, workspace/root/bridges/protocol worker reservations 4/1/2/1 alongside browser and Electron validation.
 - Root/support reported 3,222 passed, one skipped, two failed and one error across 154 files (325.9 s). The supported-SDK case exceeded 30 seconds (30003.03 ms). `mise run test:logged -- --name machines-merge-pi-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed the complete unchanged owner, exit 0 in 8.1 s.
 - Evidence: `orkestrator-test-run.rzuQT5/root-and-agent-support-tests.log.gz` under the host temporary directory after the aggregate completes. This confirms another intermittent deadline recurrence; contention remains a hypothesis. No implementation, assertion, timeout or skip changed.
+
+
+## Sidebar collision main merge — 2026-10-22
+
+- **Merge parents:** feature `8106d7821` and main `7b1066bc1`.
+- **Original command:** `mise run test:logged -- --name merge-final-full-suite -- mise run test`, Bun 1.4.3 on macOS arm64. Workspace/root/bridges/protocol reserved 4/1/2/1 workers. Component browser validation also ran on the host.
+- **Failure:** the supported-SDK staging case exceeded its 30-second deadline (30000.04 ms). Root/support reported 3,337 passed and one failed across 3,338 tests in 161 files (269.81 seconds). No other root/support case failed.
+- **Complete unchanged owner:** `mise run test:logged -- --name merge-pi-vendor-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed all four cases, exit 0 in 9.6 seconds logged.
+- **Evidence:** `orkestrator-test-run.jPvcE5/root-and-agent-support-tests.log.gz`, with outer summary in `orkestrator-test-run.1P2vS1/merge-final-full-suite.log.gz`, below the host temporary directory after aggregate completion.
+- **Assessment:** confirmed intermittent recurrence; host contention remains a hypothesis. No Pi implementation, assertion, deadline or skip changed.

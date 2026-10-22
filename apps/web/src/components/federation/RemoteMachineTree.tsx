@@ -82,7 +82,7 @@ import { sidebarFolderKey, useMachineViewStore } from "@/stores/machineViewStore
 import { useFederation } from "./FederationProvider";
 import { MachineDot, machineStatusText } from "./MachineDot";
 import {
-  useCreateFederatedEnvironment,
+  newFederatedEnvironment,
   useFederatedEnvironmentActions,
 } from "./useFederatedEnvironmentActions";
 
@@ -334,6 +334,7 @@ export function RemoteProjectGroup({
   onToggleCollapse,
   sortable,
   showMachine = false,
+  label = project.name,
 }: {
   machine: MachineView;
   project: FederatedProject;
@@ -343,8 +344,9 @@ export function RemoteProjectGroup({
   sortable: boolean;
   /** Name the machine in the header, in lists that mix machines. */
   showMachine?: boolean;
+  /** Shown instead of the project name (a repository group names the machine). */
+  label?: string;
 }) {
-  const { creating, create } = useCreateFederatedEnvironment(machine, project);
   const writable = isMachineWritable(machine);
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: project.key,
@@ -394,7 +396,7 @@ export function RemoteProjectGroup({
                 onClick={openBoard}
                 title={`Open ${project.name} on ${machine.name}`}
               >
-                <span className="truncate font-medium">{project.name}</span>
+                <span className="truncate font-medium">{label}</span>
                 {showMachine ? (
                   <MachineDot colorToken={machine.colorToken} machineName={machine.name} />
                 ) : null}
@@ -411,7 +413,10 @@ export function RemoteProjectGroup({
                 Open Board
               </ContextMenuItem>
               <ContextMenuSeparator />
-              <ContextMenuItem disabled={!writable || creating} onClick={() => void create()}>
+              <ContextMenuItem
+                disabled={!writable}
+                onClick={() => newFederatedEnvironment(machine, project)}
+              >
                 <Plus className="h-4 w-4 mr-2" />
                 New Environment
               </ContextMenuItem>
@@ -422,11 +427,11 @@ export function RemoteProjectGroup({
             variant="ghost"
             size="icon"
             className="h-6 w-6 text-muted-foreground opacity-100 transition-opacity hover:text-foreground md:opacity-0 md:group-hover/project:opacity-100 md:focus-visible:opacity-100"
-            disabled={!writable || creating}
+            disabled={!writable}
             onClick={(event) => {
               event.stopPropagation();
               event.currentTarget.blur();
-              void create();
+              newFederatedEnvironment(machine, project);
             }}
             aria-label={`New environment in ${project.name} on ${machine.name}`}
             title={

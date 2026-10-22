@@ -12,7 +12,7 @@ async function drag(page: Page, handle: Locator, target: Locator) {
 }
 
 const project = (page: Page, name: string) =>
-  page.getByRole("button", { name: new RegExp(`^${name} 3$`) });
+  page.getByRole("button", { name: new RegExp(`^(Self · )?${name} 3$`) });
 
 for (const merged of [false, true]) {
   test(`${merged ? "merged" : "local"} project header drop reorders expanded projects and survives reload`, async ({
@@ -64,9 +64,9 @@ for (const repository of [false, true]) {
     page,
   }) => {
     await page.goto(`/sidebar-drag?groups=1${repository ? "&merged=1&repository=1" : ""}`);
-    const source = page
-      .getByTitle(`Collapse folder ${repository ? "acme/source" : "Source"}`, { exact: true })
-      .first();
+    const source = repository
+      ? page.getByRole("button", { name: "Move repository acme/source", exact: true })
+      : page.getByTitle("Collapse folder Source", { exact: true }).first();
     await expect(source).toBeVisible();
     await drag(page, source, project(page, "q"));
     await expect(page.getByTestId("sidebar-writes")).toContainText(
@@ -79,12 +79,12 @@ for (const repository of [false, true]) {
     await expect(
       page
         .locator(`[data-project-folder='${repository ? "github.com/acme/source" : "Source"}']`)
-        .getByRole("button", { name: /^p 3$/ }),
+        .getByRole("button", { name: /^(Self · )?p 3$/ }),
     ).toBeVisible();
     await expect(
       page
         .locator(`[data-project-folder='${repository ? "github.com/acme/target" : "Target"}']`)
-        .getByRole("button", { name: /^q 3$/ }),
+        .getByRole("button", { name: /^(Self · )?q 3$/ }),
     ).toBeVisible();
   });
 }

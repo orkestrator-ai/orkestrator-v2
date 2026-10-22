@@ -1,4 +1,5 @@
-import { useEffect, useId, useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
+import { useDndContext } from "@dnd-kit/core";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
@@ -8,6 +9,7 @@ import {
   FolderGit2,
   FolderOpen,
   FolderMinus,
+  GripVertical,
   Pencil,
 } from "lucide-react";
 import {
@@ -29,7 +31,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { MAX_PROJECT_FOLDER_NAME_LENGTH } from "@orkestrator/protocol/project-folders";
-import { projectFolderDragId } from "@/lib/project-folders";
+import { parseProjectFolderDragId, projectFolderDragId } from "@/lib/project-folders";
 import { cn } from "@/lib/utils";
 
 interface SortableProjectFolderProps {
@@ -46,6 +48,12 @@ interface SortableProjectFolderProps {
   label?: string;
   /** A repository group rather than a folder. */
   repository?: boolean;
+  /** Clicking the name opens this instead of toggling; the chevron still toggles. */
+  onOpen?: () => void;
+  /** Destination named by the repository navigation control. */
+  openMachineName?: string;
+  /** Shown instead of the member count. */
+  badge?: ReactNode;
   children: ReactNode;
 }
 
@@ -67,21 +75,32 @@ export function SortableProjectFolder({
   onUngroup,
   label = name,
   repository = false,
+  onOpen,
+  openMachineName,
+  badge,
   children,
 }: SortableProjectFolderProps) {
   const [isRenaming, setIsRenaming] = useState(false);
   const [draftName, setDraftName] = useState(name);
   const renameInputId = useId();
 
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging, isOver } =
-    useSortable({
-      id: sortableId ?? projectFolderDragId(name),
-      data: { sidebarGroup: true },
-    });
-
-  useEffect(() => {
-    if (isRenaming) setDraftName(name);
-  }, [isRenaming, name]);
+  const { active } = useDndContext();
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    setActivatorNodeRef,
+    transform,
+    transition,
+    isDragging,
+    isOver,
+  } = useSortable({
+    id: sortableId ?? projectFolderDragId(name),
+    data: { sidebarGroup: true },
+  });
+  const canHighlightDrop =
+    !repository || (active && parseProjectFolderDragId(String(active.id)) !== null);
+  const destination = openMachineName ? ` on ${openMachineName}` : "";
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -114,23 +133,47 @@ export function SortableProjectFolder({
           "relative mx-1 flex items-center rounded-lg border transition-colors",
           // A drop lands inside the folder rather than beside it, so the whole
           // header is highlighted rather than an insertion line being drawn.
-          isOver && !isDragging
+          isOver && !isDragging && canHighlightDrop
             ? "border-primary/70 bg-primary/10"
             : "border-transparent hover:bg-hover",
         )}
       >
+        {onOpen ? (
+          <button
+            {...attributes}
+            {...listeners}
+            ref={setActivatorNodeRef}
+            type="button"
+            aria-label={`Move repository ${label}`}
+            className="shrink-0 cursor-grab rounded-md p-1 text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing"
+          >
+            <GripVertical className="h-3 w-3" aria-hidden="true" />
+          </button>
+        ) : null}
         <ContextMenu>
           <ContextMenuTrigger className="contents">
             <button
-              {...attributes}
-              {...listeners}
+              {...(onOpen ? {} : attributes)}
+              {...(onOpen ? {} : listeners)}
+              ref={onOpen ? undefined : setActivatorNodeRef}
               type="button"
-              aria-expanded={!isCollapsed}
-              title={isCollapsed ? `Expand folder ${label}` : `Collapse folder ${label}`}
-              className="flex min-w-0 flex-1 cursor-grab items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm text-foreground active:cursor-grabbing"
+              aria-expanded={onOpen ? undefined : !isCollapsed}
+              aria-label={onOpen ? `Open ${label}${destination}` : undefined}
+              title={
+                onOpen
+                  ? `Open ${name}${destination}`
+                  : isCollapsed
+                    ? `Expand folder ${label}`
+                    : `Collapse folder ${label}`
+              }
+              className={cn(
+                "flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm text-foreground",
+                !onOpen && "cursor-grab active:cursor-grabbing",
+              )}
               onClick={(event) => {
                 event.stopPropagation();
-                onToggleCollapse();
+                if (onOpen) onOpen();
+                else onToggleCollapse();
               }}
             >
               <FolderIcon
@@ -141,15 +184,22 @@ export function SortableProjectFolder({
                 aria-hidden="true"
               />
               <span className="truncate font-medium">{label}</span>
-              <span className="flex h-4 min-w-[16px] shrink-0 items-center justify-center rounded-md bg-white/[0.07] px-1 text-[10px] text-zinc-300">
-                {projectCount}
-              </span>
+              {badge ?? (
+                <span className="flex h-4 min-w-[16px] shrink-0 items-center justify-center rounded-md bg-white/[0.07] px-1 text-[10px] text-zinc-300">
+                  {projectCount}
+                </span>
+              )}
             </button>
           </ContextMenuTrigger>
           {hasMenu ? (
             <ContextMenuContent>
               {onRename ? (
-                <ContextMenuItem onClick={() => setIsRenaming(true)}>
+                <ContextMenuItem
+                  onClick={() => {
+                    setDraftName(name);
+                    setIsRenaming(true);
+                  }}
+                >
                   <Pencil className="mr-2 h-4 w-4" />
                   Rename Folder
                 </ContextMenuItem>
@@ -173,13 +223,7 @@ export function SortableProjectFolder({
           ) : null}
         </ContextMenu>
 
-        {/*
-          The name is also the drag handle, and dnd-kit's keyboard sensor owns
-          Enter and Space there — pressing either starts a drag rather than
-          toggling. This chevron carries no drag listeners, so it is the control
-          a keyboard user can actually expand the folder with. Project rows are
-          built the same way.
-        */}
+        {/* The chevron collapses independently of navigation and dragging. */}
         <button
           type="button"
           aria-expanded={!isCollapsed}

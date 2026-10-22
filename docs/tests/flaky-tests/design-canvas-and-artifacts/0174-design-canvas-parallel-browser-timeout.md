@@ -171,3 +171,11 @@ Branch `todo-0036-design-canvas-qualification-1477f37ca3cf` from `b83ae534`, on 
 - `mise run test:logged -- --name merge-browser -- mise run test:browser` ran nine workers against the initial `c17f1c8d5` merge: 399 passed, 81 skipped, two failed (362.5 s). The desktop canvas exceeded 30 s while clicking Switch tab at line 234; Monaco was the other failure.
 - `mise run test:logged -- --name merge-canvas-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts --workers=1` passed the complete unchanged owner, exit 0 in 14.0 s.
 - Evidence: `orkestrator-test-run.mgE8Fb/merge-browser.log.gz` under the host temporary directory. No assertion, deadline or skip changed; host contention remains a hypothesis.
+
+
+## Repository-sidebar review validation — 2026-10-22
+
+- **Original command:** `mise run test:logged -- --name browser-suite -- mise run test:browser`, nine workers alongside repository validation on the shared host. The component suite reported 437 passed, 85 skipped and four failed in 9.4 minutes. Both unchanged canvas viewport cases exceeded the 30-second test deadline. The other failures were Monaco startup and a new sidebar test's reload synchronization, corrected in the same change.
+- **Complete unchanged owner:** `mise run test:logged -- --name design-canvas-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts --workers=1 --output=output/playwright/design-owner` passed both viewport cases, exit 0 in 39.9 seconds.
+- **Evidence:** host temporary directory `orkestrator-test-run.QC9tF3/browser-suite.log.gz`; original traces under `output/playwright/test-results/DesignCanvas-*`. The sidebar fixes are commit `6d6f9b83f`; its final focused browser rerun passed all 30 cases.
+- **Assessment:** confirmed intermittent recurrence. Host or fixture contention remains a hypothesis. No canvas implementation, assertion, timeout or skip changed; the original aggregate remains failed.

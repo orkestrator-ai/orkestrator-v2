@@ -149,3 +149,13 @@ The refreshed merge of `7e051d955` passed `mise run test:logged -- --name latest
 - Merge: `90e3e5226` into `4902a9282`; original command `mise run test:logged -- --name machines-merge-suite -- mise run test`, workspace/root/bridges/protocol worker reservations 4/1/2/1 alongside browser and Electron validation.
 - Root/support reported 3,222 passed, one skipped, two failed and one error across 154 files (325.9 s). The checkout fixture exceeded five seconds (5019.18 ms), with `report.status` null rather than zero and an error between tests. `mise run test:logged -- --name machines-merge-disk-owner -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures` passed the complete unchanged owner, exit 0 in 1.1 s.
 - Evidence: `orkestrator-test-run.rzuQT5/root-and-agent-support-tests.log.gz` under the host temporary directory after the aggregate completes. This confirms another intermittent deadline recurrence; contention remains a hypothesis. No implementation, assertion, timeout or skip changed.
+
+
+## Repository-sidebar review validation — 2026-10-22
+
+- **Original command:** `mise run test:logged -- --name full-tests -- mise run test`, workspace/root/bridge/protocol reservations 4/1/2/1 alongside component browser validation and other worktrees. Root/support reported 3319 passed, one failed and one error across 3320 tests in 160 files (446.48 seconds).
+- **Failure:** the unchanged isolated-checkout case exceeded 5000 ms (5040.14 ms), with `report.status` null instead of zero and an error between tests.
+- **First unchanged owner:** `mise run test:logged -- --name disk-report-owner -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures` also exceeded the deadline (5043.72 ms; 5.9 seconds logged), while both aggregates were still running. Evidence: host temporary directory `orkestrator-test-run.jRwPM3`.
+- **Final complete unchanged owner:** after the component browser aggregate ended, `mise run test:logged -- --name disk-report-final-owner -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures` passed all five tests, exit 0 in 5.0 seconds logged.
+- **Aggregate evidence:** host temporary directories `orkestrator-test-run.jSDfl8/root-and-agent-support-tests.log.gz` and `orkestrator-test-run.EDCav0/full-tests.log.gz`. Sidebar fixes are commit `6d6f9b83f`.
+- **Assessment:** confirmed intermittent recurrence; host process or filesystem contention remains a hypothesis. No disk-report implementation, assertion, timeout or skip changed, and the original aggregate remains failed.

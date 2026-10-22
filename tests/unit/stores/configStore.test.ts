@@ -27,6 +27,7 @@ describe("configStore", () => {
         repositories: {},
       },
       isLoading: false,
+      hasLoaded: false,
       error: null,
     });
   });
@@ -41,6 +42,7 @@ describe("configStore", () => {
     expect(state.config.global.agentSettings?.platforms?.claude?.model).toBe("claude-sonnet-4-6");
     expect(state.config.repositories).toEqual({});
     expect(state.isLoading).toBe(false);
+    expect(state.hasLoaded).toBe(false);
     expect(state.error).toBeNull();
   });
 
@@ -69,9 +71,35 @@ describe("configStore", () => {
 
     const state = useConfigStore.getState();
     expect(state.config).toEqual(newConfig);
+    expect(state.hasLoaded).toBe(true);
+  });
+
+  test("first equal backend config marks defaults loaded without replacing config", () => {
+    useConfigStore.setState({ config: useConfigStore.getInitialState().config });
+    const before = useConfigStore.getState();
+
+    before.setConfig(structuredClone(before.config));
+
+    const after = useConfigStore.getState();
+    expect(after.hasLoaded).toBe(true);
+    expect(after.config).toBe(before.config);
+    expect(after).not.toBe(before);
+  });
+
+  test("loading and failure do not mark config loaded before a backend snapshot arrives", () => {
+    const { setLoading, setError, setConfig } = useConfigStore.getState();
+    setLoading(true);
+    expect(useConfigStore.getState().hasLoaded).toBe(false);
+    setError("Config could not be loaded");
+    setLoading(false);
+    expect(useConfigStore.getState().hasLoaded).toBe(false);
+    setError(null);
+    setConfig(structuredClone(useConfigStore.getState().config));
+    expect(useConfigStore.getState().hasLoaded).toBe(true);
   });
 
   test("setConfig preserves state and config identity for equal data", () => {
+    useConfigStore.setState({ hasLoaded: true });
     const before = useConfigStore.getState();
     const equalConfig = JSON.parse(JSON.stringify(before.config));
 
@@ -83,6 +111,7 @@ describe("configStore", () => {
   });
 
   test("setConfig ignores a config whose keys arrive in a different order", () => {
+    useConfigStore.setState({ hasLoaded: true });
     // A serialized compare is key-order sensitive, so a backend snapshot that
     // reordered its keys would republish identical data and rerender every
     // subscriber.

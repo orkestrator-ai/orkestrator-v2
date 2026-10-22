@@ -333,10 +333,10 @@ export function repositoryArrangementUpdate(
   };
 }
 
-/** The label of a repository group: its last two path segments. */
+/** Shorten a repository hint by dropping only its host, preserving every namespace. */
 export function repositoryLabel(hint: string): string {
   const parts = hint.split("/");
-  return parts.length >= 2 ? parts.slice(-2).join("/") : hint;
+  return parts.length > 2 ? parts.slice(1).join("/") : hint;
 }
 
 /** Repository hints are identities, not user-entered folder names. */
@@ -393,4 +393,27 @@ export function resolveRepositoryArrangement(
     overId,
   );
   return next ? { projectIds: next, folders: {} } : null;
+}
+
+/**
+ * A member's label in its repository group: its machine, since the group
+ * already names the repository. A machine with several projects in the group
+ * adds the project name to tell them apart.
+ */
+export function repositoryMemberLabel(
+  member: MergedProject,
+  group: readonly MergedProject[],
+): string {
+  const shared = group.some(
+    (other) => other !== member && other.machine.connectionId === member.machine.connectionId,
+  );
+  return shared ? `${member.machine.name} · ${member.name}` : member.machine.name;
+}
+
+/** What a repository group's heading opens: the command node's project, else the first shown. */
+export function repositoryOpenTarget(
+  group: readonly MergedProject[],
+  commandNodeId: string | null,
+): MergedProject | null {
+  return group.find((member) => member.machine.backendId === commandNodeId) ?? group[0] ?? null;
 }

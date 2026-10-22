@@ -8,6 +8,7 @@ import {
   uninstallDesktopFake,
 } from "@/test/federation-desktop-fake";
 import { updatePortalLayout } from "@/lib/portal/portal-layout";
+import { openMachineWorkspace } from "@/lib/federation/open-workspace";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createElement, type ComponentProps } from "react";
@@ -353,6 +354,7 @@ describe("HierarchicalSidebar", () => {
         },
         repositories: {},
       },
+      hasLoaded: true,
       isLoading: false,
       error: null,
     }));
@@ -1506,6 +1508,47 @@ describe("HierarchicalSidebar", () => {
         undefined,
       ),
     );
+  });
+
+  test("opens the create dialog requested by a workspace switch once config has loaded", async () => {
+    useConfigStore.setState({ hasLoaded: false });
+    sessionStorage.setItem(
+      "orkestrator.workspace-switch-intent",
+      JSON.stringify({ createEnvironmentProjectId: "project-1" }),
+    );
+    try {
+      render(<HierarchicalSidebar />);
+      expect(sessionStorage.getItem("orkestrator.workspace-switch-intent")).toBeNull();
+      // Its defaults come from config, so the dialog waits for it.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(screen.queryByText(/^Create Ork \(Environment\)/)).toBeNull();
+
+      act(() => useConfigStore.setState({ hasLoaded: true }));
+      await screen.findByText(/^Create Ork \(Environment\)/);
+      expect(createEnvironmentMock).not.toHaveBeenCalled();
+    } finally {
+      sessionStorage.clear();
+    }
+  });
+
+  test("opens the create dialog when a machine section asks for this window's machine", async () => {
+    window.orkestratorWorkspaceTarget = { nodeId: "bk_here" } as never;
+    try {
+      render(<HierarchicalSidebar />);
+      act(() =>
+        openMachineWorkspace({
+          connectionId: "bk_here",
+          projectId: "project-1",
+          createEnvironment: true,
+          title: "Project One",
+        }),
+      );
+      await screen.findByText(/^Create Ork \(Environment\)/);
+      expect(createEnvironmentMock).not.toHaveBeenCalled();
+      expect(useUIStore.getState().selectedProjectId).toBeNull();
+    } finally {
+      delete window.orkestratorWorkspaceTarget;
+    }
   });
 
   test("does not select or start a partially configured environment", async () => {

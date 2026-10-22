@@ -26,12 +26,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import {
-  applyWorkingDirectory,
-  cursorSdkStateDirectoryPath,
-  resolveCursorSettingSources,
-  workingDirectory,
-} from "./config.js";
+import { applyWorkingDirectory, cursorSdkStateDirectoryPath, workingDirectory } from "./config.js";
 
 describe("Cursor SDK state", () => {
   test("nests the SDK store below CURSOR_BRIDGE_STATE_DIR", () => {
@@ -282,70 +277,4 @@ describe("the bridge process", () => {
     },
     PROCESS_TEST_TIMEOUT_MS,
   );
-});
-
-/**
- * The host-run execution posture, pinned so it cannot drift silently.
- *
- * `sandboxEnabled` being false means a Cursor host tab runs `shell`, `write`
- * and `delete` against the user's machine with no approval surface — the SDK
- * offers no approval hook this bridge could park a call on. That is the same
- * answer every platform here gives locally (Grok's `--always-approve`, Pi's
- * default-off approval gate, Claude's local allow), and it is stated in
- * `docs/architecture/agent-engines.md` rather than left implicit.
- * Plan 12 replaces it with a uniform backend-owned policy; until then, changing
- * this default is a documentation change too.
- */
-describe("the host execution posture", () => {
-  function readSandboxDefault(env: NodeJS.ProcessEnv): Promise<string> {
-    return runBun({
-      body: `const c = await import(${JSON.stringify(pathToFileURL(join(import.meta.dir, "config.ts")).href)});
-         process.stdout.write(String(c.sandboxEnabled));`,
-      env: { ...process.env, ...env },
-    });
-  }
-
-  test(
-    "is ungated unless a launcher explicitly opts in",
-    async () => {
-      expect(await readSandboxDefault({ CURSOR_BRIDGE_SANDBOX: "" })).toBe("false");
-    },
-    PROCESS_TEST_TIMEOUT_MS,
-  );
-
-  test(
-    "only the exact opt-in value turns the SDK sandbox on",
-    async () => {
-      // `sandboxEnabled` is frozen at import, so every value needs its own
-      // process. They are independent, so start them together.
-      const [optIn, word, zero] = await Promise.all([
-        readSandboxDefault({ CURSOR_BRIDGE_SANDBOX: "1" }),
-        readSandboxDefault({ CURSOR_BRIDGE_SANDBOX: "true" }),
-        readSandboxDefault({ CURSOR_BRIDGE_SANDBOX: "0" }),
-      ]);
-      expect(optIn).toBe("true");
-      // Anything else fails closed towards the documented default rather than
-      // half-enabling a sandbox on a typo.
-      expect(word).toBe("false");
-      expect(zero).toBe("false");
-    },
-    PROCESS_TEST_TIMEOUT_MS,
-  );
-
-  test("project settings are an exact opt-in read at the call site", () => {
-    const previous = process.env.CURSOR_BRIDGE_PROJECT_SETTINGS;
-    try {
-      delete process.env.CURSOR_BRIDGE_PROJECT_SETTINGS;
-      expect(resolveCursorSettingSources()).toEqual(["user"]);
-      process.env.CURSOR_BRIDGE_PROJECT_SETTINGS = "1";
-      expect(resolveCursorSettingSources()).toEqual(["user", "project"]);
-      process.env.CURSOR_BRIDGE_PROJECT_SETTINGS = "0";
-      expect(resolveCursorSettingSources()).toEqual(["user"]);
-      process.env.CURSOR_BRIDGE_PROJECT_SETTINGS = "true";
-      expect(resolveCursorSettingSources()).toEqual(["user"]);
-    } finally {
-      if (previous === undefined) delete process.env.CURSOR_BRIDGE_PROJECT_SETTINGS;
-      else process.env.CURSOR_BRIDGE_PROJECT_SETTINGS = previous;
-    }
-  });
 });

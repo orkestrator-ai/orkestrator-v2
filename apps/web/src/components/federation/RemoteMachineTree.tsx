@@ -1,5 +1,5 @@
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
-import { useCallback, useMemo, type ReactNode } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
   DndContext,
@@ -9,6 +9,7 @@ import {
   useSensor,
   useSensors,
   type DragEndEvent,
+  type DragStartEvent,
 } from "@dnd-kit/core";
 import {
   SortableContext,
@@ -20,8 +21,6 @@ import { CSS } from "@dnd-kit/utilities";
 import {
   ChevronRight,
   Container,
-  Folder,
-  FolderOpen,
   GripVertical,
   LayoutGrid,
   Laptop,
@@ -34,6 +33,7 @@ import {
   Square,
   Trash2,
 } from "lucide-react";
+import type { BackendId } from "@orkestrator/protocol/federation";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
@@ -55,16 +55,30 @@ import {
   type EnvironmentMenuItem,
 } from "@/components/environments/EnvironmentItem";
 import { UnreadBellIcon } from "@/components/environments/UnreadBellIcon";
+import { SortableProjectFolder } from "@/components/sidebar/SortableProjectFolder";
+import { SidebarRootDropZone } from "@/components/sidebar/SidebarRootDropZone";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { isMachineWritable, type MachineView } from "@/lib/federation/aggregate";
 import { useStore } from "zustand";
 import { remoteOrdersFor } from "@/lib/federation/remote-order-writes";
+import { remoteProjectsFor, withArrangement } from "@/lib/federation/remote-project-writes";
 import { moveId, withOrder } from "@/lib/federation/remote-order";
 import type { FederatedEnvironment, FederatedProject } from "@/lib/federation/summaries";
-import { buildProjectTree, isProjectFolderCollapsed } from "@/lib/project-folders";
+import {
+  buildProjectTree,
+  normalizeProjectFolderName,
+  parseProjectFolderDragId,
+  projectFolderKey,
+  projectSortableIds,
+  resolveProjectArrangement,
+  resolveRenameProjectFolder,
+  resolveSortProjectFolder,
+  resolveUngroupProjectFolder,
+  type ProjectArrangement,
+} from "@/lib/project-folders";
 import { OutcomeUnknownError } from "@/lib/portal/portal-store";
 import { cn } from "@/lib/utils";
-import { useUIStore } from "@/stores";
+import { sidebarFolderKey, useMachineViewStore } from "@/stores/machineViewStore";
 import { useFederation } from "./FederationProvider";
 import { MachineDot, machineStatusText } from "./MachineDot";
 import {
@@ -82,45 +96,44 @@ const ACTIVITY_TEXT: Record<FederatedEnvironment["activity"], string> = {
   idle: "Idle",
 };
 
-/**
- * Collapse state is kept with this window's own projects and folders, so it
- * is keyed by the machine-qualified identity: two machines can share IDs and
- * folder names.
- */
-function folderCollapseKey(machine: MachineView, folder: string): string {
-  return `${machine.backendId}/${folder}`;
+function reportWriteError(machine: MachineView, what: string, error: unknown): void {
+  if (error instanceof OutcomeUnknownError) {
+    toast.warning(`${what}: outcome unknown on ${machine.name}`, { description: error.message });
+  } else {
+    toast.error(`Could not ${what.toLowerCase()} on ${machine.name}`, {
+      description: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
-/** The selected environment when this window is working on this machine. */
-function useFocusedEnvironmentId(machine: MachineView): string | null {
-  return useUIStore((state) => (machine.bound ? state.selectedEnvironmentId : null));
+/** A project of another machine as the folder arrangement sees it: its key is its drag id. */
+interface RemoteProjectItem {
+  id: string;
+  name: string;
+  folder?: string;
+  project: FederatedProject;
+}
+
+function remoteProjectItems(projects: readonly FederatedProject[]): RemoteProjectItem[] {
+  return projects.map((project) => ({
+    id: project.key,
+    name: project.name,
+    ...(project.folder ? { folder: project.folder } : {}),
+    project,
+  }));
 }
 
 /**
- * Another machine's projects and environments, laid out like this window's
- * own sidebar: the owner's folders, project order and environment order.
- * Environments can be dragged within their project; the new order is written
- * to the owner, never to this machine.
+ * Another machine's environment order, with the drags this client sent and
+ * the owner has not reflected yet. A drag is written to the owner.
  */
-export function RemoteMachineTree({ machine }: { machine: MachineView }) {
+export function useRemoteEnvironments() {
   const { portal } = useFederation();
-  const collapsedProjects = useUIStore((state) => state.collapsedProjects);
-  const collapsedProjectFolders = useUIStore((state) => state.collapsedProjectFolders);
-  const toggleProjectCollapse = useUIStore((state) => state.toggleProjectCollapse);
-  const toggleProjectFolderCollapse = useUIStore((state) => state.toggleProjectFolderCollapse);
-  const focusedEnvironmentId = useFocusedEnvironmentId(machine);
   const orderWrites = useMemo(() => remoteOrdersFor(portal), [portal]);
   const orders = useStore(orderWrites.store);
-  const writable = isMachineWritable(machine);
-  const sortable = writable && !machine.truncated;
 
-  const projects = useMemo(
-    () => [...machine.projects].sort((left, right) => left.order - right.order),
-    [machine.projects],
-  );
-  const tree = useMemo(() => buildProjectTree(projects), [projects]);
   const environmentsOf = useCallback(
-    (project: FederatedProject) =>
+    (machine: MachineView, project: FederatedProject) =>
       withOrder(
         (machine.environmentsByProject.get(project.ref.projectId) ?? NO_ENVIRONMENTS)
           .filter((environment) => !environment.isProjectHome)
@@ -128,162 +141,215 @@ export function RemoteMachineTree({ machine }: { machine: MachineView }) {
         orders.get(project.key),
         (environment) => environment.ref.environmentId,
       ),
-    [machine.environmentsByProject, orders],
+    [orders],
   );
+
+  /** Persists dragging environment `activeKey` onto `overKey`; false when neither is in `project`. */
+  const reorder = useCallback(
+    (machine: MachineView, project: FederatedProject, activeKey: string, overKey: string) => {
+      const visible = environmentsOf(machine, project);
+      const keys = moveId(
+        visible.map((environment) => environment.key),
+        activeKey,
+        overKey,
+      );
+      if (!keys) return false;
+      const idByKey = new Map(visible.map((environment) => [environment.key, environment]));
+      const ids = keys.map((key) => idByKey.get(key)!.ref.environmentId);
+      // Reorder only visible slots; home rows keep their owner position and are
+      // included in the whole-project payload so the owner never appends them.
+      let nextVisible = 0;
+      const allIds = [
+        ...(machine.environmentsByProject.get(project.ref.projectId) ?? NO_ENVIRONMENTS),
+      ]
+        .sort((left, right) => left.order - right.order)
+        .map((environment) =>
+          environment.isProjectHome ? environment.ref.environmentId : ids[nextVisible++]!,
+        );
+      orderWrites.submit(project.ref, allIds, (error: unknown) =>
+        reportWriteError(machine, "Reorder environments", error),
+      );
+      return true;
+    },
+    [environmentsOf, orderWrites],
+  );
+
+  return { environmentsOf, reorder };
+}
+
+/** Whether a drag id is one of `projects`' environments, and in which project. */
+export function remoteEnvironmentProject(
+  machine: MachineView,
+  projects: readonly FederatedProject[],
+  environmentKey: string,
+): FederatedProject | null {
+  for (const project of projects) {
+    const environments = machine.environmentsByProject.get(project.ref.projectId) ?? [];
+    if (environments.some((environment) => environment.key === environmentKey)) return project;
+  }
+  return null;
+}
+
+/**
+ * Another machine's projects and environments, laid out like this window's
+ * own sidebar: the owner's folders, project order and environment order.
+ * Projects, folders and environments can be dragged as on the owner's own
+ * sidebar; the result is written to the owner, never to this machine.
+ */
+export function RemoteMachineTree({ machine }: { machine: MachineView }) {
+  const { portal } = useFederation();
+  const collapsedProjectKeys = useMachineViewStore((state) => state.collapsedProjectKeys);
+  const collapsedFolderKeys = useMachineViewStore((state) => state.collapsedFolderKeys);
+  const setProjectKeyCollapsed = useMachineViewStore((state) => state.setProjectKeyCollapsed);
+  const setFolderKeyCollapsed = useMachineViewStore((state) => state.setFolderKeyCollapsed);
+  const projectWrites = useMemo(() => remoteProjectsFor(portal), [portal]);
+  const arrangements = useStore(projectWrites.store);
+  const { environmentsOf, reorder } = useRemoteEnvironments();
+  const [dragging, setDragging] = useState<"project" | "other" | null>(null);
+  const writable = isMachineWritable(machine);
+  const sortable = writable && !machine.truncated;
+
+  const projects = useMemo(
+    () => withArrangement(machine.projects, arrangements.get(machine.backendId)),
+    [arrangements, machine.backendId, machine.projects],
+  );
+  const items = useMemo(() => remoteProjectItems(projects), [projects]);
+  const tree = useMemo(() => buildProjectTree(items), [items]);
+  const folderCollapseKey = (name: string) =>
+    sidebarFolderKey(machine.backendId, projectFolderKey(name));
+  const isFolderCollapsed = (name: string) => collapsedFolderKeys.includes(folderCollapseKey(name));
+  const sortableIds = projectSortableIds(tree, [], isFolderCollapsed);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
+  const arrange = (arrangement: ProjectArrangement | null) => {
+    if (!sortable || !arrangement) return;
+    const byKey = new Map(items.map((item) => [item.id, item.project.ref.projectId]));
+    const folders: Record<string, string | null> = {};
+    for (const [key, folder] of Object.entries(arrangement.folders)) {
+      const projectId = byKey.get(key);
+      if (projectId) folders[projectId] = folder;
+    }
+    projectWrites.submit(
+      machine.backendId as BackendId,
+      {
+        projectIds: arrangement.projectIds.flatMap((key) => byKey.get(key) ?? []),
+        folders,
+      },
+      (error: unknown) => reportWriteError(machine, "Arrange projects", error),
+    );
+  };
+
+  const handleDragStart = ({ active }: DragStartEvent) => {
+    const id = String(active.id);
+    setDragging(
+      parseProjectFolderDragId(id) !== null || items.some((item) => item.id === id)
+        ? "project"
+        : "other",
+    );
+  };
+
   const handleDragEnd = ({ active, over }: DragEndEvent) => {
+    setDragging(null);
     if (!sortable || !over) return;
     const activeId = String(active.id);
     const overId = String(over.id);
+    if (parseProjectFolderDragId(activeId) !== null || items.some((item) => item.id === activeId)) {
+      arrange(resolveProjectArrangement(activeId, overId, items));
+      return;
+    }
     // Environments never move between projects, so both rows share one.
-    const project = projects.find((candidate) => {
-      const ids = environmentsOf(candidate).map((environment) => environment.ref.environmentId);
-      return ids.includes(activeId) && ids.includes(overId);
-    });
-    if (!project) return;
-    const projectId = project.ref.projectId;
-    const ids = moveId(
-      environmentsOf(project).map((environment) => environment.ref.environmentId),
-      activeId,
-      overId,
-    );
-    if (!ids) return;
-    // Reorder only visible slots; home rows keep their owner position and are
-    // included in the whole-project payload so the owner never appends them.
-    let nextVisible = 0;
-    const allIds = [...(machine.environmentsByProject.get(projectId) ?? NO_ENVIRONMENTS)]
-      .sort((left, right) => left.order - right.order)
-      .map((environment) =>
-        environment.isProjectHome ? environment.ref.environmentId : ids[nextVisible++]!,
-      );
-    orderWrites.submit(project.ref, allIds, (error: unknown) => {
-      if (error instanceof OutcomeUnknownError) {
-        toast.warning(`Reorder: outcome unknown on ${machine.name}`, {
-          description: error.message,
-        });
-      } else {
-        toast.error(`Could not reorder environments on ${machine.name}`, {
-          description: error instanceof Error ? error.message : String(error),
-        });
-      }
-    });
+    const project = remoteEnvironmentProject(machine, projects, activeId);
+    if (project) reorder(machine, project, activeId, overId);
   };
 
-  const renderProject = (project: FederatedProject) => (
+  const renderProject = (item: RemoteProjectItem) => (
     <RemoteProjectGroup
-      key={project.key}
+      key={item.id}
       machine={machine}
-      project={project}
-      environments={environmentsOf(project)}
-      isCollapsed={collapsedProjects.includes(project.key)}
-      onToggleCollapse={() => toggleProjectCollapse(project.key)}
-      focusedEnvironmentId={focusedEnvironmentId}
+      project={item.project}
+      environments={environmentsOf(machine, item.project)}
+      isCollapsed={collapsedProjectKeys.includes(item.id)}
+      onToggleCollapse={() => setProjectKeyCollapsed(item.id)}
       sortable={sortable}
     />
   );
 
   return (
-    <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-      {tree.map((entry) => {
-        if (entry.kind === "project") return renderProject(entry.project);
-        const collapseKey = folderCollapseKey(machine, entry.name);
-        return (
-          <RemoteProjectFolder
-            key={`folder:${entry.key}`}
-            name={entry.name}
-            projectCount={entry.projects.length}
-            isCollapsed={isProjectFolderCollapsed(collapsedProjectFolders, collapseKey)}
-            onToggleCollapse={() => toggleProjectFolderCollapse(collapseKey)}
-          >
-            {entry.projects.map(renderProject)}
-          </RemoteProjectFolder>
-        );
-      })}
+    <DndContext
+      sensors={sensors}
+      collisionDetection={closestCenter}
+      onDragStart={handleDragStart}
+      onDragEnd={handleDragEnd}
+      onDragCancel={() => setDragging(null)}
+    >
+      <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
+        {tree.map((entry) => {
+          if (entry.kind === "project") return renderProject(entry.project);
+          const folderActions = sortable
+            ? {
+                onRename: (nextName: string) => {
+                  const normalized = normalizeProjectFolderName(nextName);
+                  if (!normalized) return;
+                  const collapsed = isFolderCollapsed(entry.name);
+                  arrange(resolveRenameProjectFolder(items, entry.name, nextName));
+                  setFolderKeyCollapsed(folderCollapseKey(entry.name), false);
+                  setFolderKeyCollapsed(folderCollapseKey(normalized), collapsed);
+                },
+                onSort: () => arrange(resolveSortProjectFolder(items, entry.name)),
+                onUngroup: () => arrange(resolveUngroupProjectFolder(items, entry.name)),
+              }
+            : {};
+          return (
+            <SortableProjectFolder
+              key={`folder:${entry.key}`}
+              name={entry.name}
+              projectCount={entry.projects.length}
+              isCollapsed={isFolderCollapsed(entry.name)}
+              onToggleCollapse={() => setFolderKeyCollapsed(folderCollapseKey(entry.name))}
+              {...folderActions}
+            >
+              {entry.projects.map(renderProject)}
+            </SortableProjectFolder>
+          );
+        })}
+        <SidebarRootDropZone active={dragging === "project"} />
+      </SortableContext>
     </DndContext>
   );
 }
 
-/** A folder of another machine, drawn like `SortableProjectFolder`. */
-function RemoteProjectFolder({
-  name,
-  projectCount,
-  isCollapsed,
-  onToggleCollapse,
-  children,
-}: {
-  name: string;
-  projectCount: number;
-  isCollapsed: boolean;
-  onToggleCollapse: () => void;
-  children: ReactNode;
-}) {
-  const FolderIcon = isCollapsed ? Folder : FolderOpen;
-  return (
-    <div data-project-folder={name} className="px-2 py-0.5">
-      <div className="relative mx-1 flex items-center rounded-lg border border-transparent transition-colors hover:bg-hover">
-        <button
-          type="button"
-          aria-expanded={!isCollapsed}
-          title={isCollapsed ? `Expand folder ${name}` : `Collapse folder ${name}`}
-          className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm text-foreground"
-          onClick={onToggleCollapse}
-        >
-          <FolderIcon className="h-4 w-4 shrink-0 text-amber-400/80" aria-hidden="true" />
-          <span className="truncate font-medium">{name}</span>
-          <span className="flex h-4 min-w-[16px] shrink-0 items-center justify-center rounded-md bg-white/[0.07] px-1 text-[10px] text-zinc-300">
-            {projectCount}
-          </span>
-        </button>
-        <button
-          type="button"
-          aria-expanded={!isCollapsed}
-          aria-label={isCollapsed ? `Expand folder ${name}` : `Collapse folder ${name}`}
-          className="shrink-0 rounded-md p-1 transition-colors hover:bg-white/[0.07]"
-          onClick={onToggleCollapse}
-        >
-          <ChevronRight
-            aria-hidden="true"
-            className={cn(
-              "h-4 w-4 text-muted-foreground transition-transform duration-200",
-              !isCollapsed && "rotate-90",
-            )}
-          />
-        </button>
-      </div>
-      {!isCollapsed && (
-        <div className="ml-3 border-l border-zinc-800/80 pl-1" data-project-folder-content={name}>
-          {children}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** A project of another machine, drawn like `SortableProjectGroup`. */
-function RemoteProjectGroup({
+/**
+ * A project of another machine, drawn like `SortableProjectGroup`. Its drag id
+ * is its node-qualified key, so it can share a list with other machines'.
+ */
+export function RemoteProjectGroup({
   machine,
   project,
   environments,
   isCollapsed,
   onToggleCollapse,
-  focusedEnvironmentId,
   sortable,
+  showMachine = false,
 }: {
   machine: MachineView;
   project: FederatedProject;
   environments: readonly FederatedEnvironment[];
   isCollapsed: boolean;
   onToggleCollapse: () => void;
-  focusedEnvironmentId: string | null;
   sortable: boolean;
+  /** Name the machine in the header, in lists that mix machines. */
+  showMachine?: boolean;
 }) {
   const { creating, create } = useCreateFederatedEnvironment(machine, project);
   const writable = isMachineWritable(machine);
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: project.key,
+    disabled: !sortable,
+  });
   const openBoard = () =>
     openMachineWorkspace({
       connectionId: machine.connectionId,
@@ -292,7 +358,13 @@ function RemoteProjectGroup({
     });
 
   return (
-    <div className="px-2" data-testid="federated-project" data-project={project.key}>
+    <div
+      ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      className={cn("px-2", isDragging && "opacity-50 z-50")}
+      data-testid="federated-project"
+      data-project={project.key}
+    >
       <Collapsible open={!isCollapsed} onOpenChange={onToggleCollapse}>
         <div className="relative mx-1 flex items-center group/project rounded-lg border border-transparent transition-colors hover:bg-hover">
           <CollapsibleTrigger
@@ -312,12 +384,20 @@ function RemoteProjectGroup({
           <ContextMenu>
             <ContextMenuTrigger className="contents">
               <button
+                {...(sortable ? attributes : {})}
+                {...(sortable ? listeners : {})}
                 type="button"
-                className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm text-foreground"
+                className={cn(
+                  "flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm text-foreground",
+                  sortable && "cursor-grab active:cursor-grabbing",
+                )}
                 onClick={openBoard}
                 title={`Open ${project.name} on ${machine.name}`}
               >
                 <span className="truncate font-medium">{project.name}</span>
+                {showMachine ? (
+                  <MachineDot colorToken={machine.colorToken} machineName={machine.name} />
+                ) : null}
                 {environments.length > 0 && (
                   <span className="flex h-4 min-w-[16px] shrink-0 items-center justify-center rounded-md bg-white/[0.07] px-1 text-[10px] text-zinc-300">
                     {environments.length}
@@ -359,7 +439,7 @@ function RemoteProjectGroup({
         <CollapsibleContent>
           {environments.length > 0 && (
             <SortableContext
-              items={environments.map((environment) => environment.ref.environmentId)}
+              items={environments.map((environment) => environment.key)}
               strategy={verticalListSortingStrategy}
             >
               {environments.map((environment) => (
@@ -367,7 +447,6 @@ function RemoteProjectGroup({
                   key={environment.key}
                   machine={machine}
                   environment={environment}
-                  isSelected={focusedEnvironmentId === environment.ref.environmentId}
                   sortable={sortable}
                 />
               ))}
@@ -380,24 +459,74 @@ function RemoteProjectGroup({
 }
 
 /**
- * An environment of another machine, drawn like `SortableEnvironmentItem`
- * around `EnvironmentItem`. Selecting it switches to the owner's workspace.
+ * An environment of another machine in a project, drawn like
+ * `SortableEnvironmentItem` around `EnvironmentItem`. Its drag id is its
+ * node-qualified key.
  */
 function RemoteSortableEnvironmentItem({
   machine,
   environment,
-  isSelected,
   sortable,
 }: {
   machine: MachineView;
   environment: FederatedEnvironment;
-  isSelected: boolean;
   sortable: boolean;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
-    id: environment.ref.environmentId,
+    id: environment.key,
     disabled: !sortable,
   });
+  const live = machine.transport === "connected";
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      className={cn(isDragging && "opacity-50 z-50")}
+      data-testid="federated-environment-row"
+      data-machine={machine.connectionId}
+    >
+      <div
+        className={cn(
+          "group/sortable mx-1 flex items-center rounded-lg border border-transparent transition-colors hover:bg-environment-hover",
+          !live && "opacity-60",
+        )}
+      >
+        {sortable ? (
+          <button
+            {...attributes}
+            {...listeners}
+            aria-label={`Reorder ${environment.name}`}
+            className="flex h-6 w-4 shrink-0 cursor-grab items-center justify-center text-muted-foreground opacity-0 transition-opacity hover:text-foreground active:cursor-grabbing group-hover/sortable:opacity-100"
+          >
+            <GripVertical className="h-3 w-3" />
+          </button>
+        ) : (
+          // Read-only while the owner is unavailable; keeps the icons aligned.
+          <span aria-hidden="true" className="h-6 w-4 shrink-0" />
+        )}
+        <div className="flex-1 min-w-0">
+          <RemoteEnvironmentItem machine={machine} environment={environment} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The row content of another machine's environment, laid out like
+ * `EnvironmentItem`: type icon, machine dot, name and an optional subtitle.
+ * Selecting it moves the window to the owner's workspace.
+ */
+export function RemoteEnvironmentItem({
+  machine,
+  environment,
+  subtitle,
+}: {
+  machine: MachineView;
+  environment: FederatedEnvironment;
+  subtitle?: string;
+}) {
   const { busy, writable, open, copyLink, start, stop, requestDelete, deleteDialog } =
     useFederatedEnvironmentActions(machine, environment);
   const isMobile = useMediaQuery(MOBILE_MEDIA_QUERY);
@@ -459,123 +588,94 @@ function RemoteSortableEnvironmentItem({
   ];
 
   return (
-    <div
-      ref={setNodeRef}
-      style={{ transform: CSS.Transform.toString(transform), transition }}
-      className={cn(isDragging && "opacity-50 z-50")}
-      data-testid="federated-environment-row"
-      data-machine={machine.connectionId}
-    >
-      <div
-        className={cn(
-          "group/sortable mx-1 flex items-center rounded-lg border border-transparent transition-colors",
-          isSelected
-            ? "relative overflow-hidden border-transparent bg-linear-to-r from-selected to-selected-edge text-selected-foreground before:absolute before:inset-y-1 before:left-1 before:w-0.5 before:rounded-full before:bg-primary before:transition-opacity hover:before:opacity-0"
-            : "hover:bg-environment-hover",
-          !live && "opacity-60",
-        )}
-      >
-        {sortable ? (
-          <button
-            {...attributes}
-            {...listeners}
-            aria-label={`Reorder ${environment.name}`}
-            className="flex h-6 w-4 shrink-0 cursor-grab items-center justify-center text-muted-foreground opacity-0 transition-opacity hover:text-foreground active:cursor-grabbing group-hover/sortable:opacity-100"
+    <>
+      <ContextMenu>
+        <ContextMenuTrigger className="contents">
+          <div
+            className={cn(
+              "group flex w-full items-center gap-2 py-1 pr-2 text-[13px] transition-colors",
+              isMobile && "select-none",
+              environment.deleting && "opacity-60",
+            )}
           >
-            <GripVertical className="h-3 w-3" />
-          </button>
-        ) : (
-          // Read-only while the owner is unavailable; keeps the icons aligned.
-          <span aria-hidden="true" className="h-6 w-4 shrink-0" />
-        )}
-        <div className="flex-1 min-w-0">
-          <ContextMenu>
-            <ContextMenuTrigger className="contents">
-              <div
-                className={cn(
-                  "group flex w-full items-center gap-2 py-1 pr-2 text-[13px] transition-colors",
-                  isMobile && "select-none",
-                  environment.deleting && "opacity-60",
-                )}
-              >
-                <button
-                  type="button"
-                  onClick={open}
-                  aria-label={`${environment.name}, on ${machine.name}, ${activityText}`}
+            <button
+              type="button"
+              onClick={open}
+              aria-label={`${environment.name}, on ${machine.name}, ${activityText}`}
+              className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left text-muted-foreground transition-colors group-hover:text-foreground"
+            >
+              {environment.deleting ? (
+                <Loader2 className="h-4 w-4 shrink-0 animate-spin text-destructive" />
+              ) : isTransitioning || busy ? (
+                <Loader2 className="h-4 w-4 shrink-0 animate-spin text-amber-500" />
+              ) : (
+                <EnvironmentIcon
                   className={cn(
-                    "flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left transition-colors",
-                    isSelected
-                      ? "text-foreground"
-                      : "text-muted-foreground group-hover:text-foreground",
+                    "h-4 w-4 shrink-0 transition-colors",
+                    (!isRunning || !live) && "text-muted-foreground",
+                    isRunning &&
+                      live &&
+                      environment.activity === "waiting" &&
+                      "text-amber-500 animate-pulse",
+                    isRunning &&
+                      live &&
+                      environment.activity === "working" &&
+                      "text-blue-500 animate-pulse",
+                    isRunning && live && environment.activity === "idle" && "text-success",
                   )}
-                >
-                  {environment.deleting ? (
-                    <Loader2 className="h-4 w-4 shrink-0 animate-spin text-destructive" />
-                  ) : isTransitioning || busy ? (
-                    <Loader2 className="h-4 w-4 shrink-0 animate-spin text-amber-500" />
-                  ) : (
-                    <EnvironmentIcon
-                      className={cn(
-                        "h-4 w-4 shrink-0 transition-colors",
-                        (!isRunning || !live) && "text-muted-foreground",
-                        isRunning &&
-                          live &&
-                          environment.activity === "waiting" &&
-                          "text-amber-500 animate-pulse",
-                        isRunning &&
-                          live &&
-                          environment.activity === "working" &&
-                          "text-blue-500 animate-pulse",
-                        isRunning && live && environment.activity === "idle" && "text-success",
-                      )}
-                    />
+                />
+              )}
+              <span className="flex min-w-0 flex-1 flex-col">
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <MachineDot
+                    colorToken={machine.colorToken}
+                    machineName={machine.name}
+                    status={statusText}
+                  />
+                  <span className="truncate font-medium leading-4">{environment.name}</span>
+                  {environment.hasUnreadWork && (
+                    <UnreadBellIcon className="h-3 w-3" aria-label="New completed activity" />
                   )}
-                  <span className="flex min-w-0 flex-1 items-center gap-1.5">
-                    <MachineDot
-                      colorToken={machine.colorToken}
-                      machineName={machine.name}
-                      status={statusText}
-                    />
-                    <span className="truncate font-medium leading-4">{environment.name}</span>
-                    {environment.hasUnreadWork && (
-                      <UnreadBellIcon className="h-3 w-3" aria-label="New completed activity" />
-                    )}
+                </span>
+                {subtitle && (
+                  <span className="truncate text-[11px] font-normal leading-4 text-zinc-500">
+                    {subtitle}
                   </span>
-                </button>
-                {isMobile && (
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <button
-                        type="button"
-                        className="-my-1 -mr-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-zinc-700/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                        aria-label={`Actions for ${environment.name} on ${machine.name}`}
-                        onPointerDown={(event) => event.stopPropagation()}
-                      >
-                        <MoreVertical className="h-4 w-4" aria-hidden="true" />
-                      </button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <EnvironmentMenuItems
-                        items={menuItems}
-                        Item={DropdownMenuItem}
-                        Separator={DropdownMenuSeparator}
-                      />
-                    </DropdownMenuContent>
-                  </DropdownMenu>
                 )}
-              </div>
-            </ContextMenuTrigger>
-            <ContextMenuContent>
-              <EnvironmentMenuItems
-                items={menuItems}
-                Item={ContextMenuItem}
-                Separator={ContextMenuSeparator}
-              />
-            </ContextMenuContent>
-          </ContextMenu>
-        </div>
-      </div>
+              </span>
+            </button>
+            {isMobile && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    className="-my-1 -mr-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-zinc-700/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    aria-label={`Actions for ${environment.name} on ${machine.name}`}
+                    onPointerDown={(event) => event.stopPropagation()}
+                  >
+                    <MoreVertical className="h-4 w-4" aria-hidden="true" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <EnvironmentMenuItems
+                    items={menuItems}
+                    Item={DropdownMenuItem}
+                    Separator={DropdownMenuSeparator}
+                  />
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+          </div>
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          <EnvironmentMenuItems
+            items={menuItems}
+            Item={ContextMenuItem}
+            Separator={ContextMenuSeparator}
+          />
+        </ContextMenuContent>
+      </ContextMenu>
       {deleteDialog}
-    </div>
+    </>
   );
 }

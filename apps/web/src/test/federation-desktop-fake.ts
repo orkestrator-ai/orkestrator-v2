@@ -14,7 +14,13 @@ import {
   toNodeProjectSummary,
   type NodeSummary,
 } from "@orkestrator/protocol/node-summaries";
+import {
+  emptyPortalLayout,
+  PORTAL_LAYOUT_CHANGED_EVENT,
+  type PortalLayout,
+} from "@orkestrator/protocol/portal-layout";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
+import { portalLayoutStore } from "@/lib/portal/portal-layout";
 import { portalStore } from "@/lib/portal/portal-store";
 
 export type MachineDataset = {
@@ -122,7 +128,10 @@ export function installDesktopFake(options: {
   datasets: Record<string, MachineDataset>;
   /** Answer a routed command; return `undefined` to fall through to the default. */
   respond?: (call: InvokeCall) => unknown;
+  /** The sidebar order the command node has stored. */
+  layout?: Partial<PortalLayout>;
 }) {
+  let layout: PortalLayout = { ...emptyPortalLayout(), ...options.layout };
   const calls: InvokeCall[] = [];
   const listeners = new Map<string, Set<(payload: unknown) => void>>();
   let nextWorkspace = 1;
@@ -200,6 +209,14 @@ export function installDesktopFake(options: {
       };
     }
     if (command === "renew_node_workspace" || command === "close_node_workspace") return {};
+    if (command === "get_portal_layout") return structuredClone(layout);
+    if (command === "update_portal_layout") {
+      layout = { ...layout, ...args, revision: layout.revision + 1 };
+      for (const listener of Array.from(listeners.get(PORTAL_LAYOUT_CHANGED_EVENT) ?? [])) {
+        listener(structuredClone(layout));
+      }
+      return structuredClone(layout);
+    }
     if (command === "invoke_on_node") {
       const nodeId = String(args.nodeId);
       const call: InvokeCall = {
@@ -263,6 +280,7 @@ export function installDesktopFake(options: {
     connections,
     listen,
     outcomes,
+    layout: () => layout,
     emit(event: string, payload: unknown) {
       for (const listener of Array.from(listeners.get(event) ?? [])) listener(payload);
     },
@@ -287,5 +305,6 @@ export function uninstallDesktopFake(): void {
     unsupported: false,
     outcomesRevision: 0,
   });
+  portalLayoutStore.setState({ layout: emptyPortalLayout(), loaded: false });
   delete window.orkestrator;
 }

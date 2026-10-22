@@ -910,3 +910,22 @@ in 167.09 seconds (3180 passed, one skipped, zero failed).
 ## Two-column report main merge — 2026-10-21
 
 Pi staging exceeded 30 seconds in the aggregate and first owning-file rerun; after browser validation ended, the complete unchanged four-test owner passed in 11.6 seconds (`merge-pi-final-owner`). See [0629](0629-two-column-main-merge-validation.md) for commands, worker configuration, counts and evidence. No source, assertion, timeout or skip changed.
+
+
+## Agent interaction and permission review — 2026-10-22
+
+- **Original command:** `mise run test:logged -- --name full-tests -- mise run test`; workspace/root/bridges/protocol reserved 4/1/2/1 slots alongside other worktrees.
+- **Failure:** `Pi bridge runtime vendoring > loads Pi's supported SDK from the staged runtime closure` exceeded 30000 ms (30001.12 ms). Root/support reported 3218 passed, one skipped and one failed across 3220 tests in 154 files (400.36 s).
+- **Owning-file rerun:** `mise run test:logged -- --name pi-vendor-isolated -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` also timed out at 30001.68 ms (three passed, one failed; 30.9 s logged).
+- **Evidence:** `orkestrator-test-run.rkxXtB/root-and-agent-support-tests.log.gz` and `orkestrator-test-run.e0IVU0/pi-vendor-isolated.log.gz` below the host temporary root.
+- **Assessment:** unresolved qualification limitation on this host. The failed isolated rerun does not independently establish a new flake. Pi source, tests, deadlines and skips remained unchanged.
+
+
+The final `final-suite` rerun passed the unchanged complete root/support group
+(3219 passed, one skipped, zero failed across 3220 tests; 318.00 s), including
+Pi vendoring. This establishes the runtime-staging failure as intermittent;
+no Pi code, deadline or assertion changed.
+
+## Agent-interactions main merge, 2026-10-22
+
+`mise run test:logged -- --name merge-tests -- mise run test` repeated `Pi bridge runtime vendoring > loads Pi's supported SDK from the staged runtime closure` at 112073.68 ms in the one-worker root group; the group later hit its no-output watchdog without final counts. `mise run test:logged -- --name merge-unit-pi-bridge-vendor.test -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed the entire unchanged owner (19.1 s logged). Host load reached 156.45 during the original aggregate; see [0691](0691-main-merge-validation-timeout-cluster.md) for group evidence.

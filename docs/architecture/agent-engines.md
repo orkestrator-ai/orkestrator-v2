@@ -562,8 +562,18 @@ configuration loads, and whether its commands reach the network. It renders
 them from the policy the bridge reports, and each bridge reports what it
 applies. Pi, Grok and OpenCode have no sandbox, so a `provider` sandbox and the
 network restriction it would hold are reported as unsandboxed with a note;
-Codex and Grok report project resources as on, because their own project trust
-decides; Cursor reports `ask` as the auto-approval it runs. When the policy turns
+Grok reports project resources as on, because its own folder trust decides;
+Cursor reports `ask` as the auto-approval it runs. Codex honours project
+resources off: every thread it starts, resumes or forks pins its cwd untrusted
+(a nested `projects` table in the thread config; Codex ignores a dotted
+`projects."<path>"` key there) and disables each repo-scope skill from
+`skills/list` in a thread-scoped `skills.config`, because the untrusted pin does
+not reach skills (`codexProjectTrustConfig`, `codexProjectSkillsConfig`). That
+keeps out the checkout's `.codex` config layer (MCP servers, hooks, model
+settings), its AGENTS.md and its skills, wins over a trusted main checkout, and
+stops a writable thread marking the project trusted in the user's
+`config.toml`. `live-project-trust.test.ts` proves it against the pinned
+binary. When the policy turns
 project resources on, the ACP bridge launches Grok with `GROK_FOLDER_TRUST=0` and
 `agent --no-leader` (`providerEnv`), so a checkout Grok never trusted, such as a
 container's `/workspace`, still loads its AGENTS.md, skills, commands, hooks and
@@ -580,7 +590,7 @@ decoder together.
 | Adapter | Policy mapping | `network` in `capabilityPolicy.deny` (search unless `allow` names `web.search`) |
 | --- | --- | --- |
 | Claude | `permissionMode` and the approval callback; `allowedTools`/`disallowedTools`; `settingSources`; SDK sandbox options | WebFetch, and WebSearch unless allowed, in `disallowedTools` (`claudeDisallowedTools`) |
-| Codex | `approvalPolicy`, thread sandbox and sandbox network; the coordinator's verified permission profile | `web_search = "disabled"`, or `"cached"` when search is allowed, on the thread; a coordinator also sets it as process configuration and has it read back through `config/read` |
+| Codex | `approvalPolicy`, thread sandbox and sandbox network; an untrusted project pin and disabled repo skills when project resources are off; the coordinator's verified permission profile | `web_search = "disabled"`, or `"cached"` when search is allowed, on the thread; a coordinator also sets it as process configuration and has it read back through `config/read` |
 | Cursor | local SDK sandbox/auto-review; `settingSources`; `tools`/`disallowedTools`, re-applied on resume | `webFetch`, `webSearch` and `task` in `disallowedTools`; the read-only allowlist never includes `webFetch`, and includes `webSearch` only when allowed |
 | Grok | `--always-approve` only for auto-approval, and under auto-approval the bridge also answers the ACP permission requests Grok still sends (allow option), except for a kind the policy denies (`autoApprovedPermissionOption`); ACP permission requests otherwise; `GROK_FOLDER_TRUST=0` and `agent --no-leader` when project resources are on, Grok's own folder trust otherwise | `--disable-web-search` and `agent --no-leader`, which remove search with fetch; an allowed search is not honoured |
 | Pi | approval extension; resource-loader exclusions and project trust; active SDK tool selection | No hosted tools; the read-only gate admits only its read tools by name |

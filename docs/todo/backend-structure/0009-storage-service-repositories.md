@@ -1,6 +1,7 @@
 # Storage service repositories
 
-Checked against `main` at `2459b05c` (2026-10-15).
+Checked against `main` at `2459b05c` (2026-10-15). Step 1 (`StorageContext`)
+was done on top of `b83ae534` (2026-10-22); steps 2 to 4 remain.
 
 `StorageService` is one class cut by size into a 14-layer `extends` chain, so
 every layer shares `StorageBase`'s protected state and reading one store means
@@ -14,7 +15,7 @@ lost-update bugs closed by the SQLite migration cannot come back.
 - Since #969 every backend store except `config.json` lives in
   `orkestrator.sqlite` (`STORE_LAYOUTS` in `storage-stores.ts`). `loadJson` and
   `saveJson` keep their names but route to the database for those stores
-  (`saveStore` and `loadStore` in `storage-base.ts`). An earlier idea of a
+  (`saveStore` and `loadStore` in `storage-context.ts`). An earlier idea of a
   shared JSON file store is superseded by this and is not part of the plan.
 - The chain, all in `apps/backend/src/core/` (about 15,000 lines in 15 files):
   `StorageBase` (`storage-base.ts`) → `StorageProjects` → `StorageConfig` →
@@ -22,12 +23,26 @@ lost-update bugs closed by the SQLite migration cannot come back.
   `StorageBuildPipelines` → `StorageDrafts` → `StorageAgentMail` →
   `StorageKanban` → `StoragePreviewServices` → `StorageNodes` →
   `StoragePublicOperations` → `StorageService` (`storage.ts`).
-- `StorageBase` owns the primitives: the database handle, `updateStore`,
-  `updateStoreRow`, `serializeMutation`, `atomically` (with its
-  `AsyncLocalStorage` scope), `loadJson`/`saveJson`, `announce`, the
-  sensitive scrubbing helpers (`scrubPendingNativeAgentDispatchBackups`,
-  `scrubPendingNativeAgentSteerBackups`, `scrubDeletedDatabaseContent`) and the
-  prompt-queue claim-recovery timer.
+- **Step 1 is done.** `StorageContext` (`storage-context.ts`) owns the shared
+  state and the store primitives: the database handle and its snapshot timers,
+  the `atomically` scope (one `AsyncLocalStorage` per `StorageService`),
+  the per-target mutation tails, the JSON-file write queue and read cache,
+  `resourceGeneration`, `updateStore`, `updateStoreRow`, `serialize` (the old
+  `serializeMutation`, whose doc comment now records the full lease order),
+  `acquireLease`, `loadJson`/`saveJson`/`saveSensitiveJson`/`deleteStore` and
+  the archive and WAL scrubbing helpers. Its `changes` member, a
+  `StorageChanges` (`storage-changes.ts`), owns the change listener and
+  observers, `announce` (deferred through `deferUntilCommit` inside an atomic
+  scope), the bounded change journal (formerly `scopedChanges`) and the
+  revision manifests.
+- `StorageBase` creates the context in its constructor and holds it in a
+  `private` field, so no layer above can reach it. It keeps the store-name
+  helpers (`kanbanFile()` and so on, which the writer guard groups stores by),
+  the `enqueue*Mutation` lease wrappers and lease timeouts, the four abstract
+  hooks, the prompt-queue claim timer and lease length, and the native-agent
+  pending dispatch/steer scrubbers. Every other member forwards to the context
+  under its old name (`serializeMutation` → `serialize`,
+  `acquireMutationLock` → `acquireLease`).
 - It still declares four abstract hooks that later layers implement:
   `recoverExpiredPromptQueueClaims`, `promptQueueMessageFingerprint`,
   `deleteComposeDraftsByProject` and `deleteSessionBuffer`.
@@ -44,9 +59,16 @@ lost-update bugs closed by the SQLite migration cannot come back.
   `deleteStore` holds no store-wide lease, when a call on the way to it is
   neither awaited nor returned, when the whole-value writers of one store share
   no lease, or when a store has both whole-value and `updateStore`/
-  `updateStoreRow` writers. Its last test fails when a backend class outside
-  the chain calls those primitives, so an extracted repository cannot drop
-  out of the scan unnoticed.
+  `updateStoreRow` writers. A test fails when a backend class outside the
+  chain calls those primitives, so an extracted repository cannot drop out of
+  the scan unnoticed. Since step 1 it also fails when a layer other than
+  `StorageBase` touches `this.context`, when a `StorageBase` member other than
+  the matching forwarder reaches a writing context member (`saveJson`,
+  `saveSensitiveJson`, `deleteStore`, `updateStore`, `updateStoreRow`,
+  `atomically`, `serialize`, `acquireLease`, `database`), when `this.context`
+  is used as a value outside the constructor, and when any backend source
+  other than `storage-base.ts`, `storage-context.ts` and `storage-changes.ts`
+  names `StorageContext`.
 - What the guard found on `9906db30`: 22 stores have only leased whole-value
   writers and 9 have only transactional ones; none has both. Helpers reach
   their lease through every caller: `saveEnvironments` (19 call paths),
@@ -60,11 +82,17 @@ lost-update bugs closed by the SQLite migration cannot come back.
 - Concurrency coverage that exists: `storage-store-concurrency.test.ts` (16
   concurrent writes across two `StorageService` instances for sessions,
   project notes, Linear completion comments and feature plans),
-  `storage-atomic.test.ts` (the primitives, and Linear auth saves and clears
-  waiting on another backend's lease and after a failed holder) and
+  `storage-atomic.test.ts` (the primitives through the chain, and Linear auth
+  saves and clears waiting on another backend's lease and after a failed
+  holder), `storage-context.test.ts` (the context on its own: atomic commit
+  with deferred announcements, per-target FIFO, the lease across two contexts
+  on one data directory, manifest store mapping) and
   `storage-kanban-concurrency.test.ts`.
 - Tests reach into protected members with 31 `as unknown as` casts across 12
-  of the 30 `storage*.test.ts` files.
+  of the 30 `storage*.test.ts` files (counted before step 1). Step 1 moved one:
+  `creationQueueSize` in `storage-project-concurrency.test.ts` now reads
+  `context.mutationTails`. The `database` casts still work through
+  `StorageBase`'s `database` getter.
 - `tests/unit/inheritance-chains.test.ts` pins this chain in `PINNED_CHAINS`,
   with `plan: "docs/todo/backend-structure/0009-storage-service-repositories.md"`. The test fails if
   the pinned class list no longer matches the source (a shortened chain is
@@ -82,14 +110,17 @@ chain, remove the entry, and delete this file in the same change. **Every step
 must also keep `storage-writer-guards.test.ts` scanning every class that
 writes stores**: once a repository leaves the chain, add it to the scan (and
 teach the scan its `StorageContext` primitive names) instead of letting the
-"outside the chain" test be relaxed.
+"outside the chain" test be relaxed. Concretely, the first repository step
+has to: scan the repository class alongside the chain; treat
+`this.context.saveJson`/`saveSensitiveJson`/`deleteStore` as whole-value
+writes, `this.context.updateStore`/`updateStoreRow` as transactional ones,
+`this.context.atomically` as the scope and `this.context.serialize` as a lease
+wrapper (target parameter 0, operation parameter 2); resolve stores named by
+the repository's own `xFile()` helpers; and only then add its file to the
+allowed list of "only StorageBase holds the StorageContext". Step 1 removed no
+class from the chain, so it left `PINNED_CHAINS` unchanged.
 
-1. **Introduce `StorageContext`.** Move the database handle, atomic scope,
-   mutation tails, the store primitives, `resourceGeneration`, change
-   observers, `announce` and `scopedChanges` into one object the facade owns.
-   `StorageBase` forwards to it. Write the full lease order on
-   `StorageContext.serialize`: projects → environments → others, and per-key
-   work fence → native session lease → leaf leases.
+1. ~~**Introduce `StorageContext`.**~~ Done (see "Current state").
 2. **Extract the leaf repositories**, one layer per PR, each with
    `StorageService` delegating to it:
    - preview services;
@@ -123,9 +154,11 @@ StorageService (facade, same public surface)
  ├─ PreviewServicesRepository / PublicOperationsRepository
  └─ BuildPipelinesRepository
         shared: StorageContext {
-          dataDir, database, resourceGeneration,
-          stores: { read, update, updateRow, save, serialize, atomically },
-          changes: { announce, observers, scopedChanges },
+          dataDir, database, resourceGeneration, file,
+          loadJson, loadStoreRow, loadStoreStrict, ..., saveJson,
+          saveSensitiveJson, deleteStore, updateStore, updateStoreRow,
+          serialize, acquireLease, atomically, deferUntilCommit,
+          changes: StorageChanges { announce, listeners, journal, manifests },
         }
 ```
 

@@ -13,7 +13,12 @@ import {
   type ReadModelPersistence,
 } from "./node-read-model.js";
 import { NODE_RELAY_PREFIX, type RelayTarget } from "./node-relay.js";
-import { NodeOutcomeLedger, routeToNode, type RoutedResult } from "./node-routing.js";
+import {
+  isReadCommand,
+  NodeOutcomeLedger,
+  routeToNode,
+  type RoutedResult,
+} from "./node-routing.js";
 import type { NodeService } from "./node-service.js";
 
 /**
@@ -157,7 +162,7 @@ export class NodePortal {
         }
       }
       // Writes refresh that node's summaries sooner than its next event.
-      void this.readModel.requestHydrate(nodeId);
+      if (!isReadCommand(args.command)) void this.readModel.requestHydrate(nodeId);
     }
     return result;
   }

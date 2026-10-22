@@ -70,7 +70,6 @@ function callMcpTool(state: SessionState, args: Record<string, unknown>, callId:
 
 const previousUrl = process.env.ORKESTRATOR_AGENT_MCP_URL;
 const previousToken = process.env.ORKESTRATOR_AGENT_MCP_TOKEN;
-const previousProjectSettings = process.env.CURSOR_BRIDGE_PROJECT_SETTINGS;
 
 afterEach(() => {
   setCursorMcpTransportForTests();
@@ -79,8 +78,6 @@ afterEach(() => {
   else process.env.ORKESTRATOR_AGENT_MCP_URL = previousUrl;
   if (previousToken === undefined) delete process.env.ORKESTRATOR_AGENT_MCP_TOKEN;
   else process.env.ORKESTRATOR_AGENT_MCP_TOKEN = previousToken;
-  if (previousProjectSettings === undefined) delete process.env.CURSOR_BRIDGE_PROJECT_SETTINGS;
-  else process.env.CURSOR_BRIDGE_PROJECT_SETTINGS = previousProjectSettings;
 });
 
 describe("Cursor MCP inventory", () => {
@@ -113,7 +110,6 @@ describe("Cursor MCP inventory", () => {
   });
 
   test("a read-only policy returns only the Orkestrator entry when project MCP is present", async () => {
-    process.env.CURSOR_BRIDGE_PROJECT_SETTINGS = "1";
     const mcpPath = join(workingDirectory, ".cursor", "mcp.json");
     await mkdir(join(workingDirectory, ".cursor"), { recursive: true });
     await writeFile(
@@ -128,6 +124,19 @@ describe("Cursor MCP inventory", () => {
     try {
       const allowed = await cursorMcpServers(connection, { projectResources: true });
       expect(Object.keys(allowed).sort()).toEqual(["orkestrator", "review-untrusted"]);
+
+      // Only the session's policy opens the project layer: no policy, a
+      // policy that turns it off, and the retired env override all keep it
+      // closed.
+      process.env.CURSOR_BRIDGE_PROJECT_SETTINGS = "1";
+      try {
+        expect(Object.keys(await cursorMcpServers(connection))).toEqual(["orkestrator"]);
+        expect(
+          Object.keys(await cursorMcpServers(connection, { projectResources: false })),
+        ).toEqual(["orkestrator"]);
+      } finally {
+        delete process.env.CURSOR_BRIDGE_PROJECT_SETTINGS;
+      }
 
       const denied = await cursorMcpServers(connection, {
         readOnly: true,

@@ -109,31 +109,6 @@ export function sessionDirectory(): string | undefined {
   return directory ? resolve(directory) : undefined;
 }
 
-/**
- * Whether the agent's tool calls are routed through the approval flow.
- *
- * Off by default and deliberately so: an Orkestrator Pi tab is an interactive
- * agent session in an already-isolated worktree or container, matching the
- * permissive default every other bridge here uses. The container boundary, not
- * a per-call prompt, is what isolates an agent. When it *is* on, every timeout,
- * disconnect and malformed answer denies — see `interactions.ts`.
- */
-export function approvalsEnabled(): boolean {
-  return process.env.PI_BRIDGE_REQUIRE_APPROVAL === "1";
-}
-
-/**
- * Ambient project-local resources the SDK is allowed to load from the workspace.
- *
- * Pi discovers `.pi/` extensions, skills and prompt templates out of the
- * repository, and an extension is arbitrary TypeScript that runs in this
- * process. Cloning a repository must not be enough to run its code, so the
- * project layer is opt-in and only the container launcher opts in — exactly the
- * boundary `ACP_APPROVE_PROJECT_MCPS` draws for the ACP bridge. Every other
- * value, including unset and a stray ambient one, fails closed.
- */
-export const projectResourcesEnabled = process.env.PI_BRIDGE_PROJECT_RESOURCES === "1";
-
 export const MAX_BODY_BYTES = 2 * 1024 * 1024;
 /**
  * Rows retained in the rendered transcript.

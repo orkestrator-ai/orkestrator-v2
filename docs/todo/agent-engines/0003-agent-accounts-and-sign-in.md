@@ -1,6 +1,6 @@
 # Agent accounts and sign-in
 
-Checked against `main` at `2459b05c` (2026-10-15); account-switching gap 5
+Checked against `main` at `2459b05c` (2026-10-15); account-switching gap 4
 against `9b3f53a2` (2026-10-21).
 
 Each platform should report a normalized sign-in state. Sign-in should happen
@@ -77,7 +77,10 @@ mostly inside containers. How accounts work is in
     `staleLoginLocalBridges`, `staleLoginEnvironmentIds`).
   - Container hand-off (`agent-accounts-containers.ts`:
     `refreshStagedAgentAccountLogins`, `syncContainerAgentAccountsOnStart`,
-    `reconcileContainerAgentAccount`).
+    `reconcileContainerAgentAccount`, `syncContainerClaudeLogin`). Claude
+    logins go in access-only and a switch also rewrites `oauthAccount` in the
+    running container's `~/.claude.json` (2026-10-21; see
+    [0018-container-network-and-credential-isolation.md](../containers-and-environments/0018-container-network-and-credential-isolation.md)).
   - Reauthentication for Claude goes through `ClaudeAuthRecoveryCard`.
 
 ## Outstanding work
@@ -116,23 +119,16 @@ Each was checked against the current code.
    account (header comment in `agent-accounts-containers.ts`). This goes away
    when the legacy host-mount path is retired; see
    [0021-container-rebuild-state-preservation.md](../containers-and-environments/0021-container-rebuild-state-preservation.md).
-2. **A container's `~/.claude.json` keeps the previous `oauthAccount`** after a
-   live switch, so `claude auth status` inside it names the old email while
-   using the new token. `reconcileContainerAgentAccount` rewrites the staged
-   `.claude.json` and pipes in the credential. The entrypoint, however, copies
-   the mounted file into `$HOME/.claude.json` only at container start
-   (`docker/entrypoint.sh`). A fix would update `oauthAccount` in the running
-   container's `$HOME/.claude.json` during reconcile.
-3. **`claude` / `codex` run from a container terminal** stay on the previous
+2. **`claude` / `codex` run from a container terminal** stay on the previous
    account until the container restarts or its bridge next starts. The login is
    written in only by `syncContainerAgentAccountsOnStart` and
    `reconcileContainerAgentAccount`, which runs at bridge start. Either
    reconcile when a container agent terminal opens, or say so in the UI.
-4. **An atomic-rename write by the CLI** replaces a shared symlink with a regular
+3. **An atomic-rename write by the CLI** replaces a shared symlink with a regular
    file inside the account directory, and that file stops being shared for that
    account. `linkSharedEntries` leaves it alone on purpose, because the content
    is the account's now. Nothing reports that it happened.
-5. **An agent-test profile can use the wrong Claude account** when `dev:test`
+4. **An agent-test profile can use the wrong Claude account** when `dev:test`
    is started from a shell whose `CLAUDE_CONFIG_DIR` names an added account
    (for example, an Orkestrator agent tab). The desktop records that directory
    as `ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR`, but

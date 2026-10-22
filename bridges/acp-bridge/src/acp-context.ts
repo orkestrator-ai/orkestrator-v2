@@ -544,6 +544,8 @@ export interface ParkedDeadline {
 export interface ApprovalState extends ParkedDeadline {
   id: string;
   title: string;
+  /** What the call runs, so the card can be a command or file approval. */
+  detail?: import("./acp-session.js").AcpApprovalDetail;
   options: Array<{ optionId: string; name: string; kind?: string }>;
   respond(optionId?: string): void;
 }

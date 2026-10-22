@@ -1,3 +1,6 @@
+import { useStore } from "zustand";
+import { portalLayoutStore } from "@/lib/portal/portal-layout";
+import { useSidebarHydration, useSidebarScrollRestore } from "./useSidebarHydration";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
 import { startsOnSelection } from "@/lib/environment-auto-start";
 import { takeAddProjectIntent } from "@/lib/portal/workspace-switch";
@@ -85,7 +88,6 @@ import { useBoundCollapseSync } from "@/components/federation/useBoundCollapseSy
 import { useMachineViews } from "@/components/federation/useMachineViews";
 import { ALL_MACHINES, filterMachines } from "@/lib/federation/aggregate";
 import { isMachineShown } from "@/lib/federation/sidebar-layout";
-import { takeSidebarScroll } from "@/lib/portal/workspace-switch";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import {
   DropdownMenu,
@@ -493,7 +495,8 @@ export function HierarchicalSidebar() {
   const toggleEnvironmentSelection = useUIStore((state) => state.toggleEnvironmentSelection);
   const setMultiSelection = useUIStore((state) => state.setMultiSelection);
   const clearMultiSelection = useUIStore((state) => state.clearMultiSelection);
-  const collapseEmptyProjects = useUIStore((state) => state.collapseEmptyProjects);
+  const portalLayoutLoaded = useStore(portalLayoutStore, (state) => state.loaded);
+  const projectsLoaded = useProjectStore((state) => state.hasLoaded);
   const setEnvironmentSortMode = useUIStore((state) => state.setEnvironmentSortMode);
   // Multi-machine presentation. This sidebar's own machine keeps its full
   // tree; other machines appear as their own sections, or merged into one
@@ -538,20 +541,10 @@ export function HierarchicalSidebar() {
   useBoundCollapseSync(
     federation.enabled ? (boundMachineView?.backendId ?? null) : null,
     projects,
-    !projectsLoading,
+    projectsLoaded && !projectsLoading,
   );
   // After the window moved to another node, the list returns to where it was.
   const listScrollRef = useRef<HTMLDivElement>(null);
-  const [pendingScroll, setPendingScroll] = useState(takeSidebarScroll);
-  const listReady = !projectsLoading && (!federation.enabled || federation.portalState.loaded);
-  useEffect(() => {
-    if (pendingScroll === null || !listReady) return;
-    const frame = requestAnimationFrame(() => {
-      if (listScrollRef.current) listScrollRef.current.scrollTop = pendingScroll;
-      setPendingScroll(null);
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [listReady, pendingScroll]);
 
   // A project home has no row of its own: selecting its project activates it.
   const sidebarEnvironments = useMemo(
@@ -620,86 +613,17 @@ export function HierarchicalSidebar() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isMultiSelectMode, clearMultiSelection]);
 
-  // Track which project IDs we've already loaded environments for
-  const loadedProjectIdsRef = useRef<Set<string>>(new Set());
-  // Projects whose environments have finished loading (not just started).
-  const settledProjectIdsRef = useRef<Set<string>>(new Set());
-  const [settledLoads, setSettledLoads] = useState(0);
-  // Machines whose collapse state the window already kept when this page loaded.
-  const [recordedMachines] = useState(() => useMachineViewStore.getState().seededMachines);
-  // Track whether initial collapse of empty projects has been done
-  const initialCollapseAppliedRef = useRef(false);
-
-  // Reset the loaded ref when store is empty but ref has items
-  // (handles hot reload where store is reset but ref persists)
-  useEffect(() => {
-    if (allEnvironments.length === 0 && loadedProjectIdsRef.current.size > 0) {
-      loadedProjectIdsRef.current.clear();
-      settledProjectIdsRef.current.clear();
-      initialCollapseAppliedRef.current = false;
-    }
-  }, [allEnvironments.length]);
-
-  // Load environments for new projects only (not on every project count change)
-  useEffect(() => {
-    const loadNewProjectEnvironments = async () => {
-      for (const project of projects) {
-        if (!loadedProjectIdsRef.current.has(project.id)) {
-          loadedProjectIdsRef.current.add(project.id);
-          try {
-            await loadEnvironments(project.id);
-            settledProjectIdsRef.current.add(project.id);
-            setSettledLoads((count) => count + 1);
-          } catch (err) {
-            // Keep later projects loading and allow this project to be retried
-            // after the project list or environment store changes.
-            loadedProjectIdsRef.current.delete(project.id);
-            console.error(`Failed to load environments for project ${project.id}:`, err);
-          }
-        }
-      }
-    };
-    if (projects.length > 0) {
-      loadNewProjectEnvironments();
-    }
-  }, [projects, loadEnvironments]);
-
-  // Collapse empty projects on initial load (runs once after environments are loaded)
-  useEffect(() => {
-    if (initialCollapseAppliedRef.current || projects.length === 0) {
-      return;
-    }
-    // Wait until environments have loaded for every project; a load still in
-    // flight would make its project look empty.
-    const allProjectsLoaded = projects.every((p) => settledProjectIdsRef.current.has(p.id));
-    if (!allProjectsLoaded) {
-      return;
-    }
-    // Whether this machine is one the multi-machine sidebar already
-    // remembers is known once the portal has loaded.
-    if (federation.supported && !federation.portalState.loaded) return;
-    // It does: moving the window here must not change its collapsed projects.
-    if (boundMachineView && recordedMachines.includes(boundMachineView.backendId)) {
-      initialCollapseAppliedRef.current = true;
-      return;
-    }
-    // Apply collapse and mark as done
-    const projectsWithEnvs = new Set(sidebarEnvironments.map((e) => e.projectId));
-    collapseEmptyProjects(
-      projects.map((p) => p.id),
-      projectsWithEnvs,
-    );
-    initialCollapseAppliedRef.current = true;
-  }, [
+  const environmentsReady = useSidebarHydration(
     projects,
-    sidebarEnvironments,
-    collapseEmptyProjects,
-    settledLoads,
-    boundMachineView,
-    federation.supported,
-    federation.portalState.loaded,
-    recordedMachines,
-  ]);
+    projectsLoaded && !projectsLoading && (!federation.supported || federation.portalState.loaded),
+    allEnvironments,
+    loadEnvironments,
+  );
+  useSidebarScrollRestore(
+    listScrollRef,
+    environmentsReady &&
+      (!federation.enabled || (federation.portalState.loaded && portalLayoutLoaded)),
+  );
 
   // Group environments by project in one memoized pass, instead of a
   // filter+sort per project per render.
@@ -848,8 +772,6 @@ export function HierarchicalSidebar() {
     );
     try {
       await deleteProjectAndEnvironments(projectId, projectEnvs, deleteEnvironment, removeProject);
-      // Clean up the loaded projects ref since project is deleted
-      loadedProjectIdsRef.current.delete(projectId);
     } catch (err) {
       console.error("Failed to delete project:", err);
       throw err;
@@ -1116,8 +1038,10 @@ export function HierarchicalSidebar() {
       onRestartEnvironment={restartEnvironment}
       onForkEnvironment={handleForkEnvironment}
       onCreateEnvironment={() => handleOpenCreateEnvDialog(project.id)}
-      onAddToFolder={() => setFolderDialogProjectId(project.id)}
-      onRemoveFromFolder={project.folder ? () => handleRemoveFromFolder(project.id) : undefined}
+      onAddToFolder={mixed ? undefined : () => setFolderDialogProjectId(project.id)}
+      onRemoveFromFolder={
+        !mixed && project.folder ? () => handleRemoveFromFolder(project.id) : undefined
+      }
       isMultiSelectMode={isMultiSelectMode}
       selectedEnvironmentIds={selectedEnvironmentIds}
     />

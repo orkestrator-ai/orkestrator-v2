@@ -733,3 +733,26 @@ describe("the sidebar order the command node keeps", () => {
     );
   });
 });
+
+for (const mode of ["remote", "merged"] as const) {
+  test(`${mode} folder rename normalizes collapse state and clears the previous key`, async () => {
+    installDesktopFake({
+      list: connectionList([MACHINE_A]),
+      datasets: {
+        a: { projects: [{ id: "p", name: "App", order: 0, folder: "Work" }], environments: {} },
+      },
+    });
+    renderWithFederation(mode === "remote" ? <RemoteSections /> : <AggregateList mode="project" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Collapse folder Work" }));
+    fireEvent.contextMenu(screen.getByTitle("Expand folder Work"));
+    fireEvent.click(await screen.findByText("Rename Folder"));
+    fireEvent.change(await screen.findByLabelText("Rename folder Work"), {
+      target: { value: "  New    Folder  " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^Rename$/ }));
+    await screen.findByRole("button", { name: "Expand folder New Folder" });
+    const prefix = mode === "remote" ? "bk_a" : "project";
+    expect(useMachineViewStore.getState().collapsedFolderKeys).toContain(`${prefix}/new folder`);
+    expect(useMachineViewStore.getState().collapsedFolderKeys).not.toContain(`${prefix}/work`);
+  });
+}

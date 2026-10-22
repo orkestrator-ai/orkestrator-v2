@@ -34,6 +34,7 @@ import { cn } from "@/lib/utils";
 
 interface SortableProjectFolderProps {
   name: string;
+  sortableId?: string;
   projectCount: number;
   isCollapsed: boolean;
   onToggleCollapse: () => void;
@@ -57,6 +58,7 @@ interface SortableProjectFolderProps {
  */
 export function SortableProjectFolder({
   name,
+  sortableId,
   projectCount,
   isCollapsed,
   onToggleCollapse,
@@ -72,7 +74,7 @@ export function SortableProjectFolder({
   const renameInputId = useId();
 
   const { attributes, listeners, setNodeRef, transform, transition, isDragging, isOver } =
-    useSortable({ id: projectFolderDragId(name) });
+    useSortable({ id: sortableId ?? projectFolderDragId(name) });
 
   useEffect(() => {
     if (isRenaming) setDraftName(name);

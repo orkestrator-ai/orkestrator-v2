@@ -21,7 +21,9 @@ import {
   buildProjectTree,
   flattenProjectTree,
   normalizeProjectFolderName,
-  projectFolderKey,
+  parseProjectFolderDragId,
+  PROJECT_ROOT_DROP_ID,
+  type ProjectTreeEntry,
   type ProjectArrangement,
 } from "@/lib/project-folders";
 import type { MachineView } from "./aggregate";
@@ -282,7 +284,7 @@ function bounded(ids: string[]): string[] {
 function sameFolder(left: string | null | undefined, right: string | null | undefined): boolean {
   const a = normalizeProjectFolderName(left);
   const b = normalizeProjectFolderName(right);
-  return a === null || b === null ? a === b : projectFolderKey(a) === projectFolderKey(b);
+  return a === b;
 }
 
 /**
@@ -335,4 +337,60 @@ export function repositoryArrangementUpdate(
 export function repositoryLabel(hint: string): string {
   const parts = hint.split("/");
   return parts.length >= 2 ? parts.slice(-2).join("/") : hint;
+}
+
+/** Repository hints are identities, not user-entered folder names. */
+export function buildRepositoryTree(
+  projects: readonly MergedProject[],
+): ProjectTreeEntry<MergedProject>[] {
+  const entries: ProjectTreeEntry<MergedProject>[] = [];
+  const groups = new Map<string, Extract<ProjectTreeEntry<MergedProject>, { kind: "folder" }>>();
+  for (const project of projects) {
+    const name = project.folder;
+    if (!name) {
+      entries.push({ kind: "project", project });
+      continue;
+    }
+    const existing = groups.get(name);
+    if (existing) existing.projects.push(project);
+    else {
+      const entry = { kind: "folder" as const, name, key: name, projects: [project] };
+      groups.set(name, entry);
+      entries.push(entry);
+    }
+  }
+  return entries;
+}
+
+/** Repository drags reorder whole groups or members within their own group. */
+export function resolveRepositoryArrangement(
+  activeId: string,
+  overId: string,
+  projects: readonly MergedProject[],
+): ProjectArrangement | null {
+  const tree = buildRepositoryTree(projects);
+  const folderKey = parseProjectFolderDragId(activeId);
+  const overKey = parseProjectFolderDragId(overId);
+  if (folderKey !== null) {
+    const ids = tree.map((entry) =>
+      entry.kind === "folder" ? `project-folder:${entry.key}` : entry.project.id,
+    );
+    const next = moveEntry(ids, activeId, overId === PROJECT_ROOT_DROP_ID ? ids.at(-1)! : overId);
+    if (!next) return null;
+    const byId = new Map(ids.map((id, index) => [id, tree[index]!]));
+    return {
+      projectIds: flattenProjectTree(next.map((id) => byId.get(id)!)).map((p) => p.id),
+      folders: {},
+    };
+  }
+  if (overKey !== null) return null;
+  const active = projects.find((p) => p.id === activeId);
+  const over = projects.find((p) => p.id === overId);
+  if (!active || !over || active.folder !== over.folder) return null;
+  const next = moveEntry(
+    flattenProjectTree(tree).map((p) => p.id),
+    activeId,
+    overId,
+  );
+  return next ? { projectIds: next, folders: {} } : null;
 }

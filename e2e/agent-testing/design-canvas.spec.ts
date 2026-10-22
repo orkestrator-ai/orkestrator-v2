@@ -1,3 +1,4 @@
+import { ensureProjectExpanded } from "./sidebar-project";
 import { expect, test } from "@playwright/test";
 import { writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -72,7 +73,7 @@ test("real gateway saves a design and rehydrates another client's edits", async 
       revision: 2,
     });
     await page.reload();
-    await page.getByRole("button", { name: `Expand project ${project.name}`, exact: true }).click();
+    await ensureProjectExpanded(page, project.name);
     await page.getByText(env.name, { exact: true }).first().click();
     await page.getByRole("button", { name: "Show file panel", exact: true }).click();
     // The panel starts on Changes; explicitly select the tree before routing.
@@ -166,7 +167,7 @@ test("real gateway saves a design and rehydrates another client's edits", async 
       });
     }
     await page.reload();
-    await page.getByRole("button", { name: `Expand project ${project.name}`, exact: true }).click();
+    await ensureProjectExpanded(page, project.name);
     await page.getByText(env.name, { exact: true }).first().click();
     await page.getByRole("button", { name: "Show file panel", exact: true }).click();
     await page.getByRole("tab", { name: "All files", exact: true }).click();
@@ -200,7 +201,7 @@ test("real gateway saves a design and rehydrates another client's edits", async 
     await page.getByRole("button", { name: "Redo design change" }).click();
     await expect(embedded.getByRole("heading")).toHaveText("Updated by another client");
     await page.reload();
-    await page.getByRole("button", { name: `Expand project ${project.name}`, exact: true }).click();
+    await ensureProjectExpanded(page, project.name);
     await page.getByText(env.name, { exact: true }).first().click();
     await expect(embedded.getByRole("heading")).toHaveText("Updated by another client");
     const layout = await invoke<{ root: unknown }>("get_pane_layout", { environmentId: env.id });
@@ -222,7 +223,7 @@ test("real gateway saves a design and rehydrates another client's edits", async 
       page.getByText("Use the orkestrator-design MCP server", { exact: false }),
     ).toHaveCount(0);
     await page.reload();
-    await page.getByRole("button", { name: `Expand project ${project.name}`, exact: true }).click();
+    await ensureProjectExpanded(page, project.name);
     await page.getByText(env.name, { exact: true }).first().click();
     await expect(page.getByText("Mock up the sidebar", { exact: true })).toBeVisible();
     await expect(
@@ -271,7 +272,7 @@ test("private canvases survive reload and can be retired to recover quota", asyn
   const action = <T>(action: string, input: Record<string, unknown>) =>
     invoke<T>("design_action", { environmentId: env.id, action, input });
   const selectEnvironment = async () => {
-    await page.getByRole("button", { name: `Expand project ${project.name}`, exact: true }).click();
+    await ensureProjectExpanded(page, project.name);
     await page.getByText(env.name, { exact: true }).first().click();
   };
   const openLibrary = async () => {

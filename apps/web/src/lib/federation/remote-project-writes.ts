@@ -77,7 +77,8 @@ export function createRemoteProjectWrites(portal: PortalStore) {
 
   const projectsOf = (nodeId: BackendId): FederatedProject[] | null => {
     const state = portal.getState();
-    if (nodeId === state.selfId) return state.self?.projects ?? null;
+    if (nodeId === state.selfId)
+      return state.self && !state.self.truncated ? state.self.projects : null;
     const node = portal.node(nodeId);
     return node && !node.truncated ? node.projects : null;
   };

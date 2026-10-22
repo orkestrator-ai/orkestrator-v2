@@ -22,31 +22,48 @@ import { portalInvoke, portalListen } from "./portal-transport";
 interface PortalLayoutState {
   layout: PortalLayout;
   loaded: boolean;
+  error: string | null;
 }
 
 const store = createStore<PortalLayoutState>(() => ({
   layout: emptyPortalLayout(),
   loaded: false,
+  error: null,
 }));
 
 /** Writes in flight; a read must not undo a drag the command node has not answered yet. */
 let writing = 0;
 let started = 0;
+let generation = 0;
+let readRevision = 0;
 let unlisteners: Array<() => void> = [];
 
 function apply(next: PortalLayout): void {
   if (writing > 0) return;
   store.setState((state) =>
-    state.loaded && state.layout.revision > next.revision ? state : { layout: next, loaded: true },
+    state.loaded && state.layout.revision > next.revision
+      ? state
+      : { layout: next, loaded: true, error: null },
   );
 }
 
+function unsupportedCommand(error: unknown): boolean {
+  return /unknown command|not available in this backend/i.test(String(error));
+}
+
 async function read(): Promise<void> {
+  const request = ++readRevision;
   try {
-    apply(parsePortalLayout(await portalInvoke<unknown>("get_portal_layout")));
-  } catch {
-    // An older command node: the default order, kept for this page only.
-    store.setState({ loaded: true });
+    const layout = parsePortalLayout(await portalInvoke<unknown>("get_portal_layout"));
+    if (request === readRevision) apply(layout);
+  } catch (error) {
+    if (request !== readRevision || writing > 0) return;
+    if (unsupportedCommand(error)) store.setState({ loaded: true, error: null });
+    else
+      store.setState({
+        loaded: false,
+        error: "Could not load the sidebar order. Reconnect to retry.",
+      });
   }
 }
 
@@ -54,16 +71,31 @@ async function read(): Promise<void> {
 export function startPortalLayout(): () => void {
   started += 1;
   if (started === 1) {
-    void read();
+    const current = ++generation;
+    const subscriptions = [];
     for (const event of [PORTAL_LAYOUT_CHANGED_EVENT, NATIVE_EVENT_STREAM_CONNECTED_EVENT]) {
-      void portalListen<unknown>(event, (payload) => {
-        if (event === PORTAL_LAYOUT_CHANGED_EVENT) apply(parsePortalLayout(payload.payload));
-        else void read();
-      }).then((stop) => {
-        if (started === 0) stop();
-        else unlisteners.push(stop);
-      });
+      subscriptions.push(
+        portalListen<unknown>(event, (payload) => {
+          if (generation !== current) return;
+          if (event === PORTAL_LAYOUT_CHANGED_EVENT) apply(parsePortalLayout(payload.payload));
+          else void read();
+        }).then((stop) => {
+          if (started === 0 || generation !== current) stop();
+          else unlisteners.push(stop);
+        }),
+      );
     }
+    void Promise.all(subscriptions)
+      .then(() => {
+        if (started > 0 && generation === current) void read();
+      })
+      .catch(() => {
+        if (generation === current)
+          store.setState({
+            loaded: false,
+            error: "Could not follow the sidebar order. Reconnect to retry.",
+          });
+      });
   }
   let released = false;
   return () => {
@@ -71,6 +103,8 @@ export function startPortalLayout(): () => void {
     released = true;
     started -= 1;
     if (started > 0) return;
+    generation += 1;
+    readRevision += 1;
     for (const stop of unlisteners) stop();
     unlisteners = [];
   };
@@ -78,18 +112,21 @@ export function startPortalLayout(): () => void {
 
 /** Shows `update` at once and writes it to the command node. */
 export async function updatePortalLayout(update: PortalLayoutUpdate): Promise<void> {
+  if (!store.getState().loaded)
+    throw new Error("The sidebar order has not loaded. Reconnect to retry.");
+  readRevision += 1;
   store.setState((state) => ({ layout: { ...state.layout, ...update }, loaded: true }));
   writing += 1;
   let unsupported = false;
   try {
     await portalInvoke<unknown>("update_portal_layout", { ...update });
   } catch (error) {
-    unsupported = /unknown command|not available in this backend/i.test(String(error));
+    unsupported = unsupportedCommand(error);
     if (!unsupported) throw error;
   } finally {
     writing -= 1;
     // Answers can arrive out of order; the stored layout is the one to show.
-    if (writing === 0 && !unsupported) void read();
+    if (writing === 0 && !unsupported) await read();
   }
 }
 

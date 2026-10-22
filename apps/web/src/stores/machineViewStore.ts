@@ -27,6 +27,7 @@ export interface MachineCollapseState {
   collapsedProjectKeys: readonly string[];
   /** `sidebarFolderKey(machineId, "")`: every folder of the machine. */
   folderPrefix: string;
+  folderKeys?: readonly string[];
   collapsedFolderKeys: readonly string[];
 }
 
@@ -46,6 +47,8 @@ interface MachineViewState {
   collapsedFolderKeys: string[];
   /** Machines whose own collapse state has been carried over into the keys above. */
   seededMachines: string[];
+  knownProjectKeys: string[];
+  knownFolderKeys: string[];
   setMachineFilter: (filter: string) => void;
   setGrouping: (grouping: Exclude<SidebarGrouping, "activity">) => void;
   setCompactMachineLabels: (compact: boolean) => void;
@@ -74,6 +77,8 @@ export const useMachineViewStore = create<MachineViewState>()(
       collapsedProjectKeys: [],
       collapsedFolderKeys: [],
       seededMachines: [],
+      knownProjectKeys: [],
+      knownFolderKeys: [],
       setMachineFilter: (machineFilter) => set({ machineFilter }),
       setGrouping: (grouping) => set({ grouping }),
       setCompactMachineLabels: (compactMachineLabels) => set({ compactMachineLabels }),
@@ -84,15 +89,27 @@ export const useMachineViewStore = create<MachineViewState>()(
       setProjectKeyCollapsed: (key, collapsed) =>
         set((state) => ({
           collapsedProjectKeys: toggled(state.collapsedProjectKeys, key, collapsed),
+          knownProjectKeys: toggled(state.knownProjectKeys, key, true),
         })),
       setFolderKeyCollapsed: (key, collapsed) =>
         set((state) => ({
           collapsedFolderKeys: toggled(state.collapsedFolderKeys, key, collapsed),
+          knownFolderKeys: toggled(state.knownFolderKeys, key, true),
         })),
       setMachineCollapseState: (machineId, next) =>
         set((state) => {
           const projectKeys = new Set(next.projectKeys);
           return {
+            knownProjectKeys: Array.from(
+              new Set([...state.knownProjectKeys, ...next.projectKeys]),
+            ).slice(-MAX_COLLAPSED_ENTRIES),
+            knownFolderKeys: Array.from(
+              new Set([
+                ...state.knownFolderKeys,
+                ...(next.folderKeys ?? []),
+                ...next.collapsedFolderKeys,
+              ]),
+            ).slice(-MAX_COLLAPSED_ENTRIES),
             collapsedProjectKeys: [
               ...state.collapsedProjectKeys.filter((key) => !projectKeys.has(key)),
               ...next.collapsedProjectKeys,
@@ -117,6 +134,8 @@ export const useMachineViewStore = create<MachineViewState>()(
         collapsedProjectKeys: state.collapsedProjectKeys,
         collapsedFolderKeys: state.collapsedFolderKeys,
         seededMachines: state.seededMachines,
+        knownProjectKeys: state.knownProjectKeys,
+        knownFolderKeys: state.knownFolderKeys,
       }),
     },
   ),

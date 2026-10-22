@@ -373,3 +373,25 @@ assertion, timeout or skip was changed for validation.
 - **Evidence:** `orkestrator-test-run.CZyF1o/refresh-real-browser.log.gz` and `orkestrator-test-run.X462KZ/refresh-gateway-owner.log.gz` below the host temporary directory. Both disposable profiles were stopped and reset; no live launcher remains.
 - **Other validation:** formatting, lint, all typechecks, production desktop build, focused merge and ScheduleWakeup tests, documentation links, and the complete component/public browser task passed. The complete non-iOS suite finished in 517.8 seconds: all workspace packages and protocol regeneration passed; its only failures were the unchanged Claude fixture and Pi staging cases, both of whose complete owners passed separately (0513 and 0514). The aggregate's original nonzero exit remains recorded.
 - **Scope limitation:** dedicated Electron, Docker lifecycle, iOS and billed-provider qualification were not selected because this merge changes none of their owning implementations; unavailable provider/Docker browser scenarios remain explicit skips.
+
+## Sidebar collapse/layout review validation — 2026-10-22
+
+The full isolated browser run on feature branch
+`fix-environment-indentation-fc91d4557412-r1` reproduced the hidden
+`Repository settings` control after opening tools at 390 × 844:
+
+- `mise run test:logged -- --name isolated-browser -- mise run test:agent:browser:isolated`
+  used profile `qa-browser-f042f724-984`: 27 passed, 42 opt-in skips, two
+  failed (the other was the private-canvas case). The Expand-project locator
+  failures reported by the review did not recur. Failure evidence:
+  `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.9o1S1h/isolated-browser.log.gz`.
+- A fresh credential-free Codex fixture profile, `qa-sidebar-review-repro`,
+  reproduced the same narrow failure with
+  `ORKESTRATOR_AGENT_TEST_PROFILE=qa-sidebar-review-repro mise run test:logged -- --name browser-narrow-repro -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts --grep 'host picker.*narrow|private canvases'`:
+  one failed, one passed in 32.8 seconds. The private-canvas case passed.
+  Failure evidence:
+  `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.OfyDfK/browser-narrow-repro.log.gz`.
+
+No assertion, timeout, skip, or production tools-popover behavior was changed
+for this recurrence. The isolated runner stopped and reset its profile; the
+manual reproduction profile was also stopped and reset after owner validation.

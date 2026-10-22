@@ -23,6 +23,8 @@ import { SidebarRootDropZone } from "@/components/sidebar/SidebarRootDropZone";
 import { activityRows, isMachineWritable, type MachineView } from "@/lib/federation/aggregate";
 import {
   arrangeMachines,
+  buildRepositoryTree,
+  resolveRepositoryArrangement,
   mergedArrangementUpdate,
   mergedProjectList,
   repositoryArrangementUpdate,
@@ -33,6 +35,7 @@ import {
 import { updatePortalLayout, usePortalLayout } from "@/lib/portal/portal-layout";
 import {
   buildProjectTree,
+  normalizeProjectFolderName,
   parseProjectFolderDragId,
   projectFolderKey,
   projectSortableIds,
@@ -328,11 +331,25 @@ export function MergedProjectList({
         : repositoryProjectList(machines, shownIds, layout, portalState.selfId),
     [layout, machines, mode, portalState.selfId, shownIds],
   );
-  const tree = useMemo(() => buildProjectTree(list.shown), [list.shown]);
+  const tree = useMemo(
+    () => (mode === "repository" ? buildRepositoryTree(list.shown) : buildProjectTree(list.shown)),
+    [list.shown, mode],
+  );
   const projectIds = useMemo(() => new Set(list.shown.map((item) => item.id)), [list.shown]);
-  const folderCollapseKey = (name: string) => sidebarFolderKey(mode, projectFolderKey(name));
+  const folderCollapseKey = (name: string) =>
+    sidebarFolderKey(mode, mode === "repository" ? name : projectFolderKey(name));
   const isFolderCollapsed = (name: string) => collapsedFolderKeys.includes(folderCollapseKey(name));
-  const sortableIds = projectSortableIds(tree, [], isFolderCollapsed);
+  const sortableIds =
+    mode === "repository"
+      ? tree.flatMap((entry) =>
+          entry.kind === "project"
+            ? [entry.project.id]
+            : [
+                `project-folder:${entry.key}`,
+                ...(isFolderCollapsed(entry.name) ? [] : entry.projects.map((p) => p.id)),
+              ],
+        )
+      : projectSortableIds(tree, [], isFolderCollapsed);
   const isProjectDrag = (id: string) => parseProjectFolderDragId(id) !== null || projectIds.has(id);
 
   const apply = (arrangement: ProjectArrangement | null) => {
@@ -353,7 +370,11 @@ export function MergedProjectList({
     const activeId = String(active.id);
     const overId = String(over.id);
     if (isProjectDrag(activeId)) {
-      apply(resolveProjectArrangement(activeId, overId, list.shown));
+      apply(
+        mode === "repository"
+          ? resolveRepositoryArrangement(activeId, overId, list.shown)
+          : resolveProjectArrangement(activeId, overId, list.shown),
+      );
       return;
     }
     for (const item of list.shown) {
@@ -407,9 +428,12 @@ export function MergedProjectList({
               mode === "project"
                 ? {
                     onRename: (nextName: string) => {
+                      const normalized = normalizeProjectFolderName(nextName);
+                      if (!normalized) return;
                       const collapsed = isFolderCollapsed(entry.name);
                       apply(resolveRenameProjectFolder(list.shown, entry.name, nextName));
-                      if (collapsed) setFolderKeyCollapsed(folderCollapseKey(nextName), true);
+                      setFolderKeyCollapsed(folderCollapseKey(entry.name), false);
+                      setFolderKeyCollapsed(folderCollapseKey(normalized), collapsed);
                     },
                     onSort: () => apply(resolveSortProjectFolder(list.shown, entry.name)),
                     onUngroup: () => apply(resolveUngroupProjectFolder(list.shown, entry.name)),
@@ -419,6 +443,7 @@ export function MergedProjectList({
               <SortableProjectFolder
                 key={`folder:${entry.key}`}
                 name={entry.name}
+                sortableId={mode === "repository" ? `project-folder:${entry.key}` : undefined}
                 label={mode === "repository" ? repositoryLabel(entry.name) : entry.name}
                 repository={mode === "repository"}
                 projectCount={entry.projects.length}

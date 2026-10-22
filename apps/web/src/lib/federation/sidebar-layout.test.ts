@@ -9,6 +9,8 @@ import {
 import type { MachineView } from "./aggregate";
 import {
   arrangeMachines,
+  buildRepositoryTree,
+  resolveRepositoryArrangement,
   mergeOrder,
   mergedArrangementUpdate,
   mergedProjectList,
@@ -256,4 +258,43 @@ describe("by repository", () => {
       key("bk_leaf", "app"),
     ]);
   });
+});
+
+test("repository identities retain long common prefixes and case-sensitive suffixes", () => {
+  const prefix = `github.example/${"organization".repeat(6)}/`;
+  const hints = [`${prefix}repository-a`, `${prefix}repository-b`, `${prefix}Repository-a`];
+  const machines = [
+    machine(
+      "bk_a",
+      hints.map((repositoryHint, i) => project("bk_a", String(i), i, { repositoryHint })),
+    ),
+  ];
+  const list = repositoryProjectList(machines, new Set(["bk_a"]), layout(), null);
+  const tree = buildRepositoryTree(list.shown);
+  expect(tree.map((entry) => (entry.kind === "folder" ? entry.name : null))).toEqual(hints);
+  expect(tree.map((entry) => (entry.kind === "folder" ? entry.key : null))).toEqual(hints);
+  const arrangement = resolveRepositoryArrangement(
+    `project-folder:${hints[0]}`,
+    `project-folder:${hints[1]}`,
+    list.shown,
+  );
+  expect(arrangement?.projectIds).toEqual([key("bk_a", "1"), key("bk_a", "0"), key("bk_a", "2")]);
+  expect(arrangement?.folders).toEqual({});
+});
+
+test("case-only inherited folder rename persists without changing owner spelling", () => {
+  const owned = project("bk_a", "p", 0, { folder: "Work" });
+  const machines = [machine("bk_a", [owned])];
+  const list = mergedProjectList(machines, new Set(["bk_a"]), layout(), null);
+  const update = mergedArrangementUpdate(
+    list,
+    machines,
+    layout(),
+    resolveRenameProjectFolder(list.shown, "Work", "WORK"),
+  )!;
+  expect(update.projectFolders[key("bk_a", "p")]).toBe("WORK");
+  expect(
+    mergedProjectList(machines, new Set(["bk_a"]), layout(update), null).shown[0]?.folder,
+  ).toBe("WORK");
+  expect(owned.folder).toBe("Work");
 });

@@ -66,6 +66,7 @@ import { moveId, withOrder } from "@/lib/federation/remote-order";
 import type { FederatedEnvironment, FederatedProject } from "@/lib/federation/summaries";
 import {
   buildProjectTree,
+  normalizeProjectFolderName,
   parseProjectFolderDragId,
   projectFolderKey,
   projectSortableIds,
@@ -291,9 +292,12 @@ export function RemoteMachineTree({ machine }: { machine: MachineView }) {
           const folderActions = sortable
             ? {
                 onRename: (nextName: string) => {
+                  const normalized = normalizeProjectFolderName(nextName);
+                  if (!normalized) return;
                   const collapsed = isFolderCollapsed(entry.name);
                   arrange(resolveRenameProjectFolder(items, entry.name, nextName));
-                  if (collapsed) setFolderKeyCollapsed(folderCollapseKey(nextName), true);
+                  setFolderKeyCollapsed(folderCollapseKey(entry.name), false);
+                  setFolderKeyCollapsed(folderCollapseKey(normalized), collapsed);
                 },
                 onSort: () => arrange(resolveSortProjectFolder(items, entry.name)),
                 onUngroup: () => arrange(resolveUngroupProjectFolder(items, entry.name)),

@@ -521,6 +521,70 @@ stays pinned to the tail and snaps back. Measurements land as annotations in
 `results.json`. Override models and trail lengths with the variables named in
 the spec's header.
 
+### Live cold restart
+
+`e2e/agent-testing/cold-restart-live.spec.ts` stops and starts the whole
+profile (backend, bridges and Electron) around real provider turns and checks
+that display tails and build-pipeline histories reconcile with no lost,
+duplicated or stale rows. It has its own opt-in,
+`ORKESTRATOR_AGENT_TEST_LIVE_COLD_RESTART=1`, and restarts the profile with the
+selection stored in its `profile.json`, so run it on its own against a profile
+you started by hand:
+
+```bash
+mise run dev:test --profile qa-cold --fixture --credential-source claude --credential-source codex --agent-platforms claude,codex
+# In a second terminal:
+ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS=900000 \
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-cold ORKESTRATOR_AGENT_TEST_LIVE_COLD_RESTART=1 \
+  mise run test:logged -- --name cold-restart-live -- mise run test:agent:browser -- \
+  e2e/agent-testing/cold-restart-live.spec.ts
+mise run dev:stop --profile qa-cold
+mise run dev:reset --profile qa-cold
+```
+
+Turns follow a trail of files (as in the paging spec), and every prompt
+carries a random tag, so a prompt delivered twice is countable. Reconciliation
+compares ordered row ids, displayed text and parts (excluding measured times and
+publication metadata). Replay checks count prose and tool-call occurrences across
+row splits and re-keying; Codex's live `bash` and replayed `exec_command`/code-mode
+`exec` forms of a single trail read share one canonical operation. When a turn
+has advanced since the captured snapshot, prose counts stop at its last captured
+tool call so newly generated steps are not mistaken for replay. Explicit
+follow-up prompts may intentionally read an earlier stop again.
+
+- **Native conversation** (Codex GPT-6-Luna by default; set
+  `ORKESTRATOR_AGENT_TEST_COLD_RESTART_NATIVE_PLATFORM=claude` for Haiku). After
+  an idle graceful restart, the first transcript read must be the persisted
+  display tail (`freshness: "cached"`) with exactly the conversation's rows,
+  and a client reading on from that cached view must converge on the
+  provider's rows. Then the backend is `SIGKILL`ed mid-turn: the tail may lag
+  by up to the checkpoint age, but must hold the prompt and no row the provider
+  lacks; the turn must settle, every earlier row must survive, and a follow-up
+  finishes the trail. The browser shows each prompt and closing word once.
+- **Build pipeline**. One pipeline's backend is `SIGKILL`ed the moment its
+  build prompt is journaled (`pendingPromptAttempt`), the mid-dispatch window;
+  the prompt must reach the provider once, on the same session. Acceptance may
+  race this live crash. The deterministic pre-acceptance case lives in
+  `apps/backend/src/core/build-pipeline-service-recovery.test.ts`: a subprocess
+  holds `send` after durable admission, is killed with SIGKILL, and a fresh
+  service/storage pair must retry the same request id and session exactly once.
+  A second pipeline is restarted mid-turn after a persist boundary: its committed history must read
+  back straight after the restart without the provider, and the stage
+  continues once on the same session. Both are cancelled once the build turn
+  ends, and an idle restart must return every stage history byte-identical.
+
+Review validation on 2026-10-21 exercised the real profile with Codex Luna and
+GPT-6.1-Sol build turns. The strengthened build check reached final history but
+reported 18 repeated trail reads within one prompt (`mid-turn: a stop was read
+twice in the same prompt`). This remains an unresolved live qualification
+failure; the assertion is retained. An earlier Luna build also failed to return
+its required structured review-preparation result. The credential-free held-send
+SIGKILL regression independently qualifies pre-acceptance same-request-id retry.
+
+The restarts leave the profile running under a detached launcher; stop it
+with `dev:stop` as usual. `dev:status` no longer reports `testProject` after a
+restart, so the spec falls back to the profile's seeded copy.
+
 ### Live revision tokens with inactive views
 
 `e2e/agent-testing/claude-revision-tokens-live.spec.ts` checks Claude's

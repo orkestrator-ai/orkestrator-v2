@@ -28,6 +28,7 @@ export default defineConfig({
     "mcp-apply-inactive.spec.ts",
     "multi-review-live.spec.ts",
     "transcript-paging-live.spec.ts",
+    "cold-restart-live.spec.ts",
     "claude-revision-tokens-live.spec.ts",
     "mcp-apply-live.spec.ts",
     "rich-transcripts-live.spec.ts",

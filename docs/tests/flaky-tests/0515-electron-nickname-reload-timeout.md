@@ -17,3 +17,7 @@
 ## 2026-10-22 main merge recurrence
 
 `main2-electron` (`mise run test:agent:electron` through `test:logged`) finished in 567 seconds with 28 passed, one skipped and the same five-second `Workstation` reload poll failure. The complete unchanged owning file passed in 67.0 seconds with `ORKESTRATOR_AGENT_TEST_RUN_ID=main2-electron-owner-7fac mise run test:logged -- --name main2-electron-owner -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts e2e/agent-testing/electron-main.spec.ts --workers=1`. Aggregate evidence: `orkestrator-test-run.G4a2Y0/main2-electron.log.gz` under the host temporary directory. No implementation, assertion, timeout or skip changed.
+
+## Agent-interactions main merge recurrence, 2026-10-22
+
+`mise run test:logged -- --name merge-electron -- mise run test:agent:electron` failed the nickname reload alongside three other cases: 18 passed, 4 failed, 1 skipped, 7 did not run, 846.4 s. `mise run test:logged -- --name merge-electron-owner-electron-main -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts --workers=1 electron-main.spec.ts` passed the entire unchanged owner (32.4 s). Original evidence: `orkestrator-test-run.oTkYDB/merge-electron.log.gz` under the host temporary directory.

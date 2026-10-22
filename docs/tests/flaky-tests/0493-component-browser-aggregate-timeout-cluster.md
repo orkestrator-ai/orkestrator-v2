@@ -93,3 +93,86 @@ Merging `c66604e25` into `78354c54`, `main2-browser` (`mise run test:browser` th
 | `e2e/SetupRecovery.spec.ts` | 7.0 | 0 |
 
 Aggregate evidence: `orkestrator-test-run.dtZOdW/main2-browser.log.gz` under the host temporary directory. Owner command: `mise run test:logged -- --name main2-owner-<stem> -- bunx playwright test --config e2e/playwright.config.ts <file> --workers=1`, with a free `ORKESTRATOR_E2E_PORT`. The public-site smoke passed separately in 21.1 seconds.
+
+## Agent-interactions main merge recurrence, 2026-10-22
+
+`mise run test:logged -- --name merge-browser -- mise run test:browser` ran 486 component cases with nine workers: 354 passed, 81 skipped and 51 failed (968.1 s). Public-site execution was short-circuited; the separate complete public-site command `mise run test:logged -- --name merge-public-browser -- bunx playwright test --config e2e/public-site/playwright.config.ts --workers=1` passed (18.3 s). Original component evidence: `orkestrator-test-run.evViv8/merge-browser.log.gz` under the host temporary directory.
+
+All complete owners were rerun unchanged as separate commands: `mise run test:logged -- --name merge-owner-<stem> -- bunx playwright test --config e2e/playwright.config.ts --workers=1 <file>`. Nineteen passed. The native branch-suggestion test remains non-green in both viewports (2 passed, 2 failed; expected `release/2.0`, received `rel`) and is not independently classified as a flake. No implementation, timeout, assertion or skip was changed.
+
+| Complete owner | Result | Invocation elapsed |
+| --- | --- | --- |
+| `e2e/AddProjectDialog.spec.ts` | pass | 4.3 s |
+| `e2e/AgentLaunchDialog.spec.ts` | unresolved failure | 22.1 s |
+| `e2e/AgentModelPicker.spec.ts` | pass | 3.8 s |
+| `e2e/AgentUsage.spec.ts` | pass | 16.3 s |
+| `e2e/BackgroundTaskOutcome.spec.ts` | pass | 33.7 s |
+| `e2e/ClaudeInteractions.spec.ts` | pass | 15.6 s |
+| `e2e/GlobalStyles.spec.ts` | pass | 10.6 s |
+| `e2e/MachinesSettings.spec.ts` | pass | 37.0 s |
+| `e2e/MailTiles.spec.ts` | pass | 18.3 s |
+| `e2e/MultiReviewFlow.spec.ts` | pass | 81.9 s |
+| `e2e/NativeHeldSend.spec.ts` | pass | 14.4 s |
+| `e2e/OpenCodePipelineTranscript.spec.ts` | pass | 7.2 s |
+| `e2e/PaneBreakpoint.spec.ts` | pass | 23.2 s |
+| `e2e/PlanUsage.spec.ts` | pass | 5.2 s |
+| `e2e/PullRequestCheckStatus.spec.ts` | pass | 6.8 s |
+| `e2e/ReadCoordinator.spec.ts` | pass | 13.0 s |
+| `e2e/RemoteMachineTree.spec.ts` | pass | 23.7 s |
+| `e2e/ReviewLaunchDialog.spec.ts` | pass | 8.1 s |
+| `e2e/ReviewValidationOutput.spec.ts` | pass | 13.9 s |
+| `e2e/TranscriptPaging.spec.ts` | pass | 43.7 s |
+
+Exact original failed cases:
+
+- 1) [mobile-chromium] › e2e/BackgroundTaskOutcome.spec.ts:18:5 › Agent outcomes survive launch loading and remount in container environments
+- 2) [mobile-chromium] › e2e/BackgroundTaskOutcome.spec.ts:18:5 › Bash outcomes survive launch loading and remount in local environments
+- 3) [mobile-chromium] › e2e/BackgroundTaskOutcome.spec.ts:18:5 › Task outcomes survive launch loading and remount in local environments
+- 4) [mobile-chromium] › e2e/BackgroundTaskOutcome.spec.ts:18:5 › Task outcomes survive launch loading and remount in container environments
+- 5) [mobile-chromium] › e2e/AgentUsage.spec.ts:38:3 › task-group compact usage fits alongside the header and remains accessible after reload
+- 6) [mobile-chromium] › e2e/AddProjectDialog.spec.ts:50:1 › long GitHub repository text ellipsizes inside the add-project dialog
+- 7) [mobile-chromium] › e2e/AgentModelPicker.spec.ts:3:1 › short mobile viewports keep every picker view reachable
+- 8) [mobile-chromium] › e2e/AgentUsage.spec.ts:38:3 › subagent compact usage fits alongside the header and remains accessible after reload
+- 9) [mobile-chromium] › e2e/BackgroundTaskOutcome.spec.ts:18:5 › Agent outcomes survive launch loading and remount in local environments
+- 10) [mobile-chromium] › e2e/MultiReviewFlow.spec.ts:477:3 › a retained clean-review PR notice reflects the current ready snapshot after reload
+- 11) [mobile-chromium] › e2e/MultiReviewFlow.spec.ts:477:3 › a retained clean-review PR notice reflects the current interactive snapshot after reload
+- 12) [mobile-chromium] › e2e/MultiReviewFlow.spec.ts:477:3 › a retained clean-review PR notice reflects the current reviewing snapshot after reload
+- 13) [mobile-chromium] › e2e/MultiReviewFlow.spec.ts:477:3 › a retained clean-review PR notice reflects the current consolidating snapshot after reload
+- 14) [mobile-chromium] › e2e/PaneBreakpoint.spec.ts:98:5 › split panes keep terminal output, scroll positions and the draft across the breakpoint (pane tree, moveBefore)
+- 15) [mobile-chromium] › e2e/PaneBreakpoint.spec.ts:98:5 › split panes keep terminal output, scroll positions and the draft across the breakpoint (pane tree, appendChild fallback)
+- 16) [mobile-chromium] › e2e/PaneBreakpoint.spec.ts:98:5 › split panes keep terminal output, scroll positions and the draft across the breakpoint (in the app shell, moveBefore)
+- 17) [mobile-chromium] › e2e/NativeHeldSend.spec.ts:3:1 › a device code survives browser-open failure, environment switching and renderer reload without another login
+- 18) [mobile-chromium] › e2e/OpenCodePipelineTranscript.spec.ts:34:1 › OpenCode pipeline/reviewer envelopes render as thinking and timed tool rows after backend normalization
+- 19) [mobile-chromium] › e2e/RemoteMachineTree.spec.ts:28:1 › drag optimistically reorders within a project, preserves home slots, and reconciles with the summary
+- 20) [mobile-chromium] › e2e/PullRequestCheckStatus.spec.ts:57:1 › CI status fits the View PR button in grid presentation
+- 21) [mobile-chromium] › e2e/PullRequestCheckStatus.spec.ts:77:1 › CI status applies each dark-theme state color
+- 22) [mobile-chromium] › e2e/PullRequestCheckStatus.spec.ts:14:1 › CI status announces running, failed, and successful completion
+- 23) [mobile-chromium] › e2e/PaneBreakpoint.spec.ts:181:1 › switching panes on a phone keeps each pane's scroll position and the terminal's size
+- 24) [mobile-chromium] › e2e/PlanUsage.spec.ts:3:1 › stale platform and account quotas retain their timestamp and explanation after reload
+- 25) [mobile-chromium] › e2e/PaneBreakpoint.spec.ts:98:5 › split panes keep terminal output, scroll positions and the draft across the breakpoint (in the app shell, appendChild fallback)
+- 26) [mobile-chromium] › e2e/ReadCoordinator.spec.ts:25:1 › hidden documents stop coordinated reads and resume reconciles critical reads first
+- 27) [mobile-chromium] › e2e/RemoteMachineTree.spec.ts:49:1 › truncated summaries have no drag handles and preserve owner order
+- 28) [mobile-chromium] › e2e/RemoteMachineTree.spec.ts:58:3 › Unknown rolls back the drag and names the command in the notice
+- 29) [mobile-chromium] › e2e/RemoteMachineTree.spec.ts:58:3 › Reject rolls back the drag ──────────
+- 30) [mobile-chromium] › e2e/RemoteMachineTree.spec.ts:78:1 › a missing summary expires the optimistic display back to the authoritative order
+- 31) [mobile-chromium] › e2e/RemoteMachineTree.spec.ts:91:1 › overlapping drops survive unmount and finish with the latest owner and display order
+- 32) [mobile-chromium] › e2e/RemoteMachineTree.spec.ts:112:1 › dragging a project writes the new project order to its own machine
+- 33) [mobile-chromium] › e2e/ReviewLaunchDialog.spec.ts:3:1 › short mobile viewports scroll configuration while keeping actions visible
+- 34) [mobile-chromium] › e2e/ReviewValidationOutput.spec.ts:12:1 › terminal output title and long command stay inside the dialog and are centered
+- 35) [desktop-chromium] › e2e/BackgroundTaskOutcome.spec.ts:47:3 › Agent Stop reveals without moving the activity slot or card
+- 36) [desktop-chromium] › e2e/BackgroundTaskOutcome.spec.ts:47:3 › Bash Stop reveals without moving the activity slot or card
+- 37) [desktop-chromium] › e2e/AgentUsage.spec.ts:38:3 › subagent compact usage fits alongside the header and remains accessible after reload
+- 38) [desktop-chromium] › e2e/ClaudeInteractions.spec.ts:44:3 › Claude form card rehydrates after an inactive environment and reload, then answers and cancels
+- 39) [desktop-chromium] › e2e/ClaudeInteractions.spec.ts:44:3 › Claude url card rehydrates after an inactive environment and reload, then answers and cancels
+- 40) [desktop-chromium] › e2e/ClaudeInteractions.spec.ts:100:1 › a paused Claude question stays paused across a reload, then resumes and answers
+- 41) [desktop-chromium] › e2e/GlobalStyles.spec.ts:136:1 › message actions use viewport and input capability instead of width alone
+- 42) [desktop-chromium] › e2e/MailTiles.spec.ts:42:1 › Enter and Space toggle a tile from the keyboard
+- 43) [desktop-chromium] › e2e/MailTiles.spec.ts:15:1 › a batched mail prompt renders one compact tile per message, styled by kind
+- 44) [desktop-chromium] › e2e/MachinesSettings.spec.ts:6:3 › every machine keeps its actions on screen at 1024px
+- 45) [desktop-chromium] › e2e/MachinesSettings.spec.ts:32:5 › ^Settings for Desk keeps the viewport gutter and responsive cap at 1024px
+- 46) [desktop-chromium] › e2e/MachinesSettings.spec.ts:58:3 › adding a machine accepts the Unicode name boundary through paste
+- 47) [desktop-chromium] › e2e/MachinesSettings.spec.ts:58:3 › adding a machine accepts the Unicode name boundary through typing
+- 48) [desktop-chromium] › e2e/MachinesSettings.spec.ts:32:5 › ^Add machine$ keeps the viewport gutter and responsive cap at 1024px
+- 49) [desktop-chromium] › e2e/MachinesSettings.spec.ts:32:5 › ^Updates for Desk keeps the viewport gutter and responsive cap at 1024px
+- 50) [desktop-chromium] › e2e/TranscriptPaging.spec.ts:15:5 › native: paging before prose holds the original tool position
+- 51) [desktop-chromium] › e2e/AgentLaunchDialog.spec.ts:7:1 › selects a native branch suggestion with the keyboard and confirms

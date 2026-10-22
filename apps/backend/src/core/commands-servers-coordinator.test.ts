@@ -27,7 +27,6 @@ describe("Coordinator Codex server", () => {
   let storage: StorageService;
   let previousCodexHome: string | undefined;
   let previousClaudeConfigDir: string | undefined;
-  let previousCursorProjectSettings: string | undefined;
   let cleanupContext: CommandContext | null = null;
   let cleanupRuntimeId: string | null = null;
   let cleanupKind: "codex" | "claude" | "cursor" = "codex";
@@ -82,7 +81,6 @@ describe("Coordinator Codex server", () => {
     );
     await fs.writeFile(path.join(sourceClaudeHome, "plugins", "evil.js"), "// unsafe\n");
     process.env.CLAUDE_CONFIG_DIR = sourceClaudeHome;
-    previousCursorProjectSettings = process.env.CURSOR_BRIDGE_PROJECT_SETTINGS;
     cleanupKind = "codex";
   });
 
@@ -101,9 +99,6 @@ describe("Coordinator Codex server", () => {
     else process.env.CODEX_HOME = previousCodexHome;
     if (previousClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
     else process.env.CLAUDE_CONFIG_DIR = previousClaudeConfigDir;
-    if (previousCursorProjectSettings === undefined)
-      delete process.env.CURSOR_BRIDGE_PROJECT_SETTINGS;
-    else process.env.CURSOR_BRIDGE_PROJECT_SETTINGS = previousCursorProjectSettings;
     await fs.rm(root, { recursive: true, force: true });
   });
 
@@ -351,15 +346,13 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     },
   );
 
-  test("a Cursor coordinator clears inherited project-settings opt-in", async () => {
-    process.env.CURSOR_BRIDGE_PROJECT_SETTINGS = "1";
+  test("a Cursor coordinator launch carries the coordinator process policy", async () => {
     const bridge = path.join(root, "bridges", "cursor-bridge", "dist");
     await fs.mkdir(bridge, { recursive: true });
     await fs.writeFile(
       path.join(bridge, "index.js"),
       `import { mkdir } from "node:fs/promises";
 const captured = {
-  projectSettings: process.env.CURSOR_BRIDGE_PROJECT_SETTINGS ?? null,
   policy: process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY,
   mcpUrl: process.env.ORKESTRATOR_AGENT_MCP_URL,
   mcpToken: process.env.ORKESTRATOR_AGENT_MCP_TOKEN,
@@ -428,7 +421,6 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       "captured.json",
     );
     expect(JSON.parse(await fs.readFile(capturedPath, "utf8"))).toEqual({
-      projectSettings: "0",
       policy: "coordinator-read-only",
       mcpUrl: "http://127.0.0.1:1234/mcp",
       mcpToken: "scoped-token",

@@ -1,14 +1,17 @@
 # Agent interactions and permissions
 
-Checked against `main` at `2459b05c` (2026-10-15).
+Checked against `main` at `2459b05c` (2026-10-15); items 2, 4 and 6 and the
+capability half of item 13 updated on `b83ae534` (2026-10-22).
 
 Every question, approval, elicitation and dialog a provider raises should either
 reach the user through the shared interaction contract and its one generic card,
 or be resolved by backend policy. The backend execution policy, not the bridges,
 decides what a session may do without asking. The contract, the capability bit,
-the unattended policy and the execution policy are in place. What is left is
-durable "always allow" rules, honest Grok approval kinds, and retiring the
-per-bridge environment overrides that predate the execution policy.
+the unattended policy and the execution policy are in place, and the
+per-bridge environment overrides that predated the execution policy are gone.
+What is left is durable "always allow" rules, Grok loading a trusted
+checkout's resources whatever the policy says, Codex questions, and the
+countdown pause gaps.
 
 ## Current state
 
@@ -21,6 +24,8 @@ per-bridge environment overrides that predate the execution policy.
 - Capability bit: `NativeAgentCapabilities.interactions.kinds`, set per platform
   in `nativeAgentCapabilities()` (`packages/protocol/src/native-agent.ts`).
   - Cursor reports `[]`.
+  - Codex does not claim `question`: no Orkestrator turn can raise one
+    (item 13). The bridge still parks one that arrives.
   - Pi reports its live gate through `publicInteractionKinds`
     (`bridges/pi-bridge/src/public.ts`). The backend prefers that answer over
     the table (`interactionKinds` in `http-bridge-provider.ts`).
@@ -78,7 +83,11 @@ per-bridge environment overrides that predate the execution policy.
 - Grok: `publicApprovals` (`bridges/acp-bridge/src/acp-public.ts`) reports each
   ACP permission request in ACP's own shape (title from `permissionTitle`,
   plus the agent's options), which the native branch of `mapAcpApproval`
-  offers as a required choice. While any request is held, `/activity` answers
+  offers as a required choice. `permissionDetail` (`acp-session.ts`) adds the
+  kind: `command` with the command for an `execute` call, `file-change` with
+  its paths for `edit`, `delete` or `move`, `permission` otherwise or when
+  that detail is missing. The backend maps them onto `command-approval`,
+  `file-approval` and `permission`. While any request is held, `/activity` answers
   `waiting`. Plan approvals and questions use the separate
   `x.ai/exit_plan_mode` and `x.ai/ask_user_question` reverse requests.
 - OpenCode: every production owner creates the provider with
@@ -101,9 +110,11 @@ per-bridge environment overrides that predate the execution policy.
     (`AgentInfoButton.tsx`), which renders the policy's effects
     (`nativeAgentPolicyEffects`, `packages/protocol/src/native-agent-policy-effects.ts`)
     from the policy each bridge reports. A bridge reports what it applies:
-    Cursor, Pi, Grok, Codex and OpenCode rewrite an axis they cannot honour and
-    say why in `note` (`withoutProviderSandbox`, `codexReportedPolicy`,
-    `acpReportedPolicy`, `effectiveOpenCodePolicy`).
+    Cursor, Pi, Grok and OpenCode rewrite an axis they cannot honour and
+    say why in `note` (`withoutProviderSandbox`, `acpReportedPolicy`,
+    `effectiveOpenCodePolicy`). Codex honours project resources off with a
+    per-thread untrusted pin and disabled repo skills (item 6), so it reports
+    the policy unchanged.
   - Held to the adapters by the execution-policy conformance suite
     (`tests/conformance/execution-policy/`). For each platform and ten policy
     shapes it captures the options the SDK or CLI receives, decodes them into
@@ -133,16 +144,10 @@ per-bridge environment overrides that predate the execution policy.
     each was left pending for 11 minutes, then answered after a reload, and its
     turn finished with the answer (live pause record below). Grok is not
     qualified yet.
-- Deprecated overrides still read by the bridges, with a one-time deprecation
-  warning:
-  - Cursor: `CURSOR_BRIDGE_SANDBOX` and `CURSOR_BRIDGE_PROJECT_SETTINGS`
-    (`bridges/cursor-bridge/src/agent-session.ts`, `config.ts`
-    `sandboxEnabled` / `resolveCursorSettingSources`).
-  - Pi: `PI_BRIDGE_REQUIRE_APPROVAL` and `PI_BRIDGE_PROJECT_RESOURCES`
-    (`bridges/pi-bridge/src/agent-session.ts`, `config.ts`
-    `approvalsEnabled` / `projectResourcesEnabled`).
-  - ACP: `ACP_APPROVE_PROJECT_MCPS` is no longer read by `bridges/acp-bridge`
-    at all. Only a launcher sets it, and comments still cite it.
+- No bridge reads the old execution-policy env overrides
+  (`CURSOR_BRIDGE_SANDBOX`, `CURSOR_BRIDGE_PROJECT_SETTINGS`,
+  `PI_BRIDGE_REQUIRE_APPROVAL`, `PI_BRIDGE_PROJECT_RESOURCES`,
+  `ACP_APPROVE_PROJECT_MCPS`) and no launcher sets them (item 4).
 
 ## Outstanding work
 
@@ -157,62 +162,63 @@ per-bridge environment overrides that predate the execution policy.
    - `listPermissionRules?` / `removePermissionRule?` on `NativeAgentRuntimeProvider`.
 
    Bridges with no saved rules answer an empty list, not 404.
-2. **Grok approval kind.** Every Grok approval reaches the card as a
-   `permission` titled by the tool call, with the agent's own options. The
-   native ACP branch of `mapAcpApproval`
-   (`apps/backend/src/core/http-bridge-interactions.ts`) hard-codes
-   `kind: "permission"`. Derive the kind from the ACP `toolCall.kind` in the
-   bridge: report `execute` as a command approval and `edit` as a file change,
-   with the fields those kinds carry, and keep `permission` for everything
-   else. The backend then maps them onto `command-approval` and
-   `file-approval`. Carry the request's blocking hint if ACP supplies one.
+2. **Grok approval kind.** Done 2026-10-22. The bridge derives the kind from
+   the ACP `toolCall.kind` (or the kind it recorded for the same call, or a
+   known tool name such as `bash`, reading through Grok's `use_tool`
+   wrapper) and publishes `command` with the command or `file-change` with
+   the paths; the backend maps them onto `command-approval` and
+   `file-approval` and keeps the agent's own options as the choices. `delete`
+   and `move` count as file changes as well as `edit`. A request without the
+   command or paths stays a `permission`, and so does one from an older
+   bridge. Tests: `acp-permission-detail.test.ts`, `acp-provider.test.ts`.
+   Not done: ACP defines no blocking hint, so none is carried. Not checked
+   against a live Grok request (the host Grok login was expired); the Grok
+   live qualification below should confirm that real `execute` and `edit`
+   requests arrive as command and file approvals.
 3. **Claude question previews.** Set `toolConfig.askUserQuestion.previewFormat`
    once the question card's rendering mode (plain or html) is decided. Nothing
    sets it today.
-4. **Retire the deprecated policy env overrides.**
-   - Remove the reads and the deprecation warnings in the Cursor and Pi bridges,
-     along with `sandboxEnabled`, `resolveCursorSettingSources`,
-     `approvalsEnabled` and `projectResourcesEnabled`. Today
-     `publicInteractionKinds` and `bridges/pi-bridge/src/interactions.ts` still
-     fall back to them when a session has no policy.
-   - `cursorMcpServers` (`bridges/cursor-bridge/src/mcp.ts`) needs more than a
-     deletion. It reads project MCP servers only when
-     `resolveCursorSettingSources()` includes `project`, which means only when
-     `CURSOR_BRIDGE_PROJECT_SETTINGS=1`. No launcher sets that, so the check
-     ignores a policy with `projectResources: true`. Make it follow the
-     session's policy instead.
-   - Then remove the launchers that still set them to `"0"`:
-     - `commands-servers.ts`: `CURSOR_BRIDGE_PROJECT_SETTINGS` and
-       `PI_BRIDGE_PROJECT_RESOURCES` for coordinator conversations;
-     - `host-model-catalog-refresh.ts`: `CURSOR_BRIDGE_PROJECT_SETTINGS` and
-       `ACP_APPROVE_PROJECT_MCPS`;
-     - `pi-model-catalog-seeding.ts`: `PI_BRIDGE_PROJECT_RESOURCES`.
-
-     The bridges treat any defined value as an override, so these `"0"` values
-     also trigger the deprecation warning on every such launch. They exist only
-     to close an override inherited from the backend's environment, so they go
-     once the bridges stop reading the variables. Coordinator conversations stay
-     closed through `ORKESTRATOR_BRIDGE_EXECUTION_POLICY`.
-   - Update the stale comments: the Pi row in `nativeAgentCapabilities`, the
-     `publicInteractionKinds` doc comment, `bridges/pi-bridge/src/interactions.ts`
-     and the `config.ts` comments in both bridges that cite
-     `ACP_APPROVE_PROJECT_MCPS`. Root `AGENTS.md` and `bridges/pi-bridge/AGENTS.md`
-     still say Pi approvals and project resources are env-gated; update them in
-     the same change.
-   - Done when no source file outside tests names any of the five variables.
+4. **Retire the deprecated policy env overrides.** Done 2026-10-22. Cursor
+   and Pi read only the session's policy (`sandboxEnabled`,
+   `resolveCursorSettingSources`, `approvalsEnabled` and
+   `projectResourcesEnabled` are gone, and a session without a policy runs as
+   the host default). `cursorMcpServers` opens `.cursor/mcp.json` only when
+   the policy turns `projectResources` on. The launchers in
+   `commands-servers.ts`, `host-model-catalog-refresh.ts` and
+   `pi-model-catalog-seeding.ts` no longer set the variables; coordinators stay
+   closed through `ORKESTRATOR_BRIDGE_EXECUTION_POLICY`. The comments, both
+   `AGENTS.md` files and `platform-inconsistencies.md` are updated, and no
+   source file outside tests names any of the five variables. Tests that set
+   them now check they change nothing.
 5. **Delete the unused OpenCode auto-answer branch.** No production caller sets
    `autoAnswerRequests: true`. Remove the branch in `OpenCodeProvider`
    (`registerSession`, the reconcile hook and the `permission.asked` /
    `question.asked` replies) and move the tests that use it onto the journaled
    path. If a future owner wants provider-side answering, it should follow
    `agentInteractionPolicyAction` instead of always rejecting.
-6. **Codex project resources.** A Codex worker loads a trusted project's own
-   `.codex` configuration whatever `projectResources` says, so the bridge now
-   reports the axis as on with a note (`codexReportedPolicy`). Make it honour
-   `false` instead, by pinning the checkout untrusted for that thread as the
-   coordinator does process-wide, after checking live that a per-thread
-   `projects.<root>.trust_level` override takes effect. Then delete
-   `codexReportedPolicy` and let the suite prove it.
+6. **Codex project resources.** Done 2026-10-22. With project resources off,
+   every `thread/start`, `thread/resume` and `thread/fork` carries
+   `config.projects[<cwd>].trust_level = "untrusted"` (and the cwd's canonical
+   path) as a nested table, plus a thread-scoped `skills.config` that disables
+   every repo-scope skill `skills/list` reports, because the pin does not reach
+   skills. A `skills/list` failure other than method-not-found refuses the
+   thread. `codexReportedPolicy` is deleted and the conformance suite reads the
+   pin. Checked against the pinned 0.162.1 with a loopback Responses endpoint
+   (`live-project-trust.test.ts`, gated by `RUN_LIVE_CODEX_APP_SERVER=1`, no
+   credentials): with the project trusted, the `.codex` config layer, AGENTS.md,
+   `.codex/skills` and `.agents/skills` all reach the model and the project MCP
+   server is contacted (control); with the pin none of them do, on the first
+   turn and after a reload, a pin on a linked worktree wins over a trusted main
+   checkout, and the user's `config.toml` is left unchanged. A dotted
+   `projects."<path>".trust_level` key in thread config is silently ignored.
+   Left open, as residual risk:
+   - A repo skill added while a thread is loaded is not disabled until the
+     thread next starts or resumes.
+   - The slash-command catalogue (`skill-inventory.ts`) still lists repo
+     skills for a session with project resources off; Codex should refuse a
+     disabled one, but that dispatch was not checked.
+   - Hooks were not probed separately. They live in the same `.codex` layer
+     the pin drops, which the config-layer and MCP canaries prove.
 7. **Read-only turns.** Claude, Cursor and Grok run a `readOnly` turn under the
    coordinator policy but keep reporting the session's. Agent Info then
    understates the turn's restrictions (never overstates them).
@@ -249,7 +255,13 @@ per-bridge environment overrides that predate the execution policy.
     `acpReportedPolicy` reports the axis as on. No switch forces Grok's gate
     closed: an empty `GROK_HOME` would also drop the login. Find one on the
     pinned build (or ask xAI), then honour `false` and drop the note, as item 6
-    plans for Codex.
+    did for Codex. A search of the 1.0.52 binary on 2026-10-22 found only
+    switches that open the gate (`GROK_FOLDER_TRUST=0`, `--trust`,
+    `[folder_trust] enabled = false`) and no other `GROK_*TRUST*` variable or
+    trust-store path override. `GROK_AUTH_PATH` exists, so a throwaway
+    `GROK_HOME` with the login pointed back at the real auth file might keep
+    the login, but it would also drop the user's config, skills, MCP servers
+    and session store; not tried, and it needs a live Grok login to qualify.
 13. **Codex questions never reach the card.** The capability table and the
     bridge's `item/tool/requestUserInput` path claim Codex questions, but no
     real Codex turn can raise one. The bridge never sets a collaboration mode
@@ -261,9 +273,9 @@ per-bridge environment overrides that predate the execution policy.
     Orkestrator Plan turns in Codex's Plan collaboration mode, or turn on
     Codex's `default_mode_request_user_input` feature for interactive
     sessions only (unattended owners would then decline the question by
-    policy). Until then, take `question` out of the Codex row in
-    `nativeAgentCapabilities()`, or say why it stays. Then add the Codex
-    question case to `paused-interactions-live.spec.ts`.
+    policy). `question` is out of the Codex row in `nativeAgentCapabilities()` since
+    2026-10-22; put it back with the fix. Then add the Codex question case to
+    `paused-interactions-live.spec.ts`.
 
 ### Qualification
 
@@ -271,7 +283,9 @@ per-bridge environment overrides that predate the execution policy.
   past ten minutes and then answered, with
   `ORKESTRATOR_AGENT_TEST_PAUSE_PROVIDERS=grok` (see the live pause record).
   The 2026-10-21 run skipped Grok because the host Grok login had expired, and
-  a profile may never refresh it. Claude, Codex, OpenCode and Pi passed.
+  a profile may never refresh it. Claude, Codex, OpenCode and Pi passed. The
+  same run should confirm that a Grok command and edit now reach the card as a
+  command and a file approval (item 2).
 
 - Browser: raise an MCP elicitation (Codex or Claude), answer it, reload
   mid-question, and confirm it rehydrates from `/session/:id/interactions`. On
@@ -504,9 +518,10 @@ enabled pause button fixed it before the successful qualification above.
   fail-closed timeout. Codex and Pi have `interactions.test.ts` and Claude has
   `session-manager-parked-interactions.test.ts`; the full matrix was not
   confirmed.
-- Whether a container Cursor session loads the repository's `.cursor/mcp.json`
-  today. The SDK gets `settingSources` with `project` from the policy, which may
-  load it on its own, independently of `cursorMcpServers`.
+- Whether the Cursor SDK also loads `.cursor/mcp.json` itself when
+  `settingSources` includes `project`. `cursorMcpServers` now passes it
+  explicitly whenever the policy turns project resources on (item 4), so the
+  servers arrive either way; a duplicate load was not checked.
 
 ## Related
 
@@ -520,9 +535,6 @@ enabled pause button fixed it before the successful qualification above.
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md)
   for the Docker and provider runs.
 - [agent-engines.md](../../architecture/agent-engines.md) "Execution policy".
-- Living-doc drift to fix:
-  - [platform-inconsistencies.md](../../architecture/platform-inconsistencies.md)
-    still describes `ACP_APPROVE_PROJECT_MCPS` as a live switch.
 
 ## Replaces
 

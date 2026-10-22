@@ -3112,38 +3112,35 @@ describe("request handling", () => {
  * approvals that can never arrive.
  */
 describe("interaction capability", () => {
-  const gate = "PI_BRIDGE_REQUIRE_APPROVAL";
-
-  test("reports nothing while the approval gate is off", () => {
-    const previous = process.env[gate];
-    delete process.env[gate];
-    try {
-      expect(publicInteractionKinds()).toEqual([]);
-    } finally {
-      if (previous === undefined) delete process.env[gate];
-      else process.env[gate] = previous;
-    }
+  const policy = (approvals: "ask" | "auto-approve" | "deny") => ({
+    id: "interactive-host" as const,
+    sandbox: "none" as const,
+    approvals,
+    projectResources: false,
+    networkAccess: "full" as const,
   });
 
-  test("reports the approval kinds once the gate is on", () => {
-    const previous = process.env[gate];
-    process.env[gate] = "1";
-    try {
-      expect(publicInteractionKinds()).toEqual(["command-approval", "file-approval"]);
-    } finally {
-      if (previous === undefined) delete process.env[gate];
-      else process.env[gate] = previous;
-    }
+  test("reports nothing without a policy that asks", () => {
+    expect(publicInteractionKinds()).toEqual([]);
+    expect(publicInteractionKinds(newSessionState())).toEqual([]);
+    expect(publicInteractionKinds(newSessionState(undefined, policy("auto-approve")))).toEqual([]);
+    expect(publicInteractionKinds(newSessionState(undefined, policy("deny")))).toEqual([]);
   });
 
-  test("only the exact opt-in value turns the gate on", () => {
-    const previous = process.env[gate];
-    process.env[gate] = "true";
+  test("reports the approval kinds for a session whose policy asks", () => {
+    expect(publicInteractionKinds(newSessionState(undefined, policy("ask")))).toEqual([
+      "command-approval",
+      "file-approval",
+    ]);
+  });
+
+  test("the retired approval env override no longer turns the gate on", () => {
+    process.env.PI_BRIDGE_REQUIRE_APPROVAL = "1";
     try {
       expect(publicInteractionKinds()).toEqual([]);
+      expect(publicInteractionKinds(newSessionState())).toEqual([]);
     } finally {
-      if (previous === undefined) delete process.env[gate];
-      else process.env[gate] = previous;
+      delete process.env.PI_BRIDGE_REQUIRE_APPROVAL;
     }
   });
 });

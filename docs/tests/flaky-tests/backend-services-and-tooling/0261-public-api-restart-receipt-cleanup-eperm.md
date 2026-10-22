@@ -65,3 +65,23 @@ passed all four groups (exit 0, 282.3 seconds).
 - **Owning-file rerun:** `mise run test:logged -- --name public-api-projects-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/public-api/public-api-projects.test.ts --parallel=1 --only-failures` passed unchanged, exit 0 in 2.7 seconds.
 - **Evidence:** `orkestrator-test-run.7BXWb1/full-suite.log.gz` and `orkestrator-test-run.wdkpxS/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
 - **Assessment:** recurrence of the recorded cleanup flake; concurrent filesystem activity remains an unconfirmed hypothesis. No implementation, assertions, timeouts or skips changed in this owner.
+
+## Merge-resolution prompt validation recurrence — 2026-10-22
+
+- **Command:** `mise run test:logged -- --name merge-full -- mise run test`
+  with the standard workspace/root/bridges/protocol allocation of 4/1/2/1 slots.
+- **Failure:** the replay case failed during fixture cleanup at
+  `public-api/test-support.ts:143` with `EPERM` removing its temporary root
+  (10.44 ms). The backend owner and its production code were unchanged.
+- **Owning-file rerun:** `mise run test:logged -- --name merge-receipt-isolated -- bun test --cwd apps/backend ./src/core/public-api/public-api-projects.test.ts --parallel=1 --only-failures`
+  passed unchanged, exit 0 in 2.2 seconds.
+- **Evidence:** `orkestrator-test-run.9S56xJ/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+  below the host temporary directory; outer artifact
+  `orkestrator-test-run.JR9Bbt/merge-full.log.gz`.
+- **Assessment:** recurrence of the recorded cleanup flake. The aggregate also
+  had an ACP stall (0262) and a prompt assertion affected by editing its wording
+  during the run; the final prompt tests passed separately. No assertions,
+  timeouts, skips or public API implementation changed to address this cleanup.
+- **Confirmation:** `mise run test:logged -- --name merge-full-confirm -- mise run test`
+  passed all four groups, exit 0 in 432.6 seconds, with the final prompt and
+  test wording held steady throughout the run.

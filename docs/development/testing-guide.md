@@ -26,7 +26,11 @@ with [agent-testing.md](agent-testing.md).
 | Qualify live paused interactions | `mise run test:logged -- --name paused-interactions-live -- mise run test:agent:paused-interactions` | Opt-in billed turns in a disposable profile; set `ORKESTRATOR_AGENT_TEST_LIVE_PAUSED_INTERACTIONS=1` ([agent-testing.md](agent-testing.md#live-paused-interactions)) |
 | Run the live coordinator suite | `mise run test:agent:coordinator --credential-source <platform>` | Manual and opt-in: real provider turns, one disposable profile per platform ([agent-testing.md](agent-testing.md#live-coordinator-suite)) |
 
-A normal implementation loop is:
+Choose validation scope using [AGENTS.md](../../AGENTS.md#choosing-validation-for-a-change)
+before applying this loop. Documentation-only changes need only
+`mise run format:check`.
+
+A normal code implementation loop is:
 
 1. Run the owning test file while iterating.
 2. Run `mise run test:changed` after the local behavior is green.
@@ -53,6 +57,27 @@ design specs, and `e2e/agent-testing/backend-store.ts` reads and writes stores
 behind a running profile. `tests/unit/playwright-spec-loading.test.ts` lists
 every Playwright config under Node in `mise run test`, so such an import fails
 there first.
+
+### Documentation-only merge conflicts
+
+The repository's
+[merge-conflict exception](../../AGENTS.md#documentation-only-merge-conflict-resolution)
+allows format-only validation when the complete original conflicted-path list
+is known, every conflict was in prose documentation not consumed by tests,
+builds, or tooling, and manual resolution changes only that prose. Confirm no
+conflict markers remain and run `mise run format:check`; do not rerun tests,
+lint, typechecking, builds, or scenario suites solely for that resolution,
+including when code, configuration, or tests auto-merge. This repository policy
+takes precedence over generic merge prompts requiring auto-merged code checks.
+
+Retain the original unmerged path list before staging, tied to the merge's
+parent commit IDs, for resumed work. Resolving a source conflict to one parent's
+version does not make it a documentation-only conflict. If the list is missing
+or incomplete, run relevant validation on the merged result, including the full
+suite when impact cannot be scoped; do not reconstruct a prose-only scope from
+staged or combined diffs. New code/configuration edits,
+non-documentation resolutions, tooling-consumed documentation, and outstanding
+feature validation still follow the normal requirements.
 
 ### Public-site smoke tests
 

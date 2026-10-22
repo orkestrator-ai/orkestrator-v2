@@ -12,3 +12,24 @@
 - **Assessment:** the unchanged package passing alone establishes an intermittent aggregate stall, but the absent file-level output does not establish its cause. No test, assertion, timeout, skip or production code changed.
 
 - **Final aggregate rerun:** `mise run test:logged -- --name merge-tests-final -- mise run test` passed all four groups (exit 0, 277.5 seconds), including all five bridges (88.0 seconds). No tests, assertions, timeouts or skips changed.
+
+## Merge-resolution prompt validation recurrence — 2026-10-22
+
+- **Command:** `mise run test:logged -- --name merge-full -- mise run test`
+  with the standard workspace/root/bridges/protocol allocation of 4/1/2/1 slots.
+- **Failure:** ACP printed only its Bun startup banner. After 300000 ms without
+  bridge-group output, the watchdog terminated `acp-bridge#test:bridge`.
+  The bridge group ended after 385.2 seconds; the other four bridge packages
+  passed. No active ACP owner file was identified in the output.
+- **Isolated package rerun:** `mise run test:logged -- --name merge-acp-isolated -- bun run --cwd bridges/acp-bridge test:bridge`
+  passed unchanged, exit 0 in 64.6 seconds, using the script's default
+  `--parallel=1`.
+- **Evidence:** `orkestrator-test-run.9S56xJ/bridges.log.gz` below the host
+  temporary directory; outer artifact
+  `orkestrator-test-run.JR9Bbt/merge-full.log.gz`.
+- **Assessment:** recurrence of the recorded aggregate stall. Its cause remains
+  unknown; no implementation, tests, assertions, timeouts or skips changed in
+  the ACP package.
+- **Confirmation:** `mise run test:logged -- --name merge-full-confirm -- mise run test`
+  passed all four groups, exit 0 in 432.6 seconds; the bridge group passed
+  in 109.2 seconds.

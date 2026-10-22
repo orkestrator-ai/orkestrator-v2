@@ -2,7 +2,7 @@
 
 Status: Living — implemented behind capability negotiation; real-stack gates
 (native window, Docker, live agents) not yet run. Gates and evidence are in
-[web-annotation-qualification.md](../todo/web-annotation-qualification.md).
+[0044-web-annotation-qualification.md](../todo/previews-and-annotations/0044-web-annotation-qualification.md).
 
 Select part of a preview, save a note without any agent open, discuss it with
 one chosen native-agent session, request a change, and review and accept the
@@ -480,4 +480,4 @@ The new capture path never writes into native chat drafts.
 - Not yet exercised on a real stack: Docker materialization, remote backend
   upload, live-agent implementation runs per provider, iOS review, and
   native-window checks at several zoom levels. See "Last evidence" in
-  [web-annotation-qualification.md](../todo/web-annotation-qualification.md).
+  [0044-web-annotation-qualification.md](../todo/previews-and-annotations/0044-web-annotation-qualification.md).

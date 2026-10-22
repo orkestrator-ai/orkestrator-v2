@@ -119,3 +119,20 @@ failure was the separately recorded receipt-fixture cleanup recurrence in 0261.
 ## Two-column report main merge — 2026-10-21
 
 Disk reporting exceeded five seconds (5,027.73 ms) in the aggregate; the complete unchanged owner passed in 4.4 seconds (`merge-disk-owner`). See [0629](0629-two-column-main-merge-validation.md) for commands, worker configuration, counts and evidence. No source, assertion, timeout or skip changed.
+
+## Claude revision-token third main merge — 2026-10-22
+
+- **Original command:** `mise run test:logged -- --name revtok-main3-tests -- mise run test`; workspace/root/bridges/protocol reservations 4/1/2/1 alongside browser and Electron checks.
+- **Failure:** the checkout fixture exceeded 5000 ms (5044.81 ms); `report.status` was null rather than 0, also producing an error between tests. Root/support reported 3200 passed, one skipped, one failed and one error across 152 files (316.88 s).
+- **Unchanged whole owner:** `mise run test:logged -- --name revtok-main3-disk-owner -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures` passed in 1.7 s.
+- **Evidence:** `orkestrator-test-run.YKWNcv/root-and-agent-support-tests.log.gz` below the host temporary directory after aggregate completion.
+- **Assessment:** confirmed intermittent recurrence; shared-host contention remains a hypothesis. No implementation, assertion, timeout or skip changed.
+
+
+## Machines settings main merge — 2026-10-22
+
+- **Original command:** the testing guide's GNU-tool PATH with `mise run test:logged -- --name merge-tests -- mise run test`, initially merging `c17f1c8d5` into `814afe472`. Workspace/root/bridges/protocol reserved 4/1/2/1 slots, alongside browser and Docker validation.
+- **Failure:** the isolated-checkout case timed out at 5104.05 ms; `report.status` was null, also producing an error between tests. The completed root/support group reported 3221 passed, one skipped, two failed and one error across 154 files (416.86 s); the other failure was Pi staging. The overall run was interrupted to include newly published main commits.
+- **Complete unchanged owner on the refreshed merge (`7e051d955`):** `mise run test:logged -- --name merge-disk-owner -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures` passed, exit 0 in 2.5 s. The refreshed root/support group also passed in 177.5 s.
+- **Evidence:** `orkestrator-test-run.x69ru0/root-and-agent-support-tests.log.gz` and outer `orkestrator-test-run.zXH9t0/merge-tests.log.gz` below the host temporary directory.
+- **Assessment:** confirmed intermittent deadline recurrence; contention remains a hypothesis. No implementation, assertion, timeout or skip changed.

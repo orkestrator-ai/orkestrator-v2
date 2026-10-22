@@ -343,6 +343,35 @@ assertion, timeout or skip was changed for validation.
 - **Evidence:** `orkestrator-test-run.Ow1M3o/merge-browser.log.gz` and `orkestrator-test-run.MWfKgp/merge-gateway-owner.log.gz` below the host temporary directory; browser artifacts under `output/agent-testing/<profile>/browser/` for the two profiles above.
 - **Disposition:** existing narrow-picker limitation remains unresolved. Both supervisors stopped and reset their profiles. No source, assertion, deadline or skip changed.
 
+
+## Idle-observation review validation (2026-10-21)
+
+The narrow host-picker timeout recurred while validating the idle-observation
+assertions and isolated-runner opt-in default:
+
+- `ORKESTRATOR_AGENT_TEST_LIVE_IDLE_OBSERVATION=1 mise run test:logged -- --name isolated-browser -- mise run test:agent:browser:isolated`
+  on credential-free Codex fixture `qa-browser-b58be031-38c`: 28 passed,
+  44 skipped, one failed (402.7 s including startup/cleanup). The failure was
+  the same 15 s click on hidden `Repository settings` at
+  `browser-gateway.spec.ts:239`, after `Open tools`. All six idle-observation
+  live cases stayed skipped despite the inherited opt-in. Evidence:
+  `orkestrator-test-run.ObH8th/isolated-browser.log.gz` in the host temporary
+  directory and `output/agent-testing/qa-browser-b58be031-38c/browser/`.
+- The complete unchanged owning file was rerun with one worker in a fresh
+  credential-free Codex fixture, `qa-browser-50d29a4f-6e8`, using
+  `runIsolatedBrowser` with a temporary config selecting only
+  `browser-gateway.spec.ts` (`mise run test:logged -- --name gateway-owner -- bun output/idle-review/gateway-run.ts`).
+  It reproduced the same narrow click failure: 14 passed, seven skipped, one
+  failed (144.8 s). Evidence: `orkestrator-test-run.BevcYq/gateway-owner.log.gz`
+  in the host temporary directory and
+  `output/agent-testing/qa-browser-50d29a4f-6e8/browser/`.
+
+The owning-file failure leaves this recurrence reproducible in isolation; this
+run does not establish a new flaky classification. The existing late-selection
+hypothesis remains unconfirmed by this run. No assertions were skipped or
+weakened. Both profiles were stopped/reset, and the temporary runner/config
+files were removed.
+
 ## Command-node review validation recurrence — 2026-10-21
 
 - `mise run test:logged -- --name review-real-browser-confirm -- mise run test:agent:browser:isolated` reported 28 passed, 39 skipped and one failed (649.2 seconds including lifecycle). The narrow host picker reproduced the hidden `Repository settings` button after `Open tools` at line 239, with a 15-second click timeout.
@@ -408,3 +437,28 @@ assertion, timeout or skip was changed for validation.
   fix. No assertion, timeout or skip was loosened. Dedicated Electron, Docker
   lifecycle, iOS and billed-provider suites were omitted because their owning
   implementations did not change.
+
+## Idle-observation refreshed main merge — 2026-10-22
+
+The narrow picker repeated the hidden `Repository settings` click timeout at
+`browser-gateway.spec.ts:240` (15000 ms) in both the full isolated browser run
+and the complete unchanged gateway owner on a fresh credential-free local-only
+profile. The full run reported 27 passed, 51 skipped and two failed; the owner
+reported 13 passed, 10 skipped and this single failure (127.0 seconds). The
+other full-run failure, local-environment `origin` visibility, passed in the
+owner, but the owner remains non-green. Commands, evidence and cleanup are
+recorded in [0515](0515-idle-observation-main-merge-validation.md), under
+“Main refresh”. No implementation, assertion, deadline or skip changed; this
+recurrence remains unresolved rather than a newly confirmed flake.
+
+
+## Machines settings refreshed main merge — 2026-10-22
+
+- **Merge:** `origin/main` at `7e051d955` into `814afe472` on `machines-settings-13fae198a6c1-r1`. The pending merge was refreshed after two new main commits appeared; the original non-IOS and browser attempts were interrupted and are not final coverage.
+- **Full browser command:** `mise run test:logged -- --name latest-browser -- mise run test:agent:browser:isolated`, one worker, fresh credential-free Codex profile `qa-browser-e19f73e8-d2d`. Result: 28 passed, 51 skipped, one failed; exit 1 in 426.2 s including lifecycle. The narrow picker repeated the 15000 ms hidden/unstable `Repository settings` click timeout at line 240.
+- **Complete unchanged owner:** `mise run test:logged -- --name latest-gateway-owner-fixed -- bun output/merge-main-validation/gateway-owner.ts` used `runIsolatedBrowser`, the normal browser config restricted to the complete `browser-gateway.spec.ts`, and fresh credential-free profile `merge-main-gateway-13fae198`. Result: 14 passed, nine skipped, one failed; exit 1 in 159.1 s. The same narrow-picker timeout repeated. Both 1280px and 390px maintenance-rehydration cases passed in both runs; capped-file-tree and persisted-diff cases also passed.
+- **Earlier partial browser observation:** the interrupted `merge-browser` run on `c17f1c8d5` (`qa-browser-7fef7575-0d6`) had missed the capped-tree `build` folder at line 776. The refreshed suite and owning-file runs passed that case, but the owner remains non-green, so this observation does not independently establish a new flaky classification.
+- **Evidence:** host temporary-directory logs `orkestrator-test-run.8VFQmt/latest-browser.log.gz`, `orkestrator-test-run.s6XsZB/latest-gateway-owner-fixed.log.gz`, and the interrupted `orkestrator-test-run.gd1T9F/merge-browser.log.gz`. Sanitized results/traces remain under `output/agent-testing/<profile>/browser/` for the profiles above.
+- **Other verification:** formatting, lint, all typechecks, `build:all`, documentation command contracts, 1348 local Markdown links and the recurring-work harness passed. The updated non-IOS aggregate passed workspace, root/support and protocol; its sole failure was the Claude EnterPlanMode fixture race (0385), whose unchanged complete owner passed. Earlier Pi, disk-report and long-transcript deadline recurrences passed their complete unchanged owners (0514, 0259, 0627).
+- **Docker and cleanup:** the development image built successfully. The full Docker fixture suite on `merge-main-docker-latest-13fae198` passed 10 cases with two live-provider skips (74.9 s); stop/reset removed two exact-owner containers, four volumes, one network and disposable state. The earlier Docker profile was also stopped/reset. Every browser profile above was stopped/reset, and temporary rerun scripts/configs were removed. No launcher or disposable state was deliberately retained.
+- **Scope limitation:** dedicated Electron, CLI scenario and iOS suites were omitted because their owning implementations did not change; billed-provider scenarios retained their explicit opt-ins. No implementation, assertion, timeout or skip was changed. The narrow-picker recurrence remains unresolved.

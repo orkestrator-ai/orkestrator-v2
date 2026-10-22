@@ -16,7 +16,7 @@
  * arguments, so a reply carrying it proves the saved server really ran, and a
  * marker file records every call.
  *
- * What it checks (docs/todo/mcp-management.md, "Inactive environment"):
+ * What it checks (docs/todo/mcp/0039-mcp-management.md, "Inactive environment"):
  *
  * - Save and apply while A's turn runs: the turn is not interrupted, and the
  *   runtime stays `pending-next-turn` after it ends, because that query

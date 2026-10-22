@@ -404,6 +404,8 @@ describe("direct backend command registry coverage", () => {
       cacheAgentModelCatalog,
       // The cached-catalogue read filters by the configured OpenCode providers.
       loadConfig: mock(async () => ({ global: {} })),
+      // Container bridge locks are keyed by the persisted container ID.
+      loadEnvironments: mock(async () => []),
     });
 
     for (const bridge of ["opencode", "claude", "codex"]) {

@@ -74,3 +74,22 @@ Every affected owning file passed unchanged when run separately with one worker 
 The public-site browser smoke, which the failed combined command did not reach, passed separately with `mise run test:logged -- --name merge-public-browser -- bunx playwright test --config e2e/public-site/playwright.config.ts --workers=1` and a free `ORKESTRATOR_PUBLIC_E2E_PORT` (17.6 seconds logged).
 
 The unchanged owning-file passes establish intermittence for this cluster. Shared-host contention is a hypothesis, not a proven cause. No product source, test assertion, timeout or skip changed.
+
+
+## 2026-10-22 main merge recurrence
+
+Merging `c66604e25` into `78354c54`, `main2-browser` (`mise run test:browser` through `test:logged`, free fixture ports) finished with 378 passed, 81 skipped and 21 failed in 664 seconds. The nine complete owning files then passed unchanged, sequentially with one worker and a separate free fixture port, through `test:logged`. No assertions, skips or timeouts changed. Host contention remains a hypothesis.
+
+| Owning file | Seconds | Exit |
+| --- | --- | --- |
+| `e2e/AgentUsage.spec.ts` | 35.7 | 0 |
+| `e2e/DesignCanvas.spec.ts` | 29.1 | 0 |
+| `e2e/GlobalSettings.spec.ts` | 11.1 | 0 |
+| `e2e/GlobalStyles.spec.ts` | 10.6 | 0 |
+| `e2e/MonacoRuntime.spec.ts` | 7.5 | 0 |
+| `e2e/MultiReviewFlow.spec.ts` | 91.4 | 0 |
+| `e2e/NativeHeldSend.spec.ts` | 12.7 | 0 |
+| `e2e/PaneBreakpoint.spec.ts` | 21.3 | 0 |
+| `e2e/SetupRecovery.spec.ts` | 7.0 | 0 |
+
+Aggregate evidence: `orkestrator-test-run.dtZOdW/main2-browser.log.gz` under the host temporary directory. Owner command: `mise run test:logged -- --name main2-owner-<stem> -- bunx playwright test --config e2e/playwright.config.ts <file> --workers=1`, with a free `ORKESTRATOR_E2E_PORT`. The public-site smoke passed separately in 21.1 seconds.

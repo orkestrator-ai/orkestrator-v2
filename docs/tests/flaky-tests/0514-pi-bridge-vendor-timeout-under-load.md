@@ -59,3 +59,22 @@
 - **Owning-file rerun:** `mise run test:logged -- --name refresh-pi-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed all four unchanged cases (exit 0, 10.6 seconds logged).
 - **Evidence:** `orkestrator-test-run.Qv1f63/root-and-agent-support-tests.log.gz` below the host temporary directory after aggregate completion.
 - **Assessment:** confirmed intermittent recurrence; the cause remains unproven. No Pi implementation, assertion, timeout or skip changed.
+
+## Coordinator peer conformance review recurrence — 2026-10-22
+
+- **Original command:** `mise run test:logged -- --name full-suite -- mise run test` (Bun 1.4.3, macOS arm64).
+- **Workers:** workspace/root/bridges/protocol reservations 4/1/2/1; one isolated root worker on a shared host running another checkout's aggregate suite.
+- **Failure:** the supported-SDK staging case exceeded its 30-second deadline (30000.65 ms). Root/support reported 3216 passed, one skipped and three failed across 3220 tests in 298.35 seconds; the other two failures were firewall fixture deadlines (0192). Workspace, bridges and protocol groups passed.
+- **First owning-file rerun:** `mise run test:logged -- --name pi-vendor-isolated -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` also timed out while the aggregate remained active (3 passed, one failed, 30.6 seconds logged). Evidence: `orkestrator-test-run.MQIkI6/pi-vendor-isolated.log.gz` below the host temporary directory.
+- **After the aggregate finished:** `mise run test:logged -- --name pi-vendor-after-suite -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed all four unchanged cases (exit 0, 12.3 seconds logged).
+- **Aggregate evidence:** `orkestrator-test-run.Aiu72Z/root-and-agent-support-tests.log.gz`, with outer summary in `orkestrator-test-run.4usC0x/full-suite.log.gz`, below the host temporary directory.
+- **Assessment:** the final isolated pass confirms intermittence. Host contention remains a hypothesis; no vendoring implementation, assertion, timeout or skip changed.
+
+
+## Machines settings main merge — 2026-10-22
+
+- **Original command:** the testing guide's GNU-tool PATH with `mise run test:logged -- --name merge-tests -- mise run test`, initially merging `c17f1c8d5` into `814afe472`. Workspace/root/bridges/protocol reserved 4/1/2/1 slots, alongside browser and Docker validation.
+- **Failure:** supported-SDK staging exceeded 30000 ms (30000.09 ms). Root/support completed with 3221 passed, one skipped, two failed and one error across 154 files (416.86 s); disk reporting was the other failure. The overall run was interrupted to include newly published main commits.
+- **Complete unchanged owner on the refreshed merge (`7e051d955`):** `mise run test:logged -- --name merge-pi-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed all four cases, exit 0 in 25.1 s. The refreshed root/support group also passed in 177.5 s.
+- **Evidence:** `orkestrator-test-run.x69ru0/root-and-agent-support-tests.log.gz` and outer `orkestrator-test-run.zXH9t0/merge-tests.log.gz` below the host temporary directory.
+- **Assessment:** confirmed intermittent deadline recurrence; contention remains a hypothesis. No vendoring implementation, assertion, timeout or skip changed.

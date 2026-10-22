@@ -3497,6 +3497,11 @@ describe("NativeMessage task list rendering", () => {
     );
 
     const singleLineTask = screen.getByRole("button", { name: /Task Install dependencies/ });
+    expect(
+      singleLineTask
+        .closest('[data-background-task-id="task-1"]')
+        ?.getAttribute("data-background-task-status"),
+    ).toBe("completed");
     expect(getClassTokens(singleLineTask)).toContain("items-center");
     expect(getClassTokens(singleLineTask)).not.toContain("items-start");
 

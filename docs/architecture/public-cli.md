@@ -4,8 +4,8 @@ Status: Living — operator and architecture guide for the client command
 surface of the published `orkestrator` package.
 
 Testing workflow and coverage by layer: [cli-testing.md](../development/cli-testing.md).
-Outstanding work: [cli-command-surface.md](../todo/cli-command-surface.md) and
-[cli-qualification.md](../todo/cli-qualification.md) (with the evidence log).
+Outstanding work: [0017-cli-command-surface.md](../todo/cli-and-slash-commands/0017-cli-command-surface.md) and
+[0014-cli-qualification.md](../todo/cli-and-slash-commands/0014-cli-qualification.md) (with the evidence log).
 Contract source: [`packages/protocol/src/public-api.ts`](../../packages/protocol/src/public-api.ts)
 and [`public-api-resources.ts`](../../packages/protocol/src/public-api-resources.ts).
 
@@ -473,7 +473,7 @@ and a real catalogue probe to check this boundary; the `exec` scenario checks
 exec's separate environment filter. Live runs cost real tokens; keep them
 opt-in. The published package ships only the Claude and Codex bridges (OpenCode runs its own server),
 and the runner cannot target an existing profile, so Pi, Cursor and Grok cannot
-run `live-session` yet (see [cli-qualification.md](../todo/cli-qualification.md)).
+run `live-session` yet (see [0014-cli-qualification.md](../todo/cli-and-slash-commands/0014-cli-qualification.md)).
 Which test proves each scenario class is listed in
 [cli-testing.md](../development/cli-testing.md#coverage-by-layer).
 
@@ -488,7 +488,7 @@ Which test proves each scenario class is listed in
   live Claude, Codex and OpenCode container passes. Remaining gaps include Pi,
   Cursor and Grok live runs, macOS packed install/config permissions/profile
   discovery, and a foreign-owner Docker decoy through the CLI; see the
-  [qualification evidence and remaining work](../todo/cli-qualification.md).
+  [qualification evidence and remaining work](../todo/cli-and-slash-commands/0014-cli-qualification.md).
 - Browser-checked in `e2e/agent-testing/cli-ui.spec.ts`: CLI-made project,
   environment and settings changes reach an open and a reloaded renderer;
   with a live Claude profile, a CLI-started question rehydrates in an

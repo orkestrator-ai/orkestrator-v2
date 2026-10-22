@@ -11,7 +11,7 @@ export type BackendRuntimeOptions = {
  * Process state owned by one backend instance.
  *
  * Replaces the module-level maps and singletons in `commands-runtime-state.ts`
- * one cluster at a time (docs/todo/backend-runtime-state-ownership.md). The
+ * one cluster at a time (docs/todo/backend-structure/0011-backend-runtime-state-ownership.md). The
  * backend constructs one in `index.ts` and passes it as
  * `CommandContext.runtime`; command fixtures build a fresh one per context, so
  * two backends in one process never share state.

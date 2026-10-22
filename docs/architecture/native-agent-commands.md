@@ -5,8 +5,8 @@ Status: living. Owner modules:
 (wire contract, bounds, intent parsing) and
 [`agent-slash-commands.ts`](../../packages/protocol/src/agent-slash-commands.ts)
 (lexical parsing, resolution, session-action collisions). Outstanding work:
-[slash-command-catalogue.md](../todo/slash-command-catalogue.md) and
-[slash-command-qualification.md](../todo/slash-command-qualification.md).
+[0016-slash-command-catalogue.md](../todo/cli-and-slash-commands/0016-slash-command-catalogue.md) and
+[0015-slash-command-qualification.md](../todo/cli-and-slash-commands/0015-slash-command-qualification.md).
 
 Every enabled row in the native composer's `/` menu must run exactly what it
 describes, through a tested executor, and a chosen command must never silently
@@ -166,7 +166,7 @@ OpenCode 1.18.31, Pi 0.85.1, Grok 1.0.34 with ACP SDK 1.4.0, Cursor SDK 1.0.31)
 have all since moved. Mocks do not confer support: a behaviour that could not be
 qualified is listed unavailable with a reason. Live qualification at current
 pins is tracked in
-[slash-command-qualification.md](../todo/slash-command-qualification.md).
+[0015-slash-command-qualification.md](../todo/cli-and-slash-commands/0015-slash-command-qualification.md).
 
 | Provider | Discovery | Names | Execution | Catalogue status |
 | --- | --- | --- | --- | --- |
@@ -289,4 +289,4 @@ stored session; that read is cached under the key `global`, and its projection
 is `null`, so its rows are never shown. Legacy rows are non-enhanced: they get
 a synthetic `legacy:` ID (`legacyCommandId`) and run as typed text, never as a
 selection. Retiring that surface is tracked in
-[slash-command-catalogue.md](../todo/slash-command-catalogue.md).
+[0016-slash-command-catalogue.md](../todo/cli-and-slash-commands/0016-slash-command-catalogue.md).

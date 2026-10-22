@@ -10,7 +10,7 @@ external process stays authoritative; browser demand only affects
 presentation reads and optional sampling, never execution or durable
 delivery. Outstanding qualification, measured candidates and rollback-switch
 removal are tracked in
-[recurring-work-qualification.md](../todo/recurring-work-qualification.md).
+[0048-recurring-work-qualification.md](../todo/transcripts-and-observation/0048-recurring-work-qualification.md).
 
 ## Vocabulary and diagnostics
 
@@ -180,7 +180,7 @@ the running attempt.
 | B18 | `tmux-poll` | `tmux-poll.ts` | One `docker exec` per read, change-only writes. On `claude-state-signal` images the hooks ring the backend, which reads on each ring plus a 30 s safety read (2 reads a minute idle); a change the safety read finds unannounced returns the container to 1 s. Older images, and containers whose doorbell has not rung, keep the 1 s poll, which dominates their idle cost. See [container-lifecycle.md](container-lifecycle.md#claude-terminal-state-signal-claude-state-signal1). |
 | B19 | `tmux-interactive-capture` | `tmux-interactive.ts` | Completion-scheduled 250 ms, doubling to 1 s while output is unchanged, per attached interactive terminal. Bounded line patches; exact screen recovery. |
 | B20 | `validation-heartbeat` | `review-validation-worker.ts` | 500 ms persistence and cancel heartbeat; 100 ms cooperative clock. Cross-process liveness, so partly correctness-related. |
-| B21 | `storage-lock-heartbeat` | `storage-base.ts`, `storage-database.ts` | Lease holders heartbeat at least every third of the stale threshold. Critical. |
+| B21 | `storage-lock-heartbeat` | `storage-context.ts`, `storage-database.ts` | Lease holders heartbeat at least every third of the stale threshold. Critical. |
 | B22 | `opencode-reconnect` | `opencode-observation-stream.ts` | Event stream; reconnect backs off from 1 s to 30 s and resets after a healthy stream. Gaps are marked and reconciled. |
 | C08 | `system-usage-sample`, `process-usage` | `commands-registry-system.ts` | Demand-driven by clients; concurrent reads join. |
 | L01 | `gateway-heartbeat` | `gateway-handlers.ts` | Shared 25 s keepalive. It also advances the scoped stream cursor and checks client buffers, so it is replay convergence, not a cosmetic ping. |

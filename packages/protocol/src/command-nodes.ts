@@ -101,7 +101,7 @@ export interface NodeRecord {
   attachment: NodeAttachmentState;
   addedAt: string;
   lastConnectedAt?: string;
-  source: "portal" | "desktop-migration";
+  source: "portal" | "desktop-migration" | "handover";
   /** Catalogue entry this record was imported from, for idempotent migration. */
   importedFrom?: string;
 }
@@ -124,6 +124,75 @@ export interface NodeRegistry {
   tombstones: NodeDetachTombstone[];
   /** Desktop catalogue entries already imported, so a forgotten node is never re-imported. */
   importedSources: string[];
+}
+
+/**
+ * A machine handed to a command node with its gateway credential: the
+ * desktop's saved machines on import, or another command node's registry on
+ * a handover. Only ever sent to a backend, never to a client.
+ */
+export interface NodeImportEntry {
+  /** Where the entry came from (a catalogue entry or a registry), for idempotence. */
+  importedFrom: string;
+  fallbackName: string;
+  verifiedNodeId?: BackendId;
+  routes: NodeRoute[];
+  routeOrder: RouteId[];
+  token: string | null;
+  enabled: boolean;
+  profileCache?: CachedBackendProfile;
+}
+
+export const MAX_IMPORT_ENTRIES = MAX_REGISTERED_NODES;
+
+/** A machine the current command node would hand to the new one. */
+export interface HandoverCandidate {
+  nodeId: BackendId;
+  displayName: string;
+  colorToken?: string;
+  /** Whether a token is held for it; without one it arrives needing a token. */
+  hasCredential: boolean;
+}
+
+/**
+ * What making another node the command node would change (`preview_command_handover`):
+ * the machines it does not control yet, and whether this node can follow as its leaf.
+ */
+export interface CommandHandoverPreview {
+  targetNodeId: BackendId;
+  targetName: string;
+  /** Whether this node controls the target yet; if not, a client registers it first. */
+  targetRegistered: boolean;
+  /** Machines the target already controls (unknown, so empty, when it is not registered). */
+  targetNodeIds: BackendId[];
+  /** This node's machines the target does not control yet. */
+  candidates: HandoverCandidate[];
+  self: {
+    nodeId: BackendId;
+    displayName: string;
+    colorToken?: string;
+    /** This node has an HTTPS address and token the target can use to control it. */
+    reachable: boolean;
+  };
+}
+
+/** The desktop's preview: nothing to do when the target already is the command node in charge. */
+export type CommandHandoverPreviewResult =
+  | { kind: "already-command-node" }
+  | { kind: "preview"; preview: CommandHandoverPreview };
+
+export interface CommandHandoverResult {
+  targetNodeId: BackendId;
+  /** Machines the target registered. */
+  transferred: number;
+  /** Machines the target already controlled, or could not take. */
+  skipped: number;
+  /** Machines that arrived without a token. */
+  needsCredential: number;
+  /** Whether this node is now one of the target's machines. */
+  selfIncluded: boolean;
+  /** Command nodes that controlled the target and were detached. */
+  detachedControllers: number;
 }
 
 export type NodeConnectionState =
@@ -226,6 +295,8 @@ export const NODE_REFUSAL_CODES = {
   needsUpdate: "needs-update",
   /** The user detached this command node on the node itself. */
   detachedOnNode: "detached-on-node",
+  /** Only a command node attached to this node may hand its command over here. */
+  notController: "not-controller",
 } as const;
 
 export type NodeRefusalCode = (typeof NODE_REFUSAL_CODES)[keyof typeof NODE_REFUSAL_CODES];
@@ -289,6 +360,57 @@ export function parseGatewayCredential(value: unknown, label = "token"): string 
     throw new Error(`Expected ${label} to be a gateway token.`);
   }
   return value;
+}
+
+export function parseNodeImportEntries(value: unknown): NodeImportEntry[] {
+  if (!Array.isArray(value) || value.length > MAX_IMPORT_ENTRIES) {
+    throw new Error("Expected entries to be a bounded array.");
+  }
+  return value.map((raw, index) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      throw new Error(`Expected entries[${index}] to be an object.`);
+    }
+    const entry = raw as Record<string, unknown>;
+    if (
+      typeof entry.importedFrom !== "string" ||
+      !entry.importedFrom ||
+      entry.importedFrom.length > 200
+    ) {
+      throw new Error(`Expected entries[${index}].importedFrom.`);
+    }
+    const routes = parseNodeRoutes(entry.routes);
+    const parsed: NodeImportEntry = {
+      importedFrom: entry.importedFrom,
+      fallbackName: normalizeNodeDisplayName(entry.fallbackName, "fallbackName"),
+      routes,
+      routeOrder: normalizeRouteOrder(routes, entry.routeOrder),
+      token:
+        entry.token === null || entry.token === undefined
+          ? null
+          : parseGatewayCredential(entry.token),
+      enabled: entry.enabled !== false,
+    };
+    if (entry.verifiedNodeId !== undefined) {
+      if (!isBackendId(entry.verifiedNodeId) || entry.verifiedNodeId.startsWith("provisional:")) {
+        throw new Error(`Expected entries[${index}].verifiedNodeId to be a node identity.`);
+      }
+      parsed.verifiedNodeId = entry.verifiedNodeId;
+    }
+    const cache = entry.profileCache as CachedBackendProfile | undefined;
+    if (
+      cache &&
+      typeof cache.displayName === "string" &&
+      typeof cache.colorToken === "string" &&
+      Number.isSafeInteger(cache.revision)
+    ) {
+      parsed.profileCache = {
+        displayName: cache.displayName.slice(0, 64),
+        colorToken: cache.colorToken.slice(0, 32),
+        revision: cache.revision,
+      };
+    }
+    return parsed;
+  });
 }
 
 export function parsePortalOrigins(value: unknown): string[] {

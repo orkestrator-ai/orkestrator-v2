@@ -20,6 +20,7 @@ import {
   useRemoteWorkspaceStore,
 } from "@/stores/remoteWorkspaceStore";
 import { useUIStore } from "@/stores/uiStore";
+import { invoke as nativeInvoke } from "@/lib/native/backend";
 import {
   OUTCOME_UNKNOWN,
   connectionList,
@@ -36,6 +37,7 @@ import {
   RemoteMachineSection,
 } from "./FederatedSidebarSections";
 import { RemoteEnvironmentItem, RemoteProjectGroup } from "./RemoteMachineTree";
+import { CommandHandoverDialog } from "./CommandHandoverDialog";
 import { FederationProvider } from "./FederationProvider";
 import { MachineBadge, MachineDot } from "./MachineDot";
 import { MachinesFilter } from "./MachinesFilter";
@@ -101,7 +103,12 @@ function MachineOrder() {
 
 function FilterOnly() {
   const machines = useMachineViews();
-  return <MachinesFilter machines={machines} />;
+  return (
+    <>
+      <MachinesFilter machines={machines} />
+      <CommandHandoverDialog />
+    </>
+  );
 }
 
 function renderWithFederation(node: ReactNode) {
@@ -580,7 +587,7 @@ describe("Machine filter is presentation only", () => {
 });
 
 describe("The command node in the machines menu", () => {
-  test("names the command node below the filters and switches it only through its switch", async () => {
+  test("names the command node below the filters and makes another machine the command node through its switch", async () => {
     const fake = installTwoMachines();
     renderWithFederation(<FilterOnly />);
     await waitFor(() =>
@@ -607,14 +614,28 @@ describe("The command node in the machines menu", () => {
     ).toBeTruthy();
     fireEvent.click(within(switcher).getByRole("menuitem", { name: /^Machine B/ }));
 
-    await waitFor(() => expect(fake.connections.use).toHaveBeenCalledWith(MACHINE_B.id));
+    // Machine B does not control Machine A yet: the user chooses what goes with it.
+    const dialog = await screen.findByTestId("command-handover-dialog");
+    expect(within(dialog).getByText("Make Machine B the command node")).toBeTruthy();
+    expect(within(dialog).getByRole("checkbox", { name: "Machine A" })).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: /Make command node/ }));
+
+    await waitFor(() =>
+      expect(fake.connections.handOverCommand).toHaveBeenCalledWith({
+        targetConnectionId: MACHINE_B.id,
+        nodeIds: [MACHINE_A.backendId],
+        connectionIds: [],
+        includeSelf: true,
+      }),
+    );
     await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+    expect(fake.connections.use).not.toHaveBeenCalled();
     expect(fake.workspaceViews.open).not.toHaveBeenCalled();
   });
 });
 
 describe("The command node in a browser tab", () => {
-  test("switching opens another machine's own address", async () => {
+  test("switching hands command to another machine and opens its own address", async () => {
     installTwoMachines();
     delete (window.orkestrator as { connections?: unknown }).connections;
     const assign = mock((_url: string) => undefined);
@@ -641,7 +662,14 @@ describe("The command node in a browser tab", () => {
         expect(within(switcher).getByRole("menuitem", { name: /^Machine B/ })).toBeTruthy(),
       );
       fireEvent.click(within(switcher).getByRole("menuitem", { name: /^Machine B/ }));
+      const dialog = await screen.findByTestId("command-handover-dialog");
+      fireEvent.click(within(dialog).getByRole("button", { name: /Make command node/ }));
       await waitFor(() => expect(assign).toHaveBeenCalledWith(MACHINE_B.address!));
+      expect(nativeInvoke).toHaveBeenCalledWith("hand_over_command", {
+        nodeId: MACHINE_B.backendId,
+        nodeIds: [MACHINE_A.backendId],
+        includeSelf: true,
+      });
       expect(reload).not.toHaveBeenCalled();
     } finally {
       window.location.assign = originalAssign;

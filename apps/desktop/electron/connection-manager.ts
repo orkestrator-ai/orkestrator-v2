@@ -28,10 +28,16 @@ import {
   type SavedRoute,
   type SavedSshRoute,
 } from "@orkestrator/protocol/device-catalogue";
-import type { RouteId } from "@orkestrator/protocol/federation";
+import type { NodeImportEntry } from "@orkestrator/protocol/command-nodes";
+import {
+  isProvisionalBackendId,
+  type BackendId,
+  type RouteId,
+} from "@orkestrator/protocol/federation";
 import { normalizeGatewayToken } from "@orkestrator/protocol/gateway-token";
 import type { GatewayTokenSettings, WebClientStatus } from "@orkestrator/protocol/web-client";
 import { BackendHttpClient } from "./backend-process.js";
+import { savedMachineImportEntry } from "./command-node-migration.js";
 import { checkBackendRoute, connectionCheckError, type HelloOutcome } from "./backend-hello.js";
 import {
   backendAddress,
@@ -1923,6 +1929,76 @@ export class ConnectionManager {
       machines.push({ backend, token });
     }
     return machines;
+  }
+
+  /** The installation identity of a saved machine, or of Local; null until one is proved. */
+  installationIdOf(connectionId: string): BackendId | null {
+    if (connectionId === LOCAL_CONNECTION_ID) return this.localHello?.installationId ?? null;
+    const id = this.catalogue.backends.find(
+      (entry) => entry.id === connectionId,
+    )?.verifiedInstallationId;
+    return id && !isProvisionalBackendId(id) ? id : null;
+  }
+
+  /** The saved machine (or Local) whose installation identity is `nodeId`. */
+  connectionIdOf(nodeId: BackendId): string | null {
+    if (this.localHello?.installationId === nodeId) return LOCAL_CONNECTION_ID;
+    return (
+      this.catalogue.backends.find((entry) => entry.verifiedInstallationId === nodeId)?.id ?? null
+    );
+  }
+
+  /**
+   * A saved machine (or Local, over its web address) as a command node's
+   * registry receives it, token included, for handing command over. The
+   * token leaves Electron main only in the request to a command node.
+   * Null when this device has no address or token for it.
+   */
+  async machineImportEntry(connectionId: string): Promise<NodeImportEntry | null> {
+    if (connectionId === LOCAL_CONNECTION_ID) {
+      const id = this.localHello?.installationId;
+      if (!id || !this.localBackendAvailable) return null;
+      const [status, token] = await Promise.all([
+        this.localBackend.getWebClientStatus().catch(() => null),
+        this.localBackend.getTokenSettings().then(
+          (settings) => settings.token,
+          () => null,
+        ),
+      ]);
+      if (!status?.url || !token) return null;
+      const name = this.localHello?.profile.displayName ?? "This computer";
+      return {
+        importedFrom: `device:${LOCAL_CONNECTION_ID}`,
+        fallbackName: name.slice(0, 64),
+        verifiedNodeId: id,
+        routes: [
+          {
+            id: "web" as RouteId,
+            kind: "https",
+            enabled: true,
+            origin: new URL(status.url).origin,
+          },
+        ],
+        routeOrder: ["web" as RouteId],
+        token,
+        enabled: true,
+      };
+    }
+    const backend = this.catalogue.backends.find((entry) => entry.id === connectionId);
+    if (!backend) return null;
+    let token: string | null = null;
+    for (const route of orderedRoutes(backend)) {
+      token = await this.resolveToken(route, false).catch(() => null);
+      if (token) break;
+    }
+    if (!token) return null;
+    return { ...savedMachineImportEntry({ backend, token }), importedFrom: `device:${backend.id}` };
+  }
+
+  /** Run a command on a machine this device is connected to (Local always). */
+  invokeOn<T>(connectionId: string, command: string, args: Record<string, unknown>): Promise<T> {
+    if (connectionId === LOCAL_CONNECTION_ID) return this.localBackend.invoke<T>(command, args);
+    return this.invokeRemote<T>(connectionId, command, args);
   }
 
   private async resolveToken(route: SavedRoute, reEncrypt: boolean): Promise<string | null> {

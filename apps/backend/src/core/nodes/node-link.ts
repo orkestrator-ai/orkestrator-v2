@@ -220,7 +220,11 @@ export class NodeLink {
    * For a forgotten node: verify its identity over the first working route
    * and run one command without attaching (used to confirm a detach).
    */
-  async invokeWithoutAttaching<T>(command: string, args: Record<string, unknown>): Promise<T> {
+  async invokeWithoutAttaching<T>(
+    command: string,
+    args: Record<string, unknown>,
+    options: { timeoutMs?: number } = {},
+  ): Promise<T> {
     const token = this.record.credential?.token;
     if (!token) throw new NodeUnavailableError(`${this.label()} has no credential.`);
     let lastError: unknown = new NodeUnavailableError("No route is enabled.");
@@ -235,7 +239,7 @@ export class NodeLink {
         if (outcome.kind !== "hello" || outcome.hello.installationId !== this.record.nodeId) {
           throw new NodeUnavailableError("The route reached a different machine.");
         }
-        return await this.request<T>(opened.baseUrl, token, command, args);
+        return await this.request<T>(opened.baseUrl, token, command, args, options);
       } catch (error) {
         lastError = error;
         if (classifyRouteFailure(error).quarantine || isCertificateFailure(error)) break;

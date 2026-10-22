@@ -13,8 +13,12 @@ import {
   parseGatewayCredential,
   parseNodeRoutes,
   type AttachControllerResult,
+  type CommandHandoverPreview,
+  type CommandHandoverResult,
   type ControllerView,
+  type HandoverCandidate,
   type NodeAttachments,
+  type NodeImportEntry,
   type NodeListResult,
   type NodeMode,
   type NodeRecord,
@@ -23,7 +27,12 @@ import {
   type NodeStatus,
   type NodeView,
 } from "@orkestrator/protocol/command-nodes";
-import { isBackendId, type BackendId, type RouteId } from "@orkestrator/protocol/federation";
+import {
+  isBackendId,
+  isProvisionalBackendId,
+  type BackendId,
+  type RouteId,
+} from "@orkestrator/protocol/federation";
 import { checkBackendRoute } from "@orkestrator/protocol/node/node-link/backend-hello";
 import {
   classifyRouteFailure,
@@ -89,19 +98,16 @@ export interface NodeServiceOptions {
   inheritableSettings?: () => Promise<InheritedGlobalSettings>;
   /** Leaf side: the command node settings this node follows changed. */
   onInheritedSettingsChanged?: () => void;
+  /**
+   * How another node can reach and control this one: its gateway token and
+   * the origins it is served on. Handed to the new command node on a handover.
+   */
+  selfAccess?: () => Promise<{ token: string | null; origins: string[] }>;
 }
 
-export interface DesktopConnectionImport {
-  /** Catalogue entry ID, recorded so the entry is imported once. */
-  importedFrom: string;
-  fallbackName: string;
-  verifiedNodeId?: BackendId;
-  routes: NodeRoute[];
-  routeOrder: RouteId[];
-  token: string | null;
-  enabled: boolean;
-  profileCache?: NodeRecord["profileCache"];
-}
+export type DesktopConnectionImport = NodeImportEntry;
+
+const HANDOVER_TIMEOUT_MS = 30_000;
 
 const CONTACT_PERSIST_MS = 30_000;
 const DETACH_RETRY_MS = 5 * 60_000;
@@ -773,23 +779,43 @@ export class NodeService {
         "This node is in leaf mode and cannot register nodes.",
       );
     }
+    return this.adoptEntries(entries, "desktop-migration");
+  }
+
+  /**
+   * Store machines handed to this node. A migration imports each catalogue
+   * entry once; a handover is the user's explicit choice, so it skips only
+   * machines already registered, and gives a registered machine without a
+   * token the one it brings.
+   */
+  private async adoptEntries(
+    entries: NodeImportEntry[],
+    source: "desktop-migration" | "handover",
+  ): Promise<{ imported: number; skipped: number; needsCredential: number }> {
     const selfId = await this.self();
-    const counts = await this.mutateRegistry((registry) => {
+    const once = source === "desktop-migration";
+    return this.mutateRegistry((registry) => {
       let imported = 0;
       let skipped = 0;
       let needsCredential = 0;
+      let changed = false;
       const nodes = [...registry.nodes];
       const importedSources = [...registry.importedSources];
       for (const entry of entries) {
         const nodeId = entry.verifiedNodeId ?? (`provisional:${entry.importedFrom}` as BackendId);
+        const existing = nodes.findIndex((node) => node.nodeId === nodeId);
+        if (!once && existing >= 0 && !nodes[existing]!.credential && entry.token) {
+          nodes[existing] = { ...nodes[existing]!, credential: { token: entry.token } };
+          changed = true;
+        }
         if (
-          importedSources.includes(entry.importedFrom) ||
+          (once && importedSources.includes(entry.importedFrom)) ||
           nodeId === selfId ||
-          nodes.some((node) => node.nodeId === nodeId) ||
+          existing >= 0 ||
           nodes.length >= MAX_REGISTERED_NODES
         ) {
           skipped += 1;
-          if (!importedSources.includes(entry.importedFrom))
+          if (once && !importedSources.includes(entry.importedFrom))
             importedSources.push(entry.importedFrom);
           continue;
         }
@@ -802,29 +828,282 @@ export class NodeService {
           fallbackName: entry.fallbackName,
           attachment: { status: "pending" },
           addedAt: new Date(this.now()).toISOString(),
-          source: "desktop-migration",
+          source,
           importedFrom: entry.importedFrom,
         };
         if (entry.profileCache) record.profileCache = entry.profileCache;
         if (!entry.token) needsCredential += 1;
         nodes.push(record);
-        importedSources.push(entry.importedFrom);
+        if (once) importedSources.push(entry.importedFrom);
         imported += 1;
       }
-      const changed = imported > 0 || importedSources.length !== registry.importedSources.length;
+      // A node handed command may command others from now on.
+      const registrationEnabled =
+        registry.registrationEnabled || imported > 0 || source === "handover";
+      changed ||=
+        imported > 0 ||
+        importedSources.length !== registry.importedSources.length ||
+        registrationEnabled !== registry.registrationEnabled;
       return {
         next: changed
           ? {
               ...registry,
-              registrationEnabled: registry.registrationEnabled || imported > 0,
+              registrationEnabled,
               nodes,
               importedSources,
+              tombstones: registry.tombstones.filter(
+                (tombstone) => !nodes.some((node) => node.nodeId === tombstone.nodeId),
+              ),
             }
           : null,
         result: { imported, skipped, needsCredential },
       };
     });
-    return counts;
+  }
+
+  /*
+   * Handing command to another node
+   */
+
+  /**
+   * What making `nodeId` the command node would hand over. A target this
+   * node does not control yet (a client registers it first) is previewed
+   * without asking it what it controls.
+   */
+  async previewHandover(nodeId: unknown): Promise<CommandHandoverPreview> {
+    if (!isBackendId(nodeId)) throw new Error("Expected nodeId to be a node identity.");
+    const registry = await this.currentRegistry();
+    const target = registry.nodes.find((node) => node.nodeId === nodeId) ?? null;
+    const targetNodeIds = target
+      ? (
+          await (await this.handoverTarget(nodeId)).link.invoke<NodeListResult>("list_nodes")
+        ).nodes.map((node) => node.nodeId)
+      : [];
+    const candidates: HandoverCandidate[] = registry.nodes
+      .filter((node) => node.nodeId !== nodeId && !targetNodeIds.includes(node.nodeId))
+      .filter((node) => remoteRoutes(node.routes).length > 0)
+      .map((node) => {
+        const view = this.view(node);
+        return {
+          nodeId: node.nodeId,
+          displayName: view.displayName,
+          ...(view.colorToken ? { colorToken: view.colorToken } : {}),
+          hasCredential: node.credential !== null,
+        };
+      });
+    const profile = await this.storage.getBackendProfile();
+    const selfId = await this.self();
+    return {
+      targetNodeId: nodeId,
+      targetName: target ? this.view(target).displayName : nodeId,
+      targetRegistered: target !== null,
+      targetNodeIds,
+      candidates,
+      self: {
+        nodeId: selfId,
+        displayName: profile.displayName,
+        colorToken: profile.colorToken,
+        reachable: targetNodeIds.includes(selfId) || (await this.selfEntry()) !== null,
+      },
+    };
+  }
+
+  /**
+   * Make a registered node the command node: send it this node's machines
+   * (all, or `nodeIds`) with their tokens, and this node itself, over the
+   * existing link. The new command node detaches whatever controlled it and
+   * takes them on; this node then forgets them and becomes its leaf.
+   *
+   * Only the user starts this, never an agent: the command is excluded from
+   * routing and grants (`node-routing.ts`).
+   */
+  async handOverCommand(input: {
+    nodeId: unknown;
+    nodeIds?: unknown;
+    includeSelf: boolean;
+    entries: NodeImportEntry[];
+  }): Promise<CommandHandoverResult> {
+    if (this.isLeaf()) {
+      throw new NodeRefusalError(
+        NODE_REFUSAL_CODES.nodeIsSubordinate,
+        "This node is controlled by another command node. Hand over from there.",
+      );
+    }
+    const { target } = await this.handoverTarget(input.nodeId);
+    const selfId = await this.self();
+    const registry = await this.currentRegistry();
+    const chosen =
+      input.nodeIds === undefined
+        ? null
+        : Array.isArray(input.nodeIds) && input.nodeIds.every(isBackendId)
+          ? new Set<BackendId>(input.nodeIds)
+          : (() => {
+              throw new Error("Expected nodeIds to be node identities.");
+            })();
+    const moving = registry.nodes.filter(
+      (node) =>
+        node.nodeId !== target.nodeId &&
+        (chosen === null || chosen.has(node.nodeId)) &&
+        remoteRoutes(node.routes).length > 0,
+    );
+    const entries: NodeImportEntry[] = moving.map((node) => handoverEntry(node));
+    const self = input.includeSelf ? await this.selfEntry() : null;
+    if (self) entries.push(self);
+    for (const entry of input.entries) {
+      const id = entry.verifiedNodeId;
+      if (id === target.nodeId || id === selfId) continue;
+      if (id && entries.some((existing) => existing.verifiedNodeId === id)) continue;
+      entries.push(entry);
+    }
+    if (entries.length > MAX_REGISTERED_NODES) {
+      throw new NodeRefusalError(NODE_REFUSAL_CODES.tooManyNodes, "Too many nodes to hand over.");
+    }
+    // If the new command node hands command back later, it must be able to attach here.
+    await this.allowController(target.nodeId);
+    // Forget the target first: once it commands this node it attaches here,
+    // which the two-level rule refuses while it is still in this registry.
+    // The request goes over a link of its own, so suspending this node's
+    // links when the target attaches cannot cut it off.
+    await this.mutateRegistry((current) => ({
+      next: { ...current, nodes: current.nodes.filter((node) => node.nodeId !== target.nodeId) },
+      result: undefined,
+    }));
+    let accepted: {
+      imported: number;
+      skipped: number;
+      needsCredential: number;
+      detachedControllers: number;
+    };
+    const handoverLink = this.oneShotLink(target);
+    try {
+      accepted = await handoverLink.invokeWithoutAttaching(
+        "accept_command_handover",
+        { controllerId: selfId, entries },
+        { timeoutMs: HANDOVER_TIMEOUT_MS },
+      );
+    } catch (error) {
+      // Nothing changed on the target: keep commanding it.
+      await this.mutateRegistry((current) =>
+        current.nodes.some((node) => node.nodeId === target.nodeId)
+          ? { next: null, result: undefined }
+          : { next: { ...current, nodes: [...current.nodes, target] }, result: undefined },
+      );
+      throw error;
+    } finally {
+      handoverLink.stop();
+    }
+    // The machines the target took over are forgotten here and told to
+    // detach, so each has one command node.
+    const movingIds = new Set(moving.map((node) => node.nodeId));
+    const detaching = await this.mutateRegistry((current) => {
+      const forgotten = current.nodes.filter((node) => movingIds.has(node.nodeId));
+      const attached = forgotten.filter((node) => node.attachment.status === "attached");
+      const forgottenAt = new Date(this.now()).toISOString();
+      return {
+        next: {
+          ...current,
+          nodes: current.nodes.filter((node) => !movingIds.has(node.nodeId)),
+          tombstones: [
+            ...current.tombstones.filter((entry) => !movingIds.has(entry.nodeId)),
+            ...attached.map((node) => ({
+              nodeId: node.nodeId,
+              routes: node.routes,
+              routeOrder: node.routeOrder,
+              credential: node.credential,
+              forgottenAt,
+            })),
+          ],
+        },
+        result: attached.map((node) => node.nodeId),
+      };
+    });
+    for (const nodeId of detaching) void this.detachTombstone(nodeId);
+    return {
+      targetNodeId: target.nodeId,
+      transferred: accepted.imported,
+      skipped: accepted.skipped,
+      needsCredential: accepted.needsCredential,
+      selfIncluded: self !== null,
+      detachedControllers: accepted.detachedControllers,
+    };
+  }
+
+  /**
+   * Receiving side of a handover: an attached command node makes this node
+   * the command node. The machines it sends are registered first, then every
+   * command node controlling this one is detached, as if by the user here, so
+   * none re-attaches by itself. The caller, if it sent itself, becomes a leaf.
+   */
+  async acceptHandover(
+    controllerId: unknown,
+    entries: NodeImportEntry[],
+  ): Promise<{
+    imported: number;
+    skipped: number;
+    needsCredential: number;
+    detachedControllers: number;
+  }> {
+    if (
+      !isBackendId(controllerId) ||
+      !this.attachments.controllers.some((entry) => entry.controllerId === controllerId)
+    ) {
+      throw new NodeRefusalError(
+        NODE_REFUSAL_CODES.notController,
+        "Only a command node attached to this node can make it the command node.",
+      );
+    }
+    const counts = await this.adoptEntries(entries, "handover");
+    const controllers = this.attachments.controllers.map((entry) => entry.controllerId);
+    for (const id of controllers) await this.detachController(id, { byUser: true });
+    // A controller this node now commands needs no record that it was detached here.
+    const registry = await this.currentRegistry();
+    for (const id of controllers) {
+      if (registry.nodes.some((node) => node.nodeId === id)) await this.allowController(id);
+    }
+    return { ...counts, detachedControllers: controllers.length };
+  }
+
+  private async handoverTarget(nodeId: unknown): Promise<{ target: NodeRecord; link: NodeLink }> {
+    const registry = await this.currentRegistry();
+    const target = registry.nodes.find((node) => node.nodeId === nodeId);
+    if (!target) {
+      throw new NodeRefusalError(NODE_REFUSAL_CODES.unknownNode, "That node is not registered.");
+    }
+    const link = this.links.get(target.nodeId);
+    if (!link?.connected) {
+      throw new Error(`${this.view(target).displayName} is not connected. Connect to it first.`);
+    }
+    return { target, link };
+  }
+
+  /** This node as a machine another node can control, when it has an address and token. */
+  private async selfEntry(): Promise<NodeImportEntry | null> {
+    const access = await this.options.selfAccess?.().catch(() => null);
+    if (!access?.token) return null;
+    const origins = [...new Set(access.origins.map(originOf).filter(isRemoteHttps))];
+    if (origins.length === 0) return null;
+    const routes: NodeRoute[] = origins.map((origin, index) => ({
+      id: `self-${index + 1}` as RouteId,
+      kind: "https",
+      enabled: true,
+      origin,
+    }));
+    const profile = await this.storage.getBackendProfile();
+    const selfId = await this.self();
+    return {
+      importedFrom: `handover:${selfId}`,
+      fallbackName: profile.displayName,
+      verifiedNodeId: selfId,
+      routes,
+      routeOrder: routes.map((route) => route.id),
+      token: access.token,
+      enabled: true,
+      profileCache: {
+        displayName: profile.displayName,
+        colorToken: profile.colorToken,
+        revision: profile.revision,
+      },
+    };
   }
 
   /** First-use host-key review for an SSH route, before any credential is offered. */
@@ -1213,27 +1492,13 @@ export class NodeService {
       return false;
     }
     const selfId = await this.self();
-    const detachLink = new NodeLink(
-      {
-        nodeId,
-        enabled: true,
-        routes: entry.routes,
-        routeOrder: entry.routeOrder,
-        credential: entry.credential,
-        fallbackName: nodeId,
-        attachment: { status: "attached" },
-        addedAt: entry.forgottenAt,
-        source: "portal",
-      },
-      {
-        selfId,
-        attachInfo: async () => ({ displayName: "", portalOrigins: [] }),
-        ...(this.options.fetchImpl ? { fetchImpl: this.options.fetchImpl } : {}),
-        ssh: this.sshFor(nodeId),
-        onChange: () => undefined,
-        onVerified: () => undefined,
-      },
-    );
+    const detachLink = this.oneShotLink({
+      nodeId,
+      routes: entry.routes,
+      routeOrder: entry.routeOrder,
+      credential: entry.credential,
+      addedAt: entry.forgottenAt,
+    });
     try {
       await detachLink.invokeWithoutAttaching("detach_controller", { controllerId: selfId });
       await this.discardPendingDetach(nodeId);
@@ -1246,6 +1511,33 @@ export class NodeService {
     }
   }
 
+  /** A link for one request to a node outside the registry's links; it never attaches. */
+  private oneShotLink(
+    node: Pick<NodeRecord, "nodeId" | "routes" | "routeOrder" | "credential" | "addedAt">,
+  ): NodeLink {
+    return new NodeLink(
+      {
+        nodeId: node.nodeId,
+        enabled: true,
+        routes: node.routes,
+        routeOrder: node.routeOrder,
+        credential: node.credential,
+        fallbackName: node.nodeId,
+        attachment: { status: "attached" },
+        addedAt: node.addedAt,
+        source: "portal",
+      },
+      {
+        selfId: this.selfId!,
+        attachInfo: async () => ({ displayName: "", portalOrigins: [] }),
+        ...(this.options.fetchImpl ? { fetchImpl: this.options.fetchImpl } : {}),
+        ssh: this.sshFor(node.nodeId),
+        onChange: () => undefined,
+        onVerified: () => undefined,
+      },
+    );
+  }
+
   private async retryDetaches(): Promise<void> {
     if (!this.started) return;
     const registry = await this.currentRegistry();
@@ -1256,6 +1548,48 @@ export class NodeService {
     if (this.detachTimer) clearTimeout(this.detachTimer);
     this.detachTimer = setTimeout(() => void this.retryDetaches(), DETACH_RETRY_MS);
     this.detachTimer.unref?.();
+  }
+}
+
+/** A registry entry as the new command node receives it. */
+function handoverEntry(node: NodeRecord): NodeImportEntry {
+  const routes = remoteRoutes(node.routes);
+  const entry: NodeImportEntry = {
+    importedFrom: `handover:${node.nodeId}`,
+    fallbackName: node.fallbackName,
+    routes,
+    routeOrder: normalizeRouteOrder(routes, node.routeOrder),
+    token: node.credential?.token ?? null,
+    enabled: node.enabled,
+  };
+  if (!isProvisionalBackendId(node.nodeId)) entry.verifiedNodeId = node.nodeId;
+  if (node.profileCache) entry.profileCache = node.profileCache;
+  return entry;
+}
+
+/** Routes that mean the same machine from anywhere: not loopback addresses of this one. */
+function remoteRoutes(routes: NodeRoute[]): NodeRoute[] {
+  return routes.filter((route) => route.kind !== "https" || isRemoteHttps(route.origin));
+}
+
+function originOf(value: string): string {
+  try {
+    return new URL(value).origin;
+  } catch {
+    return "";
+  }
+}
+
+function isRemoteHttps(origin: string): boolean {
+  try {
+    const url = new URL(origin);
+    return (
+      url.protocol === "https:" &&
+      !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) &&
+      !url.hostname.endsWith(".localhost")
+    );
+  } catch {
+    return false;
   }
 }
 

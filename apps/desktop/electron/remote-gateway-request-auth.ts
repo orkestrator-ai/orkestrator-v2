@@ -76,12 +76,12 @@ function withoutAmbientGatewayCredentials(headers: Record<string, string>): Reco
 
 export function installRemoteGatewayRequestAuth(
   webRequest: Pick<WebRequest, "onBeforeSendHeaders" | "onHeadersReceived">,
-  getAuthorization: (url: string) => string | null,
+  getAuthorization: (url: string, webContentsId?: number) => string | null,
   options: { browserPreviewOnly?: boolean } = {},
 ): void {
   const filter = { urls: ["http://*/*", "https://*/*"] };
   webRequest.onBeforeSendHeaders(filter, (details, callback) => {
-    const authorization = getAuthorization(details.url);
+    const authorization = getAuthorization(details.url, details.webContentsId);
     if (!authorization) {
       callback({ requestHeaders: details.requestHeaders });
       return;
@@ -105,7 +105,7 @@ export function installRemoteGatewayRequestAuth(
     });
   });
   webRequest.onHeadersReceived(filter, (details, callback) => {
-    const authorization = getAuthorization(details.url);
+    const authorization = getAuthorization(details.url, details.webContentsId);
     if (
       !authorization ||
       !canAttachGatewayAuthorization(details, options.browserPreviewOnly === true)

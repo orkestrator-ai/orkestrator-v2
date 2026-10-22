@@ -68,6 +68,28 @@ restricted containers no longer need `NET_ADMIN` can the sudo grants shrink or
   `restore_provider_credentials` allows it again. The Cursor key is not in a
   staged-inputs container's creation environment; the Anthropic key is a
   staged file there.
+- Single-use refresh tokens (2026-10-21): Codex and Grok logins reach a
+  container access-only (`restrictCodexAuthSnapshot` and
+  `restrictGrokAuthSnapshot` in `packages/protocol/src/login-snapshots.ts`).
+  Staging (`accessOnlyLogin` in `portable-inputs.ts`), the restage before
+  every `docker start` (`refreshStagedAgentAccountLogins`, now for Codex and
+  Grok whether or not an account was added), the account-switch push and a
+  push before every Grok bridge start (`syncContainerGrokLogin`) all blank
+  the refresh token and drop an expired login. Codex's `last_refresh` is set
+  to now, so Codex uses its access token (ten days at issue) until it
+  expires instead of trying a refresh it cannot make. The entrypoint
+  (`restrict_imported_login`) blanks the refresh token again in the
+  container's own copy. That covers `ORKESTRATOR_PORTABLE_INPUTS=host-mounts`
+  and containers that imported a full copy before this change. A copy whose
+  access token lapses signs out on its own (Grok 1.0.52 says "Not signed
+  in", checked live), and the host login is never touched. The cost: a
+  container that imports the host login cannot keep its own `grok login` or
+  `codex login` across a restart, because that refresh token is blanked too.
+  A container that needs its own login should have that provider's
+  credentials revoked. Images older than staged inputs still mount the host
+  homes and copy them whole with their old entrypoint; they go away with the
+  host-mounts path
+  ([container-rebuild-state-preservation.md](container-rebuild-state-preservation.md)).
 
 ## Outstanding work
 
@@ -88,24 +110,104 @@ restricted containers no longer need `NET_ADMIN` can the sudo grants shrink or
    or `no-new-privileges` be reconsidered.
 4. Optional: change mode in place (restricted to full and back) instead of
    requiring a rebuild.
-5. Stop containers spending the host's Grok refresh token (high). The
-   entrypoint copies host `~/.grok/auth.json` into container state, refresh
-   token included (`docker/entrypoint.sh`, Grok import). xAI refresh tokens
-   are single-use: on 2026-10-18 an agent-test profile holding the same kind
-   of copy refreshed once, after which the next copy of the host file failed
-   its refresh and Grok cleared the login
-   ([web-annotation-qualification.md](web-annotation-qualification.md), "Runs
-   on 2026-10-18"). A container whose copy refreshes first therefore signs the
-   host (and every other container) out, and a host refresh leaves the
-   container's copy stale. The agent-test harness now blanks the refresh token
-   (`restrictGrokAuthSnapshot`); containers need their own answer, such as an
-   access-token-only copy refreshed from the host on start, or Grok's own
-   API-key mode. Check Codex and Claude container imports for the same
-   pattern. Done when a Grok container that runs past the host access token's
-   expiry leaves the host login working.
+5. Stop containers spending the host's Claude refresh token (high). Every
+   container start pipes in the host's full Claude credential, refresh token
+   included (`syncContainerAgentAccountsOnStart`, `pushContainerLogin`,
+   `.credentials.json` staging), and an added account's goes in the same way.
+   Anthropic OAuth refresh tokens are reported to rotate: Claude Code issues
+   describe a devcontainer copy and the host signing each other out. If so,
+   the first copy to refresh signs out the host and every other container.
+   This was not changed along with Grok and Codex because Claude's access
+   token lasts about eight hours. An access-only copy would sign a long
+   container session out unless something on the host refreshes and
+   re-pushes it. Options: hand containers the access token only and re-push
+   it before each Claude bridge start and when the host token renews (local
+   coordinator bridges already do this with `CLAUDE_CODE_OAUTH_TOKEN`),
+   possibly with a backend-owned host refresh; or steer container users to a
+   long-lived `claude setup-token` token. First confirm rotation with a
+   disposable account: refresh one copy, then check whether the other copy
+   can still refresh. Done when a container refresh can never invalidate the
+   host's Claude login.
+6. Stop containers spending the host's OpenCode and Pi OAuth refresh tokens
+   (high). Both are staged in full (`opencode-data/auth.json`,
+   `pi-config/agent/auth.json`). Pi's OAuth providers rotate refresh tokens:
+   agent-test profiles share Pi's file in place for this reason (see
+   [credentials and models](../development/credentials-and-models.md)).
+   OpenCode's OAuth entries (Anthropic, OpenAI, GitHub Copilot) carry the
+   same providers' rotating tokens. API-key entries are safe to copy. Apply
+   the same access-only treatment per entry type, or stage API-key entries
+   only.
+
+7. Tell a container user how to recover a lapsed Codex login (medium).
+   When a container's access-only Codex login lapses, the tab now says
+   "You've been signed out of Codex. Sign in again to keep working.", and the
+   failed turn shows Codex's raw "workspace routing discovery unauthorized
+   (401)". For a container that imports the host login, the fix is to run
+   `codex` on the host and restart the environment, which restages the host's
+   current login. Signing in inside the container works only until the next
+   restart blanks that login's refresh token. Show the restart guidance for
+   containers whose Codex credentials come from the host, and say the same
+   for Grok.
+8. Decide whether a host sign-out reaches a container that never added an
+   account (medium). When the host's Codex or Grok login is missing or
+   expired, the restage stages nothing and the container keeps the
+   access-only copy it already had. If the host signed out deliberately, a
+   still-valid copy keeps working until it expires (Codex access tokens last
+   ten days from issue). A container that has used agent accounts now has its
+   copy removed at the next bridge start. Options: remove the copy on every
+   restage that stages nothing, or keep today's "leave it to expire"
+   behaviour and document it.
 
 ### Qualification
 
+- Grok past expiry with a live login (medium). The 2026-10-21 run below could
+  not use a real Grok login: the host's access token had expired about eight
+  hours earlier, so staging rightly withheld it. Repeat on a host whose Grok
+  token is fresh. Run a Grok tab in a container past the access token's
+  expiry (about six hours, or edit `expires_at` in the container's copy).
+  Confirm that the container signs out on its own, that a bridge restart
+  after a host `grok` run signs it back in, and that the host's `auth.json`
+  hash changes only when the host itself refreshes. Tried again on
+  2026-10-21 at 07:38Z and 07:58Z: still skipped, because the host Grok access
+  token expired at 2026-10-20T16:24:55Z and refreshing it would have spent the
+  host's own refresh token. The profile launcher withheld the login and the
+  opt-in live spec (`grok-container-login.spec.ts`) skipped explicitly. The
+  Codex half of the same property passed live that day (next item).
+- Codex past expiry, run on 2026-10-21 (details in
+  [container-platform-qualification.md](container-platform-qualification.md),
+  "Results, 2026-10-21"). With the container's own access token past its
+  `exp`, Codex 0.162.1 tried a refresh with the blank refresh token, OpenAI
+  answered 400 `empty_string`, and turns failed. The container held no
+  refresh token, so nothing on the host could be spent; the host
+  `~/.codex/auth.json` and `~/.grok/auth.json` hashes and mtimes were
+  unchanged. A restart restaged the host login and signed it back in. The
+  bridge reported that sign-out as "temporarily unavailable" until this
+  change; it now reports `needs-auth`.
+- Run on 2026-10-21 (single-use refresh tokens). Host Grok 1.0.62; container
+  image `ghcr.io/orkestrator-ai/orkestrator-v2:2.23.0` (Grok 1.0.52,
+  codex-cli 0.162.1) on Docker Desktop 29.8.2 (aarch64), with this change's
+  `docker/entrypoint.sh` bind-mounted over the image's. The run used one
+  disposable container, `ork-live-0600-grok-fix`, in full network mode,
+  removed afterwards. No profile or other environment was touched.
+  - Host `~/.grok/auth.json` and `~/.codex/auth.json`: SHA-256 prefix and
+    mtime recorded before and after. Both were unchanged.
+  - `stagePortableInputs` for Codex and Grok, from the real host home into a
+    temporary data directory: Codex `auth.json` was staged with an empty
+    refresh token. Grok was withheld (`login-withheld: 1`) because the host
+    access token had expired.
+  - The entrypoint boot reached `ready`. The container's Codex `auth.json`
+    had an empty refresh token, a `last_refresh` seconds old and mode 600.
+    `codex login status` reported "Logged in using ChatGPT", and
+    `codex exec --skip-git-repo-check --sandbox read-only` answered "pong"
+    (exit 0). The refresh token was still empty afterwards.
+  - Migration from before the change: a fake full-shape Grok login (fake
+    access and refresh tokens) was written into the container's
+    `~/.grok/auth.json`, then the container was restarted. The entrypoint
+    blanked the refresh token and kept the access token.
+  - `grok -p` with that access-only fake login exited 1 with "Not signed in"
+    within the 90-second limit, and left the file with no refresh token.
+  - Skipped: a real Grok call, because the host is signed out of Grok (see
+    above).
 - The Desktop and arm64 packet matrix and live credential rotation are
   tracked in [container-platform-qualification.md](container-platform-qualification.md).
   Item 3 needs live packet tests on Linux Engine and Desktop: allowed provider
@@ -157,6 +259,10 @@ restricted containers no longer need `NET_ADMIN` can the sudo grants shrink or
   actually been replaced.
 - Do not describe a root workload as unable to change its firewall.
 - Published ports stay on loopback and authenticated.
+- A container never holds a refresh token it shares with the host or another
+  container when that provider's refresh tokens are single-use. It gets the
+  access token, re-read from the host on start, and signs out on its own when
+  that expires.
 - Credentials go only to enabled, authorized, non-revoked providers.
   Revocation is recorded before anything else, so an interrupted revoke still
   gates staging and syncs. Never promise that removal retracts a credential a

@@ -12,6 +12,7 @@ import {
   type TabInfo,
 } from "@/types/paneLayout";
 import type { EnvironmentPaneState } from "@/stores/paneLayoutStore";
+import { environmentChangeResourceKey } from "@orkestrator/protocol/change-resources";
 
 function saved(root: unknown, overrides: Partial<PersistedPaneLayout> = {}): PersistedPaneLayout {
   return {
@@ -132,6 +133,68 @@ describe("reconcilePersistedLayout", () => {
       expect(fileData?.columnNumber, String(malformed)).toBeUndefined();
       expect(fileData?.navigationRequestId, String(malformed)).toBeUndefined();
     }
+  });
+
+  test("restores change diff targets and drops ones that no longer name this environment's change", () => {
+    const restoreChangeDiff = (changeDiff: unknown) => {
+      const restored = reconcilePersistedLayout(
+        saved({
+          kind: "leaf",
+          id: "pane",
+          tabs: [
+            {
+              id: "file",
+              type: "file",
+              fileData: { filePath: "src/App.tsx", isDiff: true, changeDiff },
+            },
+          ],
+          activeTabId: "file",
+        }),
+        context,
+      );
+      const fileData = (restored!.root as Extract<EnvironmentPaneState["root"], { kind: "leaf" }>)
+        .tabs[0]?.fileData;
+      expect(fileData?.isDiff).toBe(true);
+      return fileData?.changeDiff;
+    };
+    const liveKey = environmentChangeResourceKey("env-1");
+
+    expect(
+      restoreChangeDiff({
+        kind: "historical",
+        diffIdentityId: "diff_1",
+        title: "App.tsx",
+        extra: 1,
+      }),
+    ).toEqual({ kind: "historical", diffIdentityId: "diff_1", title: "App.tsx" });
+    expect(
+      restoreChangeDiff({
+        kind: "live",
+        resourceKey: liveKey,
+        pathId: "p:src/App.tsx",
+        rowId: "m1:0",
+        revision: 4,
+        title: "App.tsx",
+      }),
+    ).toEqual({
+      kind: "live",
+      resourceKey: liveKey,
+      pathId: "p:src/App.tsx",
+      rowId: "m1:0",
+      revision: 4,
+      title: "App.tsx",
+    });
+    expect(restoreChangeDiff({ kind: "historical", diffIdentityId: "" })).toBeUndefined();
+    expect(restoreChangeDiff({ kind: "live", resourceKey: liveKey, title: "x" })).toBeUndefined();
+    expect(
+      restoreChangeDiff({
+        kind: "live",
+        resourceKey: environmentChangeResourceKey("env-other"),
+        path: "src/App.tsx",
+      }),
+    ).toBeUndefined();
+    expect(restoreChangeDiff({ kind: "live", resourceKey: "garbage", path: "a" })).toBeUndefined();
+    expect(restoreChangeDiff("historical")).toBeUndefined();
   });
 
   test("accepts legacy v1 layouts for one-time selection migration", () => {

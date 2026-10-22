@@ -7,7 +7,19 @@ import { runRemoteGit } from "./git-noninteractive-env.js";
 import { GitFetchScheduler } from "./git-fetch-scheduler.js";
 import { runCommand } from "./shell.js";
 import { gitDockerScanPool } from "./git-docker-scan-pool.js";
-import { CONTAINER_TREE_MAX_AGE_MS, DiffStatsService } from "./diff-stats-service.js";
+import {
+  CONTAINER_TREE_MAX_AGE_MS,
+  DiffStatsService,
+  type DiffScanEvent,
+  type DiffScanResult,
+  type DiffStatsTarget,
+} from "./diff-stats-service.js";
+import {
+  PhysicalKeyResolver,
+  SharedScanQueue,
+  SharedWatcherRegistry,
+} from "./change-tracking/shared-physical-work.js";
+import { startWorktreeWatcher } from "./worktree-watcher.js";
 import { CONTAINER_FETCH_EXEC_MARGIN_MS, ContainerGitFetchPolicy } from "./container-git-fetch.js";
 import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
 import {
@@ -68,6 +80,8 @@ export function createGitFetchScheduler(): GitFetchScheduler {
 
 export type DiffStatsTrackingOptions = {
   emit: BackendEmit;
+  /** Every settled scan, for the change-tracking environment projector. */
+  onScanEvent?: (event: DiffScanEvent) => void;
 };
 
 /** What the baseline check needs to know about one local environment. */
@@ -97,6 +111,8 @@ export class DiffStatsTracking {
    */
   readonly containerGitFetchPolicy: ContainerGitFetchPolicy;
   readonly service: DiffStatsService;
+  readonly sharedWatchers: SharedWatcherRegistry;
+  readonly sharedScans: SharedScanQueue<DiffScanResult>;
   private syncGeneration = 0;
   private stopped = false;
   private syncQueue: Promise<void> = Promise.resolve();
@@ -129,6 +145,12 @@ export class DiffStatsTracking {
       "container-git-fetch",
       this.containerGitFetchPolicy,
     );
+    // Aliases of one physical worktree share scans and watchers; their
+    // logical comparisons (environment + ref) stay separate.
+    const physicalKeys = new PhysicalKeyResolver();
+    const sharedScans = new SharedScanQueue<DiffScanResult>();
+    this.sharedWatchers = new SharedWatcherRegistry(startWorktreeWatcher, physicalKeys);
+    this.sharedScans = sharedScans;
     const containerStatus: ContainerGitStatusDeps = {
       exec: (id, script) => dockerExec(id, script),
       fetches: this.containerGitFetchPolicy,
@@ -142,33 +164,19 @@ export class DiffStatsTracking {
         target.kind === "container" && target.containerId
           ? this.containerGitFetchPolicy.freshness(target.containerId, target.comparisonRef)
           : undefined,
-      scan: async (target) => {
+      onScanEvent: options.onScanEvent,
+      startWatcher: this.sharedWatchers.startWatcher,
+      scan: async (target, request) => {
         // A scan follows every change the watcher sees, including HEAD moving
         // when the branch takes in newer target history.
         if (target.kind === "local") this.checkBaseline(target.environmentId);
-        const detailed =
-          target.kind === "local"
-            ? await getLocalGitStatusDetailed(
-                target.worktreePath!,
-                target.comparisonRef,
-                true,
-                this.gitFetchScheduler,
-              )
-            : await getContainerGitStatusDetailed(
-                target.containerId!,
-                target.comparisonRef,
-                true,
-                containerStatus,
-              );
-        return {
-          stats: {
-            additions: detailed.changes.reduce((sum, change) => sum + change.additions, 0),
-            deletions: detailed.changes.reduce((sum, change) => sum + change.deletions, 0),
-            filesChanged: detailed.changes.length,
-            truncated: detailed.truncated,
-          },
-          changes: detailed.changes,
-        };
+        // Both clocks are `Date.now`, so a request delayed by admission joins a
+        // pass that started after it was made.
+        return sharedScans.run(
+          `${physicalKeys.key(target)}\0${target.comparisonRef}`,
+          () => this.scanPhysical(target, containerStatus),
+          request?.requestedAtMs,
+        );
       },
       readFiles: (request) =>
         request.kind === "local"
@@ -197,6 +205,38 @@ export class DiffStatsTracking {
         console.warn(`[diff-stats] ${message}:`, error instanceof Error ? error.message : error);
       },
     });
+  }
+
+  /** One physical scan; equal concurrent requests join through {@link SharedScanQueue}. */
+  private async scanPhysical(
+    target: DiffStatsTarget,
+    containerStatus: ContainerGitStatusDeps,
+  ): Promise<DiffScanResult> {
+    const detailed =
+      target.kind === "local"
+        ? await getLocalGitStatusDetailed(
+            target.worktreePath!,
+            target.comparisonRef,
+            true,
+            this.gitFetchScheduler,
+          )
+        : await getContainerGitStatusDetailed(
+            target.containerId!,
+            target.comparisonRef,
+            true,
+            containerStatus,
+          );
+    return {
+      stats: {
+        additions: detailed.changes.reduce((sum, change) => sum + change.additions, 0),
+        deletions: detailed.changes.reduce((sum, change) => sum + change.deletions, 0),
+        filesChanged: detailed.changes.length,
+        truncated: detailed.truncated,
+      },
+      changes: detailed.changes,
+      ...(detailed.baseOid ? { baseOid: detailed.baseOid } : {}),
+      ...(detailed.ambiguousPaths ? { ambiguousPaths: detailed.ambiguousPaths } : {}),
+    };
   }
 
   /**

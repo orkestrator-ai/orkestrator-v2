@@ -115,12 +115,59 @@ describe("item adapter edge cases", () => {
         ],
       }).item,
     ).toMatchObject({
-      status: "failed",
+      // A declined patch never ran; it is no longer folded into `failed`.
+      status: "declined",
       changes: [
         { path: "a.ts", kind: "delete" },
         { path: "b.ts", kind: "update" },
       ],
     });
+  });
+
+  test("keeps every file change's payload, rename and real status", () => {
+    const changes = [
+      { path: "/w/new.ts", kind: { type: "add" }, diff: "export const a = 1;\n" },
+      { path: "/w/gone.ts", kind: { type: "delete" }, diff: "old\n" },
+      {
+        path: "/w/old.ts",
+        kind: { type: "update", move_path: "/w/moved.ts" },
+        diff: "@@ -1 +1 @@\n-a\n+b\n\n\nMoved to: /w/moved.ts",
+      },
+      {
+        path: "/w/plain.ts",
+        kind: { type: "update", move_path: null },
+        diff: "@@ -1 +1 @@\n-x\n+y\n",
+      },
+    ];
+    expect(
+      adaptAppServerItem({ id: "patch", type: "fileChange", status: "inProgress", changes }).item,
+    ).toEqual({
+      id: "patch",
+      type: "file_change",
+      // In progress stays in progress: it is a proposal, not an applied edit.
+      status: "in_progress",
+      changes: [
+        { path: "/w/new.ts", kind: "add", diff: "export const a = 1;\n" },
+        { path: "/w/gone.ts", kind: "delete", diff: "old\n" },
+        {
+          path: "/w/old.ts",
+          kind: "update",
+          diff: "@@ -1 +1 @@\n-a\n+b\n\n\nMoved to: /w/moved.ts",
+          move_path: "/w/moved.ts",
+        },
+        { path: "/w/plain.ts", kind: "update", diff: "@@ -1 +1 @@\n-x\n+y\n" },
+      ],
+    });
+    for (const [status, expected] of [
+      ["completed", "completed"],
+      ["failed", "failed"],
+      ["declined", "declined"],
+      ["inProgress", "in_progress"],
+    ] as const) {
+      expect(
+        adaptAppServerItem({ id: "patch", type: "fileChange", status, changes: [] }).item,
+      ).toMatchObject({ status: expected });
+    }
   });
 
   test("retains structured MCP results and maps unknown status to pending", () => {

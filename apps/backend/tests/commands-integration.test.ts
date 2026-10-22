@@ -1611,16 +1611,25 @@ exit 0
 
       expect(environment.worktreePath).toBeDefined();
       const worktreePath = environment.worktreePath!;
-      const gitDir = await gitOutput(worktreePath, ["rev-parse", "--git-dir"]);
-      const excludePath = await gitOutput(worktreePath, [
-        "rev-parse",
-        "--git-path",
-        "info/exclude",
-      ]);
-      expect(gitDir).not.toBe(".git");
-      const excludeFile = path.isAbsolute(excludePath)
-        ? excludePath
-        : path.resolve(worktreePath, excludePath);
+      // Read from Git's documented on-disk layout instead of `git rev-parse`, so
+      // the test spawns nothing alongside the diff scan that starting the
+      // environment begins. Under aggregate load Bun intermittently never
+      // reported the exit of a scan subprocess spawned together with these
+      // reads; the scan then held the worktree's admission slot until its
+      // 10-second command timeout, and `get_local_git_status` queued behind it.
+      // A linked worktree's `.git` is a file naming its private Git directory,
+      // whose `commondir` names the shared directory holding `info/exclude`.
+      const dotGit = path.join(worktreePath, ".git");
+      expect((await fs.stat(dotGit)).isFile()).toBe(true);
+      const gitDir = path.resolve(
+        worktreePath,
+        (await fs.readFile(dotGit, "utf8")).replace(/^gitdir:/, "").trim(),
+      );
+      const commonDir = path.resolve(
+        gitDir,
+        (await fs.readFile(path.join(gitDir, "commondir"), "utf8")).trim(),
+      );
+      const excludeFile = path.join(commonDir, "info", "exclude");
       await expect(fs.readFile(excludeFile, "utf8")).resolves.toContain(".orkestrator\n");
 
       await fs.writeFile(excludeFile, "existing-pattern");
@@ -3065,11 +3074,14 @@ printf '%s' ${JSON.stringify(
       const previousHome = process.env.HOME;
       const previousHostHome = process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME;
       const previousHostConfig = process.env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR;
+      const previousClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+      const profileClaudeConfigDir = path.join(dataDir, "agent-credentials", "claude");
       const previousAnthropicApiKey = process.env.ANTHROPIC_API_KEY;
       process.env.PATH = `${binDir}${path.delimiter}${previousPath ?? ""}`;
       process.env.HOME = path.join(dataDir, "agent-credentials", "home");
       process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = hostHome;
       process.env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR = hostConfigDir;
+      process.env.CLAUDE_CONFIG_DIR = profileClaudeConfigDir;
       delete process.env.ANTHROPIC_API_KEY;
 
       try {
@@ -3078,8 +3090,10 @@ printf '%s' ${JSON.stringify(
           context,
         );
         const marker = JSON.parse(await fs.readFile(markerPath, "utf8")) as Record<string, unknown>;
+        // The host directory is only read for the login; the bridge keeps the
+        // profile's own config dir, so its sessions never reach the host's.
         expect(marker).toMatchObject({
-          configDir: hostConfigDir,
+          configDir: profileClaudeConfigDir,
           hasAuthToken: true,
           authTokenFingerprint: createHash("sha256").update(fakeAccessToken).digest("hex"),
           keychainsVisible: false,
@@ -3109,6 +3123,8 @@ printf '%s' ${JSON.stringify(
         } else {
           process.env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR = previousHostConfig;
         }
+        if (previousClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+        else process.env.CLAUDE_CONFIG_DIR = previousClaudeConfigDir;
         if (previousAnthropicApiKey === undefined) delete process.env.ANTHROPIC_API_KEY;
         else process.env.ANTHROPIC_API_KEY = previousAnthropicApiKey;
       }
@@ -3188,11 +3204,14 @@ printf '%s' ${JSON.stringify(
       const previousHome = process.env.HOME;
       const previousHostHome = process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME;
       const previousHostConfig = process.env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR;
+      const previousClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+      const profileClaudeConfigDir = path.join(dataDir, "agent-credentials", "claude");
       const previousAnthropicApiKey = process.env.ANTHROPIC_API_KEY;
       process.env.PATH = `${binDir}${path.delimiter}${previousPath ?? ""}`;
       process.env.HOME = isolatedHome;
       process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = hostHome;
       process.env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR = hostConfigDir;
+      process.env.CLAUDE_CONFIG_DIR = profileClaudeConfigDir;
       delete process.env.ANTHROPIC_API_KEY;
 
       try {
@@ -3202,11 +3221,11 @@ printf '%s' ${JSON.stringify(
         );
         const marker = JSON.parse(await fs.readFile(markerPath, "utf8")) as Record<string, unknown>;
         expect(marker).toMatchObject({
-          configDir: hostConfigDir,
+          configDir: profileClaudeConfigDir,
           authTokenFingerprint: createHash("sha256").update(diskAccessToken).digest("hex"),
         });
-        // Only the config dir is host-scoped. The bridge keeps the isolated HOME,
-        // so nothing else under the host home is reachable from it.
+        // Only the login is read from the host. The bridge keeps the isolated
+        // HOME and config dir, so it never writes under the host home.
         expect(marker.home).toBe(isolatedHome);
         if (process.platform === "darwin") {
           // An isolated profile pins the lookup to the recorded host login
@@ -3244,6 +3263,8 @@ printf '%s' ${JSON.stringify(
         } else {
           process.env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR = previousHostConfig;
         }
+        if (previousClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+        else process.env.CLAUDE_CONFIG_DIR = previousClaudeConfigDir;
         if (previousAnthropicApiKey === undefined) delete process.env.ANTHROPIC_API_KEY;
         else process.env.ANTHROPIC_API_KEY = previousAnthropicApiKey;
       }

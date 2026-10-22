@@ -352,6 +352,20 @@ TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
 # macOS, such as /opt/homebrew/bin/gh, which do not exist in containers.
 git config --global --replace-all credential.helper "" 2>/dev/null || true
 export GIT_TERMINAL_PROMPT=0
+
+# Agent-test fixtures bind-mount a host bare repository at one fixed path. It
+# keeps its host owner, so Git refuses to clone it as dubiously owned. Trust
+# only that path, and only when the backend says it mounted the fixture.
+AGENT_TEST_GIT_REMOTE_PATH="/orkestrator-agent-test-origin.git"
+trust_agent_test_git_remote() {
+    if [ "${ORKESTRATOR_AGENT_TEST_GIT_REMOTE:-}" != "$AGENT_TEST_GIT_REMOTE_PATH" ]; then
+        return 0
+    fi
+    if ! git config --global --get-all safe.directory 2>/dev/null | grep -qxF "$AGENT_TEST_GIT_REMOTE_PATH"; then
+        git config --global --add safe.directory "$AGENT_TEST_GIT_REMOTE_PATH"
+    fi
+}
+trust_agent_test_git_remote
 if [ -n "$TOKEN" ]; then
     echo -e "${BLUE}>>> Configuring GitHub token for HTTPS <<<${NC}"
     # Credential synchronization may already have installed this multi-valued

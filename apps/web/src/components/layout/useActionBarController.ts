@@ -1,3 +1,4 @@
+import { useEnvironmentChangeProjection } from "@/hooks/useChangeProjection";
 import { environmentBrowserTarget } from "@/lib/preview-service-entry";
 import { ensurePreviewServiceSync, usePreviewServiceStore } from "@/stores/previewServiceStore";
 import {
@@ -148,6 +149,10 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   const toggleFilesPanelStore = useFilesPanelStore((state) => state.togglePanel);
   const openFilesPanelOnAllFiles = useFilesPanelStore((state) => state.openPanelOnAllFiles);
   const changes = useFilesPanelStore((state) => state.changes);
+  // The Files button's dot follows the environment's backend measurement; the
+  // panel's legacy list is only the fallback for a backend without one.
+  const changeProjection = useEnvironmentChangeProjection(selectedEnvironmentId);
+  const hasChanges = changeProjection ? changeProjection.badge.visible : changes.length > 0;
   const sidebarOpen = useUIStore((state) => state.sidebarOpen);
   const toggleSidebar = useUIStore((state) => state.toggleSidebar);
 
@@ -2353,6 +2358,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     toggleFilesPanel,
     canToggleFilesPanel,
     changes,
+    hasChanges,
     sidebarOpen,
     toggleSidebar,
     repoSettingsProjectId,

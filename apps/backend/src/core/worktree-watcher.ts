@@ -43,7 +43,16 @@ export interface WorktreeChangeHint {
   tree: boolean;
   /** The burst exceeded {@link WATCH_BURST_OVERFLOW_EVENTS}, or the platform lost events. */
   overflow: boolean;
+  /**
+   * Worktree-relative paths the burst touched, when every event named one and
+   * there were at most {@link WATCH_HINT_MAX_PATHS}. Absent means "unknown":
+   * content generations of every live body must advance.
+   */
+  paths?: string[];
 }
+
+/** Paths carried by one settled hint before it degrades to "unknown paths". */
+export const WATCH_HINT_MAX_PATHS = 256;
 
 export type StartWatch = (
   target: string,
@@ -150,6 +159,9 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
   let metadataCovered = false;
   let pending: WorktreeChangeHint = { fileList: false, tree: false, overflow: false };
   let burstEvents = 0;
+  // Content paths seen in this burst; null once one event lacked a name or
+  // the bound was exceeded.
+  let burstPaths: Set<string> | null = new Set();
 
   const fail = (error: unknown) => {
     if (closed) return;
@@ -157,9 +169,17 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
     close();
   };
 
-  const schedule = (hint: { fileList: boolean; tree: boolean; overflow?: boolean }) => {
+  const schedule = (
+    hint: { fileList: boolean; tree: boolean; overflow?: boolean },
+    contentPath?: string | null,
+  ) => {
     if (closed) return;
     burstEvents += 1;
+    if (contentPath === null) burstPaths = null;
+    else if (contentPath !== undefined && burstPaths) {
+      burstPaths.add(contentPath);
+      if (burstPaths.size > WATCH_HINT_MAX_PATHS) burstPaths = null;
+    }
     pending = {
       fileList: pending.fileList || hint.fileList,
       tree: pending.tree || hint.tree,
@@ -171,9 +191,13 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
     if (timer) return;
     timer = setTimeout(() => {
       timer = undefined;
-      const settled = pending;
+      const settled: WorktreeChangeHint =
+        burstPaths && burstPaths.size > 0 && !pending.overflow
+          ? { ...pending, paths: [...burstPaths] }
+          : pending;
       pending = { fileList: false, tree: false, overflow: false };
       burstEvents = 0;
+      burstPaths = new Set();
       if (!closed) options.onChange(settled);
     }, settleMs);
     // Never hold the process open for a debounce that only refreshes a badge.
@@ -196,7 +220,16 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
   try {
     rootWatcher = watchPath(options.worktreePath, true, (_eventType, filename) => {
       const hint = classifyWorktreeChange(filename, refs);
-      if (hint) schedule(hint);
+      if (!hint) return;
+      const name = filename === null ? null : filename.replaceAll(path.sep, "/");
+      schedule(
+        hint,
+        name === null || name === ".git" || name.startsWith(".git/")
+          ? name === null
+            ? null
+            : undefined
+          : name,
+      );
     });
   } catch (error) {
     options.onError?.(error);

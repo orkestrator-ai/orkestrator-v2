@@ -6,6 +6,7 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import type { SessionState } from "../types/index.js";
+import { recordClaudeToolDenied } from "./change-evidence.js";
 import { commandChangeHooks } from "./command-changes.js";
 import { eventEmitter } from "./event-emitter.js";
 import {
@@ -219,11 +220,38 @@ export function shellTaskHooks(session: SessionState): {
   return { PreToolUse: matcher, PostToolUse: matcher, PostToolUseFailure: matcher };
 }
 
-/** Command-change hooks that report each measurement to the turn `route` names. */
-export function commandChangeHookFor(route: (toolUseId: string) => ClaudeRuntimeTurn) {
-  return commandChangeHooks((toolUseId, change) =>
-    route(toolUseId).applyCommandChanges(toolUseId, change),
+/**
+ * Command-change hooks that report each measurement to the turn `route` names
+ * and each observation under the session's change-evidence binding.
+ */
+export function commandChangeHookFor(
+  route: (toolUseId: string) => ClaudeRuntimeTurn,
+  conversationId: string,
+) {
+  return commandChangeHooks(
+    (toolUseId, change) => route(toolUseId).applyCommandChanges(toolUseId, change),
+    conversationId,
   );
+}
+
+/**
+ * A PreToolUse hook whose denials are recorded as change evidence. The CLI
+ * reports no `permission_denied` frame for a hook's refusal, and the error
+ * `tool_result` that follows does not say the call never ran.
+ */
+export function recordingHookDenials(hook: HookCallback, conversationId: string): HookCallback {
+  return async (input, toolUseId, options) => {
+    const output = await hook(input, toolUseId, options);
+    const decision = (output as { hookSpecificOutput?: { permissionDecision?: unknown } })
+      .hookSpecificOutput?.permissionDecision;
+    if (input.hook_event_name === "PreToolUse" && input.tool_use_id && decision === "deny") {
+      recordClaudeToolDenied(conversationId, input.tool_use_id, {
+        toolName: input.tool_name,
+        input: input.tool_input,
+      });
+    }
+    return output;
+  };
 }
 
 /** Adapts a hook of this turn to the SDK's callback shape. */

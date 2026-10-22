@@ -38,11 +38,7 @@ import { TurnAccumulator } from "./sessions/turn-accumulator.js";
 import { RefusedCellTail, reportsRefusal, type RefusedCell } from "./sessions/refused-cell-tail.js";
 import { compareDispatchRecordsNewestFirst, DispatchJournal } from "./sessions/dispatch-journal.js";
 
-import {
-  beginTurnRenderState,
-  createTurnRenderState,
-  releaseTurnRenderState,
-} from "./messages/render-turn.js";
+import { createTurnRenderState, releaseTurnRenderState } from "./messages/render-turn.js";
 import {
   openModelResponseRow,
   patchCommandChangePart,
@@ -68,6 +64,7 @@ import { hasMeasuredChanges } from "@orkestrator/protocol/node/command-change-jo
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import type { ConversationMode } from "./prompts/slash-commands.js";
 import { hydrateMessagesFromPersistedSession } from "./history/rollout.js";
+import { legacyCommandChange, type CodexEvidenceSource } from "./change-evidence.js";
 
 import { isMissingRolloutError } from "./app-server/errors.js";
 
@@ -448,9 +445,9 @@ export class CodexRuntimeLifecycle {
    * Frees everything this process holds for a thread.
    *
    * Must be called on *every* path that drops a thread, not just the idle sweep.
-   * The render state carries the diff baselines — the largest per-thread
-   * allocation — and the coalescer owns a live timer, so forgetting a thread
-   * without this leaks both for a conversation that can never come back.
+   * The render state carries the rendered diffs and sub-agent caches, and the
+   * coalescer owns a live timer, so forgetting a thread without this leaks both
+   * for a conversation that can never come back.
    */
   releaseThreadRuntimeState(threadId: string): void {
     const timer = this.ctx.recoveryBackstops.get(threadId);
@@ -657,16 +654,11 @@ export class CodexRuntimeLifecycle {
     detachedThreads: number;
     reattachedThreads: number;
     transcriptCache: TranscriptCacheStats;
-    diffBudget: { baselineEntries: number; baselineBytes: number; cacheEntries: number };
+    diffBudget: { cacheEntries: number };
   } {
-    let baselineEntries = 0;
-    let baselineBytes = 0;
     let cacheEntries = 0;
     for (const state of this.ctx.threadState.values()) {
-      const stats = describeDiffBudget(state.render.fileChange);
-      baselineEntries += stats.baselineEntries;
-      baselineBytes += stats.baselineBytes;
-      cacheEntries += stats.cacheEntries;
+      cacheEntries += describeDiffBudget(state.render.fileChange).cacheEntries;
     }
     return {
       threads: this.ctx.registry.listThreads().length,
@@ -674,7 +666,7 @@ export class CodexRuntimeLifecycle {
       detachedThreads: this.ctx.detachedThreads,
       reattachedThreads: this.ctx.reattachedThreads,
       transcriptCache: getTranscriptCacheStats(),
-      diffBudget: { baselineEntries, baselineBytes, cacheEntries },
+      diffBudget: { cacheEntries },
     };
   }
 
@@ -727,7 +719,7 @@ export class CodexRuntimeLifecycle {
   ): void {
     state.historicalAssistantSegments.clear();
     state.releasedAssistantRows.clear();
-    state.render = beginTurnRenderState(state.render);
+    state.render = createTurnRenderState();
     state.renderedRow = undefined;
     state.assistantMessageId = assistantMessage.id;
     state.publishedMessageId = assistantMessage.id;
@@ -970,6 +962,7 @@ export class CodexRuntimeLifecycle {
         if (turn && turn.turnId === event.turnId) {
           turn.markRunning(event.turnId);
           this.startRefusedCellTail(context, turn);
+          this.ctx.options.changeEvidence?.turn(this.evidenceSource(context, turn), "running");
         }
         return;
       }
@@ -984,6 +977,9 @@ export class CodexRuntimeLifecycle {
         const turn = context.activeTurn;
         if (!turn || !turn.accepts(event)) return;
         this.openModelResponseRow(context, turn, event);
+        const held = turn.items.get(event.item.id);
+        // A late start or preview for a call that already settled says nothing new.
+        const settled = held?.completed === true && !held.rawFallback;
         if (event.kind === "item.completed") {
           turn.onItemCompleted(event.item, event.completedAtMs);
           this.trackCommandChangeWindow(context, "completed", event.item);
@@ -991,6 +987,17 @@ export class CodexRuntimeLifecycle {
           turn.onItemStarted(event.item, event.startedAtMs);
           this.trackCommandChangeWindow(context, "started", event.item);
         } else turn.onItemUpdated(event.item);
+        if (event.kind === "item.completed" || !settled) {
+          this.ctx.options.changeEvidence?.item(
+            this.evidenceSource(context, turn),
+            event.kind === "item.completed"
+              ? "completed"
+              : event.kind === "item.started"
+                ? "started"
+                : "updated",
+            event.item,
+          );
+        }
         // `item/completed` is authoritative; show it without waiting a tick.
         if (event.kind === "item.completed") void this.stateFor(threadId).coalescer.flushNow();
         else this.stateFor(threadId).coalescer.schedule(this.ctx.now());
@@ -1003,6 +1010,13 @@ export class CodexRuntimeLifecycle {
         // Keep it off the live transcript unless its output fails, a structured
         // fileChange replaces it, or turn completion renders it as a fallback.
         turn.onDynamicToolStarted(event.item, event.startedAtMs);
+        if (event.item.type === "dynamic_tool_call") {
+          this.ctx.options.changeEvidence?.rawApplyPatch(
+            this.evidenceSource(context, turn),
+            event.item.id,
+            event.item.arguments,
+          );
+        }
         return;
       }
       case "item.text.delta": {
@@ -1045,14 +1059,26 @@ export class CodexRuntimeLifecycle {
       case "item.dynamic.output": {
         const turn = context.activeTurn;
         if (!turn || !turn.accepts(event)) return;
-        if (turn.onDynamicToolOutput(event.itemId, event.output)) {
-          void this.stateFor(threadId).coalescer.flushNow();
+        const failed = turn.onDynamicToolOutput(event.itemId, event.output);
+        const raw = turn.items.get(event.itemId);
+        if (raw?.rawFallback && raw.completed && raw.item?.type === "dynamic_tool_call") {
+          this.ctx.options.changeEvidence?.rawApplyPatch(
+            this.evidenceSource(context, turn),
+            raw.item.id,
+            raw.item.arguments,
+            raw.item.status === "failed" ? "failed" : "succeeded",
+          );
         }
+        if (failed) void this.stateFor(threadId).coalescer.flushNow();
         return;
       }
       case "turn.diff": {
         const turn = context.activeTurn;
-        if (turn && turn.accepts(event)) turn.onTurnDiff(event.diff);
+        if (turn && turn.accepts(event)) {
+          turn.onTurnDiff(event.diff);
+          // Each update is the whole cumulative diff and replaces the last.
+          this.ctx.options.changeEvidence?.turnDiff(this.evidenceSource(context, turn), event.diff);
+        }
         return;
       }
       case "error": {
@@ -1084,6 +1110,7 @@ export class CodexRuntimeLifecycle {
         if (!turn || !turn.accepts(event)) return;
         this.discardOutlivingCommandWindows(turn);
         turn.complete(event.status, event.error);
+        this.ctx.options.changeEvidence?.turn(this.evidenceSource(context, turn), event.status);
         const finalize = () =>
           this.runFinalization(context, turn).catch((error) => {
             console.error(
@@ -1356,15 +1383,28 @@ export class CodexRuntimeLifecycle {
     }
 
     if (role === "measure" && commandDidNotRun(item)) {
+      // Nothing ran, so there is no window to report.
       probe.discard(item.id);
       return;
     }
     const threadId = context.threadId;
+    const source = context.activeTurn
+      ? this.evidenceSource(context, context.activeTurn)
+      : undefined;
     this.trackCommandChangeWork(
-      probe.end(item.id).then((change) => {
-        if (role === "measure" && change) this.applyCommandChanges(threadId, item.id, change);
+      probe.endObservation(item.id).then((observation) => {
+        if (role !== "measure" || !observation) return;
+        // Reported as observed; the backend decides what the window measures.
+        if (source) this.ctx.options.changeEvidence?.observation(source, item.id, observation);
+        const change = legacyCommandChange(observation);
+        if (change) this.applyCommandChanges(threadId, item.id, change);
       }),
     );
+  }
+
+  /** Who a thread's evidence belongs to: every session bound to it, this turn. */
+  evidenceSource(context: ThreadContext, turn: TurnAccumulator): CodexEvidenceSource {
+    return { sessionIds: [...context.bridgeSessionIds], turnId: turn.turnId };
   }
 
   /**

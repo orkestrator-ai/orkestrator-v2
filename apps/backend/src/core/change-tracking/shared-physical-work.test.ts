@@ -1,0 +1,82 @@
+import { expect, test } from "bun:test";
+import type { WorktreeWatcher, WorktreeWatcherOptions } from "../worktree-watcher.js";
+import { SharedWatcherRegistry } from "./shared-physical-work.js";
+
+test("shared watcher releases only the last listener and closes once", () => {
+  let starts = 0,
+    closes = 0,
+    first = 0,
+    second = 0;
+  let physical!: WorktreeWatcherOptions;
+  const registry = new SharedWatcherRegistry((options) => {
+    starts++;
+    physical = options;
+    return {
+      watching: true,
+      qualified: true,
+      close: () => {
+        closes++;
+      },
+    };
+  });
+  const a = registry.startWatcher({ worktreePath: "/tmp", onChange: () => first++ });
+  const b = registry.startWatcher({ worktreePath: "/tmp", onChange: () => second++ });
+  physical.onChange();
+  expect(starts).toBe(1);
+  expect(first).toBe(1);
+  expect(second).toBe(1);
+  a.close();
+  a.close();
+  physical.onChange();
+  expect(first).toBe(1);
+  expect(second).toBe(2);
+  expect(closes).toBe(0);
+  b.close();
+  expect(closes).toBe(1);
+  expect(registry.activeWatchers()).toBe(0);
+});
+
+test("replacing an unwatched physical watcher preserves earlier subscribers", () => {
+  let first = 0,
+    second = 0,
+    oldClosed = 0;
+  let physical!: WorktreeWatcherOptions;
+  const watchers: WorktreeWatcher[] = [];
+  const registry = new SharedWatcherRegistry((options) => {
+    physical = options;
+    const watcher = {
+      watching: true,
+      close: () => {
+        oldClosed++;
+      },
+    };
+    watchers.push(watcher);
+    return watcher;
+  });
+  const a = registry.startWatcher({ worktreePath: "/tmp", onChange: () => first++ });
+  (watchers[0]! as { watching: boolean }).watching = false;
+  const b = registry.startWatcher({ worktreePath: "/tmp", onChange: () => second++ });
+  physical.onChange();
+  expect(first).toBe(1);
+  expect(second).toBe(1);
+  expect(a.watching).toBe(true);
+  a.close();
+  expect(b.watching).toBe(true);
+  b.close();
+  expect(oldClosed).toBe(2);
+});
+
+test("a synchronous watcher startup failure is reported without losing subscriber ownership", () => {
+  let errors = 0;
+  const registry = new SharedWatcherRegistry((options) => {
+    options.onError?.(new Error("startup"));
+    return { watching: false, close() {} };
+  });
+  const a = registry.startWatcher({ worktreePath: "/tmp", onChange() {}, onError: () => errors++ });
+  const b = registry.startWatcher({ worktreePath: "/tmp", onChange() {}, onError: () => errors++ });
+  expect(errors).toBe(1);
+  expect(a.watching).toBe(false);
+  a.close();
+  b.close();
+  expect(registry.activeWatchers()).toBe(0);
+});

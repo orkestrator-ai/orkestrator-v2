@@ -29,8 +29,19 @@ import {
 } from "./app-constants.js";
 import { registerMainIpc } from "./ipc.js";
 import { resolveRuntimeRoots } from "./paths.js";
-import { createMainWindow } from "./window.js";
+import { createMainWindow, trustedRendererUrlFor } from "./window.js";
+import { NodeWorkspaceScopes } from "./node-workspaces.js";
+import { editDesktopConnection, setDesktopWorkspaceTarget } from "./window-workspace-target.js";
+import { importSavedMachinesOnce } from "./command-node-migration.js";
 import { ConnectionManager, DEFAULT_CONNECTION_SCOPE } from "./connection-manager.js";
+import {
+  LocalBackendCatalogueStore,
+  NativeDeviceCatalogueStore,
+} from "./connection-catalogue-store.js";
+import { PORTAL_EVENT_CHANNEL, registerFederationIpc } from "./federation-ipc.js";
+import { SshPromptBroker } from "./ssh-prompt-broker.js";
+import { createSshAdapterContext, SshTunnelSupervisor } from "./ssh/index.js";
+import { createUnavailableLocalBackend } from "./unavailable-local-backend.js";
 import { installRemoteGatewayRequestAuth } from "./remote-gateway-request-auth.js";
 import { ensurePinnedToolchains } from "@orkestrator/toolchain/manager";
 import { pinnedArtifactsForPlatforms } from "@orkestrator/toolchain/manifest";
@@ -50,6 +61,7 @@ import type {
   BrowserPreviewManager,
   BrowserPreviewServiceTransport,
 } from "./browser-preview-manager.js";
+import { connectionPreviewBackend, rebindWindowPreviews } from "./preview-connection-backend.js";
 import { PreviewTransportManager } from "./preview-transport-manager.js";
 import { createPreviewPortHints } from "./preview-port-hints.js";
 import { PreviewExternalHandoff } from "./preview-external-handoff.js";
@@ -156,15 +168,34 @@ const applicationLogging =
 const isPrimaryInstance = claimSingleInstanceLock(app);
 
 let backend: BackendHttpClient | null = null;
+let nodeWorkspaceScopes: NodeWorkspaceScopes | null = null;
 let connectionManager: ConnectionManager | null = null;
+let sshPrompts: SshPromptBroker | null = null;
+let connectionListPublish: ReturnType<typeof setTimeout> | null = null;
 type DesktopWindowContext = {
   window: BrowserWindow;
   scope: string;
   slot: number;
+  /** The connection the window's current previews were created for. */
+  previewConnectionId: string;
   browserPreviewManager: BrowserPreviewManager;
   previewTransport: PreviewTransportManager;
   artifactHosts: ArtifactHostManager;
+  /**
+   * While the window's workspace is on another node: the scope that keeps
+   * the window's own (command node) connection, for the portal channel.
+   */
+  portalScope: string | null;
+  target: WindowWorkspaceTarget | null;
 };
+type WindowWorkspaceTarget = {
+  nodeId: string;
+  nodeName: string;
+  path: "direct" | "relay";
+  routeKind?: "https" | "ssh";
+  via?: string;
+};
+
 let previewPortHints: ReturnType<typeof createPreviewPortHints> | null = null;
 let browserPreviewCaptures: BrowserPreviewCaptureStore | null = null;
 const previewExternalHandoff = new PreviewExternalHandoff((url) => shell.openExternal(url));
@@ -218,10 +249,43 @@ function focusedContext(): DesktopWindowContext | null {
   );
 }
 
+/** End a window's previews when its connection changed; see `rebindWindowPreviews`. */
+function followWindowConnection(context: DesktopWindowContext): void {
+  if (!connectionManager) return;
+  rebindWindowPreviews(context, connectionManager.getConnectionId(context.scope), (connectionId) =>
+    createWindowBrowserPreviews(
+      context.window,
+      context.scope,
+      context.slot,
+      connectionId,
+      // A workspace connection is new on every switch; preview site data
+      // stays with the node, as it would for a direct connection.
+      context.target ? `node:${context.target.nodeId}` : connectionId,
+    ),
+  );
+}
+
 function contextForEvent(event?: { sender?: { id: number } }): DesktopWindowContext {
   const context = event?.sender ? windowContexts.get(event.sender.id) : null;
   if (!context) throw new Error("The requesting window is no longer available");
   return context;
+}
+
+/** IPC context of a requesting main window. */
+type IpcContext = {
+  window: BrowserWindow;
+  scope: string;
+  browserPreviewManager: BrowserPreviewManager | null;
+  artifactHosts: ArtifactHostManager | null;
+};
+
+function ipcContextForEvent(event?: { sender?: { id: number } }): IpcContext {
+  return contextForEvent(event);
+}
+
+/** The scope that holds the window's own connection: the command node it was opened on. */
+function controlScope(context: DesktopWindowContext): string {
+  return context.portalScope ?? context.scope;
 }
 
 function emitToConnection(connectionId: string, event: string, payload: unknown): void {
@@ -230,7 +294,25 @@ function emitToConnection(connectionId: string, event: string, payload: unknown)
     if (connectionManager.getConnectionId(context.scope) === connectionId) {
       emitToWindow(context.window, event, payload);
     }
+    // The portal channel of a window whose workspace is on another node.
+    if (
+      context.portalScope &&
+      connectionManager.getConnectionId(context.portalScope) === connectionId &&
+      !context.window.isDestroyed()
+    ) {
+      context.window.webContents.send(PORTAL_EVENT_CHANNEL, event, payload);
+    }
   }
+}
+
+/** Machine state changes arrive in bursts (connect, hello, stream open); coalesce them. */
+function scheduleConnectionListPublish(): void {
+  if (connectionListPublish) return;
+  connectionListPublish = setTimeout(() => {
+    connectionListPublish = null;
+    refreshConnectionTitles();
+    publishConnectionLists();
+  }, 50);
 }
 
 function emitToFocusedWindow(event: string, payload: unknown): void {
@@ -239,6 +321,11 @@ function emitToFocusedWindow(event: string, payload: unknown): void {
 }
 
 function setConnectionTitle(window: BrowserWindow, scope: string): void {
+  const context = windowContexts.get(window.webContents.id);
+  if (context?.target) {
+    applyWindowTitle(window, productName, context.target.nodeName, createMenu);
+    return;
+  }
   const list = connectionManager?.getList(scope);
   const active = list?.connections.find((connection) => connection.active);
   applyWindowTitle(window, productName, active?.name, createMenu);
@@ -294,22 +381,25 @@ function createWindowBrowserPreviews(
   scope: string,
   slot: number,
   connectionId: string,
+  partitionKey = connectionId,
 ) {
-  const partition = browserPreviewPartitionForWindow(slot, connectionId);
+  const partition = browserPreviewPartitionForWindow(slot, partitionKey);
   let manager: BrowserPreviewManager | null = null;
   previewPortHints ??= createPreviewPortHints(
     path.join(app.getPath("userData"), "preview-ports.json"),
   );
   // Service previews: a loopback ingress per service over the authenticated
-  // tunnel of *this window's* connection. Never borrows another window's backend.
+  // tunnel of the connection this runtime was created for. Never borrows
+  // another window's backend, and outlives a switch only to release on it.
+  const previewBackend = connectionPreviewBackend(
+    () => connectionManager?.backendForConnection(connectionId) ?? null,
+  );
   const previewTransport = new PreviewTransportManager({
-    invoke: <T>(command: string, args: Record<string, unknown>) => {
-      if (!connectionManager) throw new Error("Connections are not initialized");
-      return connectionManager.invoke<T>(command, args, scope);
-    },
-    tunnelUrl: () => connectionManager?.getPreviewTunnelUrl(scope) ?? null,
-    isRemote: () => connectionManager?.getConnectionId(scope) !== LOCAL_CONNECTION_ID,
-    partitionFor: (target) => browserPreviewServicePartition(slot, connectionId, target),
+    invoke: <T>(command: string, args: Record<string, unknown>) =>
+      previewBackend.invoke<T>(command, args),
+    tunnelUrl: () => previewBackend.tunnelUrl(),
+    isRemote: () => connectionId !== LOCAL_CONNECTION_ID,
+    partitionFor: (target) => browserPreviewServicePartition(slot, partitionKey, target),
     sessionFor: (partitionName) => session.fromPartition(partitionName),
     clientKey: createHash("sha256").update(scope).digest("hex").slice(0, 24),
     portHints: previewPortHints,
@@ -355,8 +445,7 @@ function createWindowBrowserPreviews(
     // through the private preview origin with a one-use grant POSTed by a
     // loopback handoff page. The grant is never part of a URL.
     openServiceExternally: async (target) => {
-      if (!connectionManager) throw new Error("Connections are not initialized");
-      const attachment = await connectionManager.invoke<PreviewAttachmentDescriptor>(
+      const attachment = await previewBackend.invoke<PreviewAttachmentDescriptor>(
         "create_preview_attachment",
         {
           serviceId: target.serviceId,
@@ -364,7 +453,6 @@ function createWindowBrowserPreviews(
           path: target.path,
           clientKey: createHash("sha256").update(scope).digest("hex").slice(0, 24),
         },
-        scope,
       );
       if (attachment.backendInstanceId !== target.backendInstanceId || !attachment.bootstrap) {
         throw new Error("This backend cannot publish the preview to an external browser.");
@@ -495,10 +583,12 @@ async function createWindow(connectionId?: string): Promise<void> {
   if (!connectionManager) throw new Error("Connections are not initialized");
   if (quitReopen.isQuitting()) throw new Error(`${productName} is quitting`);
   const currentContext = focusedContext();
+  // A window on another node's workspace opens new windows on its own
+  // (command node) connection, never on the workspace.
   const inheritedConnectionId =
     connectionId ??
     (currentContext
-      ? connectionManager.getConnectionId(currentContext.scope)
+      ? connectionManager.getConnectionId(controlScope(currentContext))
       : connectionManager.getList().activeConnectionId);
   const scope = randomUUID();
   const slot = windowSlots.allocate();
@@ -557,9 +647,12 @@ async function createWindow(connectionId?: string): Promise<void> {
           window: createdWindow,
           scope,
           slot,
+          previewConnectionId: activeConnectionId,
           browserPreviewManager: browserPreviewRuntime.manager,
           previewTransport: browserPreviewRuntime.previewTransport,
           artifactHosts,
+          portalScope: null,
+          target: null,
         });
         lastFocusedWindowId = webContentsId;
         registered = true;
@@ -567,6 +660,10 @@ async function createWindow(connectionId?: string): Promise<void> {
         createdWindow.on("page-title-updated", (event) => {
           event.preventDefault();
           setConnectionTitle(createdWindow, scope);
+        });
+        // A reloaded window no longer knows about its prompts.
+        createdWindow.webContents.on("did-navigate", () => {
+          sshPrompts?.cancelFor(webContentsId);
         });
         createdWindow.webContents.on("did-finish-load", () => {
           // A new window can join an already-open pooled event stream and
@@ -587,7 +684,11 @@ async function createWindow(connectionId?: string): Promise<void> {
           void closing?.previewTransport.disposeAll().catch((error: unknown) => {
             console.warn("[Previews] Failed to close preview transport:", error);
           });
+          sshPrompts?.cancelFor(webContentsId);
           windowContexts.delete(webContentsId);
+          // Closing never stops the node's work; it only revokes the grant.
+          nodeWorkspaceScopes?.release(scope);
+          if (closing?.portalScope) connectionManager?.release(closing.portalScope);
           connectionManager?.release(scope);
           windowSlots.release(slot);
           if (lastFocusedWindowId === webContentsId) {
@@ -623,12 +724,45 @@ function refreshConnectionTitles(): void {
 function publishConnectionLists(): void {
   if (!connectionManager) return;
   for (const context of windowContexts.values()) {
-    emitToWindow(
-      context.window,
-      "desktop-connections-changed",
-      connectionManager.getList(context.scope),
-    );
+    try {
+      emitToWindow(
+        context.window,
+        "desktop-connections-changed",
+        connectionManager.getList(controlScope(context)),
+      );
+    } catch {
+      // A window still binding its connection receives its list once bound.
+    }
   }
+}
+
+/**
+ * Point a window's workspace at another node (or back at its command node).
+ * The window then is that node's client, exactly as if it had connected to
+ * it directly: its invoke, events, request credentials and previews follow
+ * the node, and the renderer reloads into it. The window's own connection
+ * stays bound to a portal scope for the multi-node views. The node is
+ * reached with a short-lived workspace grant the command node obtains —
+ * directly when one of its HTTPS routes answers, otherwise over the command
+ * node's own route — renewed while the window shows it, revoked after.
+ */
+async function setWindowWorkspaceTarget(
+  context: DesktopWindowContext,
+  input: { nodeId: string | null },
+): Promise<void> {
+  if (!connectionManager) throw new Error("Connections are not initialized");
+  nodeWorkspaceScopes ??= new NodeWorkspaceScopes((command, args) =>
+    connectionManager!.invoke(command, args, context.scope),
+  );
+  await setDesktopWorkspaceTarget(context, input, {
+    manager: connectionManager,
+    scopes: nodeWorkspaceScopes,
+    committed: (current) => {
+      followWindowConnection(current);
+      setConnectionTitle(current.window, current.scope);
+      publishConnectionLists();
+    },
+  });
 }
 
 function registerIpc(): void {
@@ -636,18 +770,34 @@ function registerIpc(): void {
     if (!connectionManager) throw new Error("Connections are not initialized");
     return connectionManager;
   };
-  const scopeForEvent = (event?: { sender?: { id: number } }) => contextForEvent(event).scope;
-  const updateWindowTitle = (event: { sender?: { id: number } } | undefined) => {
+  const scopeForEvent = (event?: { sender?: { id: number } }) => ipcContextForEvent(event).scope;
+  // A workspace grant cannot administer its node; say where that is done
+  // instead of surfacing the node's refusal.
+  const machineAdminScope = (event?: { sender?: { id: number } }) => {
     const context = contextForEvent(event);
-    setConnectionTitle(context.window, context.scope);
+    if (context.target) {
+      throw new Error(
+        `${context.target.nodeName}'s web access and gateway token are managed from Settings → Connections → Nodes on the command node.`,
+      );
+    }
+    return context.scope;
+  };
+  // Connection management acts on the window's own (command node)
+  // connection, even while its workspace is on another node.
+  const controlScopeForEvent = (event?: { sender?: { id: number } }) =>
+    controlScope(contextForEvent(event));
+  const updateWindowTitle = (event: { sender?: { id: number } } | undefined) => {
+    const senderId = event?.sender?.id;
+    const context = senderId === undefined ? undefined : windowContexts.get(senderId);
+    if (context) setConnectionTitle(context.window, context.scope);
   };
   registerMainIpc({
     getBackend: (event) => {
       const scope = scopeForEvent(event);
       return { invoke: (command, args) => manager().invoke(command, args, scope) };
     },
-    getMainWindow: (event) => contextForEvent(event).window,
-    getArtifactHosts: (event) => contextForEvent(event).artifactHosts,
+    getMainWindow: (event) => ipcContextForEvent(event).window,
+    getArtifactHosts: (event) => ipcContextForEvent(event).artifactHosts,
     ipc: ipcMain,
     clipboardApi: clipboard,
     createClipboardItem: (items) => new ClipboardItem(items),
@@ -659,24 +809,28 @@ function registerIpc(): void {
     },
     nativeImageApi: nativeImage,
     getMacOsPermissions,
-    listConnections: (event) => manager().getList(scopeForEvent(event)),
+    listConnections: (event) => manager().getList(controlScopeForEvent(event)),
     probeConnection: (connectionId) => {
       return manager().probe(connectionId);
     },
     connectToRemote: async (input, event) => {
-      const list = await manager().connect(input, scopeForEvent(event));
+      const context = contextForEvent(event);
+      const list = await editDesktopConnection(context, { kind: "connect", input }, manager(), () =>
+        setWindowWorkspaceTarget(context, { nodeId: null }),
+      );
+      followWindowConnection(context);
       refreshConnectionTitles();
       publishConnectionLists();
       return list;
     },
     updateConnectionToken: async (connectionId, token, event) => {
-      const list = await manager().updateToken(connectionId, token, scopeForEvent(event));
+      const list = await manager().updateToken(connectionId, token, controlScopeForEvent(event));
       publishConnectionLists();
       return list;
     },
     renameConnection: async (connectionId, nickname, event) => {
       try {
-        return await manager().rename(connectionId, nickname, scopeForEvent(event));
+        return await manager().rename(connectionId, nickname, controlScopeForEvent(event));
       } finally {
         // A durable rename survives the requesting window closing during its save.
         refreshConnectionTitles();
@@ -685,48 +839,113 @@ function registerIpc(): void {
     },
     useConnection: async (connectionId, event) => {
       const context = contextForEvent(event);
-      const nextPreviewRuntime = createWindowBrowserPreviews(
-        context.window,
-        context.scope,
-        context.slot,
-        connectionId,
+      const list = await editDesktopConnection(
+        context,
+        { kind: "use", connectionId },
+        manager(),
+        () => setWindowWorkspaceTarget(context, { nodeId: null }),
       );
-      let list: ReturnType<ConnectionManager["getList"]>;
-      try {
-        list = await manager().use(connectionId, context.scope);
-      } catch (error) {
-        nextPreviewRuntime.manager.destroyAll();
-        void nextPreviewRuntime.previewTransport.disposeAll().catch(() => undefined);
-        throw error;
-      }
-      context.browserPreviewManager.destroyAll();
-      // A connection change cancels transport owned for the previous backend.
-      void context.previewTransport.disposeAll().catch((error: unknown) => {
-        console.warn("[Previews] Failed to close preview transport:", error);
-      });
-      context.browserPreviewManager = nextPreviewRuntime.manager;
-      context.previewTransport = nextPreviewRuntime.previewTransport;
+      followWindowConnection(context);
       updateWindowTitle(event);
       publishConnectionLists();
       return list;
     },
     forgetConnection: async (connectionId, event) => {
-      const list = await manager().forget(connectionId, scopeForEvent(event));
+      const context = contextForEvent(event);
+      const list = await editDesktopConnection(
+        context,
+        { kind: "forget", connectionId },
+        manager(),
+        () => setWindowWorkspaceTarget(context, { nodeId: null }),
+      );
+      followWindowConnection(context);
       updateWindowTitle(event);
       publishConnectionLists();
       return list;
     },
     openConnectionWindow: async (connectionId) => createWindow(connectionId),
-    getBrowserPreviews: (event) => contextForEvent(event).browserPreviewManager,
+    getBrowserPreviews: (event) => ipcContextForEvent(event).browserPreviewManager,
     trustedRendererUrl: isDev
       ? (process.env.VITE_DEV_SERVER_URL ?? "http://127.0.0.1:1420")
       : pathToFileURL(path.join(process.resourcesPath, "web", "index.html")).href,
-    getWebClientStatus: (event) => manager().getWebClientStatus(scopeForEvent(event)),
+    getWebClientStatus: (event) => manager().getWebClientStatus(machineAdminScope(event)),
     setWebClientEnabled: (enabled, event) =>
-      manager().setWebClientEnabled(enabled, scopeForEvent(event)),
-    resetWebClientServe: (event) => manager().resetWebClientServe(scopeForEvent(event)),
-    getGatewayTokenSettings: (event) => manager().getTokenSettings(scopeForEvent(event)),
-    setGatewayToken: (token, event) => manager().setToken(token, scopeForEvent(event)),
+      manager().setWebClientEnabled(enabled, machineAdminScope(event)),
+    resetWebClientServe: (event) => manager().resetWebClientServe(machineAdminScope(event)),
+    getGatewayTokenSettings: (event) => manager().getTokenSettings(machineAdminScope(event)),
+    setGatewayToken: (token, event) => manager().setToken(token, machineAdminScope(event)),
+  });
+  const afterCatalogueChange = <T>(list: T): T => {
+    scheduleConnectionListPublish();
+    return list;
+  };
+  ipcMain.on("orkestrator:ssh-prompt-answer", (event, promptId: unknown, answer: unknown) => {
+    sshPrompts?.answer(event.sender.id, promptId, answer);
+  });
+  registerFederationIpc({
+    ipc: ipcMain,
+    trustedRendererUrl: rendererUrl(),
+    gatewaySnapshot: (event) => {
+      const context = contextForEvent(event);
+      const identity = manager().getBackendIdentity(context.scope);
+      return {
+        baseUrl: manager().getGatewayBaseUrl(context.scope),
+        connectionId: identity.connectionId,
+        backendId: identity.backendId,
+        legacyOrigin: identity.legacyOrigin,
+        ...(context.target && context.portalScope
+          ? {
+              workspaceTarget: context.target,
+              // Window-level presentation stays with the window's own machine.
+              portalIdentity: manager().getBackendIdentity(context.portalScope),
+            }
+          : {}),
+      };
+    },
+    connectSsh: async (event, input) =>
+      afterCatalogueChange(await manager().connectSsh(input, controlScopeForEvent(event))),
+    probeSshHostKey: (_event, input) => manager().probeSshHostKey(input),
+    trustSshHostKey: (_event, probeId) => manager().trustSshHostKey(probeId),
+    removeRoute: async (event, connectionId, routeId) =>
+      afterCatalogueChange(
+        await manager().removeRoute(connectionId, routeId, controlScopeForEvent(event)),
+      ),
+    setRouteOrder: async (event, connectionId, routeIds) =>
+      afterCatalogueChange(
+        await manager().setRouteOrder(connectionId, routeIds, controlScopeForEvent(event)),
+      ),
+    setRouteEnabled: async (event, connectionId, routeId, enabled) =>
+      afterCatalogueChange(
+        await manager().setRouteEnabled(
+          connectionId,
+          routeId,
+          enabled,
+          controlScopeForEvent(event),
+        ),
+      ),
+    useRoute: async (event, connectionId, routeId) =>
+      afterCatalogueChange(
+        await manager().useRoute(connectionId, routeId, controlScopeForEvent(event)),
+      ),
+    setAutoConnect: async (event, connectionId, autoConnect) =>
+      afterCatalogueChange(
+        await manager().setAutoConnect(connectionId, autoConnect, controlScopeForEvent(event)),
+      ),
+    setFeatures: async (event, features) =>
+      afterCatalogueChange(await manager().setFeatures(features, controlScopeForEvent(event))),
+    setWorkspaceTarget: async (event, input) => {
+      await setWindowWorkspaceTarget(contextForEvent(event), input);
+    },
+    portalInvoke: (event, command, args) =>
+      manager().invoke(command, args, controlScopeForEvent(event)),
+  });
+}
+
+function rendererUrl(): string {
+  return trustedRendererUrlFor({
+    isDev,
+    devServerUrl: process.env.VITE_DEV_SERVER_URL,
+    rendererIndexPath: path.join(process.resourcesPath, "web", "index.html"),
   });
 }
 
@@ -805,56 +1024,120 @@ async function startApplication(): Promise<void> {
       if (!splash.isDestroyed()) splash.close();
     }
   }
-  backend = await backendProcess.start({
-    isDev,
-    appVersion: app.getVersion(),
-    dataDir,
-    appRoot,
-    resourceRoot,
-    toolchainBinDir,
-    rendererDevServerUrl: isDev ? process.env.VITE_DEV_SERVER_URL : undefined,
-    gatewayHost: runtimeProfile?.gatewayHost,
-    gatewayPort: runtimeProfile?.gatewayPort,
-    allowNonTailscaleBind: runtimeFlavor === "agent-test",
-    desktopWebClient: runtimeFlavor !== "agent-test",
-    desktopUpdater: autoUpdateSupported(),
-    runtimeFlavor,
-    runtimeProfileId: runtimeProfile?.id,
-    worktreeDir: runtimeProfile?.worktreeDir,
-    dockerImage: runtimeProfile?.dockerImage,
-    strictDockerOwner: runtimeFlavor === "agent-test",
-    strictGatewayPort: runtimeFlavor === "agent-test",
-    credentialSources: runtimeProfile?.credentialSources,
-    onEvent: (event, payload) => {
-      hostUpdates?.handleEvent(event, payload);
-      if (connectionManager) connectionManager.handleLocalEvent(event, payload);
-    },
-    onUnexpectedExit: (error) => {
-      connectionManager?.markLocalBackendUnavailable();
-      emitToConnection("local", "local-backend-unavailable", { message: error.message });
-      publishConnectionLists();
-      // Shortly after a remote-requested update, relaunch instead of a modal
-      // nobody may answer, so the remote client gets its backend back.
-      if (recoverRemoteBackendFailure(dataDir, app)) {
-        console.error(
-          `[Desktop] Local backend exited after an update; applying unattended recovery: ${error.message}`,
+  const catalogueStore = new NativeDeviceCatalogueStore(path.join(dataDir, "connections"));
+  let localStartError: Error | null = null;
+  const startLocal = () =>
+    backendProcess.start({
+      isDev,
+      appVersion: app.getVersion(),
+      dataDir,
+      appRoot,
+      resourceRoot,
+      toolchainBinDir,
+      rendererDevServerUrl: isDev ? process.env.VITE_DEV_SERVER_URL : undefined,
+      gatewayHost: runtimeProfile?.gatewayHost,
+      gatewayPort: runtimeProfile?.gatewayPort,
+      allowNonTailscaleBind: runtimeFlavor === "agent-test",
+      desktopWebClient: runtimeFlavor !== "agent-test",
+      desktopUpdater: autoUpdateSupported(),
+      runtimeFlavor,
+      runtimeProfileId: runtimeProfile?.id,
+      worktreeDir: runtimeProfile?.worktreeDir,
+      dockerImage: runtimeProfile?.dockerImage,
+      strictDockerOwner: runtimeFlavor === "agent-test",
+      strictGatewayPort: runtimeFlavor === "agent-test",
+      credentialSources: runtimeProfile?.credentialSources,
+      onEvent: (event, payload) => {
+        hostUpdates?.handleEvent(event, payload);
+        if (connectionManager) connectionManager.handleLocalEvent(event, payload);
+      },
+      onUnexpectedExit: (error) => {
+        connectionManager?.markLocalBackendUnavailable();
+        emitToConnection("local", "local-backend-unavailable", { message: error.message });
+        publishConnectionLists();
+        // Shortly after a remote-requested update, relaunch instead of a modal
+        // nobody may answer, so the remote client gets its backend back.
+        if (recoverRemoteBackendFailure(dataDir, app)) {
+          console.error(
+            `[Desktop] Local backend exited after an update; applying unattended recovery: ${error.message}`,
+          );
+          return;
+        }
+        dialog.showErrorBox(
+          `${productName} backend stopped`,
+          `${error.message}\n\nLocal work is unavailable. Remote windows remain connected; restart the application to recover Local.`,
         );
-        return;
-      }
-      dialog.showErrorBox(
-        `${productName} backend stopped`,
-        `${error.message}\n\nLocal work is unavailable. Remote windows remain connected; restart the application to recover Local.`,
-      );
-    },
+      },
+    });
+  try {
+    backend = await startLocal();
+  } catch (error) {
+    // A client-only desktop keeps its saved remote machines usable when the
+    // local execution backend cannot start. Without any, there is nothing to
+    // show and startup fails as before.
+    const saved = await catalogueStore.load().catch(() => null);
+    if (isAgentTest || !saved || saved.backends.length === 0) throw error;
+    localStartError = error instanceof Error ? error : new Error(String(error));
+    console.error("[Desktop] Local backend failed to start; continuing with remote machines.");
+  }
+  sshPrompts = new SshPromptBroker(() => {
+    const context = focusedContext();
+    return context && !context.window.isDestroyed()
+      ? {
+          id: context.window.webContents.id,
+          send: (event, payload) => emitToWindow(context.window, event, payload),
+        }
+      : null;
   });
+  const sshTunnels =
+    process.platform === "darwin" || process.platform === "linux"
+      ? new SshTunnelSupervisor({
+          context: createSshAdapterContext({
+            knownHostsFile: path.join(dataDir, "ssh", "known_hosts"),
+          }),
+          prompt: (request) => sshPrompts?.prompt(request) ?? Promise.resolve(null),
+        })
+      : null;
+  const localClient = backend ?? createUnavailableLocalBackend();
   connectionManager = new ConnectionManager({
-    localBackend: backend,
+    localBackend: localClient,
+    localBackendAvailable: backend !== null,
     secureStorage: safeStorage,
+    catalogueStore,
+    legacyCatalogue: backend
+      ? new LocalBackendCatalogueStore(localClient, () => backend !== null)
+      : null,
+    sshTunnels,
     onEvent: () => undefined,
     onConnectionEvent: emitToConnection,
+    onStateChange: scheduleConnectionListPublish,
   });
   await connectionManager.initialize();
-  await backend.invoke("get_config");
+  if (backend) await backend.invoke("get_config");
+  if (backend && runtimeFlavor !== "agent-test") {
+    const manager = connectionManager;
+    const local = backend;
+    // Saved machines become leaves of this desktop's command node, once.
+    void importSavedMachinesOnce({
+      connectionsDir: path.join(dataDir, "connections"),
+      machines: () => manager.savedMachinesForCommandNode(),
+      invoke: (command, args) => local.invoke(command, args),
+    })
+      .then((result) => {
+        if (result !== "already-imported") {
+          console.info(
+            `[Desktop] Saved machines attached to the local command node: ${result.imported} imported, ${result.skipped} skipped, ${result.needsCredential} need a token`,
+          );
+        }
+      })
+      .catch((error: unknown) => {
+        console.warn(
+          "[Desktop] Saved machines were not imported into the local command node yet:",
+          error instanceof Error ? error.name : "unknown",
+        );
+      });
+  }
+  app.on("will-quit", () => connectionManager?.dispose());
 
   createMenu();
   registerIpc();
@@ -866,6 +1149,13 @@ async function startApplication(): Promise<void> {
   }
   await toolchainProgress.close();
   startupComplete = true;
+  if (localStartError) {
+    emitToConnection("local", "local-backend-unavailable", { message: localStartError.message });
+    dialog.showErrorBox(
+      `${productName} local backend did not start`,
+      `${localStartError.message}\n\nYour saved remote machines are still available. Restart the application to retry Local.`,
+    );
+  }
   await startAutoUpdate();
 
   if (runtimeProfile) {

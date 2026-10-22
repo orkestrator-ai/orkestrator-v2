@@ -38,7 +38,11 @@ import { runtimeEnvironmentForAgentQuery } from "./runtime-env.js";
 import { claudeExecutableOptions, sdkSessionIdFromBridgeId } from "./session-manager-core.js";
 import { answerClaudeElicitation } from "./session-manager-parked-interactions.js";
 import { buildSdkPrompt } from "./session-manager-persistence.js";
-import { commandChangeHookFor, shellTaskHooks } from "./session-manager-prompt-hooks.js";
+import {
+  commandChangeHookFor,
+  recordingHookDenials,
+  shellTaskHooks,
+} from "./session-manager-prompt-hooks.js";
 import {
   type ClaudeRuntimeMcp,
   createStaleMcpServerHook,
@@ -295,7 +299,7 @@ export function claudeQueryOptions(
     (...args) =>
       pick(turnFor())(...args);
   const backgroundTaskHook = latestTurnHook((target) => target.recordBackgroundTaskHook);
-  const commandChangeHook = commandChangeHookFor(turnFor);
+  const commandChangeHook = commandChangeHookFor(turnFor, session.id);
   const shellTaskHook = shellTaskHooks(session);
   return {
     cwd,
@@ -419,9 +423,9 @@ export function claudeQueryOptions(
       // snapshotted, and the measuring hook only opens a window.
       PreToolUse: [
         ...(coordinatorReadOnly && policy
-          ? [{ hooks: [createCoordinatorReadOnlyHook(policy)] }]
+          ? [{ hooks: [recordingHookDenials(createCoordinatorReadOnlyHook(policy), session.id)] }]
           : []),
-        { hooks: [createStaleMcpServerHook(mcp)] },
+        { hooks: [recordingHookDenials(createStaleMcpServerHook(mcp), session.id)] },
         commandChangeHook.PreToolUse,
         shellTaskHook.PreToolUse,
       ],

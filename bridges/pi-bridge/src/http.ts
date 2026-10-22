@@ -71,6 +71,15 @@ import {
 } from "@orkestrator/protocol/node/bridge-transcript-routes";
 import { piTranscriptSource } from "./transcript-source.js";
 import {
+  CHANGE_EVIDENCE_ACK_ROUTE,
+  CHANGE_EVIDENCE_BODY_ROUTE,
+  CHANGE_EVIDENCE_ROUTE,
+  changeEvidenceAckRouteBody,
+  changeEvidenceBodyRouteBody,
+  changeEvidenceReadBody,
+} from "@orkestrator/protocol/node/change-tracking/evidence-routes";
+import { changeEvidence } from "./change-evidence.js";
+import {
   DISPATCH_OUTCOME_LOST_KIND,
   isNativeAgentExecutionPolicy,
 } from "@orkestrator/protocol/native-agent";
@@ -274,6 +283,31 @@ async function routeGlobal(
 ): Promise<boolean> {
   if (url.pathname === "/global/auth-check" && request.method === "GET") {
     json(response, 200, { ok: true });
+    return true;
+  }
+  // The change-evidence spool, pulled by the backend's activity sweep. Behind
+  // the same bridge token as the transcript routes; reads never touch a
+  // session, and only the ack releases anything.
+  if (url.pathname === CHANGE_EVIDENCE_ROUTE && request.method === "GET") {
+    json(
+      response,
+      200,
+      changeEvidenceReadBody(changeEvidence().spool, (name) => url.searchParams.get(name)),
+    );
+    return true;
+  }
+  if (url.pathname === CHANGE_EVIDENCE_BODY_ROUTE && request.method === "GET") {
+    json(
+      response,
+      200,
+      changeEvidenceBodyRouteBody(changeEvidence().spool, (name) => url.searchParams.get(name)),
+    );
+    return true;
+  }
+  if (url.pathname === CHANGE_EVIDENCE_ACK_ROUTE && request.method === "POST") {
+    const answer = changeEvidenceAckRouteBody(changeEvidence().spool, await readJson(request));
+    if (answer.ok) json(response, 200, { released: answer.released });
+    else json(response, 400, { error: answer.error });
     return true;
   }
   if (url.pathname === "/global/models" && request.method === "GET") {

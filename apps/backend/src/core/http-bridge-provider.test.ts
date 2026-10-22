@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
 import {
   AmbiguousPromptDispatchError,
   PromptRejectedError,
@@ -493,6 +494,133 @@ describe("HTTP bridge provider", () => {
         .catch((rejection: unknown) => rejection);
       expect(error).toBeInstanceOf(PromptRejectedError);
       expect((error as Error).message).toBe(message);
+    },
+  );
+
+  test.each([404, 409, 503])(
+    "keeps a retryable HTTP %s dispatch refusal's reason",
+    async (status) => {
+      const reason =
+        "Claude is still running background work in this session, so a prompt that changes its plugins cannot start until that work finishes or is stopped";
+      const explained = httpProvider(() => Response.json({ error: reason }, { status }));
+      const error = await explained.provider
+        .send("session-1", "Build it", { requestId: "request-1" })
+        .catch((rejection: unknown) => rejection);
+      // Still retryable: the refusal clears once the background work ends.
+      expect(error).toBeInstanceOf(ProviderUnavailableError);
+      expect(error).not.toBeInstanceOf(AmbiguousPromptDispatchError);
+      expect((error as Error).message).toBe(
+        `claude prompt dispatch is temporarily unavailable (HTTP ${status}): ${reason}`,
+      );
+
+      const bare = httpProvider(() => new Response(null, { status }));
+      await expect(
+        bare.provider.send("session-1", "Build it", { requestId: "r" }),
+      ).rejects.toMatchObject({
+        message: `claude prompt dispatch is temporarily unavailable (HTTP ${status})`,
+      });
+    },
+  );
+
+  test.each([404, 409, 503])(
+    "falls back to a retryable HTTP %s error for malformed or non-string dispatch details",
+    async (status) => {
+      for (const body of [
+        "not json",
+        '{"error":',
+        "null",
+        '"reason"',
+        "[]",
+        "{}",
+        ...[null, false, 42, {}, ["reason"], "", " \r\n\t "].map((error) =>
+          JSON.stringify({ error }),
+        ),
+      ]) {
+        const { provider, requests } = httpProvider(() => new Response(body, { status }));
+        const sent = provider.send("session-1", "Build it", { requestId: "request-1" });
+        await expect(sent).rejects.toBeInstanceOf(ProviderUnavailableError);
+        await expect(sent).rejects.not.toBeInstanceOf(AmbiguousPromptDispatchError);
+        await expect(sent).rejects.toMatchObject({
+          message: `claude prompt dispatch is temporarily unavailable (HTTP ${status})`,
+        });
+        expect(requests).toHaveLength(1);
+      }
+    },
+  );
+
+  test.each([404, 409, 503])(
+    "flattens and bounds retryable HTTP %s dispatch details",
+    async (status) => {
+      for (const [reason, detail] of [
+        [" \r\nWaiting\tfor\r\nbackground work\n ", "Waiting for background work"],
+        [` \n${"x".repeat(500)}\tshould be truncated `, "x".repeat(500)],
+      ]) {
+        const { provider } = httpProvider(() => Response.json({ error: reason }, { status }));
+        const sent = provider.send("session-1", "Build it", { requestId: "request-1" });
+        await expect(sent).rejects.toBeInstanceOf(ProviderUnavailableError);
+        await expect(sent).rejects.not.toBeInstanceOf(AmbiguousPromptDispatchError);
+        await expect(sent).rejects.toMatchObject({
+          message: `claude prompt dispatch is temporarily unavailable (HTTP ${status}): ${detail}`,
+        });
+      }
+    },
+  );
+
+  test.each([409, 503])(
+    "falls back and cancels oversized HTTP %s dispatch response streams",
+    async (status) => {
+      let cancelled = false;
+      const { provider } = httpProvider(
+        () =>
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(
+                  new Uint8Array(AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes + 1),
+                );
+              },
+              cancel() {
+                cancelled = true;
+              },
+            }),
+            { status },
+          ),
+      );
+      const sent = provider.send("session-1", "Build it", { requestId: "request-1" });
+      await expect(sent).rejects.toBeInstanceOf(ProviderUnavailableError);
+      await expect(sent).rejects.not.toBeInstanceOf(AmbiguousPromptDispatchError);
+      await expect(sent).rejects.toMatchObject({
+        message: `claude prompt dispatch is temporarily unavailable (HTTP ${status})`,
+      });
+      expect(cancelled).toBe(true);
+    },
+  );
+
+  test.each([409, 503])(
+    "falls back to a retryable HTTP %s error when a dispatch response stream fails",
+    async (status) => {
+      let reads = 0;
+      const { provider } = httpProvider(
+        () =>
+          new Response(
+            new ReadableStream<Uint8Array>({
+              pull(controller) {
+                if (reads++ === 0) {
+                  controller.enqueue(new TextEncoder().encode('{"error":"incomplete reason'));
+                } else {
+                  controller.error(new Error("response stream failed"));
+                }
+              },
+            }),
+            { status },
+          ),
+      );
+      const sent = provider.send("session-1", "Build it", { requestId: "request-1" });
+      await expect(sent).rejects.toBeInstanceOf(ProviderUnavailableError);
+      await expect(sent).rejects.not.toBeInstanceOf(AmbiguousPromptDispatchError);
+      await expect(sent).rejects.toMatchObject({
+        message: `claude prompt dispatch is temporarily unavailable (HTTP ${status})`,
+      });
     },
   );
 

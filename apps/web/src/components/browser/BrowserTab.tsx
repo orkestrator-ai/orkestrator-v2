@@ -38,7 +38,7 @@ import type { BrowserTabData } from "@/types/paneLayout";
 import { AnnotatedPreviewArea, AnnotationsButton } from "./annotations/BrowserAnnotationsLayout";
 import { currentPageForManualUrl } from "./annotations/format";
 import { useBrowserAnnotations } from "./annotations/useBrowserAnnotations";
-import { errorMessage, useBlockingOverlay } from "./browser-tab-hooks";
+import { errorMessage, useAddressBarShortcut, useBlockingOverlay } from "./browser-tab-hooks";
 import { ServiceBrowserTab } from "./ServiceBrowserTab";
 
 interface BrowserTabProps {
@@ -89,13 +89,6 @@ function ManualBrowserTab({
   refreshRequestId = 0,
 }: BrowserTabProps) {
   const updateTabBrowserUrl = usePaneLayoutStore((state) => state.updateTabBrowserUrl);
-  const setActivePane = usePaneLayoutStore((state) => state.setActivePane);
-  const activePaneId = usePaneLayoutStore(
-    (state) => state.environments.get(environmentId)?.activePaneId,
-  );
-  const owningPaneId = usePaneLayoutStore(
-    (state) => state.findPaneWithTab(tabId, environmentId)?.id,
-  );
   const nativeBrowserPreview = hasNativeBrowserPreview();
   const previewPublicationAvailable = usePreviewServiceStore(
     (state) => state.capabilities?.surfaces.browserTopLevel.available === true,
@@ -251,51 +244,13 @@ function ManualBrowserTab({
     );
   }, [applyNativeState, browserPreviewSupported, nativeBrowserPreview]);
 
-  const focusAddressBar = useCallback(() => {
-    addressInputRef.current?.focus();
-    addressInputRef.current?.select();
-  }, []);
-
-  useEffect(() => {
-    if (!isActive || !browserPreviewSupported) return;
-
-    return window.orkestrator?.listen<string>("browser-preview-focus-address", (requestedTabId) => {
-      if (requestedTabId !== tabId) return;
-      if (owningPaneId) {
-        setActivePane(owningPaneId, environmentId);
-      }
-      focusAddressBar();
-    });
-  }, [
-    environmentId,
-    focusAddressBar,
-    browserPreviewSupported,
-    isActive,
-    owningPaneId,
-    setActivePane,
+  useAddressBarShortcut({
     tabId,
-  ]);
-
-  useEffect(() => {
-    if (!browserPreviewSupported || !isActive || activePaneId !== owningPaneId) return;
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      const isAddressShortcut =
-        event.key.toLowerCase() === "l" &&
-        (event.metaKey || event.ctrlKey) &&
-        !event.altKey &&
-        !event.shiftKey;
-      if (!isAddressShortcut) return;
-
-      event.preventDefault();
-      focusAddressBar();
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [activePaneId, browserPreviewSupported, focusAddressBar, isActive, owningPaneId]);
+    environmentId,
+    isActive,
+    enabled: browserPreviewSupported,
+    inputRef: addressInputRef,
+  });
 
   const resolution = useMemo(() => {
     if (!currentUrl || !browserPreviewSupported) {

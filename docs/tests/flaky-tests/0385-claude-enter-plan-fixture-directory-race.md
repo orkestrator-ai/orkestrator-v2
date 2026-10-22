@@ -66,3 +66,40 @@ assertion, timeout or skip was changed for validation.
 - **Failure:** `plan approval flow > denies EnterPlanMode when its durable preference cannot be written` failed at the fixture `writeFile` (`session-manager-interactions.test.ts:827`) with `EISDIR` after 1.30 ms; the only failure of the run (codex lockfile, root/support and workspace groups passed).
 - **Owning-file rerun:** `bun test src/services/session-manager-interactions.test.ts -t "denies EnterPlanMode when its durable preference"` from `bridges/claude-bridge` passed three times, and the whole file passed 29/29.
 - **Assessment:** the same fixture-directory symptom. The branch's Claude bridge changes (artifact MCP server configuration, tool naming, permissions) add no file writes under the Claude home; no source, assertion, timeout or skip changed.
+
+## Observation — 2026-10-20 (HTTP dispatch-detail review fixes)
+
+- **Original command:** `mise run test:logged -- --name full-tests-gnu -- mise run test`,
+  using the testing guide's GNU-tool PATH; workspace/root/bridges/protocol
+  reserved 4/1/2/1 worker slots.
+- **Failure:** `plan approval flow > denies EnterPlanMode when its durable preference cannot be written`
+  failed at the fixture's `.claude` write with `EISDIR` (2.74 ms).
+- **Package counts:** Claude reported 1,581 passed, five skipped and one failed
+  across 1,587 tests in 74 files (47.65 seconds).
+- **Owning-file reruns:** `mise run test:logged -- --name claude-interactions-isolated -- bun test --cwd bridges/claude-bridge --preload ../../tests/setup-node.ts ./src/services/session-manager-interactions.test.ts --parallel=1 --only-failures`
+  reproduced `EISDIR` in the sibling approved-exit persistence fixture
+  (28 passed, one failed; 0.2 seconds). Repeating with the GNU-tool PATH and
+  log name `claude-interactions-gnu-isolated` reproduced the original
+  EnterPlanMode fixture failure (28 passed, one failed; 0.2 seconds).
+- **Evidence:** `orkestrator-test-run.bOXAnB/bridges.log.gz`,
+  `orkestrator-test-run.Q1KuIs/claude-interactions-isolated.log.gz` and
+  `orkestrator-test-run.MhuXhW/claude-interactions-gnu-isolated.log.gz`.
+- **Assessment:** the same previously tracked fixture-directory symptom;
+  these isolated reruns did not pass, so this observation alone does not
+  establish intermittence. The first aggregate in this review-fix validation
+  passed all bridge packages unchanged. No bridge source, test assertion,
+  timeout or skip changed.
+- **Aggregate result:** the GNU-tool rerun finished in 636.6 seconds with only
+  the bridge group failing. Every workspace package passed (backend: 9,530
+  passed, 79 skipped, zero failed across 532 files); root/support and Codex
+  protocol regeneration also passed.
+
+## File/LOC change-tracking main merge — 2026-10-20
+
+- **Original command:** `mise run test:logged -- --name merge-tests-final -- mise run test`, on `implement-file-change-f3950a40ac3a-r1`, merging `origin/main` (`6bc55812`) into `68cefe21`. Workspace/root/bridges/protocol reserved 4/1/2/1 worker slots; Bun 1.4.3 on macOS arm64.
+- **Failure:** `plan approval flow > keeps plan mode enabled when an approved exit cannot be persisted` failed at `session-manager-interactions.test.ts:863` while writing its `.claude` sentinel: `EISDIR` (1.54 ms). Claude reported 1,600 passed, five skipped and one failed across 76 files (38.28 seconds).
+- **Owning-file rerun:** `mise run test:logged -- --name merge-claude-owner -- bun test --cwd bridges/claude-bridge --preload ../../tests/setup-node.ts ./src/services/session-manager-interactions.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 0.1 seconds).
+- **Evidence:** `orkestrator-test-run.R5TGEu/bridges.log.gz` below the host temporary directory; the owning-file passing output was deleted by the logged runner.
+- **Assessment:** confirmed recurrence of the existing fixture-directory race. The first full aggregate in this merge passed all bridge packages. No Claude source, assertions, deadlines or skips changed; concurrent fixture work remains a hypothesis.
+- **Bridge-group rerun:** `mise run test:logged -- --name merge-bridges-rerun -- bunx turbo run test:bridge --cwd . '--filter=./bridges/*' --concurrency=2 --continue=dependencies-successful --output-logs=new-only --log-order=stream` passed all five unchanged bridge packages (exit 0, 77.5 seconds).
+- **Final aggregate result:** exit 1 in 370.1 seconds, with only the bridge fixture above failing. All workspace packages, root/support and Codex protocol generation passed. Formatting, lint, typechecking, the application build, isolated browser suite, Electron suite and Docker suite also passed. Disposable browser and Docker profiles were stopped and reset. iOS and standalone CLI scenarios were omitted because the merge does not change those areas; ordinary CLI tests ran in the workspace suite.

@@ -15,31 +15,44 @@
  * such id.
  */
 
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import {
   retainExpansionKey,
   useMessagePartExpansionStore,
 } from "@/stores/messagePartExpansionStore";
 
 export function useMessagePartExpansion(
-  expansionKey: string,
+  expansionKey: string | readonly string[],
 ): readonly [boolean, (open: boolean) => void] {
+  // A coalescing group can change both endpoints at once. Any surviving member
+  // restores it, and a toggle updates all aliases atomically (including close).
+  const serializedKeys = JSON.stringify(
+    typeof expansionKey === "string" ? [expansionKey] : expansionKey,
+  );
+  const keys = useMemo(() => JSON.parse(serializedKeys) as string[], [serializedKeys]);
   // Tell the store this disclosure is on screen for as long as the row is
   // mounted. The remembered-key set is capped, and evicting a key the reader
   // can currently see would collapse it under them — the very failure the
   // store exists to prevent. Off-screen keys stay evictable.
-  useEffect(() => retainExpansionKey(expansionKey), [expansionKey]);
+  useEffect(() => {
+    const releases = keys.map(retainExpansionKey);
+    return () => releases.forEach((release) => release());
+  }, [keys]);
 
   const storedIsOpen = useMessagePartExpansionStore((state) =>
-    state.expandedKeys.has(expansionKey),
+    keys.some((key) => state.expandedKeys.has(key)),
   );
   const setStoredExpanded = useMessagePartExpansionStore((state) => state.setExpanded);
   const setExpanded = useCallback(
     (open: boolean) => {
-      setStoredExpanded(expansionKey, open);
+      setStoredExpanded(keys, open);
     },
-    [expansionKey, setStoredExpanded],
+    [keys, setStoredExpanded],
   );
+
+  useEffect(() => {
+    if (storedIsOpen) setStoredExpanded(keys, true);
+  }, [keys, storedIsOpen, setStoredExpanded]);
 
   return [storedIsOpen, setExpanded] as const;
 }

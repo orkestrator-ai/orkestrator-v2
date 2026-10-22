@@ -111,6 +111,15 @@ const LazyEnvironmentSettingsDialog = lazy(async () => ({
 
 const ToolbarTooltipsEnabledContext = createContext(true);
 
+/** A branch name styled like inline code in a transcript, so it stands out from the prose. */
+function BranchName({ children }: { children: ReactNode }) {
+  return (
+    <code className="rounded-md bg-primary/12 px-1.5 py-0.5 font-mono text-xs text-blue-300 break-all">
+      {children}
+    </code>
+  );
+}
+
 function ToolbarContextMenuTrigger({
   children,
   tooltip,
@@ -239,7 +248,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     filesPanelOpen,
     toggleFilesPanel,
     canToggleFilesPanel,
-    changes,
+    hasChanges,
     sidebarOpen,
     toggleSidebar,
     setRepoSettingsProjectId,
@@ -1491,14 +1500,14 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                         <span className="truncate">
                           {filesPanelOpen ? "Hide files" : "Show files"}
                         </span>
-                        {changes.length > 0 && !filesPanelOpen && (
+                        {hasChanges && !filesPanelOpen && (
                           <span
                             className="h-2 w-2 shrink-0 rounded-full bg-primary"
                             aria-hidden="true"
                           />
                         )}
                       </span>
-                    ) : changes.length > 0 && !filesPanelOpen ? (
+                    ) : hasChanges && !filesPanelOpen ? (
                       <span className="absolute right-0.5 top-0.5 h-2 w-2 rounded-full bg-primary" />
                     ) : null}
                   </Button>
@@ -1792,11 +1801,11 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
           <AlertDialogHeader>
             <AlertDialogTitle>Merge Pull Request</AlertDialogTitle>
             <AlertDialogDescription>
-              This will squash and merge <span className="font-semibold">{sourceBranch}</span> into{" "}
-              <span className="font-semibold">{targetBranch}</span>. If the pull request is a draft,
-              it will be marked ready for review first. The feature branch will be deleted after
-              merging. Merge &amp; Cleanup also permanently deletes this environment, but only after
-              the merge is confirmed successful.
+              This will squash and merge <BranchName>{sourceBranch}</BranchName> into{" "}
+              <BranchName>{targetBranch}</BranchName>. If the pull request is a draft, it will be
+              marked ready for review first. The feature branch will be deleted after merging. Merge
+              &amp; Cleanup also permanently deletes this environment, but only after the merge is
+              confirmed successful.
             </AlertDialogDescription>
           </AlertDialogHeader>
           {mergeError && (

@@ -6,6 +6,7 @@ import * as realMarkdownEditorTab from "@/components/markdown/MarkdownEditorTab"
 import * as realDiffViewerTab from "./DiffViewerTab";
 import * as realMonacoFileEditor from "./MonacoFileEditor";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
+import type { ChangeDiffTarget } from "@/types/paneLayout";
 
 const realBackendSnapshot = { ...realBackend };
 const realMarkdownEditorTabSnapshot = { ...realMarkdownEditorTab };
@@ -87,12 +88,14 @@ mock.module("./MonacoFileEditor", () => ({
 mock.module("./DiffViewerTab", () => ({
   DiffViewerTab: ({
     filePath,
+    target,
     onSwitchToFileView,
   }: {
     filePath: string;
+    target: ChangeDiffTarget;
     onSwitchToFileView?: () => void;
   }) => (
-    <div data-testid="diff-viewer">
+    <div data-testid="diff-viewer" data-target={JSON.stringify(target)}>
       <span>{filePath}</span>
       <button type="button" onClick={onSwitchToFileView}>
         View file
@@ -102,6 +105,13 @@ mock.module("./DiffViewerTab", () => ({
 }));
 
 const { FileViewerTab, getFileViewerKind, isMarkdownFile } = await import("./FileViewerTab");
+
+const liveTarget: ChangeDiffTarget = {
+  kind: "live",
+  resourceKey: "environment-net/environment/env-1/live",
+  path: "README.md",
+  title: "README.md",
+};
 
 beforeEach(() => {
   useFileDirtyStore.setState({ dirtyFiles: new Map() });
@@ -161,7 +171,7 @@ describe("FileViewerTab routing", () => {
     ).toBe("text");
   });
 
-  test("prioritizes valid diffs except for images", () => {
+  test("prioritizes a diff target, including for images", () => {
     expect(
       getFileViewerKind("README.md", {
         showDiff: true,
@@ -173,10 +183,10 @@ describe("FileViewerTab routing", () => {
         showDiff: true,
         hasDiffData: true,
       }),
-    ).toBe("image");
+    ).toBe("diff");
     expect(
       getFileViewerKind("app-preview.AVIF", {
-        showDiff: true,
+        showDiff: false,
         hasDiffData: true,
       }),
     ).toBe("image");
@@ -306,17 +316,40 @@ describe("FileViewerTab component", () => {
         worktreePath="/repo"
         isLocalEnvironment
         isActive
-        isDiff
-        gitStatus="M"
-        baseBranch="main"
+        changeDiff={liveTarget}
       />,
     );
 
-    expect(await screen.findByTestId("diff-viewer")).toBeTruthy();
+    const viewer = await screen.findByTestId("diff-viewer");
+    expect(JSON.parse(viewer.dataset.target ?? "null")).toEqual(liveTarget);
     expect(readLocalFileMock).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "View file" }));
     expect(await screen.findByTestId("markdown-file-editor")).toBeTruthy();
     expect(readLocalFileMock).toHaveBeenCalledWith("/repo", "README.md");
+  });
+
+  test("renders an image diff target as a diff without reading today's image", async () => {
+    const historicalTarget: ChangeDiffTarget = {
+      kind: "historical",
+      diffIdentityId: "diff-1",
+      title: "logo.png",
+    };
+    render(
+      <FileViewerTab
+        tabId="image-diff-tab"
+        environmentId="env-1"
+        filePath="assets/logo.png"
+        worktreePath="/repo"
+        isLocalEnvironment
+        isActive
+        changeDiff={historicalTarget}
+      />,
+    );
+
+    const viewer = await screen.findByTestId("diff-viewer");
+    expect(JSON.parse(viewer.dataset.target ?? "null")).toEqual(historicalTarget);
+    expect(readEnvironmentFileBase64Mock).not.toHaveBeenCalled();
+    expect(readLocalFileMock).not.toHaveBeenCalled();
   });
 
   test("keeps per-tab dirty state when the file tab temporarily unmounts", async () => {

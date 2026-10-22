@@ -32,9 +32,16 @@ function fakeProbe(result: MeasuredWorkspaceChange | undefined = CHANGE) {
     note: async (cwd, id) => {
       calls.push(["note", cwd, id]);
     },
-    end: async (id) => {
+    endObservation: async (id) => {
       calls.push(["end", id]);
-      return result;
+      return result
+        ? {
+            change: structuredClone(result),
+            boundary: { before: "prior-observation", after: "after-terminal" },
+            overlap: "none-observed",
+            omittedReasons: [],
+          }
+        : undefined;
     },
     discard: (id) => {
       calls.push(["discard", id]);

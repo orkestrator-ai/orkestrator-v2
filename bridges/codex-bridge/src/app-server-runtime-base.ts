@@ -7,6 +7,7 @@
 
 import type { AppServerEngine } from "./engine/app-server-engine.js";
 import type { CommandChangeProbe } from "./sessions/command-changes.js";
+import type { CodexChangeEvidence } from "./change-evidence.js";
 import type {
   RefusedCell,
   RefusedCellTail,
@@ -98,6 +99,12 @@ export interface AppServerRuntimeOptions {
    * omitted, commands are simply not measured.
    */
   commandChangeProbe?: CommandChangeProbe;
+  /**
+   * The process's change-evidence adapter (`change-evidence.ts`). Every call
+   * is a synchronous, bounded spool append from the notification path;
+   * omitted, no evidence is recorded.
+   */
+  changeEvidence?: CodexChangeEvidence;
   /**
    * Asks for a read of a turn's rollout records, for code-mode cells
    * app-server reports no item for (`RefusedCellTail`). A 200 ms timer by

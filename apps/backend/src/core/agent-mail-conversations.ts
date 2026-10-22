@@ -35,6 +35,10 @@ function summary(message: AgentMailMessage): AgentMailMessageSummary {
   return rest;
 }
 
+function compareMessages(first: AgentMailMessage, second: AgentMailMessage): number {
+  return first.createdAt.localeCompare(second.createdAt) || first.id.localeCompare(second.id);
+}
+
 function preview(body: string): string {
   const text = body.replace(/\s+/g, " ").trim();
   return text.length > AGENT_MAIL_CONVERSATION_PREVIEW_LENGTH
@@ -185,7 +189,7 @@ export function listAgentMailConversations(
     let last = conversation.messages[0]!;
     let attentionCount = 0;
     for (const message of conversation.messages) {
-      if (message.createdAt > last.createdAt) last = message;
+      if (compareMessages(message, last) > 0) last = message;
       if (agentMailNeedsAttention(message)) attentionCount += 1;
     }
     summaries.push({
@@ -245,10 +249,7 @@ export function agentMailConversationBetween(
       if (isAgentMailConversationMessage(key, message, a, b)) messages.push(message);
     }
   }
-  messages.sort(
-    (first, second) =>
-      first.createdAt.localeCompare(second.createdAt) || first.id.localeCompare(second.id),
-  );
+  messages.sort(compareMessages);
   const senders = messages.map((message) => message.from);
   return {
     revision: options.revision,

@@ -44,6 +44,8 @@ import { dockerOwnerNamespace } from "../src/core/docker-ownership";
 import { EnvironmentLifecycleTaskTracker } from "../src/core/environment-lifecycle-tasks";
 import { BackendRuntime } from "../src/core/backend-runtime";
 
+import { createOwnedTempDir, sweepStaleTempDirs } from "../../../tests/temp-sweep";
+
 type MockPtyProcess = {
   write: ReturnType<typeof mock>;
   resize: ReturnType<typeof mock>;
@@ -143,7 +145,24 @@ export async function createCommandFixtures() {
 
   const { setAgentSkillsHomeForTesting } = await import("../src/core/agent-skills");
 
+  const { cancelScheduledEnvironmentCleanup } =
+    await import("../src/core/environment-cleanup-reconciler");
+
+  const { closeEnvironmentCleanupStorage } = await import("../src/core/environment-cleanup-ledger");
+
   const tempDirs: string[] = [];
+
+  // The default data directory belongs to this process. A fixed `$TMPDIR` path
+  // was shared by every command-fixture file in every concurrent test process
+  // on the host: its SQLite cleanup ledger (a busy handler that blocks the
+  // event loop while another process writes) stalled deletions past their
+  // deadlines, background cleanup passes retried other processes' entries, and
+  // processes removed each other's terminal histories (flakes 0194, 0162, 0235).
+  const FIXTURE_ROOT_PREFIX = "orkestrator-command-fixtures-";
+  sweepStaleTempDirs({ prefix: FIXTURE_ROOT_PREFIX, maxAgeMs: 60 * 60 * 1_000 });
+  const fixtureRoot = createOwnedTempDir(FIXTURE_ROOT_PREFIX);
+  const DEFAULT_DATA_DIR = path.join(fixtureRoot, "data");
+  await fs.mkdir(DEFAULT_DATA_DIR);
 
   const SETUP_DONE_OSC = "\u001b]9999;setup_done\u0007";
 
@@ -469,7 +488,7 @@ export async function createCommandFixtures() {
         emitted.push({ event, payload });
       }),
       storage: {
-        getDataDir: () => options.dataDir ?? path.join(os.tmpdir(), "orkestrator-command-tests"),
+        getDataDir: () => options.dataDir ?? DEFAULT_DATA_DIR,
         withGitHubCompletionCommentLock: mock(
           async (_pipelineId: string, operation: () => Promise<unknown>) => operation(),
         ),
@@ -477,10 +496,7 @@ export async function createCommandFixtures() {
         // No added agent accounts: every launch uses the host login.
         loadAgentAccounts: mock(async () => ({ version: 1, accounts: [], active: {} })),
         agentAccountsDirectory: () =>
-          path.join(
-            options.dataDir ?? path.join(os.tmpdir(), "orkestrator-command-tests"),
-            "agent-accounts",
-          ),
+          path.join(options.dataDir ?? DEFAULT_DATA_DIR, "agent-accounts"),
         saveConfig: mock(async (nextConfig: typeof config) => {
           Object.assign(config, nextConfig);
         }),
@@ -838,11 +854,37 @@ export async function createCommandFixtures() {
     return stdout.trim();
   }
 
+  // A committed worktree whose `origin` has `main` costs ten Git processes (a
+  // bare init and a push among them). It is built once per file outside the
+  // per-test temporary directories and copied per test, so every test still
+  // owns an independent repository and remote.
+  let gitWorktreeTemplate: Promise<string> | undefined;
+
   async function createGitWorktreeWithOrigin(): Promise<{ worktree: string; remote: string }> {
+    gitWorktreeTemplate ??= buildGitWorktreeWithOrigin(
+      path.join(fixtureRoot, "git-worktree-template"),
+    ).catch((error: unknown) => {
+      gitWorktreeTemplate = undefined;
+      throw error;
+    });
+    const templateRoot = await gitWorktreeTemplate;
     const root = await createTempDir("ork-electron-git-");
+    await fs.cp(templateRoot, root, { recursive: true });
+    // The worktree's `origin` is an absolute path; point it at this copy's remote.
+    const configPath = path.join(root, "worktree", ".git", "config");
+    const config = await fs.readFile(configPath, "utf8");
+    if (!config.includes(templateRoot)) {
+      throw new Error("The template worktree config no longer names its origin path");
+    }
+    await fs.writeFile(configPath, config.replaceAll(templateRoot, root));
+    return { worktree: path.join(root, "worktree"), remote: path.join(root, "origin.git") };
+  }
+
+  async function buildGitWorktreeWithOrigin(root: string): Promise<string> {
     const remote = path.join(root, "origin.git");
     const worktree = path.join(root, "worktree");
 
+    await fs.mkdir(root, { recursive: true });
     await runGit(root, ["init", "--bare", remote]);
     await fs.mkdir(worktree, { recursive: true });
     await runGit(worktree, ["init"]);
@@ -855,7 +897,7 @@ export async function createCommandFixtures() {
     await runGit(worktree, ["remote", "add", "origin", remote]);
     await runGit(worktree, ["push", "-u", "origin", "main"]);
 
-    return { worktree, remote };
+    return root;
   }
 
   // Points the Codex lookup at empty managed/resource roots so it falls back to the
@@ -1374,9 +1416,7 @@ exec '${realGit}' "$@"
   }
 
   /** Registry owner of the default fixture data directory. */
-  const FIXTURE_DOCKER_OWNER = dockerOwnerNamespace(
-    path.join(os.tmpdir(), "orkestrator-command-tests"),
-  );
+  const FIXTURE_DOCKER_OWNER = dockerOwnerNamespace(DEFAULT_DATA_DIR);
   /**
    * Shell lines answering the lifecycle ownership probe (`owner\tstatus\tapp\tid`)
    * for any container as owned by `owner` and in `state`. Insert them after a
@@ -1385,6 +1425,10 @@ exec '${realGit}' "$@"
   const ownedContainerInspect = (owner = FIXTURE_DOCKER_OWNER, state = "running") =>
     `if [ "$1" = "inspect" ]; then
   case "$*" in
+    *'{{.State.Running}}'*)
+      printf '%s\\n' '${state === "running" ? "true" : "false"}'
+      exit 0
+      ;;
     *'index .Config.Labels "orkestrator-owner"'*)
       printf '%s\\t%s\\torkestrator-v2\\t%s\\n' '${owner}' '${state}' "$4"
       exit 0
@@ -1453,6 +1497,9 @@ exit 0
       shutdownRuntimes();
       if (originalDockerHost === undefined) delete process.env.DOCKER_HOST;
       else process.env.DOCKER_HOST = originalDockerHost;
+      cancelScheduledEnvironmentCleanup(DEFAULT_DATA_DIR);
+      closeEnvironmentCleanupStorage(DEFAULT_DATA_DIR);
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
     }
   });
 

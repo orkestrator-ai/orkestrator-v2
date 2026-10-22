@@ -1,3 +1,4 @@
+import { recordClaudePermissionDecision } from "./change-evidence.js";
 import { handleTurnMessage } from "./session-manager-prompt-handlers/dispatch.js";
 import { turnCanUseTool } from "./session-manager-prompt-can-use-tool.js";
 import {
@@ -19,8 +20,20 @@ export function createClaudeRuntimeTurn(turn: TurnState): ClaudeRuntimeTurn {
   return {
     handleMessage: (message) => handleTurnMessage(turn, message),
     pushSteerInput: (message) => pushSteerInput(turn, message),
-    canUseTool: (toolName, input, permissionContext) =>
-      turnCanUseTool(turn, toolName, input, permissionContext),
+    canUseTool: async (toolName, input, permissionContext) => {
+      const decision = await turnCanUseTool(turn, toolName, input, permissionContext);
+      // A refusal here has no `permission_denied` frame of its own.
+      if (decision) {
+        recordClaudePermissionDecision(
+          turn.sessionId,
+          permissionContext?.toolUseID,
+          toolName,
+          input,
+          decision.behavior,
+        );
+      }
+      return decision;
+    },
     recordBackgroundTaskHook: turnHook(turn, recordBackgroundTaskHook),
     recordPreCompact: turnHook(turn, recordPreCompact),
     recordPostCompact: turnHook(turn, recordPostCompact),

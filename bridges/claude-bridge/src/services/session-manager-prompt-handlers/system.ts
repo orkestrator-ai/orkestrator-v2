@@ -10,6 +10,7 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import type { NormalizedPart, SdkSystemMessage, SessionState } from "../../types/index.js";
 import { sessionHealth, systemSubtypeDisposition } from "../../types/index.js";
+import { recordClaudeToolDenied } from "../change-evidence.js";
 import { commandChangeProbe } from "../command-changes.js";
 import { eventEmitter } from "../event-emitter.js";
 import { debugLog } from "../logger.js";
@@ -265,6 +266,12 @@ function handlePermissionDenied(turn: TurnState, message: SDKMessage): void {
   // will close the window it opened.
   if (typeof denial.tool_use_id === "string") {
     commandChangeProbe.discard(denial.tool_use_id);
+    // It never ran: the proposal stays, and no applied effect is claimed.
+    recordClaudeToolDenied(
+      sessionId,
+      denial.tool_use_id,
+      typeof denial.tool_name === "string" ? { toolName: denial.tool_name } : {},
+    );
   }
   const marked =
     typeof denial.tool_use_id === "string" &&

@@ -38,6 +38,7 @@ import {
   tmuxSessionName,
 } from "./tmux-shared.js";
 import { TmuxBackend } from "./tmux-backend.js";
+import { transcriptToolDiffs } from "./tmux-transcript-tool-diffs.js";
 import { terminalAccountHomes } from "./terminal-account-usage.js";
 import {
   TMUX_INFO_EVENT_LIMIT,
@@ -269,12 +270,18 @@ export class TmuxSession {
   /**
    * Attach the resulting task list to a line that completed a task tool call,
    * keyed by `tool_use_id` so it reaches that tool's part and no other, and
-   * leaving every other line untouched.
+   * the diff sides of each tool call it started (`toolDiffs`, keyed by tool
+   * use id), leaving every other line untouched.
    */
   private withTaskSnapshot(line: unknown, tracker: TranscriptTaskTracker): unknown {
     const taskSnapshots = tracker.applyLine(line);
-    if (!taskSnapshots || typeof line !== "object" || line === null) return line;
-    return { ...(line as Record<string, unknown>), taskSnapshots };
+    const toolDiffs = transcriptToolDiffs(line);
+    if ((!taskSnapshots && !toolDiffs) || typeof line !== "object" || line === null) return line;
+    return {
+      ...(line as Record<string, unknown>),
+      ...(taskSnapshots ? { taskSnapshots } : {}),
+      ...(toolDiffs ? { toolDiffs } : {}),
+    };
   }
 
   pendingHooks(): Promise<PendingHookEvent[]> {

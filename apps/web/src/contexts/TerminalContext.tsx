@@ -91,6 +91,8 @@ export interface CreateFileTabOptions {
   /** One-based source location to reveal after opening the file. */
   lineNumber?: number;
   columnNumber?: number;
+  /** Open a backend-rendered change diff (historical identity or live row). */
+  changeDiff?: import("@/types/paneLayout").ChangeDiffTarget;
 }
 
 interface TerminalContextValue {

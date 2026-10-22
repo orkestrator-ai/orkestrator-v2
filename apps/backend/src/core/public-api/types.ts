@@ -33,6 +33,11 @@ export interface ReadActionHandler<I = unknown> {
   action: PublicActionName;
   parse(input: Record<string, unknown>): I;
   run(input: I, context: PublicActionContext): Promise<ReadResult>;
+  /**
+   * Why this backend cannot serve the action right now, or null. Capabilities
+   * then advertise it as unavailable with this reason.
+   */
+  unavailableReason?(context: PublicActionContext): string | null;
 }
 
 export interface ParsedMutation<I> {

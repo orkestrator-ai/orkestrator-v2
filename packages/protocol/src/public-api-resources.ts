@@ -8,6 +8,7 @@
  * is derived from the environment and tab, never from the provider's own ID.
  */
 import type { AgentPlatform } from "./agent-platforms.js";
+import type { ChangeFileRow, ChangeHistoryEntry, ChangeProjection } from "./change-resources.js";
 import type { PublicCompletionSupport, PublicInteractionRef } from "./public-api.js";
 
 // ---------------------------------------------------------------------------
@@ -314,6 +315,55 @@ export interface PublicTranscriptPage {
   token: string | null;
   historyEpoch: string | null;
   freshness: "current" | "cached" | "empty";
+}
+
+// ---------------------------------------------------------------------------
+// Change tracking
+
+/**
+ * Scopes `changes.view` can read. `environment` is the environment's baseline
+ * to its current workspace (`environment-net`).
+ */
+export const PUBLIC_CHANGE_SCOPES = Object.freeze(["environment"] as const);
+export type PublicChangeScope = (typeof PUBLIC_CHANGE_SCOPES)[number];
+
+/** One page of a projection's file rows, pinned to the projection's revision. */
+export interface PublicChangeFilePage {
+  rows: ChangeFileRow[];
+  /** Pass back as `cursor` for the next page; null on the last page. */
+  nextCursor: string | null;
+  /** Null when the backend does not know the total. */
+  totalRows: number | null;
+}
+
+/**
+ * `changes.view`: the backend's own {@link ChangeProjection} — the one every
+ * desktop and web client renders — verbatim, plus the requested page of file
+ * rows. On the first page `files` repeats `projection.filePage`. Clients never
+ * count lines, sum pages or read a missing count as zero.
+ */
+export interface PublicChangesView {
+  environmentId: string;
+  scope: PublicChangeScope;
+  projection: ChangeProjection;
+  files: PublicChangeFilePage;
+}
+
+/**
+ * A history entry as the backend reports it, with the projection of every
+ * resource its presentation names (keyed by resource key, without file rows).
+ * A resource the backend cannot project is absent, never zero.
+ */
+export interface PublicChangesHistoryEntry extends ChangeHistoryEntry {
+  projections: Record<string, ChangeProjection>;
+}
+
+/** `changes.history`: one page of a session's turns, oldest first. */
+export interface PublicChangesHistory {
+  sessionId: string;
+  entries: PublicChangesHistoryEntry[];
+  /** Pass back as `cursor` for the next (newer) page; null on the last page. */
+  nextCursor: string | null;
 }
 
 // ---------------------------------------------------------------------------

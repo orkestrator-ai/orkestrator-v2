@@ -8,6 +8,7 @@ import {
   DOCKER_LABEL_INPUTS_REVISION,
   DOCKER_LABEL_OWNER,
 } from "./constants.js";
+import { enqueueContainerBridgeOperation } from "./container-bridge-operations.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { runCommand } from "./shell.js";
 import type { CommandContext } from "./commands-context.js";
@@ -227,68 +228,68 @@ export async function revokeProviderCredentials(
   if (!AGENT_PLATFORMS.includes(provider)) throw new Error("Unknown provider");
   const environment = await context.storage.getEnvironment(environmentId);
   if (!environment?.containerId) throw new Error(`Environment has no container: ${environmentId}`);
+  const containerId = environment.containerId;
   // Recorded first: whatever happens below, nothing hands the credential back.
   await context.storage.updateEnvironment(environmentId, {
     revokedInputProviders: [...new Set([...(environment.revokedInputProviders ?? []), provider])],
   });
-  const revision = await containerLabel(environment.containerId, DOCKER_LABEL_INPUTS_REVISION);
-  const scrubbed = revision
-    ? await scrubStagedProvider(context.storage.getDataDir(), environmentId, revision, provider)
-    : false;
-  const parsed = parseContainerLifecycle(environment.containerLifecycle);
-  if (parsed.supported) {
-    for (const runtime of parsed.record.retainedRuntimes ?? []) {
-      const retainedRevision = await containerLabel(
-        runtime.containerId,
-        DOCKER_LABEL_INPUTS_REVISION,
-      );
-      if (retainedRevision) {
-        await scrubStagedProvider(
-          context.storage.getDataDir(),
-          environmentId,
-          retainedRevision,
-          provider,
+  return enqueueContainerBridgeOperation(provider, containerId, async () => {
+    const revision = await containerLabel(containerId, DOCKER_LABEL_INPUTS_REVISION);
+    const scrubbed = revision
+      ? await scrubStagedProvider(context.storage.getDataDir(), environmentId, revision, provider)
+      : false;
+    const parsed = parseContainerLifecycle(environment.containerLifecycle);
+    if (parsed.supported) {
+      for (const runtime of parsed.record.retainedRuntimes ?? []) {
+        const retainedRevision = await containerLabel(
+          runtime.containerId,
+          DOCKER_LABEL_INPUTS_REVISION,
         );
+        if (retainedRevision) {
+          await scrubStagedProvider(
+            context.storage.getDataDir(),
+            environmentId,
+            retainedRevision,
+            provider,
+          );
+        }
       }
     }
-  }
-  const immutableSecret = await hasImmutableProviderSecret(environment.containerId, provider);
-  const files = IMPORTED_CREDENTIAL_FILES[provider];
-  let removed = false;
-  try {
-    await dockerExec(
-      environment.containerId,
-      `rm -f ${files.map((file) => `'${file}'`).join(" ")}`,
-    );
-    removed = true;
-  } catch {
-    removed = false;
-  }
-  let processesStopped = false;
-  try {
-    await runCommand(
-      "docker",
-      [
-        "exec",
-        "--user",
-        "root",
-        environment.containerId,
-        "sh",
-        "-c",
-        `pkill -TERM -f '${PROVIDER_PROCESS_PATTERNS[provider]}' || true`,
-      ],
-      { timeoutMs: 15_000 },
-    );
-    processesStopped = true;
-  } catch {
-    processesStopped = false;
-  }
-  return {
-    provider,
-    removed,
-    pendingRebuild: !scrubbed || immutableSecret || !removed || !processesStopped,
-    processesStopped,
-  };
+    const immutableSecret = await hasImmutableProviderSecret(containerId, provider);
+    const files = IMPORTED_CREDENTIAL_FILES[provider];
+    let removed = false;
+    try {
+      await dockerExec(containerId, `rm -f ${files.map((file) => `'${file}'`).join(" ")}`);
+      removed = true;
+    } catch {
+      removed = false;
+    }
+    let processesStopped = false;
+    try {
+      await runCommand(
+        "docker",
+        [
+          "exec",
+          "--user",
+          "root",
+          containerId,
+          "sh",
+          "-c",
+          `pkill -TERM -f '${PROVIDER_PROCESS_PATTERNS[provider]}' || true`,
+        ],
+        { timeoutMs: 15_000 },
+      );
+      processesStopped = true;
+    } catch {
+      processesStopped = false;
+    }
+    return {
+      provider,
+      removed,
+      pendingRebuild: !scrubbed || immutableSecret || !removed || !processesStopped,
+      processesStopped,
+    };
+  });
 }
 
 /**

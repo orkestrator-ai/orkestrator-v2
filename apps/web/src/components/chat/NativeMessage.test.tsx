@@ -37,6 +37,8 @@ import {
 } from "./MessageShell";
 import { NativeMessage } from "./NativeMessage";
 import { BackgroundTaskCard } from "./NativeMessage.agent-parts";
+import { NativeChangeScopeContext } from "./NativeMessage.change-scope";
+import { environmentChangeResourceKey } from "@orkestrator/protocol/change-resources";
 
 test("renders only the design brief in optimistic and rehydrated user rows", () => {
   const prompt = buildDesignAgentPrompt("canvas-1", "  Mock up the sidebar  ");
@@ -1639,119 +1641,99 @@ describe("NativeMessage task list rendering", () => {
      * ACP providers identify a file mutation by diff content, not tool name.
      * Deferring the diff body strips `diff`/`before`/`after`, so without an
      * explicit marker the row is indistinguishable from a location-only hint on
-     * a read tool and silently loses its file name and +/- stats.
+     * a read tool and silently loses its file name.
      */
+    const invokeMock = invoke as unknown as ReturnType<typeof mock>;
+    invokeMock.mockClear();
+    invokeMock.mockImplementation(async (command: string) =>
+      command === "changes_measure_legacy_payload"
+        ? {
+            provenanceLabelKey: "changes.provenance.legacy-payload",
+            additions: { value: 1, quality: "complete", bound: "exact" },
+            deletions: { value: 1, quality: "complete", bound: "exact" },
+            changedFiles: 1,
+            contentLines: null,
+            reasonKeys: [],
+            files: [
+              {
+                pathId: "legacy:a",
+                oldPathDisplay: "/workspace/src/a.ts",
+                newPathDisplay: "/workspace/src/a.ts",
+                status: "modified",
+                fileKind: "text",
+                bodyAvailability: "available",
+                reasonKey: null,
+                truncated: false,
+                hunks: [
+                  {
+                    header: "@@ -1 +1 @@",
+                    oldStart: 1,
+                    oldLines: 1,
+                    newStart: 1,
+                    newLines: 1,
+                    lines: [
+                      { type: "remove", text: "old", oldLine: 1, newLine: null },
+                      { type: "add", text: "new", oldLine: null, newLine: 1 },
+                    ],
+                  },
+                ],
+              },
+            ],
+          }
+        : undefined,
+    );
     const loadToolDetails = mock(async (detailRef: string) => ({
       detailRef,
       toolDiff: { diff: "-old\n+new" },
     }));
-    // EditToolPart reads the terminal context for its open-diff-in-tab action.
-    render(
-      <TerminalProvider>
-        <NativeMessage
-          message={makeMessage([
-            {
-              type: "tool-invocation",
-              content: "src/a.ts",
-              toolName: "cursor_write",
-              toolState: "success",
-              detailRef: "detail-diff",
-              toolDiff: {
-                filePath: "/workspace/src/a.ts",
-                additions: 3,
-                deletions: 2,
-                deferred: true,
+    try {
+      render(
+        <TerminalProvider>
+          <NativeMessage
+            message={makeMessage([
+              {
+                type: "tool-invocation",
+                content: "src/a.ts",
+                toolName: "cursor_write",
+                toolState: "success",
+                detailRef: "detail-diff",
+                toolDiff: {
+                  filePath: "/workspace/src/a.ts",
+                  additions: 3,
+                  deletions: 2,
+                  deferred: true,
+                },
               },
-            },
-          ])}
-          loadToolDetails={loadToolDetails}
-        />
-      </TerminalProvider>,
-    );
+            ])}
+            loadToolDetails={loadToolDetails}
+          />
+        </TerminalProvider>,
+      );
 
-    // The file name and line stats are the edit row's signature; the generic
-    // tool row renders neither.
-    expect(screen.getByText("a.ts")).toBeTruthy();
-    expect(screen.getByText("+3")).toBeTruthy();
-    expect(screen.getByText("-2")).toBeTruthy();
+      // The file name is the edit row's signature; the generic tool row has none.
+      // Provider counts are not shown: only backend measurements are.
+      expect(screen.getByText("a.ts")).toBeTruthy();
+      expect(screen.queryByText("+3") === null).toBe(true);
 
-    const trigger = screen.getByText("a.ts").closest("button")!;
-    expect(trigger.hasAttribute("disabled")).toBe(false);
-    fireEvent.click(trigger);
-    await waitFor(() => expect(loadToolDetails).toHaveBeenCalledWith("detail-diff"));
-    expect(await screen.findByText("+new")).toBeTruthy();
-  });
-
-  test("counts the badge from before/after without charging a trailing newline", () => {
-    // The fallback used when a provider sends sides but no counts. A trailing
-    // newline terminates the last line, so this is -2/+1, not -3/+2.
-    render(
-      <TerminalProvider>
-        <NativeMessage
-          message={makeMessage([
-            {
-              type: "tool-invocation",
-              content: "src/a.ts",
-              toolName: "Edit",
-              toolState: "success",
-              toolDiff: {
-                filePath: "/workspace/src/a.ts",
-                before: "one\ntwo\n",
-                after: "three\n",
-              },
-            },
-          ])}
-        />
-      </TerminalProvider>,
-    );
-
-    expect(screen.getByText("+1")).toBeTruthy();
-    expect(screen.getByText("-2")).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: /edit a\.ts \+1 -2 success/i }));
-    expect(screen.getByText("-one")).toBeTruthy();
-    expect(screen.getByText("-two")).toBeTruthy();
-    expect(screen.getByText("+three")).toBeTruthy();
-    expect(screen.queryByText("-") === null).toBe(true);
-    expect(screen.queryByText("+") === null).toBe(true);
-  });
-
-  test("expands a joined MultiEdit side without a phantom line from a trailing newline", () => {
-    // Per-chunk counts already exclude the terminator. The expanded body must
-    // use the same split or the badge would read -2 while the list showed 3.
-    render(
-      <TerminalProvider>
-        <NativeMessage
-          message={makeMessage([
-            {
-              type: "tool-invocation",
-              content: "src/c.ts",
-              toolName: "MultiEdit",
-              toolState: "success",
-              toolDiff: {
-                filePath: "/workspace/src/c.ts",
-                before: "one\nfour\n",
-                after: "two\nthree\nfive",
-                additions: 3,
-                deletions: 2,
-              },
-            },
-          ])}
-        />
-      </TerminalProvider>,
-    );
-
-    expect(screen.getByText("+3")).toBeTruthy();
-    expect(screen.getByText("-2")).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: /multiedit c\.ts \+3 -2 success/i }));
-    expect(screen.getByText("-one")).toBeTruthy();
-    expect(screen.getByText("-four")).toBeTruthy();
-    expect(screen.getByText("+two")).toBeTruthy();
-    expect(screen.getByText("+three")).toBeTruthy();
-    expect(screen.getByText("+five")).toBeTruthy();
-    expect(screen.queryByText("-") === null).toBe(true);
-    expect(screen.queryByText("+") === null).toBe(true);
+      const trigger = screen.getByText("a.ts").closest("button")!;
+      expect(trigger.hasAttribute("disabled")).toBe(false);
+      fireEvent.click(trigger);
+      await waitFor(() => expect(loadToolDetails).toHaveBeenCalledWith("detail-diff"));
+      // The loaded body is measured once by the backend and rendered from its hunks.
+      expect(await screen.findByText("+new")).toBeTruthy();
+      // Recorded counts travel along untouched; the backend prefers the
+      // parsed body and uses them only when the body cannot be parsed.
+      expect(invokeMock).toHaveBeenCalledWith("changes_measure_legacy_payload", {
+        toolName: "cursor_write",
+        filePath: "/workspace/src/a.ts",
+        diff: "-old\n+new",
+        additions: 3,
+        deletions: 2,
+      });
+      expect(screen.getByTestId("legacy-change-badge").textContent).toBe("+1-1");
+    } finally {
+      invokeMock.mockImplementation(() => Promise.resolve());
+    }
   });
 
   test("routes a location-only diff hint to the generic tool row", () => {
@@ -3059,7 +3041,16 @@ describe("NativeMessage task list rendering", () => {
 
     expect(screen.getByText("Use this screenshot")).toBeTruthy();
     expect(screen.queryByText(/attached-files/) === null).toBe(true);
-    expect(await screen.findByAltText("Thumbnail: initial-shot.png")).toBeTruthy();
+    const thumbnail = await screen.findByAltText("Thumbnail: initial-shot.png");
+    Object.defineProperties(thumbnail, {
+      naturalWidth: { value: 1920 },
+      naturalHeight: { value: 1080 },
+    });
+    fireEvent.load(thumbnail);
+    // The whole image fits the tile width; it is never cropped to a fixed height.
+    expect(thumbnail.className).toContain("object-contain");
+    expect(thumbnail.className).toContain("h-auto");
+    expect(thumbnail.className).not.toContain("object-cover");
 
     fireEvent.click(
       screen.getByRole("button", {
@@ -3400,6 +3391,8 @@ describe("NativeMessage task list rendering", () => {
     expect(screen.getByText("Make the profile match")).toBeTruthy();
     expect(screen.queryByText(/Attached files have been saved/) === null).toBe(true);
     expect(await screen.findByAltText("Thumbnail: screenshot.png")).toBeTruthy();
+    // The thumbnail is the attachment; its filename caption is not repeated.
+    expect(screen.queryByText("screenshot.png") === null).toBe(true);
   });
 
   test("renders a rehydrated attachment part, which has a path but no inline data", async () => {
@@ -6847,24 +6840,26 @@ describe("NativeMessage shell command changes", () => {
       return null;
     }
     render(
-      <TerminalProvider>
-        <RegisterFileTab />
-        <NativeMessage
-          message={makeMessage(
-            [
-              command({
-                additions: 12,
-                deletions: 3,
-                files: [
-                  { path: "src/a.ts", additions: 10, deletions: 3 },
-                  { path: "src/b.ts", additions: 2, deletions: 0 },
-                ],
-              }),
-            ],
-            { id: "standard-command" },
-          )}
-        />
-      </TerminalProvider>,
+      <NativeChangeScopeContext.Provider value={{ environmentId: "env-1" }}>
+        <TerminalProvider>
+          <RegisterFileTab />
+          <NativeMessage
+            message={makeMessage(
+              [
+                command({
+                  additions: 12,
+                  deletions: 3,
+                  files: [
+                    { path: "src/a.ts", additions: 10, deletions: 3 },
+                    { path: "src/b.ts", additions: 2, deletions: 0 },
+                  ],
+                }),
+              ],
+              { id: "standard-command" },
+            )}
+          />
+        </TerminalProvider>
+      </NativeChangeScopeContext.Provider>,
     );
 
     const trigger = screen.getByRole("button", { name: /Run Command python3 rewrite.py/i });
@@ -6878,10 +6873,20 @@ describe("NativeMessage shell command changes", () => {
     fireEvent.click(trigger);
     expect(screen.getByText("Changed files")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "src/a.ts" }));
-    expect(openFile).toHaveBeenCalledWith("src/a.ts", { isDiff: true, gitStatus: "M" });
+    // The bridge kept no contents, so the file opens as it is now, labelled so.
+    expect(openFile).toHaveBeenCalledWith("src/a.ts", {
+      isDiff: true,
+      changeDiff: {
+        kind: "live",
+        resourceKey: environmentChangeResourceKey("env-1"),
+        path: "src/a.ts",
+        title: "src/a.ts (current)",
+      },
+    });
+    expect(screen.getByText(/files open in their current state/i)).toBeTruthy();
   });
 
-  test("opens deletions with deleted status and labels renames and truncated lists", () => {
+  test("opens deleted files as their current state and labels renames and truncated lists", () => {
     const openFile = mock((_path: string, _options?: unknown) => undefined);
     function RegisterFileTab() {
       const { setCreateFileTab } = useTerminalContext();
@@ -6892,40 +6897,50 @@ describe("NativeMessage shell command changes", () => {
       return null;
     }
     render(
-      <TerminalProvider>
-        <RegisterFileTab />
-        <NativeMessage
-          message={makeMessage(
-            [
-              command({
-                additions: 0,
-                deletions: 3,
-                files: [
-                  { path: "gone.ts", status: "D", additions: 0, deletions: 3 },
-                  {
-                    path: "new-name.ts",
-                    previousPath: "old-name.ts",
-                    status: "R",
-                    additions: 0,
-                    deletions: 0,
-                  },
-                ],
-                filesTruncated: true,
-              }),
-            ],
-            { id: "deleted-command" },
-          )}
-        />
-      </TerminalProvider>,
+      <NativeChangeScopeContext.Provider value={{ environmentId: "env-1" }}>
+        <TerminalProvider>
+          <RegisterFileTab />
+          <NativeMessage
+            message={makeMessage(
+              [
+                command({
+                  additions: 0,
+                  deletions: 3,
+                  files: [
+                    { path: "gone.ts", status: "D", additions: 0, deletions: 3 },
+                    {
+                      path: "new-name.ts",
+                      previousPath: "old-name.ts",
+                      status: "R",
+                      additions: 0,
+                      deletions: 0,
+                    },
+                  ],
+                  filesTruncated: true,
+                }),
+              ],
+              { id: "deleted-command" },
+            )}
+          />
+        </TerminalProvider>
+      </NativeChangeScopeContext.Provider>,
     );
     fireEvent.click(screen.getByRole("button", { name: /Run Command python3 rewrite.py/i }));
     fireEvent.click(screen.getByRole("button", { name: "gone.ts" }));
-    expect(openFile).toHaveBeenCalledWith("gone.ts", { isDiff: true, gitStatus: "D" });
+    expect(openFile).toHaveBeenCalledWith("gone.ts", {
+      isDiff: true,
+      changeDiff: {
+        kind: "live",
+        resourceKey: environmentChangeResourceKey("env-1"),
+        path: "gone.ts",
+        title: "gone.ts (current)",
+      },
+    });
     expect(screen.getByTitle("old-name.ts → new-name.ts")).toBeTruthy();
     expect(screen.getByText("More files changed; totals include them all.")).toBeTruthy();
   });
 
-  test("shows measured paths as text without a terminal provider", () => {
+  test("shows measured paths as text without a terminal provider or environment", () => {
     render(
       <NativeMessage
         message={makeMessage(

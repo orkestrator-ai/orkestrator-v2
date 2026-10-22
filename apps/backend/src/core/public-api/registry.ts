@@ -1,5 +1,6 @@
 import type { PublicActionName, PublicCapabilities } from "@orkestrator/protocol/public-api";
 import type { CommandRegistrar, RegistryDependencies } from "../commands-registry-types.js";
+import { CHANGE_HANDLERS } from "./actions-changes.js";
 import { createCapabilitiesHandler, DISCOVERY_HANDLERS } from "./actions-discovery.js";
 import { ENVIRONMENT_HANDLERS } from "./actions-environments.js";
 import { EXEC_HANDLERS } from "./actions-exec.js";
@@ -33,6 +34,7 @@ export function publicActionHandlers(): PublicActionHandler[] {
     ...SESSION_HANDLERS,
     ...SESSION_CONTROL_HANDLERS,
     ...TRANSCRIPT_HANDLERS,
+    ...CHANGE_HANDLERS,
     ...RUN_READ_HANDLERS,
     ...RUN_RECOVERY_HANDLERS,
     ...EXEC_HANDLERS,
@@ -57,7 +59,7 @@ export function buildPublicHandlerTable(
   features: () => PublicCapabilities["features"] = publicFeatures,
 ): Map<PublicActionName, PublicActionHandler> {
   const table = new Map<PublicActionName, PublicActionHandler>();
-  const capabilities = createCapabilitiesHandler(() => new Set(table.keys()), features);
+  const capabilities = createCapabilitiesHandler(() => table, features);
   for (const handler of [capabilities, ...handlers]) {
     if (table.has(handler.action))
       throw new Error(`Duplicate public action handler: ${handler.action}`);

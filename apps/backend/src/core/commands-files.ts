@@ -316,6 +316,10 @@ export type GitFileChange = {
   additions: number;
   deletions: number;
   status: string;
+  /** Git reported no line counts; `additions`/`deletions` are 0 for old readers. */
+  binary?: true;
+  /** Listed but not counted (scan cap, unreadable, too large); counts are 0 for old readers. */
+  countOmitted?: true;
 };
 
 export function splitNulTerminatedGitFields(output: string, label: string): string[] {
@@ -328,8 +332,8 @@ export function splitNulTerminatedGitFields(output: string, label: string): stri
 
 export function parseGitNumstat(
   numstatOutput: string,
-): Map<string, { additions: number; deletions: number }> {
-  const stats = new Map<string, { additions: number; deletions: number }>();
+): Map<string, { additions: number; deletions: number; binary?: true }> {
+  const stats = new Map<string, { additions: number; deletions: number; binary?: true }>();
   const fields = splitNulTerminatedGitFields(numstatOutput, "git numstat output");
   for (let index = 0; index < fields.length;) {
     const header = fields[index++] ?? "";
@@ -361,6 +365,7 @@ export function parseGitNumstat(
     stats.set(filePath, {
       additions: additions === "-" ? 0 : Number.parseInt(additions, 10) || 0,
       deletions: deletions === "-" ? 0 : Number.parseInt(deletions, 10) || 0,
+      ...(additions === "-" || deletions === "-" ? { binary: true as const } : {}),
     });
   }
   return stats;
@@ -387,7 +392,12 @@ export function parseGitFileChanges(
     if (!filePath || (isRenameOrCopy && !originalPath)) {
       throw new Error("Malformed git name-status output: empty path");
     }
-    const fileStats = stats.get(filePath) ?? { additions: 0, deletions: 0 };
+    const fileStats: { additions: number; deletions: number; binary?: true } = stats.get(
+      filePath,
+    ) ?? {
+      additions: 0,
+      deletions: 0,
+    };
     changes.push({
       path: filePath,
       originalPath,
@@ -396,6 +406,7 @@ export function parseGitFileChanges(
       additions: fileStats.additions,
       deletions: fileStats.deletions,
       status,
+      ...(fileStats.binary ? { binary: true as const } : {}),
     });
   }
   return changes;
@@ -427,7 +438,8 @@ export function parseContainerUntrackedStats(output: string): GitFileChange[] {
     }
     const additionsText = field.slice(0, separator);
     const filePath = field.slice(separator + 1);
-    if (!/^\d+$/.test(additionsText) || !filePath) {
+    // "-" marks a binary file and "?" one the scanner did not count.
+    if (!/^(\d+|-|\?)$/.test(additionsText) || !filePath) {
       throw new Error("Malformed container untracked stats record");
     }
     return {
@@ -435,9 +447,11 @@ export function parseContainerUntrackedStats(output: string): GitFileChange[] {
       originalPath: undefined,
       filename: path.basename(filePath),
       directory: path.dirname(filePath) === "." ? "" : path.dirname(filePath),
-      additions: Number.parseInt(additionsText, 10),
+      additions: /^\d+$/.test(additionsText) ? Number.parseInt(additionsText, 10) : 0,
       deletions: 0,
       status: "?",
+      ...(additionsText === "-" ? { binary: true as const } : {}),
+      ...(additionsText === "?" ? { countOmitted: true as const } : {}),
     };
   });
 }
@@ -458,6 +472,7 @@ export const GIT_STATUS_UNTRACKED_MARKER = gitStatusMarker("ORKESTRATOR_UNTRACKE
 export const GIT_STATUS_END_MARKER = gitStatusMarker("ORKESTRATOR_END");
 export const GIT_STATUS_MISSING_REF_MARKER = gitStatusMarker("ORKESTRATOR_TARGET_REF_NOT_FOUND");
 export const GIT_STATUS_BASELINE_MARKER = gitStatusMarker("ORKESTRATOR_BASELINE");
+export const GIT_STATUS_BASE_OID_MARKER = gitStatusMarker("ORKESTRATOR_BASE_OID");
 
 /**
  * Builds the single shell program that collects a container's git status.
@@ -526,6 +541,7 @@ export function buildContainerGitStatusScript(ref: string, includeWorkingTree: b
         exit 0
       fi
       printf '\\036ORKESTRATOR_BASELINE\\037%s' "$baseline"
+      printf '\\036ORKESTRATOR_BASE_OID\\037%s' "$(git rev-parse --verify --quiet "$base^{commit}")"
       end_ref=${includeWorkingTree ? "" : "HEAD"}
       printf '\\036ORKESTRATOR_NAME_STATUS\\037'
       git diff --name-status -z -M "$base" $end_ref | base64 -w0
@@ -599,8 +615,11 @@ export type ContainerGitStatusEnvelope =
       repoId: string;
       /** How the base resolved; absent from responses without the section. */
       baseline?: "tracking" | "local";
+      /** Resolved comparison commit; absent from responses without the section. */
+      baseOid?: string;
       changes: GitFileChange[];
       truncated: boolean;
+      ambiguousPaths?: string[];
     };
 
 /**
@@ -637,9 +656,24 @@ export function parseContainerGitStatusEnvelope(
     baseline = value;
     rest = rest.slice(next);
   }
+  let baseOid: string | undefined;
+  if (rest.startsWith(GIT_STATUS_BASE_OID_MARKER)) {
+    const next = rest.indexOf(GIT_STATUS_FRAME_START, GIT_STATUS_BASE_OID_MARKER.length);
+    const value = next === -1 ? "" : rest.slice(GIT_STATUS_BASE_OID_MARKER.length, next);
+    if (!/^[0-9a-f]{40,64}$/.test(value))
+      throw new Error("Malformed container git status response");
+    baseOid = value;
+    rest = rest.slice(next);
+  }
   if (rest.length === 0) throw new Error("Malformed container git status response");
   const detailed = parseContainerGitStatusSections(rest, includeWorkingTree);
-  return { kind: "ok", repoId, ...(baseline ? { baseline } : {}), ...detailed };
+  return {
+    kind: "ok",
+    repoId,
+    ...(baseline ? { baseline } : {}),
+    ...(baseOid ? { baseOid } : {}),
+    ...detailed,
+  };
 }
 
 export function parseContainerGitStatusResponse(
@@ -664,7 +698,7 @@ export function parseContainerGitStatusResponseDetailed(
 function parseContainerGitStatusSections(
   output: string,
   includeWorkingTree: boolean,
-): { changes: GitFileChange[]; truncated: boolean } {
+): { changes: GitFileChange[]; truncated: boolean; ambiguousPaths?: string[] } {
   // A workspace that is not a git repository exits before emitting any frame.
   if (output.length === 0) return { changes: [], truncated: false };
   const nameStatusStart = output.indexOf(GIT_STATUS_NAME_STATUS_MARKER);
@@ -693,6 +727,7 @@ function parseContainerGitStatusSections(
   if (!includeWorkingTree) return { changes, truncated: false };
 
   const existingPaths = new Set(changes.map((change) => change.path));
+  const ambiguousPaths: string[] = [];
   const untrackedOutput = decodeGitStatusSection(
     output.slice(untrackedStart + GIT_STATUS_UNTRACKED_MARKER.length, endStart),
     "container untracked section",
@@ -700,10 +735,15 @@ function parseContainerGitStatusSections(
   const untracked = parseContainerUntrackedStats(untrackedOutput);
   for (const change of untracked) {
     if (!existingPaths.has(change.path)) changes.push(change);
+    else ambiguousPaths.push(change.path);
   }
   // The scanner stops opening files past the same cap the host applies locally,
   // so the record count is what says whether any went uncounted.
-  return { changes, truncated: untracked.length > UNTRACKED_SCAN_MAX_FILES };
+  return {
+    changes,
+    truncated: untracked.length > UNTRACKED_SCAN_MAX_FILES,
+    ...(ambiguousPaths.length > 0 ? { ambiguousPaths } : {}),
+  };
 }
 
 /** Rate-limits the `git fetch` a local read makes before resolving its baseline. */
@@ -741,7 +781,13 @@ export async function getContainerGitStatusDetailed(
   targetBranch: string,
   includeWorkingTree: boolean,
   deps: ContainerGitStatusDeps,
-): Promise<{ changes: GitFileChange[]; truncated: boolean; remote?: WorktreeRemoteFreshness }> {
+): Promise<{
+  changes: GitFileChange[];
+  truncated: boolean;
+  remote?: WorktreeRemoteFreshness;
+  baseOid?: string;
+  ambiguousPaths?: string[];
+}> {
   const ref = validateGitRefName(targetBranch, "target branch");
   const script = buildContainerGitStatusScript(ref, includeWorkingTree);
   let envelope = parseContainerGitStatusEnvelope(
@@ -775,7 +821,13 @@ export async function getContainerGitStatusDetailed(
         ? "local-ref"
         : "tracking-ref";
   const remote = deps.fetches.observe({ containerId, repoId: envelope.repoId, ref }, baseline);
-  return { changes: envelope.changes, truncated: envelope.truncated, remote };
+  return {
+    changes: envelope.changes,
+    truncated: envelope.truncated,
+    remote,
+    ...(envelope.baseOid ? { baseOid: envelope.baseOid } : {}),
+    ...(envelope.ambiguousPaths ? { ambiguousPaths: envelope.ambiguousPaths } : {}),
+  };
 }
 
 /**
@@ -784,43 +836,76 @@ export async function getContainerGitStatusDetailed(
  * The three git reads are independent of each other, so they run together: the
  * status read used to wait for both diffs to finish before starting, which cost
  * a whole round of process spawn and git startup for nothing.
+ *
+ * The reads are read-only: `--no-optional-locks` stops `git status` from
+ * opportunistically refreshing and rewriting the index; `diff.autoRefreshIndex`
+ * must also be disabled because `git diff` can refresh stat-only changes even
+ * with optional locks disabled. That rewrite is an
+ * index change the worktree watcher must treat as a hint, so without the flag
+ * every watcher-driven scan scheduled its own redundant rescan (and took
+ * `index.lock`, which can collide with the user's own Git commands).
  */
 export async function getLocalGitStatusDetailed(
   worktreePath: string,
   targetBranch: string,
   includeUncommitted: boolean,
   fetches: LocalGitFetches,
-): Promise<{ changes: GitFileChange[]; truncated: boolean }> {
+): Promise<{
+  changes: GitFileChange[];
+  truncated: boolean;
+  /** The immutable commit the comparison resolved to, when it resolved. */
+  baseOid?: string;
+  /** Untracked paths also present in the tracked diff (index-membership overlap). */
+  ambiguousPaths?: string[];
+}> {
   validateGitRefName(targetBranch, "target branch");
   await addLocalWorkspaceArtifactsToGitExclude(worktreePath);
 
   const base = await resolveLocalGitBase(worktreePath, targetBranch, fetches);
   const endRef = includeUncommitted ? [] : ["HEAD"];
-  const [nameStatus, numstat, porcelain] = await Promise.all([
-    runCommand("git", ["-C", worktreePath, "diff", "--name-status", "-z", "-M", base, ...endRef], {
+  const git = ["--no-optional-locks", "-c", "diff.autoRefreshIndex=false", "-C", worktreePath];
+  const [nameStatus, numstat, porcelain, baseOid] = await Promise.all([
+    runCommand("git", [...git, "diff", "--name-status", "-z", "-M", base, ...endRef], {
       timeoutMs: 60_000,
     }),
-    runCommand("git", ["-C", worktreePath, "diff", "--numstat", "-z", "-M", base, ...endRef], {
+    runCommand("git", [...git, "diff", "--numstat", "-z", "-M", base, ...endRef], {
       timeoutMs: 60_000,
     }),
     includeUncommitted
-      ? runCommand(
-          "git",
-          ["-C", worktreePath, "status", "--porcelain=v1", "-z", "--untracked-files=all"],
-          { timeoutMs: 60_000 },
-        )
+      ? runCommand("git", [...git, "status", "--porcelain=v1", "-z", "--untracked-files=all"], {
+          timeoutMs: 60_000,
+        })
       : Promise.resolve({ stdout: "" }),
+    runCommand("git", ["-C", worktreePath, "rev-parse", "--verify", "-q", `${base}^{commit}`], {
+      timeoutMs: 10_000,
+    }).then(
+      (result) => result.stdout.trim() || undefined,
+      () => undefined,
+    ),
   ]);
 
-  const changes = parseGitFileChanges(nameStatus.stdout, numstat.stdout);
-  if (!includeUncommitted) return { changes, truncated: false };
+  // Without autoRefreshIndex, name-status may report stat-only modifications.
+  // Numstat checks contents and omits them, while retaining real zero-line
+  // changes (empty files, mode changes and binary files) as explicit records.
+  const changedPaths = parseGitNumstat(numstat.stdout);
+  const changes = parseGitFileChanges(nameStatus.stdout, numstat.stdout).filter(
+    (change) => change.status !== "M" || changedPaths.has(change.path),
+  );
+  const resolved = baseOid && /^[0-9a-f]{40,64}$/.test(baseOid) ? { baseOid } : {};
+  if (!includeUncommitted) return { changes, truncated: false, ...resolved };
 
   const existingPaths = new Set(changes.map((change) => change.path));
   const untrackedPaths: string[] = [];
+  const ambiguousPaths: string[] = [];
   for (const line of porcelain.stdout.split("\0").filter(Boolean)) {
     if (!line.startsWith("?? ")) continue;
     const filePath = line.slice(3);
-    if (existingPaths.has(filePath)) continue;
+    if (existingPaths.has(filePath)) {
+      // Removed from the index but still on disk: the tracked diff already
+      // lists it, so it is not double counted — but the result is ambiguous.
+      ambiguousPaths.push(filePath);
+      continue;
+    }
     untrackedPaths.push(filePath);
   }
 
@@ -837,10 +922,11 @@ export async function getLocalGitStatusDetailed(
   const additionsPerPath = await mapWithConcurrency(
     scanned,
     UNTRACKED_SCAN_CONCURRENCY,
-    (filePath) => countLocalFileLines(worktreePath, filePath).catch(() => 0),
+    (filePath) => countLocalFileLinesDetailed(worktreePath, filePath).catch(() => null),
   );
 
   untrackedPaths.forEach((filePath, index) => {
+    const counted = additionsPerPath[index];
     changes.push({
       path: filePath,
       originalPath: undefined,
@@ -848,13 +934,22 @@ export async function getLocalGitStatusDetailed(
       directory: path.dirname(filePath) === "." ? "" : path.dirname(filePath),
       // Files past the cap are still listed - the user must be able to see them
       // in the Files panel - they just carry no line count.
-      additions: additionsPerPath[index] ?? 0,
+      additions: counted?.kind === "text" ? counted.lines : 0,
       deletions: 0,
       status: "?",
+      ...(counted?.kind === "binary" ? { binary: true as const } : {}),
+      ...(!counted || counted.kind === "too-large" || counted.kind === "other"
+        ? { countOmitted: true as const }
+        : {}),
     });
   });
 
-  return { changes, truncated };
+  return {
+    changes,
+    truncated,
+    ...resolved,
+    ...(ambiguousPaths.length > 0 ? { ambiguousPaths } : {}),
+  };
 }
 
 /**
@@ -895,6 +990,21 @@ export async function mapWithConcurrency<T, R>(
  * identical counts for identical content.
  */
 export async function countLocalFileLines(rootPath: string, relativePath: string): Promise<number> {
+  const counted = await countLocalFileLinesDetailed(rootPath, relativePath);
+  return counted.kind === "text" ? counted.lines : 0;
+}
+
+/**
+ * {@link countLocalFileLines}, keeping why a file has no count: binary (a NUL
+ * byte) and oversized files are not "zero lines", and the environment
+ * projection must not present them as such.
+ */
+export async function countLocalFileLinesDetailed(
+  rootPath: string,
+  relativePath: string,
+): Promise<
+  { kind: "text"; lines: number } | { kind: "binary" } | { kind: "too-large" } | { kind: "other" }
+> {
   const target = validateRelativeFilePath(relativePath, "git status path");
   const fullPath = path.join(rootPath, target);
   recurringWorkMetrics.work("file-read");
@@ -908,7 +1018,9 @@ export async function countLocalFileLines(rootPath: string, relativePath: string
   );
   try {
     const stat = await handle.stat();
-    if (!stat.isFile() || stat.size === 0 || stat.size > MAX_BINARY_FILE_BYTES) return 0;
+    if (!stat.isFile()) return { kind: "other" };
+    if (stat.size === 0) return { kind: "text", lines: 0 };
+    if (stat.size > MAX_BINARY_FILE_BYTES) return { kind: "too-large" };
 
     const buffer = Buffer.allocUnsafe(FILE_LINE_COUNT_CHUNK_BYTES);
     let total = 0;
@@ -922,10 +1034,10 @@ export async function countLocalFileLines(rootPath: string, relativePath: string
       total += bytesRead;
       // The file can grow between the stat and the read; stop rather than let an
       // actively-written log turn one poll into an unbounded scan.
-      if (total > MAX_BINARY_FILE_BYTES) return 0;
+      if (total > MAX_BINARY_FILE_BYTES) return { kind: "too-large" };
       for (let index = 0; index < bytesRead; index += 1) {
         const byte = buffer[index]!;
-        if (byte === 0) return 0;
+        if (byte === 0) return { kind: "binary" };
         if (byte === 0x0d) {
           separators += 1;
           previousWasCarriageReturn = true;
@@ -939,7 +1051,7 @@ export async function countLocalFileLines(rootPath: string, relativePath: string
       }
     }
 
-    return separators + (lastByte !== 0x0d && lastByte !== 0x0a ? 1 : 0);
+    return { kind: "text", lines: separators + (lastByte !== 0x0d && lastByte !== 0x0a ? 1 : 0) };
   } finally {
     await handle.close().catch(() => undefined);
   }

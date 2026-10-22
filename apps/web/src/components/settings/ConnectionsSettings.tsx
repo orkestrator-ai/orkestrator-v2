@@ -45,6 +45,11 @@ import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 import { reloadAfterConnectionChange } from "@/lib/client-platform";
 import { publishConnections, subscribeToConnections } from "@/lib/connections";
 import { cn } from "@/lib/utils";
+import { duplicateMachineColors } from "@/lib/federation/aggregate";
+import { MachineDetails } from "./connections/MachineDetails";
+import { SshRouteDialog } from "./connections/SshRouteDialog";
+import { NodesSettings } from "./connections/NodesSettings";
+import { FederationFeatureToggles } from "./connections/FederationSettingsPanel";
 
 type ConnectionsApi = NonNullable<NonNullable<Window["orkestrator"]>["connections"]>;
 type TokenIntent = "replace" | "connect";
@@ -91,6 +96,30 @@ export function ConnectionsSettings() {
   const [tokenIntent, setTokenIntent] = useState<TokenIntent>("replace");
   const [removeTarget, setRemoveTarget] = useState<ConnectionSummary | null>(null);
   const [renameTarget, setRenameTarget] = useState<ConnectionSummary | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [sshOpen, setSshOpen] = useState(false);
+  const [routeTarget, setRouteTarget] = useState<ConnectionSummary | null>(null);
+  // With multi-machine views on, adding a machine adds it beside this one
+  // instead of switching (and reloading) this window.
+  const addsInPlace = connections?.features?.federation === true;
+  const sshAvailable = connections?.supportedRouteKinds?.includes("ssh") === true;
+  const colorCollisions = useMemo(
+    () =>
+      duplicateMachineColors(
+        (connections?.connections ?? []).flatMap((connection) =>
+          connection.profile
+            ? [
+                {
+                  connectionId: connection.id,
+                  colorToken: connection.profile.colorToken,
+                  name: connection.name,
+                },
+              ]
+            : [],
+        ),
+      ),
+    [connections],
+  );
 
   const load = useCallback(async () => {
     if (!api) return;
@@ -145,11 +174,24 @@ export function ConnectionsSettings() {
     setFormError(null);
     try {
       const normalizedNickname = normalizeConnectionNickname(nickname);
-      await api.connect({
+      const list = await api.connect({
         address,
         token,
         ...(normalizedNickname ? { nickname: normalizedNickname } : {}),
+        ...(addsInPlace || routeTarget ? { select: false } : {}),
+        ...(routeTarget ? { connectionId: routeTarget.id } : {}),
       });
+      if (addsInPlace || routeTarget) {
+        publish(list);
+        setAddOpen(false);
+        setRouteTarget(null);
+        resetForm();
+        setBusyId(null);
+        toast.success(routeTarget ? "Added connection method" : "Added machine", {
+          description: routeTarget?.name ?? address,
+        });
+        return;
+      }
       reloadAfterConnectionChange();
     } catch (error) {
       setFormError(errorMessage(error));
@@ -257,30 +299,55 @@ export function ConnectionsSettings() {
   };
 
   if (!api) {
+    // Browser and iOS clients: the connected node's command-node settings.
+    // Other machines are registered there; this client keeps none itself.
     return (
-      <div className="max-w-3xl rounded-lg border border-zinc-800 bg-zinc-950/40 p-5">
-        <h3 className="text-sm font-medium text-foreground">Connections are unavailable</h3>
-        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-          This client does not provide saved remote connections.
-        </p>
+      <div className="max-w-4xl space-y-6">
+        <NodesSettings />
       </div>
     );
   }
 
   return (
     <div className="max-w-4xl space-y-6">
+      <NodesSettings />
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h3 className="text-base font-semibold text-foreground">Remote connections</h3>
+          <h3 className="text-base font-semibold text-foreground">Machines</h3>
           <p className="mt-1 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-            Switch between Orkestrator backends and keep each gateway credential with its server.
+            Every machine runs its own backend and keeps its own work. This device connects to each
+            one directly; routes and credentials are saved on this device only.
           </p>
         </div>
-        <Button type="button" onClick={openAdd} className="w-fit gap-2">
-          <Plus className="h-4 w-4" />
-          Add connection
-        </Button>
+        <div className="flex gap-2">
+          {sshAvailable ? (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setRouteTarget(null);
+                setSshOpen(true);
+              }}
+              className="w-fit gap-2"
+            >
+              <Plus className="h-4 w-4" />
+              Add over SSH
+            </Button>
+          ) : null}
+          <Button
+            type="button"
+            onClick={() => {
+              setRouteTarget(null);
+              openAdd();
+            }}
+            className="w-fit gap-2"
+          >
+            <Plus className="h-4 w-4" />
+            Add machine
+          </Button>
+        </div>
       </div>
+      {connections ? <FederationFeatureToggles list={connections} /> : null}
 
       <div className="flex items-start gap-3 rounded-lg border border-zinc-800 bg-zinc-950/40 px-4 py-3">
         <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" aria-hidden="true" />
@@ -326,7 +393,7 @@ export function ConnectionsSettings() {
                 <div
                   key={connection.id}
                   className={cn(
-                    "flex flex-col gap-4 px-4 py-4 sm:flex-row sm:items-center",
+                    "flex flex-col flex-wrap gap-4 px-4 py-4 sm:flex-row sm:items-center",
                     connection.active && "bg-emerald-500/[0.035]",
                   )}
                 >
@@ -348,6 +415,16 @@ export function ConnectionsSettings() {
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="text-sm font-medium text-zinc-100">{connection.name}</span>
+                      {connection.nickname ? (
+                        <span className="text-[11px] text-zinc-500">(on this device)</span>
+                      ) : null}
+                      {connection.transport &&
+                      connection.transport !== "connected" &&
+                      connection.kind === "remote" ? (
+                        <span className="rounded-full border border-zinc-700 px-2 py-0.5 text-[11px] text-zinc-400">
+                          {connection.transport.replace(/-/g, " ")}
+                        </span>
+                      ) : null}
                       {connection.active && (
                         <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2 py-0.5 text-[11px] text-emerald-300">
                           <Check className="h-3 w-3" /> Current
@@ -360,7 +437,10 @@ export function ConnectionsSettings() {
                       )}
                     </div>
                     <p className="mt-1 truncate font-mono text-xs text-zinc-500">
-                      {connection.address ?? "This device"}
+                      {connection.address ??
+                        (connection.kind === "local"
+                          ? "This device"
+                          : (connection.routes?.[0]?.label ?? "No HTTPS address"))}
                     </p>
                     {lastConnected && (
                       <p className="mt-1 text-[11px] text-zinc-600">
@@ -369,7 +449,21 @@ export function ConnectionsSettings() {
                     )}
                   </div>
 
-                  <div className="flex shrink-0 items-center gap-2 pl-12 sm:pl-0">
+                  <div className="flex shrink-0 flex-wrap items-center gap-2 pl-12 sm:pl-0">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="text-zinc-400 hover:text-zinc-100"
+                      aria-expanded={expandedId === connection.id}
+                      onClick={() =>
+                        setExpandedId((current) =>
+                          current === connection.id ? null : connection.id,
+                        )
+                      }
+                    >
+                      Details
+                    </Button>
                     <Button
                       type="button"
                       variant="ghost"
@@ -436,13 +530,37 @@ export function ConnectionsSettings() {
                           className="h-8 w-8 text-zinc-500 hover:bg-red-500/10 hover:text-red-300"
                           onClick={() => setRemoveTarget(connection)}
                           disabled={busyId !== null}
-                          aria-label={`Remove ${connection.name}`}
+                          aria-label={`Forget ${connection.name} on this device`}
                         >
                           <Trash2 className="h-4 w-4" />
                         </Button>
                       </>
                     )}
                   </div>
+                  {expandedId === connection.id ? (
+                    <div className="basis-full">
+                      <MachineDetails
+                        connection={connection}
+                        duplicateColorWith={(
+                          (connection.profile &&
+                            colorCollisions.get(connection.profile.colorToken)) ||
+                          []
+                        )
+                          .filter((id) => id !== connection.id)
+                          .map(
+                            (id) =>
+                              connections.connections.find((candidate) => candidate.id === id)
+                                ?.name ?? id,
+                          )}
+                        onAddRoute={(kind) => {
+                          setRouteTarget(connection);
+                          if (kind === "ssh") setSshOpen(true);
+                          else openAdd();
+                        }}
+                        sshSupported={sshAvailable}
+                      />
+                    </div>
+                  ) : null}
                 </div>
               );
             })}
@@ -457,9 +575,13 @@ export function ConnectionsSettings() {
         >
           <form onSubmit={handleAdd}>
             <DialogHeader>
-              <DialogTitle>Add connection</DialogTitle>
+              <DialogTitle>
+                {routeTarget ? `Add HTTPS route to ${routeTarget.name}` : "Add machine"}
+              </DialogTitle>
               <DialogDescription>
-                Connect to an Orkestrator backend on your tailnet.
+                {routeTarget
+                  ? "Another address for the same machine. It is used only if it proves the same installation."
+                  : "Connect to an Orkestrator backend on your tailnet by its HTTPS address."}
               </DialogDescription>
             </DialogHeader>
             <ConnectionFields
@@ -604,16 +726,26 @@ export function ConnectionsSettings() {
         </DialogContent>
       </Dialog>
 
+      <SshRouteDialog
+        open={sshOpen}
+        onOpenChange={(open) => {
+          setSshOpen(open);
+          if (!open) setRouteTarget(null);
+        }}
+        machine={routeTarget}
+      />
+
       <AlertDialog
         open={removeTarget !== null}
         onOpenChange={(open) => !open && setRemoveTarget(null)}
       >
         <AlertDialogContent className={Z_FULLSCREEN_DIALOG} overlayClassName={Z_FULLSCREEN_DIALOG}>
           <AlertDialogHeader>
-            <AlertDialogTitle>Remove {removeTarget?.name}?</AlertDialogTitle>
+            <AlertDialogTitle>Forget {removeTarget?.name} on this device?</AlertDialogTitle>
             <AlertDialogDescription>
-              The server address and its saved gateway token will be removed from this client.
-              Nothing changes on the remote machine.
+              Its routes and saved gateway tokens are removed from this device only. This does not
+              revoke this device, stop the machine&apos;s backend or agents, or delete any of its
+              data.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -627,7 +759,7 @@ export function ConnectionsSettings() {
               className="bg-red-600 text-white hover:bg-red-500"
             >
               {busyId !== null && <Loader2 className="h-4 w-4 animate-spin" />}
-              Remove connection
+              Forget on this device
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

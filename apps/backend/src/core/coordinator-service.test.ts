@@ -1,4 +1,14 @@
-import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  spyOn,
+  test as bunTest,
+} from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -19,21 +29,79 @@ import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 
+// Bun abandons a timed-out test body but keeps running it, and kills its child
+// processes. Every test here records its body so cleanup waits for that late
+// Git and storage work instead of deleting the fixture underneath it (flakes
+// 0165 and 0461). The recorded copy settles quietly: Bun reports the timeout
+// itself, and a body that finishes in time still fails through `running`.
+let pendingBody: Promise<void> | null = null;
+function tracked<A extends unknown[]>(body: (...args: A) => unknown) {
+  return (...args: A): Promise<unknown> => {
+    const running = Promise.resolve().then(() => body(...args));
+    pendingBody = running.then(
+      () => undefined,
+      () => undefined,
+    );
+    return running;
+  };
+}
+const test = Object.assign((name: string, body: () => unknown) => bunTest(name, tracked(body)), {
+  each:
+    <T>(cases: readonly T[]) =>
+    (name: string, body: (value: T) => unknown) =>
+      bunTest.each(cases)(name, tracked(body)),
+});
+
 describe("project coordinator", () => {
   let root: string;
   let checkout: string;
   let storage: StorageService;
+  // Repositories built once and copied per test, so each test starts from a
+  // real checkout without paying for `git init` and a first commit again.
+  let templates: string;
+  let templateCheckout: string;
+  // A bare repository whose `main` is the template checkout's initial commit.
+  let templateRemote: string;
+  // A one-commit repository the submodule case adds; `submodule add` only clones it.
+  let templateSubmodule: string;
+
+  beforeAll(async () => {
+    templates = await fs.mkdtemp(path.join(os.tmpdir(), "ork-coordinator-templates-"));
+    templateCheckout = path.join(templates, "checkout");
+    templateRemote = path.join(templates, "remote.git");
+    templateSubmodule = path.join(templates, "submodule");
+    const commitReadme = async (cwd: string, file: string, email: string, name: string) => {
+      await fs.mkdir(cwd);
+      await runCommand("git", ["init", "-b", "main"], { cwd });
+      await runCommand("git", ["config", "user.email", email], { cwd });
+      await runCommand("git", ["config", "user.name", name], { cwd });
+      await fs.writeFile(path.join(cwd, file), file === "README.md" ? "initial\n" : "lib\n");
+      await runCommand("git", ["add", file], { cwd });
+      await runCommand("git", ["commit", "-m", file === "README.md" ? "initial" : "sub"], { cwd });
+    };
+    await Promise.all([
+      commitReadme(templateCheckout, "README.md", "test@example.invalid", "Coordinator Test"),
+      commitReadme(templateSubmodule, "lib.txt", "sub@example.invalid", "Sub"),
+    ]);
+    await runCommand("git", ["clone", "--bare", "--quiet", templateCheckout, templateRemote], {
+      cwd: templates,
+    });
+  });
+
+  afterAll(async () => {
+    await fs.rm(templates, { recursive: true, force: true });
+  });
+
+  /** Copies the prebuilt bare remote to `target` and adds it as `name` without fetching. */
+  async function addTemplateRemote(name: string, target: string): Promise<void> {
+    await fs.cp(templateRemote, target, { recursive: true });
+    await runCommand("git", ["remote", "add", name, target], { cwd: checkout });
+  }
 
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), "ork-coordinator-"));
     checkout = path.join(root, "checkout");
-    await fs.mkdir(checkout);
-    await runCommand("git", ["init", "-b", "main"], { cwd: checkout });
-    await runCommand("git", ["config", "user.email", "test@example.invalid"], { cwd: checkout });
-    await runCommand("git", ["config", "user.name", "Coordinator Test"], { cwd: checkout });
-    await fs.writeFile(path.join(checkout, "README.md"), "initial\n");
-    await runCommand("git", ["add", "README.md"], { cwd: checkout });
-    await runCommand("git", ["commit", "-m", "initial"], { cwd: checkout });
+    await fs.cp(templateCheckout, checkout, { recursive: true });
     storage = new StorageService(path.join(root, "data"));
     await storage.init();
     const config = await storage.loadConfig();
@@ -43,9 +111,25 @@ describe("project coordinator", () => {
     });
   });
 
-  afterEach(async () => {
-    await fs.rm(root, { recursive: true, force: true });
-  });
+  afterEach(
+    async () => {
+      const body = pendingBody;
+      pendingBody = null;
+      if (body) {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        await Promise.race([
+          body,
+          new Promise((resolve) => {
+            timer = setTimeout(resolve, 25_000);
+          }),
+        ]);
+        clearTimeout(timer);
+      }
+      storage.close();
+      await fs.rm(root, { recursive: true, force: true });
+    },
+    { timeout: 30_000 },
+  );
 
   test("concurrent ensure converges without sending work and a closed last tab stays closed", async () => {
     const project = await storage.addProject(
@@ -620,7 +704,52 @@ describe("project coordinator", () => {
     expect(snapshot!.workspace.repositoryContextRevision).toBeGreaterThan(0);
   });
 
-  test("bound discard confirmations refuse stale, sequencer, nested, and failed switches", async () => {
+  test("operation markers in a newline-containing Git directory block linked-worktree switches", async () => {
+    const repository = path.join(root, "repository\nmetadata");
+    await fs.rename(checkout, repository);
+    await runCommand("git", ["branch", "other"], { cwd: repository });
+    await runCommand("git", ["worktree", "add", "-b", "linked", checkout], {
+      cwd: repository,
+    });
+    const project = await storage.addProject(
+      createProject("https://example.invalid/repo.git", checkout),
+    );
+    const git = new ProjectGitService(storage);
+    const initial = await git.status(project.id);
+    expect(initial).toMatchObject({ branch: "linked", mergeInProgress: false });
+
+    const gitDirectory = (
+      await runCommand("git", ["rev-parse", "--absolute-git-dir"], { cwd: checkout })
+    ).stdout.trim();
+    expect(gitDirectory).toContain("repository\nmetadata");
+    expect(gitDirectory).not.toBe(path.join(checkout, ".git"));
+    const marker = path.join(gitDirectory, "MERGE_HEAD");
+    await fs.writeFile(marker, `${initial.headCommit!}\n`);
+
+    expect(await git.status(project.id)).toMatchObject({
+      mergeInProgress: true,
+      repositoryOperationBlockedReason: "Finish the current merge first.",
+      trackedChanges: 0,
+      untrackedChanges: 0,
+    });
+    await expect(git.prepareSwitchBranch(project.id, "refs/heads/other")).rejects.toThrow(
+      "current merge",
+    );
+    await expect(git.switchBranch(project.id, "refs/heads/other")).rejects.toThrow("current merge");
+    expect(
+      (await runCommand("git", ["branch", "--show-current"], { cwd: checkout })).stdout.trim(),
+    ).toBe("linked");
+    expect(await fs.readFile(marker, "utf8")).toBe(`${initial.headCommit!}\n`);
+
+    await fs.rm(marker);
+    expect(await git.switchBranch(project.id, "refs/heads/other")).toMatchObject({
+      branch: "other",
+      mergeInProgress: false,
+    });
+  });
+
+  /** A coordinator-owned project on the template checkout, with a second branch `other`. */
+  async function discardFixture() {
     await runCommand("git", ["branch", "other"], { cwd: checkout });
     const project = await storage.addProject(
       createProject("https://example.invalid/repo.git", checkout),
@@ -631,10 +760,18 @@ describe("project coordinator", () => {
       error: null,
     }));
     await coordinator.ensure(project.id);
-    const git = new ProjectGitService(storage);
-    const gitDirectory = (
-      await runCommand("git", ["rev-parse", "--git-dir"], { cwd: checkout })
-    ).stdout.trim();
+    return {
+      project,
+      git: new ProjectGitService(storage),
+      gitDirectory: path.join(checkout, ".git"),
+    };
+  }
+
+  // The bound-discard refusals are three cases: each drives several full status
+  // reads and checkout inspections, and together they did not fit one
+  // five-second budget under aggregate load (flake 0165).
+  test("bound discard confirmations refuse stale and reused tokens", async () => {
+    const { project, git } = await discardFixture();
 
     await fs.writeFile(path.join(checkout, "README.md"), "stale\n");
     const staleConfirmation = await git.prepareSwitchBranch(project.id, "refs/heads/other");
@@ -662,14 +799,17 @@ describe("project coordinator", () => {
     ).rejects.toThrow("Confirm the current checkout");
     expect(await fs.readFile(path.join(checkout, "README.md"), "utf8")).toBe("reuse\n");
     await runCommand("git", ["checkout", "--", "README.md"], { cwd: checkout });
+  });
 
-    await runCommand("git", ["switch", "main"], { cwd: checkout });
+  test("bound discard confirmations refuse sequencer and conflicted merge switches", async () => {
+    const { project, git, gitDirectory } = await discardFixture();
+    const headCommit = (
+      await runCommand("git", ["rev-parse", "HEAD"], { cwd: checkout })
+    ).stdout.trim();
+
     await fs.writeFile(path.join(checkout, "README.md"), "cherry\n");
     await runCommand("git", ["add", "README.md"], { cwd: checkout });
-    await fs.writeFile(
-      path.resolve(checkout, gitDirectory, "CHERRY_PICK_HEAD"),
-      `${switched.headCommit!}\n`,
-    );
+    await fs.writeFile(path.resolve(checkout, gitDirectory, "CHERRY_PICK_HEAD"), `${headCommit}\n`);
     expect(await git.status(project.id)).toMatchObject({ sequencerInProgress: true });
     await expect(git.prepareSwitchBranch(project.id, "refs/heads/other")).rejects.toThrow(
       "current cherry-pick",
@@ -698,6 +838,11 @@ describe("project coordinator", () => {
       git.switchBranch(project.id, "refs/heads/main", { confirmationToken: "ignored" }),
     ).rejects.toThrow(/merge|conflicts/i);
     await runCommand("git", ["merge", "--abort"], { cwd: checkout });
+  });
+
+  test("bound discard confirmations refuse a vanished branch and unconfirmed nested repositories", async () => {
+    const { project, git } = await discardFixture();
+    await runCommand("git", ["switch", "other"], { cwd: checkout });
 
     await fs.writeFile(path.join(checkout, "README.md"), "before vanish\n");
     const vanishing = await git.prepareSwitchBranch(project.id, "refs/heads/main");
@@ -803,16 +948,17 @@ describe("project coordinator", () => {
     await expect(fs.access(path.join(unborn, "staged.txt"))).rejects.toThrow();
   });
 
-  test("fetch covers every configured remote and a dirty submodule needs enhanced confirmation", async () => {
+  // Fetching every remote and the dirty-submodule refusal are separate cases:
+  // together their real fetches, submodule clone and checkout inspections did
+  // not fit one five-second budget under aggregate load (flakes 0461/0480/0490).
+  test("fetch covers every configured remote and reports a failing one as stale", async () => {
     const origin = path.join(root, "origin.git");
     const extra = path.join(root, "extra.git");
     const broken = path.join(root, "missing.git");
-    await runCommand("git", ["init", "--bare", "-b", "main", origin], { cwd: root });
-    await runCommand("git", ["init", "--bare", "-b", "main", extra], { cwd: root });
-    await runCommand("git", ["remote", "add", "origin", origin], { cwd: checkout });
-    await runCommand("git", ["remote", "add", "extra", extra], { cwd: checkout });
-    await runCommand("git", ["push", "origin", "main"], { cwd: checkout });
-    await runCommand("git", ["push", "extra", "main"], { cwd: checkout });
+    // Both remotes already hold `main`; the checkout has no remote-tracking refs
+    // until the service fetches, so the refs below prove each remote was fetched.
+    await addTemplateRemote("origin", origin);
+    await addTemplateRemote("extra", extra);
     const project = await storage.addProject(createProject(origin, checkout));
     const coordinator = new CoordinatorService(storage, () => ({
       enabled: true,
@@ -821,27 +967,35 @@ describe("project coordinator", () => {
     }));
     await coordinator.ensure(project.id);
     const git = new ProjectGitService(storage);
-    expect(await git.fetch(project.id, true)).toMatchObject({
+    const fetched = await git.fetch(project.id, true);
+    expect(fetched).toMatchObject({
       remoteState: "fresh",
       lastError: null,
     });
+    expect(
+      fetched.branches.filter((branch) => branch.kind === "remote").map((branch) => branch.ref),
+    ).toEqual(["refs/remotes/extra/main", "refs/remotes/origin/main"]);
     await runCommand("git", ["remote", "add", "broken", broken], { cwd: checkout });
     const failed = await git.fetch(project.id, true);
     expect(failed.remoteState).toBe("stale");
     expect(failed.lastError).toBeTruthy();
+  });
 
-    const subSrc = path.join(root, "sub-src");
-    await fs.mkdir(subSrc);
-    await runCommand("git", ["init", "-b", "main"], { cwd: subSrc });
-    await runCommand("git", ["config", "user.email", "sub@example.invalid"], { cwd: subSrc });
-    await runCommand("git", ["config", "user.name", "Sub"], { cwd: subSrc });
-    await fs.writeFile(path.join(subSrc, "lib.txt"), "lib\n");
-    await runCommand("git", ["add", "lib.txt"], { cwd: subSrc });
-    await runCommand("git", ["commit", "-m", "sub"], { cwd: subSrc });
+  test("a dirty submodule needs enhanced confirmation before a discarding switch", async () => {
+    const project = await storage.addProject(
+      createProject("https://example.invalid/repo.git", checkout),
+    );
+    const coordinator = new CoordinatorService(storage, () => ({
+      enabled: true,
+      running: true,
+      error: null,
+    }));
+    await coordinator.ensure(project.id);
+    const git = new ProjectGitService(storage);
     await runCommand("git", ["branch", "other"], { cwd: checkout });
     await runCommand(
       "git",
-      ["-c", "protocol.file.allow=always", "submodule", "add", subSrc, "vendor"],
+      ["-c", "protocol.file.allow=always", "submodule", "add", templateSubmodule, "vendor"],
       {
         cwd: checkout,
       },
@@ -954,7 +1108,7 @@ describe("project coordinator", () => {
 
   test.each(["wildcard", "absent", "stale"])(
     "launch bases refresh main with a %s tracking ref",
-    async (tracking) => {
+    async (tracking: string) => {
       const remote = path.join(root, "remote.git");
       await runCommand("git", ["init", "--bare", "-b", "main", remote], { cwd: root });
       await runCommand("git", ["remote", "add", "origin", remote], { cwd: checkout });

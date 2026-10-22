@@ -170,6 +170,8 @@ not advertise at its version before sending it.
 | `session history/resume/fork` | `session.history/resume/fork` | resumable sessions; fork adopts into a new tab | provider |
 | `session interactions list/resolve` | `session.interactions`, `session.interaction.resolve` | pending interactions, `resolve_native_agent_interaction` | provider |
 | `session transcript` | `session.transcript` | transcript window + message pages | read (content) |
+| `changes view ENV` | `changes.view` | `ChangeTrackingService.getView` / `projections.files` after `diffStats.sync` (the `changes_get_view` path) | read |
+| `changes history SESSION` | `changes.history` | `ChangeTrackingService.getHistory` + each turn's projection (no scan) | read |
 | `run get/wait` | `run.get` | operation store + reconciler | read |
 | `run retry/discard` | `run.retry/discard` | `retry/discard_native_agent_dispatch` | provider |
 | `run cancel/output` | `run.cancel/output` | exec worker control | process / read |
@@ -373,6 +375,33 @@ emits each new message once, with a `gap` record when more arrived than one
 page holds; it stops at `--timeout` or Ctrl+C and never affects the session.
 Transcript reads are explicit content access; status reads and waits never
 read transcripts.
+
+### Changes
+
+`changes view ENV` reads the backend's change projection for the environment
+(`environment-net`: its baseline to its current workspace) — the same
+`ChangeProjection` `changes_get_view` gives the desktop and web clients — plus
+one page of changed files. It never computes a count of its own. `--json`
+prints the action result verbatim:
+`{environmentId, scope, projection, files: {rows, nextCursor, totalRows}}`
+(on the first page `files` repeats `projection.filePage`). `--scope` accepts
+only `environment` (the default). `--page-size` takes 1–200 rows (default 200);
+`--cursor` pages through the same revision, and once the changes move on the
+cursor is refused with `cursor-expired` (exit 8) rather than mixing two
+measurements. Human output prints the scope label, state (with observation and
+coverage), file count and line counts with their quality — `~` partial or
+estimated, `?` unknown, `≥`/`≤` a bound; binary files and submodules show
+their kind instead of line counts — and the rows. An environment that has not
+been measured yet says so; nothing is shown as zero unless the backend
+measured zero.
+
+`changes history SESSION [--limit N] [--cursor C]` lists a session's persisted
+turns oldest first, each with the projection of every resource its
+presentation names (`projections`, keyed by resource key, without file rows);
+it never scans a worktree or reads a transcript or provider. A backend without
+change tracking answers both actions with `capability-unavailable` (exit 8)
+and advertises them as unavailable in `capabilities`. Both are reads: they
+take no request key and leave no receipt.
 
 ## Exec
 

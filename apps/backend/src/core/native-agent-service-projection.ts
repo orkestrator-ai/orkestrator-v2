@@ -1,3 +1,4 @@
+import { legacyCompatibilityCounts } from "./change-tracking/legacy-payload.js";
 import { revisedRowsReconciliationToken } from "@orkestrator/protocol/node/revised-rows";
 import path from "node:path";
 import { claudeReasoningSelection } from "@orkestrator/protocol/claude-model-catalog";
@@ -1140,10 +1141,25 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       delete projected.toolOutput;
       delete projected.toolError;
       if (rawDiff) {
+        // Older clients read these counts: give them backend CountPolicyV1
+        // numbers (or none), never the bridges' whole-side totals.
+        const counts = hasHeavyDiff
+          ? legacyCompatibilityCounts(projected.detailRef as string, {
+              toolName: typeof part.toolName === "string" ? part.toolName : undefined,
+              filePath: typeof rawDiff.filePath === "string" ? rawDiff.filePath : undefined,
+              before: typeof rawDiff.before === "string" ? rawDiff.before : undefined,
+              after: typeof rawDiff.after === "string" ? rawDiff.after : undefined,
+              diff: typeof rawDiff.diff === "string" ? rawDiff.diff : undefined,
+              additions: typeof rawDiff.additions === "number" ? rawDiff.additions : undefined,
+              deletions: typeof rawDiff.deletions === "number" ? rawDiff.deletions : undefined,
+            })
+          : {
+              ...(typeof rawDiff.additions === "number" ? { additions: rawDiff.additions } : {}),
+              ...(typeof rawDiff.deletions === "number" ? { deletions: rawDiff.deletions } : {}),
+            };
         projected.toolDiff = {
           ...(typeof rawDiff.filePath === "string" ? { filePath: rawDiff.filePath } : {}),
-          ...(typeof rawDiff.additions === "number" ? { additions: rawDiff.additions } : {}),
-          ...(typeof rawDiff.deletions === "number" ? { deletions: rawDiff.deletions } : {}),
+          ...counts,
           // Without this the renderer cannot tell a stripped diff from a
           // location-only hint, and every provider that identifies a file
           // mutation by diff content rather than tool name loses its edit

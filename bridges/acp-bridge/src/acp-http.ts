@@ -100,6 +100,19 @@ import {
 import { schedulePersist } from "./acp-persist-writer.js";
 import { structuredPromptInstruction } from "./acp-prompt.js";
 import { primeCommandChanges, settleCommandChangeWindows } from "./acp-command-changes.js";
+import {
+  CHANGE_EVIDENCE_ACK_ROUTE,
+  CHANGE_EVIDENCE_BODY_ROUTE,
+  CHANGE_EVIDENCE_ROUTE,
+  changeEvidenceAckRouteBody,
+  changeEvidenceBodyRouteBody,
+  changeEvidenceReadBody,
+} from "@orkestrator/protocol/node/change-tracking/evidence-routes";
+import {
+  beginAcpTurnEvidence,
+  changeEvidenceSpool,
+  endAcpTurnEvidence,
+} from "./change-evidence.js";
 import { holdParkedRequest, type AcpHoldFamily } from "./acp-interaction-hold.js";
 
 const TRANSCRIPT_GENERATION = randomBytes(16).toString("hex");
@@ -119,6 +132,26 @@ export async function route(
   if (!authenticated(request)) return json(response, 401, { error: "Unauthorized" });
   if (url.pathname === "/global/auth-check" && request.method === "GET") {
     return json(response, 200, { ok: true });
+  }
+  // Change evidence (docs/architecture/change-tracking.md). Reads never touch
+  // a session; only the backend's durable ack releases entries and bodies.
+  if (url.pathname === CHANGE_EVIDENCE_ROUTE && request.method === "GET") {
+    return json(
+      response,
+      200,
+      changeEvidenceReadBody(changeEvidenceSpool(), (name) => url.searchParams.get(name)),
+    );
+  }
+  if (url.pathname === CHANGE_EVIDENCE_BODY_ROUTE && request.method === "GET") {
+    return json(
+      response,
+      200,
+      changeEvidenceBodyRouteBody(changeEvidenceSpool(), (name) => url.searchParams.get(name)),
+    );
+  }
+  if (url.pathname === CHANGE_EVIDENCE_ACK_ROUTE && request.method === "POST") {
+    const answer = changeEvidenceAckRouteBody(changeEvidenceSpool(), await readJson(request));
+    return json(response, answer.ok ? 200 : 400, answer);
   }
   if (url.pathname === "/global/auth" && request.method === "GET") {
     const signedIn =
@@ -732,6 +765,7 @@ export async function route(
     // Grok reports a command only once it is running, so each shell call is
     // measured from the latest snapshot; this is the turn's first one.
     await primeCommandChanges();
+    beginAcpTurnEvidence(state, requestId || undefined);
     const acpPrompt = schema ? `${prompt}\n\n${structuredPromptInstruction(schema)}` : prompt;
     const promptCompletion = dispatchAcpPrompt(
       state,
@@ -843,6 +877,14 @@ export async function route(
         // by the agent — ACP has no status for that, so settle it explicitly.
         reconcileStaleToolParts(state);
         settleCommandChangeWindows(state);
+        endAcpTurnEvidence(
+          state,
+          stopReason === "cancelled"
+            ? "cancelled"
+            : terminalError || state.outputTruncated
+              ? "failed"
+              : "succeeded",
+        );
         state.currentTurnOutput = null;
         if (!state.outputTruncated && state.child === child && state.status !== "error") {
           state.status = "idle";
@@ -875,6 +917,7 @@ export async function route(
         cancelCursorToolMetadataReconcile(state);
         reconcileStaleToolParts(state, true);
         settleCommandChangeWindows(state);
+        endAcpTurnEvidence(state, "failed");
         if (requestId)
           setPromptJournal(state, {
             requestId,

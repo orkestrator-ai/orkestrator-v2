@@ -181,6 +181,28 @@ describe("public action input contract", () => {
     }
   });
 
+  test("change-tracking actions are immediate reads granted by read capabilities", () => {
+    expect(PUBLIC_ACTIONS["changes.view"]).toMatchObject({
+      version: 1,
+      mutation: false,
+      effects: [],
+      observation: "immediate",
+    });
+    expect(PUBLIC_ACTIONS["changes.history"]).toMatchObject({
+      version: 1,
+      mutation: false,
+      effects: [],
+      observation: "immediate",
+    });
+    expect(PUBLIC_ACTION_INPUTS["changes.view"].capability).toBe("discovery");
+    expect(PUBLIC_ACTION_INPUTS["changes.view"].input.required).toEqual(["environmentId"]);
+    expect(PUBLIC_ACTION_INPUTS["changes.view"].input.properties.scope?.enum).toEqual([
+      "environment",
+    ]);
+    expect(PUBLIC_ACTION_INPUTS["changes.history"].capability).toBe("sessions.read");
+    expect(PUBLIC_ACTION_INPUTS["changes.history"].input.required).toEqual(["sessionId"]);
+  });
+
   test("confirmation classes match the agreed risk table", () => {
     const confirmed = Object.fromEntries(
       entries

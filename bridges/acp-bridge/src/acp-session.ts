@@ -122,6 +122,7 @@ import {
 import { InteractionDeadline } from "@orkestrator/protocol/agent-interaction-deadline";
 import { applyCommandInventory } from "./acp-commands.js";
 import { applyJournaledCommandChanges, trackCommandChangeWindow } from "./acp-command-changes.js";
+import { recordAcpToolApproval, recordAcpToolEvidence } from "./change-evidence.js";
 
 export async function listResumableSessions(): Promise<JsonObject[]> {
   if (sessionListProbe) return sessionListProbe;
@@ -993,6 +994,7 @@ export function attachChild(state: SessionState, child: AcpProcess): void {
     }
     if (policy?.approvals === "deny") {
       state.policyDeniedRequests = (state.policyDeniedRequests ?? 0) + 1;
+      recordAcpToolApproval(state, toolCallId, "denied");
       child.respond(requestId, policyDenialOutcome(params));
       return;
     }
@@ -1402,13 +1404,24 @@ export function parkPermission(
   const id = randomBytes(12).toString("hex");
   const requestedAt = Date.now();
   const promptSequence = state.promptSequence;
+  const toolCallId = isObject(params.toolCall) ? params.toolCall.toolCallId : undefined;
   const finish = (optionId?: string) => {
     const approval = state.approvals.get(id);
     if (!approval) return;
     approval.deadline.settle();
     state.approvals.delete(id);
-    if (optionId && approval.options.some((option) => option.optionId === optionId)) {
-      child.respond(requestId, { outcome: { outcome: "selected", optionId } });
+    const selected = optionId
+      ? approval.options.find((option) => option.optionId === optionId)
+      : undefined;
+    // An unanswered or cancelled request, and a `reject_*` choice, refuse the
+    // call; any other selected option lets it run.
+    recordAcpToolApproval(
+      state,
+      toolCallId,
+      selected && !selected.kind?.startsWith("reject") ? "allowed" : "denied",
+    );
+    if (selected) {
+      child.respond(requestId, { outcome: { outcome: "selected", optionId: selected.optionId } });
     } else {
       child.respond(requestId, { outcome: { outcome: "cancelled" } });
     }
@@ -1431,6 +1444,7 @@ export function parkPermission(
     respond: finish,
     deadline: parkedDeadline(requestedAt, () => state.promptDeadlineAt, expire),
   });
+  recordAcpToolApproval(state, toolCallId, "awaiting");
   state.revision += 1;
   schedulePersist();
 }
@@ -1586,7 +1600,12 @@ export function applySessionUpdate(state: SessionState, params: JsonObject): voi
   if (state.outputTruncated) return;
   if (kind === "tool_call" || kind === "tool_call_update") {
     const part = applyToolCallUpdate(state, update, kind === "tool_call");
-    if (part) trackCommandChangeWindow(state, part, kind === "tool_call");
+    if (part) {
+      // Evidence first: a window this update closes reports its observation
+      // against the call record the evidence adapter has just opened.
+      recordAcpToolEvidence(state, part, update);
+      trackCommandChangeWindow(state, part, kind === "tool_call");
+    }
     return;
   }
   if (kind === "plan" || kind === "plan_update") {

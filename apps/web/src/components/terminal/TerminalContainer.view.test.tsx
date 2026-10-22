@@ -1546,6 +1546,12 @@ describe("TerminalContainer", () => {
     expect(screen.getByText("Environment setup failed.")).toBeTruthy();
     expect(screen.getByRole("button", { name: /retry setup/i })).toBeTruthy();
     expect(screen.getByRole("button", { name: /skip setup/i })).toBeTruthy();
+    // Laid-out tab content (native agent tabs included) is z-10. Without a higher
+    // layer, a native tab's own transparent setup overlay paints over this one.
+    const recoveryLayer = screen
+      .getByText("Environment setup failed.")
+      .closest(".inset-0.bg-background");
+    expect(recoveryLayer?.classList.contains("z-20")).toBe(true);
   });
 
   test("hydrates and preserves a build tab inserted before the container mounts", async () => {

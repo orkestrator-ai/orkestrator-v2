@@ -137,6 +137,10 @@ describe("real Git through the shared owner", () => {
     expect(await readRows()).toEqual([{ path: "a.txt", status: "M", additions: 1 }]);
     // Served from the hint-driven scan, not a read-triggered one.
     expect(metrics.snapshot().kinds["file-list-read"]?.cacheHits).toBe(hits + 1);
+    // The scan itself is read-only. A `git status` that refreshed the index
+    // would be a watcher hint of its own, invalidating the result it had just
+    // published and making the read above join a redundant rescan (case 0180).
+    expect((await fs.stat(index)).mtimeMs).toBe(indexBefore);
   });
 
   test("staging in a linked worktree (index outside the root) is detected", async () => {

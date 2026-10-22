@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setSystemTime, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -180,6 +180,33 @@ describe("StorageService agent mail conversations", () => {
       expect(forE3.conversations.map(({ key }) => key)).toEqual([agentMailConversationKey(E1, E3)]);
       expect(forE3.conversations[0]!.participants[0]!.key).toBe(E3);
     } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps send order for mail sent within one millisecond", async () => {
+    const { storage, dataDir } = await fixture();
+    setSystemTime(new Date("2026-10-20T12:00:00.000Z"));
+    try {
+      const sent = [];
+      for (let index = 0; index < 20; index++) {
+        sent.push(
+          await storage.sendAgentMail(tab(index % 2 === 0 ? "e1" : "e2"), {
+            requestId: `same-ms-${index}`,
+            toEnvironmentId: index % 2 === 0 ? "e2" : "e1",
+            toTabId: "agent",
+            body: `Message ${index}`,
+          }),
+        );
+      }
+      const conversation = await storage.getAgentMailConversation(E1, E2);
+      expect(conversation.messages.map(({ id }) => id)).toEqual(sent.map(({ id }) => id));
+      const listed = await storage.listAgentMailConversations();
+      expect(listed.conversations).toHaveLength(1);
+      expect(listed.conversations[0]!.lastMessage.id).toBe(sent.at(-1)!.id);
+      expect(listed.conversations[0]!.lastPreview).toBe("Message 19");
+    } finally {
+      setSystemTime();
       await fs.rm(dataDir, { recursive: true, force: true });
     }
   });

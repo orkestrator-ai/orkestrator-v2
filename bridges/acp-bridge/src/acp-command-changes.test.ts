@@ -54,9 +54,16 @@ function fakeProbe(result: MeasuredWorkspaceChange | undefined = CHANGE): {
     note: async (cwd, callId) => {
       calls.push(["note", cwd, callId]);
     },
-    end: async (callId) => {
+    endObservation: async (callId) => {
       calls.push(["end", callId]);
-      return result;
+      return result
+        ? {
+            change: result,
+            boundary: { before: "prior-observation", after: "after-terminal" },
+            overlap: "none-observed",
+            omittedReasons: [],
+          }
+        : undefined;
     },
     discard: (callId) => {
       calls.push(["discard", callId]);

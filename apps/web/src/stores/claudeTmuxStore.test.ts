@@ -689,8 +689,9 @@ describe("applyTranscriptLine", () => {
     expect(msg.content).toBe("model is Sonnet 4.6 now");
   });
 
-  test("Edit tool_use populates toolDiff with file_path and before/after", () => {
-    const line: TranscriptLine = {
+  test("tool_use parts carry the diff sides the backend stamped, verbatim", () => {
+    // Mapping tool inputs to sides is the backend's job (tmux-transcript-tool-diffs).
+    useClaudeTmuxStore.getState().applyTranscriptLine("e", {
       type: "assistant",
       uuid: "edit-1",
       message: {
@@ -700,195 +701,36 @@ describe("applyTranscriptLine", () => {
             type: "tool_use",
             id: "tu-edit",
             name: "Edit",
-            input: {
-              file_path: "/work/apps/web/package.json",
-              old_string: '"react": "18.0.0"',
-              new_string: '"react": "19.0.0"',
-            },
+            input: { file_path: "/work/a.ts", old_string: "x", new_string: "y" },
           },
+          { type: "tool_use", id: "tu-read", name: "Read", input: { file_path: "/work/b.ts" } },
         ],
       },
-    };
-    useClaudeTmuxStore.getState().applyTranscriptLine("e", line);
-    const msg = useClaudeTmuxStore.getState().getTab("e").messages[0]!;
-    const tool = msg.parts.find((p) => p.type === "tool-invocation");
-    expect(tool?.toolDiff?.filePath).toBe("/work/apps/web/package.json");
-    expect(tool?.toolDiff?.before).toBe('"react": "18.0.0"');
-    expect(tool?.toolDiff?.after).toBe('"react": "19.0.0"');
-    expect(tool?.toolDiff?.additions).toBe(1);
-    expect(tool?.toolDiff?.deletions).toBe(1);
-  });
-
-  test("Write tool_use populates toolDiff with after = content", () => {
-    const line: TranscriptLine = {
-      type: "assistant",
-      uuid: "write-1",
-      message: {
-        role: "assistant",
-        content: [
-          {
-            type: "tool_use",
-            id: "tu-write",
-            name: "Write",
-            input: { file_path: "/work/foo.txt", content: "line1\nline2" },
-          },
-        ],
+      toolDiffs: {
+        "tu-edit": { filePath: "/work/a.ts", before: "x", after: "y" },
+        "tu-read": { filePath: "/work/b.ts" },
       },
-    };
-    useClaudeTmuxStore.getState().applyTranscriptLine("e", line);
-    const msg = useClaudeTmuxStore.getState().getTab("e").messages[0]!;
-    const tool = msg.parts.find((p) => p.type === "tool-invocation");
-    expect(tool?.toolDiff?.filePath).toBe("/work/foo.txt");
-    expect(tool?.toolDiff?.before).toBe("");
-    expect(tool?.toolDiff?.after).toBe("line1\nline2");
-    expect(tool?.toolDiff?.additions).toBe(2);
-    expect(tool?.toolDiff?.deletions).toBe(0);
-  });
-
-  test("MultiEdit tool_use populates synthetic before/after chunks", () => {
-    const line: TranscriptLine = {
-      type: "assistant",
-      uuid: "multi-1",
-      message: {
-        role: "assistant",
-        content: [
-          {
-            type: "tool_use",
-            id: "tu-multi",
-            name: "MultiEdit",
-            input: {
-              file_path: "/work/foo.ts",
-              edits: [
-                { old_string: "one", new_string: "two" },
-                { old_string: "three", new_string: "four" },
-              ],
-            },
-          },
-        ],
-      },
-    };
-
-    useClaudeTmuxStore.getState().applyTranscriptLine("e", line);
-    const tool = useClaudeTmuxStore
+    });
+    const tools = useClaudeTmuxStore
       .getState()
       .getTab("e")
-      .messages[0]!.parts.find((p) => p.type === "tool-invocation");
-    expect(tool?.toolDiff?.filePath).toBe("/work/foo.ts");
-    expect(tool?.toolDiff?.before).toBe("one\nthree");
-    expect(tool?.toolDiff?.after).toBe("two\nfour");
-    expect(tool?.toolDiff?.additions).toBe(2);
-    expect(tool?.toolDiff?.deletions).toBe(2);
+      .messages[0]!.parts.filter((p) => p.type === "tool-invocation");
+    expect(tools[0]?.toolDiff).toEqual({ filePath: "/work/a.ts", before: "x", after: "y" });
+    expect(tools[1]?.toolDiff).toEqual({ filePath: "/work/b.ts" });
   });
 
-  test("MultiEdit chunks that already end in a newline gain no blank line", () => {
-    // Joining unconditionally with "\n" would render a line the file never had
-    // and count it, so two deletions would be badged as three.
-    const line: TranscriptLine = {
-      type: "assistant",
-      uuid: "multi-nl",
-      message: {
-        role: "assistant",
-        content: [
-          {
-            type: "tool_use",
-            id: "tu-multi-nl",
-            name: "MultiEdit",
-            input: {
-              file_path: "/work/foo.ts",
-              edits: [
-                { old_string: "one\n", new_string: "two\n" },
-                { old_string: "three", new_string: "four" },
-              ],
-            },
-          },
-        ],
-      },
-    };
-
-    useClaudeTmuxStore.getState().applyTranscriptLine("e", line);
-    const tool = useClaudeTmuxStore
-      .getState()
-      .getTab("e")
-      .messages[0]!.parts.find((p) => p.type === "tool-invocation");
-    expect(tool?.toolDiff?.before).toBe("one\nthree");
-    expect(tool?.toolDiff?.after).toBe("two\nfour");
-    expect(tool?.toolDiff?.additions).toBe(2);
-    expect(tool?.toolDiff?.deletions).toBe(2);
-  });
-
-  test("NotebookEdit tool_use captures notebook path and new source", () => {
-    const line: TranscriptLine = {
-      type: "assistant",
-      uuid: "notebook-1",
-      message: {
-        role: "assistant",
-        content: [
-          {
-            type: "tool_use",
-            id: "tu-notebook",
-            name: "NotebookEdit",
-            input: {
-              notebook_path: "/work/analysis.ipynb",
-              new_source: "print('done')",
-            },
-          },
-        ],
-      },
-    };
-
-    useClaudeTmuxStore.getState().applyTranscriptLine("e", line);
-    const tool = useClaudeTmuxStore
-      .getState()
-      .getTab("e")
-      .messages[0]!.parts.find((p) => p.type === "tool-invocation");
-    expect(tool?.toolDiff?.filePath).toBe("/work/analysis.ipynb");
-    expect(tool?.toolDiff?.after).toBe("print('done')");
-    expect(tool?.toolDiff?.additions).toBe(1);
-    expect(tool?.toolDiff?.deletions).toBe(0);
-  });
-
-  test("delete-mode NotebookEdit keeps the path but claims no line counts", () => {
-    const line: TranscriptLine = {
-      type: "assistant",
-      uuid: "notebook-del",
-      message: {
-        role: "assistant",
-        content: [
-          {
-            type: "tool_use",
-            id: "tu-notebook-del",
-            name: "NotebookEdit",
-            input: {
-              notebook_path: "/work/analysis.ipynb",
-              edit_mode: "delete",
-            },
-          },
-        ],
-      },
-    };
-
-    useClaudeTmuxStore.getState().applyTranscriptLine("e", line);
-    const tool = useClaudeTmuxStore
-      .getState()
-      .getTab("e")
-      .messages[0]!.parts.find((p) => p.type === "tool-invocation");
-    expect(tool?.toolDiff?.filePath).toBe("/work/analysis.ipynb");
-    expect(tool?.toolDiff?.additions).toBeUndefined();
-    expect(tool?.toolDiff?.deletions).toBeUndefined();
-  });
-
-  test("an unmapped tool still surfaces the file path it touched", () => {
+  test("without backend-stamped sides the store derives nothing from the tool input", () => {
     useClaudeTmuxStore.getState().applyTranscriptLine("e", {
       type: "assistant",
-      uuid: "read-1",
+      uuid: "edit-2",
       message: {
         role: "assistant",
         content: [
           {
             type: "tool_use",
-            id: "tu-read",
-            name: "Read",
-            input: { file_path: "/work/foo.ts" },
+            id: "tu-edit",
+            name: "Edit",
+            input: { file_path: "/work/a.ts", old_string: "x", new_string: "y" },
           },
         ],
       },
@@ -897,7 +739,7 @@ describe("applyTranscriptLine", () => {
       .getState()
       .getTab("e")
       .messages[0]!.parts.find((p) => p.type === "tool-invocation");
-    expect(tool?.toolDiff).toEqual({ filePath: "/work/foo.ts" });
+    expect(tool?.toolDiff).toBeUndefined();
   });
 
   test("failed tool_result marks invocation failure and stores error text", () => {

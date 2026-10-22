@@ -50,6 +50,26 @@ evidence. This file only points at it.
   `bridges/codex-bridge/src/testing/fake-codex-subagents.mjs` through
   `apps/backend/tests/codex-subagent-stack.ts`. The live run is recorded
   under "Codex sub-agent cards evidence" below.
+- Agent-test provider homes: every profile has its own `CLAUDE_CONFIG_DIR`,
+  `CODEX_HOME` and XDG directories, whether or not it authorizes the
+  provider's credential source (`createBackendProcessEnvironment` in
+  `apps/desktop/electron/backend-process.ts`). An authorized Codex or
+  OpenCode source adds a restricted, owner-only copy of the host's
+  `auth.json` with no refresh token, re-read on every start
+  (`seedAgentTestProviderCredentials` in `apps/desktop/scripts/dev/profile-io.ts`);
+  an authorized Claude source adds a process-scoped access token. Only Pi
+  shares a host file (its `auth.json`, in place). See
+  [`credentials-and-models.md`](../development/credentials-and-models.md).
+
+  Codex approval rules previously leaked through the shared home too. On
+  2026-10-21 a profile run of
+  `paused-interactions-live.spec.ts` answered a Codex command approval with
+  the card's optional "Approve with command policy" choice (a harness bug,
+  since fixed). Codex then wrote `prefix_rule(... decision="allow")` into the
+  host's own `~/.codex/rules/default.rules`, and the next run's `touch` ran
+  on the host policy without asking. The file was created by that run and
+  removed afterwards. The isolated Codex home now covers `rules/` as well
+  as `config.toml`.
 - Agent-test isolation: `checkHostTool` (`apps/backend/src/core/host-tools.ts`)
   reports only managed binaries in an agent-test profile, but spawning does
   not match it. `resolveClaudeBinary`, `resolveCodexBinary`,
@@ -93,21 +113,17 @@ evidence. This file only points at it.
    dismisses it with a locator handler. Pass the workspace package version in
    development, or skip the reminder for agent-test profiles.
 
-4. **MCP editor writes reach host provider homes from an agent-test
-   profile.** Authorizing the Codex or OpenCode credential source points the
-   backend's `CODEX_HOME` and XDG directories at the host's real ones
-   (`createBackendProcessEnvironment` in
-   `apps/desktop/electron/backend-process.ts`), so a backend-user MCP save in
-   such a profile edits the host's own `~/.codex/config.toml` or
-   `~/.config/opencode/opencode.json(c)`, and a Codex project-trust grant
-   would too. The live MCP apply record
-   ([mcp-management.md](mcp-management.md#live-apply-record-2026-10-18))
-   avoided it by leaving both sources unauthorized and seeding an access-only
-   Codex token and the OpenCode API key into the profile by hand. Give
-   those providers an isolated home with a credential snapshot (as Grok and
-   Cursor already have), or make the MCP editor refuse host-home sources in
-   an agent-test profile. A Codex snapshot must not carry a refresh token the
-   copy could rotate.
+4. **Agent-test containers still receive the host's Claude refresh token.**
+   A container environment in a profile that authorizes Claude is sent the
+   host's complete Claude credential JSON over stdin
+   (`syncContainerAgentAccountsOnStart` in
+   `apps/backend/src/core/agent-accounts-containers.ts`, through
+   `readRuntimeHostClaudeCredentials`), refresh token included, so the
+   container's Claude can refresh and rotate the host's login. Local bridges
+   get only the access token (`applyClaudeHostCredentialEnvironment`). Send an
+   agent-test container the access token only, as the local path and the CLI
+   scenario harness do, and decide whether production containers should
+   share a rotating refresh token with the host at all. Not run live here.
 
 ### Qualification: checks with no other home
 
@@ -202,6 +218,91 @@ Provider runs (credentials needed). Every provider also has items in [native-age
      app-server ends the turn, so it is a different scenario from card
      identity.
 
+- Agent-test provider homes (2026-10-21). An authorized Codex or OpenCode
+  source used to point the profile's `CODEX_HOME` and XDG directories at the
+  host's, so MCP editor saves, Codex trust grants, rollouts and OpenCode
+  state landed in the operator's real `~/.codex` and `~/.config/opencode`.
+  Decisions:
+  1. Isolate the homes and snapshot the credential, rather than make the MCP
+     editor refuse host-home sources. A refusal would leave every other
+     writer (trust grants, sessions, preferences, a refresh) on the host, and
+     would block user-scope MCP qualification for those providers.
+  2. The snapshot is taken by the `dev:test` launcher
+     (`seedAgentTestProviderCredentials`), as Grok's and Cursor's already
+     are, and re-read on every start. It carries no refresh token: Codex
+     gets a non-empty placeholder (the Codex bridge treats a login without a
+     refresh token or key as signed out) and a fresh `last_refresh`;
+     OpenCode OAuth entries get an empty `refresh`. An expired access token
+     is withheld with a warning. Once a copied access token lapses (about 10
+     days for ChatGPT), the profile is signed out until the host's own Codex
+     refreshes and the profile restarts; the host login is never spent.
+  3. Codex and OpenCode remove only a snapshot an earlier start published
+     (an `auth.json.orkestrator-host-snapshot` marker), so a login made
+     inside a profile that does not authorize the host's survives. Grok keeps
+     its unconditional removal.
+  4. Claude gets the same treatment: the bridge and the host catalogue probe
+     now keep the profile's own `CLAUDE_CONFIG_DIR` and authenticate with the
+     brokered access token only (`applyClaudeHostCredentialEnvironment`).
+     Before, they used the host's `~/.claude`, so profile sessions and
+     project state were written there. The host directory is still read for
+     the login and for read-only container imports. This also settles the
+     old `~/.claude/.claude.json` first-run question: the profile is a first
+     run by design, and the live run below authenticated without it.
+  5. Host OpenCode config (`opencode.json(c)`) and Codex `config.toml` are
+     not copied: they can carry MCP servers, hooks and provider settings the
+     profile should not inherit. A provider defined only in host config is
+     therefore not available in a profile.
+  6. Pi still shares the host `auth.json` in place; that is unchanged.
+
+### Agent-test provider home isolation evidence
+
+Live run, 2026-10-21, macOS 27.0 arm64, this change on top of `9b3f53a2`,
+Bun 1.4.2, pins as above (codex 0.162.1, opencode 1.19.0, claude 2.1.296),
+bridges rebuilt first. Profile `qa-hosthome-0610`: `mise run dev:test
+--profile qa-hosthome-0610 --fixture --credential-source claude
+--credential-source codex --credential-source opencode --agent-platforms
+claude,codex,opencode`.
+
+- Seeding: the profile's `agent-credentials/codex/auth.json` and
+  `agent-credentials/xdg-data/opencode/auth.json` were written `0600` with
+  their markers. The Codex copy held the host's access token, a placeholder
+  refresh token (checked by comparison, never printed) and no other secret;
+  the OpenCode copy held its two API-key entries. The backend process had
+  `HOME`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and all three XDG variables
+  inside the profile.
+- `ORKESTRATOR_AGENT_TEST_LIVE_MCP=1 ORKESTRATOR_AGENT_TEST_MCP_PROVIDERS=codex,opencode,claude
+  ORKESTRATOR_AGENT_TEST_MCP_SCOPES=backend-user,project
+  ORKESTRATOR_AGENT_TEST_MCP_MODELS=opencode=opencode-go/deepseek-v4.1-flash,codex=gpt-6.1-sol
+  bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts
+  e2e/agent-testing/mcp-apply-live.spec.ts`: exit 1, 2 passed, 1 failed,
+  21.6 min.
+  - Codex passed (10.9 min), user and project scope, neither skipped. The
+    user-scope source was the profile's own `agent-credentials/codex/config.toml`,
+    which also received the project trust grant; the host `config.toml` did not.
+  - Claude passed (7.0 min), user and project scope, signed in through the
+    brokered token with the profile's own `CLAUDE_CONFIG_DIR`; its two
+    session directories are in the profile's `claude/projects`.
+  - OpenCode failed (3.7 min): add, edit and remove applied from the
+    profile's own `xdg-config/opencode/opencode.jsonc` and both tabs reached
+    the edited server, but after each rename the model called the new name
+    when asked for the old one, and on the first add it sent a different
+    nonce. The rerun alone (run id `qa-hosthome-0610-oc2`, 3.6 min) failed
+    the same two rename probes only. This is model behaviour, not apply or
+    isolation; see the follow-up in [mcp-management.md](mcp-management.md).
+- Host after the run: `~/.codex/auth.json`, `~/.local/share/opencode/auth.json`,
+  `~/.config/opencode/opencode.jsonc` and `~/.grok/auth.json` had the same
+  SHA-256 and mtime as before the profile started; no host `config.toml`,
+  `opencode.jsonc` or `~/.claude.json` entry names the profile or a probe
+  server; no host Codex rollout, Claude project directory or OpenCode file
+  names the profile. The host's Codex refresh token was not spent.
+- Cleanup: `dev:stop` and `dev:reset` on the profile. Nothing was removed
+  from the host.
+- Left on the host by earlier profiles (not touched; the operator may remove
+  them): 30 `[projects."…/orkestrator-v2-dev/profiles/<id>/…"]` trust entries
+  in `~/.codex/config.toml`, 388 rollouts under `~/.codex/sessions` that
+  name a dev profile path, and 206 `~/.claude/projects` directories for dev
+  profile worktrees. All hold synthetic fixture content only.
+
 ### Codex sub-agent cards evidence
 
 Live run, 2026-10-17, macOS 27.0 arm64, commit `31d0fb06`, managed codex
@@ -263,13 +364,6 @@ prompt asked for three sub-agents (`alpha_check`, `beta_check`,
   second. It also checks that reopening only the backend preserves the live
   row. This guards the current boundary behavior; aligning the layouts still
   needs the recorded-stream evidence above.
-
-- When the host has no `CLAUDE_CONFIG_DIR`,
-  `apps/desktop/electron/backend-process.ts` defaults
-  `ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR` to `<home>/.claude`. Claude
-  then looks for `~/.claude/.claude.json` rather than `~/.claude.json`, so it
-  may treat the profile as a first run. Authentication still works through
-  `ANTHROPIC_AUTH_TOKEN`. Needs a live check.
 
 ## Related
 

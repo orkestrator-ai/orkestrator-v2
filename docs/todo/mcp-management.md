@@ -146,6 +146,16 @@ collects the live evidence the shipped behaviour has never had.
     query, or a restart if it never does (`olderBridgeOutcome` in
     `evidence.ts`).
 
+12. **OpenCode rename probe calls the new name.** On 2026-10-21, in
+    `qa-hosthome-0610` (see "Agent-test provider home isolation evidence" in
+    [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md)),
+    `opencode-go/deepseek-v4.1-flash` answered every "call the old server"
+    probe after a rename by calling the renamed one, in both runs (user and
+    project scope); add, edit and remove passed, and the old server was gone.
+    The same model passed on 2026-10-18. Make the probe name a tool the
+    model cannot substitute (or accept a call to a different server when the
+    old one is absent from the tool rows), or pin a model that follows it.
+
 ### Qualification
 
 Shared prerequisites and batching are in

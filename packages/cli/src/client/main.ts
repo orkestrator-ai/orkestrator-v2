@@ -6,6 +6,7 @@ import {
   sniffOutputMode,
   type CommandTree,
 } from "./argv.js";
+import { changesCommands } from "./commands/changes.js";
 import { connectionCommands } from "./commands/connection.js";
 import { environmentCommands } from "./commands/environment.js";
 import { hostCommands } from "./commands/host.js";
@@ -31,6 +32,7 @@ export const CLIENT_COMMANDS: readonly CommandSpec[] = [
   ...projectCommands,
   ...environmentCommands,
   ...sessionCommands,
+  ...changesCommands,
   ...runCommands,
   ...toolchainCommands,
   ...hostCommands,

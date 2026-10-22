@@ -240,6 +240,14 @@ that default or normalize values current writers may still omit (environment
 setup phase, agent settings, mail defaults) stay where they are. Only shapes
 no current writer can produce belong in an upgrade migration.
 
+Version 4 (`change-tracking/ledger-schema.ts`) adds the change-tracking
+ledger: the first engine with its own indexed tables (worktrees, evidence,
+snapshots, turn boundaries, measurements, selections, outbox, restore
+records) because its queries need joins and range scans. Its file contents
+live under `<dataDir>/change-tracking/` (a content-addressed object store and
+evidence bodies), so a backup of change history must include that directory
+as well as `orkestrator.sqlite`. See [change-tracking.md](change-tracking.md).
+
 ### Version 2: legacy JSON import
 
 On the first open of a data directory, every legacy store file is imported:

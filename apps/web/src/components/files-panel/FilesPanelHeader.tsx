@@ -4,19 +4,27 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { X, RefreshCw } from "lucide-react";
 import { useFilesPanelStore } from "@/stores";
 import type { FilesPanelTab } from "@/stores";
+import { useEnvironmentChangeProjection } from "@/hooks/useChangeProjection";
 
 interface FilesPanelHeaderProps {
   onRefresh: () => void;
+  /** Environment whose change projection counts the Changes tab. */
+  changeEnvironmentId?: string | null;
 }
 
-export function FilesPanelHeader({ onRefresh }: FilesPanelHeaderProps) {
+export function FilesPanelHeader({ onRefresh, changeEnvironmentId }: FilesPanelHeaderProps) {
   const activeTab = useFilesPanelStore((state) => state.activeTab);
   const setActiveTab = useFilesPanelStore((state) => state.setActiveTab);
   const changes = useFilesPanelStore((state) => state.changes);
   const closePanel = useFilesPanelStore((state) => state.closePanel);
   const isLoadingChanges = useFilesPanelStore((state) => state.isLoadingChanges);
   const isLoadingTree = useFilesPanelStore((state) => state.isLoadingTree);
-  const changesCount = changes.length;
+  const changeProjection = useEnvironmentChangeProjection(changeEnvironmentId);
+  // The backend's changed-file count when it measures the environment (an
+  // unknown count shows "?", never 0); the legacy list's length otherwise.
+  const changesCount: number | "?" | null = changeProjection
+    ? (changeProjection.counters.changedFiles ?? (changeProjection.badge.visible ? "?" : null))
+    : changes.length;
   const isLoading = activeTab === "changes" ? isLoadingChanges : isLoadingTree;
 
   return (
@@ -34,7 +42,7 @@ export function FilesPanelHeader({ onRefresh }: FilesPanelHeaderProps) {
             className="rounded-lg px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground data-[state=active]:!bg-elevated data-[state=active]:!text-foreground data-[state=active]:shadow-none dark:data-[state=active]:border-transparent"
           >
             Changes
-            {changesCount > 0 && (
+            {changesCount !== null && (changesCount === "?" || changesCount > 0) && (
               <span className="ml-1.5 rounded-md bg-white/10 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-foreground">
                 {changesCount}
               </span>

@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { useFederation } from "@/components/federation/FederationProvider";
+import { MachineDot } from "@/components/federation/MachineDot";
 import { useConfigStore } from "@/stores";
 import * as backend from "@/lib/backend";
 import {
@@ -101,6 +103,44 @@ interface SettingsPageProps {
   sectionRequest?: number;
 }
 
+/** Sections that configure this client rather than a backend. */
+const CLIENT_SECTIONS: ReadonlySet<GlobalSettingsSection> = new Set(["connections"]);
+
+/**
+ * With several machines in view, every settings page says whose settings it
+ * edits: this client, or the machine this window is bound to. Provider
+ * credentials, defaults, toolchains, containers and maintenance always
+ * target one specific backend.
+ */
+function SettingsScopeBanner({ section }: { section: GlobalSettingsSection | "" }) {
+  const { enabled, boundMachine } = useFederation();
+  if (!enabled || !boundMachine) return null;
+  if (!section) return null;
+  const client = CLIENT_SECTIONS.has(section);
+  return (
+    <div
+      className="mb-5 flex max-w-4xl items-center gap-2 rounded-md border border-zinc-800 bg-zinc-950/40 px-3 py-2 text-xs text-zinc-400"
+      data-testid="settings-scope"
+    >
+      {client ? (
+        <span>
+          <span className="font-medium text-zinc-200">This client</span> — saved on this device
+          only.
+        </span>
+      ) : (
+        <>
+          <MachineDot colorToken={boundMachine.colorToken} machineName={boundMachine.name} />
+          <span>
+            <span className="font-medium text-zinc-200">Backend: {boundMachine.name}</span> — these
+            settings belong to that machine. Other machines keep their own; open a machine&apos;s
+            panel to change its settings.
+          </span>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function SettingsPage({
   open,
   onOpenChange,
@@ -140,40 +180,45 @@ export function SettingsPage({
       defaultSection={defaultSection}
       sectionRequest={sectionRequest}
     >
-      {(activeSection) =>
-        // Skills is a read-only browser of the host's skill directories, not a
-        // config form, so it bypasses the auto-saving settings form.
-        activeSection === "updates" ? (
-          <UpdatesSettings />
-        ) : activeSection === "disk-usage" ? (
-          <DiskUsageSettings />
-        ) : activeSection === "usage" ? (
-          <UsageSettings />
-        ) : activeSection === "skills" ? (
-          <SkillsSettings />
-        ) : activeSection === "connections" ? (
-          <ConnectionsSettings />
-        ) : activeSection === "mcp" ? (
-          <McpSettings />
-        ) : activeSection === "mcp-servers" ? (
-          <ProviderMcpSettings />
-        ) : activeSection === "previews" ? (
-          <div className="space-y-8">
-            <PreviewSettings />
-            <WebAnnotationSettings />
-          </div>
-        ) : activeSection === "messaging" ? (
-          <MessagingSettings />
-        ) : isLoading && !initialLoadDone ? (
-          <div className="flex items-center justify-center py-12">
-            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-          </div>
-        ) : activeSection === "sounds" ? (
-          <SoundsSettings />
-        ) : (
-          <GlobalSettings activeSection={activeSection} />
-        )
-      }
+      {(activeSection) => (
+        <>
+          <SettingsScopeBanner section={activeSection} />
+          {
+            // Skills is a read-only browser of the host's skill directories, not a
+            // config form, so it bypasses the auto-saving settings form.
+            activeSection === "updates" ? (
+              <UpdatesSettings />
+            ) : activeSection === "disk-usage" ? (
+              <DiskUsageSettings />
+            ) : activeSection === "usage" ? (
+              <UsageSettings />
+            ) : activeSection === "skills" ? (
+              <SkillsSettings />
+            ) : activeSection === "connections" ? (
+              <ConnectionsSettings />
+            ) : activeSection === "mcp" ? (
+              <McpSettings />
+            ) : activeSection === "mcp-servers" ? (
+              <ProviderMcpSettings />
+            ) : activeSection === "previews" ? (
+              <div className="space-y-8">
+                <PreviewSettings />
+                <WebAnnotationSettings />
+              </div>
+            ) : activeSection === "messaging" ? (
+              <MessagingSettings />
+            ) : isLoading && !initialLoadDone ? (
+              <div className="flex items-center justify-center py-12">
+                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+              </div>
+            ) : activeSection === "sounds" ? (
+              <SoundsSettings />
+            ) : (
+              <GlobalSettings activeSection={activeSection} />
+            )
+          }
+        </>
+      )}
     </FullscreenSettingsLayout>
   );
 }

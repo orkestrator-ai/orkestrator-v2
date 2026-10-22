@@ -20,11 +20,20 @@
  * is from the SDK's stored conversation (`hydrateHistory`), whose tool-call
  * steps carry no call id — `RunInteractionAccumulator.onTool` keeps only the
  * tool call itself — so a journal keyed by call id would have nothing to match.
+ *
+ * Each measured window is also reported, with its boundaries and overlap kept
+ * apart, as a change-evidence observation (`change-evidence.ts`); the badge
+ * keeps its old value for clients that predate the backend's measurements.
  */
 import { resolve } from "node:path";
 import { hasMeasuredChanges } from "@orkestrator/protocol/node/command-change-journal";
 import { isFileEditToolName } from "@orkestrator/protocol/tool-diff";
-import { WorkspaceChangeProbe } from "@orkestrator/protocol/node/workspace-change-probe";
+import {
+  WorkspaceChangeProbe,
+  type ProbeObservation,
+} from "@orkestrator/protocol/node/workspace-change-probe";
+import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
+import type { TurnEvidence } from "./change-evidence.js";
 import { workingDirectory } from "./config.js";
 import { schedulePersist } from "./persistence.js";
 import { isObject, nonBlank, type JsonObject, type SessionState } from "./state.js";
@@ -33,7 +42,7 @@ import { applyCommandChanges } from "./translate.js";
 /** The slice of the probe this bridge uses, so a test can stand in for git. */
 export type CommandChangeProbe = Pick<
   WorkspaceChangeProbe,
-  "prime" | "begin" | "note" | "end" | "discard"
+  "prime" | "begin" | "note" | "endObservation" | "discard"
 >;
 
 /**
@@ -95,7 +104,10 @@ const inertTracker: CommandChangeTracker = {
  * process could snapshot anything, so measuring them would report whatever the
  * tree did since, not what the command did.
  */
-export function trackCommandChanges(state: SessionState): CommandChangeTracker {
+export function trackCommandChanges(
+  state: SessionState,
+  evidence?: Pick<TurnEvidence, "observation">,
+): CommandChangeTracker {
   const probe = currentProbe();
   if (!probe) return inertTracker;
   const open = new Set<string>();
@@ -106,7 +118,11 @@ export function trackCommandChanges(state: SessionState): CommandChangeTracker {
 
   const attach = (callId: string) =>
     safely(
-      probe.end(callId).then((change) => {
+      probe.endObservation(callId).then((observation) => {
+        if (!observation) return;
+        // The window is reported whatever the card's fate: it happened.
+        evidence?.observation(callId, observation);
+        const change = legacyCommandChange(observation);
         if (!change || !hasMeasuredChanges(change) || state.closed) return;
         if (applyCommandChanges(state, callId, change)) schedulePersist();
       }),
@@ -141,7 +157,7 @@ export function trackCommandChanges(state: SessionState): CommandChangeTracker {
     open.delete(callId);
     settled.add(callId);
     if (kind.measure) attach(callId);
-    else safely(probe.end(callId));
+    else safely(probe.endObservation(callId));
   };
 
   return {
@@ -153,6 +169,23 @@ export function trackCommandChanges(state: SessionState): CommandChangeTracker {
       settled.clear();
     },
   };
+}
+
+/**
+ * The badge value a legacy client reads, exactly as the probe's `end` derived
+ * it: one `approximate` flag standing for overlap, a late start or an
+ * unmeasured large file, which the observation keeps apart.
+ */
+export function legacyCommandChange(
+  observation: ProbeObservation,
+): MeasuredWorkspaceChange | undefined {
+  const change = observation.change;
+  if (!change) return undefined;
+  const approximate =
+    observation.overlap === "known-overlap" ||
+    observation.boundary.before === "late-start" ||
+    observation.omittedReasons.length > 0;
+  return approximate ? { ...change, approximate: true } : change;
 }
 
 /** Whether a tool call is measured, noted, or neither — and where it runs. */

@@ -19,6 +19,8 @@ import {
   PROMPT_TIMEOUT_MS,
   PROVIDER,
 } from "./config.js";
+import { randomUUID } from "node:crypto";
+import { trackTurnEvidence, type TurnEvidence } from "./change-evidence.js";
 import { trackCommandChanges } from "./command-changes.js";
 import { modelSelection } from "./models.js";
 import { schedulePersist } from "./persistence.js";
@@ -95,9 +97,16 @@ export async function dispatchPrompt(
 
   const promptSequence = state.promptSequence;
   const diagnostics = createRunDiagnostics(state);
+  // The backend's dispatch request id is the turn id it knows this turn by.
+  const evidence = trackTurnEvidence(state.id, {
+    turnId: input.requestId ?? `cursor-turn:${randomUUID()}`,
+    mode: "live",
+  });
   // Primes the worktree baseline now, before the run can execute anything.
-  const commandChanges = trackCommandChanges(state);
+  const commandChanges = trackCommandChanges(state, evidence);
   await commandChanges.ready;
+  turnEvidence.set(state, evidence);
+  evidence.start();
   const send = () =>
     agent.send(
       { text, ...(images.length > 0 ? { images } : {}) },
@@ -116,6 +125,7 @@ export async function dispatchPrompt(
           diagnostics?.delta(update);
           // Detached and total over any payload, so it can neither stall the
           // run nor stop the frame from reaching the transcript.
+          evidence.observe(update);
           commandChanges.observe(update);
           try {
             applyInteractionUpdate(state, update);
@@ -142,6 +152,8 @@ export async function dispatchPrompt(
   const run = await (diagnostics ? diagnostics.follow(send) : send()).catch((error) => {
     diagnostics?.close("send-failed");
     commandChanges.close();
+    // Whether the SDK started the run is unknown (the journal says the same).
+    endTurnEvidence(state, evidence, { phase: "unknown", terminal: false });
     throw error;
   });
   diagnostics?.sent(run.id);
@@ -201,10 +213,25 @@ export async function dispatchPrompt(
     ).finally(() => {
       diagnostics?.close();
       commandChanges.close();
+      // A turn that lost ownership (a close, a newer turn) settled no outcome.
+      endTurnEvidence(state, evidence, { phase: "unknown", terminal: false });
       unsubscribeStatus();
       if (state.activeRun === run) state.activeRun = undefined;
     }),
   };
+}
+
+/** The evidence of the turn each session is running, for its terminal path. */
+const turnEvidence = new WeakMap<SessionState, TurnEvidence>();
+
+function endTurnEvidence(
+  state: SessionState,
+  evidence: TurnEvidence | undefined,
+  outcome: Parameters<TurnEvidence["end"]>[0],
+): void {
+  if (!evidence) return;
+  evidence.end(outcome);
+  if (turnEvidence.get(state) === evidence) turnEvidence.delete(state);
 }
 
 export interface FollowableRun {
@@ -389,6 +416,15 @@ function finishTurn(
     return;
   }
 
+  endTurnEvidence(state, turnEvidence.get(state), {
+    phase:
+      result.status === "cancelled"
+        ? "cancelled"
+        : result.status === "finished"
+          ? "succeeded"
+          : "unknown",
+    terminal: true,
+  });
   // A cancelled turn is not an error: the user asked for it, and the partial
   // transcript is the honest record of what ran.
   state.status = "idle";
@@ -411,6 +447,11 @@ function failTurn(
 ): void {
   settleBackgroundChildren(state);
   settleAbandonedToolParts(state);
+  // Only a terminal result from the SDK says the run itself stopped.
+  endTurnEvidence(state, turnEvidence.get(state), {
+    phase: "failed",
+    terminal: result !== undefined,
+  });
   state.cancelTurn = undefined;
   state.activeRun = undefined;
   state.pendingCancelPromptSequence = undefined;

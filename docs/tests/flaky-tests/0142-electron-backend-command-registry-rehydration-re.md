@@ -12,3 +12,15 @@
 - **Retraction:** an earlier revision of the tmux entry above described this case as "a deterministic pre-existing failure rather than a flake" and used that to justify filing no entry. That is withdrawn — the case has not failed once outside the single aggregate run, so the determinism claim was unsupported.
 - **Attribution:** the change in flight touches `bridges/claude-bridge` only and cannot reach the Electron command registry.
 - **Hypothesis:** none yet. One aggregate-only observation with three clean isolated reruns is consistent with the contention pattern the tmux clusters show, but a recurrence needs to capture the assertion that actually failed before this can be attributed.
+
+## Review — 2026-10-20 (left open)
+
+The flaky-test work on 2026-10-20 removed this file's use of the shared fixture
+data directory (see the resolution in
+[0194](0194-environment-lifecycle-deletion-aggregate-timeout.md)). This case's
+recovered deletion writes the cleanup ledger too, and under six concurrent
+copies it went from median 229 ms / max 892 ms to 44 ms / 52 ms. That does not
+explain this observation, though: it was made on 2026-09-07, before the cleanup
+ledger existed (2026-09-26), it recorded no failure text, and it has not
+recurred. The cause remains unattributed, so the case stays open until a
+recurrence records the failing assertion.

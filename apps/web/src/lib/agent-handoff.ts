@@ -2,6 +2,7 @@ import type { NativeMessage, NativeMessagePart } from "@/lib/chat/native-message
 import { isClientOnlyNativeMessage } from "@/lib/chat/client-only-messages";
 import * as backend from "@/lib/backend";
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import type { MeasuredFileChange } from "@orkestrator/protocol/tool-diff";
 
 export const AGENT_HANDOFF_VERSION = 1;
 export const AGENT_HANDOFF_PROMPT_BUDGET = 180_000;
@@ -80,6 +81,13 @@ export interface AgentHandoffSnapshot {
   sourceAgent?: string;
   createdAt: string;
   messages: NativeMessage[];
+  /**
+   * Backend-serialized change text per tool call id (`changes_get_handoff`;
+   * see `resolveAgentHandoffChangeSummaries`). Persisted so a carrier rebuilt
+   * on load keeps the same measured evidence. Absent for calls the backend
+   * did not measure — those are written as "not measured", never as zero.
+   */
+  changeSummaries?: Record<string, string>;
   bootstrapPrompt: string;
   stats: AgentHandoffStats;
 }
@@ -94,6 +102,8 @@ interface CreateAgentHandoffOptions {
   sourceModel?: string;
   sourceAgent?: string;
   messages: NativeMessage[];
+  /** Backend change text per tool call id; see {@link AgentHandoffSnapshot.changeSummaries}. */
+  changeSummaries?: Record<string, string>;
   now?: string;
 }
 
@@ -126,6 +136,25 @@ function isNonBlankString(value: unknown): value is string {
 
 function isValidTimestamp(value: unknown): value is string {
   return typeof value === "string" && Number.isFinite(Date.parse(value));
+}
+
+/** Bounds for persisted backend change text (one entry per tool call). */
+export const AGENT_HANDOFF_MAX_CHANGE_SUMMARIES = 200;
+export const AGENT_HANDOFF_CHANGE_SUMMARY_CHARACTERS = 2_000;
+
+function isValidChangeSummaries(value: unknown): value is Record<string, string> {
+  if (!isRecord(value)) return false;
+  const entries = Object.entries(value);
+  return (
+    entries.length <= AGENT_HANDOFF_MAX_CHANGE_SUMMARIES &&
+    entries.every(
+      ([key, text]) =>
+        key.length > 0 &&
+        key.length <= 512 &&
+        typeof text === "string" &&
+        text.length <= AGENT_HANDOFF_CHANGE_SUMMARY_CHARACTERS * 2,
+    )
+  );
 }
 
 /**
@@ -288,7 +317,8 @@ export function parseAgentHandoffSnapshot(value: unknown): AgentHandoffSnapshot 
     (value.sourceAgent !== undefined && typeof value.sourceAgent !== "string") ||
     !Array.isArray(value.messages) ||
     typeof value.bootstrapPrompt !== "string" ||
-    !isRecord(value.stats)
+    !isRecord(value.stats) ||
+    (value.changeSummaries !== undefined && !isValidChangeSummaries(value.changeSummaries))
   ) {
     return null;
   }
@@ -325,6 +355,7 @@ export function parseAgentHandoffSnapshot(value: unknown): AgentHandoffSnapshot 
       sourceModel: value.sourceModel as string | undefined,
       sourceAgent: value.sourceAgent as string | undefined,
       messages: normalizedMessages,
+      changeSummaries: value.changeSummaries as Record<string, string> | undefined,
       now: value.createdAt as string,
     });
   } catch {
@@ -684,6 +715,40 @@ function childParts(part: NativeMessagePart): NativeMessagePart[] {
   return part.subagentActions ?? [];
 }
 
+/**
+ * Tool call ids of every tool row in `messages` (nested groups included), in
+ * transcript order without duplicates. Used to ask the backend for the
+ * measured changes of exactly these calls.
+ */
+export function collectAgentHandoffToolCallIds(messages: NativeMessage[]): string[] {
+  const ids = new Set<string>();
+  const visit = (part: NativeMessagePart) => {
+    if ((part.type === "tool-invocation" || part.type === "tool-result") && part.toolUseId) {
+      ids.add(part.toolUseId);
+    }
+    for (const child of childParts(part)) visit(child);
+  };
+  for (const message of messages) for (const part of message.parts) visit(part);
+  return [...ids];
+}
+
+/** Paths a tool row names as changed, without any count. */
+function toolChangedPaths(part: NativeMessagePart): string[] {
+  const paths: string[] = [];
+  if (part.toolDiff?.filePath) paths.push(part.toolDiff.filePath);
+  // Persisted parts are only partly validated; tolerate a drifted shape.
+  const files: unknown = part.commandChanges?.files;
+  for (const file of Array.isArray(files) ? (files as Array<Partial<MeasuredFileChange>>) : []) {
+    if (typeof file?.path !== "string" || !file.path) continue;
+    paths.push(
+      typeof file.previousPath === "string" && file.previousPath && file.previousPath !== file.path
+        ? `${file.previousPath} -> ${file.path}`
+        : file.path,
+    );
+  }
+  return paths.slice(0, 50);
+}
+
 function countToolCallsInPart(part: NativeMessagePart): number {
   const own = part.type === "tool-invocation" ? 1 : 0;
   return own + childParts(part).reduce((count, child) => count + countToolCallsInPart(child), 0);
@@ -697,7 +762,9 @@ export function countAgentHandoffToolCalls(messages: NativeMessage[]): number {
   );
 }
 
-function renderPart(part: NativeMessagePart, depth = 0): string[] {
+type ChangeSummaries = Readonly<Record<string, string>> | undefined;
+
+function renderPart(part: NativeMessagePart, changes: ChangeSummaries, depth = 0): string[] {
   const indent = "  ".repeat(depth);
   const nested = childParts(part);
   if (nested.length > 0) {
@@ -709,7 +776,10 @@ function renderPart(part: NativeMessagePart, depth = 0): string[] {
           : part.type === "agent-group"
             ? "AGENT GROUP"
             : "TOOL GROUP";
-    return [`${indent}[${label}]`, ...nested.flatMap((child) => renderPart(child, depth + 1))];
+    return [
+      `${indent}[${label}]`,
+      ...nested.flatMap((child) => renderPart(child, changes, depth + 1)),
+    ];
   }
 
   if (part.type === "thinking") {
@@ -746,11 +816,24 @@ function renderPart(part: NativeMessagePart, depth = 0): string[] {
     if (part.toolError) {
       lines.push(`${indent}error: ${truncate(part.toolError, 4_000)}`);
     }
-    if (part.toolDiff?.filePath) {
-      lines.push(
-        `${indent}changed: ${part.toolDiff.filePath}` +
-          ` (+${part.toolDiff.additions ?? 0}/-${part.toolDiff.deletions ?? 0})`,
-      );
+    // Counts come only from the backend's measurement of this call. A row the
+    // backend did not measure names its paths and says so: an unknown count
+    // is never written as zero, and the client never counts lines itself.
+    const measured =
+      part.toolUseId && changes && Object.hasOwn(changes, part.toolUseId)
+        ? changes[part.toolUseId]
+        : undefined;
+    const changedPaths = toolChangedPaths(part);
+    for (const path of changedPaths) lines.push(`${indent}changed: ${path}`);
+    if (measured?.trim()) {
+      lines.push(`${indent}changes (measured by Orkestrator):`);
+      for (const line of truncate(measured.trim(), AGENT_HANDOFF_CHANGE_SUMMARY_CHARACTERS).split(
+        "\n",
+      )) {
+        lines.push(`${indent}  ${line}`);
+      }
+    } else if (changedPaths.length > 0) {
+      lines.push(`${indent}changes: not measured`);
     }
     if (part.toolDiff?.diff) {
       lines.push(`${indent}diff: ${truncate(part.toolDiff.diff, 8_000)}`);
@@ -766,8 +849,12 @@ function renderPart(part: NativeMessagePart, depth = 0): string[] {
   return [];
 }
 
-function renderMessage(message: NativeMessage, index: number): HandoffTranscriptRecord {
-  const parts = message.parts.flatMap((part) => renderPart(part));
+function renderMessage(
+  message: NativeMessage,
+  index: number,
+  changes: ChangeSummaries,
+): HandoffTranscriptRecord {
+  const parts = message.parts.flatMap((part) => renderPart(part, changes));
   const body = parts.length > 0 ? parts.join("\n") : message.content;
   return {
     index: index + 1,
@@ -803,8 +890,9 @@ function nestedRecordCost(record: HandoffTranscriptRecord): number {
 function selectTranscriptRecords(
   messages: NativeMessage[],
   availableCharacters: number,
+  changes: ChangeSummaries,
 ): { records: HandoffTranscriptRecord[]; omitted: number } {
-  const rendered = messages.map(renderMessage);
+  const rendered = messages.map((message, index) => renderMessage(message, index, changes));
   if (carrierJson(rendered).length <= availableCharacters) {
     return { records: rendered, omitted: 0 };
   }
@@ -912,6 +1000,22 @@ function boundSnapshotMessages(
   return { messages: retained, dropped };
 }
 
+/** Keeps only well-formed, bounded entries; `undefined` when none remain. */
+function boundChangeSummaries(
+  value: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+  if (!value || !isRecord(value)) return undefined;
+  const bounded: Record<string, string> = {};
+  let count = 0;
+  for (const [callId, text] of Object.entries(value)) {
+    if (count >= AGENT_HANDOFF_MAX_CHANGE_SUMMARIES) break;
+    if (!callId || callId.length > 512 || typeof text !== "string" || !text.trim()) continue;
+    bounded[callId] = truncate(text, AGENT_HANDOFF_CHANGE_SUMMARY_CHARACTERS);
+    count += 1;
+  }
+  return count > 0 ? bounded : undefined;
+}
+
 export function createAgentHandoffSnapshot(
   options: CreateAgentHandoffOptions,
 ): AgentHandoffSnapshot {
@@ -962,7 +1066,8 @@ ${HANDOFF_CLOSE}`;
       carrierFooter.length -
       omissionNoticeReserve,
   );
-  const selection = selectTranscriptRecords(retainedMessages, available);
+  const changeSummaries = boundChangeSummaries(options.changeSummaries);
+  const selection = selectTranscriptRecords(retainedMessages, available, changeSummaries);
   const omissionNotice = formatOmissionNotice(selection.omitted);
   const bootstrapPrompt =
     `${header}${carrierJson(selection.records)}${transcriptFooter}` +
@@ -979,6 +1084,7 @@ ${HANDOFF_CLOSE}`;
     sourceAgent: options.sourceAgent,
     createdAt,
     messages: retainedMessages,
+    ...(changeSummaries ? { changeSummaries } : {}),
     bootstrapPrompt,
     stats: {
       messageCount: retainedMessages.length,

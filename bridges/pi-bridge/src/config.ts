@@ -48,6 +48,18 @@ export function commandChangeJournalPath(piSessionId: string | undefined): strin
 }
 
 /**
+ * Where unacknowledged change evidence is spooled, or undefined when this
+ * bridge is stateless (the spool is then memory-only).
+ *
+ * A sibling of the command-change journal, so a bridge restart re-offers
+ * evidence the backend had not yet acknowledged.
+ */
+export function changeEvidenceDirectory(): string | undefined {
+  const directory = process.env.PI_BRIDGE_STATE_DIR?.trim();
+  return directory ? resolve(directory, "change-evidence") : undefined;
+}
+
+/**
  * Pi's own configuration directory, holding `auth.json`, `models.json` and
  * `settings.json`.
  *

@@ -62,6 +62,7 @@ import {
   startTranscriptEpoch,
 } from "./transcript.js";
 import { applyInteractionUpdate } from "./translate.js";
+import { trackTurnEvidence, type TurnEvidence } from "./change-evidence.js";
 import {
   assertSessionOpen,
   clientSessionKeys,
@@ -1102,12 +1103,27 @@ async function recoverActiveRun(state: SessionState): Promise<void> {
   const unsubscribe = active.onDidChangeStatus(() => {
     state.revision += 1;
   });
+  // The provider's own reports for the tail of the run, by native call id. No
+  // probe window opens here: what the workspace holds now says nothing about
+  // what these calls did before this process existed.
+  const evidence = trackTurnEvidence(state.id, { mode: "reconciliation" });
   state.recoveringRun = (async () => {
     try {
       for await (const event of active.stream()) {
-        applyRecoveredStreamEvent(state, event);
+        applyRecoveredStreamEvent(state, event, evidence);
       }
-      await active.wait();
+      const result: { status?: string } | undefined = await active.wait();
+      evidence.end({
+        phase:
+          result?.status === "cancelled"
+            ? "cancelled"
+            : result?.status === "finished"
+              ? "succeeded"
+              : result?.status === "error"
+                ? "failed"
+                : "unknown",
+        terminal: true,
+      });
       // The whole transcript is rebuilt from the SDK's record, so everything
       // positional about the old one — open blocks, the assistant message the
       // turn was writing into, readers' absolute offsets — goes with it.
@@ -1122,6 +1138,7 @@ async function recoverActiveRun(state: SessionState): Promise<void> {
       state.status = "error";
       state.error = error instanceof Error ? error.message : "Cursor run recovery failed";
     } finally {
+      evidence.end({ phase: "unknown", terminal: false });
       unsubscribe();
       if (state.activeRun === active) {
         state.activeRun = undefined;
@@ -1135,10 +1152,16 @@ async function recoverActiveRun(state: SessionState): Promise<void> {
   })();
 }
 
-function applyRecoveredStreamEvent(state: SessionState, event: unknown): void {
+function applyRecoveredStreamEvent(
+  state: SessionState,
+  event: unknown,
+  evidence: TurnEvidence,
+): void {
   if (!isObject(event)) return;
   const update = isObject(event.update) ? event.update : event;
-  if (typeof update.type === "string") applyInteractionUpdate(state, update);
+  if (typeof update.type !== "string") return;
+  evidence.observe(update);
+  applyInteractionUpdate(state, update);
 }
 
 function appendHistoricTurn(state: SessionState, turn: unknown, runId: string): void {

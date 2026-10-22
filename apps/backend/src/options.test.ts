@@ -133,6 +133,25 @@ describe("standalone backend options", () => {
     expect(() => parseOptions(["--tailscale-bin", "--port", "1"], {})).toThrow(
       "Missing value for --tailscale-bin",
     );
+    expect(() => parseOptions(["--loopback-client-port", "65536"], {})).toThrow(
+      "Invalid --loopback-client-port value",
+    );
+    expect(() => parseOptions([], { ORKESTRATOR_LOOPBACK_CLIENT_PORT: "nope" })).toThrow(
+      "Invalid --loopback-client-port value",
+    );
+  });
+
+  test("parses the loopback client gateway port from the CLI or the environment", () => {
+    expect(parseOptions([], {}).loopbackClientPort).toBeUndefined();
+    expect(parseOptions(["--loopback-client-port", "0"], {}).loopbackClientPort).toBe(0);
+    expect(parseOptions([], { ORKESTRATOR_LOOPBACK_CLIENT_PORT: "34123" }).loopbackClientPort).toBe(
+      34123,
+    );
+    expect(
+      parseOptions(["--loopback-client-port", "34124"], {
+        ORKESTRATOR_LOOPBACK_CLIENT_PORT: "34123",
+      }).loopbackClientPort,
+    ).toBe(34124);
   });
 
   test("supports environment-managed Tailscale Serve configuration", () => {

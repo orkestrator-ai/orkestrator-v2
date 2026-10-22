@@ -164,9 +164,26 @@ interface RepoState {
 
 type OpenMode = "fresh" | "baseline" | "note";
 
+/**
+ * What one measured window established, kept apart instead of folded into a
+ * single `approximate` flag (see `change-evidence.ts`
+ * `WorkspaceObservationReport`).
+ */
+export interface ProbeObservation {
+  change?: MeasuredWorkspaceChange;
+  boundary: {
+    before: "fresh-before" | "prior-observation" | "late-start" | "unknown";
+    after: "after-terminal" | "unknown";
+  };
+  overlap: "known-overlap" | "none-observed";
+  omittedReasons: string[];
+  unavailableReason?: string;
+}
+
 interface OpenCall {
   id: string;
   repo: RepoState;
+  mode: OpenMode;
   measure: boolean;
   openedAt: number;
   overlapped: boolean;
@@ -297,12 +314,42 @@ export class WorkspaceChangeProbe {
    * mean measured and untouched, which callers need not persist.
    */
   async end(callId: string): Promise<MeasuredWorkspaceChange | undefined> {
+    const observation = await this.endObservation(callId);
+    const change = observation?.change;
+    if (!change) return undefined;
+    if (
+      observation.overlap === "known-overlap" ||
+      observation.boundary.before === "late-start" ||
+      observation.omittedReasons.length > 0
+    ) {
+      change.approximate = true;
+    }
+    return change;
+  }
+
+  /**
+   * Close a window and report what it established. Undefined for an unknown
+   * id or a noted (unmeasured) window; an unmeasurable measured window
+   * reports `unavailableReason` instead of a change.
+   */
+  async endObservation(callId: string): Promise<ProbeObservation | undefined> {
     // An observer that fires `begin` and forgets can see the end before the
     // repository lookup behind that `begin` has finished.
     await this.opening.get(callId);
     const call = this.calls.get(callId);
     if (!call) return undefined;
     this.calls.delete(callId);
+    const boundary: ProbeObservation["boundary"] = {
+      before:
+        call.mode === "fresh" ? "fresh-before" : call.late ? "late-start" : "prior-observation",
+      after: "after-terminal",
+    };
+    const unavailable = (reason: string): ProbeObservation => ({
+      boundary: { before: boundary.before, after: "unknown" },
+      overlap: call.overlapped ? "known-overlap" : "none-observed",
+      omittedReasons: [],
+      unavailableReason: reason,
+    });
     try {
       if (!call.measure || !call.before) {
         if (call.repo.keepsBaseline && !call.repo.disabled) {
@@ -312,16 +359,22 @@ export class WorkspaceChangeProbe {
       }
 
       const before = await call.before;
-      if (!before || call.repo.disabled) return undefined;
+      if (!before) return unavailable("before-unavailable");
+      if (call.repo.disabled) return unavailable("probe-disabled");
       const after = await this.snapshotShared(call.repo, "fresh");
-      if (!after || call.unavailable) return undefined;
+      if (!after) return unavailable("after-unavailable");
+      if (call.unavailable) return unavailable("baseline-priming");
 
       const change = await this.diff(call.repo, before, after).catch(() => undefined);
-      if (!change) return undefined;
-      if (call.overlapped || call.late || skippedFilesChanged(before.skipped, after.skipped)) {
-        change.approximate = true;
-      }
-      return change;
+      if (!change) return unavailable("diff-failed");
+      return {
+        change,
+        boundary,
+        overlap: call.overlapped ? "known-overlap" : "none-observed",
+        omittedReasons: skippedFilesChanged(before.skipped, after.skipped)
+          ? ["untracked-file-too-large"]
+          : [],
+      };
     } finally {
       call.repo.open.delete(call);
       await this.releaseUnusedObjects(call.repo);
@@ -368,6 +421,7 @@ export class WorkspaceChangeProbe {
     const call: OpenCall = {
       id: callId,
       repo,
+      mode,
       measure,
       openedAt: this.now(),
       overlapped: false,

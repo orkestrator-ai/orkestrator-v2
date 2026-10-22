@@ -8,7 +8,6 @@
  *   - recovery and deduplication have somewhere to live.
  */
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
-import type { BaselineMap } from "./diff-budget.js";
 
 export type ToolState = "success" | "failure" | "pending";
 export type MessageRole = "user" | "assistant" | "system";
@@ -120,8 +119,7 @@ export interface MessagePatchEventData {
 }
 
 export interface FileChangeDiffContext {
-  /** Byte-counting map so budget checks stay O(1); see `diff-budget.ts`. */
-  baselines: BaselineMap;
+  /** Rendered diff per completed `fileChange` item, turn-scoped; see `diff-budget.ts`. */
   cache: Map<string, ToolDiffMetadata>;
 }
 

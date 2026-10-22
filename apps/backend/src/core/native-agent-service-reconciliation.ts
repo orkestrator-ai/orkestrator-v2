@@ -476,6 +476,13 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
           });
           this.activityAttempts.delete(groupKey);
           this.activityRetryAt.delete(groupKey);
+          // Change evidence rides the same per-bridge observation; the pull is
+          // single-flight and its failures never affect the activity group.
+          try {
+            this.options.changeTracking?.()?.noteProviderObserved(provider, first.environmentId);
+          } catch {
+            // Change tracking is best effort here; its own pull logs failures.
+          }
           this.observations.noteGroupObserved(groupKey, {
             settledIdle:
               settledIdle && !group.some((session) => this.turnRecovery.hasCandidate(session.key)),

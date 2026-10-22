@@ -363,6 +363,23 @@ export const PUBLIC_ACTIONS = {
     milestone: "C",
     summary: "Read one bounded, ordered transcript page with a continuation cursor.",
   },
+  "changes.view": {
+    version: 1,
+    mutation: false,
+    effects: [],
+    observation: "immediate",
+    milestone: "D",
+    summary:
+      "Read the backend's change projection for an environment (scope, state, line counts and their quality) with one page of changed files.",
+  },
+  "changes.history": {
+    version: 1,
+    mutation: false,
+    effects: [],
+    observation: "immediate",
+    milestone: "D",
+    summary: "Read one page of a session's turns, each with the backend's change projection.",
+  },
   "run.get": {
     version: 1,
     mutation: false,

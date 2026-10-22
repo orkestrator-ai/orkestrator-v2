@@ -1,3 +1,10 @@
+import { coordinatorNodeContext } from "./nodes/node-context.js";
+import { NodeCoordination } from "./nodes/node-coordination.js";
+import { NodePortal } from "./nodes/node-portal.js";
+import type { GatewayNodeHooks } from "../gateway-support-core.js";
+import { NodeService, errorCode, type NodeServiceOptions } from "./nodes/node-service.js";
+import { createNodeSshFactory } from "./nodes/node-ssh.js";
+import type { NodeMode } from "@orkestrator/protocol/command-nodes";
 import { stoppedWorkerMailHook } from "./agent-mail-stopped-worker.js";
 import { setManagedGitHubCli } from "./github-cli-binary.js";
 import { setGitHubCliConfigSource } from "./github-credentials.js";
@@ -76,6 +83,7 @@ import {
   ensureContainerHostServicePorts,
 } from "./commands-environment.js";
 import { APP_VERSION, DOCKER_IMAGE } from "./constants.js";
+import type { BackendProfile } from "@orkestrator/protocol/backend-profile";
 import { WorkflowResultService } from "./workflow-result-service.js";
 import { HostMaintenanceService } from "./host-maintenance.js";
 import { readImageStatus, readRestartImpact, readToolStatus } from "./host-maintenance-readers.js";
@@ -121,6 +129,7 @@ import {
   reconcileInterruptedEnvironmentLifecycleTasks,
 } from "./environment-lifecycle-tasks.js";
 import { recoverInterruptedEnvironmentMoves } from "./environment-move.js";
+import { createBackendChangeTracking } from "./change-tracking/backend-wiring.js";
 import {
   configureTerminalHistoryRetention,
   flushTerminalHistories,
@@ -149,6 +158,12 @@ export class OrkestratorBackend {
   private readonly multiReviews: MultiReviewService;
   private readonly featurePlanning: FeaturePlanningService;
   private readonly coordinators: CoordinatorService;
+  /** Command-node registry and leaf attachments. */
+  readonly nodes: NodeService;
+  readonly nodePortal: NodePortal;
+  readonly nodeCoordination: NodeCoordination;
+  /** Origins clients load this node's UI from; registered on attached leaves. */
+  private portalOriginsSource: () => string[] = () => [];
   private readonly projectGit: ProjectGitService;
   private readonly promptQueues: PromptQueueDrainer;
   private readonly agentMail: AgentMailService;
@@ -268,6 +283,10 @@ export class OrkestratorBackend {
      * listener). Defaults to on outside `bun test`.
      */
     transcriptArtifactRuntime?: boolean;
+    /** `--command-node`: command-node registration is always enabled. */
+    commandNode?: boolean;
+    /** Test seam: node links (fetch, SSH, timers). */
+    nodeLinks?: Pick<NodeServiceOptions, "fetchImpl" | "createSsh" | "timers" | "heartbeatMs">;
   }) {
     this.keyedActivityJobs =
       options.keyedActivityJobs ?? keyedSchedulingEnabled("backend-activity");
@@ -351,11 +370,27 @@ export class OrkestratorBackend {
       new BackendRuntime({ emit: (event, payload) => options.emit(event, payload) });
     this.environmentLifecycleDrainTimeoutMs =
       options.environmentLifecycleDrainTimeoutMs ?? ENVIRONMENT_LIFECYCLE_DRAIN_TIMEOUT_MS;
+    // Backend-owned file-change tracking (docs/architecture/change-tracking.md):
+    // one service per backend, fed by the environment scan owner, native
+    // dispatch and bridge evidence. Started in init(), closed in shutdown().
+    if (!this.runtime.changeTracking) {
+      this.runtime.attachChangeTracking(
+        createBackendChangeTracking({
+          dataDir: options.dataDir,
+          storage,
+          emit: (event, payload) => options.emit(event, payload),
+          refreshEnvironment: (environmentId) =>
+            this.runtime.diffStats.service.refresh(environmentId),
+        }),
+      );
+    }
     // Every committed mutation fans out to all connected clients, so a second
     // window or browser converges without polling. `emit` is read lazily by the
     // caller's closure, which is how this survives the gateway not existing yet.
     storage.setResourceChangeListener((change) => {
       options.emit(RESOURCE_CHANGED_EVENT, change);
+      // Created below; a change before then has no self summary to refresh.
+      this.nodePortal?.readModel.noteLocalEvent(RESOURCE_CHANGED_EVENT, change);
     });
     const context = {
       storage,
@@ -426,6 +461,42 @@ export class OrkestratorBackend {
       },
     );
     context.coordinators = this.coordinators;
+    this.nodes = new NodeService({
+      storage,
+      emit: (event, payload) => options.emit(event, payload),
+      forceRegistration: options.commandNode === true,
+      portalOrigins: () => normalizePortalOrigins(this.portalOriginsSource()),
+      ...(options.nodeLinks?.fetchImpl ? { fetchImpl: options.nodeLinks.fetchImpl } : {}),
+      ...(options.nodeLinks?.timers ? { timers: options.nodeLinks.timers } : {}),
+      ...(options.nodeLinks?.heartbeatMs ? { heartbeatMs: options.nodeLinks.heartbeatMs } : {}),
+      ...((options.nodeLinks?.createSsh ?? createNodeSshFactory(options.dataDir))
+        ? { createSsh: options.nodeLinks?.createSsh ?? createNodeSshFactory(options.dataDir)! }
+        : {}),
+    });
+    context.nodes = this.nodes;
+    this.nodePortal = new NodePortal({
+      nodes: this.nodes,
+      emit: (event, payload) => options.emit(event, payload),
+      local: { invoke: (command, args = {}) => this.invoke(command, args) },
+      summaries: {
+        load: () => storage.loadNodeSummariesCache(),
+        save: (value) => storage.saveNodeSummariesCache(value),
+      },
+      outcomes: {
+        load: () => storage.loadNodeOutcomes(),
+        save: (value) => storage.saveNodeOutcomes(value),
+      },
+      ...(options.nodeLinks?.fetchImpl ? { fetchImpl: options.nodeLinks.fetchImpl } : {}),
+    });
+    context.nodePortal = this.nodePortal;
+    this.nodeCoordination = new NodeCoordination({
+      storage,
+      nodes: this.nodes,
+      portal: this.nodePortal,
+      invoke: (command, args = {}) => this.invoke(command, args),
+      emit: (event, payload) => options.emit(event, payload),
+    });
+    context.nodeCoordination = this.nodeCoordination;
     const interactionMonitorMode =
       process.env.ORKESTRATOR_AGENT_INTERACTION_OBSERVE_ONLY === "1"
         ? ("observe-only" as const)
@@ -466,6 +537,7 @@ export class OrkestratorBackend {
         return (await handler(args, context)) as T;
       },
       {
+        changeTracking: () => this.runtime.changeTracking?.nativeAgentHooks() ?? null,
         interactionMonitorMode,
         // Rollback for step 07's observation sharing; fences stay either way.
         observationSharing: process.env.ORKESTRATOR_NATIVE_OBSERVATION_SHARING !== "0",
@@ -524,6 +596,15 @@ export class OrkestratorBackend {
               });
           }
           if (isAgentTurnEndTransition(event)) {
+            // Capture the turn's end state and publish turn-net/thread-net.
+            let changesFinalized: Promise<unknown> = Promise.resolve();
+            if (event.owner !== "coordinator" && event.logicalSessionKey) {
+              changesFinalized =
+                this.runtime.changeTracking?.finalizeTurn({
+                  environmentId: event.environmentId,
+                  logicalSessionKey: event.logicalSessionKey,
+                }) ?? Promise.resolve();
+            }
             // A coordinator has no environment row and no PR to probe for.
             if (event.owner !== "coordinator") {
               this.probeForAgentCreatedPullRequest(event.environmentId, context);
@@ -537,12 +618,14 @@ export class OrkestratorBackend {
              * dispatch latency instead of the mail backoff, which for a
              * coordinator could previously reach thirty seconds.
              */
-            void this.nativeAgents.drainPromptQueueForSession(event).catch((error: unknown) => {
-              console.warn(
-                "[backend] Failed to drain the prompt queue after a turn ended:",
-                error instanceof Error ? error.message : error,
-              );
-            });
+            void changesFinalized
+              .then(() => this.nativeAgents.drainPromptQueueForSession(event))
+              .catch((error: unknown) => {
+                console.warn(
+                  "[backend] Failed to drain the prompt queue after a turn ended:",
+                  error instanceof Error ? error.message : error,
+                );
+              });
             /*
              * Settle first, drain second, in that order.
              *
@@ -601,6 +684,14 @@ export class OrkestratorBackend {
           this.agentTools.connection(environmentId, projectId, target, tabId),
         artifactLedger,
         artifactDispatch,
+        coordinatorNodeContext: async () => {
+          const status = await this.nodes.status();
+          const list = await this.nodes.listNodes();
+          return coordinatorNodeContext(
+            status,
+            list.nodes.filter((node) => node.connection.state === "connected").length,
+          );
+        },
         coordinatorDelegationAvailable: (platform) =>
           this.controlMcp.getSettings().running &&
           coordinatorProviderQualification(platform).delegation,
@@ -950,6 +1041,14 @@ export class OrkestratorBackend {
 
   async init(): Promise<void> {
     await this.context.storage.init();
+    try {
+      this.runtime.changeTracking?.start();
+    } catch (error) {
+      console.warn(
+        "[backend] Failed to start change tracking:",
+        error instanceof Error ? error.message : error,
+      );
+    }
     // Settles an update the previous process was applying; installing one is
     // what restarted this backend.
     try {
@@ -1580,6 +1679,14 @@ export class OrkestratorBackend {
       console.warn("[backend] Failed to start control MCP:", error);
     });
     this.reserveOwnedPreviewPorts();
+    // Node links reach other machines; they start after local recovery and
+    // never block it.
+    await this.nodes.start().catch((error) => {
+      console.warn("[backend] Command-node links did not start:", errorCode(error));
+    });
+    await this.nodePortal.start().catch((error) => {
+      console.warn("[backend] The command-node portal did not start:", errorCode(error));
+    });
     this.coordinators.startStatusWakes();
     reconcileCoordinatorWorkflows();
     // Tell the user now, not when a review stage silently fails to submit its
@@ -1612,6 +1719,50 @@ export class OrkestratorBackend {
       if (port > 0) ports.push(port);
     }
     this.context.previews?.reservePorts("backend", ports);
+  }
+
+  /**
+   * Safe identity for the gateway's authenticated hello handshake: the
+   * installation identity, this process's resource generation, the version
+   * and the canonical machine profile. No paths or credentials.
+   */
+  async backendHelloIdentity(): Promise<{
+    installationId: string;
+    generation: string;
+    appVersion: string;
+    profile: BackendProfile;
+    nodeMode: NodeMode;
+  }> {
+    const storage = this.context.storage;
+    const [identity, profile] = await Promise.all([
+      storage.getPreviewBackendIdentity(),
+      storage.getBackendProfile(),
+    ]);
+    return {
+      installationId: identity.instanceId,
+      generation: storage.getResourceGeneration(),
+      appVersion: APP_VERSION,
+      profile,
+      nodeMode: this.nodes.mode(),
+    };
+  }
+
+  /**
+   * The gateway's view of command-node state: attached command nodes'
+   * portal origins are allowed, and their requests record the last contact.
+   */
+  nodeGateway(): GatewayNodeHooks {
+    return {
+      isPortalOriginAllowed: (origin) => this.nodes.isPortalOriginAllowed(origin),
+      noteControllerContact: (id) => this.nodes.noteControllerContact(id),
+      authenticateGrant: (token) => this.nodePortal.grants.authenticate(token)?.expiresAt ?? null,
+      relayTarget: (nodeId) => this.nodePortal.relayTarget(nodeId),
+    };
+  }
+
+  /** Set once the gateway has bound: the origins clients use for this node, read on each attach. */
+  setPortalOriginsSource(source: () => string[]): void {
+    this.portalOriginsSource = source;
   }
 
   /** Backend-owned preview services, for gateway transport adapters. */
@@ -1654,6 +1805,10 @@ export class OrkestratorBackend {
     // Stop new annotation reconciliation; pending requests stay as persisted
     // (never marked failed) and resume on the next start.
     this.webAnnotations.stopReconciler();
+    // Closes node links and owned SSH tunnels only; nothing on any node stops.
+    this.nodeCoordination.collector.dispose();
+    this.nodePortal.stop();
+    const nodesStopped = this.nodes.stop().catch(() => undefined);
     if (this.activityLeaseSweep) {
       clearInterval(this.activityLeaseSweep);
       this.activityLeaseSweep = null;
@@ -1698,6 +1853,7 @@ export class OrkestratorBackend {
         } catch (error) {
           console.warn("[backend] Failed to drain native agent work:", error);
         }
+        await nodesStopped;
         try {
           await this.buildPipelines.shutdown();
         } catch (error) {
@@ -1782,4 +1938,20 @@ export class OrkestratorBackend {
       throw error;
     }
   }
+}
+
+/** Exact `http(s)` origins only (wildcard allow rules are not portal origins), deduplicated. */
+function normalizePortalOrigins(values: string[]): string[] {
+  const origins = new Set<string>();
+  for (const value of values) {
+    try {
+      const url = new URL(value);
+      if ((url.protocol === "https:" || url.protocol === "http:") && !url.hostname.includes("*")) {
+        origins.add(url.origin);
+      }
+    } catch {
+      // Not an origin.
+    }
+  }
+  return [...origins].slice(0, 16);
 }

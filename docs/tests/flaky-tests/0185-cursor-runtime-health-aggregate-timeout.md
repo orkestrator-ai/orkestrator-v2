@@ -33,3 +33,12 @@ wait or transport operation stalled. No assertion, timeout or skip was changed.
 - **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.C5vOM3/bridges.log.gz`.
 
 The isolated pass confirms recurrence; the stalled operation remains unknown. No assertion, timeout or skip was changed.
+
+## Recurrence during change-tracking adapter validation (2026-10-20)
+
+- **Original command:** focused Cursor bridge runs that included `src/http.test.ts` alongside the new `src/change-evidence.test.ts` and `src/command-changes.test.ts` (multi-file `bun test … --parallel=2`).
+- **Failure:** the same runtime-health case hit its hook timeout in both multi-file runs.
+- **Isolated reruns:** `src/http.test.ts` alone failed once in five runs and passed the other four. The case does not use dispatch or the new `/change-evidence` routes.
+- **Suite counts:** Cursor package: 774 passed, 1 failed.
+
+Failing once alone on a loaded host keeps this load-sensitive; the stalled operation is still unidentified. No assertion, timeout or skip was changed.

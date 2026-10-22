@@ -43,3 +43,15 @@ No interaction test, timeout, assertion or product behavior changed.
 ## Agent-mail main merge recurrence — 2026-10-19
 
 The aggregate failed this owner and its unchanged owning file passed with one worker. Exact commands, symptoms, counts, timings and bounded evidence are recorded in [0500](0500-agent-mail-main-merge-validation.md). No implementation, assertion, timeout or skip changed.
+
+## Setup recovery browser regression validation — 2026-10-20
+
+- **Original command:** `mise run test:logged -- --name browser -- mise run test:browser`, alongside the default suite and isolated application browser validation.
+- **Workers:** nine Playwright workers.
+- **Failure:** mobile paused-question case raised `route.fulfill: Fetch response has been disposed` at line 111.
+- **Suite counts:** 367 passed, 80 skipped and three failed across 450 cases (226.6 seconds logged). The other two failures were native branch selection; all four new setup recovery cases passed.
+- **Owning-file rerun:** `mise run test:logged -- --name claude-interactions-browser-isolated -- bunx playwright test --config e2e/playwright.config.ts e2e/ClaudeInteractions.spec.ts --workers=1` passed unchanged (exit 0, 14.3 seconds logged).
+- **Evidence:** `orkestrator-test-run.t17PN5/browser.log.gz` below the host temporary directory.
+- **Assessment:** confirmed intermittent recurrence. No implementation, assertion, timeout or skip changed. The public-site suite, blocked by the component failure in the combined task, passed separately (12.0 seconds).
+
+The separate native branch-selection owner rerun also failed unchanged at both viewport widths (two passed, two failed, 21.3 seconds): `mise run test:logged -- --name native-branch-browser-isolated -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentLaunchDialog.spec.ts --workers=1`. The input remained `rel` instead of `release/2.0`. This observation does not establish a flake for native branch selection. Evidence: `orkestrator-test-run.vQfkZW/native-branch-browser-isolated.log.gz`.

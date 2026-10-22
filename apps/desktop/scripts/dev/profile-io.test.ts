@@ -16,6 +16,8 @@ import {
 import os from "node:os";
 import path from "node:path";
 import * as fs from "node:fs/promises";
+import * as profileIo from "./profile-io.js";
+import { parseAgentTestArguments } from "./arguments.js";
 
 import {
   parseRuntimeStatusManifest,
@@ -32,6 +34,9 @@ import {
   removeProfileState,
   reserveLoopbackPorts,
   restrictGrokAuthSnapshot,
+  restrictCodexAuthSnapshot,
+  restrictOpenCodeAuthSnapshot,
+  CODEX_SNAPSHOT_REFRESH_TOKEN_PREFIX,
   agentTestCursorSnapshotPath,
   seedAgentTestProviderCredentials,
   seedInstalledAgentToolchains,
@@ -42,6 +47,7 @@ import {
   createBoundedLogWriter,
   orphanedRuntimeProcesses,
   seedAgentTestProfileState,
+  startDevelopment,
   stoppedRuntimeStatusIfUnchanged,
   stopTrackedRuntimeProcesses,
 } from "./lifecycle.js";
@@ -52,6 +58,49 @@ afterEach(async () =>
     directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })),
   ),
 );
+
+async function restrictedCredentialFixture(provider: "codex" | "opencode") {
+  const fixture = await modelCacheFixture();
+  const env = {
+    CODEX_HOME: path.join(fixture.root, "host-codex"),
+    XDG_DATA_HOME: path.join(fixture.root, "host-data"),
+  };
+  const source =
+    provider === "codex"
+      ? path.join(env.CODEX_HOME, "auth.json")
+      : path.join(env.XDG_DATA_HOME, "opencode", "auth.json");
+  const destination = path.join(
+    fixture.profile.dataDir,
+    "agent-credentials",
+    ...(provider === "codex" ? ["codex"] : ["xdg-data", "opencode"]),
+    "auth.json",
+  );
+  await mkdir(path.dirname(source), { recursive: true });
+  await writeFile(
+    source,
+    JSON.stringify(
+      provider === "codex"
+        ? { OPENAI_API_KEY: "host-secret" }
+        : {
+            unchanged: { type: "api", key: "host-secret" },
+            changed: { type: "api", key: "host-secret-2" },
+          },
+    ),
+  );
+  const enabled = { ...fixture.profile, credentialSources: [provider] };
+  await seedAgentTestProviderCredentials(enabled, { roots: fixture.roots, env });
+  expect(await readFile(`${destination}.orkestrator-host-snapshot`, "utf8")).not.toContain(
+    "host-secret",
+  );
+  return {
+    ...fixture,
+    enabled,
+    env,
+    source,
+    destination,
+    marker: `${destination}.orkestrator-host-snapshot`,
+  };
+}
 
 function runtimeStatus() {
   return {
@@ -404,9 +453,16 @@ describe("development profile lifecycle primitives", () => {
                 return originalRename(from, to);
               })
             : spyOn(fs, "writeFile").mockRejectedValueOnce(injectedError);
+      const originalRm = fs.rm;
       const cleanupFault =
         failure === "temporary cleanup"
-          ? spyOn(fs, "rm").mockRejectedValueOnce(injectedError)
+          ? spyOn(fs, "rm").mockImplementation(async (file, options) => {
+              if (String(file).startsWith(`${destination}.`) && String(file).endsWith(".tmp")) {
+                cleanupFault?.mockRestore();
+                throw injectedError;
+              }
+              return originalRm(file, options);
+            })
           : undefined;
       try {
         await expect(
@@ -429,6 +485,476 @@ describe("development profile lifecycle primitives", () => {
       expect(await readFile(source, "utf8")).toBe(hostText);
     },
   );
+
+  test("hands a profile the host's Codex login without its refresh token, in its own CODEX_HOME", async () => {
+    const { root, roots, profile } = await modelCacheFixture();
+    const hostCodexHome = path.join(root, "host-codex");
+    await mkdir(hostCodexHome, { recursive: true });
+    const env = { CODEX_HOME: hostCodexHome };
+    const source = path.join(hostCodexHome, "auth.json");
+    const destination = path.join(profile.dataDir, "agent-credentials", "codex", "auth.json");
+    const nowMs = Date.parse("2026-10-21T00:00:00Z");
+    const accessToken = (expSeconds: number) =>
+      `h.${Buffer.from(JSON.stringify({ exp: expSeconds })).toString("base64url")}.s`;
+    const hostLogin = (access: string) =>
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        OPENAI_API_KEY: null,
+        tokens: {
+          id_token: "host-id-token",
+          access_token: access,
+          refresh_token: "host-single-use-refresh",
+          account_id: "account-1",
+        },
+        last_refresh: "2026-10-11T00:00:00Z",
+      });
+    const live = accessToken(nowMs / 1000 + 3600);
+    const hostText = hostLogin(live);
+    await writeFile(source, hostText);
+    const enabled = { ...profile, credentialSources: ["codex" as const] };
+
+    await expect(seedAgentTestProviderCredentials(enabled, { roots, env, nowMs })).resolves.toEqual(
+      ["codex/auth.json"],
+    );
+    const text = await readFile(destination, "utf8");
+    expect(text).not.toContain("host-single-use-refresh");
+    const seeded = JSON.parse(text);
+    expect(seeded).toEqual({
+      auth_mode: "chatgpt",
+      OPENAI_API_KEY: null,
+      tokens: {
+        id_token: "host-id-token",
+        access_token: live,
+        refresh_token: expect.stringMatching(new RegExp(`^${CODEX_SNAPSHOT_REFRESH_TOKEN_PREFIX}`)),
+        account_id: "account-1",
+      },
+      last_refresh: "2026-10-21T00:00:00.000Z",
+    });
+    expect((await stat(destination)).mode & 0o777).toBe(0o600);
+    expect((await readdir(path.dirname(destination))).sort()).toEqual([
+      "auth.json",
+      "auth.json.orkestrator-host-snapshot",
+    ]);
+    // The host file is only read.
+    expect(await readFile(source, "utf8")).toBe(hostText);
+
+    // A host login that has expired is withheld, and the previous copy revoked.
+    await writeFile(source, hostLogin(accessToken(nowMs / 1000 + 30)));
+    const warnings: string[] = [];
+    await expect(
+      seedAgentTestProviderCredentials(enabled, {
+        roots,
+        env,
+        nowMs,
+        warn: (message) => warnings.push(message),
+      }),
+    ).resolves.toEqual([]);
+    await expect(access(destination)).rejects.toThrow();
+    expect(warnings).toEqual([expect.stringContaining("host Codex login has expired")]);
+    expect(warnings[0]).not.toContain("host-single-use-refresh");
+
+    // An API key is copied as an API key, and nothing else.
+    await writeFile(source, JSON.stringify({ OPENAI_API_KEY: "sk-host", extra: "kept-out" }));
+    await seedAgentTestProviderCredentials(enabled, { roots, env, nowMs });
+    expect(JSON.parse(await readFile(destination, "utf8"))).toEqual({
+      auth_mode: "apikey",
+      OPENAI_API_KEY: "sk-host",
+    });
+
+    // Revoking the source removes the snapshot it published.
+    await seedAgentTestProviderCredentials(profile, { roots, env, nowMs });
+    await expect(access(destination)).rejects.toThrow();
+    expect(await readdir(path.dirname(destination))).toEqual([]);
+  });
+
+  test("a profile's own Codex or OpenCode login survives a profile that does not authorize the host's", async () => {
+    const { root, roots, profile } = await modelCacheFixture();
+    const env = {
+      CODEX_HOME: path.join(root, "missing-host-codex"),
+      XDG_DATA_HOME: path.join(root, "missing-host-data"),
+    };
+    const codex = path.join(profile.dataDir, "agent-credentials", "codex", "auth.json");
+    const opencode = path.join(
+      profile.dataDir,
+      "agent-credentials",
+      "xdg-data",
+      "opencode",
+      "auth.json",
+    );
+    for (const file of [codex, opencode]) {
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, '{"profile":"own login"}');
+    }
+    // Neither authorized, nor authorized with no host login: nothing was seeded,
+    // so nothing is revoked.
+    await seedAgentTestProviderCredentials(profile, { roots, env });
+    await seedAgentTestProviderCredentials(
+      { ...profile, credentialSources: ["codex", "opencode"] },
+      { roots, env },
+    );
+    expect(await readFile(codex, "utf8")).toBe('{"profile":"own login"}');
+    expect(await readFile(opencode, "utf8")).toBe('{"profile":"own login"}');
+  });
+
+  test("hands a profile the host's OpenCode keys, never an OAuth refresh token", async () => {
+    const { root, roots, profile } = await modelCacheFixture();
+    const hostDataHome = path.join(root, "host-data");
+    const source = path.join(hostDataHome, "opencode", "auth.json");
+    await mkdir(path.dirname(source), { recursive: true });
+    const destination = path.join(
+      profile.dataDir,
+      "agent-credentials",
+      "xdg-data",
+      "opencode",
+      "auth.json",
+    );
+    const nowMs = Date.parse("2026-10-21T00:00:00Z");
+    const hostText = JSON.stringify({
+      "opencode-go": { type: "api", key: "go-key", note: "dropped" },
+      anthropic: {
+        type: "oauth",
+        access: "oauth-access",
+        refresh: "host-single-use-refresh",
+        expires: nowMs + 3_600_000,
+      },
+      expired: { type: "oauth", access: "old", refresh: "old-refresh", expires: nowMs - 1 },
+      unknown: { type: "future", secret: "x" },
+    });
+    await writeFile(source, hostText);
+    const enabled = { ...profile, credentialSources: ["opencode" as const] };
+
+    await expect(
+      seedAgentTestProviderCredentials(enabled, {
+        roots,
+        env: { XDG_DATA_HOME: hostDataHome },
+        nowMs,
+      }),
+    ).resolves.toEqual(["opencode/auth.json"]);
+    const text = await readFile(destination, "utf8");
+    expect(text).not.toContain("refresh-");
+    expect(text).not.toContain("host-single-use-refresh");
+    expect(JSON.parse(text)).toEqual({
+      "opencode-go": { type: "api", key: "go-key" },
+      anthropic: { type: "oauth", access: "oauth-access", expires: nowMs + 3_600_000, refresh: "" },
+    });
+    expect((await stat(destination)).mode & 0o777).toBe(0o600);
+    expect(await readFile(source, "utf8")).toBe(hostText);
+
+    await seedAgentTestProviderCredentials(profile, {
+      roots,
+      env: { XDG_DATA_HOME: hostDataHome },
+      nowMs,
+    });
+    await expect(access(destination)).rejects.toThrow();
+  });
+
+  test.each(["disabled", "missing", "enabled"] as const)(
+    "preserves a replacement Codex login when the host source is %s",
+    async (sourceState) => {
+      const { roots, profile, enabled, env, source, destination, marker } =
+        await restrictedCredentialFixture("codex");
+      const own = JSON.stringify({ OPENAI_API_KEY: "profile-key", auth_mode: "apikey" });
+      await writeFile(destination, own);
+      if (sourceState === "missing") await rm(source);
+      await seedAgentTestProviderCredentials(sourceState === "disabled" ? profile : enabled, {
+        roots,
+        env,
+      });
+      expect(await readFile(destination, "utf8")).toBe(own);
+      await expect(access(marker)).rejects.toThrow();
+    },
+  );
+
+  test.each(["disabled", "missing", "enabled"] as const)(
+    "preserves profile-owned OpenCode entries when the host source is %s",
+    async (sourceState) => {
+      const { roots, profile, enabled, env, source, destination, marker } =
+        await restrictedCredentialFixture("opencode");
+      const own = {
+        changed: { type: "api", key: "profile-replacement" },
+        added: { type: "api", key: "profile-added" },
+      };
+      const current = JSON.parse(await readFile(destination, "utf8"));
+      // Provider rewrites can reorder fields; unchanged credentials still revoke.
+      await writeFile(
+        destination,
+        JSON.stringify({ ...own, unchanged: { key: current.unchanged.key, type: "api" } }),
+      );
+      if (sourceState === "missing") await rm(source);
+      await seedAgentTestProviderCredentials(sourceState === "disabled" ? profile : enabled, {
+        roots,
+        env,
+      });
+      const expected = sourceState === "enabled" ? { ...own, unchanged: current.unchanged } : own;
+      expect(JSON.parse(await readFile(destination, "utf8"))).toEqual(expected);
+      if (sourceState === "enabled") {
+        // A second restart must not claim the merged profile entries as host-owned.
+        await seedAgentTestProviderCredentials(profile, { roots, env });
+        expect(JSON.parse(await readFile(destination, "utf8"))).toEqual(own);
+      }
+      await expect(access(marker)).rejects.toThrow();
+    },
+  );
+
+  for (const provider of ["codex", "opencode"] as const) {
+    test(`${provider} revocation failures abort startup before Electron compilation`, async () => {
+      const { roots, profile, destination } = await restrictedCredentialFixture(provider);
+      const originalRm = fs.rm;
+      const injected = new Error("sensitive host-secret /private/path");
+      const fault = spyOn(fs, "rm").mockImplementation(async (file, options) => {
+        if (file === destination) throw injected;
+        return originalRm(file, options);
+      });
+      const cache = spyOn(profileIo, "seedInstalledModelCatalogCaches").mockResolvedValue([]);
+      const toolchains = spyOn(profileIo, "seedInstalledAgentToolchains").mockResolvedValue({
+        seeded: [],
+        failed: [],
+      });
+      let compiled = false;
+      try {
+        await expect(
+          startDevelopment(parseAgentTestArguments(["--profile", profile.id]), "agent-test", {
+            roots,
+            prune: async () => [],
+            typecheck: () => {
+              compiled = true;
+              return { status: 1 };
+            },
+          }),
+        ).rejects.toThrow(
+          `Could not revoke previous ${provider === "codex" ? "Codex" : "OpenCode"} host credentials; reset the profile before startup.`,
+        );
+        expect(compiled).toBe(false);
+        expect(await readFile(destination, "utf8")).toContain("host-secret");
+      } finally {
+        fault.mockRestore();
+        cache.mockRestore();
+        toolchains.mockRestore();
+      }
+    });
+
+    test(`${provider} unreadable ownership after publication stops startup`, async () => {
+      const { roots, enabled, env, destination, marker } =
+        await restrictedCredentialFixture(provider);
+      const originalRename = fs.rename;
+      const originalRead = fs.readFile;
+      const originalRm = fs.rm;
+      let published = false;
+      const renameFault = spyOn(fs, "rename").mockImplementation(async (from, to) => {
+        await originalRename(from, to);
+        if (to === destination) published = true;
+      });
+      // A cleanup failure requires revoking the new publication. Its ownership
+      // read must fail closed too, even though auth.json remains readable.
+      const cleanupFault = spyOn(fs, "rm").mockImplementation(async (file, options) => {
+        if (published && file === `${destination}.host-copy`) throw new Error("host-secret");
+        return originalRm(file, options);
+      });
+      const readFault = spyOn(fs, "readFile").mockImplementation((async (
+        ...args: Parameters<typeof fs.readFile>
+      ) => {
+        if (published && args[0] === marker) throw new Error("host-secret");
+        return originalRead(...args);
+      }) as typeof fs.readFile);
+      try {
+        await expect(seedAgentTestProviderCredentials(enabled, { roots, env })).rejects.toThrow(
+          `Could not revoke previous ${provider === "codex" ? "Codex" : "OpenCode"} host credentials; reset the profile before startup.`,
+        );
+        expect(published).toBe(true);
+        expect(await readFile(destination, "utf8")).toContain("host-secret");
+      } finally {
+        renameFault.mockRestore();
+        cleanupFault.mockRestore();
+        readFault.mockRestore();
+      }
+    });
+
+    test(`${provider} unknown ownership never deletes a profile login or permits startup`, async () => {
+      const { roots, profile, env, destination, marker } =
+        await restrictedCredentialFixture(provider);
+      const own = JSON.stringify({ profile: "own-key" });
+      await writeFile(destination, own);
+      // Legacy empty markers cannot establish ownership and must be reconciled.
+      await writeFile(marker, "");
+      await expect(seedAgentTestProviderCredentials(profile, { roots, env })).rejects.toThrow(
+        "Could not revoke previous",
+      );
+      expect(await readFile(destination, "utf8")).toBe(own);
+    });
+
+    test.each(["open", "read"] as const)(
+      `${provider} authorized host %s errors warn without revealing contents`,
+      async (operation) => {
+        const { roots, enabled, env, source, destination, marker } =
+          await restrictedCredentialFixture(provider);
+        const originalOpen = fs.open;
+        const fault = spyOn(fs, "open").mockImplementation(async (file, ...args) => {
+          const handle = await originalOpen(file, ...args);
+          if (file === source) {
+            if (operation === "open") {
+              await handle.close();
+              throw new Error("host-secret /private/path");
+            }
+            spyOn(handle, "read").mockRejectedValue(new Error("host-secret /private/path"));
+          }
+          return handle;
+        });
+        const warnings: string[] = [];
+        try {
+          await expect(
+            seedAgentTestProviderCredentials(enabled, {
+              roots,
+              env,
+              warn: (message) => warnings.push(message),
+            }),
+          ).resolves.toEqual([]);
+        } finally {
+          fault.mockRestore();
+        }
+        expect(warnings).toEqual([
+          `Could not seed ${provider === "codex" ? "Codex" : "OpenCode"} credentials in this profile: the authorized host ${provider === "codex" ? "Codex" : "OpenCode"} auth.json could not be copied.`,
+        ]);
+        await expect(access(destination)).rejects.toThrow();
+        await expect(access(marker)).rejects.toThrow();
+        expect(await readdir(path.dirname(destination))).toEqual([]);
+      },
+    );
+
+    test.each(["write", "rename", "read-back"] as const)(
+      `${provider} %s failure revokes the old snapshot and cleans ownership`,
+      async (failure) => {
+        const { roots, enabled, env, source, destination, marker } =
+          await restrictedCredentialFixture(provider);
+        const own =
+          provider === "opencode" ? { own: { type: "api", key: "profile-key" } } : undefined;
+        if (own)
+          await writeFile(
+            destination,
+            JSON.stringify({ ...JSON.parse(await readFile(destination, "utf8")), ...own }),
+          );
+        const originalWrite = fs.writeFile;
+        const originalRename = fs.rename;
+        const originalRead = fs.readFile;
+        let markerWritten = false;
+        const trackMarker = spyOn(fs, "writeFile").mockImplementation(async (file, ...args) => {
+          if (String(file).startsWith(`${marker}.`)) markerWritten = true;
+          if (
+            failure === "write" &&
+            markerWritten &&
+            String(file).startsWith(`${destination}.`) &&
+            !String(file).startsWith(marker)
+          )
+            throw new Error("host-secret");
+          return originalWrite(file, ...args);
+        });
+        const renameFault = spyOn(fs, "rename").mockImplementation(async (from, to) => {
+          if (failure === "rename" && to === destination && markerWritten)
+            throw new Error("host-secret");
+          return originalRename(from, to);
+        });
+        const readFault = spyOn(fs, "readFile").mockImplementation((async (
+          ...args: Parameters<typeof fs.readFile>
+        ) => {
+          if (failure === "read-back" && args[0] === `${destination}.host-copy`)
+            throw new Error("host-secret");
+          return originalRead(...args);
+        }) as typeof fs.readFile);
+        const warnings: string[] = [];
+        try {
+          await expect(
+            seedAgentTestProviderCredentials(enabled, {
+              roots,
+              env,
+              warn: (message) => warnings.push(message),
+            }),
+          ).resolves.toEqual([]);
+        } finally {
+          trackMarker.mockRestore();
+          renameFault.mockRestore();
+          readFault.mockRestore();
+        }
+        if (own) expect(JSON.parse(await readFile(destination, "utf8"))).toEqual(own);
+        else await expect(access(destination)).rejects.toThrow();
+        await expect(access(marker)).rejects.toThrow();
+        expect(await readdir(path.dirname(destination))).toEqual(own ? ["auth.json"] : []);
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).not.toContain("host-secret");
+        expect(await readFile(source, "utf8")).toContain("host-secret");
+        if (failure !== "read-back") expect(markerWritten).toBe(true);
+      },
+    );
+  }
+
+  test.each([-1, 30_000])(
+    "Codex falls back to an API key with access expiry offset %s",
+    (offset) => {
+      const nowMs = Date.parse("2026-10-21T00:00:00Z");
+      const access_token = `h.${Buffer.from(JSON.stringify({ exp: (nowMs + offset) / 1000 })).toString("base64url")}.s`;
+      const result = restrictCodexAuthSnapshot(
+        JSON.stringify({
+          OPENAI_API_KEY: "api-key",
+          tokens: { access_token, refresh_token: "secret" },
+        }),
+        nowMs,
+      );
+      expect("text" in result && JSON.parse(result.text)).toEqual({
+        auth_mode: "apikey",
+        OPENAI_API_KEY: "api-key",
+      });
+    },
+  );
+
+  test("OpenCode retains wellknown tokens and optional OAuth identity fields", () => {
+    const result = restrictOpenCodeAuthSnapshot(
+      JSON.stringify({
+        known: { type: "wellknown", key: "env-key", token: "known-token", extra: "drop" },
+        oauth: {
+          type: "oauth",
+          access: "access",
+          refresh: "secret",
+          expires: 120_000,
+          accountId: "account",
+          enterpriseUrl: "https://enterprise.example",
+        },
+        invalid: { type: "wellknown", key: "k", token: " " },
+      }),
+      0,
+    );
+    expect("text" in result && JSON.parse(result.text)).toEqual({
+      known: { type: "wellknown", key: "env-key", token: "known-token" },
+      oauth: {
+        type: "oauth",
+        access: "access",
+        refresh: "",
+        expires: 120_000,
+        accountId: "account",
+        enterpriseUrl: "https://enterprise.example",
+      },
+    });
+  });
+
+  test("Codex and OpenCode snapshot reducers refuse what they do not recognise", () => {
+    expect(restrictCodexAuthSnapshot("not json")).toEqual({
+      withheld: "the host Codex auth.json is not valid JSON",
+    });
+    expect(restrictCodexAuthSnapshot("[]")).toEqual({
+      withheld: "the host Codex auth.json has an unknown shape",
+    });
+    expect(restrictCodexAuthSnapshot(JSON.stringify({ tokens: { refresh_token: "r" } }))).toEqual({
+      withheld: "the host Codex auth.json has no API key or ChatGPT access token",
+    });
+    // An opaque access token has no readable expiry; it is still copied without the refresh token.
+    const opaque = restrictCodexAuthSnapshot(
+      JSON.stringify({ tokens: { access_token: "opaque", refresh_token: "r" } }),
+      0,
+    );
+    expect("text" in opaque && JSON.parse(opaque.text).tokens.refresh_token).toStartWith(
+      CODEX_SNAPSHOT_REFRESH_TOKEN_PREFIX,
+    );
+    expect(restrictOpenCodeAuthSnapshot(JSON.stringify({ a: { type: "oauth" } }))).toMatchObject({
+      withheld: expect.stringContaining("no API key or unexpired login"),
+    });
+  });
 
   test("never hands a profile the host's Grok refresh token or an expired login", async () => {
     const { roots, profile } = await modelCacheFixture();

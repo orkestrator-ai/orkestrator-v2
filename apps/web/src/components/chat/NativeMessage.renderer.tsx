@@ -1,5 +1,4 @@
 import { useCallback, useContext, useEffect, useState, type ReactNode } from "react";
-import { isEditTool } from "@/lib/tool-names";
 import { imageReadFromToolPart, type ImageRead } from "@/lib/chat/image-read";
 import { isPlanTool } from "@/lib/plan-tool";
 import { isTodoTool } from "@/lib/todo-tool";
@@ -23,6 +22,7 @@ import {
   ToolPart,
   hasRenderableDiff,
 } from "./NativeMessage.basic-parts";
+import { isFileToolKind, useToolChangeKind } from "./NativeMessage.change-parts";
 import {
   FilePart,
   TextPart,
@@ -65,21 +65,14 @@ export function DeferredToolMessagePart({
   // A mail call is drawn as its message, and a read's message is in the result.
   const eagerDetails = isPlanTool(part.toolName) || agentMailToolCall(part) !== null;
   const detailRef = part.detailRef!;
-  const [details, setDetails] = useState<NativeAgentToolDetails | undefined>(() =>
-    cachedToolDetails(detailRef),
-  );
-  const [loadError, setLoadError] = useState<string | null>(null);
-
-  useEffect(() => {
-    const cached = cachedToolDetails(detailRef);
-    if (cached) {
-      setDetails(cached);
-      setLoadError(null);
-      return;
-    }
-    setDetails(undefined);
-    setLoadError(null);
-  }, [detailRef]);
+  const [loaded, setLoaded] = useState<{
+    ref: string;
+    details?: NativeAgentToolDetails;
+    error?: string;
+  } | null>(null);
+  const details =
+    cachedToolDetails(detailRef) ?? (loaded?.ref === detailRef ? loaded.details : undefined);
+  const loadError = loaded?.ref === detailRef ? (loaded.error ?? null) : null;
 
   useEffect(() => {
     if ((!isOpen && !eagerDetails) || details || loadError || !loadToolDetails) return;
@@ -88,11 +81,14 @@ export function DeferredToolMessagePart({
       .then((loaded) => {
         if (cancelled) return;
         cacheToolDetails(loaded);
-        setDetails(loaded);
+        setLoaded({ ref: detailRef, details: loaded });
       })
       .catch((error) => {
         if (cancelled) return;
-        setLoadError(error instanceof Error ? error.message : "Tool details are unavailable");
+        setLoaded({
+          ref: detailRef,
+          error: error instanceof Error ? error.message : "Tool details are unavailable",
+        });
       });
     return () => {
       cancelled = true;
@@ -226,6 +222,11 @@ function MessagePartContent({
 }) {
   const loadToolDetails = useContext(ToolDetailLoaderContext);
   const expansionScope = useContext(MessageExpansionScopeContext);
+  // The backend's tool kind for this call, once its presentation is known.
+  const changeToolKind = useToolChangeKind(
+    part.type === "tool-invocation" ? part.toolUseId : undefined,
+    part.sourceMessageId,
+  );
   if (part.type === "tool-invocation" && part.detailRef && loadToolDetails) {
     return (
       <DeferredToolMessagePart
@@ -270,13 +271,19 @@ function MessagePartContent({
     case "tool-invocation": {
       const mailCall = part.toolDenied ? null : agentMailToolCall(part);
       if (mailCall) return <MailToolPart call={mailCall} expansionKey={toolExpansionKey} />;
-      // ACP identifies file mutations through diff content as well as tool kind.
-      // Render any part carrying an actual diff with the edit treatment, while a
-      // location-only hint on read/search tools remains a generic tool row.
-      if (!part.toolDenied && (isEditTool(part.toolName) || hasRenderableDiff(part.toolDiff))) {
+      // File tools render as an edit card when the backend's presentation says
+      // so, or — before or without a presentation — when the part structurally
+      // carries a diff payload. Provider tool names are never classified here;
+      // a location-only hint on a read/search tool stays a generic tool row.
+      if (
+        !part.toolDenied &&
+        (isFileToolKind(changeToolKind) || hasRenderableDiff(part.toolDiff))
+      ) {
         return (
           <EditToolPart
             expansionKey={toolExpansionKey}
+            callId={part.toolUseId}
+            occurrenceId={part.sourceMessageId}
             toolName={part.toolName}
             toolState={part.toolState}
             toolTitle={part.toolTitle}
@@ -323,6 +330,8 @@ function MessagePartContent({
       const toolCard = (
         <ToolPart
           expansionKey={toolExpansionKey}
+          callId={part.toolUseId}
+          occurrenceId={part.sourceMessageId}
           toolName={part.toolName}
           toolState={part.toolState}
           toolTitle={part.toolTitle}
@@ -359,6 +368,7 @@ function MessagePartContent({
           filename={part.filename}
           containerId={containerId}
           eagerPreview={eagerImagePreview}
+          hideThumbnailCaption={eagerImagePreview}
         />
       );
     case "compaction":

@@ -34,10 +34,10 @@
  *
  * Safety: a source is written only when it resolves inside the environment's
  * worktree or the profile's own data directory (the isolated HOME and any
- * isolated provider home). A source in a host provider home, which an
- * agent-test profile uses for a platform whose credential source it
- * authorized, is skipped with that reason. Codex project trust is granted
- * only in an isolated `CODEX_HOME`.
+ * isolated provider home). An agent-test profile keeps every provider home
+ * its own even when it authorizes the host's login, so a source in a host
+ * provider home should not appear; one that does is skipped with that reason.
+ * Codex project trust is granted only in an isolated `CODEX_HOME`.
  *
  * Each platform writes `output/agent-testing/<run>/mcp-apply-live/<platform>.json`
  * with every outcome. A platform whose login is missing is skipped with the

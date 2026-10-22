@@ -813,6 +813,16 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
       resolved.session.providerSessionId,
       input.messageId,
     );
+    try {
+      this.options.changeTracking?.()?.noteFork({
+        environmentId: resolved.session.environmentId,
+        provider: input.agent,
+        parentLogicalSessionKey: resolved.session.logicalSessionKey,
+        childProviderSessionId: outcome.sessionId,
+      });
+    } catch {
+      // Lineage is best effort; the child still gets its own fresh baseline.
+    }
     return {
       ...outcome,
       controls: {

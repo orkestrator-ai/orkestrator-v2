@@ -34,7 +34,8 @@ import { useTerminalSessionStore } from "@/stores/terminalSessionStore";
 
 import { createSessionKey as createNativeSessionKey } from "@/lib/utils";
 
-import { type PaneLeaf, type PersistedPaneLayout } from "@/types/paneLayout";
+import { type ChangeDiffTarget, type PaneLeaf, type PersistedPaneLayout } from "@/types/paneLayout";
+import { environmentChangeResourceKey } from "@orkestrator/protocol/change-resources";
 
 import type { EnsureEnvironmentSetupResult, EnvironmentSetupSession } from "@/types";
 
@@ -552,8 +553,16 @@ describe("TerminalContainer", () => {
           isDiff: true,
           gitStatus: "M",
           baseBranch: undefined,
+          // A caller that only asks for a diff gets this environment's current file.
+          changeDiff: {
+            kind: "live",
+            resourceKey: environmentChangeResourceKey("env-visible"),
+            path: "src/App.tsx",
+            title: "App.tsx",
+          },
         });
         expect(fileTabs[1]?.fileData?.isDiff).toBe(false);
+        expect(fileTabs[1]?.fileData?.changeDiff).toBeUndefined();
         expect(fileTabs[1]?.fileData?.gitStatus).toBeUndefined();
       });
     });
@@ -582,6 +591,100 @@ describe("TerminalContainer", () => {
         const fileTabs = env.root.tabs.filter((tab) => tab.type === "file");
         expect(fileTabs).toHaveLength(1);
         expect(env.root.activeTabId).toBe(fileTabs[0]?.id ?? null);
+      });
+    });
+
+    test("carries change diff targets and reuses a tab only for the same target", async () => {
+      const historicalA: ChangeDiffTarget = {
+        kind: "historical",
+        diffIdentityId: "diff-a",
+        title: "App.tsx",
+      };
+      const historicalB: ChangeDiffTarget = { ...historicalA, diffIdentityId: "diff-b" };
+      const liveKey = environmentChangeResourceKey("env-visible");
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+          <CreateFileTabHarness
+            calls={[
+              { filePath: "src/App.tsx", options: { changeDiff: historicalA } },
+              { filePath: "src/App.tsx", options: { changeDiff: historicalB } },
+              { filePath: "src/App.tsx", options: { changeDiff: historicalA } },
+              // Legacy diff request, then the same live file by absolute path.
+              { filePath: "src/App.tsx", options: { isDiff: true } },
+              {
+                filePath: "/workspace/src/App.tsx",
+                options: {
+                  changeDiff: {
+                    kind: "live",
+                    resourceKey: liveKey,
+                    path: "/workspace/src/App.tsx",
+                    title: "App.tsx",
+                  },
+                },
+              },
+              { filePath: "src/App.tsx" },
+            ]}
+          />
+        </TerminalProvider>,
+      );
+
+      await waitFor(() => {
+        const env = usePaneLayoutStore.getState().environments.get("env-visible");
+        if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
+        const fileTabs = env.root.tabs.filter((tab) => tab.type === "file");
+        expect(fileTabs.map((tab) => tab.fileData?.changeDiff ?? null)).toEqual([
+          historicalA,
+          historicalB,
+          { kind: "live", resourceKey: liveKey, path: "src/App.tsx", title: "App.tsx" },
+          null,
+        ]);
+        expect(fileTabs.map((tab) => tab.fileData?.isDiff)).toEqual([true, true, true, undefined]);
+        expect(env.root.activeTabId).toBe(fileTabs[3]?.id ?? null);
+      });
+    });
+
+    test("keeps a change diff's path when it does not resolve inside the workspace", async () => {
+      const target: ChangeDiffTarget = {
+        kind: "historical",
+        diffIdentityId: "diff-elsewhere",
+        title: "old.ts",
+      };
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+          <CreateFileTabHarness
+            calls={[
+              { filePath: "/previous-worktree/src/old.ts", options: { changeDiff: target } },
+              { filePath: "/previous-worktree/src/plain.ts" },
+            ]}
+          />
+        </TerminalProvider>,
+      );
+
+      await waitFor(() => {
+        const fileTabs = usePaneLayoutStore
+          .getState()
+          .getAllTabs("env-visible")
+          .filter((tab) => tab.type === "file");
+        expect(fileTabs).toHaveLength(1);
+        expect(fileTabs[0]?.fileData).toMatchObject({
+          filePath: "/previous-worktree/src/old.ts",
+          changeDiff: target,
+        });
+      });
+      expect(mockToastError).toHaveBeenCalledWith("Could not open file", {
+        description: "The link does not point to a file inside this workspace.",
       });
     });
 

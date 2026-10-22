@@ -1,3 +1,4 @@
+import type { Ref } from "react";
 import { Check, ChevronDown, Plus, Server } from "lucide-react";
 import type { PreviewServiceSnapshot } from "@orkestrator/protocol/preview-services";
 
@@ -45,6 +46,8 @@ export interface PreviewServicePickerProps {
   onRegister?: () => void;
   onManual?: () => void;
   disabled?: boolean;
+  /** The trigger, e.g. to return focus to it when a dialog opened from the menu closes. */
+  triggerRef?: Ref<HTMLButtonElement>;
 }
 
 /**
@@ -58,6 +61,7 @@ export function PreviewServicePicker({
   onRegister,
   onManual,
   disabled,
+  triggerRef,
 }: PreviewServicePickerProps) {
   const selected =
     services.find((service) => service.definition.serviceId === selectedServiceId) ?? null;
@@ -65,6 +69,7 @@ export function PreviewServicePicker({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
+        ref={triggerRef}
         disabled={disabled}
         aria-label={
           selected ? `Preview service ${selected.definition.label}` : "Choose preview service"

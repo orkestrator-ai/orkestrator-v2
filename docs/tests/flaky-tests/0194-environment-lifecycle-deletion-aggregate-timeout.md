@@ -1,7 +1,7 @@
 # Environment lifecycle deletion cases time out in the aggregate
 
 - **ID:** 0194
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-12
 - **Tests:** in `Electron backend environment lifecycle commands`:
   `deletes the remote head branch during merged running container cleanup`
@@ -182,3 +182,46 @@ No implementation, assertion, timeout or skip was changed.
 ## Design live-cycle second main merge — 2026-10-18
 
 The GNU-tool PATH `merge-full` aggregate (workspace/root/bridges/protocol reservations 4/1/2/1, alongside browser validation) timed out non-404 remote deletion (5251.01 ms), deletion without a PR URL (5292.57 ms), and retaining ownership after a server could not be reaped (8706.36 ms; case 0226). The unchanged owning file passed `mise run test:logged -- --name merge-unit-owner-commands-registry-environments -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-registry-environments.test.ts --parallel=1 --only-failures`, exit 0, in 30.9 seconds logged. Aggregate evidence: `orkestrator-test-run.yluX61/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory. Confirmed intermittent recurrence; no implementation, assertion, timeout or skip changed.
+
+## Resolution — 2026-10-20
+
+- **Root cause:** shared fixture state, not host load alone. `createContext` in
+  `apps/backend/tests/command-fixtures.ts` defaults every context's data
+  directory to one fixed path, `$TMPDIR/orkestrator-command-tests`, shared by
+  every command-fixture file in every concurrent test process on the host
+  (including other checkouts' runs). Every `delete_environment` records and
+  updates the environment-cleanup ledger there: a SQLite database in WAL mode
+  with `synchronous = FULL`, whose `bun:sqlite` busy handler blocks the event
+  loop for up to ten seconds while another process holds the write lock. The
+  ledger also accumulated entries across runs, and a deletion's background
+  reconcile pass retried entries other processes had recorded under the same
+  environment ids. Holding that database's write lock from another process for
+  four seconds stalled `deletes the remote head branch during merged local
+  environment cleanup` from about 0.1 s to 4,112 ms in an otherwise idle run;
+  under six concurrent copies the whole-file times ran in lock-step (six copies
+  finishing at an identical 21.56 s), the signature of cross-process blocking.
+- **Fix:** `apps/backend/tests/commands-registry-environments.test.ts` now passes
+  a per-process data directory (`orkestrator-command-environments-<pid>-*`, swept
+  when stale, removed in `afterAll` after cancelling the scheduled reconcile and
+  closing the ledger connection) to every context, and points its Docker fakes'
+  ownership probe at that directory's owner namespace. The shared fixture is
+  unchanged. The ten-process `createGitWorktreeWithOrigin` repository pair is
+  built once per file and copied per test, and the remote-branch collision
+  case creates its unfetched branch directly in the bare remote (one Git
+  process instead of a clone, commit and push). Git subprocesses per file run
+  fell from 347 to 235. No assertion, timeout or skip changed.
+- **Verification:** the same four-second external lock no longer affects the
+  file, and a full run leaves the shared ledger's revision unchanged. The file
+  alone passed in 14.0–17.6 s (previously 16.7–24.6 s). Interleaved stress,
+  six concurrent copies × four rounds per variant at load average 22–45:
+  before, 24/24 passed with whole-file times of 16.0–29.1 s; after, 24/24 passed
+  in 14.1–16.1 s.
+  Deletion cases, before → after (median / max ms): merged local cleanup
+  242/634 → 70/122; already-deleted head branch 249/622 → 75/108; closed
+  cleanup 218/519 → 48/248; non-404 failure 204/327 → 72/126; no PR URL
+  203/263 → 46/62; deletion that cannot reap a server 312/469 → 90/139. The two
+  container cases are dominated by fake-Docker shell spawns and were unchanged
+  (merged running container 359/560 → 306/390; stopped container 305/776 →
+  261/308); they no longer stall on the shared ledger.
+
+- **Consolidation (2026-10-20):** the per-process data directory and the copied origin/worktree template were moved from the owning test files into `apps/backend/tests/command-fixtures.ts`, so every command-fixture file now gets its own data directory (removed in the fixture's `afterAll` after cancelling scheduled cleanup and closing the ledger). The 28 command-fixture files plus the coordinator and worktree-snapshot owners passed together afterwards: 582 passed, 1 skipped, 0 failed.

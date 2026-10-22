@@ -33,7 +33,10 @@ import {
   MAX_JOURNAL_ENTRIES,
 } from "@orkestrator/protocol/node/command-change-journal";
 import { isFileEditToolName, type MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
-import { WorkspaceChangeProbe } from "@orkestrator/protocol/node/workspace-change-probe";
+import {
+  WorkspaceChangeProbe,
+  type ProbeObservation,
+} from "@orkestrator/protocol/node/workspace-change-probe";
 import { asRecord, nonEmptyString, setBoundedMapEntry } from "./agent-provider-runtime.js";
 import { collectRawOpenCodeSubagentIds } from "./opencode-messages.js";
 
@@ -49,8 +52,34 @@ const MAX_CACHED_JOURNALS = 1_024;
 
 export type CommandChangeProbe = Pick<
   WorkspaceChangeProbe,
-  "begin" | "note" | "end" | "discard" | "prime"
+  "begin" | "note" | "endObservation" | "discard" | "prime"
 >;
+
+/** A measured shell window closed; must not throw. */
+export type ShellObservationListener = (
+  sessionId: string,
+  callId: string,
+  observation: ProbeObservation,
+) => void;
+
+/**
+ * The badge a closed window yields: exactly what `WorkspaceChangeProbe.end`
+ * returns, so the journal and transcript overlay are unchanged.
+ */
+export function legacyMeasuredChange(
+  observation: ProbeObservation | undefined,
+): MeasuredWorkspaceChange | undefined {
+  const change = observation?.change;
+  if (!observation || !change) return undefined;
+  if (
+    observation.overlap === "known-overlap" ||
+    observation.boundary.before === "late-start" ||
+    observation.omittedReasons.length > 0
+  ) {
+    change.approximate = true;
+  }
+  return change;
+}
 
 export interface OpenCodeCommandChangeOptions {
   /**
@@ -60,6 +89,22 @@ export interface OpenCodeCommandChangeOptions {
   journalDirectory?: string;
   /** Test seam; production shares one probe per backend process. */
   probe?: CommandChangeProbe;
+}
+
+/**
+ * Shell-call badges for a connection whose worktree git can read here. Only a
+ * connection with a host directory qualifies: local-worktree environments. A
+ * container's OpenCode works on a clone inside the container, so its
+ * connection carries no directory and gets none.
+ */
+export function openCodeCommandChangesFor(
+  directory: string | undefined,
+  options: OpenCodeCommandChangeOptions | undefined,
+  onMeasured: (sessionId: string) => void,
+): OpenCodeCommandChanges | undefined {
+  return directory && options
+    ? new OpenCodeCommandChanges(directory, options, onMeasured)
+    : undefined;
 }
 
 let sharedProbe: WorkspaceChangeProbe | undefined;
@@ -149,8 +194,15 @@ export class OpenCodeCommandChanges {
     private readonly options: OpenCodeCommandChangeOptions,
     /** A new measurement exists for this session; must not throw. */
     private readonly onMeasured: (sessionId: string) => void,
+    /** Every closed shell window, measured or not, for change evidence. */
+    private onObservation?: ShellObservationListener,
   ) {
     this.probe = options.probe ?? sharedWorkspaceChangeProbe();
+  }
+
+  /** Report every closed shell window to change evidence (see `opencode-change-evidence.ts`). */
+  observeShellWindows(listener: ShellObservationListener): void {
+    this.onObservation = listener;
   }
 
   /**
@@ -257,8 +309,16 @@ export class OpenCodeCommandChanges {
     // An error still measures: an aborted or timed-out command may have
     // written before it stopped, and a denied one simply measures nothing.
     void this.probe
-      .end(key)
-      .then((change) => {
+      .endObservation(key)
+      .then((observation) => {
+        if (call.measure && observation) {
+          try {
+            this.onObservation?.(sessionId, callId, observation);
+          } catch {
+            // Evidence is best effort; the badge below is independent of it.
+          }
+        }
+        const change = legacyMeasuredChange(observation);
         if (call.measure && change && hasMeasuredChanges(change)) {
           this.record(sessionId, callId, change);
         }

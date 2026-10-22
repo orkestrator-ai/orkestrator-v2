@@ -1,7 +1,7 @@
 # 0187 — Workspace artifact Git excludes aggregate timeout
 
 - **ID:** 0187
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-11
 
 ## Observation — 2026-10-11
@@ -173,3 +173,97 @@ The unchanged owning file then passed `mise run test:logged -- --name merge-clea
 - **Isolated rerun:** `mise run test:logged -- --name merge2-command-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures`, with the same GNU-tool PATH, passed the unchanged owning file (exit 0, 15.3 seconds).
 - **Evidence:** `orkestrator-test-run.vycZlB/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and outer `orkestrator-test-run.BmgkR3/merge2-full-cold.log.gz` below the host temporary directory.
 - **Assessment:** confirmed intermittent recurrence. Contention remains a hypothesis; no implementation, assertion, deadline or skip changed.
+
+## Resolution — 2026-10-20
+
+- **Status:** resolved
+- **Shared root cause (shared fixture state, not slow Git):** `createCommandFixtures()`
+  gives every context the same default data directory,
+  `$TMPDIR/orkestrator-command-tests`. Every command-fixture file in every
+  concurrent test process on the host (other worktrees included) uses it. Two
+  things live in that directory:
+  - The environment cleanup ledger, a SQLite store with WAL and
+    `synchronous = FULL`. `bun:sqlite`'s busy handler blocks the event loop for
+    up to 10 s while another process holds the write lock.
+  - The `terminal-history` root, which `deleteTerminalHistories` lists in full
+    on every deletion, reading each manifest.
+
+  On the test host the ledger held 13 entries left by other processes and earlier runs, several of
+  them at 8 attempts, and the history root held 438 directories. Every
+  `delete_environment` records and updates ledger entries. Every successful
+  deletion then starts a background `scheduleEnvironmentCleanupReconcile`
+  pass. That pass outlives the test, retries ledger entries that other
+  processes recorded and writes more ledger updates. Deletion cases here were
+  therefore paced by other processes' writes.
+  Reproduction: while a second process held the shared ledger's write lock for
+  1 s at a time, the diff-statistics cases (all of which delete their
+  environment) went from about 0.4 s to 1.2 s each. With the fix, the same
+  probe left them unchanged.
+- **Second, case-specific cause (Bun subprocess exit lost):** this case
+  kept timing out under stress after the data-directory fix (6 timeouts in 48
+  copies), so the run was instrumented further:
+  - A wrapper on the `git-docker-scan` admission pool showed the cause. The
+    tracked diff scan that `start_environment` begins held the new worktree's
+    per-target lease (`maxPerTarget: 1`) for more than 4 s, and the test's
+    interactive `get_local_git_status` read queued behind it.
+  - A timed Git shim and env-gated spawn-lifecycle logging in `shell.ts`, both
+    temporary and since reverted, showed what held the lease. In every
+    reproduction the scan's `git rev-parse --verify --quiet <sha>^{commit}`
+    (`gitRefExists`) exited in about 20 ms, but Bun delivered no `exit`, no
+    stdout/stderr EOF and no `close` for it. `runCommand` therefore waited out
+    its 10 s timeout (+100 ms grace). Only then did the scan continue and
+    release the lease, and the queued read ran against the already-deleted
+    worktree. That is the late `fatal: cannot change to …` rejection.
+  - In all four traces the lost child had been spawned within about 1 ms of
+    two other spawns: the baseline check's `merge-base` and the test's own
+    `execFile` calls `git rev-parse --git-dir` / `--git-path info/exclude`.
+    A standalone loop of the same mixed spawns (9,600 under load) did not
+    reproduce the loss, so the exact Bun trigger is unproven.
+- **Case-specific fix:** the test now finds the linked worktree's Git
+  directory and `info/exclude` from Git's documented layout instead of
+  spawning `git rev-parse`. It asserts `.git` is a file, follows it to the
+  private Git directory, then follows `commondir`. The final
+  `git check-ignore` still proves that Git honours the file.
+  - With this change: 0 lost exits and 0 failures in 48 instrumented stress
+    copies plus 24 clean ones. The same harness had shown about one failure
+    every 1–2 rounds of 6 copies before.
+  - Residual risk: the Bun lost-exit defect itself is not fixed. If it hits any
+    product subprocess, that operation still stalls for its command timeout.
+    It should be tracked as a runtime issue.
+- **Fix (test file only, `apps/backend/tests/commands-integration.test.ts`):**
+  - The file wraps `createContext` so that every context, unless it passes its
+    own `dataDir`, uses a per-process data directory. That directory is created
+    with `createOwnedTempDir("orkestrator-command-integration-")` and swept by
+    `sweepStaleTempDirs`. In `afterAll` the file cancels that directory's
+    scheduled cleanup reconcile, closes its ledger connection and removes it.
+    The ledger, its background retries and terminal histories now hold only
+    this file's own environments.
+  - Container ownership is namespaced by data directory, so the
+    running-container Docker fake's owner string is rewritten to match. A guard
+    fails loudly if the fixture script stops naming the owner.
+  - `createGitWorktreeWithOrigin` used to spend ten Git processes per test,
+    including a bare init and a push. It now builds the origin/worktree pair
+    once per file and copies it into each test's temporary directory with the
+    `origin` URL repointed. Each test still owns an independent repository and
+    remote. The diff-statistics cases drop from 18 to 9 Git processes each.
+  - No assertion, deadline or skip changed. `command-fixtures.ts` is shared by
+    about 27 files and was left unchanged. Moving its default data directory to
+    a per-process path would extend this fix to those files.
+- **This case (mean/max seconds):**
+  - Alone: 0.68/0.77 before, 0.32/0.33 after. Under stress: 1.54/5.01 before (2 timeouts), 0.61/0.78 after.
+- **Verification:**
+  - Owning file alone: `bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts`
+    took 15.4–16.1 s before (55 pass) and 12.3–14.2 s after (55 pass, 3+ runs).
+    The "still failing after 8 attempts" warnings from other processes' ledger
+    entries are gone.
+  - Aggregate simulation: 6 concurrent copies of the file, 24–40 `yes` CPU
+    burners and up to 6 other command-fixture files at once (load average
+    15–43).
+    - Before: 2 of 18 runs failed. Each failure was the artifact-excludes case
+      at 5.01 s, followed by the late `fatal: cannot change to …` unhandled
+      rejection between tests.
+    - After: 0 of 72 runs failed.
+  - `bunx tsc --noEmit -p tsconfig.test.json`, `oxlint` and `oxfmt --check`
+    pass for the file.
+
+- **Consolidation (2026-10-20):** the per-process data directory and the copied origin/worktree template were moved from the owning test files into `apps/backend/tests/command-fixtures.ts`, so every command-fixture file now gets its own data directory (removed in the fixture's `afterAll` after cancelling scheduled cleanup and closing the ledger). The 28 command-fixture files plus the coordinator and worktree-snapshot owners passed together afterwards: 582 passed, 1 skipped, 0 failed.

@@ -19,3 +19,14 @@
 - **Hypothesis:** fixture teardown or filesystem contention could explain the
   temporary-directory removal failure; the cause is unconfirmed. No public
   API implementation, assertion, timeout or skip changed.
+
+## Recurrence during the remaining real-Electron preview cases (2026-10-21)
+
+- **Command:** `mise run test:logged -- --name full-tests-0a835 -- mise run test`
+  on branch `qualify-preview-electron-remaining-cases-0a835a98d18e` (no
+  backend change), load average 16 to 36.
+- **Failure:** `EPERM: operation not permitted, rm '/tmp/ork-public-api-…'`
+  from `cleanup` (`test-support.ts:143`), the same symptom (1095.80 ms).
+- **Alone:** `bun test --preload ../../tests/setup-node.ts ./src/core/public-api/public-api-exec.test.ts --parallel=1`
+  in `apps/backend`: 17 passed (32.85 s) at load 36.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.txKi1Z/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.

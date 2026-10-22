@@ -1,7 +1,7 @@
 # Worktree tracked-edit cache hit
 
 - **ID:** 0180
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-03
 - **Snapshot:** based on `19cf6535`, with the workflow-result submission and review-nudge fixes staged. No watcher, diff-statistics or Git-snapshot implementation or tests changed.
 - **Original command:** `mise run test:logged -- --name full-suite-gnu -- mise run test`, with the GNU-tool PATH prescribed in `docs/development/testing-guide.md`.
@@ -296,3 +296,24 @@ The unchanged owning file passed alone (4 pass, 1.4 s).
 - **Owning-file rerun:** the same PATH with `mise run test:logged -- --name merge-final-owner-worktree-snapshots -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 0.5 seconds logged).
 - **Evidence:** `orkestrator-test-run.cM59au/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and outer `orkestrator-test-run.NdOLPH/merge-final-tests.log.gz` below the host temporary directory.
 - **Assessment:** confirmed intermittent recurrence. The invalidation-timing hypothesis remains unconfirmed; no implementation, assertion, timeout or skip changed.
+
+## File/LOC change-tracking validation — 2026-10-20
+
+- **Original command:** `mise run test:logged -- --name ct-full2 -- mise run test` on branch `implement-file-change-f3950a40ac3a-r1` (uncommitted change-tracking implementation on `97af3d45`), on a macOS arm64 host.
+- **Failure:** the tracked-edit cache-hit assertion at line 139 expected 1 and received 0 (134.31 ms). Backend ran 9748 tests across 548 files; this was the only failure. Root/support, bridges and the codex protocol lockfile passed.
+- **Owning-file rerun:** `bun test --cwd apps/backend ./src/core/worktree-snapshots-git.test.ts` passed 4/4 in five consecutive runs.
+- **Caveat:** the owning file is unchanged, but the branch changes the shared scan path it exercises (`SharedScanQueue` now lets a caller join a running pass that started after its request, and `DiffScanEvent` hooks were added), so this occurrence does not independently establish the flake. An earlier full run on the same branch, before the scan-sharing change, passed this test.
+- **Evidence:** `orkestrator-test-run.MRqN8v` and `orkestrator-test-run.SZoJWF` below the host temporary directory.
+
+## Resolution — 2026-10-20
+
+- **Root cause (product):** the diff scan's own `git status` rewrote the linked worktree's index. `getLocalGitStatusDetailed` ran `git status --porcelain=v1 -z --untracked-files=all` without `--no-optional-locks`, so Git opportunistically refreshed the index (`index.lock` then rename to `index`) whenever an entry was racily clean or its stat data had changed. With git 2.56 on APFS this happened on most scans in this fixture. The metadata watcher correctly reports `index` changes as file-list hints, so every watcher-driven scan produced its own hint about one settle window (50 ms here) after it finished. That hint advanced `dirtyEpoch` and queued a redundant rescan. When `readRows()` ran after the self-induced hint (or after a late index-write event from the `beforeAll` scan, delivered after the append), the published body's epoch was older than the read's required epoch. The read then joined the rescan (`coalesced`, not `cacheHits`), returning the right row with zero cache hits, which matches every recorded failure. In a quiet run the margin was about 7 ms: the scan ended at 306 ms, the read finished at 317 ms and the self-hint fired at 323 ms. Any scheduling delay lost that margin, which is why the failure followed load and the full aggregate suite. Instrumented timelines also showed the loop sustaining itself, with a scan, an index write and a hint repeating every ~50 ms until the racy window passed.
+- **Fix:** `apps/backend/src/core/commands-files.ts` `getLocalGitStatusDetailed` now passes `--no-optional-locks` to all three scan reads (two `git diff` calls and `git status`). This is Git's documented mode for background readers. The scan no longer writes the index or takes `index.lock`, so it cannot invalidate its own result or collide with the user's Git commands. Trade-off: scans no longer persist refreshed stat data or untracked-cache and fsmonitor state into the index. The next index-writing Git command, from the user or an agent, still persists it.
+- **Test:** the cache-hit assertion is unchanged. One regression assertion was added to `a tracked edit that never touches the index is detected`: after the read, the worktree index mtime must still equal its pre-edit value, so the scan must be read-only. Without the fix this new assertion fails deterministically instead of flakily.
+- **Verification** (18-core host; concurrent copies via a runner script; "pre-fix" uses a `git` PATH wrapper that strips `--no-optional-locks`, leaving the source untouched):
+  - Pre-fix, original assertions only (instrumented copy), 100 runs at 12 concurrent with 18 `yes` CPU burners: **46/100 failed** with the cache-hit `Expected 1, Received 0`. Fixed, same conditions: **0/100**.
+  - Pre-fix, updated test file, 10 runs at 5 concurrent, unstressed: 10/10 failed (9 on the new index assertion, 1 on the cache hit). With 100 runs at 12 concurrent under burners: 100/100 failed (54 index, 46 cache hit).
+  - Fixed, updated test file, 200 runs at 18 concurrent under 18 CPU burners (load ~14–21): **0/200 failed**.
+  - The timeline with the fix shows exactly one hint per real change and no index events after scans.
+  - Related backend files (`diff-stats*`, `commands-files*`, `commands-file-*`, `worktree*`): 135 pass. Backend `typecheck`, `oxlint` and `oxfmt --check` are clean on the touched files.
+  - `--rerun-each` does not apply here: the file's tests are sequential and stateful over one shared repository.

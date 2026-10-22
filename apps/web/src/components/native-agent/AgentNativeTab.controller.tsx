@@ -42,6 +42,10 @@ import {
 } from "@/lib/chat/artifact-publication-merge";
 import { BackgroundTaskChildrenContext } from "@/components/chat/NativeMessage.shared";
 import {
+  NativeChangeScopeContext,
+  type NativeChangeScope,
+} from "@/components/chat/NativeMessage.change-scope";
+import {
   NativeResumeSessionDialog,
   type ResumableSession,
 } from "@/components/chat/NativeResumeSessionDialog";
@@ -181,6 +185,7 @@ import { isSetupBlocked } from "@/lib/setup-commands";
 import { requestGlobalSettings } from "@/lib/settings-navigation";
 import { agentSettingsCanSignIn, agentTerminalSignInCommand } from "@/lib/agent-sign-in";
 import { useOptionalTerminalContext } from "@/contexts/TerminalContext";
+import { ThreadChangesHeader } from "@/components/changes/ThreadChangesHeader";
 import { ClaudeAuthRecoveryCard } from "@/components/claude/ClaudeAuthRecoveryCard";
 import { isClaudeNotLoggedInNotice } from "@/lib/claude-auth";
 
@@ -819,6 +824,16 @@ export function SharedNativeAgentController({
     data.environmentId,
     sessionKey,
     projection?.sessionId ?? data.sessionId ?? sessionKey,
+  );
+  // Lets transcript tool rows request their backend change presentations.
+  const providerSessionId = projection?.sessionId ?? data.sessionId;
+  const nativeChangeScope = useMemo<NativeChangeScope>(
+    () => ({
+      environmentId: data.environmentId,
+      provider: platform,
+      ...(providerSessionId ? { conversationId: providerSessionId } : {}),
+    }),
+    [data.environmentId, platform, providerSessionId],
   );
   const artifactPublications = useArtifactPublications(richTranscriptScope, transcriptMessages);
   const artifactPlacements = useMemo(
@@ -3354,9 +3369,18 @@ export function SharedNativeAgentController({
   );
   return (
     <BackgroundTaskChildrenContext.Provider value={childBackgroundTasks}>
-      <RichTranscriptScopeContext.Provider value={richTranscriptScope}>
-        {chatShell}
-      </RichTranscriptScopeContext.Provider>
+      <NativeChangeScopeContext.Provider value={nativeChangeScope}>
+        <RichTranscriptScopeContext.Provider value={richTranscriptScope}>
+          <div className="@container flex h-full min-h-0 flex-col">
+            <ThreadChangesHeader
+              environmentId={data.environmentId}
+              logicalSessionKey={sessionKey}
+              turnActive={isTurnActive}
+            />
+            <div className="min-h-0 flex-1">{chatShell}</div>
+          </div>
+        </RichTranscriptScopeContext.Provider>
+      </NativeChangeScopeContext.Provider>
     </BackgroundTaskChildrenContext.Provider>
   );
 }

@@ -7,6 +7,7 @@ import {
   claudePermissionMode,
   claudeTurnPolicy,
 } from "./claude-query-config.js";
+import { recordClaudeToolAwaitingApproval } from "./change-evidence.js";
 import { eventEmitter } from "./event-emitter.js";
 import { debugLog } from "./logger.js";
 import {
@@ -351,6 +352,7 @@ export async function turnCanUseTool(
   const turnPolicy = claudeTurnPolicy(session.executionPolicy, turn.options?.readOnly);
   const approvals = turnPolicy?.approvals;
   if (claudeAsksForApproval(turnPolicy, turn.options)) {
+    recordClaudeToolAwaitingApproval(sessionId, permissionContext?.toolUseID, toolName, input);
     return requestClaudeToolApproval(sessionId, toolName, input, permissionContext);
   }
   if (approvals === "deny") {

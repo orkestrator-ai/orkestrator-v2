@@ -42,6 +42,8 @@ deleted once their behaviour is in a living doc; git history keeps them. The
 | [control-mcp.md](architecture/control-mcp.md) | Control MCP operator guide. |
 | [mcp-management.md](architecture/mcp-management.md) | Per-provider MCP server management: sources, precedence, safe writes, secrets, apply states, evidence. |
 | [remote-gateway.md](architecture/remote-gateway.md) | Standalone backend, Tailscale Serve, flags, troubleshooting. |
+| [command-nodes.md](architecture/command-nodes.md) | **Target multi-machine architecture:** command nodes (registry, portal, cross-node coordinators, mail, files) and leaf nodes; control plane via the command node, agent chat, terminals and previews direct from client to leaf where reachable. |
+| [federation.md](architecture/federation.md) | Transitional client-side multi-machine federation on this branch, being reworked into command nodes: identities, hello handshake, machine profile and colours, routes/fallback, realm-based panels, known limitations, acceptance-ID map. |
 | [host-updates.md](architecture/host-updates.md) | Maintaining the backend's computer from any client: Orkestrator updates (desktop app or standalone service; now or when idle; cancel; 60 s countdown; restart reconciliation; rollback), toolchain repair, gh channel, container image, UI and CLI. Remaining work: [remote-host-upgrades.md](todo/remote-host-upgrades.md). |
 | [public-cli.md](architecture/public-cli.md) | `orkestrator` client commands: backend selection, JSON/exit contract, request keys and retention, lifecycle waits, settings, sessions, request-specific completion, exec, scenarios. |
 | [event-snapshot-recovery.md](architecture/event-snapshot-recovery.md) | Which sequence each consumer may compare, revisioned view snapshots/outcomes, bounded client hydration, best-effort PR notifications, terminal input recovery. |
@@ -50,6 +52,7 @@ deleted once their behaviour is in a living doc; git history keeps them. The
 | [review-preparation.md](architecture/review-preparation.md) | Multi-review pipeline; queue wait is 30 minutes. Auto-fix and auto-PR ordering and recovery. Fan-out budgets and the efficiency benchmark. |
 | [native-agent-commands.md](architecture/native-agent-commands.md) | Slash-command descriptors, bridge wire contract, intent resolution, collisions, catalogue lifecycle, per-provider support tables. |
 | [bridge-diagnostics.md](architecture/bridge-diagnostics.md) | Shared bridge debug logging. |
+| [change-tracking.md](architecture/change-tracking.md) | Backend-owned file and LOC tracking: scopes and CountPolicyV1, provider evidence adapters, ledger and snapshot store, turn/thread boundaries, projections and `changes_*` commands, policies, restore, retention, operator runbook. |
 | [storage.md](architecture/storage.md) | Backend SQLite database: stores and layouts, `updateStore`/leases/`atomically`, durability and deletion, migrations and the one-time JSON import. |
 | [container-lifecycle.md](architecture/container-lifecycle.md) | Container authority: durable operations, ownership, writer lease, schema floor, recovery; images and readiness; persistent storage, preserving rebuilds, recovery copies and reviewed cleanup; staged inputs, networks, budgets and bounded logs. |
 | [environment-deletion.md](architecture/environment-deletion.md) | What deleting an environment removes and in what order, the cleanup ledger and its retries, the branch rules, and the sweeps that remove leftovers. |
@@ -64,6 +67,8 @@ deleted once their behaviour is in a living doc; git history keeps them. The
 
 | Document | Notes |
 | --- | --- |
+| [command-nodes-handoff.md](development/command-nodes-handoff.md) | What was built for command nodes, where it lives, migration, deviations and what was not verified. |
+| [command-nodes-plan.md](development/command-nodes-plan.md) | Build plan for command nodes: contracts, milestones, requirement matrix with evidence and status, and the final verification procedure. |
 | [testing-guide.md](development/testing-guide.md) | How to choose and run tests. Commands live here. |
 | [agent-testing.md](development/agent-testing.md) | Isolated profiles and real-stack QA. |
 | [cli-testing.md](development/cli-testing.md) | Driving a `dev:test` profile with the `orkestrator` CLI: setup from a worktree, scripting output, recipes, UI rehydration checks. Contract stays in `public-cli.md`. |
@@ -75,6 +80,10 @@ deleted once their behaviour is in a living doc; git history keeps them. The
 | [releasing.md](development/releasing.md) | Cutting a desktop release, CI secrets, artifact names, how the in-app updater decides to run, Linux/Omarchy notes. |
 | [container-qualification.md](development/container-qualification.md) | Real-Docker qualification: C01–C30 scenario matrix, live suites and how to run them, platform dimensions, benchmark harness and regression targets. |
 | [efficiency-harness.md](development/efficiency-harness.md) | Running `efficiency:baseline`: options, workloads a–j, counting method and limitations. |
+| [ssh-routes.md](development/ssh-routes.md) | Managed SSH routes: `--loopback-client-port`, SSH alias rules, host-key trust and recovery, prompts and BatchMode, platform support, failure codes, real-sshd integration test. |
+| [federation-migration.md](development/federation-migration.md) | Catalogue v1→v2 migration, what older clients see, storage-key migration, feature flags and rollback, client/backend compatibility table. |
+| [federation-benchmarks.md](development/federation-benchmarks.md) | Synthetic 1/3/10/25-machine runtime benchmark results and what is not measured. |
+| [federation-handoff.md](development/federation-handoff.md) | Federated client handoff: architecture summary, schema versions, validation evidence, deviations and untested cases. |
 | [flaky-tests.md](development/flaky-tests.md) | Pointer to the flake registry in `tests/`. |
 
 ## Tests

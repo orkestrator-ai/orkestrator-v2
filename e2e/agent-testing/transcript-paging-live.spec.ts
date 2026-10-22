@@ -498,6 +498,12 @@ async function oldestRenderedText(page: Page, list: Locator): Promise<string> {
 /** Expands the rendered tool row that read `stop` and waits for its output. */
 async function expandStop(list: Locator, trail: Trail, stop: number): Promise<void> {
   const name = trail.files[stop - 1]!.replace(".txt", "");
+  // A folded tool group shows only its newest call; open the rendered ones so
+  // the stop's own row is reachable.
+  const folded = list.getByRole("button", { name: /^Show \d+ tool calls:/ });
+  for (let opened = 0; opened < 20 && (await folded.count()) > 0; opened += 1) {
+    await folded.first().click();
+  }
   const trigger = list.getByRole("button").filter({ hasText: name }).first();
   await trigger.scrollIntoViewIfNeeded();
   await trigger.click();

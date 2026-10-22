@@ -258,8 +258,9 @@ Findings:
   `restrictGrokAuthSnapshot`'s output: refresh tokens blanked, expired or
   unparseable logins dropped. When nothing usable remains, the launcher warns
   ("Grok is signed out in this profile: …") and seeds nothing. Containers
-  copy the same file with its refresh token: follow-up 5 in
-  [container-network-and-credential-isolation.md](container-network-and-credential-isolation.md).
+  now get the same access-only copy (2026-10-21; see "Single-use refresh
+  tokens" in
+  [container-network-and-credential-isolation.md](container-network-and-credential-isolation.md)).
 - **`results.json` kept the gateway cookie (fixed).** Playwright's JSON
   reporter writes after global teardown, so the sanitizer never saw
   `results.json`. A request that failed when the backend went away left

@@ -62,6 +62,7 @@ const AGENT_HELPER_SED =
   "/^copy_agent_file() {/,/^}$/p; " +
   "/^copy_agent_directory() {/,/^}$/p; " +
   "/^copy_agent_directory_entries() {/,/^}$/p; " +
+  "/^restrict_imported_login() {/,/^}$/p; " +
   "/^publish_claude_credentials() {/,/^}$/p";
 
 function agentCopyHelperHarness(body: string): string {
@@ -1125,6 +1126,64 @@ copy_agent_directory "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" skills Codex
     });
   });
 
+  test("imported Codex and Grok logins lose their single-use refresh tokens", () => {
+    const entrypoint = read("docker/entrypoint.sh");
+    // Each import is restricted right after it is copied, before any agent runs.
+    expect(entrypoint).toMatch(
+      /chmod 600 "\$HOME\/\.codex\/auth\.json"[^\n]*\n\s*restrict_imported_login "\$HOME\/\.codex\/auth\.json" codex Codex/,
+    );
+    expect(entrypoint).toMatch(
+      /chmod 600 "\$HOME\/\.grok\/auth\.json"[^\n]*\n\s*restrict_imported_login "\$HOME\/\.grok\/auth\.json" grok Grok/,
+    );
+    withTempDir((dir) => {
+      // The image runs the helper with node; a host without node runs it with Bun.
+      const bin = join(dir, "bin");
+      mkdirSync(bin);
+      if (!Bun.which("node")) {
+        writeFileSync(join(bin, "node"), `#!/bin/sh\nexec ${shellQuote(process.execPath)} "$@"\n`);
+        chmodSync(join(bin, "node"), 0o755);
+      }
+      const codex = join(dir, "codex.json");
+      const grok = join(dir, "grok.json");
+      const broken = join(dir, "broken.json");
+      writeFileSync(
+        codex,
+        JSON.stringify({
+          auth_mode: "chatgpt",
+          last_refresh: "2026-10-01T00:00:00Z",
+          tokens: { access_token: "a", refresh_token: "SENTINEL-CODEX" },
+        }),
+      );
+      writeFileSync(
+        grok,
+        JSON.stringify({ one: { key: "k", refresh_token: "SENTINEL-GROK" }, two: { key: "j" } }),
+      );
+      writeFileSync(broken, "SENTINEL-NOT-JSON");
+      const result = runShell(
+        agentCopyHelperHarness(`
+restrict_imported_login ${shellQuote(codex)} codex Codex
+restrict_imported_login ${shellQuote(grok)} grok Grok
+restrict_imported_login ${shellQuote(broken)} grok Grok
+restrict_imported_login ${shellQuote(join(dir, "missing.json"))} grok Grok
+`),
+        { PATH: `${bin}:${process.env.PATH ?? "/usr/bin:/bin"}` },
+      );
+
+      expect(result.exitCode).toBe(0);
+      const restrictedCodex = JSON.parse(readFileSync(codex, "utf8"));
+      expect(restrictedCodex.tokens).toEqual({ access_token: "a", refresh_token: "" });
+      expect(Date.parse(restrictedCodex.last_refresh)).toBeGreaterThan(Date.now() - 60_000);
+      expect(JSON.parse(readFileSync(grok, "utf8"))).toEqual({
+        one: { key: "k", refresh_token: "" },
+        two: { key: "j" },
+      });
+      expect((statSync(codex).mode & 0o777).toString(8)).toBe("600");
+      expect(() => statSync(broken)).toThrow();
+      expect(result.stdout).toContain("removed an unreadable Grok login");
+      expect(result.stdout + result.stderr).not.toContain("SENTINEL");
+    });
+  });
+
   test("Codex configuration copy helpers skip missing and symlinked allowlist entries", () => {
     withTempDir((dir) => {
       const source = join(dir, "source");
@@ -1727,6 +1786,8 @@ printf "continued"
       const source = join(dir, "source");
       const home = join(dir, "home");
       const destination = join(home, ".codex");
+      const marker = join(dir, "account-marker");
+      writeFileSync(marker, "previous-account", { mode: 0o600 });
       const files = [
         "auth.json",
         "config.toml",
@@ -1738,9 +1799,12 @@ printf "continued"
         "cloud-requirements-cache.json",
       ];
       const directories = ["rules", "skills", "prompts", "vendor_imports", "plugins/cache"];
+      // The import is restricted after copying, so auth.json must be a login.
+      const contents = (file: string) =>
+        file === "auth.json" ? '{"OPENAI_API_KEY":"auth.json"}' : `${file}\n`;
       mkdirSync(source, { recursive: true });
       for (const file of files) {
-        writeFileSync(join(source, file), `${file}\n`, { mode: 0o644 });
+        writeFileSync(join(source, file), contents(file), { mode: 0o644 });
       }
       for (const directory of directories) {
         mkdirSync(join(source, directory), { recursive: true });
@@ -1756,21 +1820,24 @@ printf "continued"
         `
 set -e
 log_progress() { :; }
-eval "$(sed -n '/^agent_copy_warn() {/,/^}$/p; /^report_agent_copy_skips() {/,/^}$/p; /^agent_source_path_has_symlink() {/,/^}$/p; /^agent_destination_path_has_symlink() {/,/^}$/p; /^copy_agent_file() {/,/^}$/p; /^copy_agent_directory() {/,/^}$/p' ${shellQuote(entrypoint)})"
-codex_setup="$(sed -n '/^# Set up Codex configuration$/,/^log_progress "Codex configuration ready"$/p' ${shellQuote(entrypoint)} | sed "s#/codex-home#\\$AGENT_TEST_SOURCE#g")"
+eval "$(sed -n '/^agent_copy_warn() {/,/^}$/p; /^report_agent_copy_skips() {/,/^}$/p; /^agent_source_path_has_symlink() {/,/^}$/p; /^agent_destination_path_has_symlink() {/,/^}$/p; /^copy_agent_file() {/,/^}$/p; /^copy_agent_directory() {/,/^}$/p; /^restrict_imported_login() {/,/^}$/p' ${shellQuote(entrypoint)})"
+codex_setup="$(sed -n '/^# Set up Codex configuration$/,/^log_progress "Codex configuration ready"$/p' ${shellQuote(entrypoint)} | sed "s#/codex-home#\\$AGENT_TEST_SOURCE#g; s#/tmp/orkestrator-codex-account#\\$AGENT_TEST_MARKER#g")"
 eval "$codex_setup"
 `,
         {
           HOME: home,
           PATH: process.env.PATH ?? "/usr/bin:/bin",
           AGENT_TEST_SOURCE: source,
+          AGENT_TEST_MARKER: marker,
         },
       );
 
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toBe("");
+      expect(readFileSync(marker, "utf8")).toBe("unstaged");
+      expect(statSync(marker).mode & 0o777).toBe(0o600);
       for (const file of files) {
-        expect(readFileSync(join(destination, file), "utf8")).toBe(`${file}\n`);
+        expect(readFileSync(join(destination, file), "utf8")).toBe(contents(file));
       }
       for (const directory of directories) {
         expect(readFileSync(join(destination, directory, "copied.txt"), "utf8")).toBe(
@@ -1792,8 +1859,10 @@ eval "$codex_setup"
       mkdirSync(join(grokSource, "hooks"), { recursive: true });
       mkdirSync(join(grokSource, "skills"), { recursive: true });
       mkdirSync(join(grokSource, "sessions"), { recursive: true });
+      const contents = (file: string) =>
+        file === "auth.json" ? '{"login":{"key":"auth.json"}}' : `${file}\n`;
       for (const file of ["auth.json", "config.toml", "trusted_folders.toml", "agent_id"]) {
-        writeFileSync(join(grokSource, file), `${file}\n`, { mode: 0o644 });
+        writeFileSync(join(grokSource, file), contents(file), { mode: 0o644 });
       }
       writeFileSync(join(grokSource, "hooks", "hook.sh"), "hook\n");
       writeFileSync(join(grokSource, "skills", "skill.md"), "grok skill\n");
@@ -1819,7 +1888,7 @@ eval "$grok_setup"
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toBe("");
       for (const file of ["auth.json", "config.toml", "trusted_folders.toml", "agent_id"]) {
-        expect(readFileSync(join(home, ".grok", file), "utf8")).toBe(`${file}\n`);
+        expect(readFileSync(join(home, ".grok", file), "utf8")).toBe(contents(file));
       }
       expect(statSync(join(home, ".grok", "auth.json")).mode & 0o777).toBe(0o600);
       expect(readFileSync(join(home, ".grok", "hooks", "hook.sh"), "utf8")).toBe("hook\n");
@@ -1848,7 +1917,7 @@ eval "$grok_setup"
       // An oversized file sits next to the allowlist, plus a link inside
       // ~/.config/grok, which is copied whole rather than per entry.
       mkdirSync(grokSource, { recursive: true });
-      writeFileSync(join(grokSource, "auth.json"), "auth.json\n");
+      writeFileSync(join(grokSource, "auth.json"), '{"login":{"key":"auth.json"}}');
       writeFileSync(join(grokSource, "config.toml"), "x".repeat(64), { mode: 0o644 });
       mkdirSync(grokConfig, { recursive: true });
       writeFileSync(join(grokConfig, "settings.json"), '{"portable":true}\n');
@@ -1884,7 +1953,9 @@ eval "$grok_setup"
       expect(result.stdout).not.toContain("container: .\n");
 
       // Dropping one entry does not cost the others, and no link was followed.
-      expect(readFileSync(join(home, ".grok", "auth.json"), "utf8")).toBe("auth.json\n");
+      expect(readFileSync(join(home, ".grok", "auth.json"), "utf8")).toBe(
+        '{"login":{"key":"auth.json"}}',
+      );
       expect(() => statSync(join(home, ".grok", "config.toml"))).toThrow();
       // The whole-directory helper is all-or-nothing, so the link takes the
       // portable sibling with it rather than resolving out of the mount.

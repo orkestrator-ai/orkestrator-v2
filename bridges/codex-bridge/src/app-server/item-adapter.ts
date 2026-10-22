@@ -84,15 +84,54 @@ function commandStatus(value: unknown): "in_progress" | "completed" | "failed" {
   }
 }
 
-/** SDK `PatchApplyStatus` is only completed|failed, so in-progress folds in. */
-function patchStatus(value: unknown): "completed" | "failed" {
-  return value === "failed" || value === "declined" ? "failed" : "completed";
+/**
+ * app-server `PatchApplyStatus`, kept whole: a patch still being written or
+ * awaiting approval is not a completed one, and a declined one never ran. An
+ * unrecognised value is treated as still in progress, as for commands.
+ */
+function patchStatus(value: unknown): "in_progress" | "completed" | "failed" | "declined" {
+  switch (value) {
+    case "completed":
+      return "completed";
+    case "failed":
+      return "failed";
+    case "declined":
+      return "declined";
+    default:
+      return "in_progress";
+  }
 }
 
 /** app-server nests the kind in an object; the SDK wants a bare string. */
 function changeKind(value: unknown): "add" | "delete" | "update" {
   const type = isRecord(value) ? value.type : value;
   return type === "add" ? "add" : type === "delete" ? "delete" : "update";
+}
+
+/** A renamed update's destination (`{ type: "update", move_path }`). */
+function changeMovePath(value: unknown): string | undefined {
+  return isRecord(value) && value.type === "update"
+    ? (str(value.move_path) ?? str(value.movePath))
+    : undefined;
+}
+
+/**
+ * One `v2/FileUpdateChange`, with everything app-server supplied: path, kind,
+ * rename destination and the per-change `diff` payload.
+ */
+function fileUpdateChange(change: Record<string, unknown>): {
+  path: string;
+  kind: "add" | "delete" | "update";
+  diff?: string;
+  move_path?: string;
+} {
+  const movePath = changeMovePath(change.kind);
+  return {
+    path: str(change.path) ?? "",
+    kind: changeKind(change.kind),
+    ...(typeof change.diff === "string" ? { diff: change.diff } : {}),
+    ...(movePath ? { move_path: movePath } : {}),
+  };
 }
 
 /** app-server statuses are camelCase; the existing collab code expects snake. */
@@ -212,10 +251,13 @@ export function adaptAppServerItem(raw: unknown): ItemAdaptationResult {
     }
 
     case "fileChange": {
+      // The per-change `diff` is what app-server applied (or proposes), so it
+      // is the only faithful record of the edit: reconstructing it later from
+      // the worktree would show whatever the file holds by then.
       const changes = Array.isArray(raw.changes)
         ? raw.changes
             .filter(isRecord)
-            .map((change) => ({ path: str(change.path) ?? "", kind: changeKind(change.kind) }))
+            .map(fileUpdateChange)
             .filter((change) => change.path.length > 0)
         : [];
       return {

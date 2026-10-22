@@ -371,13 +371,21 @@ describe("agent Kanban tools", () => {
       duplicate: true,
     });
 
-    const denied = await rpc(connection.url, connection.token, "tools/call", {
+    // The bearer serves one key, so another key is a slip to correct.
+    const mismatched = await rpc(connection.url, connection.token, "tools/call", {
       name: "get_workflow_result_status",
       arguments: { resultKey: crypto.randomUUID() },
     });
-    expect(denied.body.result).toMatchObject({
+    expect(mismatched.body.result).toMatchObject({
       isError: true,
-      structuredContent: { ok: false, error: { code: "capability_denied" } },
+      structuredContent: {
+        ok: false,
+        error: {
+          code: "invalid_result",
+          nextAction: "correct",
+          message: expect.stringContaining(resultKey),
+        },
+      },
     });
   });
 
@@ -435,8 +443,16 @@ describe("agent Kanban tools", () => {
     });
     expect(crossed.body.result).toMatchObject({
       isError: true,
-      structuredContent: { ok: false, error: { code: "capability_denied" } },
+      structuredContent: {
+        ok: false,
+        error: {
+          code: "invalid_result",
+          nextAction: "correct",
+          message: expect.stringContaining(secondKey),
+        },
+      },
     });
+    expect(JSON.stringify(crossed.body.result)).not.toContain(firstKey);
 
     const validation = await rpc(first.url, first.token, "tools/call", {
       name: "validate_workflow_result",
@@ -449,7 +465,7 @@ describe("agent Kanban tools", () => {
     expect(validation.body.result?.structuredContent).toMatchObject({ ok: true, valid: true });
     const validatedDigest = validation.body.result?.structuredContent?.validatedDigest;
     expect(validatedDigest).toEqual(expect.stringMatching(/^[a-f0-9]{64}$/));
-    const digestDenied = await rpc(first.url, first.token, "tools/call", {
+    const digestKeyCorrection = await rpc(first.url, first.token, "tools/call", {
       name: "submit_feature_plan_state",
       arguments: {
         resultKey: firstKey,
@@ -457,10 +473,18 @@ describe("agent Kanban tools", () => {
         validatedDigest,
       },
     });
-    expect(digestDenied.body.result).toMatchObject({
+    expect(digestKeyCorrection.body.result).toMatchObject({
       isError: true,
-      structuredContent: { ok: false, error: { code: "capability_denied" } },
+      structuredContent: {
+        ok: false,
+        error: {
+          code: "invalid_result",
+          nextAction: "correct",
+          message: expect.stringContaining(secondKey),
+        },
+      },
     });
+    expect(JSON.stringify(digestKeyCorrection.body.result)).not.toContain(firstKey);
 
     const accepted = await rpc(first.url, first.token, "tools/call", {
       name: "submit_feature_plan_state",
@@ -488,17 +512,25 @@ describe("agent Kanban tools", () => {
       duplicate: true,
     });
 
-    const statusDenied = await rpc(first.url, first.token, "tools/call", {
+    const statusKeyCorrection = await rpc(first.url, first.token, "tools/call", {
       name: "get_workflow_result_status",
       arguments: {
         resultKey: firstKey,
         capability: second.workflowResultCapability,
       },
     });
-    expect(statusDenied.body.result).toMatchObject({
+    expect(statusKeyCorrection.body.result).toMatchObject({
       isError: true,
-      structuredContent: { ok: false, error: { code: "capability_denied" } },
+      structuredContent: {
+        ok: false,
+        error: {
+          code: "invalid_result",
+          nextAction: "correct",
+          message: expect.stringContaining(secondKey),
+        },
+      },
     });
+    expect(JSON.stringify(statusKeyCorrection.body.result)).not.toContain(firstKey);
 
     const kindMismatch = await rpc(first.url, first.token, "tools/call", {
       name: "submit_fix_result",

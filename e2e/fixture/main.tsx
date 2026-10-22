@@ -1,3 +1,7 @@
+import { RemoteMachineTreeFixture } from "../../apps/web/src/test/RemoteMachineTreeFixture";
+import { NativeAttachmentsFixture } from "./NativeAttachmentsFixture";
+import { ChangeTrackingFixture, installChangeTrackingFixture } from "./changeTracking";
+import { StructuredReviewLayoutFixture } from "./StructuredReviewLayoutFixture";
 import { ClaudeInteractionsFixture } from "./ClaudeInteractionsFixture";
 import {
   AgentLaunchDialog,
@@ -45,6 +49,13 @@ import {
   COMPOSE_MIN_INPUT_HEIGHT,
 } from "../../apps/web/src/components/chat/compose-metrics";
 import { DiffViewerTab } from "../../apps/web/src/components/terminal/DiffViewerTab";
+import {
+  addedFileDiffBody,
+  diffFixtureObjectId,
+  diffFixtureResourceKey,
+  liveDiffFixtureBody,
+  type DiffFixtureStatus,
+} from "./diffViewerBackend";
 import { TiptapMarkdownEditor } from "../../apps/web/src/components/markdown/TiptapMarkdownEditor";
 import { MonacoFileEditor } from "../../apps/web/src/components/terminal/MonacoFileEditor";
 import { ChangedFileItem } from "../../apps/web/src/components/files-panel/ChangedFileItem";
@@ -124,6 +135,9 @@ const CloseRetentionFixture = lazy(async () => ({
 }));
 const PaneBreakpointFixture = lazy(async () => ({
   default: (await import("./PaneBreakpointFixture")).PaneBreakpointFixture,
+}));
+const SetupRecoveryFixture = lazy(async () => ({
+  default: (await import("./SetupRecoveryFixture")).SetupRecoveryFixture,
 }));
 
 const EnvironmentSettingsDrawerFixture = lazy(async () => ({
@@ -987,20 +1001,27 @@ const changedFileFixtures = {
   },
 } satisfies Record<string, GitFileChange>;
 
+function pathPaneIdentityId(kind: string) {
+  return `path-truncation-${kind}`;
+}
+
 function PathTruncationFixture() {
+  const bodies = new Map(
+    Object.entries(pathFixtures).map(([kind, filePath]) => {
+      const id = pathPaneIdentityId(kind);
+      return [id, addedFileDiffBody(id, filePath)] as const;
+    }),
+  );
   window.orkestrator = {
     invoke: async <T,>(command: string, args?: Record<string, unknown>) => {
-      if (command !== "read_container_file") {
+      const body = bodies.get(String(args?.diffIdentityId));
+      if (command !== "changes_get_diff" || !body) {
         throw new Error(`Unexpected fixture command: ${command}`);
       }
-
-      return {
-        path: String(args?.filePath ?? ""),
-        content: "export {};",
-        language: "typescript",
-      } as T;
+      return body as T;
     },
-  } as Window["orkestrator"];
+    listen: () => () => undefined,
+  } as unknown as Window["orkestrator"];
 
   return (
     <main className="min-h-screen bg-background p-4 text-foreground">
@@ -1022,10 +1043,12 @@ function PathTruncationFixture() {
           style={{ width: "640px" }}
         >
           <DiffViewerTab
+            target={{
+              kind: "historical",
+              diffIdentityId: pathPaneIdentityId(kind),
+              title: filePath,
+            }}
             filePath={filePath}
-            containerId="fixture-container"
-            baseBranch="main"
-            gitStatus="A"
             isActive
           />
         </section>
@@ -1100,91 +1123,55 @@ function BuildPipelineHeaderFixture() {
   );
 }
 
-const diffFixtureOriginal = [
-  "# Frontend State Audit",
-  "",
-  "**Goal:** minimise renderer-owned state so that every client of the same backend",
-  "converges on a consistent view.",
-  "",
-  "## 1. Current architecture",
-  "",
-  "The backend already owns a lot. Storage persists projects, environments and review",
-  "workflows, plus kanban tasks and completion-comment markers.",
-  "",
-  "### The gap",
-  "",
-  "Two things are missing, and every finding below is downstream of them.",
-].join("\n");
-
-const diffFixtureModified = [
-  "# Frontend State Audit — What Should Move",
-  "",
-  "**Goal:** minimise renderer-owned state so that every client of the same backend",
-  "converges on a consistent view of the world.",
-  "",
-  "## 1. Current architecture",
-  "",
-  "The backend already owns a lot. `StorageService` persists projects, environments,",
-  "config, review workflows, kanban tasks and completion-comment markers.",
-  "",
-  "### The gap",
-  "",
-  "Two things are missing, and every finding below is downstream of them.",
-  "",
-  "**(a) There is no general change-notification broadcast** — only a fixed set of",
-  "event names is ever emitted across the whole surface:",
-  "",
-  "```",
-  "environment-renamed",
-  "environment-setup-started",
-  "claude-model-catalog-updated",
-  "```",
-].join("\n");
-
 /**
- * Renders the diff viewer at full height so the phone layout (inline mode, wrapped
- * lines, trimmed gutters) can be inspected at a real mobile viewport.
+ * Renders the diff viewer at full height so the phone layout (unified rows,
+ * wrapped lines, compact header) can be inspected at a real mobile viewport.
+ * `?status=` picks the modified/new/deleted body; `?branch=` names the baseline
+ * ref the backend reports as `ref@oid`.
  */
 function DiffViewerFixture() {
   const params = new URLSearchParams(window.location.search);
-  const status = params.get("status");
-  const gitStatus = status === "new" ? "A" : status === "deleted" ? "D" : "M";
+  const statusParam = params.get("status");
+  const status: DiffFixtureStatus =
+    statusParam === "new" ? "new" : statusParam === "deleted" ? "deleted" : "modified";
   const filePath = "docs/audits/frontend-state-audit.md";
-  const containerId = "fixture-container";
-  const baseBranch = params.get("branch") ?? "63d12576e9198f24bc2271a6a8c3702dfb391eae";
+  const baselineVersion = `${params.get("branch") ?? "main"}@${diffFixtureObjectId}`;
   const [viewFileCount, setViewFileCount] = useState(0);
+  const body = liveDiffFixtureBody({ path: filePath, status, baselineVersion });
 
   window.orkestrator = {
     invoke: async <T,>(command: string, args?: Record<string, unknown>) => {
       switch (command) {
-        case "read_container_file":
-          assertFixtureArgs(command, args, { containerId, filePath });
+        case "changes_resolve_live_detail":
+          assertFixtureArgs(command, args, { resourceKey: diffFixtureResourceKey, path: filePath });
+          return { kind: "identity", identity: body.identity } as T;
+        case "changes_get_diff":
+          assertFixtureArgs(command, args, { diffIdentityId: body.identity.id });
+          return body as T;
+        case "changes_get_view":
+          // The shared projection subscription; the viewer does not depend on it.
           return {
-            path: filePath,
-            content: diffFixtureModified,
-            language: "markdown",
-          } as T;
-        case "read_file_at_branch":
-          assertFixtureArgs(command, args, { containerId, filePath, branch: baseBranch });
-          return {
-            path: filePath,
-            content: diffFixtureOriginal,
-            language: "markdown",
+            kind: "error",
+            error: { code: "unsupported-capability", reasonKey: "changes.error.unsupported" },
           } as T;
         default:
           throw new Error(`Unexpected fixture command: ${command}`);
       }
     },
-  } as Window["orkestrator"];
+    listen: () => () => undefined,
+  } as unknown as Window["orkestrator"];
 
   return (
     <main className="h-screen bg-background text-foreground">
       <section data-testid="diff-viewer-pane" className="relative h-full w-full">
         <DiffViewerTab
+          target={{
+            kind: "live",
+            resourceKey: diffFixtureResourceKey,
+            path: filePath,
+            title: "frontend-state-audit.md",
+          }}
           filePath={filePath}
-          containerId={containerId}
-          baseBranch={baseBranch}
-          gitStatus={gitStatus}
           isActive
           onSwitchToFileView={() => setViewFileCount((count) => count + 1)}
         />
@@ -1669,6 +1656,15 @@ function PullRequestCheckStatusFixture() {
 }
 
 function fixtureForPath() {
+  if (window.location.pathname === "/structured-review-layout")
+    return <StructuredReviewLayoutFixture />;
+  if (window.location.pathname === "/setup-recovery") {
+    return (
+      <Suspense fallback={null}>
+        <SetupRecoveryFixture />
+      </Suspense>
+    );
+  }
   if (window.location.pathname === "/coordinator-pane-tree") return <CoordinatorPaneTreeFixture />;
   if (window.location.pathname === "/add-project") return <AddProjectDialogFixture />;
   if (window.location.pathname === "/mail-tiles") {
@@ -1714,6 +1710,7 @@ function fixtureForPath() {
       </Suspense>
     );
   }
+  if (window.location.pathname === "/remote-machine-tree") return <RemoteMachineTreeFixture />;
   if (window.location.pathname === "/connections-settings") return <ConnectionsSettingsFixture />;
   if (window.location.pathname === "/fullscreen-settings") return <FullscreenSettingsFixture />;
   if (window.location.pathname === "/global-settings") return <GlobalSettingsFixture />;
@@ -1727,6 +1724,7 @@ function fixtureForPath() {
   if (window.location.pathname === "/build-pipeline-header") {
     return <BuildPipelineHeaderFixture />;
   }
+  if (window.location.pathname === "/change-tracking") return <ChangeTrackingFixture />;
   if (window.location.pathname === "/diff-viewer") return <DiffViewerFixture />;
   if (window.location.pathname === "/native-compose") return <NativeComposeFixture />;
   if (window.location.pathname === "/menu-placement") return <MenuPlacementFixture />;
@@ -1772,6 +1770,7 @@ function fixtureForPath() {
   if (window.location.pathname === "/native-hydrating-preview") {
     return <NativeHydratingPreviewFixture />;
   }
+  if (window.location.pathname === "/native-attachments") return <NativeAttachmentsFixture />;
   if (window.location.pathname === "/monaco-runtime") return <MonacoRuntimeFixture />;
   if (window.location.pathname === "/claude-interactions") return <ClaudeInteractionsFixture />;
   if (window.location.pathname === "/styles") return <GlobalStylesFixture />;
@@ -1808,4 +1807,5 @@ function fixtureForPath() {
   return <CreateEnvironmentFixture />;
 }
 
+if (window.location.pathname === "/change-tracking") installChangeTrackingFixture();
 createRoot(document.getElementById("root")!).render(<StrictMode>{fixtureForPath()}</StrictMode>);

@@ -181,7 +181,9 @@ async function testIndependentWindows(nicknamesOnly = false): Promise<void> {
     launchedApp = app;
     dismissStartupDialogs(app);
     const window = await app.firstWindow();
-    await expect(window).toHaveTitle(profile.electronTitle);
+    // index.html's title stays until Vite serves and runs renderer-entry; under
+    // host load that startup takes longer than expect's 5 s default.
+    await expect(window).toHaveTitle(profile.electronTitle, { timeout: 60_000 });
     await expect
       .poll(() =>
         app.evaluate(
@@ -360,7 +362,7 @@ print("public.tiff")
       .windows()
       .find((candidate) => candidate !== window && candidate.url().startsWith(rendererUrl));
     if (!secondWindow) throw new Error("New Window accelerator did not open a renderer window");
-    await expect(secondWindow).toHaveTitle(profile.electronTitle);
+    await expect(secondWindow).toHaveTitle(profile.electronTitle, { timeout: 60_000 });
     await expect
       .poll(() =>
         app.evaluate(({ BrowserWindow }) =>

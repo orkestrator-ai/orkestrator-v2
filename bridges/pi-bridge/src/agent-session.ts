@@ -593,7 +593,9 @@ function publishAttachedSession(state: SessionState, session: AgentSession): Age
     applySessionEvent(state, event);
     // Every call that ran was already measured in the `tool_result` hook,
     // which precedes this frame. What is left open here never ran.
-    if (event.type === "tool_execution_end") discardToolCall(state, event.toolCallId);
+    if (event.type === "tool_execution_end") {
+      discardToolCall(state, event.toolCallId, event.result);
+    }
   });
   // A fresh runtime loaded its resources from scratch, so this read is also
   // the reload any refresh deferred while the session was detached or busy.

@@ -1,3 +1,4 @@
+import { registerChangeCommands } from "./commands-registry-changes.js";
 import { registerDesignCommands } from "./commands-registry-design.js";
 import { registerMcpManagementCommands } from "./commands-registry-mcp.js";
 import { registerPreviewCommands } from "./commands-registry-previews.js";
@@ -31,6 +32,8 @@ import type {
   CommandRegistryOptions,
   RegistryDependencies,
 } from "./commands-registry-types.js";
+import { registerBackendProfileCommands } from "./commands-registry-backend-profile.js";
+import { registerNodeCommands } from "./commands-registry-nodes.js";
 import { registerBuildPipelineCommands } from "./commands-registry-build.js";
 import { registerControlCommands } from "./commands-registry-control.js";
 import { registerCoordinatorCommands } from "./commands-registry-coordinator.js";
@@ -291,6 +294,8 @@ export function createCommandRegistry(
   registerGitHubCommands(register, dependencies);
   registerEnvironmentCommands(register, dependencies);
   registerSystemCommands(register);
+  registerBackendProfileCommands(register);
+  registerNodeCommands(register);
   registerHostFileCommands(register);
   registerHostMaintenanceCommands(register);
   registerDockerCommands(register, dependencies);
@@ -302,6 +307,7 @@ export function createCommandRegistry(
   registerBuildPipelineCommands(register, dependencies);
   registerPromptCommands(register, dependencies);
   registerTerminalCommands(register, dependencies);
+  registerChangeCommands(register);
   registerPullRequestCommands(register, dependencies);
   registerKanbanCommands(register, dependencies);
   registerAgentMailCommands(register);

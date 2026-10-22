@@ -1,4 +1,6 @@
 import { createInterface } from "node:readline";
+import type { BackendHello } from "@orkestrator/protocol/backend-profile";
+import { checkBackendRoute } from "./backend-hello.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import { cp, lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -256,30 +258,19 @@ export function createBackendProcessEnvironment(
     if (runtime.isolatedCredentialRoot) {
       env.CLAUDE_CONFIG_DIR = path.join(runtime.isolatedCredentialRoot, "claude");
     }
-    if (allowed.has("codex")) {
-      if (inherited.OPENAI_API_KEY) env.OPENAI_API_KEY = inherited.OPENAI_API_KEY;
-      const codexHome =
-        inherited.CODEX_HOME?.trim() ||
-        (inheritedHome ? path.join(inheritedHome, ".codex") : undefined);
-      if (codexHome) env.CODEX_HOME = codexHome;
-    } else if (runtime.isolatedCredentialRoot) {
-      env.CODEX_HOME = path.join(runtime.isolatedCredentialRoot, "codex");
+    // Codex and OpenCode always get the profile's own homes. An authorized
+    // source adds the host's login as a restricted snapshot in them
+    // (`seedAgentTestProviderCredentials` in `scripts/dev/profile-io.ts`), so
+    // a trust grant, an MCP editor save or a session never reaches the host's
+    // `~/.codex` or OpenCode directories, and a refresh cannot rotate its login.
+    if (allowed.has("codex") && inherited.OPENAI_API_KEY) {
+      env.OPENAI_API_KEY = inherited.OPENAI_API_KEY;
     }
-    if (allowed.has("opencode")) {
-      if (inherited.OPENCODE_API_KEY) env.OPENCODE_API_KEY = inherited.OPENCODE_API_KEY;
-      const configHome =
-        inherited.XDG_CONFIG_HOME?.trim() ||
-        (inheritedHome ? path.join(inheritedHome, ".config") : undefined);
-      const dataHome =
-        inherited.XDG_DATA_HOME?.trim() ||
-        (inheritedHome ? path.join(inheritedHome, ".local", "share") : undefined);
-      const stateHome =
-        inherited.XDG_STATE_HOME?.trim() ||
-        (inheritedHome ? path.join(inheritedHome, ".local", "state") : undefined);
-      if (configHome) env.XDG_CONFIG_HOME = configHome;
-      if (dataHome) env.XDG_DATA_HOME = dataHome;
-      if (stateHome) env.XDG_STATE_HOME = stateHome;
-    } else if (runtime.isolatedCredentialRoot) {
+    if (allowed.has("opencode") && inherited.OPENCODE_API_KEY) {
+      env.OPENCODE_API_KEY = inherited.OPENCODE_API_KEY;
+    }
+    if (runtime.isolatedCredentialRoot) {
+      env.CODEX_HOME = path.join(runtime.isolatedCredentialRoot, "codex");
       env.XDG_CONFIG_HOME = path.join(runtime.isolatedCredentialRoot, "xdg-config");
       env.XDG_DATA_HOME = path.join(runtime.isolatedCredentialRoot, "xdg-data");
       env.XDG_STATE_HOME = path.join(runtime.isolatedCredentialRoot, "xdg-state");
@@ -311,8 +302,21 @@ const EVENT_RECONNECT_DELAY_MS = 500;
 const EVENT_RECONNECT_MAX_DELAY_MS = 8_000;
 const EVENT_STREAM_HEALTHY_AFTER_MS = 30_000;
 
+export type BackendStreamState = "open" | "closed";
+
+export type BackendListenOptions = {
+  /** Called when the authoritative stream opens or drops (it reconnects by itself). */
+  onStreamState?: (state: BackendStreamState) => void;
+};
+
 export class BackendHttpClient {
   private abortEvents: AbortController | null = null;
+  private listener: {
+    onEvent: (event: string, payload: unknown) => void;
+    options: BackendListenOptions;
+  } | null = null;
+  /** Kept across a route retarget to the same backend generation so replay resumes. */
+  private eventStream = new GatewayEventStreamState();
   private readonly eventReconnectDelayMs: number;
   /**
    * Shared ordering contract for terminal input. After an ambiguous loss only
@@ -321,6 +325,21 @@ export class BackendHttpClient {
    * a typing timer would; input typed during a round trip still coalesces.
    */
   private readonly terminalInput: TerminalInputSequencer;
+  private suspended = false;
+
+  get isSuspended(): boolean {
+    return this.suspended;
+  }
+
+  suspend(): void {
+    this.suspended = true;
+    this.abortEvents?.abort();
+  }
+
+  private endpoint(endpoint: string): URL {
+    if (this.suspended) throw new Error("The connection is awaiting a verified route.");
+    return new URL(`${this.baseUrl.replace(/\/$/, "")}${endpoint}`);
+  }
 
   constructor(
     private baseUrl: string,
@@ -342,6 +361,26 @@ export class BackendHttpClient {
     });
   }
 
+  /** Origin this client currently reaches. Ephemeral for a tunnelled route. */
+  get origin(): string {
+    return new URL(this.baseUrl).origin;
+  }
+
+  /**
+   * Point this client at another route to the same backend without
+   * replacing it, so the terminal input sequencer and its ambiguous-send
+   * fence survive the route change. The event stream restarts; its replay
+   * cursor is kept only when the caller proved the backend generation did
+   * not change (a cursor from another process lifetime is meaningless).
+   */
+  retarget(baseUrl: string, token: string, options: { preserveCursor: boolean }): void {
+    this.suspended = false;
+    this.baseUrl = baseUrl;
+    this.token = token;
+    if (!options.preserveCursor) this.eventStream = new GatewayEventStreamState();
+    if (this.listener) this.listen(this.listener.onEvent, this.listener.options);
+  }
+
   invoke<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
     return (this.terminalInput.invoke(command, args) ??
       this.request<T>(command, args)) as Promise<T>;
@@ -352,7 +391,7 @@ export class BackendHttpClient {
     args: Record<string, unknown>,
     signal?: AbortSignal,
   ): Promise<T> {
-    const response = await fetch(new URL("/__orkestrator/invoke", this.baseUrl), {
+    const response = await fetch(this.endpoint("/__orkestrator/invoke"), {
       method: "POST",
       headers: { authorization: `Bearer ${this.token}`, "content-type": "application/json" },
       body: JSON.stringify({ command, args }),
@@ -372,7 +411,7 @@ export class BackendHttpClient {
 
   /** WebSocket URL of this backend's desktop preview tunnel. Carries no credential. */
   previewTunnelUrl(): string {
-    const url = new URL("/__orkestrator/preview/tunnel", this.baseUrl);
+    const url = this.endpoint("/__orkestrator/preview/tunnel");
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     return url.toString();
   }
@@ -381,7 +420,7 @@ export class BackendHttpClient {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const response = await fetch(new URL("/__orkestrator/status", this.baseUrl), {
+      const response = await fetch(this.endpoint("/__orkestrator/status"), {
         headers: { authorization: `Bearer ${this.token}` },
         signal: controller.signal,
       });
@@ -392,6 +431,12 @@ export class BackendHttpClient {
     } finally {
       clearTimeout(timeout);
     }
+  }
+
+  /** Authenticated hello; `null` for an older backend without one. */
+  async hello(timeoutMs: number): Promise<BackendHello | null> {
+    const outcome = await checkBackendRoute(this.baseUrl, this.token, { timeoutMs });
+    return outcome.kind === "hello" ? outcome.hello : null;
   }
 
   async getTokenSettings(): Promise<GatewayTokenSettings> {
@@ -429,7 +474,7 @@ export class BackendHttpClient {
     method: "GET" | "POST",
     body?: HostUpdaterReport,
   ): Promise<HostMaintenanceSnapshot> {
-    const response = await fetch(new URL("/__orkestrator/host-updater", this.baseUrl), {
+    const response = await fetch(this.endpoint("/__orkestrator/host-updater"), {
       method,
       headers: {
         authorization: `Bearer ${this.token}`,
@@ -452,16 +497,21 @@ export class BackendHttpClient {
     return payload;
   }
 
-  listen(onEvent: (event: string, payload: unknown) => void): void {
+  listen(
+    onEvent: (event: string, payload: unknown) => void,
+    options: BackendListenOptions = {},
+  ): void {
     this.abortEvents?.abort();
     const controller = new AbortController();
     this.abortEvents = controller;
-    void this.consumeEvents(controller.signal, onEvent);
+    this.listener = { onEvent, options };
+    void this.consumeEvents(controller.signal, onEvent, options);
   }
 
   stopListening(): void {
     this.abortEvents?.abort();
     this.abortEvents = null;
+    this.listener = null;
   }
 
   /**
@@ -473,8 +523,9 @@ export class BackendHttpClient {
   private async consumeEvents(
     signal: AbortSignal,
     onEvent: (event: string, payload: unknown) => void,
+    options: BackendListenOptions = {},
   ): Promise<void> {
-    const stream = new GatewayEventStreamState();
+    const stream = this.eventStream;
     const backoff = new ReconnectBackoff({
       initialDelayMs: this.eventReconnectDelayMs,
       maxDelayMs: Math.max(this.eventReconnectDelayMs, EVENT_RECONNECT_MAX_DELAY_MS),
@@ -482,7 +533,7 @@ export class BackendHttpClient {
     });
     while (!signal.aborted) {
       try {
-        const url = new URL("/__orkestrator/events", this.baseUrl);
+        const url = this.endpoint("/__orkestrator/events");
         if (stream.cursor) url.searchParams.set(GATEWAY_EVENT_CURSOR_PARAM, stream.cursor);
         const response = await fetch(url, {
           headers: { authorization: `Bearer ${this.token}` },
@@ -495,6 +546,7 @@ export class BackendHttpClient {
           return;
         }
         backoff.connected();
+        options.onStreamState?.("open");
         // Terminal output is excluded from authoritative replay. Even a quiet
         // caught-up reconnect must trigger exact snapshot recovery.
         onEvent(TERMINAL_EVENT_STREAM_CONNECTED_EVENT, undefined);
@@ -513,6 +565,7 @@ export class BackendHttpClient {
         console.error("[BackendClient] Event stream disconnected:", error);
       }
       if (signal.aborted) return;
+      options.onStreamState?.("closed");
       // A stream that ends cleanly is retried with the same backoff as a failed
       // one, so a peer that accepts and immediately closes cannot spin this loop.
       await new Promise<void>((resolve) => {
@@ -531,7 +584,7 @@ export class BackendHttpClient {
     method: "GET" | "PUT",
     body?: { token: string },
   ): Promise<GatewayTokenSettings> {
-    const response = await fetch(new URL("/__orkestrator/gateway-settings", this.baseUrl), {
+    const response = await fetch(this.endpoint("/__orkestrator/gateway-settings"), {
       method,
       headers: {
         authorization: `Bearer ${this.token}`,
@@ -556,7 +609,7 @@ export class BackendHttpClient {
     method: "GET" | "PUT" | "DELETE",
     body?: { enabled: boolean },
   ): Promise<WebClientStatus> {
-    const response = await fetch(new URL("/__orkestrator/web-client-access", this.baseUrl), {
+    const response = await fetch(this.endpoint("/__orkestrator/web-client-access"), {
       method,
       headers: {
         authorization: `Bearer ${this.token}`,
@@ -669,6 +722,9 @@ export class BackendProcess {
     ];
     if (options.toolchainBinDir) args.push("--toolchain-bin-dir", options.toolchainBinDir);
     if (options.desktopUpdater) args.push("--desktop-updater");
+    // The desktop's local backend is always a command node: it can register
+    // the user's other machines as its leaves (docs/architecture/command-nodes.md).
+    args.push("--command-node");
     if (options.desktopWebClient) {
       args.push(
         "--desktop-web-client",

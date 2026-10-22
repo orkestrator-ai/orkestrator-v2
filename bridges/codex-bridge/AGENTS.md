@@ -29,6 +29,8 @@ ignored, so title generation cannot inherit the user's tools or instructions.
 | `src/history/code-mode-mcp-calls.ts`    | A reload's code-mode MCP calls, rendered as live   |
 | `src/messages/normalization.ts`         | Item → normalized part rendering                   |
 | `src/messages/diff-budget.ts`           | Caps the diff state, the largest memory consumer   |
+| `src/messages/file-change-diff.ts`      | Decodes app-server's per-file `fileChange` payload |
+| `src/change-evidence.ts`                | Change-tracking adapter and its evidence spool     |
 | `src/codex-item-types.ts`               | Local thread-item types (was the Codex SDK)        |
 | `src/testing/replay-recording.ts`       | Replays a recording through the real pipeline      |
 
@@ -49,8 +51,7 @@ item spawned it. Rows keep render state up to `MAX_TRACKED_ASSISTANT_ROWS`
 go is tracked again when one of its items changes, the turn ending included,
 so never make a late change depend on its row still being tracked. A row let
 go keeps its rendered file changes and sub-agent cards (`ReleasedAssistantRow`)
-and, tracked again, re-renders only the items that changed: a diff taken anew
-after later edits moved the file comes out blank. The turn's end also tracks
+and, tracked again, re-renders only the items that changed. The turn's end also tracks
 again every row let go while a card could still read as running. A publish
 tick renders only the rows that moved, and a row whose sub-agents have all
 finished (a failed spawn waits for none) is probed again only on new lifecycle
@@ -66,6 +67,23 @@ reaches readers; clear it whenever the history is replaced. Note through
 never when the change is sent: a send waits for the coalesced flush and can be
 dropped, and a note that lands after a read bumps nothing. Never note the
 newest row, which every window holds.
+
+## File changes and change evidence
+
+- A `fileChange` row is rendered only from app-server's own per-change `diff`
+  (`messages/file-change-diff.ts`): whole content for add/delete, headerless
+  hunks plus a `Moved to:` note for update. Never reconstruct it from the
+  worktree or `git show HEAD:`; that shows whatever the file holds when the
+  row renders. A change with no payload (older history) is path-only, counts
+  unknown. Keep the real status: `in_progress` is a proposal (pending row),
+  `declined` never ran; neither is folded into `completed`.
+- `change-evidence.ts` records the live item lifecycle on one per-process
+  spool (`GET /change-evidence`, `/body`, `POST /ack`, beside the transcript
+  routes). `conversationId` is the bridge session id the backend addresses in
+  `/session/:id` (one frame per session bound to the thread), `callId` the
+  item id (the row's `toolUseId`), `turnId` the Codex turn id. Calls are
+  synchronous spool appends from the notification path; never await there.
+  A reload from the rollout emits nothing.
 
 ## When touching the app-server engine
 

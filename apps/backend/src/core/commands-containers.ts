@@ -4,7 +4,7 @@ import {
   boundDiagnosticTail,
 } from "./container-log-bounds.js";
 import { persistentStateExports } from "./container-state-layout.js";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
@@ -92,6 +92,8 @@ import {
   imageWritesVolumeStorage,
 } from "./docker-image.js";
 import { storageMountArguments } from "./container-storage.js";
+import { seedFilesDir } from "./nodes/node-files.js";
+import { readSeedManifest } from "./nodes/node-seed.js";
 import {
   allowedDomainsArgument,
   containerAllowedDomains,
@@ -178,7 +180,12 @@ export async function createDockerContainer(
   if (!project) throw new Error(`Project not found: ${environment.projectId}`);
   const config = await context.storage.loadConfig();
   const repoConfig = config.repositories[project.id] ?? defaultRepositoryConfig();
-  const configuredFilesToCopy = normalizeConfiguredProjectFiles(repoConfig.filesToCopy);
+  const seedRoot = seedFilesDir(context.storage.getDataDir(), environment.id);
+  const seededFiles = await readSeedManifest(seedRoot);
+  const configuredFilesToCopy = normalizeConfiguredProjectFiles([
+    ...(repoConfig.filesToCopy ?? []),
+    ...seededFiles,
+  ]);
   if (configuredFilesToCopy.length > 0 && !project.localPath) {
     throw new Error("Project has files configured to copy, but no local path is set");
   }
@@ -274,8 +281,17 @@ export async function createDockerContainer(
     // Bounded container stdout/stderr (10 MiB × 3) where the daemon offers
     // the local driver.
     ...logDriverArguments((await dockerCapacity()).logDrivers),
+    // The bind-mounted fixture keeps its host owner, which the container's
+    // user often is not, so Git refuses it as dubiously owned. Git reads
+    // safe.directory only from global or system config, so workspace setup
+    // trusts this one fixed path when told to; production containers are not.
     ...(agentTestLocalGitRemote
-      ? ["-v", `${agentTestLocalGitRemote}:${AGENT_TEST_LOCAL_GIT_REMOTE_PATH}`]
+      ? [
+          "-v",
+          `${agentTestLocalGitRemote}:${AGENT_TEST_LOCAL_GIT_REMOTE_PATH}`,
+          "-e",
+          `ORKESTRATOR_AGENT_TEST_GIT_REMOTE=${AGENT_TEST_LOCAL_GIT_REMOTE_PATH}`,
+        ]
       : []),
     // Linux Engine does not provide Docker Desktop's host.docker.internal DNS
     // entry automatically. Do not add this override on macOS/Windows: there it
@@ -465,9 +481,15 @@ export async function createDockerContainer(
     }
   }
 
+  // A command node may have staged seed files this node's project root lacks;
+  // the node's own copy always wins.
   if (project.localPath) {
-    await bindIfExists(path.join(project.localPath, ".env"), "/project-env/.env");
-    await bindIfExists(path.join(project.localPath, ".env.local"), "/project-env/.env.local");
+    for (const envFile of [".env", ".env.local"]) {
+      const own = path.join(project.localPath, envFile);
+      // Staged dotenv files are copied into the stopped container with the
+      // other seed inputs below, so no host secret mount survives setup.
+      await bindIfExists(own, `/project-env/${envFile}`);
+    }
     await bindIfExists(path.join(project.localPath, "opencode.json"), "/opencode-project-json");
   }
 
@@ -559,6 +581,7 @@ export async function createDockerContainer(
         containerId,
         project.localPath,
         configuredFilesToCopy,
+        (await pathExists(seedRoot)) ? seedRoot : undefined,
       );
     }
   } catch (error) {
@@ -566,6 +589,8 @@ export async function createDockerContainer(
       () => undefined,
     );
     throw error;
+  } finally {
+    await rm(seedRoot, { recursive: true, force: true });
   }
   return containerId;
 }

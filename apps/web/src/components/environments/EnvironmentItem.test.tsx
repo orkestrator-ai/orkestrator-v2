@@ -1,9 +1,17 @@
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { AgentActivityState, Environment, EnvironmentType } from "@/types";
 import { useAgentActivityStore } from "@/stores/agentActivityStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
+import { useEnvironmentDiffStore } from "@/stores/environmentDiffStore";
+import { useChangeProjectionStore } from "@/stores/changeProjectionStore";
+import {
+  environmentProjectionFixture,
+  exactCount,
+  resetChangeProjectionStore,
+  unknownCount,
+} from "@/components/files-panel/change-projection-test-fixture";
 import { EnvironmentItem } from "./EnvironmentItem";
 
 function environmentFixture(overrides: Partial<Environment> & { name?: string } = {}): Environment {
@@ -88,6 +96,8 @@ beforeEach(() => {
     activeBuildEnvironmentIds: new Set(),
     viewedSessionIds: new Map(),
   });
+  resetChangeProjectionStore();
+  useEnvironmentDiffStore.setState({ stats: new Map() });
 });
 
 afterEach(cleanup);
@@ -218,4 +228,80 @@ test("a renamed project home shows its saved display name", () => {
   renderItem(environmentFixture({ projectHome: true, name: "Release checkout" }));
   expect(screen.getByRole("button", { name: /Release checkout/ })).toBeTruthy();
   expect(Boolean(screen.queryByText("Project home"))).toBe(false);
+});
+
+describe("EnvironmentItem change badge", () => {
+  const legacyStats = { additions: 99, deletions: 98, filesChanged: 7, truncated: false };
+
+  function badge() {
+    return screen.queryByTestId("environment-change-badge");
+  }
+
+  test("renders the backend projection's counters instead of the legacy mirror", () => {
+    useEnvironmentDiffStore.setState({ stats: new Map([["env-1", legacyStats]]) });
+    useChangeProjectionStore.getState().applyProjection(environmentProjectionFixture("env-1"));
+    renderItem();
+
+    expect(badge()?.textContent).toBe("+12-3");
+    expect(badge()?.getAttribute("data-measurement-id")).toBe("m-1");
+    expect(badge()?.getAttribute("title")).toContain("Environment changes");
+    expect(document.body.textContent).not.toContain("+99");
+  });
+
+  test("an unknown count renders as ? and never as 0", () => {
+    useChangeProjectionStore.getState().applyProjection(
+      environmentProjectionFixture("env-1", {
+        state: "partial",
+        coverageState: "partial",
+        counters: { additions: unknownCount(), deletions: exactCount(4), changedFiles: null },
+        reasonKeys: ["changes.reason.untracked-scan-capped"],
+      }),
+    );
+    renderItem();
+
+    expect(badge()?.textContent).toBe("~+?-4");
+    expect(badge()?.textContent).not.toContain("+0");
+    expect(badge()?.getAttribute("data-change-state")).toBe("partial");
+    expect(badge()?.getAttribute("title")).toContain("Too many untracked files to count them all");
+  });
+
+  test("a stale projection keeps the approximate mark and explains it on hover", async () => {
+    useChangeProjectionStore.getState().applyProjection(
+      environmentProjectionFixture("env-1", {
+        state: "stale",
+        observationState: "stale",
+        reasonKeys: ["changes.reason.stale"],
+      }),
+    );
+    renderItem();
+    expect(badge()?.textContent).toBe("~+12-3");
+
+    fireEvent.mouseEnter(screen.getByRole("button", { name: /Pulsing icon/ }));
+    await waitFor(() => expect(screen.getByTestId("environment-change-summary")).toBeTruthy());
+    const summary = screen.getByTestId("environment-change-summary").textContent ?? "";
+    expect(summary).toContain("2 files changed");
+    expect(summary).toContain("Last refresh failed; showing the previous result");
+    expect(summary).toContain("+12 added");
+  });
+
+  test("the backend's hidden badge stays hidden even when the legacy mirror has numbers", () => {
+    useEnvironmentDiffStore.setState({ stats: new Map([["env-1", legacyStats]]) });
+    useChangeProjectionStore.getState().applyProjection(
+      environmentProjectionFixture("env-1", {
+        badge: { visible: false, mode: "none" },
+        hasFileChanges: false,
+        counters: { additions: exactCount(0), deletions: exactCount(0), changedFiles: 0 },
+      }),
+    );
+    renderItem();
+    expect(badge()).toBeNull();
+    expect(document.body.textContent).not.toContain("+99");
+  });
+
+  test("an older backend without a projection falls back to the legacy mirror", () => {
+    useEnvironmentDiffStore.setState({ stats: new Map([["env-1", legacyStats]]) });
+    renderItem();
+    expect(badge()).toBeNull();
+    expect(document.body.textContent).toContain("+99-98");
+  });
 });

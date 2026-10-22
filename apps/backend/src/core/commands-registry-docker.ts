@@ -74,7 +74,10 @@ import {
   stopEnvironmentTask,
   resolveOperationImage,
 } from "./commands-helpers.js";
-import { syncContainerAgentAccountsOnStart } from "./agent-accounts-containers.js";
+import {
+  startContainerWithAgentAccounts,
+  syncContainerAgentAccountsOnStart,
+} from "./agent-accounts-containers.js";
 
 const lastDockerAvailabilityDiagnosticByLogger = new WeakMap<(message: string) => void, string>();
 
@@ -246,7 +249,7 @@ export function registerDockerCommands(
       // An environment's runtime starts through the lifecycle authority.
       await startAssignedContainerRuntimeTask(assigned.id, context);
     } else {
-      await runCommand("docker", ["start", id], { timeoutMs: 60_000 });
+      await startContainerWithAgentAccounts(context, null, id);
       await ensureContainerProjectFilesAccess(id);
     }
     const config = await storage.loadConfig();

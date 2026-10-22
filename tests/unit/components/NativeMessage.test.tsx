@@ -1,7 +1,10 @@
+import { buildInitialPromptWithAttachmentReferences } from "@orkestrator/protocol/initial-prompt-attachments";
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useEffect } from "react";
 import type { NativeMessage as NativeMessageType } from "../../../apps/web/src/lib/chat/native-message-types";
+import type { LegacyPayloadSummary } from "../../../apps/web/src/lib/backend/changes";
+import { environmentChangeResourceKey } from "@orkestrator/protocol/change-resources";
 import { mockWriteText } from "../../mocks/clipboard";
 import {
   type CreateFileTabOptions,
@@ -12,17 +15,74 @@ import {
 const mockOpenInBrowser = mock(async () => {});
 const mockReadFileBase64 = mock(async () => "image-base64");
 const mockReadContainerFileBase64 = mock(async () => "container-image-base64");
+// Backend change commands. Legacy rows are measured by the backend; by default
+// it has nothing to say, so rows show their path and raw output only.
+const mockMeasureLegacyToolPayload = mock(
+  async (_input: Record<string, unknown>): Promise<LegacyPayloadSummary | null> => null,
+);
+const mockGetToolChangePresentations = mock(async () => ({ presentations: {}, projections: {} }));
+const mockGetChangeView = mock(async () => ({ kind: "deleted", resourceKey: "" }));
+const mockGetChangeDiff = mock(async () => undefined);
 
 mock.module("@/lib/backend", () => ({
   openInBrowser: mockOpenInBrowser,
   readContainerFileBase64: mockReadContainerFileBase64,
   readFileBase64: mockReadFileBase64,
+  measureLegacyToolPayload: mockMeasureLegacyToolPayload,
+  getToolChangePresentations: mockGetToolChangePresentations,
+  getChangeView: mockGetChangeView,
+  getChangeDiff: mockGetChangeDiff,
 }));
+
+/** A backend legacy-payload measurement with one file of the given rows. */
+function legacySummary(
+  additions: number,
+  deletions: number,
+  lines: Array<["add" | "remove" | "context", string]>,
+): LegacyPayloadSummary {
+  const exact = (value: number) => ({
+    value,
+    quality: "complete" as const,
+    bound: "exact" as const,
+  });
+  return {
+    provenanceLabelKey: "changes.provenance.legacy-payload",
+    additions: exact(additions),
+    deletions: exact(deletions),
+    changedFiles: 1,
+    contentLines: null,
+    reasonKeys: [],
+    files: [
+      {
+        pathId: "legacy",
+        oldPathDisplay: null,
+        newPathDisplay: null,
+        status: "modified",
+        fileKind: "text",
+        bodyAvailability: "available",
+        reasonKey: null,
+        truncated: false,
+        hunks: [
+          {
+            header: "@@ -1 +1 @@",
+            oldStart: 1,
+            oldLines: 1,
+            newStart: 1,
+            newLines: 1,
+            lines: lines.map(([type, text]) => ({ type, text, oldLine: null, newLine: null })),
+          },
+        ],
+      },
+    ],
+  };
+}
 
 import { NativeMessage } from "../../../apps/web/src/components/chat/NativeMessage";
 import { clearImagePreviewCache } from "../../../apps/web/src/lib/chat/image-preview-cache";
 import { normalizeClaudeMessagesForDisplay } from "../../../apps/web/src/lib/chat/native-message-adapters";
 import { useMessagePartExpansionStore } from "../../../apps/web/src/stores/messagePartExpansionStore";
+import { resetChangePartCachesForTests } from "../../../apps/web/src/components/chat/NativeMessage.change-parts";
+import { NativeChangeScopeContext } from "../../../apps/web/src/components/chat/NativeMessage.change-scope";
 
 function TerminalContextHarness({
   children,
@@ -74,6 +134,9 @@ describe("NativeMessage", () => {
     mockReadContainerFileBase64.mockImplementation(async () => "container-image-base64");
     mockWriteText.mockReset();
     mockWriteText.mockImplementation(async () => {});
+    mockMeasureLegacyToolPayload.mockReset();
+    mockMeasureLegacyToolPayload.mockImplementation(async () => null);
+    resetChangePartCachesForTests();
   });
 
   test("renders single newlines as visible line breaks in text parts", () => {
@@ -860,6 +923,104 @@ describe("NativeMessage", () => {
     expect(image.getAttribute("src")).toBe("data:image/avif;base64,image-base64");
   });
 
+  test("renders generated marked attachments without transport text and survives remount", async () => {
+    const content = buildInitialPromptWithAttachmentReferences("Use these", [
+      { name: "shot.png", path: "/tmp/shot.png" },
+      { name: "notes.md", path: "/tmp/notes.md" },
+    ]);
+    const message: NativeMessageType = {
+      id: "marked-ui",
+      role: "user",
+      content,
+      createdAt: "2026-10-21T12:00:00Z",
+      parts: [{ type: "text", content }],
+    };
+    const first = render(<NativeMessage message={message} />);
+    for (const remount of [false, true]) {
+      if (remount) {
+        first.unmount();
+        render(<NativeMessage message={JSON.parse(JSON.stringify(message))} />);
+      }
+      expect(screen.getByText("Use these")).toBeTruthy();
+      expect(screen.getAllByRole("button", { name: "Open full image: shot.png" })).toHaveLength(1);
+      expect(screen.getByRole("button", { name: /Preview file: notes.md/ })).toBeTruthy();
+      expect(document.body.textContent).not.toContain("orkestrator-attachment-paths");
+      expect(document.body.textContent).not.toContain("Attached files have been saved");
+      expect(document.body.textContent).not.toContain("/tmp/");
+    }
+  });
+
+  test("renders an OpenCode image carrier beside a marker-only document without a duplicate thumbnail", async () => {
+    const content = buildInitialPromptWithAttachmentReferences("Use these", [
+      { name: "opencode.png", path: "/workspace/opencode.png" },
+      { name: "notes.md", path: "/workspace/notes.md" },
+    ]);
+    const message: NativeMessageType = {
+      id: "opencode-marked-ui",
+      role: "user",
+      content,
+      createdAt: "2026-10-21T12:00:00Z",
+      parts: [
+        { type: "text", content },
+        {
+          type: "image",
+          imageSource: "attachment",
+          content: "opencode.png",
+          fileUrl: "data:image/png;base64,QUJD",
+        },
+      ],
+    };
+    render(<NativeMessage message={message} />);
+    expect(await screen.findByAltText("Thumbnail: opencode.png")).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "Open full image: opencode.png" })).toHaveLength(
+      1,
+    );
+    expect(screen.getByRole("button", { name: /Preview file: notes.md/ })).toBeTruthy();
+    expect(mockReadFileBase64).not.toHaveBeenCalled();
+  });
+
+  test("keeps a user image named through loading and decode failure, hiding the caption only after load", async () => {
+    let resolveRead!: (value: string) => void;
+    mockReadFileBase64.mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveRead = resolve;
+        }),
+    );
+    const message: NativeMessageType = {
+      id: "caption-states",
+      role: "user",
+      content: "",
+      createdAt: "2026-10-21T12:00:00Z",
+      parts: [{ type: "file", content: "/tmp/caption.png" }],
+    };
+    render(<NativeMessage message={message} />);
+    const tile = screen.getByRole("button", { name: "Open full image: caption.png" });
+    expect(tile.textContent).toContain("caption.png");
+    await waitFor(() => expect(tile.getAttribute("aria-busy")).toBe("true"));
+    resolveRead("QUJD");
+    const image = await screen.findByAltText("Thumbnail: caption.png");
+    fireEvent.load(image);
+    expect(tile.textContent).not.toContain("caption.png");
+    fireEvent.error(image);
+    expect(tile.textContent).toContain("caption.png");
+    expect(tile.textContent).toContain("preview unavailable");
+  });
+
+  test("keeps the filename on an unreadable user image", async () => {
+    mockReadFileBase64.mockRejectedValueOnce(new Error("Missing image"));
+    const message: NativeMessageType = {
+      id: "caption-read-error",
+      role: "user",
+      content: "",
+      createdAt: "2026-10-21T12:00:00Z",
+      parts: [{ type: "file", content: "/tmp/missing-caption.png" }],
+    };
+    render(<NativeMessage message={message} />);
+    expect(await screen.findByText("preview unavailable")).toBeTruthy();
+    expect(screen.getByText("missing-caption.png")).toBeTruthy();
+  });
+
   test("flows adjacent attachment previews and lets them wrap", () => {
     const message: NativeMessageType = {
       id: "msg-attachment-flow",
@@ -886,8 +1047,9 @@ describe("NativeMessage", () => {
     const attachmentButtons = flow?.querySelectorAll("button") ?? [];
     expect(attachmentButtons).toHaveLength(2);
     for (const attachment of attachmentButtons) {
+      expect(attachment.getAttribute("data-image-presentation")).toBe("thumbnail");
       expect(getClassTokens(attachment)).toEqual(
-        expect.arrayContaining(["w-40", "max-w-full", "shrink-0"]),
+        expect.arrayContaining(["max-w-full", "shrink-0"]),
       );
     }
   });
@@ -1282,6 +1444,7 @@ describe("NativeMessage", () => {
     const { container } = render(<NativeMessage message={message} />);
 
     expect(container.querySelector(`img[src="${remoteUrl}"]`) === null).toBe(true);
+    expect(screen.getByText("tracker.png")).toBeTruthy();
     expect(mockReadFileBase64).not.toHaveBeenCalled();
     expect(mockReadContainerFileBase64).not.toHaveBeenCalled();
 
@@ -1484,7 +1647,7 @@ describe("NativeMessage", () => {
     }
   });
 
-  test("opens edit diffs in a file tab from the expanded tool view", () => {
+  test("opens a legacy edit's current file diff only as an explicit action", async () => {
     const createFileTab = mock(() => {});
     const message: NativeMessageType = {
       id: "msg-edit-diff",
@@ -1507,27 +1670,38 @@ describe("NativeMessage", () => {
     };
 
     render(
-      <TerminalContextHarness createFileTab={createFileTab}>
-        <NativeMessage message={message} />
-      </TerminalContextHarness>,
+      <NativeChangeScopeContext.Provider value={{ environmentId: "env-1" }}>
+        <TerminalContextHarness createFileTab={createFileTab}>
+          <NativeMessage message={message} />
+        </TerminalContextHarness>
+      </NativeChangeScopeContext.Provider>,
     );
 
     const editTrigger = screen.getByRole("button", { name: /edit/i });
     expect(editTrigger.parentElement?.className).toContain("my-0");
 
     fireEvent.click(editTrigger);
-    fireEvent.click(screen.getByTitle("Open diff in new tab"));
+    // A legacy row has no historical identity, so it never opens today's file
+    // as if it were the tool's change; the current file is a separate action.
+    expect(screen.queryByTitle("Open diff in new tab") === null).toBe(true);
+    fireEvent.click(screen.getByTitle("Open current file diff"));
 
     expect(createFileTab).toHaveBeenCalledWith("/workspace/src/example.ts", {
       isDiff: true,
-      gitStatus: "M",
+      changeDiff: {
+        kind: "live",
+        resourceKey: environmentChangeResourceKey("env-1"),
+        path: "/workspace/src/example.ts",
+        title: "example.ts (current)",
+      },
     });
+    await waitFor(() => expect(mockMeasureLegacyToolPayload).toHaveBeenCalledTimes(1));
   });
 
   test.each([
     ["the file-tab callback is unavailable", "/workspace/src/example.ts", undefined],
     ["the diff has no file path", undefined, mock(() => {})],
-  ])("omits the edit pop-out when %s", (_reason, filePath, createFileTab) => {
+  ])("omits the edit pop-outs when %s", (_reason, filePath, createFileTab) => {
     const message: NativeMessageType = {
       id: `msg-edit-no-popout-${filePath ? "callback" : "path"}`,
       role: "assistant",
@@ -1549,13 +1723,16 @@ describe("NativeMessage", () => {
     };
 
     render(
-      <TerminalContextHarness createFileTab={createFileTab}>
-        <NativeMessage message={message} />
-      </TerminalContextHarness>,
+      <NativeChangeScopeContext.Provider value={{ environmentId: "env-1" }}>
+        <TerminalContextHarness createFileTab={createFileTab}>
+          <NativeMessage message={message} />
+        </TerminalContextHarness>
+      </NativeChangeScopeContext.Provider>,
     );
     fireEvent.click(screen.getByRole("button", { name: /edit/i }));
 
     expect(screen.queryByTitle("Open diff in new tab") === null).toBe(true);
+    expect(screen.queryByTitle("Open current file diff") === null).toBe(true);
     if (createFileTab) {
       expect(createFileTab).not.toHaveBeenCalled();
     }
@@ -1592,7 +1769,14 @@ describe("NativeMessage", () => {
     expect(screen.getByRole("button", { name: /example\.ts/i })).toBeTruthy();
   });
 
-  test("renders unified edit diffs, raw output fallbacks, and error-only edit details", () => {
+  test("renders backend hunks for a recorded diff and routes payload-less edits to the generic row", async () => {
+    mockMeasureLegacyToolPayload.mockImplementation(async () =>
+      legacySummary(1, 1, [
+        ["remove", "old"],
+        ["add", "new"],
+      ]),
+    );
+    const diff = "--- a/src/example.ts\n+++ b/src/example.ts\n@@ -1 +1 @@\n-old\n+new";
     const unifiedDiffMessage: NativeMessageType = {
       id: "msg-edit-unified-diff",
       role: "assistant",
@@ -1604,10 +1788,7 @@ describe("NativeMessage", () => {
           content: "",
           toolName: "Edit",
           toolState: "success",
-          toolDiff: {
-            filePath: "/workspace/src/example.ts",
-            diff: "--- a/src/example.ts\n+++ b/src/example.ts\n@@ -1 +1 @@\n-old\n+new",
-          },
+          toolDiff: { filePath: "/workspace/src/example.ts", diff },
         },
       ],
     };
@@ -1618,9 +1799,14 @@ describe("NativeMessage", () => {
       </TerminalContextHarness>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /edit example\.ts success/i }));
-    expect(screen.getByText("--- a/src/example.ts")).toBeTruthy();
-    expect(screen.getByText("+++ b/src/example.ts")).toBeTruthy();
+    fireEvent.click(
+      await screen.findByRole("button", { name: /edit example\.ts \+1 -1 success/i }),
+    );
+    expect(mockMeasureLegacyToolPayload).toHaveBeenCalledWith({
+      toolName: "Edit",
+      filePath: "/workspace/src/example.ts",
+      diff,
+    });
     expect(screen.getByText("-old")).toBeTruthy();
     expect(screen.getByText("+new")).toBeTruthy();
 
@@ -1646,9 +1832,11 @@ describe("NativeMessage", () => {
       </TerminalContextHarness>,
     );
 
+    // No diff payload and no backend presentation: the tool name alone does
+    // not make an edit card.
     fireEvent.click(screen.getByRole("button", { name: /edit success/i }));
     expect(screen.getByText("Applied patch without a diff preview")).toBeTruthy();
-    expect(screen.getByText("Unknown file")).toBeTruthy();
+    expect(screen.queryByText("Unknown file") === null).toBe(true);
 
     const errorOnlyMessage: NativeMessageType = {
       id: "msg-edit-error-only",
@@ -1676,7 +1864,7 @@ describe("NativeMessage", () => {
     expect(screen.getByText("Patch failed to apply")).toBeTruthy();
   });
 
-  test("uses precomputed edit additions and deletions in the collapsed summary", () => {
+  test("shows no client numbers for counts-only metadata without a payload", () => {
     const message: NativeMessageType = {
       id: "msg-edit-precomputed-stats",
       role: "assistant",
@@ -1703,13 +1891,20 @@ describe("NativeMessage", () => {
       </TerminalContextHarness>,
     );
 
-    const trigger = screen.getByRole("button", {
-      name: /edit stats\.ts \+7 -3 success/i,
-    });
+    // Without a payload or a backend presentation this is a generic row; the
+    // provider's own counts are not chosen by the client.
+    const trigger = screen.getByRole("button", { name: /edit success/i });
+    expect(trigger.textContent).not.toContain("+7");
     expect((trigger as HTMLButtonElement).disabled).toBe(true);
+    expect(mockMeasureLegacyToolPayload).not.toHaveBeenCalled();
   });
 
-  test("renders before-only and after-only edit metadata", () => {
+  test("sends one-sided legacy payloads to the backend as recorded", async () => {
+    mockMeasureLegacyToolPayload.mockImplementation(async (input: Record<string, unknown>) =>
+      input.filePath === "/workspace/src/deleted.ts"
+        ? legacySummary(0, 1, [["remove", "removed only"]])
+        : legacySummary(1, 0, [["add", "created only"]]),
+    );
     const message: NativeMessageType = {
       id: "msg-edit-one-sided-diffs",
       role: "assistant",
@@ -1745,14 +1940,28 @@ describe("NativeMessage", () => {
       </TerminalContextHarness>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /edit deleted\.ts -1 success/i }));
-    fireEvent.click(screen.getByRole("button", { name: /write created\.ts \+1 success/i }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: /edit deleted\.ts \+0 -1 success/i }),
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: /write created\.ts \+1 -0 success/i }),
+    );
 
     expect(screen.getByText("-removed only")).toBeTruthy();
     expect(screen.getByText("+created only")).toBeTruthy();
+    expect(mockMeasureLegacyToolPayload).toHaveBeenCalledWith({
+      toolName: "Edit",
+      filePath: "/workspace/src/deleted.ts",
+      before: "removed only",
+    });
+    expect(mockMeasureLegacyToolPayload).toHaveBeenCalledWith({
+      toolName: "Write",
+      filePath: "/workspace/src/created.ts",
+      after: "created only",
+    });
   });
 
-  test("treats empty before and after metadata as zero diff lines", () => {
+  test("keeps empty sides as recorded content for the backend to interpret", async () => {
     const message: NativeMessageType = {
       id: "msg-edit-empty-boundaries",
       role: "assistant",
@@ -1771,13 +1980,6 @@ describe("NativeMessage", () => {
           content: "",
           toolName: "Edit",
           toolState: "success",
-          toolDiff: { filePath: "/workspace/deleted.ts", before: "removed", after: "" },
-        },
-        {
-          type: "tool-invocation",
-          content: "",
-          toolName: "Edit",
-          toolState: "success",
           toolDiff: { filePath: "/workspace/empty.ts", before: "", after: "" },
         },
       ],
@@ -1788,76 +1990,27 @@ describe("NativeMessage", () => {
         <NativeMessage message={message} />
       </TerminalContextHarness>,
     );
-
-    const created = screen.getByRole("button", { name: /write created\.ts \+1 success/i });
-    const deleted = screen.getByRole("button", { name: /edit deleted\.ts -1 success/i });
-    const empty = screen.getByRole("button", { name: /edit empty\.ts success/i });
-    expect((empty as HTMLButtonElement).disabled).toBe(true);
-
-    fireEvent.click(created);
-    fireEvent.click(deleted);
-    expect(screen.getByText("+created")).toBeTruthy();
-    expect(screen.getByText("-removed")).toBeTruthy();
-    expect(screen.queryByText("+") === null).toBe(true);
-    expect(screen.queryByText("-") === null).toBe(true);
+    // Whether a write's empty `before` means "no prior state" is the backend
+    // adapter's call; the client forwards it unchanged.
+    await waitFor(() => expect(mockMeasureLegacyToolPayload).toHaveBeenCalledTimes(2));
+    expect(mockMeasureLegacyToolPayload).toHaveBeenCalledWith({
+      toolName: "Write",
+      filePath: "/workspace/created.ts",
+      before: "",
+      after: "created",
+    });
+    expect(mockMeasureLegacyToolPayload).toHaveBeenCalledWith({
+      toolName: "Edit",
+      filePath: "/workspace/empty.ts",
+      before: "",
+      after: "",
+    });
   });
 
-  test("does not render a phantom expanded line for a trailing newline", () => {
-    const message: NativeMessageType = {
-      id: "msg-edit-trailing-newline",
-      role: "assistant",
-      content: "",
-      createdAt: "2026-03-07T12:00:00.000Z",
-      parts: [
-        {
-          type: "tool-invocation",
-          content: "",
-          toolName: "Edit",
-          toolState: "success",
-          toolDiff: {
-            filePath: "/workspace/src/a.ts",
-            before: "one\ntwo\n",
-            after: "three\n",
-          },
-        },
-        {
-          type: "tool-invocation",
-          content: "",
-          toolName: "MultiEdit",
-          toolState: "success",
-          toolDiff: {
-            filePath: "/workspace/src/c.ts",
-            before: "alpha\nbeta\n",
-            after: "gamma\ndelta\nepsilon",
-            additions: 3,
-            deletions: 2,
-          },
-        },
-      ],
-    };
-
-    render(
-      <TerminalContextHarness>
-        <NativeMessage message={message} />
-      </TerminalContextHarness>,
+  test("sends every recorded field and renders whatever the backend selected", async () => {
+    mockMeasureLegacyToolPayload.mockImplementation(async () =>
+      legacySummary(0, 0, [["context", "diff metadata without plus or minus markers"]]),
     );
-
-    fireEvent.click(screen.getByRole("button", { name: /edit a\.ts \+1 -2 success/i }));
-    fireEvent.click(screen.getByRole("button", { name: /multiedit c\.ts \+3 -2 success/i }));
-
-    expect(screen.getByText("-one")).toBeTruthy();
-    expect(screen.getByText("-two")).toBeTruthy();
-    expect(screen.getByText("+three")).toBeTruthy();
-    expect(screen.getByText("-alpha")).toBeTruthy();
-    expect(screen.getByText("-beta")).toBeTruthy();
-    expect(screen.getByText("+gamma")).toBeTruthy();
-    expect(screen.getByText("+delta")).toBeTruthy();
-    expect(screen.getByText("+epsilon")).toBeTruthy();
-    expect(screen.queryByText("+") === null).toBe(true);
-    expect(screen.queryByText("-") === null).toBe(true);
-  });
-
-  test("keeps provider diff metadata without change markers authoritative", () => {
     const message: NativeMessageType = {
       id: "msg-edit-metadata-fallback",
       role: "assistant",
@@ -1884,17 +2037,23 @@ describe("NativeMessage", () => {
         <NativeMessage message={message} />
       </TerminalContextHarness>,
     );
+    await waitFor(() => expect(mockMeasureLegacyToolPayload).toHaveBeenCalledTimes(1));
     fireEvent.click(screen.getByRole("button", { name: /edit fallback\.ts/i }));
 
-    expect(screen.getByText("diff metadata without plus or minus markers")).toBeTruthy();
+    expect(mockMeasureLegacyToolPayload).toHaveBeenCalledWith({
+      toolName: "Edit",
+      filePath: "/workspace/src/fallback.ts",
+      before: "old fallback",
+      after: "new fallback",
+      diff: "diff metadata without plus or minus markers",
+    });
+    expect(await screen.findByText("diff metadata without plus or minus markers")).toBeTruthy();
     expect(screen.queryByText("-old fallback") === null).toBe(true);
-    expect(screen.queryByText("+new fallback") === null).toBe(true);
   });
 
-  test("falls back to before and after when the provider diff is an empty string", () => {
-    // An empty `diff` is not a provider asserting "nothing changed" — it is a
-    // patch field the provider never filled in. Treating it as authoritative
-    // renders a blank body under a header that still claims +1/-1.
+  test("does not forward an empty provider diff string", async () => {
+    // An empty `diff` is a patch field the provider never filled in, not a
+    // provider asserting "nothing changed".
     const message: NativeMessageType = {
       id: "msg-edit-empty-diff",
       role: "assistant",
@@ -1921,10 +2080,15 @@ describe("NativeMessage", () => {
         <NativeMessage message={message} />
       </TerminalContextHarness>,
     );
-    fireEvent.click(screen.getByRole("button", { name: /edit empty\.ts/i }));
 
-    expect(screen.getByText("-old empty")).toBeTruthy();
-    expect(screen.getByText("+new empty")).toBeTruthy();
+    await waitFor(() =>
+      expect(mockMeasureLegacyToolPayload).toHaveBeenCalledWith({
+        toolName: "Edit",
+        filePath: "/workspace/src/empty.ts",
+        before: "old empty",
+        after: "new empty",
+      }),
+    );
   });
 
   test("renders a non-edit tool carrying only an empty diff as a generic tool row", () => {
@@ -1956,13 +2120,16 @@ describe("NativeMessage", () => {
     expect(screen.getByText(/^search$/i)).toBeTruthy();
   });
 
-  test("keeps edit diffs in step with toolDiff's values, not its identity", () => {
-    // The diff memos are keyed on the fields they read rather than on
-    // `toolDiff`'s identity, because normalization rebuilds every part object
-    // on each streaming frame and re-deriving a completed edit's diff is
-    // whole-file work. The hazard of value deps is staleness, so this pins
-    // both halves: a new object with identical values must not change what is
-    // shown, and changed values must still get through.
+  test("measures a legacy payload once per distinct value, not per object identity", async () => {
+    // Normalization rebuilds every part object on each streaming frame, so the
+    // request is keyed on the fields it sends. A new object with identical
+    // values must not ask again, and changed values must.
+    mockMeasureLegacyToolPayload.mockImplementation(async (input: Record<string, unknown>) =>
+      legacySummary(1, 1, [
+        ["remove", String(input.before)],
+        ["add", String(input.after)],
+      ]),
+    );
     const buildMessage = (before: string, after: string): NativeMessageType => ({
       id: "msg-edit-value-deps",
       role: "assistant",
@@ -1986,7 +2153,7 @@ describe("NativeMessage", () => {
       </TerminalContextHarness>,
     );
     fireEvent.click(screen.getByRole("button", { name: /edit deps\.ts/i }));
-    expect(screen.getByText("-first old")).toBeTruthy();
+    expect(await screen.findByText("-first old")).toBeTruthy();
     expect(screen.getByText("+first new")).toBeTruthy();
 
     rerender(
@@ -1995,19 +2162,20 @@ describe("NativeMessage", () => {
       </TerminalContextHarness>,
     );
     expect(screen.getByText("-first old")).toBeTruthy();
-    expect(screen.getByText("+first new")).toBeTruthy();
+    expect(mockMeasureLegacyToolPayload).toHaveBeenCalledTimes(1);
 
     rerender(
       <TerminalContextHarness>
         <NativeMessage message={buildMessage("second old", "second new")} />
       </TerminalContextHarness>,
     );
-    expect(screen.getByText("-second old")).toBeTruthy();
+    expect(await screen.findByText("-second old")).toBeTruthy();
     expect(screen.getByText("+second new")).toBeTruthy();
     expect(screen.queryByText("-first old") === null).toBe(true);
+    expect(mockMeasureLegacyToolPayload).toHaveBeenCalledTimes(2);
   });
 
-  test("disables edit rows that have no expandable details", () => {
+  test("disables path-only edit rows that have nothing to expand", () => {
     const createFileTab = mock(() => {});
     const message: NativeMessageType = {
       id: "msg-edit-no-details",
@@ -2034,7 +2202,7 @@ describe("NativeMessage", () => {
     expect(
       (
         screen.getByRole("button", {
-          name: /edit no-details\.ts success/i,
+          name: /edit success/i,
         }) as HTMLButtonElement
       ).disabled,
     ).toBe(true);
@@ -2120,6 +2288,7 @@ describe("NativeMessage", () => {
     };
 
     render(<NativeMessage message={message} />);
+    fireEvent.click(screen.getByRole("button", { name: /^Show 5 tool calls:/ }));
 
     expect(screen.getByRole("button", { name: /glob src\/\*\*\/\*\.tsx success/i })).toBeTruthy();
     expect(screen.getByRole("button", { name: /grep todo\|fixme success/i })).toBeTruthy();
@@ -2687,10 +2856,15 @@ describe("NativeMessage", () => {
     };
 
     render(<NativeMessage message={message} />);
+    fireEvent.click(screen.getByRole("button", { name: /^Show 3 tool calls:/ }));
 
-    const running = screen.getByText("running...");
-    expect(running.className).toContain("animate-pulse");
-    expect(running.className).toContain("text-yellow-600");
+    // The pending row, and the group line above it that reports it.
+    const running = screen.getAllByText("running...");
+    expect(running).toHaveLength(2);
+    for (const label of running) {
+      expect(label.className).toContain("animate-pulse");
+      expect(label.className).toContain("text-yellow-600");
+    }
     expect(screen.queryByText("pending") === null).toBe(true);
 
     expect(screen.getByText("success").className).toContain("text-success");
@@ -2776,7 +2950,7 @@ describe("NativeMessage", () => {
     expect(trigger.textContent).not.toContain("unused query");
   });
 
-  test("counts additions and deletions from raw diff output without diff metadata", () => {
+  test("never counts a raw diff found in tool output", () => {
     const rawDiff = [
       "--- a/src/raw.ts",
       "+++ b/src/raw.ts",
@@ -2808,15 +2982,22 @@ describe("NativeMessage", () => {
       </TerminalContextHarness>,
     );
 
-    // +++/--- headers must not be counted: otherwise this would read +3 -2.
-    const trigger = screen.getByRole("button", {
-      name: /edit \+2 -1 success/i,
-    });
-    expect(trigger.textContent).not.toContain("+3");
-    expect(trigger.textContent).not.toContain("-2");
+    const trigger = screen.getByRole("button", { name: /edit success/i });
+    expect(trigger.textContent).not.toContain("+2");
+    expect(trigger.textContent).not.toContain("-1");
+    fireEvent.click(trigger);
+    // Shown as the plain text it is.
+    expect(screen.getByText(/const alsoAdded = true;/)).toBeTruthy();
   });
 
-  test("renders unchanged diff context lines with muted styling", () => {
+  test("renders backend context lines with muted styling", async () => {
+    mockMeasureLegacyToolPayload.mockImplementation(async () =>
+      legacySummary(1, 1, [
+        ["context", "unchanged line"],
+        ["remove", "old line"],
+        ["add", "new line"],
+      ]),
+    );
     const message: NativeMessageType = {
       id: "msg-edit-diff-context-lines",
       role: "assistant",
@@ -2844,73 +3025,23 @@ describe("NativeMessage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /edit context\.ts/i }));
 
-    const contextLine = screen.getByText("unchanged line");
+    const contextLine = await screen.findByText("unchanged line");
     expect(contextLine.className).toContain("text-foreground/60");
     expect(contextLine.className).not.toContain("bg-success/20");
     expect(contextLine.className).not.toContain("bg-failure/20");
 
     expect(screen.getByText("+new line").className).toContain("bg-success/20");
     expect(screen.getByText("-old line").className).toContain("bg-failure/20");
-    expect(screen.getByText("@@ -1,3 +1,3 @@").className).toContain("text-blue-400");
+    expect(screen.getByText("@@ -1 +1 @@").className).toContain("text-blue-400");
   });
 
-  test("omits the unused stat when an edit only adds or only removes lines", () => {
-    const message: NativeMessageType = {
-      id: "msg-edit-single-sided-stats",
-      role: "assistant",
-      content: "",
-      createdAt: "2026-03-07T12:00:00.000Z",
-      parts: [
-        {
-          type: "tool-invocation",
-          content: "",
-          toolName: "Write",
-          toolState: "success",
-          toolDiff: {
-            filePath: "/workspace/src/added.ts",
-            additions: 3,
-            deletions: 0,
-          },
-        },
-        {
-          type: "tool-invocation",
-          content: "",
-          toolName: "Edit",
-          toolState: "success",
-          toolDiff: {
-            filePath: "/workspace/src/removed.ts",
-            additions: 0,
-            deletions: 4,
-          },
-        },
-      ],
-    };
-
-    render(
-      <TerminalContextHarness>
-        <NativeMessage message={message} />
-      </TerminalContextHarness>,
+  test("renders both the diff and the error for a partially failed edit", async () => {
+    mockMeasureLegacyToolPayload.mockImplementation(async () =>
+      legacySummary(1, 1, [
+        ["remove", "before"],
+        ["add", "after"],
+      ]),
     );
-
-    const additionsOnly = screen.getByRole("button", {
-      name: /write added\.ts \+3 success/i,
-    });
-    // `.font-mono` narrows these to the stat spans. The success/failure colours
-    // are shared with the tool-state marker in the same row, so the colour
-    // class alone no longer identifies a line count.
-    expect(additionsOnly.querySelector(".text-success.font-mono")?.textContent).toBe("+3");
-    expect(additionsOnly.querySelector(".text-failure.font-mono") === null).toBe(true);
-    expect(additionsOnly.textContent).not.toContain("-0");
-
-    const deletionsOnly = screen.getByRole("button", {
-      name: /edit removed\.ts -4 success/i,
-    });
-    expect(deletionsOnly.querySelector(".text-failure.font-mono")?.textContent).toBe("-4");
-    expect(deletionsOnly.querySelector(".text-success.font-mono") === null).toBe(true);
-    expect(deletionsOnly.textContent).not.toContain("+0");
-  });
-
-  test("renders both the diff and the error for a partially failed edit", () => {
     const message: NativeMessageType = {
       id: "msg-edit-diff-with-error",
       role: "assistant",
@@ -2937,9 +3068,9 @@ describe("NativeMessage", () => {
       </TerminalContextHarness>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /edit partial\.ts failure/i }));
+    fireEvent.click(screen.getByRole("button", { name: /edit partial\.ts/i }));
 
-    expect(screen.getByText("-before")).toBeTruthy();
+    expect(await screen.findByText("-before")).toBeTruthy();
     expect(screen.getByText("+after")).toBeTruthy();
     expect(screen.getByText("Failed to write remaining hunks")).toBeTruthy();
   });
@@ -2972,7 +3103,7 @@ describe("NativeMessage", () => {
 
     const running = screen.getByText("running...");
     expect(running.className).toContain("animate-pulse");
-    expect(screen.getByRole("button", { name: /edit pending\.ts \+1 running/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /edit pending\.ts running/i })).toBeTruthy();
   });
 
   test("derives image mime types from the container attachment extension", async () => {
@@ -3147,7 +3278,8 @@ describe("NativeMessage", () => {
     // Only surfaces that eagerly load get the thumbnail tile; without this the
     // chip becomes a large card that never fills in.
     expect(getClassTokens(attachment)).toContain("inline-flex");
-    expect(getClassTokens(attachment)).not.toContain("w-40");
+    expect(attachment.getAttribute("data-image-presentation")).toBe("chip");
+    expect(attachment.textContent).toContain("assistant-shot.png");
     expect(screen.queryByAltText("Thumbnail: assistant-shot.png") === null).toBe(true);
     // The eager effect runs during render, so a missing call here is decisive.
     expect(mockReadFileBase64).not.toHaveBeenCalled();
@@ -3478,7 +3610,13 @@ describe("NativeMessage", () => {
     expect(screen.getByText(/"file_path": "\/workspace\/src\/"/)).toBeTruthy();
   });
 
-  test("uses an edit tool title when a trailing-separator path has no filename", () => {
+  test("uses an edit tool title when a trailing-separator path has no filename", async () => {
+    mockMeasureLegacyToolPayload.mockImplementation(async () =>
+      legacySummary(1, 1, [
+        ["remove", "old value"],
+        ["add", "new value"],
+      ]),
+    );
     const message: NativeMessageType = {
       id: "msg-edit-title-without-filename",
       role: "assistant",
@@ -3506,7 +3644,7 @@ describe("NativeMessage", () => {
       </TerminalContextHarness>,
     );
 
-    const trigger = screen.getByRole("button", {
+    const trigger = await screen.findByRole("button", {
       name: /edit apply workspace patch \+1 -1 success/i,
     });
     expect(trigger.textContent).not.toContain("src");

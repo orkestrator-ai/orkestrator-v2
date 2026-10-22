@@ -623,6 +623,12 @@ export interface AgentSessionProvider {
     sessionIds: readonly string[],
   ): Promise<ReadonlyMap<string, ProviderActivityBatchEntry> | "unsupported">;
   /**
+   * This provider's canonical change-evidence producer (a bridge spool or the
+   * backend OpenCode adapter), pulled by change tracking after each activity
+   * read. See docs/architecture/change-tracking.md.
+   */
+  changeEvidenceSource?(environmentId: string): ChangeEvidenceSourceLike | null;
+  /**
    * Whether this provider's backend-held event stream is connected right now,
    * so a turn started by anyone else will be reported through
    * `ProviderCommonDependencies.onObservationHint`. Only a provider that
@@ -891,4 +897,24 @@ export interface ProviderCommonDependencies {
    * applied as activity themselves. Must not throw or await.
    */
   onObservationHint?: (sessionId: string | undefined) => void;
+}
+
+/**
+ * Structural twin of change tracking's `EvidenceSource`, declared here so the
+ * provider contract does not import the change-tracking service.
+ */
+export interface ChangeEvidenceSourceLike {
+  sourceKey: string;
+  environmentId: string;
+  provider: string;
+  read(
+    cursor: number,
+    epoch: string | null,
+  ): Promise<
+    import("@orkestrator/protocol/change-evidence").ChangeEvidenceReadResponse | "unsupported"
+  >;
+  body(id: string): Promise<Uint8Array | null>;
+  ack(
+    request: import("@orkestrator/protocol/change-evidence").ChangeEvidenceAckRequest,
+  ): Promise<void>;
 }

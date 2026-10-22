@@ -2902,13 +2902,10 @@ exit 0
 
   test("suffixes local worktree branches when origin has an unfetched branch with the stored name", async () => {
     const { worktree, remote } = await createGitWorktreeWithOrigin();
-    const updater = await createTempDir("ork-electron-remote-branch-");
-    await runGit(updater, ["clone", remote, "."]);
-    await runGit(updater, ["checkout", "-b", "review-oauth-callback"]);
-    await fs.writeFile(path.join(updater, "remote-only.txt"), "remote branch\n");
-    await runGit(updater, ["add", "remote-only.txt"]);
-    await runGit(updater, ["commit", "-m", "remote branch"]);
-    await runGit(updater, ["push", "origin", "review-oauth-callback"]);
+    // Created directly in the bare remote: the project checkout has never
+    // fetched it, which is the collision the start path must detect. Only the
+    // branch name matters here, so no clone, commit and push are needed.
+    await runGit(remote, ["branch", "review-oauth-callback", "main"]);
 
     const { stdout: knownBranches } = await execFileAsync("git", [
       "-C",

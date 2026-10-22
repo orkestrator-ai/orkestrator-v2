@@ -212,6 +212,37 @@ describe("workspace setup Git scan caches", () => {
   });
 });
 
+function runAgentTestRemoteTrust(home: string, remote: string | undefined): string {
+  const harness = `
+set -e
+eval "$(sed -n '/^AGENT_TEST_GIT_REMOTE_PATH=/p; /^trust_agent_test_git_remote() {/,/^}$/p' "$1")"
+trust_agent_test_git_remote
+trust_agent_test_git_remote
+git config --global --get-all safe.directory || true
+`;
+  const env: NodeJS.ProcessEnv = { PATH: process.env.PATH, HOME: home };
+  if (remote !== undefined) env.ORKESTRATOR_AGENT_TEST_GIT_REMOTE = remote;
+  const result = spawnSync("bash", ["-c", harness, "--", setupScript], { encoding: "utf8", env });
+  expect(result.status).toBe(0);
+  return result.stdout;
+}
+
+describe("workspace setup agent-test Git remote trust", () => {
+  test("trusts the fixed fixture path once, and nothing otherwise", () => {
+    if (!gitAvailable()) return;
+    const home = mkdtempSync(join(tmpdir(), "orkestrator-setup-trust-"));
+    try {
+      expect(runAgentTestRemoteTrust(home, undefined)).toBe("");
+      expect(runAgentTestRemoteTrust(home, "/elsewhere.git")).toBe("");
+      expect(runAgentTestRemoteTrust(home, "/orkestrator-agent-test-origin.git")).toBe(
+        "/orkestrator-agent-test-origin.git\n",
+      );
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("workspace setup attachment preservation (structure)", () => {
   test("an interrupted volume clone keeps its marker while partial files are cleaned", () => {
     const workspace = mkdtempSync(join(tmpdir(), "ork-ws-volume-clone-"));

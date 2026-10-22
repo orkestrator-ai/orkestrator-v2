@@ -26,7 +26,11 @@ import { streamSSE } from "hono/streaming";
 import { registerMcpReloadRoute } from "./mcp-reload-route.js";
 import { registerSessionCloseRoute } from "./session-close-route.js";
 import { registerSessionActivityBatchRoute } from "./session-activity-batch-route.js";
-import { registerCodexTranscriptRoutes } from "./transcript-routes.js";
+import {
+  registerCodexChangeEvidenceRoutes,
+  registerCodexTranscriptRoutes,
+} from "./transcript-routes.js";
+import { createCodexChangeEvidence } from "./change-evidence.js";
 import { isCodexApprovalMode } from "./codex-approval-mode.js";
 import {
   generateSessionTitleWithCodexExec,
@@ -761,6 +765,15 @@ function createCodexEngine(
 
 const codexEngine = createCodexEngine();
 
+/**
+ * One change-evidence spool per process, persisted beside the bridge's other
+ * sidecar state so unacknowledged evidence survives a restart.
+ */
+const codexChangeEvidence = createCodexChangeEvidence({
+  codexHome: getCodexHomeDir(),
+  cwd: getWorkingDirectory(),
+});
+
 const appServerRuntime = new AppServerRuntime({
   engine: codexEngine,
   codexHome: getCodexHomeDir(),
@@ -777,6 +790,7 @@ const appServerRuntime = new AppServerRuntime({
   // One probe per process: it serializes snapshots per repository across every
   // thread working in it.
   commandChangeProbe: new WorkspaceChangeProbe(),
+  changeEvidence: codexChangeEvidence,
 });
 
 /**
@@ -1296,6 +1310,7 @@ app.get("/session/:id/messages", async (c) => {
 
 // `GET /session/:id/transcript` and its detail and page reads.
 registerCodexTranscriptRoutes(app, appServerRuntime);
+registerCodexChangeEvidenceRoutes(app, codexChangeEvidence.spool);
 
 app.get("/session/:id/status", (c) => {
   const status = appServerRuntime.getStatus(c.req.param("id"));

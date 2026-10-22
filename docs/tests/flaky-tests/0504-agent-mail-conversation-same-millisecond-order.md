@@ -1,7 +1,7 @@
 # Agent mail conversation same-millisecond ordering
 
 - **ID:** 0504
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-20
 - **Test:** `StorageService agent mail conversations > joins both directions of a pair, oldest first, and lists each pair once`
 - **Owner:** `apps/backend/src/core/storage-agent-mail-conversations.test.ts`
@@ -30,7 +30,7 @@
   Evidence: `orkestrator-test-run.c7h361/review-all-complete.log.gz` under the
   host temporary directory. This remains an aggregate validation limitation.
 
-- **Usage settings pane validation (2026-10-20):** recurred in the final
+- **Usage settings pane validation (2026-10-20, before the fix below):** recurred in the final
   `mise run test` of the settings Usage-tab branch (`t3/settings-usage-tab`,
   base `97af3d45`), with the same two ids sharing one millisecond prefix
   (`00mvgyv76h-…`). The unchanged owner passed alone from `apps/backend`
@@ -39,3 +39,14 @@
   `orkestrator-test-run.OcQh31/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
   under the host temporary directory. Nothing in agent-mail storage or this
   test changed on that branch.
+
+## Resolution — 2026-10-20
+
+`sortableId` in `apps/backend/src/core/storage-agent-mail.ts` now writes a
+per-process sequence between the millisecond prefix and the random suffix, and
+its clock never runs backwards. Two sends in one millisecond therefore sort in
+send order; the random suffix no longer decides the tie. The regression
+`keeps send order for mail sent within one millisecond` freezes the clock with
+`setSystemTime` and sends 20 messages in both directions. It failed against the
+previous id and passes with the fix; all five agent-mail owners passed
+(109 tests).

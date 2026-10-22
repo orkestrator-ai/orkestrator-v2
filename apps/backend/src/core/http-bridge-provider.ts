@@ -75,6 +75,7 @@ import {
   assertOkWithErrorDetail,
   throwExplainedTurnFailure,
   boundedJson,
+  promptDispatchUnavailableError,
   bridgeFetch,
   normalizeProviderReadiness,
   fetchSessionSnapshot,
@@ -87,6 +88,7 @@ import {
 import { closeBridgeSessionRetaining } from "./bridge-session-close.js";
 import { HttpBridgeTranscriptReader } from "./http-bridge-transcript-reader.js";
 import { HttpBridgeActivityBatchReader } from "./http-bridge-activity-batch.js";
+import { bridgeChangeEvidenceSource } from "./http-bridge-change-evidence.js";
 import { readAcpTurnTerminalError } from "./http-bridge-turn-outcome.js";
 
 export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
@@ -113,6 +115,8 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   private readonly transcripts: HttpBridgeTranscriptReader;
   /** Scoped to this connection, so a restarted bridge re-detects the batch route. */
   private readonly activityBatchReader: HttpBridgeActivityBatchReader;
+  /** The bridge's change-evidence spool (docs/architecture/change-tracking.md). */
+  readonly changeEvidenceSource: ReturnType<typeof bridgeChangeEvidenceSource>;
   /** Grok only: see {@link readAcpTurnTerminalError}. */
   readonly turnTerminalError?: (sessionId: string, requestId: string) => Promise<string | null>;
 
@@ -127,6 +131,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     this.interactionAdapter = new HttpBridgeInteractionAdapter(this.agent, connection, fetchImpl);
     this.catalogAdapter = new HttpBridgeCatalogAdapter(this.agent, connection, fetchImpl);
     this.activityBatchReader = new HttpBridgeActivityBatchReader(connection, fetchImpl);
+    this.changeEvidenceSource = bridgeChangeEvidenceSource(connection, fetchImpl);
     this.interactions = this.interactionAdapter;
     if (this.agent === "grok") {
       this.turnTerminalError = (sessionId, requestId) =>
@@ -345,18 +350,15 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         `${this.agent} prompt dispatch outcome is unknown (HTTP ${response.status})`,
       );
     }
-    // A session can briefly disappear while a bridge reconciles a restarted
-    // provider, and an idle status read can race with another client starting a
-    // turn. Both are retryable dispatch races, not validation rejections that
-    // should park the user's prompt indefinitely.
+    // Missing sessions after restart and raced turns are retryable refusals.
+    // Preserve the bridge's reason: changing a launch-only setting can require
+    // the user to wait for background work to finish or stop it first.
     if (
       response.status === 404 ||
       response.status === 409 ||
       isTransientHttpStatus(response.status)
     ) {
-      throw new ProviderUnavailableError(
-        `${this.agent} prompt dispatch is temporarily unavailable (HTTP ${response.status})`,
-      );
+      throw await promptDispatchUnavailableError(this.agent, response);
     }
     if (!response.ok) {
       // Bridges answer terminal rejections with an actionable message. Surface it

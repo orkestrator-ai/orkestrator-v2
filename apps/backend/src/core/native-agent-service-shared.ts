@@ -420,6 +420,11 @@ export interface NativeAgentServiceOptions {
   interactionMonitorMaxRetries?: number;
   onInteractionObservation?: (observation: AgentInteractionObservation) => void | Promise<void>;
   onActivityTransition?: (event: NativeAgentActivityTransition) => void;
+  /**
+   * Backend change tracking (docs/architecture/change-tracking.md). A getter
+   * because the tracking service is attached after this one is built.
+   */
+  changeTracking?: () => NativeAgentChangeTrackingHooks | null | undefined;
   /** Reports newly persisted, content-free background questions to the shell. */
   onAsyncQuestionAttention?: (event: { environmentId: string; sessionKey: string }) => void;
   /** Atomically admits a coordinator prompt against checkout mutations. */
@@ -455,6 +460,8 @@ export interface NativeAgentServiceOptions {
    * would be instructing it to use a tool it does not have.
    */
   coordinatorDelegationAvailable?: (platform: AgentPlatform) => boolean;
+  /** The coordinator's node-role line (leaf mode or command node), or null. */
+  coordinatorNodeContext?: () => Promise<string | null>;
   /** Test seam for exercising deterministic detail-cache capacity eviction. */
   toolDetailCacheMaxEntries?: number;
   /** Test seam for exercising deterministic detail-cache byte eviction. */
@@ -485,6 +492,37 @@ export interface NativeAgentServiceOptions {
     now: () => number;
     timers: import("./recurring-scheduler.js").RecurringTimerFactory;
   };
+}
+
+/** What native dispatch and the activity sweep need from change tracking. */
+export interface NativeAgentChangeTrackingHooks {
+  /**
+   * Capture the turn's fresh start before the provider runs. Bounded and
+   * never throwing; `held` only in strict-checkpoint mode.
+   */
+  prepareTurnStart(context: {
+    environmentId: string;
+    logicalSessionKey: string;
+    requestId: string;
+    provider: string;
+    /** The provider conversation this turn runs in (joins provider evidence). */
+    providerSessionId: string;
+  }): Promise<{ kind: "ready" | "degraded" | "untracked" } | { kind: "held"; reason: string }>;
+  markTurnDispatched(
+    environmentId: string,
+    logicalSessionKey: string,
+    requestId: string,
+    outcome: "accepted" | "rejected" | "uncertain",
+  ): void;
+  /** One bridge connection was just observed; pull its change evidence. */
+  noteProviderObserved(provider: NativeAgentRuntimeProvider, environmentId: string): void;
+  /** A conversation was forked; its child inherits history by reference. */
+  noteFork(input: {
+    environmentId: string;
+    provider: string;
+    parentLogicalSessionKey: string;
+    childProviderSessionId: string;
+  }): void;
 }
 
 export interface AgentInteractionObservation {

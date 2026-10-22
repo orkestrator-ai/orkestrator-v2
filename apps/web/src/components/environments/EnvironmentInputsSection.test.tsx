@@ -42,6 +42,29 @@ describe("environment inputs section", () => {
     expect(screen.getByText(/Enabled since this container was created: Codex/)).toBeTruthy();
   });
 
+  for (const provider of ["codex", "grok"] as const) {
+    test(`explains a withheld ${provider} login and preserves staged totals`, async () => {
+      install({
+        get_environment_inputs: () => ({
+          ...staged,
+          providers: [
+            { provider, files: 1, bytes: 40, skipped: { "login-withheld": 1, symlink: 1 } },
+          ],
+          missingProviders: [],
+        }),
+      });
+      render(<EnvironmentInputsSection environmentId="env-inputs" dockerAvailable />);
+      await screen.findByText(
+        /Login withheld\. Sign in to .* on the host, then restart the container or sync its login\./,
+      );
+      expect(screen.getByText(/1 files · 40 B · 2 skipped/)).toBeTruthy();
+      expect(screen.queryAllByText(/links, oversized or unreadable/).length).toBe(0);
+      cleanup();
+      render(<EnvironmentInputsSection environmentId="env-inputs" dockerAvailable />);
+      await screen.findByText(/Login withheld/);
+    });
+  }
+
   test("explains a legacy container's whole-home mounts", async () => {
     install({ get_environment_inputs: () => ({ ...staged, mode: "host-mounts", providers: [] }) });
     render(<EnvironmentInputsSection environmentId="env-inputs" dockerAvailable />);

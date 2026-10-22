@@ -1,4 +1,5 @@
 import { DiffStatsTracking } from "./diff-stats-tracking.js";
+import type { ChangeTrackingService } from "./change-tracking/service.js";
 import type { BackendEmit } from "./commands-context.js";
 
 export type BackendRuntimeOptions = {
@@ -20,13 +21,27 @@ export type BackendRuntimeOptions = {
  */
 export class BackendRuntime {
   readonly diffStats: DiffStatsTracking;
+  /**
+   * Backend change tracking (docs/architecture/change-tracking.md). Attached
+   * by the backend once storage exists; absent in lightweight command
+   * fixtures, where the `changes_*` commands report it unavailable.
+   */
+  changeTracking: ChangeTrackingService | null = null;
 
   constructor(options: BackendRuntimeOptions) {
-    this.diffStats = new DiffStatsTracking({ emit: options.emit });
+    this.diffStats = new DiffStatsTracking({
+      emit: options.emit,
+      onScanEvent: (event) => this.changeTracking?.onDiffScanEvent(event),
+    });
+  }
+
+  attachChangeTracking(service: ChangeTrackingService): void {
+    this.changeTracking = service;
   }
 
   /** Releases everything the runtime owns; called once on backend shutdown. */
   shutdown(): void {
     this.diffStats.shutdown();
+    this.changeTracking?.shutdown();
   }
 }

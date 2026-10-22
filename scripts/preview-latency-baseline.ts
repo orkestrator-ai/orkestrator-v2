@@ -1098,7 +1098,8 @@ export async function runBaseline(
             serviceId,
             path: options.path,
             clientKey: "preview-latency-baseline",
-          })) as { url?: unknown };
+          })) as { url?: unknown; attachmentId?: unknown };
+          if (typeof created.attachmentId === "string") releases.push(created.attachmentId);
           if (typeof created.url !== "string") throw new BaselineFailure("no handoff URL returned");
           secrets.add(created.url);
           handoff = new URL(created.url);
@@ -1112,7 +1113,11 @@ export async function runBaseline(
         // The one-use code is `<attachmentId>.<secret>`; the id is what
         // release_preview_attachment needs afterwards.
         const attachmentId = code.split(".", 1)[0];
-        if (attachmentId) releases.push(attachmentId);
+        if (attachmentId && !releases.includes(attachmentId)) releases.push(attachmentId);
+        if (!code || !attachmentId) {
+          routes[route] = skippedRoute("failed", "handoff URL carried no session code");
+          continue;
+        }
         const hostName = handoff.hostname;
         const port = Number(handoff.port || 443);
         const address = options.publicationAddress ?? hostName;
@@ -1308,53 +1313,86 @@ class ThrottledLink {
  */
 function throttledPipe(source: Socket, target: Socket, link: ThrottledLink) {
   const queue: Array<{ at: number; chunk: Buffer | null }> = [];
+  // Account for bytes until the destination completes each write, including
+  // bytes in its writable buffer rather than only the scheduling queue.
   let pending = 0;
   let ended = false;
+  let stopped = false;
+  let blocked = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
+  const resume = () => {
+    if (!stopped && !blocked && pending < THROTTLE_QUEUE_HIGH_WATER / 2 && source.isPaused())
+      source.resume();
+  };
   const pump = () => {
     timer = null;
+    if (stopped || blocked) return;
     const now = performance.now();
-    while (queue.length > 0 && queue[0]!.at <= now) {
+    while (queue.length > 0 && queue[0]!.at <= now && !blocked) {
       const { chunk } = queue.shift()!;
       if (chunk === null) {
         if (!target.destroyed) target.end();
         continue;
       }
-      pending -= chunk.length;
-      link.queuedBytes -= chunk.length;
-      if (!target.destroyed) target.write(chunk);
-      if (pending < THROTTLE_QUEUE_HIGH_WATER / 2 && source.isPaused()) source.resume();
+      if (target.destroyed) {
+        stop();
+        return;
+      }
+      const writable = target.write(chunk, () => {
+        if (stopped) return;
+        pending -= chunk.length;
+        link.queuedBytes -= chunk.length;
+        resume();
+      });
+      if (!writable) {
+        blocked = true;
+        source.pause();
+      }
     }
-    if (queue.length > 0) timer = setTimeout(pump, Math.max(0, queue[0]!.at - now));
+    resume();
+    if (!blocked && queue.length > 0)
+      timer = setTimeout(pump, Math.max(0, queue[0]!.at - performance.now()));
   };
+  const drain = () => {
+    blocked = false;
+    pump();
+  };
+  target.on("drain", drain);
   const enqueue = (at: number, chunk: Buffer | null) => {
     queue.push({ at, chunk });
-    if (!timer) timer = setTimeout(pump, Math.max(0, queue[0]!.at - performance.now()));
+    if (!timer && !blocked) timer = setTimeout(pump, Math.max(0, queue[0]!.at - performance.now()));
   };
   const end = () => {
-    if (ended) return;
+    if (ended || stopped) return;
     ended = true;
     enqueue(queue.at(-1)?.at ?? performance.now(), null);
   };
-  source.on("data", (chunk: Buffer) => {
+  const data = (chunk: Buffer) => {
+    if (stopped) return;
     pending += chunk.length;
     link.queuedBytes += chunk.length;
     link.peakQueuedBytes = Math.max(link.peakQueuedBytes, link.queuedBytes);
     enqueue(link.schedule(chunk.length), chunk);
-    if (pending >= THROTTLE_QUEUE_HIGH_WATER) source.pause();
-  });
+    if (blocked || pending >= THROTTLE_QUEUE_HIGH_WATER) source.pause();
+  };
+  source.on("data", data);
   source.on("end", end);
   // A source that closes without a FIN still gets its queued bytes delivered.
   source.on("close", end);
-  return {
-    stop() {
-      if (timer) clearTimeout(timer);
-      timer = null;
-      link.queuedBytes -= pending;
-      pending = 0;
-      queue.length = 0;
-    },
-  };
+  function stop() {
+    if (stopped) return;
+    stopped = true;
+    if (timer) clearTimeout(timer);
+    timer = null;
+    target.off("drain", drain);
+    source.off("data", data);
+    source.off("end", end);
+    source.off("close", end);
+    link.queuedBytes -= pending;
+    pending = 0;
+    queue.length = 0;
+  }
+  return { stop };
 }
 
 export interface Throttle {
@@ -1609,8 +1647,7 @@ async function runDownload(argv: string[]): Promise<number> {
     clientKey: "preview-latency-baseline",
   })) as PreviewAttachmentDescriptor;
   const credential = attachment.tunnel?.credential;
-  if (!credential) throw new BaselineFailure("the attachment carried no tunnel credential");
-  secrets.add(credential);
+  if (credential) secrets.add(credential);
   const peaks: Record<string, number> = {};
   const print = (value: unknown) => {
     const line = JSON.stringify(value);
@@ -1625,6 +1662,7 @@ async function runDownload(argv: string[]): Promise<number> {
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
   try {
+    if (!credential) throw new BaselineFailure("the attachment carried no tunnel credential");
     const tunnelUrl = new URL(PREVIEW_TUNNEL_PATH, options.url);
     tunnelUrl.protocol = options.url.protocol === "https:" ? "wss:" : "ws:";
     stream = await openPreviewTunnel({

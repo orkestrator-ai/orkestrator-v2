@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { connect as netConnect, createServer, type AddressInfo, type Server } from "node:net";
+import { createHash } from "node:crypto";
+import { createServer as createHttpServer } from "node:http";
+import {
+  connect as netConnect,
+  createServer,
+  type AddressInfo,
+  type Server,
+  type Socket,
+} from "node:net";
 
 import type {
   PreviewCapabilities,
@@ -14,6 +22,7 @@ import {
   parseBaselineArgs,
   planRoutes,
   routeResult,
+  runBaseline,
   ROUTES,
   sanitizeDiagnostics,
   sessionCookieFromHead,
@@ -477,6 +486,74 @@ describe("network helpers", () => {
     }
   });
 
+  test("a paused destination bounds the throttle and backpressures a sustained producer until drain", async () => {
+    let receiver!: Socket;
+    let accepted!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      accepted = resolve;
+    });
+    const receivedHash = createHash("sha256");
+    let received = 0;
+    const server = createServer({ allowHalfOpen: true }, (socket) => {
+      receiver = socket;
+      socket.pause();
+      socket.on("data", (chunk: Buffer) => {
+        received += chunk.length;
+        receivedHash.update(chunk);
+      });
+      socket.on("end", () => socket.end("done"));
+      accepted();
+    });
+    const target = await listen(server);
+    const throttle = await startThrottle({
+      listenHost: "127.0.0.1",
+      listenPort: 0,
+      targetHost: "127.0.0.1",
+      targetPort: target,
+      latencyMs: 0,
+      rateKiB: 1_048_576,
+    });
+    const producer = netConnect({ host: "127.0.0.1", port: throttle.port, allowHalfOpen: true });
+    const payload = Buffer.alloc(64 * 1024, 7);
+    const total = 32 * 1024 * 1024;
+    let sent = 0;
+    const expectedHash = createHash("sha256");
+    for (let offset = 0; offset < total; offset += payload.length) expectedHash.update(payload);
+    const done = new Promise<void>((resolve, reject) => {
+      producer.on("error", reject);
+      producer.on("data", () => undefined);
+      producer.on("end", resolve);
+    });
+    const produce = () => {
+      while (sent < total) {
+        sent += payload.length;
+        if (!producer.write(payload)) return;
+      }
+      producer.end();
+    };
+    producer.on("drain", produce);
+    producer.once("connect", produce);
+    try {
+      await ready;
+      await Bun.sleep(500);
+      const plateau = throttle.stats().upBytes;
+      await Bun.sleep(200);
+      expect(throttle.stats().upBytes).toBe(plateau);
+      expect(sent).toBeLessThan(total);
+      expect(throttle.stats().peakQueuedBytes).toBeLessThanOrEqual(1024 * 1024);
+      receiver.resume();
+      await done;
+      expect(received).toBe(total);
+      expect(receivedHash.digest("hex")).toBe(expectedHash.digest("hex"));
+      expect(throttle.stats().upBytes).toBe(total);
+    } finally {
+      producer.destroy();
+      receiver?.destroy();
+      await throttle.close();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  }, 15_000);
+
   test("the throttle delays each direction and preserves bytes and EOF", async () => {
     const echo = createServer({ allowHalfOpen: true }, (socket) => {
       const chunks: Buffer[] = [];
@@ -517,4 +594,53 @@ describe("network helpers", () => {
       await new Promise<void>((resolve) => echo.close(() => resolve()));
     }
   });
+});
+
+describe("baseline orchestration", () => {
+  for (const handoff of [
+    { url: "https://s.preview.test/session", attachmentId: "att-missing-code" },
+    { url: "malformed URL", attachmentId: "att-malformed" },
+    { attachmentId: "att-missing-url" },
+    { url: "https://s.preview.test/session?code=att-legacy.secret" },
+  ]) {
+    test(`releases private-origin attachments after handoff failure (${handoff.attachmentId ?? "legacy"})`, async () => {
+      const releases: string[] = [];
+      const server = createHttpServer(async (request, response) => {
+        const chunks: Buffer[] = [];
+        for await (const chunk of request) chunks.push(Buffer.from(chunk));
+        const { command, args } = JSON.parse(Buffer.concat(chunks).toString());
+        const result =
+          command === "get_preview_capabilities"
+            ? capabilities()
+            : command === "get_preview_services"
+              ? { services: [service()] }
+              : command === "probe_preview_service"
+                ? service()
+                : command === "create_preview_handoff_url"
+                  ? handoff
+                  : command === "release_preview_attachment"
+                    ? releases.push(args.attachmentId)
+                    : { access: { attachments: 0 } };
+        response.setHeader("content-type", "application/json");
+        response.end(JSON.stringify({ result }));
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      try {
+        const options = parse([
+          "--url",
+          `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+          "--routes",
+          "private-origin",
+          "--timeout-ms",
+          "100",
+        ]);
+        const run = await runBaseline(options);
+        expect(run.result.routes["private-origin"].status).toBe("failed");
+        expect(releases).toEqual([handoff.attachmentId ?? "att-legacy"]);
+        expect(() => assertNoSecrets(JSON.stringify(run.result), run.secrets)).not.toThrow();
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+    });
+  }
 });

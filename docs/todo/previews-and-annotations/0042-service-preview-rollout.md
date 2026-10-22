@@ -789,6 +789,49 @@ evidence.
   pass in a real Electron window, the full `mise run test:agent:electron`
   suite.
 
+2026-10-22, review follow-up on `1ab33f742`, same macOS 26.6.2 arm64 host,
+Bun 1.4.3, Node 24.21.0 and Playwright 1.64.0. Single-machine qualification;
+transport and publication defaults remain unchanged.
+
+- Forgotten-connection intent is persisted before clearing and retried
+  independently of window transports, with 64 attempts per pass. Retention
+  regressions cover 141 partitions, failed clears, releasing the last
+  holding window, restart recovery, and a startup removal failure that must
+  still attempt the native clear. Window holdings include shared sessions;
+  schedule cancellation and shutdown stop recurring reconciliation.
+- The throttle now waits for destination `drain`, includes unfinished socket
+  writes in its queue accounting, and removes its listeners on teardown.
+  A 32 MiB sustained-producer regression pauses the destination, observes
+  admission plateau and upstream backpressure with at most 1 MiB queued,
+  then resumes reading and verifies byte integrity and EOF.
+- Handoff creation returns the attachment ID independently of the URL and
+  releases it if grant consumption fails. Baseline orchestration regressions
+  release IDs for missing URLs, invalid URLs and missing session codes, and
+  retain compatibility with code-only responses. Default backend tests run
+  the real `watch` and `download` subcommands against an isolated stack,
+  including release after a missing tunnel credential.
+- Passed through `mise run test:logged`: `mise run check`; the focused
+  retention, baseline-tool, baseline-command and handoff command suites;
+  `mise run test:preview:browser` (6 passed, 1 skipped: Vite fixture unset),
+  including the hostile service-worker journey; and
+  `mise run test:preview:bench` (both loopback suites, including all four
+  baseline routes and attachment counts returning to zero).
+- `mise run test:agent:electron`: 29 passed, 1 skipped (native Wayland on
+  macOS), 145.8 s. The production forget IPC clears actual service and shared
+  partition cookies while Local's cookie remains. Restarting the real main
+  process removes both retired directories and preserves Local's directory.
+  The extended multi-backend journey also passed alone after the final
+  retention changes (12.4 s). Disposable profiles, fixture backends and PKI
+  were stopped and removed by the harnesses.
+- `mise run test:logged -- --name full-suite -- mise run test`: all four
+  groups passed (453.7 s). After the final retention edge-case changes, the
+  complete desktop package suite passed again (24.5 s), as did
+  `mise run check` and the native multi-backend retention journey.
+- No Docker, published-CLI or iOS scenario suite was added: this follow-up
+  changes desktop retention and baseline tooling, with an additive backend
+  handoff response. Vite HMR remains outside this run because its isolated
+  fixture was not installed; the full Electron suite's own HMR journey passed.
+
 ## Constraints and rationale
 
 - The threat boundaries, the credential and data path, and the resource-owner

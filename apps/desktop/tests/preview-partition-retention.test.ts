@@ -12,6 +12,7 @@ import {
 import {
   liveServicePartitionSuffixes,
   PreviewPartitionRetention,
+  previewPartitionsInUse,
   type PreviewPartitionFs,
   type PreviewServiceListSource,
 } from "../electron/preview-partition-retention";
@@ -78,12 +79,18 @@ class MemoryFs implements PreviewPartitionFs {
   }
 }
 
+const retentions: PreviewPartitionRetention[] = [];
+afterEach(() => {
+  for (const retention of retentions.splice(0)) retention.dispose();
+});
+
 function setup(options: { held?: string[] } = {}) {
   const fs = new MemoryFs();
   const cleared: string[] = [];
   const warn = mock(() => undefined);
   const held = new Set(options.held ?? []);
   const retention = new PreviewPartitionRetention({
+    retryMs: 5,
     partitionsDir: PARTITIONS,
     pendingFile: PENDING,
     sessionFor: (partition) => ({
@@ -96,6 +103,7 @@ function setup(options: { held?: string[] } = {}) {
     fs,
     logger: { warn },
   });
+  retentions.push(retention);
   return { fs, cleared, held, retention, warn };
 }
 
@@ -129,6 +137,38 @@ describe("liveServicePartitionSuffixes", () => {
 });
 
 describe("PreviewPartitionRetention", () => {
+  test("derives current holdings across windows and transports, including shared sessions", async () => {
+    const first = new Set([servicePartition(1, "remote", "svc-a")]);
+    const second = new Set([servicePartition(2, "local", "svc-b")]);
+    const windows = [
+      {
+        sharedPartition: browserPreviewPartitionForWindow(1, "remote"),
+        transport: { partitionsInUse: () => first },
+      },
+      {
+        sharedPartition: browserPreviewPartitionForWindow(2, "local"),
+        transport: { partitionsInUse: () => second },
+      },
+    ];
+    expect(previewPartitionsInUse(windows)).toEqual(
+      new Set([...first, ...second, windows[0]!.sharedPartition, windows[1]!.sharedPartition]),
+    );
+    const { fs, retention, cleared, held } = setup();
+    for (const partition of previewPartitionsInUse(windows)) {
+      held.add(partition);
+      fs.directories.add(dirName(partition));
+    }
+    const key = connectionPartitionKey("remote");
+    expect(await retention.forgetConnection(key, { includeShared: true })).toEqual([]);
+    windows.shift(); // The remote window closes while Local keeps working.
+    held.clear();
+    for (const partition of previewPartitionsInUse(windows)) held.add(partition);
+    const deadline = Date.now() + 1_000;
+    while (cleared.length < 2 && Date.now() < deadline) await Bun.sleep(5);
+    expect(cleared).toHaveLength(2);
+    expect(cleared.every((partition) => !held.has(partition))).toBe(true);
+  });
+
   test("clears partitions of removed services on that connection, in every window slot", async () => {
     const { fs, cleared, retention } = setup();
     const kept = servicePartition(1, "local", "svc-live");
@@ -283,6 +323,99 @@ describe("PreviewPartitionRetention", () => {
     expect(warn).toHaveBeenCalledWith("[Previews] Failed to remove cleared preview partitions.");
   });
 
+  test("forgotten cleanup drains beyond one pass and retries failures without a transport, then survives restart", async () => {
+    const { fs, retention, held } = setup();
+    const partitions = Array.from({ length: 140 }, (_, index) =>
+      servicePartition(1, "forgotten", `svc-${index}`),
+    );
+    const shared = browserPreviewPartitionForWindow(1, "forgotten");
+    partitions.push(shared);
+    const unrelated = servicePartition(1, "kept", "svc-keep");
+    for (const partition of [...partitions, unrelated]) fs.directories.add(dirName(partition));
+    held.add(partitions[0]!);
+    let failures = 2;
+    const cleared = new Set<string>();
+    const options = {
+      partitionsDir: PARTITIONS,
+      pendingFile: PENDING,
+      fs,
+      retryMs: 5,
+      inUse: () => held,
+      sessionFor: (partition: string) => ({
+        clearStorageData: async () => {
+          if (partition === partitions[1] && failures-- > 0) throw new Error("busy");
+          cleared.add(partition);
+        },
+      }),
+    };
+    const active = new PreviewPartitionRetention(options);
+    retentions.push(active);
+    expect(
+      await active.forgetConnection(connectionPartitionKey("forgotten"), { includeShared: true }),
+    ).toHaveLength(63);
+    held.clear(); // The last window and its transport have gone away.
+    const deadline = Date.now() + 2_000;
+    while (cleared.size < partitions.length && Date.now() < deadline) await Bun.sleep(5);
+    expect(cleared.size).toBe(partitions.length);
+    active.dispose();
+    retention.dispose();
+    // Simulate death after minting intent but before its first successful clear.
+    const late = servicePartition(2, "forgotten", "svc-late");
+    fs.directories.add(dirName(late));
+    const restarted = new PreviewPartitionRetention({
+      ...options,
+      sessionFor: () => {
+        throw new Error("startup must not create a native session");
+      },
+    });
+    retentions.push(restarted);
+    expect(await restarted.sweepPending()).toHaveLength(partitions.length + 1);
+    expect(Array.from(fs.directories)).toEqual([dirName(unrelated)]);
+  });
+
+  test("a failed startup removal of an uncleared forgotten partition still retries the native clear", async () => {
+    const { fs, cleared, retention, warn } = setup();
+    const gone = servicePartition(1, "forgotten", "svc-failed");
+    fs.directories.add(dirName(gone));
+    fs.failRemove.add(dirName(gone));
+    fs.files.set(
+      `${PENDING}.forgotten`,
+      JSON.stringify([{ key: connectionPartitionKey("forgotten"), includeShared: true }]),
+    );
+    expect(await retention.sweepPending()).toEqual([]);
+    expect(fs.pending()).toEqual([]);
+    const deadline = Date.now() + 1_000;
+    while (!cleared.length && Date.now() < deadline) await Bun.sleep(5);
+    expect(cleared).toEqual([gone]);
+    expect(fs.pending()).toEqual([dirName(gone)]);
+    expect(warn).toHaveBeenCalled();
+  });
+
+  test("failed clears survive a restart even before any follow-up pass", async () => {
+    const { fs } = setup();
+    const gone = servicePartition(1, "forgotten", "svc-failed");
+    fs.directories.add(dirName(gone));
+    const options = {
+      partitionsDir: PARTITIONS,
+      pendingFile: PENDING,
+      fs,
+      inUse: () => [],
+      logger: { warn: () => undefined },
+      sessionFor: () => ({
+        clearStorageData: async () => {
+          throw new Error("busy");
+        },
+      }),
+    };
+    const first = new PreviewPartitionRetention(options);
+    await first.forgetConnection(connectionPartitionKey("forgotten"), { includeShared: false });
+    first.dispose();
+    expect(fs.pending()).toEqual([]);
+    const restarted = new PreviewPartitionRetention(options);
+    expect(await restarted.sweepPending()).toEqual([dirName(gone)]);
+    restarted.dispose();
+  });
+
   test("a missing partitions directory or pending file is not an error", async () => {
     const { retention, warn } = setup();
     expect(await retention.sweepPending()).toEqual([]);
@@ -296,6 +429,26 @@ describe("PreviewPartitionRetention", () => {
     });
     expect(await missing.forgetConnection("0123456789abcdef", { includeShared: true })).toEqual([]);
     expect(warn).not.toHaveBeenCalled();
+  });
+
+  test("window schedules can be cancelled before first run, and shutdown cancels the others", async () => {
+    const { fs, retention } = setup();
+    fs.directories.add(dirName(servicePartition(1, "local", "svc-gone")));
+    const first = mock(async () => snapshot([]));
+    const second = mock(async () => snapshot([]));
+    const stop = retention.schedule(connectionPartitionKey("local"), source(first), {
+      delayMs: 10,
+      intervalMs: 5,
+    });
+    retention.schedule(connectionPartitionKey("local"), source(second), {
+      delayMs: 10,
+      intervalMs: 5,
+    });
+    stop();
+    retention.dispose();
+    await Bun.sleep(40);
+    expect(first).not.toHaveBeenCalled();
+    expect(second).not.toHaveBeenCalled();
   });
 
   test("a scheduled reconcile stops once its transport closes", async () => {

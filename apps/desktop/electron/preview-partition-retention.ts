@@ -35,6 +35,7 @@ export interface PreviewPartitionRetentionOptions {
   inUse(): Iterable<string>;
   fs?: PreviewPartitionFs;
   logger?: Pick<Console, "warn">;
+  retryMs?: number;
 }
 
 /** A source of the authoritative service list for one window's connection. */
@@ -83,6 +84,21 @@ export function liveServicePartitionSuffixes(snapshot: unknown): Set<string> | n
   return suffixes;
 }
 
+/** Authoritative holdings across every window, including its shared legacy session. */
+export function previewPartitionsInUse(
+  windows: Iterable<{
+    sharedPartition: string;
+    transport: { partitionsInUse(): Iterable<string> };
+  }>,
+): Set<string> {
+  const held = new Set<string>();
+  for (const window of windows) {
+    held.add(window.sharedPartition);
+    for (const partition of window.transport.partitionsInUse()) held.add(partition);
+  }
+  return held;
+}
+
 /**
  * Ends preview partitions nothing can use again: a removed service's
  * partition, and every preview partition of a forgotten connection. The
@@ -96,6 +112,10 @@ export function liveServicePartitionSuffixes(snapshot: unknown): Set<string> | n
 export class PreviewPartitionRetention {
   private readonly fs: PreviewPartitionFs;
   private queue: Promise<unknown> = Promise.resolve();
+  private retry: ReturnType<typeof setTimeout> | null = null;
+  private disposed = false;
+  private retryOffset = 0;
+  private readonly schedules = new Set<() => void>();
 
   constructor(private readonly options: PreviewPartitionRetentionOptions) {
     this.fs = options.fs ?? nodeFs;
@@ -104,8 +124,12 @@ export class PreviewPartitionRetention {
   /** Remove directories cleared in an earlier run. Call before any preview session exists. */
   sweepPending(): Promise<string[]> {
     return this.serialize(async () => {
-      const pending = await this.readPending();
-      if (!pending.length) return [];
+      const forgotten = await this.readForgotten();
+      const names = await this.listPartitions();
+      const clearedBefore = new Set(await this.readPending());
+      const pending = Array.from(
+        new Set([...clearedBefore, ...names.filter((name) => this.isForgotten(name, forgotten))]),
+      );
       const removed: string[] = [];
       const failed: string[] = [];
       for (const name of pending) {
@@ -119,7 +143,16 @@ export class PreviewPartitionRetention {
         }
       }
       if (failed.length) this.warn("[Previews] Failed to remove cleared preview partitions.");
-      await this.writePending(failed);
+      // A failed directory removal does not prove its site data was cleared.
+      // Only keep prior positive clears here; forgotten intent retries the rest.
+      await this.writePending(failed.filter((name) => clearedBefore.has(name)));
+      // Retain whole-connection intent even when more directories failed than
+      // fit in the bounded per-directory journal.
+      const remaining = names.filter((name) => !removed.includes(name));
+      await this.writeForgotten(
+        forgotten.filter((entry) => remaining.some((name) => this.isForgotten(name, [entry]))),
+      );
+      if (failed.length) this.scheduleForgotten();
       return removed;
     });
   }
@@ -127,13 +160,24 @@ export class PreviewPartitionRetention {
   /** Every preview partition of a connection this device forgot (all window slots). */
   forgetConnection(connectionKey: string, options: { includeShared: boolean }): Promise<string[]> {
     return this.serialize(async () => {
-      const names = (await this.listPartitions()).filter((name) => {
-        const service = SERVICE_PARTITION.exec(name);
-        if (service) return service[1] === connectionKey;
-        const shared = SHARED_PARTITION.exec(name);
-        return options.includeShared && shared?.[1] === connectionKey;
-      });
-      return this.clear(names);
+      if (!/^[0-9a-f]{16}$/.test(connectionKey)) throw new Error("Invalid connection key");
+      const forgotten = await this.readForgotten();
+      const existing = forgotten.find((entry) => entry.key === connectionKey);
+      if (existing) existing.includeShared ||= options.includeShared;
+      else {
+        if (forgotten.length >= MAX_PENDING) throw new Error("Preview cleanup capacity exceeded");
+        forgotten.push({ key: connectionKey, includeShared: options.includeShared });
+      }
+      // Admission is durable before clearing anything. A restart can finish
+      // even if no transport for this connection will ever exist again.
+      await this.writeForgotten(forgotten);
+      try {
+        return await this.clear(
+          (await this.listPartitions()).filter((name) => this.isForgotten(name, forgotten)),
+        );
+      } finally {
+        this.scheduleForgotten();
+      }
     });
   }
 
@@ -156,7 +200,7 @@ export class PreviewPartitionRetention {
         // Older, unreachable or over-bound backends keep their partitions.
         return [];
       }
-      if (!live || source.closed) return [];
+      if (!live || source.closed || this.disposed) return [];
       return this.clear(candidates.filter((name) => !live.has(SERVICE_PARTITION.exec(name)![2]!)));
     });
   }
@@ -169,22 +213,95 @@ export class PreviewPartitionRetention {
     connectionKey: string,
     source: PreviewServiceListSource,
     timing: { delayMs: number; intervalMs: number },
-  ): void {
+  ): () => void {
+    if (this.disposed) return () => undefined;
     let interval: ReturnType<typeof setInterval> | null = null;
+    const stop = () => {
+      clearTimeout(first);
+      if (interval) clearInterval(interval);
+      this.schedules.delete(stop);
+    };
     const run = () => {
-      if (source.closed) {
-        if (interval) clearInterval(interval);
+      if (source.closed || this.disposed) {
+        stop();
         return;
       }
       void this.reconcileServices(connectionKey, source).catch(() => undefined);
     };
     const first = setTimeout(() => {
       run();
-      if (source.closed) return;
+      if (source.closed || this.disposed) return;
       interval = setInterval(run, timing.intervalMs);
       interval.unref?.();
     }, timing.delayMs);
+    this.schedules.add(stop);
     first.unref?.();
+    return stop;
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    if (this.retry) clearTimeout(this.retry);
+    this.retry = null;
+    for (const stop of Array.from(this.schedules)) stop();
+  }
+
+  private isForgotten(
+    name: string,
+    entries: Array<{ key: string; includeShared: boolean }>,
+  ): boolean {
+    const service = SERVICE_PARTITION.exec(name);
+    const shared = SHARED_PARTITION.exec(name);
+    return entries.some(
+      (entry) => service?.[1] === entry.key || (entry.includeShared && shared?.[1] === entry.key),
+    );
+  }
+
+  private async readForgotten(): Promise<Array<{ key: string; includeShared: boolean }>> {
+    try {
+      const value: unknown = JSON.parse(
+        await this.fs.readFile(`${this.options.pendingFile}.forgotten`),
+      );
+      if (!Array.isArray(value) || value.length > MAX_PENDING)
+        throw new Error("Invalid cleanup journal");
+      return value.filter(
+        (entry) =>
+          entry && /^[0-9a-f]{16}$/.test(entry.key) && typeof entry.includeShared === "boolean",
+      );
+    } catch (error) {
+      if (isMissing(error)) return [];
+      throw error;
+    }
+  }
+
+  private writeForgotten(entries: Array<{ key: string; includeShared: boolean }>): Promise<void> {
+    return this.fs.writeFile(
+      `${this.options.pendingFile}.forgotten`,
+      `${JSON.stringify(entries)}\n`,
+    );
+  }
+
+  private scheduleForgotten(): void {
+    if (this.disposed || this.retry) return;
+    this.retry = setTimeout(() => {
+      this.retry = null;
+      void this.serialize(async () => {
+        const forgotten = await this.readForgotten();
+        const pending = new Set(await this.readPending());
+        const names = (await this.listPartitions()).filter(
+          (name) => this.isForgotten(name, forgotten) && !pending.has(name),
+        );
+        if (!names.length) return;
+        const offset = this.retryOffset % names.length;
+        await this.clear([...names.slice(offset), ...names.slice(0, offset)]);
+        this.retryOffset += MAX_CLEARED_PER_PASS;
+        this.scheduleForgotten();
+      }).catch(() => {
+        this.warn("[Previews] Failed to retry forgotten preview cleanup.");
+        this.scheduleForgotten();
+      });
+    }, this.options.retryMs ?? 1_000);
+    this.retry.unref?.();
   }
 
   private async clear(names: string[]): Promise<string[]> {
@@ -192,10 +309,12 @@ export class PreviewPartitionRetention {
     // Already cleared this run or before; their directories go on the next start.
     const pending = new Set(await this.readPending());
     const cleared: string[] = [];
+    let attempted = 0;
     for (const name of names) {
-      if (cleared.length >= MAX_CLEARED_PER_PASS) break;
+      if (attempted >= MAX_CLEARED_PER_PASS || pending.size + cleared.length >= MAX_PENDING) break;
       const partition = `persist:${name}`;
       if (held.has(partition) || pending.has(name)) continue;
+      attempted += 1;
       try {
         const session = this.options.sessionFor(partition);
         await session.clearStorageData();
@@ -216,7 +335,7 @@ export class PreviewPartitionRetention {
     try {
       return await this.fs.readdir(this.options.partitionsDir);
     } catch (error) {
-      if (!isMissing(error)) this.warn("[Previews] Failed to list preview partitions.");
+      if (!isMissing(error)) throw error;
       return [];
     }
   }

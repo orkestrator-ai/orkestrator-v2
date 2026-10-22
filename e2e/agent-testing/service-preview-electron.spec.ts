@@ -30,7 +30,7 @@ import { _electron as electron } from "playwright";
 import type { ElectronApplication } from "playwright";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { request as httpRequest } from "node:http";
-import { cp, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type {
@@ -45,7 +45,10 @@ import { PREVIEW_INGRESS_HEADER } from "@orkestrator/protocol/preview-access";
 import { formatPreviewServiceUri } from "@orkestrator/protocol/preview-services";
 
 import { BackendHttpClient, BackendProcess } from "../../apps/desktop/electron/backend-process";
-import { browserPreviewServicePartition } from "../../apps/desktop/electron/desktop-window-lifecycle";
+import {
+  browserPreviewServicePartition,
+  browserPreviewPartitionForWindow,
+} from "../../apps/desktop/electron/desktop-window-lifecycle";
 import {
   resolveRuntimeProfile,
   type RuntimeProfile,
@@ -2074,6 +2077,30 @@ test("windows on different backends never share previews, and switches release o
 
   // Forget removes the active connection before preview teardown. The old
   // transport must retain its client to release on the issuing backend.
+  // Seed actual native sessions, including the shared legacy partition. The
+  // production forget handler must clear both, while Local remains in use.
+  const retiredPartitions = [
+    browserPreviewServicePartition(2, remoteId, svc("r")),
+    browserPreviewPartitionForWindow(2, remoteId),
+  ];
+  const localPartition = browserPreviewServicePartition(1, LOCAL_CONNECTION_ID, svc("a"));
+  const retiredPaths = await s().app.evaluate(
+    async ({ session }, partitions) => {
+      const paths: string[] = [];
+      for (const partition of partitions) {
+        const native = session.fromPartition(partition);
+        await native.cookies.set({
+          url: "https://retention.test",
+          name: "retention",
+          value: "seed",
+        });
+        await native.cookies.flushStore();
+        paths.push(native.getStoragePath()!);
+      }
+      return paths;
+    },
+    [...retiredPartitions, localPartition],
+  );
   const forgottenIngress = origin("r");
   const forgotten = await second.evaluate(
     (id) => (globalThis as any).orkestrator.connections.forget(id),
@@ -2094,6 +2121,30 @@ test("windows on different backends never share previews, and switches release o
     )
     .toBe("closed");
   await expect.poll(() => remoteFixture.openSockets(), { timeout: 15_000 }).toBe(0);
+  await expect
+    .poll(
+      () =>
+        s().app.evaluate(
+          async ({ session }, partitions) =>
+            Promise.all(
+              partitions.map(
+                async (partition) =>
+                  (await session.fromPartition(partition).cookies.get({ name: "retention" }))
+                    .length,
+              ),
+            ),
+          retiredPartitions,
+        ),
+      { timeout: 20_000 },
+    )
+    .toEqual([0, 0]);
+  expect(
+    await s().app.evaluate(
+      async ({ session }, partition) =>
+        (await session.fromPartition(partition).cookies.get({ name: "retention" })).length,
+      localPartition,
+    ),
+  ).toBe(1);
   await attachService("b", "after-forget-local", true, second);
   await waitForService("b");
   const [localAfterForget] = await viewsOn(origin("b"), secondId);
@@ -2141,4 +2192,22 @@ test("windows on different backends never share previews, and switches release o
     .toBe("closed");
   expect(await inService<string>("a", "window.__multiKept")).toBe("svc-a");
   await preview("destroy", "multi-a");
+  // Restart the actual main process: its startup sweep must remove the
+  // directories recorded by that native clear, before creating any views.
+  await closeElectron();
+  const restarted = await launchElectron(s());
+  Object.assign(s(), restarted);
+  for (const retired of retiredPaths.slice(0, 2))
+    expect(
+      await stat(retired).then(
+        () => true,
+        () => false,
+      ),
+    ).toBe(false);
+  expect(
+    await stat(retiredPaths[2]!).then(
+      () => true,
+      () => false,
+    ),
+  ).toBe(true);
 });

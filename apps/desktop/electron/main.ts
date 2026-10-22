@@ -64,7 +64,10 @@ import type {
 import { connectionPreviewBackend, rebindWindowPreviews } from "./preview-connection-backend.js";
 import { PreviewTransportManager } from "./preview-transport-manager.js";
 import { createPreviewPortHints } from "./preview-port-hints.js";
-import { PreviewPartitionRetention } from "./preview-partition-retention.js";
+import {
+  PreviewPartitionRetention,
+  previewPartitionsInUse,
+} from "./preview-partition-retention.js";
 import { PreviewExternalHandoff } from "./preview-external-handoff.js";
 import type { PreviewAttachmentDescriptor } from "@orkestrator/protocol/preview-access";
 import {
@@ -386,8 +389,14 @@ function previewRetention(): PreviewPartitionRetention {
     pendingFile: path.join(app.getPath("userData"), "preview-partitions-pending.json"),
     sessionFor: (partitionName) => session.fromPartition(partitionName),
     inUse: () =>
-      Array.from(windowContexts.values()).flatMap((context) =>
-        context.previewTransport.partitionsInUse(),
+      previewPartitionsInUse(
+        Array.from(windowContexts.values(), (context) => ({
+          sharedPartition: browserPreviewPartitionForWindow(
+            context.slot,
+            context.target ? `node:${context.target.nodeId}` : context.previewConnectionId,
+          ),
+          transport: context.previewTransport,
+        })),
       ),
     logger: console,
   });
@@ -882,13 +891,13 @@ function registerIpc(): void {
       );
       followWindowConnection(context);
       // Every window has left the connection; its preview site data is unreachable.
-      void previewRetention()
+      await previewRetention()
         .forgetConnection(connectionPartitionKey(connectionId), {
           includeShared: !Array.from(windowContexts.values()).some(
             (other) => other.previewConnectionId === connectionId,
           ),
         })
-        .catch(() => undefined);
+        .catch(() => console.warn("[Previews] Failed to record forgotten connection cleanup."));
       updateWindowTitle(event);
       publishConnectionLists();
       return list;
@@ -1167,7 +1176,10 @@ async function startApplication(): Promise<void> {
         );
       });
   }
-  app.on("will-quit", () => connectionManager?.dispose());
+  app.on("will-quit", () => {
+    previewPartitionRetention?.dispose();
+    connectionManager?.dispose();
+  });
 
   // Before any window exists, so no session holds a partition being removed.
   await previewRetention()

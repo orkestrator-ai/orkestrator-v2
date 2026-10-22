@@ -121,9 +121,21 @@ The client never names a host, port, or container.
   through the Electron session (storage, cookies, service workers, caches);
   the emptied directory is removed on the next start, before any session
   exists (`preview-partitions-pending.json`). A partition a live transport
-  holds is never touched; a filtered, not-modified or failed list clears
-  nothing. Partitions are listed before the list is fetched, and service ids
+  or window holds is never touched; a filtered, not-modified or failed list
+  clears nothing. Partitions are listed before the list is fetched, and service ids
   are never reused, so a service created meanwhile is never a candidate.
+  Forgotten connection keys are recorded durably in
+  `preview-partitions-pending.json.forgotten` before clearing starts. An
+  independent retry owner attempts at most 64 clears per pass, including
+  failures, even after every transport closes. Failed clears and held
+  partitions remain eligible; retries rotate candidates so failures cannot
+  starve the rest. At startup, the whole-connection journal also identifies
+  directories whose clear never completed. They can be removed before any
+  preview session exists. A failed removal retains the connection intent;
+  it never counts as evidence of a successful native clear. The per-directory
+  journal admits at most 1,024 entries until startup removes them, and the
+  forgotten-key journal refuses admission at 1,024 keys without evicting
+  earlier cleanup intent.
 - The listener first binds the port it used last for that service (bind, never
   probe-then-close), so origin-keyed storage such as localStorage usually
   survives a restart. If the port is taken, a fresh one is used and that

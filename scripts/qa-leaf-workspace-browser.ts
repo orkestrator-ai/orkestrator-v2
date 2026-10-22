@@ -289,7 +289,10 @@ async function main(): Promise<void> {
       requests.length = 0;
       await Promise.all([
         page.waitForNavigation({ timeout: 30_000, waitUntil: "domcontentloaded" }),
-        page.click(`${leafRow} button >> nth=0`),
+        page
+          .locator(leafRow)
+          .getByRole("button", { name: /^leaf-env, on / })
+          .click(),
       ]);
       await page.waitForSelector('[data-testid="project-search-bar"]', { timeout: 30_000 });
       await dismissStartupPrompts(page);
@@ -307,6 +310,35 @@ async function main(): Promise<void> {
         fail("Leaf is still listed as another machine");
       }
       await page.screenshot({ path: path.join(out, "02-tab-on-leaf.png") });
+
+      // The machines menu still names Desk as the command node.
+      await page.click('[data-testid="machines-filter"]');
+      const commandNodeName = await page
+        .locator('[data-testid="command-node-name"]')
+        .textContent({ timeout: 10_000 });
+      if (commandNodeName?.trim() !== "Desk") fail(`command node shown as ${commandNodeName}`);
+      await page.screenshot({ path: path.join(out, "02b-command-node-row.png") });
+      await page.keyboard.press("Escape");
+      log("machines menu names Desk as the command node");
+
+      // Settings changed on Desk apply on Leaf.
+      const deskConfig = await invoke<{ global: Record<string, unknown> }>(desk, "get_config");
+      await invoke(desk, "update_global_config", {
+        global: { ...deskConfig.global, terminalScrollback: 4321 },
+      });
+      await until(
+        "Leaf to use Desk's settings",
+        () => invoke<{ global: { terminalScrollback?: number } }>(leaf, "get_config"),
+        (value) => value.global.terminalScrollback === 4321,
+      );
+      const leafStatus = await invoke<{ inheritedSettingsFrom?: { controllerId: string } }>(
+        leaf,
+        "get_node_status",
+      );
+      if (leafStatus.inheritedSettingsFrom?.controllerId !== deskId) {
+        fail(`Leaf follows ${JSON.stringify(leafStatus.inheritedSettingsFrom)}`);
+      }
+      log("Leaf uses Desk's settings");
 
       // Workspace traffic goes to Leaf (directly or through Desk's relay);
       // only the portal stays on Desk.
@@ -360,7 +392,10 @@ async function main(): Promise<void> {
       // Opening Desk's environment moves the tab back.
       await Promise.all([
         page.waitForNavigation({ timeout: 30_000, waitUntil: "domcontentloaded" }),
-        page.click(`${deskRow} button >> nth=0`),
+        page
+          .locator(deskRow)
+          .getByRole("button", { name: /^desk-env, on / })
+          .click(),
       ]);
       await page.waitForSelector('[data-testid="project-search-bar"]', { timeout: 30_000 });
       const back = await page.evaluate(() => window.orkestratorWorkspaceTarget ?? null);
@@ -409,7 +444,10 @@ async function main(): Promise<void> {
       });
       await Promise.all([
         page.waitForNavigation({ waitUntil: "domcontentloaded" }),
-        page.click(`${leafRow} button >> nth=0`),
+        page
+          .locator(leafRow)
+          .getByRole("button", { name: /^leaf-env, on / })
+          .click(),
       ]).catch(async (error) => {
         await page.screenshot({ path: path.join(out, "return-leaf-failure.png") });
         log("return notices:", await page.locator("[data-sonner-toast]").allTextContents());
@@ -457,7 +495,10 @@ async function main(): Promise<void> {
       await dismissStartupPrompts(page);
       await Promise.all([
         page.waitForNavigation({ waitUntil: "domcontentloaded" }),
-        page.click(`${deskRow} button >> nth=0`),
+        page
+          .locator(deskRow)
+          .getByRole("button", { name: /^desk-env, on / })
+          .click(),
       ]);
       await page.waitForSelector('[data-testid="project-search-bar"]');
       if (await page.evaluate(() => Boolean(window.orkestratorWorkspaceTarget)))

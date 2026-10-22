@@ -20,6 +20,7 @@ import {
   validatePort,
   validateSshDestination,
 } from "./device-catalogue.js";
+import type { InheritedSettingsSource } from "./controller-settings.js";
 import { isBackendId, isRouteId, type BackendId, type RouteId } from "./federation.js";
 
 /** Identifies the calling command node on every request it sends to a leaf. */
@@ -55,6 +56,8 @@ export interface NodeStatus {
   mostRecentControllerId?: BackendId;
   /** Registered subordinates whose control is suspended because this node is a leaf. */
   suspendedSubordinateCount: number;
+  /** The command node whose settings this leaf uses in place of its own (see `controller-settings.ts`). */
+  inheritedSettingsFrom?: InheritedSettingsSource;
 }
 
 export interface NodeHttpsRoute {

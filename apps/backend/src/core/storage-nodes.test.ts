@@ -4,8 +4,9 @@ import os from "node:os";
 import path from "node:path";
 
 import type { NodeRecord } from "@orkestrator/protocol/command-nodes";
-import type { RouteId } from "@orkestrator/protocol/federation";
+import type { BackendId, RouteId } from "@orkestrator/protocol/federation";
 
+import { LeafControllerSettings } from "./nodes/node-controller-settings.js";
 import { StorageService } from "./storage.js";
 
 const record: NodeRecord = {
@@ -122,4 +123,41 @@ describe("portal sidebar layout", () => {
       await rm(dataDir, { recursive: true, force: true });
     }
   });
+});
+
+test("controller settings round-trip, filter corruption and ignore detached controllers", async () => {
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), "ork-controller-store-"));
+  try {
+    const storage = new StorageService(dataDir);
+    const entry = {
+      controllerId: "bk_command" as BackendId,
+      changedAt: "2026-10-22T00:00:00.000Z",
+      settings: { reviewInstruction: "Controller review" },
+    };
+    await storage.mutateControllerSettings(() => ({
+      next: { version: 1, entries: [entry] },
+      result: undefined,
+    }));
+    const reopened = new StorageService(dataDir);
+    expect((await reopened.getControllerSettings()).entries).toEqual([entry]);
+    await storage.mutateControllerSettings(() => ({
+      next: {
+        version: 1,
+        entries: [entry, { ...entry, controllerId: "bad id" }, { ...entry, settings: [] }],
+      } as never,
+      result: undefined,
+    }));
+    expect((await reopened.getControllerSettings()).entries).toEqual([entry]);
+    const leaf = new LeafControllerSettings({
+      storage: reopened,
+      attachedName: () => null,
+      onChange: () => undefined,
+      now: Date.now,
+    });
+    await leaf.start();
+    expect(leaf.current()).toBeNull();
+    expect(leaf.source()).toBeUndefined();
+  } finally {
+    await rm(dataDir, { recursive: true, force: true });
+  }
 });

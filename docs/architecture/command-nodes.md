@@ -121,6 +121,47 @@ There is no deeper hierarchy.
   to; they never keep a registry of a command node's leaves.
 - Web and iOS connect to a command node (or directly to a leaf) exactly as
   they connect to a backend today, and receive the UI from it.
+- **The command node changes only when the user changes it**: with the
+  switch on the "Command node" row of the sidebar's machines menu, in
+  Settings → Machines, or by opening a machine in a new window. Opening an
+  environment on another machine, or creating one there, moves the window's
+  workspace and never its command node. Saving a machine on a device
+  (`connect` with `select: false`) does not switch to it on any client.
+
+## Settings
+
+Settings belong to the command node the client is connected to, and apply
+to everything it runs, on every machine it controls.
+
+- **In the client.** A leaf window keeps the leaf's per-project repository
+  settings and machine-specific globals. Only inherited preferences are
+  overlaid from the command node over the portal channel
+  (`lib/portal/command-node-config.ts`). Whole-global saves send preference
+  changes to the command node and machine-specific changes to the workspace
+  backend, preserving the other node's values. Each settings section names
+  the owner of its preferences and machine-specific controls.
+- **Handed down to leaves.** The command node sends the inherited subset
+  of its settings (`@orkestrator/protocol/controller-settings`: agent
+  defaults and models, review instruction, terminal, messaging and similar
+  preferences) to each leaf when the link connects and whenever its config
+  changes (`sync_controller_settings`, never routable through a workspace
+  grant or `invoke_on_node`). The leaf lays them over its own config
+  (`StorageConfig.loadConfig`), so a launch on the leaf that falls back to
+  defaults — a coordinator's `launch_node_environment` without a model, a
+  build or review step — uses the command node's.
+- **The leaf's own settings are kept underneath** (`loadOwnConfig`) and come
+  back when the command node detaches. A whole-config save on the leaf that
+  echoes an inherited value keeps the leaf's own; a changed value is stored
+  as the leaf's own but stays overridden while the command node is attached.
+  `get_node_status` reports which command node's settings are in use
+  (`inheritedSettingsFrom`).
+- With several command nodes attached, the leaf follows the one whose
+  settings changed most recently; equal timestamps prefer the later receipt.
+  Each snapshot is complete: omitted inherited keys use product defaults,
+  while the leaf's persisted own values remain underneath.
+- Machine-specific settings never travel: credentials and API keys, paths,
+  installed or enabled platforms, container budgets, network policy,
+  previews, MCP servers and logs.
 
 ## Node registry (on the command node)
 
@@ -184,7 +225,9 @@ A command node attached to another command node operates in leaf mode:
   information, but they are mostly hidden: the portal and the node's own UI
   do not show them by default. They can be opened behind a warning that the
   node is in leaf mode and that coordination happens on the named command
-  node.
+  node. A window whose workspace is on a leaf shows the same warning in
+  place of the leaf's coordinator, with a link to the command node's
+  coordinator for the same repository.
 - When the node is no longer attached anywhere, it returns to being a
   command node and its coordinators regain their cross-node tools.
 

@@ -4,6 +4,11 @@ import {
 } from "@orkestrator/protocol/coordinator-web-research";
 import * as shared from "./storage-shared.js";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
+import {
+  INHERITED_GLOBAL_SETTING_KEYS,
+  type InheritedGlobalSettings,
+} from "@orkestrator/protocol/controller-settings";
 import { normalizeAgentSettings } from "@orkestrator/protocol/agent-settings";
 import { normalizeDebugLogRetentionDays } from "@orkestrator/protocol/debug-logging";
 import { normalizeNotificationSoundSettings } from "@orkestrator/protocol/notification-sounds";
@@ -170,7 +175,80 @@ export type StorageLayerTypes = [
 ];
 
 export abstract class StorageConfig extends StorageProjects {
+  /**
+   * The settings of the command node this node follows while it is a leaf
+   * (see `@orkestrator/protocol/controller-settings`). Set by the backend;
+   * `null` (or a provider returning `null`) means this node's own settings.
+   */
+  inheritedGlobalSettings: (() => InheritedGlobalSettings | null) | null = null;
+
+  /**
+   * The settings this node works with: its own config, with the inherited
+   * settings of its command node laid over it while it is a leaf. Writers
+   * use `loadOwnConfig`, so inherited values are never persisted here.
+   */
   async loadConfig(): Promise<AppConfig> {
+    return this.withInheritedSettings(await this.loadOwnConfig());
+  }
+
+  /** The command node's settings changed: everything that reads config re-reads it. */
+  announceInheritedSettingsChanged(): void {
+    this.announce("config", "app");
+  }
+
+  protected withInheritedSettings(config: AppConfig): AppConfig {
+    const inherited = this.inheritedGlobalSettings?.() ?? null;
+    if (!inherited) return config;
+    const values = { ...config.global } as unknown as Record<string, unknown>;
+    const defaults = defaultConfig().global as unknown as Record<string, unknown>;
+    // Each snapshot is complete: omitted preferences mean product defaults,
+    // never the leaf's persisted override.
+    for (const key of INHERITED_GLOBAL_SETTING_KEYS) {
+      delete values[key];
+      if (defaults[key] !== undefined) values[key] = defaults[key];
+    }
+    const global = { ...values, ...inherited } as AppConfig["global"];
+    // The command node's default agent may not be enabled on this node.
+    const agentSettings = normalizeAgentSettings(global.agentSettings);
+    const enabled = normalizeAgentPlatforms(global.enabledAgentPlatforms, []);
+    global.agentSettings =
+      enabled.length > 0
+        ? {
+            ...agentSettings,
+            defaultAgent: firstEnabledAgentPlatform(enabled, agentSettings.defaultAgent),
+          }
+        : agentSettings;
+    return { ...config, global };
+  }
+
+  /**
+   * A whole-config save echoes back what `loadConfig` returned, inherited
+   * values included. Those are the command node's, so this node keeps its
+   * own value for every inherited key the save did not change.
+   */
+  private keepOwnInheritedValues(
+    incoming: AppConfig["global"],
+    own: AppConfig["global"],
+  ): AppConfig["global"] {
+    const inherited = this.inheritedGlobalSettings?.() ?? null;
+    if (!inherited) return incoming;
+    const effective = this.withInheritedSettings({
+      version: "",
+      global: own,
+      repositories: {},
+    }).global as unknown as Record<string, unknown>;
+    const next = { ...incoming } as unknown as Record<string, unknown>;
+    const ownValues = own as unknown as Record<string, unknown>;
+    for (const key of INHERITED_GLOBAL_SETTING_KEYS) {
+      if (!isDeepStrictEqual(next[key], effective[key])) continue;
+      if (ownValues[key] === undefined) delete next[key];
+      else next[key] = ownValues[key];
+    }
+    return next as unknown as AppConfig["global"];
+  }
+
+  /** This node's own persisted config, without anything inherited from a command node. */
+  async loadOwnConfig(): Promise<AppConfig> {
     const configExists = await fs.access(this.configFile()).then(
       () => true,
       () => false,
@@ -226,12 +304,14 @@ export abstract class StorageConfig extends StorageProjects {
   ): Promise<void> {
     const validated = validateConfigReviewInstruction(config);
     await this.enqueueConfigMutation(async () => {
-      const current = options.preserveCredentials ? await this.loadConfig() : null;
+      const own = await this.loadOwnConfig();
+      const current = options.preserveCredentials ? own : null;
+      const ownGlobal = this.keepOwnInheritedValues(validated.global, own.global);
       const next = current
         ? {
             ...validated,
             global: {
-              ...validated.global,
+              ...ownGlobal,
               ...(current.global.githubToken ? { githubToken: current.global.githubToken } : {}),
               ...(current.global.anthropicApiKey
                 ? { anthropicApiKey: current.global.anthropicApiKey }
@@ -242,7 +322,7 @@ export abstract class StorageConfig extends StorageProjects {
                 : {}),
             },
           }
-        : validated;
+        : { ...validated, global: ownGlobal };
       await this.saveSensitiveJson(this.configFile(), next);
     });
     this.announce("config", "app");
@@ -384,7 +464,7 @@ export abstract class StorageConfig extends StorageProjects {
   async saveDesktopConnections(desktopConnections: StoredDesktopConnections): Promise<void> {
     const validated = parseStoredDesktopConnections(desktopConnections);
     await this.enqueueConfigMutation(async () => {
-      const config = await this.loadConfig();
+      const config = await this.loadOwnConfig();
       config.desktopConnections = validated;
       await this.saveSensitiveJson(this.configFile(), config);
     });
@@ -401,11 +481,11 @@ export abstract class StorageConfig extends StorageProjects {
     repoConfig: RepositoryConfig,
   ): Promise<AppConfig> {
     return this.enqueueConfigMutation(async () => {
-      const config = await this.loadConfig();
+      const config = await this.loadOwnConfig();
       config.repositories[projectId] = { ...defaultRepositoryConfig(), ...repoConfig };
       await this.saveSensitiveJson(this.configFile(), config);
       this.announce("config", "app");
-      return config;
+      return this.withInheritedSettings(config);
     });
   }
 
@@ -418,7 +498,7 @@ export abstract class StorageConfig extends StorageProjects {
     repoConfig: RepositoryConfig,
   ): Promise<AppConfig> {
     return this.enqueueConfigMutation(async () => {
-      const config = await this.loadConfig();
+      const config = await this.loadOwnConfig();
       const current = config.repositories[projectId] ?? defaultRepositoryConfig();
       const userSettings = { ...repoConfig };
       delete userSettings.lastEnvironmentType;
@@ -437,7 +517,7 @@ export abstract class StorageConfig extends StorageProjects {
       };
       await this.saveSensitiveJson(this.configFile(), config);
       this.announce("config", "app");
-      return config;
+      return this.withInheritedSettings(config);
     });
   }
 
@@ -447,7 +527,7 @@ export abstract class StorageConfig extends StorageProjects {
     updates: Partial<RepositoryConfig>,
   ): Promise<AppConfig> {
     return this.enqueueConfigMutation(async () => {
-      const config = await this.loadConfig();
+      const config = await this.loadOwnConfig();
       const current = config.repositories[projectId] ?? defaultRepositoryConfig();
       config.repositories[projectId] = {
         ...defaultRepositoryConfig(),
@@ -456,13 +536,13 @@ export abstract class StorageConfig extends StorageProjects {
       };
       await this.saveSensitiveJson(this.configFile(), config);
       this.announce("config", "app");
-      return config;
+      return this.withInheritedSettings(config);
     });
   }
 
   async updateGlobalConfig(
     globalConfig: AppConfig["global"],
-    options: { preserveCredentials?: boolean } = {},
+    options: { preserveCredentials?: boolean; preserveInheritedSettings?: boolean } = {},
   ): Promise<AppConfig> {
     const reviewValidated = validateGlobalReviewInstruction(globalConfig);
     const enabledAgentPlatforms = normalizeAgentPlatforms(
@@ -538,7 +618,7 @@ export abstract class StorageConfig extends StorageProjects {
       },
     };
     return this.enqueueConfigMutation(async () => {
-      const config = await this.loadConfig();
+      const config = await this.loadOwnConfig();
       validated.coordinatorProviderTierDefaultVersion = Math.max(
         validated.coordinatorProviderTierDefaultVersion ??
           COORDINATOR_PROVIDER_TIER_DEFAULT_VERSION,
@@ -562,9 +642,19 @@ export abstract class StorageConfig extends StorageProjects {
       // Written only by `setGitHubCliReminderDismissed`, likewise.
       if (config.global.githubCliReminderDismissed) validated.githubCliReminderDismissed = true;
       else delete validated.githubCliReminderDismissed;
+      const ownGlobal = this.keepOwnInheritedValues(validated, config.global);
+      if (options.preserveInheritedSettings) {
+        // A leaf-window save routes preferences separately. Its machine save
+        // must preserve local preferences even if a newer sync arrived first.
+        for (const key of INHERITED_GLOBAL_SETTING_KEYS) {
+          delete ownGlobal[key];
+          if (config.global[key] !== undefined)
+            Object.assign(ownGlobal, { [key]: config.global[key] });
+        }
+      }
       config.global = options.preserveCredentials
         ? {
-            ...validated,
+            ...ownGlobal,
             ...(config.global.githubToken ? { githubToken: config.global.githubToken } : {}),
             ...(config.global.anthropicApiKey
               ? { anthropicApiKey: config.global.anthropicApiKey }
@@ -574,10 +664,10 @@ export abstract class StorageConfig extends StorageProjects {
               ? { openCodeZenApiKey: config.global.openCodeZenApiKey }
               : {}),
           }
-        : validated;
+        : ownGlobal;
       await this.saveSensitiveJson(this.configFile(), config);
       this.announce("config", "app");
-      return config;
+      return this.withInheritedSettings(config);
     });
   }
 
@@ -586,7 +676,7 @@ export abstract class StorageConfig extends StorageProjects {
     locations: import("@orkestrator/protocol/disk-usage").WorktreeLocationSettings,
   ): Promise<AppConfig> {
     return this.enqueueConfigMutation(async () => {
-      const config = await this.loadConfig();
+      const config = await this.loadOwnConfig();
       const next = {
         ...(locations.environments ? { environments: locations.environments } : {}),
         ...(locations.dev ? { dev: locations.dev } : {}),
@@ -595,7 +685,7 @@ export abstract class StorageConfig extends StorageProjects {
       else delete config.global.worktreeLocations;
       await this.saveSensitiveJson(this.configFile(), config);
       this.announce("config", "app");
-      return config;
+      return this.withInheritedSettings(config);
     });
   }
 
@@ -604,11 +694,11 @@ export abstract class StorageConfig extends StorageProjects {
     settings: import("@orkestrator/protocol/mcp-management").McpManagementRolloutSettings,
   ): Promise<AppConfig> {
     return this.enqueueConfigMutation(async () => {
-      const config = await this.loadConfig();
+      const config = await this.loadOwnConfig();
       config.global = { ...config.global, mcpManagement: settings };
       await this.saveSensitiveJson(this.configFile(), config);
       this.announce("config", "app");
-      return config;
+      return this.withInheritedSettings(config);
     });
   }
 
@@ -616,70 +706,70 @@ export abstract class StorageConfig extends StorageProjects {
   async updateNotificationSoundSettings(settings: unknown): Promise<AppConfig> {
     const notificationSounds = normalizeNotificationSoundSettings(settings);
     return this.enqueueConfigMutation(async () => {
-      const config = await this.loadConfig();
+      const config = await this.loadOwnConfig();
       config.global = {
         ...config.global,
         notificationSounds,
       };
       await this.saveSensitiveJson(this.configFile(), config);
       this.announce("config", "app");
-      return config;
+      return this.withInheritedSettings(config);
     });
   }
 
   /** Turn the startup GitHub CLI reminder off, or back on. */
   async setGitHubCliReminderDismissed(dismissed: boolean): Promise<AppConfig> {
     return this.enqueueConfigMutation(async () => {
-      const config = await this.loadConfig();
+      const config = await this.loadOwnConfig();
       if (dismissed) config.global.githubCliReminderDismissed = true;
       else delete config.global.githubCliReminderDismissed;
       await this.saveSensitiveJson(this.configFile(), config);
       this.announce("config", "app");
-      return config;
+      return this.withInheritedSettings(config);
     });
   }
 
   async setGitHubToken(token: string | null): Promise<AppConfig> {
     return this.enqueueConfigMutation(async () => {
-      const config = await this.loadConfig();
+      const config = await this.loadOwnConfig();
       if (token === null) delete config.global.githubToken;
       else config.global.githubToken = token;
       await this.saveSensitiveJson(this.configFile(), config);
       this.announce("config", "app");
-      return config;
+      return this.withInheritedSettings(config);
     });
   }
 
   async setCursorApiKey(apiKey: string | null): Promise<AppConfig> {
     return this.enqueueConfigMutation(async () => {
-      const config = await this.loadConfig();
+      const config = await this.loadOwnConfig();
       if (apiKey === null) delete config.global.cursorApiKey;
       else config.global.cursorApiKey = apiKey;
       await this.saveSensitiveJson(this.configFile(), config);
       this.announce("config", "app");
-      return config;
+      return this.withInheritedSettings(config);
     });
   }
 
   async setAnthropicApiKey(apiKey: string | null): Promise<AppConfig> {
     return this.enqueueConfigMutation(async () => {
-      const config = await this.loadConfig();
+      const config = await this.loadOwnConfig();
       if (apiKey === null) delete config.global.anthropicApiKey;
       else config.global.anthropicApiKey = apiKey;
       await this.saveSensitiveJson(this.configFile(), config);
       this.announce("config", "app");
-      return config;
+      return this.withInheritedSettings(config);
     });
   }
 
   async setOpenCodeZenApiKey(apiKey: string | null): Promise<AppConfig> {
     return this.enqueueConfigMutation(async () => {
-      const config = await this.loadConfig();
+      const config = await this.loadOwnConfig();
       if (apiKey === null) delete config.global.openCodeZenApiKey;
       else config.global.openCodeZenApiKey = apiKey;
       await this.saveSensitiveJson(this.configFile(), config);
       this.announce("config", "app");
-      return config;
+      return this.withInheritedSettings(config);
     });
   }
 }

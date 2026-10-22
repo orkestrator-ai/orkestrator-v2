@@ -5,6 +5,7 @@ import {
   normalizeRouteOrder,
   type NodeRecord,
 } from "@orkestrator/protocol/command-nodes";
+import { SYNC_CONTROLLER_SETTINGS_COMMAND } from "@orkestrator/protocol/controller-settings";
 import { isBackendId } from "@orkestrator/protocol/federation";
 import {
   PORTAL_LAYOUT_CHANGED_EVENT,
@@ -29,7 +30,8 @@ function safeInteger(value: unknown, label: string): number {
 /**
  * Command-node and leaf commands. See docs/development/command-nodes-plan.md.
  *
- * Leaf side: `attach_controller`, `detach_controller`, `list_controllers`.
+ * Leaf side: `attach_controller`, `detach_controller`, `list_controllers`,
+ * `sync_controller_settings`.
  * Command side: the registry (`list_nodes`, `add_node`, `update_node`,
  * `forget_node`, `reconnect_node`, …), SSH prompts and host-key trust, and
  * the one-time import of the desktop's saved machines.
@@ -98,6 +100,12 @@ export function registerNodeCommands(register: CommandRegistrar): void {
   register("detach_controller_here", async (args, context) => {
     assertOnlyKeys(args, ["controllerId"], "arguments");
     return nodes(context).detachController(args.controllerId, { byUser: true });
+  });
+
+  // An attached command node handing down its settings (see `controller-settings.ts`).
+  register(SYNC_CONTROLLER_SETTINGS_COMMAND, async (args, context) => {
+    assertOnlyKeys(args, ["controllerId", "settings"], "arguments");
+    return nodes(context).inheritedSettings.receive(args);
   });
 
   register("allow_controller", async (args, context) => {

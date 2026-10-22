@@ -100,6 +100,15 @@
 - Root/support reported 3,222 passed, one skipped, two failed and one error across 154 files (325.9 s). The supported-SDK case exceeded 30 seconds (30003.03 ms). `mise run test:logged -- --name machines-merge-pi-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed the complete unchanged owner, exit 0 in 8.1 s.
 - Evidence: `orkestrator-test-run.rzuQT5/root-and-agent-support-tests.log.gz` under the host temporary directory after the aggregate completes. This confirms another intermittent deadline recurrence; contention remains a hypothesis. No implementation, assertion, timeout or skip changed.
 
+## Inherited-settings implementation validation — 2026-10-22
+
+- **Command:** `mise run test:logged -- --name complete-tests -- mise run test`, Bun 1.4.3 on macOS arm64; workspace/root/bridge/protocol reservations 4/1/2/1, with browser validation running concurrently.
+- **Failure:** the supported SDK vendoring case hit 30000.28 ms. Root/support reported 3315 passed and two failed across 3317 tests in 250.71 seconds. The other failure was a new DOM absence-assertion convention violation, subsequently fixed.
+- **Owning-file rerun:** `mise run test:logged -- --name pi-vendor-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 15.6 seconds).
+- **Evidence:** `orkestrator-test-run.92oAQN/root-and-agent-support-tests.log.gz` under the host temporary directory after aggregate completion; outer run `orkestrator-test-run.6yesvR`.
+- Concurrent staging and browser load remain possible contributors; no Pi implementation, test, timeout or skip changed.
+
+The final-source retry, `mise run test:logged -- --name final-complete-tests -- mise run test`, passed every non-iOS group (exit 0, 454.4 seconds). Root/support passed in 141.5 seconds.
 
 ## Sidebar collision main merge — 2026-10-22
 
@@ -109,3 +118,12 @@
 - **Complete unchanged owner:** `mise run test:logged -- --name merge-pi-vendor-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed all four cases, exit 0 in 9.6 seconds logged.
 - **Evidence:** `orkestrator-test-run.jPvcE5/root-and-agent-support-tests.log.gz`, with outer summary in `orkestrator-test-run.1P2vS1/merge-final-full-suite.log.gz`, below the host temporary directory after aggregate completion.
 - **Assessment:** confirmed intermittent recurrence; host contention remains a hypothesis. No Pi implementation, assertion, deadline or skip changed.
+
+## Command-node main merge — 2026-10-22
+
+- **Merge parents:** feature `2f6fdfe2875cb6bb62499db1167f81b69ba5842e` and main `58c5df9f9bf68402d3c851f894608688594f77d7`.
+- **Original command:** `mise run test:logged -- --name merge-complete-suite -- mise run test:all`, Bun 1.4.3 on macOS arm64; workspace/root/bridges/protocol reservations 4/1/2/1. Component and isolated browser validation also ran on the host.
+- **Failure:** the supported-SDK runtime staging case exceeded 30 seconds (30000.86 ms). Root/support reported 3,337 passed and one failed across 3,338 tests in 161 files (335.55 seconds). Workspace, bridges and protocol groups passed; the aggregate exited 1 after 628.1 seconds, before the iOS stage.
+- **Complete unchanged owner:** `mise run test:logged -- --name merge-pi-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed, exit 0 in 11.6 seconds.
+- **Evidence:** `orkestrator-test-run.Dq33wp/root-and-agent-support-tests.log.gz` and outer `orkestrator-test-run.G461RT/merge-complete-suite.log.gz` below the host temporary directory.
+- **Assessment:** confirmed intermittent recurrence; concurrent staging and browser load remain hypotheses. No Pi implementation, assertion, timeout or skip changed.

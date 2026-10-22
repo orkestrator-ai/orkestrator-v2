@@ -518,6 +518,76 @@ describe("Machine filter is presentation only", () => {
   });
 });
 
+describe("The command node in the machines menu", () => {
+  test("names the command node below the filters and switches it only through its switch", async () => {
+    const fake = installTwoMachines();
+    renderWithFederation(<FilterOnly />);
+    await waitFor(() =>
+      expect(screen.getByTestId("machines-connectivity").textContent).toBe("3/3"),
+    );
+
+    await act(async () => {
+      fireEvent.pointerDown(screen.getByTestId("machines-filter"), { button: 0, ctrlKey: false });
+    });
+    const row = await screen.findByTestId("command-node-row");
+    expect(screen.getByTestId("command-node-switch")).toBeTruthy();
+    // A "Command node" heading, then the machine, above "Manage machines…".
+    const heading = screen.getByText("Command node", { exact: true });
+    const manage = screen.getByRole("menuitem", { name: /Manage machines/ });
+    expect(heading.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(row.compareDocumentPosition(manage) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.keyDown(row, { key: "ArrowRight" });
+    });
+    const switcher = await screen.findByTestId("command-node-switcher");
+    expect(
+      within(switcher).getByRole("menuitem", { name: /^Local, current command node/ }),
+    ).toBeTruthy();
+    fireEvent.click(within(switcher).getByRole("menuitem", { name: /^Machine B/ }));
+
+    await waitFor(() => expect(fake.connections.use).toHaveBeenCalledWith(MACHINE_B.id));
+    await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+    expect(fake.workspaceTarget.set).not.toHaveBeenCalled();
+  });
+});
+
+describe("The command node in a browser tab", () => {
+  test("switching opens another machine's own address", async () => {
+    installTwoMachines();
+    delete (window.orkestrator as { connections?: unknown }).connections;
+    const assign = mock((_url: string) => undefined);
+    const originalAssign = window.location.assign;
+    window.location.assign = assign;
+    try {
+      renderWithFederation(<FilterOnly />);
+      await waitFor(() =>
+        expect(screen.getByTestId("machines-connectivity").textContent).toBe("3/3"),
+      );
+      await act(async () => {
+        fireEvent.pointerDown(screen.getByTestId("machines-filter"), {
+          button: 0,
+          ctrlKey: false,
+        });
+      });
+      const row = await screen.findByTestId("command-node-row");
+      expect(screen.getByTestId("command-node-switch")).toBeTruthy();
+      await act(async () => {
+        fireEvent.keyDown(row, { key: "ArrowRight" });
+      });
+      const switcher = await screen.findByTestId("command-node-switcher");
+      await waitFor(() =>
+        expect(within(switcher).getByRole("menuitem", { name: /^Machine B/ })).toBeTruthy(),
+      );
+      fireEvent.click(within(switcher).getByRole("menuitem", { name: /^Machine B/ }));
+      await waitFor(() => expect(assign).toHaveBeenCalledWith(MACHINE_B.address!));
+      expect(reload).not.toHaveBeenCalled();
+    } finally {
+      window.location.assign = originalAssign;
+    }
+  });
+});
+
 describe("OP-06/CR-03: opening another machine's environment", () => {
   test("OP-06/CR-03: the desktop window moves to that machine; nothing is stopped", async () => {
     const fake = installTwoMachines();

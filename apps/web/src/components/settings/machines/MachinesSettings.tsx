@@ -288,7 +288,9 @@ function MachineRow({
                   This window
                 </Badge>
               ) : null}
-              {entry.role === "self" && !entry.current ? <Badge>Command node</Badge> : null}
+              {entry.role === "self" ? (
+                <Badge className="border-sky-500/25 bg-sky-500/10 text-sky-300">Command node</Badge>
+              ) : null}
               {entry.role === "device" ? <Badge>This device only</Badge> : null}
             </div>
             <p className="mt-0.5 truncate font-mono text-xs text-zinc-400">

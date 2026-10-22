@@ -174,10 +174,13 @@ function DropdownMenuSub({ ...props }: React.ComponentProps<typeof DropdownMenuP
 function DropdownMenuSubTrigger({
   className,
   inset,
+  indicator,
   children,
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.SubTrigger> & {
   inset?: boolean;
+  /** Replaces the trailing chevron. */
+  indicator?: React.ReactNode;
 }) {
   return (
     <DropdownMenuPrimitive.SubTrigger
@@ -190,7 +193,7 @@ function DropdownMenuSubTrigger({
       {...props}
     >
       {children}
-      <ChevronRightIcon className="ml-auto size-4" />
+      {indicator ?? <ChevronRightIcon className="ml-auto size-4" />}
     </DropdownMenuPrimitive.SubTrigger>
   );
 }

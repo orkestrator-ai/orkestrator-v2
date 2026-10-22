@@ -542,7 +542,7 @@ export class StoragePublicOperations extends StorageNodes {
     apply: (current: RepositoryConfig) => RepositoryConfig,
   ): Promise<RepositoryConfig> {
     const next = await this.enqueueConfigMutation(async () => {
-      const config = await this.loadConfig();
+      const config = await this.loadOwnConfig();
       const stored = config.repositories[projectId];
       if (
         expectedRevision !== undefined &&

@@ -505,6 +505,13 @@ recurrence remains unresolved rather than a newly confirmed flake.
 
 Evidence is `orkestrator-test-run.IcTGSf/merge-isolated-browser.log.gz` below the host temporary directory. The runner stopped/reset its profile and removed disposable state. The unchanged gateway owner was not rerun separately for this observation, so this records an unresolved recurrence, not a new confirmed flake. No implementation, assertion, timeout or skip changed.
 
+## Inherited-settings validation — 2026-10-22
+
+- **Full command:** `mise run test:logged -- --name isolated-browser -- mise run test:agent:browser:isolated`, one worker, fresh credential-free Codex profile `qa-browser-eee2ec83-1a5`.
+- **Result:** 26 passed, 51 skipped and three failed across 80 cases (428.0 seconds including lifecycle). The narrow picker repeated the 15000 ms hidden/unstable `Repository settings` click timeout at `browser-gateway.spec.ts:241`. Both terminal recovery rendering cases also failed; those were investigated separately.
+- **Owner rerun:** `ORKESTRATOR_AGENT_TEST_PROFILE=inherited-settings-qa-20daf002 mise run test:logged -- --name gateway-terminal-owners -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/browser-gateway.spec.ts e2e/agent-testing/terminal-input-resume.spec.ts --workers=1` used a fresh credential-free local fixture. It reported 16 passed, 10 skipped and only this failure (155.8 seconds). Both terminal recovery cases and both maintenance viewports passed.
+- **Evidence:** host temporary-directory logs `orkestrator-test-run.VhN1Q9/isolated-browser.log.gz` and `orkestrator-test-run.pQu4zt/gateway-terminal-owners.log.gz`; sanitized artifacts under `output/agent-testing/<profile>/browser/` for the named profiles.
+- The same known failure persists in its unchanged owner, so this observation remains unresolved. No picker implementation, assertion, timeout or skip changed. The full-run profile was stopped and reset by its runner.
 
 ## Sidebar collision main merge — 2026-10-22
 
@@ -514,3 +521,12 @@ Evidence is `orkestrator-test-run.IcTGSf/merge-isolated-browser.log.gz` below th
 - **Complete unchanged owner rerun:** on a fresh credential-free Codex fixture profile `merge-gateway-owner-281c943b`, `ORKESTRATOR_AGENT_TEST_PROFILE=merge-gateway-owner-281c943b ORKESTRATOR_AGENT_TEST_RUN_ID=merge-gateway-owner-281c943b mise run test:logged -- --name merge-gateway-owner -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/browser-gateway.spec.ts --workers=1` reported 12 passed, 10 skipped and two failed (155.3 seconds logged). The same narrow click failed again; the local-environment smoke also could not find fixture project `origin` at line 521 (related case 0494).
 - **Evidence:** host temporary directories `orkestrator-test-run.CT3LS7/merge-isolated-browser.log.gz` and `orkestrator-test-run.gtNahW/merge-gateway-owner.log.gz`; browser artifacts under `output/agent-testing/qa-browser-a3624124-244/browser/` and `output/agent-testing/merge-gateway-owner-281c943b/browser/`.
 - **Assessment:** this recurrence remains unresolved and does not independently establish intermittence. No gateway implementation, assertion, timeout or skip changed. Both profiles were stopped and reset.
+
+## Command-node main merge — 2026-10-22
+
+- **Merge parents:** feature `2f6fdfe2875cb6bb62499db1167f81b69ba5842e` and main `58c5df9f9bf68402d3c851f894608688594f77d7`.
+- **Original command:** `mise run test:logged -- --name merge-isolated-browser -- mise run test:agent:browser:isolated`; credential-free Codex fixture profile `qa-browser-8dbc46b0-80e`, one Playwright worker.
+- **Result:** 28 passed, 51 opt-in skips and one failed, exit 1 after 532.1 seconds including lifecycle. The narrow host picker again timed out after 15000 ms on the hidden/unstable Repository settings button at `browser-gateway.spec.ts:241`.
+- **Complete unchanged owner rerun:** fresh credential-free Codex fixture `merge-gateway-owner-20daf002`; `ORKESTRATOR_AGENT_TEST_PROFILE=merge-gateway-owner-20daf002 ORKESTRATOR_AGENT_TEST_RUN_ID=merge-gateway-owner-20daf002 mise run test:logged -- --name merge-gateway-owner -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/browser-gateway.spec.ts --workers=1` reported 13 passed, 10 skipped and the same single failure, exit 1 after 140.4 seconds. The authoritative local-environment smoke, both maintenance viewports and persisted-diff baseline cases passed.
+- **Evidence:** `orkestrator-test-run.bjwqdi/merge-isolated-browser.log.gz` and `orkestrator-test-run.FYNbrS/merge-gateway-owner.log.gz` below the host temporary directory; sanitized artifacts under `output/agent-testing/qa-browser-8dbc46b0-80e/browser/` and `output/agent-testing/merge-gateway-owner-20daf002/browser/`.
+- **Assessment:** the known failure persists in the unchanged owning file, so browser validation remains non-green; this observation does not establish intermittence. No implementation, assertion, timeout or skip changed. Both profiles were stopped and reset.

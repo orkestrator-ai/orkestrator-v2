@@ -592,16 +592,21 @@ struct RemoteWebView: UIViewRepresentable {
                         throw ConnectionBridgeError.invalidInput
                     }
                     let nickname = body["nickname"]
-                    guard nickname == nil || nickname is String else {
+                    let select = body["select"]
+                    guard nickname == nil || nickname is String,
+                          select == nil || select is Bool else {
                         throw ConnectionBridgeError.invalidInput
                     }
-                    isSwitchingThroughBridge = true
+                    // `select: false` saves the machine without switching the command node.
+                    let selects = (select as? Bool) ?? true
+                    if selects { isSwitchingThroughBridge = true }
                     let result = try await model.connect(
                         address: address,
                         token: token,
-                        nickname: nickname as? String
+                        nickname: nickname as? String,
+                        select: selects
                     )
-                    defer { finishBridgeSwitch() }
+                    defer { if selects { finishBridgeSwitch() } }
                     try await reply(id: requestID, result: result)
                 case "use":
                     guard let connectionID = body["connectionId"] as? String else {

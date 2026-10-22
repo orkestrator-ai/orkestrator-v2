@@ -12,7 +12,9 @@ namespace), their per-file lock files and five-deep backup ladders.
 | `apps/backend/src/core/storage-stores.ts` | Store registry and layouts, migrations, the legacy JSON import, archive retention and scrubbing |
 | `apps/backend/src/core/storage-record-upgrades.ts` | One-shot upgrades of record shapes only older builds wrote |
 | `apps/backend/src/core/storage-backups.ts` | Pre-migration and daily snapshots, rotation |
-| `apps/backend/src/core/storage-base.ts` | `StorageService` primitives: `loadJson`/`saveJson` routing, `updateStore`, `serializeMutation`, `atomically` |
+| `apps/backend/src/core/storage-context.ts` | `StorageContext`, the state every store shares: database handle, `loadJson`/`saveJson` routing, `updateStore`, `serialize` (with the lease order), `atomically` |
+| `apps/backend/src/core/storage-changes.ts` | `StorageChanges`: resource announcements, the change journal and the revision manifests |
+| `apps/backend/src/core/storage-base.ts` | Base of the `StorageService` chain: store names, lease wrappers, and forwarders to its `StorageContext` |
 | `packages/protocol/src/node/storage-database.ts` | On-disk format and a read-only reader for Bun scripts |
 | `apps/backend/src/core/storage-test-support.ts` | Test helpers: seed, read and inspect stores |
 
@@ -158,6 +160,12 @@ scope commits after it is released. `storage-writer-guards.test.ts` parses the
 `StorageService` chain and enforces all of this per store, following private,
 protected and `#private` helpers to every caller, with no exceptions; a write
 it cannot follow fails.
+The primitives are implemented on `StorageContext` (`storage-context.ts`,
+whose `serialize` also records the lease order) and the chain reaches them
+only through `StorageBase`'s forwarders of the same names. The guard fails a
+layer that touches `this.context` directly, and any class other than
+`StorageBase` that names `StorageContext`, so a repository that takes the
+context has to be added to the scan first.
 
 Whole-store reads are cached per store and revalidated against the committed
 revision on every read (one indexed lookup), which also observes other

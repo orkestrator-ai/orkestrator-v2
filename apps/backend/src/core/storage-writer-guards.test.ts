@@ -58,7 +58,10 @@ const WRITES = new Map<string, WriteKind>([
   ["this.database.updateStoreRow", "transactional"],
 ]);
 
-/** The primitives themselves (in `StorageBase`); their bodies are not call sites. */
+/**
+ * The primitives themselves: `StorageBase`'s forwarders to the `StorageContext`
+ * implementations. Their bodies are not call sites.
+ */
 const PRIMITIVES = new Set([
   "saveJson",
   "saveSensitiveJson",
@@ -71,6 +74,25 @@ const PRIMITIVES = new Set([
 
 /** Primitives that finish before they return; every other one returns a promise. */
 const SYNCHRONOUS_PRIMITIVES = new Set(["updateStore", "updateStoreRow"]);
+
+/**
+ * `StorageContext` members that write, scope or lease stores, each with the
+ * one `StorageBase` forwarder allowed to reach it. Every layer writes through
+ * the forwarders, which the analysis follows; a direct `this.context.saveJson`
+ * would bypass it, so only the base of the chain may name `this.context`, and
+ * only its forwarders may reach these members.
+ */
+const CONTEXT_FORWARDERS = new Map([
+  ["saveJson", "saveJson"],
+  ["saveSensitiveJson", "saveSensitiveJson"],
+  ["deleteStore", "deleteStore"],
+  ["updateStore", "updateStore"],
+  ["updateStoreRow", "updateStoreRow"],
+  ["atomically", "atomically"],
+  ["serialize", "serializeMutation"],
+  ["acquireLease", "acquireMutationLock"],
+  ["database", "database"],
+]);
 
 /** Callbacks that run synchronously inside the call, in the caller's context. */
 const SYNCHRONOUS_CALLBACKS = new Set(["this.database.transaction"]);
@@ -399,6 +421,49 @@ function analyzeStorageWriters(sources: SourceFile[], options: { rootClass: stri
   }
   const violations: string[] = [];
   const location = (file: ParsedFile, node: Node) => `${file.file}:${lineOf(file, node.start)}`;
+
+  // The shared StorageContext is reached only by the chain's base, and its
+  // writing members only by their forwarders.
+  const baseClass = chain.at(-1)!;
+  for (const info of chain) {
+    walk(info.node, (node, ancestors) => {
+      if (node.type !== "MemberExpression" || node.computed) return;
+      if (unwrap(node.object as Node).type !== "ThisExpression") return;
+      if (propertyName(node.property as Node) !== "context") return;
+      const where = `${location(info.file, node)} ${info.name}`;
+      if (info !== baseClass) {
+        violations.push(
+          `${where}: reaches this.context directly; call ${baseClass.name}'s forwarders`,
+        );
+        return;
+      }
+      const parent = ancestors.at(-1);
+      const owner = members.find((member) => ancestors.includes(member.node));
+      // The constructor creates it.
+      if (
+        parent?.type === "AssignmentExpression" &&
+        parent.left === node &&
+        owner?.name === "constructor"
+      ) {
+        return;
+      }
+      const accessed =
+        parent?.type === "MemberExpression" && parent.object === node && !parent.computed
+          ? propertyName(parent.property as Node)
+          : null;
+      if (!accessed) {
+        violations.push(`${where}: uses this.context as a value, which the analysis cannot follow`);
+        return;
+      }
+      const forwarder = CONTEXT_FORWARDERS.get(accessed);
+      if (!forwarder) return;
+      if (owner?.name !== forwarder) {
+        violations.push(
+          `${where}: this.context.${accessed} outside the ${forwarder} forwarder${owner ? ` (in ${owner.name})` : ""}`,
+        );
+      }
+    });
+  }
 
   // Writes the member walk above did not visit (a static block, a field
   // initializer) cannot be followed, so they fail.
@@ -1008,6 +1073,34 @@ describe("StorageService store writers", () => {
     // above; extend the scan to it (for example when a repository is extracted).
     expect(outside).toEqual([]);
   });
+
+  test("only StorageBase holds the StorageContext", () => {
+    // Its store primitives are scanned through StorageBase's forwarders. A
+    // class that takes a StorageContext (an extracted repository) writes
+    // through `this.context`, which the scan does not follow yet: teach the
+    // scan that class and those names before allowing it here.
+    const allowed = new Set(
+      ["storage-base.ts", "storage-context.ts", "storage-changes.ts"].map((name) =>
+        path.relative(repoRoot, path.join(coreDir, name)),
+      ),
+    );
+    const holders: string[] = [];
+    for (const full of backendSourceFiles()) {
+      const source = readFileSync(full, "utf8");
+      if (!source.includes("StorageContext")) continue;
+      const file = parse({ file: path.relative(repoRoot, full), source });
+      walk(file.program, (node) => {
+        if (
+          node.type === "Identifier" &&
+          node.name === "StorageContext" &&
+          !allowed.has(file.file)
+        ) {
+          holders.push(`${file.file}:${lineOf(file, node.start)}`);
+        }
+      });
+    }
+    expect(holders).toEqual([]);
+  });
 });
 
 describe("store writer analysis", () => {
@@ -1270,6 +1363,59 @@ describe("store writer analysis", () => {
     expect(initializer.violations).toEqual([
       expect.stringContaining("saveJson outside any method the analysis can follow"),
     ]);
+  });
+
+  test("lets only the base's forwarders reach the StorageContext's writers", () => {
+    const sources = (base: string, layer: string) => [
+      {
+        file: "fixture.ts",
+        source: `
+          export abstract class Base {
+            protected readonly dataDir: string = "/data";
+            private readonly context = new StorageContext();
+            protected file(name: string): string { return path.join(this.dataDir, name); }
+            protected aFile(): string { return this.file("a.json"); }
+            protected async saveJson(file: string, value: unknown): Promise<void> {
+              return this.context.saveJson(file, value);
+            }
+            protected serializeMutation<T>(target: string, label: string, operation: () => Promise<T>): Promise<T> {
+              return this.context.serialize(target, label, operation);
+            }
+            protected announce(id: string): void { this.context.changes.announce(id); }
+            ${base}
+          }
+          export class Store extends Base {
+            async save() { return this.serializeMutation(this.aFile(), "a", async () => { await this.saveJson(this.aFile(), 1); }); }
+            ${layer}
+          }`,
+      },
+    ];
+    const run = (base: string, layer: string) =>
+      analyzeStorageWriters(sources(base, layer), { rootClass: "Store" }).violations;
+
+    expect(run("", "")).toEqual([]);
+    expect(run("", `async direct() { await this.context.saveJson(this.aFile(), 2); }`)).toEqual([
+      expect.stringContaining("Store: reaches this.context directly"),
+    ]);
+    expect(
+      run(`protected async sneak() { await this.context.saveJson(this.aFile(), 2); }`, ""),
+    ).toEqual([expect.stringContaining("this.context.saveJson outside the saveJson forwarder")]);
+    expect(
+      run(
+        `protected async lease<T>(op: () => Promise<T>) { return this.context.serialize("x", "x", op); }`,
+        "",
+      ),
+    ).toEqual([
+      expect.stringContaining("this.context.serialize outside the serializeMutation forwarder"),
+    ]);
+    for (const member of [
+      `protected handle() { return this.context; }`,
+      `protected swap(other: StorageContext) { (this as any).context = other; }`,
+    ]) {
+      expect(run(member, "")).toEqual([expect.stringContaining("uses this.context as a value")]);
+    }
+    // Only the constructor may assign it.
+    expect(run(`constructor() { (this as any).context = new StorageContext(); }`, "")).toEqual([]);
   });
 
   test("treats a store deletion as a whole-value write", () => {

@@ -113,7 +113,7 @@ export function SortableProjectGroup({
   });
 
   const style = {
-    transform: CSS.Transform.toString(transform),
+    transform: CSS.Translate.toString(transform),
     transition,
   };
   const githubRepositoryUrl = getGitHubRepositoryUrl(project.gitUrl);

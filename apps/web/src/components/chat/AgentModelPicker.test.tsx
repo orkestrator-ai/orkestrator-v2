@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
+import * as sortable from "@dnd-kit/sortable";
 import { AgentModelPicker } from "./AgentModelPicker";
 import { PLATFORM_ICON_CLASS } from "@/components/icons/AgentIcons";
 
@@ -1885,6 +1886,36 @@ describe("AgentModelPicker", () => {
     );
     expect(onModelChange).not.toHaveBeenCalled();
     expect(screen.getByRole("menu")).toBeTruthy();
+  });
+
+  test("favorite rows omit non-unit drag scales from their rendered transform", () => {
+    const useSortable = sortable.useSortable;
+    const sortableSpy = spyOn(sortable, "useSortable").mockImplementation((options) => ({
+      ...useSortable(options),
+      transform: { x: 12, y: 56, scaleX: 0.75, scaleY: 1.5 },
+    }));
+    try {
+      setMobileViewport(false);
+      renderPicker({
+        models: models.slice(0, 2),
+        selectedPlatform: "codex",
+        favorites: [
+          { platform: "codex", modelId: "model-1" },
+          { platform: "codex", modelId: "model-2" },
+        ],
+        onReorderFavorites: () => {},
+      });
+      openPicker();
+
+      const rows = document.querySelectorAll<HTMLElement>("[data-favorite-sortable]");
+      expect(rows.length).toBe(2);
+      for (const row of rows) {
+        expect(row.style.transform).toBe("translate3d(12px, 56px, 0)");
+      }
+    } finally {
+      cleanup();
+      sortableSpy.mockRestore();
+    }
   });
 
   test("supports keyboard drag activation and movement for favorite rows", async () => {

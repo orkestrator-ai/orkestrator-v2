@@ -373,7 +373,14 @@ the Electron main-process bookkeeping tests and two dev-tooling defects.
   merges, three consecutive green `CI` runs on `main` (item 1). The Linux
   evidence so far is from an `oven/bun:1.4.3` container (arm64, four CPUs,
   non-root, `CI` and `GITHUB_ACTIONS` set) running the affected owners, not
-  the full `mise run test` on an x64 runner.
+  the full `mise run test` on an x64 runner. The whole backend package there
+  (one worker) passed 9,806, skipped 146 and failed 33 in 878 s, with no
+  watcher error; the 33 are container-script, media, worker and Node-parity
+  cases that no real CI run failed, consistent with the slim image lacking
+  runner tools such as `node`. They were not investigated one by one.
+- Local `mise run test` on the branch (macOS, host load 21–27) failed only
+  open flakes 0192 and 0175; both owners passed alone. Bridges, web, CLI and
+  the rest of the backend passed.
 - There is no controlled before-and-after comparison; the streamlining
   validation table was never filled. The 401.9 s (review) and 283.3 s (#815)
   aggregate figures predate #966 and #969.

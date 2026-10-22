@@ -415,7 +415,7 @@ fires.
 recurring owners attempt work and the physical work that implies. Run it when
 a change touches a cadence, a cache or join, admission, or a workflow or
 observation driver (see [recurring-work.md](../architecture/recurring-work.md)).
-It takes seconds and needs no Docker, Git remote, GitHub or provider.
+It takes about 30 s and needs no Docker, Git remote, GitHub or provider.
 
 ```bash
 # Print a fresh artifact; --out writes it, --overhead adds a real-time
@@ -460,13 +460,15 @@ Generate the reference before making the change; no artifact is committed
 - **Driven blocks.** `nativeObservation` (`recurring-baseline-native.ts`)
   runs the real native activity sweep and queue scan against fake providers,
   in rollback and shared modes. `workflows` (`recurring-baseline-workflows.ts`)
-  runs the real feature-planning, build-pipeline and looped-review
-  supervisors over a temporary store, in whole-store rollback and keyed modes.
-  Each domain reports `storageReads` (store content decoded, cached or not)
-  beside `storageStats` (reuse of already-decoded records). The test holds
-  every attempt to a per-domain budget (`STORAGE_PER_ATTEMPT` in
-  `recurring-baseline.test.ts`), so one extra read per pass fails it. Multi
-  review is not driven.
+  runs the real feature-planning, build-pipeline, looped-review and
+  multi-review supervisors over a temporary store, in whole-store rollback and
+  keyed modes. Multi review's real rollback, `WorkflowDueScheduler`, runs on
+  real timers, so its legacy whole-store tick (`adaptiveScheduling: false`)
+  stands in for it. Each domain reports `storageReads` (store content
+  decoded, cached or not, and uncached row queries) beside `storageStats`
+  (reuse of already-decoded records). The test holds every attempt to a
+  per-domain budget (`STORAGE_PER_ATTEMPT` in `recurring-baseline.test.ts`),
+  so one extra read per pass fails it.
 
 It is a call-count model, not a profile. It does not measure durations, CPU,
 RSS or I/O bytes; provider, transcript and storage cost behind the modelled
@@ -477,6 +479,50 @@ live isolated profile tracked in
 [0048-recurring-work-qualification.md](../todo/transcripts-and-observation/0048-recurring-work-qualification.md).
 Live counters for a running backend come from `get_recurring_work_diagnostics`
 or the `recurringWork` block of `/__orkestrator/metrics`.
+
+#### Live idle A/B
+
+`scripts/recurring-live-ab.ts` is the committed form of the live idle A/B.
+Per arm and repeat it starts a disposable credential-free profile
+(`dev:test --fixture --fixture-environments local,container
+--no-agent-credentials`), waits for `ready`, settles for 60 s, and then samples
+`recurringWork` plus the backend and Electron processes' CPU time and RSS
+every 30 s over a 6-minute window (longer than the 5-minute container fetch
+cooldown). It then times edit-to-detection: it appends to a tracked file in
+each fixture environment and waits for the `diff-scan` `changed` counter to
+move. Probes start at random offsets across one 15 s container poll period,
+so they are not phase-locked to the poll. Last, it counts `Unhandled promise rejection (continuing)` guard lines in
+the profile logs, stops the profile with `dev:stop` and resets it with
+`dev:reset`. Each invocation adds a unique suffix to its profile names and
+checks the owned launcher PID and start identity before sampling, stopping or
+resetting. SIGINT and SIGTERM cancel active waits and requests, then wait for
+owned-profile cleanup before exiting (130 and 143 respectively). Existing or
+unverifiable profiles are refused. `--keep-profiles` retains stopped state.
+
+Freshness probes require a valid pre-write metrics baseline; failed baselines
+and counter resets are reported as unusable, outside the latency percentiles.
+Kind rates use their first and last observed samples and label shortened
+intervals partial; kinds that disappear remain in the report. A reset or
+disappearance inside an observed interval invalidates that rate.
+
+Arms are `candidate` (defaults), `rollback`
+(`ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=all`,
+`ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0`) and `metrics-off`
+(`ORKESTRATOR_RECURRING_METRICS=0`, CPU and RSS only). Build the CLI first; the
+freshness probes use it.
+
+```bash
+mise run build:cli
+mise exec -- bun scripts/recurring-live-ab.ts --arms candidate,rollback,metrics-off \
+  --repeats 1 --out output/benchmarks/recurring-live-ab.json
+```
+
+Each run takes about 10 minutes. The JSON holds kinds, counts, durations and
+process totals only. The script reads the gateway token from the profile's
+auth file and sends it only as a loopback request header. Stdout is a Markdown
+summary. Measured limits: the Electron window is a client (its renderer
+polls), bridges and Docker are not in the CPU/RSS totals, and detection is
+backend-side, a lower bound on change-to-visible.
 
 For transcript, projection and storage cost, use the
 [efficiency harness](efficiency-harness.md) (`mise run efficiency:baseline`).

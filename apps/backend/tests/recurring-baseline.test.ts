@@ -123,12 +123,14 @@ describe("driven native observation baseline (step 07)", () => {
 
 // Storage reads plus stats each workflow attempt may cost, from the current
 // supervisors (whole-store ticks list the store and read each active record;
-// looped review reads a record's row four times and claims it once per pass).
-// Raise one only for a reviewed reason.
+// looped review reads a record's row four times and claims it once per pass;
+// a multi-review pass reads its record ten times). Raise one only for a
+// reviewed reason.
 const STORAGE_PER_ATTEMPT = {
-  rollback: { "feature-planning": 3, "build-pipeline": 4, "looped-review": 12 },
-  keyed: { "feature-planning": 1, "build-pipeline": 2, "looped-review": 5 },
+  rollback: { "feature-planning": 3, "build-pipeline": 4, "looped-review": 12, "multi-review": 19 },
+  keyed: { "feature-planning": 1, "build-pipeline": 2, "looped-review": 5, "multi-review": 10 },
 } as const;
+const DOMAINS = ["feature-planning", "build-pipeline", "looped-review", "multi-review"] as const;
 
 describe("driven workflow supervision baseline (step 08)", () => {
   test("is deterministic, content-free, and keyed selection no longer scales with history", async () => {
@@ -140,7 +142,7 @@ describe("driven workflow supervision baseline (step 08)", () => {
     expect(serialized).not.toContain("env-");
     expect(serialized).not.toContain("synthetic");
     const { rollback, keyed } = first.modes;
-    for (const domain of ["build-pipeline", "looped-review"] as const) {
+    for (const domain of ["build-pipeline", "looped-review", "multi-review"] as const) {
       // The whole-store tick enumerates every record every tick…
       expect(rollback[domain].recordsScanned).toBeGreaterThanOrEqual(
         (fixture.windowMs / 1_500) * (fixture.completedPerStore + fixture.activePerStore),
@@ -156,10 +158,17 @@ describe("driven workflow supervision baseline (step 08)", () => {
         Math.abs(keyed[domain].providerReads - rollback[domain].providerReads),
       ).toBeLessThanOrEqual(fixture.activePerStore * 2);
     }
+    // Keyed multi review observes running reviewers every 3 s plus jitter, the
+    // legacy tick every second, but every pass still reads each reviewer.
+    expect(keyed["multi-review"].providerReads).toBeGreaterThan(0);
+    expect(keyed["multi-review"].providerReads).toBeLessThan(
+      rollback["multi-review"].providerReads,
+    );
+    expect(keyed["multi-review"].providerReads % 2).toBe(0);
     // Every attempt reads storage, and none reads more than its budget, cache
     // or not: one extra read per attempt breaks a budget.
     for (const mode of ["rollback", "keyed"] as const) {
-      for (const domain of ["feature-planning", "build-pipeline", "looped-review"] as const) {
+      for (const domain of DOMAINS) {
         const counts = first.modes[mode][domain];
         const storage = counts.storageReads + counts.storageStats;
         expect(storage).toBeGreaterThanOrEqual(counts.attempts);

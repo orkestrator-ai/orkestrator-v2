@@ -42,6 +42,7 @@ import { cursorSdkCredentialPath } from "./cursor-sdk-bridge.js";
 import { discoverHostPiModelCatalog } from "./pi-model-catalog-seeding.js";
 import { normalizeOpenCodeComposerCatalog } from "./opencode-model-catalog.js";
 import { runCommand } from "./shell.js";
+import { openCodeSdkFetch } from "./http-bridge-transport.js";
 import {
   applyClaudeHostCredentialEnvironment,
   resolveCursorHostCredentialMaterial,
@@ -359,7 +360,12 @@ async function refreshOpenCode(
     (await context.storage.loadConfig()).global.openCodeModelProviders,
   );
   const models = await withHostOpenCodeServer(context, async ({ baseUrl, directory, headers }) => {
-    const client = dependencies.createOpenCodeClient({ baseUrl, directory, headers });
+    const client = dependencies.createOpenCodeClient({
+      baseUrl,
+      directory,
+      headers,
+      fetch: openCodeSdkFetch,
+    });
     const response = await client.provider.list(
       {},
       { signal: AbortSignal.timeout(dependencies.openCodeProviderListTimeoutMs) },

@@ -20,3 +20,11 @@
 - **Unchanged whole owner:** `mise run test:logged -- --name revtok-main3-transcript-paging-owner-correct -- bunx playwright test --config e2e/playwright.config.ts e2e/TranscriptPaging.spec.ts --workers=1` passed all eight cases in 44.9 s. An earlier command used a nonexistent root config and exited before discovering any tests; it is not validation evidence.
 - **Evidence:** `orkestrator-test-run.9O0EhD/revtok-main3-browser.log.gz` below the host temporary directory.
 - **Assessment:** confirmed intermittent occurrence in the same scenario, with a different assertion; rendering timing remains a hypothesis. No implementation, assertion, timeout or skip changed.
+
+## Recurring-work qualification main merge — 2026-10-22
+
+- **Original command:** `mise run test:logged -- --name merge-browser -- mise run test:browser`, nine Playwright workers alongside the repository aggregate, Electron checks and Docker image build. Pre-merge HEAD was `61866a15b208019ee787038202be0e3381a42343`; merged main was `3b469e885`.
+- **Failure:** desktop Chromium `native: paging before prose holds the original tool position` failed its offset-preservation poll at line 70: 244.5 px, expected less than 3 px within 5000 ms. Component coverage reported 410 passed, 85 skipped and three failed across 498 cases (253.8 s logged). The other two failures were native branch-suggestion selection in `AgentLaunchDialog.spec.ts`.
+- **Complete unchanged owner:** `mise run test:logged -- --name merge-transcript-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/TranscriptPaging.spec.ts --workers=1` passed all eight cases, exit 0 (43.7 s logged).
+- **Evidence:** `orkestrator-test-run.S5weqt/merge-browser.log.gz` below the host temporary directory.
+- **Assessment:** confirmed intermittent offset-preservation failure. The owner and implementation were unchanged by this merge; no assertion, deadline or skip was changed.

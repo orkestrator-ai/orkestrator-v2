@@ -10,6 +10,7 @@ import type { CommandContext } from "./commands-context.js";
 import { __testing as refreshTesting } from "./host-model-catalog-refresh.js";
 import { setLocalServerShutdownRequested } from "./commands-runtime-state.js";
 import { HOST_ACP_MODEL_FETCH_TIMEOUT_MS } from "./commands-servers.js";
+import { openCodeSdkFetch } from "./http-bridge-transport.js";
 import { StorageService } from "./storage.js";
 
 type ProbeSpawn = {
@@ -316,8 +317,9 @@ describe("host model catalogue refresh", () => {
     });
     const run = mock(async () => ({ stdout: "", stderr: "" }));
     stubBridgeSpawn((spawned) => listenAsBridge(Number(spawned.env.PORT)));
+    const createClient = mock(() => ({ provider: { list: providerList } }));
     const refresh = refreshTesting.createHostModelCatalogRefresher({
-      createOpenCodeClient: mock(() => ({ provider: { list: providerList } })) as never,
+      createOpenCodeClient: createClient as never,
       runCommand: run as never,
     });
 
@@ -327,6 +329,7 @@ describe("host model catalogue refresh", () => {
     if (result.agent !== "opencode") throw new Error("Expected an OpenCode catalogue");
     expect(result.models.map((model) => model.id)).toContain("openai/gpt-5");
     expect(providerList).toHaveBeenCalledTimes(1);
+    expect(createClient).toHaveBeenCalledWith(expect.objectContaining({ fetch: openCodeSdkFetch }));
     expect(run).toHaveBeenCalledWith(
       "opencode",
       ["models", "--refresh"],

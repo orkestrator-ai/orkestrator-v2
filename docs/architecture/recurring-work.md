@@ -17,23 +17,31 @@ removal are tracked in
 `packages/protocol/src/recurring-work.ts` is the shared, dependency-free
 vocabulary:
 
-- `RECURRING_JOB_KINDS` names every job. A kind is the only label a
-  recurring-work metric may carry; an environment id, path, branch, URL,
-  prompt or command output can never become a dimension.
-- `RECURRING_JOB_CATALOGUE` records, per kind, the owning process, trigger,
-  priority class, nominal cadence, in-flight policy, recovery contract and
-  whether it is instrumented. Its `inventory` field holds the IDs used in the
-  tables below (B for backend, C for renderer, L for bridges, desktop and
-  bounded waits; `F02` marks the container fetch policy). The catalogue is
-  descriptive: nothing reads a cadence from it to drive a timer, and a
-  cadence or policy change updates its entry in the same change.
+- `RECURRING_JOB_KINDS` names every job the backend records. A kind is the
+  only label a recurring-work metric may carry; an environment id, path,
+  branch, URL, prompt or command output can never become a dimension.
+  Renderer, bridge and desktop recurrence has no kind: nothing records it,
+  and an entry nothing records drifts unnoticed. The C and L tables below
+  describe it by ID. A process that starts recording adds its kinds, with a
+  bounded, content-free path to the diagnostics surface.
+- `RECURRING_JOB_CATALOGUE` records, per kind, the trigger, priority class,
+  nominal cadence, in-flight policy, recovery contract and whether the backend
+  records it today (`instrumented`). Its `inventory` field holds the IDs used
+  in the tables below (B for backend, C for client-driven backend reads, L01
+  for the gateway heartbeat; `F02` marks the container fetch policy). The
+  catalogue is descriptive: nothing reads a cadence from it to drive a timer,
+  and a cadence or policy change updates its entry in the same change.
 - `RECURRING_WORK_UNITS` counts physical work (`git-spawn`, `gh-spawn`,
   `docker-exec`, `directory-read`, `provider-request`, `storage-read`,
   `record-scanned`, …) at the boundary that performs it, attributed to the
   innermost recurring job. `storage-read` counts stored content decoded for a
-  caller, whether the database or its revision-validated row cache served it;
-  `storage-stat` counts a revision or stat check that reused values already
-  decoded (see [storage.md](storage.md)).
+  caller, whether the database or its revision-validated row cache served it,
+  and every uncached row query; `storage-stat` counts a revision or stat check
+  that reused values already decoded. Content fetched from the database also
+  charges `bytes`, so a cache miss is visible beside a cache-served read (see
+  [storage.md](storage.md)). `provider-request` is one HTTP request to a
+  bridge (`bridgeFetch`) or to an OpenCode server through its SDK
+  (`openCodeSdkFetch`, event-stream connects included).
 
 The backend recorder, `recurringWorkMetrics`
 (`apps/backend/src/core/recurring-work-metrics.ts`), keeps one fixed record
@@ -42,8 +50,8 @@ changed/unchanged, cache hits, bytes, duration and queue-delay histograms,
 work units, error categories) and tracks at most
 `RECURRING_WORK_MAX_TRACKED_ACTIVE` (1,024) in-flight attempts. Errors are
 recorded as finite categories, never messages. `ORKESTRATOR_RECURRING_METRICS=0`
-turns it off. Renderer, bridge and desktop kinds are catalogued but not
-recorded (`instrumented: false`).
+turns it off. A few backend kinds are catalogued but not yet recorded
+(`instrumented: false`).
 
 `recurringWorkDiagnostics()` (`recurring-diagnostics.ts`) is the one
 read-only surface: recorder snapshot, every live scheduler, admission pool
@@ -192,20 +200,22 @@ cleanup (B25).
 
 ### Renderer
 
-| ID | Kind | Source | Cadence |
-| --- | --- | --- | --- |
-| C01 | `client-native-session-refresh` | `useNativeAgentSession.ts`, `native-session-read-policy.ts` | Active tab: 500 ms while running, blocked, cancelling or recovering; 1.5 s idle. A qualified provider's quiet idle view backs off through 3, 5, 10 and 15 s (`NATIVE_QUIET_BACKOFF_TRIAL_MS`); qualified today: Cursor, Pi, Grok and OpenCode, and only when the backend advertises observation events. Any invalidation returns it to 1.5 s. |
-| C02 | `client-files-panel` | `useFilesPanel.ts` | 5 s while the panel is open and the environment available; immediate on open, tab, target or action. |
-| C03 | `client-resource-manifest` | `resource-sync.ts` | Resource events coalesce for 50 ms; revision gaps and reconnects trigger a manifest check; 5 min safety manifest check. |
-| C05 | `client-reviewer-transcript` | `MultiReviewReviewerTab.tsx` | 4 s while active and running or pending; conditional on a source token. |
-| C06 | `client-validation-output` | `ReviewValidationStatus.tsx` | 2 s, completion-scheduled, while the output modal is open and the result queued or running; byte-offset reads. |
-| C07 | `client-init-logs` | `InitializationLogs.tsx` | 1 s while mounted; the backend shares the Docker log tail across clients. |
-| C08 | `client-system-meters` | `SystemUsageIndicator.tsx`, `AgentInfoButton.tsx` | One shared read key: title bar 5 s, process and agent popovers 3 s while open. |
-| C09 | `client-docker-availability` | `App.tsx` | Startup, explicit retry and every 60 s. |
-| C10 | `client-connection-health` | `ServerConnectionSwitcher.tsx` | Active connection every 30 s and on focus; inactive entries on demand with a 10 s cache; young in-flight probes are joined, probes older than 5 s superseded. |
-| C11 | `client-coordinator-panel` | `useCoordinatorPanelData.ts` | Event-led from scoped `coordinator` resource changes with conditional reads; a 60 s repository-status probe (the full 60 s poll only for older backends); focus probes at least 10 s apart. |
-| C12 | `client-design-canvas` | `design-controller.ts` | Events plus a 3 s cursor check. |
-| C14 | `client-cursor-login` | `CursorSdkSignIn.tsx` | 1.5 s only while a login is pending; one read in flight. |
+None of these is recorded; the IDs are the only names.
+
+| ID | Source | Cadence |
+| --- | --- | --- |
+| C01 | `useNativeAgentSession.ts`, `native-session-read-policy.ts` | Active tab: 500 ms while running, blocked, cancelling or recovering; 1.5 s idle. A qualified provider's quiet idle view backs off through 3, 5, 10 and 15 s (`NATIVE_QUIET_BACKOFF_TRIAL_MS`); qualified today: Cursor, Pi, Grok and OpenCode, and only when the backend advertises observation events. Any invalidation returns it to 1.5 s. |
+| C02 | `useFilesPanel.ts` | 5 s while the panel is open and the environment available; immediate on open, tab, target or action. |
+| C03 | `resource-sync.ts` | Resource events coalesce for 50 ms; revision gaps and reconnects trigger a manifest check; 5 min safety manifest check. |
+| C05 | `MultiReviewReviewerTab.tsx` | 4 s while active and running or pending; conditional on a source token. |
+| C06 | `ReviewValidationStatus.tsx` | 2 s, completion-scheduled, while the output modal is open and the result queued or running; byte-offset reads. |
+| C07 | `InitializationLogs.tsx` | 1 s while mounted; the backend shares the Docker log tail across clients. |
+| C08 | `SystemUsageIndicator.tsx`, `AgentInfoButton.tsx` | One shared read key: title bar 5 s, process and agent popovers 3 s while open. |
+| C09 | `App.tsx` | Startup, explicit retry and every 60 s. |
+| C10 | `ServerConnectionSwitcher.tsx` | Active connection every 30 s and on focus; inactive entries on demand with a 10 s cache; young in-flight probes are joined, probes older than 5 s superseded. |
+| C11 | `useCoordinatorPanelData.ts` | Event-led from scoped `coordinator` resource changes with conditional reads; a 60 s repository-status probe (the full 60 s poll only for older backends); focus probes at least 10 s apart. |
+| C12 | `design-controller.ts` | Events plus a 3 s cursor check. |
+| C14 | `CursorSdkSignIn.tsx` | 1.5 s only while a login is pending; one read in flight. |
 
 C05 to C14 are scheduled through the read coordinator, so they pause while
 hidden and reconcile on return. Presentation clocks (`useElapsedTimer`,
@@ -219,19 +229,22 @@ batching) are recovery work covered by
 
 ### Bridges, desktop and bounded waits
 
-| ID | Kind | Source | Cadence |
-| --- | --- | --- | --- |
-| L02 | `bridge-sse-keepalive` | `bridges/codex-bridge/src/index.ts`, `bridges/claude-bridge/src/routes/events.ts` | Codex checks every 5 s and sends at 5 s while active, 30 s while idle, echoing the latest revision; Claude every 30 s per connection. |
-| L03, L04 | `bridge-idle-sweep` | Codex app-server lifecycle and bridge index; Claude `session-manager-persistence.ts` and `session-manager-runtime-idle.ts` | Codex idle-session and index cleanup every 5 min; Claude evicts idle hydrated transcripts every 5 min. Each warm Claude CLI has one deadline, armed when a turn hands back the foreground and restarted by its own frames: it closes input after 10 min of silence (`CLAUDE_BRIDGE_RUNTIME_IDLE_MS`; at least 5 min while a continuation is owed) and re-checks a CLI still running tasks every 10 min. |
-| L05 | `bridge-idle-sweep`, `bridge-parent-watchdog` | Cursor and Pi `server.ts`, `BridgeLifecycle` (`packages/protocol/src/bridge-lifecycle.ts`) | 1 min idle sweep, 10 min idle detach; parent check every 5 s. `BridgeLifecycle` owns the handles, clears every timer on shutdown and rejects a repeated start. |
-| L06 | `bridge-parent-watchdog` | `packages/protocol/src/parent-watchdog.ts` | Default 15 s; callers override with their required detection time. |
-| L07 | — | `bridges/acp-bridge/src/acp-client-disconnect.ts` | Event-only. ACP no longer polls sockets; request `aborted`, response `close` and socket `end`/`close` cover every tested disconnect shape. |
-| L08 | `bridge-diagnostics-heartbeat` | `packages/protocol/src/node/bridge-diagnostics.ts` | 60 s heartbeat and usage flush. |
-| L09 | `desktop-log-retention` | `packages/protocol/src/node/application-logging.ts` | Startup plus every 6 h. |
-| L10 | — | `packages/toolchain/src/manager.ts`, Claude `session-preferences.ts` | Lock heartbeat while an operation is owned. |
-| L11 | — | `scripts/test-admission.ts`, `host-test-scheduler.ts` | Test-only: 500 ms channel heartbeat, 100 ms admission polling. Not desktop idle cost. |
-| L12 | — | `apps/ios/OrkestratorMobile/Views/RemoteWebView.swift` | At most 100 readiness checks 100 ms apart after navigation; two successes required. |
-| L13, L14 | — | Server health, desktop backend startup, tmux and Docker setup; PTY, terminal history and Codex coalescers | Operation-scoped readiness waits with finite deadlines, and data-triggered flush and debounce with bounded buffers and shutdown flush. |
+Apart from L01 (`gateway-heartbeat`, in the backend table), none of these is
+recorded.
+
+| ID | Source | Cadence |
+| --- | --- | --- |
+| L02 | `bridges/codex-bridge/src/index.ts`, `bridges/claude-bridge/src/routes/events.ts` | Codex checks every 5 s and sends at 5 s while active, 30 s while idle, echoing the latest revision; Claude every 30 s per connection. |
+| L03, L04 | Codex app-server lifecycle and bridge index; Claude `session-manager-persistence.ts` and `session-manager-runtime-idle.ts` | Codex idle-session and index cleanup every 5 min; Claude evicts idle hydrated transcripts every 5 min. Each warm Claude CLI has one deadline, armed when a turn hands back the foreground and restarted by its own frames: it closes input after 10 min of silence (`CLAUDE_BRIDGE_RUNTIME_IDLE_MS`; at least 5 min while a continuation is owed) and re-checks a CLI still running tasks every 10 min. |
+| L05 | Cursor and Pi `server.ts`, `BridgeLifecycle` (`packages/protocol/src/bridge-lifecycle.ts`) | 1 min idle sweep, 10 min idle detach; parent check every 5 s. `BridgeLifecycle` owns the handles, clears every timer on shutdown and rejects a repeated start. |
+| L06 | `packages/protocol/src/parent-watchdog.ts` | Default 15 s; callers override with their required detection time. |
+| L07 | `bridges/acp-bridge/src/acp-client-disconnect.ts` | Event-only. ACP no longer polls sockets; request `aborted`, response `close` and socket `end`/`close` cover every tested disconnect shape. |
+| L08 | `packages/protocol/src/node/bridge-diagnostics.ts` | 60 s heartbeat and usage flush. |
+| L09 | `packages/protocol/src/node/application-logging.ts` | Startup plus every 6 h. |
+| L10 | `packages/toolchain/src/manager.ts`, Claude `session-preferences.ts` | Lock heartbeat while an operation is owned. |
+| L11 | `scripts/test-admission.ts`, `host-test-scheduler.ts` | Test-only: 500 ms channel heartbeat, 100 ms admission polling. Not desktop idle cost. |
+| L12 | `apps/ios/OrkestratorMobile/Views/RemoteWebView.swift` | At most 100 readiness checks 100 ms apart after navigation; two successes required. |
+| L13, L14 | Server health, desktop backend startup, tmux and Docker setup; PTY, terminal history and Codex coalescers | Operation-scoped readiness waits with finite deadlines, and data-triggered flush and debounce with bounded buffers and shutdown flush. |
 
 ## Latency budgets
 

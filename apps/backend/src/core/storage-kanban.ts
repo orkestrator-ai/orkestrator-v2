@@ -74,6 +74,7 @@ type LoadedNativeAgentSessions = shared.LoadedNativeAgentSessions;
 type PersistedOpenCodeModelCatalogStore = shared.PersistedOpenCodeModelCatalogStore;
 type ResourceChangeListener = shared.ResourceChangeListener;
 
+import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { StorageAgentMail } from "./storage-agent-mail.ts";
 
 function stableKanbanId(namespace: string, requestId: string): string {
@@ -447,7 +448,11 @@ export class StorageKanban extends StorageAgentMail {
     if (!isCanonicalUuid(imageId)) {
       throw new Error("Kanban image ID is invalid");
     }
-    return (await fs.readFile(this.kanbanImageFile(imageId))).toString("base64");
+    // A blob file, not a store: a file read, so storage budgets count stores only.
+    const image = await fs.readFile(this.kanbanImageFile(imageId));
+    recurringWorkMetrics.work("file-read");
+    recurringWorkMetrics.bytes(image.length);
+    return image.toString("base64");
   }
 
   async getProjectNotes(projectId: string): Promise<ProjectNotes> {

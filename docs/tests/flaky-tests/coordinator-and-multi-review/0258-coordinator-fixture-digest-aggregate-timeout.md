@@ -118,3 +118,14 @@ The unchanged owning file passed alone (48 pass, 2.3 s, after failing twice more
   from the timed-out test's removed fixture directory.
 - **Isolated rerun:** `mise run test:logged -- --name coordinator-live-alone -- bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./scripts/dev/coordinator-live.test.ts --parallel=1`
   passed in 2.1 s. The owning file was unchanged on the branch.
+
+## Recurrence during recurring-work qualification (2026-10-22)
+
+- **Command:** `mise run test:logged -- --name full-tests -- mise run test` on
+  a macOS arm64 host, branch `todo-0048-recurring-work-qualification-6e2a0df806d3`,
+  just after the branch's live isolated-profile A/B runs ended.
+- **Failure:** the same test timed out at 5017.57 ms. Desktop package: 1111
+  pass, 14 skip, 1 fail.
+- **Isolated rerun:** `mise run test:logged -- --name desktop-fixture-digest -- bun test --cwd apps/desktop ./scripts/dev/coordinator-live.test.ts --parallel=1 --only-failures`
+  passed in 1.8 s. The owning file was unchanged on the branch. No timeout,
+  assertion or skip changed.

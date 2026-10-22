@@ -261,6 +261,8 @@ async function runMode(
     };
   } finally {
     await service.shutdown();
+    // Closed before the directory goes, so no snapshot timer outlives it.
+    storage.close();
     await rm(dataDir, { recursive: true, force: true });
   }
 }

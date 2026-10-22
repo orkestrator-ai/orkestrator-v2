@@ -1,15 +1,17 @@
 # Recurring work qualification
 
-Checked against `main` at `2459b05c` (2026-10-15).
+Checked against `main` at `b83ae534` (2026-10-22). Live evidence from macOS
+on 2026-10-22; see [Live evidence](#live-evidence-2026-10-22-macos).
 
 #852 changed how often the app collects and reads facts: shared worktree
 snapshots, a container fetch policy, lifecycle-aware PR monitoring, the client
 read coordinator, the native observation broker and keyed workflow
-supervision. It was qualified only on Linux, with deterministic call counts
-and one credential-free idle A/B run. Before the rollback drivers can go, the
-instrumentation that would distort live evidence needs fixing, live freshness
-and cost need measuring against the written latency budgets, and the measured
-candidates need a decision.
+supervision. It was qualified on Linux with deterministic call counts and one
+credential-free idle A/B run. The instrumentation fixes are done and a
+credential-free macOS idle A/B with freshness probes has run. What remains is
+the busy live profile, the GitHub, provider, iOS, suspend and soak runs, the
+measured-candidate decisions those runs feed, and then removing the rollback
+drivers.
 
 ## Current state
 
@@ -17,7 +19,29 @@ candidates need a decision.
   labels work only by the kinds in `RECURRING_JOB_CATALOGUE`
   (`packages/protocol/src/recurring-work.ts`), whose `inventory` field carries
   the B, C and L IDs of the inventory in
-  [recurring-work.md](../../architecture/recurring-work.md).
+  [recurring-work.md](../../architecture/recurring-work.md). Only
+  backend-recorded work has a kind. The 19 renderer, bridge and desktop kinds
+  that nothing recorded were dropped from the vocabulary (with them the stale
+  `acp-disconnect-poll` 50 ms and `client-browser-annotation` 150 ms
+  entries), and the inventory's C and L rows describe that work by ID.
+- Storage accounting follows the rule in "Constraints and rationale" on
+  every path. Uncached `StorageDatabase.rows()` queries are `storage-read`s,
+  and a workflow-result entry index hit is a `storage-stat`. Every
+  `openBackendDatabase` connection reports, not only `StorageService`'s.
+  Content fetched from the database charges its serialized length as `bytes`
+  (`observeFetch`), so a cache miss shows bytes beside its read and a
+  cache-served read shows none. Terminal session buffers and Kanban images
+  are blob files: `file-read`s with bytes, not storage reads.
+- OpenCode SDK clients fetch through `openCodeSdkFetch`
+  (`http-bridge-transport.ts`): the provider's default client
+  (`createOpenCodeSdkClient`, `opencode-sdk-client.ts`), the host catalogue
+  refresh and provider sign-in. Each SDK request, event-stream connects and
+  reconnects included, is a `provider-request` like a `bridgeFetch`.
+- The activity jobs `coordinator-repair`, `claude-state-reconcile` and
+  `pending-rename-reconcile` register as `recovery`, as catalogued (they were
+  `maintenance`, `progress` and `progress`). In `BackendActivityJobs` the
+  class only orders overdue runs after a host resume: every job has its own
+  slot.
 - Read through `get_recurring_work_diagnostics` (`commands-registry-system.ts`)
   and the `recurringWork` block of the gateway's `/__orkestrator/metrics`.
 - Harness: `apps/backend/scripts/recurring-baseline.ts` with its `-harness`,
@@ -28,11 +52,17 @@ candidates need a decision.
   [testing-guide.md](../../development/testing-guide.md#recurring-work-harness);
   latency budgets:
   [recurring-work.md](../../architecture/recurring-work.md#latency-budgets).
-  No reference artifact is committed (the stored step artifacts stopped
-  reproducing after the efficiency file-tree cache and the storage move, and
-  were deleted), so generate one before any comparison. The workflows block
-  reports `storageReads` beside `storageStats`, and the test holds each
-  attempt to a per-domain storage budget (`STORAGE_PER_ATTEMPT`).
+  No reference artifact is committed; generate one before any comparison.
+  The workflows block drives feature planning, build pipelines, looped review
+  and multi review (its legacy whole-store tick stands in for the
+  real-timer `WorkflowDueScheduler` rollback). It reports `storageReads`
+  beside `storageStats`, and the test holds each attempt to a per-domain
+  storage budget (`STORAGE_PER_ATTEMPT`). The harness now closes each
+  temporary `StorageService` before deleting its directory. Before that fix a
+  run logged `Hourly database snapshot failed: disk I/O error` and its process
+  stayed alive for minutes after the work finished.
+- Live idle A/B: `scripts/recurring-live-ab.ts`, documented in
+  [testing-guide.md](../../development/testing-guide.md#live-idle-ab).
 - Rollback switches, each read once at startup and let through the desktop
   environment allowlist in `apps/desktop/electron/backend-process.ts`:
   - `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` (`KEYED_SCHEDULING_ROLLBACK_ENV`,
@@ -55,43 +85,79 @@ candidates need a decision.
 - `HostSuspendDetector` re-times every live scheduler after a host sleep so
   overdue keys run once.
 
+### Harness effect (2026-10-22)
+
+`--compare` against an artifact generated at `b83ae534` moved only the
+workflows block. Build-pipeline storage reads rose from 8 to 24 in rollback
+and from 12 to 24 keyed: the startup sweep's transcript-manifest row
+listings, now charged. The new multi-review domain read as follows at
+the default fixture (200 completed, 2 active, 10 min): rollback 600 ticks,
+11,400 storage reads and 2,400 provider reads; keyed 361 attempts, 3,421
+reads and 680 provider reads. A keyed pass reads its record ten times
+(one-row reads and `validateMultiReviewController` fence checks); a
+whole-store tick reads 19 times with two active workflows. Every scenario
+counter is unchanged. The base artifact itself read keyed build pipelines as
+18/829, not 12/827, during a run slowed to 16 minutes by heavy disk
+contention and the unclosed-storage linger. Two direct runs at the base
+commit gave 12/827, so that domain's full-matrix counts are not reliable
+under load. The full matrix now takes about 30 s.
+
+### Live evidence (2026-10-22, macOS)
+
+Host: macOS (Darwin 25.6.0, arm64), Docker Desktop 29.7.2, Bun 1.4.3, a
+`dev:test` build of this branch. `scripts/recurring-live-ab.ts` ran three
+repeats of three arms (candidate, rollback, metrics off). Each run was a fresh
+fixture profile with one local and one container environment and no agent
+credentials, settled for 60 s and was sampled every 30 s over a 6-minute
+window. No browser client was attached, so the Electron window was the only
+client; its title-bar meter is the `system-usage-sample` row. Starts per minute,
+mean of three repeats (every repeat within ±0.1):
+
+| Job | Rollback | Candidate |
+| --- | --- | --- |
+| Feature planning tick | 59.9 | 2.0 |
+| Looped review tick | 59.9 | 2.0 |
+| Build pipeline tick | 39.9 | 2.0 |
+| Multi review tick | 4.0 | 2.0 |
+| Native launch scan | 30.0 | 2.0 |
+| Native queue scan | 30.0 | 2.0 |
+| Pending rename reconcile | 30.0 | 2.0 |
+| Native activity sweep, mail presence and injection, Claude state, tmux drain | 30.0 each | 30.0 each |
+| Claude terminal-state poll (1 container) | 59.9 | 59.9 |
+| Diff scans (1 local watched, 1 container) | 4.5 | 4.5 |
+| Container git fetch | 0 | 0 |
+
+- Work units per minute: candidate 76.8 storage reads and 96.0 stats,
+  rollback 132.7 and 133.9. `docker exec` was 63.9 in both arms, 59.9 of it
+  the container's terminal-state poll (B18), and Git spawns were 4.0. The
+  fixture stores are empty, so the saving is wakeups and launch and rename
+  scans, not workflow history. The ratios match the Linux run of #852.
+- Process cost per repeat, backend process only. CPU in ms per minute:
+  candidate 245, 250 and 262; rollback 248, 277 and 250; metrics off 253,
+  245 and 292. RSS median: 163 to 263 MiB in every arm, with no trend by arm.
+  The Electron process tree used 645 to 730 ms/min (repeats 2 and 3; repeat 1
+  sampled only the launcher wrapper). At this idle load neither the keyed
+  drivers' saving nor the recorder's cost shows above the run-to-run spread.
+- Freshness, measured backend-side from the write to the `diff-scan`
+  `changed` counter moving. This is a lower bound on change-to-visible.
+  - Watched local worktree (recursive `fs.watch` on macOS): p50 516 ms and
+    p95 739 ms over 15 probes per arm, the same in both arms. A later run with
+    randomised probe offsets gave p50 649 ms and p95 872 ms over 12. Budget:
+    2 s or less.
+  - Container: 12 probes at random offsets in the 15 s poll gave p50 6.5 s,
+    p95 13.4 s and a maximum of 13.4 s, including the `environment exec`
+    write's round trip. Budget: 20 s or less. The 45 probes in the A/B runs
+    used a fixed gap that phase-locked them to the poll (all 11.9 to 12.1 s),
+    so only their maximum is meaningful.
+- Zero `Unhandled promise rejection (continuing)` guard lines in each of the
+  ten profiles' logs (the nine A/B runs and the freshness rerun), every one
+  started, stopped and reset by the script.
+- No container fetch ran. The fixture's environments use immutable commit
+  baselines (`base.branch: null`), which never fetch, and the
+  `container-git-fetch` policy held no records. The fetch policy and its
+  failure ladder are therefore still unqualified live.
+
 ## Outstanding work
-
-### Code: instrumentation, before the live profile
-
-1. Charge the storage reads that still bypass the counters.
-   `StorageDatabase.rows()` charges nothing; display tails, build-pipeline
-   transcript manifests, deletion fences and web annotations read through it.
-   Nor does a hit in the workflow-result entry index
-   (`workflow-result-service.ts`), which is revalidated by store revision.
-   Charge each as a `storage-read` or `storage-stat` under the storage
-   accounting rule in "Constraints and rationale". Also decide whether rows
-   fetched from the database should charge `bytes`, so the live profile can
-   tell a cache miss (a full row fetch) from a cache-served read. Both count
-   as one `storage-read` today.
-2. Decide the 19 catalogue kinds built with `external(...)` (renderer, bridge
-   and desktop work). They are `instrumented: false`. Record them with
-   bounded, content-free counters, or drop them from the vocabulary.
-3. Count OpenCode SDK requests as `provider-request`; today only
-   `http-bridge-transport.ts` charges it. Decide whether direct `fs` reads
-   outside `loadJson` (draft buffers, Kanban images) count as storage reads.
-4. Drive multi review in `recurring-baseline-workflows.ts`. Only feature
-   planning, build pipelines and looped review are driven.
-5. Commit the live idle A/B procedure as a script or as documented commands;
-   the qualifying run used an uncommitted wrapper. Generate a fresh reference
-   artifact only when a cadence change needs one; a run takes seconds.
-6. Bring `RECURRING_JOB_CATALOGUE` and the harness text back in line with the
-   code:
-   - `acp-disconnect-poll` (L07) still lists a 50 ms poll, but ACP disconnect
-     detection is event-only (`bridges/acp-bridge/src/acp-client-disconnect.ts`).
-     Remove the kind or mark it historical.
-   - `client-browser-annotation` (C13) lists a 150 ms poll that no longer
-     exists; annotation capture now polls `SELECTION_POLL_MS` (400 ms) while
-     selecting, in `useAnnotationCapture.ts`.
-   - `coordinator-repair` is catalogued `recovery` but registered as
-     `maintenance` in `core/index.ts`; pick one.
-   - `BASELINE_LIMITATIONS` in `recurring-baseline-harness.ts` still says
-     multi review uses the adaptive due scheduler by default (it is keyed).
 
 ### Qualification
 
@@ -100,32 +166,37 @@ credentials or a platform CI lacks are batched in
 [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md).
 
 - Live isolated profile, started with
-  `mise run dev:test --profile <name> --fixture --fixture-environments local,container`:
-  - 10 environments with 0, 1 and 2 browser clients; at least five minutes of
-    warm idle, then burst saves, long Git reads, an active turn, a pending
-    approval, a queued prompt, a workflow completion, a network outage and a
-    client resume;
-  - sample `recurringWork` and process CPU/RSS every 30 s, and record p50/p95
-    change-to-visible against the latency budgets;
-  - CPU/RSS with metrics on and off; three repeats; a window longer than the
-    5 min container fetch cooldown;
+  `mise run dev:test --profile <name> --fixture --fixture-environments local,container`.
+  The idle part is done on macOS (see Live evidence): 30 s samples, CPU/RSS
+  with metrics on and off, three repeats, a window longer than the 5 min
+  container fetch cooldown, a rollback arm, and backend-side freshness for a
+  watched local and a container diff badge. Still owed:
+  - 10 environments with 0, 1 and 2 browser clients, then burst saves, long
+    Git reads, an active turn, a pending approval, a queued prompt, a workflow
+    completion, a network outage and a client resume. Each needs credentials,
+    a scripted UI or a fault injector that `recurring-live-ab.ts` does not
+    have;
+  - change-to-visible as a client sees it (the script stops at backend
+    detection), for every row of the latency budgets;
+  - a container with a branch baseline, so the container fetch policy runs
+    (the fixture's immutable baselines never fetch);
   - container app wiring: the Files panel open on a container, a merge from
-    the UI and an inactive-environment switch;
-  - the rollback arm sets `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK=all` and
-    `ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0`. Stop and reset with
-    `mise run dev:stop` and `mise run dev:reset`.
+    the UI and an inactive-environment switch.
 - Live GitHub: terminal discovery cadence, replacement and reopen discovery,
   admission queue delay under real `gh` latency, and rate-limit cooldown.
 - Live providers: see [0049-native-agent-idle-observation.md](0049-native-agent-idle-observation.md).
-- macOS: watcher coverage with recursive `fs.watch` (`worktree-watcher.ts`;
-  only Linux was exercised, other platforms use the polling fallback),
-  Electron and Docker Desktop.
+- macOS: recursive `fs.watch` (`worktree-watcher.ts`) detects a save in a
+  watched worktree in under 1 s (Live evidence), with Electron under
+  `dev:test` and Docker Desktop. Still owed: a packaged Electron app, and the
+  watcher's burst-overflow and failure-to-polling paths on macOS.
 - iOS: the `apps/ios` wrapper running the web client, checking the read
   coordinator's hidden pause and resume across backgrounding and screen lock.
 - A real host suspend and resume against `HostSuspendDetector`.
 - Soak: repeated add, remove, stop and restart cycles. Timer, subscriber and
   cache counts return to baseline, and profile logs hold zero
-  `Unhandled promise rejection (continuing)` guard lines.
+  `Unhandled promise rejection (continuing)` guard lines. The ten idle
+  profile lifecycles of 2026-10-22 had zero guard lines each; that is not a
+  soak.
 - Two clients with one disconnected; backend and bridge restarts at durable
   transition boundaries; an older backend.
 - Real-browser QA of the Files panel (inactive-environment switch, two
@@ -134,7 +205,11 @@ credentials or a platform CI lacks are batched in
 
 ### Measured candidates
 
-Decide each from the live data; change nothing without evidence.
+Decide each from the live data; change nothing without evidence. The
+2026-10-22 idle A/B decides none of them. It has no PRs, no GitHub, no
+fetching container, a single client, no design canvas, no validation output
+and no interactive terminal, so every candidate below is still open. The
+container fetch failure ladder needs a branch-baseline container first.
 
 - Settled check-rollup backoff (`pr-check-rollup`, 60 s).
 - A container-scoped PR cooldown. It is per entry today because container
@@ -164,13 +239,20 @@ Decide each from the live data; change nothing without evidence.
 
 ### Code: after soak
 
+Not started. The idle A/B on macOS shows the keyed drivers starting no more
+often than the rollback drivers, with the same freshness and no guard lines.
+But the busy profile, live GitHub, providers and soak above have not run, so
+the rollback drivers stay.
+
 - Remove `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` and the whole-store drivers
   domain by domain, with the desktop allowlist entry. Remove the
   `multi-review` domain together with `WorkflowDueScheduler`, which
   [0027-multi-review-scale-and-cost.md](../coordinator-and-multi-review/0027-multi-review-scale-and-cost.md) deletes.
 - Remove `ORKESTRATOR_NATIVE_OBSERVATION_SHARING` and its allowlist entry.
 - Decide whether `ORKESTRATOR_RECURRING_METRICS` stays as a permanent off
-  switch.
+  switch. On the 2026-10-22 idle A/B the recorder's cost did not show above
+  run-to-run spread (backend CPU 245 to 262 ms/min with it on, 245 to 292 with
+  it off).
 - Update the affected `RECURRING_JOB_CATALOGUE` entries in the same change.
 
 ## Constraints and rationale
@@ -262,7 +344,7 @@ Storage accounting, settled at `9906db30`:
   reuses values already decoded: a write diffing against cached rows,
   `storeRowStats`, the build-pipeline control-record and live-tag caches, and
   the file stat cache. A database fetch for an internal lookup is still a
-  read. `StorageDatabase` reports `read` or `stat`, and `storage-context.ts` maps
+  read. `StorageDatabase` reports `read` or `stat`, and `storage-stores.ts` maps
   them one to one.
 - Why: the counter exists to catch extra reads. A cached whole-store read
   still parses every row, and whether the cache is warm depends on unrelated
@@ -293,7 +375,9 @@ Storage accounting, settled at `9906db30`:
   the rollback drivers, or does retirement wait for the live profile?
 - Should the Claude terminal-state poll (B18, in
   [0020-container-state-observation.md](../containers-and-environments/0020-container-state-observation.md)) be
-  measured first, since it dominates remaining container idle cost?
+  measured first, since it dominates remaining container idle cost? On the
+  macOS idle A/B it was 59.9 of 63.9 `docker exec` calls per minute, in both
+  arms.
 
 ## Needs verification
 

@@ -3,6 +3,7 @@ import path from "node:path";
 import { BUILD_PIPELINE_TRANSCRIPT_STORE_LAYOUTS } from "./build-pipeline-transcript-layout.js";
 import { NATIVE_AGENT_DISPLAY_TAIL_STORE_LAYOUTS } from "./native-agent-display-tail-layout.js";
 import { changeLedgerMigration } from "./change-tracking/ledger-schema.js";
+import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { snapshotBeforeMigration } from "./storage-backups.js";
 import { recordShapeUpgradeMigration } from "./storage-record-upgrades.js";
 import {
@@ -521,15 +522,34 @@ function purgeExpiredLegacyJson(archiveRoot: string, now: number): void {
   }
 }
 
-/** Opens the backend database for `dataDir`, importing legacy JSON once. */
+/**
+ * Charges a connection's reads to recurring work. Storage is charged by what
+ * the caller got, not where the rows came from: a read served from the
+ * revision-validated cache still parses every row, so an extra read shows
+ * however warm the cache is. Bytes are charged only for content fetched from
+ * the database, which is what tells a cache miss from a cache-served read.
+ */
+const RECURRING_STORAGE_OBSERVERS: Required<
+  Pick<StorageDatabaseOptions, "observe" | "observeFetch">
+> = {
+  observe: (event) => recurringWorkMetrics.work(event === "read" ? "storage-read" : "storage-stat"),
+  observeFetch: (length) => recurringWorkMetrics.bytes(length),
+};
+
+/**
+ * Opens the backend database for `dataDir`, importing legacy JSON once. Every
+ * connection reports its reads to {@link recurringWorkMetrics} unless the
+ * caller passes its own observers.
+ */
 export function openBackendDatabase(
   dataDir: string,
-  options: Pick<StorageDatabaseOptions, "observe"> = {},
+  options: Pick<StorageDatabaseOptions, "observe" | "observeFetch"> = {},
 ): StorageDatabase {
   const database = new StorageDatabase(dataDir, {
     layoutFor: storeLayout,
     migrations: STORAGE_MIGRATIONS,
     beforeMigrate: (opened, from) => snapshotBeforeMigration(opened, dataDir, from),
+    ...RECURRING_STORAGE_OBSERVERS,
     ...options,
   });
   try {

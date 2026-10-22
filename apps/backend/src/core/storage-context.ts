@@ -96,13 +96,8 @@ export class StorageContext {
    */
   get database(): StorageDatabase {
     if (!this.storageDatabase || this.storageDatabase.isClosed()) {
-      this.storageDatabase = openBackendDatabase(this.dataDir, {
-        // Charged by what the caller got, not where the rows came from: a
-        // read served from the revision-validated cache still parses every
-        // row, and an extra read must show however warm the cache is.
-        observe: (event) =>
-          recurringWorkMetrics.work(event === "read" ? "storage-read" : "storage-stat"),
-      });
+      // Reads and fetched bytes are charged by the default observers.
+      this.storageDatabase = openBackendDatabase(this.dataDir);
     }
     return this.storageDatabase;
   }

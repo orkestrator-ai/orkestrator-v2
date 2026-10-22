@@ -799,8 +799,6 @@ function applyPiToolPolicy(
   session.setActiveToolsByName(active);
 }
 
-let warnedLegacyPolicy = false;
-
 /** Provider-neutral process authority, matching the other bridges. */
 export const BRIDGE_EXECUTION_POLICY_ENV = "ORKESTRATOR_BRIDGE_EXECUTION_POLICY";
 
@@ -826,35 +824,19 @@ export function resolvePiExecutionPolicy(
   policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy,
 ): import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy {
   // Process authority first: a coordinator bridge serves exactly one
-  // conversation, so nothing a caller sends may widen what it runs under, and
-  // the legacy env overrides below must not loosen it either.
+  // conversation, so nothing a caller sends may widen what it runs under.
   if (process.env[BRIDGE_EXECUTION_POLICY_ENV] === "coordinator-read-only") {
     return coordinatorProcessPolicy();
   }
-  const fallback =
-    policy ??
-    ({
+  return (
+    policy ?? {
       id: "interactive-host",
       sandbox: "provider",
       approvals: "auto-approve",
       projectResources: false,
       networkAccess: "full",
-    } as const);
-  const approvalOverride = process.env.PI_BRIDGE_REQUIRE_APPROVAL;
-  const resourcesOverride = process.env.PI_BRIDGE_PROJECT_RESOURCES;
-  if ((approvalOverride !== undefined || resourcesOverride !== undefined) && !warnedLegacyPolicy) {
-    warnedLegacyPolicy = true;
-    console.warn(
-      "[pi-bridge] PI_BRIDGE_REQUIRE_APPROVAL/PI_BRIDGE_PROJECT_RESOURCES are deprecated; configure the session execution policy instead.",
-    );
-  }
-  return {
-    ...fallback,
-    ...(approvalOverride !== undefined
-      ? { approvals: approvalOverride === "1" ? "ask" : "auto-approve" }
-      : {}),
-    ...(resourcesOverride !== undefined ? { projectResources: resourcesOverride === "1" } : {}),
-  };
+    }
+  );
 }
 
 /**

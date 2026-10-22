@@ -23,7 +23,6 @@ const previousApiKey = process.env.CURSOR_API_KEY;
 const previousStateDir = process.env.CURSOR_BRIDGE_STATE_DIR;
 const previousCredentialFile = process.env.CURSOR_BRIDGE_AUTH_FILE;
 const previousExecutionPolicy = process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY;
-const previousProjectSettings = process.env.CURSOR_BRIDGE_PROJECT_SETTINGS;
 const previousMcpUrl = process.env.ORKESTRATOR_AGENT_MCP_URL;
 const previousMcpToken = process.env.ORKESTRATOR_AGENT_MCP_TOKEN;
 const bridgeStateRoot = join(tmpdir(), `cursor-bridge-sdk-test-${process.pid}`);
@@ -218,7 +217,6 @@ beforeEach(async () => {
   prewarmFails = false;
   warmWorkspaceReleases = 0;
   delete process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY;
-  delete process.env.CURSOR_BRIDGE_PROJECT_SETTINGS;
   delete process.env.ORKESTRATOR_AGENT_MCP_URL;
   delete process.env.ORKESTRATOR_AGENT_MCP_TOKEN;
   setCursorMcpTransportForTests();
@@ -310,8 +308,6 @@ afterAll(() => {
   else process.env.CURSOR_BRIDGE_AUTH_FILE = previousCredentialFile;
   if (previousExecutionPolicy === undefined) delete process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY;
   else process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY = previousExecutionPolicy;
-  if (previousProjectSettings === undefined) delete process.env.CURSOR_BRIDGE_PROJECT_SETTINGS;
-  else process.env.CURSOR_BRIDGE_PROJECT_SETTINGS = previousProjectSettings;
   if (previousMcpUrl === undefined) delete process.env.ORKESTRATOR_AGENT_MCP_URL;
   else process.env.ORKESTRATOR_AGENT_MCP_URL = previousMcpUrl;
   if (previousMcpToken === undefined) delete process.env.ORKESTRATOR_AGENT_MCP_TOKEN;
@@ -461,6 +457,26 @@ describe("ensureAgent", () => {
     await expect(ensureAgent(state)).resolves.toMatchObject({ agentId: "created-agent" });
     expect(prewarmOptions).toHaveLength(1);
     expect(state.workspaceWarmRelease).toBeUndefined();
+  });
+
+  test("the retired sandbox and project-settings env overrides change nothing", () => {
+    const host = {
+      id: "interactive-host",
+      sandbox: "none",
+      approvals: "auto-approve",
+      projectResources: false,
+      networkAccess: "full",
+    } as const;
+    const before = resolveCursorExecutionPolicy(host);
+    process.env.CURSOR_BRIDGE_SANDBOX = "1";
+    process.env.CURSOR_BRIDGE_PROJECT_SETTINGS = "1";
+    try {
+      expect(resolveCursorExecutionPolicy(host)).toEqual(before);
+      expect(before).toMatchObject({ sandbox: "none", projectResources: false });
+    } finally {
+      delete process.env.CURSOR_BRIDGE_SANDBOX;
+      delete process.env.CURSOR_BRIDGE_PROJECT_SETTINGS;
+    }
   });
 
   test("reports unsupported approval semantics and fails deny-mode escalation closed", async () => {
@@ -756,8 +772,7 @@ describe("ensureAgent", () => {
     expect(state.hostedMcpTools).toBeUndefined();
   });
 
-  test("a read-only attach drops repository MCP servers even when project settings are opted in", async () => {
-    process.env.CURSOR_BRIDGE_PROJECT_SETTINGS = "1";
+  test("a read-only attach drops repository MCP servers even when project resources are on", async () => {
     setCursorMcpTransportForTests({
       async connect() {
         return {
@@ -781,7 +796,13 @@ describe("ensureAgent", () => {
     );
     const connection = { url: "http://127.0.0.1:4567/mcp", token: "coord-token" };
     try {
-      const interactive = newSessionState();
+      const interactive = newSessionState(undefined, {
+        id: "interactive-container",
+        sandbox: "container",
+        approvals: "auto-approve",
+        projectResources: true,
+        networkAccess: "full",
+      });
       interactive.agentMcp = connection;
       await ensureAgent(interactive);
       expect(mcpServerNames(created[0])).toEqual(["orkestrator", "review-untrusted"]);

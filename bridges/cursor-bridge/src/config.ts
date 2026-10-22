@@ -91,37 +91,6 @@ export function cursorSdkStateDirectoryPath(): string | null {
  */
 export const credentialFile = process.env.CURSOR_BRIDGE_AUTH_FILE?.trim() || undefined;
 
-/**
- * Sandbox the agent's own tool calls.
- *
- * Off by default and deliberately so: an Orkestrator Cursor tab is an
- * interactive agent session in an already-isolated worktree or container,
- * matching the permissive default the ACP path uses. The container boundary,
- * not the SDK sandbox, is what isolates an agent.
- */
-export const sandboxEnabled = process.env.CURSOR_BRIDGE_SANDBOX === "1";
-
-/**
- * Ambient Cursor settings layers the SDK is allowed to read from disk.
- *
- * `project` reads `.cursor/` out of the workspace, which is repository
- * controlled. Cloning a repository must not be enough to run its code, so the
- * project layer is opt-in and only the container launcher opts in — exactly
- * the boundary `ACP_APPROVE_PROJECT_MCPS` draws for the ACP path. Every other
- * value, including unset and a stray ambient one, fails closed.
- *
- * Read at the call site rather than frozen at import so a test (or a late
- * launcher assignment) can still close the project layer. Production still
- * sets this before the process starts.
- */
-export function resolveCursorSettingSources(
-  env: NodeJS.ProcessEnv = process.env,
-): Array<"user" | "project"> {
-  return env.CURSOR_BRIDGE_PROJECT_SETTINGS === "1" ? ["user", "project"] : ["user"];
-}
-
-export const settingSources: Array<"user" | "project"> = resolveCursorSettingSources();
-
 export const MAX_BODY_BYTES = 2 * 1024 * 1024;
 /**
  * Retained transcript rows. A turn writes one row per model step, so this

@@ -14,7 +14,7 @@ import {
   type NativeAgentRuntimeSummary,
 } from "@orkestrator/protocol/native-agent";
 import { transcriptTailStart } from "@orkestrator/protocol/node/transcript-window";
-import { approvalsEnabled, PROVIDER } from "./config.js";
+import { PROVIDER } from "./config.js";
 import { publicPiMcpServers } from "./mcp.js";
 import {
   piRunId,
@@ -270,15 +270,14 @@ export function publicContextUsage(state: SessionState): NativeAgentContextUsage
 /**
  * The interaction kinds this session can actually raise.
  *
- * Read from the live gate rather than from the platform table: Pi's approval
- * surface is off unless `PI_BRIDGE_REQUIRE_APPROVAL=1`, so a session with the
- * gate off never asks. Reporting the empty set is what lets the tab say so
- * instead of showing a pending list that looks like it is still loading.
+ * Read from the live gate rather than from the platform table: Pi asks only
+ * when the session's execution policy says `ask`, so a session under any
+ * other policy, or with none, never asks. Reporting the empty set is what lets
+ * the tab say so instead of showing a pending list that looks like it is still
+ * loading.
  */
 export function publicInteractionKinds(state?: SessionState): string[] {
-  return (state?.policy ? state.policy.approvals === "ask" : approvalsEnabled())
-    ? ["command-approval", "file-approval"]
-    : [];
+  return state?.policy?.approvals === "ask" ? ["command-approval", "file-approval"] : [];
 }
 
 export function publicRuntime(state: SessionState): NativeAgentRuntimeSummary {

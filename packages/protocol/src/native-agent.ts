@@ -1013,9 +1013,9 @@ export function nativeAgentCapabilities(agent: AgentPlatform): NativeAgentCapabi
         mode: false,
       },
       actions: { compact: true, steer: true, rewindMessages: true, branches: true },
-      // Pi's approval gate is off unless `PI_BRIDGE_REQUIRE_APPROVAL=1`, so
-      // this is what the platform *may* raise. The live session reports the
-      // empty set when the gate is off — see the bridge's status projection.
+      // Pi asks only under an `ask` execution policy, so this is what the
+      // platform *may* raise. The live session reports the empty set under any
+      // other policy — see `publicInteractionKinds` in the bridge.
       interactions: { kinds: ["command-approval", "file-approval"] },
     };
   }

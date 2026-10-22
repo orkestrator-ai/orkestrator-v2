@@ -596,8 +596,9 @@ When touching the Pi bridge:
   Losing the bridge's state costs a rendered transcript; it never costs the
   conversation. That is why `detachSession` keeps `sessionFile` and why a
   restart re-attaches to the same session rather than starting a new one.
-- Approvals are off unless `PI_BRIDGE_REQUIRE_APPROVAL=1`, matching the
-  permissive default every other bridge here uses. When on, every timeout,
+- Approvals follow the session's execution policy: `ask` parks a call, `deny`
+  refuses it, and a session with no policy runs as the host default,
+  `auto-approve`. When the gate asks, every timeout,
   disconnect, closing session and unparseable answer **denies**. A turn that
   ends with a call still parked denies it too — leaving it unanswered wedges the
   turn and, with it, the environment's activity state.
@@ -625,10 +626,9 @@ When touching the Pi bridge:
   await: new prompts get 409, one still preparing settles as cancelled, and
   `/close` keeps the session registered until its removal is published (503
   pending otherwise).
-- Project-local `.pi/` resources are opt-in through
-  `PI_BRIDGE_PROJECT_RESOURCES`, set from the resolved environment execution
-  policy on both host and container runs. Host project resources are off by
-  default. Enabling them permits repository MCP processes and Pi extensions
+- Project-local `.pi/` resources load only when the session's execution
+  policy turns `projectResources` on, on both host and container runs. Host
+  project resources are off by default. Enabling them permits repository MCP processes and Pi extensions
   (arbitrary TypeScript) to run on the host.
 - Pi's SDK sessions load no MCP client (only its CLI loads the built-in `mcp`
   extension) and have no plan/build mode. The bridge owns an MCP client (`src/mcp.ts`) and registers tools through the inline

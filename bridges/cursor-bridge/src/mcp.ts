@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import type { McpServerConfig, SDKCustomTool, SDKJsonValue } from "@cursor/sdk";
 import { Client as McpClient, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import type { NativeAgentMcpServer } from "@orkestrator/protocol/native-agent";
-import { resolveCursorSettingSources, workingDirectory } from "./config.js";
+import { workingDirectory } from "./config.js";
 import { isObject, nonBlank, type JsonObject, type SessionState } from "./state.js";
 import { sliceToBytes } from "./transcript.js";
 import {
@@ -82,11 +82,11 @@ export interface CursorMcpResolutionPolicy {
 /**
  * Resolve the MCP launch set handed to Cursor's SDK.
  *
- * Project configuration is intentionally read only when the launcher opted
- * into Cursor's project settings (containers) *and* this session is allowed
- * to use them. A cloned repository therefore cannot make the host bridge
- * execute a command merely by containing `.cursor/mcp.json`. Read-only
- * attaches skip that file even when the process-wide opt-in is on, and
+ * Project configuration (`.cursor/mcp.json`) is read only when the session's
+ * policy turns project resources on: the container default, or an explicit
+ * environment override. A session without a policy, and the host default,
+ * leave it closed, so a cloned repository cannot make the host bridge execute
+ * a command merely by containing that file. Read-only attaches skip it too and
  * return only the scoped Orkestrator entry. The Orkestrator server is
  * supplied by the backend in private environment variables or a per-tab
  * `agentMcp` body and wins a name collision.
@@ -95,10 +95,7 @@ export async function cursorMcpServers(
   agentMcp?: AgentMcpConnection,
   policy?: CursorMcpResolutionPolicy,
 ): Promise<Record<string, McpServerConfig>> {
-  const allowProject =
-    policy?.readOnly !== true &&
-    policy?.projectResources !== false &&
-    resolveCursorSettingSources().includes("project");
+  const allowProject = policy?.readOnly !== true && policy?.projectResources === true;
   const servers = allowProject ? await readProjectMcpServers() : {};
   const url = agentMcp?.url.trim() || process.env.ORKESTRATOR_AGENT_MCP_URL?.trim();
   const token = agentMcp?.token.trim() || process.env.ORKESTRATOR_AGENT_MCP_TOKEN?.trim();

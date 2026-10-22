@@ -7,19 +7,28 @@
  * read-only bypass, the pending cap, the timeout — every one of which must
  * deny rather than approve — and pausing that timeout.
  *
- * The gate is read per call rather than at import, so this holds whatever
- * order the suite happens to load these modules in. Time is Bun's fake clock,
+ * The gate follows each session's execution policy, so the sessions here are
+ * created under `ask`. Time is Bun's fake clock,
  * which also moves `Date.now`, so the default five-minute window and the
  * day-long hold ceiling are proven without waiting for either.
  */
 import { describe, expect, jest, test } from "bun:test";
 import { AGENT_INTERACTION_HOLD_CEILING_MS as CEILING } from "@orkestrator/protocol/agent-interactions";
 
-process.env.PI_BRIDGE_REQUIRE_APPROVAL = "1";
-
 const { holdApproval, publicApprovals, requestToolApproval, resolveApproval } =
   await import("./interactions.js");
-const { newSessionState } = await import("./agent-session.js");
+const { newSessionState: newBareSessionState } = await import("./agent-session.js");
+
+/** A session whose execution policy turns the approval gate on. */
+function newSessionState() {
+  return newBareSessionState(undefined, {
+    id: "interactive-host",
+    sandbox: "none",
+    approvals: "ask",
+    projectResources: false,
+    networkAccess: "full",
+  });
+}
 const { approvalTimeoutMs, MAX_PENDING_APPROVALS } = await import("./config.js");
 
 const HOUR = 60 * 60 * 1000;
@@ -267,22 +276,16 @@ describe("pausing an approval's deadline", () => {
 });
 
 test("read-only reviews deny commands, writes and unknown tools even with approvals disabled", async () => {
-  const previous = process.env.PI_BRIDGE_REQUIRE_APPROVAL;
-  process.env.PI_BRIDGE_REQUIRE_APPROVAL = "0";
-  try {
-    const state = newSessionState();
-    state.readOnly = true;
-    for (const tool of ["bash", "write", "edit", "custom-extension"]) {
-      expect(await requestToolApproval(state, tool, tool, {})).toMatchObject({ block: true });
-    }
-    expect(await requestToolApproval(state, "read", "read", {})).toEqual({ block: false });
-    expect(state.approvals.size).toBe(0);
-    state.readOnly = false;
-    expect(await requestToolApproval(state, "fix", "edit", {})).toEqual({ block: false });
-  } finally {
-    if (previous === undefined) delete process.env.PI_BRIDGE_REQUIRE_APPROVAL;
-    else process.env.PI_BRIDGE_REQUIRE_APPROVAL = previous;
+  // No policy runs as the host default, auto-approve.
+  const state = newBareSessionState();
+  state.readOnly = true;
+  for (const tool of ["bash", "write", "edit", "custom-extension"]) {
+    expect(await requestToolApproval(state, tool, tool, {})).toMatchObject({ block: true });
   }
+  expect(await requestToolApproval(state, "read", "read", {})).toEqual({ block: false });
+  expect(state.approvals.size).toBe(0);
+  state.readOnly = false;
+  expect(await requestToolApproval(state, "fix", "edit", {})).toEqual({ block: false });
 });
 
 test("a coordinator cannot reach the network through an extension's web tool", async () => {
@@ -290,22 +293,15 @@ test("a coordinator cannot reach the network through an extension's web tool", a
   // extensions are not loaded for a coordinator). The gate is a name
   // allowlist, so any such tool is refused before it runs, approvals or not.
   const { coordinatorProcessPolicy } = await import("./agent-session.js");
-  const previous = process.env.PI_BRIDGE_REQUIRE_APPROVAL;
-  process.env.PI_BRIDGE_REQUIRE_APPROVAL = "0";
-  try {
-    const state = newSessionState();
-    state.policy = coordinatorProcessPolicy();
-    state.readOnly = true;
-    for (const tool of ["web_search", "web_fetch", "webfetch", "fetch", "browser"]) {
-      expect(
-        await requestToolApproval(state, tool, tool, { url: "https://example.com" }),
-      ).toMatchObject({ block: true });
-    }
-    expect(state.approvals.size).toBe(0);
-  } finally {
-    if (previous === undefined) delete process.env.PI_BRIDGE_REQUIRE_APPROVAL;
-    else process.env.PI_BRIDGE_REQUIRE_APPROVAL = previous;
+  const state = newBareSessionState();
+  state.policy = coordinatorProcessPolicy();
+  state.readOnly = true;
+  for (const tool of ["web_search", "web_fetch", "webfetch", "fetch", "browser"]) {
+    expect(
+      await requestToolApproval(state, tool, tool, { url: "https://example.com" }),
+    ).toMatchObject({ block: true });
   }
+  expect(state.approvals.size).toBe(0);
 });
 
 test("coordinator read-only allows Orkestrator MCP tools and still denies the rest", async () => {

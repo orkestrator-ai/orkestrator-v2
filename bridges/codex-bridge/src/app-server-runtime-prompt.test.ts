@@ -3750,7 +3750,7 @@ describe("composed approval settings", () => {
       "mcp_servers.orkestrator"
     ]!;
     expect(server.default_tools_approval_mode).toBeUndefined();
-    expect(requests[requests.lastIndexOf(resume) - 1]?.method).toBe("thread/unsubscribe");
+    expect(methodBefore(requests, resume)).toBe("thread/unsubscribe");
   });
 
   test.each(["untrusted", "on-request", "auto-review"] as const)(
@@ -3979,6 +3979,15 @@ describe("composed approval settings", () => {
 });
 
 // These paths deliberately omit agentMcp: search alone must govern reloads.
+/**
+ * The request a resume followed, past the `skills/list` read that keeps a
+ * checkout's skills out of a session with project resources off.
+ */
+function methodBefore(requests: { method: string }[], request: { method: string }): string {
+  const before = requests.slice(0, requests.lastIndexOf(request));
+  return before.findLast((candidate) => candidate.method !== "skills/list")?.method ?? "";
+}
+
 describe("search configuration recovery", () => {
   async function complete(h: Harness): Promise<void> {
     h.child().notify("turn/completed", {
@@ -4119,7 +4128,7 @@ describe("search configuration recovery", () => {
     expect((resume.params.config as Record<string, unknown> | undefined)?.web_search).toBe(
       readOnly ? "disabled" : undefined,
     );
-    expect(requests[requests.lastIndexOf(resume) - 1]?.method).toBe("thread/unsubscribe");
+    expect(methodBefore(requests, resume)).toBe("thread/unsubscribe");
   });
 
   test.each([false, true])(
@@ -4210,7 +4219,7 @@ describe("search configuration recovery", () => {
     const requests = h.child().requests;
     const resume = requests.findLast((r) => r.method === "thread/resume")!;
     expect(resume.params.config).toMatchObject({ web_search: "disabled" });
-    expect(requests[requests.lastIndexOf(resume) - 1]?.method).toBe("thread/unsubscribe");
+    expect(methodBefore(requests, resume)).toBe("thread/unsubscribe");
     expect(requests.findLast((r) => r.method === "turn/start")!.params.sandboxPolicy).toEqual({
       type: "readOnly",
       networkAccess: false,
@@ -4252,6 +4261,6 @@ describe("search configuration recovery", () => {
     const requests = h.child().requests;
     const resume = requests.findLast((r) => r.method === "thread/resume")!;
     expect(resume.params.config).toMatchObject({ web_search: "disabled" });
-    expect(requests[requests.lastIndexOf(resume) - 1]?.method).toBe("thread/unsubscribe");
+    expect(methodBefore(requests, resume)).toBe("thread/unsubscribe");
   });
 });

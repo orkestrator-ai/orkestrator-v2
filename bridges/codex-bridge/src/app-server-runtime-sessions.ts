@@ -38,7 +38,6 @@ import {
 import { normalizeExplicitSessionTitle, persistSessionTitle } from "./session-titles.js";
 
 import { AppServerRpcError, isMissingRolloutError } from "./app-server/errors.js";
-import { codexReportedPolicy } from "./codex-reported-policy.js";
 
 import { type StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 
@@ -1281,7 +1280,7 @@ export class CodexRuntimeSessions {
     return {
       // Keeps the pre-migration contract; `phase` carries the new detail.
       status: phaseToExternalStatus(phase),
-      ...(session.config.policy ? { policy: codexReportedPolicy(session.config.policy) } : {}),
+      ...(session.config.policy ? { policy: session.config.policy } : {}),
       phase,
       title: session.title,
       error,
@@ -1583,7 +1582,7 @@ export class CodexRuntimeSessions {
         : {}),
       mode: session.config.mode,
       fastMode: session.config.serviceTier === "fast",
-      ...(session.config.policy ? { policy: codexReportedPolicy(session.config.policy) } : {}),
+      ...(session.config.policy ? { policy: session.config.policy } : {}),
       durable: await this.isSessionConfigPersisted(session),
     };
   }

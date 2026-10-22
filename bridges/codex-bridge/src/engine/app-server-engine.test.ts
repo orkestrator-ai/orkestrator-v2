@@ -414,6 +414,140 @@ describe("thread lifecycle", () => {
     });
   });
 
+  test("pins the checkout untrusted on every thread entry point when project resources are off", async () => {
+    const h = harness({
+      "thread/start": () => ({ thread: thread("t1") }),
+      "thread/resume": () => ({ thread: thread("t1") }),
+      "thread/fork": () => ({ thread: thread("t2") }),
+    });
+    const policy = {
+      id: "interactive-host",
+      sandbox: "none",
+      approvals: "auto-approve",
+      networkAccess: "full",
+    } as const;
+    const off: EngineTurnConfig = { ...BUILD, policy: { ...policy, projectResources: false } };
+    await h.engine.start();
+    await h.engine.startThread({ config: off });
+    await h.engine.resumeThread("t1", { config: off, includeTurns: true });
+    await h.engine.forkThread("t1", off);
+
+    // A resumed or forked thread is rebuilt from its rollout with these
+    // settings, so each one must carry the pin, not only the first start.
+    for (const method of ["thread/start", "thread/resume", "thread/fork"]) {
+      expect(
+        h.child().requests.find((request) => request.method === method)?.params.config,
+      ).toEqual({ projects: { "/tmp/workspace": { trust_level: "untrusted" } } });
+    }
+
+    const on = harness({ "thread/start": () => ({ thread: thread("t1") }) });
+    await on.engine.start();
+    await on.engine.startThread({
+      config: { ...BUILD, policy: { ...policy, projectResources: true } },
+    });
+    expect(
+      on.child().requests.find((request) => request.method === "thread/start")?.params.config,
+    ).toBeUndefined();
+  });
+
+  test("disables the checkout's own skills on every thread entry point when project resources are off", async () => {
+    const skills = {
+      data: [
+        {
+          cwd: "/tmp/workspace",
+          errors: [],
+          skills: [
+            {
+              name: "repo-skill",
+              path: "/tmp/workspace/.codex/skills/a/SKILL.md",
+              scope: "repo",
+              enabled: true,
+            },
+            {
+              name: "mine",
+              path: "/home/u/.agents/skills/mine/SKILL.md",
+              scope: "user",
+              enabled: true,
+            },
+            {
+              name: "off",
+              path: "/home/u/.agents/skills/off/SKILL.md",
+              scope: "user",
+              enabled: false,
+            },
+          ],
+        },
+      ],
+    };
+    const h = harness({
+      "skills/list": () => skills,
+      "thread/start": () => ({ thread: thread("t1") }),
+      "thread/resume": () => ({ thread: thread("t1") }),
+      "thread/fork": () => ({ thread: thread("t2") }),
+    });
+    const config: EngineTurnConfig = {
+      ...BUILD,
+      policy: {
+        id: "interactive-host",
+        sandbox: "none",
+        approvals: "auto-approve",
+        projectResources: false,
+        networkAccess: "full",
+      },
+    };
+    await h.engine.start();
+    await h.engine.startThread({ config });
+    await h.engine.resumeThread("t1", { config, includeTurns: true });
+    await h.engine.forkThread("t1", config);
+
+    for (const method of ["thread/start", "thread/resume", "thread/fork"]) {
+      expect(
+        h.child().requests.find((request) => request.method === method)?.params.config,
+      ).toEqual({
+        projects: { "/tmp/workspace": { trust_level: "untrusted" } },
+        // The user's own disabled skill is listed again: the thread's list
+        // replaces theirs, and must not switch it back on.
+        skills: {
+          config: [
+            { path: "/tmp/workspace/.codex/skills/a/SKILL.md", enabled: false },
+            { path: "/home/u/.agents/skills/off/SKILL.md", enabled: false },
+          ],
+        },
+      });
+    }
+    expect(
+      h
+        .child()
+        .requests.filter((request) => request.method === "skills/list")
+        .map((r) => r.params),
+    ).toEqual(Array(3).fill({ cwds: ["/tmp/workspace"] }));
+  });
+
+  test("refuses a thread whose project skills cannot be listed", async () => {
+    const h = harness({
+      "skills/list": () => {
+        throw new Error("skills unavailable");
+      },
+      "thread/start": () => ({ thread: thread("t1") }),
+    });
+    await h.engine.start();
+    await expect(
+      h.engine.startThread({
+        config: {
+          ...BUILD,
+          policy: {
+            id: "interactive-host",
+            sandbox: "none",
+            approvals: "auto-approve",
+            projectResources: false,
+            networkAccess: "full",
+          },
+        },
+      }),
+    ).rejects.toThrow("skills unavailable");
+    expect(h.child().requests.some((request) => request.method === "thread/start")).toBe(false);
+  });
+
   test("passes a tab-scoped MCP header without overriding ordinary approvals", async () => {
     const h = harness({
       "thread/start": () => ({ thread: thread("t1") }),
@@ -632,6 +766,8 @@ describe("thread lifecycle", () => {
     expect(params.config).toEqual({
       web_search: "disabled",
       "features.standalone_web_search": false,
+      // Project resources are off, so the checkout's own `.codex` stays out.
+      projects: { "/tmp/workspace": { trust_level: "untrusted" } },
     });
     // Not a coordinator process, so there is no process setting to read back.
     expect(h.child().requests.some((request) => request.method === "config/read")).toBe(false);
@@ -762,6 +898,7 @@ describe("thread lifecycle", () => {
     expect(params.config).toEqual({
       web_search: "cached",
       "features.standalone_web_search": false,
+      projects: { "/tmp/workspace": { trust_level: "untrusted" } },
     });
 
     // `live` opens any URL the model names, and `disabled` is not what this

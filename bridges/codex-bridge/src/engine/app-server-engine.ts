@@ -60,6 +60,7 @@ import type { SkillsListParams, UserInput } from "../app-server/generated/typesc
 import { redactSecrets } from "../app-server/redaction.js";
 import {
   AppServerRpcError,
+  JSON_RPC_METHOD_NOT_FOUND,
   classifyDispatchFailure,
   isPaginatedHistoryUnsupportedError,
   isSafeToRetryImmediately,
@@ -74,6 +75,8 @@ import {
   codexHostedNetworkLockGaps,
   codexNetworkDeniedConfig,
   codexNetworkDeniedSearchMode,
+  codexProjectSkillsConfig,
+  codexProjectTrustConfig,
 } from "../codex-config.js";
 import { type McpToolAvailability, waitForMcpToolAvailability } from "./mcp-tool-availability.js";
 import {
@@ -1499,13 +1502,39 @@ export class AppServerEngine implements CodexEngine {
 
   // --------------------------------------------------------------- threads
 
-  private toThreadParams(config: EngineTurnConfig): Record<string, unknown> {
+  /**
+   * Thread configuration only app-server can supply: with project resources
+   * off, the checkout's own skills, which the untrusted pin does not reach.
+   * An app-server without `skills/list` has no skills to keep out.
+   */
+  private async projectResourceThreadConfig(
+    generation: EngineGeneration,
+    config: EngineTurnConfig,
+  ): Promise<Record<string, unknown>> {
+    if (!config.policy || config.policy.projectResources) return {};
+    let listed: unknown;
+    try {
+      listed = await this.supervisor.requestOnGeneration(generation, "skills/list", {
+        cwds: [config.cwd ?? this.options.cwd],
+      } satisfies SkillsListParams);
+    } catch (error) {
+      if (error instanceof AppServerRpcError && error.code === JSON_RPC_METHOD_NOT_FOUND) return {};
+      throw error;
+    }
+    return codexProjectSkillsConfig(listed);
+  }
+
+  private toThreadParams(
+    config: EngineTurnConfig,
+    extraConfig: Record<string, unknown> = {},
+  ): Record<string, unknown> {
     const approveAgentMcpTools =
       (config.policy?.approvals === "auto-approve" &&
         (config.approvalPolicy ?? "never") === "never" &&
         config.sandbox !== "read-only") ||
       (config.policy?.id === "coordinator-read-only" && Boolean(config.permissionProfile)) ||
       Boolean(config.workflowResultTool && config.agentMcp);
+    const cwd = config.cwd ?? this.options.cwd;
     const threadConfig: Record<string, unknown> = {
       // A sandbox's network switch stops commands, not hosted web search, which
       // runs on OpenAI's servers: off, or `cached` (no live page fetches) when
@@ -1514,6 +1543,10 @@ export class AppServerEngine implements CodexEngine {
       // process carries the same setting as process configuration, which
       // `assertHostedNetworkLock` reads back.
       ...codexNetworkDeniedConfig(config.policy),
+      // Project resources off: this thread does not load the checkout's own
+      // `.codex` configuration, even where the user trusts it in Codex.
+      ...codexProjectTrustConfig(config.policy, cwd),
+      ...extraConfig,
       ...(config.agentMcp
         ? {
             // Replace the complete server table. The app-server process may
@@ -1566,7 +1599,7 @@ export class AppServerEngine implements CodexEngine {
         : {}),
     };
     return {
-      cwd: config.cwd ?? this.options.cwd,
+      cwd,
       // Passed explicitly on every call rather than relying on inherited state.
       approvalPolicy: config.approvalPolicy ?? "never",
       approvalsReviewer: config.approvalsReviewer ?? "user",
@@ -1625,22 +1658,24 @@ export class AppServerEngine implements CodexEngine {
 
   async startThread(options: StartThreadOptions): Promise<EngineThread> {
     const generation = await this.assertHostedNetworkLock(options.config);
+    const extra = await this.projectResourceThreadConfig(generation, options.config);
     const response = await this.supervisor.requestOnGeneration<{
       thread: Record<string, unknown>;
       model?: unknown;
       activePermissionProfile?: { id?: unknown } | null;
-    }>(generation, "thread/start", this.toThreadParams(options.config));
+    }>(generation, "thread/start", this.toThreadParams(options.config, extra));
     this.assertPermissionProfile(response.activePermissionProfile, options.config);
     return this.bindThread(response.thread, options.config, response.model);
   }
 
   async resumeThread(threadId: string, options: ResumeThreadOptions): Promise<EngineThread> {
     const generation = await this.assertHostedNetworkLock(options.config);
+    const extra = await this.projectResourceThreadConfig(generation, options.config);
     const response = await this.supervisor.requestOnGeneration<{
       thread: Record<string, unknown>;
       model?: unknown;
       activePermissionProfile?: { id?: unknown } | null;
-    }>(generation, "thread/resume", { threadId, ...this.toThreadParams(options.config) });
+    }>(generation, "thread/resume", { threadId, ...this.toThreadParams(options.config, extra) });
     this.assertPermissionProfile(response.activePermissionProfile, options.config);
     const thread = this.bindThread(response.thread, options.config, response.model);
     // app-server reconstructs turn history on resume by default.
@@ -1693,6 +1728,7 @@ export class AppServerEngine implements CodexEngine {
     lastTurnId?: string,
   ): Promise<EngineThread> {
     const generation = await this.assertHostedNetworkLock(config);
+    const extra = await this.projectResourceThreadConfig(generation, config);
     const response = await this.supervisor.requestOnGeneration<{
       thread: Record<string, unknown>;
       model?: unknown;
@@ -1700,7 +1736,7 @@ export class AppServerEngine implements CodexEngine {
     }>(generation, "thread/fork", {
       threadId,
       ...(lastTurnId ? { lastTurnId } : {}),
-      ...this.toThreadParams(config),
+      ...this.toThreadParams(config, extra),
     });
     this.assertPermissionProfile(response.activePermissionProfile, config);
     return this.bindThread(response.thread, config, response.model);

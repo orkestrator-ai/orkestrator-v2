@@ -3,7 +3,15 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { withDockerScript } from "../../tests/container-lifecycle-fixtures.js";
+import {
+  memoryLifecycleContext,
+  withDockerScript,
+} from "../../tests/container-lifecycle-fixtures.js";
+import { registerDockerCommands } from "./commands-registry-docker.js";
+import type { CommandHandler } from "./commands-context.js";
+import type { RegistryDependencies } from "./commands-registry-types.js";
+import { dockerOwnerNamespace } from "./docker-ownership.js";
+import { resetImageManifestCache } from "./docker-image.js";
 import { revokeProviderCredentials } from "./portable-input-status.js";
 import { staleLoginEnvironmentIds } from "./agent-account-bridge-state.js";
 import {
@@ -12,6 +20,7 @@ import {
   reconcileContainerAgentAccount,
   refreshStagedAgentAccountLogins,
   syncContainerAgentAccountsOnStart,
+  startContainerWithAgentAccounts,
   syncContainerGrokLogin,
   type ContainerRunners,
 } from "./agent-accounts-containers.js";
@@ -111,6 +120,16 @@ async function stage(): Promise<string> {
     },
   );
   return staged.revision;
+}
+
+async function start(fake: ReturnType<typeof fakeRunners>): Promise<void> {
+  await withDockerScript(
+    `#!/bin/sh
+if [ "$1" = "inspect" ]; then printf 'false\\n'; fi
+exit 0
+`,
+    async () => startContainerWithAgentAccounts(context, environment, "container-1", fake.runners),
+  );
 }
 
 function staged(revision: string, relative: string): string {
@@ -397,7 +416,7 @@ describe("refreshStagedAgentAccountLogins", () => {
 });
 
 describe("syncContainerAgentAccountsOnStart", () => {
-  test("pipes the active Claude account's login and resets the Codex marker", async () => {
+  test("pipes the active Claude account's login and preserves the installed Codex marker", async () => {
     await addAccounts({ claude: CLAUDE_ID });
     const fake = fakeRunners(null);
     fake.markers.set("/tmp/orkestrator-codex-account", CODEX_ID);
@@ -414,7 +433,7 @@ describe("syncContainerAgentAccountsOnStart", () => {
     expect(piped?.command).toBe(SYNC_CONTAINER_CLAUDE_CREDENTIAL_COMMAND);
     expect(piped?.stdin).toContain("claude-2");
     expect(fake.markers.get("/tmp/orkestrator-claude-account")).toBe(CLAUDE_ID);
-    expect(fake.markers.has("/tmp/orkestrator-codex-account")).toBe(false);
+    expect(fake.markers.get("/tmp/orkestrator-codex-account")).toBe(CODEX_ID);
   });
 
   test("a renewal during start copying cannot mark the old credential as renewed", async () => {
@@ -544,6 +563,198 @@ describe("reconcileContainerAgentAccount", () => {
     await reconcileContainerAgentAccount(context, "container-1", "codex", control, fake.runners);
     expect(fake.calls.filter((call) => call.kind === "pipe")).toHaveLength(1);
     expect(state.stopped).toBe(1);
+  });
+
+  test("a restart that restaged another account still switches back to the host", async () => {
+    const revision = await stage();
+    await addAccounts({ codex: CODEX_ID });
+    const fake = fakeRunners(revision);
+    const global = { enabledAgentPlatforms: ["claude", "codex"] } as never;
+    // Restart while the added account is active: the entrypoint imports its login.
+    await start(fake);
+    await syncContainerAgentAccountsOnStart(
+      context,
+      environment,
+      "container-1",
+      global,
+      fake.runners,
+    );
+    expect(fake.markers.get("/tmp/orkestrator-codex-account")).toBe("unstaged");
+
+    await storage.mutateAgentAccounts((store) => ({
+      store: { ...store, active: {} },
+      result: undefined,
+    }));
+    const { state, control } = bridge(true);
+    await reconcileContainerAgentAccount(context, "container-1", "codex", control, fake.runners);
+
+    const piped = fake.calls.filter((call) => call.command.includes(".codex/auth.json")).at(-1);
+    expect(piped?.stdin).toBe('{"OPENAI_API_KEY":"codex-host"}');
+    expect(fake.markers.get("/tmp/orkestrator-codex-account")).toBe("default");
+    expect(state.stopped).toBe(1);
+  });
+
+  test("a restart that staged no login leaves the next bridge start to correct the container", async () => {
+    const revision = await stage();
+    await addAccounts({});
+    const expired = `h.${Buffer.from(
+      JSON.stringify({ exp: Math.floor(Date.now() / 1000) - 3600 }),
+    ).toString("base64url")}.s`;
+    await write(
+      path.join(root, "host-codex", "auth.json"),
+      JSON.stringify({ tokens: { access_token: expired, refresh_token: "r" } }),
+    );
+    const fake = fakeRunners(revision);
+    const global = { enabledAgentPlatforms: ["claude", "codex"] } as never;
+    await start(fake);
+    await syncContainerAgentAccountsOnStart(
+      context,
+      environment,
+      "container-1",
+      global,
+      fake.runners,
+    );
+    // The container kept whatever copy it had, which may be another account's.
+    expect(fake.markers.get("/tmp/orkestrator-codex-account")).toBe("unstaged");
+
+    await reconcileContainerAgentAccount(
+      context,
+      "container-1",
+      "codex",
+      bridge(false).control,
+      fake.runners,
+    );
+    expect(fake.calls.some((call) => call.command === "rm -f /home/node/.codex/auth.json")).toBe(
+      true,
+    );
+    expect(fake.markers.get("/tmp/orkestrator-codex-account")).toBe("default");
+  });
+
+  test("A to host during restaging and back to A still delivers A's login", async () => {
+    const revision = await stage();
+    await addAccounts({ codex: CODEX_ID });
+    context.storage.loadConfig = async () =>
+      ({ global: { enabledAgentPlatforms: ["codex"] } }) as never;
+    const fake = fakeRunners(revision);
+    const loadAgentAccounts = context.storage.loadAgentAccounts.bind(context.storage);
+    let reads = 0;
+    context.storage.loadAgentAccounts = async () => {
+      const snapshot = await loadAgentAccounts();
+      reads++;
+      await storage.mutateAgentAccounts((current) => ({
+        store: { ...current, active: {} },
+        result: undefined,
+      }));
+      return snapshot;
+    };
+    await start(fake);
+    context.storage.loadAgentAccounts = loadAgentAccounts;
+    // The credential home came from one snapshot. No second marker read can
+    // misattribute a host login to A, nor does startup acknowledge an import.
+    expect(reads).toBe(1);
+    expect(await fs.readFile(staged(revision, "codex-home/auth.json"), "utf8")).toBe(
+      '{"OPENAI_API_KEY":"codex-2"}',
+    );
+    await storage.mutateAgentAccounts((store) => ({
+      store: { ...store, active: { codex: CODEX_ID } },
+      result: undefined,
+    }));
+    await syncContainerAgentAccountsOnStart(
+      context,
+      environment,
+      "container-1",
+      { enabledAgentPlatforms: ["codex"] } as never,
+      fake.runners,
+    );
+    expect(fake.markers.get("/tmp/orkestrator-codex-account")).toBe("unstaged");
+    await reconcileContainerAgentAccount(
+      context,
+      "container-1",
+      "codex",
+      bridge(true).control,
+      fake.runners,
+    );
+    expect(fake.calls.filter((call) => call.kind === "pipe").at(-1)?.stdin).toBe(
+      '{"OPENAI_API_KEY":"codex-2"}',
+    );
+    expect(fake.markers.get("/tmp/orkestrator-codex-account")).toBe(CODEX_ID);
+  });
+
+  test("startup without any restage hint never makes an added login look like the host", async () => {
+    const revision = await stage();
+    await addAccounts({ codex: CODEX_ID });
+    const fake = fakeRunners(revision);
+    await start(fake);
+    expect(await fs.readFile(staged(revision, "codex-home/auth.json"), "utf8")).toContain(
+      "codex-2",
+    );
+    // Startup can run repeatedly or in a recreated backend; there is no
+    // in-process hand-off to consume, lose, or misidentify by a short id.
+    for (let i = 0; i < 2; i++) {
+      await syncContainerAgentAccountsOnStart(
+        context,
+        environment,
+        "container-1",
+        { enabledAgentPlatforms: ["codex"] } as never,
+        fake.runners,
+      );
+    }
+    await addAccounts({});
+    await reconcileContainerAgentAccount(
+      context,
+      "container-1",
+      "codex",
+      bridge(true).control,
+      fake.runners,
+    );
+    expect(fake.calls.filter((call) => call.kind === "pipe").at(-1)?.stdin).toBe(
+      '{"OPENAI_API_KEY":"codex-host"}',
+    );
+  });
+
+  test("reconciliation copies the identity, home and generation from one registry snapshot", async () => {
+    const before = "11111111-2222-4333-8444-555555555555";
+    const after = "99999999-8888-4777-8666-555555555555";
+    await addAccounts({ codex: CODEX_ID });
+    await storage.mutateAgentAccounts((store) => ({
+      store: { ...store, loginGeneration: { codex: before } },
+      result: undefined,
+    }));
+    const fake = fakeRunners(null);
+    const exec = fake.runners.exec;
+    fake.runners.exec = async (id, command) => {
+      const result = await exec(id, command);
+      if (command.startsWith("cat /tmp/orkestrator-codex-account")) {
+        await storage.mutateAgentAccounts((store) => ({
+          store: { ...store, active: {}, loginGeneration: { codex: after } },
+          result: undefined,
+        }));
+      }
+      return result;
+    };
+    await reconcileContainerAgentAccount(
+      context,
+      "container-1",
+      "codex",
+      bridge(false).control,
+      fake.runners,
+    );
+    expect(fake.calls.filter((call) => call.kind === "pipe").at(-1)?.stdin).toBe(
+      '{"OPENAI_API_KEY":"codex-2"}',
+    );
+    expect(fake.markers.get("/tmp/orkestrator-codex-account")).toBe(`${CODEX_ID}:${before}`);
+    fake.runners.exec = exec;
+    await reconcileContainerAgentAccount(
+      context,
+      "container-1",
+      "codex",
+      bridge(false).control,
+      fake.runners,
+    );
+    expect(fake.calls.filter((call) => call.kind === "pipe").at(-1)?.stdin).toBe(
+      '{"OPENAI_API_KEY":"codex-host"}',
+    );
+    expect(fake.markers.get("/tmp/orkestrator-codex-account")).toBe(`default:${after}`);
   });
 
   test("leaves a busy bridge on its account", async () => {
@@ -705,6 +916,233 @@ describe("reconcileContainerAgentAccount", () => {
     );
     expect(fake.calls).toEqual([]);
   });
+});
+
+describe("container start credential hand-off", () => {
+  async function withStartFixture(
+    options: {
+      running?: boolean;
+      entrypointInvalidates?: boolean;
+      failure?: "start" | "ambiguous-start" | "project-access" | "boot" | "marker-write";
+    },
+    run: (fixture: {
+      start: (shortId?: boolean) => Promise<unknown>;
+      auth: () => Promise<string>;
+      marker: () => Promise<string>;
+      stagedAuth: () => Promise<string>;
+    }) => Promise<void>,
+  ): Promise<void> {
+    const fullId = "a".repeat(64);
+    environment.containerId = fullId;
+    if (options.failure === "boot") {
+      resetImageManifestCache();
+      environment.containerLifecycle = {
+        schemaVersion: 1,
+        revision: 0,
+        lastRuntimeGeneration: 1,
+        runtime: {
+          containerId: fullId,
+          runtimeGeneration: 1,
+          owner: dockerOwnerNamespace(storage.getDataDir()),
+          imageId: `sha256:${"b".repeat(64)}`,
+        },
+        storage: { format: "legacy-layer", workspaceGeneration: 1 },
+        outcomes: [],
+      };
+    }
+    context.storage.loadConfig = async () =>
+      ({ global: { enabledAgentPlatforms: ["codex"] } }) as never;
+    const lifecycle = memoryLifecycleContext([environment], storage.getDataDir()).context;
+    context.runtime = lifecycle.runtime;
+    context.environmentLifecycleTasks = lifecycle.environmentLifecycleTasks;
+    context.emit = lifecycle.emit;
+    const revision = await stage();
+    const authFile = path.join(root, "installed-auth.json");
+    const markerFile = path.join(root, "installed-marker");
+    const runningFile = path.join(root, "running");
+    const failedMarkerWrite = path.join(root, "failed-marker-write");
+    await write(authFile, '{"OPENAI_API_KEY":"codex-host"}');
+    await write(markerFile, "default");
+    await write(runningFile, String(options.running ?? false));
+    const commands = new Map<string, CommandHandler>();
+    registerDockerCommands(
+      (name, handler) => commands.set(name, handler),
+      {} as RegistryDependencies,
+    );
+    // Exercise the real registry, lifecycle queue, restaging and Docker command
+    // boundary. Only the daemon is replaced; its installed login is independent
+    // of staged inputs and changes on a genuine boot or an actual credential pipe.
+    const script = `#!/usr/bin/env bun
+import { readFileSync, writeFileSync, copyFileSync, existsSync } from "node:fs";
+const [command, ...args] = process.argv.slice(2);
+const auth = ${JSON.stringify(authFile)};
+const marker = ${JSON.stringify(markerFile)};
+const running = ${JSON.stringify(runningFile)};
+const failure = ${JSON.stringify(options.failure ?? null)};
+const failedMarkerWrite = ${JSON.stringify(failedMarkerWrite)};
+if (command === "inspect") {
+  const format = args[1];
+  if (format.includes(".State.Running")) console.log(readFileSync(running, "utf8"));
+  else if (format.includes("orkestrator-owner")) console.log(${JSON.stringify(dockerOwnerNamespace(storage.getDataDir()))} + "\\trunning\\torkestrator-v2\\t" + ${JSON.stringify(fullId)});
+  else if (format.includes("orkestrator-inputs-revision")) console.log(${JSON.stringify(revision)});
+  else process.exit(1);
+} else if (command === "start") {
+  if (failure === "start") process.exit(17);
+  if (readFileSync(running, "utf8") !== "true") {
+    if (${JSON.stringify(options.entrypointInvalidates ?? false)}) writeFileSync(marker, "unstaged");
+    copyFileSync(${JSON.stringify(staged(revision, "codex-home/auth.json"))}, auth);
+    writeFileSync(running, "true");
+  }
+  if (failure === "ambiguous-start") process.exit(17);
+} else if (command === "exec") {
+  if (readFileSync(running, "utf8") !== "true") process.exit(18);
+  if (args[0] === "--user") {
+    if (failure === "project-access") process.exit(19);
+  } else {
+    const text = args.at(-1);
+    if (text.includes("/run/orkestrator/boot-status.json")) {
+      console.log(JSON.stringify({ version: 1, bootId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", pid1Start: "5000", phase: "failed", failureCode: "entrypoint-failed" }));
+      console.log("5000");
+    } else if (text.startsWith("cat /tmp/orkestrator-codex-account")) console.log(readFileSync(marker, "utf8"));
+    else if (text.includes("/tmp/orkestrator-codex-account")) {
+      if (failure === "marker-write" && !existsSync(failedMarkerWrite)) {
+        writeFileSync(failedMarkerWrite, "failed");
+        process.exit(23);
+      }
+      const value = text.match(/printf '%s' '([^']*)'/)?.[1];
+      if (value === undefined) process.exit(20);
+      writeFileSync(marker, value);
+    } else if (text.includes("/home/node/.codex/auth.json")) writeFileSync(auth, await Bun.stdin.text());
+    else process.exit(21);
+  }
+} else if (command === "create") console.log("manifest-probe");
+else if (command === "cp") {
+  const body = Buffer.from(JSON.stringify({ schemaVersion: 1, appVersion: "1.0.0", sourceRevision: null, architecture: "arm64", runtimes: {}, agents: {}, bridges: [], capabilities: { "boot-status": 1 }, stateFormats: {} }));
+  const header = Buffer.alloc(512);
+  header.write("image-manifest.json");
+  header.write(body.length.toString(8).padStart(11, "0"), 124);
+  header[156] = 48;
+  process.stdout.write(Buffer.concat([header, body]));
+} else if (command !== "rm") process.exit(22);
+`;
+    try {
+      await withDockerScript(script, async () =>
+        run({
+          // A short id must still use the assigned environment's lifecycle path.
+          start: async (shortId = true) =>
+            commands.get("docker_start_container")!(
+              { containerId: shortId ? fullId.slice(0, 12) : fullId },
+              context,
+            ),
+          auth: () => fs.readFile(authFile, "utf8"),
+          marker: () => fs.readFile(markerFile, "utf8"),
+          stagedAuth: () => fs.readFile(staged(revision, "codex-home/auth.json"), "utf8"),
+        }),
+      );
+    } finally {
+      lifecycle.runtime.shutdown();
+      resetImageManifestCache();
+    }
+  }
+
+  test("overlapping short and full id starts cannot consume or replace an installed marker", async () => {
+    await withStartFixture({}, async (fixture) => {
+      await addAccounts({ codex: CODEX_ID });
+      await Promise.all([fixture.start(), fixture.start(false)]);
+      expect(await fixture.auth()).toBe('{"OPENAI_API_KEY":"codex-2"}');
+      expect(await fixture.marker()).toBe("unstaged");
+      await addAccounts({});
+      await reconcileContainerAgentAccount(context, environment.containerId!, "codex", {
+        isRunning: async () => false,
+        stop: async () => {},
+      });
+      expect(await fixture.auth()).toBe('{"OPENAI_API_KEY":"codex-host"}');
+      expect(await fixture.marker()).toBe("default");
+    });
+  });
+
+  test("entrypoint invalidation survives a failed backend marker write", async () => {
+    await withStartFixture(
+      { entrypointInvalidates: true, failure: "marker-write" },
+      async (fixture) => {
+        await addAccounts({ codex: CODEX_ID });
+        await fixture.start();
+        expect(await fixture.auth()).toBe('{"OPENAI_API_KEY":"codex-2"}');
+        expect(await fixture.marker()).toBe("unstaged");
+        await addAccounts({});
+        await reconcileContainerAgentAccount(context, environment.containerId!, "codex", {
+          isRunning: async () => false,
+          stop: async () => {},
+        });
+        expect(await fixture.auth()).toBe('{"OPENAI_API_KEY":"codex-host"}');
+        expect(await fixture.marker()).toBe("default");
+      },
+    );
+  });
+
+  for (const busy of [false, true]) {
+    test(`a no-op start preserves the installed host login until the bridge is idle (busy=${busy})`, async () => {
+      await withStartFixture({ running: true }, async (fixture) => {
+        await addAccounts({ codex: CODEX_ID });
+        liveWork = busy;
+        await fixture.start();
+        expect(await fixture.marker()).toBe("default");
+        expect(await fixture.auth()).toContain("codex-host");
+        expect(await fixture.stagedAuth()).toBe('{"OPENAI_API_KEY":"codex-host"}');
+        let stopped = 0;
+        const bridge = {
+          isRunning: async () => true,
+          stop: async () => {
+            stopped++;
+          },
+        };
+        await reconcileContainerAgentAccount(context, environment.containerId!, "codex", bridge);
+        if (busy) {
+          expect(stopped).toBe(0);
+          expect(await fixture.auth()).toContain("codex-host");
+          liveWork = false;
+          await reconcileContainerAgentAccount(context, environment.containerId!, "codex", bridge);
+        }
+        expect(await fixture.auth()).toBe('{"OPENAI_API_KEY":"codex-2"}');
+        expect(await fixture.marker()).toBe(CODEX_ID);
+        expect(stopped).toBe(1);
+      });
+    });
+  }
+
+  for (const failure of [
+    undefined,
+    "project-access",
+    "boot",
+    "ambiguous-start",
+    "start",
+  ] as const) {
+    test(`a real start leaves a recoverable marker through ${failure ?? "successful startup"}`, async () => {
+      await withStartFixture({ failure }, async (fixture) => {
+        await addAccounts({ codex: CODEX_ID });
+        if (failure)
+          await expect(fixture.start()).rejects.toThrow(
+            failure === "boot" ? "entrypoint-failed" : undefined,
+          );
+        else await fixture.start();
+        if (failure === "start") {
+          // No entrypoint ran: a rejected exec cannot certify a staged account.
+          expect(await fixture.auth()).toContain("codex-host");
+          expect(await fixture.marker()).toBe("default");
+          return;
+        }
+        expect(await fixture.auth()).toContain("codex-2");
+        expect(await fixture.marker()).toBe("unstaged");
+        await addAccounts({});
+        await reconcileContainerAgentAccount(context, environment.containerId!, "codex", {
+          isRunning: async () => false,
+          stop: async () => {},
+        });
+        expect(await fixture.auth()).toBe('{"OPENAI_API_KEY":"codex-host"}');
+        expect(await fixture.marker()).toBe("default");
+      });
+    });
+  }
 });
 
 describe("syncContainerGrokLogin", () => {

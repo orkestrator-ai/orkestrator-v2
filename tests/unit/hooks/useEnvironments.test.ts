@@ -7,6 +7,7 @@ import { useClaudeOptionsStore } from "../../../apps/web/src/stores/claudeOption
 import { useLoopedReviewStore } from "../../../apps/web/src/stores/loopedReviewStore";
 import { useUIStore } from "../../../apps/web/src/stores/uiStore";
 import { useErrorDialogStore } from "../../../apps/web/src/stores/errorDialogStore";
+import { useProjectStore } from "../../../apps/web/src/stores/projectStore";
 import { useSessionStore } from "../../../apps/web/src/stores/sessionStore";
 import { usePaneLayoutStore } from "../../../apps/web/src/stores/paneLayoutStore";
 import { mockToastError, mockToastInfo, mockToastSuccess } from "../../mocks/sonner";
@@ -17,7 +18,7 @@ import type {
   PortMapping,
   StartEnvironmentResult,
 } from "../../../apps/web/src/types";
-import { createMockEnvironment } from "../utils/testFactories";
+import { createMockEnvironment, createMockProject } from "../utils/testFactories";
 import {
   DEFAULT_TERMINAL_APPEARANCE,
   DEFAULT_TERMINAL_SCROLLBACK,
@@ -180,6 +181,7 @@ describe("useEnvironments", () => {
     });
     useLoopedReviewStore.setState({ workflows: new Map() });
     useErrorDialogStore.setState({ error: null });
+    useProjectStore.setState({ projects: [] });
     useClaudeOptionsStore.setState({ options: {}, pendingNativeLaunches: {} });
     useConfigStore.setState({
       config: {
@@ -807,6 +809,138 @@ describe("useEnvironments", () => {
     expect(result.current.error).toBe("Failed to delete");
     expect(result.current.allEnvironments).toHaveLength(1);
   });
+
+  test.each([
+    ["startEnvironment", "start", "start"],
+    ["stopEnvironment", "stop", "stop"],
+    ["restartEnvironment", "restart", "stop"],
+    ["restartEnvironment", "restart", "start"],
+    ["deleteEnvironment", "delete", "delete"],
+  ] as const)(
+    "%s retains error context after switching projects (%s, failing %s)",
+    async (operation, verb, failingStep) => {
+      const environment = createMockEnvironment({
+        id: "env-origin",
+        projectId: "project-origin",
+        name: "Original environment",
+        status: "running",
+      });
+      const otherEnvironment = createMockEnvironment({
+        id: "env-other",
+        projectId: "project-other",
+        name: "Other environment",
+      });
+      useProjectStore.setState({
+        projects: [
+          createMockProject({ id: environment.projectId, name: "Original project" }),
+          createMockProject({ id: otherEnvironment.projectId, name: "Other project" }),
+        ],
+      });
+      useEnvironmentStore.setState({ environments: [environment, otherEnvironment] });
+      useUIStore.setState({
+        selectedProjectId: environment.projectId,
+        selectedEnvironmentId: environment.id,
+      });
+      mockGetEnvironments.mockImplementation((projectId) =>
+        Promise.resolve(projectId === environment.projectId ? [environment] : [otherEnvironment]),
+      );
+      const failure = createDeferred<never>();
+      const failingBackend = {
+        start: mockStartEnvironment,
+        stop: mockStopEnvironment,
+        delete: mockDeleteEnvironment,
+      }[failingStep];
+      failingBackend.mockImplementation(() => failure.promise);
+      const { result, rerender } = renderHook(({ projectId }) => useEnvironments(projectId), {
+        initialProps: { projectId: environment.projectId },
+      });
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+      const initialPrompt = "Keep this initial prompt available for recovery";
+      const message = `Provisioning failed: ${"x".repeat(80)}`;
+      let outcome!: Promise<unknown>;
+      act(() => {
+        const pending =
+          operation === "startEnvironment"
+            ? result.current.startEnvironment(environment.id, initialPrompt)
+            : result.current[operation](environment.id);
+        // Handle rejection immediately while the backend call is still pending.
+        outcome = pending.then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+      });
+      await waitFor(() => expect(failingBackend).toHaveBeenCalledWith(environment.id));
+
+      act(() => {
+        useUIStore.setState({
+          selectedProjectId: otherEnvironment.projectId,
+          selectedEnvironmentId: otherEnvironment.id,
+        });
+      });
+      rerender({ projectId: otherEnvironment.projectId });
+      await waitFor(() => expect(result.current.environments[0]?.id).toBe(otherEnvironment.id));
+      await act(async () => {
+        failure.reject(new Error(message));
+        expect(await outcome).toMatchObject({ message });
+      });
+
+      expect(mockToastError).toHaveBeenCalledTimes(1);
+      expect(mockToastError).toHaveBeenCalledWith(`Failed to ${verb} environment`, {
+        description: `Original project / Original environment: Provisioning failed: ${"x".repeat(29)}...`,
+        action: { label: "Details", onClick: expect.any(Function) },
+      });
+      const toastOptions = mockToastError.mock.calls[0]?.[1] as {
+        action: { onClick: () => void };
+      };
+      act(() => {
+        // Details must retain the toast's identity even if its source disappears later.
+        useEnvironmentStore.setState({ environments: [otherEnvironment] });
+        useProjectStore.setState({ projects: [] });
+        toastOptions.action.onClick();
+      });
+      expect(useErrorDialogStore.getState().error).toMatchObject({
+        title: `Failed to ${verb} environment`,
+        message,
+        initialPrompt: operation === "startEnvironment" ? initialPrompt : undefined,
+        context: { project: "Original project", environment: "Original environment" },
+      });
+    },
+  );
+
+  test.each([true, false])(
+    "start failure falls back to environment identity without a project (environment exists: %s)",
+    async (environmentExists) => {
+      if (environmentExists) {
+        useEnvironmentStore.setState({
+          environments: [createMockEnvironment({ id: "env-orphan", name: "Orphan environment" })],
+        });
+      }
+      mockStartEnvironment.mockRejectedValue(new Error("Start rejected"));
+      const { result } = renderHook(() => useEnvironments(null));
+      await act(async () => {
+        await expect(result.current.startEnvironment("env-orphan")).rejects.toThrow(
+          "Start rejected",
+        );
+      });
+
+      const identity = environmentExists ? "Orphan environment" : "env-orphan";
+      expect(mockToastError).toHaveBeenCalledTimes(1);
+      expect(mockToastError.mock.calls[0]?.[1]).toMatchObject({
+        description: `${identity}: Start rejected`,
+      });
+      const toastOptions = mockToastError.mock.calls[0]?.[1] as {
+        action: { onClick: () => void };
+      };
+      act(() => toastOptions.action.onClick());
+      expect(useErrorDialogStore.getState().error).toMatchObject({
+        title: "Failed to start environment",
+        message: "Start rejected",
+        initialPrompt: undefined,
+        context: { project: undefined, environment: identity },
+      });
+    },
+  );
 
   test("startEnvironment starts an environment and updates status", async () => {
     const existingEnv = createMockEnvironment({
@@ -1788,6 +1922,10 @@ describe("useEnvironments", () => {
     useEnvironmentStore.setState({
       environments: [environment],
     });
+    const previousProjects = useProjectStore.getState().projects;
+    useProjectStore.setState({
+      projects: [createMockProject({ id: "project-1", name: "orkestrator-v2" })],
+    });
     mockGetEnvironment.mockResolvedValue({
       ...environment,
       status: "error",
@@ -1796,6 +1934,7 @@ describe("useEnvironments", () => {
     });
 
     await reconcileEnvironmentSetupSnapshots();
+    useProjectStore.setState({ projects: previousProjects });
 
     const state = useEnvironmentStore.getState();
     expect(state.getEnvironmentById(environment.id)).toMatchObject({
@@ -1811,9 +1950,13 @@ describe("useEnvironments", () => {
     act(() => {
       toastOptions.action?.onClick?.();
     });
+    expect(mockToastError.mock.calls[0]?.[1]).toMatchObject({
+      description: "orkestrator-v2 / mock-env: Docker provisioning failed",
+    });
     expect(useErrorDialogStore.getState().error).toMatchObject({
       title: "Failed to start environment",
       message: "Docker provisioning failed",
+      context: { project: "orkestrator-v2", environment: "mock-env" },
     });
   });
 

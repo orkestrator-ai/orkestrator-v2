@@ -460,6 +460,8 @@ export interface NativeAgentServiceOptions {
    * would be instructing it to use a tool it does not have.
    */
   coordinatorDelegationAvailable?: (platform: AgentPlatform) => boolean;
+  /** The coordinator's node-role line (leaf mode or command node), or null. */
+  coordinatorNodeContext?: () => Promise<string | null>;
   /** Test seam for exercising deterministic detail-cache capacity eviction. */
   toolDetailCacheMaxEntries?: number;
   /** Test seam for exercising deterministic detail-cache byte eviction. */

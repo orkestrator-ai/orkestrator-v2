@@ -57,10 +57,10 @@ it reaches. Some rules of thumb:
 | Score | Meaning | Items |
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
-| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 18 |
-| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 266 |
-| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 281 |
-| **Total** | | **566** |
+| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 14 |
+| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 272 |
+| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 285 |
+| **Total** | | **572** |
 
 ## Very high
 
@@ -91,7 +91,7 @@ it reaches. Some rules of thumb:
 
 - [x] Re-baseline the opt-in preview suites and all preview unit files on current main after #966, #967 and #969 ([service-preview-rollout.md](service-preview-rollout.md), qualification)
 - [x] Run the real Electron window service-preview qualification with the tunnel enabled in an isolated profile ([service-preview-rollout.md](service-preview-rollout.md), qualification)
-- [ ] Cover the remaining real-Electron service-preview cases: windows on different backends, a connection switch, clipboard, overlays, HMR reattach, keyboard and narrow viewport ([service-preview-rollout.md](service-preview-rollout.md), qualification)
+- [x] Cover the remaining real-Electron service-preview cases: windows on different backends, a connection switch, clipboard, overlays, HMR reattach, keyboard and narrow viewport ([service-preview-rollout.md](service-preview-rollout.md), qualification)
 - [ ] Write a two-machine tailnet runbook and run decoy, latency, throttling, reconnect and publication checks ([service-preview-rollout.md](service-preview-rollout.md), qualification)
 - [x] Re-run the annotation Electron and isolated browser suites on current main and record a sign-off ([web-annotation-qualification.md](web-annotation-qualification.md), qualification)
 - [x] Run the live annotation implement test once per provider and record skips explicitly ([web-annotation-qualification.md](web-annotation-qualification.md), qualification)
@@ -123,7 +123,7 @@ it reaches. Some rules of thumb:
 ### Design canvas (high)
 
 - [x] Run a live Claude and Codex design-tool cycle, including Ask agent, handoff and an environment switch ([design-canvas-qualification.md](design-canvas-qualification.md), qualification)
-- [ ] Rerun the live Claude design cycle's Ask agent, approval and handoff steps on an account that is not rate-limited ([design-canvas-qualification.md](design-canvas-qualification.md), qualification)
+- [x] Rerun the live Claude design cycle's Ask agent, approval and handoff steps on an account that is not rate-limited ([design-canvas-qualification.md](design-canvas-qualification.md), qualification)
 - [x] Verify whether the open design flakes, especially the extra event in 0215, reflect ordering bugs ([design-canvas-qualification.md](design-canvas-qualification.md), verify)
 - [x] Reject a reused design `correlationId` with different input on settled receipts in `submit` and `findCreate` ([design-operation-recovery-edges.md](design-operation-recovery-edges.md))
 
@@ -138,7 +138,7 @@ it reaches. Some rules of thumb:
 
 - [x] Park Claude `onElicitation` and `onUserDialog` requests as interactions instead of declining them ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md))
 - [x] Check on each platform that the Agent Info policy summary matches the options the adapter received ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), qualification)
-- [ ] Qualify a paused question and approval on each provider's real CLI past ten minutes, then answer ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), qualification)
+- [x] Qualify a paused question and approval on each provider's real CLI past ten minutes, then answer ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), qualification)
 - [x] Keep the Claude CLI open across idle turns with an idle detach instead of draining at turn end ([mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md))
 - [x] Report `authentication-required` readiness on Claude, Pi, ACP and OpenCode; drop the Cursor-only 401 branch ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md))
 - [x] Confirm no auth response body carries a token or key except the login URL, and the URL is never logged ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md), qualification)
@@ -153,7 +153,7 @@ it reaches. Some rules of thumb:
 - [x] `qualification` Record `test:agent:electron` and the desktop live-host probe on the release Electron build ([rich-transcripts.md](rich-transcripts.md))
 - [x] Qualify live history paging and reviewer Load earlier messages beyond the 100-message live window ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
 - [x] Run a live multi-review: progress probes, reviewer windows, detail expansion, pages and scroll anchoring ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
-- [ ] Qualify Claude inactive-tab and background-task runs against content-revision tokens ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
+- [x] Qualify Claude inactive-tab and background-task runs against content-revision tokens ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
 - [x] Qualify cold restart: display tails and pipeline histories reconcile, including a mid-dispatch restart ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
 - [ ] Qualify idle observation live per provider: missed final event, approvals, sub-agents, reconnect, hidden ([native-agent-idle-observation.md](native-agent-idle-observation.md), qualification)
 - [x] Back off gateway terminal fallback reconnect timers with `ReconnectBackoff`, resetting after healthy streams ([client-reconnect-and-freshness.md](client-reconnect-and-freshness.md))
@@ -197,7 +197,7 @@ it reaches. Some rules of thumb:
 - [x] Fix flake 0166 (OpenCode probe deadline), which recurred on 2026-10-15 ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
 - [x] Keep split panes mounted across the mobile breakpoint through stable per-pane hosts ([mobile-layout-gaps.md](mobile-layout-gaps.md))
 - [x] Move the environment settings dialog out of the drawer row so it is usable on mobile ([mobile-layout-gaps.md](mobile-layout-gaps.md))
-- [x] Keep MCP editor writes in an agent-test profile out of the host's Codex and OpenCode homes when those credential sources are authorized ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md))
+- [x] Keep MCP editor writes and Codex approval rules in an agent-test profile out of the host's Codex and OpenCode homes when those credential sources are authorized ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md))
 - [ ] Send agent-test container environments the host's Claude access token only, never its refresh token ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md))
 
 ## Medium
@@ -285,7 +285,8 @@ it reaches. Some rules of thumb:
 - [ ] Run the container C-scenarios on native arm64 hardware and mark emulation-only evidence ([container-platform-qualification.md](container-platform-qualification.md), qualification)
 - [ ] Measure compressed manifest and layer bytes and cold pull time for a pushed GHCR image ([container-platform-qualification.md](container-platform-qualification.md), qualification)
 - [ ] Qualify session resume after rebuild (C13) for Codex, OpenCode, Pi, Cursor and Grok ([container-platform-qualification.md](container-platform-qualification.md), qualification)
-- [ ] Qualify live credential rotation (C21) while a provider process runs, including account switching ([container-platform-qualification.md](container-platform-qualification.md), qualification)
+- [x] Qualify live credential rotation (C21) while a provider process runs, including account switching ([container-platform-qualification.md](container-platform-qualification.md), qualification)
+- [ ] Qualify live credential rotation (C21) for Claude, Cursor and the Grok bridge-start push while a provider process runs ([container-platform-qualification.md](container-platform-qualification.md), qualification)
 - [ ] Inject readiness failures on a real daemon (firewall, DNS, permissions, status write, Docker restart, C10) ([container-platform-qualification.md](container-platform-qualification.md), qualification)
 - [ ] Run a live daemon disconnect mid-copy and a process kill around the rebuild commit write ([container-platform-qualification.md](container-platform-qualification.md), qualification)
 - [ ] Check the agent-tools port is answered from a container on a host whose reachability path is open (C22) ([container-platform-qualification.md](container-platform-qualification.md), qualification)
@@ -297,6 +298,8 @@ it reaches. Some rules of thumb:
 - [ ] Generate one canonical default allowlist for the backend, renderer and firewall fallbacks ([container-network-and-credential-isolation.md](container-network-and-credential-isolation.md))
 - [ ] Prototype bounded external egress enforcement so restricted containers no longer need `NET_ADMIN` ([container-network-and-credential-isolation.md](container-network-and-credential-isolation.md))
 - [ ] Qualify a Grok container running past the host access token's expiry with a live login: it signs out alone, the host stays signed in ([container-network-and-credential-isolation.md](container-network-and-credential-isolation.md), qualification)
+- [ ] Tell a container user to restart the environment to recover a lapsed host-imported Codex or Grok login ([container-network-and-credential-isolation.md](container-network-and-credential-isolation.md))
+- [ ] Decide whether a host Codex or Grok sign-out removes the access-only copy from a container that never added an account ([container-network-and-credential-isolation.md](container-network-and-credential-isolation.md), decision)
 - [ ] Choose and apply a measured default CPU, memory and PID budget for new container runtimes ([container-resource-budgets-and-performance.md](container-resource-budgets-and-performance.md))
 - [ ] Measure browser, build and provider workloads with and without the experiment budget on Engine and Desktop ([container-resource-budgets-and-performance.md](container-resource-budgets-and-performance.md), qualification)
 - [ ] Record container benchmark numbers for Docker Desktop and arm64 against the regression targets ([container-resource-budgets-and-performance.md](container-resource-budgets-and-performance.md), qualification)
@@ -376,6 +379,8 @@ it reaches. Some rules of thumb:
 - [ ] Verify every bridge has per-kind park, render, resolve and fail-closed timeout interaction tests ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), verify)
 - [ ] Verify whether a container Cursor session loads the repository's `.cursor/mcp.json` today ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), verify)
 - [ ] Decide whether Claude MCP OAuth sign-in uses parked `mcp-url` elicitations or a separate MCP flow ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), decision)
+- [ ] Let a real Codex turn raise a question (Plan collaboration mode or `default_mode_request_user_input`), or drop `question` from its capabilities ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md))
+- [ ] Pause a Grok permission and question past ten minutes on a signed-in Grok, then answer ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), qualification)
 - [x] Retire Claude per-turn bookkeeping (continuation watchdog, `backgroundTaskControls`) with the warm runtime ([mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md))
 - [ ] Steer long Claude and Cursor turns, switch environment, return and reload; confirm the snapshot restores it ([mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md), qualification)
 - [x] Measure Claude turn-start and follow-up first-token latency before and after the warm runtime changes ([mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md), qualification)
@@ -393,6 +398,7 @@ it reaches. Some rules of thumb:
 - [ ] Show each auth state from fixtures in the per-session card and, later, the settings card ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md), qualification)
 - [ ] Run a Codex sign-out then sign-in round trip on a fixture profile with Codex credentials ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md), qualification)
 - [ ] Confirm an expired Claude login mid-turn shows the `auth` notice and actionable readiness, not a spawn failure ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md), qualification)
+- [ ] Make an agent-test profile select the Claude credential entry for its chosen host account ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md))
 - [ ] Migrate reasoning and speed axes onto generic `parameters`, or record the decision to keep both models ([composer-model-parameters.md](composer-model-parameters.md))
 - [ ] Apply or reject a per-turn `model` on a Codex dispatch; the Codex prompt body drops it, so an explicit dispatch model on an existing session is ignored ([composer-model-parameters.md](composer-model-parameters.md))
 - [ ] Change an extra Cursor model axis, send a turn, reload, and confirm the value returns from the backend ([composer-model-parameters.md](composer-model-parameters.md), qualification)
@@ -408,6 +414,7 @@ it reaches. Some rules of thumb:
 - [ ] Check what a live Cursor resume row shows when every agent is created as `Orkestrator` ([session-lifecycle-consistency.md](session-lifecycle-consistency.md), verify)
 - [x] Close the empty session a resume into a new tab replaces; Grok keeps a process per resume ([session-lifecycle-consistency.md](session-lifecycle-consistency.md))
 - [ ] Run live close retention for Cursor and Pi with both signed in to an isolated profile ([session-lifecycle-consistency.md](session-lifecycle-consistency.md), qualification)
+- [ ] Retry or serialise OpenCode server starts that fail on the shared `opencode.db` lock, and fail the turn instead of waiting silently ([session-lifecycle-consistency.md](session-lifecycle-consistency.md))
 
 ### Transcripts, observation and bandwidth (medium)
 
@@ -588,6 +595,9 @@ it reaches. Some rules of thumb:
 - [ ] Decide whether annotations on legacy URL tabs may keep depending on the legacy route ([service-preview-rollout.md](service-preview-rollout.md), decision)
 - [ ] Decide whether preview tunnel liveness should outlast a reader paused by backpressure, whose ping waits behind queued data ([service-preview-rollout.md](service-preview-rollout.md), decision)
 - [ ] Name service tabs after their service in the tab strip instead of "Browser N" ([service-preview-rollout.md](service-preview-rollout.md))
+- [ ] Give the service tab's address field room in narrow panes (92 px at the narrowest window) ([service-preview-rollout.md](service-preview-rollout.md))
+- [ ] Confirm flake 0620 (keyboard service picker under timer throttling) stays fixed, then consider its switches for every Electron spec ([service-preview-rollout.md](service-preview-rollout.md), verify)
+- [ ] Verify flake 0622, a remote preview attachment held after its window closed in one slow run ([service-preview-rollout.md](service-preview-rollout.md), verify)
 - [ ] Build the web iframe preview surface: minimal sandbox, honoured framing, top-level fallback, safe postMessage ([embedded-service-previews.md](embedded-service-previews.md))
 - [ ] Investigate partitioned (CHIPS) cookies for the `__Host-orkestrator-preview` transport cookie only ([embedded-service-previews.md](embedded-service-previews.md))
 - [ ] Build an optional iOS in-app preview in a dedicated `WKWebView` with its own data store ([embedded-service-previews.md](embedded-service-previews.md))
@@ -773,6 +783,7 @@ it reaches. Some rules of thumb:
 - [x] Per-block visibility for rich-render idle prefetch ([rich-transcripts.md](rich-transcripts.md))
 - [ ] Record source and normalise phase timing for state and discovery reads ([transcript-history-efficiency.md](transcript-history-efficiency.md))
 - [ ] Verify whether Claude SDK `getSessionMessages` `limit`/`offset` avoids a full JSONL parse ([transcript-history-efficiency.md](transcript-history-efficiency.md), verify)
+- [ ] Verify why a re-activated Claude view takes two or three state and discovery snapshots before settling ([transcript-history-efficiency.md](transcript-history-efficiency.md), verify)
 - [ ] Restructure frontend retained history into immutable pages if 8 MiB profiling shows long tasks ([transcript-history-efficiency.md](transcript-history-efficiency.md), deferred)
 - [ ] Measure bridge-to-backend snapshot bytes and CPU before designing incremental bridge part deltas ([transcript-history-efficiency.md](transcript-history-efficiency.md), deferred)
 - [ ] Add per-message provider revisions so projection can skip its per-row comparison walk ([transcript-history-efficiency.md](transcript-history-efficiency.md), deferred)
@@ -911,7 +922,7 @@ it reaches. Some rules of thumb:
 | File | Very high | High | Medium | Low | Total |
 | --- | --- | --- | --- | --- | --- |
 | **Service previews and web annotations** | | | | | |
-| [service-preview-rollout.md](service-preview-rollout.md) |  | 2 | 12 | 9 | 23 |
+| [service-preview-rollout.md](service-preview-rollout.md) |  | 1 | 12 | 12 | 25 |
 | [embedded-service-previews.md](embedded-service-previews.md) |  |  |  | 13 | 13 |
 | [preview-service-discovery.md](preview-service-discovery.md) |  |  | 1 | 5 | 6 |
 | [web-annotation-qualification.md](web-annotation-qualification.md) |  |  | 15 | 4 | 19 |
@@ -925,12 +936,12 @@ it reaches. Some rules of thumb:
 | **Containers and environments** | | | | | |
 | [container-platform-qualification.md](container-platform-qualification.md) |  |  | 12 | 2 | 14 |
 | [container-rebuild-state-preservation.md](container-rebuild-state-preservation.md) |  |  | 2 | 2 | 4 |
-| [container-network-and-credential-isolation.md](container-network-and-credential-isolation.md) |  | 2 | 3 | 1 | 6 |
+| [container-network-and-credential-isolation.md](container-network-and-credential-isolation.md) |  | 2 | 5 | 1 | 8 |
 | [container-resource-budgets-and-performance.md](container-resource-budgets-and-performance.md) |  |  | 3 | 6 | 9 |
 | [container-state-observation.md](container-state-observation.md) |  |  | 5 | 6 | 11 |
 | [environment-and-disk-cleanup.md](environment-and-disk-cleanup.md) |  |  |  | 6 | 6 |
 | **Design canvas** | | | | | |
-| [design-canvas-qualification.md](design-canvas-qualification.md) |  | 1 | 7 | 6 | 14 |
+| [design-canvas-qualification.md](design-canvas-qualification.md) |  |  | 7 | 6 | 13 |
 | [design-operation-recovery-edges.md](design-operation-recovery-edges.md) |  |  | 1 | 2 | 3 |
 | [design-agent-conversation-links.md](design-agent-conversation-links.md) |  |  | 5 | 3 | 8 |
 | **MCP** | | | | | |
@@ -938,17 +949,17 @@ it reaches. Some rules of thumb:
 | [mcp-environment-delivery.md](mcp-environment-delivery.md) |  |  | 4 | 10 | 14 |
 | [control-mcp-voice-surface.md](control-mcp-voice-surface.md) |  |  | 9 |  | 9 |
 | **Agent engines and provider SDKs** | | | | | |
-| [agent-interactions-and-permissions.md](agent-interactions-and-permissions.md) |  | 1 | 13 | 6 | 20 |
+| [agent-interactions-and-permissions.md](agent-interactions-and-permissions.md) |  |  | 15 | 6 | 21 |
 | [mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md) |  |  | 3 | 5 | 8 |
 | [session-titles-and-history.md](session-titles-and-history.md) |  |  | 4 | 4 | 8 |
-| [agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md) |  |  | 7 | 6 | 13 |
+| [agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md) |  |  | 8 | 6 | 14 |
 | [composer-model-parameters.md](composer-model-parameters.md) |  |  | 3 | 5 | 8 |
 | [opencode-v2.md](opencode-v2.md) |  |  |  | 3 | 3 |
 | [provider-sdk-adoption-backlog.md](provider-sdk-adoption-backlog.md) |  |  | 2 | 15 | 17 |
-| [session-lifecycle-consistency.md](session-lifecycle-consistency.md) |  |  | 7 | 7 | 14 |
+| [session-lifecycle-consistency.md](session-lifecycle-consistency.md) |  |  | 8 | 7 | 15 |
 | **Transcripts, observation and bandwidth** | | | | | |
 | [rich-transcripts.md](rich-transcripts.md) |  |  | 2 |  | 2 |
-| [transcript-history-efficiency.md](transcript-history-efficiency.md) |  | 1 | 16 | 5 | 22 |
+| [transcript-history-efficiency.md](transcript-history-efficiency.md) |  |  | 16 | 6 | 22 |
 | [remote-client-bandwidth.md](remote-client-bandwidth.md) |  |  | 4 | 9 | 13 |
 | [native-agent-idle-observation.md](native-agent-idle-observation.md) |  | 1 | 3 | 2 | 6 |
 | [client-reconnect-and-freshness.md](client-reconnect-and-freshness.md) |  |  | 6 | 2 | 8 |

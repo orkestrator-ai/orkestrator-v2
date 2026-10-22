@@ -18,6 +18,17 @@ mock.module("@/lib/native/backend", () => ({
 // Mock the event listener
 mock.module("@/lib/native/events", () => ({
   listen: mock(() => Promise.resolve(() => {})),
+  // An explicit transport (the portal's) is used as given.
+  listenOn: mock(
+    (
+      source:
+        | { listen(event: string, callback: (payload: unknown) => void): () => void }
+        | undefined,
+      event: string,
+      handler: (event: { payload: unknown }) => unknown,
+    ) =>
+      Promise.resolve(source ? source.listen(event, (payload) => handler({ payload })) : () => {}),
+  ),
   emit: mock(() => Promise.resolve()),
   NATIVE_EVENT_STREAM_CONNECTED_EVENT: "native-event-stream-connected",
   TERMINAL_EVENT_STREAM_CONNECTED_EVENT: "terminal-event-stream-connected",

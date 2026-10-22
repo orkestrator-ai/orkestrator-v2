@@ -35,26 +35,40 @@ export function isPathInsideRoot(filePath: string, rootPath: string): boolean {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
+/**
+ * Copy the project's configured files into an environment. The project root
+ * is the source; `fallbackRoot` (seed files a command node staged for this
+ * environment) is used only for files the project root does not have, so the
+ * node's own copy always wins.
+ */
 export async function copyConfiguredProjectFilesToDirectory(
   projectPath: string,
   destinationRoot: string,
   filesToCopy: string[] | undefined,
+  fallbackRoot?: string,
 ): Promise<void> {
   const configuredFiles = normalizeConfiguredProjectFiles(filesToCopy);
   if (configuredFiles.length === 0) return;
 
   const projectRoot = await fs.realpath(projectPath);
+  const seedRoot = fallbackRoot ? await fs.realpath(fallbackRoot).catch(() => null) : null;
 
   for (const relativePath of configuredFiles) {
-    const sourcePath = path.join(projectRoot, relativePath);
+    let sourceRoot = projectRoot;
     let realSourcePath: string;
     try {
-      realSourcePath = await fs.realpath(sourcePath);
+      realSourcePath = await fs.realpath(path.join(projectRoot, relativePath));
     } catch {
-      throw new Error(`Configured file to copy not found: ${relativePath}`);
+      const seeded = seedRoot
+        ? await fs.realpath(path.join(seedRoot, relativePath)).catch(() => null)
+        : null;
+      if (!seeded || !seedRoot)
+        throw new Error(`Configured file to copy not found: ${relativePath}`);
+      sourceRoot = seedRoot;
+      realSourcePath = seeded;
     }
 
-    if (!isPathInsideRoot(realSourcePath, projectRoot)) {
+    if (!isPathInsideRoot(realSourcePath, sourceRoot)) {
       throw new Error(`Configured file to copy must stay inside the project: ${relativePath}`);
     }
 
@@ -73,13 +87,19 @@ export async function stageConfiguredProjectFilesForContainer(
   containerId: string,
   projectPath: string,
   filesToCopy: string[] | undefined,
+  fallbackRoot?: string,
 ): Promise<void> {
   const configuredFiles = normalizeConfiguredProjectFiles(filesToCopy);
   if (configuredFiles.length === 0) return;
 
   const stagingDir = await fs.mkdtemp(path.join(os.tmpdir(), "orkestrator-project-files-"));
   try {
-    await copyConfiguredProjectFilesToDirectory(projectPath, stagingDir, configuredFiles);
+    await copyConfiguredProjectFilesToDirectory(
+      projectPath,
+      stagingDir,
+      configuredFiles,
+      fallbackRoot,
+    );
     await runCommand(
       "docker",
       ["cp", `${stagingDir}${path.sep}.`, `${containerId}:/project-files`],

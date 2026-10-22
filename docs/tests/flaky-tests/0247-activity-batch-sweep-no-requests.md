@@ -117,3 +117,18 @@ Recorded evidence only; no test changed.
 - **Owning-file rerun:** `mise run test:logged -- --name activity-batch-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/native-agent-service-activity-batch.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 0.3 seconds).
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.I5wqmJ/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer artifact `orkestrator-test-run.mhBVPo/full-suite.log.gz` in the same temporary directory.
 - **Assessment:** matches the existing aggregate-only empty-request symptom. Host contention or local-port failures remain hypotheses. No activity-sweep source, assertion, timeout or skip changed.
+
+
+## Claude revision-token review fixes — 2026-10-21
+
+- **Original command:** `mise run test:logged -- --name full-tests-cold -- mise run test` on macOS arm64 with Bun 1.4.3 and concurrent host validation.
+- **Workers:** workspace/root/bridges/protocol reserved 4/1/2/1 slots; backend used two isolated Bun workers.
+- **Failure:** `activity sweep over the batch route > missing unmaps only that session; unavailable leaves every mapping uncertain` retained `provider-1` at line 177 (11.86 ms), after reconciliation logged an error. This assertion did not independently establish the empty-request symptom.
+- **Suite counts:** backend 9740 passed, 67 skipped and one failed across 9808 tests in 551 files (416.37 seconds). The aggregate exited 1 after 439.7 seconds; root/support also hit the Pi staging timeout tracked in 0178. Other workspace packages, bridges and protocol passed.
+- **Owning-file rerun:** `mise run test:logged -- --name activity-batch-alone -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/native-agent-service-activity-batch.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 0.4 seconds logged).
+- **Evidence:** `orkestrator-test-run.e4Hc1C/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and outer `orkestrator-test-run.l7ZsFV/full-tests-cold.log.gz` below the host temporary directory.
+- **Assessment:** confirmed intermittent recurrence. Host contention or local-port failures remain unconfirmed explanations; no activity-sweep source, assertion, timeout or skip changed.
+
+The subsequent `mise run test:logged -- --name full-tests-warm -- mise run test`
+passed all four groups (exit 0, 442.9 seconds logged); root/support passed in
+190.9 seconds. Both owning implementations and tests remained unchanged.

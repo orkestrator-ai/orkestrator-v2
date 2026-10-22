@@ -68,3 +68,23 @@
 - **Owning-file rerun:** `mise run test:logged -- --name merge-15f6cd-acp-owners -- bun test --cwd bridges/acp-bridge ./src/acp-http.test.ts ./src/acp-generalization.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed unchanged, exit 0, in 6.6 seconds.
 - **Evidence:** `orkestrator-test-run.KPQz1y/merge-15f6cd-acp-rerun.log.gz` below the host temporary directory.
 - **Assessment:** confirmed intermittent recurrence; no timeout, assertion or skip changed.
+
+## Structured review layout validation recurrence — 2026-10-21
+
+- **Command:** `mise run test:logged -- --name complete-tests -- mise run test`.
+- **Workers:** ACP `--parallel=1`, two bridge packages under Turbo; aggregate
+  groups reserved 4/1/2/1 workspace/root/bridge/protocol slots. Browser checks
+  and another worktree's validation were active on the host.
+- **Failure:** the filesystem/terminal fixture hook timed out at 60009.03 ms.
+  ACP reported 646 passed, 3 skipped, 1 failed across 650 tests in 43 files
+  (263.61 s); the other four bridge package tasks passed.
+- **Evidence:** `orkestrator-test-run.RzbPLB/bridges.log.gz` under the host
+  temporary directory.
+- **Owning-file rerun:** `mise run test:logged -- --name acp-generalization-rerun -- bun --cwd=bridges/acp-bridge test ./src/acp-generalization.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`
+  passed unchanged (3 tests, exit 0, 1.2 s logged).
+- **Assessment:** confirms the existing intermittent fixture lifecycle timeout.
+  Shared-host contention remains a hypothesis; no assertion, timeout or skip changed.
+
+## Two-column report main merge — 2026-10-21
+
+ACP filesystem/terminal generalization hit its 60-second hook deadline (60,013.01 ms); its complete unchanged owner passed with the Node preload in 1.6 seconds (`merge-acp-owner`). See [0629](0629-two-column-main-merge-validation.md) for commands, worker configuration, counts and evidence. No source, assertion, timeout or skip changed.

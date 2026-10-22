@@ -1,3 +1,4 @@
+import { extractMarkedAttachmentReferences } from "@orkestrator/protocol/initial-prompt-attachments";
 import { beginEnvironmentMove, endEnvironmentMove } from "./environment-replacement-fence.js";
 import { describe, expect, mock, test } from "bun:test";
 
@@ -717,7 +718,7 @@ describe("NativeAgentService", () => {
       ],
     });
     const createSession = mock(async () => "provider-session");
-    const send = mock(async () => undefined);
+    const send = mock<AgentSessionProvider["send"]>(async () => undefined);
     const provider = {
       agent: "codex",
       createSession,
@@ -764,11 +765,18 @@ describe("NativeAgentService", () => {
       expect(createSession).toHaveBeenCalledTimes(1);
       expect(send).toHaveBeenCalledTimes(1);
       expect(attachmentWrites).toBe(1);
+      expect(extractMarkedAttachmentReferences(send.mock.calls[0]![1])).toEqual({
+        prompt: "Inspect the screenshots",
+        attachments: [
+          {
+            name: "requirements.md",
+            path: "/workspace/.orkestrator/initial-prompt/batch/requirements.md",
+          },
+        ],
+      });
       expect(send).toHaveBeenCalledWith(
         "provider-session",
-        expect.stringMatching(
-          /Inspect the screenshots[\s\S]*requirements\.md: \/workspace\/\.orkestrator\/initial-prompt\/batch\/requirements\.md/,
-        ),
+        expect.any(String),
         expect.objectContaining({
           requestId: "initial-prompt:env-1:startup-agent",
           images: [{ filename: "reference.png", data: "cG5n" }],

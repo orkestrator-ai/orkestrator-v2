@@ -90,3 +90,59 @@ tests retained their opt-ins. CLI scenario and iOS suites were omitted because
 those areas did not change. Browser/native failures, Pi staging and incomplete
 aggregate coverage remain validation limitations; host load is not a proven
 explanation for them.
+
+## Second main merge — 2026-10-22
+
+Baseline `a973416e`, target `edcd60d92`; 415 incoming or resolved paths before
+these validation evidence updates. Eight conflicts
+combined the cold-restart and Claude revision-token qualification records,
+test-suite registration, flake evidence and todo counts. Both suites remain
+registered. The full path inventory contained no conflict markers or broken
+local Markdown link targets.
+
+- Formatting, lint, typecheck and the desktop build passed. After the test fix
+  below, final formatting/lint/typecheck passed again. Focused flake-index,
+  test-runner, mise-task, spec-loading and both live-test-helper contracts passed
+  (26.3 s).
+- Component and public-site browser suites passed (`main-refresh2-browser`,
+  250.4 s), as did CLI scenarios (58.7 s) and the worktree-specific Docker image
+  build (127.0 s).
+- The first full non-iOS run failed only on the unchanged submodule-move owner
+  (558.2 s). Its complete owning file passed unchanged alone (19.1 s); see
+  [0248](0248-move-restart-recovery-submodule-timeout.md). Root/support, bridges
+  and protocol regeneration passed in the aggregate. Evidence:
+  `orkestrator-test-run.ZQ12yB` and `orkestrator-test-run.1b7Rd4`.
+- Isolated browser: 28 passed, 45 skipped, one failed (503.0 s). The capped-file
+  tree case could not find its `build` folder after reload. Its trace then
+  exceeded the sanitizer's 16 MiB limit, producing a separate teardown error;
+  the limit was retained. Evidence: `orkestrator-test-run.HUNzaS` and sanitized
+  artifacts under `output/agent-testing/qa-browser-ede86f62-840/browser/`.
+- Docker initially reported nine passed, two skipped and one failed (106.1 s):
+  the incoming command-only seed test read `/workspace/.env.review-seed`
+  immediately after `start_environment` returned, before asynchronous workspace
+  setup copied it. This test now waits for authoritative `setupScriptsComplete`
+  before checking file content and staging deletion. Its assertions and overall
+  test deadline are retained. The full Docker suite passed after that fix
+  (`main-refresh2-docker-fixed`, 72.2 s). Initial evidence:
+  `orkestrator-test-run.U25409`; passing results:
+  `output/agent-testing/cold-refresh2-c5a8-docker-fixed/browser/results.json`.
+- A whole `browser-gateway.spec.ts` rerun with Docker enabled and `--trace=off`
+  (to avoid another oversized trace) passed the capped-tree and seed scenarios,
+  but still failed narrow maintenance navigation at line 2426: the drawer could
+  not select project `origin`. Result: 19 passed, four skipped, one failed
+  (150.8 s). The whole owner remains non-green, so this is not classified as an
+  unchanged-owner flake. Evidence: `orkestrator-test-run.gho0st` and
+  `output/agent-testing/cold-refresh2-c5a8-gateway-owner/browser/`.
+- Full Electron validation passed (29 passed, one skipped;
+  `main-refresh2-electron`, 139.3 s), with
+  results under `output/agent-testing/cold-refresh2-c5a8-electron/electron/`.
+- The complete non-iOS retry passed all four groups
+  (`env -u PORT mise run test:logged -- --name main-refresh2-warm -- mise run test`,
+  exit 0, 445.8 s). Passing summary: `orkestrator-test-run.GZGyER/summary.json`.
+  This qualifies the aggregate retry; the separate isolated/browser-owner
+  failures above remain validation limitations.
+
+The isolated runner stopped/reset its own profile. Manual profile
+`cold-refresh2-c5a8-docker` was stopped and reset after its suites; reset removed
+three exact-owner containers, six volumes and one network. Live provider tests
+retained their opt-ins; iOS was not run because its implementation did not change.

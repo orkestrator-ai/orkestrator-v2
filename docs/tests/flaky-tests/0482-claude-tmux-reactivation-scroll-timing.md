@@ -12,3 +12,9 @@
 - **Owning-file rerun:** `mise run test:logged -- --name merge-claude-tmux-owner -- bun test ./tests/unit/components/ClaudeTmuxChatTab.test.tsx --parallel=1 --only-failures` passed unchanged, exit 0, in 15.6 s.
 - **Evidence:** `orkestrator-test-run.Yk2l1H/root-and-agent-support-tests.log.gz` below the host temporary directory.
 - **Assessment:** confirmed intermittent observation; delayed effect or scroll delivery under shared-host load is a hypothesis. No source, assertion, timeout or skip changed.
+
+## Transcript-scroll main merge validation — 2026-10-21
+
+- `mise run test:logged -- --name merge-tests -- mise run test` reproduced the undefined `scrollTo` call at `tests/unit/components/ClaudeTmuxChatTab.test.tsx:1001` (594.29 ms) with workspace/root/bridges/protocol worker reservations 4/1/2/1. The root group reported 3179 passed, one skipped and one failed across 3181 tests in 151 files (505.03 s). Browser and Electron checks also ran on the shared host.
+- The unchanged owning file passed: `mise run test:logged -- --name merge-tmux-owner -- bun test ./tests/unit/components/ClaudeTmuxChatTab.test.tsx --parallel=1 --only-failures` (exit 0, 10.9 s logged).
+- Evidence: `orkestrator-test-run.4IXzMM/root-and-agent-support-tests.log.gz` in the host temporary directory. Delayed effect or scroll delivery remains a hypothesis. No source, assertion, timeout or skip changed.

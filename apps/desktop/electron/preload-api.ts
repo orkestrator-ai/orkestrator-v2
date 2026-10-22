@@ -8,6 +8,7 @@ import type {
 } from "@orkestrator/protocol/browser-preview";
 import {
   parseConnectionList,
+  type ConnectSshRouteInput,
   type ConnectToRemoteInput,
   type ConnectionList,
 } from "@orkestrator/protocol/connections";
@@ -25,25 +26,122 @@ type EventCallback<T> = (payload: T) => void;
 
 export type IpcRendererLike = {
   invoke<T = unknown>(channel: string, ...args: unknown[]): Promise<T>;
-  on(channel: string, listener: (event: unknown, name: string, payload: unknown) => void): void;
+  on(channel: string, listener: (event: unknown, ...args: any[]) => void): void;
+  send?(channel: string, ...args: unknown[]): void;
 };
+
+type WorkspaceTarget = {
+  nodeId: string;
+  nodeName: string;
+  path: "direct" | "relay";
+  routeKind?: "https" | "ssh";
+  via?: string;
+};
+
+type DesktopIdentity = {
+  connectionId: string;
+  backendId: string | null;
+  legacyOrigin: string | null;
+};
+
+/** Main-process snapshot of the window's machine; never contains a credential. */
+type DesktopGatewaySnapshot = {
+  baseUrl: string | null;
+  connectionId: string;
+  backendId: string | null;
+  legacyOrigin: string | null;
+  workspaceTarget: WorkspaceTarget | null;
+  portalIdentity: DesktopIdentity | null;
+};
+
+function parseWorkspaceTarget(value: unknown): WorkspaceTarget | null {
+  if (!value || typeof value !== "object") return null;
+  const target = value as Record<string, unknown>;
+  if (typeof target.nodeId !== "string" || typeof target.nodeName !== "string") return null;
+  if (target.path !== "direct" && target.path !== "relay") return null;
+  return {
+    nodeId: target.nodeId,
+    nodeName: target.nodeName,
+    path: target.path,
+    ...(target.routeKind === "https" || target.routeKind === "ssh"
+      ? { routeKind: target.routeKind }
+      : {}),
+    ...(typeof target.via === "string" ? { via: target.via } : {}),
+  };
+}
+
+function parseIdentity(value: unknown): DesktopIdentity | null {
+  if (!value || typeof value !== "object") return null;
+  const identity = value as Record<string, unknown>;
+  if (typeof identity.connectionId !== "string") return null;
+  const text = (field: unknown) => (typeof field === "string" && field ? field : null);
+  return {
+    connectionId: identity.connectionId,
+    backendId: text(identity.backendId),
+    legacyOrigin: text(identity.legacyOrigin),
+  };
+}
+
+function readGatewaySnapshot(ipcRenderer: {
+  sendSync(channel: string): unknown;
+}): DesktopGatewaySnapshot | null {
+  try {
+    const value = ipcRenderer.sendSync("orkestrator:connections:gateway-sync") as Record<
+      string,
+      unknown
+    > | null;
+    if (!value || typeof value !== "object" || typeof value.connectionId !== "string") return null;
+    const text = (field: unknown) => (typeof field === "string" && field ? field : null);
+    return {
+      baseUrl: text(value.baseUrl),
+      connectionId: value.connectionId,
+      backendId: text(value.backendId),
+      legacyOrigin: text(value.legacyOrigin),
+      workspaceTarget: parseWorkspaceTarget(value.workspaceTarget),
+      portalIdentity: parseIdentity(value.portalIdentity),
+    };
+  } catch {
+    return null;
+  }
+}
 
 export function exposeActiveConnectionGateway(
   contextBridge: { exposeInMainWorld(key: string, value: unknown): void },
   ipcRenderer: { sendSync(channel: string): unknown },
 ): boolean {
-  let connectionList: ConnectionList;
+  let connectionList: ConnectionList | null = null;
   try {
     connectionList = parseConnectionList(ipcRenderer.sendSync("orkestrator:connections:list-sync"));
   } catch {
-    return false;
+    // A workspace snapshot is authoritative even without a saved catalogue.
   }
-  const activeConnection = connectionList.connections.find((connection) => connection.active);
-  if (activeConnection?.kind !== "remote" || !activeConnection.address) return false;
+  const snapshot = readGatewaySnapshot(ipcRenderer);
+  if (snapshot) {
+    // Stable storage identity for presentation state: the machine, never a
+    // route or an ephemeral forwarded port.
+    contextBridge.exposeInMainWorld("orkestratorDesktopIdentity", {
+      connectionId: snapshot.connectionId,
+      backendId: snapshot.backendId,
+      legacyOrigin: snapshot.legacyOrigin,
+      ...(snapshot.portalIdentity ? { portal: snapshot.portalIdentity } : {}),
+    });
+    if (snapshot.workspaceTarget) {
+      contextBridge.exposeInMainWorld("orkestratorWorkspaceTarget", snapshot.workspaceTarget);
+    }
+  }
+  const activeConnection = connectionList?.connections.find((connection) => connection.active);
+  if (!snapshot?.baseUrl && activeConnection?.kind !== "remote") return false;
+  const baseUrl = snapshot?.baseUrl ?? activeConnection?.address;
+  if (!baseUrl) return false;
   contextBridge.exposeInMainWorld("orkestratorGateway", {
     enabled: true,
     desktop: true,
-    baseUrl: activeConnection.address,
+    baseUrl,
+    // A tunnelled route's local port can change after a reconnect; direct
+    // URLs re-resolve it instead of keeping the port from page load.
+    ...(snapshot
+      ? { resolveBaseUrl: () => readGatewaySnapshot(ipcRenderer)?.baseUrl ?? baseUrl }
+      : {}),
   });
   return true;
 }
@@ -137,6 +235,43 @@ export function createArtifactHostApi(ipcRenderer: IpcRendererLike): ArtifactHos
       };
     },
   };
+}
+
+/**
+ * `window.orkestratorPortal`: the window's own command node while its
+ * workspace (`window.orkestrator`) is on another node.
+ */
+export function createPortalApi(ipcRenderer: IpcRendererLike) {
+  const listeners = new Map<string, Set<EventCallback<unknown>>>();
+  ipcRenderer.on("orkestrator:portal-event", (_event, name: string, payload: unknown) => {
+    const callbacks = listeners.get(name);
+    if (!callbacks) return;
+    for (const callback of callbacks) callback(payload);
+  });
+  return {
+    invoke<T = unknown>(command: string, args?: Record<string, unknown>): Promise<T> {
+      return ipcRenderer.invoke("orkestrator:portal:invoke", command, args ?? {});
+    },
+    listen<T = unknown>(event: string, callback: EventCallback<T>): () => void {
+      const callbackSet = listeners.get(event) ?? new Set<EventCallback<unknown>>();
+      listeners.set(event, callbackSet);
+      callbackSet.add(callback as EventCallback<unknown>);
+      return () => {
+        callbackSet.delete(callback as EventCallback<unknown>);
+        if (callbackSet.size === 0) listeners.delete(event);
+      };
+    },
+  };
+}
+
+/** Expose the portal channel when the window's workspace is on another node. */
+export function exposePortal(
+  contextBridge: { exposeInMainWorld(key: string, value: unknown): void },
+  ipcRenderer: IpcRendererLike & { sendSync(channel: string): unknown },
+): boolean {
+  if (!readGatewaySnapshot(ipcRenderer)?.workspaceTarget) return false;
+  contextBridge.exposeInMainWorld("orkestratorPortal", createPortalApi(ipcRenderer));
+  return true;
 }
 
 export function createOrkestratorElectronApi(ipcRenderer: IpcRendererLike) {
@@ -236,6 +371,68 @@ export function createOrkestratorElectronApi(ipcRenderer: IpcRendererLike) {
       },
       openWindow(connectionId: string): Promise<void> {
         return ipcRenderer.invoke("orkestrator:connections:open-window", connectionId);
+      },
+      connectSsh(input: ConnectSshRouteInput): Promise<ConnectionList> {
+        return ipcRenderer.invoke("orkestrator:connections:connect-ssh", input);
+      },
+      probeSshHostKey(input: { destination: string; sshPort?: number }): Promise<{
+        probeId: string;
+        destination: string;
+        fingerprints: Array<{ type: string; fingerprint: string }>;
+      }> {
+        return ipcRenderer.invoke("orkestrator:connections:ssh-probe-host-key", input);
+      },
+      trustSshHostKey(probeId: string): Promise<{ added: number }> {
+        return ipcRenderer.invoke("orkestrator:connections:ssh-trust-host-key", probeId);
+      },
+      removeRoute(connectionId: string, routeId: string): Promise<ConnectionList> {
+        return ipcRenderer.invoke("orkestrator:connections:remove-route", connectionId, routeId);
+      },
+      setRouteOrder(connectionId: string, routeIds: string[]): Promise<ConnectionList> {
+        return ipcRenderer.invoke(
+          "orkestrator:connections:set-route-order",
+          connectionId,
+          routeIds,
+        );
+      },
+      setRouteEnabled(
+        connectionId: string,
+        routeId: string,
+        enabled: boolean,
+      ): Promise<ConnectionList> {
+        return ipcRenderer.invoke(
+          "orkestrator:connections:set-route-enabled",
+          connectionId,
+          routeId,
+          enabled,
+        );
+      },
+      useRoute(connectionId: string, routeId: string): Promise<ConnectionList> {
+        return ipcRenderer.invoke("orkestrator:connections:use-route", connectionId, routeId);
+      },
+      setAutoConnect(connectionId: string, autoConnect: boolean): Promise<ConnectionList> {
+        return ipcRenderer.invoke(
+          "orkestrator:connections:set-auto-connect",
+          connectionId,
+          autoConnect,
+        );
+      },
+      setFeatures(features: {
+        federation?: boolean;
+        sshRoutes?: boolean;
+        routeFallback?: boolean;
+      }): Promise<ConnectionList> {
+        return ipcRenderer.invoke("orkestrator:connections:set-features", features);
+      },
+      answerSshPrompt(promptId: string, answer: string | null): void {
+        ipcRenderer.send?.("orkestrator:ssh-prompt-answer", promptId, answer);
+      },
+    },
+
+    /** Which node the window works on; the renderer reloads after a change. */
+    workspaceTarget: {
+      set(nodeId: string | null): Promise<void> {
+        return ipcRenderer.invoke("orkestrator:workspace-target:set", { nodeId });
       },
     },
 

@@ -21,7 +21,8 @@ import {
   OPENCODE_PINNED_RUNTIME_ENV,
 } from "@orkestrator/protocol/terminal-agent-launch";
 import { stopEnvironmentExecWorkers } from "./public-api/exec-control.js";
-import { existsSync } from "node:fs";
+import { existsSync, promises as seedFs } from "node:fs";
+import { seedFilesDir } from "./nodes/node-files.js";
 import path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import {
@@ -1801,6 +1802,10 @@ export async function deleteEnvironment(
           );
         });
       context.agentTools?.revokeEnvironment(environmentId);
+      await seedFs.rm(seedFilesDir(storage.getDataDir(), environmentId), {
+        recursive: true,
+        force: true,
+      });
       await storage.removeEnvironment(environmentId);
       // Bridges were stopped above, so nothing is writing bridge state now.
       if (cleanup) await runEnvironmentCleanupStep(cleanup, "state-dirs", context);

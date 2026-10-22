@@ -652,6 +652,27 @@ function isCodexAccountAuthFailure(notice: RuntimeNotice): boolean {
 }
 
 /**
+ * `account/read` failing because the server rejected the access token, read as
+ * the signed-out answer it stands for.
+ *
+ * Codex 0.162 answers with an RPC error ("workspace routing discovery
+ * unauthorized (401)") rather than `{ account: null }` once its token is
+ * refused and cannot be refreshed: an access-only copy in a container past its
+ * expiry, checked live on 2026-10-21. Read as an error, it left the sign-out
+ * unconfirmed, so status showed "temporarily unavailable" and a login pushed
+ * into `CODEX_HOME` was never reloaded.
+ */
+function signedOutAccountRead(error: unknown): { account: null; requiresOpenaiAuth: true } {
+  if (
+    error instanceof AppServerRpcError &&
+    /\bunauthorized \(401\)|\bHTTP 401\b|\b401 Unauthorized\b/i.test(error.message)
+  ) {
+    return { account: null, requiresOpenaiAuth: true };
+  }
+  throw error;
+}
+
+/**
  * A fingerprint of the login stored in `CODEX_HOME`, or undefined when there is
  * none worth reloading.
  *
@@ -1228,6 +1249,7 @@ export class AppServerEngine implements CodexEngine {
     const generation = this.supervisor.getGeneration();
     void this.supervisor
       .request("account/read", { refreshToken })
+      .catch(signedOutAccountRead)
       .then((response) => this.applyAccountRead(response, sequence, generation, accountChanged))
       .catch((error: unknown) => {
         // Unconfirmed either way: leave admission alone. The notice still says
@@ -1959,7 +1981,9 @@ export class AppServerEngine implements CodexEngine {
     // On-demand UI auth-status reads must not force a token refresh here (see
     // `checkAccountSignIn`). App-server refreshes a stale token on its own.
     const loginSequence = this.loginSequence;
-    const response = await this.supervisor.request("account/read", { refreshToken: false });
+    const response = await this.supervisor
+      .request("account/read", { refreshToken: false })
+      .catch(signedOutAccountRead);
     // Auth-status reads answer from account/read itself. A connector reload is
     // independent work and must not turn a valid account answer into an error.
     void this.applyAccountRead(response, sequence, generation, false).catch((error: unknown) => {

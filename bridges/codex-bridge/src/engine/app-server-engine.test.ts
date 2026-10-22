@@ -3382,6 +3382,47 @@ describe("account sign-in", () => {
     expect(h.engine.isAccountSignInRequired()).toBe(true);
   });
 
+  describe("an account read refused with 401", () => {
+    // Codex 0.162 with an access-only login past its expiry (checked live).
+    const refused = () => {
+      throw new Error("workspace routing discovery unauthorized (401)");
+    };
+
+    test("reports the sign-out it stands for", async () => {
+      const h = harness({ "account/read": refused });
+      await h.engine.start();
+      expect(await h.engine.readAccount()).toMatchObject({
+        account: null,
+        requiresOpenaiAuth: true,
+      });
+      expect(h.engine.isAccountSignInRequired()).toBe(true);
+    });
+
+    test("confirms the sign-out an unauthorized turn asks about", async () => {
+      const h = harness({ "account/read": refused });
+      await h.engine.start();
+      h.child().notify("error", {
+        threadId: "t1",
+        turnId: "turn-1",
+        error: { message: "Unauthorized", codexErrorInfo: "unauthorized" },
+        willRetry: false,
+      });
+      await flush(h);
+      expect(h.engine.isAccountSignInRequired()).toBe(true);
+    });
+
+    test("other account read failures stay unconfirmed", async () => {
+      const h = harness({
+        "account/read": () => {
+          throw new Error("account service unavailable (503)");
+        },
+      });
+      await h.engine.start();
+      await expect(h.engine.readAccount()).rejects.toThrow("503");
+      expect(h.engine.isAccountSignInRequired()).toBe(false);
+    });
+  });
+
   describe("a model that is answering outweighs a signed-out account read", () => {
     const startTurn = (h: Harness, turnId = "turn-1", threadId = "t1") =>
       h.child().notify("turn/started", { threadId, turn: { id: turnId } });

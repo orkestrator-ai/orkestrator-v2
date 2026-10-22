@@ -5,6 +5,7 @@ import {
   emptyUsageTotals,
   isUsageDayKey,
   usageCount,
+  usageDayKey,
   type UsageTotals,
 } from "@orkestrator/protocol/usage-history";
 import type { NativeAgentTurnUsage } from "@orkestrator/protocol/native-agent";
@@ -16,14 +17,50 @@ import type { NativeAgentTurnUsage } from "@orkestrator/protocol/native-agent";
  * A row is content-free: platform, environment, model names and counts. It is
  * bucketed by local calendar day because that is what the panes offer, and by
  * model inside each day so a range query can report per-model totals without
- * keeping a second index.
+ * keeping a second index. The day is the turn's own (see
+ * {@link usageTurnDay}), not the day it was read.
  *
  * `turnIds` is the durable half of the de-duplication: providers keep
  * re-reporting their last twenty turns on every read, and a backend restart
- * empties the recorder's in-memory set.
+ * empties the recorder's in-memory set. The ids it holds are scoped by
+ * provider session (see {@link usageTurnKey}).
  */
 
 export const USAGE_SESSION_RECORD_VERSION = 1;
+
+/**
+ * The key a row de-duplicates one turn by.
+ *
+ * A row is keyed by the tab, which outlives the conversation inside it, while
+ * the ACP and Pi bridges fall back to minting a turn id from a per-session
+ * counter (`turn-1`, `turn-2`, …) when the provider gave them nothing better.
+ * Unscoped, the first turns of a conversation that replaced another in the
+ * same tab would be refused as duplicates of the previous one's and vanish
+ * from the history. Scoping by provider session keeps those distinct.
+ */
+export function usageTurnKey(turnId: string, providerSessionId?: string): string {
+  return providerSessionId ? `${providerSessionId}\u0000${turnId}` : turnId;
+}
+
+/**
+ * The calendar day a turn belongs to.
+ *
+ * `turn.at` is when the bridge finalized it, which is what history has to be
+ * bucketed by: providers republish their recent turns on every usage read and
+ * several bridges restore them across a restart, so the day this backend first
+ * saw a turn can be long after it ran. A turn the bridge could not date falls
+ * back to the observation day, which is all that is known about it. A
+ * timestamp ahead of the observation day — a clock that moved, or a bridge on
+ * another host — is clamped back to it, so no bucket can sit past the end of
+ * every range a pane can ask for.
+ */
+export function usageTurnDay(turn: NativeAgentTurnUsage, observedDay: string): string {
+  if (!turn.at) return observedDay;
+  const at = new Date(turn.at);
+  if (Number.isNaN(at.getTime())) return observedDay;
+  const day = usageDayKey(at);
+  return day > observedDay ? observedDay : day;
+}
 
 /** Turn ids retained per row; comfortably past the twenty providers republish. */
 export const MAX_RECORDED_TURN_IDS = 64;
@@ -168,18 +205,28 @@ function trimModels(bucket: UsageDayBucket): void {
 /**
  * Applies one turn to a record. Returns false when the turn was already
  * recorded (its id is in `turnIds`) or carries nothing.
+ *
+ * `day` is the day it was observed; the bucket it lands in is
+ * {@link usageTurnDay}, which prefers the turn's own time.
  */
 export function applyTurnToRecord(
   record: UsageSessionRecord,
   turn: NativeAgentTurnUsage,
   day: string,
   at: string,
+  providerSessionId?: string,
 ): boolean {
-  if (!turn.turnId || record.turnIds.includes(turn.turnId)) return false;
+  if (!turn.turnId) return false;
+  const key = usageTurnKey(turn.turnId, providerSessionId);
+  // The bare id is refused as well, because a row written before turn keys
+  // were scoped holds unscoped ids: re-recording the turns the provider is
+  // still republishing would count them a second time. Those entries leave
+  // the window as the session records new turns.
+  if (record.turnIds.includes(key) || record.turnIds.includes(turn.turnId)) return false;
   const totals = usageTotalsFromTurn(turn);
   // The id is retained either way: a turn that reported nothing must not be
   // re-examined on every later read.
-  record.turnIds.push(turn.turnId);
+  record.turnIds.push(key);
   if (record.turnIds.length > MAX_RECORDED_TURN_IDS) {
     record.turnIds.splice(0, record.turnIds.length - MAX_RECORDED_TURN_IDS);
   }
@@ -187,7 +234,7 @@ export function applyTurnToRecord(
   if (!record.firstSeenAt) record.firstSeenAt = at;
   if (usageTurnIsEmpty(totals)) return true;
   const modelId = turn.modelId?.trim() || UNKNOWN_USAGE_MODEL_ID;
-  const bucket = (record.days[day] ??= { models: {} });
+  const bucket = (record.days[usageTurnDay(turn, day)] ??= { models: {} });
   const existing = bucket.models[modelId];
   bucket.models[modelId] = existing ? addUsageTotals(existing, totals) : totals;
   trimModels(bucket);

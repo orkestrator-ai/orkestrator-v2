@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 
 import * as backend from "@/lib/backend";
 import type { UsageHistoryReport, UsageTotals } from "@/lib/backend";
-import { UsageSettings } from "./UsageSettings";
+import { UsageSettings, usagePlatformFilterOptions } from "./UsageSettings";
 
 function totals(overrides: Partial<UsageTotals> = {}): UsageTotals {
   return {
@@ -196,4 +196,85 @@ test("the limits view asks each enabled platform for its plan", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Limits" }));
   await waitFor(() => expect(plan).toHaveBeenCalled());
   expect(screen.getAllByRole("region", { name: "Plan usage" }).length).toBeGreaterThan(0);
+});
+
+test("a failed refresh keeps the report that was already on screen", async () => {
+  render(<UsageSettings />);
+  await headline();
+  history.mockRejectedValue(new Error("backend unavailable"));
+  fireEvent.click(screen.getByRole("button", { name: "7 days" }));
+  expect(await screen.findByText("backend unavailable")).toBeTruthy();
+  // The numbers that did load stay readable under the error.
+  expect(screen.getByTestId("usage-total").textContent).toBe("10.0K");
+});
+
+test("the cost view ranks environments by spend, not by tokens", async () => {
+  history.mockResolvedValue(
+    report({
+      environments: [
+        ...Array.from({ length: 6 }, (_, index) => ({
+          environmentId: `bulk-${index}`,
+          name: `Bulk ${index}`,
+          totals: totals({ totalTokens: 9_000_000, costUsd: 0, unpricedTokens: 9_000_000 }),
+          sessions: 1,
+        })),
+        {
+          environmentId: "spender",
+          name: "Big spender",
+          totals: totals({ totalTokens: 1_000, costUsd: 900 }),
+          sessions: 1,
+        },
+      ],
+    }),
+  );
+  render(<UsageSettings />);
+  await headline();
+  // Token order puts the only environment that cost anything last, where the
+  // six-row limit cuts it off.
+  expect(
+    within(screen.getByRole("region", { name: "Environments" })).queryByText("Big spender") ===
+      null,
+  ).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "Cost" }));
+  await waitFor(() =>
+    expect(
+      within(screen.getByRole("region", { name: "Environments" })).getByText("Big spender"),
+    ).toBeTruthy(),
+  );
+  expect(
+    within(screen.getByRole("region", { name: "Environments" })).getByText("$900.00"),
+  ).toBeTruthy();
+});
+
+test("the cost view calls unpriced tokens unpriced, not absent", async () => {
+  const unpriced = totals({ totalTokens: 6_000, costUsd: 0, unpricedTokens: 6_000 });
+  history.mockResolvedValue(
+    report({
+      days: [
+        {
+          day: "2026-10-20",
+          totals: unpriced,
+          platforms: [{ platform: "codex", totals: unpriced }],
+        },
+      ],
+      totals: unpriced,
+      platforms: [{ platform: "codex", totals: unpriced, sessions: 1 }],
+      models: [{ modelId: "gpt-6.1", platform: "codex", totals: unpriced, sessions: 1 }],
+      recordedPlatforms: ["codex"],
+    }),
+  );
+  render(<UsageSettings />);
+  await headline();
+  fireEvent.click(screen.getByRole("button", { name: "Cost" }));
+  expect(await screen.findByText("No priced spend in this range.")).toBeTruthy();
+  expect(screen.queryByText("No usage recorded in this range.") === null).toBe(true);
+});
+
+test("the platform filter always offers whatever is selected", () => {
+  expect(usagePlatformFilterOptions(["claude"], "all")).toEqual(["claude"]);
+  // A report that no longer lists the selected platform must not drop its
+  // option: the trigger would go blank with the filter still applied.
+  expect(usagePlatformFilterOptions([], "codex")).toEqual(["codex"]);
+  expect(usagePlatformFilterOptions(["codex"], "claude")).toEqual(["claude", "codex"]);
+  expect(usagePlatformFilterOptions(["codex", "claude"], "claude")).toEqual(["claude", "codex"]);
 });

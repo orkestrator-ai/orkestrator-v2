@@ -241,3 +241,137 @@ test("deletes one environment's rows on request only", async () => {
   expect(report.sessions).toBe(1);
   expect(report.environments.map((entry) => entry.environmentId)).toEqual(["env-2"]);
 });
+
+test("drops the least recently used rows above the row limit", async () => {
+  const clock: Clock = { value: new Date(2026, 9, 20, 9, 0, 0) };
+  const directory = await dataDirectory();
+  const database = connect(directory);
+  const store = new UsageHistoryStore({
+    database: () => database,
+    now: () => clock.value,
+    limits: { maxRows: 2 },
+  });
+  for (const [index, tab] of ["tab-1", "tab-2", "tab-3"].entries()) {
+    clock.value = new Date(2026, 9, 20, 9, index, 0);
+    store.recordTurns({
+      sessionKey: `env-1:claude:${tab}`,
+      environmentId: "env-1",
+      platform: "claude",
+      turns: [turn(`t-${tab}`)],
+    });
+  }
+  // The oldest row by `lastSeenAt` goes; the two newest survive intact.
+  expect(store.prune()).toEqual({ prunedRows: 1, prunedDays: 0 });
+  expect(store.report({ days: 7 }).sessions).toBe(2);
+  expect(store.report({ days: 7 }).totals.turns).toBe(2);
+});
+
+test("reports where recording began and which platforms exist past every filter", async () => {
+  const clock: Clock = { value: new Date(2026, 9, 1, 9, 0, 0) };
+  const { store } = await storeWithClock(clock);
+  store.recordTurns({
+    sessionKey: "env-1:codex:tab-1",
+    environmentId: "env-1",
+    platform: "codex",
+    turns: [turn("t1", { costUsd: 0 })],
+  });
+  clock.value = new Date(2026, 9, 20, 9, 0, 0);
+  store.recordTurns({
+    sessionKey: "env-2:claude:tab-1",
+    environmentId: "env-2",
+    platform: "claude",
+    turns: [turn("t2")],
+  });
+
+  // Both describe the whole recording, so an environment filter must not
+  // narrow them: the pane says history started earlier than the range it is
+  // showing, and still offers a platform that ran somewhere else.
+  const filtered = store.report({ days: 7, environmentId: "env-2" });
+  expect(filtered.recordingSince).toBe("2026-10-01");
+  expect(filtered.recordedPlatforms).toEqual(["claude", "codex"]);
+  expect(filtered.environments.map((entry) => entry.environmentId)).toEqual(["env-2"]);
+  expect(filtered.sessions).toBe(1);
+  expect(store.report({ days: 7, platform: "claude" }).recordedPlatforms).toEqual([
+    "claude",
+    "codex",
+  ]);
+});
+
+test("a report never prunes; retention is swept from the write path", async () => {
+  const clock: Clock = { value: new Date(2026, 0, 1, 9, 0, 0) };
+  const directory = await dataDirectory();
+  const database = connect(directory);
+  const limits = { retentionDays: 2 };
+  const writer = new UsageHistoryStore({
+    database: () => database,
+    now: () => clock.value,
+    limits,
+  });
+  writer.recordTurns({
+    sessionKey: "env-1:claude:tab-1",
+    environmentId: "env-1",
+    platform: "claude",
+    turns: [turn("t1")],
+  });
+  clock.value = new Date(2026, 0, 10, 9, 0, 0);
+  // A store that has never swept — as a freshly started backend has not —
+  // still only reads. A sweep here would cost the usage pane a second full
+  // scan plus a write transaction per expired row before it could answer.
+  const reader = new UsageHistoryStore({
+    database: () => database,
+    now: () => clock.value,
+    limits,
+  });
+  expect(reader.report({ days: 30 }).recordingSince).toBe("2026-01-01");
+  expect(reader.report({ days: 30 }).recordingSince).toBe("2026-01-01");
+  // The sweep is what drops it.
+  expect(reader.prune().prunedRows).toBe(1);
+  expect(reader.report({ days: 30 }).recordingSince).toBeUndefined();
+});
+
+test("counts a turn number the next conversation in the same tab reuses", async () => {
+  const clock: Clock = { value: new Date(2026, 9, 20, 9, 0, 0) };
+  const { store } = await storeWithClock(clock);
+  const session = {
+    sessionKey: "env-1:grok:tab-1",
+    environmentId: "env-1",
+    platform: "grok" as const,
+  };
+  expect(
+    store.recordTurns({ ...session, providerSessionId: "conv-a", turns: [turn("turn-1")] }),
+  ).toBe(1);
+  expect(
+    store.recordTurns({ ...session, providerSessionId: "conv-a", turns: [turn("turn-1")] }),
+  ).toBe(0);
+  // A replaced conversation numbers its turns from one again.
+  expect(
+    store.recordTurns({ ...session, providerSessionId: "conv-b", turns: [turn("turn-1")] }),
+  ).toBe(1);
+  expect(store.report({ days: 1 }).totals.turns).toBe(2);
+});
+
+test("records a republished backlog on the days its turns actually ran", async () => {
+  const clock: Clock = { value: new Date(2026, 9, 20, 9, 0, 0) };
+  const { store } = await storeWithClock(clock);
+  // The first projection of a conversation that already has history offers
+  // every turn the provider still republishes. Each belongs to its own day.
+  expect(
+    store.recordTurns({
+      sessionKey: "env-1:claude:tab-1",
+      environmentId: "env-1",
+      platform: "claude",
+      turns: [
+        turn("t1", { at: new Date(2026, 9, 18, 11, 0, 0).toISOString() }),
+        turn("t2", { at: new Date(2026, 9, 19, 11, 0, 0).toISOString() }),
+        turn("t3", { at: new Date(2026, 9, 20, 8, 0, 0).toISOString() }),
+      ],
+    }),
+  ).toBe(3);
+  const report = store.report({ days: 7 });
+  const busy = report.days.filter((point) => point.totals.turns > 0);
+  expect(busy.map((point) => point.day)).toEqual(["2026-10-18", "2026-10-19", "2026-10-20"]);
+  expect(report.totals.turns).toBe(3);
+  expect(report.recordingSince).toBe("2026-10-18");
+  // Only today's turn lands on today.
+  expect(store.report({ days: 1 }).totals.turns).toBe(1);
+});

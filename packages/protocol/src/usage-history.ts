@@ -13,6 +13,13 @@ import { AGENT_PLATFORMS, isAgentPlatform, type AgentPlatform } from "./agent-pl
  * report tokens without a price, so their tokens are also counted in
  * {@link UsageTotals.unpricedTokens} and the panes label them rather than
  * inventing a rate from a price table this app does not keep.
+ *
+ * A turn is bucketed by the day its bridge finalized it (`NativeAgentTurnUsage.at`),
+ * never by the day it was read. Providers republish their recent turns on
+ * every usage read and several bridges restore them across a restart, so the
+ * two differ by months whenever a conversation with history is observed for
+ * the first time. A turn its bridge could not date falls back to the day it
+ * was first seen, which is all that is known about it.
  */
 
 /** Counts for one bucket. Every field is a sum; nothing is an average. */

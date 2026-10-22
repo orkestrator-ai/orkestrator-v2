@@ -319,7 +319,14 @@ describe("loading", () => {
             turn: { inputTokens: 10, outputTokens: 5 },
             durationMs: 3_000,
             apiDurationMs: 2_000,
-            turns: [{ turnId: "t1", durationMs: 3_000, apiDurationMs: 2_000 }],
+            turns: [
+              {
+                turnId: "t1",
+                at: "2026-01-01T00:00:00.000Z",
+                durationMs: 3_000,
+                apiDurationMs: 2_000,
+              },
+            ],
             updatedAt: "2026-01-01T00:00:00Z",
           },
         },
@@ -333,7 +340,16 @@ describe("loading", () => {
     expect(restored.usage).toMatchObject({
       durationMs: 3_000,
       apiDurationMs: 2_000,
-      turns: [{ turnId: "t1", durationMs: 3_000, apiDurationMs: 2_000 }],
+      // `at` dates recorded usage, so a turn kept across a restart must not
+      // come back undated: the consumer would fall back to today.
+      turns: [
+        {
+          turnId: "t1",
+          at: "2026-01-01T00:00:00.000Z",
+          durationMs: 3_000,
+          apiDurationMs: 2_000,
+        },
+      ],
     });
   });
 

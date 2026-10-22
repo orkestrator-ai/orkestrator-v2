@@ -136,6 +136,11 @@ export function UsageTrendChart({ days, platforms, metric }: UsageTrendChartProp
     (_, index) => (max / GRID_LINES) * (index + 1),
   );
   const empty = dayTotals.every((total) => total === 0);
+  // Tokens the provider priced at nothing are usage, not absence. Saying
+  // nothing was recorded would contradict the breakdown table and the
+  // platform list, which both label the same rows `Unpriced`.
+  const unpricedOnly =
+    empty && metric === "cost" && days.some((point) => point.totals.totalTokens > 0);
 
   return (
     <div className="relative">
@@ -217,7 +222,7 @@ export function UsageTrendChart({ days, platforms, metric }: UsageTrendChartProp
           </svg>
           {empty ? (
             <p className="pointer-events-none absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">
-              No usage recorded in this range.
+              {unpricedOnly ? "No priced spend in this range." : "No usage recorded in this range."}
             </p>
           ) : null}
         </div>

@@ -1261,6 +1261,46 @@ describe("cumulative agent usage", () => {
     });
   });
 
+  test("keeps a republished run's original time instead of re-dating it", async () => {
+    const state = runningSession();
+    const ranEarlier = "2026-08-03T22:30:00.000Z";
+    state.usage = {
+      turn: { inputTokens: 80, outputTokens: 20, totalTokens: 100 },
+      turns: [{ turnId: "run-1", at: ranEarlier }],
+      updatedAt: new Date(1).toISOString(),
+    };
+
+    await refreshAgentUsage(
+      state,
+      usageAgent(async () => ({
+        ...usageReport(3_000, 125),
+        runs: [
+          {
+            runId: "run-1",
+            usage: { inputTokens: 80, outputTokens: 20, totalTokens: 100 },
+            cost: { rawCostCents: 20, chargedCents: 12 },
+          },
+          {
+            runId: "run-2",
+            usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 },
+            cost: { rawCostCents: 2, chargedCents: 2 },
+          },
+        ],
+      })),
+      state.promptSequence,
+      100,
+      100,
+    );
+
+    // This builder rebuilds every run the agent republishes. `at` is what
+    // dates recorded usage, so a run that already has one keeps it; only a
+    // run seen for the first time is dated now.
+    const turns = publicContextUsage(state).turns ?? [];
+    expect(turns.find((entry) => entry.turnId === "run-1")?.at).toBe(ranEarlier);
+    expect(turns.find((entry) => entry.turnId === "run-2")?.at).toBeDefined();
+    expect(turns.find((entry) => entry.turnId === "run-2")?.at).not.toBe(ranEarlier);
+  });
+
   test("does not let a late usage read overwrite a newer turn", async () => {
     const state = runningSession();
     state.usage = {

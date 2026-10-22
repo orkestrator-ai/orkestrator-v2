@@ -687,6 +687,10 @@ function normalizeAgentUsageRuns(
     return [
       {
         turnId: candidate.runId,
+        // Carried forward, never refreshed: this builder rebuilds every entry
+        // the agent republishes, so taking the clock here would re-date a
+        // turn that ran days ago.
+        at: prior?.at ?? new Date().toISOString(),
         ...(usage.inputTokens !== undefined ? { inputTokens: usage.inputTokens } : {}),
         ...(usage.outputTokens !== undefined ? { outputTokens: usage.outputTokens } : {}),
         ...(usage.cacheReadTokens !== undefined ? { cacheReadTokens: usage.cacheReadTokens } : {}),

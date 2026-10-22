@@ -1150,6 +1150,9 @@ export async function buildClaudeUsageSnapshot(
     `claude-turn-${session.latestTurnGeneration ?? updatedAt}`;
   const turn = {
     turnId,
+    // The result message arrives once per turn, so this is the turn's own
+    // time rather than whenever a later read republished it.
+    at: updatedAt,
     costUsd: totals.cost,
     inputTokens: totals.input,
     outputTokens: totals.output,

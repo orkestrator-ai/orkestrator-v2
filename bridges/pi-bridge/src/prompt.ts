@@ -737,6 +737,9 @@ function recordUsage(state: SessionState, input: DispatchInput): void {
         (turn.cacheWriteTokens ?? 0);
     const turnEntry = {
       turnId,
+      // Pi reports usage several times within a turn, so the first sighting
+      // of this turn id is what dates it.
+      at: previous?.turns?.find((entry) => entry.turnId === turnId)?.at ?? new Date().toISOString(),
       ...(turnCost === undefined ? {} : { costUsd: turnCost }),
       ...(turn.inputTokens === undefined ? {} : { inputTokens: turn.inputTokens }),
       ...(turn.outputTokens === undefined ? {} : { outputTokens: turn.outputTokens }),

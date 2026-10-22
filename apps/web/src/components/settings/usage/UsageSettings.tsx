@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { AlertCircle, Loader2, RefreshCw } from "lucide-react";
 import {
+  AGENT_PLATFORMS,
   AGENT_PLATFORM_LABELS,
+  isAgentPlatform,
   normalizeAgentPlatforms,
   type AgentPlatform,
 } from "@orkestrator/protocol/agent-platforms";
@@ -58,6 +60,22 @@ const RANGE_OPTIONS = [
 
 const ALL_ENVIRONMENTS = "all";
 const ALL_PLATFORMS = "all";
+
+/**
+ * The platforms the filter offers: everything the report has ever recorded,
+ * plus whatever is selected even when the report does not list it (its rows
+ * may since have been pruned). Dropping the selected option would leave the
+ * trigger blank with the filter still applied, and no way to read why the
+ * pane is empty.
+ */
+export function usagePlatformFilterOptions(
+  recorded: readonly AgentPlatform[],
+  selected: string,
+): AgentPlatform[] {
+  const offered = new Set<AgentPlatform>(recorded);
+  if (isAgentPlatform(selected)) offered.add(selected);
+  return AGENT_PLATFORMS.filter((entry) => offered.has(entry));
+}
 
 interface UsageLoad {
   /** The filter the answer belongs to; a stale one is still being replaced. */
@@ -118,10 +136,14 @@ export function UsageSettings() {
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        setLoaded({
+        // The report already on screen is kept: a failed refresh leaves the
+        // numbers that did load readable under the error rather than
+        // replacing a working pane with one line of text.
+        setLoaded((previous) => ({
           key: queryKey,
           error: err instanceof Error ? err.message : "Could not load usage",
-        });
+          ...(previous?.report ? { report: previous.report } : {}),
+        }));
       });
     return () => {
       cancelled = true;
@@ -132,6 +154,10 @@ export function UsageSettings() {
   const report = loaded?.report ?? null;
   const error = loaded?.key === queryKey ? (loaded.error ?? null) : null;
   const metric: UsageMetric = view === "cost" ? "cost" : "tokens";
+  const platformOptions = useMemo(
+    () => usagePlatformFilterOptions(report?.recordedPlatforms ?? [], platform),
+    [platform, report?.recordedPlatforms],
+  );
   const totals = report?.totals;
   // Heaviest first, so a thin series is never buried under a thick one.
   const chartPlatforms = useMemo(
@@ -217,7 +243,7 @@ export function UsageSettings() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value={ALL_PLATFORMS}>All platforms</SelectItem>
-                {(report?.recordedPlatforms ?? []).map((entry) => (
+                {platformOptions.map((entry) => (
                   <SelectItem key={entry} value={entry}>
                     {AGENT_PLATFORM_LABELS[entry]}
                   </SelectItem>

@@ -196,7 +196,14 @@ export function UsageEnvironmentList({
   metric: UsageMetric;
   limit?: number;
 }) {
-  const shown = environments.slice(0, limit);
+  // Ranked by the metric on screen. The report arrives ordered by tokens, so
+  // a cost view ranked by it would read as spend while being ordered by
+  // something else — and `limit` could then cut the biggest spender out
+  // entirely. `whole` stays over every environment, not just the shown ones.
+  const ranked = [...environments].sort(
+    (left, right) => metricValue(right.totals, metric) - metricValue(left.totals, metric),
+  );
+  const shown = ranked.slice(0, limit);
   const whole = environments.reduce((sum, entry) => sum + metricValue(entry.totals, metric), 0);
   return (
     <section aria-label="Environments" className="space-y-1.5">

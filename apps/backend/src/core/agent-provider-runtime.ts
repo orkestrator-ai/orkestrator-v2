@@ -227,6 +227,12 @@ export function normalizeProviderContextUsage(value: unknown): NativeAgentContex
       }
       if (typeof turn.requestId === "string") normalized.requestId = turn.requestId.slice(0, 256);
       if (typeof turn.modelId === "string") normalized.modelId = turn.modelId.slice(0, 256);
+      // Re-serialized rather than copied, so an unparseable value is dropped
+      // here instead of reaching a consumer that buckets usage by it.
+      if (typeof turn.at === "string") {
+        const at = new Date(turn.at);
+        if (!Number.isNaN(at.getTime())) normalized.at = at.toISOString();
+      }
       return [normalized];
     });
     if (turns.length > 0) usage.turns = turns;

@@ -758,12 +758,13 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
    */
   private readonly usageRecorder = new UsageHistoryRecorder({
     // Optional because narrow test doubles of the storage omit it.
-    write: ({ sessionKey, environmentId, platform, turns }) =>
+    write: ({ sessionKey, environmentId, platform, providerSessionId, turns }) =>
       typeof this.storage.recordAgentUsageTurns === "function"
         ? this.storage.recordAgentUsageTurns({
             sessionKey,
             environmentId,
             platform,
+            ...(providerSessionId ? { providerSessionId } : {}),
             turns: turns ?? [],
           })
         : 0,
@@ -4727,10 +4728,15 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       );
       // Usage history is recorded from the merged turns, which carry every
       // turn the provider still republishes rather than only the newest one.
+      // The provider session scopes their ids: this key belongs to the tab,
+      // which outlives the conversation in it.
       this.usageRecorder.observe({
         sessionKey,
         environmentId: input.environmentId,
         platform: input.agent,
+        ...(resolved.session.providerSessionId
+          ? { providerSessionId: resolved.session.providerSessionId }
+          : {}),
         usage: contextUsage,
       });
       const normalized = this.projectionMessages(

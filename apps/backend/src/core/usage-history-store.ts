@@ -36,6 +36,16 @@ import {
  * access, because a report walks every row once and caching the whole store
  * would retain months of history in memory for a pane nobody has open.
  *
+ * A report reads every row rather than the owner index even when it filters by
+ * environment: `recordingSince` and `recordedPlatforms` describe the whole
+ * recording whatever the filters, so one unfiltered pass answers both those
+ * and the filtered aggregation. The owner index is what
+ * {@link UsageHistoryStore.deleteByEnvironment} deletes by.
+ *
+ * Retention is swept from the write path only. A read never triggers it: the
+ * usage pane would otherwise pay a second full scan plus a write transaction
+ * per expired row before it could answer.
+ *
  * Usage rows outlive the session, the environment and the project they came
  * from: a report of the last ninety days must not change because an
  * environment was deleted yesterday. They hold no conversation content, so
@@ -59,6 +69,11 @@ export interface RecordUsageTurnsInput {
   sessionKey: string;
   environmentId: string;
   platform: AgentPlatform;
+  /**
+   * The conversation the turns belong to, which scopes their ids. A tab
+   * outlives the conversation in it, and two bridges number turns per session.
+   */
+  providerSessionId?: string;
   turns: readonly NativeAgentTurnUsage[];
 }
 
@@ -91,7 +106,7 @@ export class UsageHistoryStore {
           emptyUsageSessionRecord(input.environmentId, input.platform, timestamp);
         let count = 0;
         for (const turn of input.turns) {
-          if (applyTurnToRecord(record, turn, day, timestamp)) count += 1;
+          if (applyTurnToRecord(record, turn, day, timestamp, input.providerSessionId)) count += 1;
         }
         if (count === 0) return { result: 0 };
         return { result: count, value: record };
@@ -102,7 +117,6 @@ export class UsageHistoryStore {
 
   /** The range report the usage panes render. */
   report(query: UsageHistoryQuery = {}): UsageHistoryReport {
-    this.pruneIfDue();
     const now = this.now();
     const toDay = usageDayKey(now);
     const days = normalizeUsageRangeDays(query.days);
@@ -120,12 +134,17 @@ export class UsageHistoryStore {
     let sessions = 0;
     let recordingSince: string | undefined;
 
-    for (const { key, record } of this.readRecords(query.environmentId)) {
+    for (const { key, record } of this.readRecords()) {
+      // Both of these describe the whole recording, so they are collected
+      // before either filter: a pane has to be able to say that history starts
+      // later than the range it shows, and to offer a platform whose usage is
+      // outside the environment currently selected.
       for (const day of Object.keys(record.days)) {
         if (!recordingSince || day < recordingSince) recordingSince = day;
       }
       recordedPlatforms.add(record.platform);
       if (query.platform && record.platform !== query.platform) continue;
+      if (query.environmentId && record.environmentId !== query.environmentId) continue;
       let sessionCounted = false;
       for (const [day, bucket] of Object.entries(record.days)) {
         if (day < fromDay || day > toDay) continue;
@@ -261,12 +280,10 @@ export class UsageHistoryStore {
     }
   }
 
-  private readRecords(environmentId?: string): Array<{ key: string; record: UsageSessionRecord }> {
+  private readRecords(): Array<{ key: string; record: UsageSessionRecord }> {
     const database = this.options.database();
     if (!database.hasStore(USAGE_HISTORY_STORE)) return [];
-    const entries = database
-      .rows(USAGE_HISTORY_STORE)
-      .list(environmentId ? { owner: environmentId, values: true } : { values: true });
+    const entries = database.rows(USAGE_HISTORY_STORE).list({ values: true });
     const records: Array<{ key: string; record: UsageSessionRecord }> = [];
     for (const entry of entries) {
       if (!entry.value) continue;

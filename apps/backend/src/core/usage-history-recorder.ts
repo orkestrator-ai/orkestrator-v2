@@ -1,5 +1,9 @@
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import type { NativeAgentContextUsage } from "@orkestrator/protocol/native-agent";
+import type {
+  NativeAgentContextUsage,
+  NativeAgentTurnUsage,
+} from "@orkestrator/protocol/native-agent";
+import { usageTurnKey } from "./usage-history-record.js";
 
 /**
  * The in-process gate in front of the usage store.
@@ -12,8 +16,12 @@ import type { NativeAgentContextUsage } from "@orkestrator/protocol/native-agent
  * backend restart falls back on.
  *
  * Recording never blocks a projection: `observe` returns synchronously and the
- * write it schedules is serialized per session and swallows its own failures.
- * Usage history is a report, not state anything depends on.
+ * write it schedules is serialized and swallows its own failures. Usage
+ * history is a report, not state anything depends on.
+ *
+ * A write that fails gives its turn ids back, so the next read offers them
+ * again. Keeping them would drop those turns for the life of the process: the
+ * provider republishes the same ids, and nothing else would ever retry.
  */
 
 /** Turn ids remembered per session; the durable row keeps the same number. */
@@ -27,6 +35,7 @@ export interface UsageHistoryRecorderOptions {
     sessionKey: string;
     environmentId: string;
     platform: AgentPlatform;
+    providerSessionId?: string;
     turns: NativeAgentContextUsage["turns"];
   }) => Promise<number> | number;
 }
@@ -35,11 +44,13 @@ export interface ObserveUsageInput {
   sessionKey: string;
   environmentId: string;
   platform: AgentPlatform;
+  /** Scopes the turn ids; two bridges mint them from a per-session counter. */
+  providerSessionId?: string;
   usage: NativeAgentContextUsage | undefined;
 }
 
 export class UsageHistoryRecorder {
-  /** Session key to the turn ids already written, newest last. */
+  /** Session key to the turn keys already written, newest last. */
   private readonly seen = new Map<string, string[]>();
   private writes: Promise<unknown> = Promise.resolve();
 
@@ -49,11 +60,20 @@ export class UsageHistoryRecorder {
     const turns = input.usage?.turns;
     if (!turns?.length || !input.sessionKey || !input.environmentId) return;
     const seen = this.seen.get(input.sessionKey) ?? [];
-    const fresh = turns.filter((turn) => turn.turnId && !seen.includes(turn.turnId));
+    const fresh: NativeAgentTurnUsage[] = [];
+    const keys: string[] = [];
+    for (const turn of turns) {
+      if (!turn.turnId) continue;
+      const key = usageTurnKey(turn.turnId, input.providerSessionId);
+      if (seen.includes(key) || keys.includes(key)) continue;
+      fresh.push(turn);
+      keys.push(key);
+    }
     if (fresh.length === 0) return;
     // Remembered before the write so a second observation of the same read
     // cannot queue the same turns twice; the row de-duplicates either way.
-    const next = [...seen, ...fresh.map((turn) => turn.turnId)];
+    // A write that fails hands them back below.
+    const next = [...seen, ...keys];
     this.seen.delete(input.sessionKey);
     this.seen.set(
       input.sessionKey,
@@ -70,12 +90,30 @@ export class UsageHistoryRecorder {
           sessionKey: input.sessionKey,
           environmentId: input.environmentId,
           platform: input.platform,
+          ...(input.providerSessionId ? { providerSessionId: input.providerSessionId } : {}),
           turns: fresh,
         }),
       )
       .catch((error: unknown) => {
+        // Nothing reached the row, so these turns are offerable again. The
+        // durable `turnIds` makes a re-offer idempotent, so a retry cannot
+        // count them twice.
+        this.release(input.sessionKey, keys);
         console.warn("[usage-history] Could not record agent usage:", error);
       });
+  }
+
+  /** Forgets turn keys a failed write never persisted, keeping LRU order. */
+  private release(sessionKey: string, keys: readonly string[]): void {
+    const seen = this.seen.get(sessionKey);
+    if (!seen) return;
+    const dropped = new Set(keys);
+    const kept = seen.filter((key) => !dropped.has(key));
+    if (kept.length === seen.length) return;
+    // `Map.set` on a key that is still present keeps its position, so this
+    // does not promote a session that only failed to write.
+    if (kept.length === 0) this.seen.delete(sessionKey);
+    else this.seen.set(sessionKey, kept);
   }
 
   /** Resolves once every scheduled write has settled. Tests and shutdown. */
@@ -83,7 +121,7 @@ export class UsageHistoryRecorder {
     await this.writes;
   }
 
-  /** Forgets a session's turn memory; the durable row is untouched. */
+  /** Forgets a session's whole turn memory; the durable row is untouched. */
   forget(sessionKey: string): void {
     this.seen.delete(sessionKey);
   }

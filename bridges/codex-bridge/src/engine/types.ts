@@ -212,6 +212,8 @@ export interface EngineCreditSnapshot {
 
 export interface EngineTurnUsage {
   turnId: string;
+  /** When this turn was last accounted, ISO-8601; what dates recorded usage. */
+  at?: string;
   inputTokens?: number;
   outputTokens?: number;
   cacheReadTokens?: number;

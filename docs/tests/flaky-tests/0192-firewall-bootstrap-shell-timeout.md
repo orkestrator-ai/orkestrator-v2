@@ -118,3 +118,12 @@ The final root/support run with all GNU prerequisites timed out this case at 500
 - **Owning-file rerun:** the same GNU-tool PATH with `mise run test:logged -- --name merge-firewall-owner -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 32.3 seconds logged).
 - **Evidence:** `orkestrator-test-run.d10zQ4/root-and-agent-support-tests.log.gz` below the host temporary directory.
 - **Assessment:** confirms another intermittent shell-fixture deadline. Contention remains an unproven hypothesis; no implementation, assertion, timeout or skip changed.
+
+## Canonical allowlist change — 2026-10-22
+
+- **Original command:** `mise run test:logged -- --name changed -- mise run test:changed`, on a host whose load average was about 69 from other worktrees' suites.
+- **Failure:** ten `container firewall policy` cases (including `firewall uses stored domains and tolerates a repeated GitHub bootstrap range` and `root bootstrap records network policy once and ignores later caller values`, which runs no allowlist code) each exceeded five seconds.
+- **Root counts:** 1433 passed, one skipped, 22 failed across 1456 tests in 38 files (167.4 seconds); the other twelve failures are 0199's file.
+- **Owning-file reruns:** `bun test ./tests/unit/firewall-refresh.test.ts ./tests/unit/firewall-policy.test.ts --parallel=1` through `test:logged` still timed out three policy cases at five seconds (36 passed, 78.98 seconds, load still high). The same command with `--timeout 30000` passed all 39 (39.75 seconds). Before the aggregate run, the same two files passed at the default deadline (27.2 seconds logged).
+- **Evidence:** `/tmp/orkestrator-test-run.pQullD/root-and-agent-support-tests.log.gz`.
+- **Assessment:** another load-bound shell-fixture deadline; the change touched the firewall's default list, but the timed-out cases include one that never reads it and all pass with a longer deadline. No assertion, timeout or skip changed.

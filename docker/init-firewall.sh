@@ -224,78 +224,8 @@ elif [ -n "${ALLOWED_DOMAINS:-}" ]; then
     DOMAINS_CSV="$ALLOWED_DOMAINS"
 else
     echo "Using default allowed domains"
-    DOMAIN_ARRAY=(
-        # Package registries and runtimes
-        "registry.npmjs.org"
-        "npmjs.org"
-        "nodejs.org"
-        "bun.sh"
-        "mise.jdx.dev"
-        "mise-versions.jdx.dev"
-        "aube.jdx.dev"
-
-        # AI providers
-        "opencode.ai"
-        "api.anthropic.com"
-        "anthropic.com"
-        "openai.com"
-        "chatgpt.com"
-        "auth.openai.com"
-        "googleapis.com"
-        "api.openrouter.ai"
-        "openrouter.ai"
-        "huggingface.co"
-        "groq.com"
-        "deepseek.com"
-        "moonshot.ai"
-        "ollama.com"
-        "api.ollama.com"
-        "together.ai"
-        "x.ai"
-        "auth.x.ai"
-        "api.x.ai"
-        "cli-chat-proxy.grok.com"
-        "api2.cursor.sh"
-        "api3.cursor.sh"
-        "api4.cursor.sh"
-        "api5.cursor.sh"
-        "repo42.cursor.sh"
-        "authenticator.cursor.sh"
-        "marketplace.cursorapi.com"
-        "cursor-cdn.com"
-        "cursor.com"
-        "bedrock.amazonaws.com"
-        "pi.dev"
-        "radius.pi.dev"
-
-        # Cloud providers
-        "vercel.com"
-        "cloudflare.com"
-        "microsoft.com"
-        "azure.com"
-        "sap.com"
-        "account.hana.ondemand.com"
-
-        # Analytics and monitoring
-        "sentry.io"
-        "statsig.anthropic.com"
-        "statsig.com"
-        "helicone.ai"
-
-        # VS Code and extensions
-        "marketplace.visualstudio.com"
-        "vscode.blob.core.windows.net"
-        "update.code.visualstudio.com"
-
-        # Other services
-        "github.com"
-        "mcp.context7.com"
-        "cdn.jsdelivr.net"
-        # Playwright browser downloads. The image ships its own pinned Chromium,
-        # so this only matters when a project pins a different Playwright version.
-        "cdn.playwright.dev"
-    )
-    DOMAINS_CSV=$(IFS=','; printf '%s' "${DOMAIN_ARRAY[*]}")
+    DOMAINS_CSV=$(ork_default_domains)
+    [ -n "$DOMAINS_CSV" ] || echo "WARNING: $ORK_DEFAULT_DOMAINS_FILE is missing or empty; allowing only GitHub"
 fi
 
 # Resolve the allowed domains within fixed bounds (count, addresses per

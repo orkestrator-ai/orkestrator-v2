@@ -21,3 +21,11 @@ fixture now puts Homebrew's GNU tools first on its own PATH
 (`tests/unit/gnu-shell-tools.ts`), and the date-dependent case skips with the
 install command when they are absent. This open entry still tracks only the
 aggregate-load timeouts.
+
+## Canonical allowlist change — 2026-10-22
+
+- **Original command:** `mise run test:logged -- --name changed -- mise run test:changed`, host load average about 69.
+- **Failure:** twelve `firewall allowlist refresh and edits` cases exceeded five seconds (exit code `null` from the spawned script), including the new `a missing default list allows nothing beyond GitHub`.
+- **Owning-file reruns:** passed alone at the default deadline before the aggregate run, and passed with `--timeout 30000` afterwards (shared run with 0192: 39 passed, 39.75 seconds).
+- **Evidence:** `/tmp/orkestrator-test-run.pQullD/root-and-agent-support-tests.log.gz`.
+- **Assessment:** same load-bound deadline; no assertion, timeout or skip changed.

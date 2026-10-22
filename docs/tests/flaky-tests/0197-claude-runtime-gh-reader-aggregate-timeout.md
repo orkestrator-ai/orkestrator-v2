@@ -23,3 +23,10 @@ No assertion, timeout or skip was changed.
 - **Isolated rerun:** `mise run test:logged -- --name move-gh-reader-isolated -- bun test ./bridges/claude-bridge/src/services/runtime-env.test.ts --parallel=1 --only-failures` passed, exit 0, in 3.6 seconds.
 - **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.DTErJR/` (compressed group logs).
 - **Hypothesis:** subprocess deadlines under concurrent host load remain plausible; the isolated pass does not establish a root cause. No timeout, assertion or skip was changed.
+
+## Canonical allowlist change — 2026-10-22
+
+- **Original command:** `mise run test:logged -- --name changed -- mise run test:changed`, host load average about 69.
+- **Failure:** the case failed at 2018.61 ms; bridge counts 1602 passed, one failed across 1608 tests in 76 files.
+- **Owning-file rerun:** `bun test ./src/services/runtime-env.test.ts` in `bridges/claude-bridge` passed (12 tests, 2.24 seconds). The change did not touch the bridge.
+- **Evidence:** `/tmp/orkestrator-test-run.pQullD/bridges.log.gz`.

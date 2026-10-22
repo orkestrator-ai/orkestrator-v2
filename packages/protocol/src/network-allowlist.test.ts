@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
+  AGENT_NETWORK_DOMAINS_BY_PLATFORM,
+  DEFAULT_ALLOWED_DOMAINS,
   allowlistEntryDomain,
   allowlistForNetworkPolicy,
+  imageDefaultAllowedDomains,
   parseAllowlistEntry,
 } from "./network-allowlist";
 
@@ -49,5 +52,28 @@ describe("network allowlist entries", () => {
     expect(allowlistForNetworkPolicy(entries, 3)).toEqual(entries);
     expect(allowlistForNetworkPolicy(entries, 2)).toEqual(["example.com", "db.example.com"]);
     expect(allowlistForNetworkPolicy(entries, 1)).toEqual(["example.com", "db.example.com"]);
+  });
+});
+
+describe("default allowlists", () => {
+  test("every default and required host is a valid entry", () => {
+    for (const domain of [
+      ...DEFAULT_ALLOWED_DOMAINS,
+      ...Object.values(AGENT_NETWORK_DOMAINS_BY_PLATFORM).flat(),
+    ]) {
+      expect({ domain, entry: parseAllowlistEntry(domain)?.domain }).toEqual({
+        domain,
+        entry: domain,
+      });
+    }
+  });
+
+  test("the image fallback is the defaults first, then each platform's hosts once", () => {
+    const image = imageDefaultAllowedDomains();
+    expect(image.slice(0, DEFAULT_ALLOWED_DOMAINS.length)).toEqual([...DEFAULT_ALLOWED_DOMAINS]);
+    expect(new Set(image).size).toBe(image.length);
+    for (const domains of Object.values(AGENT_NETWORK_DOMAINS_BY_PLATFORM)) {
+      for (const domain of domains) expect(image).toContain(domain);
+    }
   });
 });

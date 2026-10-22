@@ -66,11 +66,13 @@ Users and isolation:
   terminals with `docker exec --user orkroot`; `node` has no sudoers path to
   become `orkroot`.
 - Network firewall (iptables/ipset) for security isolation. `node` has
-  passwordless sudo for exactly two things: `/usr/local/bin/init-firewall.sh`
-  and `/usr/local/bin/run-root-setup.sh` (the latter only when PID 1's
-  `NETWORK_MODE` is `full`). The container boundary, not a reusable root
-  shell, is what isolates an agent. Runtime allowlist edits use
-  `docker exec --user root /usr/local/bin/update-firewall.sh`.
+  passwordless sudo for exactly three things: the image entrypoint
+  (`/usr/local/bin/network-policy-entrypoint.sh`, which records the network
+  policy once, root-owned, before dropping to `node`),
+  `/usr/local/bin/init-firewall.sh`, and `/usr/local/bin/run-root-setup.sh`
+  (the latter only when the recorded mode is `full`). The container boundary,
+  not a reusable root shell, is what isolates an agent. Runtime allowlist
+  edits use `docker exec --user root /usr/local/bin/update-firewall.sh`.
 
 ## Playwright
 
@@ -131,14 +133,16 @@ else is rejected outright. `full` mode skips the firewall entirely.
   providers, so a self-hosted endpoint or a regional mirror is a host only the
   user knows and belongs in `allowedDomains` rather than being guessed at.
 - A new install persists `DEFAULT_ALLOWED_DOMAINS`
-  (`apps/backend/src/core/storage-shared-core.ts`): GitHub, npm, Bun, the
+  (`packages/protocol/src/network-allowlist.ts`): GitHub, npm, Bun, the
   Anthropic API, Sentry/Statsig, the VS Code marketplace, Context7, and
-  Playwright's CDN. `docker/init-firewall.sh` and `configStore.ts` carry their
-  own, broader default lists as fallbacks; the three are not identical, so read
-  the one that applies before assuming a host is reachable. They are not required
-  to match, but `tests/unit/version-drift.test.ts` does require the hosts the
-  image itself depends on to appear in all three, so a new one cannot be added to
-  only one list.
+  Playwright's CDN. It is the only default list. The renderer seeds its
+  unloaded config from the same constant, and the firewall's fallback for a
+  container with no `ALLOWED_DOMAINS`, `docker/default-allowed-domains`, is
+  generated from it plus every platform's required hosts
+  (`bun scripts/generate-default-allowed-domains.ts`).
+  `tests/unit/version-drift.test.ts` fails when the committed file is stale or
+  a copy of the list reappears elsewhere. A stored user list is never widened
+  to match the defaults.
 - DNS and localhost are always allowed. There is no general SSH exception,
   and under network policy 3 an allowed domain is reachable on TCP 443 only
   unless its entry names a port (`host:port`, `host:port/udp`); GitHub's

@@ -12,6 +12,11 @@ import {
   pinnedToolchainArtifacts,
   selectPinnedToolchainArtifacts,
 } from "@orkestrator/toolchain/manifest";
+import { DEFAULT_ALLOWED_DOMAINS } from "@orkestrator/protocol/network-allowlist";
+import {
+  DEFAULT_ALLOWED_DOMAINS_FILE,
+  renderDefaultAllowedDomains,
+} from "../../scripts/generate-default-allowed-domains";
 
 const repoRoot = join(import.meta.dir, "..", "..");
 
@@ -1143,49 +1148,51 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     expect(Number(size![1])).toBeGreaterThanOrEqual(512);
   });
 
-  test("allowlists: every host required by the image is in all three default lists", () => {
-    // Three independent default lists reach containers by different routes: the
-    // backend's is persisted on a new install, the renderer's seeds an unwritten
-    // config, and the firewall script's is the fallback when ALLOWED_DOMAINS is
-    // absent. A host added to one and forgotten in the others is reachable or
-    // not depending on which path a given install took.
-    const literal = (rel: string, open: string, close: string) => {
-      const source = read(rel);
-      const from = source.indexOf(open);
-      if (from < 0) throw new Error(`Expected ${open} in ${rel}`);
-      const to = source.indexOf(close, from + open.length);
-      if (to < 0) throw new Error(`Unterminated ${open} in ${rel}`);
-      return source.slice(from, to);
-    };
+  test("allowlists: one canonical default list, generated into the image fallback", () => {
+    // The backend persists DEFAULT_ALLOWED_DOMAINS on a new install, the
+    // renderer seeds its unloaded config from the same constant, and the
+    // firewall's fallback (used when a container has no ALLOWED_DOMAINS) is a
+    // committed file generated from it plus every platform's required hosts.
+    expect(read(DEFAULT_ALLOWED_DOMAINS_FILE)).toBe(renderDefaultAllowedDomains());
 
-    const lists = {
-      backend: literal(
-        "apps/backend/src/core/storage-shared-core.ts",
-        "export const DEFAULT_ALLOWED_DOMAINS = [",
-        "];",
-      ),
-      renderer: literal("apps/web/src/stores/configStore.ts", "allowedDomains: [", "],"),
-      firewall: literal("docker/init-firewall.sh", "DOMAIN_ARRAY=(", "\n    )"),
-    };
+    // No second copy of the list survives anywhere it used to live.
+    expect(read("apps/web/src/stores/configStore.ts")).toContain(
+      "allowedDomains: [...DEFAULT_ALLOWED_DOMAINS],",
+    );
+    expect(read("apps/backend/src/core/storage-shared-core.ts")).toContain(
+      "allowedDomains: [...DEFAULT_ALLOWED_DOMAINS],",
+    );
+    for (const rel of [
+      "apps/web/src/stores/configStore.ts",
+      "apps/backend/src/core/storage-shared-core.ts",
+      "docker/init-firewall.sh",
+      "docker/update-firewall.sh",
+      "docker/firewall-domains.sh",
+    ]) {
+      expect({ rel, copy: read(rel).includes('"registry.npmjs.org"') }).toEqual({
+        rel,
+        copy: false,
+      });
+    }
+    expect(read("docker/init-firewall.sh")).not.toContain("DOMAIN_ARRAY");
+    expect(read("docker/Dockerfile")).toContain(
+      "COPY docker/default-allowed-domains /usr/local/lib/orkestrator/default-allowed-domains",
+    );
 
-    // Not the full union — the three lists are deliberately different sizes.
-    // These are the hosts the image itself depends on being reachable.
+    // The hosts the image itself depends on being reachable.
     const miseConfig = JSON.parse(read("config/mise-version.json")) as {
       runtimeAllowedHosts: string[];
     };
-    const requiredHosts = [
+    for (const host of [
       "github.com",
       "registry.npmjs.org",
       "cdn.playwright.dev",
       ...miseConfig.runtimeAllowedHosts,
-    ];
-    for (const host of requiredHosts) {
-      expect({
+    ]) {
+      expect({ host, listed: DEFAULT_ALLOWED_DOMAINS.includes(host) }).toEqual({
         host,
-        backend: lists.backend.includes(`"${host}"`),
-        renderer: lists.renderer.includes(`"${host}"`),
-        firewall: lists.firewall.includes(`"${host}"`),
-      }).toEqual({ host, backend: true, renderer: true, firewall: true });
+        listed: true,
+      });
     }
   });
 

@@ -1,6 +1,9 @@
+import { promises as fs } from "node:fs";
 import path from "node:path";
 import { PUBLIC_API_LIMITS } from "@orkestrator/protocol/public-api";
 import type { PublicExecOutputWindow } from "@orkestrator/protocol/public-api-resources";
+import type { Environment } from "../models.js";
+import { CommandFailedError, runCommand } from "../shell.js";
 import { requireEnvironment } from "./actions-discovery.js";
 import { loadOperation } from "./actions-runs.js";
 import { assertReadyForAgents } from "./actions-sessions.js";
@@ -42,6 +45,62 @@ import type {
 
 const inFlight = new Map<string, Promise<OperationPatch | null>>();
 
+/**
+ * Whether the exec control claimed the operation (`state.json` exists). The
+ * control starts a worker only after that claim, so once the control process
+ * has exited, a missing claim proves no worker exists or ever will. Read
+ * without Bun: a launcher that cannot start is exactly when this matters.
+ * `undefined` when the answer is unknown.
+ */
+async function workerClaimed(
+  environment: Environment,
+  directory: string,
+): Promise<boolean | undefined> {
+  const statePath = path.posix.join(directory, "state.json");
+  if (environment.environmentType === "local") {
+    return fs.lstat(path.join(directory, "state.json")).then(
+      () => true,
+      (error: NodeJS.ErrnoException) => (error.code === "ENOENT" ? false : undefined),
+    );
+  }
+  if (!environment.containerId) return undefined;
+  try {
+    const { stdout } = await runCommand(
+      "docker",
+      [
+        "exec",
+        environment.containerId,
+        "sh",
+        "-c",
+        'if [ -e "$1" ]; then echo claimed; else echo unclaimed; fi',
+        "sh",
+        statePath,
+      ],
+      { timeoutMs: 10_000 },
+    );
+    const answer = stdout.trim();
+    return answer === "claimed" ? true : answer === "unclaimed" ? false : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function neverStarted(error: unknown) {
+  return {
+    state: "failed" as const,
+    stage: "completed",
+    execution: {
+      state: "failed",
+      evidence: "none",
+      reason: `The command's worker never started (${boundedMessage(error)})`,
+    },
+    error: {
+      code: "exec-failed" as const,
+      message: "The command's worker never started; it was not run",
+    },
+  } satisfies OperationPatch;
+}
+
 async function reconcileExec(
   record: PublicOperationRecord,
   context: PublicActionContext,
@@ -73,14 +132,18 @@ async function reconcileExec(
     ) {
       return null;
     }
+    const directory = execDirectory(environment, record.operationId, context.command);
     let state: ExecState;
     try {
       state = (await control(environment, context.command, {
         action: "status",
         operationId: record.operationId,
-        directory: execDirectory(environment, record.operationId, context.command),
+        directory,
       })) as ExecState;
-    } catch {
+    } catch (error) {
+      // The control that started this operation has exited by now; without
+      // its claim no worker can ever report, so do not wait for one.
+      if ((await workerClaimed(environment, directory)) === false) return neverStarted(error);
       if (environment.status !== "running") {
         return {
           state: "interrupted",
@@ -218,6 +281,15 @@ const environmentExec: MutationActionHandler<ExecInput> = {
             maxOutputBytes: PUBLIC_API_LIMITS.execOutputMaxBytes,
           })) as ExecState;
         } catch (error) {
+          // A control that exited without claiming the operation never
+          // started a worker (a timed-out one may still be dying, so leave
+          // that to reconciliation).
+          if (
+            !(error instanceof CommandFailedError && error.timedOut) &&
+            (await workerClaimed(environment, directory)) === false
+          ) {
+            return { ...neverStarted(error), result: { operationId: operation.operationId } };
+          }
           // The control may have claimed and started the worker before its
           // response was lost; never start a second one. Reconcile instead.
           return {

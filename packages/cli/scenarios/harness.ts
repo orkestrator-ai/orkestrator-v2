@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { prepareIsolatedBackendEnvironment } from "./provider-homes.js";
+import { prepareProviderRuntime } from "./provider-runtime.js";
 import { randomUUID } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -25,6 +26,7 @@ import { isPublicActionResponse, type PublicEnvelope } from "@orkestrator/protoc
 export const PACKAGE_ROOT = path.resolve(import.meta.dir, "..");
 const BIN = path.join(PACKAGE_ROOT, "bin", "orkestrator.js");
 const READY_TIMEOUT_MS = 60_000;
+const TOOLCHAIN_INSTALL_TIMEOUT_MS = 5 * 60_000;
 const COMMAND_TIMEOUT_MS = 10 * 60_000;
 const MAX_CAPTURE_BYTES = 4 * 1024 * 1024;
 
@@ -104,6 +106,32 @@ export async function startIsolatedBackend(options: {
   const worktreeDir = path.join(options.root, "worktrees");
   await mkdir(dataDir, { recursive: true, mode: 0o700 });
   const env = await prepareIsolatedBackendEnvironment(options);
+  // Pi, Cursor and Grok: their bridge, platform selection and pinned binary.
+  const runtime = await prepareProviderRuntime({
+    root: options.root,
+    dataDir,
+    packageRoot: PACKAGE_ROOT,
+    ...(options.credentialSource ? { provider: options.credentialSource } : {}),
+  });
+  if (runtime.toolchainTools.length > 0) {
+    const install = spawnSync(
+      process.execPath,
+      [
+        BIN,
+        "toolchain",
+        "install",
+        "--json",
+        "--data-dir",
+        dataDir,
+        ...runtime.toolchainTools.flatMap((tool) => ["--tool", tool]),
+      ],
+      { cwd: options.root, env, encoding: "utf8", timeout: TOOLCHAIN_INSTALL_TIMEOUT_MS },
+    );
+    if (install.status !== 0)
+      throw new Error(
+        `toolchain install ${runtime.toolchainTools.join(",")} failed:\n${`${install.stdout}${install.stderr}`.slice(-2_000)}`,
+      );
+  }
   const logFile = path.join(options.root, "backend.log");
   const child = Bun.spawn(
     [
@@ -121,6 +149,7 @@ export async function startIsolatedBackend(options: {
       worktreeDir,
       "--runtime-flavor",
       "agent-test",
+      ...runtime.serveArgs,
       ...(options.extraArgs ?? []),
       ...(options.credentialSource ? ["--credential-source", options.credentialSource] : []),
     ],

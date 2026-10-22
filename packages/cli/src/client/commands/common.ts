@@ -85,6 +85,72 @@ export async function submit<T>(
   return { session, ...outcome };
 }
 
+/**
+ * Submit a mutation whose operation the caller will then wait for. A lost
+ * response (`transport-uncertain`) does not end the wait: the request key was
+ * saved before sending, so the operation is found by that key (as `run get
+ * --request-id` would) and the caller observes it from there. Admission can
+ * outlast the client's request timeout (a provider server starting under
+ * load), so lookups repeat within `timeoutMs`; if the key never appears, the
+ * original error stands. Nothing is ever resubmitted.
+ */
+export async function submitForWait<T>(
+  context: CommandContext,
+  action: PublicActionName,
+  input: Record<string, unknown>,
+  options: Record<string, unknown>,
+  timeoutMs: number,
+): Promise<{ session: ClientSession; result?: T; receipt?: PublicReceipt; warnings?: string[] }> {
+  const session = await context.session();
+  try {
+    return {
+      session,
+      ...(await session.mutate<T>(action, input, stringOption(options, "request-id"))),
+    };
+  } catch (error) {
+    const requestId = error instanceof CliError ? error.details?.requestId : undefined;
+    const namespace = error instanceof CliError ? error.details?.namespace : undefined;
+    if (
+      !(error instanceof CliError) ||
+      error.code !== "transport-uncertain" ||
+      typeof requestId !== "string" ||
+      typeof namespace !== "string"
+    )
+      throw error;
+    let receipt: PublicReceipt;
+    try {
+      receipt = await observe<PublicReceipt>(
+        async () => {
+          try {
+            const found = await session.readWithReceipt("run.get", {
+              requestId,
+              action,
+              namespace,
+            });
+            return found.receipt ? { done: true, value: found.receipt } : { done: false };
+          } catch (lookup) {
+            // Not admitted yet, or the backend is too busy to answer a read.
+            if (
+              lookup instanceof CliError &&
+              (lookup.code === "not-found" || lookup.code === "connection-failed")
+            )
+              return { done: false };
+            throw lookup;
+          }
+        },
+        { timeoutMs, signal: context.signal },
+      );
+    } catch {
+      throw error;
+    }
+    return {
+      session,
+      receipt,
+      warnings: [`The ${action} response was lost; found the operation by its request key`],
+    };
+  }
+}
+
 /** Read `run.get` for one operation; returns its receipt. */
 export async function readOperation(
   session: ClientSession,

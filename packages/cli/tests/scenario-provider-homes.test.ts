@@ -1,5 +1,15 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -8,6 +18,7 @@ import {
   INHERITED_AGENT_TOOL_ENV,
   prepareIsolatedBackendEnvironment,
 } from "../scenarios/provider-homes.js";
+import { prepareProviderRuntime } from "../scenarios/provider-runtime.js";
 
 /**
  * Live scenarios must never write into the host's provider homes, and may see
@@ -336,4 +347,207 @@ test("preserves XDG-based Git, gh and mise configuration for backend children", 
     hostEnv: { ...hostEnv, ...explicit },
   });
   for (const [key, value] of Object.entries(explicit)) expect(custom[key]).toBe(value);
+});
+
+describe("Pi, Cursor and Grok", () => {
+  test("Pi gets only its API-key logins, never an OAuth one", async () => {
+    const { hostHome, root } = await fixture();
+    const source = path.join(hostHome, ".pi", "agent", "auth.json");
+    await mkdir(path.dirname(source), { recursive: true });
+    const credentials = JSON.stringify({
+      "openai-codex": { type: "oauth", access: "a", refresh: "rotating-refresh", expires: 0 },
+      "opencode-go": { type: "api_key", key: "pi-key" },
+    });
+    await writeFile(source, credentials);
+    await writeFile(path.join(hostHome, ".pi", "agent", "settings.json"), "{}");
+    const env = await prepareIsolatedBackendEnvironment({
+      root,
+      hostHome,
+      hostEnv: {},
+      credentialSource: "pi",
+    });
+    const base = path.join(root, "provider-homes");
+    expect(env.PI_CODING_AGENT_DIR).toBe(path.join(base, ".pi", "agent"));
+    expect(env.ORKESTRATOR_AGENT_TEST_HOST_PI_AGENT_DIR).toBe(env.PI_CODING_AGENT_DIR);
+    expect(env.ORKESTRATOR_AGENT_TEST_HOST_HOME).toBe(base);
+    expect(await filesUnder(base)).toEqual([path.join(".pi", "agent", "auth.json")]);
+    const staged = path.join(env.PI_CODING_AGENT_DIR!, "auth.json");
+    expect(JSON.parse(await readFile(staged, "utf8"))).toEqual({
+      "opencode-go": { type: "api_key", key: "pi-key" },
+    });
+    expect((await stat(staged)).mode & 0o777).toBe(0o600);
+    expect(await readFile(source, "utf8")).toBe(credentials);
+  });
+
+  test("Pi refuses a login with no API key", async () => {
+    const { hostHome, root } = await fixture();
+    const source = path.join(hostHome, ".pi", "agent", "auth.json");
+    await mkdir(path.dirname(source), { recursive: true });
+    await writeFile(source, JSON.stringify({ anthropic: { type: "oauth", refresh: "r" } }));
+    await expect(
+      isolateProviderHomes({ root, hostHome, hostEnv: {}, credentialSource: "pi" }),
+    ).rejects.toThrow("refusing to clone OAuth");
+    expect(await filesUnder(path.join(root, "provider-homes"))).toEqual([]);
+  });
+
+  test("Grok gets its login with the refresh token blanked, or an explicit API key", async () => {
+    const { hostHome, root } = await fixture();
+    const source = path.join(hostHome, ".grok", "auth.json");
+    await mkdir(path.dirname(source), { recursive: true });
+    const credentials = JSON.stringify({
+      "https://auth.x.ai::user": {
+        key: "access",
+        refresh_token: "rotating-refresh",
+        expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+      },
+    });
+    await writeFile(source, credentials);
+    await writeFile(path.join(hostHome, ".grok", "config.toml"), "host settings");
+    const env = await prepareIsolatedBackendEnvironment({
+      root,
+      hostHome,
+      hostEnv: {},
+      credentialSource: "grok",
+    });
+    const base = path.join(root, "provider-homes");
+    expect(env.GROK_HOME).toBe(path.join(base, ".grok"));
+    expect(env.ORKESTRATOR_AGENT_TEST_HOST_HOME).toBe(base);
+    expect(await filesUnder(base)).toEqual([path.join(".grok", "auth.json")]);
+    const staged = JSON.parse(await readFile(path.join(env.GROK_HOME!, "auth.json"), "utf8"));
+    expect(staged["https://auth.x.ai::user"]).toMatchObject({ key: "access", refresh_token: "" });
+    expect(await readFile(source, "utf8")).toBe(credentials);
+
+    const keyed = await fixture();
+    await mkdir(path.join(keyed.hostHome, ".grok"), { recursive: true });
+    await writeFile(path.join(keyed.hostHome, ".grok", "auth.json"), "must-not-be-read");
+    const keyedEnv = await prepareIsolatedBackendEnvironment({
+      root: keyed.root,
+      hostHome: keyed.hostHome,
+      hostEnv: { XAI_API_KEY: "xai-key" },
+      credentialSource: "grok",
+    });
+    expect(keyedEnv.XAI_API_KEY).toBe("xai-key");
+    expect(await filesUnder(path.join(keyed.root, "provider-homes"))).toEqual([]);
+  });
+
+  test("Grok refuses an expired login rather than copying one that must refresh", async () => {
+    const { hostHome, root } = await fixture();
+    await mkdir(path.join(hostHome, ".grok"), { recursive: true });
+    await writeFile(
+      path.join(hostHome, ".grok", "auth.json"),
+      JSON.stringify({
+        login: { key: "a", refresh_token: "r", expires_at: "2000-01-01T00:00:00Z" },
+      }),
+    );
+    await expect(
+      isolateProviderHomes({ root, hostHome, hostEnv: {}, credentialSource: "grok" }),
+    ).rejects.toThrow("cannot use the host login");
+  });
+
+  test("provider keys reach only their own authorized run", async () => {
+    const { hostHome, root } = await fixture();
+    const hostEnv = {
+      CURSOR_API_KEY: "cursor-key",
+      XAI_API_KEY: "xai-key",
+      GROK_AUTH_FILE: "host-grok-auth",
+      GROK_HOME: "host-grok",
+      PI_CODING_AGENT_DIR: "host-pi",
+    };
+    const free = await prepareIsolatedBackendEnvironment({ root, hostHome, hostEnv });
+    for (const key of ["CURSOR_API_KEY", "XAI_API_KEY", "GROK_AUTH_FILE"])
+      expect(free[key]).toBeUndefined();
+    expect(free.GROK_HOME!.startsWith(path.join(root, "provider-homes"))).toBe(true);
+    expect(free.PI_CODING_AGENT_DIR!.startsWith(path.join(root, "provider-homes"))).toBe(true);
+    const cursor = await prepareIsolatedBackendEnvironment({
+      root,
+      hostHome,
+      hostEnv,
+      credentialSource: "cursor",
+    });
+    expect(cursor.CURSOR_API_KEY).toBe("cursor-key");
+    expect(cursor.XAI_API_KEY).toBeUndefined();
+    expect(cursor.ORKESTRATOR_AGENT_TEST_HOST_HOME).toBeUndefined();
+  });
+});
+
+describe("prepareProviderRuntime", () => {
+  async function layout() {
+    const base = await mkdtemp(path.join(os.tmpdir(), "ork-provider-runtime-"));
+    directories.push(base);
+    const packageRoot = path.join(base, "repo", "packages", "cli");
+    for (const name of ["claude-bridge", "codex-bridge"]) {
+      await mkdir(path.join(packageRoot, "resources", name, "dist"), { recursive: true });
+      await writeFile(path.join(packageRoot, "resources", name, "dist", "index.js"), "");
+    }
+    for (const name of ["pi-bridge", "cursor-bridge", "acp-bridge"]) {
+      const bridge = path.join(base, "repo", "bridges", name);
+      await mkdir(path.join(bridge, "dist"), { recursive: true });
+      await mkdir(path.join(bridge, "src"), { recursive: true });
+      await writeFile(path.join(bridge, "dist", "index.js"), "");
+      await writeFile(path.join(bridge, "package.json"), `{"name":"${name}"}`);
+    }
+    const root = path.join(base, "scenario");
+    const dataDir = path.join(root, "data");
+    await mkdir(dataDir, { recursive: true });
+    return { packageRoot, root, dataDir, repo: path.join(base, "repo") };
+  }
+
+  test("packaged providers keep the packaged resources untouched", async () => {
+    const { packageRoot, root, dataDir } = await layout();
+    for (const provider of [undefined, "claude", "codex", "opencode"]) {
+      expect(
+        await prepareProviderRuntime({
+          root,
+          dataDir,
+          packageRoot,
+          ...(provider ? { provider } : {}),
+        }),
+      ).toEqual({ serveArgs: [], toolchainTools: [] });
+    }
+    expect(await readdir(dataDir)).toEqual([]);
+  });
+
+  test.each([
+    ["pi", "pi-bridge", []],
+    ["cursor", "cursor-bridge", []],
+    ["grok", "acp-bridge", ["grok"]],
+  ] as const)(
+    "%s runs its built bridge beside the packaged ones",
+    async (provider, bridge, tools) => {
+      const { packageRoot, root, dataDir, repo } = await layout();
+      const runtime = await prepareProviderRuntime({ root, dataDir, packageRoot, provider });
+      const resources = path.join(root, "resources");
+      expect(runtime).toEqual({
+        serveArgs: ["--resource-root", resources],
+        toolchainTools: [...tools],
+      });
+      expect((await readdir(resources)).sort()).toEqual(
+        ["claude-bridge", "codex-bridge", bridge].sort(),
+      );
+      expect(await realpath(path.join(resources, "claude-bridge"))).toBe(
+        await realpath(path.join(packageRoot, "resources", "claude-bridge")),
+      );
+      // Only what the desktop app ships: dist and package.json, never src.
+      expect((await readdir(path.join(resources, bridge))).sort()).toEqual([
+        "dist",
+        "package.json",
+      ]);
+      expect(await realpath(path.join(resources, bridge, "dist"))).toBe(
+        await realpath(path.join(repo, "bridges", bridge, "dist")),
+      );
+      expect(
+        JSON.parse(await readFile(path.join(dataDir, "agent-platforms.json"), "utf8")),
+      ).toEqual({
+        enabled: ["claude", "codex", "opencode", provider],
+      });
+    },
+  );
+
+  test("an unbuilt bridge fails with the build command", async () => {
+    const { packageRoot, root, dataDir, repo } = await layout();
+    await rm(path.join(repo, "bridges", "pi-bridge", "dist"), { recursive: true });
+    await expect(
+      prepareProviderRuntime({ root, dataDir, packageRoot, provider: "pi" }),
+    ).rejects.toThrow("mise run build:pi-bridge");
+  });
 });

@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { publicSuccessEnvelope, type PublicReceipt } from "@orkestrator/protocol/public-api";
+import {
+  publicErrorEnvelope,
+  publicSuccessEnvelope,
+  type PublicReceipt,
+} from "@orkestrator/protocol/public-api";
 import { PUBLIC_API_FIXTURES } from "@orkestrator/protocol/testing/public-api-fixtures";
 import {
   createSandbox,
@@ -150,6 +154,115 @@ describe("run wait exit mapping", () => {
     const body = JSON.parse(deadline.out);
     expect(body.error.code).toBe("deadline-exceeded");
     expect(body.receipt.operationId).toBe(OPERATION);
+  });
+});
+
+describe("waiting through a lost submission response", () => {
+  const START = [
+    "--json",
+    "session",
+    "start",
+    "--environment",
+    "env",
+    "--agent",
+    "codex",
+    "--prompt",
+    "hello",
+    "--request-id",
+    "slow-start",
+  ];
+
+  /** `session.start` admits but its response is lost; `run.get` finds it later. */
+  async function lostStart(byKey: Array<PublicReceipt | null>, byId: PublicReceipt[]) {
+    const box = await createSandbox();
+    const lookups: Array<Record<string, unknown>> = [];
+    let starts = 0;
+    const gateway = await startFakeGateway((request) => {
+      const action = String(request.body.args.action);
+      const input = request.body.args.input as Record<string, unknown>;
+      if (action === "session.start") {
+        starts += 1;
+        return new Response("upstream timeout", { status: 504 });
+      }
+      if (action === "run.get" && input.requestId !== undefined) {
+        lookups.push(input);
+        const next = byKey.shift();
+        return next
+          ? envelope(publicSuccessEnvelope("run.get", null, next))
+          : envelope(
+              publicErrorEnvelope("run.get", { code: "not-found", message: "not admitted yet" }),
+            );
+      }
+      if (action === "run.get") {
+        const next = byId.length > 1 ? byId.shift()! : byId[0]!;
+        return envelope(publicSuccessEnvelope("run.get", null, next));
+      }
+      return defaultResponder()(request);
+    });
+    cleanups.push(
+      () => box.cleanup(),
+      () => gateway.stop(),
+    );
+    const dataDir = await box.publishDescriptor(gateway);
+    await box.run(["connection", "add", "local", "--data-dir", dataDir, "--default", "--no-check"]);
+    return { box, lookups, starts: () => starts };
+  }
+
+  const admitted = receipt({
+    action: "session.start",
+    requestId: "slow-start",
+    state: "running",
+    stage: "admitted",
+    resources: { environmentId: "env" },
+    execution: undefined,
+    completedAt: undefined,
+  });
+  const dispatched = receipt({
+    action: "session.start",
+    requestId: "slow-start",
+    state: "running",
+    stage: "dispatching",
+    resources: { environmentId: "env", sessionId: "ses_slow", tabId: "agent-job-slow" },
+    execution: { state: "running" },
+    completedAt: undefined,
+  });
+  const finished = receipt({
+    action: "session.start",
+    requestId: "slow-start",
+    resources: { environmentId: "env", sessionId: "ses_slow", tabId: "agent-job-slow" },
+  });
+
+  test("--wait finds the run by its request key and observes it to the end", async () => {
+    const { box, lookups, starts } = await lostStart([null, admitted], [dispatched, finished]);
+    const result = await box.run([...START, "--wait", "--timeout", "30s"]);
+    expect(result.code).toBe(0);
+    const output = JSON.parse(result.out);
+    expect(output.receipt.state).toBe("succeeded");
+    expect(output.result).toMatchObject({ sessionId: "ses_slow", runId: OPERATION });
+    expect(output.warnings.join("\n")).toContain("request key");
+    // Looked up under the saved key and namespace; never resubmitted.
+    expect(lookups).toHaveLength(2);
+    expect(lookups[0]).toMatchObject({ requestId: "slow-start", action: "session.start" });
+    expect(typeof lookups[0]!.namespace).toBe("string");
+    expect(starts()).toBe(1);
+  });
+
+  test("the original error stands if the key never appears within the wait", async () => {
+    const { box, starts } = await lostStart([], [finished]);
+    const result = await box.run([...START, "--wait", "--timeout", "600ms"]);
+    expect(result.code).toBe(4);
+    const error = JSON.parse(result.out).error;
+    expect(error.code).toBe("transport-uncertain");
+    expect(error.details).toMatchObject({ requestId: "slow-start" });
+    expect(starts()).toBe(1);
+  });
+
+  test("without --wait a lost response is reported, not looked up", async () => {
+    const { box, lookups } = await lostStart([finished], [finished]);
+    const result = await box.run(START);
+    expect(result.code).toBe(4);
+    expect(JSON.parse(result.out).error.code).toBe("transport-uncertain");
+    expect(lookups).toHaveLength(0);
   });
 });
 

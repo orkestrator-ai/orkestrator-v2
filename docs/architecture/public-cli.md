@@ -222,6 +222,13 @@ or `run get --request-id KEY --action ACTION` reads them;
 `not-found` and `history-expired` are distinct and neither is evidence that
 nothing ran.
 
+`session start --wait` and `session prompt --wait` do this themselves when the
+submission's response is lost (`transport-uncertain`, for example an admission
+slower than the client's 60 s request timeout). They look the run up by its
+saved key until it appears, then keep waiting, within the same `--timeout`
+budget; a warning names the recovery. If the key never appears, exit 4
+stands. Nothing is resubmitted.
+
 ### Retention and expiry
 
 Keys belong to a **namespace** (`ns-<created ms>-<random>`), published in
@@ -422,7 +429,11 @@ environment. At most four commands run per environment.
 
 The worker outlives the client and the backend; a backend restart reconciles
 it by its heartbeat (a recycled PID cannot impersonate it). A worker that stops
-reporting is `interrupted` and never re-run. `run cancel OP` targets that exact
+reporting is `interrupted` and never re-run. If the launcher fails, the
+backend checks whether it claimed the run (`state.json`) without needing Bun:
+unclaimed means no worker was started, and the run fails at once (`exec-failed`,
+"worker never started"); claimed stays pending until the worker reports, and a
+second worker is never started. `run cancel OP` targets that exact
 worker and drains its descendants. `run output OP [--stream stderr] [--tail N]`
 reads a bounded window. By default a non-zero exit is exit 1 with the child's
 code in JSON; `--exit-code` passes the child's code through (the envelope stays
@@ -448,8 +459,10 @@ gets disposable provider homes under its scenario root (`CLAUDE_CONFIG_DIR`,
 `CODEX_HOME` and the three `XDG_*` homes; `isolateProviderHomes` in
 `packages/cli/scenarios/provider-homes.ts`), so agents never write sessions, history
 or settings into the operator's own `~/.claude`, `~/.codex` or OpenCode
-directories. A live run stages only API-key credentials for Codex or OpenCode
-(mode 0600); OAuth `auth.json` files are refused, even when fresh, because a
+directories. `PI_CODING_AGENT_DIR` and `GROK_HOME` are disposable too. A
+live run stages only API-key credentials for Codex, OpenCode, Pi (`api_key`
+entries; OAuth entries are dropped) or Cursor (`CURSOR_API_KEY`), and Grok's
+login with its refresh token blanked (or `XAI_API_KEY`) (mode 0600); OAuth `auth.json` files are refused, even when fresh, because a
 refresh (including one triggered by a 401) could rotate the host's login and
 leave its replacement in a disposable home. For Codex, supply a test API key
 through `CODEX_API_KEY` or `OPENAI_API_KEY`, or an API-key-only `auth.json` in
@@ -471,9 +484,14 @@ as the parent tab. The harness starts every backend with a decoy connection.
 `inherited-agent-connection.test.ts` executes startup with a stub login shell
 and a real catalogue probe to check this boundary; the `exec` scenario checks
 exec's separate environment filter. Live runs cost real tokens; keep them
-opt-in. The published package ships only the Claude and Codex bridges (OpenCode runs its own server),
-and the runner cannot target an existing profile, so Pi, Cursor and Grok cannot
-run `live-session` yet (see [0014-cli-qualification.md](../todo/cli-and-slash-commands/0014-cli-qualification.md)).
+opt-in. The published package ships only the Claude and Codex bridges (OpenCode runs its own server).
+For a live Pi, Cursor or Grok run the harness gives that backend its own
+`--resource-root`: the packaged Claude and Codex bridges plus the provider's
+worktree-built bridge (`prepareProviderRuntime` in
+`packages/cli/scenarios/provider-runtime.ts`), with the provider enabled and,
+for Grok, the pinned binary installed into the scenario data directory. Those
+providers are not yet live-qualified (see
+[0014-cli-qualification.md](../todo/cli-and-slash-commands/0014-cli-qualification.md)).
 Which test proves each scenario class is listed in
 [cli-testing.md](../development/cli-testing.md#coverage-by-layer).
 

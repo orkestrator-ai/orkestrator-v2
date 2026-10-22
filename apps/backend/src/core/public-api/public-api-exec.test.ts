@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, jest, test } from "bun:test";
 import { promises as fs } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { PublicReceipt } from "@orkestrator/protocol/public-api";
 import type { PublicExecOutputWindow } from "@orkestrator/protocol/public-api-resources";
@@ -22,8 +23,10 @@ afterEach(async () => {
   await Promise.all(harnesses.splice(0).map((harness) => harness.cleanup()));
 });
 
-async function setup(): Promise<{ harness: PublicApiHarness; worktree: string }> {
-  const harness = await createPublicApiHarness();
+async function setup(
+  options: Parameters<typeof createPublicApiHarness>[0] = {},
+): Promise<{ harness: PublicApiHarness; worktree: string }> {
+  const harness = await createPublicApiHarness(options);
   harnesses.push(harness);
   const worktree = path.join(harness.root, "worktree");
   await fs.mkdir(path.join(worktree, "sub"), { recursive: true });
@@ -299,6 +302,69 @@ describe("environment.exec", () => {
     );
     expect(replay.receipt?.replayed).toBe(true);
     expect((await fs.readFile(marker, "utf8")).trim().split("\n")).toHaveLength(1);
+  });
+
+  test("a launcher that fails before claiming the command settles it as failed", async () => {
+    const toolchainBinDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-exec-bun-"));
+    try {
+      // Like the mise shim that could not resolve from `/`: the control's
+      // Bun exits before it reads its input.
+      await fs.writeFile(path.join(toolchainBinDir, "bun"), "#!/bin/sh\nexit 127\n", {
+        mode: 0o755,
+      });
+      const { harness, worktree } = await setup({ context: { toolchainBinDir } });
+      const marker = path.join(worktree, "ran");
+      const started = await exec(harness, "launcher-down", { argv: ["touch", marker] });
+      expect(started.ok).toBe(false);
+      expect(!started.ok && started.error.code).toBe("exec-failed");
+      const receipt = started.receipt!;
+      expect(receipt.state).toBe("failed");
+      expect(receipt.execution).toMatchObject({ state: "failed", evidence: "none" });
+      expect(receipt.execution?.reason).toContain("never started");
+      // Read again: the receipt stays settled; nothing was run or claimed.
+      const read = await harness.call("run.get", { operationId: receipt.operationId });
+      expect(read.receipt?.state).toBe("failed");
+      expect(await fs.stat(marker).catch(() => null)).toBeNull();
+      expect(
+        await fs
+          .stat(path.join(harness.dataDir, "exec-runs", receipt.operationId, "state.json"))
+          .catch(() => null),
+      ).toBeNull();
+    } finally {
+      await fs.rm(toolchainBinDir, { recursive: true, force: true });
+    }
+  });
+
+  test("a launcher that fails after claiming the command waits for its worker", async () => {
+    const toolchainBinDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-exec-bun-"));
+    const fakeBun = path.join(toolchainBinDir, "bun");
+    try {
+      // The control claims and starts the worker, then its response is lost.
+      await fs.writeFile(
+        fakeBun,
+        `#!/bin/sh\n${JSON.stringify(process.execPath)} "$@" >/dev/null\nexit 1\n`,
+        { mode: 0o755 },
+      );
+      const { harness, worktree } = await setup({ context: { toolchainBinDir } });
+      const marker = path.join(worktree, "runs.log");
+      const started = await exec(harness, "launcher-lost", {
+        argv: ["sh", "-c", `echo run >> ${JSON.stringify(marker)}`],
+      });
+      const operationId = started.receipt!.operationId;
+      expect(started.receipt!.state).toBe("running");
+      expect(started.receipt!.execution?.state).toBe("pending");
+      // Status reads still fail, but the claim proves a worker may exist.
+      const pending = await harness.call("run.get", { operationId });
+      expect(pending.receipt?.state).toBe("running");
+      // Once the control works again, the worker's own result settles it.
+      await fs.rm(fakeBun);
+      await fs.symlink(process.execPath, fakeBun);
+      const final = await waitTerminal(harness, operationId);
+      expect(final.state).toBe("succeeded");
+      expect((await fs.readFile(marker, "utf8")).trim().split("\n")).toHaveLength(1);
+    } finally {
+      await fs.rm(toolchainBinDir, { recursive: true, force: true });
+    }
   });
 
   test("stopping the environment cancels its running commands first", async () => {

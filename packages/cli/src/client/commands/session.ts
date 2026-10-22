@@ -20,6 +20,7 @@ import {
   REQUEST_ID_OPTION,
   stringOption,
   submit,
+  submitForWait,
   TIMEOUT_OPTION,
   waitForOperation,
 } from "./common.js";
@@ -62,10 +63,32 @@ const CONTROL_OPTIONS = [
   },
 ];
 
+function waitBudget(options: Record<string, unknown>): number {
+  return (options.timeout as number | undefined) ?? DEFAULT_WAIT_MS;
+}
+
+/** Submit a run; with --wait, a lost response is recovered by request key. */
+async function submitRun<T>(
+  context: CommandContext,
+  action: "session.start" | "session.prompt",
+  input: Record<string, unknown>,
+  options: Record<string, unknown>,
+) {
+  const startedAt = Date.now();
+  const submitted =
+    options.wait === true
+      ? await submitForWait<T>(context, action, input, options, waitBudget(options))
+      : await submit<T>(context, action, input, options);
+  return { ...submitted, startedAt };
+}
+
 async function finishRun(
   context: CommandContext,
   parsed: ParsedCommand,
   base: CommandOutcome,
+  startedAt: number,
+  /** For a recovered submission: the result and IDs, read from the final receipt. */
+  fromReceipt?: (receipt: PublicReceipt) => Pick<CommandOutcome, "result" | "ids">,
 ): Promise<CommandOutcome> {
   if (parsed.options.wait !== true || !base.receipt) {
     return base;
@@ -75,12 +98,14 @@ async function finishRun(
     context,
     session,
     base.receipt,
-    (parsed.options.timeout as number | undefined) ?? DEFAULT_WAIT_MS,
+    // Recovering a lost response spends part of the same budget.
+    Math.max(0, waitBudget(parsed.options) - (Date.now() - startedAt)),
     { continueOnInteraction: parsed.options["continue-on-interaction"] === true },
   );
   const failure = receiptFailure(final);
   return {
     ...base,
+    ...fromReceipt?.(final),
     receipt: final,
     human: receiptLines(final),
     ...(failure ? { failure } : {}),
@@ -277,7 +302,7 @@ export const sessionCommands: CommandSpec[] = [
         throw new CliError("invalid-input", "--environment and --agent are required");
       }
       const prompt = await readPrompt(context.io, options);
-      const { session, result, receipt, warnings } = await submit<{
+      const { session, result, receipt, warnings, startedAt } = await submitRun<{
         sessionId: string;
         tabId: string;
         runId: string;
@@ -293,20 +318,35 @@ export const sessionCommands: CommandSpec[] = [
         },
         options,
       );
-      return finishRun(context, parsed, {
-        action: "session.start",
-        result,
-        receipt,
-        warnings,
-        connection: session.identity,
-        ids: [result.sessionId],
-        human: [
-          ...keyValues([
-            ["session", result.sessionId],
-            ["run", result.runId],
-          ]),
-        ],
+      // A recovered submission has only its receipt, which names the same
+      // IDs once the backend has dispatched the run.
+      const fromReceipt = (final: PublicReceipt) => ({
+        result: {
+          sessionId: final.resources.sessionId ?? null,
+          tabId: final.resources.tabId ?? null,
+          runId: final.operationId,
+        },
+        ids: final.resources.sessionId ? [final.resources.sessionId] : [],
       });
+      return finishRun(
+        context,
+        parsed,
+        {
+          action: "session.start",
+          ...(result ? { result, ids: [result.sessionId] } : fromReceipt(receipt!)),
+          receipt,
+          warnings,
+          connection: session.identity,
+          human: result
+            ? keyValues([
+                ["session", result.sessionId],
+                ["run", result.runId],
+              ])
+            : [],
+        },
+        startedAt,
+        result ? undefined : fromReceipt,
+      );
     },
   },
   {
@@ -331,7 +371,7 @@ export const sessionCommands: CommandSpec[] = [
       const options = parsed.options;
       validateWaitOptions(options);
       const prompt = await readPrompt(context.io, options);
-      const { session, result, receipt, warnings } = await submit<{ runId: string }>(
+      const { session, result, receipt, warnings, startedAt } = await submitRun<{ runId: string }>(
         context,
         "session.prompt",
         {
@@ -343,15 +383,21 @@ export const sessionCommands: CommandSpec[] = [
         },
         options,
       );
-      return finishRun(context, parsed, {
-        action: "session.prompt",
-        result,
-        receipt,
-        warnings,
-        connection: session.identity,
-        ids: [result.runId],
-        human: receipt ? receiptLines(receipt) : [`run ${result.runId}`],
-      });
+      const runId = result?.runId ?? receipt!.operationId;
+      return finishRun(
+        context,
+        parsed,
+        {
+          action: "session.prompt",
+          result: result ?? { runId },
+          receipt,
+          warnings,
+          connection: session.identity,
+          ids: [runId],
+          human: receipt ? receiptLines(receipt) : [`run ${runId}`],
+        },
+        startedAt,
+      );
     },
   },
   {

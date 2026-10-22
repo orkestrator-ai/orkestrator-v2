@@ -27,6 +27,7 @@ import {
   removeAgentTestHostKeychainLink,
   seedAgentTestDockerConfig,
 } from "../electron/backend-process";
+import { installControlledTimeout } from "../../../tests/helpers/controlled-timeout";
 
 const directories: string[] = [];
 const processes: BackendProcess[] = [];
@@ -1751,4 +1752,171 @@ printf 'Available within your tailnet:\\nhttps://workstation.example.ts.net\\n'
     expect(exited).toBe(true);
     expect(backendProcess.getPid()).toBeUndefined();
   });
+});
+
+describe("BackendProcess startup failure boundaries", () => {
+  const READY_TIMEOUT_MS = 30_000;
+  const TOKEN = "fake-backend-token-1234567890";
+
+  /**
+   * A stand-in for the packaged Bun runtime. It records its pid (kept across
+   * `exec`) in `pidFile`, then runs `body`; `$AUTH` names the auth file it
+   * should advertise.
+   */
+  async function fakeBackend(body: string, authFile?: string) {
+    const root = await mkdtemp(path.join(os.tmpdir(), "orkestrator-startup-boundary-"));
+    directories.push(root);
+    const auth = authFile ?? path.join(root, "auth.json");
+    const pidFile = path.join(root, "pid");
+    await mkdir(path.join(root, "bin"), { recursive: true });
+    const fakeBun = path.join(root, "bin", "bun");
+    await writeFile(
+      fakeBun,
+      `#!/bin/sh
+AUTH=${JSON.stringify(auth)}
+printf '%s' "$$" > ${JSON.stringify(pidFile)}.tmp && mv ${JSON.stringify(pidFile)}.tmp ${JSON.stringify(pidFile)}
+${body}
+`,
+    );
+    await chmod(fakeBun, 0o755);
+    const backendProcess = new BackendProcess();
+    processes.push(backendProcess);
+    const onUnexpectedExit = mock((_error: Error) => undefined);
+    const started = backendProcess.start({
+      isDev: false,
+      appVersion: "9.9.9-boundary",
+      appRoot: root,
+      resourceRoot: root,
+      dataDir: root,
+      gatewayPort: 0,
+      onEvent: () => undefined,
+      onUnexpectedExit,
+    });
+    // Observed only through its rejection; the tests assert on it.
+    started.catch(() => undefined);
+    const pid = async () => {
+      await waitForPath(pidFile, 10_000);
+      return Number(await readFile(pidFile, "utf8"));
+    };
+    return { root, auth, backendProcess, started, onUnexpectedExit, pid };
+  }
+
+  const READY_LINE = `printf '{"type":"orkestrator-backend-ready","url":"http://127.0.0.1:1/","authFile":"%s","bindAddress":"127.0.0.1","port":1}\\n' "$AUTH"`;
+
+  async function waitForProcessGone(pid: number, timeoutMs = 5_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      try {
+        process.kill(pid, 0);
+      } catch {
+        return;
+      }
+      await Bun.sleep(10);
+    }
+    throw new Error(`Process ${pid} was still running`);
+  }
+
+  async function waitUntil(predicate: () => boolean, label: string, timeoutMs = 5_000) {
+    const deadline = Date.now() + timeoutMs;
+    while (!predicate()) {
+      if (Date.now() > deadline) throw new Error(`Timed out waiting for ${label}`);
+      await Bun.sleep(10);
+    }
+  }
+
+  test(
+    "rejects an auth file without a valid token and stops the child",
+    async () => {
+      const backend = await fakeBackend(`${READY_LINE}\nexec sleep 30`);
+      await writeFile(backend.auth, JSON.stringify({ token: "short" }));
+      const pid = await backend.pid();
+
+      await expect(backend.started).rejects.toThrow(
+        "Backend authentication file does not contain a valid token",
+      );
+      expect(backend.backendProcess.getPid()).toBeUndefined();
+      expect(backend.backendProcess.getInfo()).toBeNull();
+      await waitForProcessGone(pid);
+      expect(backend.onUnexpectedExit).not.toHaveBeenCalled();
+    },
+    SPAWN_TIMEOUT_MS,
+  );
+
+  test(
+    "rejects a child that exits between readiness and client setup",
+    async () => {
+      // The auth file is a FIFO, so reading it holds startup after readiness
+      // until the test writes the token: the exit is guaranteed to land first.
+      const fifoRoot = await mkdtemp(path.join(os.tmpdir(), "orkestrator-startup-fifo-"));
+      directories.push(fifoRoot);
+      const fifo = path.join(fifoRoot, "auth.fifo");
+      await new Promise<void>((resolve, reject) =>
+        spawn("mkfifo", [fifo], { stdio: "ignore" })
+          .once("error", reject)
+          .once("exit", (code) => (code === 0 ? resolve() : reject(new Error(`mkfifo ${code}`)))),
+      );
+      const backend = await fakeBackend(`${READY_LINE}\nexit 0`, fifo);
+      await backend.pid();
+      await waitUntil(() => backend.backendProcess.getPid() === undefined, "the child's exit");
+
+      await writeFile(fifo, JSON.stringify({ token: TOKEN }));
+      await expect(backend.started).rejects.toThrow("Backend service exited during startup");
+      expect(backend.backendProcess.getInfo()).toBeNull();
+      // Startup never completed, so this is a failed start, not a crash.
+      expect(backend.onUnexpectedExit).not.toHaveBeenCalled();
+    },
+    SPAWN_TIMEOUT_MS,
+  );
+
+  test(
+    "rejects after the readiness deadline and stops the silent child",
+    async () => {
+      const clock = installControlledTimeout(READY_TIMEOUT_MS, {
+        label: "backend readiness deadline",
+      });
+      try {
+        const backend = await fakeBackend("exec sleep 30");
+        const pid = await backend.pid();
+        await waitUntil(() => clock.pendingCount() === 1, "the readiness deadline");
+
+        clock.advance();
+        await expect(backend.started).rejects.toThrow("Timed out waiting for the backend service");
+        expect(backend.backendProcess.getPid()).toBeUndefined();
+        await waitForProcessGone(pid);
+        expect(backend.onUnexpectedExit).not.toHaveBeenCalled();
+      } finally {
+        clock.restore();
+      }
+    },
+    SPAWN_TIMEOUT_MS,
+  );
+
+  test(
+    "stop during startup rejects the start and leaves nothing running",
+    async () => {
+      const backend = await fakeBackend("exec sleep 30");
+      const pid = await backend.pid();
+
+      await backend.backendProcess.stop();
+      await expect(backend.started).rejects.toThrow("Backend service exited");
+      expect(backend.backendProcess.getPid()).toBeUndefined();
+      expect(backend.backendProcess.getInfo()).toBeNull();
+      await waitForProcessGone(pid);
+      expect(backend.onUnexpectedExit).not.toHaveBeenCalled();
+
+      // The supervisor is reusable: the next start launches a fresh child.
+      const second = backend.backendProcess.start({
+        isDev: false,
+        appRoot: backend.root,
+        resourceRoot: backend.root,
+        dataDir: backend.root,
+        gatewayPort: 0,
+        onEvent: () => undefined,
+      });
+      second.catch(() => undefined);
+      await waitUntil(() => backend.backendProcess.getPid() !== undefined, "a second child");
+      expect(backend.backendProcess.getPid()).not.toBe(pid);
+    },
+    SPAWN_TIMEOUT_MS,
+  );
 });

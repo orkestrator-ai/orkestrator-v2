@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 
 import * as realBackend from "@/lib/backend";
 import * as realHostPathPicker from "@/lib/host-path-picker";
+import { type ControlledTimeout, installControlledTimeout } from "../../helpers/controlled-timeout";
 
 const realBackendSnapshot = { ...realBackend };
 const realHostPathPickerSnapshot = { ...realHostPathPicker };
@@ -28,8 +29,16 @@ afterAll(() => {
   mock.module("@/lib/host-path-picker", () => realHostPathPickerSnapshot);
 });
 
+// `PATH_DETECTION_DEBOUNCE_MS`: a typed path is inspected once the user pauses.
+// Host-picker lookups use a zero delay and stay on the real clock.
+const PATH_DETECTION_DEBOUNCE_MS = 2000;
+let pathDebounce: ControlledTimeout;
+
 describe("AddProjectDialog", () => {
   beforeEach(() => {
+    pathDebounce = installControlledTimeout(PATH_DETECTION_DEBOUNCE_MS, {
+      label: "AddProjectDialog typed-path detection",
+    });
     delete window.orkestratorGateway;
     openDialogMock.mockReset();
     openDialogMock.mockResolvedValue(null);
@@ -39,6 +48,7 @@ describe("AddProjectDialog", () => {
 
   afterEach(() => {
     cleanup();
+    pathDebounce.restore();
     window.orkestratorGateway = originalGateway;
   });
 
@@ -114,16 +124,16 @@ describe("AddProjectDialog", () => {
     const pathInput = screen.getByLabelText(/Local path/i);
 
     fireEvent.change(pathInput, { target: { value: "/Users/alice/typ" } });
-    await new Promise((resolve) => setTimeout(resolve, 1200));
+    expect(pathDebounce.pendingCount()).toBe(1);
     fireEvent.change(pathInput, { target: { value: "/Users/alice/typed" } });
-    await new Promise((resolve) => setTimeout(resolve, 1200));
 
-    // The first edit's timer was reset, so nothing has been inspected yet.
+    // The second edit cleared the first edit's timer and armed its own, so
+    // nothing has been inspected yet and only the final path will be.
+    expect(pathDebounce.pendingCount()).toBe(1);
     expect(getGitRemoteUrlMock).not.toHaveBeenCalled();
 
-    await waitFor(() => expect(getGitRemoteUrlMock).toHaveBeenCalledWith("/Users/alice/typed"), {
-      timeout: 3000,
-    });
+    await waitForDetection();
+    expect(getGitRemoteUrlMock).toHaveBeenCalledWith("/Users/alice/typed");
     expect(getGitRemoteUrlMock).toHaveBeenCalledTimes(1);
     await waitFor(() =>
       expect((screen.getByLabelText(/Git URL/) as HTMLInputElement).value).toBe(
@@ -147,9 +157,8 @@ describe("AddProjectDialog", () => {
       target: { value: "/Users/alice/not-a-repo" },
     });
 
-    await waitFor(() => expect(validateGitUrl).toHaveBeenCalledWith("invalid-remote"), {
-      timeout: 3000,
-    });
+    await waitForDetection();
+    expect(validateGitUrl).toHaveBeenCalledWith("invalid-remote");
     expect((screen.getByLabelText(/Git URL/) as HTMLInputElement).value).toBe(
       "https://github.com/acme/mine.git",
     );
@@ -166,8 +175,16 @@ describe("AddProjectDialog", () => {
       }),
     );
     await waitFor(() => expect(getGitRemoteUrlMock).toHaveBeenCalledTimes(1));
-    await new Promise((resolve) => setTimeout(resolve, 2300));
+    await waitFor(() =>
+      expect((screen.getByLabelText(/Git URL/) as HTMLInputElement).value).toBe(
+        "https://github.com/acme/project.git",
+      ),
+    );
 
+    // The picker's inspection settled without arming the typed-path debounce,
+    // so no later lookup can follow.
+    expect(pathDebounce.pendingCount()).toBe(0);
+    await waitForDetection();
     expect(getGitRemoteUrlMock).toHaveBeenCalledTimes(1);
   });
 
@@ -259,7 +276,6 @@ describe("AddProjectDialog", () => {
         "https://github.com/acme/retried.git",
       );
     },
-    10000,
   );
 
   test("retries when the source changes during detected URL validation", async () => {
@@ -283,7 +299,7 @@ describe("AddProjectDialog", () => {
     expect((screen.getByLabelText(/Git URL/) as HTMLInputElement).value).toBe(
       "https://github.com/acme/project.git",
     );
-  }, 10000);
+  });
 
   test("handles a rejected typed-path lookup without changing the manual URL", async () => {
     getGitRemoteUrlMock.mockRejectedValue(new Error("not a repository"));
@@ -336,7 +352,6 @@ describe("AddProjectDialog", () => {
       await waitForDetection();
       expect(getGitRemoteUrlMock).toHaveBeenCalledTimes(stage === "lookup" ? 2 : 1);
     },
-    10000,
   );
 
   test("selecting the typed path cancels the debounce even while picker lookup is pending", async () => {
@@ -357,7 +372,7 @@ describe("AddProjectDialog", () => {
     );
     await waitForDetection();
     expect(getGitRemoteUrlMock).toHaveBeenCalledTimes(1);
-  }, 10000);
+  });
 
   test("does nothing when browser detection has no entered path", async () => {
     window.orkestratorGateway = { enabled: true };
@@ -958,9 +973,11 @@ function selectExistingTab() {
   fireEvent.mouseDown(screen.getByRole("tab", { name: "Existing repository" }), { button: 0 });
 }
 
+/** Elapses the typed-path debounce, then lets the lookup it starts settle. */
 async function waitForDetection() {
   await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 2150));
+    pathDebounce.advance();
+    await new Promise((resolve) => setTimeout(resolve, 0));
   });
 }
 

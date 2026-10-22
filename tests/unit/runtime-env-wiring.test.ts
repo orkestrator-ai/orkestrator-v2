@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { nonRotatingOAuthProviders } from "@orkestrator/protocol/login-snapshots";
 
 const repoRoot = join(import.meta.dir, "..", "..");
 
@@ -706,7 +707,7 @@ report_agent_copy_skips OpenCode
     // they run concurrently. Extract the real block and drive each ordering.
     function runCredentialBlock(
       dir: string,
-      options: { mount?: string; existing?: string; envValue?: string },
+      options: { mount?: string; existing?: string; envValue?: string; interleave?: boolean },
     ): { stdout: string; exitCode: number | null; credential: string | null } {
       const home = join(dir, "home");
       const mount = join(dir, "claude-config");
@@ -719,6 +720,13 @@ report_agent_copy_skips OpenCode
         writeFileSync(join(home, ".claude", ".credentials.json"), options.existing);
       }
 
+      // The image restricts a copied login with node; a host without node uses Bun.
+      const bin = join(dir, "bin");
+      mkdirSync(bin, { recursive: true });
+      if (!Bun.which("node")) {
+        writeFileSync(join(bin, "node"), `#!/bin/sh\nexec ${shellQuote(process.execPath)} "$@"\n`);
+        chmodSync(join(bin, "node"), 0o755);
+      }
       const entrypointPath = join(repoRoot, "docker", "entrypoint.sh");
       const result = runShell(
         `
@@ -727,11 +735,23 @@ eval "$(sed -n '${AGENT_HELPER_SED}' ${shellQuote(entrypointPath)})"
 block="$(sed -n '/^if \\[ -n "\\$CLAUDE_OAUTH_CREDENTIALS" \\]/,/^fi$/p' ${shellQuote(entrypointPath)} | sed "s#/claude-config#\\$AGENT_TEST_MOUNT#g")"
 [ -n "$block" ] || { echo "harness failed to extract the credential block"; exit 9; }
 log_progress() { echo "$1"; }
+${
+  options.interleave
+    ? `eval ${shellQuote(
+        read("docker/entrypoint.sh")
+          .match(/^restrict_imported_login\(\) \{[\s\S]*?^}/m)![0]
+          .replace(
+            "        if (!login",
+            '        const target = process.env.HOME + "/.claude/.credentials.json"; fs.writeFileSync(target + ".backend", JSON.stringify({claudeAiOauth:{accessToken:"fresh-backend"}})); fs.renameSync(target + ".backend", target);\n        if (!login',
+          ),
+      )}`
+    : ""
+}
 eval "$block"
 `,
         {
           HOME: home,
-          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          PATH: `${bin}:${process.env.PATH ?? "/usr/bin:/bin"}`,
           AGENT_TEST_MOUNT: mount,
           ...(options.envValue === undefined ? {} : { CLAUDE_OAUTH_CREDENTIALS: options.envValue }),
         },
@@ -777,7 +797,45 @@ eval "$block"
       });
     });
 
-    test("treats an empty pre-existing credential as absent", () => {
+    test("a backend push during imported-login restriction cannot be overwritten", () => {
+      withTempDir((dir) => {
+        const result = runCredentialBlock(dir, {
+          mount: JSON.stringify({
+            claudeAiOauth: { accessToken: "stale-mounted", refreshToken: "SENTINEL" },
+          }),
+          interleave: true,
+        });
+        expect(result.exitCode).toBe(0);
+        expect(JSON.parse(result.credential!).claudeAiOauth.accessToken).toBe("fresh-backend");
+        expect(result.credential).not.toContain("SENTINEL");
+      });
+    });
+
+    test("a credential copied from the mount loses its refresh tokens", () => {
+      withTempDir((dir) => {
+        // A host-mounted ~/.claude, or a revision staged before logins were
+        // access-only, still carries the host's single-use refresh token.
+        const result = runCredentialBlock(dir, {
+          mount: JSON.stringify({
+            claudeAiOauth: {
+              accessToken: "from-mount",
+              refreshToken: "SENTINEL-CLAUDE",
+              expiresAt: 1,
+            },
+            mcpOAuth: { server: { accessToken: "mcp", refreshToken: "SENTINEL-MCP" } },
+          }),
+        });
+
+        expect(result.exitCode).toBe(0);
+        expect(JSON.parse(result.credential ?? "{}")).toEqual({
+          claudeAiOauth: { accessToken: "from-mount", expiresAt: 1 },
+          mcpOAuth: { server: { accessToken: "mcp" } },
+        });
+        expect(result.stdout).not.toContain("SENTINEL");
+      });
+    });
+
+    test("leaves an empty pre-existing file for the backend to replace atomically", () => {
       withTempDir((dir) => {
         // A zero-byte file is a failed write, not a login. `-s` is what makes
         // this differ from `-f`, which would strand the container logged out.
@@ -787,7 +845,7 @@ eval "$block"
         });
 
         expect(result.exitCode).toBe(0);
-        expect(result.credential).toContain("from-mount");
+        expect(result.credential).toBe("");
       });
     });
 
@@ -801,7 +859,7 @@ eval "$block"
       });
     });
 
-    test("an explicit CLAUDE_OAUTH_CREDENTIALS still overrides both sources", () => {
+    test("backend credentials win over a concurrently imported environment payload", () => {
       withTempDir((dir) => {
         const result = runCredentialBlock(dir, {
           envValue: '{"claudeAiOauth":{"accessToken":"from-env"}}',
@@ -810,7 +868,7 @@ eval "$block"
         });
 
         expect(result.exitCode).toBe(0);
-        expect(result.credential).toContain("from-env");
+        expect(result.credential).toContain("already-synced");
       });
     });
 
@@ -1126,8 +1184,126 @@ copy_agent_directory "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" skills Codex
     });
   });
 
+  test("imported OpenCode and Pi OAuth logins lose rotating refresh tokens, keeping keys", () => {
+    const entrypoint = read("docker/entrypoint.sh");
+    expect(entrypoint).toMatch(
+      /chmod 600 "\$HOME\/\.local\/share\/opencode\/auth\.json"[^\n]*\n\s*restrict_imported_login "\$HOME\/\.local\/share\/opencode\/auth\.json" opencode OpenCode \/opencode-data auth\.json\n/,
+    );
+    expect(entrypoint).toMatch(
+      /chmod 600 "\$HOME\/\.pi\/agent\/auth\.json"[^\n]*\n\s*restrict_imported_login "\$HOME\/\.pi\/agent\/auth\.json" pi Pi \/pi-config\/agent auth\.json\n/,
+    );
+    // The entrypoint keeps the same non-rotating providers as the backend.
+    expect(entrypoint).toContain(
+      `{ opencode: ${JSON.stringify(nonRotatingOAuthProviders("opencode")).replaceAll(",", ", ")}, pi: ${JSON.stringify(nonRotatingOAuthProviders("pi")).replaceAll(",", ", ")} }[kind]`,
+    );
+    withTempDir((dir) => {
+      const bin = join(dir, "bin");
+      mkdirSync(bin);
+      if (!Bun.which("node")) {
+        writeFileSync(join(bin, "node"), `#!/bin/sh\nexec ${shellQuote(process.execPath)} "$@"\n`);
+        chmodSync(join(bin, "node"), 0o755);
+      }
+      const opencode = join(dir, "opencode.json");
+      const pi = join(dir, "pi.json");
+      const opencodeLogins = {
+        "opencode-go": { type: "api", key: "go" },
+        openai: { type: "oauth", access: "a", refresh: "SENTINEL-OC", expires: 1 },
+        "github-copilot": { type: "oauth", access: "gho", refresh: "gho", expires: 0 },
+      };
+      const piLogins = {
+        anthropic: { type: "oauth", access: "a", refresh: "SENTINEL-PI", expires: 1 },
+        meta: { type: "oauth", access: "key", refresh: "identity", expires: 2 },
+        openrouter: { type: "api_key", key: "or" },
+      };
+      // A host home mounted directly: the source and the copy are the same file.
+      mkdirSync(join(dir, "opencode-data"));
+      mkdirSync(join(dir, "pi-config", "agent"), { recursive: true });
+      writeFileSync(join(dir, "opencode-data", "auth.json"), JSON.stringify(opencodeLogins));
+      writeFileSync(join(dir, "pi-config", "agent", "auth.json"), JSON.stringify(piLogins));
+      writeFileSync(opencode, JSON.stringify(opencodeLogins));
+      writeFileSync(pi, JSON.stringify(piLogins));
+      const result = runShell(
+        agentCopyHelperHarness(`
+restrict_imported_login ${shellQuote(opencode)} opencode OpenCode ${shellQuote(join(dir, "opencode-data"))} auth.json
+restrict_imported_login ${shellQuote(pi)} pi Pi ${shellQuote(join(dir, "pi-config", "agent"))} auth.json
+`),
+        { PATH: `${bin}:${process.env.PATH ?? "/usr/bin:/bin"}` },
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(readFileSync(opencode, "utf8"))).toEqual({
+        "opencode-go": { type: "api", key: "go" },
+        openai: { type: "oauth", access: "a", refresh: "", expires: 1 },
+        "github-copilot": { type: "oauth", access: "gho", refresh: "gho", expires: 0 },
+      });
+      expect(JSON.parse(readFileSync(pi, "utf8"))).toEqual({
+        anthropic: { type: "oauth", access: "a", refresh: "", expires: 1 },
+        meta: { type: "oauth", access: "key", refresh: "identity", expires: 2 },
+        openrouter: { type: "api_key", key: "or" },
+      });
+      expect((statSync(pi).mode & 0o777).toString(8)).toBe("600");
+      expect(result.stdout + result.stderr).not.toContain("SENTINEL");
+    });
+  });
+
+  test("OpenCode and Pi logins made inside the container keep their refresh tokens", () => {
+    withTempDir((dir) => {
+      const bin = join(dir, "bin");
+      mkdirSync(bin);
+      if (!Bun.which("node")) {
+        writeFileSync(join(bin, "node"), `#!/bin/sh\nexec ${shellQuote(process.execPath)} "$@"\n`);
+        chmodSync(join(bin, "node"), 0o755);
+      }
+      const own = { type: "oauth", access: "own", refresh: "own-refresh", expires: 2 };
+      const restart = join(dir, "restart.json");
+      const mixed = join(dir, "mixed.json");
+      const linked = join(dir, "linked.json");
+      const unreadable = join(dir, "unreadable.json");
+      // A restart with no staged file leaves the container's file as it is.
+      writeFileSync(restart, JSON.stringify({ kimi: own }));
+      // The host holds only OpenAI; the container's Kimi login is its own.
+      writeFileSync(
+        mixed,
+        JSON.stringify({ kimi: own, openai: { ...own, refresh: "SENTINEL-OLD" } }),
+      );
+      writeFileSync(unreadable, "not json");
+      const source = join(dir, "source");
+      mkdirSync(source);
+      writeFileSync(
+        join(source, "auth.json"),
+        JSON.stringify({ openai: { type: "oauth", access: "a", refresh: "", expires: 1 } }),
+      );
+      // A symlinked source names no providers: the copy skipped it.
+      const linkedSource = join(dir, "linked-source");
+      mkdirSync(linkedSource);
+      symlinkSync(join(source, "auth.json"), join(linkedSource, "auth.json"));
+      writeFileSync(linked, JSON.stringify({ kimi: own, openai: own }));
+      const result = runShell(
+        agentCopyHelperHarness(`
+restrict_imported_login ${shellQuote(restart)} pi Pi ${shellQuote(join(dir, "absent"))} auth.json
+restrict_imported_login ${shellQuote(mixed)} opencode OpenCode ${shellQuote(source)} auth.json
+restrict_imported_login ${shellQuote(linked)} opencode OpenCode ${shellQuote(linkedSource)} auth.json
+restrict_imported_login ${shellQuote(unreadable)} pi Pi ${shellQuote(join(dir, "absent"))} auth.json
+`),
+        { PATH: `${bin}:${process.env.PATH ?? "/usr/bin:/bin"}` },
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(readFileSync(restart, "utf8"))).toEqual({ kimi: own });
+      expect(JSON.parse(readFileSync(mixed, "utf8"))).toEqual({
+        kimi: own,
+        openai: { ...own, refresh: "" },
+      });
+      expect(JSON.parse(readFileSync(linked, "utf8"))).toEqual({ kimi: own, openai: own });
+      // With no host file to restrict it against, the container's own file is not judged.
+      expect(readFileSync(unreadable, "utf8")).toBe("not json");
+      expect(result.stdout + result.stderr).not.toContain("SENTINEL");
+    });
+  });
+
   test("imported Codex and Grok logins lose their single-use refresh tokens", () => {
     const entrypoint = read("docker/entrypoint.sh");
+    expect(entrypoint).toContain('restrict_imported_login "$temporary_path" claude Claude');
     // Each import is restricted right after it is copied, before any agent runs.
     expect(entrypoint).toMatch(
       /chmod 600 "\$HOME\/\.codex\/auth\.json"[^\n]*\n\s*restrict_imported_login "\$HOME\/\.codex\/auth\.json" codex Codex/,
@@ -2052,7 +2228,14 @@ eval "$claude_setup"
       writeFileSync(join(config, "opencode.json"), '{"config":true}\n');
       writeFileSync(join(config, "plugin", "custom.ts"), "export default {}\n");
       writeFileSync(join(config, "node_modules", "some-dep", "binary.node"), "mach-o\n");
-      writeFileSync(join(data, "auth.json"), '{"token":"opencode"}\n', { mode: 0o600 });
+      writeFileSync(
+        join(data, "auth.json"),
+        JSON.stringify({
+          opencode: { type: "api", key: "k" },
+          openai: { type: "oauth", access: "a", refresh: "r", expires: 1 },
+        }),
+        { mode: 0o600 },
+      );
       writeFileSync(join(data, "account.json"), '{"account":"test"}\n');
       writeFileSync(join(data, "opencode.db"), "x".repeat(1024 * 1024));
       writeFileSync(join(data, "storage", "kept.json"), "kept\n");
@@ -2087,10 +2270,13 @@ eval "$opencode_setup"
         "export default {}\n",
       );
       expect(() => statSync(join(home, ".config", "opencode", "node_modules"))).toThrow();
-      // Credential rides the mount; the multi-GB session database does not.
-      expect(readFileSync(join(home, ".local", "share", "opencode", "auth.json"), "utf8")).toBe(
-        '{"token":"opencode"}\n',
-      );
+      // Credential rides the mount, access-only; the multi-GB session database does not.
+      expect(
+        JSON.parse(readFileSync(join(home, ".local", "share", "opencode", "auth.json"), "utf8")),
+      ).toEqual({
+        opencode: { type: "api", key: "k" },
+        openai: { type: "oauth", access: "a", refresh: "", expires: 1 },
+      });
       expect(readFileSync(join(home, ".local", "share", "opencode", "account.json"), "utf8")).toBe(
         '{"account":"test"}\n',
       );

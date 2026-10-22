@@ -1,7 +1,7 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { invoke } from "@/lib/native/backend";
 import { listen } from "@/lib/native/events";
-import { portalStore } from "./portal-store";
+import { PortalStore, portalStore } from "./portal-store";
 import { portalInvoke, portalListen, workspaceTarget } from "./portal-transport";
 
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
@@ -10,7 +10,7 @@ const listenMock = listen as unknown as ReturnType<typeof mock>;
 function installPortal() {
   const listeners = new Map<string, (payload: unknown) => void>();
   const portal = {
-    invoke: mock(async (command: string, _args?: Record<string, unknown>) => {
+    invoke: mock(async (command: string, _args?: Record<string, unknown>): Promise<unknown> => {
       if (command === "get_node_summaries") {
         return {
           selfId: "bk_command",
@@ -85,4 +85,22 @@ describe("the portal channel", () => {
     expect(portal.invoke).toHaveBeenCalledWith("stop_environment", { environmentId: "e1" });
     expect(portal.invoke.mock.calls.some(([command]) => command === "invoke_on_node")).toBe(false);
   });
+});
+
+test("maintenance polling never schedules portal refreshes for self or routed nodes", async () => {
+  const { portal } = installPortal();
+  portal.invoke.mockImplementation(async (command: string) =>
+    command === "invoke_on_node" ? { outcome: "ok", result: { revision: 1 } } : { revision: 1 },
+  );
+  const store = new PortalStore();
+  store.store.setState({ selfId: "bk_command" as never });
+  const refresh = spyOn(store, "scheduleRefresh").mockImplementation(() => {});
+  for (const node of ["bk_command", "bk_leaf"]) {
+    for (let i = 0; i < 3; i++)
+      await store.invokeOnNode(node as never, "get_host_maintenance", { detail: false });
+  }
+  expect(refresh).not.toHaveBeenCalled();
+  await store.invokeOnNode("bk_leaf" as never, "repair_host_toolchain");
+  expect(refresh).toHaveBeenCalledTimes(1);
+  refresh.mockRestore();
 });

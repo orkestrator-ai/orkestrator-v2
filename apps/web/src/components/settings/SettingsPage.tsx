@@ -18,33 +18,30 @@ import {
   SlidersHorizontal,
   Cable,
   MessagesSquare,
-  RadioTower,
+  Network,
   MonitorPlay,
   Volume2,
   Server,
   HardDrive,
-  Download,
 } from "lucide-react";
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import { GlobalSettings } from "./GlobalSettings";
 import { SkillsSettings } from "./SkillsSettings";
 import { DiskUsageSettings } from "./DiskUsageSettings";
-import { UpdatesSettings } from "./UpdatesSettings";
 import { McpSettings } from "./McpSettings";
 import { ProviderMcpSettings } from "./mcp-servers/ProviderMcpSettings";
 import { PreviewSettings } from "./PreviewSettings";
 import { WebAnnotationSettings } from "./WebAnnotationSettings";
 import { FullscreenSettingsLayout, type SettingsMenuItem } from "./FullscreenSettingsLayout";
 import { MessagingSettings } from "./MessagingSettings";
-import { ConnectionsSettings } from "./ConnectionsSettings";
+import { MachinesSettings } from "./machines/MachinesSettings";
 import { SoundsSettings } from "./SoundsSettings";
 import type { GlobalSettingsSection } from "@/lib/settings-navigation";
 
 const MENU_ITEMS: SettingsMenuItem<GlobalSettingsSection>[] = [
   { id: "general", label: "General", icon: <Settings2 className="h-4 w-4" /> },
-  { id: "updates", label: "Updates", icon: <Download className="h-4 w-4" /> },
+  { id: "machines", label: "Machines", icon: <Network className="h-4 w-4" /> },
   { id: "disk-usage", label: "Disk usage", icon: <HardDrive className="h-4 w-4" /> },
-  { id: "connections", label: "Connections", icon: <RadioTower className="h-4 w-4" /> },
   { id: "defaults", label: "Defaults", icon: <SlidersHorizontal className="h-4 w-4" /> },
   { id: "platforms", label: "Platforms", icon: <Boxes className="h-4 w-4" /> },
   { id: "review", label: "Review", icon: <Eye className="h-4 w-4" /> },
@@ -100,8 +97,8 @@ interface SettingsPageProps {
   sectionRequest?: number;
 }
 
-/** Sections that configure this client rather than a backend. */
-const CLIENT_SECTIONS: ReadonlySet<GlobalSettingsSection> = new Set(["connections"]);
+/** Sections that span machines or configure this client rather than one backend. */
+const CLIENT_SECTIONS: ReadonlySet<GlobalSettingsSection> = new Set(["machines"]);
 
 /**
  * With several machines in view, every settings page says whose settings it
@@ -121,8 +118,8 @@ function SettingsScopeBanner({ section }: { section: GlobalSettingsSection | "" 
     >
       {client ? (
         <span>
-          <span className="font-medium text-zinc-200">This client</span> — saved on this device
-          only.
+          <span className="font-medium text-zinc-200">All machines</span> — each machine&apos;s
+          settings and updates are applied on that machine.
         </span>
       ) : (
         <>
@@ -183,14 +180,12 @@ export function SettingsPage({
           {
             // Skills is a read-only browser of the host's skill directories, not a
             // config form, so it bypasses the auto-saving settings form.
-            activeSection === "updates" ? (
-              <UpdatesSettings />
+            activeSection === "machines" ? (
+              <MachinesSettings />
             ) : activeSection === "disk-usage" ? (
               <DiskUsageSettings />
             ) : activeSection === "skills" ? (
               <SkillsSettings />
-            ) : activeSection === "connections" ? (
-              <ConnectionsSettings />
             ) : activeSection === "mcp" ? (
               <McpSettings />
             ) : activeSection === "mcp-servers" ? (

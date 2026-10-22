@@ -66,7 +66,7 @@ command nodes span all connected nodes.
 | Desktop | `electron/federation-ipc.ts`, `ssh-prompt-broker.ts`, `backend-panel-views.ts` | IPC, askpass prompts, machine panel views |
 | Renderer | `apps/web/src/lib/federation/*` | Backend clients, registry, runtimes, aggregation, recovery |
 | Renderer | `apps/web/src/components/federation/*` | Provider, filter, dots, rows, sections, panels, effects |
-| Renderer | `apps/web/src/components/settings/connections/*` | Machine details, SSH dialog, feature toggles, browser machines |
+| Renderer | `apps/web/src/components/settings/machines/*` | Machines settings: list, settings, updates, SSH dialog, device toggles |
 
 `.oxlintrc.json` forbids `@/lib/native/backend`, `@/lib/backend` and
 `@/lib/backend/*` imports under `apps/web/src/lib/federation/**` and
@@ -152,8 +152,8 @@ handshake before a route is used:
 - The desktop applies profile events whose revision is not older than the
   cached one, and writes `profileCache` into the catalogue. That cache labels
   an offline machine (`profile.cached: true`). Each renderer runtime also
-  applies that machine's profile events (newer revisions only). Connections
-  edits send the newest revision the client has seen. The Connections page warns
+  applies that machine's profile events (newer revisions only). Profile edits
+  send the newest revision the client has seen. The Machines page warns
   about colour collisions (`duplicateMachineColors`) but never recolours a
   machine. On a profile conflict it shows the current values and does not
   retry.
@@ -482,7 +482,7 @@ with `MachinesFilter`:
   (`FederatedSearchSection`, at most 20 rows). It is labelled per machine,
   opens that machine's panel, and says when results may be incomplete
   because a machine is unavailable, still loading or truncated.
-- Settings pages show a scope banner: **This client** for Connections,
+- Settings pages show a scope banner: **All machines** for Machines,
   **Backend: name** for everything else, which always targets the window's
   bound machine.
 
@@ -550,8 +550,8 @@ this client, Not connected, or Unavailable · last seen ….
 ## Feature flags
 
 The flags live in the catalogue's `features` and are edited under Settings →
-Connections (`setFeatures`). Each defaults to `true`. Turning one off stops
-client machinery only, never remote work.
+Machines → This device (`setFeatures`). Each defaults to `true`. Turning one off
+stops client machinery only, never remote work.
 
 | Flag | Off means |
 | --- | --- |
@@ -658,11 +658,11 @@ with it. The command-node equivalents are in the requirement matrix of
 | CL-01 | `apps/desktop/tests/connection-manager-federation.test.ts` |
 | CL-02 | `apps/desktop/tests/connection-manager-federation.test.ts`, `apps/web/src/lib/desktop-storage-key.test.ts`, `apps/web/src/lib/federation/federation-runtime.test.ts` |
 | CL-03 | `apps/web/src/lib/federation/aggregate.test.ts` |
-| CL-04 | `apps/backend/src/core/backend-profile-store.test.ts`, `apps/web/src/components/settings/connections/connections-machine.test.tsx` |
+| CL-04 | `apps/backend/src/core/backend-profile-store.test.ts`, `apps/web/src/components/settings/machines/MachinesSettings.test.tsx` |
 | CL-05 | `apps/web/src/components/federation/federation-ui.test.tsx` |
 | CT-02 | `apps/desktop/tests/connection-manager-federation.test.ts` |
 | SH-01, SH-05, SH-06, SH-07, SH-10, SH-11 | `apps/desktop/tests/ssh/tunnel-supervisor.test.ts`, `apps/desktop/tests/ssh/ssh-tunnel-integration.test.ts` (real sshd) |
-| SH-02 | `apps/desktop/tests/ssh/host-trust.test.ts`, `apps/desktop/tests/ssh/ssh-tunnel-integration.test.ts`, `apps/web/src/components/settings/connections/connections-machine.test.tsx` |
+| SH-02 | `apps/desktop/tests/ssh/host-trust.test.ts`, `apps/desktop/tests/ssh/ssh-tunnel-integration.test.ts`, `apps/web/src/components/settings/machines/SshRouteDialog.test.tsx` |
 | SH-03 | `apps/desktop/tests/ssh/tunnel-supervisor.test.ts`, `apps/desktop/tests/ssh/ssh-tunnel-integration.test.ts`, `apps/desktop/tests/federation-ipc.test.ts`, `apps/web/src/components/federation/federation-ui.test.tsx` |
 | SH-04 | `apps/desktop/tests/ssh/ssh-proxyjump-integration.test.ts` (real sshd jump host) |
 | SH-08, SH-09 | `apps/backend/tests/gateway-hello.test.ts`, `apps/desktop/tests/connection-manager-federation.test.ts` |

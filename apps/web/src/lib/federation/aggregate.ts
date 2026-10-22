@@ -1,12 +1,12 @@
 /**
  * Presentation projections over several machines' summaries.
  *
- * Everything here is a view: grouping, filtering and sorting never merge
- * records, change ownership or touch workflow state. Projects with the same
- * name on two machines stay two project instances; a repository group is
- * only a visual heading over separately owned projects. Global activity
- * order is a presentation sort over backend-reported timestamps from
- * different clocks, with backend and resource IDs as the final tie-breakers.
+ * Everything here is a view: filtering and sorting never merge records,
+ * change ownership or touch workflow state. Projects with the same name on
+ * two machines stay two project instances (`sidebar-layout.ts` orders the
+ * merged lists). Global activity order is a presentation sort over
+ * backend-reported timestamps from different clocks, with backend and
+ * resource IDs as the final tie-breakers.
  */
 
 import type { ConnectionTransportState } from "@orkestrator/protocol/connections";
@@ -34,24 +34,6 @@ export type SidebarGrouping = "machine" | "project" | "repository" | "activity";
 export const ALL_MACHINES = "all";
 export type MachineFilter = typeof ALL_MACHINES | string;
 
-export interface ProjectGroup {
-  machine: MachineView;
-  project: FederatedProject;
-  environments: readonly FederatedEnvironment[];
-}
-
-export interface MachineGroup {
-  machine: MachineView;
-  projects: ProjectGroup[];
-}
-
-export interface RepositoryGroup {
-  /** Repository hint or explicit mapping key; `null` for an ungrouped project. */
-  repository: string | null;
-  label: string;
-  projects: ProjectGroup[];
-}
-
 export interface ActivityRow {
   machine: MachineView;
   project: FederatedProject | null;
@@ -69,68 +51,6 @@ export function filterMachines(
 ): MachineView[] {
   if (filter === ALL_MACHINES) return [...machines];
   return machines.filter((machine) => machine.connectionId === filter);
-}
-
-function projectGroups(machine: MachineView, includeProjectHomes = false): ProjectGroup[] {
-  return machine.projects.map((project) => ({
-    machine,
-    project,
-    environments: (machine.environmentsByProject.get(project.ref.projectId) ?? []).filter(
-      (environment) => includeProjectHomes || !environment.isProjectHome,
-    ),
-  }));
-}
-
-/** Machine → project instances → environments, in each backend's own order. */
-export function groupByMachine(machines: readonly MachineView[]): MachineGroup[] {
-  return [...machines]
-    .sort(compareMachines)
-    .map((machine) => ({ machine, projects: projectGroups(machine) }));
-}
-
-/** Project instances with machine badges. Equal names stay separate rows. */
-export function groupByProject(machines: readonly MachineView[]): ProjectGroup[] {
-  return machines
-    .flatMap((machine) => projectGroups(machine))
-    .sort(
-      (a, b) =>
-        a.project.name.localeCompare(b.project.name, undefined, { sensitivity: "base" }) ||
-        compareMachines(a.machine, b.machine) ||
-        compareText(a.project.ref.projectId, b.project.ref.projectId),
-    );
-}
-
-/**
- * Optional visual grouping. Only a backend-published repository hint or an
- * explicit user mapping groups projects; a matching name, path or branch
- * never does.
- */
-export function groupByRepository(
-  machines: readonly MachineView[],
-  mapping: ReadonlyMap<string, string> = new Map(),
-): RepositoryGroup[] {
-  const groups = new Map<string, RepositoryGroup>();
-  const ungrouped: RepositoryGroup[] = [];
-  for (const group of groupByProject(machines)) {
-    const key = mapping.get(group.project.key) ?? group.project.repositoryHint ?? null;
-    if (!key) {
-      ungrouped.push({ repository: null, label: group.project.name, projects: [group] });
-      continue;
-    }
-    const existing = groups.get(key);
-    if (existing) existing.projects.push(group);
-    else groups.set(key, { repository: key, label: repositoryLabel(key), projects: [group] });
-  }
-  return [...Array.from(groups.values()), ...ungrouped].sort(
-    (a, b) =>
-      a.label.localeCompare(b.label, undefined, { sensitivity: "base" }) ||
-      compareText(a.repository ?? "", b.repository ?? ""),
-  );
-}
-
-function repositoryLabel(key: string): string {
-  const parts = key.split("/");
-  return parts.length >= 2 ? parts.slice(-2).join("/") : key;
 }
 
 const ACTIVITY_PRIORITY: Record<FederatedEnvironment["activity"], number> = {
@@ -232,14 +152,6 @@ export function duplicateMachineColors(
   }
   for (const [color, ids] of Array.from(byColor)) if (ids.length < 2) byColor.delete(color);
   return byColor;
-}
-
-function compareMachines(a: MachineView, b: MachineView): number {
-  return (
-    Number(b.bound) - Number(a.bound) ||
-    a.name.localeCompare(b.name, undefined, { sensitivity: "base" }) ||
-    compareText(a.backendId, b.backendId)
-  );
 }
 
 function compareText(a: string, b: string): number {

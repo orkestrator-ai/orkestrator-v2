@@ -829,7 +829,7 @@ export class NodeService {
     if (!this.registrationEnabled(registry)) {
       throw new NodeRefusalError(
         NODE_REFUSAL_CODES.registrationDisabled,
-        "Turn on command-node registration in Connections settings first.",
+        "Allow this machine to command others in Settings → Machines first.",
       );
     }
     return registry;

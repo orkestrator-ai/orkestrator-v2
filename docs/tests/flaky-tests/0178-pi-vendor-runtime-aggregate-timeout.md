@@ -925,3 +925,7 @@ The final `final-suite` rerun passed the unchanged complete root/support group
 (3219 passed, one skipped, zero failed across 3220 tests; 318.00 s), including
 Pi vendoring. This establishes the runtime-staging failure as intermittent;
 no Pi code, deadline or assertion changed.
+
+## Agent-interactions main merge, 2026-10-22
+
+`mise run test:logged -- --name merge-tests -- mise run test` repeated `Pi bridge runtime vendoring > loads Pi's supported SDK from the staged runtime closure` at 112073.68 ms in the one-worker root group; the group later hit its no-output watchdog without final counts. `mise run test:logged -- --name merge-unit-pi-bridge-vendor.test -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed the entire unchanged owner (19.1 s logged). Host load reached 156.45 during the original aggregate; see [0691](0691-main-merge-validation-timeout-cluster.md) for group evidence.

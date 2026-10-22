@@ -5,6 +5,7 @@ import type { HostTask } from "@orkestrator/protocol/host-maintenance";
 
 import * as backend from "@/lib/backend";
 import { HostDependencySettings } from "./HostDependencySettings";
+import { connectedHostClient as client } from "@/test/host-maintenance-client";
 
 afterEach(() => {
   cleanup();
@@ -55,7 +56,7 @@ test("shows each tool's source and the next release's pins, and repairs on reque
     task("toolchain-repair"),
   );
   const accept = mock(() => undefined);
-  render(<HostDependencySettings snapshot={detailed} accept={accept} />);
+  render(<HostDependencySettings client={client} snapshot={detailed} accept={accept} />);
   expect(screen.getByText("on PATH (not managed)")).toBeTruthy();
   expect(screen.getByText("2.1.310")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Repair agent tools" }));
@@ -66,7 +67,7 @@ test("shows each tool's source and the next release's pins, and repairs on reque
 test("lists environments still on an older image and pulls the release image", async () => {
   spyOn(backend, "getHostMaintenance").mockResolvedValue(detailed);
   const pull = spyOn(backend, "startHostImageUpdate").mockResolvedValue(task("image-update"));
-  render(<HostDependencySettings snapshot={detailed} accept={() => undefined} />);
+  render(<HostDependencySettings client={client} snapshot={detailed} accept={() => undefined} />);
   expect(screen.getByText("feature-x")).toBeTruthy();
   fireEvent.click(
     screen.getByRole("button", { name: "Pull ghcr.io/orkestrator-ai/orkestrator-v2:2.21.1" }),
@@ -77,7 +78,7 @@ test("lists environments still on an older image and pulls the release image", a
 test("following the newest gh asks first", async () => {
   spyOn(backend, "getHostMaintenance").mockResolvedValue(detailed);
   const channel = spyOn(backend, "setHostGhChannel").mockResolvedValue(task("gh-update"));
-  render(<HostDependencySettings snapshot={detailed} accept={() => undefined} />);
+  render(<HostDependencySettings client={client} snapshot={detailed} accept={() => undefined} />);
   fireEvent.click(screen.getByRole("switch", { name: "Follow the newest gh release" }));
   expect(await screen.findByText("Follow the newest gh release?")).toBeTruthy();
   expect(channel).not.toHaveBeenCalled();
@@ -87,7 +88,7 @@ test("following the newest gh asks first", async () => {
 
 test("a running task shows its step", () => {
   const snapshot = { ...detailed, tasks: { "toolchain-repair": task("toolchain-repair") } };
-  render(<HostDependencySettings snapshot={snapshot} accept={() => undefined} />);
+  render(<HostDependencySettings client={client} snapshot={snapshot} accept={() => undefined} />);
   expect(screen.getByText("Downloading claude")).toBeTruthy();
   expect(
     (screen.getByRole("button", { name: "Repair agent tools" }) as HTMLButtonElement).disabled,
@@ -97,6 +98,7 @@ test("a running task shows its step", () => {
 test("an unknown installed version is displayed as unavailable rather than as the pin", () => {
   render(
     <HostDependencySettings
+      client={client}
       snapshot={{
         ...detailed,
         tools: [

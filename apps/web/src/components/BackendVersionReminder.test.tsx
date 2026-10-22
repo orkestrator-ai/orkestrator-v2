@@ -104,7 +104,7 @@ describe("BackendVersionReminder", () => {
       const [, options] = lastWarning();
       expect(options.action?.label).toBe("Update backend");
       options.action?.onClick();
-      expect(opened).toEqual(["updates"]);
+      expect(opened).toEqual(["machines"]);
     } finally {
       window.removeEventListener("orkestrator:open-global-settings", listener);
     }

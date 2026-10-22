@@ -33,6 +33,8 @@ test("cold stored leaf hydrates actual stores before gateway initialization and 
   };
   const a = visit("A");
   expect(a.getState().collapsedProjects).toEqual([]);
+  expect(a.getState().projectCollapseChoices).toEqual([]);
+  a.getState().setProjectCollapsed("explicit-expanded", false);
   expect(a.getState().recentProjectIds).toEqual([]);
   expect(a.getState().sidebarWidth).toBe(345);
   a.getState().selectProject("same-id");
@@ -42,6 +44,8 @@ test("cold stored leaf hydrates actual stores before gateway initialization and 
   b.getState().selectProject("b-project");
   b.getState().setProjectCollapsed("same-id", true);
   expect(b.getState().collapsedProjectFolders).toEqual([]);
+  expect(b.getState().projectCollapseChoices).not.toContain("explicit-expanded");
+  expect(visit("A").getState().projectCollapseChoices).toContain("explicit-expanded");
   expect(visit("A").getState().recentProjectIds).toEqual(["same-id"]);
   expect(visit("A").getState().collapsedProjects).toEqual([]);
   expect(visit("A").getState().collapsedProjectFolders).toEqual(["Folder"]);

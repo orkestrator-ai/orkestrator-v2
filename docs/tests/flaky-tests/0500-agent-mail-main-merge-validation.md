@@ -178,3 +178,22 @@ one failed; 146.0 seconds). Both profiles were stopped and reset. This remains
 unresolved validation, with evidence and exact commands in case 0224; the
 native branch-picker failures above also remain unresolved. The original
 nonzero browser-suite exit statuses are retained.
+
+## Recurrence during the Usage-tab main merge (2026-10-22)
+
+Merged `origin/main` at `566758e0` into the settings Usage-tab branch
+`t3/settings-usage-tab`. `mise run test:logged -- --name merge-browser --
+mise run test:browser` reported 398 passed, 81 skipped and one failed with
+nine workers (2.8 minutes): the same native branch-suggestion case in
+`e2e/AgentLaunchDialog.spec.ts:7`, with the input holding `rel` instead of
+`release/2.0` at the 5,000 ms deadline.
+
+`ORKESTRATOR_E2E_PORT=21911 mise run test:logged -- --name merge-native-branch-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentLaunchDialog.spec.ts --workers=1 --output output/playwright/merge-native-branch-owner`
+repeated both viewport cases in the unchanged owning spec (two passed, two
+failed; exit 1, 20.4 seconds logged), which is what this case has recorded
+since 2026-10-19. The merge changes neither the owning spec nor the native
+branch input, and no assertion, timeout or skip changed. This stays
+unresolved validation rather than a newly confirmed flake. Evidence:
+`orkestrator-test-run.7jy4nG/merge-browser.log.gz` and
+`orkestrator-test-run.jpfrcV/merge-native-branch-owner.log.gz` below the host
+temporary directory.

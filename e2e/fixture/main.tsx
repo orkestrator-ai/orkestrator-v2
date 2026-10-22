@@ -106,6 +106,10 @@ const RichTranscriptPerfFixture = lazy(async () => ({
   default: (await import("./RichTranscriptPerfFixture")).RichTranscriptPerfFixture,
 }));
 
+const DesignLibraryPerfFixture = lazy(async () => ({
+  default: (await import("./DesignLibraryPerfFixture")).DesignLibraryPerfFixture,
+}));
+
 const TranscriptPagingFixture = lazy(async () => ({
   default: (await import("./TranscriptPagingFixture")).TranscriptPagingFixture,
 }));
@@ -1792,6 +1796,12 @@ function fixtureForPath() {
     return (
       <Suspense fallback={null}>
         <RichTranscriptPerfFixture />
+      </Suspense>
+    );
+  if (window.location.pathname === "/design-library-perf")
+    return (
+      <Suspense fallback={null}>
+        <DesignLibraryPerfFixture />
       </Suspense>
     );
   if (window.location.pathname === "/virtuoso-follow") return <VirtuosoFollowFixture />;

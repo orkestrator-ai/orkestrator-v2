@@ -26,7 +26,7 @@ import { PreviewTunnelServer } from "./preview-tunnel-server.js";
 /**
  * Opt-in route comparison (`ORKESTRATOR_PREVIEW_BENCH=1`): connect plus time to
  * the first response byte for one `GET /health`, on a fresh connection each
- * time, over loopback on one machine. It records numbers for the evidence log;
+ * time, over loopback on one machine. It prints numbers to record as evidence;
  * the only assertion is that every route completes.
  */
 const enabled = process.env.ORKESTRATOR_PREVIEW_BENCH === "1";

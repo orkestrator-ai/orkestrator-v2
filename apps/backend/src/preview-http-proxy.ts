@@ -143,6 +143,8 @@ export class PreviewHttpProxy {
         this.limits,
         this.hooks(context),
       );
+      if (result.firstByteMs !== undefined)
+        this.options.metrics.observe("http.first_byte_ms", result.firstByteMs);
       const name =
         result.outcome === "completed"
           ? "http.completed"

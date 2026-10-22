@@ -88,7 +88,7 @@ function nominated(headers: HeaderList): Set<string> {
   return names;
 }
 
-/** Bounds from step 02: header count and total bytes on each hop. */
+/** Header count and total byte bounds (`PREVIEW_LIMITS`) on each hop. */
 export function requestHeaderViolation(
   rawHeaders: readonly string[],
   limits: { headerMaxBytes: number; headerMaxFields: number } = PREVIEW_LIMITS,

@@ -41,11 +41,13 @@
  * A bridge that answers without the MCP configuration report is older than
  * it: it cannot prove an apply, and Cursor and Pi bridges that old do not
  * reload between turns either. The runtime says so (`restart-required`, or a
- * Claude `pending-next-turn` that cannot be confirmed) instead of waiting
- * silently, and polling continues so a restarted bridge can still prove it.
+ * Claude `pending-next-turn` not confirmed until the bridge reports a query)
+ * instead of waiting silently, and polling continues so a restarted bridge can
+ * still prove it.
  *
  * Each pass also re-reads the source of every operation it polled and applies
- * the external-edit rule in `external-edits.ts`.
+ * the external-edit rule in `external-edits.ts`; `external-edit-watch.ts`
+ * does the same for waiting operations this pass never polls.
  *
  * Polling is bounded: at most {@link EVIDENCE_READS_PER_TICK} reads per tick,
  * each runtime at most once per {@link EVIDENCE_RECHECK_MS}, each read capped
@@ -238,8 +240,10 @@ const BRIDGE_LABEL: Partial<Record<AgentPlatform, string>> = {
 /**
  * What a runtime behind a bridge older than the MCP configuration report is
  * told. Claude bridges that old still re-read their files at every query, so
- * the change loads; it just cannot be confirmed. Cursor and Pi bridges that
- * old do not reload between turns, and Grok only ever loads on restart.
+ * the change loads; bridges since #838 report what a query loaded once one
+ * has run, which confirms it with no restart (seen live on 2026-10-18), and
+ * only one older still never does. Cursor and Pi bridges that old do not
+ * reload between turns, and Grok only ever loads on restart.
  */
 export function olderBridgeOutcome(provider: AgentPlatform): {
   state: McpApplyState;
@@ -249,7 +253,7 @@ export function olderBridgeOutcome(provider: AgentPlatform): {
   if (provider === "claude") {
     return {
       state: "pending-next-turn",
-      reason: `This ${label} bridge is older than this backend and does not report what it loads. The change loads on the session's next message, but cannot be confirmed until the environment restarts.`,
+      reason: `This ${label} bridge is older than this backend and does not report what it loads. The change loads on the session's next message and is confirmed once the bridge reports that message's query; if it never does, restart the environment to confirm it.`,
     };
   }
   return {

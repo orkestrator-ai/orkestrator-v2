@@ -52,10 +52,10 @@ a deny-approvals policy.
   `review-rich-fixes` was stopped and reset.
 - Electron aggregate: 19 passed, 1 skipped, 3 startup-title failures. Both owning
   files passed unchanged alone: artifact host (5.9 s) and Electron main (24.3 s).
-  Recorded in [0470](../tests/flaky-tests/0470-electron-launch-title-timeout-under-load.md).
+  Recorded in [0470](../tests/flaky-tests/electron-and-desktop/0470-electron-launch-title-timeout-under-load.md).
 - A full-suite run reproduced the existing same-millisecond agent-mail ordering
   failure; the unchanged owner passed alone. Recorded in
-  [0504](../tests/flaky-tests/0504-agent-mail-conversation-same-millisecond-order.md).
+  [0504](../tests/flaky-tests/coordinator-and-multi-review/0504-agent-mail-conversation-same-millisecond-order.md).
 
 Final aggregate (`review-all-complete`, 486.6 s): 8,483 web tests passed
 (10 skips); backend had 9,531 passes, 41 skips, and only the unchanged agent-mail
@@ -102,8 +102,8 @@ The three failures left in the validation above were fixed afterwards.
 
 | Failure | Fix and evidence |
 | --- | --- |
-| Agent-mail same-millisecond order ([0504](../tests/flaky-tests/0504-agent-mail-conversation-same-millisecond-order.md)) | Message ids carry a per-process sequence after a monotonic millisecond prefix, so ties sort in send order. A frozen-clock regression fails on the old id and passes now; the five agent-mail owners pass (109 tests). Resolved. |
-| Electron startup title ([0470](../tests/flaky-tests/0470-electron-launch-title-timeout-under-load.md)) | The first title after launch waits for Vite to serve the renderer entry. The three failing owners used the 5-second default; they now use the 60 seconds the service-preview and annotation specs already gave this wait. `test:agent:electron` passed (117.1 s), at low host load only. Resolved; reopen on a loaded recurrence. |
+| Agent-mail same-millisecond order ([0504](../tests/flaky-tests/coordinator-and-multi-review/0504-agent-mail-conversation-same-millisecond-order.md)) | Message ids carry a per-process sequence after a monotonic millisecond prefix, so ties sort in send order. A frozen-clock regression fails on the old id and passes now; the five agent-mail owners pass (109 tests). Resolved. |
+| Electron startup title ([0470](../tests/flaky-tests/electron-and-desktop/0470-electron-launch-title-timeout-under-load.md)) | The first title after launch waits for Vite to serve the renderer entry. The three failing owners used the 5-second default; they now use the 60 seconds the service-preview and annotation specs already gave this wait. `test:agent:electron` passed (117.1 s), at low host load only. Resolved; reopen on a loaded recurrence. |
 | Docker fixture Git ownership | Git reads `safe.directory` only from global or system config, so `GIT_CONFIG_*` environment cannot fix it. The backend now sets `ORKESTRATOR_AGENT_TEST_GIT_REMOTE` only when it mounts the agent-test origin, and `workspace-setup.sh` then trusts only the fixed `/orkestrator-agent-test-origin.git` path. Production containers get no trust entry. In the real image, a root-owned mount cloned by `node` fails without the trust and clones with it. Unit coverage is in `commands-process-coverage.test.ts` and `workspace-setup-preserve.test.ts`. |
 
 Docker fixture rerun: `rtfix-docker` profile started with the documented

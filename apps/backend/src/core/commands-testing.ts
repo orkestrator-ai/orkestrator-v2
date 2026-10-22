@@ -92,6 +92,10 @@ export const __testing = {
   configuredOpenCodeAgentToolsCount(): number {
     return configuredOpenCodeAgentTools.size;
   },
+  /** Settles with the key's in-flight reconcile, which a status read starts without waiting. */
+  async openCodeAgentToolsConfigurationSettled(key: string): Promise<void> {
+    await openCodeAgentToolsConfigurations.get(key)?.task;
+  },
   openCodeAgentToolsState,
   // `resetLocalServerLifecycle` restores the production windows and backoff, so
   // an override cannot outlive the test that set it.

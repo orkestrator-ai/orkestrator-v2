@@ -90,7 +90,7 @@ running tests on the same host and daemon throughout, at a load average of
 | Benchmarks (`container-benchmarks.test.ts`) | C28 | Three runs; see the table below |
 | `test:agent:docker` | C29, container settings (desktop and narrow), foreign-profile refusal, Playwright as both container users | 5/5 pass |
 | Live approval (`container-approval-stop.spec.ts`) | C11 approval half, Claude | No run granted the approval. With the layout fix, 3 of 5 runs passed end to end; the other 2 showed Connection Failed after the restart. After the review fix (`99263373`), 4 of 4 runs passed (see below) |
-| `test:agent:browser:isolated` | C30 | 25 passed, 15 opt-in skips, 1 failed: the narrow host picker, known flake [0224](../../tests/flaky-tests/0224-host-picker-narrow-tools-popover.md), which passed alone. Every local-worktree scenario passed |
+| `test:agent:browser:isolated` | C30 | 25 passed, 15 opt-in skips, 1 failed: the narrow host picker, known flake [0224](../../tests/flaky-tests/previews-annotations-and-gateway/0224-host-picker-narrow-tools-popover.md), which passed alone. Every local-worktree scenario passed |
 
 After the fixture fix, the live suites ran twice each, both clean: once
 through `mise run test:logged` (Bun 1.4.3) and once directly with Bun 1.4.2

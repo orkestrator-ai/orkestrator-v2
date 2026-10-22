@@ -258,11 +258,11 @@ Validation: `mise run check` passed. The Codex bridge suite passed with the new
 test (2,200 passed, 34 skipped) once `PORT` was unset. With the agent tab's
 inherited `PORT` the `item-to-parts` file cannot start, registered as
 environmental flake
-[0660](../../tests/flaky-tests/0660-codex-item-to-parts-inherited-port.md).
+[0660](../../tests/flaky-tests/agent-bridges/0660-codex-item-to-parts-inherited-port.md).
 The final run of the whole spec on Codex passed (261 s), and the Claude native
 case passed separately (150 s). The profile was stopped and reset afterwards.
 A full `env -u PORT mise run test` (707 s) failed only on a recurrence of
-[0248](../../tests/flaky-tests/0248-move-restart-recovery-submodule-timeout.md)
+[0248](../../tests/flaky-tests/environments-and-containers/0248-move-restart-recovery-submodule-timeout.md)
 (5137.87 ms), whose unchanged owning file passed with the documented command.
 
 ## Qualification results (2026-10-21): Claude revision tokens
@@ -386,9 +386,9 @@ Validation: `mise run check` passed; the new `useHeldTranscriptPlace` tests,
 the `useVirtuosoScrollState` guard test, and the native and reviewer tab
 suites passed. Full `mise run test` before and after merging `origin/main`
 failed only on flakes whose owning files pass alone:
-[0480](../../tests/flaky-tests/0480-coordinator-fetch-remotes-submodule-timeout.md)
-(new), a [0180](../../tests/flaky-tests/0180-worktree-tracked-edit-cache-hit.md)
-recurrence and [0481](../../tests/flaky-tests/0481-pty-resize-before-stty.md)
+[0480](../../tests/flaky-tests/coordinator-and-multi-review/0480-coordinator-fetch-remotes-submodule-timeout.md)
+(new), a [0180](../../tests/flaky-tests/environments-and-containers/0180-worktree-tracked-edit-cache-hit.md)
+recurrence and [0481](../../tests/flaky-tests/backend-services-and-tooling/0481-pty-resize-before-stty.md)
 (new); web passed 7,963 with 0 failures.
 
 Not run here: the Multi Review case with a Claude reviewer completing after

@@ -1,0 +1,17 @@
+# Desktop startup validation timing gap
+
+- **ID:** 0673
+- **Status:** open
+- **Date observed:** 2026-10-22
+- **Tests:** `BackendProcess startup failure boundaries > rejects an auth file without a valid token and stops the child` (teardown); `Electron backend process supervisor > adopts and removes an owned Serve route after an ungraceful backend restart`; `Electron backend process supervisor > shares concurrent startup and clears stale state when the child exits`.
+- **File:** `apps/desktop/tests/backend-process.test.ts`
+- **Original stress command:** `mise run test:logged -- --name desktop-startup-stress -- bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./tests/backend-process.test.ts --test-name-pattern 'BackendProcess startup failure boundaries' --parallel=1 --rerun-each 100 --only-failures`.
+- **Worker configuration:** one Bun worker with the repository Node preload. The full non-iOS aggregate and other host validation were running concurrently.
+- **Failure:** run 91 reported a beforeEach/afterEach timeout for the invalid-token case at 907,951.26 ms. No invalid-token assertion mismatch or FIFO startup failure was reported.
+- **Suite counts:** 399 passed, one failed, 4,800 filtered out, 1,500 expectations across 400 selected tests (1,069.9 s logged).
+- **Complete-owner observation:** `mise run test:logged -- --name desktop-startup-owners -- bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./tests/backend-process.test.ts ./tests/main-startup-switches.test.ts --parallel=1 --only-failures` reported 54 passed, two failed and two errors (1,014.9 s logged). The Serve restart case exceeded 30 seconds; the concurrent-startup case lasted 916,960.63 ms.
+- **Isolated rerun:** the identical complete-owner command with log name `desktop-startup-owners-rerun` passed unchanged (20.3 s logged).
+- **Boundary stress rerun:** `mise run test:logged -- --name desktop-startup-stress-rerun -- bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./tests/backend-process.test.ts --test-name-pattern 'rejects an auth file without a valid token|rejects a child that exits between readiness and client setup' --parallel=1 --rerun-each 100 --only-failures` passed (67.8 s logged), covering 100 repetitions of each reviewed boundary.
+- **Hypothesis:** a host interruption or stall affected several processes together. ACP close, Pi image reads and renderer cases in the concurrent aggregate also reported durations around 907 seconds; workspace, root and bridges hit the no-progress watchdog. Host suspension was not independently confirmed. This is not evidence that the auth-file or FIFO ordering fix failed.
+- **Evidence:** temporary logged artifacts `orkestrator-test-run.VILH9P` (boundary stress), `orkestrator-test-run.9fB9jD` (complete desktop owners), and `orkestrator-test-run.hSEpwT` (aggregate group logs and summary). The aggregate exited 1 and is not passing validation evidence.
+- **Aggregate retry:** `mise run test:logged -- --name full-tests-rerun -- mise run test` also exited 1 (1,130.3 s logged). Bridges passed in 105.3 s and the Codex protocol check passed in 441 ms. Workspace and root/support groups hit no-progress watchdogs; CLI, Mermaid and ClaudeTmuxChatTab tests reported 995–999 second durations after the aggregate heartbeat jumped from 120 to 1,129 seconds. Artifacts: `orkestrator-test-run.mgBOpY` (group evidence), `orkestrator-test-run.UMWLYL` (outer logger). Broad validation remains incomplete; no assertion or timeout was loosened.

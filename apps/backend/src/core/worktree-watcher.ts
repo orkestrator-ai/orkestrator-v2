@@ -209,7 +209,13 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
     recursive: boolean,
     listener: (eventType: string, filename: string | null) => void,
   ): FSWatcher => {
-    const handle = start(target, listener, { recursive });
+    // Node types the name as `string | null`, but Bun on Linux passes
+    // `undefined` when the watched directory itself is removed. Both mean
+    // "unknown"; normalising here keeps every listener on one spelling instead
+    // of throwing from inside the platform's event dispatch.
+    const handle = start(target, (eventType, filename) => listener(eventType, filename ?? null), {
+      recursive,
+    });
     // A watch can fail asynchronously - the directory is removed, the platform
     // runs out of descriptors or watches. Surfacing it lets the owner fall back
     // to polling instead of going quiet forever.

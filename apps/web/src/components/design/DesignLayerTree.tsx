@@ -237,15 +237,14 @@ export function DesignLayerTree(props: DesignLayerTreeProps) {
       const current = latest.current;
       const key = contentKey(frame, current.metas[frameId]);
       let pending: Promise<DesignHierarchyPage>;
+      let bridge: DesignFrameBridge | undefined;
       if (source === "bridge") {
-        const bridge = current.getBridge(frameId)!;
-        pending = bridge
-          .ask<DesignHierarchyPage>({ op: "hierarchyPage", ...query })
-          .then((page) => {
-            if (bridge.renderedContentId !== key)
-              throw new StaleHierarchyError("Frame re-rendered");
-            return page;
-          });
+        bridge = current.getBridge(frameId)!;
+        const asked = bridge;
+        pending = asked.ask<DesignHierarchyPage>({ op: "hierarchyPage", ...query }).then((page) => {
+          if (asked.renderedContentId !== key) throw new StaleHierarchyError("Frame re-rendered");
+          return page;
+        });
       } else {
         const loader = current.loadHierarchy ?? designApi.hierarchy;
         const expected = current.metas[frameId]?.structureId;
@@ -259,6 +258,14 @@ export function DesignLayerTree(props: DesignLayerTreeProps) {
         (page) => commit(applyPage(treeRef.current, request, page, protectedBranches())),
         (error: unknown) => {
           if (!isCurrentRequest(treeRef.current, request)) return;
+          if (bridge?.closed) {
+            // The frame was culled or re-rendered mid-load: forget the branch so
+            // it is asked again from whichever source is ready (the backend for
+            // a culled frame, the new bridge once it renders).
+            const failed = failLoad(treeRef.current, request, errorMessage(error));
+            commit(clearBranch(failed, request.frameId, request.branch));
+            return;
+          }
           if (error instanceof StaleHierarchyError) {
             commit(
               failLoad(

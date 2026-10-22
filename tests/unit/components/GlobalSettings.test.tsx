@@ -2741,46 +2741,34 @@ describe("GlobalSettings", () => {
     );
   });
 
-  test.skip(
-    "stops retrying a persistently failing GitHub credential propagation",
-    async () => {
-      mockPropagateGithubCredentialsToContainers.mockResolvedValue({
-        updated: [],
-        failed: [["environment-1", "container unavailable"]],
-      });
-      render(<GlobalSettings activeSection="general" />);
-      fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
+  test("stops retrying a persistently failing GitHub credential propagation", async () => {
+    mockPropagateGithubCredentialsToContainers.mockResolvedValue({
+      updated: [],
+      failed: [["environment-1", "container unavailable"]],
+    });
+    render(<GlobalSettings activeSection="general" />);
+    fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
 
-      // First save: propagation fails (count=1)
+    // The source change propagates once; each failure keeps the form dirty and
+    // re-arms the debounce until the bounded retries are spent.
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      await waitFor(() => expect(autoSaveClock.pendingCount()).toBe(1));
       await flushAutoSave();
-      // Second save: propagation fails (count=2)
-      await flushAutoSave();
-      // Additional flushes to allow the bounded retry to complete
-      await flushAutoSave();
-      await flushAutoSave();
-      await flushAutoSave();
-      await flushAutoSave();
-      await flushAutoSave();
-      await flushAutoSave();
-      await flushAutoSave();
-      await flushAutoSave();
-      await flushAutoSave();
-      await flushAutoSave();
-      await flushAutoSave();
-      await flushAutoSave();
-      // Final wait to ensure any late timers fire
-      await new Promise((r) => setTimeout(r, 3000));
-
-      // One initial attempt plus the bounded retries, then the form gives up.
-      expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledTimes(3);
-      expect(mockUpdateGlobalConfig.mock.calls.length).toBeLessThanOrEqual(3);
-      const failureToasts = mockToastError.mock.calls.filter(([message]) =>
-        String(message).includes("containers were not updated"),
+      await waitFor(() =>
+        expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledTimes(attempt),
       );
-      expect(failureToasts).toHaveLength(1);
-    },
-    { timeout: 15000 },
-  );
+      await screen.findByText(attempt < 3 ? "Unsaved changes" : "All changes saved");
+    }
+
+    // The final save left nothing to retry: no debounce is armed, so no later
+    // save can run without a new edit.
+    expect(autoSaveClock.pendingCount()).toBe(0);
+    expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(3);
+    const failureToasts = mockToastError.mock.calls.filter(([message]) =>
+      String(message).includes("containers were not updated"),
+    );
+    expect(failureToasts).toHaveLength(1);
+  });
 
   test("keeps a rejected credential edit across an unrelated store write", async () => {
     const originalConsoleError = console.error;

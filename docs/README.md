@@ -15,7 +15,7 @@ Refreshed 2026-10-15 against `main` at `2459b05c`.
 | --- | --- |
 | [`architecture/`](#architecture) | Living guides to how shipped features work. Keep them aligned with the tree. |
 | [`development/`](#development) | Living contributor guides: testing, upgrades, releases, disk usage. |
-| [`tests/`](#tests) | The flaky-test registry. |
+| [`tests/`](#tests) | The flaky-test registry, grouped into folders by area. [`tests/flaky-tests/0000-index.md`](tests/flaky-tests/0000-index.md) points to each folder's index, which tracks its cases. |
 | [`todo/`](#todo) | All outstanding work in numbered files, grouped into folders by area. [`todo/0000-index.md`](todo/0000-index.md) points to each folder's index, which ranks its files by criticality. Pick work from here. |
 
 There are no other plan, review or dated-note folders, and nothing else
@@ -79,6 +79,7 @@ deleted once their behaviour is in a living doc; git history keeps them. The
 | [linting.md](development/linting.md) | oxfmt/oxlint configuration, exclusions, severity policy and disable-directive rules. |
 | [releasing.md](development/releasing.md) | Cutting a desktop release, CI secrets, artifact names, how the in-app updater decides to run, Linux/Omarchy notes. |
 | [container-qualification.md](development/container-qualification.md) | Real-Docker qualification: C01–C30 scenario matrix, live suites and how to run them, platform dimensions, benchmark harness and regression targets. |
+| [preview-two-machine-runbook.md](development/preview-two-machine-runbook.md) | Two-machine tailnet run for service previews: `scripts/preview-latency-baseline.ts` (route baselines, client decoy, userspace throttle, diagnostics watch, slow reader), whole-link throttling, loss and reconnect, publication, cleanup, what to record. Thresholds are not set yet. Gate: [0042-service-preview-rollout.md](todo/previews-and-annotations/0042-service-preview-rollout.md). |
 | [efficiency-harness.md](development/efficiency-harness.md) | Running `efficiency:baseline`: options, workloads a–j, counting method and limitations. |
 | [ssh-routes.md](development/ssh-routes.md) | Managed SSH routes: `--loopback-client-port`, SSH alias rules, host-key trust and recovery, prompts and BatchMode, platform support, failure codes, real-sshd integration test. |
 | [federation-migration.md](development/federation-migration.md) | Catalogue v1→v2 migration, what older clients see, storage-key migration, feature flags and rollback, client/backend compatibility table. |
@@ -90,7 +91,7 @@ deleted once their behaviour is in a living doc; git history keeps them. The
 
 | Document | Notes |
 | --- | --- |
-| [0000-index.md](tests/flaky-tests/0000-index.md) | The only flake registry index. Search it; open a case file only when the row matches. |
+| [0000-index.md](tests/flaky-tests/0000-index.md) | The flake registry's top-level index. It lists the ten group folders and what each covers; each group's own `0000-index.md` table tracks its cases. Search the group indexes; open a case file only when the row matches. |
 
 Steer probe scripts live in [`scripts/steer-probes/`](../scripts/steer-probes/), not under `docs/`.
 

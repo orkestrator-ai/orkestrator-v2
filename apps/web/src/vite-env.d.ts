@@ -203,7 +203,7 @@ interface Window {
       resetServiceSiteData?(
         target: import("@orkestrator/protocol/browser-preview").BrowserPreviewServiceTarget,
       ): Promise<void>;
-      /** Present on desktop builds with private preview publication (step 11). */
+      /** Present on desktop builds with private preview publication. */
       openServiceExternally?(
         target: import("@orkestrator/protocol/browser-preview").BrowserPreviewServiceTarget,
       ): Promise<void>;

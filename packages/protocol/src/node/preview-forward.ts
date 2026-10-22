@@ -53,6 +53,8 @@ export interface PreviewForwardResult {
   status?: number;
   bytesUp: number;
   bytesDown: number;
+  /** From the start of the upstream connect to the upstream response head. */
+  firstByteMs?: number;
 }
 
 export interface PreviewForwardHooks {
@@ -209,6 +211,7 @@ export async function forwardPreviewRequest(
   });
 
   try {
+    const started = Date.now();
     upstream = await hooks.connect(controller.signal);
     if (controller.signal.aborted) throw previewFailure("access-expired");
     if (upstream.listenerCount("error") === 0) upstream.on("error", () => undefined);
@@ -251,6 +254,7 @@ export async function forwardPreviewRequest(
         throw Object.assign(new Error("upload failed"), { previewCategory: uploadFailure });
       throw error;
     });
+    result.firstByteMs = Date.now() - started;
     const { headers } = downstreamResponseHeaders(upstreamResponse.headers, policy);
     const contentType = String(headers["content-type"] ?? "");
     const streaming = /^text\/event-stream/i.test(contentType);

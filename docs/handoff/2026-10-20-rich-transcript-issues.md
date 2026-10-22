@@ -72,7 +72,7 @@ Multi Review, build-pipeline and feature-planning transcripts are covered in
   full suites and 1 of 5 isolated reruns.
 - **Confidence:** pre-existing; the test and agent-mail modules are unchanged
   on this branch. Recorded in
-  [0504](../tests/flaky-tests/0504-agent-mail-conversation-same-millisecond-order.md).
+  [0504](../tests/flaky-tests/coordinator-and-multi-review/0504-agent-mail-conversation-same-millisecond-order.md).
 - **Next step:** a deterministic tie-break (insertion sequence) or a test
   clock; two messages sent in one millisecond currently order by a random id
   suffix.

@@ -476,7 +476,18 @@ async function grokSources(
   );
   let projectTrust: TrustVerdict | undefined;
   if (worktree) {
-    projectTrust = input.inContainer ? undefined : await grokFolderTrust(policy, worktree, read);
+    // A session whose policy turns project resources on runs Grok with
+    // `GROK_FOLDER_TRUST=0` (the ACP bridge's `providerEnv`), so the store
+    // does not decide for it.
+    projectTrust = input.inContainer
+      ? undefined
+      : input.context.projectResources === true
+        ? {
+            trust: "allowed",
+            reason:
+              "This environment's execution policy turns project resources on, so its Grok sessions run with folder trust off and load this file.",
+          }
+        : await grokFolderTrust(policy, worktree, read);
     add(
       projectSource("grok", "project", worktree, path.join(".grok", "config.toml"), homes, {
         format: "toml",

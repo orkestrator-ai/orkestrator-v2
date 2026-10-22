@@ -243,7 +243,7 @@ describe("monorepo orchestration scripts", () => {
   test("aggregate test tasks never replay a cached pass", () => {
     // A cache hit would let a group report success having executed nothing,
     // which is worth far less than the seconds it saves on a suite that still
-    // tracks live flakes in docs/tests/flaky-tests/0000-index.md.
+    // tracks live flakes in docs/tests/flaky-tests/.
     const turbo = JSON.parse(read("turbo.json")) as {
       tasks?: Record<string, { cache?: boolean }>;
     };

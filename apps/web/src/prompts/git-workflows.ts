@@ -118,8 +118,8 @@ Execute these steps in order:
 
 ## Step 3: Resolve Conflicts
 
-If there are merge conflicts:
-1. Run \`git status\` to see which files have conflicts
+Resolve any remaining conflicts, then validate the merged result even on resume after staging or committing:
+1. Run \`git status\` to see which files have conflicts. Before staging any resolution, capture the complete original unmerged path list with git diff --name-only --diff-filter=U -z and retain it in local Git metadata, outside tracked files, for resume, tied to this merge's parent commit IDs. Keep every original conflict in scope even if its resolution exactly matches either parent, including after staging or committing.
 2. For each conflicted file:
    - Read the file to understand the conflict markers (<<<<<<<, =======, >>>>>>>)
    - Analyze both versions and determine the correct resolution
@@ -127,11 +127,12 @@ If there are merge conflicts:
    - Ensure the resolved code is correct and functional
 3. After resolving all conflicts, run \`git add -A\` to stage the resolved files
 4. Validate the resolution:
-   - Scope validation to the files that had merge conflicts, not everything the merge brought in: auto-merged changes were already validated on their own branches and do not by themselves require re-running tests
-   - If every conflicted file is prose documentation not consumed by tests, builds, or tooling, do not run tests, typechecking, or builds; only confirm no conflict markers remain and run fast documentation checks such as formatting or link checks on the resolved files
-   - If any conflicted file is source, configuration, a test, or Markdown consumed by tests, builds, or tooling, run validation targeted at the resolved files and their dependents, and run the full suite only when that impact cannot be scoped
-   - File role takes precedence over location or extension: source files under docs/ (such as .ts or .mdx) count as code, not documentation
-   - On resume, recover the conflicted files from merge state (staged paths that differ from both HEAD and MERGE_HEAD, or the merge commit's combined diff); if they cannot be established, run relevant validation
+   - Always run repository-required checks before pushing; repository instructions take precedence over targeted validation and prose-only skipping.
+   - Assess the whole merge delta from the merge parents' common ancestor to the merged result, including cleanly auto-merged changes and conflict resolutions. Validation on separate branches does not establish that the combined merge is validated.
+   - Only if the complete original conflict list is known, every original conflicted file and the whole merge delta are prose documentation not consumed by tests, builds, or tooling, and repository instructions permit skipping, may you skip tests, typechecking, or builds; confirm no conflict markers remain and run applicable documentation checks such as formatting or link checks.
+   - If any original conflict or any part of the whole merge delta is source, configuration, a test, or Markdown consumed by tests, builds, or tooling, run relevant validation on the merged result, targeted at affected files and their dependents. Auto-merged code alongside prose-only conflicts still requires relevant tests or typechecking. Run the full suite when impact cannot be scoped or repository instructions require it.
+   - File role takes precedence over location or extension: source files under docs/ (such as .ts or .mdx) count as code, not documentation.
+   - On resume, use the complete retained original conflict list. Once staging has begun, the remaining live unmerged paths are not a complete original list; never overwrite the retained list with them. Staged paths differing from both parents and a merge commit's combined diff cannot reconstruct that list: they can omit conflicts resolved to one parent and include clean auto-merges. If the original list is unavailable or incomplete, or the whole merge delta cannot be established, treat scope as unknown: do not apply the prose-only skip; run relevant validation on the merged result, or conservative full validation when impact cannot be scoped.
 
 ## Step 4: Complete the Merge
 

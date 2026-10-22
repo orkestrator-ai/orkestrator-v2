@@ -481,6 +481,19 @@ async function main() {
         if (index !== candidate.index && cmd.cwd === "." && !coveredBy.has(index) && !Array.from(coveredBy.values()).includes(index) && candidate.covers.includes(cmd.command) && !dependsOn(candidate.index, index) && cmd.dependsOn.every(id => dependsOn(candidate.index, commands.findIndex(dependency => dependency.id === id)))) coveredBy.set(index, candidate.index);
       }
     }
+    // A repeated identical command (same command line and directory) adds no
+    // evidence, only its cost again. The first copy covers it, unless the copy
+    // waits on setup the first does not, which may make the rerun meaningful.
+    const repeats = new Set();
+    for (const [index, cmd] of commands.entries()) {
+      if (coveredBy.has(index)) continue;
+      const first = commands.findIndex(other => other.command === cmd.command && other.cwd === cmd.cwd);
+      if (first === index) continue;
+      const prerequisites = cmd.dependsOn.map(id => commands.findIndex(dependency => dependency.id === id));
+      if (!prerequisites.every(dependency => dependency === first || dependsOn(first, dependency))) continue;
+      coveredBy.set(index, coveredBy.get(first) ?? first);
+      repeats.add(index);
+    }
     const pending = new Set(commands.map((_, i) => i));
     while ((pending.size || tasks.size) && !stopping) {
       for (const index of Array.from(pending)) {
@@ -496,7 +509,7 @@ async function main() {
         if (coveringIndex !== undefined) {
           const covering = run.results[coveringIndex];
           if (["pending", "queued", "running"].includes(covering.status)) continue;
-          Object.assign(run.results[index], { status: covering.status === "passed" ? "skipped" : "incomplete", limitation: covering.status === "passed" ? "Covered by " + covering.id + " (repository-declared coverage)" : "Covering validation " + covering.id + " did not pass" });
+          Object.assign(run.results[index], { status: covering.status === "passed" ? "skipped" : "incomplete", limitation: covering.status === "passed" ? "Covered by " + covering.id + (repeats.has(index) ? " (identical command)" : " (repository-declared coverage)") : "Covering validation " + covering.id + " did not pass" });
           pending.delete(index);
           persist();
           continue;

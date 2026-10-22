@@ -21,6 +21,9 @@
  * Unlike the previous sequential runner this does **not** stop at the first
  * failing group: with concurrency the others have already run anyway, so
  * reporting every failure saves a second full run.
+ *
+ * Slow area suites run only when the change can reach them; see
+ * `test-areas.ts`. CI runs them all through `mise run test:full`.
  */
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -45,6 +48,7 @@ import { pipeline } from "node:stream/promises";
 import { StringDecoder } from "node:string_decoder";
 import { createGzip } from "node:zlib";
 import { createTestAdmission } from "./test-admission";
+import { areaIgnoreEnvironment, selectTestAreas, type AreaDecision } from "./test-areas";
 
 const root = path.resolve(import.meta.dir, "..");
 
@@ -87,6 +91,8 @@ export interface TestAllDependencies {
   /** Logical cores, used to size the per-group worker pools. */
   cores: number;
   log: (message: string) => void;
+  /** Decides which area suites this change can reach (see `test-areas.ts`). */
+  selectAreas: (root: string, env: NodeJS.ProcessEnv) => AreaDecision[];
 }
 
 export const TEST_LOG_DIRECTORY_ENV = "ORKESTRATOR_TEST_LOG_DIR";
@@ -686,6 +692,7 @@ const defaultDependencies: TestAllDependencies = {
   root,
   cores: availableParallelism(),
   log: (message) => process.stdout.write(`${message}\n`),
+  selectAreas: (repositoryRoot, env) => selectTestAreas({ root: repositoryRoot, env }),
 };
 
 /**
@@ -704,6 +711,12 @@ const defaultDependencies: TestAllDependencies = {
 export interface WorkerPlan {
   /** Bun workers used by each active workspace package task. */
   workspace: number;
+  /**
+   * Bun workers for the backend package task, which replaces one of the
+   * concurrent workspace slots. It runs Node-preloaded integration suites,
+   * not happy-dom UI workers, so it sits outside the UI worker budget.
+   */
+  backend: number;
   /** Maximum workspace package tasks Turbo may execute at once. */
   workspaceConcurrency: number;
   root: number;
@@ -741,6 +754,14 @@ export const MIN_AGGREGATE_TEST_WORKERS = 1 + MIN_BRIDGE_WORKERS + 1 + 1;
  * it in strict env mode while keeping it out of the hash.
  */
 export const WORKSPACE_WORKERS_ENV = "ORKESTRATOR_TEST_WORKERS";
+/** Overrides {@link WORKSPACE_WORKERS_ENV} for the backend package only. */
+export const BACKEND_WORKERS_ENV = "ORKESTRATOR_BACKEND_TEST_WORKERS";
+
+/**
+ * Keep port-reservation and subprocess-deadline suites at the previous pool size
+ * until their higher-concurrency failure rate has been measured on an idle host.
+ */
+export const MAX_BACKEND_TEST_WORKERS = 2;
 export const ALLOW_MISSING_PROTOCOL_BINARY_ENV = "CODEX_PROTOCOL_CHECK_ALLOW_MISSING_BINARY";
 
 /**
@@ -782,13 +803,19 @@ export function planWorkers(cores: number): WorkerPlan {
   // higher caps repeatedly starved subprocess fixtures and produced
   // SIGTERM/SIGSEGV UI-worker crashes.
   const root = Math.max(1, budget - 1 - bridges - workspace * workspaceConcurrency);
-  return { workspace, workspaceConcurrency, root, bridges };
+  const backend = Math.max(
+    workspace,
+    Math.min(MAX_BACKEND_TEST_WORKERS, Number.isFinite(cores) ? Math.floor(cores / 3) : 0),
+  );
+  return { workspace, backend, workspaceConcurrency, root, bridges };
 }
 
 export function buildConcurrentGroups(
   cores: number,
   affected = false,
   timingsDirectory?: string,
+  /** Package-script variables that leave unselected area suites out. */
+  areaEnvironment: Record<string, string> = {},
 ): TestGroup[] {
   const workers = planWorkers(cores);
   // Groups may queue on tiny hosts, but no individual child may exceed the
@@ -796,11 +823,16 @@ export function buildConcurrentGroups(
   const capacity = Math.max(1, Math.floor(cores) || 1);
   workers.root = Math.min(capacity, workers.root);
   workers.bridges = Math.min(capacity, workers.bridges);
+  // The backend task occupies one of the concurrent workspace slots.
+  const workspaceReservation = Math.min(
+    capacity,
+    workers.backend + workers.workspace * (workers.workspaceConcurrency - 1),
+  );
   const changedArguments = affected ? ["--changed=main", "--pass-with-no-tests"] : [];
   return [
     {
       name: "workspace (web, backend, desktop, web-public, cli, protocol, toolchain)",
-      workers: workers.workspace * workers.workspaceConcurrency,
+      workers: workspaceReservation,
       command: "bunx",
       args: [
         "turbo",
@@ -821,7 +853,11 @@ export function buildConcurrentGroups(
         "--summarize",
         ...(affected ? ["--affected"] : []),
       ],
-      env: { [WORKSPACE_WORKERS_ENV]: String(workers.workspace) },
+      env: {
+        ...areaEnvironment,
+        [WORKSPACE_WORKERS_ENV]: String(workers.workspace),
+        [BACKEND_WORKERS_ENV]: String(workers.backend),
+      },
     },
     {
       name: "root and agent-support tests",
@@ -888,6 +924,25 @@ export function buildConcurrentGroups(
       env: { [ALLOW_MISSING_PROTOCOL_BINARY_ENV]: "1" },
     },
   ];
+}
+
+/**
+ * Logs each area decision and returns the variables that skip unselected
+ * areas. A selection failure runs every area: skipping is only an optimization.
+ */
+function selectAreaEnvironment(dependencies: TestAllDependencies): Record<string, string> {
+  try {
+    const decisions = dependencies.selectAreas(dependencies.root, dependencies.env);
+    for (const { area, run, reason } of decisions) {
+      dependencies.log(`${run ? "AREA RUN" : "AREA SKIP"} ${area.name}: ${reason}`);
+    }
+    return areaIgnoreEnvironment(decisions);
+  } catch (error) {
+    dependencies.log(
+      `AREA RUN all: selection failed (${error instanceof Error ? error.message : String(error)})`,
+    );
+    return {};
+  }
 }
 
 function formatDuration(ms: number): string {
@@ -968,6 +1023,7 @@ export async function runAllTests(overrides: Partial<TestAllDependencies> = {}):
       admission?.capacity.workers ?? dependencies.cores,
       affected,
       timingsDirectory,
+      selectAreaEnvironment(dependencies),
     );
     const configuredLogDirectory = dependencies.env[TEST_LOG_DIRECTORY_ENV];
     const logDirectory = usesDefaultRunner

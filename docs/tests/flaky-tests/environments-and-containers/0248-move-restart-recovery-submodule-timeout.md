@@ -272,3 +272,12 @@ The aggregate exited 1 after 822.1 s. Backend counts were 9918 passed, 80 skippe
 - **Complete unchanged owner:** `mise run test:logged -- --name merge-submodule-owner -- bun test --cwd apps/backend ./src/core/environment-move.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed all 37 tests, exit 0 (20.5 s logged).
 - **Evidence:** `orkestrator-test-run.bej67B/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
 - **Assessment:** confirmed recurrence of this deadline failure. No implementation, test assertion, deadline or skip changed.
+
+## Test-suite speed-up branch — 2026-10-22
+
+- **Original command:** `mise run test` on `speed-up-review-68ad8937158f-r1` (area suites, a six-worker backend pool, and fixed-sleep removals). Workspace reserved eight slots (backend six Bun workers plus one two-worker package task), root/support one, bridges two and protocol one. Host load rose from 8 to about 50 during the run as other worktrees' suites started.
+- **Failure:** `restart recovery re-links submodules of an adopted or abandoned copy` exceeded its five-second deadline at 5111.70 ms. The aggregate finished in 335.1 s.
+- **Owner change:** this branch changes the owning file's fixtures (the project, origin and submodule source repositories are now built once per file and copied per test); the failing test's assertions and deadline are unchanged.
+- **Owning-file rerun:** `bun test --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts --parallel=1 --only-failures` from `apps/backend` passed all 37 tests twice (28.8 s and 19.6 s) at host load 46.
+- **Evidence:** `orkestrator-test-run.EZ31P0/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
+- **Assessment:** recurrence of the known deadline failure under heavy host load. A larger backend worker pool adds concurrent Git work, so watch this entry's frequency after the change lands.

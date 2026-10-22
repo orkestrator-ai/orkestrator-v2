@@ -2,8 +2,13 @@ import {
   beginEnvironmentMove,
   endEnvironmentMove,
 } from "../src/core/environment-replacement-fence";
-import { describe, expect, mock, spyOn, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
+import {
+  type ControlledTimeout,
+  installControlledTimeout,
+} from "../../../tests/helpers/controlled-timeout";
 import type { AgentAccountStore } from "../src/core/agent-accounts-store";
+import { TERMINAL_ACTIVITY_SETTLE_MS } from "../src/core/commands-runtime-state";
 import { MAX_TEXT_FILE_BYTES } from "../src/core/path-safety";
 import { terminalAccountHomes } from "../src/core/terminal-account-usage";
 
@@ -12,7 +17,6 @@ import { createCommandFixtures } from "./command-fixtures";
 const {
   ASYNC_TEST_BUDGET_MS,
   RUNNING_CONTAINER_DOCKER_SCRIPT,
-  TERMINAL_ACTIVITY_SETTLE_TEST_WAIT_MS,
   commandTesting,
   createCommandRegistry,
   createContext,
@@ -52,6 +56,30 @@ const {
 const { beginSetupPreparationSession } = await import("../src/core/commands-environment");
 
 type RunCommand = typeof import("../src/core/shell").runCommand;
+
+let settleClock: ControlledTimeout | undefined;
+
+/**
+ * Captures the tracked-terminal output settle debounce so a test fires it on
+ * demand instead of sleeping past it. The default single pending timer also
+ * proves each new output chunk cleared the previous debounce before re-arming.
+ */
+function controlSettleTimer(): ControlledTimeout {
+  settleClock = installControlledTimeout(TERMINAL_ACTIVITY_SETTLE_MS, {
+    label: "terminal activity settle",
+  });
+  return settleClock;
+}
+
+/** Lets promise continuations started by a fired timer run before asserting. */
+function flushMacrotask(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+afterEach(() => {
+  settleClock?.restore();
+  settleClock = undefined;
+});
 
 describe("Electron backend command registry", () => {
   // The `security` stub only takes effect on darwin, where `getHostClaudeCredentials`
@@ -2771,6 +2799,7 @@ exec sleep 30
       const recordCompletion = context.storage.recordEnvironmentCompletion as ReturnType<
         typeof mock
       >;
+      const settle = controlSettleTimer();
 
       const sessionId = terminalSessionResult(
         await commands.get("create_local_terminal_session")?.(
@@ -2792,7 +2821,7 @@ exec sleep 30
 
       await withFixedDate("2026-07-23T10:05:00.000Z", async () => {
         ptyProcesses[0]?.emitData("work complete\r\n");
-        await Bun.sleep(TERMINAL_ACTIVITY_SETTLE_TEST_WAIT_MS);
+        expect(settle.advance()).toBe(1);
       });
       expect(recordCompletion).toHaveBeenLastCalledWith(environment.id, "2026-07-23T10:05:00.000Z");
       await waitForCondition(
@@ -2846,6 +2875,7 @@ exec sleep 30
       notifyAgentTurnCompleted.mockRejectedValueOnce(new Error("command temporarily unavailable"));
       context.notifyAgentTurnCompleted = notifyAgentTurnCompleted;
       const commands = createCommandRegistry();
+      const settle = controlSettleTimer();
 
       const sessionId = terminalSessionResult(
         await commands.get("create_local_terminal_session")?.(
@@ -2861,6 +2891,7 @@ exec sleep 30
       await commands.get("start_local_terminal_session")?.({ sessionId }, context);
       await commands.get("local_terminal_write")?.({ sessionId, data: "codex\r" }, context);
       ptyProcesses[0]?.emitData("done\r\n");
+      expect(settle.advance()).toBe(1);
 
       await waitForCondition(
         () =>
@@ -2877,7 +2908,8 @@ exec sleep 30
       ).toHaveLength(1);
 
       ptyProcesses[0]?.emitData("late background output");
-      await Bun.sleep(TERMINAL_ACTIVITY_SETTLE_TEST_WAIT_MS);
+      settle.advance();
+      await flushMacrotask();
       expect(recordCompletion).toHaveBeenCalledTimes(2);
       expect(notifyAgentTurnCompleted).toHaveBeenCalledTimes(2);
       await commands.get("close_local_terminal_session")?.({ sessionId }, context);
@@ -2903,6 +2935,7 @@ exec sleep 30
         typeof mock
       >;
       const commands = createCommandRegistry();
+      const settle = controlSettleTimer();
       const sessionId = terminalSessionResult(
         await commands.get("create_local_terminal_session")?.(
           {
@@ -2918,16 +2951,21 @@ exec sleep 30
 
       await commands.get("local_terminal_write")?.({ sessionId, data: "first\r" }, context);
       ptyProcesses[0]?.emitData("first done\r\n");
+      expect(settle.advance()).toBe(1);
       await waitForCondition(
         () => notifyAgentTurnCompleted.mock.calls.length === 1,
         "first generation notification",
       );
       ptyProcesses[0]?.emitData("late output from first generation");
-      await Bun.sleep(TERMINAL_ACTIVITY_SETTLE_TEST_WAIT_MS);
+      // The first notification is still pending, so the prompt stays armed and
+      // the late output settles again; the generation dedupe must drop it.
+      expect(settle.advance()).toBe(1);
+      await flushMacrotask();
       expect(recordCompletion).toHaveBeenCalledTimes(1);
 
       await commands.get("local_terminal_write")?.({ sessionId, data: "second\r" }, context);
       ptyProcesses[0]?.emitData("second done\r\n");
+      expect(settle.advance()).toBe(1);
       await waitForCondition(
         () => notifyAgentTurnCompleted.mock.calls.length === 2,
         "second generation notification",
@@ -2968,6 +3006,7 @@ exec sleep 30
       context.notifyAgentTurnCompleted = notifyAgentTurnCompleted;
       const consoleError = spyOn(console, "error").mockImplementation(() => undefined);
       const commands = createCommandRegistry();
+      const settle = controlSettleTimer();
       try {
         const sessionId = terminalSessionResult(
           await commands.get("create_local_terminal_session")?.(
@@ -2992,7 +3031,8 @@ exec sleep 30
         const recordsAfterExhaustion = recordCompletion.mock.calls.length;
         const notificationsAfterExhaustion = notifyAgentTurnCompleted.mock.calls.length;
         ptyProcesses[0]?.emitData("stray output after exhausted completion");
-        await Bun.sleep(TERMINAL_ACTIVITY_SETTLE_TEST_WAIT_MS);
+        settle.advance();
+        await flushMacrotask();
 
         expect(recordCompletion).toHaveBeenCalledTimes(recordsAfterExhaustion);
         expect(notifyAgentTurnCompleted).toHaveBeenCalledTimes(notificationsAfterExhaustion);
@@ -3032,6 +3072,7 @@ exec sleep 30
         typeof mock
       >;
       const commands = createCommandRegistry();
+      const settle = controlSettleTimer();
       const args = {
         environmentId: environment.id,
         terminalKey: "agent-tab",
@@ -3067,7 +3108,8 @@ exec sleep 30
         context,
       );
       ptyProcesses[1]?.emitData("$ ");
-      await Bun.sleep(TERMINAL_ACTIVITY_SETTLE_TEST_WAIT_MS);
+      settle.advance();
+      await flushMacrotask();
 
       expect(recordCompletion).toHaveBeenCalledTimes(1);
       expect(notifyAgentTurnCompleted).toHaveBeenCalledTimes(1);
@@ -3101,6 +3143,7 @@ exec sleep 30
       const recordCompletion = context.storage.recordEnvironmentCompletion as ReturnType<
         typeof mock
       >;
+      const settle = controlSettleTimer();
 
       const sessionId = terminalSessionResult(
         await commands.get("create_local_terminal_session")?.(
@@ -3117,7 +3160,8 @@ exec sleep 30
 
       await commands.get("local_terminal_write")?.({ sessionId, data: "unfinished" }, context);
       ptyProcesses[0]?.emitData("shell echo");
-      await Bun.sleep(TERMINAL_ACTIVITY_SETTLE_TEST_WAIT_MS);
+      settle.advance();
+      await flushMacrotask();
       expect(recordActivity).not.toHaveBeenCalled();
 
       await commands.get("local_terminal_write")?.({ sessionId, data: "\r" }, context);
@@ -3125,24 +3169,27 @@ exec sleep 30
       recordActivity.mockClear();
 
       ptyProcesses[0]?.emitData("first chunk");
-      await Bun.sleep(400);
+      expect(settle.pendingCount()).toBe(1);
       ptyProcesses[0]?.emitData("second chunk");
-      // The second chunk restarts the 750ms settle window, so nothing may have been
-      // recorded 500ms later. This sleep is load-bearing: it is the reset itself
-      // being asserted, and it leaves 250ms of slack against a stalled machine.
-      await Bun.sleep(500);
+      // The second chunk restarts the 750ms settle window: it must clear the first
+      // chunk's timer before arming its own. The controlled timer allows only one
+      // pending settle, so a timer the reset failed to clear would throw here, and
+      // nothing may be recorded until the restarted window itself elapses.
+      expect(settle.pendingCount()).toBe(1);
+      await flushMacrotask();
       expect(recordCompletion).not.toHaveBeenCalled();
 
-      // Wait for the restarted window to elapse rather than sleeping exactly past
-      // it, so a scheduling stall delays the test instead of failing it.
+      expect(settle.advance()).toBe(1);
       await waitForCondition(
         () => recordCompletion.mock.calls.length > 0,
         "debounced terminal completion to settle",
       );
       expect(recordCompletion).toHaveBeenCalledTimes(1);
       recordCompletion.mockClear();
+      await flushMacrotask();
       ptyProcesses[0]?.emitData("background output after completion");
-      await Bun.sleep(TERMINAL_ACTIVITY_SETTLE_TEST_WAIT_MS);
+      settle.advance();
+      await flushMacrotask();
       expect(recordCompletion).not.toHaveBeenCalled();
       await commands.get("close_local_terminal_session")?.({ sessionId }, context);
     },
@@ -3209,6 +3256,7 @@ exec sleep 30
     const commands = createCommandRegistry();
     const recordActivity = context.storage.recordEnvironmentActivity as ReturnType<typeof mock>;
     const recordCompletion = context.storage.recordEnvironmentCompletion as ReturnType<typeof mock>;
+    const settle = controlSettleTimer();
 
     const sessionId = terminalSessionResult(
       await commands.get("create_local_terminal_session")?.(
@@ -3226,8 +3274,10 @@ exec sleep 30
     recordActivity.mockClear();
 
     ptyProcesses[0]?.emitData("work in progress");
+    expect(settle.pendingCount()).toBe(1);
     await commands.get("close_local_terminal_session")?.({ sessionId }, context);
-    await Bun.sleep(TERMINAL_ACTIVITY_SETTLE_TEST_WAIT_MS);
+    settle.advance();
+    await flushMacrotask();
 
     expect(recordActivity).not.toHaveBeenCalled();
     expect(recordCompletion).not.toHaveBeenCalled();

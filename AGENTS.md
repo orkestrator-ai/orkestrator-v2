@@ -157,7 +157,7 @@ commands. Never use npm or yarn.
 ```bash
 bun install              # NOT npm install
 mise run <task>          # Repository-level task; NOT npm run
-mise run test            # Complete suite; NOT bare root-level `bun test`
+mise run test            # Default suite; NOT bare root-level `bun test`
 bun test <explicit-path> # Focused Bun test-runner invocation only
 bunx <package>           # NOT npx
 bun <file>               # NOT node <file>
@@ -188,7 +188,9 @@ the changed paths can affect instead of always running every suite:
 - Every change to code or configuration runs `mise run format:check`,
   `mise run lint`, and `mise run typecheck`.
 - Code changes under `apps/`, `bridges/`, `packages/`, `scripts/`, or `tests/`
-  run `mise run test` (the complete non-iOS suite).
+  run `mise run test` (the non-iOS suite). It selects the slow area suites
+  itself from the change's import graph; do not add `mise run test:full` to
+  force them.
 - Treat dependency, lockfile, `mise.toml`, Turbo, test-runner, or
   `packages/protocol` changes as wide-reaching even when the diff is small;
   they always need `mise run test`.

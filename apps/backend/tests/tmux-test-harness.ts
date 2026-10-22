@@ -25,7 +25,11 @@ import path from "node:path";
 
 import { setTimeout as delay } from "node:timers/promises";
 
-import { registerTmuxBackendCommands, RUNTIME_ROOT_PREFIX } from "../src/core/tmux";
+import {
+  registerTmuxBackendCommands,
+  RUNTIME_ROOT_PREFIX,
+  type TmuxSessionTimingOptions,
+} from "../src/core/tmux";
 
 import type { Environment } from "../src/core/models";
 
@@ -710,4 +714,21 @@ export function deferred<T>(): {
     reject = rejectPromise;
   });
   return { promise, resolve, reject };
+}
+
+/**
+ * A command-deadline clock on which the session's pauses elapse instantly.
+ * Real time spent on pane reads still counts, so each deadline loop sees time
+ * pass exactly as in production, checking the pane on every iteration; it
+ * just stops sleeping through the gaps between checks.
+ */
+export function warpedCommandClock(): TmuxSessionTimingOptions {
+  let skippedMs = 0;
+  return {
+    now: () => Date.now() + skippedMs,
+    sleep: async (delayMs) => {
+      skippedMs += delayMs;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    },
+  };
 }

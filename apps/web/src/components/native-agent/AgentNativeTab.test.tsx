@@ -68,6 +68,7 @@ import {
   mockToastLoading,
   mockToastWarning,
 } from "../../../../../tests/mocks/sonner";
+import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout";
 
 // Snapshot before installing the stubs so the real modules are restored for
 // any suite that runs after this file in the same module registry.
@@ -451,8 +452,20 @@ beforeEach(() => {
   });
 });
 
+let readCoordinatorFaked = false;
+
+/** A fake-clock shared read coordinator; afterEach restores the default after unmount. */
+function fakeReadCoordinator() {
+  readCoordinatorFaked = true;
+  return installFakeReadCoordinator();
+}
+
 afterEach(() => {
   cleanup();
+  if (readCoordinatorFaked) {
+    resetReadCoordinatorForTests();
+    readCoordinatorFaked = false;
+  }
   renderVirtualizedMessages = false;
   latestTranscriptAnnotationProps = undefined;
   useConfigStore.getState().setConfig(configSnapshot);
@@ -1355,13 +1368,29 @@ describe("AgentNativeTab", () => {
         ...(await defaultProjection(input as never)),
         readiness: { state: "authentication-required" as const, message: "Account needs sign-in" },
       }));
-      render(<AgentNativeTab tabId="tab-auth-retry" data={identity("codex")} isActive />);
-      await screen.findByRole("button", { name: "Retry sign-in options" });
-      expect(screen.queryByRole("button", { name: "Open Codex settings" }) === null).toBe(true);
-      expect(
-        await screen.findByRole("button", { name: "Sign in to Codex" }, { timeout: 2_000 }),
-      ).toBeTruthy();
-      expect(reads).toBe(2);
+      // The automatic re-read waits 1 s; control that delay instead of sleeping
+      // through it. The fake coordinator keeps background reads off the real
+      // clock, and every async query below names a timeout other than Testing
+      // Library's 1 s default, so the auth retry is the only timer at 1 s.
+      installFakeReadCoordinator();
+      const authRetry = installControlledTimeout(1_000, { label: "native auth re-read" });
+      const query = { timeout: 2_000 };
+      try {
+        render(<AgentNativeTab tabId="tab-auth-retry" data={identity("codex")} isActive />);
+        await screen.findByRole("button", { name: "Retry sign-in options" }, query);
+        expect(screen.queryByRole("button", { name: "Open Codex settings" }) === null).toBe(true);
+        expect(reads).toBe(1);
+        await waitFor(() => expect(authRetry.pendingCount()).toBe(1), query);
+        await act(async () => {
+          authRetry.advance();
+        });
+        expect(await screen.findByRole("button", { name: "Sign in to Codex" }, query)).toBeTruthy();
+        expect(reads).toBe(2);
+      } finally {
+        cleanup();
+        authRetry.restore();
+        resetReadCoordinatorForTests();
+      }
     },
   );
 
@@ -1960,21 +1989,36 @@ describe("AgentNativeTab", () => {
       revision: 1,
     });
 
-    const first = render(<AgentNativeTab tabId={tabId} data={identity("grok")} isActive />);
-    expect(await screen.findByRole("button", { name: "Remove layout.png" })).toBeTruthy();
-    await waitFor(() => expect(composeDraftRecords.get(draftKey)?.revision).toBeGreaterThan(1));
-    const savedRevision = composeDraftRecords.get(draftKey)!.revision;
-    first.unmount();
-    useNativeComposeStore.setState({ drafts: new Map() });
+    // Each save waits out the 400 ms draft debounce; control it instead.
+    const saveDebounce = installControlledTimeout(400, { label: "native compose draft save" });
+    const flushSave = async () => {
+      await waitFor(() => expect(saveDebounce.pendingCount()).toBe(1));
+      await act(async () => {
+        saveDebounce.advance();
+      });
+    };
+    try {
+      const first = render(<AgentNativeTab tabId={tabId} data={identity("grok")} isActive />);
+      expect(await screen.findByRole("button", { name: "Remove layout.png" })).toBeTruthy();
+      await flushSave();
+      await waitFor(() => expect(composeDraftRecords.get(draftKey)?.revision).toBeGreaterThan(1));
+      const savedRevision = composeDraftRecords.get(draftKey)!.revision;
+      first.unmount();
+      useNativeComposeStore.setState({ drafts: new Map() });
 
-    const remounted = render(<AgentNativeTab tabId={tabId} data={identity("grok")} isActive />);
-    expect(await screen.findByRole("button", { name: "Remove layout.png" })).toBeTruthy();
-    expect((await screen.findByRole("textbox")).textContent).toBe("Review the layout");
-    await waitFor(() =>
-      expect(composeDraftRecords.get(draftKey)?.revision).toBeGreaterThan(savedRevision),
-    );
-    expect(composeDraftRecords.get(draftKey)?.value).toMatchObject({ attachments: [image] });
-    remounted.unmount();
+      const remounted = render(<AgentNativeTab tabId={tabId} data={identity("grok")} isActive />);
+      expect(await screen.findByRole("button", { name: "Remove layout.png" })).toBeTruthy();
+      expect((await screen.findByRole("textbox")).textContent).toBe("Review the layout");
+      await flushSave();
+      await waitFor(() =>
+        expect(composeDraftRecords.get(draftKey)?.revision).toBeGreaterThan(savedRevision),
+      );
+      expect(composeDraftRecords.get(draftKey)?.value).toMatchObject({ attachments: [image] });
+      remounted.unmount();
+    } finally {
+      cleanup();
+      saveDebounce.restore();
+    }
   });
 
   test("unlocks a preserved draft when authoritative readiness recovers", async () => {
@@ -4085,6 +4129,9 @@ describe("AgentNativeTab", () => {
       return { outcome: "unknown", requestId: input.requestId, error: "The transport failed" };
     });
 
+    // The projection poll is scheduled by the read coordinator; a fake clock
+    // drives one tick of the active (500 ms) cadence instead of waiting for it.
+    const { clock } = fakeReadCoordinator();
     render(<AgentNativeTab tabId={tabId} data={identity("cursor")} isActive />);
     const input = await screen.findByRole("textbox");
     fireEvent.input(input, { target: { textContent: "Move the dashboard pages" } });
@@ -4110,9 +4157,8 @@ describe("AgentNativeTab", () => {
     // Once the backend's own projection poll says the window elapsed, the
     // retry/discard card arrives without any client-side store write.
     status = "action-required";
-    expect(
-      await screen.findByRole("button", { name: "Retry send" }, { timeout: 4_000 }),
-    ).toBeTruthy();
+    await act(() => clock.advance(500));
+    expect(await screen.findByRole("button", { name: "Retry send" })).toBeTruthy();
     expect(screen.getByText(/could not confirm delivery of your last message/i)).toBeTruthy();
   });
 
@@ -4155,6 +4201,9 @@ describe("AgentNativeTab", () => {
       },
     }));
 
+    // The projection poll is scheduled by the read coordinator; a fake clock
+    // drives one tick of the active (500 ms) cadence instead of waiting for it.
+    const { clock } = fakeReadCoordinator();
     render(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
 
     // The record exists and locks the composer the moment it is persisted, but
@@ -4169,9 +4218,8 @@ describe("AgentNativeTab", () => {
     // runs, not a client-side store write, so this exercises the wiring the UI
     // actually depends on.
     status = "action-required";
-    expect(
-      await screen.findByRole("button", { name: "Retry send" }, { timeout: 4_000 }),
-    ).toBeTruthy();
+    await act(() => clock.advance(500));
+    expect(await screen.findByRole("button", { name: "Retry send" })).toBeTruthy();
     expect(screen.getByText(/could not confirm delivery of your last message/i)).toBeTruthy();
     expect(screen.queryByText(/Confirming delivery with Codex/i) === null).toBe(true);
   });
@@ -6204,11 +6252,14 @@ describe("AgentNativeTab", () => {
           };
     });
 
+    // The projection poll is scheduled by the read coordinator; a fake clock
+    // drives one tick of the active (500 ms) cadence instead of waiting for it.
+    const { clock } = fakeReadCoordinator();
     render(<AgentNativeTab tabId="tab-pi-given-up" data={identity("pi")} isActive />);
 
-    await waitFor(() => expect(screen.getByText("Connection Failed")).toBeTruthy(), {
-      timeout: 5_000,
-    });
+    await waitFor(() => expect(reads).toBe(1));
+    await act(() => clock.advance(500));
+    await waitFor(() => expect(screen.getByText("Connection Failed")).toBeTruthy());
     expect(
       screen.getByText(
         "The native agent runtime no longer holds this session. Retry to start a new one.",
@@ -6231,11 +6282,14 @@ describe("AgentNativeTab", () => {
         : base;
     });
 
+    // The projection poll is scheduled by the read coordinator; a fake clock
+    // drives one tick of the active (500 ms) cadence instead of waiting for it.
+    const { clock } = fakeReadCoordinator();
     render(<AgentNativeTab tabId="tab-pi-recovered" data={identity("pi")} isActive />);
 
-    await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalledTimes(2), {
-      timeout: 5_000,
-    });
+    await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalledTimes(1));
+    await act(() => clock.advance(500));
+    await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalledTimes(2));
     expect(screen.queryByText("Refreshing Pi session…") === null).toBe(true);
     expect(screen.queryByTestId("session-refresh-shimmer-pinned") === null).toBe(true);
     expect(screen.queryByText("Connection Failed") === null).toBe(true);
@@ -6676,24 +6730,35 @@ describe("AgentNativeTab", () => {
     });
     getNativeAgentProjectionMock.mockImplementation(async () => null as never);
 
-    render(<NativeSessionIdentityHarness platform="cursor" />);
-    await waitFor(() =>
-      expect(screen.getByTestId("runtime-error").textContent).toBe("bridge refused the session"),
-    );
+    // The reads that follow are the registered production poll; a fake clock
+    // drives it instead of waiting out its 500/1,500 ms cadence.
+    const { clock } = installFakeReadCoordinator();
+    try {
+      render(<NativeSessionIdentityHarness platform="cursor" />);
+      await waitFor(() =>
+        expect(screen.getByTestId("runtime-error").textContent).toBe("bridge refused the session"),
+      );
 
-    // Suppression is scoped to "the session still is not there". A read that
-    // does find one supersedes the failure — otherwise the message outlives what
-    // it described, and the next genuine absence reports a stale cause.
-    getNativeAgentProjectionMock.mockImplementation(defaultProjection);
-    await waitFor(() => expect(screen.getByTestId("runtime-error").textContent).toBe(""), {
-      timeout: 4_000,
-    });
+      // Suppression is scoped to "the session still is not there". A read that
+      // does find one supersedes the failure — otherwise the message outlives what
+      // it described, and the next genuine absence reports a stale cause.
+      getNativeAgentProjectionMock.mockImplementation(defaultProjection);
+      const readsBeforePoll = getNativeAgentProjectionMock.mock.calls.length;
+      await act(() => clock.advance(1_500));
+      await waitFor(() => expect(screen.getByTestId("runtime-error").textContent).toBe(""));
+      expect(getNativeAgentProjectionMock.mock.calls.length).toBeGreaterThan(readsBeforePoll);
 
-    getNativeAgentProjectionMock.mockImplementation(async () => null as never);
-    await waitFor(() => expect(screen.getByTestId("has-completed-read").textContent).toBe("true"), {
-      timeout: 4_000,
-    });
-    expect(screen.getByTestId("runtime-error").textContent).toBe("");
+      getNativeAgentProjectionMock.mockImplementation(async () => null as never);
+      const readsBeforeEmptyPoll = getNativeAgentProjectionMock.mock.calls.length;
+      await act(() => clock.advance(1_500));
+      await waitFor(() =>
+        expect(screen.getByTestId("has-completed-read").textContent).toBe("true"),
+      );
+      expect(getNativeAgentProjectionMock.mock.calls.length).toBeGreaterThan(readsBeforeEmptyPoll);
+      expect(screen.getByTestId("runtime-error").textContent).toBe("");
+    } finally {
+      resetReadCoordinatorForTests();
+    }
   }, 10_000);
 
   test("runs the reconcile an invalidation asked for once creation completes", async () => {

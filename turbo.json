@@ -31,7 +31,12 @@
         "$TURBO_ROOT$/tests/conformance/**"
       ],
       "outputs": [],
-      "passThroughEnv": ["ORKESTRATOR_TEST_WORKERS", "ORKESTRATOR_TEST_TIMINGS_DIR"]
+      "passThroughEnv": [
+        "ORKESTRATOR_TEST_WORKERS",
+        "ORKESTRATOR_TEST_TIMINGS_DIR",
+        "ORKESTRATOR_BACKEND_TEST_IGNORE",
+        "ORKESTRATOR_BACKEND_TEST_WORKERS"
+      ]
     },
     "test:bridge": {
       "cache": false,

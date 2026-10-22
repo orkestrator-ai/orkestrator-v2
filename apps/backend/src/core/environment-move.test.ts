@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test, mock, spyOn } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, test, mock, spyOn } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -69,9 +69,20 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
 
-async function setup() {
-  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "ork-env-move-")));
-  roots.push(root);
+// The project repository with its bare `origin`, and the two submodule source
+// repositories, are built once per file and copied per test, so every test
+// still owns independent repositories without paying for their Git processes.
+let templates: Promise<string> | undefined;
+
+afterAll(async () => {
+  const root = await templates?.catch(() => undefined);
+  if (root) await fs.rm(root, { recursive: true, force: true });
+});
+
+async function buildTemplates(): Promise<string> {
+  const root = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "ork-env-move-template-")),
+  );
   const projectPath = path.join(root, "app");
   await runCommand("git", ["init", "-q", "-b", "main", projectPath]);
   await fs.writeFile(path.join(projectPath, "README.md"), "fixture");
@@ -91,6 +102,52 @@ async function setup() {
   await runCommand("git", ["clone", "-q", "--bare", projectPath, origin]);
   await runCommand("git", ["-C", projectPath, "remote", "add", "origin", origin]);
   await runCommand("git", ["-C", projectPath, "fetch", "-q", "origin"]);
+  await commitFixtureRepo(path.join(root, "nested-src"), "nested.txt");
+  await commitFixtureRepo(path.join(root, "sub-src"), "sub.txt");
+  return root;
+}
+
+function templateRoot(): Promise<string> {
+  templates ??= buildTemplates().catch((error: unknown) => {
+    templates = undefined;
+    throw error;
+  });
+  return templates;
+}
+
+/**
+ * Copies template entries to the same relative paths under `root`, re-pointing
+ * the absolute template paths in the named Git configs at `root`.
+ */
+async function copyTemplate(
+  root: string,
+  entries: string[],
+  configs: string[] = [],
+): Promise<void> {
+  const template = await templateRoot();
+  for (const entry of entries) {
+    await fs.cp(path.join(template, entry), path.join(root, entry), { recursive: true });
+  }
+  for (const config of configs) {
+    const configPath = path.join(root, config);
+    const content = await fs.readFile(configPath, "utf8");
+    if (!content.includes(template)) {
+      throw new Error(`The template ${config} no longer names a template path`);
+    }
+    await fs.writeFile(configPath, content.replaceAll(template, root));
+  }
+}
+
+async function setup() {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "ork-env-move-")));
+  roots.push(root);
+  const projectPath = path.join(root, "app");
+  // `app` names `origin.git` as its remote and the bare clone names `app`.
+  await copyTemplate(
+    root,
+    ["app", "origin.git"],
+    [path.join("app", ".git", "config"), path.join("origin.git", "config")],
+  );
   const storage = new StorageService(path.join(root, "data"));
   await storage.init();
   const project = await storage.addProject(
@@ -147,8 +204,7 @@ async function commitFixtureRepo(repo: string, file: string): Promise<void> {
 async function addNestedSubmodules(root: string, projectPath: string, worktree: string) {
   const nested = path.join(root, "nested-src");
   const sub = path.join(root, "sub-src");
-  await commitFixtureRepo(nested, "nested.txt");
-  await commitFixtureRepo(sub, "sub.txt");
+  await copyTemplate(root, ["nested-src", "sub-src"]);
   await runCommand("git", ["-C", sub, ...gitIdentity, "submodule", "add", "-q", nested, "nested"]);
   await runCommand("git", ["-C", sub, ...gitIdentity, "commit", "-qm", "nested"]);
   await runCommand("git", [

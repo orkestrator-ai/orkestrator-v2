@@ -62,21 +62,32 @@ describe("packaged client entrypoint", () => {
       XDG_CONFIG_HOME: path.join(root, "xdg"),
       HOME: root,
     };
-    const named = await runBin(
-      [
-        "toolchain",
-        "install",
-        "--dry-run",
-        "--json",
-        "--tool",
-        "claude,codex",
-        "--tool",
-        "pi",
-        "--data-dir",
-        path.join(root, "from-flag"),
-      ],
-      env,
-    );
+    // Each invocation is an independent dry run or refusal, so start them together.
+    const [named, fromEnv, fromDefault, ...invalidRuns] = await Promise.all([
+      runBin(
+        [
+          "toolchain",
+          "install",
+          "--dry-run",
+          "--json",
+          "--tool",
+          "claude,codex",
+          "--tool",
+          "pi",
+          "--data-dir",
+          path.join(root, "from-flag"),
+        ],
+        env,
+      ),
+      runBin(["toolchain", "install", "--dry-run", "--json"], env),
+      runBin(["toolchain", "install", "--dry-run", "--json"], {
+        XDG_CONFIG_HOME: path.join(root, "xdg"),
+        HOME: root,
+      }),
+      ...[",", ",,", "unknown"].map((value) =>
+        runBin(["toolchain", "install", "--json", "--tool", value], env),
+      ),
+    ]);
     expect(named.code).toBe(0);
     expect(JSON.parse(named.stdout).result).toMatchObject({
       dryRun: true,
@@ -88,19 +99,13 @@ describe("packaged client entrypoint", () => {
         .result.tools.map((tool: { tool: string }) => tool.tool)
         .sort(),
     ).toEqual(["claude", "codex", "gh", "pi"]);
-    const fromEnv = await runBin(["toolchain", "install", "--dry-run", "--json"], env);
     expect(JSON.parse(fromEnv.stdout).result.dataDir).toBe(path.join(root, "from-env"));
-    const fromDefault = await runBin(["toolchain", "install", "--dry-run", "--json"], {
-      XDG_CONFIG_HOME: path.join(root, "xdg"),
-      HOME: root,
-    });
     expect(JSON.parse(fromDefault.stdout).result.dataDir).toBe(
       process.platform === "darwin"
         ? path.join(root, "Library", "Application Support", "orkestrator-v2")
         : path.join(root, "xdg", "orkestrator-v2"),
     );
-    for (const value of [",", ",,", "unknown"]) {
-      const invalid = await runBin(["toolchain", "install", "--json", "--tool", value], env);
+    for (const invalid of invalidRuns) {
       expect(invalid.code).toBe(2);
       expect(JSON.parse(invalid.stdout).error.code).toBe("invalid-input");
     }
@@ -117,18 +122,22 @@ describe("packaged client entrypoint", () => {
       XDG_CONFIG_HOME: path.join(root, "xdg"),
       HOME: root,
     };
-    for (const argv of [
+    const argvs = [
       ["--help"],
       ["help", "environment", "start"],
       ["version"],
       ["--version", "--json"],
       ["serve", "--help"],
-    ]) {
-      const result = await runBin(argv, env);
+    ];
+    const [list, ...results] = await Promise.all([
+      runBin(["--json", "project", "list"], env),
+      ...argvs.map((argv) => runBin(argv, env)),
+    ]);
+    for (const [index, result] of results.entries()) {
+      const argv = argvs[index];
       expect({ argv, code: result.code }).toEqual({ argv, code: 0 });
       expect(result.stdout).not.toContain("orkestrator-backend-ready");
     }
-    const list = await runBin(["--json", "project", "list"], env);
     expect(list.code).toBe(4);
     expect(isPublicActionResponse(JSON.parse(list.stdout))).toBe(true);
     // No data directory, no XDG config, no listener output: nothing started.
@@ -140,13 +149,15 @@ describe("packaged client entrypoint", () => {
   test("unknown commands and typoed service flags are refused without echoing values", async () => {
     const root = await scratch();
     const env = { ORKESTRATOR_DATA_DIR: path.join(root, "data"), HOME: root };
-    const typo = await runBin(["--prot", "34121"], env);
+    const [typo, prompt, mixed] = await Promise.all([
+      runBin(["--prot", "34121"], env),
+      runBin(["implement the secret feature"], env),
+      runBin(["--data-dir", path.join(root, "data"), "--json"], env),
+    ]);
     expect(typo.code).toBe(2);
     expect(typo.stderr).toContain("--prot");
-    const prompt = await runBin(["implement the secret feature"], env);
     expect(prompt.code).toBe(2);
     expect(prompt.stderr).not.toContain("secret feature");
-    const mixed = await runBin(["--data-dir", path.join(root, "data"), "--json"], env);
     expect(mixed.code).toBe(2);
     expect(JSON.parse(mixed.stdout).error.code).toBe("invalid-input");
     await expect(stat(path.join(root, "data"))).rejects.toThrow();

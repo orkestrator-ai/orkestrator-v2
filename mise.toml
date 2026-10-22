@@ -191,7 +191,12 @@ description = "Preview the production renderer"
 run = "bun run --cwd apps/web preview"
 
 [tasks.test]
-description = "Run the complete non-iOS test suite"
+description = "Run the non-iOS test suite, including the area suites this change can reach"
+run = "bun scripts/test-all.ts"
+
+[tasks."test:full"]
+description = "Run the complete non-iOS test suite, including every area suite"
+env = { ORKESTRATOR_TEST_AREAS = "all" }
 run = "bun scripts/test-all.ts"
 
 [tasks."test:changed"]
@@ -201,7 +206,7 @@ run = "bun scripts/test-all.ts"
 
 [tasks."test:all"]
 description = "Run the complete test suite, including iOS"
-env = { ORKESTRATOR_INCLUDE_IOS = "1" }
+env = { ORKESTRATOR_INCLUDE_IOS = "1", ORKESTRATOR_TEST_AREAS = "all" }
 run = "bun scripts/test-all.ts"
 
 [tasks."test:logged"]

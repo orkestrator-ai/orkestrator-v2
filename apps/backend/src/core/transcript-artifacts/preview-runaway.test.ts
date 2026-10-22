@@ -47,6 +47,12 @@ const BUDGETS: Partial<PreviewBudgets> = {
   operationDeadlineMs: 25_000,
   cleanupGraceMs: 1_000,
 };
+/**
+ * The probe step budget for a case whose step hangs: the step deadline is the
+ * same code path, only the wait for it is shorter. The healthy job that
+ * follows on the same runner still has ample time per step.
+ */
+const HUNG_STEP_MS = 1_000;
 /** Process mode's RSS watchdog limit for these tests (the container has its 1 GiB cgroup). */
 const PROCESS_MEMORY_LIMIT = 768 * 1024 * 1024;
 const preparer = new TranscriptInteractivePreparer({ frameAncestors: [] });
@@ -82,6 +88,8 @@ interface RunawayCase {
   name: string;
   html: string;
   probes?: ArtifactProbeV1[];
+  /** Budgets this case's runner overrides (its own runner, so other cases keep theirs). */
+  budgets?: Partial<PreviewBudgets>;
   /** Expected outcome; `any` for work that is legitimate but must still end in time. */
   expect: (result: PreviewJobResult, mode: "process" | "container") => void;
 }
@@ -139,6 +147,8 @@ const CASES: RunawayCase[] = [
       { op: "click", target: "x" },
       { op: "expect-text", target: "x", equals: "go" },
     ],
+    // The click never returns, so the job waits out the step deadline.
+    budgets: { probeStepMs: HUNG_STEP_MS },
     expect: (result) => {
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error.code).toBe("render_timeout");
@@ -198,20 +208,25 @@ function runawaySuite(mode: "process" | "container", enabled: boolean) {
   describe(`runaway execution (${mode} isolation)`, () => {
     const exits: ExitReport[] = [];
     const owner = previewContainerOwner(path.join(tmpdir(), `ork-runaway-${process.pid}-${mode}`));
-    let runner: TranscriptPreviewRunner | undefined;
+    /** One runner per budget override, reused by every case that shares it. */
+    const runners = new Map<string, TranscriptPreviewRunner>();
     let operation = 0;
     const scope = () => ({
       environmentId: `env-runaway-${mode}`,
       conversationKey: `c${++operation}`,
       operationId: `op_runaway${mode}${String(operation).padStart(4, "0")}`,
     });
-    const make = () =>
-      (runner ??=
+    const make = (overrides: Partial<PreviewBudgets> = {}) => {
+      const key = JSON.stringify(overrides);
+      const existing = runners.get(key);
+      if (existing) return existing;
+      const budgets = { ...BUDGETS, ...overrides };
+      const created =
         mode === "process"
           ? new TranscriptPreviewRunner({
               isolation: "process",
               allowProcessInteractive: true,
-              budgets: BUDGETS,
+              budgets,
               memoryLimitBytes: PROCESS_MEMORY_LIMIT,
               onWorkerExit: (report) => exits.push(report),
             })
@@ -224,11 +239,14 @@ function runawaySuite(mode: "process" | "container", enabled: boolean) {
                 user: PREVIEW_WORKER_USER,
                 owner,
               },
-              budgets: BUDGETS,
+              budgets,
               onWorkerExit: (report) => exits.push(report),
-            }));
+            });
+      runners.set(key, created);
+      return created;
+    };
     afterAll(async () => {
-      await runner?.close();
+      await Promise.all([...runners.values()].map((created) => created.close()));
       if (mode === "container" && enabled)
         spawnSync("docker", ["rm", "-f", ...listOwned(owner)], { stdio: "ignore" });
     });
@@ -264,7 +282,7 @@ function runawaySuite(mode: "process" | "container", enabled: boolean) {
       modeTest(
         `${runaway.name}: ends within the deadline, the boundary is gone, the next job succeeds`,
         async () => {
-          const target = make();
+          const target = make(runaway.budgets);
           const runawayScope = scope();
           const started = Date.now();
           const result = await target.run(

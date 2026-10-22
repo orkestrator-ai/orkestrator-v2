@@ -10,7 +10,10 @@ import {
   restoreMatchMedia,
   setMobileViewport,
 } from "../../../../../tests/mocks/match-media";
-import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout";
+import {
+  installControlledTimeout,
+  type ControlledTimeout,
+} from "../../../../../tests/helpers/controlled-timeout";
 
 // Mock modules that require a real backend runtime or have side effects.
 // IMPORTANT: Do NOT mock @/stores (barrel) or @/lib/backend here — doing so
@@ -90,18 +93,27 @@ let composeBarOptions:
 
 mock.module("@/hooks/useTerminal", () => ({
   useTerminal: (options: MockUseTerminalOptions) => {
-    const [locallyBootstrapped, setLocallyBootstrapped] = useState(false);
-    const markBootstrapped = useCallback((sessionId: string) => {
-      const accepted = markBootstrappedMock(sessionId);
-      if (accepted) setLocallyBootstrapped(true);
-      return accepted;
-    }, []);
+    const [locallyBootstrapped, setLocallyBootstrapped] = useState<{
+      sessionId: string;
+      containerId?: string | null;
+    } | null>(null);
+    const markBootstrapped = useCallback(
+      (sessionId: string) => {
+        const accepted = markBootstrappedMock(sessionId);
+        if (accepted) setLocallyBootstrapped({ sessionId, containerId: options.containerId });
+        return accepted;
+      },
+      [options.containerId],
+    );
     lastUseTerminalOptions = options;
     useTerminalOptionsHistory.push(options);
     terminalOnData = options.onData;
     return {
       sessionId: useTerminalSessionId,
-      bootstrapped: useTerminalBootstrapped || locallyBootstrapped,
+      bootstrapped:
+        useTerminalBootstrapped ||
+        (locallyBootstrapped?.sessionId === useTerminalSessionId &&
+          locallyBootstrapped?.containerId === options.containerId),
       isConnected: useTerminalIsConnected,
       isConnecting: useTerminalIsConnecting,
       error: null,
@@ -236,6 +248,74 @@ function deferred<T>() {
     reject = promiseReject;
   });
   return { promise, resolve, reject };
+}
+
+// The component's own backoffs: the connection and session-list retries start
+// at 250 ms and double (the connection gives up after its third attempt), and
+// each launch attempt waits 300 ms. Tests that exercise them control these
+// delays instead of sleeping through them, which also turns a quiet-window
+// sleep into evidence: an advanced clock with nothing armed cannot fire later.
+const FIRST_RETRY_MS = 250;
+const SECOND_RETRY_MS = 500;
+const THIRD_RETRY_MS = 1000;
+const BOOTSTRAP_DELAY_MS = 300;
+/** For async queries while the 1 s clock (Testing Library's default timeout) is controlled. */
+const QUERY_TIMEOUT = { timeout: 2_000 };
+
+type TerminalClocks = {
+  at: (delayMs: number) => ControlledTimeout;
+  /** Timers armed across every controlled delay. */
+  pending: () => number;
+  restore: () => void;
+};
+
+let terminalClocks: TerminalClocks | undefined;
+
+/** Installed before rendering; afterEach restores real time after cleanup. */
+function installTerminalClocks(...delays: number[]): TerminalClocks {
+  const clocks = new Map(
+    delays.map((delayMs) => [
+      delayMs,
+      installControlledTimeout(delayMs, { label: `PersistentTerminal ${delayMs} ms backoff` }),
+    ]),
+  );
+  terminalClocks = {
+    at: (delayMs) => {
+      const clock = clocks.get(delayMs);
+      if (!clock) throw new Error(`No controlled clock at ${delayMs} ms`);
+      return clock;
+    },
+    pending: () => Array.from(clocks.values()).reduce((sum, c) => sum + c.pendingCount(), 0),
+    restore: () => {
+      // Each install wraps the previous one's setTimeout; unwind in reverse.
+      for (const clock of Array.from(clocks.values()).reverse()) clock.restore();
+    },
+  };
+  return terminalClocks;
+}
+
+/** Drains the promise chains and React work already in motion. */
+async function settleTerminal(): Promise<void> {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+/** Lets the next launch attempt go out: waits for it to be scheduled, then fires it. */
+async function releaseBootstrapAttempt(clocks: TerminalClocks): Promise<void> {
+  const clock = clocks.at(BOOTSTRAP_DELAY_MS);
+  await waitFor(() => expect(clock.pendingCount()).toBe(1));
+  await advanceClock(clock);
+}
+
+/** Fires the timers armed at one controlled delay, then settles what they started. */
+async function advanceClock(clock: ControlledTimeout): Promise<number> {
+  let ran = 0;
+  await act(async () => {
+    ran = clock.advance();
+  });
+  await settleTerminal();
+  return ran;
 }
 
 function interceptDisconnectedNoticeTimer() {
@@ -435,6 +515,13 @@ function createTerminalData(options?: {
   } as unknown as Parameters<typeof PersistentTerminal>[0]["terminalData"];
 }
 
+const originalSetTerminalSession = useTerminalSessionStore.getState().setSession;
+
+/** Keep a fresh PTY from becoming a restored-session shortcut during readiness assertions. */
+function holdSessionPersistence(): void {
+  useTerminalSessionStore.setState({ setSession: mock(() => {}) });
+}
+
 describe("PersistentTerminal", () => {
   beforeEach(() => {
     composeBarPropsMock.mockClear();
@@ -586,6 +673,9 @@ describe("PersistentTerminal", () => {
 
   afterEach(() => {
     cleanup();
+    useTerminalSessionStore.setState({ setSession: originalSetTerminalSession });
+    terminalClocks?.restore();
+    terminalClocks = undefined;
     delete window.orkestrator;
   });
 
@@ -816,6 +906,7 @@ describe("PersistentTerminal", () => {
             resolveSecondAttempt = resolve;
           }),
       );
+    const clocks = installTerminalClocks(FIRST_RETRY_MS, SECOND_RETRY_MS);
 
     render(
       <StrictMode>
@@ -841,8 +932,11 @@ describe("PersistentTerminal", () => {
     // second attempt's in-flight marker and start an overlapping third call.
     await act(async () => {
       resolveFirstAttempt();
-      await new Promise((resolve) => setTimeout(resolve, 400));
     });
+    await settleTerminal();
+    // Neither an immediate call nor a backoff retry: run any armed retry.
+    await advanceClock(clocks.at(FIRST_RETRY_MS));
+    await advanceClock(clocks.at(SECOND_RETRY_MS));
     expect(connectMock).toHaveBeenCalledTimes(2);
 
     useTerminalIsConnected = true;
@@ -893,6 +987,7 @@ describe("PersistentTerminal", () => {
       isFirstTab: false,
       paneId: "pane-1",
     };
+    const clocks = installTerminalClocks(FIRST_RETRY_MS, SECOND_RETRY_MS);
     const view = render(<PersistentTerminal {...props} />);
 
     await waitFor(() => expect(connectMock).toHaveBeenCalledTimes(1));
@@ -908,6 +1003,7 @@ describe("PersistentTerminal", () => {
       await Promise.resolve();
     });
     expect(connectMock).toHaveBeenCalledTimes(1);
+    expect(clocks.at(FIRST_RETRY_MS).pendingCount()).toBe(1);
 
     useTerminalSessionId = "replacement-session";
     act(() => {
@@ -918,9 +1014,11 @@ describe("PersistentTerminal", () => {
         });
     });
     await waitFor(() => expect(connectMock).toHaveBeenCalledTimes(2));
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 600));
-    });
+    await settleTerminal();
+    // The first target's retry was cancelled, not merely outrun.
+    expect(clocks.pending()).toBe(0);
+    await advanceClock(clocks.at(FIRST_RETRY_MS));
+    await advanceClock(clocks.at(SECOND_RETRY_MS));
     expect(connectMock).toHaveBeenCalledTimes(2);
   });
 
@@ -934,6 +1032,7 @@ describe("PersistentTerminal", () => {
       }
       useTerminalIsConnected = true;
     });
+    const clocks = installTerminalClocks(FIRST_RETRY_MS, SECOND_RETRY_MS);
 
     render(
       <PersistentTerminal
@@ -950,17 +1049,23 @@ describe("PersistentTerminal", () => {
       />,
     );
 
-    await waitFor(() => expect(connectMock).toHaveBeenCalledTimes(2), { timeout: 2_000 });
+    await waitFor(() => expect(clocks.at(FIRST_RETRY_MS).pendingCount()).toBe(1));
+    expect(connectMock).toHaveBeenCalledTimes(1);
+    await advanceClock(clocks.at(FIRST_RETRY_MS));
+    await waitFor(() => expect(connectMock).toHaveBeenCalledTimes(2));
     expect(useTerminalIsConnected).toBe(true);
 
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 600));
-    });
+    await settleTerminal();
+    expect(clocks.pending()).toBe(0);
+    await advanceClock(clocks.at(SECOND_RETRY_MS));
     expect(connectMock).toHaveBeenCalledTimes(2);
   });
 
   it("bounds automatic retries when the same terminal target keeps failing", async () => {
     useTerminalIsConnected = false;
+    // A fourth attempt would back off for 1 s, so control that delay too. It is
+    // also Testing Library's default timeout, so the queries here name another.
+    const clocks = installTerminalClocks(FIRST_RETRY_MS, SECOND_RETRY_MS, THIRD_RETRY_MS);
 
     render(
       <PersistentTerminal
@@ -977,10 +1082,17 @@ describe("PersistentTerminal", () => {
       />,
     );
 
-    await waitFor(() => expect(connectMock).toHaveBeenCalledTimes(3), { timeout: 2_000 });
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 600));
-    });
+    await waitFor(() => expect(clocks.at(FIRST_RETRY_MS).pendingCount()).toBe(1), QUERY_TIMEOUT);
+    expect(connectMock).toHaveBeenCalledTimes(1);
+    await advanceClock(clocks.at(FIRST_RETRY_MS));
+    await waitFor(() => expect(clocks.at(SECOND_RETRY_MS).pendingCount()).toBe(1), QUERY_TIMEOUT);
+    expect(connectMock).toHaveBeenCalledTimes(2);
+    await advanceClock(clocks.at(SECOND_RETRY_MS));
+    await waitFor(() => expect(connectMock).toHaveBeenCalledTimes(3), QUERY_TIMEOUT);
+
+    await settleTerminal();
+    expect(clocks.pending()).toBe(0);
+    await advanceClock(clocks.at(THIRD_RETRY_MS));
     expect(connectMock).toHaveBeenCalledTimes(3);
   });
 
@@ -1069,6 +1181,7 @@ describe("PersistentTerminal", () => {
       paneId: "pane-1",
       isSetupTab: true,
     };
+    const clocks = installTerminalClocks(FIRST_RETRY_MS, SECOND_RETRY_MS);
     const view = render(<PersistentTerminal {...props} />);
 
     await waitFor(() => expect(connectMock).toHaveBeenCalledTimes(1));
@@ -1078,9 +1191,10 @@ describe("PersistentTerminal", () => {
     view.rerender(<PersistentTerminal {...props} />);
     useTerminalIsConnecting = false;
     view.rerender(<PersistentTerminal {...props} />);
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 800));
-    });
+    await settleTerminal();
+    expect(clocks.pending()).toBe(0);
+    await advanceClock(clocks.at(FIRST_RETRY_MS));
+    await advanceClock(clocks.at(SECOND_RETRY_MS));
 
     expect(connectMock).toHaveBeenCalledTimes(1);
   });
@@ -1089,6 +1203,7 @@ describe("PersistentTerminal", () => {
     useTerminalSessionId = "backend-job-session";
     useTerminalIsConnected = true;
     useTerminalBootstrapped = false;
+    const clocks = installTerminalClocks(BOOTSTRAP_DELAY_MS);
     const terminalData = createTerminalData();
     render(
       <PersistentTerminal
@@ -1107,9 +1222,9 @@ describe("PersistentTerminal", () => {
     );
 
     await waitFor(() => expect(lastUseTerminalOptions?.attachExistingOnly).toBe(true));
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 400));
-    });
+    await settleTerminal();
+    expect(clocks.pending()).toBe(0);
+    await advanceClock(clocks.at(BOOTSTRAP_DELAY_MS));
     expect(bootstrapWrites()).toEqual([]);
   });
 
@@ -2290,6 +2405,7 @@ describe("PersistentTerminal", () => {
           ? { bootstrapped: false, delivered: false, duplicate: false }
           : undefined,
       );
+      const clocks = installTerminalClocks(BOOTSTRAP_DELAY_MS);
       renderForWarnings("claude");
       await waitFor(() => expect(lastUseTerminalOptions?.onReplay).toBeDefined());
 
@@ -2297,15 +2413,14 @@ describe("PersistentTerminal", () => {
       act(() => {
         terminalOnData?.(new TextEncoder().encode("shell output ".repeat(12)));
       });
+      await releaseBootstrapAttempt(clocks);
+      await releaseBootstrapAttempt(clocks);
+      await releaseBootstrapAttempt(clocks);
 
       // The bootstrap warning takes the bounded retry budget to appear, and it
       // takes precedence over the replay warning already on screen.
-      await waitFor(
-        () =>
-          expect(screen.getByRole("status").textContent).toContain(
-            "launch command could not start",
-          ),
-        { timeout: 2_000 },
+      await waitFor(() =>
+        expect(screen.getByRole("status").textContent).toContain("launch command could not start"),
       );
 
       dismiss();
@@ -2940,6 +3055,8 @@ describe("PersistentTerminal", () => {
     ["a workspace path", "ready in /workspace/project"],
     ["substantial shell output", "x".repeat(101)],
   ])("marks a non-first tab ready after %s", async (_label, output) => {
+    holdSessionPersistence();
+    const clocks = installTerminalClocks(BOOTSTRAP_DELAY_MS);
     render(
       <PersistentTerminal
         terminalData={createTerminalData()}
@@ -2957,10 +3074,14 @@ describe("PersistentTerminal", () => {
     );
 
     await waitFor(() => expect(terminalOnData).toBeDefined());
-    expect(bootstrapWrites()).not.toContain("echo non-first-ready\n");
+    await settleTerminal();
+    await advanceClock(clocks.at(BOOTSTRAP_DELAY_MS));
+    expect(bootstrapWrites()).toEqual([]);
+    expect(clocks.pending()).toBe(0);
     act(() => {
       void terminalOnData?.(new TextEncoder().encode(output));
     });
+    await releaseBootstrapAttempt(clocks);
     await waitFor(() => {
       expect(bootstrapWrites()).toContain("echo non-first-ready\n");
     });
@@ -3220,7 +3341,9 @@ describe("PersistentTerminal", () => {
   });
 
   it("resets launch readiness when the terminal moves to a replacement container", async () => {
+    holdSessionPersistence();
     const terminalData = createTerminalData();
+    const clocks = installTerminalClocks(BOOTSTRAP_DELAY_MS);
     const view = render(
       <PersistentTerminal
         terminalData={terminalData}
@@ -3239,11 +3362,13 @@ describe("PersistentTerminal", () => {
 
     await waitFor(() => expect(terminalOnData).toBeDefined());
     act(() => {
-      void terminalOnData?.(new TextEncoder().encode("workspace $ "));
+      void terminalOnData?.(new TextEncoder().encode("❯ "));
     });
+    await releaseBootstrapAttempt(clocks);
     await waitFor(() => expect(bootstrapWrites()).toContain("echo ready\n"), { timeout: 1_000 });
 
-    writeMock.mockClear();
+    invokeMock.mockClear();
+    useTerminalSessionId = "session-container-2";
     view.rerender(
       <PersistentTerminal
         terminalData={terminalData}
@@ -3260,10 +3385,21 @@ describe("PersistentTerminal", () => {
       />,
     );
 
+    await settleTerminal();
+    await advanceClock(clocks.at(BOOTSTRAP_DELAY_MS));
+    expect(bootstrapWrites()).toEqual([]);
+    expect(lastUseTerminalOptions?.containerId).toBe("container-2");
     act(() => {
-      void terminalOnData?.(new TextEncoder().encode("replacement $ "));
+      void terminalOnData?.(new TextEncoder().encode("replacement ❯ "));
     });
-    await waitFor(() => expect(bootstrapWrites()).toContain("echo ready\n"), { timeout: 1_000 });
+    await settleTerminal();
+    expect(bootstrapWrites()).toEqual([]);
+    await releaseBootstrapAttempt(clocks);
+    expect(bootstrapWrites()).toEqual(["echo ready\n"]);
+    expect(invokeMock).toHaveBeenCalledWith("bootstrap_terminal_session", {
+      sessionId: "session-container-2",
+      data: "echo ready\n",
+    });
   });
 
   it("sends compose images sequentially before normalized single-line text", async () => {
@@ -3494,6 +3630,7 @@ describe("PersistentTerminal", () => {
       return { environments };
     });
 
+    const clocks = installTerminalClocks(BOOTSTRAP_DELAY_MS);
     render(
       <PersistentTerminal
         terminalData={createTerminalData()}
@@ -3513,6 +3650,7 @@ describe("PersistentTerminal", () => {
       />,
     );
 
+    await releaseBootstrapAttempt(clocks);
     await waitFor(() => {
       expect(bootstrapWrites()).toContain(
         'codex --model "gpt-review" --config "model_reasoning_effort=\\"high\\"" --config "service_tier=\\"default\\"" "Fix the failing tests"\n',
@@ -3549,6 +3687,7 @@ describe("PersistentTerminal", () => {
       return { environments };
     });
 
+    const clocks = installTerminalClocks(BOOTSTRAP_DELAY_MS);
     render(
       <PersistentTerminal
         terminalData={createTerminalData()}
@@ -3573,6 +3712,7 @@ describe("PersistentTerminal", () => {
       await Promise.resolve();
     });
     expect(writeMock).not.toHaveBeenCalled();
+    expect(clocks.pending()).toBe(0);
     expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]).toMatchObject({
       initialAgentModel: "gpt-review",
       initialReasoningEffort: "high",
@@ -3583,6 +3723,7 @@ describe("PersistentTerminal", () => {
       await Promise.resolve();
     });
 
+    await releaseBootstrapAttempt(clocks);
     await waitFor(() => {
       expect(bootstrapWrites()).toContain(
         'codex --model "gpt-review" --config "model_reasoning_effort=\\"high\\"" "Fix the failing tests"\n',
@@ -4002,6 +4143,7 @@ describe("PersistentTerminal", () => {
   });
 
   it("emits success and failure OSC markers for setup completion", async () => {
+    const clocks = installTerminalClocks(BOOTSTRAP_DELAY_MS);
     render(
       <PersistentTerminal
         terminalData={createTerminalData()}
@@ -4020,6 +4162,7 @@ describe("PersistentTerminal", () => {
     );
 
     let setupWrite: string | undefined;
+    await releaseBootstrapAttempt(clocks);
     await waitFor(() => {
       const writes = bootstrapWrites();
       setupWrite = writes.find(
@@ -4036,6 +4179,7 @@ describe("PersistentTerminal", () => {
   });
 
   it("launches first container setup commands without waiting for workspace-ready output", async () => {
+    const clocks = installTerminalClocks(BOOTSTRAP_DELAY_MS);
     render(
       <PersistentTerminal
         terminalData={createTerminalData()}
@@ -4053,6 +4197,7 @@ describe("PersistentTerminal", () => {
       />,
     );
 
+    await releaseBootstrapAttempt(clocks);
     await waitFor(() => {
       const writes = bootstrapWrites();
       expect(
@@ -4572,6 +4717,7 @@ describe("PersistentTerminal", () => {
       }
       persistentSessionStore.sessionSnapshotGenerations = new Map([["env-1", 1]]);
     });
+    const clocks = installTerminalClocks(FIRST_RETRY_MS, SECOND_RETRY_MS);
 
     render(
       <PersistentTerminal
@@ -4588,19 +4734,19 @@ describe("PersistentTerminal", () => {
       />,
     );
 
-    await waitFor(
-      () => {
-        expect(persistentSessionStore.sessionSnapshotGenerations.has("env-1")).toBe(true);
-      },
-      { timeout: 3000 },
-    );
-
-    // The retry chain stops once a snapshot lands: the next attempt would have
-    // been ~500ms after the second call, so a quiet window proves it stopped.
-    const callsAtSnapshot = persistentSessionStore.loadSessionsForEnvironment.mock.calls.length;
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 700));
+    await waitFor(() => expect(clocks.at(FIRST_RETRY_MS).pendingCount()).toBe(1));
+    expect(persistentSessionStore.sessionSnapshotGenerations.has("env-1")).toBe(false);
+    await advanceClock(clocks.at(FIRST_RETRY_MS));
+    await waitFor(() => {
+      expect(persistentSessionStore.sessionSnapshotGenerations.has("env-1")).toBe(true);
     });
+
+    // The retry chain stops once a snapshot lands: the next attempt would back
+    // off 500ms after the second call, and no retry is armed to make it.
+    const callsAtSnapshot = persistentSessionStore.loadSessionsForEnvironment.mock.calls.length;
+    await settleTerminal();
+    expect(clocks.pending()).toBe(0);
+    await advanceClock(clocks.at(SECOND_RETRY_MS));
     expect(persistentSessionStore.loadSessionsForEnvironment.mock.calls.length).toBe(
       callsAtSnapshot,
     );
@@ -4631,6 +4777,7 @@ describe("PersistentTerminal", () => {
         order: 0,
       },
     ];
+    const clocks = installTerminalClocks(FIRST_RETRY_MS);
 
     render(
       <PersistentTerminal
@@ -4662,15 +4809,18 @@ describe("PersistentTerminal", () => {
       }
     });
 
-    await waitFor(
-      () => {
-        expect(persistentSessionStore.loadSessionsForEnvironment).toHaveBeenCalledTimes(2);
-        expect(persistentSessionStore.loadSessionBuffer).toHaveBeenCalledWith(
-          "fresh-persistent-session",
-        );
-      },
-      { timeout: 3000 },
-    );
+    // Failed, with the retry armed: the old snapshot is still not used.
+    await waitFor(() => expect(clocks.at(FIRST_RETRY_MS).pendingCount()).toBe(1));
+    expect(persistentSessionStore.createSession).not.toHaveBeenCalled();
+    expect(persistentSessionStore.loadSessionBuffer).not.toHaveBeenCalled();
+    await advanceClock(clocks.at(FIRST_RETRY_MS));
+
+    await waitFor(() => {
+      expect(persistentSessionStore.loadSessionsForEnvironment).toHaveBeenCalledTimes(2);
+      expect(persistentSessionStore.loadSessionBuffer).toHaveBeenCalledWith(
+        "fresh-persistent-session",
+      );
+    });
     expect(persistentSessionStore.createSession).not.toHaveBeenCalled();
   });
 
@@ -4679,6 +4829,8 @@ describe("PersistentTerminal", () => {
     persistentSessionStore.loadSessionsForEnvironment.mockImplementation(async () => {
       throw new Error("list failed");
     });
+    // The 1 s clock is also Testing Library's default timeout: name another.
+    const clocks = installTerminalClocks(FIRST_RETRY_MS, SECOND_RETRY_MS, THIRD_RETRY_MS);
 
     const view = render(
       <PersistentTerminal
@@ -4695,20 +4847,18 @@ describe("PersistentTerminal", () => {
       />,
     );
 
-    await waitFor(
-      () => {
-        expect(
-          persistentSessionStore.loadSessionsForEnvironment.mock.calls.length,
-        ).toBeGreaterThanOrEqual(2);
-      },
-      { timeout: 3000 },
-    );
+    await waitFor(() => expect(clocks.at(FIRST_RETRY_MS).pendingCount()).toBe(1), QUERY_TIMEOUT);
+    await advanceClock(clocks.at(FIRST_RETRY_MS));
+    await waitFor(() => expect(clocks.at(SECOND_RETRY_MS).pendingCount()).toBe(1), QUERY_TIMEOUT);
+    expect(persistentSessionStore.loadSessionsForEnvironment.mock.calls.length).toBe(2);
 
     view.unmount();
     const callsAtUnmount = persistentSessionStore.loadSessionsForEnvironment.mock.calls.length;
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 900));
-    });
+    // Unmounting cancels the armed retry; running the later backoffs anyway
+    // proves nothing was left behind to fire.
+    expect(clocks.pending()).toBe(0);
+    await advanceClock(clocks.at(SECOND_RETRY_MS));
+    await advanceClock(clocks.at(THIRD_RETRY_MS));
     expect(persistentSessionStore.loadSessionsForEnvironment.mock.calls.length).toBe(
       callsAtUnmount,
     );
@@ -4935,6 +5085,7 @@ describe("PersistentTerminal", () => {
         ? { bootstrapped: false, delivered: false, duplicate: false }
         : { bootstrapped: true, delivered: true, duplicate: false };
     });
+    const clocks = installTerminalClocks(BOOTSTRAP_DELAY_MS);
 
     render(
       <PersistentTerminal
@@ -4955,10 +5106,10 @@ describe("PersistentTerminal", () => {
     act(() => {
       terminalOnData?.(new TextEncoder().encode("shell output ".repeat(12)));
     });
+    await releaseBootstrapAttempt(clocks);
+    await releaseBootstrapAttempt(clocks);
 
-    expect(
-      await screen.findByRole("button", { name: "Address all" }, { timeout: 2_000 }),
-    ).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Address all" })).toBeTruthy();
     expect(attempts).toBe(2);
     expect(markBootstrappedMock).toHaveBeenCalledWith("session-1");
   });
@@ -4971,6 +5122,7 @@ describe("PersistentTerminal", () => {
       if (attempts === 1) throw new Error("PTY is still starting");
       return { bootstrapped: true, delivered: true, duplicate: false };
     });
+    const clocks = installTerminalClocks(BOOTSTRAP_DELAY_MS);
 
     render(
       <PersistentTerminal
@@ -4990,8 +5142,10 @@ describe("PersistentTerminal", () => {
     act(() => {
       terminalOnData?.(new TextEncoder().encode("shell output ".repeat(12)));
     });
+    await releaseBootstrapAttempt(clocks);
+    await releaseBootstrapAttempt(clocks);
 
-    await screen.findByRole("button", { name: "Address all" }, { timeout: 2_000 });
+    await screen.findByRole("button", { name: "Address all" });
     expect(attempts).toBe(2);
     expect(markBootstrappedMock).toHaveBeenCalledWith("session-1");
   });
@@ -5002,6 +5156,7 @@ describe("PersistentTerminal", () => {
         ? { bootstrapped: false, delivered: false, duplicate: false }
         : undefined,
     );
+    const clocks = installTerminalClocks(BOOTSTRAP_DELAY_MS);
 
     render(
       <PersistentTerminal
@@ -5021,11 +5176,16 @@ describe("PersistentTerminal", () => {
     act(() => {
       terminalOnData?.(new TextEncoder().encode("shell output ".repeat(12)));
     });
+    await releaseBootstrapAttempt(clocks);
+    await releaseBootstrapAttempt(clocks);
+    await releaseBootstrapAttempt(clocks);
 
-    const warning = await screen.findByRole("status", {}, { timeout: 2_000 });
+    const warning = await screen.findByRole("status");
     expect(warning.textContent).toContain("launch command could not start");
     expect(bootstrapWrites()).toHaveLength(3);
     expect(markBootstrappedMock).not.toHaveBeenCalled();
+    // The bound is three attempts: no fourth is scheduled.
+    expect(clocks.pending()).toBe(0);
   });
 
   it("cancels a scheduled bootstrap retry when the terminal unmounts", async () => {
@@ -5100,10 +5260,12 @@ describe("PersistentTerminal", () => {
       isFirstTab: false,
       paneId: "pane-1",
     };
+    const clocks = installTerminalClocks(BOOTSTRAP_DELAY_MS);
     const view = render(<PersistentTerminal {...props} />);
     act(() => {
       terminalOnData?.(new TextEncoder().encode("shell output ".repeat(12)));
     });
+    await releaseBootstrapAttempt(clocks);
     await waitFor(() => expect(bootstrapWrites()).toHaveLength(1));
 
     useTerminalSessionId = "session-2";
@@ -5111,10 +5273,9 @@ describe("PersistentTerminal", () => {
     await act(async () => {
       resolveFirst({ bootstrapped: true, delivered: true, duplicate: false });
     });
+    await releaseBootstrapAttempt(clocks);
 
-    await waitFor(() => expect(markBootstrappedMock).toHaveBeenCalledWith("session-2"), {
-      timeout: 2_000,
-    });
+    await waitFor(() => expect(markBootstrappedMock).toHaveBeenCalledWith("session-2"));
     expect(markBootstrappedMock).not.toHaveBeenCalledWith("session-1");
   });
 
@@ -5152,16 +5313,20 @@ describe("PersistentTerminal", () => {
       paneId: "pane-1",
     });
 
+    const clocks = installTerminalClocks(BOOTSTRAP_DELAY_MS);
     const view = render(<PersistentTerminal {...props(["echo ready"])} />);
     act(() => {
       void terminalOnData?.(new TextEncoder().encode("workspace $ "));
     });
+    await releaseBootstrapAttempt(clocks);
     await waitFor(() => expect(bootstrapWrites()).toHaveLength(1));
 
     // Equal contents, brand new array — exactly what `pane-layout-restore`
     // produces on every refresh.
     view.rerender(<PersistentTerminal {...props(["echo ready"])} />);
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    await settleTerminal();
+    expect(clocks.pending()).toBe(0);
+    await advanceClock(clocks.at(BOOTSTRAP_DELAY_MS));
 
     expect(bootstrapWrites()).toEqual(["echo ready\n"]);
 
@@ -5181,6 +5346,7 @@ describe("PersistentTerminal", () => {
         ? { bootstrapped: true, delivered: false, duplicate: true }
         : undefined,
     );
+    const clocks = installTerminalClocks(BOOTSTRAP_DELAY_MS);
 
     render(
       <PersistentTerminal
@@ -5199,11 +5365,12 @@ describe("PersistentTerminal", () => {
     act(() => {
       terminalOnData?.(new TextEncoder().encode("shell output ".repeat(12)));
     });
+    await releaseBootstrapAttempt(clocks);
 
-    await waitFor(() => expect(markBootstrappedMock).toHaveBeenCalledWith("session-1"), {
-      timeout: 2_000,
-    });
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    await waitFor(() => expect(markBootstrappedMock).toHaveBeenCalledWith("session-1"));
+    await settleTerminal();
+    expect(clocks.pending()).toBe(0);
+    await advanceClock(clocks.at(BOOTSTRAP_DELAY_MS));
     expect(bootstrapWrites()).toHaveLength(1);
     expect(screen.queryByRole("status") === null).toBe(true);
   });
@@ -5217,6 +5384,7 @@ describe("PersistentTerminal", () => {
         ? { bootstrapped: false, delivered: false, duplicate: false }
         : { bootstrapped: true, delivered: true, duplicate: false };
     });
+    const clocks = installTerminalClocks(BOOTSTRAP_DELAY_MS);
 
     render(
       <PersistentTerminal
@@ -5235,12 +5403,14 @@ describe("PersistentTerminal", () => {
     act(() => {
       terminalOnData?.(new TextEncoder().encode("shell output ".repeat(12)));
     });
+    await releaseBootstrapAttempt(clocks);
+    await releaseBootstrapAttempt(clocks);
 
-    await waitFor(() => expect(markBootstrappedMock).toHaveBeenCalledWith("session-1"), {
-      timeout: 2_000,
-    });
+    await waitFor(() => expect(markBootstrappedMock).toHaveBeenCalledWith("session-1"));
     // The bound is three attempts; without a stop the chain would reach it.
-    await new Promise((resolve) => setTimeout(resolve, 800));
+    await settleTerminal();
+    expect(clocks.pending()).toBe(0);
+    await advanceClock(clocks.at(BOOTSTRAP_DELAY_MS));
     expect(attempts).toBe(2);
     expect(bootstrapWrites()).toHaveLength(2);
     expect(screen.queryByRole("status") === null).toBe(true);
@@ -5272,15 +5442,17 @@ describe("PersistentTerminal", () => {
       isFirstTab: false,
       paneId: "pane-1",
     };
+    const clocks = installTerminalClocks(BOOTSTRAP_DELAY_MS);
     const view = render(<PersistentTerminal {...props} />);
     act(() => {
       terminalOnData?.(new TextEncoder().encode("shell output ".repeat(12)));
     });
+    await releaseBootstrapAttempt(clocks);
 
-    await waitFor(() => expect(markBootstrappedMock).toHaveBeenCalledWith("session-1"), {
-      timeout: 2_000,
-    });
-    await new Promise((resolve) => setTimeout(resolve, 800));
+    await waitFor(() => expect(markBootstrappedMock).toHaveBeenCalledWith("session-1"));
+    await settleTerminal();
+    expect(clocks.pending()).toBe(0);
+    await advanceClock(clocks.at(BOOTSTRAP_DELAY_MS));
     expect(screen.queryByRole("status") === null).toBe(true);
     expect(bootstrapWrites()).toHaveLength(1);
 
@@ -5288,7 +5460,9 @@ describe("PersistentTerminal", () => {
     // so the tab settles without ever launching again.
     useTerminalBootstrapped = true;
     view.rerender(<PersistentTerminal {...props} />);
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    await settleTerminal();
+    expect(clocks.pending()).toBe(0);
+    await advanceClock(clocks.at(BOOTSTRAP_DELAY_MS));
     expect(bootstrapWrites()).toHaveLength(1);
     expect(screen.queryByRole("status") === null).toBe(true);
   });
@@ -5312,12 +5486,16 @@ describe("PersistentTerminal", () => {
       isFirstTab: false,
       paneId: "pane-1",
     };
+    const clocks = installTerminalClocks(BOOTSTRAP_DELAY_MS);
     const view = render(<PersistentTerminal {...props} />);
     act(() => {
       terminalOnData?.(new TextEncoder().encode("shell output ".repeat(12)));
     });
+    await releaseBootstrapAttempt(clocks);
+    await releaseBootstrapAttempt(clocks);
+    await releaseBootstrapAttempt(clocks);
 
-    const warning = await screen.findByRole("status", {}, { timeout: 2_000 });
+    const warning = await screen.findByRole("status");
     expect(warning.textContent).toContain("launch command could not start");
 
     // The warning names a session that no longer exists; leaving it up would
@@ -5328,6 +5506,7 @@ describe("PersistentTerminal", () => {
   });
 
   it("launches Codex terminal mode without an initial prompt", async () => {
+    const clocks = installTerminalClocks(BOOTSTRAP_DELAY_MS);
     render(
       <PersistentTerminal
         terminalData={createTerminalData()}
@@ -5343,12 +5522,14 @@ describe("PersistentTerminal", () => {
       />,
     );
 
+    await releaseBootstrapAttempt(clocks);
     await waitFor(() => {
       expect(bootstrapWrites()).toContain("codex\n");
     });
   });
 
   it("escapes quotes and dollar signs in Codex prompts", async () => {
+    const clocks = installTerminalClocks(BOOTSTRAP_DELAY_MS);
     render(
       <PersistentTerminal
         terminalData={createTerminalData()}
@@ -5365,12 +5546,14 @@ describe("PersistentTerminal", () => {
       />,
     );
 
+    await releaseBootstrapAttempt(clocks);
     await waitFor(() => {
       expect(bootstrapWrites()).toContain('codex "Use \\"\\$HOME\\" for the config path"\n');
     });
   });
 
   it("preserves newlines in Codex prompts", async () => {
+    const clocks = installTerminalClocks(BOOTSTRAP_DELAY_MS);
     render(
       <PersistentTerminal
         terminalData={createTerminalData()}
@@ -5387,6 +5570,7 @@ describe("PersistentTerminal", () => {
       />,
     );
 
+    await releaseBootstrapAttempt(clocks);
     await waitFor(() => {
       expect(bootstrapWrites()).toContain('codex "Fix line one\nand line two"\n');
     });

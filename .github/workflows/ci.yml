@@ -105,11 +105,11 @@ jobs:
           sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0
           bwrap --unshare-all --ro-bind / / true
 
-      - name: Run default non-iOS suite
+      - name: Run complete non-iOS suite
         env:
           # A known place for the failing groups' full logs, uploaded below.
           ORKESTRATOR_TEST_LOG_DIR: ${{ runner.temp }}/orkestrator-test-logs
-        run: mise run test
+        run: mise run test:full
 
       # The console keeps only each failing group's tail and its failure
       # reports; the compressed full logs hold everything else.

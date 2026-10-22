@@ -15,7 +15,8 @@ with [agent-testing.md](agent-testing.md).
 | Test one file | `mise run test:logged -- --name focused -- bun test ./path/to/file.test.ts --parallel=1 --only-failures` | First feedback while editing one owner |
 | Test root unit tests | `mise run test:logged -- --name root-unit -- mise run test:unit` | Root `tests/unit` only |
 | Test changed code | `mise run test:changed` | Fast local feedback across affected packages and files |
-| Test the repository | `mise run test` | Authoritative default, non-iOS validation before handoff |
+| Test the repository | `mise run test` | Authoritative default, non-iOS validation before handoff; runs only the [area suites](#area-suites) the change can reach |
+| Test the repository, every area | `mise run test:full` | What CI runs; every area suite regardless of the change |
 | Test everything, including iOS | `mise run test:all` | Release-sensitive or iOS validation on a Mac with Xcode |
 | Check format, lint, and types | `mise run test:logged -- --name check -- mise run check` | Static validation; this does not run tests |
 | Run browser component tests | `mise run test:logged -- --name browser -- mise run test:browser` | Playwright component/browser coverage |
@@ -38,6 +39,31 @@ A normal code implementation loop is:
    handoff.
 4. Add the relevant browser, agent, Docker, or iOS suite when the changed area
    requires it.
+
+### Area suites
+
+A few slow, self-contained test sets are area suites, declared in
+`scripts/test-areas.ts`: the real-Chromium transcript-artifact suites and the
+tmux suites. `mise run test` runs an area only when the change can reach it,
+and prints an `AREA RUN` or `AREA SKIP` line with the reason.
+
+An area runs when any file in its import graph differs from the merge base
+with local `main`, including uncommitted and untracked files. The graph starts
+at the area's test files and its package's preloads and follows every runtime
+import into workspace packages; type-only imports do not count. Each area also
+lists triggers for inputs an import cannot express, such as fixtures read by
+path. Dependency, lockfile, `bunfig.toml`, `tsconfig`, `mise.toml`, Turbo, and
+test-runner changes run every area, and so does anything uncertain: no merge
+base, a Git failure, or an unreadable graph.
+
+CI runs `mise run test:full`, which sets `ORKESTRATOR_TEST_AREAS=all`, so a
+coupling the graph cannot see is still caught before merge. `test:all` also
+runs every area. Set `ORKESTRATOR_TEST_AREA_BASE` to compare against a branch
+other than `main`.
+
+Add an area only for a slow test set whose import graph is narrow. Measure
+first: an area whose graph reaches shared hubs such as storage or the protocol
+package runs on most changes and saves little.
 
 `test:changed` is an optimization, not final proof. It uses Turbo's affected
 package graph and Bun's changes from the local `main` ref. Configuration files,
@@ -169,7 +195,7 @@ or start a production backend.
 
 | Group | Contents | Scheduling |
 | --- | --- | --- |
-| Workspace | Web, backend, desktop, public web, CLI, toolchain, and protocol package tests | Turbo runs at most two package tasks; each package gets two Bun workers when the budget is six or more |
+| Workspace | Web, backend, desktop, public web, CLI, toolchain, and protocol package tests | Turbo runs at most two package tasks; each package gets two Bun workers when the budget is six or more, including the backend, capped at two while port and deadline-sensitive tests need higher-concurrency qualification |
 | Root | Root renderer and repository-contract tests plus agent artifact and fixture-server support tests | Receives the remaining worker budget: one worker on a large host, up to two on smaller ones |
 | Bridges | ACP, Claude, Codex, Cursor, and Pi bridge tests | Turbo runs two bridge tasks, each with one Bun worker |
 | Protocol | Regeneration check for the committed Codex protocol lockfile | One independent command |
@@ -177,9 +203,11 @@ or start a production backend.
 All cooperating runs share a host budget: one worker slot per logical core by
 default (`ORKESTRATOR_TEST_HOST_WORKERS` may raise it to four per core), plus a
 memory admission budget of 65% of physical memory. This suite still plans at
-most eight Bun workers of its own; the larger host budget lets other worktrees
-and review validations run beside it. The protocol check reserves one slot too. Groups run together
-when they fit; smaller machines queue groups instead of spawning extra workers.
+most eight Bun workers of its own, including the backend pool, whose
+Node-preloaded integration suites do not load happy-dom. The larger host budget
+lets other worktrees and review validations run beside it. The protocol check
+reserves one slot too. Groups run together when they fit; smaller machines queue
+groups instead of spawning extra workers.
 The per-suite plan includes the protocol slot in its eight-slot ceiling.
 Each ordinary group reserves an estimated 1 GiB per worker (bounded by the host
 memory budget). These are admission estimates, not operating-system CPU or
@@ -780,6 +808,10 @@ then records the redundant entry as skipped with its covering command ID. Failed
 coverage remains incomplete. Coverage is deduplicated only when the covering
 command also depends on the required prerequisites and no dependency cycle is
 introduced. Dependent checks wait for the actual covering result. The original plan stays immutable.
+A repeated identical command (the same command line and directory) is covered
+by its first copy the same way, recorded as `(identical command)`, unless the
+repeat waits on a prerequisite the first copy did not, which may make the rerun
+meaningful. Discovery is also told never to plan a command twice.
 
 A missing `.orkestrator-test-scheduler.json` is normal and silent. One that is
 present but unreadable, oversized, or invalid is *ignored* rather than fatal:

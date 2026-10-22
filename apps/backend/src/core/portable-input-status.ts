@@ -181,7 +181,7 @@ export const IMPORTED_CREDENTIAL_FILES: Record<AgentPlatform, readonly string[]>
   claude: ["/home/node/.claude/.credentials.json"],
   codex: ["/home/node/.codex/auth.json"],
   opencode: ["/home/node/.local/share/opencode/auth.json"],
-  grok: ["/home/node/.grok/auth.json"],
+  grok: ["/home/node/.grok/auth.json", "/home/node/.grok/xai-api-key"],
   pi: ["/home/node/.pi/agent/auth.json"],
   cursor: [CONTAINER_CURSOR_API_KEY_FILE, CONTAINER_CURSOR_SDK_AUTH_FILE],
 };

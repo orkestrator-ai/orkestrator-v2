@@ -55,13 +55,23 @@ export class GatewayTransport {
         "The request is larger than the client's request limit",
       );
     }
+    // Observation reads pass their remaining budget. Credential rotation must
+    // not grant the retry a second copy of that budget.
+    const deadline = options.timeoutMs === undefined ? undefined : Date.now() + options.timeoutMs;
+    const sendWithBudget = (token: string) => {
+      if (deadline === undefined) return this.send(body, token, options);
+      const remaining = deadline - Date.now();
+      if (remaining <= 0)
+        throw new CliError("connection-failed", "The request deadline passed", { retryable: true });
+      return this.send(body, token, { ...options, timeoutMs: remaining });
+    };
     let token = await this.target.readToken();
-    let response = await this.send(body, token, options);
+    let response = await sendWithBudget(token);
     if (response.status === 401 && !options.mutation) {
       // The token may have been rotated; a safe read gets one fresh attempt.
       await response.body?.cancel().catch(() => undefined);
       token = await this.target.readToken();
-      response = await this.send(body, token, options);
+      response = await sendWithBudget(token);
     }
     return this.decode(response, options);
   }

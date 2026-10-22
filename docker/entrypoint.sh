@@ -1002,6 +1002,7 @@ mkdir -p "$HOME/.grok" "$HOME/.config/grok"
 
 if [ -d /grok-home ]; then
     for file in \
+        xai-api-key \
         auth.json \
         config.toml \
         trusted_folders.toml \
@@ -1018,6 +1019,7 @@ if [ -d /grok-home ]; then
         copy_agent_directory_entries /grok-home "$HOME/.grok" "$dir" Grok
     done
 
+    chmod 600 "$HOME/.grok/xai-api-key" 2>/dev/null || true
     chmod 600 "$HOME/.grok/auth.json" 2>/dev/null || true
     restrict_imported_login "$HOME/.grok/auth.json" grok Grok
 fi

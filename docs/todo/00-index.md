@@ -57,10 +57,10 @@ it reaches. Some rules of thumb:
 | Score | Meaning | Items |
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
-| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 15 |
-| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 269 |
-| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 284 |
-| **Total** | | **569** |
+| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 14 |
+| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 272 |
+| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 285 |
+| **Total** | | **572** |
 
 ## Very high
 
@@ -154,7 +154,7 @@ it reaches. Some rules of thumb:
 - [x] Qualify live history paging and reviewer Load earlier messages beyond the 100-message live window ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
 - [x] Run a live multi-review: progress probes, reviewer windows, detail expansion, pages and scroll anchoring ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
 - [x] Qualify Claude inactive-tab and background-task runs against content-revision tokens ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
-- [ ] Qualify cold restart: display tails and pipeline histories reconcile, including a mid-dispatch restart ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
+- [x] Qualify cold restart: display tails and pipeline histories reconcile, including a mid-dispatch restart ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
 - [ ] Qualify idle observation live per provider: missed final event, approvals, sub-agents, reconnect, hidden ([native-agent-idle-observation.md](native-agent-idle-observation.md), qualification)
 - [x] Back off gateway terminal fallback reconnect timers with `ReconnectBackoff`, resetting after healthy streams ([client-reconnect-and-freshness.md](client-reconnect-and-freshness.md))
 - [x] Fix `storageReads` = 0 since #969 by charging cached row reads, and add a test asserting it ([recurring-work-qualification.md](recurring-work-qualification.md))
@@ -434,6 +434,9 @@ it reaches. Some rules of thumb:
 - [ ] Add heap/RSS and event-loop-lag reporting to the efficiency harness ([transcript-history-efficiency.md](transcript-history-efficiency.md))
 - [ ] Decide whether to keep, cache or remove the joined sync-v1 history fallback and pre-`/transcript` reads ([transcript-history-efficiency.md](transcript-history-efficiency.md))
 - [ ] Give Codex a per-response row boundary; tool-only responses share one row (130 reads in 16 rows live) ([transcript-history-efficiency.md](transcript-history-efficiency.md))
+- [ ] Give Codex replayed rows stable ids, or prove a mounted tab with retained history survives a bridge-only restart ([transcript-history-efficiency.md](transcript-history-efficiency.md))
+- [ ] Stop a Codex turn promptly when its backend dies; after a backend SIGKILL the turn read up to five more stops ([transcript-history-efficiency.md](transcript-history-efficiency.md))
+- [ ] Hit the pre-acceptance build-pipeline dispatch window live with a fault hook; crash runs landed after acceptance ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
 - [ ] Re-run the Claude native live paging case with the held-place fixes (tall coalesced blocks; blocked by a 429 on 2026-10-18) ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
 - [ ] Qualify a live Grok/ACP session through the v2 transcript summary, detail and page routes ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
 - [ ] Run Cursor past producer trim thresholds while inactive; check window, sub-agents and controls ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
@@ -893,6 +896,7 @@ it reaches. Some rules of thumb:
 - [ ] Profile and trim backend slow test owners (validation worker, public-api exec, commands, tmux) ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
 - [ ] Resolve the gateway-auth part of flake 0006 once the registry criteria are met ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
 - [ ] Stop an Electron spec's Vite dev server even when the test times out and its `finally` never runs ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
+- [ ] Stop the Codex bridge listening on import so its tests ignore an inherited `PORT` (flake 0660) ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
 - [ ] Record fresh test-suite baselines and a controlled before-and-after comparison if speed work resumes ([test-suite-and-ci-health.md](test-suite-and-ci-health.md), qualification)
 - [ ] Confirm the desktop test gaps with coverage before writing tests ([test-suite-and-ci-health.md](test-suite-and-ci-health.md), verify)
 - [ ] Find the root cause of the `AddProjectDialog.test.tsx` cost ([test-suite-and-ci-health.md](test-suite-and-ci-health.md), verify)
@@ -955,7 +959,7 @@ it reaches. Some rules of thumb:
 | [session-lifecycle-consistency.md](session-lifecycle-consistency.md) |  |  | 8 | 7 | 15 |
 | **Transcripts, observation and bandwidth** | | | | | |
 | [rich-transcripts.md](rich-transcripts.md) |  |  | 2 |  | 2 |
-| [transcript-history-efficiency.md](transcript-history-efficiency.md) |  | 1 | 13 | 6 | 20 |
+| [transcript-history-efficiency.md](transcript-history-efficiency.md) |  |  | 16 | 6 | 22 |
 | [remote-client-bandwidth.md](remote-client-bandwidth.md) |  |  | 4 | 9 | 13 |
 | [native-agent-idle-observation.md](native-agent-idle-observation.md) |  | 1 | 3 | 2 | 6 |
 | [client-reconnect-and-freshness.md](client-reconnect-and-freshness.md) |  |  | 6 | 2 | 8 |
@@ -977,7 +981,7 @@ it reaches. Some rules of thumb:
 | **Cross-cutting** | | | | | |
 | [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md) |  | 1 | 10 | 5 | 16 |
 | [mixed-version-compatibility.md](mixed-version-compatibility.md) |  |  | 2 | 3 | 5 |
-| [test-suite-and-ci-health.md](test-suite-and-ci-health.md) | 1 |  | 4 | 13 | 18 |
+| [test-suite-and-ci-health.md](test-suite-and-ci-health.md) | 1 |  | 4 | 14 | 19 |
 | [mobile-layout-gaps.md](mobile-layout-gaps.md) |  |  | 1 | 4 | 5 |
 | [dependency-upgrades.md](dependency-upgrades.md) |  |  | 3 | 7 | 10 |
 | [remote-host-upgrades.md](remote-host-upgrades.md) |  |  | 3 | 2 | 5 |

@@ -2653,6 +2653,19 @@ test("Docker fixture consumes command-only seed files and deletes secret staging
     });
     await invoke("commit_node_file_write", { uploadId: upload.uploadId });
     await invoke("start_environment", { environmentId: environment.id });
+    // Start returns once setup is launched; the workspace consumes seeds later.
+    await expect
+      .poll(
+        async () => {
+          const current = await invoke<Environment & { setupScriptsComplete?: boolean }>(
+            "get_environment",
+            { environmentId: environment.id },
+          );
+          return current.setupScriptsComplete === true;
+        },
+        { timeout: 120_000 },
+      )
+      .toBe(true);
     const active = await invoke<Environment>("get_environment", { environmentId: environment.id });
     expect(active.containerId).toBeTruthy();
     const copied = spawnSync(

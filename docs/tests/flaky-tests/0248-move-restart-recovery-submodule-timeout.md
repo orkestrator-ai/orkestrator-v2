@@ -151,6 +151,22 @@ The aggregate failed this owner and its unchanged owning file passed with one wo
 - **Evidence:** `orkestrator-test-run.tW4jss/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory after aggregate completion.
 - **Assessment:** confirmed intermittent recurrence. Concurrent subprocess contention remains a hypothesis; no implementation, assertion, timeout or skip changed.
 
+## Cold-restart qualification — 2026-10-21
+
+- **Original command:** `env -u PORT mise run test` on branch `qualify-cold-restart-reconcile-c5a876531b5f` (base `9b3f53a2`), with the host at a load average of about 10 on 18 cores. The change touches only the Codex bridge, one e2e spec and docs.
+- **Failure:** `restart recovery re-links submodules of an adopted or abandoned copy` exceeded 5000 ms (5137.87 ms); the backend reported one failure and the workspace group failed after 707.2 seconds. Every other group passed.
+- **Owning-file reruns:** `bun --cwd=apps/backend test src/core/environment-move.test.ts` without the Node preload failed the same case again (5075.09 ms; 36 passed). The documented command, `env -u PORT mise run test:logged -- --name environment-move-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts --parallel=1 --only-failures`, passed unchanged (exit 0, 40.0 seconds logged).
+- **Evidence:** `orkestrator-test-run.oQ14Bx` (aggregate) and `orkestrator-test-run.ZCmfUZ` (preload-free rerun) under the host temporary directory.
+- **Assessment:** confirmed recurrence. No implementation, assertion, timeout or skip changed.
+
+## Cold restart review qualification — 2026-10-21
+
+- **Original command:** `mise run test:logged -- --name review-full-suite -- mise run test`, alongside isolated live cold-restart qualification; workspace/root/bridges/protocol reserved 4/1/2/1 slots.
+- **Failure:** `restart recovery re-links submodules of an adopted or abandoned copy` exceeded the default 5000 ms deadline (5073.05 ms). Backend reported 9739 passed, 67 skipped, three failed and one between-test error across 9809 tests in 551 files (630.83 seconds).
+- **Owning-file rerun:** `mise run test:logged -- --name environment-move-recheck -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts --parallel=1 --only-failures` passed the unchanged owning file (exit 0, 20.3 seconds logged).
+- **Evidence:** `orkestrator-test-run.K1HiOG/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory.
+- **Assessment:** confirmed intermittent recurrence; concurrent load is an unconfirmed explanation. No implementation, assertion, timeout or skip changed.
+
 ## Federated client backend validation — 2026-10-21
 
 - **Original command:** a full `test:workspace` run during the federated multi-backend client work on `implement-remote-doc-007d1ec11a16-r1` (backend machine profile, authenticated hello and loopback client gateway, `0ec079bb`). That change does not touch `environment-move.ts` or its test.
@@ -185,6 +201,19 @@ submodule metadata. The other failing test was the unchanged terminal history
 owner, recorded in [0513](0513-terminal-history-backward-page-count.md).
 All other workspace packages, root/support, bridges and protocol regeneration
 passed.
+
+## Second cold-restart main merge — 2026-10-22
+
+- **Original command:** `env -u PORT mise run test:logged -- --name main-refresh2-full -- mise run test`, merging `origin/main` at `edcd60d92` into `a973416e`.
+- **Workers:** normal workspace/root/bridges/protocol reservations of 4/1/2/1 slots, alongside browser and container checks.
+- **Failure:** `restart recovery re-links submodules of an adopted or abandoned copy` exceeded 5000 ms (5090.90 ms), followed by a terminated Git subprocess error. This was the aggregate's only failing test; root/support, bridges and protocol regeneration passed. Aggregate exit 1, 558.2 s logged.
+- **Owning-file rerun:** `env -u PORT mise run test:logged -- --name main-refresh2-move-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts --parallel=1 --only-failures` passed the complete unchanged file (exit 0, 19.1 s).
+- **Evidence:** `orkestrator-test-run.ZQ12yB/main-refresh2-full.log.gz` and `orkestrator-test-run.1b7Rd4/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
+- **Assessment:** confirmed intermittent recurrence. No move implementation, assertion, timeout or skip changed; concurrent validation does not establish the cause.
+
+The subsequent `env -u PORT mise run test:logged -- --name main-refresh2-warm -- mise run test`
+passed all four non-iOS groups (exit 0, 445.8 s). No move source or test changed
+between the failed aggregate, owning-file pass and successful aggregate retry.
 
 
 ## Preview qualification second main merge — 2026-10-21

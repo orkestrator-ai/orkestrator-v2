@@ -836,6 +836,14 @@ passed all four groups (424.5 seconds logged); root/support passed in 200.4
 seconds. The unrelated NativeMessage interaction was corrected; Pi staging
 remained unchanged.
 
+## Cold restart review qualification — 2026-10-21
+
+- **Original command:** `mise run test:logged -- --name review-full-suite -- mise run test`, alongside isolated live cold-restart validation.
+- **Workers:** workspace/root/bridges/protocol reservations of 4/1/2/1 slots; bridge admission waited 222 seconds for shared host capacity.
+- **Failure:** staged runtime loading exceeded 30000 ms (30000.37 ms). Root/support reported 3156 passed, one skipped and this single failure across 3158 tests in 150 files (372.42 seconds).
+- **Owning-file rerun:** `mise run test:logged -- --name pi-vendor-recheck -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed the unchanged owning file alone (exit 0, 27.1 seconds logged).
+- **Evidence:** `orkestrator-test-run.K1HiOG/root-and-agent-support-tests.log.gz` under the host temporary directory.
+- **Assessment:** confirmed intermittent recurrence. Concurrent validation and shared-capacity waits were observed; host contention remains an unconfirmed explanation. No Pi implementation, assertion, timeout or skip changed.
 
 ## Claude revision-token review fixes — 2026-10-21
 

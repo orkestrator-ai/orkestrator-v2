@@ -152,8 +152,8 @@ handshake before a route is used:
 - The desktop applies profile events whose revision is not older than the
   cached one, and writes `profileCache` into the catalogue. That cache labels
   an offline machine (`profile.cached: true`). Each renderer runtime also
-  applies that machine's profile events (newer revisions only). Connections
-  edits send the newest revision the client has seen. The Connections page warns
+  applies that machine's profile events (newer revisions only). Profile edits
+  send the newest revision the client has seen. The Machines page warns
   about colour collisions (`duplicateMachineColors`) but never recolours a
   machine. On a profile conflict it shows the current values and does not
   retry.
@@ -482,7 +482,7 @@ with `MachinesFilter`:
   (`FederatedSearchSection`, at most 20 rows). It is labelled per machine,
   opens that machine's panel, and says when results may be incomplete
   because a machine is unavailable, still loading or truncated.
-- Settings pages show a scope banner: **This client** for Connections,
+- Settings pages show a scope banner: **All machines** for Machines,
   **Backend: name** for everything else, which always targets the window's
   bound machine.
 
@@ -550,8 +550,8 @@ this client, Not connected, or Unavailable · last seen ….
 ## Feature flags
 
 The flags live in the catalogue's `features` and are edited under Settings →
-Connections (`setFeatures`). Each defaults to `true`. Turning one off stops
-client machinery only, never remote work.
+Machines → This device (`setFeatures`). Each defaults to `true`. Turning one off
+stops client machinery only, never remote work.
 
 | Flag | Off means |
 | --- | --- |

@@ -36,6 +36,11 @@ export function ClientOptions({ list }: { list: ConnectionList }) {
     help: string;
   }> = [
     {
+      key: "federation",
+      label: "Show all machines together",
+      help: "Show work from all saved machines together on this device.",
+    },
+    {
       key: "sshRoutes",
       label: "Managed SSH routes",
       help: "Reach a machine's backend through your system OpenSSH (desktop only).",

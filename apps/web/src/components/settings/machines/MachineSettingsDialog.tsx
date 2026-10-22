@@ -102,7 +102,7 @@ export function MachineSettingsDialog({
           <ProfileSection machine={machine} onChanged={onChanged} />
           <StatusSection machine={machine} snapshot={snapshot} api={api} onChanged={onChanged} />
           {node ? <NodeRoutesSection key={node.nodeId} node={node} onSaved={onChanged} /> : null}
-          {api && connection?.kind === "remote" ? (
+          {api && connection ? (
             <DeviceConnectionSection
               api={api}
               connection={connection}

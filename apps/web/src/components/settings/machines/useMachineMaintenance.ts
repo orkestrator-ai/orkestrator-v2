@@ -26,9 +26,10 @@ function busy(snapshot: HostMaintenanceSnapshot | null): boolean {
   );
 }
 
-/** "kind:id:state" of every task, to notice one finishing. */
+/** Terminal task identities, including tasks that finished between polls. */
 function taskKey(snapshot: HostMaintenanceSnapshot | null): string {
   return Object.values(snapshot?.tasks ?? {})
+    .filter((task) => task && task.state !== "running")
     .map((task) => `${task?.kind}:${task?.id}:${task?.state}`)
     .sort()
     .join("|");
@@ -80,6 +81,13 @@ export function useMachineMaintenance(
   const [snapshot, setSnapshot] = useState<HostMaintenanceSnapshot | null>(options.initial ?? null);
   const [error, setError] = useState<string | null>(null);
   const revision = useRef(options.initial?.revision ?? -1);
+  const activeClient = useRef(client);
+  useEffect(() => {
+    activeClient.current = client;
+    return () => {
+      activeClient.current = null;
+    };
+  }, [client]);
 
   // The dialog showing this is keyed by machine, so the client only changes
   // between null and that machine's client.
@@ -91,12 +99,15 @@ export function useMachineMaintenance(
   }, []);
 
   const read = useCallback(
-    (detail: boolean): Promise<void> =>
-      client
-        ? client
-            .getHostMaintenance(detail)
-            .then(accept, (failure: unknown) => setError(errorText(failure)))
-        : Promise.resolve(),
+    async (detail: boolean): Promise<void> => {
+      if (!client) return;
+      try {
+        const next = await client.getHostMaintenance(detail);
+        if (activeClient.current === client) accept(next);
+      } catch (failure) {
+        if (activeClient.current === client) setError(errorText(failure));
+      }
+    },
     [accept, client],
   );
   const reload = useCallback(() => read(true), [read]);
@@ -128,11 +139,11 @@ export function useMachineMaintenance(
 
   // A finished task changed what the live readings report.
   const tasks = taskKey(snapshot);
-  const previousTasks = useRef(tasks);
+  const previousTasks = useRef(taskKey(options.initial ?? null));
   useEffect(() => {
     const before = previousTasks.current;
     previousTasks.current = tasks;
-    if (before && before !== tasks && before.includes(":running")) void reload();
+    if (tasks && before !== tasks) void reload();
   }, [reload, tasks]);
 
   return { client, snapshot, error, accept, reload };

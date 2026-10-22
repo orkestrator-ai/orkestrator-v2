@@ -75,7 +75,8 @@ export function AddMachineDialog({
   knownAddresses: readonly string[];
   onAdded: () => void;
 }) {
-  const deviceOnly = status === null;
+  const [register, setRegister] = useState(true);
+  const deviceOnly = status === null || !register;
   const [kind, setKind] = useState<RouteKind>("https");
   const [origin, setOrigin] = useState("");
   const [destination, setDestination] = useState("");
@@ -92,8 +93,8 @@ export function AddMachineDialog({
   const [enabling, setEnabling] = useState(false);
   const [hostKey, setHostKey] = useState<HostKeyReview | null>(null);
 
-  const leaf = status?.mode === "leaf";
-  const registrationOff = status !== null && !leaf && !status.registrationEnabled;
+  const leaf = !deviceOnly && status?.mode === "leaf";
+  const registrationOff = !deviceOnly && status !== null && !leaf && !status.registrationEnabled;
   const sshAvailable = deviceOnly ? typeof api?.connectSsh === "function" : true;
   const canSaveOnDevice = !deviceOnly && kind === "https" && typeof api?.connect === "function";
   const blocked = leaf || registrationOff || (deviceOnly && !api);
@@ -268,9 +269,31 @@ export function AddMachineDialog({
             <DialogDescription>
               {deviceOnly
                 ? "Connect this device to another Orkestrator backend."
-                : "The machine you are connected to reaches the new one itself, verifies which installation it is and keeps its token. Nothing on the new machine is changed or stopped."}
+                : "The machine you are connected to registers and attaches the new backend and keeps its token. The new backend enters leaf mode: if it controls other nodes, those subordinate links and command activity are suspended until it detaches. Existing agents keep running."}
             </DialogDescription>
           </DialogHeader>
+
+          {status && api ? (
+            <label className="flex items-start gap-3 text-sm">
+              <Checkbox
+                checked={deviceOnly}
+                onCheckedChange={(checked) => {
+                  setRegister(checked !== true);
+                  setError(null);
+                  setHostKey(null);
+                }}
+                disabled={saving}
+                aria-label="Save on this device only"
+              />
+              <span>
+                Save on this device only
+                <span className="block text-xs text-zinc-500">
+                  Connect directly without registration or attachment. The backend keeps control of
+                  its subordinate nodes.
+                </span>
+              </span>
+            </label>
+          ) : null}
 
           {leaf ? (
             <Notice>

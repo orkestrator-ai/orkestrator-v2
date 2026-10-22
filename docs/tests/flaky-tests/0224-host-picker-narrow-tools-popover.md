@@ -373,3 +373,38 @@ assertion, timeout or skip was changed for validation.
 - **Evidence:** `orkestrator-test-run.CZyF1o/refresh-real-browser.log.gz` and `orkestrator-test-run.X462KZ/refresh-gateway-owner.log.gz` below the host temporary directory. Both disposable profiles were stopped and reset; no live launcher remains.
 - **Other validation:** formatting, lint, all typechecks, production desktop build, focused merge and ScheduleWakeup tests, documentation links, and the complete component/public browser task passed. The complete non-iOS suite finished in 517.8 seconds: all workspace packages and protocol regeneration passed; its only failures were the unchanged Claude fixture and Pi staging cases, both of whose complete owners passed separately (0513 and 0514). The aggregate's original nonzero exit remains recorded.
 - **Scope limitation:** dedicated Electron, Docker lifecycle, iOS and billed-provider qualification were not selected because this merge changes none of their owning implementations; unavailable provider/Docker browser scenarios remain explicit skips.
+
+
+## Machines settings review validation — 2026-10-22
+
+- **Scope:** branch `machines-settings-13fae198a6c1-r1`; maintenance navigation,
+  machine labels, discovery fallback and saved-connection controls. The failing
+  host-path scenarios were unchanged.
+- **Original command:** `mise run test:logged -- --name isolated-browser -- mise run test:agent:browser:isolated`,
+  one worker, credential-free Codex profile `qa-browser-a27914dd-603`.
+  Result: 27 passed, 42 skipped, two failed (exit 1, 424.0 seconds including
+  lifecycle). The narrow picker timed out after 15000 ms clicking hidden or
+  unstable `Repository settings` at `browser-gateway.spec.ts:240`. Separately,
+  `typed project paths detect a remote and preserve newer manual URL edits`
+  could not find the Add project dialog's Git URL input after its 2300 ms wait.
+- **Complete owning-file rerun:** `mise run test:logged -- --name gateway-recheck -- bun output/machines-validation/recheck.ts`
+  used `runIsolatedBrowser` with the normal browser configuration restricted to
+  the complete `browser-gateway.spec.ts`, one worker and fresh credential-free
+  profile `qa-browser-97da0d2c-6a8`. Result: 14 passed, nine skipped, one failed
+  (exit 1, 139.1 seconds). The narrow picker repeated its 15000 ms timeout;
+  the typed-path case passed. Since the complete owner remains non-green,
+  this does not establish a new flake classification for the typed-path case.
+- **Evidence:** host temporary-directory logs
+  `orkestrator-test-run.uYTFen/isolated-browser.log.gz` and
+  `orkestrator-test-run.Z58n1W/gateway-recheck.log.gz`; results and traces under
+  `output/agent-testing/<profile>/browser/` for the profiles above. Both profiles
+  were stopped and reset, and the temporary runner/config were removed.
+- **Relevant validation:** both 1280px and 390px maintenance cases passed in
+  both runs, proving completion with Settings closed and recovery after reload.
+  All 36 Machines component-browser cases, focused renderer/routing tests,
+  recurring-work checks, formatting, lint, typechecks and the complete non-iOS
+  suite passed. The Machines Unicode correction uses macOS line-end navigation
+  before Backspace; its original mobile failures reproduced alone before that
+  fix. No assertion, timeout or skip was loosened. Dedicated Electron, Docker
+  lifecycle, iOS and billed-provider suites were omitted because their owning
+  implementations did not change.

@@ -226,3 +226,50 @@ describe("maintenanceIssues", () => {
     expect(maintenanceIssues(hostMaintenanceSnapshotFixture({ image: null }))).toEqual([]);
   });
 });
+
+test("browser discovery failure retains a self entry even without profile metadata", () => {
+  for (const selfProfile of [
+    null,
+    { revision: 1, displayName: "Desk", colorToken: "teal", updatedAt: "t" },
+  ]) {
+    const [self] = buildMachineList({
+      status: null,
+      nodes: null,
+      connections: null,
+      selfProfile,
+      workspaceNodeId: null,
+      selfAddress: "desk.example",
+    });
+    expect(self).toMatchObject({
+      role: "self",
+      current: true,
+      connected: true,
+      maintenance: true,
+      address: "desk.example",
+    });
+  }
+});
+
+test("nonempty saved nicknames take precedence for self, registered and device-only machines", () => {
+  const profile = {
+    revision: 1,
+    displayName: "Canonical",
+    colorToken: "teal",
+    updatedAt: "t",
+    cached: true,
+  };
+  for (const nickname of ["My name", "", "   ", undefined]) {
+    const entries = buildMachineList({
+      status,
+      nodes: nodes(node("build", "Canonical")),
+      connections: list(
+        { ...local, nickname },
+        remote("build", { backendId: "bk_build" as never, profile, nickname }),
+        remote("other", { profile, nickname }),
+      ),
+      selfProfile: profile,
+      workspaceNodeId: null,
+    });
+    expect(entries.map((e) => e.name)).toEqual(Array(3).fill(nickname?.trim() || "Canonical"));
+  }
+});

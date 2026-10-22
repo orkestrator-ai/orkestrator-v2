@@ -177,29 +177,31 @@ export function buildMachineList(input: MachineListInput): MachineEntry[] {
   const selfConnection =
     saved.find((connection) => connection.active) ??
     (selfId ? saved.find((connection) => connection.backendId === selfId) : undefined);
-  if (status || selfConnection) {
+  // Node discovery is optional; this window still has a backend to maintain.
+  {
     if (selfConnection) used.add(selfConnection.id);
     entries.push({
       key: `self:${selfId ?? selfConnection?.id ?? "self"}`,
       role: "self",
       nodeId: selfId ?? selfConnection?.backendId ?? null,
       name:
-        selfProfile?.displayName ??
-        selfConnection?.profile?.displayName ??
-        selfConnection?.name ??
-        "This machine",
+        selfConnection?.nickname?.trim() ||
+        (selfProfile?.displayName ??
+          selfConnection?.profile?.displayName ??
+          selfConnection?.name ??
+          "This machine"),
       colorToken: selfProfile?.colorToken ?? selfConnection?.profile?.colorToken,
       address: selfConnection
         ? (connectionAddress(selfConnection) ??
           (selfConnection.kind === "local" ? "This device" : null))
         : (input.selfAddress ?? null),
       via: selfConnection ? connectionVia(selfConnection) : "This client's connection",
-      connected: status !== null || (selfConnection ? connectionConnected(selfConnection) : false),
+      connected: status !== null || (selfConnection ? connectionConnected(selfConnection) : true),
       statusText: status
         ? "Connected"
         : selfConnection
           ? connectionStatus(selfConnection)
-          : "Connecting…",
+          : "Connected",
       ...(selfConnection?.lastConnectedAt
         ? { lastConnectedAt: selfConnection.lastConnectedAt }
         : {}),
@@ -221,7 +223,7 @@ export function buildMachineList(input: MachineListInput): MachineEntry[] {
       key: `node:${node.nodeId}`,
       role: "node",
       nodeId: node.nodeId,
-      name: node.displayName,
+      name: connection?.nickname?.trim() || node.displayName,
       colorToken: node.colorToken,
       address: route ? nodeRouteAddress(route) : null,
       via: route ? nodeRouteVia(route) : "No route",
@@ -241,7 +243,7 @@ export function buildMachineList(input: MachineListInput): MachineEntry[] {
       key: `device:${connection.id}`,
       role: "device",
       nodeId: connection.backendId ?? null,
-      name: connection.profile?.displayName ?? connection.name,
+      name: connection.nickname?.trim() || connection.profile?.displayName || connection.name,
       colorToken: connection.profile?.colorToken,
       address:
         connectionAddress(connection) ?? (connection.kind === "local" ? "This device" : null),

@@ -2447,17 +2447,24 @@ for (const width of [1280, 390]) {
       const section = settings.getByRole("combobox", { name: "Settings section", exact: true });
       if (await section.isVisible()) {
         await section.click();
-        await page.getByRole("option", { name: "Updates", exact: true }).click();
+        await page.getByRole("option", { name: "Machines", exact: true }).click();
       } else {
-        await settings.getByRole("button", { name: "Updates", exact: true }).click();
+        await settings.getByRole("button", { name: "Machines", exact: true }).click();
       }
+      const currentMachine = settings.getByTestId("machine-row").filter({ hasText: "This window" });
+      await currentMachine.getByRole("button", { name: /^Updates for / }).click();
+      const updates = page.getByRole("dialog", { name: /^Updates for / });
       await expect(
-        settings.getByRole("heading", { name: "Agent tools", exact: true }),
+        updates.getByRole("heading", { name: "Agent tools", exact: true }),
       ).toBeVisible();
-      return settings;
+      return updates;
     };
     let settings = await openUpdates();
-    await settings.getByRole("button", { name: "Close settings" }).click();
+    await settings.getByRole("button", { name: "Close", exact: true }).click();
+    await page
+      .getByRole("dialog", { name: "Settings", exact: true })
+      .getByRole("button", { name: "Close settings" })
+      .click();
     const task = await invoke<{ id: string }>("set_host_gh_channel", { channel: "pinned" });
     await expect
       .poll(async () => {
@@ -2472,7 +2479,11 @@ for (const width of [1280, 390]) {
       .toBe("succeeded");
     settings = await openUpdates();
     await expect(settings.getByRole("status").filter({ hasText: /^Done/ })).toBeVisible();
-    await settings.getByRole("button", { name: "Close settings" }).click();
+    await settings.getByRole("button", { name: "Close", exact: true }).click();
+    await page
+      .getByRole("dialog", { name: "Settings", exact: true })
+      .getByRole("button", { name: "Close settings" })
+      .click();
     await page.reload();
     settings = await openUpdates();
     await expect(settings.getByRole("status").filter({ hasText: /^Done/ })).toBeVisible();

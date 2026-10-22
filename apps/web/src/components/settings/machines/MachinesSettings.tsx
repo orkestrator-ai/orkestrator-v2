@@ -110,11 +110,20 @@ export function MachinesSettings() {
         </div>
       ) : null}
 
-      {nodesError && !status && loaded ? (
-        <p className="rounded-lg border border-zinc-800 bg-zinc-950/40 px-4 py-3 text-xs text-zinc-400">
-          The machine you are connected to cannot control other machines yet ({nodesError}).
-          {api ? " Machines are saved on this device only." : ""}
-        </p>
+      {nodesError && loaded ? (
+        <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 px-4 py-3 text-xs text-zinc-400">
+          Machine discovery is unavailable ({nodesError}). You can still manage this machine’s
+          updates.
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="mt-3"
+            onClick={() => void refresh()}
+          >
+            Retry machine discovery
+          </Button>
+        </div>
       ) : null}
 
       {connectionsError ? (

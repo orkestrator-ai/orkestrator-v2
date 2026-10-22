@@ -80,7 +80,8 @@ for (const inputMethod of ["typing", "paste"] as const) {
     await submit.click();
     await expect(dialog.getByText("Use a machine name of 64 characters or fewer.")).toBeVisible();
     expect(await page.evaluate(() => localStorage.getItem("machines-fixture-add-node"))).toBeNull();
-    await input.press("End");
+    // On macOS End scrolls the dialog; explicitly move the caret to the line end.
+    await input.press(process.platform === "darwin" ? "Meta+ArrowRight" : "End");
     await input.press("Backspace");
     await expect(input).toHaveValue(name);
     await submit.click();

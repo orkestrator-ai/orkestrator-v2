@@ -1007,12 +1007,13 @@ export function HierarchicalSidebar() {
 
   const renderProjectGroup = (
     project: Project,
-    mixed?: { sortableId: string; machineBadge: ReactNode },
+    mixed?: { sortableId: string; machineBadge: ReactNode; label?: string },
   ) => (
     <SortableProjectGroup
       key={project.id}
       sortableId={mixed?.sortableId}
       machineBadge={mixed?.machineBadge}
+      label={mixed?.label}
       project={project}
       environments={getProjectEnvironments(project.id)}
       home={allEnvironments.find(
@@ -1270,11 +1271,12 @@ export function HierarchicalSidebar() {
       </DndContext>
     );
 
-  const renderMergedBoundProject = (projectId: string, sortableId: string) => {
+  const renderMergedBoundProject = (projectId: string, sortableId: string, label?: string) => {
     const project = projectsById.get(projectId);
     if (!project) return null;
     return renderProjectGroup(project, {
       sortableId,
+      label,
       machineBadge: boundMachineView ? (
         <MachineDot
           colorToken={boundMachineView.colorToken}

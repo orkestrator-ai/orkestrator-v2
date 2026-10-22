@@ -334,6 +334,7 @@ export function RemoteProjectGroup({
   onToggleCollapse,
   sortable,
   showMachine = false,
+  label = project.name,
 }: {
   machine: MachineView;
   project: FederatedProject;
@@ -343,6 +344,8 @@ export function RemoteProjectGroup({
   sortable: boolean;
   /** Name the machine in the header, in lists that mix machines. */
   showMachine?: boolean;
+  /** Shown instead of the project name (a repository group names the machine). */
+  label?: string;
 }) {
   const { creating, create } = useCreateFederatedEnvironment(machine, project);
   const writable = isMachineWritable(machine);
@@ -394,7 +397,7 @@ export function RemoteProjectGroup({
                 onClick={openBoard}
                 title={`Open ${project.name} on ${machine.name}`}
               >
-                <span className="truncate font-medium">{project.name}</span>
+                <span className="truncate font-medium">{label}</span>
                 {showMachine ? (
                   <MachineDot colorToken={machine.colorToken} machineName={machine.name} />
                 ) : null}

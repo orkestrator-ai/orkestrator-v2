@@ -73,6 +73,8 @@ interface SortableProjectGroupProps {
   sortableId?: string;
   /** Shown after the name, in lists that mix machines. */
   machineBadge?: ReactNode;
+  /** Shown instead of the project name (a repository group names the machine). */
+  label?: string;
 }
 
 export function SortableProjectGroup({
@@ -99,6 +101,7 @@ export function SortableProjectGroup({
   selectedEnvironmentIds = [],
   sortableId,
   machineBadge,
+  label = project.name,
 }: SortableProjectGroupProps) {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
@@ -210,7 +213,7 @@ export function SortableProjectGroup({
                   onFocus={projectTooltip.show}
                   onBlur={projectTooltip.hide}
                 >
-                  <span className="truncate font-medium">{project.name}</span>
+                  <span className="truncate font-medium">{label}</span>
                   {machineBadge}
                   {environments.length > 0 && (
                     <span className="flex h-4 min-w-[16px] shrink-0 items-center justify-center rounded-md bg-white/[0.07] px-1 text-[10px] text-zinc-300">

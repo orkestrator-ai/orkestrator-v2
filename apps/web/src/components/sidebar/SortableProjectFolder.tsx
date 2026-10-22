@@ -46,6 +46,10 @@ interface SortableProjectFolderProps {
   label?: string;
   /** A repository group rather than a folder. */
   repository?: boolean;
+  /** Clicking the name opens this instead of toggling; the chevron still toggles. */
+  onOpen?: () => void;
+  /** Shown instead of the member count. */
+  badge?: ReactNode;
   children: ReactNode;
 }
 
@@ -67,6 +71,8 @@ export function SortableProjectFolder({
   onUngroup,
   label = name,
   repository = false,
+  onOpen,
+  badge,
   children,
 }: SortableProjectFolderProps) {
   const [isRenaming, setIsRenaming] = useState(false);
@@ -122,12 +128,19 @@ export function SortableProjectFolder({
               {...attributes}
               {...listeners}
               type="button"
-              aria-expanded={!isCollapsed}
-              title={isCollapsed ? `Expand folder ${label}` : `Collapse folder ${label}`}
+              aria-expanded={onOpen ? undefined : !isCollapsed}
+              title={
+                onOpen
+                  ? `Open ${label}`
+                  : isCollapsed
+                    ? `Expand folder ${label}`
+                    : `Collapse folder ${label}`
+              }
               className="flex min-w-0 flex-1 cursor-grab items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm text-foreground active:cursor-grabbing"
               onClick={(event) => {
                 event.stopPropagation();
-                onToggleCollapse();
+                if (onOpen) onOpen();
+                else onToggleCollapse();
               }}
             >
               <FolderIcon
@@ -138,9 +151,11 @@ export function SortableProjectFolder({
                 aria-hidden="true"
               />
               <span className="truncate font-medium">{label}</span>
-              <span className="flex h-4 min-w-[16px] shrink-0 items-center justify-center rounded-md bg-white/[0.07] px-1 text-[10px] text-zinc-300">
-                {projectCount}
-              </span>
+              {badge ?? (
+                <span className="flex h-4 min-w-[16px] shrink-0 items-center justify-center rounded-md bg-white/[0.07] px-1 text-[10px] text-zinc-300">
+                  {projectCount}
+                </span>
+              )}
             </button>
           </ContextMenuTrigger>
           {hasMenu ? (

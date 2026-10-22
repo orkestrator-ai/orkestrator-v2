@@ -18,6 +18,8 @@ import {
   placeShown,
   registryOrder,
   repositoryArrangementUpdate,
+  repositoryMemberLabel,
+  repositoryOpenTarget,
   repositoryProjectList,
 } from "./sidebar-layout";
 import type { FederatedProject } from "./summaries";
@@ -257,6 +259,54 @@ describe("by repository", () => {
       key("bk_control", "app"),
       key("bk_leaf", "app"),
     ]);
+  });
+
+  test("machines are reordered within their repository", () => {
+    const list = repositoryProjectList(machines, shown, layout(), "bk_control");
+    const update = repositoryArrangementUpdate(
+      list,
+      machines,
+      resolveRepositoryArrangement(key("bk_leaf", "app"), key("bk_control", "app"), list.shown),
+    );
+    expect(update?.repositoryOrder).toEqual([
+      key("bk_leaf", "app"),
+      key("bk_control", "app"),
+      key("bk_control", "tools"),
+    ]);
+  });
+
+  test("members are labelled by machine, with the project when a machine has several", () => {
+    const twice = machine("bk_leaf", [
+      project("bk_leaf", "app", 0, { repositoryHint: "github.com/acme/app" }),
+      project("bk_leaf", "app-2", 1, { repositoryHint: "github.com/acme/app" }),
+    ]);
+    const list = repositoryProjectList([control, twice], shown, layout(), "bk_control");
+    const group = list.shown.filter((item) => item.folder === "github.com/acme/app");
+    expect(group.map((item) => repositoryMemberLabel(item, group))).toEqual([
+      "bk_control",
+      "bk_leaf · app",
+      "bk_leaf · app-2",
+    ]);
+  });
+
+  test("a group's heading opens the command node's project, else the first shown", () => {
+    const list = repositoryProjectList(
+      machines,
+      shown,
+      layout({
+        repositoryOrder: [
+          key("bk_leaf", "app"),
+          key("bk_control", "app"),
+          key("bk_control", "tools"),
+        ],
+      }),
+      "bk_control",
+    );
+    const group = list.shown.filter((item) => item.folder === "github.com/acme/app");
+    expect(group[0]?.id).toBe(key("bk_leaf", "app"));
+    expect(repositoryOpenTarget(group, "bk_control")?.id).toBe(key("bk_control", "app"));
+    expect(repositoryOpenTarget(group, "bk_other")?.id).toBe(key("bk_leaf", "app"));
+    expect(repositoryOpenTarget([], "bk_control")).toBeNull();
   });
 });
 

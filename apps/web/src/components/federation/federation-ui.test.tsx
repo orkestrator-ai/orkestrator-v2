@@ -207,6 +207,49 @@ test("merged lists draw this window's own projects and rows with its full contro
   }
 });
 
+test("a repository group names each member by its machine and shows a machine dot, not a count", async () => {
+  const hint = "github.com/acme/app";
+  const first = machineView();
+  first.projects[0]!.repositoryHint = hint;
+  const second = machineView({
+    connectionId: "b",
+    backendId: "bk_b" as never,
+    name: "Machine B",
+    colorToken: "rose",
+    projects: [
+      {
+        ref: projectRef("bk_b" as BackendId, "project-1"),
+        key: projectKey(projectRef("bk_b" as BackendId, "project-1")),
+        name: "app",
+        order: 0,
+        repositoryHint: hint,
+      },
+    ],
+  });
+  await act(async () => {
+    render(
+      <MergedProjectList
+        machines={[first, second]}
+        shownIds={new Set(["a", "b"])}
+        mode="repository"
+        renderBoundProject={() => null}
+        onBoundEnvironmentDragEnd={() => undefined}
+      />,
+    );
+  });
+  const heading = screen.getByTitle("Open acme/app");
+  expect(heading.getAttribute("aria-expanded")).toBeNull();
+  expect(within(heading).getByTestId("machine-dot").getAttribute("data-machine-color")).toBe(
+    "teal",
+  );
+  expect(within(heading).queryByText("2") === null).toBe(true);
+  const members = screen.getAllByTestId("federated-project");
+  expect(members.map((member) => member.querySelector(".truncate")?.textContent)).toEqual([
+    "Machine A",
+    "Machine B",
+  ]);
+});
+
 describe("CL-05: machine identity visual rules", () => {
   test("CL-05: a decorative MachineDot is hidden from assistive technology", () => {
     render(<MachineDot colorToken="teal" machineName="Machine A" />);

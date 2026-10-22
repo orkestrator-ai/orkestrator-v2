@@ -16,7 +16,6 @@ import {
 } from "react";
 import {
   DndContext,
-  closestCenter,
   KeyboardSensor,
   PointerSensor,
   useSensor,
@@ -104,6 +103,7 @@ import {
   resolveEnvironmentAgentActivity,
 } from "@/components/environments/EnvironmentItem";
 import { cn } from "@/lib/utils";
+import { sidebarCollisionDetection } from "@/lib/sidebar-collision";
 import { withoutProjectHomes } from "@/lib/project-home";
 import { LazyDialogLoadingFallback, LazyLoadBoundary } from "@/components/LazyLoadBoundary";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
@@ -1217,7 +1217,7 @@ export function HierarchicalSidebar() {
     ) : (
       <DndContext
         sensors={sensors}
-        collisionDetection={closestCenter}
+        collisionDetection={sidebarCollisionDetection}
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
       >

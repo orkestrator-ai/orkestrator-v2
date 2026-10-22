@@ -3,7 +3,6 @@ import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
   DndContext,
-  closestCenter,
   KeyboardSensor,
   PointerSensor,
   useSensor,
@@ -78,6 +77,7 @@ import {
 } from "@/lib/project-folders";
 import { OutcomeUnknownError } from "@/lib/portal/portal-store";
 import { cn } from "@/lib/utils";
+import { sidebarCollisionDetection } from "@/lib/sidebar-collision";
 import { sidebarFolderKey, useMachineViewStore } from "@/stores/machineViewStore";
 import { useFederation } from "./FederationProvider";
 import { MachineDot, machineStatusText } from "./MachineDot";
@@ -281,7 +281,7 @@ export function RemoteMachineTree({ machine }: { machine: MachineView }) {
   return (
     <DndContext
       sensors={sensors}
-      collisionDetection={closestCenter}
+      collisionDetection={sidebarCollisionDetection}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
       onDragCancel={() => setDragging(null)}

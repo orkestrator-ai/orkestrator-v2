@@ -46,6 +46,7 @@ import {
   type ProjectArrangement,
 } from "@/lib/project-folders";
 import { cn } from "@/lib/utils";
+import { sidebarCollisionDetection } from "@/lib/sidebar-collision";
 import { sidebarFolderKey, useMachineViewStore } from "@/stores/machineViewStore";
 import { useFederation } from "./FederationProvider";
 import { MachineDot, machineStatusText } from "./MachineDot";
@@ -416,7 +417,7 @@ export function MergedProjectList({
       ) : null}
       <DndContext
         sensors={sensors}
-        collisionDetection={closestCenter}
+        collisionDetection={sidebarCollisionDetection}
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
         onDragCancel={() => setDraggingProject(false)}

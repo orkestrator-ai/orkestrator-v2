@@ -128,10 +128,11 @@ else is rejected outright. `full` mode skips the firewall entirely.
 - Everything else comes from the environment's `ALLOWED_DOMAINS`, which the
   backend builds from the per-environment or global `allowedDomains` plus the
   hosts the enabled agent platforms require (`requiredAgentNetworkDomains`
-  re-adds Cursor's, Grok's and Pi's hosts only when those platforms are
-  enabled). Pi's list is necessarily partial: it fronts the user's own model
-  providers, so a self-hosted endpoint or a regional mirror is a host only the
-  user knows and belongs in `allowedDomains` rather than being guessed at.
+  re-adds Codex's, Cursor's, Grok's and Pi's hosts only when those platforms
+  are enabled). Codex requires `chatgpt.com` and `auth.openai.com`. Pi's
+  list is necessarily partial: it fronts the user's own model providers, so a
+  self-hosted endpoint or a regional mirror is a host only the user knows and
+  belongs in `allowedDomains` rather than being guessed at.
 - A new install persists `DEFAULT_ALLOWED_DOMAINS`
   (`packages/protocol/src/network-allowlist.ts`): GitHub, npm, Bun, the
   Anthropic API, Sentry/Statsig, the VS Code marketplace, Context7, and

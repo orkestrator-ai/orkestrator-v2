@@ -103,3 +103,11 @@ assertion, timeout or skip was changed for validation.
 - **Assessment:** confirmed recurrence of the existing fixture-directory race. The first full aggregate in this merge passed all bridge packages. No Claude source, assertions, deadlines or skips changed; concurrent fixture work remains a hypothesis.
 - **Bridge-group rerun:** `mise run test:logged -- --name merge-bridges-rerun -- bunx turbo run test:bridge --cwd . '--filter=./bridges/*' --concurrency=2 --continue=dependencies-successful --output-logs=new-only --log-order=stream` passed all five unchanged bridge packages (exit 0, 77.5 seconds).
 - **Final aggregate result:** exit 1 in 370.1 seconds, with only the bridge fixture above failing. All workspace packages, root/support and Codex protocol generation passed. Formatting, lint, typechecking, the application build, isolated browser suite, Electron suite and Docker suite also passed. Disposable browser and Docker profiles were stopped and reset. iOS and standalone CLI scenarios were omitted because the merge does not change those areas; ordinary CLI tests ran in the workspace suite.
+
+## Egress qualification review fixes — 2026-10-22
+
+- **Original command:** `mise run test:logged -- --name complete-tests -- mise run test`, Bun 1.4.3 on macOS arm64. Workspace/root/bridges/protocol reservations were 4/1/2/1 slots; other worktrees also ran suites.
+- **Failure:** `plan approval flow > denies EnterPlanMode when its durable preference cannot be written` failed at the `.claude` fixture write with `EISDIR` (2.09 ms). Claude reported 1602 passed, five skipped and one failed across 1608 tests in 76 files (47.00 seconds).
+- **Owning-file rerun:** `mise run test:logged -- --name claude-interactions-isolated -- bun test --cwd bridges/claude-bridge ./src/services/session-manager-interactions.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed unchanged (exit 0, 0.2 seconds logged).
+- **Evidence:** `orkestrator-test-run.MSqERJ/bridges.log.gz` below the host temporary directory after aggregate completion. The passing owner output was deleted by the logged runner.
+- **Assessment:** confirms another recurrence of the registered fixture race. No Claude implementation, assertion, timeout or skip changed.

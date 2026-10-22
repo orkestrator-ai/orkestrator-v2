@@ -59,3 +59,12 @@
 - **Owning-file rerun:** `mise run test:logged -- --name refresh-pi-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed all four unchanged cases (exit 0, 10.6 seconds logged).
 - **Evidence:** `orkestrator-test-run.Qv1f63/root-and-agent-support-tests.log.gz` below the host temporary directory after aggregate completion.
 - **Assessment:** confirmed intermittent recurrence; the cause remains unproven. No Pi implementation, assertion, timeout or skip changed.
+
+## Egress qualification review observation — 2026-10-22
+
+- **Original command:** `mise run test:logged -- --name complete-tests -- mise run test`, Bun 1.4.3 on macOS arm64; workspace/root/bridges/protocol reservations 4/1/2/1 with one isolated root worker. Other worktrees also ran suites.
+- **Failure:** `Pi bridge runtime vendoring > loads Pi's supported SDK from the staged runtime closure` exceeded 30000 ms (30002.02 ms). Root/support reported 3216 passed, one skipped and 11 failed across 3228 tests in 156 files (305.32 seconds); ten failures were existing firewall-policy timeouts.
+- **Owning-file rerun:** `mise run test:logged -- --name pi-vendor-isolated -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` also timed out at 30002.54 ms (three passed, one failed; 31.3 seconds logged).
+- **Evidence:** `orkestrator-test-run.MSqERJ/root-and-agent-support-tests.log.gz` after aggregate completion and `orkestrator-test-run.EdW3fi/pi-vendor-isolated.log.gz` below the host temporary directory.
+- **Assessment:** this observation does not independently establish a flake; runtime staging remains an unresolved validation limitation. No Pi implementation, assertion, timeout or skip changed.
+- **After aggregate completion:** `mise run test:logged -- --name pi-vendor-after-aggregate -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed the complete unchanged owner (exit 0, 15.4 seconds logged). This later pass confirms intermittence for this recurrence; the root cause remains unproven.

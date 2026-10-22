@@ -45,6 +45,10 @@ import {
   mockToastSuccess as toastSuccessMock,
   mockToastWarning as toastWarningMock,
 } from "../../../../../tests/mocks/sonner";
+import {
+  installControlledTimeout,
+  type ControlledTimeout,
+} from "../../../../../tests/helpers/controlled-timeout";
 
 const realAlertDialogSnapshot = { ...realAlertDialog };
 const realContextMenuSnapshot = { ...realContextMenu };
@@ -922,6 +926,31 @@ afterAll(() => {
   });
 });
 
+// `useHoverTooltip` opens after 500 ms and closes after 100 ms. Tests that
+// exercise a hover tooltip control both delays and advance them, rather than
+// waiting them out.
+type TooltipClocks = { open: ControlledTimeout; close: ControlledTimeout };
+
+async function withTooltipClocks(run: (clocks: TooltipClocks) => Promise<void>): Promise<void> {
+  const open = installControlledTimeout(500, { label: "hover tooltip open" });
+  const close = installControlledTimeout(100, { label: "hover tooltip close" });
+  try {
+    await run({ open, close });
+  } finally {
+    cleanup();
+    close.restore();
+    open.restore();
+  }
+}
+
+/** Fires the one armed tooltip timer; none armed means the gesture did not start it. */
+async function fireTooltipTimer(clock: ControlledTimeout): Promise<void> {
+  expect(clock.pendingCount()).toBe(1);
+  await act(async () => {
+    clock.advance();
+  });
+}
+
 beforeEach(() => {
   currentDeletingEnvironments.clear();
   currentDeletingProjects.clear();
@@ -1156,21 +1185,25 @@ describe("ActionBar grid presentation", () => {
   });
 
   test("keeps context-menu tooltips enabled on desktop hover", async () => {
-    render(<ActionBar />);
+    await withTooltipClocks(async ({ open, close }) => {
+      render(<ActionBar />);
 
-    const nativeButton = screen.getByRole("button", { name: "New native agent tab" });
-    fireEvent.mouseEnter(nativeButton);
+      const nativeButton = screen.getByRole("button", { name: "New native agent tab" });
+      fireEvent.mouseEnter(nativeButton);
+      await fireTooltipTimer(open);
 
-    const tooltipTitle = await waitFor(() => screen.getByText("New Native Agent Tab"));
+      const tooltipTitle = await waitFor(() => screen.getByText("New Native Agent Tab"));
 
-    fireEvent.mouseLeave(nativeButton);
-    fireEvent.mouseLeave(tooltipTitle.parentElement!);
-    await waitFor(
-      () => {
-        expect(screen.queryByText("New Native Agent Tab") === null).toBe(true);
-      },
-      { timeout: 10_000 },
-    );
+      fireEvent.mouseLeave(nativeButton);
+      fireEvent.mouseLeave(tooltipTitle.parentElement!);
+      await fireTooltipTimer(close);
+      await waitFor(
+        () => {
+          expect(screen.queryByText("New Native Agent Tab") === null).toBe(true);
+        },
+        { timeout: 10_000 },
+      );
+    });
   }, 20_000);
 
   test("keeps context-menu tooltips enabled on desktop keyboard focus", async () => {
@@ -1194,21 +1227,24 @@ describe("ActionBar grid presentation", () => {
   }, 20_000);
 
   test("shows the shortcut hints that match the native, terminal, and review controls", async () => {
-    render(<ActionBar />);
+    await withTooltipClocks(async ({ close }) => {
+      render(<ActionBar />);
 
-    const cases = [
-      ["New native agent tab", "⌘T · Right-click for options"],
-      ["New terminal tab", "⌘R · Right-click for agent CLIs"],
-      ["Code review", "⌘⇧R or right-click/long-press to configure"],
-    ] as const;
+      const cases = [
+        ["New native agent tab", "⌘T · Right-click for options"],
+        ["New terminal tab", "⌘R · Right-click for agent CLIs"],
+        ["Code review", "⌘⇧R or right-click/long-press to configure"],
+      ] as const;
 
-    for (const [accessibleName, hint] of cases) {
-      const button = screen.getByRole("button", { name: accessibleName });
-      fireEvent.focus(button);
-      expect(screen.getByText(hint)).toBeTruthy();
-      fireEvent.blur(button);
-      await waitFor(() => expect(screen.queryByText(hint) === null).toBe(true));
-    }
+      for (const [accessibleName, hint] of cases) {
+        const button = screen.getByRole("button", { name: accessibleName });
+        fireEvent.focus(button);
+        expect(screen.getByText(hint)).toBeTruthy();
+        fireEvent.blur(button);
+        await fireTooltipTimer(close);
+        await waitFor(() => expect(screen.queryByText(hint) === null).toBe(true));
+      }
+    });
   });
 
   test("renders mobile tools as two columns with labels after their icons", () => {
@@ -1486,13 +1522,16 @@ describe("ActionBar copy URL", () => {
       hostEntryPort: 49152,
     };
 
-    render(<ActionBar />);
+    await withTooltipClocks(async ({ open }) => {
+      render(<ActionBar />);
 
-    fireEvent.mouseEnter(screen.getByRole("button", { name: "Copy URL" }).parentElement!);
+      fireEvent.mouseEnter(screen.getByRole("button", { name: "Copy URL" }).parentElement!);
+      await fireTooltipTimer(open);
 
-    await waitFor(() => {
-      expect(screen.getByText("localhost:49152")).toBeTruthy();
-      expect(screen.getByText("Ctrl⇧C")).toBeTruthy();
+      await waitFor(() => {
+        expect(screen.getByText("localhost:49152")).toBeTruthy();
+        expect(screen.getByText("Ctrl⇧C")).toBeTruthy();
+      });
     });
   });
 
@@ -1634,20 +1673,23 @@ describe("ActionBar copy URL", () => {
       hostEntryPort: undefined,
     };
 
-    render(<ActionBar />);
+    await withTooltipClocks(async ({ open }) => {
+      render(<ActionBar />);
 
-    const copyButton = screen.getByRole("button", { name: "No mapped URL" }) as HTMLButtonElement;
-    expect(copyButton.disabled).toBe(true);
-    fireEvent.mouseEnter(copyButton.parentElement!);
+      const copyButton = screen.getByRole("button", { name: "No mapped URL" }) as HTMLButtonElement;
+      expect(copyButton.disabled).toBe(true);
+      fireEvent.mouseEnter(copyButton.parentElement!);
+      await fireTooltipTimer(open);
 
-    await waitFor(() => {
-      expect(screen.getByText("No mapped URL")).toBeTruthy();
-      expect(screen.queryByText("Ctrl⇧C") === null).toBe(true);
+      await waitFor(() => {
+        expect(screen.getByText("No mapped URL")).toBeTruthy();
+        expect(screen.queryByText("Ctrl⇧C") === null).toBe(true);
+      });
+
+      fireEvent.keyDown(window, { key: "C", code: "KeyC", ctrlKey: true, shiftKey: true });
+
+      expect(writeTextMock).not.toHaveBeenCalled();
     });
-
-    fireEvent.keyDown(window, { key: "C", code: "KeyC", ctrlKey: true, shiftKey: true });
-
-    expect(writeTextMock).not.toHaveBeenCalled();
   });
 });
 
@@ -7046,47 +7088,53 @@ describe("ActionBar editor actions", () => {
       baseUrl: "https://workstation.tailnet.ts.net/",
     };
     try {
-      const { rerender } = render(<ActionBar />);
-      const containerEditorButton = screen.getByRole("button", { name: "Open in VS Code" });
-      expect((containerEditorButton as HTMLButtonElement).disabled).toBe(true);
+      await withTooltipClocks(async ({ open }) => {
+        const { rerender } = render(<ActionBar />);
+        const containerEditorButton = screen.getByRole("button", { name: "Open in VS Code" });
+        expect((containerEditorButton as HTMLButtonElement).disabled).toBe(true);
 
-      fireEvent.mouseEnter(containerEditorButton.parentElement!);
-      await waitFor(() => {
-        expect(screen.getByText("Unavailable for remote connections")).toBeTruthy();
-        expect(screen.queryByText("⌘O") === null).toBe(true);
+        fireEvent.mouseEnter(containerEditorButton.parentElement!);
+        await fireTooltipTimer(open);
+        await waitFor(() => {
+          expect(screen.getByText("Unavailable for remote connections")).toBeTruthy();
+          expect(screen.queryByText("⌘O") === null).toBe(true);
+        });
+
+        fireEvent.click(containerEditorButton);
+        fireEvent.keyDown(window, { key: "o", code: "KeyO", metaKey: true });
+
+        currentEnvironment = {
+          ...selectedEnvironment,
+          environmentType: "local",
+          containerId: null,
+          worktreePath: "/tmp/remote-worktree",
+        };
+        rerender(<ActionBar />);
+
+        const localEditorButton = screen.getByRole("button", { name: "Open in VS Code" });
+        expect((localEditorButton as HTMLButtonElement).disabled).toBe(true);
+        fireEvent.click(localEditorButton);
+
+        expect(openInEditorMock).not.toHaveBeenCalled();
+        expect(openLocalInEditorMock).not.toHaveBeenCalled();
       });
-
-      fireEvent.click(containerEditorButton);
-      fireEvent.keyDown(window, { key: "o", code: "KeyO", metaKey: true });
-
-      currentEnvironment = {
-        ...selectedEnvironment,
-        environmentType: "local",
-        containerId: null,
-        worktreePath: "/tmp/remote-worktree",
-      };
-      rerender(<ActionBar />);
-
-      const localEditorButton = screen.getByRole("button", { name: "Open in VS Code" });
-      expect((localEditorButton as HTMLButtonElement).disabled).toBe(true);
-      fireEvent.click(localEditorButton);
-
-      expect(openInEditorMock).not.toHaveBeenCalled();
-      expect(openLocalInEditorMock).not.toHaveBeenCalled();
     } finally {
       delete window.orkestratorGateway;
     }
   });
 
   test("shows the editor shortcut tooltip for local connections", async () => {
-    render(<ActionBar />);
+    await withTooltipClocks(async ({ open }) => {
+      render(<ActionBar />);
 
-    const editorButton = screen.getByRole("button", { name: "Open in VS Code" });
-    fireEvent.mouseEnter(editorButton.parentElement!);
+      const editorButton = screen.getByRole("button", { name: "Open in VS Code" });
+      fireEvent.mouseEnter(editorButton.parentElement!);
+      await fireTooltipTimer(open);
 
-    await waitFor(() => {
-      expect(screen.getByText("⌘O")).toBeTruthy();
-      expect(screen.queryByText("Unavailable for remote connections") === null).toBe(true);
+      await waitFor(() => {
+        expect(screen.getByText("⌘O")).toBeTruthy();
+        expect(screen.queryByText("Unavailable for remote connections") === null).toBe(true);
+      });
     });
   });
 });

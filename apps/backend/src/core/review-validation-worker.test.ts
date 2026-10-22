@@ -571,16 +571,21 @@ clearInterval(heartbeat);`,
 });
 
 test("a covered command can be stopped while its covering command runs", async () => {
+  // The covering command runs until the test releases it after the stop, so
+  // the stop always lands while it is running. The wait is bounded, and an
+  // unreleased gate fails the command.
+  const release = ".orkestrator/covering-release";
+  const covering = `i=0; while [ ! -e ${release} ] && [ $i -lt 600 ]; do sleep 0.05; i=$((i+1)); done; test -e ${release}`;
   const { root, run } = await fixture([
     command("covered", "touch .orkestrator/covered-ran"),
-    command("covering", "sleep 3"),
+    command("covering", covering),
   ]);
   await writeFile(
     path.join(root, ".orkestrator-test-scheduler.json"),
     JSON.stringify({
       version: 1,
       cooperativeCommands: [],
-      commandProfiles: { "sleep 3": { covers: ["touch .orkestrator/covered-ran"] } },
+      commandProfiles: { [covering]: { covers: ["touch .orkestrator/covered-ran"] } },
     }),
   );
   await control(root, run);
@@ -590,6 +595,8 @@ test("a covered command can be stopped while its covering command runs", async (
     status: "incomplete",
     limitation: "Stopped by the user before it started; validation is incomplete",
   });
+  await mkdir(path.join(root, ".orkestrator"), { recursive: true });
+  await writeFile(path.join(root, release), "");
   const done = await completed(root, run);
   expect(done.results.map((result) => result.status)).toEqual(["incomplete", "passed"]);
   expect(existsSync(path.join(root, ".orkestrator/covered-ran"))).toBe(false);

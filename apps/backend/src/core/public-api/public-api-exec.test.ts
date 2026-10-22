@@ -19,9 +19,23 @@ jest.setTimeout(60_000);
 
 const harnesses: PublicApiHarness[] = [];
 
+const KILL_GRACE_ENV = "ORKESTRATOR_TEST_EXEC_KILL_GRACE_MS";
+const originalKillGrace = process.env[KILL_GRACE_ENV];
+
 afterEach(async () => {
+  if (originalKillGrace === undefined) delete process.env[KILL_GRACE_ENV];
+  else process.env[KILL_GRACE_ENV] = originalKillGrace;
   await Promise.all(harnesses.splice(0).map((harness) => harness.cleanup()));
 });
+
+/**
+ * The worker inherits the backend's environment, so this shortens its
+ * TERM-to-KILL grace (5s in production) for commands started afterwards. The
+ * command still has to ignore TERM and be killed by the grace timer.
+ */
+function shortenKillGrace(): void {
+  process.env[KILL_GRACE_ENV] = "500";
+}
 
 async function setup(
   options: Parameters<typeof createPublicApiHarness>[0] = {},
@@ -297,6 +311,7 @@ describe("environment.exec", () => {
 
   test("a command ignoring TERM is killed after the timeout grace period", async () => {
     const { harness } = await setup();
+    shortenKillGrace();
     const started = await exec(harness, "ignore-term", {
       argv: ["sh", "-c", "trap '' TERM; sleep 1000"],
       timeoutMs: 1_000,
@@ -328,6 +343,7 @@ describe("environment.exec", () => {
 
   test("cancel kills a command that ignores TERM", async () => {
     const { harness } = await setup();
+    shortenKillGrace();
     const started = await exec(harness, "cancel-ignore", {
       argv: ["sh", "-c", "trap '' TERM; sleep 1000"],
     });
@@ -457,6 +473,7 @@ describe("environment.exec", () => {
 
   test("environment stop drains a command that ignores TERM", async () => {
     const { harness } = await setup();
+    shortenKillGrace();
     const started = await exec(harness, "stop-ignore", {
       argv: ["sh", "-c", "trap '' TERM; sleep 1000"],
     });
@@ -484,8 +501,12 @@ describe("environment.exec", () => {
     }
     const refused = await exec(harness, "c-over", { argv: ["sleep", "5"] });
     expect(!refused.ok && refused.error.code).toBe("busy");
-    for (const operationId of ids)
-      await harness.call("run.cancel", { operationId }, { requestId: `cc-${operationId}` });
+    // Each cancel waits for the worker's 1s cancel poll; cancel them together.
+    await Promise.all(
+      ids.map((operationId) =>
+        harness.call("run.cancel", { operationId }, { requestId: `cc-${operationId}` }),
+      ),
+    );
   });
 
   test("bounds concurrent admission under a race", async () => {
@@ -498,12 +519,14 @@ describe("environment.exec", () => {
     const admitted = results.filter((result) => result.ok);
     expect(admitted.length).toBeLessThanOrEqual(4);
     expect(results.filter((result) => !result.ok)).toHaveLength(8 - admitted.length);
-    for (const result of admitted) {
-      await harness.call(
-        "run.cancel",
-        { operationId: result.receipt!.operationId },
-        { requestId: `cancel-${result.receipt!.operationId}` },
-      );
-    }
+    await Promise.all(
+      admitted.map((result) =>
+        harness.call(
+          "run.cancel",
+          { operationId: result.receipt!.operationId },
+          { requestId: `cancel-${result.receipt!.operationId}` },
+        ),
+      ),
+    );
   });
 });

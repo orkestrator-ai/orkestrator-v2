@@ -1,6 +1,11 @@
 {
   "version": 1,
-  "cooperativeCommands": ["mise run test", "mise run test:all", "mise run test:changed"],
+  "cooperativeCommands": [
+    "mise run test",
+    "mise run test:full",
+    "mise run test:all",
+    "mise run test:changed"
+  ],
   "commandProfiles": {
     "mise run test:agent:browser:isolated": {
       "resources": ["workspace:*"],
@@ -22,9 +27,13 @@
       "resources": ["workspace:*"],
       "covers": ["mise run test:changed"]
     },
-    "mise run test:all": {
+    "mise run test:full": {
       "resources": ["workspace:*"],
       "covers": ["mise run test", "mise run test:changed"]
+    },
+    "mise run test:all": {
+      "resources": ["workspace:*"],
+      "covers": ["mise run test:full", "mise run test", "mise run test:changed"]
     },
     "mise run format:check": {
       "resources": [],

@@ -236,7 +236,14 @@ describe("interactive preview in Chromium", () => {
       const target = new TranscriptPreviewRunner({
         isolation: "process",
         allowProcessInteractive: true,
-        budgets: { readinessMs: 2_000, workerWallMs: 9_000, cleanupGraceMs: 500 },
+        // probeStepMs: the hung click waits out the same step deadline, only
+        // sooner; the healthy calculator job afterwards still has ample time per step.
+        budgets: {
+          readinessMs: 2_000,
+          workerWallMs: 9_000,
+          cleanupGraceMs: 500,
+          probeStepMs: 1_000,
+        },
         onWorkerExit: (report) => local.push(report),
       });
       try {
@@ -339,19 +346,7 @@ describe("interactive preview in Chromium", () => {
       "the sink detects requests from a deliberately unrestricted page",
       async () => {
         hits.length = 0;
-        const browser = await chromium.launch({ executablePath: CHROMIUM!, headless: true });
-        try {
-          const page = await browser.newPage();
-          await page.goto(`${sinkOrigin}/start`);
-          await page.setContent(
-            `<!doctype html><html><body>${escapeBody()}<script>${escapeScript()}</script></body></html>`,
-          );
-          await page.waitForTimeout(1_500);
-        } finally {
-          await browser.close();
-        }
-        // The control proves the sink observes every class we later expect to be blocked.
-        for (const path of [
+        const CONTROL_PATHS = [
           "/img",
           "/css",
           "/fetch",
@@ -360,8 +355,25 @@ describe("interactive preview in Chromium", () => {
           "/script",
           "/iframe",
           "/form",
-        ]) {
-          expect(hits.some((hit) => hit.includes(path))).toBe(true);
+        ];
+        const reached = (path: string) => hits.some((hit) => hit.includes(path));
+        const browser = await chromium.launch({ executablePath: CHROMIUM!, headless: true });
+        try {
+          const page = await browser.newPage();
+          await page.goto(`${sinkOrigin}/start`);
+          await page.setContent(
+            `<!doctype html><html><body>${escapeBody()}<script>${escapeScript()}</script></body></html>`,
+          );
+          // A positive observation: done as soon as every class has arrived.
+          const deadline = Date.now() + 10_000;
+          while (!CONTROL_PATHS.every(reached) && Date.now() < deadline)
+            await new Promise((resolve) => setTimeout(resolve, 50));
+        } finally {
+          await browser.close();
+        }
+        // The control proves the sink observes every class we later expect to be blocked.
+        for (const path of CONTROL_PATHS) {
+          expect(reached(path)).toBe(true);
         }
       },
       60_000,

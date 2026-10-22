@@ -13,6 +13,7 @@ import {
   isTmuxNoServerMessage,
   jsonlByMtimeFindCommand,
   listLocalJsonlByMtime,
+  LIVENESS_CHECK_EVERY_TICKS,
   newestJsonlFindCommand,
   newestJsonlInDir,
   parseFreshJsonlFindOutput,
@@ -50,6 +51,40 @@ import {
   waitFor,
   withFakeTmuxRuntime,
 } from "./tmux-test-harness.js";
+
+/**
+ * Stands in for the poll loop's wait between ticks, so a test advances the
+ * loop one whole tick at a time instead of sleeping through real intervals.
+ */
+function pollTickStepper() {
+  let released = 0;
+  let resume: (() => void) | undefined;
+  let parked = deferred<void>();
+  const release = async () => {
+    await parked.promise;
+    parked = deferred<void>();
+    released += 1;
+    const resumeTick = resume!;
+    resume = undefined;
+    resumeTick();
+  };
+  return {
+    pollTick: () =>
+      new Promise<void>((resolve) => {
+        resume = resolve;
+        parked.resolve();
+      }),
+    /** Ticks the loop has been allowed to run, which is the loop's own tick count. */
+    released: () => released,
+    /** Lets the parked loop run its next tick without waiting for it to finish. */
+    release,
+    /** Runs one whole tick: the loop is parked again when this resolves. */
+    step: async () => {
+      await release();
+      await parked.promise;
+    },
+  };
+}
 
 test("fast-mode pane parsing uses the newest acknowledgement and strips ANSI", () => {
   expect(fastModeFromPane("Fast mode ON\n\u001b[31mFast mode OFF\u001b[0m")).toBe(false);
@@ -1229,13 +1264,33 @@ describe("live session read paths", () => {
 
       // Fill past the 20-entry cap so the first entry is evicted, then deliver
       // it again: there is nothing left to replace, so it is admitted afresh.
-      for (let index = 0; index < 20; index += 1) {
-        await deliver(
-          "Notification",
-          `filler-${String(index).padStart(2, "0")}`,
-          JSON.stringify({ message: `filler-${index}` }),
+      // The fillers land together: a tick drains pending files in name order,
+      // and each is renamed into place so no tick can read a partial write.
+      const fillerIds = Array.from(
+        { length: 20 },
+        (_, index) => `filler-${String(index).padStart(2, "0")}`,
+      );
+      const seenBeforeFillers = emitted.length;
+      await Promise.all(
+        fillerIds.map(async (id, index) => {
+          const staged = path.join(pendingDir, `Notification-${id}.json.tmp`);
+          await fs.writeFile(staged, JSON.stringify({ message: `filler-${index}` }));
+          await fs.rename(staged, path.join(pendingDir, `Notification-${id}.json`));
+        }),
+      );
+      await waitFor(() => {
+        const delivered = new Set(
+          emitted
+            .slice(seenBeforeFillers)
+            .filter(
+              (entry) =>
+                entry.event === "claude-tmux:event" &&
+                (entry.payload as { event_kind?: string }).event_kind === "Notification",
+            )
+            .map((entry) => (entry.payload as { event_id?: string }).event_id),
         );
-      }
+        return fillerIds.every((id) => delivered.has(id));
+      }, 5_000);
       const filled = await snapshot();
       expect(filled.info_events).toHaveLength(20);
       expect(filled.info_events.some(({ id }) => id === "shared")).toBe(false);
@@ -1608,7 +1663,8 @@ describe("live session read paths", () => {
   }, 20_000);
 
   test("spawns far fewer liveness checks than poll ticks for a live session", async () => {
-    const handlers = createHandlers();
+    const ticks = pollTickStepper();
+    const handlers = createHandlers({ sessionTiming: { pollTick: ticks.pollTick } });
 
     await withFakeTmuxRuntime(async ({ environment, log }) => {
       const context = {
@@ -1632,22 +1688,25 @@ describe("live session read paths", () => {
           .filter((line) => line.startsWith(`has-session -t ${session}`)).length;
       const before = await livenessChecks();
 
-      // The loop ticks every POLL_INTERVAL_MS (250ms), so this window covers
-      // roughly a dozen ticks. Each liveness check is its own process spawn — a
-      // `docker exec` in container mode — and can only report a session that
-      // has already ended, which is why it must not run per tick.
-      await delay(3_000);
+      // Run a dozen whole ticks, the window three seconds of POLL_INTERVAL_MS
+      // (250ms) ticks would cover. Each liveness check is its own process
+      // spawn — a `docker exec` in container mode — and can only report a
+      // session that has already ended, which is why it must not run per tick.
+      for (let tick = 0; tick < 12; tick += 1) await ticks.step();
       const spawned = (await livenessChecks()) - before;
 
       expect(spawned).toBeGreaterThanOrEqual(1);
       expect(spawned).toBeLessThanOrEqual(3);
 
       await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
+      // Let the parked loop observe the stop and exit.
+      await ticks.release();
     });
   }, 20_000);
 
   test("still reports a tmux session that ended, on the slower liveness cadence", async () => {
-    const handlers = createHandlers();
+    const ticks = pollTickStepper();
+    const handlers = createHandlers({ sessionTiming: { pollTick: ticks.pollTick } });
 
     await withFakeTmuxRuntime(async ({ environment, alive, runtimeRoot }) => {
       const emitted: Array<{ event: string; payload: unknown }> = [];
@@ -1684,21 +1743,26 @@ describe("live session read paths", () => {
       // that process-local state contributing "working" forever.
       const pendingDir = path.join(runtimeRoot, "sessions", status.session_id, "pending");
       await fs.writeFile(path.join(pendingDir, "UserPromptSubmit-before-death.json"), "{}");
+      await ticks.step();
       await waitFor(() => persistedStates.includes("working"));
 
       // Claude exits and tmux tears the session down; nothing else tells the
       // poll loop, so the periodic has-session check is the only signal.
       await fs.rm(path.join(alive, tmuxSessionName(environment.id, tabId)), { force: true });
 
-      await waitFor(
-        () =>
-          emitted.some(
-            (item) =>
-              item.event === "claude-tmux:event" &&
-              (item.payload as { kind?: string }).kind === "stopped",
-          ),
-        8_000,
-      );
+      const stopped = () =>
+        emitted.some(
+          (item) =>
+            item.event === "claude-tmux:event" &&
+            (item.payload as { kind?: string }).kind === "stopped",
+        );
+      // Every tick before the next liveness tick passes without noticing.
+      while ((ticks.released() + 1) % LIVENESS_CHECK_EVERY_TICKS !== 0) await ticks.step();
+      expect(stopped()).toBe(false);
+      // The liveness tick reports the ended session and ends the loop, so it
+      // never parks again.
+      await ticks.release();
+      await waitFor(stopped, 8_000);
 
       await waitFor(() => persistedStates.at(-1) === "idle");
       await expect(

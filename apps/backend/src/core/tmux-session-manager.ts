@@ -118,6 +118,20 @@ export type SessionManagerTmuxLayerTypes = [
   ProbeExec,
   TranscriptTail,
 ];
+/**
+ * Timing seams for one session. Production waits on the real clock; tests
+ * inject them to step poll ticks or to reach a command deadline without
+ * sleeping through it.
+ */
+export type TmuxSessionTimingOptions = {
+  /** Waits until the poll loop's next tick is due. */
+  pollTick?: (intervalMs: number) => Promise<void>;
+  /** Clock read by the slash-command settle and confirmation deadlines. */
+  now?: () => number;
+  /** Pause between those deadline loops' checks. */
+  sleep?: (delayMs: number) => Promise<void>;
+};
+
 export class TmuxSession {
   readonly sessionId: string;
   readonly tmuxSession: string;
@@ -166,6 +180,9 @@ export class TmuxSession {
   private forceNextObservation = false;
   private observationInFlight: Promise<void> | undefined;
   private readonly inputMutex = new AsyncMutex();
+  private readonly pollTick: (intervalMs: number) => Promise<void>;
+  private readonly now: () => number;
+  private readonly sleep: (delayMs: number) => Promise<void>;
 
   constructor(
     readonly environmentId: string,
@@ -174,7 +191,11 @@ export class TmuxSession {
     runtimeRootPrefix: string,
     resumeSessionId?: string,
     claudeCommand?: string,
+    timing: TmuxSessionTimingOptions = {},
   ) {
+    this.pollTick = timing.pollTick ?? ((intervalMs) => delay(intervalMs));
+    this.now = timing.now ?? (() => Date.now());
+    this.sleep = timing.sleep ?? ((delayMs) => delay(delayMs));
     this.resumed = resumeSessionId !== undefined;
     // A resumed provider session already has authoritative conversation state,
     // even if its transcript has not been discovered by this backend yet.
@@ -565,7 +586,7 @@ export class TmuxSession {
     void (async () => {
       try {
         while (!this.stopRequested) {
-          await delay(POLL_INTERVAL_MS);
+          await this.pollTick(POLL_INTERVAL_MS);
           if (this.stopRequested) break;
           tick += 1;
 
@@ -1106,11 +1127,11 @@ export class TmuxSession {
     initialSnapshot: string,
     command: string,
   ): Promise<void> {
-    const deadline = Date.now() + FAST_MODE_SWITCH_TIMEOUT_MS;
-    while (Date.now() < deadline) {
+    const deadline = this.now() + FAST_MODE_SWITCH_TIMEOUT_MS;
+    while (this.now() < deadline) {
       const snapshot = await this.capturePane();
       if (snapshot === initialSnapshot) {
-        await delay(FAST_MODE_POLL_MS);
+        await this.sleep(FAST_MODE_POLL_MS);
         continue;
       }
       if (paneHasClaudeExited(snapshot)) {
@@ -1124,7 +1145,7 @@ export class TmuxSession {
       if (rejection) throw new Error(rejection);
       const observed = fastModeFromPane(response);
       if (observed === target) return;
-      await delay(FAST_MODE_POLL_MS);
+      await this.sleep(FAST_MODE_POLL_MS);
     }
     throw new Error(`Claude did not confirm fast mode ${target ? "on" : "off"}`);
   }
@@ -1168,15 +1189,15 @@ export class TmuxSession {
   }
 
   private async waitForPanePermissionMode(targetMode: string): Promise<string> {
-    const deadline = Date.now() + PERMISSION_MODE_SWITCH_TIMEOUT_MS;
+    const deadline = this.now() + PERMISSION_MODE_SWITCH_TIMEOUT_MS;
     let lastObservedMode: string | undefined;
-    while (Date.now() < deadline) {
+    while (this.now() < deadline) {
       const observedMode = await this.capturePanePermissionMode();
       if (observedMode) {
         lastObservedMode = observedMode;
         if (observedMode === targetMode) return observedMode;
       }
-      await delay(PERMISSION_MODE_POLL_MS);
+      await this.sleep(PERMISSION_MODE_POLL_MS);
     }
     const observed = lastObservedMode ? `; observed ${lastObservedMode}` : "";
     throw new Error(`Claude did not enter ${targetMode}${observed}`);
@@ -1195,20 +1216,20 @@ export class TmuxSession {
   }
 
   private async waitForCommandIdle(): Promise<void> {
-    const started = Date.now();
+    const started = this.now();
     const deadline = started + COMMAND_IDLE_TIMEOUT_MS;
     const noHookDeadline = started + COMMAND_NO_HOOK_SETTLE_MS;
     let sawBusy = this.busy;
-    while (Date.now() < deadline) {
+    while (this.now() < deadline) {
       if (this.busy) {
         sawBusy = true;
       } else if (sawBusy) {
-        await delay(COMMAND_AFTER_IDLE_SETTLE_MS);
+        await this.sleep(COMMAND_AFTER_IDLE_SETTLE_MS);
         return;
-      } else if (Date.now() >= noHookDeadline) {
+      } else if (this.now() >= noHookDeadline) {
         return;
       }
-      await delay(50);
+      await this.sleep(50);
     }
     console.warn("[tmux] timed out waiting for Claude slash command to settle", this.tmuxSession);
   }
@@ -1561,6 +1582,7 @@ export async function getOrCreateSession(
   environmentId: string,
   tabId: string,
   resumeSessionId: string | undefined,
+  timing?: TmuxSessionTimingOptions,
 ): Promise<TmuxSession> {
   const existing = tmuxManager.get(environmentId, tabId);
   if (existing) return existing;
@@ -1573,6 +1595,7 @@ export async function getOrCreateSession(
     runtimeRootPrefixForContext(context),
     resumeSessionId,
     resolvePinnedClaudeCommand(context, backend),
+    timing,
   );
   tmuxManager.insert(environmentId, tabId, session);
   return session;

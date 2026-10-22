@@ -71,6 +71,7 @@ const ROOT_COMMAND_SURFACE = [
   "publish:cli",
   "preview",
   "test",
+  "test:full",
   "test:all",
   "test:logged",
   "test:browser",

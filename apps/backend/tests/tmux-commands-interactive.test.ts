@@ -14,6 +14,7 @@ import {
   invoke,
   waitFor,
   withFakeTmuxRuntime,
+  warpedCommandClock,
 } from "./tmux-test-harness.js";
 
 describe("Electron tmux launch flags and interactive controls", () => {
@@ -418,7 +419,9 @@ exit 0
   // — the CLI flags only apply at launch — and each one then waits out the
   // no-hook settle window, so this needs more than the default per-test budget.
   test("switches model, effort, and fast mode as slash commands in the live TUI", async () => {
-    const handlers = createHandlers();
+    // No hook arrives for these commands, so each model and effort switch
+    // settles at COMMAND_NO_HOOK_SETTLE_MS; the warped clock elapses it.
+    const handlers = createHandlers({ sessionTiming: warpedCommandClock() });
 
     await withFakeTmuxRuntime(async ({ environment, alive }) => {
       const emitted: Array<{ event: string; payload: unknown }> = [];
@@ -933,7 +936,9 @@ exit 0
   });
 
   test("validates fast-mode requests and times out without inventing confirmation", async () => {
-    const handlers = createHandlers();
+    // The ignored request must run out FAST_MODE_SWITCH_TIMEOUT_MS; the
+    // warped clock elapses it while the pane is re-read on every poll.
+    const handlers = createHandlers({ sessionTiming: warpedCommandClock() });
 
     await withFakeTmuxRuntime(async ({ environment, alive, log }) => {
       const tabId = "tab-fast-timeout";

@@ -18,6 +18,8 @@ const ENTRY_PACKAGES = [
   "@earendil-works/pi-ai",
   "@earendil-works/pi-agent-core",
 ] as const;
+/** Store entries copied at once while staging the closure. */
+const COPY_CONCURRENCY = 12;
 
 /** Resolve a package by walking up `node_modules` from a starting directory. */
 async function resolvePackage(name: string, from: string): Promise<string | undefined> {
@@ -133,17 +135,28 @@ export async function stageRuntimeClosure(options: {
     }
   }
 
-  for (const instance of packages.values()) {
-    await cp(instance.storeRoot, path.join(options.destination, ".bun", instance.storeKey), {
-      recursive: true,
-      dereference: false,
-      verbatimSymlinks: true,
-    });
-  }
+  // Store entries are disjoint directories, so copy several at once: one at a
+  // time spends most of the closure's ~18k files waiting on filesystem
+  // latency. Deduplicate by store key so no two copies share a destination.
+  const storeRoots = new Map<string, string>();
+  for (const instance of packages.values()) storeRoots.set(instance.storeKey, instance.storeRoot);
+  const pendingCopies = Array.from(storeRoots);
+  const copyWorker = async () => {
+    for (let next = pendingCopies.shift(); next; next = pendingCopies.shift()) {
+      const [storeKey, storeRoot] = next;
+      await cp(storeRoot, path.join(options.destination, ".bun", storeKey), {
+        recursive: true,
+        dereference: false,
+        verbatimSymlinks: true,
+      });
+    }
+  };
+  await Promise.all(Array.from({ length: COPY_CONCURRENCY }, copyWorker));
 
-  // A project-local store entry links to its siblings by their local names,
-  // which for a globally stored sibling omit the hash suffix. Keep those
-  // relative links resolvable in a mixed store.
+  // Every copy has finished before any link below is created. A project-local
+  // store entry links to its siblings by their local names, which for a
+  // globally stored sibling omit the hash suffix. Keep those relative links
+  // resolvable in a mixed store.
   for (const instance of packages.values()) {
     if (!instance.localAlias) continue;
     const aliasPath = path.join(options.destination, ".bun", instance.localAlias);

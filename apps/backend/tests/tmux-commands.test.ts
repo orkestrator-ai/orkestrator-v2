@@ -1,15 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 
 import {
   createHandlers,
+  deferred,
   encodeCwd,
   invoke,
   waitFor,
   withFakeTmuxRuntime,
+  warpedCommandClock,
 } from "./tmux-test-harness.js";
 
 describe("Electron tmux hooks and transcripts", () => {
@@ -252,7 +254,10 @@ describe("Electron tmux hooks and transcripts", () => {
   });
 
   test("generated blocking hooks use an integer timeout and fail closed on expiry", async () => {
-    const handlers = createHandlers();
+    // Hold the poll loop before its first tick: it would otherwise drain the
+    // timeout files this test inspects while the hooks run.
+    const pollLoopHeld = deferred<void>();
+    const handlers = createHandlers({ sessionTiming: { pollTick: () => pollLoopHeld.promise } });
 
     await withFakeTmuxRuntime(async ({ environment, runtimeRoot }) => {
       const context = {
@@ -282,24 +287,36 @@ describe("Electron tmux hooks and transcripts", () => {
       const immediateScriptPath = path.join(runtimeRoot, "hook-immediate-timeout.sh");
       await fs.writeFile(immediateScriptPath, immediateScript);
 
-      const runHook = (kind: "PreToolUse" | "PermissionRequest" | "Elicitation") => {
-        const result = spawnSync("bash", [immediateScriptPath, kind], {
-          encoding: "utf8",
-          input: JSON.stringify({ session_id: status.session_id }),
+      const runHook = async (kind: "PreToolUse" | "PermissionRequest" | "Elicitation") => {
+        const child = spawn("bash", [immediateScriptPath, kind]);
+        let stdout = "";
+        let stderr = "";
+        child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
+        child.stderr.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
+        child.stdin.end(JSON.stringify({ session_id: status.session_id }));
+        const exitStatus = await new Promise<number | null>((resolve, reject) => {
+          child.once("error", reject);
+          child.once("close", resolve);
         });
-        expect(result.status).toBe(0);
-        expect(result.stderr).toBe("");
-        return JSON.parse(result.stdout) as unknown;
+        expect(exitStatus).toBe(0);
+        expect(stderr).toBe("");
+        return JSON.parse(stdout) as unknown;
       };
 
-      expect(runHook("PreToolUse")).toEqual({
+      // Each hook invocation writes under its own id, so the three run together.
+      const [preToolUse, permissionRequest, elicitation] = await Promise.all([
+        runHook("PreToolUse"),
+        runHook("PermissionRequest"),
+        runHook("Elicitation"),
+      ]);
+      expect(preToolUse).toEqual({
         hookSpecificOutput: {
           hookEventName: "PreToolUse",
           permissionDecision: "deny",
           permissionDecisionReason: "Approval timed out without a user response.",
         },
       });
-      expect(runHook("PermissionRequest")).toEqual({
+      expect(permissionRequest).toEqual({
         hookSpecificOutput: {
           hookEventName: "PermissionRequest",
           decision: {
@@ -308,7 +325,7 @@ describe("Electron tmux hooks and transcripts", () => {
           },
         },
       });
-      expect(runHook("Elicitation")).toEqual({
+      expect(elicitation).toEqual({
         hookSpecificOutput: {
           hookEventName: "Elicitation",
           action: "cancel",
@@ -326,6 +343,8 @@ describe("Electron tmux hooks and transcripts", () => {
         { tabId: "tab-hook-timeout", environmentId: environment.id },
         context,
       );
+      // Let the held loop observe the stop and exit.
+      pollLoopHeld.resolve();
     });
   });
 
@@ -428,7 +447,9 @@ describe("Electron tmux hooks and transcripts", () => {
   });
 
   test("reports prompt, exit, capture, send, and transition failures", async () => {
-    const handlers = createHandlers();
+    // The ignored /plan must run out PERMISSION_MODE_SWITCH_TIMEOUT_MS; the
+    // warped clock elapses it while the pane is re-read on every poll.
+    const handlers = createHandlers({ sessionTiming: warpedCommandClock() });
 
     await withFakeTmuxRuntime(async ({ environment, alive }) => {
       const context = {

@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   acquireFullSuiteLease,
   ALLOW_MISSING_PROTOCOL_BINARY_ENV,
+  BACKEND_WORKERS_ENV,
   buildConcurrentGroups,
   createTestLogDirectory,
   DEFAULT_TEST_GROUP_TIMEOUT_MS,
@@ -17,6 +18,7 @@ import {
   IOS_GROUP_TIMEOUT_MS,
   main,
   MAX_AGGREGATE_TEST_WORKERS,
+  MAX_BACKEND_TEST_WORKERS,
   MAX_CONSOLE_TAIL_LINE_CHARS,
   MAX_FAILURE_REPORTS,
   MAX_GROUP_OUTPUT_TAIL_BYTES,
@@ -39,6 +41,7 @@ import {
   type TestAllDependencies,
   type TestGroup,
 } from "../../scripts/test-all";
+import { TEST_AREAS, type AreaDecision } from "../../scripts/test-areas";
 
 interface Invocation {
   name: string;
@@ -60,6 +63,8 @@ function createDependencies(
     cores?: number;
     /** Blocks the named group until released, to observe concurrency. */
     gate?: { name: string; release: Promise<void> };
+    /** Area decisions; defaults to none so runner tests never inspect Git. */
+    selectAreas?: TestAllDependencies["selectAreas"];
   } = {},
 ): {
   dependencies: TestAllDependencies;
@@ -84,6 +89,7 @@ function createDependencies(
       platform: options.platform ?? "linux",
       root: "/test/repository",
       log: (message) => logs.push(message),
+      selectAreas: options.selectAreas ?? (() => []),
       runGroup: async (group: TestGroup, env): Promise<CommandResult> => {
         started.push(group.name);
         invocations.push({
@@ -219,7 +225,10 @@ describe("scripts/test-all.ts", () => {
     const bridgeGroup = groups.find((group) => group.name === BRIDGES)!;
 
     expect(workspaceGroup.args).toContain("--concurrency=2");
-    expect(workspaceGroup.env).toEqual({ [WORKSPACE_WORKERS_ENV]: "2" });
+    expect(workspaceGroup.env).toEqual({
+      [WORKSPACE_WORKERS_ENV]: "2",
+      [BACKEND_WORKERS_ENV]: "3",
+    });
     expect(rootGroup.args).toContain("--parallel=1");
     expect(rootGroup.args.slice(0, 2)).toEqual(["test", "./tests"]);
     expect(rootGroup.args).toContain("./e2e/agent-testing/artifact-sanitizer.test.ts");
@@ -258,6 +267,51 @@ describe("scripts/test-all.ts", () => {
     expect(workspace.env[WORKSPACE_WORKERS_ENV]).toMatch(/^\d+$/);
     // The caller's environment object must not be mutated.
     expect(dependencies.env[WORKSPACE_WORKERS_ENV]).toBeUndefined();
+  });
+
+  test("leaves unselected area suites out of the workspace group and says why", async () => {
+    const [first, second] = TEST_AREAS as [AreaDecision["area"], AreaDecision["area"]];
+    const seen: NodeJS.ProcessEnv[] = [];
+    const { dependencies, invocations, logs } = createDependencies({
+      selectAreas: (root, env) => {
+        expect(root).toBe("/test/repository");
+        seen.push(env);
+        return [
+          { area: first, run: false, reason: "none of its 3 imported files changed since main" },
+          { area: second, run: true, reason: "apps/backend/src/core/x.ts changed" },
+        ];
+      },
+    });
+
+    expect(await runAllTests(dependencies)).toBe(0);
+    expect(seen).toEqual([dependencies.env]);
+    expect(logs).toContain(
+      `AREA SKIP ${first.name}: none of its 3 imported files changed since main`,
+    );
+    expect(logs).toContain(`AREA RUN ${second.name}: apps/backend/src/core/x.ts changed`);
+    const ignore = invocations.find((entry) => entry.name === WORKSPACE)!.env
+      .ORKESTRATOR_BACKEND_TEST_IGNORE;
+    for (const pattern of first.tests)
+      expect(ignore).toContain(`--path-ignore-patterns=${pattern}`);
+    for (const pattern of second.tests) expect(ignore).not.toContain(pattern);
+    // Only the package that owns the areas receives the variable.
+    for (const entry of invocations.filter((invocation) => invocation.name !== WORKSPACE)) {
+      expect(entry.env.ORKESTRATOR_BACKEND_TEST_IGNORE).toBeUndefined();
+    }
+  });
+
+  test("runs every area when selection fails", async () => {
+    const { dependencies, invocations, logs } = createDependencies({
+      selectAreas: () => {
+        throw new Error("git exploded");
+      },
+    });
+
+    expect(await runAllTests(dependencies)).toBe(0);
+    expect(logs).toContain("AREA RUN all: selection failed (git exploded)");
+    expect(
+      invocations.find((entry) => entry.name === WORKSPACE)!.env.ORKESTRATOR_BACKEND_TEST_IGNORE,
+    ).toBeUndefined();
   });
 
   test("removes ambient bridge diagnostics flags from every aggregate group", async () => {
@@ -329,6 +383,8 @@ describe("scripts/test-all.ts", () => {
       expect(plan.workspace).toBeGreaterThanOrEqual(1);
       expect(plan.workspaceConcurrency).toBeGreaterThanOrEqual(1);
       expect(plan.workspaceConcurrency).toBeLessThanOrEqual(3);
+      expect(plan.backend).toBeGreaterThanOrEqual(plan.workspace);
+      expect(plan.backend).toBeLessThanOrEqual(Math.max(plan.workspace, MAX_BACKEND_TEST_WORKERS));
       for (const value of Object.values(plan)) expect(Number.isInteger(value)).toBe(true);
     }
   });
@@ -352,8 +408,35 @@ describe("scripts/test-all.ts", () => {
     expect(1 + large.root + large.bridges + large.workspace * large.workspaceConcurrency).toBe(
       MAX_AGGREGATE_TEST_WORKERS,
     );
-    // Beyond the cap the plan is constant: more cores must not multiply peak heap.
-    expect(planWorkers(64)).toEqual(planWorkers(MAX_AGGREGATE_TEST_WORKERS));
+    // Beyond the cap the UI plan is constant: more cores must not multiply peak heap.
+    const { backend: _large, ...largeUi } = planWorkers(64);
+    const { backend: _capped, ...cappedUi } = planWorkers(MAX_AGGREGATE_TEST_WORKERS);
+    expect(largeUi).toEqual(cappedUi);
+  });
+
+  test("the backend package gets its own bounded share of a large host", async () => {
+    // Backend workers are Node-preloaded integration suites, not happy-dom UI
+    // workers, so they scale with the host instead of the UI budget.
+    expect(planWorkers(4).backend).toBe(planWorkers(4).workspace);
+    expect(planWorkers(8).backend).toBe(2);
+    expect(planWorkers(12).backend).toBe(4);
+    expect(planWorkers(18).backend).toBe(MAX_BACKEND_TEST_WORKERS);
+    expect(planWorkers(64).backend).toBe(MAX_BACKEND_TEST_WORKERS);
+
+    const workspace = buildConcurrentGroups(18).find((group) => group.name === WORKSPACE)!;
+    // The backend task fills one concurrent slot; the other keeps its usual pool.
+    expect(workspace.workers).toBe(MAX_BACKEND_TEST_WORKERS + planWorkers(18).workspace);
+    expect(workspace.env?.[BACKEND_WORKERS_ENV]).toBe(String(MAX_BACKEND_TEST_WORKERS));
+    expect(workspace.env?.[WORKSPACE_WORKERS_ENV]).toBe(String(planWorkers(18).workspace));
+    // A reservation never exceeds the capacity it is granted.
+    expect(buildConcurrentGroups(1).find((group) => group.name === WORKSPACE)!.workers).toBe(1);
+
+    const manifest = JSON.parse(
+      await readFile(path.join(import.meta.dir, "../../apps/backend/package.json"), "utf8"),
+    );
+    expect(manifest.scripts["test:workspace"]).toContain(
+      `--parallel=\${${BACKEND_WORKERS_ENV}:-\${${WORKSPACE_WORKERS_ENV}:-2}}`,
+    );
   });
 
   test("runs bridge suites as cacheable Turbo package tasks", () => {

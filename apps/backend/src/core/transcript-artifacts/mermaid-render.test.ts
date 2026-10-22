@@ -129,36 +129,49 @@ describe("mermaid rendering", () => {
         const head = "flowchart TD\n  A --> B\n";
         return head + "%".repeat(bytes - Buffer.byteLength(head));
       };
-      // A trailing run of `%` is a comment line in Mermaid.
-      const atLimit = await run(
-        padded(MERMAID_POLICY.maxSourceBytes).replace(/%+$/, (match) => `%%${match.slice(2)}`),
-      );
-      expect(atLimit.ok).toBe(true);
-      const over = await run(padded(MERMAID_POLICY.maxSourceBytes + 1));
-      expect(over.ok).toBe(false);
-      if (!over.ok)
-        expect(over.error).toMatchObject({
-          code: "package_size_exceeded",
-          resource: "source-bytes",
-        });
-
       const chain = (edges: number) =>
         `flowchart LR\n${Array.from({ length: edges }, (_, i) => `  A${i} --> A${i + 1}`).join("\n")}`;
-      const at250 = await run(chain(MERMAID_POLICY.maxEdges));
-      expect(at250.ok).toBe(true);
-      if (at250.ok && at250.kind === "mermaid") expect(at250.edges).toBe(MERMAID_POLICY.maxEdges);
-      const over250 = await run(chain(MERMAID_POLICY.maxEdges + 1));
-      expect(over250.ok).toBe(false);
-      if (!over250.ok)
-        expect(over250.error).toMatchObject({ code: "package_size_exceeded", resource: "edges" });
-
       // 2,000 notes stay under 32 KiB of source but generate more than 5,000 SVG elements.
       const notes = `sequenceDiagram\n${Array.from({ length: 2_000 }, () => "Note over A:x").join("\n")}`;
-      const tooMany = await run(notes);
-      expect(tooMany.ok).toBe(false);
-      if (!tooMany.ok) {
-        expect(tooMany.error).toMatchObject({ code: "package_size_exceeded", resource: "svg" });
-        expect(tooMany.diagnostics[0]!.message).toContain("elements");
+      // The five jobs are independent (each has its own environment), so they
+      // run at once on a runner admitting all five.
+      const concurrent = new TranscriptPreviewRunner({
+        isolation: "process",
+        admission: { runningGlobal: 5 },
+      });
+      try {
+        const [atLimit, over, at250, over250, tooMany] = await Promise.all([
+          // A trailing run of `%` is a comment line in Mermaid.
+          run(
+            padded(MERMAID_POLICY.maxSourceBytes).replace(/%+$/, (match) => `%%${match.slice(2)}`),
+            concurrent,
+          ),
+          run(padded(MERMAID_POLICY.maxSourceBytes + 1), concurrent),
+          run(chain(MERMAID_POLICY.maxEdges), concurrent),
+          run(chain(MERMAID_POLICY.maxEdges + 1), concurrent),
+          run(notes, concurrent),
+        ]);
+        expect(atLimit.ok).toBe(true);
+        expect(over.ok).toBe(false);
+        if (!over.ok)
+          expect(over.error).toMatchObject({
+            code: "package_size_exceeded",
+            resource: "source-bytes",
+          });
+
+        expect(at250.ok).toBe(true);
+        if (at250.ok && at250.kind === "mermaid") expect(at250.edges).toBe(MERMAID_POLICY.maxEdges);
+        expect(over250.ok).toBe(false);
+        if (!over250.ok)
+          expect(over250.error).toMatchObject({ code: "package_size_exceeded", resource: "edges" });
+
+        expect(tooMany.ok).toBe(false);
+        if (!tooMany.ok) {
+          expect(tooMany.error).toMatchObject({ code: "package_size_exceeded", resource: "svg" });
+          expect(tooMany.diagnostics[0]!.message).toContain("elements");
+        }
+      } finally {
+        await concurrent.close();
       }
     },
     90_000,
@@ -167,6 +180,7 @@ describe("mermaid rendering", () => {
   browserTest(
     "the external watchdog ends a blocked render within the deadline and the browser is gone",
     async () => {
+      const RENDER_DEADLINE_MS = 1_000;
       const exits: Array<{
         verified: boolean;
         browserPid: number | null;
@@ -175,6 +189,9 @@ describe("mermaid rendering", () => {
       const blocking = new TranscriptPreviewRunner({
         isolation: "process",
         testing: { blockMermaidRender: true },
+        // A shorter render deadline than the production one: the watchdog is
+        // the same, only the wait for it is shorter.
+        budgets: { mermaidRenderMs: RENDER_DEADLINE_MS },
         onWorkerExit: (report) => exits.push(report),
       });
       try {
@@ -187,8 +204,10 @@ describe("mermaid rendering", () => {
             code: "render_timeout",
             resource: "mermaid-render",
           });
-        // Launch (≈1 s) + the 5 s parse/layout deadline; the spin never yields.
-        expect(elapsed).toBeLessThan(MERMAID_POLICY.renderTimeoutMs + 4_000);
+        // Launch (≈1 s) + the parse/layout deadline; the spin never yields, so
+        // only the deadline ended it.
+        expect(elapsed).toBeGreaterThanOrEqual(RENDER_DEADLINE_MS);
+        expect(elapsed).toBeLessThan(RENDER_DEADLINE_MS + 4_000);
         const deadline = Date.now() + 10_000;
         while (blocking.stats().running > 0 && Date.now() < deadline)
           await new Promise((resolve) => setTimeout(resolve, 50));

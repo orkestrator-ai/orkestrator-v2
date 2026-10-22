@@ -348,7 +348,12 @@ describe("monorepo orchestration scripts", () => {
     ]) {
       const scripts = (JSON.parse(read(pkg)) as { scripts?: Record<string, string> }).scripts ?? {};
       expect(scripts.test).toContain("--parallel");
-      expect(scripts["test:workspace"]).toContain("--parallel=${ORKESTRATOR_TEST_WORKERS:-2}");
+      // The backend takes its own larger pool first (see planWorkers).
+      expect(scripts["test:workspace"]).toContain(
+        pkg === "apps/backend/package.json"
+          ? "--parallel=${ORKESTRATOR_BACKEND_TEST_WORKERS:-${ORKESTRATOR_TEST_WORKERS:-2}}"
+          : "--parallel=${ORKESTRATOR_TEST_WORKERS:-2}",
+      );
     }
   });
 

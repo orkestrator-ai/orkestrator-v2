@@ -1,3 +1,6 @@
+import { useStore } from "zustand";
+import { portalLayoutStore } from "@/lib/portal/portal-layout";
+import { useSidebarHydration, useSidebarScrollRestore } from "./useSidebarHydration";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
 import { startsOnSelection } from "@/lib/environment-auto-start";
 import { takeAddProjectIntent } from "@/lib/portal/workspace-switch";
@@ -16,7 +19,6 @@ import {
   closestCenter,
   KeyboardSensor,
   PointerSensor,
-  useDroppable,
   useSensor,
   useSensors,
   type DragEndEvent,
@@ -44,6 +46,7 @@ import {
 import { ProjectHomeActivity } from "./ProjectHomeActivity";
 import { SortableProjectGroup } from "./SortableProjectGroup";
 import { SortableProjectFolder } from "./SortableProjectFolder";
+import { SidebarRootDropZone } from "./SidebarRootDropZone";
 import { AddProjectDialog } from "@/components/projects/AddProjectDialog";
 import { suggestedCloneDirectory } from "@/lib/github-clone";
 import { AddToFolderDialog } from "@/components/projects/AddToFolderDialog";
@@ -77,12 +80,14 @@ import { useFederation } from "@/components/federation/FederationProvider";
 import { MachinesFilter } from "@/components/federation/MachinesFilter";
 import { MachineDot } from "@/components/federation/MachineDot";
 import {
-  FederatedAggregateList,
-  MachineSectionHeader,
-  RemoteMachineSection,
+  FederatedActivityList,
+  MachineSectionList,
+  MergedProjectList,
 } from "@/components/federation/FederatedSidebarSections";
+import { useBoundCollapseSync } from "@/components/federation/useBoundCollapseSync";
 import { useMachineViews } from "@/components/federation/useMachineViews";
 import { ALL_MACHINES, filterMachines } from "@/lib/federation/aggregate";
+import { isMachineShown } from "@/lib/federation/sidebar-layout";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import {
   DropdownMenu,
@@ -103,7 +108,6 @@ import { withoutProjectHomes } from "@/lib/project-home";
 import { LazyDialogLoadingFallback, LazyLoadBoundary } from "@/components/LazyLoadBoundary";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import {
-  PROJECT_ROOT_DROP_ID,
   buildProjectTree,
   isProjectFolderCollapsed,
   listProjectFolderNames,
@@ -254,37 +258,6 @@ function AnimatedActivityRow({
   return (
     <div ref={rowRef} data-environment-id={environmentId} className={className}>
       {children}
-    </div>
-  );
-}
-
-/**
- * Drop target for the root level.
- *
- * Only rendered while a project is being dragged, and only then does it take
- * up space: a permanent target at the bottom of the list would compete with
- * the last folder's own rows for every drop near the end.
- *
- * It is deliberately tall and offset from the last row. Collision detection is
- * `closestCenter`, so a short strip tucked directly under the final project
- * puts the two centres close enough together that a drop meant for the root
- * resolves against that project instead.
- */
-function SidebarRootDropZone({ active }: { active: boolean }) {
-  const { setNodeRef, isOver } = useDroppable({ id: PROJECT_ROOT_DROP_ID });
-  if (!active) return null;
-  return (
-    <div
-      ref={setNodeRef}
-      data-testid="sidebar-root-drop-zone"
-      className={cn(
-        "mx-3 mt-3 mb-2 flex min-h-16 items-center justify-center rounded-lg border border-dashed px-3 py-4 text-center text-xs transition-colors",
-        isOver
-          ? "border-primary/70 bg-primary/10 text-foreground"
-          : "border-zinc-800 text-zinc-500",
-      )}
-    >
-      Drop here to remove from folder
     </div>
   );
 }
@@ -522,7 +495,8 @@ export function HierarchicalSidebar() {
   const toggleEnvironmentSelection = useUIStore((state) => state.toggleEnvironmentSelection);
   const setMultiSelection = useUIStore((state) => state.setMultiSelection);
   const clearMultiSelection = useUIStore((state) => state.clearMultiSelection);
-  const collapseEmptyProjects = useUIStore((state) => state.collapseEmptyProjects);
+  const portalLayoutLoaded = useStore(portalLayoutStore, (state) => state.loaded);
+  const projectsLoaded = useProjectStore((state) => state.hasLoaded);
   const setEnvironmentSortMode = useUIStore((state) => state.setEnvironmentSortMode);
   // Multi-machine presentation. This sidebar's own machine keeps its full
   // tree; other machines appear as their own sections, or merged into one
@@ -533,26 +507,44 @@ export function HierarchicalSidebar() {
   const machineGrouping = useMachineViewStore((state) => state.grouping);
   const setMachineGrouping = useMachineViewStore((state) => state.setGrouping);
   const openMachinePanel = openMachineWorkspace;
-  const visibleMachines = federation.enabled
-    ? filterMachines(
-        machineViews,
-        machineViews.some((machine) => machine.connectionId === machineFilter)
-          ? machineFilter
-          : ALL_MACHINES,
-      )
-    : [];
+  const visibleMachines = useMemo(
+    () =>
+      federation.enabled
+        ? filterMachines(
+            machineViews,
+            machineViews.some((machine) => machine.connectionId === machineFilter)
+              ? machineFilter
+              : ALL_MACHINES,
+          )
+        : [],
+    [federation.enabled, machineFilter, machineViews],
+  );
   const boundMachineView = machineViews.find((machine) => machine.bound) ?? null;
-  const boundMachineVisible =
-    !federation.enabled || visibleMachines.some((machine) => machine.bound);
   const remoteMachinesVisible = visibleMachines.filter((machine) => !machine.bound);
-  const federatedAggregateMode: "activity" | "project" | "repository" | null =
-    federation.enabled && remoteMachinesVisible.length > 0
-      ? environmentSortMode === "activity"
-        ? "activity"
-        : machineGrouping === "machine"
+  // Machines are listed in the command node's order, whichever one this window
+  // works on. Merged lists hide a machine that is not connected; its projects
+  // keep their place for when it is back.
+  const federatedMode: "machine" | "activity" | "project" | "repository" | null =
+    !federation.enabled
+      ? null
+      : remoteMachinesVisible.length === 0
+        ? environmentSortMode === "activity"
           ? null
-          : machineGrouping
-      : null;
+          : "machine"
+        : environmentSortMode === "activity"
+          ? "activity"
+          : machineGrouping;
+  const mergedShownIds = useMemo(
+    () => new Set(visibleMachines.filter(isMachineShown).map((machine) => machine.connectionId)),
+    [visibleMachines],
+  );
+  useBoundCollapseSync(
+    federation.enabled ? (boundMachineView?.backendId ?? null) : null,
+    projects,
+    projectsLoaded && !projectsLoading,
+  );
+  // After the window moved to another node, the list returns to where it was.
+  const listScrollRef = useRef<HTMLDivElement>(null);
 
   // A project home has no row of its own: selecting its project activates it.
   const sidebarEnvironments = useMemo(
@@ -621,60 +613,17 @@ export function HierarchicalSidebar() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isMultiSelectMode, clearMultiSelection]);
 
-  // Track which project IDs we've already loaded environments for
-  const loadedProjectIdsRef = useRef<Set<string>>(new Set());
-  // Track whether initial collapse of empty projects has been done
-  const initialCollapseAppliedRef = useRef(false);
-
-  // Reset the loaded ref when store is empty but ref has items
-  // (handles hot reload where store is reset but ref persists)
-  useEffect(() => {
-    if (allEnvironments.length === 0 && loadedProjectIdsRef.current.size > 0) {
-      loadedProjectIdsRef.current.clear();
-      initialCollapseAppliedRef.current = false;
-    }
-  }, [allEnvironments.length]);
-
-  // Load environments for new projects only (not on every project count change)
-  useEffect(() => {
-    const loadNewProjectEnvironments = async () => {
-      for (const project of projects) {
-        if (!loadedProjectIdsRef.current.has(project.id)) {
-          loadedProjectIdsRef.current.add(project.id);
-          try {
-            await loadEnvironments(project.id);
-          } catch (err) {
-            // Keep later projects loading and allow this project to be retried
-            // after the project list or environment store changes.
-            loadedProjectIdsRef.current.delete(project.id);
-            console.error(`Failed to load environments for project ${project.id}:`, err);
-          }
-        }
-      }
-    };
-    if (projects.length > 0) {
-      loadNewProjectEnvironments();
-    }
-  }, [projects, loadEnvironments]);
-
-  // Collapse empty projects on initial load (runs once after environments are loaded)
-  useEffect(() => {
-    if (initialCollapseAppliedRef.current || projects.length === 0) {
-      return;
-    }
-    // Wait until we've attempted to load environments for all projects
-    const allProjectsLoaded = projects.every((p) => loadedProjectIdsRef.current.has(p.id));
-    if (!allProjectsLoaded) {
-      return;
-    }
-    // Apply collapse and mark as done
-    const projectsWithEnvs = new Set(sidebarEnvironments.map((e) => e.projectId));
-    collapseEmptyProjects(
-      projects.map((p) => p.id),
-      projectsWithEnvs,
-    );
-    initialCollapseAppliedRef.current = true;
-  }, [projects, sidebarEnvironments, collapseEmptyProjects]);
+  const environmentsReady = useSidebarHydration(
+    projects,
+    projectsLoaded && !projectsLoading && (!federation.supported || federation.portalState.loaded),
+    allEnvironments,
+    loadEnvironments,
+  );
+  useSidebarScrollRestore(
+    listScrollRef,
+    environmentsReady &&
+      (!federation.enabled || (federation.portalState.loaded && portalLayoutLoaded)),
+  );
 
   // Group environments by project in one memoized pass, instead of a
   // filter+sort per project per render.
@@ -823,8 +772,6 @@ export function HierarchicalSidebar() {
     );
     try {
       await deleteProjectAndEnvironments(projectId, projectEnvs, deleteEnvironment, removeProject);
-      // Clean up the loaded projects ref since project is deleted
-      loadedProjectIdsRef.current.delete(projectId);
     } catch (err) {
       console.error("Failed to delete project:", err);
       throw err;
@@ -1058,9 +1005,14 @@ export function HierarchicalSidebar() {
     ? projects.find((p) => p.id === settingsProjectId)
     : null;
 
-  const renderProjectGroup = (project: Project) => (
+  const renderProjectGroup = (
+    project: Project,
+    mixed?: { sortableId: string; machineBadge: ReactNode },
+  ) => (
     <SortableProjectGroup
       key={project.id}
+      sortableId={mixed?.sortableId}
+      machineBadge={mixed?.machineBadge}
       project={project}
       environments={getProjectEnvironments(project.id)}
       home={allEnvironments.find(
@@ -1086,8 +1038,10 @@ export function HierarchicalSidebar() {
       onRestartEnvironment={restartEnvironment}
       onForkEnvironment={handleForkEnvironment}
       onCreateEnvironment={() => handleOpenCreateEnvDialog(project.id)}
-      onAddToFolder={() => setFolderDialogProjectId(project.id)}
-      onRemoveFromFolder={project.folder ? () => handleRemoveFromFolder(project.id) : undefined}
+      onAddToFolder={mixed ? undefined : () => setFolderDialogProjectId(project.id)}
+      onRemoveFromFolder={
+        !mixed && project.folder ? () => handleRemoveFromFolder(project.id) : undefined
+      }
       isMultiSelectMode={isMultiSelectMode}
       selectedEnvironmentIds={selectedEnvironmentIds}
     />
@@ -1106,6 +1060,254 @@ export function HierarchicalSidebar() {
         ) ?? null);
   const activeEnvironment =
     activeType === "environment" ? allEnvironments.find((e) => e.id === activeId) : null;
+
+  /** An activity row of this window's machine, also used among other machines' rows. */
+  const activityRowClassName = (environmentId: string) =>
+    cn(
+      "mx-1 flex items-center rounded-lg border border-transparent transition-colors",
+      selectedEnvironmentId === environmentId && !isMultiSelectMode
+        ? "relative overflow-hidden bg-linear-to-r from-selected to-selected-edge text-selected-foreground before:absolute before:inset-y-1 before:left-1 before:w-0.5 before:rounded-full before:bg-primary"
+        : "hover:bg-environment-hover",
+    );
+
+  const renderActivityItem = (environment: Environment) => (
+    <EnvironmentItem
+      environment={environment}
+      subtitle={projectsById.get(environment.projectId)?.name ?? "Unknown project"}
+      isSelected={selectedEnvironmentId === environment.id}
+      onSelect={handleSelectEnvironment}
+      onDelete={deleteEnvironment}
+      onStart={startEnvironment}
+      onStop={stopEnvironment}
+      onRestart={restartEnvironment}
+      onFork={handleForkEnvironment}
+      isMultiSelectMode={isMultiSelectMode}
+      isChecked={selectedEnvironmentIds.includes(environment.id)}
+    />
+  );
+
+  /** This window's own machine's projects and environments. */
+  const localTree =
+    projectsLoading && projects.length === 0 ? (
+      <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
+        <FolderGit2 className="h-8 w-8 mb-2 opacity-50" />
+        <p className="text-sm">Loading projects...</p>
+      </div>
+    ) : projects.length === 0 ? (
+      <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
+        <FolderGit2 className="h-8 w-8 mb-2 opacity-50" />
+        <p className="text-sm">No projects yet</p>
+        <Button variant="link" size="sm" onClick={() => setShowAddProjectDialog(true)}>
+          Add your first project
+        </Button>
+      </div>
+    ) : environmentSortMode === "activity" ? (
+      <div data-testid="activity-environment-list">
+        <div
+          data-testid="activity-controls-bar"
+          className="sticky top-0 z-10 flex h-10 items-center border-b border-border/60 bg-sidebar/95 px-2 backdrop-blur-sm md:h-8"
+        >
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 text-zinc-400 hover:bg-zinc-800 hover:text-foreground"
+                aria-label="Create environment"
+                title="Create environment"
+              >
+                <Plus className="h-4 w-4" aria-hidden="true" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-56">
+              <DropdownMenuLabel className="text-xs text-muted-foreground">
+                New environment in
+              </DropdownMenuLabel>
+              {projects.map((project) => (
+                <DropdownMenuItem
+                  key={project.id}
+                  onSelect={() => handleOpenCreateEnvDialog(project.id)}
+                >
+                  <FolderGit2 className="h-4 w-4" aria-hidden="true" />
+                  <span className="truncate">{project.name}</span>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          <div className="ml-auto flex items-center gap-1">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div
+                  className="flex h-7 items-center gap-1.5 rounded-md px-2 font-mono text-[11px] tabular-nums text-zinc-400"
+                  aria-label={`${totalEnvironmentCount} ${
+                    totalEnvironmentCount === 1 ? "environment" : "environments"
+                  }`}
+                >
+                  <Boxes className="h-3.5 w-3.5 text-emerald-500" aria-hidden="true" />
+                  <span>{totalEnvironmentCount}</span>
+                </div>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" sideOffset={5}>
+                Environments
+              </TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div
+                  className={cn(
+                    "flex h-7 min-w-9 items-center justify-center gap-1.5 rounded-md px-2 font-mono text-[11px] tabular-nums",
+                    waitingEnvironmentCount > 0
+                      ? "bg-amber-500/10 text-amber-400"
+                      : "text-zinc-600",
+                  )}
+                  aria-label={`${waitingEnvironmentCount} waiting ${
+                    waitingEnvironmentCount === 1 ? "environment" : "environments"
+                  }`}
+                >
+                  <Bell
+                    className={cn(
+                      "h-3.5 w-3.5",
+                      waitingEnvironmentCount > 0 && "fill-amber-400/20",
+                    )}
+                    aria-hidden="true"
+                  />
+                  <span>{waitingEnvironmentCount}</span>
+                </div>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" sideOffset={5}>
+                Waiting environments
+              </TooltipContent>
+            </Tooltip>
+          </div>
+        </div>
+        {sortEnvironmentsByActivity(allEnvironments, projects)
+          .filter(
+            (environment) =>
+              environment.projectHome &&
+              !environment.deletionRequestedAt &&
+              environment.lifecycleOperation !== "deleting",
+          )
+          .map((home) => (
+            <ProjectHomeActivity
+              key={home.id}
+              home={home}
+              projectName={projectsById.get(home.projectId)?.name ?? "Unknown project"}
+            />
+          ))}
+        {activityEnvironments.length === 0 ? (
+          <div className="px-4 py-8 text-center text-sm text-muted-foreground">
+            No environments yet
+          </div>
+        ) : (
+          <div data-testid="activity-environment-rows" className="px-1 pt-2">
+            {activityEnvironments.map((environment, position) => (
+              <AnimatedActivityRow
+                key={environment.id}
+                environmentId={environment.id}
+                position={position}
+                className={cn(activityRowClassName(environment.id), "will-change-transform")}
+              >
+                <div className="min-w-0 flex-1 pl-2">{renderActivityItem(environment)}</div>
+              </AnimatedActivityRow>
+            ))}
+          </div>
+        )}
+      </div>
+    ) : (
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
+      >
+        <SortableContext items={projectSortableItems} strategy={verticalListSortingStrategy}>
+          {projectTree.map((entry) =>
+            entry.kind === "project" ? (
+              renderProjectGroup(entry.project)
+            ) : (
+              <SortableProjectFolder
+                key={`folder:${entry.key}`}
+                name={entry.name}
+                projectCount={entry.projects.length}
+                isCollapsed={isProjectFolderCollapsed(collapsedProjectFolders, entry.name)}
+                onToggleCollapse={() => toggleProjectFolderCollapse(entry.name)}
+                onRename={(nextName) => handleRenameFolder(entry.name, nextName)}
+                onSort={() => handleSortFolder(entry.name)}
+                onUngroup={() => handleUngroupFolder(entry.name)}
+              >
+                {entry.projects.map((project) => renderProjectGroup(project))}
+              </SortableProjectFolder>
+            ),
+          )}
+          <SidebarRootDropZone active={activeType === "project"} />
+        </SortableContext>
+
+        {/* Drag overlay for visual feedback */}
+        <DragOverlay>
+          {activeProject && (
+            <div className="rounded-md bg-card border border-border px-3 py-2 shadow-lg">
+              <div className="flex items-center gap-2">
+                <FolderGit2 className="h-4 w-4" />
+                <span className="text-sm font-medium">{activeProject.name}</span>
+              </div>
+            </div>
+          )}
+          {activeFolder && (
+            <div className="rounded-md bg-card border border-border px-3 py-2 shadow-lg">
+              <div className="flex items-center gap-2">
+                <Folder className="h-4 w-4 text-amber-400/80" aria-hidden="true" />
+                <span className="text-sm font-medium">{activeFolder.name}</span>
+              </div>
+            </div>
+          )}
+          {activeEnvironment && (
+            <div className="rounded-md bg-card border border-border px-3 py-2 shadow-lg">
+              <span className="text-sm">{activeEnvironment.name}</span>
+            </div>
+          )}
+        </DragOverlay>
+      </DndContext>
+    );
+
+  const renderMergedBoundProject = (projectId: string, sortableId: string) => {
+    const project = projectsById.get(projectId);
+    if (!project) return null;
+    return renderProjectGroup(project, {
+      sortableId,
+      machineBadge: boundMachineView ? (
+        <MachineDot
+          colorToken={boundMachineView.colorToken}
+          machineName={boundMachineView.name}
+          status="This window"
+        />
+      ) : null,
+    });
+  };
+
+  const handleBoundEnvironmentDrop = (activeId: string, overId: string) => {
+    const reorder = resolveSidebarReorder(
+      activeId,
+      overId,
+      "environment",
+      projects,
+      allEnvironments,
+    );
+    if (!reorder) return;
+    reorderEnvironments(reorder.projectId, reorder.ids).catch((err: unknown) => {
+      console.error("Failed to persist sidebar reorder:", err);
+    });
+  };
+
+  const renderFederatedActivityRow = (environmentId: string) => {
+    const environment = sidebarEnvironments.find((entry) => entry.id === environmentId);
+    if (!environment) return null;
+    return (
+      <div className={activityRowClassName(environment.id)}>
+        <div className="min-w-0 flex-1 pl-2">{renderActivityItem(environment)}</div>
+      </div>
+    );
+  };
 
   return (
     <div className="flex h-full flex-col">
@@ -1289,251 +1491,42 @@ export function HierarchicalSidebar() {
       />
 
       {/* Projects List */}
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div ref={listScrollRef} data-sidebar-scroll className="min-h-0 flex-1 overflow-y-auto">
         <div
           data-testid="sidebar-list-content"
           className={environmentSortMode === "activity" && projects.length > 0 ? "pb-2" : "py-2"}
         >
-          {federatedAggregateMode ? (
-            <FederatedAggregateList
+          {federatedMode === "activity" ? (
+            <FederatedActivityList
               machines={visibleMachines}
-              mode={federatedAggregateMode}
-              renderBoundEnvironment={(environmentId) => {
-                const environment = sidebarEnvironments.find((entry) => entry.id === environmentId);
-                return environment ? (
-                  <EnvironmentItem
-                    environment={environment}
-                    subtitle={projectsById.get(environment.projectId)?.name ?? "Unknown project"}
-                    isSelected={selectedEnvironmentId === environment.id}
-                    onSelect={handleSelectEnvironment}
-                    onDelete={deleteEnvironment}
-                    onStart={startEnvironment}
-                    onStop={stopEnvironment}
-                    onRestart={restartEnvironment}
-                    onFork={handleForkEnvironment}
-                    isMultiSelectMode={isMultiSelectMode}
-                    isChecked={selectedEnvironmentIds.includes(environment.id)}
-                  />
-                ) : null;
-              }}
+              renderBoundRow={renderFederatedActivityRow}
             />
-          ) : (
+          ) : federatedMode === "project" || federatedMode === "repository" ? (
+            <MergedProjectList
+              machines={machineViews}
+              shownIds={mergedShownIds}
+              mode={federatedMode}
+              renderBoundProject={renderMergedBoundProject}
+              onBoundEnvironmentDragEnd={handleBoundEnvironmentDrop}
+            />
+          ) : federatedMode === "machine" && boundMachineView ? (
+            <MachineSectionList
+              machines={machineViews}
+              shown={visibleMachines}
+              renderBound={() => localTree}
+            />
+          ) : federatedMode === "machine" ? (
+            // This window's machine is not identified yet; its tree comes first.
             <>
-              {federation.enabled && boundMachineView && boundMachineVisible ? (
-                <MachineSectionHeader machine={boundMachineView} />
-              ) : null}
-              {!boundMachineVisible ? null : projectsLoading && projects.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
-                  <FolderGit2 className="h-8 w-8 mb-2 opacity-50" />
-                  <p className="text-sm">Loading projects...</p>
-                </div>
-              ) : projects.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
-                  <FolderGit2 className="h-8 w-8 mb-2 opacity-50" />
-                  <p className="text-sm">No projects yet</p>
-                  <Button variant="link" size="sm" onClick={() => setShowAddProjectDialog(true)}>
-                    Add your first project
-                  </Button>
-                </div>
-              ) : environmentSortMode === "activity" ? (
-                <div data-testid="activity-environment-list">
-                  <div
-                    data-testid="activity-controls-bar"
-                    className="sticky top-0 z-10 flex h-10 items-center border-b border-border/60 bg-sidebar/95 px-2 backdrop-blur-sm md:h-8"
-                  >
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-7 w-7 text-zinc-400 hover:bg-zinc-800 hover:text-foreground"
-                          aria-label="Create environment"
-                          title="Create environment"
-                        >
-                          <Plus className="h-4 w-4" aria-hidden="true" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="start" className="w-56">
-                        <DropdownMenuLabel className="text-xs text-muted-foreground">
-                          New environment in
-                        </DropdownMenuLabel>
-                        {projects.map((project) => (
-                          <DropdownMenuItem
-                            key={project.id}
-                            onSelect={() => handleOpenCreateEnvDialog(project.id)}
-                          >
-                            <FolderGit2 className="h-4 w-4" aria-hidden="true" />
-                            <span className="truncate">{project.name}</span>
-                          </DropdownMenuItem>
-                        ))}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-
-                    <div className="ml-auto flex items-center gap-1">
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <div
-                            className="flex h-7 items-center gap-1.5 rounded-md px-2 font-mono text-[11px] tabular-nums text-zinc-400"
-                            aria-label={`${totalEnvironmentCount} ${
-                              totalEnvironmentCount === 1 ? "environment" : "environments"
-                            }`}
-                          >
-                            <Boxes className="h-3.5 w-3.5 text-emerald-500" aria-hidden="true" />
-                            <span>{totalEnvironmentCount}</span>
-                          </div>
-                        </TooltipTrigger>
-                        <TooltipContent side="bottom" sideOffset={5}>
-                          Environments
-                        </TooltipContent>
-                      </Tooltip>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <div
-                            className={cn(
-                              "flex h-7 min-w-9 items-center justify-center gap-1.5 rounded-md px-2 font-mono text-[11px] tabular-nums",
-                              waitingEnvironmentCount > 0
-                                ? "bg-amber-500/10 text-amber-400"
-                                : "text-zinc-600",
-                            )}
-                            aria-label={`${waitingEnvironmentCount} waiting ${
-                              waitingEnvironmentCount === 1 ? "environment" : "environments"
-                            }`}
-                          >
-                            <Bell
-                              className={cn(
-                                "h-3.5 w-3.5",
-                                waitingEnvironmentCount > 0 && "fill-amber-400/20",
-                              )}
-                              aria-hidden="true"
-                            />
-                            <span>{waitingEnvironmentCount}</span>
-                          </div>
-                        </TooltipTrigger>
-                        <TooltipContent side="bottom" sideOffset={5}>
-                          Waiting environments
-                        </TooltipContent>
-                      </Tooltip>
-                    </div>
-                  </div>
-                  {sortEnvironmentsByActivity(allEnvironments, projects)
-                    .filter(
-                      (environment) =>
-                        environment.projectHome &&
-                        !environment.deletionRequestedAt &&
-                        environment.lifecycleOperation !== "deleting",
-                    )
-                    .map((home) => (
-                      <ProjectHomeActivity
-                        key={home.id}
-                        home={home}
-                        projectName={projectsById.get(home.projectId)?.name ?? "Unknown project"}
-                      />
-                    ))}
-                  {activityEnvironments.length === 0 ? (
-                    <div className="px-4 py-8 text-center text-sm text-muted-foreground">
-                      No environments yet
-                    </div>
-                  ) : (
-                    <div data-testid="activity-environment-rows" className="px-1 pt-2">
-                      {activityEnvironments.map((environment, position) => (
-                        <AnimatedActivityRow
-                          key={environment.id}
-                          environmentId={environment.id}
-                          position={position}
-                          className={cn(
-                            "mx-1 flex items-center rounded-lg border border-transparent transition-colors will-change-transform",
-                            selectedEnvironmentId === environment.id && !isMultiSelectMode
-                              ? "relative overflow-hidden bg-linear-to-r from-selected to-selected-edge text-selected-foreground before:absolute before:inset-y-1 before:left-1 before:w-0.5 before:rounded-full before:bg-primary"
-                              : "hover:bg-environment-hover",
-                          )}
-                        >
-                          <div className="min-w-0 flex-1 pl-2">
-                            <EnvironmentItem
-                              environment={environment}
-                              subtitle={
-                                projectsById.get(environment.projectId)?.name ?? "Unknown project"
-                              }
-                              isSelected={selectedEnvironmentId === environment.id}
-                              onSelect={handleSelectEnvironment}
-                              onDelete={deleteEnvironment}
-                              onStart={startEnvironment}
-                              onStop={stopEnvironment}
-                              onRestart={restartEnvironment}
-                              onFork={handleForkEnvironment}
-                              isMultiSelectMode={isMultiSelectMode}
-                              isChecked={selectedEnvironmentIds.includes(environment.id)}
-                            />
-                          </div>
-                        </AnimatedActivityRow>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <DndContext
-                  sensors={sensors}
-                  collisionDetection={closestCenter}
-                  onDragStart={handleDragStart}
-                  onDragEnd={handleDragEnd}
-                >
-                  <SortableContext
-                    items={projectSortableItems}
-                    strategy={verticalListSortingStrategy}
-                  >
-                    {projectTree.map((entry) =>
-                      entry.kind === "project" ? (
-                        renderProjectGroup(entry.project)
-                      ) : (
-                        <SortableProjectFolder
-                          key={`folder:${entry.key}`}
-                          name={entry.name}
-                          projectCount={entry.projects.length}
-                          isCollapsed={isProjectFolderCollapsed(
-                            collapsedProjectFolders,
-                            entry.name,
-                          )}
-                          onToggleCollapse={() => toggleProjectFolderCollapse(entry.name)}
-                          onRename={(nextName) => handleRenameFolder(entry.name, nextName)}
-                          onSort={() => handleSortFolder(entry.name)}
-                          onUngroup={() => handleUngroupFolder(entry.name)}
-                        >
-                          {entry.projects.map(renderProjectGroup)}
-                        </SortableProjectFolder>
-                      ),
-                    )}
-                    <SidebarRootDropZone active={activeType === "project"} />
-                  </SortableContext>
-
-                  {/* Drag overlay for visual feedback */}
-                  <DragOverlay>
-                    {activeProject && (
-                      <div className="rounded-md bg-card border border-border px-3 py-2 shadow-lg">
-                        <div className="flex items-center gap-2">
-                          <FolderGit2 className="h-4 w-4" />
-                          <span className="text-sm font-medium">{activeProject.name}</span>
-                        </div>
-                      </div>
-                    )}
-                    {activeFolder && (
-                      <div className="rounded-md bg-card border border-border px-3 py-2 shadow-lg">
-                        <div className="flex items-center gap-2">
-                          <Folder className="h-4 w-4 text-amber-400/80" aria-hidden="true" />
-                          <span className="text-sm font-medium">{activeFolder.name}</span>
-                        </div>
-                      </div>
-                    )}
-                    {activeEnvironment && (
-                      <div className="rounded-md bg-card border border-border px-3 py-2 shadow-lg">
-                        <span className="text-sm">{activeEnvironment.name}</span>
-                      </div>
-                    )}
-                  </DragOverlay>
-                </DndContext>
-              )}
-              {remoteMachinesVisible.map((machine) => (
-                <RemoteMachineSection key={machine.connectionId} machine={machine} />
-              ))}
+              {localTree}
+              <MachineSectionList
+                machines={machineViews}
+                shown={remoteMachinesVisible}
+                renderBound={() => null}
+              />
             </>
+          ) : (
+            localTree
           )}
         </div>
       </div>

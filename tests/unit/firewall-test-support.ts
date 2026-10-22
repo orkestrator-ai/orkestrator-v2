@@ -27,6 +27,10 @@ export function fixtureScript(dir: string, name: string): string {
     join(dir, "lib", "firewall-domains.sh"),
     rewriteFirewallPaths(dir, read("docker/firewall-domains.sh")),
   );
+  writeFileSync(
+    join(dir, "lib", "default-allowed-domains"),
+    read("docker/default-allowed-domains"),
+  );
   const script = join(dir, name);
   writeFileSync(script, rewriteFirewallPaths(dir, read(`docker/${name}`)));
   return script;

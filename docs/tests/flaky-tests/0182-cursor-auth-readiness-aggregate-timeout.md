@@ -175,3 +175,16 @@ while the workspace, root and protocol groups ran beside it on a host at load
 average about 9. The unchanged Cursor bridge suite (`bun run test:bridge` in
 `bridges/cursor-bridge`) then passed alone: 775 passed, 0 failed. No Cursor
 implementation, assertion, timeout or skip changed.
+
+## CI `main` recurrence — 2026-10-19
+
+CI `main` run 39298647284 (`67a6cc31`, job "Unit and integration tests",
+`ubuntu-latest`, one Bun worker per bridge package) timed out three HTTP cases
+at 5,000 ms with "a beforeEach/afterEach hook timed out for this test":
+`authentication > reports an authenticated credential as ready`,
+`authentication > an attached agent is ready without reading credentials` and
+`session creation > status exposes token-delta progress while the first model
+call is running`. The later red `main` runs did not repeat it. On 2026-10-22,
+`mise run test:logged -- --name cursor-http-owner -- bun test --cwd bridges/cursor-bridge --preload ../../tests/setup-node.ts ./src/http.test.ts --parallel=1 --only-failures`
+passed unchanged on macOS (1.7 s). No implementation, assertion, timeout or
+skip changed.

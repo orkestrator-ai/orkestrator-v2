@@ -21,7 +21,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
-import * as backend from "@/lib/backend";
+import type { HostMaintenanceClient } from "@/lib/host-maintenance-client";
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -59,9 +59,11 @@ function sourceLabel(tool: HostToolStatus): string {
 
 /** The pinned toolchain, gh's channel, and the container image of the host. */
 export function HostDependencySettings({
+  client,
   snapshot,
   accept,
 }: {
+  client: HostMaintenanceClient;
   snapshot: HostMaintenanceSnapshot;
   accept: (snapshot: HostMaintenanceSnapshot) => void;
 }) {
@@ -74,7 +76,7 @@ export function HostDependencySettings({
     setStarting(kind);
     try {
       await run();
-      accept(await backend.getHostMaintenance());
+      accept(await client.getHostMaintenance());
     } catch (failure) {
       toast.error(errorText(failure));
     } finally {
@@ -143,7 +145,7 @@ export function HostDependencySettings({
             variant={repairNeeded ? "default" : "outline"}
             size="sm"
             disabled={starting !== null || tasks["toolchain-repair"]?.state === "running"}
-            onClick={() => void start("toolchain-repair", backend.startHostToolchainRepair)}
+            onClick={() => void start("toolchain-repair", client.startHostToolchainRepair)}
           >
             {starting === "toolchain-repair" ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
@@ -220,7 +222,7 @@ export function HostDependencySettings({
           disabled={
             starting !== null || tasks["image-update"]?.state === "running" || image === null
           }
-          onClick={() => void start("image-update", backend.startHostImageUpdate)}
+          onClick={() => void start("image-update", client.startHostImageUpdate)}
         >
           {starting === "image-update" ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
@@ -251,7 +253,7 @@ export function HostDependencySettings({
               onClick={() => {
                 const channel = confirmGh;
                 setConfirmGh(null);
-                if (channel) void start("gh-update", () => backend.setHostGhChannel(channel));
+                if (channel) void start("gh-update", () => client.setHostGhChannel(channel));
               }}
             >
               {confirmGh === "latest" ? "Use the newest gh" : "Use the pinned gh"}

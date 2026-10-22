@@ -224,7 +224,10 @@ describe("AlertDialog primitives", () => {
     // renders above the shadcn default.
     const sources = [
       "apps/web/src/components/settings/GlobalSettings.sections.tsx",
-      "apps/web/src/components/settings/ConnectionsSettings.tsx",
+      "apps/web/src/components/settings/machines/DeviceConnectionSection.tsx",
+      "apps/web/src/components/settings/machines/MachineSettingsDialog.tsx",
+      "apps/web/src/components/settings/HostUpdatesPanel.tsx",
+      "apps/web/src/components/settings/HostDependencySettings.tsx",
       "apps/web/src/components/settings/McpSettings.tsx",
       "apps/web/src/components/docker/DockerStatsDialog.tsx",
       "apps/web/src/components/environments/EnvironmentSettingsDialog.tsx",

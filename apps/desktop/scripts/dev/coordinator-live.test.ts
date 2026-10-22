@@ -178,13 +178,15 @@ describe("live coordinator platforms", () => {
         "read-only",
       ]),
     ).toMatchObject({ scenarios: ["read-only", "family"] });
-    expect(() => parseCoordinatorLiveArguments(["--scenario", "peer"])).toThrow(
+    expect(parseCoordinatorLiveArguments(["--scenario", "peer"]).scenarios).toEqual(["peer"]);
+    expect(() => parseCoordinatorLiveArguments(["--scenario", "status"])).toThrow(
       "Unknown live coordinator scenario",
     );
     expect(() => parseCoordinatorLiveArguments(["--scenario"])).toThrow("Missing value");
     expect(coordinatorLiveScenariosFromEnv(undefined)).toEqual([...COORDINATOR_LIVE_SCENARIOS]);
     expect(coordinatorLiveScenariosFromEnv(" family , async ")).toEqual(["async", "family"]);
-    expect(() => coordinatorLiveScenariosFromEnv("async,peer")).toThrow("Unknown");
+    expect(coordinatorLiveScenariosFromEnv("peer,async")).toEqual(["async", "peer"]);
+    expect(() => coordinatorLiveScenariosFromEnv("async,status")).toThrow("Unknown");
   });
 });
 
@@ -198,6 +200,9 @@ describe("read-only scenario", () => {
     expect(prompt).toContain(probe.canaryFile);
     expect(prompt).toContain("list_tickets");
     expect(prompt).toContain("git commit");
+    // A step with no tool is unavailable, not denied (Cursor mislabelled its
+    // hidden fetch and removed write tools `denied` with no call).
+    expect(prompt).toContain("A step you made no call for is never denied");
     // The answers are planted outside the prompt; quoting them would prove nothing.
     expect(prompt).not.toContain(probe.canaryLine);
     expect(prompt).not.toContain(probe.ticketTitle);
@@ -1151,6 +1156,7 @@ describe("suite verdict", () => {
       "read-only": summary("passed"),
       async: summary("passed", undefined, "async"),
       family: summary("passed", undefined, "family"),
+      peer: summary("passed", undefined, "peer"),
     };
     expect(coordinatorLiveVerdict("codex", all, run({ summaries: passed }))).toMatchObject({
       verdict: "passed",
@@ -1187,10 +1193,12 @@ describe("suite verdict", () => {
       "read-only": summary("skipped", "no credential"),
       async: summary("skipped", "no credential", "async"),
       family: summary("skipped", "no credential", "family"),
+      peer: summary("skipped", "no credential", "peer"),
     };
     expect(coordinatorLiveVerdict("codex", all, run({ summaries: skipped }))).toMatchObject({
       verdict: "skipped",
-      reason: "read-only: no credential; async: no credential; family: no credential",
+      reason:
+        "read-only: no credential; async: no credential; family: no credential; peer: no credential",
     });
   });
 
@@ -1271,7 +1279,7 @@ describe("suite verdict", () => {
       { ...summary("passed"), version: 2 },
       { ...summary("passed"), platform: "other" },
       { ...summary("passed"), verdict: "flaky" },
-      { ...summary("passed"), scenario: "peer" },
+      { ...summary("passed"), scenario: "status" },
     ]) {
       expect(parseCoordinatorLivePlatformSummary(value)).toBeNull();
     }

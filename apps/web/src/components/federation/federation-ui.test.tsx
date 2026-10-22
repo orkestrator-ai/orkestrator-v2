@@ -9,6 +9,7 @@ import {
 } from "@orkestrator/protocol/federation";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import type { MachineView } from "@/lib/federation/aggregate";
+import { isMachineShown } from "@/lib/federation/sidebar-layout";
 import type { FederatedEnvironment } from "@/lib/federation/summaries";
 import { reorderFederatedEnvironments } from "@/lib/federation/federated-actions";
 import { portalStore } from "@/lib/portal/portal-store";
@@ -22,8 +23,12 @@ import {
   uninstallDesktopFake,
 } from "@/test/federation-desktop-fake";
 import { mockToastWarning } from "../../../../../tests/mocks/sonner";
-import { FederatedAggregateList, RemoteMachineSection } from "./FederatedSidebarSections";
-import { FederatedEnvironmentRow } from "./FederatedEnvironmentRow";
+import {
+  FederatedActivityList,
+  MergedProjectList,
+  RemoteMachineSection,
+} from "./FederatedSidebarSections";
+import { RemoteEnvironmentItem } from "./RemoteMachineTree";
 import { FederationProvider } from "./FederationProvider";
 import { MachineBadge, MachineDot } from "./MachineDot";
 import { MachinesFilter } from "./MachinesFilter";
@@ -59,7 +64,31 @@ function RemoteSections() {
 
 function AggregateList({ mode }: { mode: "project" | "activity" }) {
   const machines = useMachineViews();
-  return <FederatedAggregateList machines={machines} mode={mode} />;
+  if (mode === "activity") {
+    return <FederatedActivityList machines={machines} renderBoundRow={() => null} />;
+  }
+  return (
+    <MergedProjectList
+      machines={machines}
+      shownIds={new Set(machines.filter(isMachineShown).map((machine) => machine.connectionId))}
+      mode="project"
+      renderBoundProject={() => null}
+      onBoundEnvironmentDragEnd={() => undefined}
+    />
+  );
+}
+
+function MachineOrder() {
+  const machines = useMachineViews();
+  return (
+    <ol>
+      {machines.map((machine) => (
+        <li key={machine.connectionId} data-testid="machine-order">
+          {machine.connectionId}
+        </li>
+      ))}
+    </ol>
+  );
 }
 
 function FilterOnly() {
@@ -87,9 +116,9 @@ function rowOf(connectionId: string): HTMLElement {
 }
 
 async function openRowActions(machineName: string) {
-  const trigger = screen.getByRole("button", { name: `Actions for feature on ${machineName}` });
+  const row = screen.getByRole("button", { name: new RegExp(`^feature, on ${machineName},`) });
   await act(async () => {
-    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    fireEvent.contextMenu(row);
   });
   return screen.findByRole("menu");
 }
@@ -147,7 +176,7 @@ afterEach(() => {
   window.location.reload = originalReload;
 });
 
-test("aggregate projections retain bound-machine environment controls", () => {
+test("merged lists draw this window's own projects and rows with its full controls", () => {
   const local = machineView({ bound: true });
   const remote = machineView({
     connectionId: "b",
@@ -155,16 +184,26 @@ test("aggregate projections retain bound-machine environment controls", () => {
     projects: [],
     environmentsByProject: new Map(),
   });
-  for (const mode of ["activity", "project", "repository"] as const) {
-    const view = render(
-      <FederatedAggregateList
+  const view = render(
+    <FederatedActivityList
+      machines={[local, remote]}
+      renderBoundRow={(id) => <button aria-label={`Start local ${id}`}>Start</button>}
+    />,
+  );
+  expect(screen.getByRole("button", { name: "Start local env-1" })).toBeTruthy();
+  view.unmount();
+  for (const mode of ["project", "repository"] as const) {
+    const list = render(
+      <MergedProjectList
         machines={[local, remote]}
+        shownIds={new Set(["a", "b"])}
         mode={mode}
-        renderBoundEnvironment={(id) => <button aria-label={`Start local ${id}`}>Start</button>}
+        renderBoundProject={(id) => <button aria-label={`Open local ${id}`}>Open</button>}
+        onBoundEnvironmentDragEnd={() => undefined}
       />,
     );
-    expect(screen.getByRole("button", { name: "Start local env-1" })).toBeTruthy();
-    view.unmount();
+    expect(screen.getByRole("button", { name: "Open local project-1" })).toBeTruthy();
+    list.unmount();
   }
 });
 
@@ -202,34 +241,24 @@ describe("CL-05: machine identity visual rules", () => {
   test("CL-05: an environment row is named by environment, machine and activity", () => {
     const machine = machineView();
     render(
-      <FederatedEnvironmentRow
+      <RemoteEnvironmentItem
         machine={machine}
-        project={machine.projects[0]!}
         environment={firstEnvironment(machine)}
-        showMachineLabel
+        subtitle="app"
       />,
     );
-    const button = screen.getByRole("button", { name: /^feature, on Machine A, Working/ });
-    expect(button.getAttribute("aria-label")).toContain("project app");
-    expect(screen.getByTestId("federated-environment-row").className).not.toContain("opacity-60");
+    expect(screen.getByRole("button", { name: /^feature, on Machine A, Working/ })).toBeTruthy();
+    expect(screen.getByText("app")).toBeTruthy();
   });
 
   test("CL-05: an unavailable machine's row is dimmed and says connection lost, never stopped", () => {
     const machine = machineView({ transport: "unreachable", freshness: "stale" });
-    render(
-      <FederatedEnvironmentRow
-        machine={machine}
-        project={null}
-        environment={firstEnvironment(machine)}
-        showMachineLabel={false}
-      />,
-    );
+    render(<FederatedActivityList machines={[machine]} renderBoundRow={() => null} />);
     const row = screen.getByTestId("federated-environment-row");
     expect(row.className).toContain("opacity-60");
     const label = within(row).getAllByRole("button")[0]!.getAttribute("aria-label") ?? "";
     expect(label).toContain("Machine A");
     expect(label).toMatch(/connection lost/i);
-    expect(within(row).getByText("Unavailable")).toBeTruthy();
     expect(row.textContent ?? "").not.toMatch(/stopped/i);
     expect(label).not.toMatch(/stopped/i);
   });
@@ -281,10 +310,11 @@ describe("UI-01: machines with identical IDs and project names", () => {
     const projects = screen.getAllByTestId("federated-project");
     expect(projects).toHaveLength(2);
     expect(new Set(projects.map((project) => project.getAttribute("data-project"))).size).toBe(2);
-    // Deterministic: equal names sort by machine name.
-    expect(
-      projects.map((project) => within(project).getByText(/^Machine [AB]$/).textContent),
-    ).toEqual(["Machine A", "Machine B"]);
+    // The command node's registry order until the user moves them.
+    expect(projects.map((project) => project.getAttribute("data-project"))).toEqual([
+      projectKey(projectRef("bk_a" as BackendId, "project-1")),
+      projectKey(projectRef("bk_b" as BackendId, "project-1")),
+    ]);
     expect(
       within(projects[0]!).getAllByTestId("machine-dot")[0]!.getAttribute("data-machine-color"),
     ).toBe("teal");
@@ -638,3 +668,91 @@ describe("DP-01/DP-03/CR-03: browser and iOS tabs move to a leaf workspace", () 
     expect(fake.calls.filter((call) => /^(stop|delete)_/.test(call.command))).toEqual([]);
   });
 });
+
+describe("the sidebar order the command node keeps", () => {
+  test("machines follow the stored order, and the window's own machine does not move to the top", async () => {
+    installDesktopFake({
+      list: connectionList([MACHINE_A, MACHINE_B]),
+      datasets: { a: sharedIdDataset("idle"), b: sharedIdDataset("idle") },
+      layout: { revision: 1, machineOrder: ["bk_b", "bk_self", "bk_a"] },
+    });
+    window.orkestratorWorkspaceTarget = { nodeId: "bk_a", nodeName: "Machine A", path: "direct" };
+    try {
+      renderWithFederation(<MachineOrder />);
+      await waitFor(() =>
+        // The command node's own summary is not part of this fixture.
+        expect(screen.getAllByTestId("machine-order").map((item) => item.textContent)).toEqual([
+          "bk_b",
+          "bk_a",
+        ]),
+      );
+    } finally {
+      delete window.orkestratorWorkspaceTarget;
+    }
+  });
+
+  test("by project hides a machine that is not connected", async () => {
+    installDesktopFake({
+      list: connectionList([
+        MACHINE_A,
+        remoteConnection("b", "Machine B", "rose", { transport: "unreachable" }),
+      ]),
+      datasets: { a: sharedIdDataset("idle"), b: sharedIdDataset("idle") },
+    });
+    renderWithFederation(<AggregateList mode="project" />);
+    await waitForRows(1);
+    expect(
+      screen
+        .getAllByTestId("federated-project")
+        .map((project) => project.getAttribute("data-project")),
+    ).toEqual([projectKey(projectRef("bk_a" as BackendId, "project-1"))]);
+  });
+
+  test("by project follows a stored order across machines", async () => {
+    installDesktopFake({
+      list: connectionList([MACHINE_A, MACHINE_B]),
+      datasets: { a: sharedIdDataset("idle"), b: sharedIdDataset("idle") },
+      layout: {
+        revision: 2,
+        projectOrder: [
+          projectKey(projectRef("bk_b" as BackendId, "project-1")),
+          projectKey(projectRef("bk_a" as BackendId, "project-1")),
+        ],
+      },
+    });
+    renderWithFederation(<AggregateList mode="project" />);
+    await waitFor(() =>
+      expect(
+        screen
+          .getAllByTestId("federated-project")
+          .map((project) => project.getAttribute("data-project")),
+      ).toEqual([
+        projectKey(projectRef("bk_b" as BackendId, "project-1")),
+        projectKey(projectRef("bk_a" as BackendId, "project-1")),
+      ]),
+    );
+  });
+});
+
+for (const mode of ["remote", "merged"] as const) {
+  test(`${mode} folder rename normalizes collapse state and clears the previous key`, async () => {
+    installDesktopFake({
+      list: connectionList([MACHINE_A]),
+      datasets: {
+        a: { projects: [{ id: "p", name: "App", order: 0, folder: "Work" }], environments: {} },
+      },
+    });
+    renderWithFederation(mode === "remote" ? <RemoteSections /> : <AggregateList mode="project" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Collapse folder Work" }));
+    fireEvent.contextMenu(screen.getByTitle("Expand folder Work"));
+    fireEvent.click(await screen.findByText("Rename Folder"));
+    fireEvent.change(await screen.findByLabelText("Rename folder Work"), {
+      target: { value: "  New    Folder  " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^Rename$/ }));
+    await screen.findByRole("button", { name: "Expand folder New Folder" });
+    const prefix = mode === "remote" ? "bk_a" : "project";
+    expect(useMachineViewStore.getState().collapsedFolderKeys).toContain(`${prefix}/new folder`);
+    expect(useMachineViewStore.getState().collapsedFolderKeys).not.toContain(`${prefix}/work`);
+  });
+}

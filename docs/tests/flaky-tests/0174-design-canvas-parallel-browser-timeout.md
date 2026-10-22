@@ -165,3 +165,9 @@ Branch `todo-0036-design-canvas-qualification-1477f37ca3cf` from `b83ae534`, on 
   - Run once more with 18 `yes` busy processes added (load about 60).
 - **Result:** this case passed in every run, 24 in total across both viewports, along with the full nine-worker `mise run test:browser` runs. The only failures were in the new accessibility spec, and were fixed in the same change (see [0036](../../todo/design-canvas/0036-design-canvas-qualification.md#accessibility)).
 - **Assessment:** host CPU contention alone did not reproduce the timeout, so there is still no basis for choosing between a client wait on an observable state and a product fix. The case stays open. No implementation, assertion, timeout or skip changed.
+
+## Sidebar main-merge validation — 2026-10-22
+
+- `mise run test:logged -- --name merge-browser -- mise run test:browser` ran nine workers against the initial `c17f1c8d5` merge: 399 passed, 81 skipped, two failed (362.5 s). The desktop canvas exceeded 30 s while clicking Switch tab at line 234; Monaco was the other failure.
+- `mise run test:logged -- --name merge-canvas-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts --workers=1` passed the complete unchanged owner, exit 0 in 14.0 s.
+- Evidence: `orkestrator-test-run.mgE8Fb/merge-browser.log.gz` under the host temporary directory. No assertion, deadline or skip changed; host contention remains a hypothesis.

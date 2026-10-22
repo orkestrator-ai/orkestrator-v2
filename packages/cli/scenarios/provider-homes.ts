@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { restrictGrokAuthSnapshot } from "@orkestrator/protocol/login-snapshots";
 import {
   getClaudeOAuthAccessToken,
   getHostClaudeCredentials,
@@ -62,9 +63,41 @@ function copyableCredential(provider: "codex" | "opencode", contents: string): s
 }
 
 /**
+ * Pi's API-key logins only. OAuth entries are dropped, never cloned: Pi
+ * refreshes them in place, which would rotate the host's refresh token.
+ */
+function piApiKeys(contents: string): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(contents);
+  } catch {
+    parsed = undefined;
+  }
+  const keys: Record<string, { type: "api_key"; key: string }> = {};
+  if (record(parsed)) {
+    for (const [name, credential] of Object.entries(parsed)) {
+      if (
+        record(credential) &&
+        credential.type === "api_key" &&
+        typeof credential.key === "string" &&
+        credential.key.trim()
+      )
+        keys[name] = { type: "api_key", key: credential.key };
+    }
+  }
+  if (Object.keys(keys).length === 0) {
+    throw new Error(
+      "Live pi scenarios require an api_key entry in Pi's auth.json; refusing to clone OAuth logins because refresh could invalidate the host login.",
+    );
+  }
+  return JSON.stringify(keys);
+}
+
+/**
  * Isolate writable provider state. Only an explicitly selected live provider
- * receives credentials: API keys for Codex/OpenCode, or Claude's access token
- * without its refresh token. HOME stays intact for host tools; XDG consumers
+ * receives credentials: API keys for Codex/OpenCode/Pi/Cursor, Claude's access
+ * token without its refresh token, or Grok's login with its refresh token
+ * blanked (the rule the agent-test profiles use). HOME stays intact for host tools; XDG consumers
  * Git, gh and mise are explicitly pointed at their original settings below.
  */
 export async function isolateProviderHomes(
@@ -79,6 +112,10 @@ export async function isolateProviderHomes(
     XDG_CONFIG_HOME: path.join(base, "xdg-config"),
     XDG_DATA_HOME: path.join(base, "xdg-data"),
     XDG_STATE_HOME: path.join(base, "xdg-state"),
+    // Home-relative, so container input staging finds them under the
+    // disposable host home below.
+    PI_CODING_AGENT_DIR: path.join(base, ".pi", "agent"),
+    GROK_HOME: path.join(base, ".grok"),
   };
   for (const directory of Object.values(env))
     await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -113,6 +150,48 @@ export async function isolateProviderHomes(
     // and container input staging. The original host was read only above.
     env.ORKESTRATOR_AGENT_TEST_HOST_HOME = base;
     env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR = env.CLAUDE_CONFIG_DIR!;
+  }
+  if (options.credentialSource === "pi") {
+    const source = path.join(
+      hostEnv.PI_CODING_AGENT_DIR?.trim() || path.join(hostHome, ".pi", "agent"),
+      "auth.json",
+    );
+    const contents = await readFile(source, "utf8").catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw new Error("Cannot read pi scenario credentials");
+    });
+    if (contents) {
+      await writeFile(path.join(env.PI_CODING_AGENT_DIR!, "auth.json"), piApiKeys(contents), {
+        mode: 0o600,
+      });
+    }
+    env.ORKESTRATOR_AGENT_TEST_HOST_HOME = base;
+    env.ORKESTRATOR_AGENT_TEST_HOST_PI_AGENT_DIR = env.PI_CODING_AGENT_DIR!;
+  }
+  if (options.credentialSource === "grok") {
+    if (hostEnv.XAI_API_KEY?.trim()) {
+      env.XAI_API_KEY = hostEnv.XAI_API_KEY.trim();
+      await writeFile(path.join(env.GROK_HOME!, "xai-api-key"), env.XAI_API_KEY, { mode: 0o600 });
+    } else {
+      const source = path.join(
+        hostEnv.GROK_HOME?.trim() || path.join(hostHome, ".grok"),
+        "auth.json",
+      );
+      const contents = await readFile(source, "utf8").catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return undefined;
+        throw new Error("Cannot read grok scenario credentials");
+      });
+      if (contents) {
+        const snapshot = restrictGrokAuthSnapshot(contents);
+        if ("withheld" in snapshot)
+          throw new Error(`Live grok scenarios cannot use the host login: ${snapshot.withheld}`);
+        await writeFile(path.join(env.GROK_HOME!, "auth.json"), snapshot.text, { mode: 0o600 });
+      }
+    }
+    env.ORKESTRATOR_AGENT_TEST_HOST_HOME = base;
+  }
+  if (options.credentialSource === "cursor" && hostEnv.CURSOR_API_KEY?.trim()) {
+    env.CURSOR_API_KEY = hostEnv.CURSOR_API_KEY.trim();
   }
   if (options.credentialSource === "codex" || options.credentialSource === "opencode") {
     const provider = options.credentialSource;
@@ -170,6 +249,11 @@ export async function prepareIsolatedBackendEnvironment(
     "OPENCODE_CONFIG",
     "OPENCODE_CONFIG_CONTENT",
     "OPENCODE_AUTH_JSON",
+    "CURSOR_API_KEY",
+    "XAI_API_KEY",
+    "GROK_AUTH_FILE",
+    "GROK_AUTH_PROVIDER_COMMAND",
+    "GROK_AUTH_METHOD_ID",
   ])
     delete env[key];
   const providerHomes = await isolateProviderHomes({ ...options, hostEnv, hostHome });

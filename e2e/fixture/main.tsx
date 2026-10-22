@@ -13,7 +13,7 @@ import { AgentUsageFixture } from "./AgentUsageFixture";
 import { AddProjectDialogFixture } from "./AddProjectDialogFixture";
 import { BackgroundTaskOutcomeFixture } from "./BackgroundTaskOutcomeFixture";
 import { CodexSubagentCardsFixture } from "./CodexSubagentCardsFixture";
-import { ConnectionsSettingsFixture } from "./ConnectionsSettingsFixture";
+import { MachinesSettingsFixture } from "./MachinesSettingsFixture";
 import { DesignCanvasFixture } from "./DesignCanvasFixture";
 import { MenuPlacementFixture } from "./MenuPlacementFixture";
 import { ComposerIconPickersFixture } from "./ComposerIconPickersFixture";
@@ -1715,7 +1715,7 @@ function fixtureForPath() {
     );
   }
   if (window.location.pathname === "/remote-machine-tree") return <RemoteMachineTreeFixture />;
-  if (window.location.pathname === "/connections-settings") return <ConnectionsSettingsFixture />;
+  if (window.location.pathname === "/machines-settings") return <MachinesSettingsFixture />;
   if (window.location.pathname === "/fullscreen-settings") return <FullscreenSettingsFixture />;
   if (window.location.pathname === "/global-settings") return <GlobalSettingsFixture />;
   if (window.location.pathname === "/github-cli-setup") return <GitHubCliSetupFixture />;

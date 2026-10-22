@@ -26,6 +26,19 @@ const DOT_CLASSES: Record<MachineColorToken | typeof FALLBACK_MACHINE_COLOR, str
   neutral: "bg-transparent border border-dashed border-muted-foreground",
 };
 
+// The same colours as an outline, for a machine shown while it is not connected.
+const OUTLINE_CLASSES: Record<MachineColorToken | typeof FALLBACK_MACHINE_COLOR, string> = {
+  violet: "border-violet-500 dark:border-violet-400",
+  blue: "border-blue-500 dark:border-blue-400",
+  teal: "border-teal-500 dark:border-teal-400",
+  green: "border-emerald-500 dark:border-emerald-400",
+  amber: "border-amber-500 dark:border-amber-400",
+  orange: "border-orange-500 dark:border-orange-400",
+  rose: "border-rose-500 dark:border-rose-400",
+  slate: "border-slate-500 dark:border-slate-400",
+  neutral: "border-dashed border-muted-foreground",
+};
+
 const LABELS: Record<MachineColorToken | typeof FALLBACK_MACHINE_COLOR, string> = {
   violet: "Violet",
   blue: "Blue",
@@ -40,6 +53,10 @@ const LABELS: Record<MachineColorToken | typeof FALLBACK_MACHINE_COLOR, string> 
 
 export function machineDotClass(token: string | undefined): string {
   return DOT_CLASSES[machineColorForDisplay(token)];
+}
+
+export function machineOutlineClass(token: string | undefined): string {
+  return OUTLINE_CLASSES[machineColorForDisplay(token)];
 }
 
 export function machineColorLabel(token: string | undefined): string {

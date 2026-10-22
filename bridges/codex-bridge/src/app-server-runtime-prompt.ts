@@ -31,6 +31,7 @@ import { DispatchJournalAdmissionError } from "./sessions/dispatch-journal.js";
 import { createMessageId, type NormalizedMessage, type NormalizedPart } from "./messages/types.js";
 
 import { parseCodexSteerCommand, wrapPromptForConversationMode } from "./prompts/slash-commands.js";
+import { skillUnavailability } from "./commands/skill-inventory.js";
 import type { CommandPlan } from "./commands/codex-command-catalogue.js";
 import {
   NATIVE_AGENT_COMMAND_CATALOGUE_VERSION,
@@ -248,7 +249,10 @@ export class CodexRuntimePrompt {
     // prepared, so a stale one costs nothing and keeps the user's draft.
     let plan: CommandPlan | undefined;
     if (input.command) {
-      plan = await this.ctx.commandCatalogue.resolveSelected(input.command);
+      plan = await this.ctx.commandCatalogue.resolveSelected(
+        input.command,
+        session.config.policy?.projectResources !== false,
+      );
       if (plan.kind === "refused") return commandRefusal(plan.message);
       if (plan.kind === "builtin" && input.outputSchema) {
         return commandRefusal(
@@ -319,17 +323,20 @@ export class CodexRuntimePrompt {
     if (!plan) {
       plan =
         interpretCommands && !input.outputSchema
-          ? await this.ctx.commandCatalogue.resolveTyped(input.prompt)
+          ? await this.ctx.commandCatalogue.resolveTyped(
+              input.prompt,
+              session.config.policy?.projectResources !== false,
+            )
           : { kind: "text" };
     } else if (plan.kind === "skill") {
       // The environment check above can replace the child. A binding listed by
       // the dead generation is withdrawn; re-validate against the live one.
-      const live = this.ctx.commandCatalogue.skills.current()?.byId.get(plan.binding.id);
-      if (!live || live.path !== plan.binding.path || !live.enabled || live.ambiguous) {
-        const revalidated = await this.ctx.commandCatalogue.resolveSelected(input.command!);
-        if (revalidated.kind === "refused") return commandRefusal(revalidated.message);
-        plan = revalidated;
-      }
+      const revalidated = await this.ctx.commandCatalogue.resolveSelected(
+        input.command!,
+        session.config.policy?.projectResources !== false,
+      );
+      if (revalidated.kind === "refused") return commandRefusal(revalidated.message);
+      plan = revalidated;
     }
 
     // 4. Local commands never reach the model. A refused *typed* command is
@@ -341,7 +348,9 @@ export class CodexRuntimePrompt {
     if (plan.kind === "builtin") {
       const response =
         plan.builtin === "help"
-          ? await this.ctx.commandCatalogue.helpText()
+          ? await this.ctx.commandCatalogue.helpText(
+              session.config.policy?.projectResources !== false,
+            )
           : await this.modelsListText(session);
       this.emitLocalResponse(session, input.prompt, response);
       return { ok: true, result: { status: "processing", requestId } };
@@ -362,6 +371,13 @@ export class CodexRuntimePrompt {
     } else if (plan.kind === "skill") {
       executionPrompt = `$${plan.binding.name}${plan.args ? ` ${plan.args}` : ""}`;
       skillInput = { name: plan.binding.name, path: plan.binding.path };
+    }
+    if (plan.kind === "skill") {
+      const unavailable = skillUnavailability(
+        plan.binding,
+        session.config.policy?.projectResources !== false,
+      );
+      if (unavailable) return commandRefusal(unavailable.message);
     }
     const isPlanReview = session.config.mode === "plan";
     // Consolidation is a structured report turn, not a planning turn. Keep the
@@ -384,9 +400,12 @@ export class CodexRuntimePrompt {
     // Thread-scoped configuration a prompt can change: MCP approvals, and
     // hosted web search when a read-only turn denies a network the session
     // allows. app-server applies both only when a thread starts or resumes.
+    let projectSkillsRevision = this.ctx.projectSkillsRevision;
     const needsThreadReload = (config: EngineTurnConfig): boolean =>
       Boolean(input.workflowResultTool) ||
-      context?.promptThreadConfig !== promptThreadConfig(config);
+      context?.promptThreadConfig !== promptThreadConfig(config) ||
+      (config.policy?.projectResources === false &&
+        context?.projectSkillsRevision !== projectSkillsRevision);
     if (context && !context.materialized && needsThreadReload(promptConfig())) {
       // A thread that was never prompted has no rollout, so reloading it for
       // changed MCP approvals would lose it. Release it and start a fresh
@@ -431,7 +450,37 @@ export class CodexRuntimePrompt {
       // read-only turn's network denial, before dispatch.
       context = await this.resumeThreadForPrompt(session.id, context, turnConfig);
     }
+    // A watcher can invalidate the inventory while start/resume is in flight.
+    // Rebuild with fresh exclusions before certifying this turn's configuration.
+    for (
+      let attempt = 0;
+      turnConfig.policy?.projectResources === false &&
+      projectSkillsRevision !== this.ctx.projectSkillsRevision;
+      attempt += 1
+    ) {
+      if (attempt >= 3) {
+        context.promptThreadConfig = undefined;
+        return {
+          ok: false,
+          status: 503,
+          error: "Codex project skills kept changing; retry when the inventory settles",
+        };
+      }
+      if (!context.materialized) {
+        // No rollout exists until the first turn. Refuse before journaling and
+        // release this empty thread so retry starts with the refreshed inventory.
+        await this.lifecycle.detachThread(context, true);
+        return {
+          ok: false,
+          status: 503,
+          error: "Codex project skills changed during attachment; retry the prompt",
+        };
+      }
+      projectSkillsRevision = this.ctx.projectSkillsRevision;
+      context = await this.resumeThreadForPrompt(session.id, context, turnConfig);
+    }
     context.promptThreadConfig = promptThreadConfig(turnConfig);
+    context.projectSkillsRevision = projectSkillsRevision;
     if (input.workflowResultTool && turnConfig.agentMcp) {
       // The turn can only finish by calling this tool. Without it the model
       // runs to the end and pastes its result as text, which the backend waits
@@ -722,6 +771,7 @@ export class CodexRuntimePrompt {
           context = await this.resumeThreadForPrompt(session.id, context, turnConfig);
         }
         context.promptThreadConfig = promptThreadConfig(turnConfig);
+        context.projectSkillsRevision = projectSkillsRevision;
         // Close the overlap window before the first await below, exactly as the
         // main dispatch path does. Recovery leaves a re-attached thread `idle`
         // with `turnStartedAt` cleared, so this also restores the busy state a
@@ -1343,7 +1393,9 @@ export class CodexRuntimePrompt {
         commands: [],
       };
     }
-    return this.ctx.commandCatalogue.list();
+    return this.ctx.commandCatalogue.list(
+      this.ctx.registry.getSession(sessionId)?.config.policy?.projectResources !== false,
+    );
   }
 
   async refreshCommandCatalogue(

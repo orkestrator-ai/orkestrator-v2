@@ -1,5 +1,5 @@
 import { describe, expect, jest, spyOn, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
@@ -26,6 +26,7 @@ import {
   setClaudeHomeForTesting,
   track,
   waitFor,
+  blockClaudeConfigDir,
 } from "./session-manager-test-harness.js";
 
 // ---------------------------------------------------------------------------
@@ -824,7 +825,7 @@ describe("plan approval flow", () => {
           permissionMode: "default",
         });
         const call = await nextQueryCall();
-        await writeFile(join(directory, ".claude"), "not a directory", "utf-8");
+        await blockClaudeConfigDir(directory);
 
         const result = await call.options.canUseTool!("EnterPlanMode", { reason: "plan" });
         expect(result.behavior).toBe("deny");
@@ -860,7 +861,7 @@ describe("plan approval flow", () => {
           plan: "Persist the completed plan-mode exit",
         });
         await waitFor(() => getPendingPlanApprovals(session.id).length === 1);
-        await writeFile(join(directory, ".claude"), "not a directory", "utf-8");
+        await blockClaudeConfigDir(directory);
         const approval = getPendingPlanApprovals(session.id)[0];
         expect(respondToPlanApproval(approval.id, true)).toBe(true);
 

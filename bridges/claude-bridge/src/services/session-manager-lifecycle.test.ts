@@ -33,6 +33,7 @@ import {
   waitFor,
   withTemporaryClaudeHome,
   withWorkspaceCwd,
+  blockClaudeConfigDir,
 } from "./session-manager-test-harness.js";
 import type { SdkSessionInfo } from "./session-manager-test-harness.js";
 
@@ -555,7 +556,7 @@ describe("session lifecycle", () => {
     try {
       const session = createSession("launch");
       track(session.id);
-      await writeFile(join(directory, ".claude"), "not a directory", "utf-8");
+      await blockClaudeConfigDir(directory);
       let releasePersistence: (() => void) | undefined;
       const persistenceGate = new Promise<void>((resolve) => {
         releasePersistence = resolve;
@@ -660,7 +661,7 @@ describe("session lifecycle", () => {
     try {
       const session = createSession("launch");
       track(session.id);
-      await writeFile(join(directory, ".claude"), "not a directory", "utf-8");
+      await blockClaudeConfigDir(directory);
 
       await expect(
         claimPromptDispatch(session.id, "initial-prompt:env-1:tab-failure", async () => {}),
@@ -788,7 +789,7 @@ describe("session lifecycle", () => {
       const session = createSession("plan");
       track(session.id);
       session.planMode = false;
-      await writeFile(join(directory, ".claude"), "not a directory", "utf-8");
+      await blockClaudeConfigDir(directory);
       const { events, stop } = captureEvents();
       try {
         await expect(setSessionPreferences(session.id, { planMode: true })).rejects.toBeTruthy();

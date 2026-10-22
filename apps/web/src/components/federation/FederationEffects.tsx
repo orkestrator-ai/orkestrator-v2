@@ -56,7 +56,7 @@ function useResourceLink(machines: readonly MachineView[]) {
       if (machines.length === 0) return;
       handled.current = true;
       toast.info("This link is for a machine that isn't saved here", {
-        action: { label: "Add a connection", onClick: () => requestGlobalSettings("connections") },
+        action: { label: "Add a machine", onClick: () => requestGlobalSettings("machines") },
       });
       return;
     }

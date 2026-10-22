@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { prepareIsolatedBackendEnvironment } from "./provider-homes.js";
+import { prepareProviderRuntime } from "./provider-runtime.js";
 import { randomUUID } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -25,6 +26,7 @@ import { isPublicActionResponse, type PublicEnvelope } from "@orkestrator/protoc
 export const PACKAGE_ROOT = path.resolve(import.meta.dir, "..");
 const BIN = path.join(PACKAGE_ROOT, "bin", "orkestrator.js");
 const READY_TIMEOUT_MS = 60_000;
+const TOOLCHAIN_INSTALL_TIMEOUT_MS = 5 * 60_000;
 const COMMAND_TIMEOUT_MS = 10 * 60_000;
 const MAX_CAPTURE_BYTES = 4 * 1024 * 1024;
 
@@ -88,6 +90,10 @@ export { isolateProviderHomes } from "./provider-homes.js";
 /** Start an isolated backend through the packaged launcher (`serve`). */
 export async function startIsolatedBackend(options: {
   root: string;
+  /** Packaged distribution under test; defaults to this worktree. */
+  packageRoot?: string;
+  hostEnv?: NodeJS.ProcessEnv;
+  hostHome?: string;
   env?: Record<string, string>;
   extraArgs?: string[];
   /** The explicitly authorized live provider (see `isolateProviderHomes`). */
@@ -100,15 +106,43 @@ export async function startIsolatedBackend(options: {
   ) {
     throw new Error("Select live credentials through credentialSource, not extraArgs");
   }
+  const packageRoot = options.packageRoot ?? PACKAGE_ROOT;
+  const launcher = path.join(packageRoot, "bin", "orkestrator.js");
   const dataDir = path.join(options.root, "data");
   const worktreeDir = path.join(options.root, "worktrees");
   await mkdir(dataDir, { recursive: true, mode: 0o700 });
   const env = await prepareIsolatedBackendEnvironment(options);
+  // Pi, Cursor and Grok: their bridge, platform selection and pinned binary.
+  const runtime = await prepareProviderRuntime({
+    root: options.root,
+    dataDir,
+    packageRoot,
+    ...(options.credentialSource ? { provider: options.credentialSource } : {}),
+  });
+  if (runtime.toolchainTools.length > 0) {
+    const install = spawnSync(
+      process.execPath,
+      [
+        launcher,
+        "toolchain",
+        "install",
+        "--json",
+        "--data-dir",
+        dataDir,
+        ...runtime.toolchainTools.flatMap((tool) => ["--tool", tool]),
+      ],
+      { cwd: options.root, env, encoding: "utf8", timeout: TOOLCHAIN_INSTALL_TIMEOUT_MS },
+    );
+    if (install.status !== 0)
+      throw new Error(
+        `toolchain install ${runtime.toolchainTools.join(",")} failed (exit ${install.status ?? "unknown"})`,
+      );
+  }
   const logFile = path.join(options.root, "backend.log");
   const child = Bun.spawn(
     [
       process.execPath,
-      BIN,
+      launcher,
       "serve",
       "--host",
       "127.0.0.1",
@@ -121,6 +155,7 @@ export async function startIsolatedBackend(options: {
       worktreeDir,
       "--runtime-flavor",
       "agent-test",
+      ...runtime.serveArgs,
       ...(options.extraArgs ?? []),
       ...(options.credentialSource ? ["--credential-source", options.credentialSource] : []),
     ],

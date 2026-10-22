@@ -98,6 +98,7 @@ import {
   type DelegationRecord,
 } from "../../apps/desktop/scripts/dev/coordinator-live-delegation";
 import { coordinatorLiveBudgets } from "../../apps/desktop/scripts/dev/coordinator-live-budgets";
+import { runPeerScenario } from "../../apps/desktop/scripts/dev/coordinator-live-peer-orchestration";
 import {
   createDelegationWatch,
   removeLaunchedEnvironments,
@@ -813,6 +814,42 @@ async function familyCase(input: {
   expect(failures, `${platform}: the worker-mail family scenario`).toEqual([]);
 }
 
+/**
+ * The peer scenario: two ordinary environments, neither launched by a
+ * coordinator, with Wake peers on. The responder starts idle; the opener
+ * sends it the first message by environment id; they alternate until ten
+ * messages have moved. The harness sends nothing after the two startup
+ * prompts and answers nothing.
+ */
+async function peerCase(input: {
+  page: Page;
+  entry: CoordinatorLivePlatform;
+  summary: CoordinatorLivePlatformSummary;
+  skip: (reason: string) => never;
+  cleanup: Array<() => Promise<unknown>>;
+}): Promise<void> {
+  const { entry, summary, skip, cleanup } = input;
+  const { platform } = entry;
+  const { invoke, fixture } = await openProfile(input.page);
+  const { checks, transcripts, escaped, mail, observations } = await runPeerScenario({
+    invoke,
+    projectId: fixture.id,
+    probe: { platform, token: randomBytes(6).toString("hex") },
+    skip,
+    cleanup,
+    log: (line) => console.log(line),
+  });
+  const calls = Object.values(transcripts).flatMap((messages) => transcriptToolCalls(messages));
+  summary.toolCalls = calls.map(({ name, state }) => ({ name, state }));
+  if (escaped.length > 0) summary.escapedInteractions = escaped;
+  const failures = recordChecks(summary, checks, {
+    peerMessages: mail.filter((message) => message.route === "peer").length,
+    ...coordinatorWaitCounts(calls),
+    observations: observations.length,
+  });
+  expect(failures, `${platform}: the peer-mail scenario`).toEqual([]);
+}
+
 test.describe("live coordinator", () => {
   test.skip(
     !LIVE,
@@ -893,6 +930,18 @@ test.describe("live coordinator", () => {
             cleanup,
           });
           await familyCase({ coordinator, summary, cleanup });
+        });
+      });
+    }
+
+    if (scenarios.includes("peer")) {
+      test(`peer mail on ${platform} wakes both sides: ten alternating messages between two ordinary environments with Wake peers on and nobody acting`, async ({
+        page,
+      }) => {
+        test.setTimeout(budgets.tests.peer);
+        page.setDefaultTimeout(30_000);
+        await runCase(entry, "peer", async ({ summary, skip, cleanup }) => {
+          await peerCase({ page, entry, summary, skip, cleanup });
         });
       });
     }

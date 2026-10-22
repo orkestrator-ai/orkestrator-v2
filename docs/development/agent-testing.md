@@ -844,8 +844,9 @@ the shell names an added account remains tracked in
 
 The live coordinator suite checks that a real provider keeps the coordinator's
 read-only boundary (`read-only`), that delegation never waits inside a turn
-(`async`), and that worker mail flows with nobody's help (`family`). It runs as
-one command and owns its profiles:
+(`async`), that worker mail flows with nobody's help (`family`), and that peer
+mail between two ordinary environments wakes each side with **Wake peers** on
+(`peer`). It runs as one command and owns its profiles:
 
 ```bash
 mise run test:agent:coordinator                              # every platform and scenario
@@ -1008,6 +1009,27 @@ reply), each ping has a distinct delivered request and reply, ordered by
 persisted creation timestamps with each reply before the next request, no family
 message is `stored` or `inject_failed`, and nothing reached the harness.
 
+The `peer` case needs no coordinator. It turns **Settings → Messaging → Wake
+peers** on for its run (off by default) and restores it afterwards, then
+creates two ordinary local environments on the fixture project, each with a
+startup agent on the platform in build mode, the way `launch_environment`
+does but with no coordinator behind them, so their mail takes the `peer`
+route. The responder's startup prompt asks it to say ready and end its turn;
+once it is idle, the opener's startup prompt sends it the first message by
+environment id. Each side answers message *n* with message *n + 1*
+(`reply_message`) until the tenth, and the opener then writes a done line.
+The harness sends nothing after the two startup prompts and answers nothing,
+waiting at most `ORKESTRATOR_AGENT_TEST_COORDINATOR_PEER_TIMEOUT_MS` (default
+1800000) for the exchange. It passes when Wake peers was the only messaging
+setting changed, all ten messages exist exactly once with the right sender and
+recipient, each routed `peer` and `injected`, each created no earlier than the
+previous one was delivered (the delivery is what woke its recipient), no other
+message passed between the peers, the opener wrote its done line, no
+interaction reached the harness, and neither transcript holds a user row
+other than its startup prompt and mail carriers. A peer turn failing on a
+recognised sign-in error skips the case. Both environments are stopped and
+deleted when it ends.
+
 Each scenario step waits at most
 `ORKESTRATOR_AGENT_TEST_COORDINATOR_STEP_TIMEOUT_MS` (default 600000). Workers
 the coordinator launched are stopped and deleted when the case ends. The
@@ -1018,7 +1040,7 @@ to the coordinator (a carrier count of -1 means unverified), and its `sleep`,
 Playwright timeouts cover the sum of each scenario's wait budgets plus four
 minutes for setup and cleanup. The profile runner uses those same timeouts and
 adds two minutes per selected scenario for process overhead. Both honor the
-step, turn and family timeout environment overrides.
+step, turn, family and peer timeout environment overrides.
 
 Credential-free tests in `coordinator-live-observer.test.ts` exercise the same
 observer and gate/queue orchestration as the live spec, including completion
@@ -1028,7 +1050,7 @@ negative evidence and deadline relationships.
 
 To run the spec against a profile you started yourself, set the opt-in and
 optionally narrow the platforms and scenarios
-(`ORKESTRATOR_AGENT_TEST_COORDINATOR_SCENARIOS=async,family`). Each case closes the main conversation an
+(`ORKESTRATOR_AGENT_TEST_COORDINATOR_SCENARIOS=async,family,peer`). Each case closes the main conversation an
 earlier case assigned and leaves the project home environment in place:
 
 ```bash
@@ -1248,3 +1270,39 @@ go; `--older-than <days>` also removes stopped profiles idle for that long.
   processes; it never kills by executable name or port.
 - If reset refuses the target, do not bypass the sentinel or path check. Inspect
   `profile.json` and choose the intended named profile.
+
+## Claude container login renewal qualification
+
+The deterministic tests cover startup refresh with surviving MCP logins, account
+switch fencing, sanitization publication races, and bridge-start ordering. The
+Docker fixture also boots and restarts with a legacy Claude refresh token on a
+read-only mount and verifies that the working credential is access-only.
+
+`apps/backend/tests/claude-container-login-live.test.ts` qualifies the real
+refresh exchange separately. It runs the pinned host CLI, then pushes its
+renewal into a running container while a Claude background task waits past the
+old token's **actual** expiry. The same session must produce a model response
+after expiry; the container is never restarted, and no renderer is mounted.
+Credentials and responses stay out of test output.
+
+Provision an **exclusive disposable account** at
+`<private-root>/agent-accounts/claude/<uuid>` with an on-disk `.credentials.json`.
+Do not borrow a personal login or an agent-test profile's copied refresh token:
+this qualification intentionally rotates the dedicated account's refresh token.
+Wait until the real login has 90–240 seconds remaining; do not edit expiry
+metadata. Build a development image and supply the pinned host toolchain's bin
+directory. Then run:
+
+```bash
+ORKESTRATOR_LIVE_CLAUDE_LOGIN=1 \
+ORKESTRATOR_LIVE_CLAUDE_ACCOUNT_HOME=<private-root>/agent-accounts/claude/<uuid> \
+ORKESTRATOR_LIVE_CLAUDE_IMAGE=orkestrator-v2:dev-<workspace-hash> \
+ORKESTRATOR_LIVE_CLAUDE_TOOLCHAIN_BIN=<pinned-toolchain-bin> \
+  mise run test:logged -- --name claude-login-live -- bun test --cwd apps/backend ./tests/claude-container-login-live.test.ts --parallel=1 --only-failures
+```
+
+The test is skipped without the opt-in. With the opt-in, missing prerequisites,
+provider failures, ineffective refreshes, and failed continuations fail the
+qualification. It removes only its own container and scratch directory; the
+renewed dedicated login remains in its home. A synthetic Docker pass does not
+prove that the provider refresh exchange succeeded.

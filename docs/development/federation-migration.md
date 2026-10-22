@@ -142,7 +142,7 @@ Other storage:
 ## Feature flags
 
 The flags are stored in the catalogue's `features` and toggled under
-Settings → Connections. They default to on. Turning one off changes only this
+Settings → Machines, in the **This device** card. They default to on. Turning one off changes only this
 client. It never stops or changes remote work, and it never edits saved
 machines or routes, so turning it back on restores the previous behaviour.
 

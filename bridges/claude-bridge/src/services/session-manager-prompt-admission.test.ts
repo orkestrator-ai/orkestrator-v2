@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { structuredOutputFailure } from "@orkestrator/protocol/structured-output";
@@ -10,6 +10,7 @@ import {
   sessionManagerTestHome,
   setClaudeHomeForTesting,
   track,
+  blockClaudeConfigDir,
 } from "./session-manager-test-harness.js";
 import {
   TRANSCRIPT_READ_FAILED,
@@ -110,7 +111,7 @@ describe("prompt admission", () => {
     const directory = await mkdtemp(join(tmpdir(), "claude-admission-rollback-"));
     setClaudeHomeForTesting(directory);
     try {
-      await writeFile(join(directory, ".claude"), "not a directory");
+      await blockClaudeConfigDir(directory);
       const previousAbort = new AbortController();
       const session = registeredSession({
         planMode: false,

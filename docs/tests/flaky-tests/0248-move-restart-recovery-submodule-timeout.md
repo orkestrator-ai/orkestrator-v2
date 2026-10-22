@@ -256,3 +256,10 @@ below the host temporary directory. Scheduling contention remains a hypothesis.
 - **Assessment:** confirmed recurrence. The host load average exceeded 50 during validation; scheduling contention is plausible but unproven. No move implementation, assertion, timeout or skip changed.
 
 The aggregate exited 1 after 822.1 s. Backend counts were 9918 passed, 80 skipped, three failed and two between-test errors across 10001 tests in 572 files (757.16 s). The other failures are recorded in 0248, 0512 and 0673; root firewall fixture timeouts are recorded in 0192. All other workspace packages, bridges and protocol regeneration passed.
+
+## Sidebar main-merge validation — 2026-10-22
+
+- Initial merge of `c17f1c8d5` into `b0f24b642`: `mise run test:logged -- --name merge-suite -- mise run test` reserved workspace/root/bridges/protocol workers 4/1/2/1. Backend reported 9,967 passed, 69 skipped, two failed and one error (556.4 s).
+- `restart recovery re-links submodules of an adopted or abandoned copy` exceeded five seconds (5,064.82 ms); the submodule child then reported missing `nested` directories after fixture cleanup and was terminated.
+- After refreshing the pending merge to `7e051d955`, `mise run test:logged -- --name merge-environment-move-owner -- bun test --cwd apps/backend ./src/core/environment-move.test.ts --parallel=1 --only-failures` passed the complete unchanged owner, exit 0 in 23.9 s.
+- Evidence: `orkestrator-test-run.9ak22c/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory. Browser, Docker and another worktree's tests overlapped the initial aggregate. No assertion, deadline or skip changed; host contention remains a hypothesis.

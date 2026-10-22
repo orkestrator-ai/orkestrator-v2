@@ -169,6 +169,7 @@ export async function runClient(
     if (error instanceof CliError && error.code === "observation-interrupted") {
       return output.interrupted(signalName(signal), {
         action: error.action ?? action,
+        details: error.details,
         ...(error.receipt ? { receipt: error.receipt } : {}),
         ...(connection ? { connection } : {}),
       });

@@ -54,3 +54,7 @@ hints that never overtake their commit. This case was not rerun. Its symptoms
 or profile timing, and nothing here implicates the design change feed. It
 stays open; see the follow-up in
 [0036-design-canvas-qualification.md](../../todo/design-canvas/0036-design-canvas-qualification.md).
+
+## Standalone reruns — 2026-10-22
+
+`mise run test:logged -- --name design-isolated -- mise run test:agent:design:isolated` ran three times on fresh disposable profiles at host load averages 31–60, once with the branch's product files reverted to `b83ae534`. This case passed every time, in 40–48 s per file run. The other case in the file failed every time at the new design tab's brief, which is recorded in [0036](../../todo/design-canvas/0036-design-canvas-qualification.md) under the opening-prompt item and is not this flake. The case was not run late in a full `test:agent:browser` run, the only setting where it has failed. It stays open. No implementation, assertion, timeout or skip changed.

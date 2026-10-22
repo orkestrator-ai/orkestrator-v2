@@ -1,3 +1,4 @@
+import { ensureProjectExpanded } from "./sidebar-project";
 import {
   newReviewValidationRun,
   type ReviewValidationRun,
@@ -1458,9 +1459,7 @@ test("agent mail rehydrates after an inactive recipient is opened and the page r
     }
 
     await page.goto(status.browserUrl!);
-    const expandProject = page.getByRole("button", { name: `Expand project ${fixture!.name}` });
-    await expect(expandProject).toBeVisible({ timeout: 30_000 });
-    await expandProject.click();
+    await ensureProjectExpanded(page, fixture!.name);
     await page.getByText(sender.name, { exact: true }).first().click();
     await expect(page.getByText(sender.name, { exact: true }).first()).toBeVisible();
     await invoke("send_agent_mail", {
@@ -1478,11 +1477,7 @@ test("agent mail rehydrates after an inactive recipient is opened and the page r
     await expect(page.getByRole("button", { name: "Agent messages", exact: true })).toBeVisible();
 
     await page.reload();
-    const expandAfterReload = page.getByRole("button", {
-      name: `Expand project ${fixture!.name}`,
-    });
-    await expect(expandAfterReload).toBeVisible({ timeout: 30_000 });
-    await expandAfterReload.click();
+    await ensureProjectExpanded(page, fixture!.name);
     await page.getByText(recipient.name, { exact: true }).first().click();
     await expect(page.getByText("1 message in inbox · pull only")).toBeVisible({
       timeout: 15_000,
@@ -1623,9 +1618,7 @@ test("coordinator Multi Review action reconciles a mounted renderer and survives
     }
     const [target, other] = environments;
     await page.goto(status.browserUrl!);
-    const expand = page.getByRole("button", { name: `Expand project ${fixture!.name}` });
-    await expect(expand).toBeVisible({ timeout: 30_000 });
-    await expand.click();
+    await ensureProjectExpanded(page, fixture!.name);
     await page.getByText(target!.name, { exact: true }).first().click();
     const input = {
       requestId: `browser-review-${target!.id}`,
@@ -1698,9 +1691,7 @@ test("coordinator Multi Review action reconciles a mounted renderer and survives
     });
     await expect(page.getByText(/^Multi Review cancelled\b/).first()).toBeVisible();
     await page.reload();
-    const expandAgain = page.getByRole("button", { name: `Expand project ${fixture!.name}` });
-    await expect(expandAgain).toBeVisible({ timeout: 30_000 });
-    await expandAgain.click();
+    await ensureProjectExpanded(page, fixture!.name);
     await page.getByText(target!.name, { exact: true }).first().click();
     await expect(page.getByRole("heading", { name: "Multi Review", exact: true })).toBeVisible({
       timeout: 30_000,
@@ -1719,7 +1710,7 @@ test("coordinator Multi Review action reconciles a mounted renderer and survives
   }
 });
 
-test("Docker fixture boots and restarts with access-only Codex and Grok imports", async () => {
+test("Docker fixture boots and restarts with access-only Claude, Codex and Grok imports", async () => {
   test.skip(process.env.ORKESTRATOR_AGENT_TEST_DOCKER !== "1", "requires a development image");
   const runtime = resolveRuntimeProfile({
     repositoryRoot,
@@ -1735,7 +1726,16 @@ test("Docker fixture boots and restarts with access-only Codex and Grok imports"
     return result.stdout.trim();
   };
   try {
-    for (const provider of ["codex", "grok"]) await fs.mkdir(path.join(root, provider));
+    for (const provider of ["claude", "codex", "grok"]) await fs.mkdir(path.join(root, provider));
+    const claude = JSON.stringify({
+      claudeAiOauth: {
+        accessToken: "fixture-access",
+        refreshToken: "fixture-refresh",
+        expiresAt: Date.now() + 3600_000,
+      },
+      mcpOAuth: { fixture: { accessToken: "fixture-mcp", refreshToken: "fixture-mcp-refresh" } },
+    });
+    await fs.writeFile(path.join(root, "claude/.credentials.json"), claude, { mode: 0o600 });
     const codex = JSON.stringify({ tokens: { access_token: "fixture-access", refresh_token: "" } });
     const grok = JSON.stringify({
       live: { key: "fixture-access", refresh_token: "", expires_at: "2099-01-01T00:00:00Z" },
@@ -1756,6 +1756,8 @@ test("Docker fixture boots and restarts with access-only Codex and Grok imports"
       `type=bind,source=${root}/codex,target=/codex-home,readonly`,
       "--mount",
       `type=bind,source=${root}/grok,target=/grok-home,readonly`,
+      "--mount",
+      `type=bind,source=${root}/claude,target=/claude-config,readonly`,
       runtime.dockerImage,
     ]);
     for (let boot = 0; boot < 2; boot++) {
@@ -1780,6 +1782,8 @@ test("Docker fixture boots and restarts with access-only Codex and Grok imports"
         "bash",
         "-euc",
         `
+        test "$(stat -c %a "$HOME/.claude/.credentials.json")" = 600
+        jq -e '.claudeAiOauth.accessToken == "fixture-access" and (.claudeAiOauth | has("refreshToken") | not) and .mcpOAuth.fixture.accessToken == "fixture-mcp" and (.mcpOAuth.fixture | has("refreshToken") | not)' "$HOME/.claude/.credentials.json" >/dev/null
         test "$(stat -c %a "$HOME/.codex/auth.json")" = 600
         test "$(stat -c %a "$HOME/.grok/auth.json")" = 600
         jq -e '.tokens.access_token == "fixture-access" and .tokens.refresh_token == "" and (.last_refresh | type == "string")' "$HOME/.codex/auth.json" >/dev/null
@@ -1789,6 +1793,7 @@ test("Docker fixture boots and restarts with access-only Codex and Grok imports"
       ]);
       docker(["stop", "--time", "1", containerId]);
     }
+    expect(await fs.readFile(path.join(root, "claude/.credentials.json"), "utf8")).toBe(claude);
     expect(await fs.readFile(path.join(root, "codex/auth.json"), "utf8")).toBe(codex);
     expect(await fs.readFile(path.join(root, "grok/auth.json"), "utf8")).toBe(grok);
   } finally {
@@ -2170,7 +2175,7 @@ test("review validation queues across worktrees and runs while its environment i
     }
     const [target, other] = environments;
     await page.goto(status.browserUrl!);
-    await page.getByRole("button", { name: `Expand project ${fixture.name}` }).click();
+    await ensureProjectExpanded(page, fixture.name);
     await page.getByText(target!.name, { exact: true }).first().click();
     const snapshot = await invoke<{ head: string; paths: string[] }>(
       "get_environment_uncommitted_paths",
@@ -2274,7 +2279,7 @@ test("review validation queues across worktrees and runs while its environment i
     expect(run.results[0]!.queueReason).toBeUndefined();
     const completed = run;
     await page.reload();
-    await page.getByRole("button", { name: `Expand project ${fixture.name}` }).click();
+    await ensureProjectExpanded(page, fixture.name);
     await page.getByText(target!.name, { exact: true }).first().click();
     const restored = await invoke<ReviewValidationRun>("status_review_validation", {
       environmentId: target!.id,
@@ -2447,17 +2452,24 @@ for (const width of [1280, 390]) {
       const section = settings.getByRole("combobox", { name: "Settings section", exact: true });
       if (await section.isVisible()) {
         await section.click();
-        await page.getByRole("option", { name: "Updates", exact: true }).click();
+        await page.getByRole("option", { name: "Machines", exact: true }).click();
       } else {
-        await settings.getByRole("button", { name: "Updates", exact: true }).click();
+        await settings.getByRole("button", { name: "Machines", exact: true }).click();
       }
+      const currentMachine = settings.getByTestId("machine-row").filter({ hasText: "This window" });
+      await currentMachine.getByRole("button", { name: /^Updates for / }).click();
+      const updates = page.getByRole("dialog", { name: /^Updates for / });
       await expect(
-        settings.getByRole("heading", { name: "Agent tools", exact: true }),
+        updates.getByRole("heading", { name: "Agent tools", exact: true }),
       ).toBeVisible();
-      return settings;
+      return updates;
     };
     let settings = await openUpdates();
-    await settings.getByRole("button", { name: "Close settings" }).click();
+    await settings.getByRole("button", { name: "Close", exact: true }).click();
+    await page
+      .getByRole("dialog", { name: "Settings", exact: true })
+      .getByRole("button", { name: "Close settings" })
+      .click();
     const task = await invoke<{ id: string }>("set_host_gh_channel", { channel: "pinned" });
     await expect
       .poll(async () => {
@@ -2472,7 +2484,11 @@ for (const width of [1280, 390]) {
       .toBe("succeeded");
     settings = await openUpdates();
     await expect(settings.getByRole("status").filter({ hasText: /^Done/ })).toBeVisible();
-    await settings.getByRole("button", { name: "Close settings" }).click();
+    await settings.getByRole("button", { name: "Close", exact: true }).click();
+    await page
+      .getByRole("dialog", { name: "Settings", exact: true })
+      .getByRole("button", { name: "Close settings" })
+      .click();
     await page.reload();
     settings = await openUpdates();
     await expect(settings.getByRole("status").filter({ hasText: /^Done/ })).toBeVisible();

@@ -44,7 +44,10 @@ async function fixtureHome() {
   await fs.mkdir(dataDir, { recursive: true });
   // Claude: allowlisted files and extensions, plus state that must never be staged.
   await write(path.join(home, ".claude", "CLAUDE.md"), "memory");
-  await write(path.join(home, ".claude", ".credentials.json"), '{"token":"fixture"}');
+  await write(
+    path.join(home, ".claude", ".credentials.json"),
+    '{"claudeAiOauth":{"accessToken":"fixture","refreshToken":"fixture-refresh"}}',
+  );
   await write(path.join(home, ".claude", "history.jsonl"), "SENTINEL-HISTORY");
   await write(path.join(home, ".claude", "projects", "p", "s.jsonl"), "SENTINEL-TRANSCRIPT");
   await write(path.join(home, ".claude", "commands", "review.md"), "command");
@@ -255,6 +258,138 @@ describe("portable input staging", () => {
       provider: "codex",
       files: 0,
       bytes: 0,
+      skipped: { "login-withheld": 1 },
+    });
+  });
+
+  test("stages Claude's login access-only and withholds an expired one without a warning", async () => {
+    const { dataDir, roots, home } = await fixtureHome();
+    const now = new Date("2026-10-21T12:00:00Z");
+    await write(
+      path.join(home, ".claude", ".credentials.json"),
+      JSON.stringify({
+        claudeAiOauth: {
+          accessToken: "access",
+          refreshToken: "SENTINEL",
+          expiresAt: now.getTime() + 60 * 60_000,
+        },
+        mcpOAuth: { server: { accessToken: "mcp", refreshToken: "SENTINEL" } },
+      }),
+    );
+    const live = await stagePortableInputs(dataDir, "env-claude", new Set(["claude"]), roots, now);
+    const text = await fs.readFile(
+      path.join(live.directory, "claude-config", ".credentials.json"),
+      "utf8",
+    );
+    expect(JSON.parse(text)).toEqual({
+      claudeAiOauth: { accessToken: "access", expiresAt: now.getTime() + 60 * 60_000 },
+      mcpOAuth: { server: { accessToken: "mcp" } },
+    });
+    // A stale on-disk file beside a Keychain login is normal on macOS; the
+    // stdin sync delivers Claude's login, so withholding it is not reported.
+    await write(
+      path.join(home, ".claude", ".credentials.json"),
+      JSON.stringify({
+        claudeAiOauth: { accessToken: "a", refreshToken: "SENTINEL", expiresAt: 1 },
+      }),
+    );
+    const expired = await stagePortableInputs(
+      dataDir,
+      "env-claude-expired",
+      new Set(["claude"]),
+      roots,
+      now,
+    );
+    expect(await listFiles(expired.directory)).not.toContain("claude-config/.credentials.json");
+    expect(expired.providers[0]?.skipped["login-withheld"]).toBeUndefined();
+  });
+
+  test("stages OpenCode and Pi OAuth logins access-only and keeps their API keys", async () => {
+    const { dataDir, roots, home } = await fixtureHome();
+    const now = new Date("2026-10-21T12:00:00Z");
+    const live = now.getTime() + 8 * 3600_000;
+    await write(
+      path.join(home, ".local", "share", "opencode", "auth.json"),
+      JSON.stringify({
+        "opencode-go": { type: "api", key: "go-key" },
+        openai: { type: "oauth", access: "oc", refresh: "SENTINEL-OC", expires: live },
+        "github-copilot": { type: "oauth", access: "gho", refresh: "gho", expires: 0 },
+      }),
+    );
+    await write(
+      path.join(home, ".pi", "agent", "auth.json"),
+      JSON.stringify({
+        anthropic: { type: "oauth", access: "pi", refresh: "SENTINEL-PI", expires: live },
+        openai: { type: "oauth", access: "old", refresh: "SENTINEL-OLD", expires: 1 },
+        openrouter: { type: "api_key", key: "or-key" },
+      }),
+    );
+    await write(path.join(home, ".pi", "agent", "settings.json"), "{}");
+    const staged = await stagePortableInputs(
+      dataDir,
+      "env-provider-logins",
+      new Set(["opencode", "pi"] as const),
+      roots,
+      now,
+    );
+    expect(
+      JSON.parse(
+        await fs.readFile(path.join(staged.directory, "opencode-data", "auth.json"), "utf8"),
+      ),
+    ).toEqual({
+      "opencode-go": { type: "api", key: "go-key" },
+      openai: { type: "oauth", access: "oc", refresh: "", expires: live },
+      "github-copilot": { type: "oauth", access: "gho", refresh: "gho", expires: 0 },
+    });
+    expect(
+      JSON.parse(
+        await fs.readFile(path.join(staged.directory, "pi-config", "agent", "auth.json"), "utf8"),
+      ),
+    ).toEqual({
+      anthropic: { type: "oauth", access: "pi", refresh: "", expires: live },
+      openrouter: { type: "api_key", key: "or-key" },
+    });
+    for (const [provider, stage] of [
+      ["opencode", "opencode-data"],
+      ["pi", "pi-config"],
+    ] as const) {
+      const files = await listFiles(path.join(staged.directory, stage));
+      const bytes = (
+        await Promise.all(files.map((file) => fs.stat(path.join(staged.directory, stage, file))))
+      ).reduce((sum, stat) => sum + stat.size, 0);
+      expect(staged.providers.find((entry) => entry.provider === provider)).toEqual({
+        provider,
+        files: files.length,
+        bytes,
+        // The expired Pi OpenAI login is reported; the file itself is still staged.
+        skipped: provider === "pi" ? { "login-withheld": 1 } : {},
+      });
+    }
+    for (const file of await listFiles(staged.directory)) {
+      expect(await fs.readFile(path.join(staged.directory, file), "utf8")).not.toContain(
+        "SENTINEL",
+      );
+    }
+
+    // Expired OAuth logins only: nothing is staged for them.
+    await write(
+      path.join(home, ".pi", "agent", "auth.json"),
+      JSON.stringify({ anthropic: { type: "oauth", access: "a", refresh: "r", expires: 1 } }),
+    );
+    const expired = await stagePortableInputs(
+      dataDir,
+      "env-provider-expired",
+      new Set(["pi"] as const),
+      roots,
+      now,
+    );
+    expect(await listFiles(expired.directory)).toEqual([
+      "manifest.json",
+      "pi-config/agent/settings.json",
+    ]);
+    expect(expired.providers[0]).toMatchObject({
+      provider: "pi",
+      files: 1,
       skipped: { "login-withheld": 1 },
     });
   });

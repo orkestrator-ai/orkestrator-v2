@@ -5,6 +5,7 @@ import {
   recoverStoredWorkspace,
   switchWorkspace,
   takeSwitchSelection,
+  takeSidebarScroll,
   takeWorkspaceStartupError,
 } from "./workspace-switch";
 import { readStoredWorkspace, writeStoredWorkspace } from "./workspace-target-storage";
@@ -176,4 +177,28 @@ test("expired startup succeeds before rendering; unexpired startup preserves the
   invokeMock.mockClear();
   expect(await recoverStoredWorkspace()).toBe(false);
   expect(invokeMock).not.toHaveBeenCalled();
+});
+
+test("workspace switch remembers sidebar scroll and consumes it exactly once", async () => {
+  window.orkestrator = { workspaceTarget: { set: async () => undefined } } as never;
+  spyOn(window.location, "reload").mockImplementation(() => undefined);
+  const sidebar = document.createElement("div");
+  sidebar.setAttribute("data-sidebar-scroll", "");
+  sidebar.scrollTop = 812;
+  document.body.append(sidebar);
+  try {
+    await switchWorkspace("bk_A");
+    expect(takeSidebarScroll()).toBe(812);
+    expect(takeSidebarScroll()).toBeNull();
+  } finally {
+    sidebar.remove();
+  }
+});
+
+test("invalid saved scroll offsets are removed rather than restored", () => {
+  for (const value of ["-1", "NaN", "Infinity", "broken"]) {
+    sessionStorage.setItem("orkestrator.workspace-switch-sidebar-scroll", value);
+    expect(takeSidebarScroll()).toBeNull();
+    expect(sessionStorage.getItem("orkestrator.workspace-switch-sidebar-scroll")).toBeNull();
+  }
 });

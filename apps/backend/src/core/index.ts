@@ -29,6 +29,9 @@ import {
 } from "./workflow-supervisor.js";
 import { BackendActivityJobs, type BackendActivityJob } from "./backend-activity-jobs.js";
 import { HostSuspendDetector } from "./host-suspend-detector.js";
+import { ContainerClaudeLoginKeeper } from "./container-claude-login-keeper.js";
+import { refreshHostClaudeLogin } from "./claude-host-login-refresh.js";
+import { setHostClaudeLoginRefresher } from "./agent-accounts-containers.js";
 import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
 
 /** Former activity-bundle cadence, per named job. */
@@ -192,6 +195,7 @@ export class OrkestratorBackend {
   private shutdownPromise: Promise<void> | null = null;
   private activityLeaseSweep: ReturnType<typeof setInterval> | null = null;
   private hostSuspendDetector: HostSuspendDetector | null = null;
+  private claudeLoginKeeper: ContainerClaudeLoginKeeper | null = null;
   private nativeActivitySweep: ReturnType<typeof setInterval> | null = null;
   private tabResourceSweep: ReturnType<typeof setInterval> | null = null;
   /** Step 08 named due jobs; `null` on the rollback bundle. Never both. */
@@ -1189,6 +1193,14 @@ export class OrkestratorBackend {
       onSuspend: (suspendedMs) => recurringDiagnosticsRegistry.notifySuspension(suspendedMs),
     });
     this.hostSuspendDetector.start();
+    // Containers hold Claude logins access-only; this hands them each host
+    // renewal and renews the host login before it lapses.
+    this.claudeLoginKeeper ??= new ContainerClaudeLoginKeeper(this.context, {
+      refreshHostLogin: (account) => refreshHostClaudeLogin(this.context, account),
+    });
+    const keeper = this.claudeLoginKeeper;
+    setHostClaudeLoginRefresher(() => keeper.refreshHostIfDue());
+    keeper.start();
     // Before the gateway can accept a start command: bridges left behind by a
     // backend that died without draining must be reaped first, or the codex
     // pidfile they still hold blocks this instance's app-server ownership.
@@ -1815,6 +1827,9 @@ export class OrkestratorBackend {
     }
     this.hostSuspendDetector?.stop();
     this.hostSuspendDetector = null;
+    this.claudeLoginKeeper?.stop();
+    this.claudeLoginKeeper = null;
+    setHostClaudeLoginRefresher(undefined);
     // Log followers are observers; stopping them never touches containers.
     shutdownContainerLogService();
     shutdownOomEventWatcher();

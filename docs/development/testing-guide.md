@@ -194,6 +194,38 @@ uncaught exceptions. A server-side test there is not exercising the runtime the
 code ships in. `tests/unit/test-suite-ownership.test.ts` therefore rejects
 root tests that import backend or desktop sources.
 
+The same guard gives every test file exactly one owner. It derives the owners
+from what actually runs: the aggregate's groups (`buildConcurrentGroups` in
+`scripts/test-all.ts`) and each package's test selectors, not a list kept
+beside them. A new test file that no suite selects, or that two suites select,
+fails it.
+
+### Controlled time
+
+Wait for an explicit signal, not wall time. To skip an application delay,
+capture it with `installControlledTimeout` (`tests/helpers/controlled-timeout.ts`,
+tested by `tests/unit/controlled-timeout.test.ts`). It intercepts only timers
+scheduled at one exact delay, leaving Testing Library, promises and unrelated
+timers real, and it throws when more timers are pending at that delay than
+expected (by default one, which suits a debounce) so a colliding module is not
+captured by accident. `advance()` runs the captured timers, `pendingCount()`
+says whether one is armed, and `restore()` reports any it drops. The
+`GlobalSettings`, `PersistentTerminal`, `AddProjectDialog` and desktop
+`BackendProcess` suites use it.
+
+- A negative assertion needs evidence that its deadline has passed or cannot
+  arrive: advance the captured timer, or show that none is armed. Do not
+  shorten a sleep without that.
+- Fake time in the parent cannot advance a child process; use an explicit
+  completion signal or a controllable fixture boundary instead.
+- Avoid global fake time across a real HTTP handshake.
+- Never run all timers on loops that re-arm themselves (retries, polling).
+- Install controlled time before rendering, advance inside `act`, settle the
+  promises the advance triggers, and restore real time even when an assertion
+  fails.
+- Do not swap a sleep for an async query that waits the same wall time, and
+  never change a production debounce or retry constant to make a test cheaper.
+
 `mise run typecheck` covers every location: package tests through each
 package's typecheck script (`tsconfig.test.json` in the backend and desktop),
 root tests and `scripts/` through `tests/tsconfig.json`, and the browser and
@@ -270,6 +302,20 @@ fixtures. Run it alone with
 
 Record results in the evidence log of
 [0042-service-preview-rollout.md](../todo/previews-and-annotations/0042-service-preview-rollout.md#evidence-log).
+
+### Opt-in design checks
+
+Design export from a real running container (the shipped helper over
+`docker exec -i`, `/workspace` on a `volume-nocopy` named volume, interrupted
+by killing the client, stopping or restarting the container and emptying the
+workspace) is skipped unless its image variable is set. The container and
+volume carry a throwaway owner label and are removed by id.
+
+```bash
+ORKESTRATOR_TEST_DOCKER_DESIGN_IMAGE=orkestrator-v2:latest \
+  mise run test:logged -- --name design-export-container -- bun test --cwd apps/backend \
+  ./src/core/design/export-container.test.ts
+```
 
 ### CLI scenarios
 
@@ -710,11 +756,17 @@ executed nothing, and this repository still tracks live flakes in
 `docs/tests/flaky-tests/0000-index.md`, so a green that proves only "the inputs are unchanged" is
 not worth the seconds it saves. Every aggregate invocation runs every test.
 
-`build` stays cacheable, and it is the expensive dependency. `test:workspace`
-still depends on it, so a warm run skips the rebuild and goes straight to the
-tests. Both test tasks keep their `inputs` declarations, which name the shared
-Bun configuration and preload files alongside the package files, so the wiring
-is already correct if caching is ever reconsidered.
+`build` stays cacheable, and it is the expensive dependency. Only the backend
+and CLI `test:workspace` tasks depend on it, through the root `turbo.json`,
+because `apps/backend/tests/standalone.test.ts` and
+`packages/cli/tests/cli.test.ts` consume `dist`. Web, web-public, desktop and
+protocol override `dependsOn` to `[]` in their own `turbo.json`: their tests
+consume no build output. The workspace group asks Turbo for `build` and
+`test:workspace` in one invocation, so every build still runs while
+independent tests overlap it, and a warm run skips the rebuilds. Both test
+tasks keep their `inputs` declarations, which name the shared Bun configuration
+and preload files alongside the package files, so the wiring is already correct
+if caching is ever reconsidered.
 
 Turborepo 2.8 automatically shares its local cache across linked Git worktrees
 when no explicit cache directory is configured. Do not add a relative

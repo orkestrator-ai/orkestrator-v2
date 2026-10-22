@@ -219,6 +219,67 @@ describe("DesignLayerTree", () => {
     await screen.findByRole("button", { name: "now-live" });
   });
 
+  test("a frame culled while its layers load falls back to the backend, not an error row", async () => {
+    let reject: (error: Error) => void = () => {};
+    const bridge = {
+      renderedContentId: "c-s1",
+      closed: false,
+      ask: mock(() => new Promise((_resolve, fail) => (reject = fail))),
+    } as unknown as DesignFrameBridge & { closed: boolean };
+    const loadHierarchy = mock<HierarchyLoader>(async (_env, _canvas, _frameId, query) => ({
+      revision: 1,
+      structureId: "s1",
+      page: pageFor({ body: [{ label: "from-backend" }] }, "fp", query.rootSelector, query.cursor),
+    }));
+    const tree = setup({
+      frames: [frame("f1", "Culled")],
+      metas: { f1: meta("f1", "s1") },
+      getBridge: () => bridge,
+      liveFrames: new Set(["f1"]),
+      loadHierarchy,
+    });
+    await flush();
+    expect(bridge.ask).toHaveBeenCalledTimes(1);
+    // Culling closes the bridge (rejecting its pending ask) and drops the frame from the live set.
+    bridge.closed = true;
+    tree.rerender({ liveFrames: new Set() });
+    await act(async () => reject(new Error("Frame closed")));
+    await screen.findByRole("button", { name: "from-backend" });
+    expect(screen.queryByRole("treeitem", { name: /Could not load layers/ }) === null).toBe(true);
+    expect(loadHierarchy).toHaveBeenCalledTimes(1);
+  });
+
+  test("a replacement live bridge retries a branch rejected by the closed bridge", async () => {
+    let reject: (error: Error) => void = () => {};
+    const old = {
+      renderedContentId: "c-s1",
+      closed: false,
+      ask: mock(() => new Promise((_resolve, fail) => (reject = fail))),
+    } as unknown as DesignFrameBridge & { closed: boolean };
+    const loadHierarchy = mock<HierarchyLoader>();
+    const tree = setup({
+      frames: [frame("f1", "Replaced")],
+      metas: { f1: meta("f1", "s1") },
+      getBridge: () => old,
+      liveFrames: new Set(["f1"]),
+      loadHierarchy,
+    });
+    await flush();
+    expect(old.ask).toHaveBeenCalledTimes(1);
+    const replacement = fakeBridge("c-s1", { body: [{ label: "replacement-layer" }] });
+    old.closed = true;
+    tree.rerender({ getBridge: () => replacement.bridge, renderedVersion: 1 });
+    await act(async () => reject(new Error("Frame closed")));
+    await screen.findByRole("button", { name: "replacement-layer" });
+    expect(replacement.ask).toHaveBeenCalledWith({
+      op: "hierarchyPage",
+      maxNodes: 200,
+      maxDepth: 1,
+    });
+    expect(loadHierarchy).not.toHaveBeenCalled();
+    expect(screen.queryByRole("treeitem", { name: /Could not load layers/ }) === null).toBe(true);
+  });
+
   test("keyboard navigation follows the WAI-ARIA tree pattern with roving tabindex", async () => {
     const spec: Spec = {
       body: [{ label: "header", children: 1 }, { label: "main" }],

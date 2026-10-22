@@ -429,7 +429,11 @@ export class CodexRuntimeLifecycle {
    * "no rollout found" — so its id is cleared instead, and the next prompt starts a
    * fresh thread. Verified against codex 0.147.0.
    */
-  async detachThread(context: ThreadContext): Promise<void> {
+  async detachThread(context: ThreadContext, requireUnsubscribe = false): Promise<void> {
+    if (requireUnsubscribe) {
+      context.promptThreadConfig = undefined;
+      await this.ctx.options.engine.unsubscribeThread(context.engineHandle, true);
+    }
     const sessionIds = [...context.bridgeSessionIds];
     this.releaseThreadRuntimeState(context.threadId);
 
@@ -445,7 +449,9 @@ export class CodexRuntimeLifecycle {
     }
 
     this.ctx.detachedThreads += 1;
-    await this.ctx.options.engine.unsubscribeThread(context.engineHandle).catch(() => undefined);
+    if (!requireUnsubscribe) {
+      await this.ctx.options.engine.unsubscribeThread(context.engineHandle).catch(() => undefined);
+    }
   }
 
   /**
@@ -748,6 +754,7 @@ export class CodexRuntimeLifecycle {
     }
     if (event.kind === "skills.changed") {
       // Constant-time mark; the catalogue coalesces the re-read off this path.
+      this.ctx.projectSkillsRevision += 1;
       this.ctx.commandCatalogue.markSkillsChanged();
       return;
     }

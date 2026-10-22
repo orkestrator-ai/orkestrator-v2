@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { GatewayTransport } from "../src/client/transport.js";
@@ -69,6 +69,32 @@ describe("authenticated transport", () => {
       transport.invoke("x", {}, { mutation: true, signal: controller.signal }),
     ).rejects.toMatchObject({ code: "connection-failed" });
     expect(calls).toBe(0);
+  });
+
+  test("credential rotation cannot restart an observation request's exhausted budget", async () => {
+    let now = 1000;
+    let calls = 0;
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const transport = new GatewayTransport(
+        {
+          baseUrl: "http://127.0.0.1:1",
+          identity: { name: "test", kind: "connection", endpoint: "test" },
+          readToken: async () => TOKEN,
+        },
+        async () => {
+          calls += 1;
+          now += 101;
+          return calls === 1 ? new Response(null, { status: 401 }) : json({ result: null });
+        },
+      );
+      await expect(
+        transport.invoke("x", {}, { mutation: false, timeoutMs: 100 }),
+      ).rejects.toMatchObject({ code: "connection-failed" });
+      expect(calls).toBe(1);
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   test("request deadline includes a body stalled after headers", async () => {

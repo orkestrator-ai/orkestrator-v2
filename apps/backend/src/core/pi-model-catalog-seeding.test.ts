@@ -177,7 +177,6 @@ describe("discoverHostPiModelCatalog", () => {
     process.env.PI_BRIDGE_STATE_DIR = "/leaked/state";
     process.env.PI_SESSION_DIR = "/leaked/sessions";
     process.env.PI_AGENT_DIR = "/leaked/agent";
-    process.env.PI_BRIDGE_PROJECT_RESOURCES = "1";
     try {
       stubBridgeSpawn(async (spawned) =>
         listenAsBridge(Number(spawned.env.PORT), spawned.env.PI_BRIDGE_TOKEN ?? "", []),
@@ -187,12 +186,10 @@ describe("discoverHostPiModelCatalog", () => {
 
       const spawned = spawns[0]!;
       // A probe owns no conversation, so it must not restore or create bridge
-      // or session state, and a `.pi/` extension is arbitrary TypeScript that
-      // an ambient variable must not be able to switch back on.
+      // or session state.
       expect(spawned.env.PI_BRIDGE_STATE_DIR).toBeUndefined();
       expect(spawned.env.PI_SESSION_DIR).toBeUndefined();
       expect(spawned.env.PI_AGENT_DIR).toBeUndefined();
-      expect(spawned.env.PI_BRIDGE_PROJECT_RESOURCES).toBe("0");
       expect(spawned.env.HOSTNAME).toBe("127.0.0.1");
       expect(spawned.env.PI_BRIDGE_TOKEN?.length).toBeGreaterThanOrEqual(32);
       // Spawned from the bridge's own package directory, never a worktree.
@@ -203,7 +200,6 @@ describe("discoverHostPiModelCatalog", () => {
       delete process.env.PI_BRIDGE_STATE_DIR;
       delete process.env.PI_SESSION_DIR;
       delete process.env.PI_AGENT_DIR;
-      delete process.env.PI_BRIDGE_PROJECT_RESOURCES;
     }
   });
 

@@ -14,6 +14,7 @@ describe("uiStore", () => {
       projectBoardNotesOpen: false,
       sidebarWidth: 280,
       collapsedProjects: [],
+      projectCollapseChoices: [],
       selectedEnvironmentIds: [],
       expandedSessionsEnvironments: [],
       environmentSortMode: "project",

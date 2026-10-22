@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { NormalizedMessage, SSEEvent } from "../types/index.js";
@@ -15,6 +15,7 @@ import {
   sessionManagerTestHome,
   track,
   waitFor,
+  blockClaudeConfigDir,
 } from "./session-manager-test-harness.js";
 import {
   INTERRUPTED_NOTICE_TEXT,
@@ -267,7 +268,7 @@ describe("status frames", () => {
         const promptPromise = sendPrompt(session.id, "hello", { permissionMode: "plan" });
         const call = await nextQueryCall();
         setClaudeHomeForTesting(directory);
-        await writeFile(join(directory, ".claude"), "not a directory", "utf-8");
+        await blockClaudeConfigDir(directory);
         call.push({ type: "system", subtype: "status", permissionMode: "default", status: null });
         call.push({ type: "result", subtype: "success" });
         call.finish();

@@ -109,7 +109,7 @@ default change with the staged plan's decision-record template.
    client's demand and never a shared backend's cadence. Persist it with the
    existing client settings (candidates: the zustand `persist` store in
    `apps/web/src/stores/uiStore.ts`, UI in
-   `apps/web/src/components/settings/ConnectionsSettings.tsx`; confirm before
+   `apps/web/src/components/settings/machines/ClientOptions.tsx`; confirm before
    editing). Feed it to `read-coordinator.ts` as one more scheduling input, not
    new per-feature timers. Network hints are optional and may be absent or
    wrong about metered access.

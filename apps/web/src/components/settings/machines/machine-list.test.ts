@@ -1,0 +1,228 @@
+import { describe, expect, test } from "bun:test";
+import type { NodeListResult, NodeStatus, NodeView } from "@orkestrator/protocol/command-nodes";
+import type { ConnectionList, ConnectionSummary } from "@orkestrator/protocol/connections";
+import { hostMaintenanceSnapshotFixture } from "@orkestrator/protocol/testing/host-maintenance-fixtures";
+import { buildMachineList, maintenanceIssues } from "./machine-list";
+
+const status: NodeStatus = {
+  nodeId: "bk_self" as never,
+  mode: "command",
+  registrationEnabled: true,
+  controllers: [],
+  detachedControllers: [],
+  suspendedSubordinateCount: 0,
+};
+
+function node(id: string, name: string, overrides: Partial<NodeView> = {}): NodeView {
+  return {
+    nodeId: `bk_${id}` as never,
+    enabled: true,
+    displayName: name,
+    colorToken: "teal",
+    fallbackName: id,
+    routes: [
+      {
+        id: "https" as never,
+        kind: "https",
+        enabled: true,
+        origin: `https://${id}.tailnet.ts.net`,
+      },
+    ],
+    routeOrder: ["https" as never],
+    hasCredential: true,
+    attachment: { status: "attached" },
+    connection: { state: "connected", epoch: 1, activeRouteId: "https" as never },
+    addedAt: "2026-10-21T00:00:00.000Z",
+    lastConnectedAt: "2026-10-21T10:00:00.000Z",
+    source: "portal",
+    ...overrides,
+  };
+}
+
+function nodes(...views: NodeView[]): NodeListResult {
+  return { revision: 1, mode: "command", suspended: false, nodes: views, pendingDetaches: [] };
+}
+
+const local: ConnectionSummary = {
+  id: "local",
+  name: "Local",
+  address: null,
+  kind: "local",
+  active: true,
+  requiresToken: false,
+  backendId: "bk_self" as never,
+};
+
+function remote(id: string, overrides: Partial<ConnectionSummary> = {}): ConnectionSummary {
+  return {
+    id,
+    name: `${id}.example`,
+    address: `https://${id}.example`,
+    kind: "remote",
+    active: false,
+    requiresToken: false,
+    transport: "disabled",
+    ...overrides,
+  };
+}
+
+function list(...connections: ConnectionSummary[]): ConnectionList {
+  return { activeConnectionId: "local", connections };
+}
+
+describe("buildMachineList", () => {
+  test("lists the connected machine first, then the rest by name, each once", () => {
+    const entries = buildMachineList({
+      status,
+      nodes: nodes(node("zed", "Zed"), node("build", "Build box")),
+      connections: list(local, remote("build", { backendId: "bk_build" as never })),
+      selfProfile: { revision: 1, displayName: "Desk", colorToken: "violet", updatedAt: "t" },
+      workspaceNodeId: null,
+    });
+    expect(entries.map((entry) => [entry.name, entry.role, entry.current])).toEqual([
+      ["Desk", "self", true],
+      ["Build box", "node", false],
+      ["Zed", "node", false],
+    ]);
+    const build = entries[1]!;
+    // The saved connection to the same installation is merged into the node.
+    expect(build.connection?.id).toBe("build");
+    expect(build.address).toBe("build.tailnet.ts.net");
+    expect(build.via).toBe("Tailscale HTTPS");
+    expect(build.connected).toBe(true);
+    expect(build.maintenance).toBe(true);
+    expect(entries[0]!.address).toBe("This device");
+    expect(entries[0]!.via).toBe("Local backend on this device");
+  });
+
+  test("the node the window's workspace is on is the current machine and comes first", () => {
+    const entries = buildMachineList({
+      status,
+      nodes: nodes(node("build", "Build box")),
+      connections: null,
+      selfProfile: null,
+      workspaceNodeId: "bk_build",
+    });
+    expect(entries.map((entry) => [entry.name, entry.current])).toEqual([
+      ["Build box", true],
+      ["This machine", false],
+    ]);
+  });
+
+  test("describes unreachable nodes, SSH routes and machines saved on this device only", () => {
+    const entries = buildMachineList({
+      status,
+      nodes: nodes(
+        node("ssh", "Tunnel", {
+          routes: [
+            {
+              id: "ssh" as never,
+              kind: "ssh",
+              enabled: true,
+              destination: "tunnel-host",
+              remoteGatewayPort: 34122,
+            },
+          ],
+          routeOrder: ["ssh" as never],
+          connection: { state: "unavailable", epoch: 1 },
+        }),
+      ),
+      connections: list(local, remote("vps", { transport: "connected" })),
+      selfProfile: null,
+      workspaceNodeId: null,
+    });
+    const tunnel = entries.find((entry) => entry.name === "Tunnel")!;
+    expect(tunnel).toMatchObject({
+      address: "tunnel-host",
+      via: "SSH tunnel",
+      connected: false,
+      statusText: "Unavailable",
+      maintenance: false,
+    });
+    const vps = entries.find((entry) => entry.role === "device")!;
+    expect(vps).toMatchObject({
+      name: "vps.example",
+      address: "vps.example",
+      via: "HTTPS",
+      connected: true,
+      maintenance: false,
+    });
+  });
+
+  test("a browser client lists the machine it reached at its own address", () => {
+    const [self] = buildMachineList({
+      status,
+      nodes: nodes(),
+      connections: null,
+      selfProfile: null,
+      workspaceNodeId: null,
+      selfAddress: "desk.tailnet.ts.net",
+    });
+    expect(self).toMatchObject({ role: "self", address: "desk.tailnet.ts.net", connected: true });
+  });
+});
+
+describe("maintenanceIssues", () => {
+  test("nothing is reported for a current machine", () => {
+    expect(maintenanceIssues(hostMaintenanceSnapshotFixture())).toEqual([]);
+  });
+
+  test("an Orkestrator update, tools needing repair and an incompatible image are issues", () => {
+    const issues = maintenanceIssues(
+      hostMaintenanceSnapshotFixture({
+        updater: {
+          ...hostMaintenanceSnapshotFixture().updater,
+          latestVersion: "2.27.0",
+          updateAvailable: true,
+        },
+        tools: [
+          { name: "claude", pinnedVersion: "2.1.3", source: "managed", installedVersion: "2.1.3" },
+          { name: "codex", pinnedVersion: "0.9.0", source: "missing", installedVersion: null },
+          { name: "pi", pinnedVersion: "1.0.0", source: "path", installedVersion: null },
+          {
+            name: "opencode",
+            pinnedVersion: "1.2.0",
+            source: "managed",
+            installedVersion: "1.1.0",
+          },
+          {
+            name: "gh",
+            pinnedVersion: "2.0.0",
+            source: "managed",
+            installedVersion: "2.5.0",
+            channel: "latest",
+          },
+        ],
+        image: {
+          name: "orkestrator-v2:latest",
+          present: true,
+          compatible: false,
+          reason: null,
+          releaseReference: "ghcr.io/x:2.26.0",
+          outdatedEnvironments: [],
+        },
+      }),
+    );
+    expect(issues).toEqual([
+      "Orkestrator 2.27.0 is available",
+      "codex is missing",
+      "pi is not managed by Orkestrator",
+      "opencode 1.1.0 differs from 1.2.0",
+      "The container image is out of date",
+    ]);
+  });
+
+  test("a missing image or unreachable Docker is not an update", () => {
+    const base = {
+      name: "orkestrator-v2:latest",
+      compatible: null,
+      reason: null,
+      releaseReference: "ghcr.io/x:2.26.0",
+      outdatedEnvironments: [],
+    };
+    expect(
+      maintenanceIssues(hostMaintenanceSnapshotFixture({ image: { ...base, present: false } })),
+    ).toEqual([]);
+    expect(maintenanceIssues(hostMaintenanceSnapshotFixture({ image: null }))).toEqual([]);
+  });
+});

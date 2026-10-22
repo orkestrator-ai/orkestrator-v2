@@ -66,7 +66,7 @@ command nodes span all connected nodes.
 | Desktop | `electron/federation-ipc.ts`, `ssh-prompt-broker.ts`, `backend-panel-views.ts` | IPC, askpass prompts, machine panel views |
 | Renderer | `apps/web/src/lib/federation/*` | Backend clients, registry, runtimes, aggregation, recovery |
 | Renderer | `apps/web/src/components/federation/*` | Provider, filter, dots, rows, sections, panels, effects |
-| Renderer | `apps/web/src/components/settings/connections/*` | Machine details, SSH dialog, feature toggles, browser machines |
+| Renderer | `apps/web/src/components/settings/machines/*` | Machines settings: list, settings, updates, SSH dialog, device toggles |
 
 `.oxlintrc.json` forbids `@/lib/native/backend`, `@/lib/backend` and
 `@/lib/backend/*` imports under `apps/web/src/lib/federation/**` and
@@ -658,11 +658,11 @@ with it. The command-node equivalents are in the requirement matrix of
 | CL-01 | `apps/desktop/tests/connection-manager-federation.test.ts` |
 | CL-02 | `apps/desktop/tests/connection-manager-federation.test.ts`, `apps/web/src/lib/desktop-storage-key.test.ts`, `apps/web/src/lib/federation/federation-runtime.test.ts` |
 | CL-03 | `apps/web/src/lib/federation/aggregate.test.ts` |
-| CL-04 | `apps/backend/src/core/backend-profile-store.test.ts`, `apps/web/src/components/settings/connections/connections-machine.test.tsx` |
+| CL-04 | `apps/backend/src/core/backend-profile-store.test.ts`, `apps/web/src/components/settings/machines/MachinesSettings.test.tsx` |
 | CL-05 | `apps/web/src/components/federation/federation-ui.test.tsx` |
 | CT-02 | `apps/desktop/tests/connection-manager-federation.test.ts` |
 | SH-01, SH-05, SH-06, SH-07, SH-10, SH-11 | `apps/desktop/tests/ssh/tunnel-supervisor.test.ts`, `apps/desktop/tests/ssh/ssh-tunnel-integration.test.ts` (real sshd) |
-| SH-02 | `apps/desktop/tests/ssh/host-trust.test.ts`, `apps/desktop/tests/ssh/ssh-tunnel-integration.test.ts`, `apps/web/src/components/settings/connections/connections-machine.test.tsx` |
+| SH-02 | `apps/desktop/tests/ssh/host-trust.test.ts`, `apps/desktop/tests/ssh/ssh-tunnel-integration.test.ts`, `apps/web/src/components/settings/machines/SshRouteDialog.test.tsx` |
 | SH-03 | `apps/desktop/tests/ssh/tunnel-supervisor.test.ts`, `apps/desktop/tests/ssh/ssh-tunnel-integration.test.ts`, `apps/desktop/tests/federation-ipc.test.ts`, `apps/web/src/components/federation/federation-ui.test.tsx` |
 | SH-04 | `apps/desktop/tests/ssh/ssh-proxyjump-integration.test.ts` (real sshd jump host) |
 | SH-08, SH-09 | `apps/backend/tests/gateway-hello.test.ts`, `apps/desktop/tests/connection-manager-federation.test.ts` |

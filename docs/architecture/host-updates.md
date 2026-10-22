@@ -252,9 +252,15 @@ The launcher works like this:
 
 ## UI
 
-**Settings → Updates** ([`UpdatesSettings.tsx`](../../apps/web/src/components/settings/UpdatesSettings.tsx),
-[`HostDependencySettings.tsx`](../../apps/web/src/components/settings/HostDependencySettings.tsx))
-shows:
+**Settings → Machines** lists every machine; a machine's **Updates** button
+turns red when its Orkestrator has an update, an agent tool is missing,
+unmanaged or off its pin, or its container image is incompatible
+([`machine-list.ts`](../../apps/web/src/components/settings/machines/machine-list.ts)
+`maintenanceIssues`). The button opens that machine's updates
+([`MachineUpdatesDialog.tsx`](../../apps/web/src/components/settings/machines/MachineUpdatesDialog.tsx),
+[`HostUpdatesPanel.tsx`](../../apps/web/src/components/settings/HostUpdatesPanel.tsx),
+[`HostDependencySettings.tsx`](../../apps/web/src/components/settings/HostDependencySettings.tsx)),
+which shows:
 - the running and newest versions, the update channel, and the updater;
 - the job, with Cancel;
 - the confirmation, with the restart impact and the wait-until-idle choice;
@@ -262,8 +268,15 @@ shows:
 - the `gh` channel switch;
 - the image, with its outdated environments and Pull.
 
-`useHostMaintenance` rehydrates on mount and on every reconnect, ignores
-older revisions, and re-reads the live readings when a task finishes.
+Commands for the command node go over the portal channel; commands for a
+registered node go through it with `invoke_on_node`, so a client can update
+any machine the command node controls. `useMachineMaintenance` follows the
+command node's own `host-maintenance-updated` events and rehydrates on every
+reconnect; another node's events stay on that node, so its snapshot is read
+every few seconds while an update or task runs and every 20 seconds
+otherwise. Both ignore older revisions and re-read the live readings when a
+task finishes. `useHostMaintenance` does the same for the window's own
+backend, for the banner.
 
 `HostUpdateBanner` shows a running update on every client, with Cancel. Once
 the host is back on the new version (within ten minutes of the update), it

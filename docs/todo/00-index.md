@@ -878,7 +878,7 @@ it reaches. Some rules of thumb:
 
 - [x] Add a 60 s countdown with Postpone on the Mac for remote-initiated restarts ([remote-host-upgrades.md](remote-host-upgrades.md))
 - [x] Offer an opt-in, unqualified out-of-band `gh` update ([remote-host-upgrades.md](remote-host-upgrades.md))
-- [ ] Rebuild environments on an outdated image from Settings → Updates instead of one by one ([remote-host-upgrades.md](remote-host-upgrades.md))
+- [ ] Rebuild environments on an outdated image from Settings → Machines → Updates instead of one by one ([remote-host-upgrades.md](remote-host-upgrades.md))
 - [ ] Separate container terminals from host terminals in the restart impact ([remote-host-upgrades.md](remote-host-upgrades.md))
 - [ ] Confirm runtime drift counters and advisory notices show and rehydrate in Agent Info on two platforms ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md), qualification)
 - [ ] Confirm the usage panel shows turns and account windows across a reload on two providers ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md), qualification)

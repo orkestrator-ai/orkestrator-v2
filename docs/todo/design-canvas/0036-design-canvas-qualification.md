@@ -136,9 +136,9 @@ files; see [0031-live-provider-and-platform-qualification.md](../cross-cutting/0
   needs real old desktop and backend binaries, which are batched with
   [0034](../cross-cutting/0034-mixed-version-compatibility.md).
 - **Browser design flakes under controlled parallel load.**
-  [0174](../../tests/flaky-tests/0174-design-canvas-parallel-browser-timeout.md)
+  [0174](../../tests/flaky-tests/design-canvas-and-artifacts/0174-design-canvas-parallel-browser-timeout.md)
   (`e2e/DesignCanvas.spec.ts` timeouts with six workers) and
-  [0208](../../tests/flaky-tests/0208-design-canvas-private-import-picker-disabled-in-suite.md)
+  [0208](../../tests/flaky-tests/design-canvas-and-artifacts/0208-design-canvas-private-import-picker-disabled-in-suite.md)
   (import picker stays disabled late in `test:agent:browser`). Neither
   reproduced on 2026-10-22, so there is nothing yet to decide between a client
   wait on an observable state (the controller's 3 s cursor check is a real
@@ -250,7 +250,7 @@ ORKESTRATOR_AGENT_TEST_PROFILE=qa-design-live-c2 ORKESTRATOR_AGENT_TEST_LIVE_DES
      result (`terminal_reason` `aborted_streaming` or `aborted_tools`) as a
      stop. An aborted result nobody asked for is still an error. This is
      also the root cause of flake
-     [0273](../../tests/flaky-tests/0273-claude-live-slash-provider-result.md).
+     [0273](../../tests/flaky-tests/native-agents-and-transcripts/0273-claude-live-slash-provider-result.md).
 - **Test findings.** Pressing Escape to clear a sidebar tooltip stops the
   active tab's running turn; `design-live.spec.ts` and
   `slash-command-inactive.spec.ts` no longer do. A turn waiting on an approval
@@ -312,7 +312,7 @@ test:agent:browser -- e2e/agent-testing/design-live.spec.ts`, with
 ## Live cycle evidence: Claude rerun (2026-10-21)
 
 The Claude steps that the account rate limit blocked on 2026-10-18 (flake
-[0450](../../tests/flaky-tests/0450-claude-live-design-account-rate-limit.md))
+[0450](../../tests/flaky-tests/design-canvas-and-artifacts/0450-claude-live-design-account-rate-limit.md))
 now pass.
 
 - **Setup.** Branch `qualify-claude-design-cycle-rerun-dab5ea290ebf` at
@@ -711,15 +711,15 @@ in the phone project.
 - [`agent-testing.md`](../../development/agent-testing.md) and
   [`testing-guide.md`](../../development/testing-guide.md).
 - Open design flakes:
-  [0174](../../tests/flaky-tests/0174-design-canvas-parallel-browser-timeout.md),
-  [0208](../../tests/flaky-tests/0208-design-canvas-private-import-picker-disabled-in-suite.md)
-  and [0246](../../tests/flaky-tests/0246-design-renderer-real-chromium-launch-deadline.md)
+  [0174](../../tests/flaky-tests/design-canvas-and-artifacts/0174-design-canvas-parallel-browser-timeout.md),
+  [0208](../../tests/flaky-tests/design-canvas-and-artifacts/0208-design-canvas-private-import-picker-disabled-in-suite.md)
+  and [0246](../../tests/flaky-tests/design-canvas-and-artifacts/0246-design-renderer-real-chromium-launch-deadline.md)
   (real-Chromium launch on CI). Resolved on 2026-10-16 as test artefacts:
-  [0193](../../tests/flaky-tests/0193-design-sync-gap-aggregate-timeout.md),
-  [0215](../../tests/flaky-tests/0215-design-operation-replay-event-count.md),
-  [0218](../../tests/flaky-tests/0218-design-service-replay-aggregate-timeout.md)
+  [0193](../../tests/flaky-tests/design-canvas-and-artifacts/0193-design-sync-gap-aggregate-timeout.md),
+  [0215](../../tests/flaky-tests/design-canvas-and-artifacts/0215-design-operation-replay-event-count.md),
+  [0218](../../tests/flaky-tests/design-canvas-and-artifacts/0218-design-service-replay-aggregate-timeout.md)
   and the design half of
-  [0225](../../tests/flaky-tests/0225-design-and-bench-aggregate-timeouts.md).
+  [0225](../../tests/flaky-tests/previews-annotations-and-gateway/0225-design-and-bench-aggregate-timeouts.md).
 
 ## Replaces
 

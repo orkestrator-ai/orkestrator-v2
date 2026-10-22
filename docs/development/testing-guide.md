@@ -906,8 +906,10 @@ Use this order:
 5. Rerun the affected group or `mise run test:changed`; finish with the full
    suite once the cause is addressed.
 
-Keep [the flake index](../tests/flaky-tests/0000-index.md) current for
-credible flakes. Search the index first; open only the matching case file.
+Keep [the flake registry](../tests/flaky-tests/0000-index.md) current for
+credible flakes. Its top-level index only lists the ten group folders; each
+group's own `0000-index.md` table tracks its cases. Search the group indexes
+first; open only the matching case file.
 Record the exact test and file, original command and worker configuration,
 failure message and duration, suite counts, isolated rerun command and result,
 observation date, and an evidence-backed hypothesis. Do not skip, loosen, or

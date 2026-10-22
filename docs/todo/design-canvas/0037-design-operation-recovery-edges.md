@@ -132,7 +132,7 @@ settled receipt, is fixed; see "Constraints and rationale".)
   real-container export run exercises the same reconciliation rules.
 - [0034-mixed-version-compatibility.md](../cross-cutting/0034-mixed-version-compatibility.md): the
   never-migrated legacy canvas path is a compatibility path.
-- Flake [0215](../../tests/flaky-tests/0215-design-operation-replay-event-count.md)
+- Flake [0215](../../tests/flaky-tests/design-canvas-and-artifacts/0215-design-operation-replay-event-count.md)
   (resolved): the lost-execute and duplicate-execute case now holds the
   background validation before it counts hints.
 - [`design-canvas.md`](../../architecture/design-canvas.md) ("Operations",

@@ -240,7 +240,7 @@ With that fix, Codex passed the combined live run. Claude's initial turn then
 failed with an SDK result diagnostic; the unchanged Claude-only owning file
 passed on rerun (one passed, zero skipped, 87.3 s), including the inactive and
 restart checks. This intermittent provider failure is recorded as
-[0273](../../tests/flaky-tests/0273-claude-live-slash-provider-result.md), with the
+[0273](../../tests/flaky-tests/native-agents-and-transcripts/0273-claude-live-slash-provider-result.md), with the
 failed combined command and evidence. Both providers therefore passed against
 the final code; the JSON report above now contains the final Claude-only run.
 
@@ -249,7 +249,7 @@ projection and command suites, `format:check`, `lint` and `typecheck` passed.
 The final `mise run test` passed the workspace, all five bridges and
 Codex protocol groups. Its only failure was the existing
 `tests/unit/flaky-tests-index.test.ts`: record
-`docs/tests/flaky-tests/0265-command-fixture-hooks-aggregate-timeout.md` lacks
+`docs/tests/flaky-tests/environments-and-containers/0265-command-fixture-hooks-aggregate-timeout.md` lacks
 the required ID/status metadata in HEAD. The unchanged owning test also
 failed alone, so this is a deterministic baseline failure, not a new flake.
 Aggregate evidence:

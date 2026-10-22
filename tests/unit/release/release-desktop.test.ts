@@ -32,9 +32,26 @@ type FakeRelease = { id: number; draft: boolean; assets: string[] };
 
 const isReleaseList = (command: string[]) => command[1] === "api" && command.includes("--paginate");
 
-/** What the GitHub releases API lists for `tag`, as `gh api --jq` prints it. */
-function listing(releases: FakeRelease[]): string {
-  return releases.map((release) => JSON.stringify(release)).join("\n");
+/** A release for another tag, so the repository never lists as empty. */
+const UNRELATED_RELEASE = { id: 1, tag: "v2.0.0", draft: false, assets: [] };
+
+/**
+ * Every release the GitHub API lists, as `gh api --jq` prints it: `releases`
+ * for `releaseTag`, the `published` releases of other tags, and one unrelated
+ * release, because this repository always has some.
+ */
+function listing(
+  releases: FakeRelease[],
+  releaseTag: string = tag,
+  published: Array<{ id: number; tag: string }> = [],
+): string {
+  return [
+    ...releases.map((release) => ({ ...release, tag: releaseTag })),
+    ...published.map((release) => ({ ...release, draft: false, assets: [] })),
+    UNRELATED_RELEASE,
+  ]
+    .map((release) => JSON.stringify(release))
+    .join("\n");
 }
 
 function harness(
@@ -44,6 +61,7 @@ function harness(
   published: Array<{ id: number; tag: string }> = [],
 ) {
   let nextId = Math.max(100, ...releases.map((release) => release.id)) + 1;
+  const releaseTag = overrides.releaseTag?.() ?? tag;
   const run = mock((command: string[], _env?: NodeJS.ProcessEnv) => {
     if (command[1] === "api" && command.includes("DELETE")) {
       const id = Number(command.at(-1)?.split("/").at(-1));
@@ -55,14 +73,9 @@ function harness(
   });
   const capture = mock((command: string[]) => {
     if (command[0] === "gh" && command[2] === "download") return "minimumSystemVersion: '22.0.0'\n";
-    if (
-      command[0] === "gh" &&
-      isReleaseList(command) &&
-      command.at(-1)?.includes("select(.draft == false)")
-    ) {
-      return published.map((release) => JSON.stringify(release)).join("\n");
+    if (command[0] === "gh" && isReleaseList(command)) {
+      return listing(releases, releaseTag, published);
     }
-    if (command[0] === "gh" && isReleaseList(command)) return listing(releases);
     if (command[0] === "gh" && command.includes("POST")) {
       const id = nextId++;
       releases.push({ id, draft: true, assets: [] });
@@ -86,6 +99,7 @@ function harness(
     prepareMacUpdateFeeds: () => ["release/latest-mac.yml"],
     writeToolchainPins: () => "release/toolchain-pins.json",
     npmHasVersion: () => false,
+    sleep: mock((_ms: number) => {}),
     ...overrides,
   };
   return { runtime, run, capture, releases };
@@ -355,9 +369,8 @@ describe("release channels", () => {
     );
     runDesktopRelease(["publish", "--skip-npm"], runtime);
     expect(run.mock.calls.map(([command]) => command[2])).toEqual(["edit"]);
-    expect(
-      capture.mock.calls.some(([command]) => command.at(-1)?.includes("select(.draft == false)")),
-    ).toBe(false);
+    // Only the check that the draft is complete lists releases.
+    expect(capture.mock.calls.filter(([command]) => isReleaseList(command))).toHaveLength(1);
   });
 
   test("an alpha that cannot be hidden only warns: the new alpha is already public", () => {
@@ -644,7 +657,7 @@ describe("draft release ownership", () => {
     const original = capture.getMockImplementation()!;
     let listings = 0;
     capture.mockImplementation((command) =>
-      isReleaseList(command) && ++listings === 2 ? "" : original(command),
+      isReleaseList(command) && ++listings === 2 ? listing([]) : original(command),
     );
     runDesktopRelease(["build"], runtime);
     expect(run.mock.calls.some(([command]) => command.includes("DELETE"))).toBe(false);
@@ -781,6 +794,64 @@ describe("draft release ownership", () => {
       expect(run).not.toHaveBeenCalled();
     },
   );
+});
+
+describe("empty release listings", () => {
+  /** Makes the first `count` release listings come back empty, as GitHub's API intermittently does. */
+  function emptyListings(capture: ReturnType<typeof harness>["capture"], count: number) {
+    const original = capture.getMockImplementation()!;
+    let listings = 0;
+    capture.mockImplementation((command) =>
+      isReleaseList(command) && ++listings <= count ? "" : original(command),
+    );
+  }
+
+  test("a build retries an empty listing instead of creating a second draft", () => {
+    // v2.26.2-beta: an empty listing made a later build create a duplicate draft.
+    const { runtime, capture, releases } = harness();
+    emptyListings(capture, 2);
+    runDesktopRelease(["build"], runtime);
+    expect(capture.mock.calls.some(([command]) => command.includes("POST"))).toBe(false);
+    expect(releases.map((release) => release.id)).toEqual([100]);
+    expect(runtime.sleep).toHaveBeenCalledTimes(2);
+  });
+
+  test("a finished build retries an empty listing before uploading pins and feeds", () => {
+    // v2.26.2-beta: Linux uploaded everything, then reported its draft missing.
+    const { runtime, run, capture } = harness();
+    const original = capture.getMockImplementation()!;
+    let built = false;
+    capture.mockImplementation((command) => {
+      if (isReleaseList(command) && built) {
+        built = false;
+        return "";
+      }
+      return original(command);
+    });
+    const running = run.getMockImplementation()!;
+    run.mockImplementation((command, env) => {
+      running(command, env);
+      if (command[1] === "electron-builder") built = true;
+    });
+    runDesktopRelease(["build"], runtime);
+    expect(run.mock.calls.at(-1)?.[0].at(-1)).toBe("release/toolchain-pins.json");
+  });
+
+  test("publish retries an empty listing", () => {
+    const { runtime, run, capture } = harness();
+    emptyListings(capture, 1);
+    runDesktopRelease(["publish", "--skip-npm"], runtime);
+    expect(run.mock.calls.map(([command]) => command[2])).toEqual(["edit"]);
+  });
+
+  test("gives up on a listing that stays empty, before any side effect", () => {
+    const { runtime, run, capture } = harness({}, []);
+    emptyListings(capture, Number.POSITIVE_INFINITY);
+    expect(() => runDesktopRelease(["build"], runtime)).toThrow("listed no releases at all");
+    expect(runtime.sleep).toHaveBeenCalledTimes(4);
+    expect(capture.mock.calls.some(([command]) => command.includes("POST"))).toBe(false);
+    expect(run).not.toHaveBeenCalled();
+  });
 });
 
 test.each(["dirty", "wrong-head"])(

@@ -78,3 +78,9 @@
 - **Complete unchanged owner on the refreshed merge (`7e051d955`):** `mise run test:logged -- --name merge-pi-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed all four cases, exit 0 in 25.1 s. The refreshed root/support group also passed in 177.5 s.
 - **Evidence:** `orkestrator-test-run.x69ru0/root-and-agent-support-tests.log.gz` and outer `orkestrator-test-run.zXH9t0/merge-tests.log.gz` below the host temporary directory.
 - **Assessment:** confirmed intermittent deadline recurrence; contention remains a hypothesis. No vendoring implementation, assertion, timeout or skip changed.
+
+## Sidebar integration with Machines — 2026-10-22
+
+- Merge: `90e3e5226` into `4902a9282`; original command `mise run test:logged -- --name machines-merge-suite -- mise run test`, workspace/root/bridges/protocol worker reservations 4/1/2/1 alongside browser and Electron validation.
+- Root/support reported 3,222 passed, one skipped, two failed and one error across 154 files (325.9 s). The supported-SDK case exceeded 30 seconds (30003.03 ms). `mise run test:logged -- --name machines-merge-pi-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed the complete unchanged owner, exit 0 in 8.1 s.
+- Evidence: `orkestrator-test-run.rzuQT5/root-and-agent-support-tests.log.gz` under the host temporary directory after the aggregate completes. This confirms another intermittent deadline recurrence; contention remains a hypothesis. No implementation, assertion, timeout or skip changed.

@@ -187,6 +187,17 @@ export function resourceKey(ref: ResourceRef): string {
   }
 }
 
+/** Inverse of {@link projectKey}; `null` for anything that is not one. */
+export function parseProjectKey(key: string): ProjectRef | null {
+  try {
+    const parsed = JSON.parse(key) as unknown;
+    if (!Array.isArray(parsed) || parsed.length !== 3 || parsed[1] !== "project") return null;
+    return parseProjectRef({ backendId: parsed[0], projectId: parsed[2] });
+  } catch {
+    return null;
+  }
+}
+
 /** Inverse of {@link environmentKey}; `null` for anything that is not one. */
 export function parseEnvironmentKey(key: string): EnvironmentRef | null {
   try {

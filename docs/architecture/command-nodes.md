@@ -227,10 +227,29 @@ backend.
 - **The sidebar is symmetric.** The node the window works on is listed from
   its full stores with the ordinary rows; every other node — including the
   command node itself, from its self summary (`get_node_summaries` with
-  `includeSelf`) — is listed from the portal's summaries.
-- **Presentation.** Per-node state (layouts, collapsed projects) is
-  namespaced by node identity; window-level state (sidebar, zoom) stays with
-  the window's own machine.
+  `includeSelf`) — is listed from the portal's summaries. Both are drawn with
+  the same row layout, so a row lines up the same whichever node owns it.
+- **The sidebar order is the command node's.** The command node keeps the
+  cross-machine order every client shows (`get_portal_layout`,
+  `update_portal_layout`, `portal-layout-changed`;
+  `@orkestrator/protocol/portal-layout`): the machine order ("by machine"),
+  the merged project order and the folders projects sit in there ("by
+  project"), and the repository order ("by repository"). Which node the
+  window works on never moves anything. Until the user drags something, the
+  command node comes first, then the other nodes in registry order; in the
+  merged lists the command node's projects (with its folders) come first and
+  every other node's follow. Anything new goes after whatever precedes it in
+  that default. A node that is not connected is hidden from the merged lists
+  but keeps its entries, so its projects return to their place. Within a
+  node's own section, project, folder and environment order belong to that
+  node: a drag there is written to the owner (`arrange_projects`,
+  `reorder_environments`), and moving a project into a folder of the merged
+  list is recorded on the command node only.
+- **Presentation.** Per-node state (layouts) is namespaced by node identity;
+  window-level state (sidebar, zoom, and what is collapsed in the
+  multi-machine sidebar, by machine-qualified key) stays with the window's own
+  machine, so moving the window to another node leaves the sidebar as it was,
+  scroll position included.
 - **One intentional difference.** A workspace grant cannot perform a
   node's administrative commands (gateway token, web-client access, control
   MCP token, node registry); those stay in the command node's

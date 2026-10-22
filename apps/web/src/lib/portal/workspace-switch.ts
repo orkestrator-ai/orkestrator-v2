@@ -110,7 +110,32 @@ export async function switchWorkspace(
   } finally {
     switching = false;
   }
+  rememberSidebarScroll();
   window.location.reload();
+}
+
+const SIDEBAR_SCROLL_KEY = "orkestrator.workspace-switch-sidebar-scroll";
+
+/** The sidebar comes back where the user left it, as if it never reloaded. */
+function rememberSidebarScroll(): void {
+  try {
+    const list = document.querySelector<HTMLElement>("[data-sidebar-scroll]");
+    if (list) window.sessionStorage.setItem(SIDEBAR_SCROLL_KEY, String(list.scrollTop));
+  } catch {
+    // The sidebar starts at the top instead.
+  }
+}
+
+/** The sidebar's scroll position before the last switch, once. */
+export function takeSidebarScroll(): number | null {
+  try {
+    const value = window.sessionStorage.getItem(SIDEBAR_SCROLL_KEY);
+    window.sessionStorage.removeItem(SIDEBAR_SCROLL_KEY);
+    const top = value === null ? Number.NaN : Number(value);
+    return Number.isFinite(top) && top >= 0 ? top : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

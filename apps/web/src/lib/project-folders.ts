@@ -96,8 +96,8 @@ export function buildProjectTree<P extends Pick<Project, "folder">>(
  * arrangement is computed against this list rather than the raw one. Persisting
  * it also converges the stored order onto what the user sees.
  */
-export function flattenProjectTree(entries: readonly ProjectTreeEntry[]): Project[] {
-  const projects: Project[] = [];
+export function flattenProjectTree<P = Project>(entries: readonly ProjectTreeEntry<P>[]): P[] {
+  const projects: P[] = [];
   for (const entry of entries) {
     if (entry.kind === "project") projects.push(entry.project);
     else projects.push(...entry.projects);
@@ -120,9 +120,11 @@ export function isProjectFolderCollapsed(
  * rendered, so offering them as sortable targets would let a drop resolve
  * against a row the user cannot see.
  */
-export function projectSortableIds(
-  entries: readonly ProjectTreeEntry[],
+export function projectSortableIds<P extends Pick<Project, "id"> = Project>(
+  entries: readonly ProjectTreeEntry<P>[],
   collapsedFolders: readonly string[],
+  isCollapsed: (name: string) => boolean = (name) =>
+    isProjectFolderCollapsed(collapsedFolders, name),
 ): string[] {
   const ids: string[] = [];
   for (const entry of entries) {
@@ -131,11 +133,14 @@ export function projectSortableIds(
       continue;
     }
     ids.push(projectFolderDragId(entry.name));
-    if (isProjectFolderCollapsed(collapsedFolders, entry.name)) continue;
+    if (isCollapsed(entry.name)) continue;
     for (const project of entry.projects) ids.push(project.id);
   }
   return ids;
 }
+
+/** What the folder arrangement needs to know about a project. */
+export type ArrangeableProject = Pick<Project, "id" | "folder" | "name">;
 
 /** A full sidebar arrangement: the new order, plus memberships that changed. */
 export interface ProjectArrangement {
@@ -143,12 +148,12 @@ export interface ProjectArrangement {
   folders: Record<string, string | null>;
 }
 
-function folderOf(project: Project): string | null {
+function folderOf(project: Pick<Project, "folder">): string | null {
   return normalizeProjectFolderName(project.folder);
 }
 
 /** Case-insensitive folder identity, or null for a root-level project. */
-function folderKeyOf(project: Project): string | null {
+function folderKeyOf(project: Pick<Project, "folder">): string | null {
   const folder = folderOf(project);
   return folder === null ? null : projectFolderKey(folder);
 }
@@ -159,8 +164,8 @@ function sameFolder(left: string | null, right: string | null): boolean {
 }
 
 function arrangementOrNull(
-  current: readonly Project[],
-  next: readonly Project[],
+  current: readonly ArrangeableProject[],
+  next: readonly ArrangeableProject[],
   folders: Record<string, string | null>,
 ): ProjectArrangement | null {
   const orderChanged =
@@ -170,7 +175,7 @@ function arrangementOrNull(
   return { projectIds: next.map((project) => project.id), folders };
 }
 
-function moveWithin(projects: readonly Project[], from: number, to: number): Project[] {
+function moveWithin<P>(projects: readonly P[], from: number, to: number): P[] {
   const next = [...projects];
   const [removed] = next.splice(from, 1);
   if (!removed) return next;
@@ -188,7 +193,7 @@ function moveWithin(projects: readonly Project[], from: number, to: number): Pro
 export function resolveProjectArrangement(
   activeId: string,
   overId: string,
-  projects: readonly Project[],
+  projects: readonly ArrangeableProject[],
 ): ProjectArrangement | null {
   if (activeId === overId) return null;
   const entries = buildProjectTree(projects);
@@ -212,7 +217,7 @@ export function resolveProjectArrangement(
   const overFolderKey = parseProjectFolderDragId(overId);
   if (overFolderKey !== null) {
     const folder = entries.find(
-      (entry): entry is ProjectFolderEntry =>
+      (entry): entry is ProjectFolderEntry<ArrangeableProject> =>
         entry.kind === "folder" && entry.key === overFolderKey,
     );
     if (!folder) return null;
@@ -248,8 +253,8 @@ export function resolveProjectArrangement(
 function resolveFolderDrag(
   activeFolderKey: string,
   overId: string,
-  entries: readonly ProjectTreeEntry[],
-  ordered: readonly Project[],
+  entries: readonly ProjectTreeEntry<ArrangeableProject>[],
+  ordered: readonly ArrangeableProject[],
 ): ProjectArrangement | null {
   const activeUnitIndex = entries.findIndex(
     (entry) => entry.kind === "folder" && entry.key === activeFolderKey,
@@ -287,7 +292,7 @@ function resolveFolderDrag(
  * rows have to be contiguous to be one group.
  */
 export function resolveAddProjectToFolder(
-  projects: readonly Project[],
+  projects: readonly ArrangeableProject[],
   projectId: string,
   folderInput: string,
 ): ProjectArrangement | null {
@@ -319,7 +324,7 @@ export function resolveAddProjectToFolder(
 
 /** Arrangement that lifts one project back out to the root level. */
 export function resolveRemoveProjectFromFolder(
-  projects: readonly Project[],
+  projects: readonly ArrangeableProject[],
   projectId: string,
 ): ProjectArrangement | null {
   const ordered = flattenProjectTree(buildProjectTree(projects));
@@ -336,7 +341,7 @@ export function resolveRemoveProjectFromFolder(
 
 /** Arrangement that renames a folder by rewriting every member's name. */
 export function resolveRenameProjectFolder(
-  projects: readonly Project[],
+  projects: readonly ArrangeableProject[],
   folderName: string,
   nextName: string,
 ): ProjectArrangement | null {
@@ -360,13 +365,14 @@ export function resolveRenameProjectFolder(
 
 /** Arrangement that sorts one folder's projects alphabetically by display name. */
 export function resolveSortProjectFolder(
-  projects: readonly Project[],
+  projects: readonly ArrangeableProject[],
   folderName: string,
 ): ProjectArrangement | null {
   const key = projectFolderKey(folderName);
   const entries = buildProjectTree(projects);
   const folder = entries.find(
-    (entry): entry is ProjectFolderEntry => entry.kind === "folder" && entry.key === key,
+    (entry): entry is ProjectFolderEntry<ArrangeableProject> =>
+      entry.kind === "folder" && entry.key === key,
   );
   if (!folder) return null;
 
@@ -382,7 +388,7 @@ export function resolveSortProjectFolder(
 
 /** Arrangement that dissolves a folder, returning every member to the root. */
 export function resolveUngroupProjectFolder(
-  projects: readonly Project[],
+  projects: readonly ArrangeableProject[],
   folderName: string,
 ): ProjectArrangement | null {
   const key = projectFolderKey(folderName);

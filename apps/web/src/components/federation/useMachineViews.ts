@@ -12,6 +12,8 @@ import {
 import type { NodeSummary, SelfNodeSummary } from "@orkestrator/protocol/node-summaries";
 import { useEnvironmentStore, useProjectStore } from "@/stores";
 import type { MachineView } from "@/lib/federation/aggregate";
+import { orderMachines, registryOrder } from "@/lib/federation/sidebar-layout";
+import { usePortalLayout } from "@/lib/portal/portal-layout";
 import {
   boundedText,
   repositoryHint,
@@ -177,11 +179,23 @@ export function useRemoteMachineViews(): MachineView[] {
   }, [boundId, portalState.nodes, portalState.self]);
 }
 
-/** All machines, this one first. */
+/**
+ * All machines, in the order the command node keeps for the sidebar: its own
+ * first and the rest in its registry order until the user moves them. Which
+ * machine the window works on never changes the order.
+ */
 export function useMachineViews(): MachineView[] {
   const bound = useBoundMachineView();
   const remote = useRemoteMachineViews();
-  return useMemo(() => (bound ? [bound, ...remote] : remote), [bound, remote]);
+  const { portalState } = useFederation();
+  const layout = usePortalLayout();
+  return useMemo(() => {
+    const machines = registryOrder(bound ? [bound, ...remote] : remote, [
+      ...(portalState.selfId ? [portalState.selfId] : []),
+      ...portalState.nodes.map((node) => node.nodeId),
+    ]);
+    return orderMachines(machines, layout, portalState.selfId);
+  }, [bound, layout, portalState.nodes, portalState.selfId, remote]);
 }
 
 export function useMachineView(connectionId: string | null): MachineView | null {

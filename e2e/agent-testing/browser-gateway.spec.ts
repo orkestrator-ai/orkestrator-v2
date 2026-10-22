@@ -1,3 +1,4 @@
+import { ensureProjectExpanded } from "./sidebar-project";
 import {
   newReviewValidationRun,
   type ReviewValidationRun,
@@ -1458,9 +1459,7 @@ test("agent mail rehydrates after an inactive recipient is opened and the page r
     }
 
     await page.goto(status.browserUrl!);
-    const expandProject = page.getByRole("button", { name: `Expand project ${fixture!.name}` });
-    await expect(expandProject).toBeVisible({ timeout: 30_000 });
-    await expandProject.click();
+    await ensureProjectExpanded(page, fixture!.name);
     await page.getByText(sender.name, { exact: true }).first().click();
     await expect(page.getByText(sender.name, { exact: true }).first()).toBeVisible();
     await invoke("send_agent_mail", {
@@ -1478,11 +1477,7 @@ test("agent mail rehydrates after an inactive recipient is opened and the page r
     await expect(page.getByRole("button", { name: "Agent messages", exact: true })).toBeVisible();
 
     await page.reload();
-    const expandAfterReload = page.getByRole("button", {
-      name: `Expand project ${fixture!.name}`,
-    });
-    await expect(expandAfterReload).toBeVisible({ timeout: 30_000 });
-    await expandAfterReload.click();
+    await ensureProjectExpanded(page, fixture!.name);
     await page.getByText(recipient.name, { exact: true }).first().click();
     await expect(page.getByText("1 message in inbox · pull only")).toBeVisible({
       timeout: 15_000,
@@ -1623,9 +1618,7 @@ test("coordinator Multi Review action reconciles a mounted renderer and survives
     }
     const [target, other] = environments;
     await page.goto(status.browserUrl!);
-    const expand = page.getByRole("button", { name: `Expand project ${fixture!.name}` });
-    await expect(expand).toBeVisible({ timeout: 30_000 });
-    await expand.click();
+    await ensureProjectExpanded(page, fixture!.name);
     await page.getByText(target!.name, { exact: true }).first().click();
     const input = {
       requestId: `browser-review-${target!.id}`,
@@ -1698,9 +1691,7 @@ test("coordinator Multi Review action reconciles a mounted renderer and survives
     });
     await expect(page.getByText(/^Multi Review cancelled\b/).first()).toBeVisible();
     await page.reload();
-    const expandAgain = page.getByRole("button", { name: `Expand project ${fixture!.name}` });
-    await expect(expandAgain).toBeVisible({ timeout: 30_000 });
-    await expandAgain.click();
+    await ensureProjectExpanded(page, fixture!.name);
     await page.getByText(target!.name, { exact: true }).first().click();
     await expect(page.getByRole("heading", { name: "Multi Review", exact: true })).toBeVisible({
       timeout: 30_000,
@@ -2184,7 +2175,7 @@ test("review validation queues across worktrees and runs while its environment i
     }
     const [target, other] = environments;
     await page.goto(status.browserUrl!);
-    await page.getByRole("button", { name: `Expand project ${fixture.name}` }).click();
+    await ensureProjectExpanded(page, fixture.name);
     await page.getByText(target!.name, { exact: true }).first().click();
     const snapshot = await invoke<{ head: string; paths: string[] }>(
       "get_environment_uncommitted_paths",
@@ -2288,7 +2279,7 @@ test("review validation queues across worktrees and runs while its environment i
     expect(run.results[0]!.queueReason).toBeUndefined();
     const completed = run;
     await page.reload();
-    await page.getByRole("button", { name: `Expand project ${fixture.name}` }).click();
+    await ensureProjectExpanded(page, fixture.name);
     await page.getByText(target!.name, { exact: true }).first().click();
     const restored = await invoke<ReviewValidationRun>("status_review_validation", {
       environmentId: target!.id,

@@ -251,7 +251,7 @@ five credential-free cases. A fake backend that only exercises parsing does not
 count as gateway, backend or provider coverage. Do not claim Docker or live
 coverage from scripted adapters, or UI rehydration from API polling alone.
 Gaps and the qualification evidence log are in
-[cli-qualification.md](../todo/cli-qualification.md).
+[0014-cli-qualification.md](../todo/cli-and-slash-commands/0014-cli-qualification.md).
 
 ## Cleanup
 

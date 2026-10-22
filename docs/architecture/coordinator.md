@@ -8,9 +8,9 @@ Orkestrator controls to delegate implementation to isolated worker environments.
 It cannot edit the project checkout itself.
 
 What is still missing — mainly provider parity — lives in
-[coordinator-read-only-adapters.md](../todo/coordinator-read-only-adapters.md),
-[coordinator-live-conformance.md](../todo/coordinator-live-conformance.md) and
-[coordinator-consistency-gaps.md](../todo/coordinator-consistency-gaps.md).
+[0026-coordinator-read-only-adapters.md](../todo/coordinator-and-multi-review/0026-coordinator-read-only-adapters.md),
+[0024-coordinator-live-conformance.md](../todo/coordinator-and-multi-review/0024-coordinator-live-conformance.md) and
+[0028-coordinator-consistency-gaps.md](../todo/coordinator-and-multi-review/0028-coordinator-consistency-gaps.md).
 Engine internals live in [`agent-engines.md`](agent-engines.md). Control MCP
 operator detail lives in [`control-mcp.md`](control-mcp.md). Qualification
 invariants for agents live in `AGENTS.md` under **Coordinator qualification**.
@@ -820,4 +820,4 @@ guarantee, not by one end-to-end scenario replayed per platform:
   `commands-servers-coordinator-opencode.test.ts`
 
 The runs that qualify each platform, and the scenarios still to add, are in
-[coordinator-live-conformance.md](../todo/coordinator-live-conformance.md).
+[0024-coordinator-live-conformance.md](../todo/coordinator-and-multi-review/0024-coordinator-live-conformance.md).

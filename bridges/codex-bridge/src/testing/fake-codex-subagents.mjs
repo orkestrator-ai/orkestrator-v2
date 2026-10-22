@@ -2,7 +2,7 @@
  * The `FAKE_CODEX_SCRIPT=subagents` turn for `fake-codex-app-server.mjs`.
  *
  * Reproduces the multi-agent v2 shape behind the duplicate-card incident
- * (docs/todo/live-provider-and-platform-qualification.md, "Codex sub-agent
+ * (docs/todo/cross-cutting/0031-live-provider-and-platform-qualification.md, "Codex sub-agent
  * cards"): `spawn_agent` outputs carry only a task path, the parent rollout has
  * no `sub_agent_activity` records, and child thread ids reach the parent stream
  * only as live `subAgentActivity` items. A cold bridge therefore has nothing but

@@ -380,7 +380,7 @@ Update the traced version only after doing the steps below.
 
    Never mount a whole provider home, and never symlink a state path; see the
    constraints in
-   [container-rebuild-state-preservation.md](../todo/container-rebuild-state-preservation.md).
+   [0021-container-rebuild-state-preservation.md](../todo/containers-and-environments/0021-container-rebuild-state-preservation.md).
 4. Set the provider's entry in `PROVIDER_STATE_TRACED_VERSIONS` to the new
    version and update the "Traced against" line under "Provider state".
 
@@ -852,7 +852,7 @@ through the backend workspace.
    command and the local `opencode serve` spawn, and by an `ENV` in
    `docker/Dockerfile`. It suppresses the check and the notice; `/update`
    stays reachable from the command palette as a deliberate user action.
-   1.x now ships from upstream's `v1` branch; see `docs/todo/opencode-v2.md`.
+   1.x now ships from upstream's `v1` branch; see `docs/todo/agent-engines/0008-opencode-v2.md`.
 
 Upstream references: [OpenCode releases](https://github.com/anomalyco/opencode/releases)
 and [OpenCode SDK documentation](https://opencode.ai/docs/sdk/).
@@ -1310,7 +1310,7 @@ downgrade compatibility matters.
 Everything that is not an agent SDK or CLI (renderer and backend libraries,
 Electron, Bun, Docker image tools, CI actions) follows the same lockfile rules
 (AGENTS.md, *Updating Bun and lockfiles*) plus these. Outstanding upgrades are
-tracked in [`docs/todo/dependency-upgrades.md`](../todo/dependency-upgrades.md).
+tracked in [`docs/todo/cross-cutting/0032-dependency-upgrades.md`](../todo/cross-cutting/0032-dependency-upgrades.md).
 
 Finding what is outdated: `mise exec -- bun outdated --filter='*'` and
 `mise exec -- bun audit` (both read-only), then `npm view <pkg> dist-tags`.

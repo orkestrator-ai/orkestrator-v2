@@ -373,7 +373,7 @@ model, written as `<provider>/<model>`, from a provider your OpenCode login has
 connected. The build-pipeline case also needs a model that emits reasoning.
 The spec still requires the pin even though no fixed default model ships any
 more; making it optional is tracked in
-[live-provider-and-platform-qualification.md](../todo/live-provider-and-platform-qualification.md).
+[0031-live-provider-and-platform-qualification.md](../todo/cross-cutting/0031-live-provider-and-platform-qualification.md).
 
 ```bash
 mise run dev:test --profile qa-opencode-live --fixture --credential-source opencode --agent-platforms opencode
@@ -405,7 +405,7 @@ server's log whether each model call really reached it. It refuses to write a
 source outside the test worktree or the profile's data directory. Authorizing
 the Codex or OpenCode credential source points those providers at the host's
 own homes, so their user scopes are then skipped; the
-[live record](../todo/mcp-management.md#live-apply-record-2026-10-18) shows
+[live record](../todo/mcp/0039-mcp-management.md#live-apply-record-2026-10-18) shows
 how those scopes were covered with an access-only credential seeded into the
 profile. Run one provider at a time (flake 0420). Each provider writes
 `output/agent-testing/<run>/mcp-apply-live/<provider>.json`.
@@ -428,7 +428,7 @@ because another environment's announcement also recovers a view (stamp gap).
 Each provider writes
 `output/agent-testing/<run>/idle-observation-live/<platform>.json`. The
 recorded run and its credential setup are in
-[native-agent-idle-observation.md](../todo/native-agent-idle-observation.md#live-qualification-record-2026-10-21).
+[0049-native-agent-idle-observation.md](../todo/transcripts-and-observation/0049-native-agent-idle-observation.md#live-qualification-record-2026-10-21).
 
 The live Multi Review cycle (`e2e/agent-testing/multi-review-live.spec.ts`)
 has its own opt-in, `ORKESTRATOR_AGENT_TEST_LIVE_MULTI_REVIEW=1`, and uses the
@@ -772,7 +772,7 @@ The approval card is answered with **Approve** alone. The spec never picks an
 optional or amendment option. Codex's "Approve with command policy" writes a
 rule into the profile's isolated Codex home. Earlier profiles shared the host
 home, as recorded in
-[live-provider-and-platform-qualification.md](../todo/live-provider-and-platform-qualification.md).
+[0031-live-provider-and-platform-qualification.md](../todo/cross-cutting/0031-live-provider-and-platform-qualification.md).
 The task remains explicitly opt-in (the environment flag above is required);
 it is not part of the default suite or CI because it spends real provider tokens.
 Two additional cases inject setup failures immediately after creation and
@@ -784,7 +784,7 @@ can check it against a shorter watchdog. Environments are registered for stop/de
 immediately after creation, so setup failures also clean up; cleanup failures fail
 the qualification. Credential-free regression tests for cleanup, immediate holds
 and approval choices run in `mise run test`. The evidence is in
-[agent-interactions-and-permissions.md](../todo/agent-interactions-and-permissions.md#live-pause-record-2026-10-21).
+[0001-agent-interactions-and-permissions.md](../todo/agent-engines/0001-agent-interactions-and-permissions.md#live-pause-record-2026-10-21).
 
 ### Live design-tool cycle
 
@@ -838,7 +838,7 @@ state stay there. The launching shell's `CLAUDE_CONFIG_DIR` is recorded only
 as a host credential source, so a scratch configuration directory is no longer
 needed to isolate session writes. Selecting the matching Keychain login when
 the shell names an added account remains tracked in
-[agent-accounts-and-sign-in.md](../todo/agent-accounts-and-sign-in.md).
+[0003-agent-accounts-and-sign-in.md](../todo/agent-engines/0003-agent-accounts-and-sign-in.md).
 
 ### Live coordinator suite
 

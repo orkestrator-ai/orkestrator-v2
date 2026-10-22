@@ -243,7 +243,7 @@ export const BASELINE_LIMITATIONS = [
   "The nativeObservation block (step 07) drives the real native activity sweep and native queue scan with fake providers counted at the provider boundary, over one 10-environment fixture, in rollback and shared modes; bridge-side cost per read and mail, coordinator and workflow consumers are not driven.",
   "Multi review uses an adaptive due scheduler by default (reconcile every 15 s plus per-workflow due passes); it is not modelled because idle cost depends on active workflows.",
   "Local and container environments use a branch baseline (`main`), so every scan consults its fetch owner; environments created from an immutable commit skip that path. The modelled remote is idle: container fetches succeed and never move `origin/main`, so no fetch-triggered rescan occurs.",
-  "No watcher change events occur in the idle window; burst edits, long reads, outages and approval/completion freshness need the live isolated profile (docs/todo/recurring-work-qualification.md).",
+  "No watcher change events occur in the idle window; burst edits, long reads, outages and approval/completion freshness need the live isolated profile (docs/todo/transcripts-and-observation/0048-recurring-work-qualification.md).",
   "Clients model the Files panel open on environment 0 with both the file list and file tree refreshing every 5 s; other renderer polling (native session views, meters) is not driven.",
 ];
 

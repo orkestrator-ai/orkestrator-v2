@@ -995,7 +995,7 @@ the read-only turns of a packaged review:
 | Pi | Exempt as one of the turn's own attempt tools; see "Attempt tools in read-only turns" below |
 
 None of these has been run against a real reviewer on its provider yet; see
-[multi-review-flow-graph.md](../todo/multi-review-flow-graph.md).
+[0029-multi-review-flow-graph.md](../todo/coordinator-and-multi-review/0029-multi-review-flow-graph.md).
 
 ### Attempt tools in read-only turns (Grok, Pi)
 

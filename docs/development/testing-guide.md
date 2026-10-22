@@ -269,7 +269,7 @@ fixtures. Run it alone with
 `bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts service-preview-electron.spec.ts`.
 
 Record results in the evidence log of
-[service-preview-rollout.md](../todo/service-preview-rollout.md#evidence-log).
+[0042-service-preview-rollout.md](../todo/previews-and-annotations/0042-service-preview-rollout.md#evidence-log).
 
 ### CLI scenarios
 
@@ -312,7 +312,7 @@ mise run dev:stop --profile qa-cli-live && mise run dev:reset --profile qa-cli-l
 
 The run manifest (IDs, exit codes, stages — no prompts or tokens) is written to
 `output/cli-scenarios/<run>/manifest.json`. Record live results in the
-[evidence log](../todo/cli-qualification.md#evidence-log), against the coverage
+[evidence log](../todo/cli-and-slash-commands/0014-cli-qualification.md#evidence-log), against the coverage
 table in [cli-testing.md](cli-testing.md#coverage-by-layer).
 See [public-cli.md](../architecture/public-cli.md#targeted-scenarios).
 
@@ -403,7 +403,7 @@ jobs; change-to-visible freshness against the
 [latency budgets](../architecture/recurring-work.md#latency-budgets); renderer
 polling other than the Files panel; or bridge-side recurrence. Those need the
 live isolated profile tracked in
-[recurring-work-qualification.md](../todo/recurring-work-qualification.md).
+[0048-recurring-work-qualification.md](../todo/transcripts-and-observation/0048-recurring-work-qualification.md).
 Live counters for a running backend come from `get_recurring_work_diagnostics`
 or the `recurringWork` block of `/__orkestrator/metrics`.
 

@@ -1,5 +1,5 @@
 import { ProjectHomeActivity } from "./ProjectHomeActivity";
-import { useRef, useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { useSortable } from "@dnd-kit/sortable";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
@@ -69,6 +69,10 @@ interface SortableProjectGroupProps {
   onRemoveFromFolder?: () => void;
   isMultiSelectMode?: boolean;
   selectedEnvironmentIds?: string[];
+  /** Drag id in a list that mixes machines (the project key); the project ID otherwise. */
+  sortableId?: string;
+  /** Shown after the name, in lists that mix machines. */
+  machineBadge?: ReactNode;
 }
 
 export function SortableProjectGroup({
@@ -93,6 +97,8 @@ export function SortableProjectGroup({
   onRemoveFromFolder,
   isMultiSelectMode = false,
   selectedEnvironmentIds = [],
+  sortableId,
+  machineBadge,
 }: SortableProjectGroupProps) {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
@@ -100,7 +106,7 @@ export function SortableProjectGroup({
   const projectTooltip = useHoverTooltip();
 
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
-    id: project.id,
+    id: sortableId ?? project.id,
   });
 
   const style = {
@@ -205,6 +211,7 @@ export function SortableProjectGroup({
                   onBlur={projectTooltip.hide}
                 >
                   <span className="truncate font-medium">{project.name}</span>
+                  {machineBadge}
                   {environments.length > 0 && (
                     <span className="flex h-4 min-w-[16px] shrink-0 items-center justify-center rounded-md bg-white/[0.07] px-1 text-[10px] text-zinc-300">
                       {environments.length}

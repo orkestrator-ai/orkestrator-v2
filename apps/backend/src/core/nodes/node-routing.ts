@@ -52,6 +52,8 @@ export const NODE_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
   "list_node_transfers",
   "compare_project_files",
   "get_node_summaries",
+  "get_portal_layout",
+  "update_portal_layout",
   "open_node_workspace",
   "renew_node_workspace",
   "close_node_workspace",

@@ -1,7 +1,15 @@
 import { useEffect, useId, useState, type ReactNode } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ArrowDownAZ, ChevronRight, Folder, FolderOpen, FolderMinus, Pencil } from "lucide-react";
+import {
+  ArrowDownAZ,
+  ChevronRight,
+  Folder,
+  FolderGit2,
+  FolderOpen,
+  FolderMinus,
+  Pencil,
+} from "lucide-react";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -29,9 +37,14 @@ interface SortableProjectFolderProps {
   projectCount: number;
   isCollapsed: boolean;
   onToggleCollapse: () => void;
-  onRename: (nextName: string) => void | Promise<void>;
-  onSort: () => void | Promise<void>;
-  onUngroup: () => void | Promise<void>;
+  /** Folder actions; a list without them (a repository group) has no menu. */
+  onRename?: (nextName: string) => void | Promise<void>;
+  onSort?: () => void | Promise<void>;
+  onUngroup?: () => void | Promise<void>;
+  /** Shown instead of `name`, which stays the folder's identity. */
+  label?: string;
+  /** A repository group rather than a folder. */
+  repository?: boolean;
   children: ReactNode;
 }
 
@@ -50,6 +63,8 @@ export function SortableProjectFolder({
   onRename,
   onSort,
   onUngroup,
+  label = name,
+  repository = false,
   children,
 }: SortableProjectFolderProps) {
   const [isRenaming, setIsRenaming] = useState(false);
@@ -72,14 +87,15 @@ export function SortableProjectFolder({
     setIsRenaming(false);
     const trimmed = draftName.trim();
     if (!trimmed || trimmed === name) return;
-    void onRename(trimmed);
+    void onRename?.(trimmed);
   };
 
   // Renaming happens in a dialog rather than inline in the header. Closing the
   // context menu restores focus to its trigger, which would blur — and so
   // cancel — an inline field the moment it appeared.
 
-  const FolderIcon = isCollapsed ? Folder : FolderOpen;
+  const FolderIcon = repository ? FolderGit2 : isCollapsed ? Folder : FolderOpen;
+  const hasMenu = Boolean(onRename || onSort || onUngroup);
 
   return (
     <div
@@ -105,35 +121,51 @@ export function SortableProjectFolder({
               {...listeners}
               type="button"
               aria-expanded={!isCollapsed}
-              title={isCollapsed ? `Expand folder ${name}` : `Collapse folder ${name}`}
+              title={isCollapsed ? `Expand folder ${label}` : `Collapse folder ${label}`}
               className="flex min-w-0 flex-1 cursor-grab items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm text-foreground active:cursor-grabbing"
               onClick={(event) => {
                 event.stopPropagation();
                 onToggleCollapse();
               }}
             >
-              <FolderIcon className="h-4 w-4 shrink-0 text-amber-400/80" aria-hidden="true" />
-              <span className="truncate font-medium">{name}</span>
+              <FolderIcon
+                className={cn(
+                  "h-4 w-4 shrink-0",
+                  repository ? "text-muted-foreground" : "text-amber-400/80",
+                )}
+                aria-hidden="true"
+              />
+              <span className="truncate font-medium">{label}</span>
               <span className="flex h-4 min-w-[16px] shrink-0 items-center justify-center rounded-md bg-white/[0.07] px-1 text-[10px] text-zinc-300">
                 {projectCount}
               </span>
             </button>
           </ContextMenuTrigger>
-          <ContextMenuContent>
-            <ContextMenuItem onClick={() => setIsRenaming(true)}>
-              <Pencil className="mr-2 h-4 w-4" />
-              Rename Folder
-            </ContextMenuItem>
-            <ContextMenuItem onClick={() => void onSort()}>
-              <ArrowDownAZ className="mr-2 h-4 w-4" />
-              Sort
-            </ContextMenuItem>
-            <ContextMenuSeparator />
-            <ContextMenuItem onClick={() => void onUngroup()}>
-              <FolderMinus className="mr-2 h-4 w-4" />
-              Remove Folder
-            </ContextMenuItem>
-          </ContextMenuContent>
+          {hasMenu ? (
+            <ContextMenuContent>
+              {onRename ? (
+                <ContextMenuItem onClick={() => setIsRenaming(true)}>
+                  <Pencil className="mr-2 h-4 w-4" />
+                  Rename Folder
+                </ContextMenuItem>
+              ) : null}
+              {onSort ? (
+                <ContextMenuItem onClick={() => void onSort()}>
+                  <ArrowDownAZ className="mr-2 h-4 w-4" />
+                  Sort
+                </ContextMenuItem>
+              ) : null}
+              {onUngroup ? (
+                <>
+                  <ContextMenuSeparator />
+                  <ContextMenuItem onClick={() => void onUngroup()}>
+                    <FolderMinus className="mr-2 h-4 w-4" />
+                    Remove Folder
+                  </ContextMenuItem>
+                </>
+              ) : null}
+            </ContextMenuContent>
+          ) : null}
         </ContextMenu>
 
         {/*
@@ -146,7 +178,7 @@ export function SortableProjectFolder({
         <button
           type="button"
           aria-expanded={!isCollapsed}
-          aria-label={isCollapsed ? `Expand folder ${name}` : `Collapse folder ${name}`}
+          aria-label={isCollapsed ? `Expand folder ${label}` : `Collapse folder ${label}`}
           className="shrink-0 rounded-md p-1 transition-colors hover:bg-white/[0.07]"
           onClick={(event) => {
             event.stopPropagation();

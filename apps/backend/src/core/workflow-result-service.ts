@@ -27,6 +27,7 @@ import {
   type WorkflowResultValidation,
   type WorkflowResultValidationIssue,
 } from "@orkestrator/protocol/workflow-results";
+import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { StoreCorruptError, type StorageDatabase } from "./storage-database.js";
 import { openBackendDatabase } from "./storage-stores.js";
 import { validateWorkflowResult } from "./workflow-result-contracts.js";
@@ -1263,7 +1264,11 @@ export class WorkflowResultService {
   private currentIndex(database: StorageDatabase): EntryIndex | null {
     const revision = database.storeRevision(WORKFLOW_RESULTS_STORE);
     if (revision === null) return null;
-    if (this.index?.revision === revision) return this.index;
+    if (this.index?.revision === revision) {
+      // Reuses entries decoded at this revision: a stat, not a read.
+      recurringWorkMetrics.work("storage-stat");
+      return this.index;
+    }
     this.index = null;
     const startedAt = Date.now();
     let snapshot: { value: unknown; revision: number } | null;

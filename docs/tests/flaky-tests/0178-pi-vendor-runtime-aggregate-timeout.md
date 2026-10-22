@@ -910,3 +910,12 @@ in 167.09 seconds (3180 passed, one skipped, zero failed).
 ## Two-column report main merge — 2026-10-21
 
 Pi staging exceeded 30 seconds in the aggregate and first owning-file rerun; after browser validation ended, the complete unchanged four-test owner passed in 11.6 seconds (`merge-pi-final-owner`). See [0629](0629-two-column-main-merge-validation.md) for commands, worker configuration, counts and evidence. No source, assertion, timeout or skip changed.
+
+## Recurring-work qualification — 2026-10-22
+
+The aggregate `mise run test:logged -- --name full-tests -- mise run test` on
+branch `todo-0048-recurring-work-qualification-6e2a0df806d3` (macOS arm64)
+timed out the test at 30001.00 ms; the root/support group had 3224 pass, 1
+skip, 1 fail. The unchanged owner passed alone
+(`mise run test:logged -- --name pi-vendor -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures`,
+8.0 s logged). No source, assertion, timeout or skip changed.

@@ -1522,7 +1522,7 @@ export class OrkestratorBackend {
         {
           name: "coordinator-repair",
           kind: "coordinator-repair",
-          priority: "maintenance",
+          priority: "recovery",
           intervalMs: MAINTENANCE_JOB_MS,
           run: async () => {
             reconcileCoordinatorWorkflows();
@@ -1575,7 +1575,7 @@ export class OrkestratorBackend {
         jobs.push({
           name: "claude-state",
           kind: "claude-state-reconcile",
-          priority: "progress",
+          priority: "recovery",
           intervalMs: ACTIVITY_JOB_MS,
           fixedRate: true,
           run: async () => {
@@ -1590,7 +1590,7 @@ export class OrkestratorBackend {
         jobs.push({
           name: "pending-renames",
           kind: "pending-rename-reconcile",
-          priority: "progress",
+          priority: "recovery",
           intervalMs: ACTIVITY_JOB_MS,
           fixedRate: true,
           // Rename intent (task 9): every 2 s while an environment carries

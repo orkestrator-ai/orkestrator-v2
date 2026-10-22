@@ -174,8 +174,16 @@ even when the cache serves it, because a cached whole-store read still parses
 every row. A revision check that lets a caller reuse values it already decoded
 is a `storage-stat`. That covers a write diffing against cached rows, row-size
 accounting, the build-pipeline control-record cache and the remaining file stat
-cache. Reads through `StorageDatabase.rows()` and hits in the workflow-result
-entry index are not charged yet.
+cache, and a hit in the workflow-result entry index. Every query through the
+uncached `StorageDatabase.rows()` that returns rows or keys (display tails,
+build-pipeline transcript manifests, deletion fences, web annotations,
+artifact grants) is a `storage-read`; its writes charge nothing there. Every
+connection `openBackendDatabase` opens reports this way, not only
+`StorageService`'s. Content fetched from the database (a cache miss's whole
+store, a single-row or owner query, a `rows()` read) also charges its
+serialized length as `bytes` (`observeFetch`), so a cache miss shows bytes
+beside its read while a cache-served read shows none. Blob files outside the
+stores (terminal session buffers, Kanban images) are `file-read`s.
 
 Several backends may share a data directory (the desktop app and `orkestrator
 serve` default to the same one). WAL lets them read concurrently, and the

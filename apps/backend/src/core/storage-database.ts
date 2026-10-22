@@ -198,9 +198,18 @@ export interface StorageDatabaseOptions {
    * from the database or from this connection's revision-validated cache, or
    * a store's rows were fetched from the database for an internal lookup.
    * `stat`: an internal lookup (a write's previous rows, row sizes) reused the
-   * cached rows after checking the committed revision.
+   * cached rows after checking the committed revision. Every query through
+   * {@link StorageDatabase.rows} that returns rows or keys is a `read`.
    */
   observe?: (event: StorageReadEvent) => void;
+  /**
+   * Observes how much stored content an access fetched from the database, as
+   * the serialized length (UTF-16 code units) of the rows or document it
+   * selected. A read served by the revision-validated cache fetches nothing
+   * and reports nothing, so a cache miss (a whole-store fetch) shows as bytes
+   * beside its `read` while a cache-served read shows as a `read` alone.
+   */
+  observeFetch?: (length: number) => void;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -227,6 +236,7 @@ export class StorageDatabase {
   private readonly touchedRevisions = new Map<string, number>();
   private readonly layoutFor: (store: string) => StoreLayout;
   private readonly observe: ((event: StorageReadEvent) => void) | undefined;
+  private readonly observeFetch: ((length: number) => void) | undefined;
   private closed = false;
 
   constructor(dataDir: string, options: StorageDatabaseOptions = {}) {
@@ -237,6 +247,7 @@ export class StorageDatabase {
     }
     this.layoutFor = options.layoutFor ?? (() => ({ kind: "document" }));
     this.observe = options.observe;
+    this.observeFetch = options.observeFetch;
     this.db = new Database(this.path, { create: true, strict: true });
     try {
       // Sensitive stores (agent mail, prompt queues, credentials) share this
@@ -455,6 +466,7 @@ export class StorageDatabase {
     const rows = this.db
       .query("SELECT value FROM store_rows WHERE store = ? AND owner = ? ORDER BY position, key")
       .all(store, owner) as Array<{ value: string }>;
+    this.fetched(rows.reduce((length, row) => length + row.value.length, 0));
     return rows.map((row) => JSON.parse(row.value) as unknown);
   }
 
@@ -475,9 +487,11 @@ export class StorageDatabase {
             const row = this.db
               .query("SELECT value FROM store_rows WHERE store = ? AND collection = ? AND key = ?")
               .get(store, collection, key) as { value: string } | null;
+            this.fetched(row?.value.length ?? 0);
             return row ? (JSON.parse(row.value) as unknown) : undefined;
           }
           this.observe?.("read");
+          this.fetched(header.document?.length ?? 0);
           value = assembleStoredValue(header, []);
         } catch (error) {
           if (error instanceof SyntaxError) throw new StoreCorruptError(store);
@@ -656,6 +670,7 @@ export class StorageDatabase {
           "SELECT position, value FROM store_rows WHERE store = ? AND collection = ? AND key = ?",
         )
         .get(store, collection, key) as { position: number; value: string } | null;
+      this.fetched(existing?.value.length ?? 0);
       let current: unknown;
       try {
         current = existing ? (JSON.parse(existing.value) as unknown) : undefined;
@@ -843,6 +858,7 @@ export class StorageDatabase {
       document: string | null;
     };
     const rows = new Map<string, StoreRow>();
+    let length = meta.document?.length ?? 0;
     if (meta.mode === "rows") {
       for (const row of this.db
         .query(
@@ -850,8 +866,10 @@ export class StorageDatabase {
         )
         .all(store) as StoreRow[]) {
         rows.set(rowId(row.collection, row.key), row);
+        length += row.value.length;
       }
     }
+    this.fetched(length);
     const loaded: CachedStore = {
       revision: meta.revision,
       layout: meta.layout,
@@ -861,6 +879,10 @@ export class StorageDatabase {
     };
     this.setCache(store, loaded);
     return loaded;
+  }
+
+  private fetched(length: number): void {
+    if (length > 0) this.observeFetch?.(length);
   }
 
   private assemble(store: string, cached: CachedStore): unknown {
@@ -917,6 +939,12 @@ export class StorageDatabase {
     }
     const db = this.db;
     const ownerOf = layout.kind === "record" ? layout.owner : undefined;
+    // Uncached, so every query that returns rows or keys is a database read;
+    // the write paths below charge nothing here.
+    const read = (length = 0): void => {
+      this.observe?.("read");
+      this.fetched(length);
+    };
     const requireTransaction = (): Map<string, CachedStore | null> => {
       if (!this.pendingCache) {
         throw new Error(`Row writes to ${store} must run inside a storage transaction`);
@@ -971,19 +999,21 @@ export class StorageDatabase {
         const row = db
           .query("SELECT value FROM store_rows WHERE store = ? AND collection = ? AND key = ?")
           .get(store, collection, key) as { value: string } | null;
+        read(row?.value.length);
         return row?.value;
       },
       entry(key, collection = "") {
-        return (
-          (db
-            .query(
-              `SELECT collection, key, position, owner, value, length(CAST(value AS BLOB)) AS bytes
-               FROM store_rows WHERE store = ? AND collection = ? AND key = ?`,
-            )
-            .get(store, collection, key) as StoreRowEntry | null) ?? undefined
-        );
+        const row = db
+          .query(
+            `SELECT collection, key, position, owner, value, length(CAST(value AS BLOB)) AS bytes
+             FROM store_rows WHERE store = ? AND collection = ? AND key = ?`,
+          )
+          .get(store, collection, key) as StoreRowEntry | null;
+        read(row?.value?.length);
+        return row ?? undefined;
       },
       has(key, collection = "") {
+        read();
         return (
           db
             .query(
@@ -1007,14 +1037,17 @@ export class StorageDatabase {
           options.values === false
             ? "collection, key, position, owner, NULL AS value"
             : "collection, key, position, owner, value";
-        return db
+        const entries = db
           .query(
             `SELECT ${columns}, length(CAST(value AS BLOB)) AS bytes FROM store_rows
              WHERE ${clauses.join(" AND ")} ORDER BY collection, position, key`,
           )
           .all(...parameters) as StoreRowEntry[];
+        read(entries.reduce((length, entry) => length + (entry.value?.length ?? 0), 0));
+        return entries;
       },
       owners() {
+        read();
         return (
           db
             .query(

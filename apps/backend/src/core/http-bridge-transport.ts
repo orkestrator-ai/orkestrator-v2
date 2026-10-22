@@ -331,6 +331,21 @@ function bridgeRequestTimeoutMs(
   return DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS;
 }
 
+/**
+ * `fetch` for OpenCode SDK clients, which reach the OpenCode server directly
+ * rather than through {@link bridgeFetch}: one `provider-request` per HTTP
+ * request (event-stream connects and reconnects included), charged the same
+ * way. Bun's idle timeout is off, as in the SDK's own default fetch; the
+ * caller's signal and deadline still abort.
+ */
+export const openCodeSdkFetch: typeof fetch = Object.assign(
+  (input: RequestInfo | URL, init?: RequestInit) => {
+    recurringWorkMetrics.work("provider-request");
+    return fetch(input, { ...init, timeout: false });
+  },
+  { preconnect: fetch.preconnect },
+);
+
 export async function bridgeFetch(
   connection: BridgeConnection,
   path: string,

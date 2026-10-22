@@ -8,7 +8,6 @@ import {
   RECURRING_PRIORITY_CLASSES,
   RECURRING_RECOVERY_CONTRACTS,
   RECURRING_TRIGGERS,
-  RECURRING_WORK_OWNERS,
   RECURRING_WORK_UNITS,
   isRecurringJobKind,
   isRecurringPriorityClass,
@@ -24,15 +23,20 @@ describe("recurring-work vocabulary", () => {
     );
     for (const kind of RECURRING_JOB_KINDS) {
       const entry = RECURRING_JOB_CATALOGUE[kind];
-      expect(RECURRING_WORK_OWNERS).toContain(entry.owner);
       expect(RECURRING_TRIGGERS).toContain(entry.trigger);
       expect(RECURRING_PRIORITY_CLASSES).toContain(entry.priority);
       expect(RECURRING_IN_FLIGHT_POLICIES).toContain(entry.inFlight);
       expect(RECURRING_RECOVERY_CONTRACTS).toContain(entry.recovery);
       expect(entry.inventory).toMatch(/^[BCLF]\d{2}(,[BCLF]\d{2})*$/);
       if (entry.nominalCadenceMs !== null) expect(entry.nominalCadenceMs).toBeGreaterThan(0);
-      // Only the backend records in-process today.
-      if (entry.owner !== "backend") expect(entry.instrumented).toBe(false);
+    }
+  });
+
+  test("only backend-recorded work is in the vocabulary", () => {
+    // Renderer, bridge and desktop recurrence is described by the inventory's
+    // C and L rows; nothing records it, so it has no kind.
+    for (const kind of RECURRING_JOB_KINDS) {
+      expect(kind).not.toMatch(/^(client|bridge|desktop|acp)-/);
     }
   });
 

@@ -38,3 +38,7 @@ cause remains unconfirmed. No implementation, assertion, timeout or skip changed
 - **Owning-file rerun:** `mise run test:logged -- --name refresh-claude-owner -- bun test --cwd bridges/claude-bridge --preload ../../tests/setup-node.ts ./src/services/session-manager-interactions.test.ts --parallel=1 --only-failures` passed the complete unchanged owner (exit 0, 0.2 seconds logged).
 - **Evidence:** `orkestrator-test-run.Qv1f63/bridges.log.gz` below the host temporary directory after aggregate completion.
 - **Assessment:** confirmed intermittent recurrence. No bridge implementation, assertion, timeout or skip changed.
+
+## Agent-interactions main merge recurrence, 2026-10-22
+
+`mise run test:logged -- --name merge-tests-retry -- mise run test` repeated `plan approval flow > keeps plan mode enabled when an approved exit cannot be persisted` with EISDIR at `session-manager-interactions.test.ts:863` (1.15 ms) in the one-worker Claude bridge package. `mise run test:logged -- --name merge-claude-interactions-owner -- bun --cwd=bridges/claude-bridge test ./src/services/session-manager-interactions.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed the complete unchanged owner (0.2 s). Evidence is in `orkestrator-test-run.f3gD5p/bridges.log.gz` under the host temporary directory. No test, timeout, skip or implementation was changed.

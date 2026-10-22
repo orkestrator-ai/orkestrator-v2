@@ -127,6 +127,9 @@ function threadObject(id, extra = {}) {
 let initialized = false;
 
 const handlers = {
+  "skills/list": (id) => {
+    respond(id, { data: [{ cwd: process.cwd(), skills: [], errors: [] }] });
+  },
   initialize: (id) => {
     if (process.env.FAKE_CODEX_SCRIPT === "no-initialize") return;
     respond(id, {

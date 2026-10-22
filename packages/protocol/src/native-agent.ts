@@ -1013,9 +1013,9 @@ export function nativeAgentCapabilities(agent: AgentPlatform): NativeAgentCapabi
         mode: false,
       },
       actions: { compact: true, steer: true, rewindMessages: true, branches: true },
-      // Pi's approval gate is off unless `PI_BRIDGE_REQUIRE_APPROVAL=1`, so
-      // this is what the platform *may* raise. The live session reports the
-      // empty set when the gate is off — see the bridge's status projection.
+      // Pi asks only under an `ask` execution policy, so this is what the
+      // platform *may* raise. The live session reports the empty set under any
+      // other policy — see `publicInteractionKinds` in the bridge.
       interactions: { kinds: ["command-approval", "file-approval"] },
     };
   }
@@ -1025,11 +1025,15 @@ export function nativeAgentCapabilities(agent: AgentPlatform): NativeAgentCapabi
     // Codex binds its collaboration mode to the thread and persists it.
     composer: { ...capabilities.composer, modeScope: "session" },
     actions: { compact: true, steer: true, review: true, rewindMessages: true },
-    // Codex: `item/tool/requestUserInput` questions, MCP elicitations in both
-    // form and url modes, and command/file approvals through
-    // `item/permissions/requestApproval`.
+    // Codex: MCP elicitations in both form and url modes, and command/file
+    // approvals through `item/permissions/requestApproval`. Not `question`:
+    // the bridge sets no collaboration mode, so every turn runs in Codex's
+    // Default mode, where `request_user_input` is refused and the model asks
+    // in plain text instead. The bridge still parks an
+    // `item/tool/requestUserInput` that does arrive (a user's own Codex config
+    // can turn `default_mode_request_user_input` on).
     interactions: {
-      kinds: ["question", "command-approval", "file-approval", "permission", "mcp-form", "mcp-url"],
+      kinds: ["command-approval", "file-approval", "permission", "mcp-form", "mcp-url"],
     },
   };
 }

@@ -182,7 +182,14 @@ export function normalizeSkillsList(
 /** Why a listed skill cannot run, or undefined when it can. */
 export function skillUnavailability(
   binding: SkillBinding,
+  projectResources = true,
 ): { reason: "disabled" | "ambiguous"; message: string } | undefined {
+  if (!projectResources && !["user", "system", "admin"].includes(binding.scope)) {
+    return {
+      reason: "disabled",
+      message: "This skill is disabled because project resources are off for this session.",
+    };
+  }
   if (!binding.enabled) {
     return {
       reason: "disabled",
@@ -199,8 +206,11 @@ export function skillUnavailability(
 }
 
 /** Public descriptor. Carries no path and nothing that could name one. */
-export function skillCommandRow(binding: SkillBinding): NativeAgentSlashCommand {
-  const unavailable = skillUnavailability(binding);
+export function skillCommandRow(
+  binding: SkillBinding,
+  projectResources = true,
+): NativeAgentSlashCommand {
+  const unavailable = skillUnavailability(binding, projectResources);
   return {
     name: `$${binding.name}`,
     insertText: `$${binding.name}`,

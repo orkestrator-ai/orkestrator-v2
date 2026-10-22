@@ -92,3 +92,34 @@ describe("RG-01/RG-02 command-node stores", () => {
     }
   });
 });
+
+describe("portal sidebar layout", () => {
+  test("updates replace only the fields they name and the revision advances", async () => {
+    const dataDir = await mkdtemp(path.join(os.tmpdir(), "ork-nodes-"));
+    try {
+      const storage = new StorageService(dataDir);
+      expect(await storage.getPortalLayout()).toEqual({
+        revision: 0,
+        machineOrder: [],
+        projectOrder: [],
+        projectFolders: {},
+        repositoryOrder: [],
+      });
+      await storage.updatePortalLayout({ machineOrder: ["bk_b", "bk_a"] });
+      const layout = await storage.updatePortalLayout({
+        projectOrder: ['["bk_a","project","p"]'],
+        projectFolders: { '["bk_a","project","p"]': "Work" },
+      });
+      expect(layout).toEqual({
+        revision: 2,
+        machineOrder: ["bk_b", "bk_a"],
+        projectOrder: ['["bk_a","project","p"]'],
+        projectFolders: { '["bk_a","project","p"]': "Work" },
+        repositoryOrder: [],
+      });
+      expect(await new StorageService(dataDir).getPortalLayout()).toEqual(layout);
+    } finally {
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+});

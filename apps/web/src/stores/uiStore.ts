@@ -42,6 +42,8 @@ interface UIState {
   sidebarWidth: number;
   /** Project IDs that are collapsed in the hierarchical sidebar */
   collapsedProjects: string[];
+  /** Projects with an explicit collapse choice; defaults may still apply to the others. */
+  projectCollapseChoices: string[];
   /**
    * Sidebar folder names that are collapsed. Keyed by name because a folder
    * has no record of its own — see `@orkestrator/protocol/project-folders`.
@@ -111,6 +113,7 @@ export const createUIStore = () =>
         projectBoardNotesOpen: false,
         sidebarWidth: 280,
         collapsedProjects: [],
+        projectCollapseChoices: [],
         collapsedProjectFolders: [],
         selectedEnvironmentIds: [],
         expandedSessionsEnvironments: [],
@@ -151,6 +154,9 @@ export const createUIStore = () =>
 
         toggleProjectCollapse: (projectId) =>
           set((state) => ({
+            projectCollapseChoices: Array.from(
+              new Set([...state.projectCollapseChoices, projectId]),
+            ),
             collapsedProjects: state.collapsedProjects.includes(projectId)
               ? state.collapsedProjects.filter((id) => id !== projectId)
               : [...state.collapsedProjects, projectId],
@@ -158,6 +164,9 @@ export const createUIStore = () =>
 
         setProjectCollapsed: (projectId, collapsed) =>
           set((state) => ({
+            projectCollapseChoices: Array.from(
+              new Set([...state.projectCollapseChoices, projectId]),
+            ),
             collapsedProjects: collapsed
               ? state.collapsedProjects.includes(projectId)
                 ? state.collapsedProjects
@@ -210,16 +219,14 @@ export const createUIStore = () =>
 
         collapseEmptyProjects: (projectIds, projectsWithEnvironments) =>
           set((state) => {
-            // Find projects that have no environments and aren't already collapsed
-            const emptyProjects = projectIds.filter(
-              (id) => !projectsWithEnvironments.has(id) && !state.collapsedProjects.includes(id),
+            const empty = projectIds.filter(
+              (id) =>
+                !state.projectCollapseChoices.includes(id) &&
+                !state.collapsedProjects.includes(id) &&
+                !projectsWithEnvironments.has(id),
             );
-            if (emptyProjects.length === 0) {
-              return state; // No change needed
-            }
-            return {
-              collapsedProjects: [...state.collapsedProjects, ...emptyProjects],
-            };
+            if (empty.length === 0) return state;
+            return { collapsedProjects: [...state.collapsedProjects, ...empty] };
           }),
 
         setZoomLevel: (level) => set({ zoomLevel: Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, level)) }),
@@ -243,6 +250,7 @@ export const createUIStore = () =>
           sidebarWidth: state.sidebarWidth,
           sidebarOpen: state.sidebarOpen,
           collapsedProjects: state.collapsedProjects,
+          projectCollapseChoices: state.projectCollapseChoices,
           collapsedProjectFolders: state.collapsedProjectFolders,
           recentProjectIds: state.recentProjectIds,
           environmentSortMode: state.environmentSortMode,

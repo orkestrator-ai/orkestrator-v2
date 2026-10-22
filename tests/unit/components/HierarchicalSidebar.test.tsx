@@ -1,3 +1,13 @@
+import { FederationProvider } from "@/components/federation/FederationProvider";
+import { useMachineViewStore } from "@/stores/machineViewStore";
+import { projectKey, projectRef } from "@orkestrator/protocol/federation";
+import {
+  connectionList,
+  installDesktopFake,
+  remoteConnection,
+  uninstallDesktopFake,
+} from "@/test/federation-desktop-fake";
+import { updatePortalLayout } from "@/lib/portal/portal-layout";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createElement, type ComponentProps } from "react";
@@ -213,6 +223,50 @@ function mockActivityRowOffsetTop(
 }
 
 describe("HierarchicalSidebar", () => {
+  test("merged bound rows hide owner folder actions while machine sections keep them", async () => {
+    const previousView = useMachineViewStore.getState();
+    const previousNative = window.orkestrator;
+    const fake = installDesktopFake({
+      list: connectionList([remoteConnection("a", "Machine A", "teal")]),
+      datasets: { a: { projects: [], environments: {} } },
+    });
+    useProjectStore.getState().setProjects([project]);
+    useMachineViewStore.getState().setGrouping("project");
+    let view: ReturnType<typeof render> | undefined;
+    try {
+      view = render(
+        <FederationProvider>
+          <HierarchicalSidebar />
+        </FederationProvider>,
+      );
+      await screen.findByTestId("federated-project-list");
+      const boundId = "bk_self";
+      // The project is rooted on its owner, but filed in a shared folder.
+      await act(async () => {
+        await updatePortalLayout({
+          projectFolders: { [projectKey(projectRef(boundId as never, project.id))]: "Shared" },
+        });
+      });
+      fireEvent.contextMenu(screen.getByRole("button", { name: /^Project One/i }));
+      expect(screen.queryByText("Add to Folder") === null).toBe(true);
+      expect(screen.queryByText("Remove from Folder") === null).toBe(true);
+      expect(project.folder).toBeUndefined();
+      expect(arrangeProjectsMock).not.toHaveBeenCalled();
+      expect(fake.layout().projectFolders).toEqual({
+        [projectKey(projectRef(boundId as never, project.id))]: "Shared",
+      });
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+      act(() => useMachineViewStore.getState().setGrouping("machine"));
+      fireEvent.contextMenu(await screen.findByRole("button", { name: /^Project One/i }));
+      expect(screen.getByText("Add to Folder")).toBeTruthy();
+    } finally {
+      view?.unmount();
+      uninstallDesktopFake();
+      window.orkestrator = previousNative;
+      useMachineViewStore.setState(previousView, true);
+    }
+  });
+
   beforeEach(() => {
     if (!HTMLElement.prototype.scrollIntoView) {
       HTMLElement.prototype.scrollIntoView = () => {};
@@ -244,7 +298,7 @@ describe("HierarchicalSidebar", () => {
     arrangeProjectsMock.mockImplementation(async () => {});
     ensureProjectHomeMock.mockClear();
     useEnvironmentStore.setState({ environments: [], deletingEnvironments: new Set() });
-    useProjectStore.setState({ projects: [], deletingProjects: new Set() });
+    useProjectStore.setState({ projects: [], deletingProjects: new Set(), hasLoaded: true });
     projectsValue = [project];
     environmentsValue = [];
     projectsLoadingValue = false;
@@ -270,6 +324,7 @@ describe("HierarchicalSidebar", () => {
       selectedEnvironmentId: null,
       recentProjectIds: [],
       collapsedProjects: [],
+      projectCollapseChoices: [],
       collapsedProjectFolders: [],
       selectedEnvironmentIds: [],
       expandedSessionsEnvironments: [],

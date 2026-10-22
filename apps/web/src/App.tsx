@@ -95,7 +95,7 @@ import { FederationProvider } from "@/components/federation/FederationProvider";
 import { SshPromptDialog } from "@/components/federation/SshPromptDialog";
 import { FederationEffects } from "@/components/federation/FederationEffects";
 import { NodeActionRequestsDialog } from "@/components/federation/NodeActionRequestsDialog";
-import { NodeSshPromptDialog } from "@/components/settings/connections/NodesSettings";
+import { NodeSshPromptDialog } from "@/components/settings/machines/NodeSshPromptDialog";
 import { keepStoredWorkspaceAlive, takeWorkspaceStartupError } from "@/lib/portal/workspace-switch";
 import { useWorkspaceSwitchSelection } from "@/hooks/useWorkspaceSwitchSelection";
 

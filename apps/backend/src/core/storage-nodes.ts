@@ -1,4 +1,9 @@
 import type { NodeAttachments, NodeRegistry } from "@orkestrator/protocol/command-nodes";
+import {
+  parsePortalLayout,
+  type PortalLayout,
+  type PortalLayoutUpdate,
+} from "@orkestrator/protocol/portal-layout";
 
 import { readStoredNodeAttachments, readStoredNodeRegistry } from "./nodes/node-store-format.js";
 import { StoragePreviewServices } from "./storage-preview-services.js";
@@ -60,6 +65,27 @@ export class StorageNodes extends StoragePreviewServices {
 
   protected nodeOutcomesFile(): string {
     return this.file("node-outcomes.json");
+  }
+
+  protected portalLayoutFile(): string {
+    return this.file("portal-layout.json");
+  }
+
+  /** The portal sidebar's cross-machine order (see `@orkestrator/protocol/portal-layout`). */
+  async getPortalLayout(): Promise<PortalLayout> {
+    return parsePortalLayout(await this.loadJson<unknown>(this.portalLayoutFile(), () => null));
+  }
+
+  /** Replaces the given fields; the revision advances on every write. */
+  async updatePortalLayout(update: PortalLayoutUpdate): Promise<PortalLayout> {
+    return this.serializeMutation(this.portalLayoutFile(), "portal layout", async () => {
+      const current = parsePortalLayout(
+        await this.loadJson<unknown>(this.portalLayoutFile(), () => null),
+      );
+      const next: PortalLayout = { ...current, ...update, revision: current.revision + 1 };
+      await this.saveJson(this.portalLayoutFile(), { version: 1, ...next });
+      return next;
+    });
   }
 
   /** Last-known portal summaries of other nodes (names and states only). */

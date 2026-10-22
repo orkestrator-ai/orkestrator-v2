@@ -255,7 +255,6 @@ async function refreshAcp(
   if (useCursorSdk) {
     env.CURSOR_BRIDGE_TOKEN = token;
     env.CURSOR_BRIDGE_AUTH_FILE = cursorSdkCredentialPath(context);
-    env.CURSOR_BRIDGE_PROJECT_SETTINGS = "0";
     if (cursorApiKey) env.CURSOR_API_KEY = cursorApiKey;
     else delete env.CURSOR_API_KEY;
   } else {
@@ -280,7 +279,6 @@ async function refreshAcp(
       modelUpdateMethods: ["x.ai/models/update", "_x.ai/models/update"],
       sessionUpdateMethods: ["x.ai/session/update", "_x.ai/session/update"],
     });
-    env.ACP_APPROVE_PROJECT_MCPS = "0";
   }
   const models = await withShortLivedBridge(
     {

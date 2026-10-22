@@ -4,11 +4,11 @@ import {
   CANCELLABLE_HOST_UPDATE_JOB_STATES,
   isActiveHostUpdateJob,
 } from "@orkestrator/protocol/host-maintenance";
-import { describeHostUpdateJob } from "@/components/settings/UpdatesSettings";
+import { describeHostUpdateJob } from "@/components/settings/HostUpdatesPanel";
 import { useHostMaintenance } from "@/components/settings/useHostMaintenance";
 import { BUNDLED_APP_VERSION } from "@/lib/app-version";
 import * as backend from "@/lib/backend";
-import { requestGlobalSettings } from "@/lib/settings-navigation";
+import { requestCurrentMachineUpdates } from "@/lib/settings-navigation";
 import { versionClientKind } from "@/lib/version-reminder";
 
 export const HOST_UPDATE_TOAST_ID = "orkestrator-host-update";
@@ -69,7 +69,7 @@ export function HostUpdateBanner() {
                 });
               },
             }
-          : { label: "Details", onClick: () => requestGlobalSettings("updates") },
+          : { label: "Details", onClick: requestCurrentMachineUpdates },
       };
       if (job.state === "awaiting-restart" || job.state === "waiting-for-idle") {
         toast.warning("Orkestrator is updating on the host", options);

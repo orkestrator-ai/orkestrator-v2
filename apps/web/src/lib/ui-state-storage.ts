@@ -3,6 +3,7 @@ import { desktopConnectionStorageKey, windowStorageKey } from "./desktop-storage
 
 const PROJECT_FIELDS = [
   "collapsedProjects",
+  "projectCollapseChoices",
   "collapsedProjectFolders",
   "recentProjectIds",
 ] as const;

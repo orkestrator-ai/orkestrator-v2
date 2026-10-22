@@ -138,3 +138,20 @@ The final root/support run with all GNU prerequisites timed out this case at 500
 - **Assessment:** this observation does not independently confirm a flake because the unchanged owner also failed alone. The registered fixture timeout remains a validation limitation; host contention is a hypothesis. No existing firewall implementation, assertion, timeout or skip changed.
 - **After aggregate completion:** `mise run test:logged -- --name firewall-policy-after-aggregate -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` also exceeded five seconds in the uppercase policy-3 blocked-probe case (5018.89 ms; 23 passed, one failed; 47.9 seconds logged). Evidence: `orkestrator-test-run.kK9Fhh/firewall-policy-after-aggregate.log.gz`. This leaves the existing owner unresolved at its unchanged deadline.
 - **Aggregate outcome:** exit 1 after 624.2 seconds, with root/support, bridges and workspace groups failing; Codex protocol regeneration passed. All new regressions, static checks, live egress qualification and the isolated Docker scenario suite passed.
+
+## CLI qualification review — 2026-10-22
+
+- `mise run test:logged -- --name review-complete-suite -- mise run test`, with workspace/root/bridges/protocol reservations 4/1/2/1 and one root worker, timed out both `policy 2 allowlist example.org,example.com chooses blocked HTTPS probe example.net` (5005.48 ms) and its policy 3 counterpart (5007.47 ms). Both expected process exit 0 and received null.
+- `mise run test:logged -- --name review-firewall-rerun -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` passed the complete unchanged owner (exit 0, 40.1 s).
+- Evidence: `orkestrator-test-run.GxEUIl/root-and-agent-support-tests.log.gz` below the host temporary directory after aggregate completion. This confirms intermittent shell-fixture deadlines; no firewall code, assertion, timeout or skip changed.
+
+## Coordinator peer conformance review recurrence — 2026-10-22
+
+- **Original command:** `mise run test:logged -- --name full-suite -- mise run test` (Bun 1.4.3, macOS arm64).
+- **Workers:** workspace/root/bridges/protocol reservations 4/1/2/1; one isolated root worker on a shared host running another checkout's aggregate suite.
+- **Failures:** `policy 2 narrows host access to named ports and records what it applied` and `policy 3 allows address, protocol and port tuples` returned a null exit code and exceeded five seconds (5003.20 ms and 5005.68 ms).
+- **Root counts:** 3216 passed, one skipped and three failed across 3220 tests (298.35 seconds). The other failure was Pi vendoring (0514). Workspace, bridges and protocol groups passed.
+- **First owning-file rerun:** `mise run test:logged -- --name firewall-policy-isolated -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` passed both original failing cases, but `firewall uses stored domains and tolerates a repeated GitHub bootstrap range` exceeded its five-second deadline (5025.72 ms): 23 passed, one failed, 45.5 seconds logged. Evidence: `orkestrator-test-run.O9XqXs/firewall-policy-isolated.log.gz` below the host temporary directory.
+- **After the aggregate finished:** `mise run test:logged -- --name firewall-policy-after-suite -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` passed all 24 unchanged cases (exit 0, 27.3 seconds logged).
+- **Aggregate evidence:** `orkestrator-test-run.Aiu72Z/root-and-agent-support-tests.log.gz`, with outer summary in `orkestrator-test-run.4usC0x/full-suite.log.gz`, below the host temporary directory.
+- **Assessment:** the final isolated pass confirms intermittence. Host contention remains a hypothesis; no firewall implementation, assertion, timeout or skip changed.

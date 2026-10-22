@@ -1154,10 +1154,6 @@ export async function startLocalServerUnlocked(
     // to run any session under a weaker policy, whatever a request body or a
     // persisted record says, so a permissive record cannot survive a restart.
     env[ORKESTRATOR_BRIDGE_EXECUTION_POLICY_ENV] = COORDINATOR_EXECUTION_POLICY;
-    // Inherited from the backend process, this opt-in would otherwise load
-    // `.cursor/mcp.json` into every Cursor attach. A coordinator is already
-    // read-only; close the deprecated override the same way Pi closes its own.
-    env.CURSOR_BRIDGE_PROJECT_SETTINGS = "0";
     // Created here rather than on first paste: a bridge canonicalizes this root
     // before it reads through it, and a directory that does not exist yet is
     // indistinguishable from one that is not allowed.
@@ -1269,13 +1265,6 @@ export async function startLocalServerUnlocked(
     // account. Containers are handed an explicit path instead, and an
     // agent-test profile the host's `auth.json` alone when Pi is authorized.
     await applyPiHostCredentialEnvironment(context, env);
-    if (coordinatorId) {
-      // Pi's project resources are arbitrary TypeScript from the checkout, and
-      // a coordinator points at the user's own repository rather than a
-      // disposable clone. The bridge already reads the policy for this; the
-      // explicit `0` also closes the deprecated env override.
-      env.PI_BRIDGE_PROJECT_RESOURCES = "0";
-    }
     env.PI_SESSION_DIR = environmentStateDirectory(
       context.storage.getDataDir(),
       "pi-bridge-sessions",

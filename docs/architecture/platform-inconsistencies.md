@@ -256,7 +256,7 @@ The capability table treats them as identical. Runtime is not.
 | Binary | `cursor-agent` (never `cursor`) | `grok` |
 | Subcommand | `acp` | `agent … stdio` |
 | Command auto-approve | `--force` | `--always-approve` |
-| MCP auto-approve | `--approve-mcps` only if `ACP_APPROVE_PROJECT_MCPS === "1"` | **no equivalent flag** |
+| Project MCP servers | `.cursor/mcp.json` only when the session policy turns `projectResources` on (`cursorMcpServers`) | loaded by Grok's own folder trust; `GROK_FOLDER_TRUST=0` only when `projectResources` is on |
 | Spawn `--model` | yes | yes |
 | Spawn `--reasoning-effort` | **no** | yes |
 | Composer wire | `session/set_config_option` (`model`, `thought_level`, fast) | `session/set_model` + `_meta.reasoningEffort` |

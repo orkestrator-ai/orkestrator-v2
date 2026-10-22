@@ -7,8 +7,8 @@ links and the in-app updater.
 
 ## Update channels
 
-Each host chooses the releases it updates to in **Settings → Updates →
-Channel**. The version's suffix decides which channel a release ships to:
+Each host chooses the releases it updates to in **Settings → Machines →
+Updates → Channel**. The version's suffix decides which channel a release ships to:
 
 | Channel | Version | Example | Installed by |
 | --- | --- | --- | --- |
@@ -149,7 +149,8 @@ alpha keeps its tag, assets, npm version and container image; publish its
 draft again to bring it back. If hiding fails, the new alpha is still public
 and the command only warns; make the older alphas drafts on GitHub by hand.
 
-Remote clients can also check and install through **Settings → Updates**,
+Remote clients can also check and install through **Settings → Machines →
+Updates**,
 `orkestrator host update`, or the `host.*` public actions. The app then shows a
 60-second countdown instead of the Restart / Later prompt. See
 [host-updates.md](../architecture/host-updates.md).

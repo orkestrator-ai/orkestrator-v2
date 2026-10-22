@@ -56,7 +56,8 @@ from real releases, plus two known limitations.
 
 ### Known limitations
 
-4. Environments on an older image are listed, not rebuilt. Each still needs
+4. Environments on an older image are listed in Settings → Machines → Updates,
+   not rebuilt. Each still needs
    its own Rebuild (keep work) from its environment menu, because that dialog
    carries the preservation and capacity checks. A bulk "rebuild outdated"
    would need the same review per environment.

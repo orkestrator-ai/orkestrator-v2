@@ -808,6 +808,10 @@ then records the redundant entry as skipped with its covering command ID. Failed
 coverage remains incomplete. Coverage is deduplicated only when the covering
 command also depends on the required prerequisites and no dependency cycle is
 introduced. Dependent checks wait for the actual covering result. The original plan stays immutable.
+A repeated identical command (the same command line and directory) is covered
+by its first copy the same way, recorded as `(identical command)`, unless the
+repeat waits on a prerequisite the first copy did not, which may make the rerun
+meaningful. Discovery is also told never to plan a command twice.
 
 A missing `.orkestrator-test-scheduler.json` is normal and silent. One that is
 present but unreadable, oversized, or invalid is *ignored* rather than fatal:

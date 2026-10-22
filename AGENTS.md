@@ -181,8 +181,10 @@ Review preparation (the Build pipeline's package preparation and Multi Review)
 reads this file to decide which checks a change needs. Scale the plan to what
 the changed paths can affect instead of always running every suite:
 
-- Documentation-only changes (`*.md`, `docs/**`, `plans/**`) need no test
-  suite: `mise run format:check` is enough.
+- Documentation-only changes (prose in files such as `*.md`, `docs/**`, or
+  `plans/**`, not content consumed by tests, builds, or tooling) need no test
+  suite: `mise run format:check` is enough. File role takes precedence over
+  location or extension; source under `docs/` still counts as code.
 - Every change to code or configuration runs `mise run format:check`,
   `mise run lint`, and `mise run typecheck`.
 - Code changes under `apps/`, `bridges/`, `packages/`, `scripts/`, or `tests/`
@@ -198,6 +200,30 @@ the changed paths can affect instead of always running every suite:
   (`mise run test:agent:docker`), the published CLI
   (`mise run test:cli:scenarios`), and iOS (`mise run test:all`, macOS only).
   Omit them otherwise and say so in one limitation.
+
+#### Documentation-only merge-conflict resolution
+
+When the complete original conflicted-path list establishes that every conflict
+was in prose documentation, and the manual resolution changes only that prose,
+use documentation-only validation: confirm no conflict markers remain and run
+`mise run format:check`. Do not rerun tests, lint, typechecking, builds, or
+scenario suites solely for that merge-resolution step, even when code,
+configuration, or tests merge automatically. This exception takes precedence
+over the normal changed-path requirements above and generic merge-validation
+prompts that require checks for auto-merged code.
+
+Capture the complete original unmerged path list before staging any resolution
+and retain it with the merge's parent commit IDs in local Git metadata for
+resume. A conflict remains in scope even when resolved exactly to one parent's
+version. If the original list is unavailable or incomplete, do not infer a
+documentation-only scope from remaining unmerged paths, staged diffs, or a merge
+commit's combined diff; run relevant validation on the merged result, including
+the full suite when impact cannot be scoped.
+
+The exception does not waive outstanding validation required for the feature
+work or apply to new code/configuration changes, non-documentation conflict
+resolutions, or documentation consumed by tests, builds, or tooling. Those
+changes follow the normal validation requirements.
 
 ### Running tests
 

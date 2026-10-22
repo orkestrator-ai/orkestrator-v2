@@ -1198,16 +1198,6 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     return () => clearTimeout(timer);
   }, [coreHasChanges, localCoreSignature, isSaving, saveBlocker]);
 
-  // DEBUG: trace auto-save effect
-  useEffect(() => {
-    console.log("[DEBUG] auto-save effect ran", {
-      coreHasChanges,
-      isSaving,
-      saveBlocker: !!saveBlocker,
-      localCoreSignature,
-    });
-  }, [coreHasChanges, localCoreSignature, isSaving, saveBlocker]);
-
   // Closing Settings, or switching to Messaging/Skills/MCP/Connections, unmounts
   // this form. Flush a still-debounced edit so it is not silently dropped when
   // the Save button that once covered it is gone.

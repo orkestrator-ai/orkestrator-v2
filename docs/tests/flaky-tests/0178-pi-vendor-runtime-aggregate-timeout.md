@@ -919,3 +919,9 @@ Pi staging exceeded 30 seconds in the aggregate and first owning-file rerun; aft
 - **Owning-file rerun:** `mise run test:logged -- --name pi-vendor-isolated -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` also timed out at 30001.68 ms (three passed, one failed; 30.9 s logged).
 - **Evidence:** `orkestrator-test-run.rkxXtB/root-and-agent-support-tests.log.gz` and `orkestrator-test-run.e0IVU0/pi-vendor-isolated.log.gz` below the host temporary root.
 - **Assessment:** unresolved qualification limitation on this host. The failed isolated rerun does not independently establish a new flake. Pi source, tests, deadlines and skips remained unchanged.
+
+
+The final `final-suite` rerun passed the unchanged complete root/support group
+(3219 passed, one skipped, zero failed across 3220 tests; 318.00 s), including
+Pi vendoring. This establishes the runtime-staging failure as intermittent;
+no Pi code, deadline or assertion changed.

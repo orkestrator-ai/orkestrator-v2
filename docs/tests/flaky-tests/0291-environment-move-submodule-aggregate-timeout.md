@@ -52,3 +52,14 @@ other workspace package passed; aggregate exit 1 after 852.0 seconds.
 
 - **Command:** `mise run test` on `3ebece08` (macOS 27.0, Apple Silicon, host running other agent workloads). The workspace group failed on three known flakes (0291, 0248, 0175): `move_environment > a failed submodule re-link restores the original checkout`, `restart recovery re-links submodules of an adopted or abandoned copy` and `a branch baseline follows origin/<ref> only when the policy fetches`, each at the 5-second default (5060 to 5098 ms).
 - **Isolated rerun:** `bun test ./src/core/environment-move.test.ts ./src/core/container-git-fetch-git.test.ts` from `apps/backend` passed 43 of 43 (40.05 s). The branch did not change either owning file or the code they test.
+
+
+## Agent interaction and permission review — 2026-10-22
+
+- **Original command:** `mise run test:logged -- --name final-suite -- mise run test` on the project-resource and approval fixes.
+- **Workers:** workspace/root/bridges/protocol reserved 4/1/2/1 slots alongside other worktrees; workspace waited 111.4 seconds for host capacity.
+- **Failure:** `move_environment > a failed submodule re-link restores the original checkout` exceeded 5000 ms (5088.17 ms). A follow-on between-test `CommandFailedError` reported `submodule--helper` could not enter `libs/sub` and the child received SIGTERM.
+- **Owning-file rerun:** `mise run test:logged -- --name environment-move-isolated -- bun test --cwd apps/backend ./src/core/environment-move.test.ts --parallel=1 --only-failures` passed the complete unchanged 37-test owner (41.0 s logged, exit 0).
+- **Suite counts:** backend: 9904 passed, 80 skipped, two failed and one between-test error across 9986 tests in 571 files (572.47 s); the other failure is tracked in 0672. Root/support, bridges and protocol passed.
+- **Evidence:** `orkestrator-test-run.H9pUnY/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory; passing focused output was removed by `test:logged`.
+- **Assessment:** confirms another intermittent recurrence. No environment-move implementation, test, deadline, assertion or skip changed. The shared-host contention hypothesis remains unproven.

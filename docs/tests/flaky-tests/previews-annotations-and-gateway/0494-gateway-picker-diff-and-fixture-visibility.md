@@ -52,3 +52,15 @@
 - **Evidence:** `orkestrator-test-run.D3CX6N/merge-browser.log.gz` and `orkestrator-test-run.itUkmQ/merge-gateway-rerun.log.gz` below the host temporary directory; sanitized artifacts under `output/agent-testing/qa-browser-c5dc6bca-3dd/browser/` and `output/agent-testing/merge-main-gateway-rerun-dab5ea29/browser/`.
 
 - **Cleanup (2026-10-21 merge):** `dev:stop` and `dev:reset` completed for `merge-main-20261021-dab5ea29`, removing two exact-owner containers, four volumes, one network and disposable profile state. The one-shot browser runner stopped/reset its own `qa-browser-c5dc6bca-3dd` profile. No manual profile state was retained.
+
+
+## Sidebar collision main merge — 2026-10-22
+
+The full isolated browser suite passed its authoritative local-environment smoke
+case, but the complete unchanged gateway owner on a fresh credential-free Codex
+profile could not find fixture project `origin` at `browser-gateway.spec.ts:521`
+within 30 seconds. It also repeated the narrow Repository settings click timeout
+(0224): 12 passed, 10 skipped and two failed in 155.3 seconds. This observation
+does not establish a new flaky classification. Exact commands and evidence are
+recorded in [0224](0224-host-picker-narrow-tools-popover.md#sidebar-collision-main-merge--2026-10-22).
+Both disposable profiles were stopped and reset; no owning source or test changed.

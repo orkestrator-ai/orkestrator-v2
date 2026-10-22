@@ -1163,7 +1163,10 @@ function ConnectedApp() {
     <FederationProvider>
       <TooltipProvider>
         <TerminalProvider>
-          <DockerAvailabilityProvider available={dockerAvailable === true}>
+          <DockerAvailabilityProvider
+            available={dockerAvailable === true}
+            ready={dockerAvailable !== null || dockerCheckStatus === "error"}
+          >
             <AppShell>
               {localBackendUnavailableMessage && (
                 <div

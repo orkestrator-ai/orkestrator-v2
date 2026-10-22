@@ -8,10 +8,11 @@ import {
   uninstallDesktopFake,
 } from "@/test/federation-desktop-fake";
 import { updatePortalLayout } from "@/lib/portal/portal-layout";
+import { openMachineWorkspace } from "@/lib/federation/open-workspace";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createElement, type ComponentProps } from "react";
-import type { DragEndEvent, DragStartEvent } from "@dnd-kit/core";
+import type { CollisionDetection, DragEndEvent, DragStartEvent } from "@dnd-kit/core";
 import { mockReadImage } from "../../mocks/clipboard";
 import { restoreMatchMedia, setMobileViewport } from "../../mocks/match-media";
 import { mockToastWarning } from "../../mocks/sonner";
@@ -267,6 +268,109 @@ describe("HierarchicalSidebar", () => {
     }
   });
 
+  test("repository members render the bound machine label through the full sidebar", async () => {
+    const previousView = useMachineViewStore.getState();
+    const previousNative = window.orkestrator;
+    installDesktopFake({
+      list: connectionList([remoteConnection("a", "Machine A", "teal")]),
+      datasets: { a: { projects: [], environments: {} } },
+    });
+    const sameRepository = { ...project, id: "project-2", name: "Second checkout", order: 1 };
+    projectsValue = [project, sameRepository];
+    useProjectStore.getState().setProjects(projectsValue);
+    useMachineViewStore.getState().setGrouping("repository");
+    let view: ReturnType<typeof render> | undefined;
+    try {
+      view = render(
+        <FederationProvider>
+          <HierarchicalSidebar />
+        </FederationProvider>,
+      );
+      const list = await screen.findByTestId("federated-repository-list");
+      expect(await within(list).findByText("This computer · Project One")).toBeTruthy();
+      expect(within(list).getByText("This computer · Second checkout")).toBeTruthy();
+      expect(
+        within(list).getByRole("button", { name: "Open acme/project-one on This computer" }),
+      ).toBeTruthy();
+      const member = within(list).getByText("This computer · Project One").closest("button")!;
+      fireEvent.click(member);
+      expect(useUIStore.getState().selectedProjectId).toBe(project.id);
+    } finally {
+      view?.unmount();
+      uninstallDesktopFake();
+      window.orkestrator = previousNative;
+      useMachineViewStore.setState(previousView, true);
+    }
+  });
+
+  for (const mode of ["project", "repository"] as const) {
+    test(`${mode} collision filtering skips environment rows for project and folder drags`, async () => {
+      const previousView = useMachineViewStore.getState();
+      const previousNative = window.orkestrator;
+      installDesktopFake({
+        list: connectionList([remoteConnection("a", "Machine A", "teal")]),
+        datasets: { a: { projects: [], environments: {} } },
+      });
+      useProjectStore.getState().setProjects([project]);
+      useMachineViewStore.getState().setGrouping(mode);
+      let view: ReturnType<typeof render> | undefined;
+      try {
+        view = render(
+          <FederationProvider>
+            <HierarchicalSidebar />
+          </FederationProvider>,
+        );
+        await screen.findByTestId(`federated-${mode}-list`);
+        const detect = dndContextProps!.collisionDetection!;
+        const projectId = projectKey(projectRef("bk_self" as never, project.id));
+        const groupId = "project-folder:github.com/acme/project-one";
+        const rootId = "project-folder-root";
+        const rect = (x: number) => ({
+          top: 0,
+          bottom: 10,
+          left: x,
+          right: x + 10,
+          width: 10,
+          height: 10,
+        });
+        const containers = [
+          "env-one",
+          "env-two",
+          projectId,
+          groupId,
+          ...(mode === "project" ? [rootId] : []),
+        ];
+        const dragData = (id: string) => ({
+          current:
+            id === rootId
+              ? undefined
+              : { sortable: { containerId: id.startsWith("env-") ? "environments" : "projects" } },
+        });
+        const args = (activeId: string, x = 0) =>
+          ({
+            active: { id: activeId, data: dragData(activeId) },
+            collisionRect: rect(x),
+            droppableRects: new Map(containers.map((id, index) => [id, rect(index * 100)])),
+            droppableContainers: containers.map((id) => ({ id, data: dragData(id) })),
+            pointerCoordinates: null,
+          }) as Parameters<CollisionDetection>[0];
+        for (const activeId of [projectId, groupId]) {
+          // The environment is nearest; the next valid project must win.
+          expect(detect(args(activeId))[0]?.id).toBe(projectId);
+          expect(detect(args(activeId, 300))[0]?.id).toBe(groupId);
+          if (mode === "project") expect(detect(args(activeId, 400))[0]?.id).toBe(rootId);
+        }
+        expect(detect(args("env-one"))[0]?.id).toBe("env-one");
+        expect(detect(args("env-one", 100))[0]?.id).toBe("env-two");
+      } finally {
+        view?.unmount();
+        uninstallDesktopFake();
+        window.orkestrator = previousNative;
+        useMachineViewStore.setState(previousView, true);
+      }
+    });
+  }
+
   beforeEach(() => {
     if (!HTMLElement.prototype.scrollIntoView) {
       HTMLElement.prototype.scrollIntoView = () => {};
@@ -353,6 +457,7 @@ describe("HierarchicalSidebar", () => {
         },
         repositories: {},
       },
+      hasLoaded: true,
       isLoading: false,
       error: null,
     }));
@@ -1506,6 +1611,202 @@ describe("HierarchicalSidebar", () => {
         undefined,
       ),
     );
+  });
+
+  test("opens the create dialog requested by a workspace switch once config has loaded", async () => {
+    useConfigStore.setState({ hasLoaded: false });
+    sessionStorage.setItem(
+      "orkestrator.workspace-switch-intent",
+      JSON.stringify({ createEnvironmentProjectId: "project-1" }),
+    );
+    try {
+      render(<HierarchicalSidebar />);
+      expect(sessionStorage.getItem("orkestrator.workspace-switch-intent")).toBeNull();
+      // Its defaults come from config, so the dialog waits for it.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
+
+      act(() => useConfigStore.setState({ hasLoaded: true }));
+      await screen.findByText(/^Create Ork \(Environment\)/);
+      expect(createEnvironmentMock).not.toHaveBeenCalled();
+    } finally {
+      sessionStorage.clear();
+    }
+  });
+
+  test("opens the create dialog when a machine section asks for this window's machine", async () => {
+    window.orkestratorWorkspaceTarget = { nodeId: "bk_here" } as never;
+    try {
+      render(<HierarchicalSidebar />);
+      act(() =>
+        openMachineWorkspace({
+          connectionId: "bk_here",
+          projectId: "project-1",
+          createEnvironment: true,
+          title: "Project One",
+        }),
+      );
+      await screen.findByText(/^Create Ork \(Environment\)/);
+      expect(createEnvironmentMock).not.toHaveBeenCalled();
+      expect(useUIStore.getState().selectedProjectId).toBeNull();
+    } finally {
+      delete window.orkestratorWorkspaceTarget;
+    }
+  });
+
+  test.each([true, false])(
+    "uses destination defaults after the initial Docker probe resolves available=%s",
+    async (available) => {
+      const localProject = { ...project, localPath: "/tmp/project-one" };
+      const ports = [{ hostPort: 4300, containerPort: 3000, protocol: "tcp" as const }];
+      projectsValue = [localProject];
+      useProjectStore.setState({ projects: [localProject] });
+      useConfigStore.setState({ hasLoaded: false });
+      sessionStorage.setItem(
+        "orkestrator.workspace-switch-intent",
+        JSON.stringify({ createEnvironmentProjectId: project.id }),
+      );
+      const sidebar = (ready: boolean) => (
+        <DockerAvailabilityProvider available={ready && available} ready={ready}>
+          <HierarchicalSidebar />
+        </DockerAvailabilityProvider>
+      );
+      try {
+        const view = render(sidebar(false));
+        act(() => {
+          const config = useConfigStore.getState().config;
+          useConfigStore.getState().setConfig({
+            ...config,
+            repositories: {
+              [project.id]: {
+                defaultBranch: "main",
+                prBaseBranch: "main",
+                lastEnvironmentType: "containerized",
+                defaultPortMappings: ports,
+                agentSettings: {
+                  defaultAgent: "codex",
+                  platforms: {
+                    codex: { mode: "native", model: "gpt-5.4", reasoningEffort: "high" },
+                  },
+                },
+              },
+            },
+          });
+        });
+        // Config and projects arrived first; the initial probe is still pending.
+        expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
+        expect(createEnvironmentMock).not.toHaveBeenCalled();
+
+        view.rerender(sidebar(true));
+        await screen.findByText(/^Create Ork \(Environment\)/);
+        expect(
+          screen.getByRole("button", { name: available ? /^Containerized$/ : /^Local$/ }).className,
+        ).toContain("font-bold");
+        fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+        await waitFor(() => {
+          expect(createEnvironmentMock).toHaveBeenCalledWith(
+            project.id,
+            undefined,
+            "full",
+            undefined,
+            available ? ports : undefined,
+            available ? "containerized" : "local",
+            undefined,
+          );
+          expect(updateEnvironmentAgentSettingsMock).toHaveBeenCalledWith(
+            createdEnvironment.id,
+            { defaultAgent: "codex", platforms: { codex: { mode: "native" } } },
+            true,
+            "gpt-5.4",
+            "high",
+            [],
+            undefined,
+          );
+        });
+        await waitFor(() =>
+          expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true),
+        );
+        // A later availability update must not replay the consumed request.
+        view.rerender(sidebar(false));
+        view.rerender(sidebar(true));
+        expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
+        expect(createEnvironmentMock).toHaveBeenCalledTimes(1);
+      } finally {
+        sessionStorage.clear();
+      }
+    },
+  );
+
+  test("waits for both initial project hydration and an in-flight project load", async () => {
+    projectsValue = [];
+    projectsLoadingValue = false;
+    useProjectStore.setState({ hasLoaded: false });
+    sessionStorage.setItem(
+      "orkestrator.workspace-switch-intent",
+      JSON.stringify({ createEnvironmentProjectId: project.id }),
+    );
+    try {
+      const view = render(<HierarchicalSidebar />);
+      expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
+      projectsValue = [project];
+      projectsLoadingValue = true;
+      act(() => useProjectStore.setState({ hasLoaded: true, projects: [project] }));
+      expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
+      projectsLoadingValue = false;
+      view.rerender(<HierarchicalSidebar />);
+      await screen.findByText(/^Create Ork \(Environment\)/);
+      expect(createEnvironmentMock).not.toHaveBeenCalled();
+    } finally {
+      sessionStorage.clear();
+    }
+  });
+
+  test("discards a missing destination project after projects have loaded", () => {
+    projectsValue = [];
+    sessionStorage.setItem(
+      "orkestrator.workspace-switch-intent",
+      JSON.stringify({ createEnvironmentProjectId: project.id }),
+    );
+    try {
+      const view = render(<HierarchicalSidebar />);
+      expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
+      // A later project refresh must not revive an already discarded request.
+      projectsValue = [project];
+      act(() => useProjectStore.setState({ projects: [project] }));
+      view.rerender(<HierarchicalSidebar />);
+      expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
+      expect(createEnvironmentMock).not.toHaveBeenCalled();
+    } finally {
+      sessionStorage.clear();
+    }
+  });
+
+  test("keeps a create request pending when config fails until a retry loads it", async () => {
+    useConfigStore.setState({ hasLoaded: false, isLoading: true });
+    sessionStorage.setItem(
+      "orkestrator.workspace-switch-intent",
+      JSON.stringify({ createEnvironmentProjectId: project.id }),
+    );
+    try {
+      const view = render(<HierarchicalSidebar />);
+      expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
+      act(() => {
+        useConfigStore.getState().setError("Config could not be loaded");
+        useConfigStore.getState().setLoading(false);
+      });
+      view.rerender(<HierarchicalSidebar />);
+      expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
+      expect(createEnvironmentMock).not.toHaveBeenCalled();
+      act(() => {
+        const state = useConfigStore.getState();
+        state.setError(null);
+        state.setConfig(structuredClone(state.config));
+      });
+      await screen.findByText(/^Create Ork \(Environment\)/);
+    } finally {
+      sessionStorage.clear();
+    }
   });
 
   test("does not select or start a partially configured environment", async () => {

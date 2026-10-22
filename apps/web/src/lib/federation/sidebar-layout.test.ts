@@ -5,6 +5,7 @@ import {
   resolveProjectArrangement,
   resolveRenameProjectFolder,
   buildProjectTree,
+  PROJECT_ROOT_DROP_ID,
 } from "@/lib/project-folders";
 import type { MachineView } from "./aggregate";
 import {
@@ -18,6 +19,9 @@ import {
   placeShown,
   registryOrder,
   repositoryArrangementUpdate,
+  repositoryLabel,
+  repositoryMemberLabel,
+  repositoryOpenTarget,
   repositoryProjectList,
 } from "./sidebar-layout";
 import type { FederatedProject } from "./summaries";
@@ -258,6 +262,54 @@ describe("by repository", () => {
       key("bk_leaf", "app"),
     ]);
   });
+
+  test("machines are reordered within their repository", () => {
+    const list = repositoryProjectList(machines, shown, layout(), "bk_control");
+    const update = repositoryArrangementUpdate(
+      list,
+      machines,
+      resolveRepositoryArrangement(key("bk_leaf", "app"), key("bk_control", "app"), list.shown),
+    );
+    expect(update?.repositoryOrder).toEqual([
+      key("bk_leaf", "app"),
+      key("bk_control", "app"),
+      key("bk_control", "tools"),
+    ]);
+  });
+
+  test("members are labelled by machine, with the project when a machine has several", () => {
+    const twice = machine("bk_leaf", [
+      project("bk_leaf", "app", 0, { repositoryHint: "github.com/acme/app" }),
+      project("bk_leaf", "app-2", 1, { repositoryHint: "github.com/acme/app" }),
+    ]);
+    const list = repositoryProjectList([control, twice], shown, layout(), "bk_control");
+    const group = list.shown.filter((item) => item.folder === "github.com/acme/app");
+    expect(group.map((item) => repositoryMemberLabel(item, group))).toEqual([
+      "bk_control",
+      "bk_leaf · app",
+      "bk_leaf · app-2",
+    ]);
+  });
+
+  test("a group's heading opens the command node's project, else the first shown", () => {
+    const list = repositoryProjectList(
+      machines,
+      shown,
+      layout({
+        repositoryOrder: [
+          key("bk_leaf", "app"),
+          key("bk_control", "app"),
+          key("bk_control", "tools"),
+        ],
+      }),
+      "bk_control",
+    );
+    const group = list.shown.filter((item) => item.folder === "github.com/acme/app");
+    expect(group[0]?.id).toBe(key("bk_leaf", "app"));
+    expect(repositoryOpenTarget(group, "bk_control")?.id).toBe(key("bk_control", "app"));
+    expect(repositoryOpenTarget(group, "bk_other")?.id).toBe(key("bk_leaf", "app"));
+    expect(repositoryOpenTarget([], "bk_control")).toBeNull();
+  });
 });
 
 test("repository identities retain long common prefixes and case-sensitive suffixes", () => {
@@ -297,4 +349,31 @@ test("case-only inherited folder rename persists without changing owner spelling
     mergedProjectList(machines, new Set(["bk_a"]), layout(update), null).shown[0]?.folder,
   ).toBe("WORK");
   expect(owned.folder).toBe("Work");
+});
+
+test("repository labels preserve namespaces with shared trailing segments", () => {
+  expect(repositoryLabel("gitlab.example/team-a/shared/app")).toBe("team-a/shared/app");
+  expect(repositoryLabel("gitlab.example/team-b/shared/app")).toBe("team-b/shared/app");
+  expect(repositoryLabel("github.com/acme/app")).toBe("acme/app");
+  expect(repositoryLabel("acme/app")).toBe("acme/app");
+  expect(repositoryLabel("app")).toBe("app");
+});
+
+test("project drops on repository headers and the root cannot change repository membership or order", () => {
+  const machines = [
+    machine("bk_a", [
+      project("bk_a", "a", 0, { repositoryHint: "gitlab.example/team-a/shared/app" }),
+      project("bk_a", "b", 1, { repositoryHint: "gitlab.example/team-b/shared/app" }),
+    ]),
+  ];
+  const list = repositoryProjectList(machines, new Set(["bk_a"]), layout(), null);
+  for (const overId of [
+    "project-folder:gitlab.example/team-a/shared/app",
+    "project-folder:gitlab.example/team-b/shared/app",
+    PROJECT_ROOT_DROP_ID,
+  ]) {
+    const arrangement = resolveRepositoryArrangement(key("bk_a", "a"), overId, list.shown);
+    expect(arrangement).toBeNull();
+    expect(repositoryArrangementUpdate(list, machines, arrangement)).toBeNull();
+  }
 });

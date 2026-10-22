@@ -19,6 +19,8 @@ export interface WorkspaceSwitchIntent {
   environmentId?: string;
   /** Open the Add Project dialog on the node. */
   addProject?: boolean;
+  /** Open the New Environment dialog for this project on the node. */
+  createEnvironmentProjectId?: string;
 }
 
 let switching = false;
@@ -43,10 +45,18 @@ function readIntent(): WorkspaceSwitchIntent | null {
       ...(typeof value.projectId === "string" ? { projectId: value.projectId } : {}),
       ...(typeof value.environmentId === "string" ? { environmentId: value.environmentId } : {}),
       ...(value.addProject === true ? { addProject: true } : {}),
+      ...(typeof value.createEnvironmentProjectId === "string"
+        ? { createEnvironmentProjectId: value.createEnvironmentProjectId }
+        : {}),
     };
   } catch {
     return null;
   }
+}
+
+/** Each part of the intent is taken once; whatever is left waits for its reader. */
+function keepRest(rest: WorkspaceSwitchIntent): void {
+  writeIntent(Object.keys(rest).length > 0 ? rest : null);
 }
 
 /** The selection asked for with the last switch, once. */
@@ -54,7 +64,7 @@ export function takeSwitchSelection(): { projectId: string; environmentId?: stri
   const intent = readIntent();
   if (!intent?.projectId) return null;
   const { projectId, environmentId, ...rest } = intent;
-  writeIntent(rest.addProject ? rest : null);
+  keepRest(rest);
   return { projectId, ...(environmentId ? { environmentId } : {}) };
 }
 
@@ -63,8 +73,17 @@ export function takeAddProjectIntent(): boolean {
   const intent = readIntent();
   if (!intent?.addProject) return false;
   const { addProject: _addProject, ...rest } = intent;
-  writeIntent(rest.projectId ? rest : null);
+  keepRest(rest);
   return true;
+}
+
+/** The project the last switch asked to create an environment in, once. */
+export function takeCreateEnvironmentIntent(): string | null {
+  const intent = readIntent();
+  if (!intent?.createEnvironmentProjectId) return null;
+  const { createEnvironmentProjectId, ...rest } = intent;
+  keepRest(rest);
+  return createEnvironmentProjectId;
 }
 
 /**

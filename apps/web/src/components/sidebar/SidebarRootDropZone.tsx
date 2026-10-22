@@ -9,10 +9,9 @@ import { cn } from "@/lib/utils";
  * up space: a permanent target at the bottom of the list would compete with
  * the last folder's own rows for every drop near the end.
  *
- * It is deliberately tall and offset from the last row. Collision detection is
- * `closestCenter`, so a short strip tucked directly under the final project
- * puts the two centres close enough together that a drop meant for the root
- * resolves against that project instead.
+ * It is deliberately tall and offset from the last row to provide a clear
+ * pointer-containment target. The spacing also separates its centre from the
+ * final project for keyboard drags, which still use `closestCenter`.
  */
 export function SidebarRootDropZone({ active }: { active: boolean }) {
   const { setNodeRef, isOver } = useDroppable({ id: PROJECT_ROOT_DROP_ID });

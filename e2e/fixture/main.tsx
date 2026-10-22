@@ -1,3 +1,4 @@
+import { MergedProjectListFixture } from "../../apps/web/src/test/MergedProjectListFixture";
 import { RemoteMachineTreeFixture } from "../../apps/web/src/test/RemoteMachineTreeFixture";
 import { NativeAttachmentsFixture } from "./NativeAttachmentsFixture";
 import { ChangeTrackingFixture, installChangeTrackingFixture } from "./changeTracking";
@@ -101,6 +102,10 @@ import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { ReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 import { useVirtuosoScrollState } from "../../apps/web/src/hooks/useVirtuosoScrollState";
+
+const SidebarDragFixture = lazy(async () => ({
+  default: (await import("../../apps/web/src/test/SidebarDragFixture")).SidebarDragFixture,
+}));
 
 const RichTranscriptPerfFixture = lazy(async () => ({
   default: (await import("./RichTranscriptPerfFixture")).RichTranscriptPerfFixture,
@@ -383,7 +388,19 @@ function NativeComposeFixture() {
     <main className="min-h-screen bg-background pt-4 text-foreground">
       <section data-testid="native-compose-fixture" className="w-full">
         <NativeComposeBar
-          attachments={[]}
+          attachments={
+            new URLSearchParams(window.location.search).has("images")
+              ? ["first", "second"].map((name) => ({
+                  id: name,
+                  type: "image" as const,
+                  name: `${name}.svg`,
+                  path: `/${name}.svg`,
+                  previewUrl: `data:image/svg+xml,${encodeURIComponent(
+                    `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" fill="${name === "first" ? "blue" : "red"}"/></svg>`,
+                  )}`,
+                }))
+              : []
+          }
           onRemoveAttachment={() => {}}
           inputRef={inputRef}
           inputContainerRef={inputContainerRef}
@@ -1714,6 +1731,14 @@ function fixtureForPath() {
       </Suspense>
     );
   }
+  if (window.location.pathname === "/sidebar-drag") {
+    return (
+      <Suspense fallback={null}>
+        <SidebarDragFixture />
+      </Suspense>
+    );
+  }
+  if (window.location.pathname === "/merged-project-list") return <MergedProjectListFixture />;
   if (window.location.pathname === "/remote-machine-tree") return <RemoteMachineTreeFixture />;
   if (window.location.pathname === "/machines-settings") return <MachinesSettingsFixture />;
   if (window.location.pathname === "/fullscreen-settings") return <FullscreenSettingsFixture />;

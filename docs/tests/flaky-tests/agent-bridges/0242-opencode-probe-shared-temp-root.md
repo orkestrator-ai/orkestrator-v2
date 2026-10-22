@@ -68,3 +68,16 @@
 - The failures were the Pi vendoring 30-second deadline, the disk-report five-second deadline, and two compatibility-probe temporary-root list assertions (setup and CLI-version deadline cases). The other checkout independently reported the Pi and disk deadlines and a compatibility-probe temporary-root assertion.
 - All three unchanged owning files then passed with one worker: `mise run test:logged -- --name review-root-owners -- bun test ./tests/unit/pi-bridge-vendor.test.ts ./tests/unit/disk-report.test.ts ./scripts/opencode-live-compatibility-probe.test.ts --parallel=1` (exit 0, 15.7 s). An earlier Pi retry while the complete runs were active had also timed out.
 - Evidence: compressed component logs under the host temporary directory `orkestrator-test-run.BEgua1`; outer artifact `orkestrator-test-run.6duRAm`. Host contention and the already documented shared temporary-root comparisons remain plausible contributors. No implementation, assertion, deadline or skip in these owners changed.
+
+## Command-node main merge final validation — 2026-10-22
+
+- **Merge parents:** feature `2f6fdfe2875cb6bb62499db1167f81b69ba5842e` and main `58c5df9f9bf68402d3c851f894608688594f77d7`.
+- **Command:** `mise run test:logged -- --name merge-final-complete-suite -- mise run test:all`, Bun 1.4.3 on macOS arm64; workspace/root/bridges/protocol reservations 4/1/2/1. A fresh gateway owning-file browser rerun initially overlapped this aggregate.
+- **Failure:** `a deadline during setup stops the abandoned probe from spawning a server` at line 422 observed `[]` instead of its initial `ork-opencode-compat-*` root list (161.21 ms). The no-spawn assertion passed. Root/support reported 3,337 passed and one failed across 3,338 tests in 161 files (179.06 seconds); Pi vendoring passed in this run.
+- **Complete unchanged owner:** `mise run test:logged -- --name merge-opencode-probe-owner -- bun test ./scripts/opencode-live-compatibility-probe.test.ts --parallel=1 --only-failures` passed, exit 0 in 0.6 seconds.
+- **Evidence:** `orkestrator-test-run.W4p4kG/root-and-agent-support-tests.log.gz` and outer `orkestrator-test-run.6ihOxg/merge-final-complete-suite.log.gz` below the host temporary directory after aggregate completion.
+- **Assessment:** confirmed intermittent recurrence of the existing shared temporary-root snapshot assertion. Another process removing a root between snapshots is plausible but unproven. No implementation, assertion, deadline or skip changed.
+
+The aggregate completed with workspace, bridges and protocol passing; only root/support failed (exit 1, 426.4 seconds). The root failure prevented its serial iOS stage, so iOS was invoked separately with `mise run test:logged -- --name merge-ios -- mise run test:ios`.
+
+The separate iOS command did not reach compilation or tests: `simctl list devices available --json` waited on Xcode's `xcodebuild -runFirstLaunch`. The logged runner's 300-second no-output watchdog stopped its owned process group (exit 1, 300.0 seconds; evidence `orkestrator-test-run.SZkLnj/merge-ios.log.gz`). iOS remains unvalidated because host initialization did not finish. Separate Electron, Docker and CLI scenario suites were outside the changed implementation areas.

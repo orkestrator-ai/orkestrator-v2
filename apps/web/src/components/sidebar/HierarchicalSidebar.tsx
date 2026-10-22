@@ -1,9 +1,9 @@
 import { useStore } from "zustand";
 import { portalLayoutStore } from "@/lib/portal/portal-layout";
 import { useSidebarHydration, useSidebarScrollRestore } from "./useSidebarHydration";
-import { openMachineWorkspace } from "@/lib/federation/open-workspace";
+import { onCreateEnvironmentRequest, openMachineWorkspace } from "@/lib/federation/open-workspace";
 import { startsOnSelection } from "@/lib/environment-auto-start";
-import { takeAddProjectIntent } from "@/lib/portal/workspace-switch";
+import { takeAddProjectIntent, takeCreateEnvironmentIntent } from "@/lib/portal/workspace-switch";
 import {
   lazy,
   useState,
@@ -16,7 +16,6 @@ import {
 } from "react";
 import {
   DndContext,
-  closestCenter,
   KeyboardSensor,
   PointerSensor,
   useSensor,
@@ -69,7 +68,7 @@ import { useProjects } from "@/hooks/useProjects";
 import { useEnvironments } from "@/hooks/useEnvironments";
 import { useEnvironmentListSync } from "@/hooks/useEnvironmentListSync";
 import { useAgentActivityStore } from "@/stores/agentActivityStore";
-import { useUIStore, useProjectStore, useEnvironmentStore } from "@/stores";
+import { useUIStore, useProjectStore, useEnvironmentStore, useConfigStore } from "@/stores";
 import { drainProjectHomeEnsures } from "@/hooks/useFilesPanel";
 import { useEnvironmentDiffStats } from "@/hooks/useEnvironmentDiffStats";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
@@ -104,9 +103,13 @@ import {
   resolveEnvironmentAgentActivity,
 } from "@/components/environments/EnvironmentItem";
 import { cn } from "@/lib/utils";
+import { sidebarCollisionDetection } from "@/lib/sidebar-collision";
 import { withoutProjectHomes } from "@/lib/project-home";
 import { LazyDialogLoadingFallback, LazyLoadBoundary } from "@/components/LazyLoadBoundary";
-import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
+import {
+  useDockerAvailability,
+  useDockerAvailabilityReady,
+} from "@/contexts/DockerAvailabilityContext";
 import {
   buildProjectTree,
   isProjectFolderCollapsed,
@@ -437,12 +440,17 @@ export async function deleteProjectAndEnvironments(
 
 export function HierarchicalSidebar() {
   const dockerAvailable = useDockerAvailability();
+  const dockerReady = useDockerAvailabilityReady();
   // Poll git diff stats for all environments
   useEnvironmentDiffStats();
   // "Add a project on <machine>" moved the window to that machine first.
   const [showAddProjectDialog, setShowAddProjectDialog] = useState(takeAddProjectIntent);
   const [showCreateEnvDialog, setShowCreateEnvDialog] = useState(false);
   const [createEnvProjectId, setCreateEnvProjectId] = useState<string | null>(null);
+  // "New environment" on another machine's project moved the window here first.
+  const [pendingCreateEnvProjectId, setPendingCreateEnvProjectId] = useState(
+    takeCreateEnvironmentIntent,
+  );
   const [activeId, setActiveId] = useState<string | null>(null);
   const [activeType, setActiveType] = useState<SidebarDragType | null>(null);
   const [folderDialogProjectId, setFolderDialogProjectId] = useState<string | null>(null);
@@ -497,6 +505,7 @@ export function HierarchicalSidebar() {
   const clearMultiSelection = useUIStore((state) => state.clearMultiSelection);
   const portalLayoutLoaded = useStore(portalLayoutStore, (state) => state.loaded);
   const projectsLoaded = useProjectStore((state) => state.hasLoaded);
+  const configLoaded = useConfigStore((state) => state.hasLoaded);
   const setEnvironmentSortMode = useUIStore((state) => state.setEnvironmentSortMode);
   // Multi-machine presentation. This sidebar's own machine keeps its full
   // tree; other machines appear as their own sections, or merged into one
@@ -783,6 +792,41 @@ export function HierarchicalSidebar() {
     setShowCreateEnvDialog(true);
   };
 
+  // The dialog reads its defaults (environment type, ports) when it opens, so
+  // after a workspace switch it waits for this machine's projects, config and
+  // initial Docker probe. An unfinished probe must not force a local default.
+  useEffect(() => {
+    if (
+      !pendingCreateEnvProjectId ||
+      !configLoaded ||
+      !projectsLoaded ||
+      projectsLoading ||
+      !dockerReady
+    )
+      return;
+    setPendingCreateEnvProjectId(null);
+    if (!projects.some((project) => project.id === pendingCreateEnvProjectId)) return;
+    setCreateEnvProjectId(pendingCreateEnvProjectId);
+    setShowCreateEnvDialog(true);
+  }, [
+    configLoaded,
+    dockerReady,
+    pendingCreateEnvProjectId,
+    projects,
+    projectsLoaded,
+    projectsLoading,
+  ]);
+
+  // "New environment" from a machine section that turned out to be this one.
+  useEffect(
+    () =>
+      onCreateEnvironmentRequest((projectId) => {
+        setCreateEnvProjectId(projectId);
+        setShowCreateEnvDialog(true);
+      }),
+    [],
+  );
+
   // Build a flat ordered list of visible environment IDs in display order
   // Only includes environments from expanded (non-collapsed) projects
   const getOrderedEnvironmentIds = useCallback((): string[] => {
@@ -1007,12 +1051,13 @@ export function HierarchicalSidebar() {
 
   const renderProjectGroup = (
     project: Project,
-    mixed?: { sortableId: string; machineBadge: ReactNode },
+    mixed?: { sortableId: string; machineBadge: ReactNode; label?: string },
   ) => (
     <SortableProjectGroup
       key={project.id}
       sortableId={mixed?.sortableId}
       machineBadge={mixed?.machineBadge}
+      label={mixed?.label}
       project={project}
       environments={getProjectEnvironments(project.id)}
       home={allEnvironments.find(
@@ -1217,7 +1262,7 @@ export function HierarchicalSidebar() {
     ) : (
       <DndContext
         sensors={sensors}
-        collisionDetection={closestCenter}
+        collisionDetection={sidebarCollisionDetection}
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
       >
@@ -1270,11 +1315,12 @@ export function HierarchicalSidebar() {
       </DndContext>
     );
 
-  const renderMergedBoundProject = (projectId: string, sortableId: string) => {
+  const renderMergedBoundProject = (projectId: string, sortableId: string, label?: string) => {
     const project = projectsById.get(projectId);
     if (!project) return null;
     return renderProjectGroup(project, {
       sortableId,
+      label,
       machineBadge: boundMachineView ? (
         <MachineDot
           colorToken={boundMachineView.colorToken}

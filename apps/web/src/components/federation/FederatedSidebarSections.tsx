@@ -29,9 +29,12 @@ import {
   mergedProjectList,
   repositoryArrangementUpdate,
   repositoryLabel,
+  repositoryMemberLabel,
+  repositoryOpenTarget,
   repositoryProjectList,
   type MergedProject,
 } from "@/lib/federation/sidebar-layout";
+import { openMachineWorkspace } from "@/lib/federation/open-workspace";
 import { updatePortalLayout, usePortalLayout } from "@/lib/portal/portal-layout";
 import {
   buildProjectTree,
@@ -46,6 +49,7 @@ import {
   type ProjectArrangement,
 } from "@/lib/project-folders";
 import { cn } from "@/lib/utils";
+import { sidebarCollisionDetection } from "@/lib/sidebar-collision";
 import { sidebarFolderKey, useMachineViewStore } from "@/stores/machineViewStore";
 import { useFederation } from "./FederationProvider";
 import { MachineDot, machineStatusText } from "./MachineDot";
@@ -309,8 +313,8 @@ export function MergedProjectList({
   /** Machines whose projects are shown (connected, and not filtered out). */
   shownIds: ReadonlySet<string>;
   mode: "project" | "repository";
-  /** A project of this window's own machine, with its drag id. */
-  renderBoundProject: (projectId: string, sortableId: string) => ReactNode;
+  /** A project of this window's own machine, with its drag id and the label to show. */
+  renderBoundProject: (projectId: string, sortableId: string, label?: string) => ReactNode;
   /** An environment of this window's own machine was dropped. */
   onBoundEnvironmentDragEnd: (activeId: string, overId: string) => void;
 }) {
@@ -351,7 +355,6 @@ export function MergedProjectList({
         )
       : projectSortableIds(tree, [], isFolderCollapsed);
   const isProjectDrag = (id: string) => parseProjectFolderDragId(id) !== null || projectIds.has(id);
-
   const apply = (arrangement: ProjectArrangement | null) => {
     const update =
       mode === "project"
@@ -390,9 +393,9 @@ export function MergedProjectList({
     onBoundEnvironmentDragEnd(activeId, overId);
   };
 
-  const renderProject = (item: MergedProject) =>
+  const renderProject = (item: MergedProject, label?: string) =>
     item.machine.bound ? (
-      <div key={item.id}>{renderBoundProject(item.project.ref.projectId, item.id)}</div>
+      <div key={item.id}>{renderBoundProject(item.project.ref.projectId, item.id, label)}</div>
     ) : (
       <RemoteProjectGroup
         key={item.id}
@@ -403,6 +406,7 @@ export function MergedProjectList({
         onToggleCollapse={() => setProjectKeyCollapsed(item.id)}
         sortable={isMachineWritable(item.machine) && !item.machine.truncated}
         showMachine
+        label={label}
       />
     );
 
@@ -416,7 +420,7 @@ export function MergedProjectList({
       ) : null}
       <DndContext
         sensors={sensors}
-        collisionDetection={closestCenter}
+        collisionDetection={sidebarCollisionDetection}
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
         onDragCancel={() => setDraggingProject(false)}
@@ -439,6 +443,10 @@ export function MergedProjectList({
                     onUngroup: () => apply(resolveUngroupProjectFolder(list.shown, entry.name)),
                   }
                 : {};
+            const opens =
+              mode === "repository"
+                ? repositoryOpenTarget(entry.projects, portalState.selfId)
+                : null;
             return (
               <SortableProjectFolder
                 key={`folder:${entry.key}`}
@@ -449,9 +457,33 @@ export function MergedProjectList({
                 projectCount={entry.projects.length}
                 isCollapsed={isFolderCollapsed(entry.name)}
                 onToggleCollapse={() => setFolderKeyCollapsed(folderCollapseKey(entry.name))}
+                onOpen={
+                  opens
+                    ? () =>
+                        openMachineWorkspace({
+                          connectionId: opens.machine.connectionId,
+                          projectId: opens.project.ref.projectId,
+                          title: opens.name,
+                        })
+                    : undefined
+                }
+                openMachineName={opens?.machine.name}
+                badge={
+                  opens ? (
+                    <MachineDot
+                      colorToken={opens.machine.colorToken}
+                      machineName={opens.machine.name}
+                    />
+                  ) : undefined
+                }
                 {...folderActions}
               >
-                {entry.projects.map(renderProject)}
+                {entry.projects.map((item) =>
+                  renderProject(
+                    item,
+                    mode === "repository" ? repositoryMemberLabel(item, entry.projects) : undefined,
+                  ),
+                )}
               </SortableProjectFolder>
             );
           })}

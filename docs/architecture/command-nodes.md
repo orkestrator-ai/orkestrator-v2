@@ -136,7 +136,7 @@ There is no deeper hierarchy.
   (owned loopback forwards, host-key trust, no remote install). Interactive
   SSH prompts are relayed to the user through the portal; unattended
   reconnects use key/agent authentication only.
-- The registry is managed from the portal's Connections settings. Removing a
+- The registry is managed from the portal's Machines settings. Removing a
   node from a registry only forgets it on that command node; it never stops
   or deletes anything on the node.
 

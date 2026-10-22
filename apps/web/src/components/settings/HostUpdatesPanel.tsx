@@ -8,6 +8,7 @@ import {
   isHostUpdateChannel,
   type HostRestartImpact,
   type HostUpdateChannel,
+  type HostMaintenanceSnapshot,
   type HostUpdateJob,
 } from "@orkestrator/protocol/host-maintenance";
 import {
@@ -31,9 +32,8 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Z_FULLSCREEN_DIALOG, Z_FULLSCREEN_DIALOG_POPOVER } from "@/constants/z-index";
-import * as backend from "@/lib/backend";
+import type { HostMaintenanceClient } from "@/lib/host-maintenance-client";
 import { HostDependencySettings } from "./HostDependencySettings";
-import { useHostMaintenance } from "./useHostMaintenance";
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -143,13 +143,22 @@ const IDLE_WAITS = [
 ] as const;
 
 /**
- * Maintenance of the computer running the connected backend: Orkestrator
- * updates, the pinned toolchain, `gh` and the container image. Works the same
- * from that computer and from any device connected to it; the host applies
- * each change.
+ * Maintenance of one machine: Orkestrator updates, the pinned toolchain,
+ * `gh` and the container image. Works the same from that machine and from
+ * any device connected to it, directly or through a command node; the host
+ * applies each change.
  */
-export function UpdatesSettings() {
-  const { snapshot, error, accept } = useHostMaintenance({ detail: true });
+export function HostUpdatesPanel({
+  client,
+  snapshot,
+  error,
+  accept,
+}: {
+  client: HostMaintenanceClient;
+  snapshot: HostMaintenanceSnapshot | null;
+  error: string | null;
+  accept: (snapshot: HostMaintenanceSnapshot) => void;
+}) {
   const [checking, setChecking] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [installing, setInstalling] = useState(false);
@@ -163,7 +172,7 @@ export function UpdatesSettings() {
     setImpact(null);
     setConfirming(true);
     try {
-      setImpact(await backend.getHostRestartImpact());
+      setImpact(await client.getHostRestartImpact());
     } catch {
       // The confirmation still works; it just cannot say what is running.
     }
@@ -172,7 +181,7 @@ export function UpdatesSettings() {
   const check = async () => {
     setChecking(true);
     try {
-      accept(await backend.requestHostUpdateCheck());
+      accept(await client.requestHostUpdateCheck());
     } catch (failure) {
       toast.error(`Could not check for updates: ${errorText(failure)}`);
     } finally {
@@ -183,7 +192,7 @@ export function UpdatesSettings() {
   const install = async () => {
     setInstalling(true);
     try {
-      const result = await backend.requestHostUpdate({
+      const result = await client.requestHostUpdate({
         ...(snapshot?.updater.latestVersion ? { version: snapshot.updater.latestVersion } : {}),
         ...(whenIdle ? { drain: "when-idle" as const, maxWaitSeconds: maxWait } : {}),
       });
@@ -199,7 +208,7 @@ export function UpdatesSettings() {
   const changeChannel = async (channel: HostUpdateChannel) => {
     setSwitchingChannel(true);
     try {
-      accept(await backend.setHostUpdateChannel(channel));
+      accept(await client.setHostUpdateChannel(channel));
     } catch (failure) {
       toast.error(`Could not change the update channel: ${errorText(failure)}`);
     } finally {
@@ -209,7 +218,7 @@ export function UpdatesSettings() {
 
   const cancel = async () => {
     try {
-      accept((await backend.cancelHostUpdate(snapshot?.job?.id)).snapshot);
+      accept((await client.cancelHostUpdate(snapshot?.job?.id)).snapshot);
     } catch (failure) {
       toast.error(`Could not cancel the update: ${errorText(failure)}`);
     }
@@ -242,8 +251,7 @@ export function UpdatesSettings() {
         <div>
           <h3 className="text-sm font-medium">Orkestrator updates</h3>
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-            Updates Orkestrator on the computer running this backend, from here or any device
-            connected to it.
+            Updates Orkestrator on this machine, from here or any device connected to it.
           </p>
         </div>
 
@@ -340,7 +348,7 @@ export function UpdatesSettings() {
         </div>
       </section>
 
-      <HostDependencySettings snapshot={snapshot} accept={accept} />
+      <HostDependencySettings client={client} snapshot={snapshot} accept={accept} />
 
       <AlertDialog open={confirming} onOpenChange={(open) => !installing && setConfirming(open)}>
         <AlertDialogContent className={Z_FULLSCREEN_DIALOG} overlayClassName={Z_FULLSCREEN_DIALOG}>

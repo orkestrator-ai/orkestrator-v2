@@ -404,3 +404,10 @@ export function deriveNodeMode(input: {
   if (input.controllerCount > 0) return "leaf";
   return input.commandedNodeCount > 0 ? "command" : "standalone";
 }
+
+/** Routed reads do not invalidate the machine’s project/environment summaries. */
+export function isNodeReadCommand(command: string): boolean {
+  return ["get_", "list_", "read_", "search_", "check_", "describe_"].some((prefix) =>
+    command.startsWith(prefix),
+  );
+}

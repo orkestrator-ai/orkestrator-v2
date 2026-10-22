@@ -7,10 +7,11 @@ import { useMachineViewStore } from "@/stores/machineViewStore";
 
 /**
  * This device's route features for the machines it can connect to directly
- * (its targets). Multi-machine views come from the connected command node,
- * not from this client. Turning one off never stops work on any machine.
+ * (its targets), and how it keeps their tokens. Multi-machine views come
+ * from the connected command node, not from this client. Turning one off
+ * never stops work on any machine.
  */
-export function FederationFeatureToggles({ list }: { list: ConnectionList }) {
+export function ClientOptions({ list }: { list: ConnectionList }) {
   const api = window.orkestrator?.connections;
   const compact = useMachineViewStore((state) => state.compactMachineLabels);
   const setCompact = useMachineViewStore((state) => state.setCompactMachineLabels);
@@ -35,6 +36,11 @@ export function FederationFeatureToggles({ list }: { list: ConnectionList }) {
     help: string;
   }> = [
     {
+      key: "federation",
+      label: "Show all machines together",
+      help: "Show work from all saved machines together on this device.",
+    },
+    {
       key: "sshRoutes",
       label: "Managed SSH routes",
       help: "Reach a machine's backend through your system OpenSSH (desktop only).",
@@ -50,7 +56,14 @@ export function FederationFeatureToggles({ list }: { list: ConnectionList }) {
       className="space-y-3 rounded-lg border border-zinc-800 bg-zinc-950/40 p-4"
       data-testid="federation-toggles"
     >
-      <p className="text-sm font-medium text-zinc-200">This client</p>
+      <div>
+        <p className="text-sm font-medium text-zinc-200">This device</p>
+        <p className="text-xs text-zinc-500">
+          {list.credentialStorage === "secure"
+            ? "Tokens saved on this device are protected by your operating system’s credential storage and cannot be revealed."
+            : "Tokens saved on this device are kept only for this app session and cannot be revealed."}
+        </p>
+      </div>
       {rows.map((row) => (
         <div key={row.key} className="flex items-start justify-between gap-4">
           <div>

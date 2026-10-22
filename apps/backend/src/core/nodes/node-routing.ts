@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isNodeReadCommand } from "@orkestrator/protocol/command-nodes";
 
 import type { BackendId } from "@orkestrator/protocol/federation";
 
@@ -88,12 +89,8 @@ export function isNodeExcludedCommand(command: string): boolean {
   return NODE_EXCLUDED_COMMANDS.has(command);
 }
 
-/** Reads that are safe to issue (and to repeat) while a node is reconnecting. */
-const READ_PREFIXES = ["get_", "list_", "read_", "search_", "check_", "describe_"];
-
-export function isReadCommand(command: string): boolean {
-  return READ_PREFIXES.some((prefix) => command.startsWith(prefix));
-}
+/** Reads safe to repeat while reconnecting, shared with summary invalidation. */
+export { isNodeReadCommand as isReadCommand } from "@orkestrator/protocol/command-nodes";
 
 export interface NodeOutcomeRecord {
   outcomeId: string;
@@ -187,7 +184,7 @@ export async function routeToNode<T>(input: {
   }
   if (!input.link || !input.link.connected) {
     throw new NodeUnavailableError(
-      isReadCommand(input.command)
+      isNodeReadCommand(input.command)
         ? "That node is not connected; its last-known state is shown."
         : "That node is not connected, so changes to it are disabled.",
     );
@@ -195,7 +192,7 @@ export async function routeToNode<T>(input: {
   try {
     return { outcome: "ok", result: await input.link.invoke<T>(input.command, input.args) };
   } catch (error) {
-    if (error instanceof NodeOutcomeUnknownError && !isReadCommand(input.command)) {
+    if (error instanceof NodeOutcomeUnknownError && !isNodeReadCommand(input.command)) {
       const requestKey = input.requestKey ?? randomUUID();
       const record = await input.outcomes.record({
         nodeId: input.nodeId,

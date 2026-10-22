@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 
 import type { NodeRoute } from "@orkestrator/protocol/command-nodes";
 import type { RouteId } from "@orkestrator/protocol/federation";
@@ -352,4 +352,34 @@ describe("DP-01/DP-02 leaf workspaces and client grants", () => {
     now += 15 * 60_000;
     expect(grants.authenticate(token)).toBeNull();
   });
+});
+
+test("maintenance polling does not hydrate project/environment summaries; writes still do", async () => {
+  const { command, leaf } = await commandWithLeaf();
+  leaf.commands.set("get_host_maintenance", () => ({ revision: 1 }));
+  leaf.commands.set("repair_host_toolchain", () => ({ id: "repair" }));
+  const hydrate = spyOn(command.portal.readModel, "requestHydrate");
+  leaf.received.length = 0;
+  try {
+    for (let i = 0; i < 3; i++) {
+      expect(
+        await command.portal.invokeOnNode({
+          nodeId: "bk_leaf",
+          command: "get_host_maintenance",
+          args: { detail: false },
+        }),
+      ).toMatchObject({ outcome: "ok" });
+    }
+    await settle(40);
+    expect(hydrate).not.toHaveBeenCalled();
+    expect(
+      leaf.received.some((entry) =>
+        ["get_projects", "get_environment_snapshots"].includes(entry.command),
+      ),
+    ).toBe(false);
+    await command.portal.invokeOnNode({ nodeId: "bk_leaf", command: "repair_host_toolchain" });
+    expect(hydrate).toHaveBeenCalledWith("bk_leaf");
+  } finally {
+    hydrate.mockRestore();
+  }
 });

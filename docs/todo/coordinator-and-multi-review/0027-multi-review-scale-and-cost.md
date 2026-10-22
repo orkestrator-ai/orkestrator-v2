@@ -206,7 +206,7 @@ Codex GPT-6-Luna (low) prepared and consolidated.
 | --- | --- | --- |
 | Multi Review component specs | `ORKESTRATOR_E2E_PORT=14731 bunx playwright test --config e2e/playwright.config.ts e2e/MultiReviewLaunchDialog.spec.ts e2e/MultiReviewOverview.spec.ts e2e/MultiReviewFlow.spec.ts e2e/ReviewLaunchDialog.spec.ts` | Pass |
 | Full component browser suite | `mise run test:browser` (on port 14732) | 326 passed, 69 skipped, 1 failed. All 73 Multi Review cases passed. The failure was `CoordinatorPaneTree` "drops in the mobile switcher…", which failed 2 of 3 times on its own on unchanged `main`; the test clicked inside dnd-kit's 50 ms post-drop click suppression, fixed in the spec ([0035-mobile-layout-gaps.md](../cross-cutting/0035-mobile-layout-gaps.md#constraints-and-rationale)). |
-| Agent-browser suite | `mise run test:agent:browser:isolated` | 25 passed, 18 skipped (opt-in live cases), 1 failed: known flake [0224](../../tests/flaky-tests/0224-host-picker-narrow-tools-popover.md), which passed 4 of 4 alone. The suite has no credential-free Multi Review case; the launcher and reviewer tab are covered by the live cycle below. |
+| Agent-browser suite | `mise run test:agent:browser:isolated` | 25 passed, 18 skipped (opt-in live cases), 1 failed: known flake [0224](../../tests/flaky-tests/previews-annotations-and-gateway/0224-host-picker-narrow-tools-popover.md), which passed 4 of 4 alone. The suite has no credential-free Multi Review case; the launcher and reviewer tab are covered by the live cycle below. |
 | Coordinator Multi Review action (opt-in) | `ORKESTRATOR_AGENT_TEST_REVIEW=1 … --grep "coordinator Multi Review action"` | Failed on a stale assertion: the exact text "Cancelled" is gone since the flow graph. It now matches the status line "Multi Review cancelled", and passes. |
 | Live cycle: unmount | `multi-review-live.spec.ts` "settles while unmounted…" | Pass (2 full runs; an earlier run passed every snapshot check and failed on a spec selector). Settled to `ready` while unmounted. No cancellation, one prompt per reviewer, same sessions, `unchanged` conditional reads, no fallback. The graph, inspector, Fix control and the reviewer's read-only tab are right on return and after reloads. |
 | Live cycle: renderer reload | "survives a renderer reload while reviewers run" | Pass (2 runs; one earlier attempt failed in preparation before the reload; the step reminder now covers it, see [Restart continuation and step reminders](#restart-continuation-and-step-reminders-2026-10-17)). |
@@ -290,7 +290,7 @@ text names the platform provider, including OpenCode.
   -- mise run test` exited 1 after 409.7 seconds. All recovery tests, all other
   workspace packages and root/bridge/protocol groups passed. Backend reported
   8,636 passed, 41 skipped and one failure: the unchanged tracked-edit
-  cache-hit flake [0180](../../tests/flaky-tests/0180-worktree-tracked-edit-cache-hit.md).
+  cache-hit flake [0180](../../tests/flaky-tests/environments-and-containers/0180-worktree-tracked-edit-cache-hit.md).
   Its complete owning file passed immediately on rerun (four tests,
   0.5 seconds). The earlier aggregate's three known timeout owners also passed
   separately; the wrapper-identity assertion found there was corrected and
@@ -630,7 +630,7 @@ real bridge process and a fake CLI).
 - [0034-mixed-version-compatibility.md](../cross-cutting/0034-mixed-version-compatibility.md): support
   window for the transcript fallbacks.
 - [0030-test-suite-and-ci-health.md](../cross-cutting/0030-test-suite-and-ci-health.md): CI gates.
-- Flake [0171](../../tests/flaky-tests/0171-multi-review-admission-benchmark-load.md),
+- Flake [0171](../../tests/flaky-tests/coordinator-and-multi-review/0171-multi-review-admission-benchmark-load.md),
   resolved on 2026-10-15: the slow-reviewer benchmark now asserts dispatch
   ordering instead of a wall-clock bound.
 - [`review-preparation.md`](../../architecture/review-preparation.md) covers

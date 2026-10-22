@@ -100,11 +100,11 @@ Test code the runs below depend on.
    expired sign-in redirect. Use them to exercise `stable`/`unstable` from
    `web_annotation_result_capture` and the redirect handling of Show on page.
 6. Done 2026-10-17: both flakes that touched these suites are resolved.
-   [0204](../../tests/flaky-tests/0204-web-annotation-quota-hook-timeout.md)
+   [0204](../../tests/flaky-tests/previews-annotations-and-gateway/0204-web-annotation-quota-hook-timeout.md)
    (`web-annotation-quotas.test.ts` hook timeout) was resolved on `main` by
    #1042: the cause was a per-record fsync loop in the pre-SQLite storage,
    removed by #969.
-   [0225](../../tests/flaky-tests/0225-design-and-bench-aggregate-timeouts.md)
+   [0225](../../tests/flaky-tests/previews-annotations-and-gateway/0225-design-and-bench-aggregate-timeouts.md)
    (the `web-annotation-payloads.bench.test.ts` creation-cost bound) was
    resolved on this branch: the case now bounds actual SQLite writes per
    create, and median timings remain diagnostic.
@@ -298,7 +298,7 @@ Validation of the change (commit `50c26708`):
 | `profile-io.test.ts` and `lifecycle.test.ts`; `coordinator-live.test.ts` | 46 passed; 46 passed |
 | Throwaway failing probe through the browser config | `results.json` call log shows `orkestrator_gateway_auth=[REDACTED]` |
 | `mise run check`, e2e and desktop typechecks | Pass |
-| `mise run test` | Codex protocol group passed; the other three failed only on load timeouts in files this change does not touch, each passing alone: known flakes 0165, 0178 and 0180 (0180 also failed once in three runs alone, as recorded), reopened 0093, and new flakes [0460](../../tests/flaky-tests/0460-tab-teardown-hanging-delete-elapsed-bound.md) and [0461](../../tests/flaky-tests/0461-coordinator-fetch-remotes-submodule-timeout.md) |
+| `mise run test` | Codex protocol group passed; the other three failed only on load timeouts in files this change does not touch, each passing alone: known flakes 0165, 0178 and 0180 (0180 also failed once in three runs alone, as recorded), reopened 0093, and new flakes [0460](../../tests/flaky-tests/backend-services-and-tooling/0460-tab-teardown-hanging-delete-elapsed-bound.md) and [0461](../../tests/flaky-tests/coordinator-and-multi-review/0461-coordinator-fetch-remotes-submodule-timeout.md) |
 
 The profile was stopped and reset afterwards (`dev:reset`: 0 containers,
 disposable state removed). The host `~/.grok/auth.json` was never written.
@@ -473,7 +473,7 @@ another app owns native focus. The recorded explicit menu selection is then
 authoritative. A unit regression verifies the selected label in that state;
 the Electron test continues to require that label and gates only the OS-focus
 predicate on actual native focus availability. Initial Home reload flake
-[0272](../../tests/flaky-tests/0272-annotation-home-reload-native-view.md) is
+[0272](../../tests/flaky-tests/previews-annotations-and-gateway/0272-annotation-home-reload-native-view.md) is
 recorded separately; its owning spec passed unchanged on rerun.
 
 Follow-up validation on `annotation-native-window-signoff`:

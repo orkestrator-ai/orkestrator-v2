@@ -1,0 +1,190 @@
+# Cursor authenticated readiness times out in the aggregate
+
+- **ID:** 0182
+- **Status:** open
+
+Observed: 2026-10-06 on macOS with Bun 1.4.2.
+
+- Test: `authentication > reports an authenticated credential as ready`
+- File: `bridges/cursor-bridge/src/http.test.ts:133`
+- Failure: `this test timed out after 5000ms`, reported duration 5327.42 ms.
+- Cursor package counts: 667 passed, 1 failed across 38 files.
+
+The original command was:
+
+```bash
+PATH="/opt/homebrew/opt/bash/bin:/opt/homebrew/opt/coreutils/libexec/gnubin:/opt/homebrew/opt/findutils/libexec/gnubin:/opt/homebrew/opt/gnu-tar/libexec/gnubin:/opt/homebrew/opt/grep/libexec/gnubin:/opt/homebrew/opt/gnu-sed/libexec/gnubin:/opt/homebrew/bin:$PATH" \
+  mise run test:logged -- --name full-suite -- mise run test
+```
+
+The aggregate ran workspace, root, bridges and protocol groups concurrently,
+with 2, 3, 2 and 1 worker slots respectively. Each bridge package used one Bun
+worker, with two bridge package tasks active at once. The bridge group failed
+in 62.5 seconds. The workspace and protocol groups passed.
+
+The owning file then passed alone, exit status 0, in 2.1 seconds:
+
+```bash
+mise run test:logged -- --name cursor-auth-isolated -- \
+  bun test ./bridges/cursor-bridge/src/http.test.ts \
+  --preload ./tests/setup-node.ts --parallel=1 --only-failures
+```
+
+Evidence: `/tmp/orkestrator-test-run.WqBC12/bridges.log.gz` (aggregate) and the
+logged `PASS cursor-auth-isolated` result. The passing log was removed by the
+logged runner, as designed.
+
+The test exercises a loopback HTTP session-status request with a test API key.
+No assertion mismatch was reported. Aggregate scheduling or loopback delay is
+possible, but not established; the isolated result alone does not identify the
+cause. No timeout, assertion or skip was changed.
+
+## Recurrence on 2026-10-07
+
+On macOS with Bun 1.4.2, `mise run test:logged -- --name fix-suite-final --
+mise run test` (using the GNU-tool PATH above) reported the same readiness test
+as a beforeEach/afterEach hook timeout at 10004.37 ms. The following
+`authentication > an attached agent is ready without reading credentials` also
+failed at 2777.45 ms with undefined session state; an unhandled error was
+reported between tests. Cursor counts were 666 passed, 2 failed and 1 error
+across 38 files. Group worker allocations remained 2/3/2/1.
+
+The owning file passed alone in 1.9 seconds, exit 0:
+
+```bash
+mise run test:logged -- --name cursor-http-alone -- \
+  bun test ./bridges/cursor-bridge/src/http.test.ts \
+  --preload ./tests/setup-node.ts --parallel=1 --only-failures
+```
+
+Evidence: `/tmp/orkestrator-test-run.8uQSSt/bridges.log.gz` and
+`/tmp/orkestrator-test-run.8uQSSt/summary.json`. The readiness setup timeout
+preceded both undefined-state errors, suggesting a cascading fixture failure;
+the underlying timeout cause remains unproven. Assertions and timeouts were
+left unchanged.
+
+## Recurrence on 2026-10-12
+
+The environment-move fix validation reproduced `authentication > reports an authenticated credential as ready` under
+`mise run test:logged -- --name move-full-suite -- mise run test`, with the GNU
+tool PATH documented in the testing guide. Group allocations were 2/3/2/1.
+Cursor package: 667 passed, 1 failed and 1 error across 38 files; failure duration 5596.47 ms.
+
+The owning file passed alone, exit 0, in 3.8 seconds:
+
+```bash
+mise run test:logged -- --name isolate-cursor-http -- bun test --cwd bridges/cursor-bridge ./src/http.test.ts --parallel=1 --only-failures
+```
+
+Evidence: `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.tUZZDC/summary.json`
+and its compressed group logs. Status remains open; the isolated pass confirms
+recurrence but does not establish a root cause. No assertion, timeout or skip
+was changed.
+
+## Recurrence on 2026-10-15 during MCP removal validation
+
+On macOS with Bun 1.4.3, the unchanged `src/http.test.ts` reported two
+beforeEach/afterEach hook timeouts under:
+
+```bash
+mise run test:logged -- --name full-tests -- mise run test
+```
+
+- `authentication > reports an authenticated credential as ready`: 10004.15 ms.
+- `authentication > an attached agent is ready without reading credentials`: 7364.10 ms.
+- Cursor package: 719 passed, 2 failed, 6564 assertions across 39 files in 28.80 s.
+- Group allocations: workspace 4 slots, root 1, bridges 2, protocol 1. The
+  bridge packages each used one Bun worker. Turbo stopped sibling bridge
+  tasks when Cursor failed, so those tasks do not provide completed evidence.
+
+The owning file passed unchanged alone, exit 0, in 1.3 s:
+
+```bash
+mise run test:logged -- --name cursor-http-isolated -- \
+  bun test --cwd bridges/cursor-bridge ./src/http.test.ts \
+  --preload ../../tests/setup-node.ts --parallel=1
+```
+
+Evidence: `/private/tmp/orkestrator-test-run.sYaNWH/bridges.log.gz` and
+`summary.json` from the aggregate, plus the logged isolated PASS. The passing
+log is removed by the runner. The recurrence is consistent with the prior
+HTTP fixture cleanup/setup timeouts under aggregate load; its root cause
+remains unproven. No assertion, timeout or skip was changed.
+
+The warm full-suite rerun (`full-tests-warm`) subsequently passed every bridge
+package: Cursor 721 passed, 0 failed, and all five bridge tasks completed in
+77.4 s. The run's only failure was the unrelated agent-account directory
+assertion tracked in case 0238. Evidence:
+`/private/tmp/orkestrator-test-run.HeXNK8/bridges.log.gz` and `summary.json`.
+
+## Recurrence — 2026-10-16 (mail tiles and launch-defaults main merge)
+
+`mise run test:logged -- --name mail-wakes-latest-tests -- mise run test`
+used the testing guide's GNU-tool PATH and reserved 4/1/2/1
+workspace/root/bridge/protocol slots. Each bridge used one isolated Bun worker.
+The Cursor HTTP file reported four ten-second beforeEach/afterEach hook
+timeouts:
+
+- `authentication > reports an authenticated credential as ready`: 10004.19 ms.
+- `authentication > an attached agent is ready without reading credentials`: 10004.03 ms.
+- `session creation > returns the shared session projection`: 10002.30 ms.
+- `session creation > records the read-only boundary before the session is attached`: 10002.18 ms.
+
+A connection-refused error at `src/http.test.ts:158` also appeared between
+tests. Cursor reported 718 passed and four failed across 39 files (53.59
+seconds); all four other bridge packages passed. The bridge group finished in
+99.8 seconds. The aggregate exited 1 after 319.4 seconds; workspace, root
+and protocol groups passed. Evidence:
+`/tmp/orkestrator-test-run.Oe72br/bridges.log.gz`;
+outer artifact `/tmp/orkestrator-test-run.NMr6us/mail-wakes-latest-tests.log.gz`.
+
+`mise run test:logged -- --name mail-wakes-cursor-http-isolated -- bun test --cwd bridges/cursor-bridge ./src/http.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`
+passed the unchanged owning file (exit 0) in 1.4 seconds after the bridge group
+finished, while the aggregate workspace and root groups were still running.
+The isolated pass confirms an intermittent recurrence. A fixture setup or
+cleanup timeout cascading into later cases is consistent with earlier
+observations, but the underlying cause remains unconfirmed. No implementation,
+assertion, timeout or skip changed in the Cursor bridge.
+
+## Recurrence — 2026-10-17 (host maintenance review fixes)
+
+The `all-tests` aggregate reported ten-second hook timeouts for
+`authentication > reports an authenticated credential as ready` (10004.17 ms)
+and `authentication > an attached agent is ready without reading credentials`
+(10002.95 ms), with a connection-refused error between them. Evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.Q6mb2y/bridges.log.gz`.
+The unchanged owner passed alone in 1.3 s:
+
+```sh
+mise run test:logged -- --name cursor-http-rerun-node -- bun test --cwd bridges/cursor-bridge ./src/http.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures
+```
+
+No Cursor implementation, timeout, assertion or skip changed.
+
+## Queued-steer further main merge — 2026-10-19
+
+The ten-second readiness timeout recurred; the unchanged HTTP owning file
+passed alone in 2.3 seconds. Commands and aggregate evidence are recorded in
+[0501](../aggregate-validation-runs/0501-queued-steer-main-merge-validation.md). No implementation, assertion,
+timeout or skip changed.
+
+## Container credential rotation qualification — 2026-10-21
+
+`mise run test` failed only this test, at 10,002 ms in the bridges group,
+while the workspace, root and protocol groups ran beside it on a host at load
+average about 9. The unchanged Cursor bridge suite (`bun run test:bridge` in
+`bridges/cursor-bridge`) then passed alone: 775 passed, 0 failed. No Cursor
+implementation, assertion, timeout or skip changed.
+
+## CI `main` recurrence — 2026-10-19
+
+CI `main` run 39298647284 (`67a6cc31`, job "Unit and integration tests",
+`ubuntu-latest`, one Bun worker per bridge package) timed out three HTTP cases
+at 5,000 ms with "a beforeEach/afterEach hook timed out for this test":
+`authentication > reports an authenticated credential as ready`,
+`authentication > an attached agent is ready without reading credentials` and
+`session creation > status exposes token-delta progress while the first model
+call is running`. The later red `main` runs did not repeat it. On 2026-10-22,
+`mise run test:logged -- --name cursor-http-owner -- bun test --cwd bridges/cursor-bridge --preload ../../tests/setup-node.ts ./src/http.test.ts --parallel=1 --only-failures`
+passed unchanged on macOS (1.7 s). No implementation, assertion, timeout or
+skip changed.

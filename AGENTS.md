@@ -224,9 +224,10 @@ reusable mock functions in `tests/mocks/*`, mock narrow dependencies rather than
 shared app modules, and never add a competing global mock for a module another
 suite imports for real.
 
-Flakes are tracked only in
-[`docs/tests/flaky-tests/0000-index.md`](docs/tests/flaky-tests/0000-index.md).
-Search the index by test name or owning file; do not read every case file. A
+Flakes are tracked only in the group folders of
+[`docs/tests/flaky-tests/`](docs/tests/flaky-tests/0000-index.md); the top-level
+index only lists the groups. Search the group indexes by test name or owning
+file; do not read every case file. A
 failure is a flake only if the owning file passes when rerun alone; record it in
 the same change, and never hide one by skipping or loosening the test.
 
@@ -1460,15 +1461,20 @@ report whether its state was reset or deliberately retained.
 
 ### Flaky Test Tracking
 
-Keep [`docs/tests/flaky-tests/0000-index.md`](docs/tests/flaky-tests/0000-index.md)
+Keep the flake registry in [`docs/tests/flaky-tests/`](docs/tests/flaky-tests/0000-index.md)
 current whenever test behavior shows a credible flake. That directory is the
-only flake registry — do not start a second one. Search the index by test name
-or owning file; read the **Status** column before opening a case file. Do not
-read every `NNNN-*.md` file.
+only flake registry — do not start a second one. Cases live in ten group
+folders, each with its own `0000-index.md` table; the top-level index only
+names the groups and what they cover, and never holds case rows. Search the
+group indexes by test name or owning file
+(`rg '<name>' docs/tests/flaky-tests/*/0000-index.md`); read the **Status**
+column before opening a case file. Do not read every `NNNN-*.md` file.
 
 If a test fails in the normal aggregate or parallel suite but passes when its
-owning file is rerun alone, add or update the matching numbered case file and
-its index row in the same change. Record the exact test name and file, the
+owning file is rerun alone, add or update the matching numbered case file in
+its group folder and that group's index row in the same change. Append new
+rows at the end of the group table and change status in place, so parallel
+branches touch different lines. Record the exact test name and file, the
 original command and worker configuration, the failure message and duration when
 available, suite counts, the isolated rerun command and result, the observation
 date, and any evidence-backed hypothesis or reproduction notes.

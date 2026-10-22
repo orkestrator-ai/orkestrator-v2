@@ -34,6 +34,13 @@
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.ozsKgo/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - **Assessment:** consistent with the existing aggregate-load timeout hypothesis; no timeout or assertion was changed. The full aggregate remains a failed validation result, with this isolated pass confirming the recurrence is intermittent.
 
+## Service preview rollout full suite — 2026-10-22
+
+- Command: `mise run test:logged -- --name full-tests-0042 -- mise run test` on branch `todo-0042-service-preview-rollout-a6b636a9b237` (`b83ae534` plus the service preview rollout working tree, which does not touch this test's code), macOS 26.6.2 arm64, default `mise run test` groups, host load average 15 to 60 (above 400 earlier in the hour).
+- Failure: `a branch baseline follows origin/<ref> only when the policy fetches` at 5192.66 ms. Backend: 9909 passed, 84 skipped, 4 failed across 9997 tests in 572 files (630.59 s); the other failures were 0213, 0175 and 0165 (two cases).
+- Evidence: `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.iQtiOF/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- Isolated rerun: `mise exec -- bun test --cwd apps/backend ./src/core/container-git-fetch-git.test.ts --parallel=1` passed unchanged (6 passed, 1 skipped) at load 11.
+
 ## CI-health branch aggregate — 2026-10-22
 
 - **Original command:** `mise run test:logged -- --name full-suite -- mise run test`

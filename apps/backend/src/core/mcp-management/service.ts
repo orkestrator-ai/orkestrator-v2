@@ -50,6 +50,7 @@ import {
   type CurrentSourceState,
   type RuntimeGenerations,
 } from "./evidence.js";
+import { ExternalEditWatch } from "./external-edit-watch.js";
 import {
   heldRuntimes,
   noteOnce,
@@ -159,6 +160,7 @@ export class McpManagementService {
   private initialized: Promise<void> | null = null;
   private disposed = false;
   private readonly evidence: EvidenceScheduler;
+  private readonly externalEdits: ExternalEditWatch;
 
   constructor(private readonly options: McpManagementServiceOptions) {
     const dir = path.join(options.dataDir, "mcp-management");
@@ -181,6 +183,12 @@ export class McpManagementService {
       blocked: (provider) => !!this.gate.applyBlock(provider),
       currentSource: (stored) => this.currentSource(stored),
       generations: () => this.runtimeGenerations(),
+      commit: (stored) => this.finishApplyUpdate(stored),
+    });
+    this.externalEdits = new ExternalEditWatch({
+      now: this.now,
+      blocked: (provider) => !!this.gate.applyBlock(provider),
+      currentSource: (stored) => this.currentSource(stored),
       commit: (stored) => this.finishApplyUpdate(stored),
     });
   }
@@ -990,11 +998,17 @@ export class McpManagementService {
   }
 
   /**
-   * Queued reloads, or runtimes still inside their bounded evidence window.
-   * When neither remains the timer stops rearming and the scheduler is idle.
+   * Queued reloads, runtimes still inside their bounded evidence window, or
+   * waiting runtimes whose source is still watched for outside edits. When
+   * none remains the timer stops rearming and the scheduler is idle.
    */
   private hasScheduledWork(): boolean {
-    return this.hasQueuedWork() || this.evidence.hasWork(this.operations.list());
+    const operations = this.operations.list();
+    return (
+      this.hasQueuedWork() ||
+      this.evidence.hasWork(operations) ||
+      this.externalEdits.hasWork(operations)
+    );
   }
 
   private scheduleTick(delay = this.options.tickMs ?? 2_000): void {
@@ -1106,6 +1120,8 @@ export class McpManagementService {
     }
     // Proof of adoption for runtimes that apply on their own boundary.
     await this.evidence.check(this.operations.list());
+    // Outside edits for waiting runtimes that neither pass above reads.
+    await this.externalEdits.check(this.operations.list());
   }
 
   /**

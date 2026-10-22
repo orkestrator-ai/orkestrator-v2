@@ -1,7 +1,7 @@
 # Coordinator bound discard confirmations timeout under aggregate load
 
 - **ID:** 0165
-- **Status:** resolved
+- **Status:** open
 - **Date observed:** 2026-09-26
 - **Test:** `project coordinator > bound discard confirmations refuse stale, sequencer, nested, and failed switches`
 - **File:** `apps/backend/src/core/coordinator-service.test.ts`
@@ -731,3 +731,11 @@ assertion, timeout or skip was changed for validation.
   `git submodule` shell scripts, and these are the behaviour under test. A
   possible follow-up is to run `submodule foreach` in parallel with the other
   inspection reads.
+
+## Recurrence after the fix — 2026-10-22 (reopened)
+
+- Command: `mise run test:logged -- --name full-tests-0042 -- mise run test` on branch `todo-0042-service-preview-rollout-a6b636a9b237` (`b83ae534` plus the service preview rollout working tree, which does not touch this test's code), macOS 26.6.2 arm64, default `mise run test` groups, host load average 15 to 60 (above 400 earlier in the hour).
+- Failure: two of the split tests timed out: `project coordinator > a dirty submodule needs enhanced confirmation before a discarding switch` (5144.75 ms; split out of the 0490/0461 test) and `project coordinator > fetch force, fast-forward sync, remote switching, and divergence stay safe` (5091.72 ms). Backend: 9909 passed, 84 skipped, 4 failed across 9997 tests in 572 files (630.59 s); the other failures were 0213, 0175 and 0165 (two cases).
+- Evidence: `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.iQtiOF/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- Isolated rerun: `mise exec -- bun test --cwd apps/backend ./src/core/coordinator-service.test.ts --parallel=1` passed unchanged (56 passed) at load 11.
+- Assessment: the 2026-10-20 fix made these cases fit the 5 s budget on a loaded host, but not on this one. Reopened; no code, assertion or timeout changed in this run.

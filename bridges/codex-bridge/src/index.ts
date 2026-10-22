@@ -41,7 +41,7 @@ import { AppServerRuntime, SESSION_CLOSING_ERROR } from "./app-server-runtime.js
 import { AppServerEngine, type AppServerEngineOptions } from "./engine/app-server-engine.js";
 import { codexAppServerConfigOverrides } from "./codex-config.js";
 import { APPROVAL_DECISIONS, isApprovalDecision } from "./app-server/approvals.js";
-import { redactSecrets } from "./app-server/redaction.js";
+import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
 import { parseInteractionAnswer, type InteractionAnswer } from "./app-server/interactions.js";
 import type { ParkedHoldResponse } from "./app-server-runtime-approvals.js";
 import type { AgentInteractionHold } from "@orkestrator/protocol/agent-interactions";

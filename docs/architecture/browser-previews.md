@@ -110,6 +110,32 @@ The client never names a host, port, or container.
   the partition and the listener; different windows or connections never
   share. **Reset site data** clears only that partition, and never runs on a
   tab switch.
+- Partitions nothing can use again are ended by Electron
+  (`PreviewPartitionRetention`, `preview-partition-retention.ts`), because the
+  backend knows nothing about client partitions. A minute after a window's
+  preview transport starts, and every 30 minutes while it lives, Electron
+  fetches its backend's full, unfiltered `get_preview_services` list and
+  clears that connection's service partitions (in every window slot) whose
+  service is gone. Forgetting a connection clears all its service partitions,
+  and its shared legacy partitions once no window uses it. Clearing goes
+  through the Electron session (storage, cookies, service workers, caches);
+  the emptied directory is removed on the next start, before any session
+  exists (`preview-partitions-pending.json`). A partition a live transport
+  or window holds is never touched; a filtered, not-modified or failed list
+  clears nothing. Partitions are listed before the list is fetched, and service ids
+  are never reused, so a service created meanwhile is never a candidate.
+  Forgotten connection keys are recorded durably in
+  `preview-partitions-pending.json.forgotten` before clearing starts. An
+  independent retry owner attempts at most 64 clears per pass, including
+  failures, even after every transport closes. Failed clears and held
+  partitions remain eligible; retries rotate candidates so failures cannot
+  starve the rest. At startup, the whole-connection journal also identifies
+  directories whose clear never completed. They can be removed before any
+  preview session exists. A failed removal retains the connection intent;
+  it never counts as evidence of a successful native clear. The per-directory
+  journal admits at most 1,024 entries until startup removes them, and the
+  forgotten-key journal refuses admission at 1,024 keys without evicting
+  earlier cleanup intent.
 - The listener first binds the port it used last for that service (bind, never
   probe-then-close), so origin-keyed storage such as localStorage usually
   survives a restart. If the port is taken, a fresh one is used and that
@@ -285,7 +311,7 @@ pooled per service; nothing is replayed after a reconnect.
 | Attachment and credential hash | Backend `PreviewAccessService` | Release (by the client, on the issuing backend, including after a connection change or window close), lease expiry, generation change, service removal, credential rotation, kill switch, shutdown |
 | Tunnel sockets and upstream TCP | Backend `PreviewTunnelServer` | Closing either leg closes both; revocation closes everything tracked for the attachment |
 | Local ingress listener and ingress secret | Electron `PreviewTransportManager` | Last attachment release plus a short retirement lease, connection change, window close, app quit |
-| Service partition cookies and storage | Electron session | **Reset site data** for that service only (see [0042-service-preview-rollout.md](../todo/previews-and-annotations/0042-service-preview-rollout.md) for retention) |
+| Service partition cookies and storage | Electron session | **Reset site data** for that service only; cleared once its service is gone from the backend's list or its connection is forgotten, directory removed on the next start (shared legacy partitions of live connections: see [0042-service-preview-rollout.md](../todo/previews-and-annotations/0042-service-preview-rollout.md)) |
 | Browser preview session cookie | Browser holds the value; backend owns validity | Server-side idle and absolute expiry, revocation |
 
 ## Operator controls
@@ -435,7 +461,16 @@ the private `Host` instead. Inbound forwarding headers are always discarded.
   untrusted services need separate preview domains.
 - An application service worker can intercept the service host's sign-in path
   and block re-sign-in. The sign-in code only authorizes that same service, so
-  nothing leaks, but the user must clear the site's data to recover.
+  nothing leaks, but the user must clear the site's data to recover (observed
+  in real Chromium on 2026-10-22). The worker can also carry the code
+  elsewhere and redeem it once from another browser, for that same service
+  only.
+- Script on one published service can send a credentialed `GET` to a sibling
+  service's host: services are same-site, the preview cookie is
+  `SameSite=Lax`, and only writes and upgrades are checked. The request
+  reaches the sibling application; its response stays unreadable to the
+  sender. See
+  [0054-preview-cross-service-reads.md](../todo/previews-and-annotations/0054-preview-cross-service-reads.md).
 - The relay needs `node` or `bun` in the image, and the `node` user.
 - Only HTTP/1.1 and WebSockets are carried. HTTP/2-only features, HTTP/3,
   WebTransport, and UDP are not.

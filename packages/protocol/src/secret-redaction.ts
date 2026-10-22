@@ -1,16 +1,16 @@
 /**
- * Redaction for text the bridge captures from the engine and serves over HTTP.
+ * Redaction for provider text a bridge captures and serves over HTTP.
  *
- * The bridge requires a per-process bearer token and restricts browser origins.
+ * Bridges require a per-process bearer token and restrict browser origins.
  * Redaction remains a second layer of defence: authenticated snapshot consumers
  * still should not receive credentials embedded in provider diagnostics.
  *
  * One pass, by *shape*: a bearer token, an `sk-`/`ghp_` style key, URL userinfo
  * or a query-string credential embedded in free text — typically an MCP server's
  * startup error, which is the single most likely place for a real token to
- * surface. Structured engine payloads never leave the process raw: they go
- * through the allowlists in `app-server-engine.ts`, which drop unknown fields
- * instead of trying to redact them.
+ * surface. Used by the Codex bridge (engine diagnostics) and the Claude bridge
+ * (MCP server errors). Structured payloads should go through allowlists that
+ * drop unknown fields instead of trying to redact them.
  *
  * Best-effort. It exists to stop the common cases leaving the process, not to
  * make an untrusted reader safe.

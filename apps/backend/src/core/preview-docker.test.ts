@@ -5,11 +5,14 @@ import { createServer, type AddressInfo, type Server } from "node:net";
 import { http1Request } from "@orkestrator/protocol/node/preview-http1";
 
 import { connectPreviewUpstream } from "../preview-upstream.js";
+import { publishedPortArguments } from "./commands-containers.js";
 import { runCommand } from "./shell.js";
 import { createPreviewHarness, type PreviewHarness } from "./preview-test-support.js";
 
 /**
- * Opt-in owned-Docker journeys (plan step 14, journeys 2 and 4):
+ * Opt-in owned-Docker journeys (same-port containers with a host decoy, then
+ * recreation onto a reused port; an automatic `hostPort: 0` mapping published
+ * by the backend's own arguments):
  * `ORKESTRATOR_TEST_DOCKER_PREVIEW_IMAGE=orkestrator-v2:latest`. Containers are
  * labelled with a throwaway owner namespace and removed afterwards; nothing
  * touches the user's environments.
@@ -55,7 +58,11 @@ describe.skipIf(!enabled)("preview services against owned Docker containers", ()
   const containers: string[] = [];
   const servers: Server[] = [];
 
-  function startContainer(environmentId: string, marker: string): string {
+  function startContainer(
+    environmentId: string,
+    marker: string,
+    publish = ["-p", `127.0.0.1::${internalPort}/tcp`],
+  ): string {
     const id = docker([
       "run",
       "-d",
@@ -64,8 +71,7 @@ describe.skipIf(!enabled)("preview services against owned Docker containers", ()
       `orkestrator-owner=${harness.owner}`,
       "--label",
       `environment-id=${environmentId}`,
-      "-p",
-      `127.0.0.1::${internalPort}/tcp`,
+      ...publish,
       "--entrypoint",
       "node",
       image!,
@@ -151,7 +157,7 @@ describe.skipIf(!enabled)("preview services against owned Docker containers", ()
     expect(first.hostPort).not.toBe(internalPort);
     expect(second.hostPort).not.toBe(first.hostPort);
 
-    // Journey 4: recreate A with a new host binding and put another fixture on
+    // Recreation: recreate A with a new host binding and put another fixture on
     // A's old host port. The service follows A, not the reused port.
     const oldGeneration = harness.runtime.registry.currentGeneration(serviceA);
     harness.runtime.registry.beforeEnvironmentTargetChange("a");
@@ -165,5 +171,48 @@ describe.skipIf(!enabled)("preview services against owned Docker containers", ()
     expect(harness.runtime.registry.currentGeneration(serviceA)).not.toBe(oldGeneration);
     // B is untouched by A's lifecycle.
     expect((await body(serviceB)).marker).toBe("container-b");
+  }, 60_000);
+
+  test("an automatic mapping is published, seeded and followed through recreation", async () => {
+    const portMappings = [
+      {
+        containerPort: internalPort,
+        hostPort: 0,
+        protocol: "tcp" as const,
+        hostPortMode: "auto" as const,
+      },
+    ];
+    // The arguments container creation uses, so Docker picks the host port.
+    const publish = publishedPortArguments(portMappings, undefined);
+    expect(publish).toEqual(["-p", `127.0.0.1::${internalPort}/tcp`]);
+    const first = startContainer("auto", "container-auto", publish);
+    await harness.addContainerEnvironment("auto", { containerId: first, portMappings });
+    await harness.runtime.init();
+    await harness.runtime.registry.settle();
+    const seeded = harness.runtime.registry.snapshot({ environmentId: "auto" }).services;
+    expect(seeded.map((service) => service.definition.applicationPort)).toEqual([internalPort]);
+    const serviceId = seeded[0]!.definition.serviceId;
+
+    const before = await body(serviceId);
+    expect(before.marker).toBe("container-auto");
+    // Docker's binding, never the container port (where the host decoy listens).
+    expect(before.hostPort).not.toBe(internalPort);
+    expect(before.hostPort).toBe(
+      Number(
+        docker(["port", first, `${internalPort}/tcp`])
+          .split("\n")[0]!
+          .split(":")
+          .at(-1),
+      ),
+    );
+
+    harness.runtime.registry.beforeEnvironmentTargetChange("auto");
+    docker(["rm", "-f", first]);
+    servers.push(await listen(before.hostPort, "impostor-on-old-auto-port"));
+    const recreated = startContainer("auto", "container-auto-recreated", publish);
+    await harness.storage.updateEnvironment("auto", { containerId: recreated });
+    const after = await body(serviceId);
+    expect(after.marker).toBe("container-auto-recreated");
+    expect(after.hostPort).not.toBe(before.hostPort);
   }, 60_000);
 });

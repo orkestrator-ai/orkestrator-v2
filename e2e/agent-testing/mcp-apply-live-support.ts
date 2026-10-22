@@ -187,6 +187,43 @@ export async function dispatchProbeTurn(
   return result;
 }
 
+/**
+ * A request error without Playwright's call log, which echoes the request
+ * headers and so the gateway's auth cookie into the summary and the report.
+ */
+export function requestErrorMessage(command: string, error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const head = message.split(/\r?\n\s*Call log:/)[0]!.trim();
+  return `${command}: ${head.replace(/orkestrator_gateway_auth=[^\s;]+/g, "orkestrator_gateway_auth=<redacted>")}`;
+}
+
+/**
+ * Invoke one backend command. A read (`get_…`/`list_…`) is retried when the
+ * connection resets before a response: it changes nothing, so a reused socket
+ * the gateway already closed must not end a run that is many billed turns in.
+ * A mutation is never retried here.
+ */
+export async function invokeCommand<T>(
+  command: string,
+  send: () => Promise<T>,
+  pause: () => Promise<void>,
+  attempts = 3,
+): Promise<T> {
+  const readOnly = /^(get|list)_/.test(command);
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await send();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const reset = /ECONNRESET|socket hang up|EPIPE/.test(message);
+      if (!readOnly || !reset || attempt >= attempts) {
+        throw new Error(requestErrorMessage(command, error));
+      }
+      await pause();
+    }
+  }
+}
+
 /** Apply states that are still moving; anything else is an outcome. */
 export const TRANSIENT_APPLY_STATES: ReadonlySet<string> = new Set([
   "queued",

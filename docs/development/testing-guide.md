@@ -276,21 +276,21 @@ directories, CAs, and owner labels. Install the Vite fixture into an isolated
 copy first (see `test-fixtures/preview-vite/README.md`).
 
 ```bash
-# Real Docker: same-port containers, host decoy, recreation, docker exec relay
+# Real Docker: same-port containers, host decoy, recreation, docker exec relay.
+# The image is required; the relay image defaults to it.
 ORKESTRATOR_TEST_DOCKER_PREVIEW_IMAGE=orkestrator-v2:latest \
-ORKESTRATOR_TEST_DOCKER_RELAY_IMAGE=orkestrator-v2:latest \
-  mise run test:logged -- --name preview-docker -- bun test --cwd apps/backend \
-  ./src/core/preview-docker.test.ts ./src/preview-relay-supervisor.test.ts --parallel=1
+  mise run test:logged -- --name preview-docker -- mise run test:preview:docker
 
-# Real Chromium against private preview origins (add the Vite variable for HMR)
+# Real Chromium against private preview origins (add the Vite variable for HMR;
+# Playwright arguments such as --grep pass through)
 ORKESTRATOR_TEST_PREVIEW_VITE_DIR=/tmp/preview-vite \
-  mise run test:logged -- --name preview-browser -- \
-  bunx playwright test --config e2e/preview/playwright.preview.config.ts
+  mise run test:logged -- --name preview-browser -- mise run test:preview:browser
 
-# Loopback route latency for the evidence log
-ORKESTRATOR_PREVIEW_BENCH=1 mise run test:logged -- --name preview-bench -- \
-  bun test --cwd apps/backend ./src/preview-bench.test.ts --parallel=1
+# Loopback route latency for the evidence log (prints one [preview-bench] line)
+mise run test:preview:bench
 ```
+
+None of these tasks runs in `mise run test` or in CI.
 
 The real Electron window with the desktop tunnel on needs no variable: it is
 `e2e/agent-testing/service-preview-electron.spec.ts`, part of

@@ -1,6 +1,6 @@
 {
   "name": "@orkestrator/desktop",
-  "version": "2.26.2-beta",
+  "version": "2.26.3-beta",
   "private": true,
   "type": "module",
   "scripts": {

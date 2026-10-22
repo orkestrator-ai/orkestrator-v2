@@ -132,6 +132,20 @@ final class ConnectionModelTests: XCTestCase {
         XCTAssertEqual(model.vault.connections.count, 2)
     }
 
+    func testConnectWithoutSelectKeepsTheCommandNode() async throws {
+        let current = connection(address: "https://desk.example", date: .distantPast)
+        let store = MemoryCredentialStore(vault: ConnectionVault(activeConnectionID: current.id, connections: [current]))
+        let model = ConnectionModel(credentialStore: store, validator: MockValidator())
+
+        let result = try await model.connect(
+            address: "https://leaf.example",
+            token: "gateway-token-leaf-123",
+            select: false
+        )
+        XCTAssertEqual(model.activeConnection?.id, current.id)
+        XCTAssertEqual(result.connections.count, 2)
+    }
+
     func testConnectDraftReportsFailureAndClearsTokenOnSuccess() async {
         let validator = MockValidator()
         validator.checkError = TestFailure.expected

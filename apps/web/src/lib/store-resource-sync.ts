@@ -11,6 +11,9 @@ import {
   type ResourceResyncRequest,
 } from "@/lib/resource-sync";
 import { listen, type UnlistenFn } from "@/lib/native/events";
+import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
+import { settingsOnCommandNode } from "@/lib/portal/command-node-config";
+import { portalListen } from "@/lib/portal/portal-transport";
 import { adoptPersistedPaneLayout, onPaneLayoutWriteSettled } from "@/lib/pane-layout-persistence";
 import {
   commitBuildPipelineSetupHandoff,
@@ -510,6 +513,20 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
       return refreshConfig();
     }),
   );
+
+  // On a leaf window the settings are the command node's: follow its changes too.
+  if (settingsOnCommandNode()) {
+    let stopCommandNodeConfig: UnlistenFn | null = null;
+    void portalListen<{ resource?: unknown }>(RESOURCE_CHANGED_EVENT, (event) => {
+      if (event.payload?.resource === "config") void refreshConfig();
+    })
+      .then((stop) => {
+        if (disposed) stop();
+        else stopCommandNodeConfig = stop;
+      })
+      .catch(() => undefined);
+    unsubscribes.push(() => stopCommandNodeConfig?.());
+  }
 
   unsubscribes.push(
     onResourceChanged("kanban", ({ id: projectId }) => {

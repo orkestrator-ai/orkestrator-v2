@@ -45,7 +45,7 @@ export function ProjectWorkspace({
   return tab === "coordinator" ? (
     // A project switch must discard the prior checkout's live chat state even
     // when the next checkout fails to load.
-    <LeafModeCoordinatorGate key={projectId}>
+    <LeafModeCoordinatorGate key={projectId} projectId={projectId}>
       <CoordinatorPanel projectId={projectId} />
     </LeafModeCoordinatorGate>
   ) : (

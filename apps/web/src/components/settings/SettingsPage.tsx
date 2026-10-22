@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useFederation } from "@/components/federation/FederationProvider";
 import { MachineDot } from "@/components/federation/MachineDot";
+import { useCommandNode } from "@/components/federation/useCommandNode";
 import { useConfigStore } from "@/stores";
 import * as backend from "@/lib/backend";
 import {
@@ -97,40 +98,56 @@ interface SettingsPageProps {
   sectionRequest?: number;
 }
 
-/** Sections that span machines or configure this client rather than one backend. */
-const CLIENT_SECTIONS: ReadonlySet<GlobalSettingsSection> = new Set(["machines"]);
-
 /**
- * With several machines in view, every settings page says whose settings it
- * edits: this client, or the machine this window is bound to. Provider
- * credentials, defaults, toolchains, containers and maintenance always
- * target one specific backend.
+ * Every settings page says whose settings it edits. They are the command
+ * node's: the machine this client is connected to, which hands them down to
+ * the machines it controls. They stay the command node's while the window
+ * works on another machine; only machine-specific details (accounts, disk,
+ * tools, logs) are that machine's. Another machine's own settings are opened
+ * from that machine.
  */
 function SettingsScopeBanner({ section }: { section: GlobalSettingsSection | "" }) {
   const { enabled, boundMachine } = useFederation();
-  if (!enabled || !boundMachine) return null;
-  if (!section) return null;
-  const client = CLIENT_SECTIONS.has(section);
+  const commandNode = useCommandNode();
+  if (!commandNode || !section) return null;
+  // With a single machine there is nothing to tell apart, except in Machines.
+  if (!enabled && section !== "machines") return null;
+  const name = <span className="font-medium text-zinc-200">{commandNode.name}</span>;
   return (
     <div
-      className="mb-5 flex max-w-4xl items-center gap-2 rounded-md border border-zinc-800 bg-zinc-950/40 px-3 py-2 text-xs text-zinc-400"
+      className="mb-5 flex max-w-4xl items-start gap-2 rounded-md border border-zinc-800 bg-zinc-950/40 px-3 py-2 text-xs text-zinc-400"
       data-testid="settings-scope"
     >
-      {client ? (
-        <span>
-          <span className="font-medium text-zinc-200">All machines</span> — each machine&apos;s
-          settings and updates are applied on that machine.
-        </span>
-      ) : (
-        <>
-          <MachineDot colorToken={boundMachine.colorToken} machineName={boundMachine.name} />
-          <span>
-            <span className="font-medium text-zinc-200">Backend: {boundMachine.name}</span> — these
-            settings belong to that machine. Other machines keep their own; open a machine&apos;s
-            panel to change its settings.
-          </span>
-        </>
-      )}
+      <MachineDot
+        colorToken={commandNode.colorToken}
+        machineName={commandNode.name}
+        className="mt-1"
+      />
+      <span>
+        <span className="font-medium text-zinc-200">Command node: {commandNode.name}.</span>{" "}
+        {section === "machines" ? (
+          <>
+            These are the machines {name} controls. Settings changed in this app are for {name} only
+            and apply to its work on every machine; a machine&apos;s individual settings are opened
+            from that machine.
+          </>
+        ) : commandNode.workspaceHere ? (
+          <>
+            These settings are for {name} only and apply to the work it runs on every machine it
+            controls. Each machine&apos;s individual settings are opened from that machine (Settings
+            → Machines).
+          </>
+        ) : (
+          <>
+            These settings are for {name} only and apply to the work it runs on every machine it
+            controls. Machine-specific details (accounts, disk, tools, logs) are those of{" "}
+            <span className="font-medium text-zinc-200">
+              {boundMachine?.name ?? "this machine"}
+            </span>
+            , where this window is working; its other settings are opened from that machine.
+          </>
+        )}
+      </span>
     </div>
   );
 }

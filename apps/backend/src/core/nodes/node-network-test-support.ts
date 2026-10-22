@@ -8,6 +8,11 @@ import {
   type NodeRegistry,
 } from "@orkestrator/protocol/command-nodes";
 
+import {
+  emptyControllerSettingsStore,
+  type ControllerSettingsStore,
+} from "@orkestrator/protocol/controller-settings";
+
 import type { CommandContext, CommandHandler } from "../commands-context.js";
 import { registerNodeCommands } from "../commands-registry-nodes.js";
 import { NodePortal } from "./node-portal.js";
@@ -23,6 +28,7 @@ import type { NodeLinkTimers } from "./node-link.js";
 export class MemoryNodeStorage implements NodeServiceStorage {
   registry: NodeRegistry = emptyNodeRegistry();
   attachments: NodeAttachments = emptyNodeAttachments();
+  controllerSettings: ControllerSettingsStore = emptyControllerSettingsStore();
   writes = { registry: 0, attachments: 0 };
 
   constructor(
@@ -57,6 +63,21 @@ export class MemoryNodeStorage implements NodeServiceStorage {
       this.attachments = structuredClone(next);
       this.writes.attachments += 1;
     }
+    return result;
+  }
+
+  async getControllerSettings(): Promise<ControllerSettingsStore> {
+    return structuredClone(this.controllerSettings);
+  }
+
+  async mutateControllerSettings<T>(
+    mutate: (current: ControllerSettingsStore) => {
+      next: ControllerSettingsStore | null;
+      result: T;
+    },
+  ): Promise<T> {
+    const { next, result } = mutate(structuredClone(this.controllerSettings));
+    if (next) this.controllerSettings = structuredClone(next);
     return result;
   }
 

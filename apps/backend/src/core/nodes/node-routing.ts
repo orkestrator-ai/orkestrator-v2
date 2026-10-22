@@ -25,6 +25,7 @@ export const NODE_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
   "detach_controller_here",
   "allow_controller",
   "list_controllers",
+  "sync_controller_settings",
   "set_command_node_enabled",
   "create_client_grant",
   "renew_client_grant",

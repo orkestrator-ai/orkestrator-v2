@@ -44,6 +44,7 @@
     "./container-recovery": "./src/container-recovery.ts",
     "./login-snapshots": "./src/login-snapshots.ts",
     "./container-resources": "./src/container-resources.ts",
+    "./controller-settings": "./src/controller-settings.ts",
     "./coordinator": "./src/coordinator.ts",
     "./command-nodes": "./src/command-nodes.ts",
     "./node-summaries": "./src/node-summaries.ts",

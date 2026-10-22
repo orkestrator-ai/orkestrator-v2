@@ -185,6 +185,20 @@ export function installDesktopFake(options: {
   invoke.mockImplementation(async (command: string, args: Record<string, unknown> = {}) => {
     if (command === "get_node_status") return structuredClone(status);
     if (command === "get_node_summaries") return { selfId: SELF_NODE_ID, nodes: summaries() };
+    if (command === "list_nodes") {
+      return {
+        revision: 1,
+        mode: "command",
+        suspended: false,
+        nodes: remotes.map((connection) => ({
+          ...nodeView(connection),
+          routes: connection.address
+            ? [{ id: "https", kind: "https", enabled: true, origin: connection.address }]
+            : [],
+        })),
+        pendingDetaches: [],
+      };
+    }
     if (command === "get_backend_profile") {
       return { revision: 1, displayName: "This computer", colorToken: "violet", updatedAt: "t" };
     }

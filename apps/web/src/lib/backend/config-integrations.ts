@@ -1,4 +1,9 @@
 import { invoke } from "@/lib/native/backend";
+import {
+  invokeCommandNodeSetting,
+  invokeGlobalConfigCommand,
+  invokeRepositoryConfigCommand,
+} from "@/lib/portal/command-node-config";
 import { getGatewayBaseUrl, resolveGatewayLoopbackBaseUrl } from "@/lib/gateway-url";
 import type {
   Environment,
@@ -35,8 +40,9 @@ import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 
 import type { PrDetectionResult } from "./projects-environments";
 
+/** The application settings are the command node's, even while the workspace is on a leaf. */
 export async function getConfig(): Promise<AppConfig> {
-  return invoke<AppConfig>("get_config");
+  return invokeGlobalConfigCommand("get_config");
 }
 
 export interface AgentModelCatalogCache {
@@ -150,34 +156,34 @@ export async function saveConfig(config: AppConfig): Promise<void> {
 }
 
 export async function getGlobalConfig(): Promise<GlobalConfig> {
-  return invoke<GlobalConfig>("get_global_config");
+  return invokeCommandNodeSetting<GlobalConfig>("get_global_config");
 }
 
 export async function updateGlobalConfig(global: GlobalConfig): Promise<AppConfig> {
-  return invoke<AppConfig>("update_global_config", { global });
+  return invokeGlobalConfigCommand("update_global_config", { global });
 }
 
 /** Turn the startup reminder to set up the GitHub CLI off, or back on. */
 export async function setGitHubCliReminderDismissed(dismissed: boolean): Promise<AppConfig> {
-  return invoke<AppConfig>("set_github_cli_reminder_dismissed", { dismissed });
+  return invokeGlobalConfigCommand("set_github_cli_reminder_dismissed", { dismissed });
 }
 
 export async function updateNotificationSoundSettings(
   settings: import("@orkestrator/protocol/notification-sounds").NotificationSoundSettings,
 ): Promise<AppConfig> {
-  return invoke<AppConfig>("update_notification_sound_settings", { settings });
+  return invokeGlobalConfigCommand("update_notification_sound_settings", { settings });
 }
 
 export async function setGitHubToken(token: string | null): Promise<AppConfig> {
-  return invoke<AppConfig>("set_github_token", { token });
+  return invokeGlobalConfigCommand("set_github_token", { token });
 }
 
 export async function setCursorApiKey(apiKey: string | null): Promise<AppConfig> {
-  return invoke<AppConfig>("set_cursor_api_key", { apiKey });
+  return invokeGlobalConfigCommand("set_cursor_api_key", { apiKey });
 }
 
 export async function setAnthropicApiKey(apiKey: string | null): Promise<AppConfig> {
-  return invoke<AppConfig>("set_anthropic_api_key", { apiKey });
+  return invokeGlobalConfigCommand("set_anthropic_api_key", { apiKey });
 }
 
 /** Read one platform's plan/quota windows from the backend. */
@@ -192,7 +198,7 @@ export async function getPlanUsage(
 }
 
 export async function setOpenCodeZenApiKey(apiKey: string | null): Promise<AppConfig> {
-  return invoke<AppConfig>("set_opencode_zen_api_key", { apiKey });
+  return invokeGlobalConfigCommand("set_opencode_zen_api_key", { apiKey });
 }
 
 /**
@@ -285,7 +291,7 @@ export async function updateRepositoryConfig(
   projectId: string,
   repoConfig: RepositoryConfig,
 ): Promise<AppConfig> {
-  return invoke<AppConfig>("update_repository_config", { projectId, repoConfig });
+  return invokeRepositoryConfigCommand("update_repository_config", { projectId, repoConfig });
 }
 
 export async function getLogDirectory(): Promise<string> {

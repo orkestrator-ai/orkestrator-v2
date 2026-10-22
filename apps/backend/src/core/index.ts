@@ -2,6 +2,7 @@ import { coordinatorNodeContext } from "./nodes/node-context.js";
 import { NodeCoordination } from "./nodes/node-coordination.js";
 import { NodePortal } from "./nodes/node-portal.js";
 import type { GatewayNodeHooks } from "../gateway-support-core.js";
+import { pickInheritedGlobalSettings } from "@orkestrator/protocol/controller-settings";
 import { NodeService, errorCode, type NodeServiceOptions } from "./nodes/node-service.js";
 import { createNodeSshFactory } from "./nodes/node-ssh.js";
 import type { NodeMode } from "@orkestrator/protocol/command-nodes";
@@ -476,8 +477,13 @@ export class OrkestratorBackend {
       ...((options.nodeLinks?.createSsh ?? createNodeSshFactory(options.dataDir))
         ? { createSsh: options.nodeLinks?.createSsh ?? createNodeSshFactory(options.dataDir)! }
         : {}),
+      inheritableSettings: async () =>
+        pickInheritedGlobalSettings((await storage.loadConfig()).global),
+      onInheritedSettingsChanged: () => storage.announceInheritedSettingsChanged(),
     });
     context.nodes = this.nodes;
+    // While a leaf, this node works with its command node's settings.
+    storage.inheritedGlobalSettings = () => this.nodes.inheritedSettings.current();
     this.nodePortal = new NodePortal({
       nodes: this.nodes,
       emit: (event, payload) => options.emit(event, payload),
@@ -943,6 +949,8 @@ export class OrkestratorBackend {
         this.activityJobs?.wake("pending-renames");
       }
       if (change.resource === "prompt-queue") this.activityJobs?.wake("tmux-queues");
+      // Leaves follow this node's settings.
+      if (change.resource === "config") this.nodes.syncSettingsToLeaves();
     });
     this.reapPidServers = options.startupReapers?.localServers ?? reapOrphanedLocalServers;
     this.reapTmuxRuntimes =

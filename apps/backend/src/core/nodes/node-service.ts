@@ -31,8 +31,16 @@ import {
   type SshTunnelProvider,
 } from "@orkestrator/protocol/node/node-link/routes";
 import type { SshAskpassHandler } from "@orkestrator/protocol/node/ssh/askpass";
+import {
+  SYNC_CONTROLLER_SETTINGS_COMMAND,
+  type InheritedGlobalSettings,
+} from "@orkestrator/protocol/controller-settings";
 
 import type { NodeStoreMutation } from "../storage-nodes.js";
+import {
+  LeafControllerSettings,
+  type ControllerSettingsStorage,
+} from "./node-controller-settings.js";
 import { NodeLink, NODE_HELLO_TIMEOUT_MS, type NodeLinkTimers } from "./node-link.js";
 import { NodeSshPrompts } from "./node-ssh-prompts.js";
 
@@ -48,7 +56,7 @@ import { NodeSshPrompts } from "./node-ssh-prompts.js";
  * When the last controller detaches, command activity resumes.
  */
 
-export interface NodeServiceStorage {
+export interface NodeServiceStorage extends ControllerSettingsStorage {
   getNodeRegistry(): Promise<NodeRegistry>;
   mutateNodeRegistry<T>(
     mutate: (current: NodeRegistry) => NodeStoreMutation<NodeRegistry, T>,
@@ -77,6 +85,10 @@ export interface NodeServiceOptions {
   now?: () => number;
   /** How long a controller's last contact may stay unpersisted. */
   contactPersistMs?: number;
+  /** Command side: this node's settings that its leaves inherit. */
+  inheritableSettings?: () => Promise<InheritedGlobalSettings>;
+  /** Leaf side: the command node settings this node follows changed. */
+  onInheritedSettingsChanged?: () => void;
 }
 
 export interface DesktopConnectionImport {
@@ -117,6 +129,11 @@ export class NodeService {
   private readonly changeListeners = new Set<() => void>();
   private readonly detachListeners = new Set<(controllerId: BackendId) => void>();
   private changeQueued = false;
+  /** Leaf side: settings handed down by attached command nodes. */
+  readonly inheritedSettings: LeafControllerSettings;
+  /** Command side: what each leaf was last sent, per link epoch. */
+  private readonly sentSettings = new Map<BackendId, { epoch: number; settings: string }>();
+  private readonly settingsSends = new Map<BackendId, Promise<void>>();
 
   constructor(options: NodeServiceOptions) {
     this.options = options;
@@ -124,6 +141,17 @@ export class NodeService {
     this.emit = options.emit;
     this.now = options.now ?? Date.now;
     this.prompts = new NodeSshPrompts(options.emit);
+    this.inheritedSettings = new LeafControllerSettings({
+      storage: options.storage,
+      now: this.now,
+      attachedName: (controllerId) =>
+        this.attachments.controllers.find((entry) => entry.controllerId === controllerId)
+          ?.displayName ?? null,
+      onChange: () => {
+        this.options.onInheritedSettingsChanged?.();
+        this.emitStatus();
+      },
+    });
   }
 
   async start(): Promise<void> {
@@ -132,6 +160,7 @@ export class NodeService {
     await this.self();
     this.attachments = await this.storage.getNodeAttachments();
     this.registry = await this.storage.getNodeRegistry();
+    await this.inheritedSettings.start();
     this.lastMode = this.mode();
     this.applyMode();
     void this.retryDetaches();
@@ -191,6 +220,8 @@ export class NodeService {
     };
     const recent = this.mostRecentControllerId();
     if (recent) status.mostRecentControllerId = recent;
+    const inherited = this.inheritedSettings.source();
+    if (inherited) status.inheritedSettingsFrom = inherited;
     return status;
   }
 
@@ -360,6 +391,12 @@ export class NodeService {
     this.pendingContacts.delete(controllerId);
     this.lastPersistedContact.delete(controllerId);
     if (result.detached) {
+      void this.inheritedSettings.forget(controllerId).catch((error: unknown) => {
+        console.warn(
+          "[nodes] Could not drop a detached command node's settings:",
+          errorCode(error),
+        );
+      });
       for (const listener of this.detachListeners) listener(controllerId);
       this.applyMode();
       this.emitStatus();
@@ -477,6 +514,51 @@ export class NodeService {
     } catch (error) {
       console.warn("[nodes] Could not record the latest controller contact:", errorCode(error));
     }
+  }
+
+  /*
+   * Command side: settings handed down to leaves
+   */
+
+  /** This node's inheritable settings changed: send them to every connected leaf. */
+  syncSettingsToLeaves(): void {
+    for (const link of this.links.values()) this.syncSettingsTo(link);
+  }
+
+  /**
+   * Send the settings to one leaf if it has not had them on this connection.
+   * Sends to a leaf are serialized so an older copy never lands after a newer one.
+   */
+  private syncSettingsTo(link: NodeLink): void {
+    const source = this.options.inheritableSettings;
+    if (!source || !link.connected || this.isLeaf()) return;
+    const nodeId = link.nodeId;
+    const previous = this.settingsSends.get(nodeId) ?? Promise.resolve();
+    const next = previous.then(async () => {
+      if (!link.connected || this.links.get(nodeId) !== link) return;
+      const epoch = link.view.epoch;
+      const settings = await source();
+      const serialized = JSON.stringify(settings);
+      const sent = this.sentSettings.get(nodeId);
+      if (sent && sent.epoch === epoch && sent.settings === serialized) return;
+      try {
+        await link.invoke(SYNC_CONTROLLER_SETTINGS_COMMAND, {
+          controllerId: this.selfId,
+          settings,
+        });
+        this.sentSettings.set(nodeId, { epoch, settings: serialized });
+      } catch (error) {
+        // An older leaf has no such command; it keeps its own settings. Not
+        // retried on this connection unless the settings change again.
+        this.sentSettings.set(nodeId, { epoch, settings: serialized });
+        console.warn("[nodes] Could not send settings to a node:", errorCode(error));
+      }
+    });
+    const settled = next.catch(() => undefined);
+    this.settingsSends.set(nodeId, settled);
+    void settled.then(() => {
+      if (this.settingsSends.get(nodeId) === settled) this.settingsSends.delete(nodeId);
+    });
   }
 
   /*
@@ -921,7 +1003,10 @@ export class NodeService {
       ssh: this.sshFor(nodeId),
       ...(this.options.timers ? { timers: this.options.timers } : {}),
       ...(this.options.heartbeatMs ? { heartbeatMs: this.options.heartbeatMs } : {}),
-      onChange: () => this.publishNodes(),
+      onChange: () => {
+        this.publishNodes();
+        this.syncSettingsTo(link);
+      },
       onVerified: (update) => void this.recordVerified(link.nodeId, update),
       onIdentity: (installationId) => this.adoptIdentity(link.nodeId, installationId),
     });

@@ -1,5 +1,9 @@
 import type { NodeAttachments, NodeRegistry } from "@orkestrator/protocol/command-nodes";
 import {
+  parseControllerSettingsStore,
+  type ControllerSettingsStore,
+} from "@orkestrator/protocol/controller-settings";
+import {
   parsePortalLayout,
   type PortalLayout,
   type PortalLayoutUpdate,
@@ -69,6 +73,34 @@ export class StorageNodes extends StoragePreviewServices {
 
   protected portalLayoutFile(): string {
     return this.file("portal-layout.json");
+  }
+
+  protected controllerSettingsFile(): string {
+    return this.file("controller-settings.json");
+  }
+
+  /** Leaf: the settings each attached command node handed down (no credentials). */
+  async getControllerSettings(): Promise<ControllerSettingsStore> {
+    return parseControllerSettingsStore(
+      await this.loadJson<unknown>(this.controllerSettingsFile(), () => null),
+    );
+  }
+
+  async mutateControllerSettings<T>(
+    mutate: (current: ControllerSettingsStore) => NodeStoreMutation<ControllerSettingsStore, T>,
+  ): Promise<T> {
+    return this.serializeMutation(
+      this.controllerSettingsFile(),
+      "controller settings",
+      async () => {
+        const current = parseControllerSettingsStore(
+          await this.loadJson<unknown>(this.controllerSettingsFile(), () => null),
+        );
+        const { next, result } = mutate(structuredClone(current));
+        if (next) await this.saveJson(this.controllerSettingsFile(), { ...next, version: 1 });
+        return result;
+      },
+    );
   }
 
   /** The portal sidebar's cross-machine order (see `@orkestrator/protocol/portal-layout`). */

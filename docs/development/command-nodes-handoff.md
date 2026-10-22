@@ -37,6 +37,12 @@ matrix with evidence for every row are in
 - **Leaf mode.** Attaching a command node suspends its own links but keeps
   its registry. Registration is refused, and its coordinators lose their
   cross-node tools.
+- **Inherited settings** (`nodes/node-controller-settings.ts`). The command
+  node sends its inheritable settings with `sync_controller_settings` on
+  every link connection and config change; the leaf keeps one copy per
+  controller (`controller-settings.json`) and `StorageConfig.loadConfig`
+  lays the most recently changed one over the leaf's own config. Writers use
+  `loadOwnConfig`. See [Settings](../architecture/command-nodes.md#settings).
 
 ## Portal
 

@@ -240,6 +240,25 @@ description = "Run the Docker agent browser fixture"
 env = { ORKESTRATOR_AGENT_TEST_DOCKER = "1" }
 run = "bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts --grep 'Docker fixture'"
 
+[tasks."test:preview:docker"]
+description = "Opt-in service preview checks on real Docker: same-port containers, host decoy, recreation, docker exec relay (needs ORKESTRATOR_TEST_DOCKER_PREVIEW_IMAGE)"
+run = """
+: "${ORKESTRATOR_TEST_DOCKER_PREVIEW_IMAGE:?Set ORKESTRATOR_TEST_DOCKER_PREVIEW_IMAGE to the image under test}"
+export ORKESTRATOR_TEST_DOCKER_RELAY_IMAGE="${ORKESTRATOR_TEST_DOCKER_RELAY_IMAGE:-$ORKESTRATOR_TEST_DOCKER_PREVIEW_IMAGE}"
+bun test --cwd apps/backend ./src/core/preview-docker.test.ts ./src/preview-relay-supervisor.test.ts --parallel=1
+"""
+
+[tasks."test:preview:browser"]
+description = "Opt-in real Chromium checks against private preview origins (set ORKESTRATOR_TEST_PREVIEW_VITE_DIR for HMR)"
+raw_args = true
+run = "bunx playwright test --config e2e/preview/playwright.preview.config.ts"
+
+[tasks."test:preview:bench"]
+description = "Opt-in loopback latency of the preview routes, and a loopback self-test of the two-machine baseline tool"
+# The bounded test console drops console.log unless asked; the numbers are the output.
+env = { ORKESTRATOR_PREVIEW_BENCH = "1", ORKESTRATOR_TEST_VERBOSE_CONSOLE = "1" }
+run = "bun test --cwd apps/backend ./src/preview-bench.test.ts ./src/preview-latency-baseline.test.ts --parallel=1"
+
 [tasks."test:agent:paused-interactions"]
 description = "Opt-in billed provider qualification past ten minutes against an already-running disposable profile"
 run = "bunx playwright test --config e2e/agent-testing/playwright.paused-interactions.config.ts"

@@ -29,7 +29,7 @@ export type PreviewAccessRevocationReason =
   | "released"
   | "expired";
 
-/** Publication hooks supplied by the private-origin manager (step 10). */
+/** Publication hooks supplied by the private-origin manager (`preview-publication.ts`). */
 export interface PreviewPublicationPort {
   /** Absolute bootstrap action URL, or null when browser publication is unavailable. */
   bootstrapAction(): string | null;

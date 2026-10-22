@@ -119,6 +119,15 @@ The final root/support run with all GNU prerequisites timed out this case at 500
 - **Evidence:** `orkestrator-test-run.d10zQ4/root-and-agent-support-tests.log.gz` below the host temporary directory.
 - **Assessment:** confirms another intermittent shell-fixture deadline. Contention remains an unproven hypothesis; no implementation, assertion, timeout or skip changed.
 
+## Service preview rollout full suite — 2026-10-22
+
+- Command: `mise run test:logged -- --name full-tests-0042 -- mise run test` on branch `todo-0042-service-preview-rollout-a6b636a9b237` (`b83ae534` plus the service preview rollout working tree, which does not touch this test's code), macOS 26.6.2 arm64, default `mise run test` groups, host load average 15 to 60 (above 400 earlier in the hour).
+- Failure: a different case of the same shell-fixture family, `container firewall policy > policy 3 allowlist example.com:80 chooses blocked HTTPS probe example.com`, at 5007.90 ms (`exitCode` null; "killed 1 dangling process"). Root and agent-support: 3241 passed, 1 skipped, 1 failed across 3243 tests in 155 files (268.62 s).
+- Evidence: `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.iQtiOF/root-and-agent-support-tests.log.gz`.
+- Isolated rerun: `mise exec -- bun test tests/unit/firewall-policy.test.ts` passed unchanged (24 passed) at load 11.
+
+Second full suite on the same branch (2026-10-22): `mise run test:logged -- --name full-tests-0042-2 -- mise run test` on branch `todo-0042-service-preview-rollout-a6b636a9b237` (`b83ae534` plus the service preview rollout working tree), macOS 26.6.2 arm64, default groups, load average 10 to 22. `container firewall policy > policy 3 allows address, protocol and port tuples` timed out at 5004.36 ms (`exitCode` null). Root and agent-support: 3240 passed, 1 skipped, 2 failed across 3243 tests in 155 files (283.56 s); the workspace, bridges and protocol groups passed. Evidence: `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.fDVMln/root-and-agent-support-tests.log.gz`. `mise exec -- bun test tests/unit/firewall-policy.test.ts` passed unchanged (24 passed, 17.6 s).
+
 ## MCP external-edit watch review fixes — 2026-10-22
 
 - **Original command:** `mise run test:logged -- --name full-suite -- mise run test`; workspace/root/bridges/protocol reserved 4/1/2/1 slots, with one isolated root worker.

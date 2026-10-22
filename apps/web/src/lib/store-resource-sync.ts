@@ -518,7 +518,9 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
   if (settingsOnCommandNode()) {
     let stopCommandNodeConfig: UnlistenFn | null = null;
     void portalListen<{ resource?: unknown }>(RESOURCE_CHANGED_EVENT, (event) => {
-      if (event.payload?.resource === "config") void refreshConfig();
+      if (!disposed && event.payload?.resource === "config") {
+        void refreshConfig().catch(() => undefined);
+      }
     })
       .then((stop) => {
         if (disposed) stop();

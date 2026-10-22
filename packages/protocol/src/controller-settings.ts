@@ -61,7 +61,12 @@ export function pickInheritedGlobalSettings(global: object): InheritedGlobalSett
  * keys only (others are dropped), within the size bound.
  */
 export function parseInheritedGlobalSettings(value: unknown): InheritedGlobalSettings {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null)
+  ) {
     throw new Error("Expected settings to be an object.");
   }
   let serialized: string;
@@ -73,7 +78,11 @@ export function parseInheritedGlobalSettings(value: unknown): InheritedGlobalSet
   if (new TextEncoder().encode(serialized).byteLength > MAX_INHERITED_SETTINGS_BYTES) {
     throw new Error("Settings are too large.");
   }
-  return pickInheritedGlobalSettings(JSON.parse(serialized) as Record<string, unknown>);
+  const parsed: unknown = JSON.parse(serialized);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Expected settings to be an object.");
+  }
+  return pickInheritedGlobalSettings(parsed);
 }
 
 /** One command node's settings, as a leaf keeps them. */
@@ -102,7 +111,12 @@ export function parseControllerSettingsStore(value: unknown): ControllerSettings
   for (const entry of entries) {
     if (!entry || typeof entry !== "object") continue;
     const record = entry as Record<string, unknown>;
-    if (!isBackendId(record.controllerId) || typeof record.changedAt !== "string") continue;
+    if (
+      !isBackendId(record.controllerId) ||
+      typeof record.changedAt !== "string" ||
+      !Number.isFinite(Date.parse(record.changedAt))
+    )
+      continue;
     try {
       parsed.push({
         controllerId: record.controllerId,

@@ -1244,6 +1244,39 @@ final class RemoteWebViewPolicyTests: XCTestCase {
         XCTAssertTrue(scripts[4].contains("action is not supported"))
     }
 
+    func testBridgeConnectWithoutSelectionNeverSwitchesOrAuthenticates() async throws {
+        let first = connection(address: "https://one.example")
+        let store = MemoryCredentialStore(vault: ConnectionVault(activeConnectionID: first.id, connections: [first]))
+        let validator = MockValidator()
+        let model = ConnectionModel(credentialStore: store, validator: validator)
+        let (coordinator, state) = makeCoordinator(model: model, initialState: .ready)
+        var authentications = 0
+        coordinator.authenticationStarter = { _ in authentications += 1 }
+        validator.checkHandler = { _, _ in
+            XCTAssertFalse(coordinator.isSwitchingThroughBridge)
+        }
+        var scripts: [String] = []
+        coordinator.javaScriptEvaluator = {
+            XCTAssertFalse(coordinator.isSwitchingThroughBridge)
+            scripts.append($0)
+            return true
+        }
+
+        await coordinator.handleBridgeRequest(
+            id: "save-only", action: "connect",
+            body: ["address": "https://two.example", "token": "gateway-token-new-123", "select": false]
+        )
+
+        XCTAssertEqual(model.activeConnection?.id, first.id)
+        XCTAssertEqual(model.vault.connections.count, 2)
+        XCTAssertFalse(coordinator.isSwitchingThroughBridge)
+        XCTAssertNil(coordinator.requestedConnection)
+        XCTAssertEqual(authentications, 0)
+        XCTAssertEqual(state.value, .ready)
+        XCTAssertEqual(scripts.count, 1)
+        XCTAssertTrue(scripts[0].contains(#""save-only", true"#))
+    }
+
     func testBridgeRecoversSwitchWhenJavaScriptEvaluationFails() async throws {
         let model = ConnectionModel(
             credentialStore: MemoryCredentialStore(),

@@ -5,6 +5,8 @@ import path from "node:path";
 
 import type { InheritedGlobalSettings } from "@orkestrator/protocol/controller-settings";
 
+import { createCommandRegistry } from "./commands-registry.js";
+import type { CommandContext } from "./commands-context.js";
 import { StorageService } from "./storage.js";
 
 async function withStorage(run: (storage: StorageService) => Promise<void>): Promise<void> {
@@ -86,6 +88,70 @@ describe("settings inherited from a command node", () => {
       const returned = await storage.setGitHubCliReminderDismissed(true);
       expect(returned.global.terminalScrollback).toBe(5_000);
       expect((await storage.loadOwnConfig()).global.terminalScrollback).toBe(1_000);
+    });
+  });
+  test("complete snapshots reset absent preferences without changing the leaf's stored overrides", async () => {
+    await withStorage(async (storage) => {
+      const own = await storage.loadOwnConfig();
+      await storage.updateGlobalConfig({
+        ...own.global,
+        reviewInstruction: "Leaf instruction",
+        terminalScrollback: 1234,
+      });
+      let inherited: InheritedGlobalSettings = { reviewInstruction: "Controller instruction" };
+      storage.inheritedGlobalSettings = () => inherited;
+      expect((await storage.loadConfig()).global.reviewInstruction).toBe("Controller instruction");
+      inherited = {};
+      const effective = await storage.loadConfig();
+      expect(effective.global.reviewInstruction).toBeUndefined();
+      expect(effective.global.terminalScrollback).toBe(own.global.terminalScrollback);
+      await storage.updateGlobalConfig({ ...effective.global, allowedDomains: ["leaf.test"] });
+      expect((await storage.loadOwnConfig()).global.reviewInstruction).toBe("Leaf instruction");
+      expect((await storage.loadOwnConfig()).global.terminalScrollback).toBe(1234);
+    });
+  });
+
+  test("coerces inherited default agents to the leaf's enabled platforms", async () => {
+    await withStorage(async (storage) => {
+      const own = await storage.loadOwnConfig();
+      await storage.updateGlobalConfig({
+        ...own.global,
+        enabledAgentPlatforms: ["claude"],
+        allowedDomains: ["leaf.test"],
+      });
+      storage.inheritedGlobalSettings = () => ({ agentSettings: { defaultAgent: "codex" } });
+      const effective = await storage.loadConfig();
+      expect(effective.global.agentSettings?.defaultAgent).toBe("claude");
+      expect(effective.global.enabledAgentPlatforms).toEqual(["claude"]);
+      expect(effective.global.allowedDomains).toEqual(["leaf.test"]);
+    });
+  });
+  test("machine-only saves preserve own preferences even after an intervening controller sync", async () => {
+    await withStorage(async (storage) => {
+      const own = await storage.loadOwnConfig();
+      await storage.updateGlobalConfig({
+        ...own.global,
+        terminalScrollback: 1234,
+        reviewInstruction: "Leaf review",
+      });
+      storage.inheritedGlobalSettings = () => ({ terminalScrollback: 9000 });
+      const update = createCommandRegistry().get("update_global_config")!;
+      const context = { storage } as CommandContext;
+      await update(
+        {
+          global: { ...own.global, terminalScrollback: 5000, allowedDomains: ["leaf.test"] },
+          preserveInheritedSettings: true,
+        },
+        context,
+      );
+      await expect(
+        update({ global: own.global, preserveInheritedSettings: "yes" }, context),
+      ).rejects.toThrow("preserveInheritedSettings");
+      const stored = await storage.loadOwnConfig();
+      expect(stored.global.terminalScrollback).toBe(1234);
+      expect(stored.global.reviewInstruction).toBe("Leaf review");
+      expect(stored.global.allowedDomains).toEqual(["leaf.test"]);
+      expect((await storage.loadConfig()).global.terminalScrollback).toBe(9000);
     });
   });
 });

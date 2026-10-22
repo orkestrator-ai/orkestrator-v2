@@ -132,8 +132,9 @@ export class NodeService {
   /** Leaf side: settings handed down by attached command nodes. */
   readonly inheritedSettings: LeafControllerSettings;
   /** Command side: what each leaf was last sent, per link epoch. */
-  private readonly sentSettings = new Map<BackendId, { epoch: number; settings: string }>();
-  private readonly settingsSends = new Map<BackendId, Promise<void>>();
+  private readonly sentSettings = new WeakMap<NodeLink, { epoch: number; settings: string }>();
+  private readonly unsupportedSettings = new WeakMap<NodeLink, number>();
+  private readonly settingsSends = new WeakMap<NodeLink, Promise<void>>();
 
   constructor(options: NodeServiceOptions) {
     this.options = options;
@@ -309,6 +310,11 @@ export class NodeService {
         "That command node is registered under this node. Forget it here first; only two levels are allowed.",
       );
     }
+    // A fresh attachment must wait for any failed detach cleanup before it
+    // becomes eligible to follow persisted settings again.
+    if (!this.attachments.controllers.some((entry) => entry.controllerId === parsed.controllerId)) {
+      await this.inheritedSettings.forget(parsed.controllerId);
+    }
     const timestamp = new Date(this.now()).toISOString();
     const next = await this.storage.mutateNodeAttachments((current) => {
       if (current.detachedControllers.some((entry) => entry.controllerId === parsed.controllerId)) {
@@ -391,16 +397,12 @@ export class NodeService {
     this.pendingContacts.delete(controllerId);
     this.lastPersistedContact.delete(controllerId);
     if (result.detached) {
-      void this.inheritedSettings.forget(controllerId).catch((error: unknown) => {
-        console.warn(
-          "[nodes] Could not drop a detached command node's settings:",
-          errorCode(error),
-        );
-      });
       for (const listener of this.detachListeners) listener(controllerId);
       this.applyMode();
       this.emitStatus();
     }
+    // Retry cleanup even if a previous detach removed the attachment but failed to persist.
+    await this.inheritedSettings.forget(controllerId);
     return { detached: result.detached };
   }
 
@@ -533,31 +535,38 @@ export class NodeService {
     const source = this.options.inheritableSettings;
     if (!source || !link.connected || this.isLeaf()) return;
     const nodeId = link.nodeId;
-    const previous = this.settingsSends.get(nodeId) ?? Promise.resolve();
+    const previous = this.settingsSends.get(link) ?? Promise.resolve();
     const next = previous.then(async () => {
       if (!link.connected || this.links.get(nodeId) !== link) return;
       const epoch = link.view.epoch;
+      if (this.unsupportedSettings.get(link) === epoch) return;
       const settings = await source();
+      if (!link.connected || this.links.get(nodeId) !== link || link.view.epoch !== epoch) return;
       const serialized = JSON.stringify(settings);
-      const sent = this.sentSettings.get(nodeId);
+      const sent = this.sentSettings.get(link);
       if (sent && sent.epoch === epoch && sent.settings === serialized) return;
       try {
         await link.invoke(SYNC_CONTROLLER_SETTINGS_COMMAND, {
           controllerId: this.selfId,
           settings,
         });
-        this.sentSettings.set(nodeId, { epoch, settings: serialized });
+        this.sentSettings.set(link, { epoch, settings: serialized });
       } catch (error) {
-        // An older leaf has no such command; it keeps its own settings. Not
-        // retried on this connection unless the settings change again.
-        this.sentSettings.set(nodeId, { epoch, settings: serialized });
+        // A definitive capability refusal is distinct from delivery. Other
+        // failures remain unsent, so the next sync can retry unchanged settings.
+        if (
+          error instanceof Error &&
+          error.message === `Unknown command: ${SYNC_CONTROLLER_SETTINGS_COMMAND}`
+        ) {
+          this.unsupportedSettings.set(link, epoch);
+        }
         console.warn("[nodes] Could not send settings to a node:", errorCode(error));
       }
     });
     const settled = next.catch(() => undefined);
-    this.settingsSends.set(nodeId, settled);
+    this.settingsSends.set(link, settled);
     void settled.then(() => {
-      if (this.settingsSends.get(nodeId) === settled) this.settingsSends.delete(nodeId);
+      if (this.settingsSends.get(link) === settled) this.settingsSends.delete(link);
     });
   }
 

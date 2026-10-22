@@ -877,10 +877,20 @@ export function registerProjectCommands(
     const force = args.force === undefined ? false : asRequiredBoolean(args.force, "force");
     return planUsageReader(context, platform, { force });
   });
-  register("update_global_config", async ({ global }, { storage }) => {
+  register("update_global_config", async ({ global, preserveInheritedSettings }, { storage }) => {
     const updated = await storage.updateGlobalConfig(
       stripRendererCredentials(asRecord(global, "global")),
-      { preserveCredentials: true },
+      {
+        preserveCredentials: true,
+        ...(preserveInheritedSettings === undefined
+          ? {}
+          : {
+              preserveInheritedSettings: asRequiredBoolean(
+                preserveInheritedSettings,
+                "preserveInheritedSettings",
+              ),
+            }),
+      },
     );
     configureTerminalHistoryRetention({
       enabled: updated.global.terminalHistoryEnabled,

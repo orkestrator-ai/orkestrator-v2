@@ -5,7 +5,10 @@ import {
 import * as shared from "./storage-shared.js";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import type { InheritedGlobalSettings } from "@orkestrator/protocol/controller-settings";
+import {
+  INHERITED_GLOBAL_SETTING_KEYS,
+  type InheritedGlobalSettings,
+} from "@orkestrator/protocol/controller-settings";
 import { normalizeAgentSettings } from "@orkestrator/protocol/agent-settings";
 import { normalizeDebugLogRetentionDays } from "@orkestrator/protocol/debug-logging";
 import { normalizeNotificationSoundSettings } from "@orkestrator/protocol/notification-sounds";
@@ -195,23 +198,26 @@ export abstract class StorageConfig extends StorageProjects {
 
   protected withInheritedSettings(config: AppConfig): AppConfig {
     const inherited = this.inheritedGlobalSettings?.() ?? null;
-    if (!inherited || Object.keys(inherited).length === 0) return config;
-    const global = {
-      ...config.global,
-      ...(inherited as Partial<AppConfig["global"]>),
-    } as AppConfig["global"];
-    if (inherited.agentSettings !== undefined) {
-      // The command node's default agent may not be enabled on this node.
-      const agentSettings = normalizeAgentSettings(global.agentSettings);
-      const enabled = normalizeAgentPlatforms(global.enabledAgentPlatforms, []);
-      global.agentSettings =
-        enabled.length > 0
-          ? {
-              ...agentSettings,
-              defaultAgent: firstEnabledAgentPlatform(enabled, agentSettings.defaultAgent),
-            }
-          : agentSettings;
+    if (!inherited) return config;
+    const values = { ...config.global } as unknown as Record<string, unknown>;
+    const defaults = defaultConfig().global as unknown as Record<string, unknown>;
+    // Each snapshot is complete: omitted preferences mean product defaults,
+    // never the leaf's persisted override.
+    for (const key of INHERITED_GLOBAL_SETTING_KEYS) {
+      delete values[key];
+      if (defaults[key] !== undefined) values[key] = defaults[key];
     }
+    const global = { ...values, ...inherited } as AppConfig["global"];
+    // The command node's default agent may not be enabled on this node.
+    const agentSettings = normalizeAgentSettings(global.agentSettings);
+    const enabled = normalizeAgentPlatforms(global.enabledAgentPlatforms, []);
+    global.agentSettings =
+      enabled.length > 0
+        ? {
+            ...agentSettings,
+            defaultAgent: firstEnabledAgentPlatform(enabled, agentSettings.defaultAgent),
+          }
+        : agentSettings;
     return { ...config, global };
   }
 
@@ -233,7 +239,7 @@ export abstract class StorageConfig extends StorageProjects {
     }).global as unknown as Record<string, unknown>;
     const next = { ...incoming } as unknown as Record<string, unknown>;
     const ownValues = own as unknown as Record<string, unknown>;
-    for (const key of Object.keys(inherited)) {
+    for (const key of INHERITED_GLOBAL_SETTING_KEYS) {
       if (!isDeepStrictEqual(next[key], effective[key])) continue;
       if (ownValues[key] === undefined) delete next[key];
       else next[key] = ownValues[key];
@@ -536,7 +542,7 @@ export abstract class StorageConfig extends StorageProjects {
 
   async updateGlobalConfig(
     globalConfig: AppConfig["global"],
-    options: { preserveCredentials?: boolean } = {},
+    options: { preserveCredentials?: boolean; preserveInheritedSettings?: boolean } = {},
   ): Promise<AppConfig> {
     const reviewValidated = validateGlobalReviewInstruction(globalConfig);
     const enabledAgentPlatforms = normalizeAgentPlatforms(
@@ -637,6 +643,15 @@ export abstract class StorageConfig extends StorageProjects {
       if (config.global.githubCliReminderDismissed) validated.githubCliReminderDismissed = true;
       else delete validated.githubCliReminderDismissed;
       const ownGlobal = this.keepOwnInheritedValues(validated, config.global);
+      if (options.preserveInheritedSettings) {
+        // A leaf-window save routes preferences separately. Its machine save
+        // must preserve local preferences even if a newer sync arrived first.
+        for (const key of INHERITED_GLOBAL_SETTING_KEYS) {
+          delete ownGlobal[key];
+          if (config.global[key] !== undefined)
+            Object.assign(ownGlobal, { [key]: config.global[key] });
+        }
+      }
       config.global = options.preserveCredentials
         ? {
             ...ownGlobal,

@@ -1,58 +1,97 @@
-/**
- * Settings belong to the command node the client is connected to.
- *
- * While the window's workspace is on another node, the application settings
- * (the global config: defaults, platforms, review, terminal, keys, sounds,
- * messaging) are still read from and written to the command node, over the
- * portal channel. The command node hands the inherited ones down to that
- * node, so its own launches use them too (`@orkestrator/protocol/controller-settings`).
- * Per-project repository settings stay with the node that owns the project.
- *
- * So the config a leaf window holds is the leaf's repositories with the
- * command node's global settings.
- */
-
+/** Workspace config keeps machine settings local; only preferences come from the command node. */
+import {
+  INHERITED_GLOBAL_SETTING_KEYS,
+  pickInheritedGlobalSettings,
+} from "@orkestrator/protocol/controller-settings";
+import {
+  firstEnabledAgentPlatform,
+  normalizeAgentPlatforms,
+} from "@orkestrator/protocol/agent-platforms";
+import { normalizeAgentSettings } from "@orkestrator/protocol/agent-settings";
+import { deepEqualJson } from "@/lib/chat/message-identity";
 import { invoke } from "@/lib/native/backend";
-import type { AppConfig } from "@/types";
+import type { AppConfig, GlobalConfig } from "@/types";
 import { portalInvoke, workspaceTarget } from "./portal-transport";
 
-/** The workspace transport, called exactly as a direct `invoke` would be. */
 function workspaceInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   return args === undefined ? invoke<T>(command) : invoke<T>(command, args);
 }
 
-/** The window's workspace is on another node, so settings go to the command node. */
 export function settingsOnCommandNode(): boolean {
   return workspaceTarget() !== null;
 }
 
-/** A global-settings command: on the command node, with this window's repositories. */
+function workspaceConfig(workspace: AppConfig, commandNode: AppConfig): AppConfig {
+  const global = { ...workspace.global };
+  for (const key of INHERITED_GLOBAL_SETTING_KEYS) delete global[key];
+  Object.assign(global, pickInheritedGlobalSettings(commandNode.global));
+  const agentSettings = normalizeAgentSettings(global.agentSettings);
+  const enabled = normalizeAgentPlatforms(global.enabledAgentPlatforms, []);
+  global.agentSettings = {
+    ...agentSettings,
+    defaultAgent:
+      enabled.length > 0
+        ? firstEnabledAgentPlatform(enabled, agentSettings.defaultAgent)
+        : agentSettings.defaultAgent,
+  };
+  return { ...workspace, global };
+}
+
+/** Read the effective workspace view, or save each setting on its owning node. */
 export async function invokeGlobalConfigCommand(
   command: string,
   args?: Record<string, unknown>,
 ): Promise<AppConfig> {
   if (!settingsOnCommandNode()) return workspaceInvoke<AppConfig>(command, args);
+  if (command === "update_global_config") {
+    // Read before writing: a failed paired read must not leave a partial save.
+    const [commandNode, workspace] = await Promise.all([
+      portalInvoke<AppConfig>("get_config"),
+      workspaceInvoke<AppConfig>("get_config"),
+    ]);
+    const incoming = args?.global as GlobalConfig;
+    const effective = workspaceConfig(workspace, commandNode).global;
+    const commandGlobal = { ...commandNode.global };
+    const workspaceGlobal = { ...incoming };
+    for (const key of INHERITED_GLOBAL_SETTING_KEYS) {
+      // Preserve command defaults when the form echoes a leaf-coerced value.
+      if (!deepEqualJson(incoming[key], effective[key])) {
+        delete commandGlobal[key];
+        if (incoming[key] !== undefined) Object.assign(commandGlobal, { [key]: incoming[key] });
+        if (
+          key === "agentSettings" &&
+          incoming.agentSettings?.defaultAgent === effective.agentSettings?.defaultAgent
+        ) {
+          commandGlobal.agentSettings = {
+            ...incoming.agentSettings,
+            defaultAgent: commandNode.global.agentSettings?.defaultAgent,
+          };
+        }
+      }
+      delete workspaceGlobal[key];
+    }
+    const savedCommand = await portalInvoke<AppConfig>(command, { global: commandGlobal });
+    const savedWorkspace = await workspaceInvoke<AppConfig>(command, {
+      global: workspaceGlobal,
+      preserveInheritedSettings: true,
+    });
+    return workspaceConfig(savedWorkspace, savedCommand);
+  }
   const [commandNode, workspace] = await Promise.all([
-    portalInvoke<AppConfig>(command, args),
-    workspaceInvoke<AppConfig>("get_config"),
+    portalInvoke<AppConfig>("get_config"),
+    workspaceInvoke<AppConfig>(command, args),
   ]);
-  return { ...workspace, global: commandNode.global };
+  return workspaceConfig(workspace, commandNode);
 }
 
-/** A repository-settings command: on the project's node, with the command node's global settings. */
 export async function invokeRepositoryConfigCommand(
   command: string,
   args?: Record<string, unknown>,
 ): Promise<AppConfig> {
-  if (!settingsOnCommandNode()) return workspaceInvoke<AppConfig>(command, args);
-  const [workspace, commandNode] = await Promise.all([
-    workspaceInvoke<AppConfig>(command, args),
-    portalInvoke<AppConfig>("get_config"),
-  ]);
-  return { ...workspace, global: commandNode.global };
+  return invokeGlobalConfigCommand(command, args);
 }
 
-/** A settings command that returns no config: on the command node. */
+/** Commands dedicated to inherited preferences target the command node. */
 export function invokeCommandNodeSetting<T>(
   command: string,
   args?: Record<string, unknown>,

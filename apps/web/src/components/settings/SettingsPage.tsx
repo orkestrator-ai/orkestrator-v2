@@ -98,53 +98,48 @@ interface SettingsPageProps {
   sectionRequest?: number;
 }
 
-/**
- * Every settings page says whose settings it edits. They are the command
- * node's: the machine this client is connected to, which hands them down to
- * the machines it controls. They stay the command node's while the window
- * works on another machine; only machine-specific details (accounts, disk,
- * tools, logs) are that machine's. Another machine's own settings are opened
- * from that machine.
- */
-function SettingsScopeBanner({ section }: { section: GlobalSettingsSection | "" }) {
+/** Names the owner of the settings and machine tools shown in this section. */
+export function SettingsScopeBanner({ section }: { section: GlobalSettingsSection | "" }) {
   const { enabled, boundMachine } = useFederation();
   const commandNode = useCommandNode();
-  if (!commandNode || !section) return null;
-  // With a single machine there is nothing to tell apart, except in Machines.
-  if (!enabled && section !== "machines") return null;
-  const name = <span className="font-medium text-zinc-200">{commandNode.name}</span>;
+  if (!commandNode || !section || (!enabled && section !== "machines")) return null;
+  const workspaceName =
+    boundMachine?.name ?? (commandNode.workspaceHere ? commandNode.name : "this machine");
+  const inherited = section === "review" || section === "messaging";
+  const mixed = ["defaults", "terminal", "claude", "codex", "opencode"].includes(section);
+  const ownerName = section === "machines" || inherited ? commandNode.name : workspaceName;
   return (
     <div
       className="mb-5 flex max-w-4xl items-start gap-2 rounded-md border border-zinc-800 bg-zinc-950/40 px-3 py-2 text-xs text-zinc-400"
       data-testid="settings-scope"
     >
       <MachineDot
-        colorToken={commandNode.colorToken}
-        machineName={commandNode.name}
+        colorToken={
+          section === "machines" || inherited
+            ? commandNode.colorToken
+            : (boundMachine?.colorToken ?? commandNode.colorToken)
+        }
+        machineName={ownerName}
         className="mt-1"
       />
       <span>
-        <span className="font-medium text-zinc-200">Command node: {commandNode.name}.</span>{" "}
         {section === "machines" ? (
           <>
-            These are the machines {name} controls. Settings changed in this app are for {name} only
-            and apply to its work on every machine; a machine&apos;s individual settings are opened
-            from that machine.
+            Command node: <strong>{commandNode.name}</strong>. These are the machines it controls.
           </>
-        ) : commandNode.workspaceHere ? (
+        ) : inherited ? (
           <>
-            These settings are for {name} only and apply to the work it runs on every machine it
-            controls. Each machine&apos;s individual settings are opened from that machine (Settings
-            → Machines).
+            Preferences for <strong>{commandNode.name}</strong>, inherited by work on every machine
+            it controls.
+          </>
+        ) : mixed ? (
+          <>
+            Preferences come from <strong>{commandNode.name}</strong>. Machine-specific settings,
+            accounts and tools belong to <strong>{workspaceName}</strong>.
           </>
         ) : (
           <>
-            These settings are for {name} only and apply to the work it runs on every machine it
-            controls. Machine-specific details (accounts, disk, tools, logs) are those of{" "}
-            <span className="font-medium text-zinc-200">
-              {boundMachine?.name ?? "this machine"}
-            </span>
-            , where this window is working; its other settings are opened from that machine.
+            Machine settings for <strong>{workspaceName}</strong>. Changes apply to this machine.
           </>
         )}
       </span>

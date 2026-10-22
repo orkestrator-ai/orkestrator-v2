@@ -1,8 +1,8 @@
 import { invoke } from "@/lib/native/backend";
 import {
-  invokeCommandNodeSetting,
   invokeGlobalConfigCommand,
   invokeRepositoryConfigCommand,
+  settingsOnCommandNode,
 } from "@/lib/portal/command-node-config";
 import { getGatewayBaseUrl, resolveGatewayLoopbackBaseUrl } from "@/lib/gateway-url";
 import type {
@@ -40,7 +40,7 @@ import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 
 import type { PrDetectionResult } from "./projects-environments";
 
-/** The application settings are the command node's, even while the workspace is on a leaf. */
+/** Workspace machine settings with the command node's inherited preferences. */
 export async function getConfig(): Promise<AppConfig> {
   return invokeGlobalConfigCommand("get_config");
 }
@@ -156,7 +156,9 @@ export async function saveConfig(config: AppConfig): Promise<void> {
 }
 
 export async function getGlobalConfig(): Promise<GlobalConfig> {
-  return invokeCommandNodeSetting<GlobalConfig>("get_global_config");
+  return settingsOnCommandNode()
+    ? (await getConfig()).global
+    : invoke<GlobalConfig>("get_global_config");
 }
 
 export async function updateGlobalConfig(global: GlobalConfig): Promise<AppConfig> {

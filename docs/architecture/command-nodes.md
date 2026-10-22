@@ -133,13 +133,13 @@ There is no deeper hierarchy.
 Settings belong to the command node the client is connected to, and apply
 to everything it runs, on every machine it controls.
 
-- **In the client.** Settings always read and write the command node's
-  application settings (the global config), over the portal channel while
-  the window's workspace is on a leaf (`lib/portal/command-node-config.ts`).
-  A leaf window's config is the leaf's per-project repository settings
-  with the command node's global settings. Every settings page names the
-  command node and says the settings are for it alone; a machine's own
-  settings are opened from that machine.
+- **In the client.** A leaf window keeps the leaf's per-project repository
+  settings and machine-specific globals. Only inherited preferences are
+  overlaid from the command node over the portal channel
+  (`lib/portal/command-node-config.ts`). Whole-global saves send preference
+  changes to the command node and machine-specific changes to the workspace
+  backend, preserving the other node's values. Each settings section names
+  the owner of its preferences and machine-specific controls.
 - **Handed down to leaves.** The command node sends the inherited subset
   of its settings (`@orkestrator/protocol/controller-settings`: agent
   defaults and models, review instruction, terminal, messaging and similar
@@ -156,7 +156,9 @@ to everything it runs, on every machine it controls.
   `get_node_status` reports which command node's settings are in use
   (`inheritedSettingsFrom`).
 - With several command nodes attached, the leaf follows the one whose
-  settings changed most recently.
+  settings changed most recently; equal timestamps prefer the later receipt.
+  Each snapshot is complete: omitted inherited keys use product defaults,
+  while the leaf's persisted own values remain underneath.
 - Machine-specific settings never travel: credentials and API keys, paths,
   installed or enabled platforms, container budgets, network policy,
   previews, MCP servers and logs.

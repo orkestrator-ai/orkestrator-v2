@@ -99,3 +99,13 @@
 - Merge: `90e3e5226` into `4902a9282`; original command `mise run test:logged -- --name machines-merge-suite -- mise run test`, workspace/root/bridges/protocol worker reservations 4/1/2/1 alongside browser and Electron validation.
 - Root/support reported 3,222 passed, one skipped, two failed and one error across 154 files (325.9 s). The supported-SDK case exceeded 30 seconds (30003.03 ms). `mise run test:logged -- --name machines-merge-pi-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed the complete unchanged owner, exit 0 in 8.1 s.
 - Evidence: `orkestrator-test-run.rzuQT5/root-and-agent-support-tests.log.gz` under the host temporary directory after the aggregate completes. This confirms another intermittent deadline recurrence; contention remains a hypothesis. No implementation, assertion, timeout or skip changed.
+
+## Inherited-settings implementation validation — 2026-10-22
+
+- **Command:** `mise run test:logged -- --name complete-tests -- mise run test`, Bun 1.4.3 on macOS arm64; workspace/root/bridge/protocol reservations 4/1/2/1, with browser validation running concurrently.
+- **Failure:** the supported SDK vendoring case hit 30000.28 ms. Root/support reported 3315 passed and two failed across 3317 tests in 250.71 seconds. The other failure was a new DOM absence-assertion convention violation, subsequently fixed.
+- **Owning-file rerun:** `mise run test:logged -- --name pi-vendor-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 15.6 seconds).
+- **Evidence:** `orkestrator-test-run.92oAQN/root-and-agent-support-tests.log.gz` under the host temporary directory after aggregate completion; outer run `orkestrator-test-run.6yesvR`.
+- Concurrent staging and browser load remain possible contributors; no Pi implementation, test, timeout or skip changed.
+
+The final-source retry, `mise run test:logged -- --name final-complete-tests -- mise run test`, passed every non-iOS group (exit 0, 454.4 seconds). Root/support passed in 141.5 seconds.

@@ -36,6 +36,14 @@ export interface LeafControllerSettingsOptions {
 export class LeafControllerSettings {
   private store: ControllerSettingsStore = { version: 1, entries: [] };
 
+  private mutations: Promise<unknown> = Promise.resolve();
+
+  private serialize<T>(run: () => Promise<T>): Promise<T> {
+    const next = this.mutations.then(run);
+    this.mutations = next.catch(() => undefined);
+    return next;
+  }
+
   constructor(private readonly options: LeafControllerSettingsOptions) {}
 
   async start(): Promise<void> {
@@ -44,6 +52,10 @@ export class LeafControllerSettings {
 
   /** `sync_controller_settings` from an attached command node. */
   async receive(args: Record<string, unknown>): Promise<{ applied: boolean }> {
+    return this.serialize(() => this.receiveSettings(args));
+  }
+
+  private async receiveSettings(args: Record<string, unknown>): Promise<{ applied: boolean }> {
     const controllerId = args.controllerId;
     if (!isBackendId(controllerId)) throw new Error("Expected controllerId to be a node identity.");
     if (this.options.attachedName(controllerId) === null) {
@@ -77,6 +89,18 @@ export class LeafControllerSettings {
    * changed whenever that command node had sent settings.
    */
   async forget(controllerId: BackendId): Promise<void> {
+    return this.serialize(() => this.forgetSettings(controllerId));
+  }
+
+  private async forgetSettings(controllerId: BackendId): Promise<void> {
+    // The attachment is already gone. Publish the effective change even if
+    // cleanup fails, and do not let a subsequent reattachment revive this copy.
+    const hadEntry = this.store.entries.some((entry) => entry.controllerId === controllerId);
+    this.store = {
+      ...this.store,
+      entries: this.store.entries.filter((entry) => entry.controllerId !== controllerId),
+    };
+    if (hadEntry) this.options.onChange();
     const removed = await this.options.storage.mutateControllerSettings((current) => {
       const entries = current.entries.filter((entry) => entry.controllerId !== controllerId);
       if (entries.length === current.entries.length) {
@@ -86,7 +110,6 @@ export class LeafControllerSettings {
       return { next: value, result: { value, removed: true } };
     });
     this.store = removed.value;
-    if (removed.removed) this.options.onChange();
   }
 
   /** The settings this node follows, or `null` for its own. */
@@ -108,7 +131,7 @@ export class LeafControllerSettings {
     let best: ControllerSettingsStore["entries"][number] | null = null;
     for (const entry of this.store.entries) {
       if (this.options.attachedName(entry.controllerId) === null) continue;
-      if (!best || entry.changedAt > best.changedAt) best = entry;
+      if (!best || entry.changedAt >= best.changedAt) best = entry;
     }
     return best;
   }

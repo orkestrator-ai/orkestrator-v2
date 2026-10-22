@@ -6,7 +6,8 @@ import {
 } from "@orkestrator/protocol/controller-settings";
 import type { BackendId, RouteId } from "@orkestrator/protocol/federation";
 
-import { TestNodeNetwork } from "./node-network-test-support.js";
+import { LeafControllerSettings } from "./node-controller-settings.js";
+import { MemoryNodeStorage, TestNodeNetwork } from "./node-network-test-support.js";
 
 const cleanups: Array<() => void | Promise<void>> = [];
 
@@ -114,5 +115,139 @@ describe("settings a command node hands down", () => {
       settings: { githubToken: "secret", terminalScrollback: 4_000 },
     });
     expect(leaf.service.inheritedSettings.current()).toEqual({ terminalScrollback: 4_000 });
+  });
+  test("a replacement link resends unchanged settings after forgetting and re-adding a leaf", async () => {
+    const { command, leaf, sends } = await setup({ terminalScrollback: 7000 });
+    const args = {
+      routes: [{ id: "primary" as RouteId, kind: "https", enabled: true, origin: leaf.origin }],
+      token: leaf.token,
+    };
+    const original = await command.service.addNode(args);
+    await waitFor(() => leaf.service.inheritedSettings.current()?.terminalScrollback === 7000);
+    const sent = sends();
+    await command.service.forgetNode({ nodeId: original.nodeId });
+    expect(leaf.service.inheritedSettings.current()).toBeNull();
+    await command.service.addNode(args);
+    await waitFor(() => leaf.service.inheritedSettings.current()?.terminalScrollback === 7000);
+    expect(sends()).toBeGreaterThan(sent);
+  });
+
+  test("transient failures retry unchanged snapshots on a healthy link", async () => {
+    const { command, leaf, sends } = await setup({ terminalScrollback: 7000 });
+    leaf.commands.set(SYNC_CONTROLLER_SETTINGS_COMMAND, () => {
+      throw new Error("Temporary write failure");
+    });
+    const view = await command.service.addNode({
+      routes: [{ id: "primary" as RouteId, kind: "https", enabled: true, origin: leaf.origin }],
+      token: leaf.token,
+    });
+    await waitFor(() => sends() > 0);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(command.service.link(view.nodeId)?.connected).toBe(true);
+    const sent = sends();
+    leaf.commands.delete(SYNC_CONTROLLER_SETTINGS_COMMAND);
+    command.service.syncSettingsToLeaves();
+    await waitFor(() => leaf.service.inheritedSettings.current()?.terminalScrollback === 7000);
+    expect(sends()).toBeGreaterThan(sent);
+  });
+
+  test("unsupported settings commands are remembered separately for the connection", async () => {
+    const { command, leaf, sends, setSettings } = await setup({ terminalScrollback: 7000 });
+    leaf.commands.set(SYNC_CONTROLLER_SETTINGS_COMMAND, () => {
+      throw new Error(`Unknown command: ${SYNC_CONTROLLER_SETTINGS_COMMAND}`);
+    });
+    await command.service.addNode({
+      routes: [{ id: "primary" as RouteId, kind: "https", enabled: true, origin: leaf.origin }],
+      token: leaf.token,
+    });
+    await waitFor(() => sends() > 0);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const sent = sends();
+    setSettings({ terminalScrollback: 8000 });
+    command.service.syncSettingsToLeaves();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(sends()).toBe(sent);
+    expect(leaf.service.inheritedSettings.current()).toBeNull();
+  });
+
+  test("detach reports cleanup failure, announces the change, and clears stale copies before reattach", async () => {
+    const { command, leaf, leafChanges } = await setup({ terminalScrollback: 7000 });
+    await command.service.addNode({
+      routes: [{ id: "primary" as RouteId, kind: "https", enabled: true, origin: leaf.origin }],
+      token: leaf.token,
+    });
+    await waitFor(() => leaf.service.inheritedSettings.current() !== null);
+    const controllerId = await command.service.selfIdentity();
+    const original = leaf.storage.mutateControllerSettings.bind(leaf.storage);
+    leaf.storage.mutateControllerSettings = async () => {
+      throw new Error("Disk failure");
+    };
+    const changes = leafChanges();
+    await expect(leaf.service.detachController(controllerId)).rejects.toThrow("Disk failure");
+    expect(leafChanges()).toBe(changes + 1);
+    expect(leaf.service.inheritedSettings.current()).toBeNull();
+    await expect(
+      leaf.service.attachController({ controllerId, displayName: "command", portalOrigins: [] }),
+    ).rejects.toThrow("Disk failure");
+    leaf.storage.mutateControllerSettings = original;
+    await leaf.service.attachController({
+      controllerId,
+      displayName: "command",
+      portalOrigins: [],
+    });
+    expect(leaf.service.inheritedSettings.current()).toBeNull();
+    expect(leaf.storage.controllerSettings.entries).toEqual([]);
+  });
+});
+
+describe("multi-controller arbitration", () => {
+  test("serializes persistence and cache updates, breaks timestamp ties by receipt order, and survives restart", async () => {
+    const storage = new MemoryNodeStorage("bk_leaf", {} as never);
+    const attached = new Set(["bk_first", "bk_second"]);
+    const options = {
+      storage,
+      attachedName: (id: BackendId) => (attached.has(id) ? id : null),
+      onChange: () => undefined,
+      now: () => 1000,
+    };
+    const leaf = new LeafControllerSettings(options);
+    await leaf.start();
+    const original = storage.mutateControllerSettings.bind(storage);
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let mutations = 0;
+    storage.mutateControllerSettings = async (mutate) => {
+      const result = await original(mutate);
+      if (++mutations === 1) await blocked;
+      return result;
+    };
+    const first = leaf.receive({
+      controllerId: "bk_first",
+      settings: { terminalScrollback: 1000 },
+    });
+    const second = leaf.receive({
+      controllerId: "bk_second",
+      settings: { terminalScrollback: 2000 },
+    });
+    await waitFor(() => mutations === 1);
+    release();
+    await Promise.all([first, second]);
+    expect(leaf.current()).toEqual({ terminalScrollback: 2000 });
+    expect(leaf.source()?.controllerId).toBe("bk_second" as BackendId);
+    const restarted = new LeafControllerSettings(options);
+    await restarted.start();
+    expect(restarted.source()).toEqual(leaf.source());
+    // An unchanged resend from the non-winning controller does not steal precedence.
+    await leaf.receive({ controllerId: "bk_first", settings: { terminalScrollback: 1000 } });
+    expect(leaf.source()?.controllerId).toBe("bk_second" as BackendId);
+    await leaf.receive({ controllerId: "bk_first", settings: { terminalScrollback: 3000 } });
+    expect(leaf.source()?.controllerId).toBe("bk_first" as BackendId);
+    attached.delete("bk_first");
+    await leaf.forget("bk_first" as BackendId);
+    expect(leaf.source()?.controllerId).toBe("bk_second" as BackendId);
+    attached.delete("bk_second");
+    expect(leaf.current()).toBeNull();
   });
 });

@@ -150,6 +150,34 @@ describe("sortable sidebar items", () => {
     expect(row.style.transform).toBe("translate3d(0px, 40px, 0)");
   });
 
+  test.each([false, true])(
+    "project groups preserve their size with non-unit drag scales (collapsed: %s)",
+    (isCollapsed) => {
+      sortableState.isDragging = true;
+      sortableState.transform = { x: 12, y: 40, scaleX: 0.75, scaleY: 3.5 };
+
+      const { container } = renderProjectGroup({ isCollapsed });
+
+      expect((container.firstElementChild as HTMLElement).style.transform).toBe(
+        "translate3d(12px, 40px, 0)",
+      );
+    },
+  );
+
+  test.each([false, true])(
+    "folders preserve their size with non-unit drag scales (collapsed: %s)",
+    (isCollapsed) => {
+      sortableState.isDragging = true;
+      sortableState.transform = { x: -12, y: 40, scaleX: 1.5, scaleY: 0.25 };
+
+      const { container } = renderFolder({ isCollapsed });
+
+      expect((container.firstElementChild as HTMLElement).style.transform).toBe(
+        "translate3d(-12px, 40px, 0)",
+      );
+    },
+  );
+
   test("SortableEnvironmentItem activates dragging from the grip handle only", () => {
     const { container } = render(
       <SortableEnvironmentItem

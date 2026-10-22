@@ -2,7 +2,6 @@ import { createSessionKey } from "@/lib/utils";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as realSortable from "@dnd-kit/sortable";
-import * as realUtilities from "@dnd-kit/utilities";
 import type { TabInfo } from "@/types/paneLayout";
 import { createDraggableTabId } from "@/types/paneLayout";
 import { useSessionStore } from "@/stores/sessionStore";
@@ -26,7 +25,6 @@ import {
 } from "@orkestrator/protocol/multi-review";
 
 const realSortableSnapshot = { ...realSortable };
-const realUtilitiesSnapshot = { ...realUtilities };
 
 // Mutable so a test can exercise the isDragging styling branch. The factory
 // result is cached by Bun, but the hook body re-reads this on every render.
@@ -36,8 +34,6 @@ let sortableListeners: Record<string, unknown> = {};
 let sortableTransform: unknown = null;
 let sortableTransition: string | null = null;
 let sortableHookId: unknown;
-let sortableTransformInput: unknown;
-let sortableTransformString = "";
 const sortableSetNodeRefMock = mock((_node: HTMLElement | null) => {});
 const sortablePointerDownMock = mock((_event: unknown) => {});
 
@@ -48,8 +44,6 @@ function resetSortableMock() {
   sortableTransform = null;
   sortableTransition = null;
   sortableHookId = undefined;
-  sortableTransformInput = undefined;
-  sortableTransformString = "";
   sortableSetNodeRefMock.mockReset();
   sortablePointerDownMock.mockReset();
 }
@@ -68,22 +62,10 @@ mock.module("@dnd-kit/sortable", () => ({
   },
 }));
 
-mock.module("@dnd-kit/utilities", () => ({
-  CSS: {
-    Translate: {
-      toString: (transform: unknown) => {
-        sortableTransformInput = transform;
-        return sortableTransformString;
-      },
-    },
-  },
-}));
-
 const { DraggableTab } = await import("./DraggableTab");
 
 afterAll(() => {
   mock.module("@dnd-kit/sortable", () => realSortableSnapshot);
-  mock.module("@dnd-kit/utilities", () => realUtilitiesSnapshot);
 });
 
 function renderTab(tab: TabInfo, index = 0) {
@@ -1081,19 +1063,17 @@ describe("DraggableTab tooltip and context menu structure", () => {
     expect(tab.className).toContain("z-50");
   });
 
-  test("wires the pane-scoped sortable identity, ref, styles, attributes, and listeners", () => {
+  test("wires pane-scoped dragging and omits non-unit scales from unequal-width tabs", () => {
     sortableAttributes = { "data-sortable-attribute": "attached" };
     sortableListeners = { onPointerDown: sortablePointerDownMock };
-    sortableTransform = { x: 12, y: 6, scaleX: 1, scaleY: 1 };
+    sortableTransform = { x: 12, y: 6, scaleX: 2.5, scaleY: 0.75 };
     sortableTransition = "transform 200ms ease";
-    sortableTransformString = "translate3d(12px, 6px, 0)";
 
     renderTab({ id: "tab-terminal", type: "plain" });
 
     const tab = screen.getByText("Terminal 1").closest("div")!;
     expect(sortableHookId).toBe(createDraggableTabId("tab-terminal", "pane-1"));
     expect(sortableSetNodeRefMock).toHaveBeenCalledWith(tab);
-    expect(sortableTransformInput).toEqual(sortableTransform);
     expect(tab.style.transform).toBe("translate3d(12px, 6px, 0)");
     expect(tab.style.transition).toBe("transform 200ms ease");
     expect(tab.getAttribute("data-sortable-attribute")).toBe("attached");

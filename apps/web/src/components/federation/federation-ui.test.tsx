@@ -1,5 +1,6 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import type { ReactNode } from "react";
+import * as sortable from "@dnd-kit/sortable";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import {
   environmentKey,
@@ -26,9 +27,10 @@ import { mockToastWarning } from "../../../../../tests/mocks/sonner";
 import {
   FederatedActivityList,
   MergedProjectList,
+  MachineSectionList,
   RemoteMachineSection,
 } from "./FederatedSidebarSections";
-import { RemoteEnvironmentItem } from "./RemoteMachineTree";
+import { RemoteEnvironmentItem, RemoteProjectGroup } from "./RemoteMachineTree";
 import { FederationProvider } from "./FederationProvider";
 import { MachineBadge, MachineDot } from "./MachineDot";
 import { MachinesFilter } from "./MachinesFilter";
@@ -157,6 +159,54 @@ function machineView(overrides: Partial<MachineView> = {}): MachineView {
 function firstEnvironment(machine: MachineView): FederatedEnvironment {
   return machine.environmentsByProject.get("project-1")![0]!;
 }
+
+test("federated sortable wrappers preserve size when dragged over unequal items", () => {
+  const useSortable = sortable.useSortable;
+  const sortableSpy = spyOn(sortable, "useSortable").mockImplementation((options) => ({
+    ...useSortable(options),
+    transform: { x: -12, y: 40, scaleX: 0.75, scaleY: 3.5 },
+    isDragging: true,
+  }));
+  try {
+    const machine = machineView();
+    // Bound sections accept their tree as children, keeping this check independent
+    // of remote hydration while exercising the same sortable machine wrapper.
+    const boundMachines = [
+      { ...machine, bound: true },
+      { ...machine, connectionId: "b", name: "Machine B", bound: true },
+    ];
+    renderWithFederation(
+      <>
+        <MachineSectionList
+          machines={boundMachines}
+          shown={boundMachines}
+          renderBound={() => null}
+        />
+        <RemoteProjectGroup
+          machine={machine}
+          project={machine.projects[0]!}
+          environments={[firstEnvironment(machine)]}
+          isCollapsed={false}
+          onToggleCollapse={() => {}}
+          sortable
+        />
+      </>,
+    );
+
+    const wrappers = [
+      ...screen.getAllByTestId("bound-machine-section"),
+      screen.getByTestId("federated-project"),
+      screen.getByTestId("federated-environment-row"),
+    ];
+    expect(wrappers.length).toBe(4);
+    for (const wrapper of wrappers) {
+      expect(wrapper.style.transform).toBe("translate3d(-12px, 40px, 0)");
+    }
+  } finally {
+    cleanup();
+    sortableSpy.mockRestore();
+  }
+});
 
 let reload = mock(() => undefined);
 

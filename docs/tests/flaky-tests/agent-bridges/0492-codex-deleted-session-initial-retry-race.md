@@ -12,3 +12,7 @@
 - **Owning-file rerun:** `mise run test:logged -- --name merge-codex-prompt-owner -- bun test --cwd bridges/codex-bridge --preload ../../tests/setup-node.ts ./src/app-server-runtime-prompt.test.ts --parallel=1 --only-failures` passed unchanged, exit 0, in 5.9 seconds.
 - **Evidence:** `orkestrator-test-run.B1tmFx/bridges.log.gz` below the host temporary directory after aggregate completion.
 - **Assessment:** the unchanged isolated pass establishes intermittence. A deletion racing the delayed retry's transport work is a hypothesis; no implementation, assertion, timeout or skip changed.
+
+## Cross-service read policy validation recurrence — 2026-10-23
+
+`mise run test` with the 0054 change (no bridge source changes) failed this case and three neighbouring `at-most-once dispatch` cases at host load about 43. The unchanged owning file passed alone in 10.6 s (`codex-runtime-prompt-alone`). Details in [0694](../aggregate-validation-runs/0694-cross-service-reads-validation.md). No assertion, timeout or skip changed.

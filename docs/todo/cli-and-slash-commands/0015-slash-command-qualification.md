@@ -578,7 +578,7 @@ Pro, Bun 1.4.2 (200 cold and 5,000 warm samples, 40 projection samples,
   `lost`); backend `native-agent-service-dispatch.test.ts`,
   `native-agent-retired-dispatch.test.ts`, `storage-native-agent-sessions.test.ts`,
   `http-bridge-provider.test.ts`; web `AgentNativeTab.test.tsx` and
-  `useNativeAgentSession.progressive.test.tsx`. Not run live (see below).
+  `useNativeAgentSession.progressive.test.tsx`. Proved live on a host worktree in the Multi Review round below.
 - Skew: an older renderer's sync-v1 delta check refuses the unknown
   `retiredDispatch` field, as it does every earlier additive field; full
   snapshots and the progressive view accept it.
@@ -627,9 +627,49 @@ Spec changes made during these runs:
   asserted. The cause of the `unknown` is todo 0059.
 - The restart steps annotate `retired-without-retry` when a parked dispatch is
   settled as lost by reconciliation (follow-up 1). None of the passing runs
-  parked a dispatch at all (the restart came after the turn's first reply), so
-  the click-free path is proved by unit and route tests only (outstanding
-  item 2).
+  parked a dispatch at all (the restart came after the turn's first reply);
+  the Multi Review round below added a step that stages the lost
+  acknowledgement and proved the path live.
+
+### Multi Review round (2026-10-23)
+
+Multi Review returned two findings (one P1, one P2) and five test-coverage
+gaps; a Fix session applied them in `35dba0957`:
+
+- **P1, picker dismissal.** A mousedown inside the composer's own
+  contenteditable counted as "outside" and closed the menu, and an Escape
+  dismissal stuck to that exact text for good, so retyping the same token
+  never reopened it. The menu now ignores clicks in the composer that owns it
+  (`aria-controls`), and a dismissal ends when the token is cleared or
+  completed (`useSlashCommandMenu.ts`, `SlashCommandMenu.tsx`).
+- **P2, duplicate lost-dispatch warning.** A send whose own response said
+  `requestIdRetired` showed the inline error and then a toast for the same
+  notice when the projection caught up. The tab now dismisses that notice as
+  soon as it releases the id, including before the notice arrives.
+- **Coverage gaps:** retired dispatch on the agent-mail path stays unknown and
+  fails closed; a third refresh arriving during the queued refresh gets its
+  own reload; a restarted Claude bridge answers a cold `/dispatch` from disk
+  without registering the session; menu click handling; the duplicate toast;
+  and a live step in `slash-command-inactive.spec.ts` that stages a lost
+  acknowledgement (`slash-command-lost-ack.ts` erases only the backend's
+  acknowledgement and parks the record) around a real bridge restart.
+
+Checked: every fix and test above; nothing rejected. Two further spec changes
+were made here: the new first picker step waits 30 s like every other picker
+wait (it used Playwright's 5 s default), and the merge with `main`.
+
+Live, profile `qa-slash-0015r`, after the merge (host load average 60 to 72
+from other worktrees):
+
+| Run | Environment | Providers | Result |
+| --- | --- | --- | --- |
+| `slash-review-local` | host worktree | Codex, Claude | **2 passed, 0 skipped** (147 s, 172 s), including the new picker step and, for Claude, the lost-acknowledgement step: the parked dispatch was retired by reconciliation with no Retry, the draft kept its text under no request id, the message showed inline with no toast and no Retry button, and the resend under a new id ran exactly once more |
+| `slash-review-container` | container | Codex, Claude | Both failed at the new picker step's 5 s wait |
+| `slash-review-container2` | container | Codex, Claude | Picker step passed (14 s, 28 s) and the inactive completion passed; both failed when the returned tab's picker still lacked the refreshed row after 5 s. Flake 0710 holds the evidence |
+
+So the click-free lost path is proved live on a host worktree. In a container
+under heavy host load the tab's catalogue lags the backend's (0710); the same
+file passed in containers at low load earlier the same day.
 
 ### Validation (2026-10-23)
 
@@ -664,11 +704,6 @@ Spec changes made during these runs:
    support window from
    [0034-mixed-version-compatibility.md](../cross-cutting/0034-mixed-version-compatibility.md)
    to say which old builds count.
-2. **Live proof of the click-free lost dispatch.** Restart a Claude bridge
-   right after Send in a host and a container environment and check that the
-   card never asks for a Retry, the draft keeps its text and the message
-   shows. The browser scenario's restart steps pass but do not tell the two
-   paths apart; add an assertion there, or a dedicated step.
 
 ## Constraints and rationale
 
@@ -710,7 +745,7 @@ Made on 2026-10-23 while closing items 1 to 5 and both follow-ups.
    - Pros: covers every shape a plausible window contains, and found two real
      defects. Cons: if 0034 picks a longer window (before #599), the pre-#599
      bridges are covered only by the 404 path, and nothing was run against a
-     real old build (outstanding item 2).
+     real old build (outstanding item 1).
 2. **Pi credentials.** The host has an OAuth Pi login with a rotating refresh
    token.
    - Options: copy `auth.json` into the disposable agent directory; share it
@@ -785,6 +820,9 @@ Made on 2026-10-23 while closing items 1 to 5 and both follow-ups.
    retried again (cause filed as 0059). The picker symptom keeps its 30 s wait
    and is flake 0710. Pro: the scenario stays strict where the cause is
    unknown. Con: 0710 can still fail a container run until it is fixed.
+   After Multi Review the new first picker step got the same 30 s as every
+   other picker wait; the return-after-refresh wait stays at 5 s because a
+   refreshed list reaching the tab late is the behaviour 0710 tracks.
 10. **Small defects found by the matrix were fixed here** (unknown availability
     state ran a command; Claude's sync-v1 snapshot dropped `commandRevision`),
     because both were small, each is pinned by a new test, and one was a

@@ -529,14 +529,16 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provide
           .toBe(true);
 
         await test.step("composer clicks keep the picker open and clearing resets dismissal", async () => {
+          // The same 30 s budget as every other picker wait here: a container
+          // tab can take longer to apply its first catalogue (flake 0710).
           await typeIntoComposer("/slashq-run");
-          await expect(picker).toBeVisible();
+          await expect(picker).toBeVisible({ timeout: 30_000 });
           await input.click();
           await expect(picker).toBeVisible();
           await input.press("Escape");
           await expect(picker).toBeHidden();
           await typeIntoComposer("/slashq-run");
-          await expect(picker).toBeVisible();
+          await expect(picker).toBeVisible({ timeout: 30_000 });
           await input.press("Escape");
           await input.fill("");
         });

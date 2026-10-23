@@ -42,3 +42,32 @@
   different, diagnosed timing (the dispatch's revalidation took 5.7 s under
   load).
 - **Owner:** [0015-slash-command-qualification.md](../../../todo/cli-and-slash-commands/0015-slash-command-qualification.md).
+
+## After the review fix (2026-10-23)
+
+The Multi Review fix (`35dba0957`) stopped a click inside the composer from
+dismissing the picker and made a dismissal end with its token. That is a real
+defect, but it is not this case: profile `qa-slash-0015r`, host load average
+60 to 72 from other worktrees, container variant, Codex and Claude:
+
+- `slash-review-container`: both failed at the new first picker step, which
+  waited Playwright's 5 s default. The page held `/slashq-run` in its last
+  discovery and projection payloads (catalogue `stale`, 59 rows) when it typed.
+- `slash-review-container2` (that step given the 30 s used by every other
+  picker wait): the picker appeared after 14 s (Codex) and 28 s (Claude), and
+  the inactive-completion step passed. Both then failed at "returning shows
+  the result": after an explicit refresh had answered `reloaded` and the
+  backend projection listed `/slashq-added`, the page's
+  `get_native_agent_discovery_update` reads each took 4 to 12 s and kept
+  returning the pre-refresh `stale` list for about a minute; the first read
+  with the new row came back at 11:39:59, after the 5 s wait had expired.
+- The same file passed every step on a host worktree in the same profile
+  (`slash-review-local`, both providers), and in containers at a load average
+  near 10 (Codex 193 s, Claude 284 s and 209 s earlier the same day).
+
+Narrowed hypothesis: under host load, the progressive discovery read for a
+container session is slow and serves its previous snapshot well after the
+backend's own catalogue has changed, so the tab's picker lags the backend.
+Next step: time `get_native_agent_discovery_update` for a container session
+against a local one at the same load, and check whether an explicit refresh
+invalidates the progressive discovery snapshot as well as the catalogue cache.

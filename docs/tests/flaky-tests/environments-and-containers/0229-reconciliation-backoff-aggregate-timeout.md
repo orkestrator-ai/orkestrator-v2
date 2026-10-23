@@ -43,3 +43,11 @@ mise run test:logged -- --name reconciliation-rerun -- bun test --cwd apps/backe
 
 Evidence: `/tmp/orkestrator-test-run.aDyLLJ/root-tests.log.gz`. No assertion,
 implementation, skip or timeout was changed for these cases.
+
+
+## Session lifecycle review recurrence — 2026-10-23
+
+- `mise run test:logged -- --name repository-tests -- mise run test` ran the backend with two workers alongside browser and other-worktree checks. `backs off failed reconciliation for 30 seconds and clears the floor after success` timed out at 5007.44 ms; `lets an explicit first prompt bypass rename retry backoff` subsequently observed one fake-Codex log entry instead of two (129.93 ms).
+- Backend totals: 9909 passed, 60 skipped and three failed across 9972 tests in 576 files (968.42 s). The third failure was the Mermaid watchdog tracked in 0512. The repository command exited 1 after 1022.1 s.
+- `mise run test:logged -- --name environment-create-owner -- bun test --cwd apps/backend ./tests/commands-registry-environments-create.test.ts --parallel=1 --only-failures` passed the complete unchanged owner (exit 0, 13.7 s).
+- Evidence: `orkestrator-test-run.NMPAwO/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and outer `orkestrator-test-run.EP6EVD/repository-tests.log.gz` under the host temporary directory. The second failure may have cascaded from the first timeout's unfinished work, but this is unproven. No assertion, deadline, or skip changed.

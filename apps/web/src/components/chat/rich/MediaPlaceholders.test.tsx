@@ -122,8 +122,10 @@ describe("Markdown image placeholders", () => {
   test("a path outside the workspace is its own state with no file actions", async () => {
     readRejects("Invalid file path: file is outside Orkestrator workspace storage");
     render(<MarkdownImage src="/tmp/shot.png" alt="Shot" />);
-    const image = await screen.findByRole("img", { name: "Shot (image outside of the workspace)" });
-    expect(image.textContent).toContain("Shot · image outside of the workspace");
+    const image = await screen.findByRole("img", {
+      name: "Shot (image outside previewable workspace storage)",
+    });
+    expect(image.textContent).toContain("Shot · image outside previewable workspace storage");
     expect(screen.queryAllByRole("button")).toHaveLength(0);
   });
 
@@ -133,8 +135,25 @@ describe("Markdown image placeholders", () => {
         <MarkdownImage src="/tmp/shot.png" alt="Shot" />
       </MediaScopeContext.Provider>,
     );
-    expect(screen.getByRole("img", { name: "Shot (image outside of the workspace)" })).toBeTruthy();
+    expect(
+      screen.getByRole("img", { name: "Shot (image outside previewable workspace storage)" }),
+    ).toBeTruthy();
     expect(readCalls()).toHaveLength(0);
+  });
+
+  test("an image in a project-home checkout reports the preview storage limitation", async () => {
+    readRejects("Invalid file path: file is outside Orkestrator workspace storage");
+    render(<MarkdownImage src="/projects/project-home/docs/shot.png" alt="Project shot" />);
+    const image = await screen.findByRole("img", {
+      name: "Project shot (image outside previewable workspace storage)",
+    });
+    expect(image.closest("[data-media-state]")?.getAttribute("data-media-state")).toBe(
+      "outside-workspace",
+    );
+    expect(readCalls()).toEqual([
+      ["read_file_base64", { filePath: "/projects/project-home/docs/shot.png" }],
+    ]);
+    expect(screen.queryAllByRole("button")).toHaveLength(0);
   });
 
   test("access denied by the backend is its own state with no file actions", async () => {
@@ -277,7 +296,7 @@ describe("file preview states", () => {
   test.each([
     [
       "Invalid file path: file is outside Orkestrator workspace storage",
-      /The file is outside of the workspace/,
+      /The file is outside previewable workspace storage/,
       "outside-workspace",
     ],
     ["EACCES: permission denied", /Access to this file was denied/, "denied"],
@@ -291,6 +310,37 @@ describe("file preview states", () => {
     expect(status.getAttribute("data-media-state")).toBe(state);
     // The filename stays visible.
     expect(screen.getByRole("dialog").textContent).toContain("notes.txt");
+  });
+
+  test("an unsafe container video path reports outside-workspace without reading", async () => {
+    render(
+      <FilePreview
+        reference={{ path: "/tmp/clip.mp4", containerId: "container-1" }}
+        name="clip.mp4"
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Preview file: clip.mp4 (Video)" }));
+    const status = screen.getByText(/The file is outside previewable workspace storage/);
+    expect(status.getAttribute("data-media-state")).toBe("outside-workspace");
+    expect(status.textContent).toContain("container's /workspace");
+    expect(screen.queryByText(/does not carry the file's bytes/) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Load video" }) === null).toBe(true);
+    await act(async () => {});
+    expect(readCalls()).toHaveLength(0);
+  });
+
+  test("a project-home file explains why a working-directory path cannot be previewed", async () => {
+    readRejects("Invalid file path: file is outside Orkestrator workspace storage");
+    render(
+      <FilePreview reference={{ path: "/projects/project-home/notes.txt" }} name="notes.txt" />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Preview file: notes.txt (Text)" }));
+    const status = await screen.findByText(/The file is outside previewable workspace storage/);
+    expect(status.getAttribute("data-media-state")).toBe("outside-workspace");
+    expect(status.textContent).toContain("Orkestrator-managed workspace storage");
+    expect(status.textContent).toContain(
+      "Project-home checkouts are excluded from host preview reads, even when they are the working directory",
+    );
   });
 
   test("an image file previews as <img> with its header dimensions reserved", async () => {

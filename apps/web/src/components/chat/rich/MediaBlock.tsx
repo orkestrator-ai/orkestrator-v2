@@ -62,7 +62,10 @@ function failureCopy(state: FailedImageState): { text: string; name: string } {
     case "blocked":
       return { text: "image source not allowed", name: "image blocked" };
     case "outside-workspace":
-      return { text: "image outside of the workspace", name: "image outside of the workspace" };
+      return {
+        text: "image outside previewable workspace storage",
+        name: "image outside previewable workspace storage",
+      };
     case "denied":
       return { text: "access to this image was denied", name: "image access denied" };
     case "unavailable":

@@ -169,7 +169,7 @@ const FAILURE_TEXT: Record<LoadFailure, string> = {
   unavailable:
     "The file is unavailable. It may have been moved or deleted, or its environment is not running.",
   "outside-workspace":
-    "The file is outside of the workspace. Orkestrator only previews files inside the environment's workspace.",
+    "The file is outside previewable workspace storage. Local file previews are limited to Orkestrator-managed workspace storage or the container's /workspace. Project-home checkouts are excluded from host preview reads, even when they are the working directory.",
   denied: "Access to this file was denied. Orkestrator is not permitted to read it.",
   "too-large": "The file is larger than the backend's read limit, so it cannot be previewed.",
   "decode-failed": "The file's bytes could not be decoded.",
@@ -514,7 +514,7 @@ function FilePreviewDialog({
   const inlineSize = dataUrlByteLength(reference.fileUrl);
   const [loaded, setLoaded] = useState<Loaded>(() =>
     !(canResolveMedia(reference) || (reference.detailRef && loadToolDetails))
-      ? { status: "failed", failure: "no-bytes" }
+      ? { status: "failed", failure: reference.containerId ? "outside-workspace" : "no-bytes" }
       : playable
         ? { status: "awaiting-activation" }
         : { status: "loading" },

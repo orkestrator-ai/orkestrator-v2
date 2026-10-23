@@ -234,6 +234,39 @@ describe("streamed file preview media", () => {
     expect(document.querySelector("video") === null).toBe(true);
   });
 
+  test.each([
+    {
+      source: "host",
+      reference: { path: "/workspace-storage/clip.mp4" },
+      message: "The file is outside the environment's workspace",
+      target: { environmentId: "env-1", path: "/workspace-storage/clip.mp4" },
+    },
+    {
+      source: "container",
+      reference: { path: "/workspace/out/clip.mp4", containerId: "c0ffee" },
+      message: "The file is outside the container workspace",
+      target: { environmentId: "env-1", path: "out/clip.mp4", containerId: "c0ffee" },
+    },
+  ])(
+    "a $source confinement refusal shows workspace copy without base64 fallback",
+    async ({ reference, message, target }) => {
+      setBackend({
+        transcript_media_open_stream: async () => {
+          throw structured("policy_denied", message);
+        },
+      });
+      await openPreview(reference, "clip.mp4");
+      fireEvent.click(screen.getByRole("button", { name: "Load video" }));
+      const status = await screen.findByText(/The file is outside previewable workspace storage/);
+      expect(status.getAttribute("data-media-state")).toBe("outside-workspace");
+      expect(calls("transcript_media_open_stream")).toEqual([target]);
+      expect(calls("read_file_base64")).toHaveLength(0);
+      expect(calls("read_container_file_base64")).toHaveLength(0);
+      expect(document.querySelector("video") === null).toBe(true);
+      expect(screen.queryByRole("button", { name: "Load video" }) === null).toBe(true);
+    },
+  );
+
   test("bytes that sniff as a non-playable type are not played and the stream is closed", async () => {
     setBackend({
       transcript_media_open_stream: async () => ({

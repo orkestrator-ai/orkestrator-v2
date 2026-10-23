@@ -601,6 +601,61 @@ describe("pinNativeAgentParts", () => {
     ]);
   });
 
+  test.each(["subagent", "task-group"] as const)(
+    "anchors a settled %s merged with later tools after the combined block",
+    (kind) => {
+      const settledAt = "2026-06-28T12:01:30.000Z";
+      const agent: NativeMessage["parts"][number] =
+        kind === "subagent"
+          ? settledWorker(settledAt)
+          : {
+              type: "task-group",
+              content: "Agent",
+              task: {
+                type: "tool-invocation",
+                content: "Agent",
+                toolName: "Agent",
+                toolUseId: "task-merged",
+                toolState: "success",
+                settledAt,
+              },
+              childTools: [],
+            };
+      const messages = normalizeNativeMessages([
+        at("launch", "2026-06-28T12:00:00.000Z", [agent]),
+        at("later-tool", "2026-06-28T12:03:00.000Z", [
+          {
+            type: "tool-invocation",
+            content: "Read",
+            toolName: "Read",
+            toolUseId: "read-after-agent",
+          },
+        ]),
+        at("answer", "2026-06-28T12:04:00.000Z", [{ type: "text", content: "Done" }]),
+      ]);
+      expect(messages.map((message) => message.id)).toEqual(["launch", "answer"]);
+      expect(messages[0]?.parts.map((part) => part.type)).toEqual([kind, "tool-group"]);
+      expect(messages[0]?.createdAt).toBe("2026-06-28T12:03:00.000Z");
+      expect(messages[0]?.settleAnchorCreatedAt).toBe("2026-06-28T12:00:00.000Z");
+      const pinned = pinNativeAgentParts(messages);
+      expect(pinned.map((message) => message.id)).toEqual([
+        "launch",
+        "launch:settled-agents",
+        "answer",
+      ]);
+      expect(pinned[0]?.parts).toEqual([
+        expect.objectContaining({
+          type: "tool-group",
+          parts: [expect.objectContaining({ toolUseId: "read-after-agent" })],
+        }),
+      ]);
+      expect(pinned[1]?.createdAt).toBe(settledAt);
+      expect(pinned[1]?.parts).toEqual([{ ...messages[0]!.parts[0]!, sourceMessageId: "launch" }]);
+      // Rehydration produces the same placement without a prior active observation.
+      expect(pinNativeAgentParts(structuredClone(messages))).toEqual(pinned);
+    },
+  );
+
   test("does not collect tasks after the final API error", () => {
     const messages = [
       at("assistant-launch", "2026-08-18T17:00:00.000Z", [

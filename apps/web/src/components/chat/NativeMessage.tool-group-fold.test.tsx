@@ -3,8 +3,8 @@
  * how many calls there were and how long they took. The line opens the full
  * list and, from its place at the top of that list, folds it again.
  */
-import { afterEach, describe, expect, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { TerminalProvider } from "@/contexts";
 import type { NativeMessagePart } from "@/lib/chat/native-message-types";
 import { NativeMessage } from "./NativeMessage";
@@ -203,6 +203,57 @@ describe("folded tool group", () => {
     expect(trigger().getAttribute("aria-expanded")).toBe("true");
     await waitFor(() => expect(trigger().getAttribute("aria-expanded")).toBe("false"));
   });
+
+  for (const toggleDuringHold of [false, true]) {
+    test(`folds a visible two-call group on the next frame (user toggle: ${toggleDuringHold})`, () => {
+      const frames = new Map<number, FrameRequestCallback>();
+      let nextFrame = 0;
+      const request = spyOn(globalThis, "requestAnimationFrame").mockImplementation((callback) => {
+        frames.set(++nextFrame, callback);
+        return nextFrame;
+      });
+      const cancel = spyOn(globalThis, "cancelAnimationFrame").mockImplementation((id) => {
+        frames.delete(id);
+      });
+      try {
+        const id = `threshold-${++messageCounter}`;
+        const calls = [shell(0, "git status"), shell(1, "git diff"), shell(2, "git log")];
+        const { rerender } = render(messageView(id, calls.slice(0, 2)));
+        expect(screen.getByText("git status")).toBeTruthy();
+        rerender(messageView(id, calls));
+        const trigger = screen.getByRole("button", { name: /^Show 3 tool calls:/ });
+        expect(trigger.getAttribute("aria-expanded")).toBe("true");
+        expect(screen.getByText("git status")).toBeTruthy();
+        if (toggleDuringHold) {
+          fireEvent.click(trigger);
+          expect(trigger.getAttribute("aria-expanded")).toBe("false");
+          fireEvent.click(trigger);
+          expect(trigger.getAttribute("aria-expanded")).toBe("true");
+        }
+        act(() => {
+          const pending = Array.from(frames.values());
+          frames.clear();
+          pending.forEach((callback) => callback(16));
+        });
+        expect(trigger.getAttribute("aria-expanded")).toBe(String(toggleDuringHold));
+        if (toggleDuringHold) {
+          expect(screen.getByText("git status")).toBeTruthy();
+          rerender(messageView(id, [...calls, shell(3, "git branch")]));
+          expect(
+            screen
+              .getByRole("button", { name: /^Fold 4 tool calls:/ })
+              .getAttribute("aria-expanded"),
+          ).toBe("true");
+        } else {
+          expect(screen.queryByText("git status") === null).toBe(true);
+        }
+      } finally {
+        cleanup();
+        request.mockRestore();
+        cancel.mockRestore();
+      }
+    });
+  }
 
   test("renders a group that arrives already long folded without animating", () => {
     const calls = [shell(0, "git status"), shell(1, "git diff --stat"), shell(2, "git log -5")];

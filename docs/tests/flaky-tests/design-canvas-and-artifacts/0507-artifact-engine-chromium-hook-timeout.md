@@ -26,3 +26,12 @@
 - **Isolated result:** unchanged owning file passed, exit 0 in 88.0 seconds. No assertions, deadlines or skips changed.
 - **Evidence:** `orkestrator-test-run.JvGFao/account-containers.log.gz` below the host temporary directory.
 - **Assessment:** recurrence of the existing intermittent hook timeout under concurrent validation; resource contention remains a hypothesis, not an established cause. Focused backend runs must use `bun test --cwd apps/backend ./path.test.ts --parallel=1` directly rather than append a path to the package's whole-suite script.
+
+## Tool-fold coverage validation recurrence — 2026-10-23
+
+- **Original command:** `mise run test:logged -- --name repository-tests -- mise run test` on `animate-tool-calls-9f849713d495-r1`.
+- **Worker configuration:** Workspace/root/bridges/protocol groups reserved 4/1/2/1 worker slots; the backend used two isolated Bun workers. Other worktree validation and transcript browser checks shared the host.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.5bWdNz/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Failure:** The unnamed Chromium policy hook timed out after 5003.96 ms, with one dangling process reported killed.
+- **Owning-file rerun:** `mise run test:logged -- --name artifact-engines-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/transcript-artifacts/content-server.engines.test.ts --parallel=1 --only-failures` passed the complete unchanged file, exit 0 in 59.8 seconds.
+- **Assessment:** Recurrence of the existing intermittent hook timeout. Host contention remains an unproven explanation; assertions, deadlines and skips were unchanged.

@@ -432,6 +432,7 @@ export function StepTranscriptTail({
   assistantLabel,
   containerId,
   loadTranscript = backend.getMultiReviewStepTranscript,
+  loadToolDetails = backend.getMultiReviewStepToolDetails,
 }: {
   workflowId: string;
   step: MultiReviewStepKind;
@@ -445,6 +446,7 @@ export function StepTranscriptTail({
   assistantLabel?: string;
   containerId?: string;
   loadTranscript?: typeof backend.getMultiReviewStepTranscript;
+  loadToolDetails?: typeof backend.getMultiReviewStepToolDetails;
 }) {
   const read = useCallback(
     (workflow: string, target: string, knownSourceToken?: string) =>
@@ -461,6 +463,10 @@ export function StepTranscriptTail({
     merge: mergeMultiReviewStepTranscript,
     toMessages: toMultiReviewStepMessages,
   });
+  const toolDetails = useCallback(
+    (detailRef: string) => loadToolDetails(workflowId, step, detailRef),
+    [loadToolDetails, step, workflowId],
+  );
   // The backend's answer wins once there is one: the snapshot may be behind.
   const session = access.kind === "own" && snapshot ? snapshot.session : access.kind;
   const sessionStep =
@@ -493,6 +499,7 @@ export function StepTranscriptTail({
       platform={snapshot?.agent ?? undefined}
       containerId={containerId}
       expansionScope={`multi-review:${workflowId}:step:${step}:tail`}
+      loadToolDetails={toolDetails}
     />
   );
 }
@@ -602,28 +609,39 @@ export function MultiReviewFindingsBadge({
   findings,
   reviewerCount,
   provisionalCount = 0,
+  isActive = true,
   className,
 }: {
   findings: MultiReviewMergedFinding[];
   reviewerCount: number;
   provisionalCount?: number;
+  isActive?: boolean;
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLElement>(null);
+  if (!isActive && open) setOpen(false);
   const panelId = useId();
   const headingId = useId();
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || !isActive) return;
     const onPointerDown = (event: PointerEvent) => {
       if (event.target instanceof Node && rootRef.current?.contains(event.target)) return;
       setOpen(false);
     };
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (
+        event.key !== "Escape" ||
+        event.defaultPrevented ||
+        !(event.target instanceof Node) ||
+        !rootRef.current?.contains(event.target)
+      )
+        return;
       event.preventDefault();
       setOpen(false);
+      rootRef.current?.querySelector("button")?.focus();
     };
     document.addEventListener("pointerdown", onPointerDown);
     document.addEventListener("keydown", onKeyDown);
@@ -631,7 +649,45 @@ export function MultiReviewFindingsBadge({
       document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [open]);
+  }, [open, isActive]);
+
+  // The sticky badge can sit near either viewport edge. Keep the list on the
+  // roomier side and bound its own scroll area, including after page scrolling.
+  useLayoutEffect(() => {
+    if (!open || !isActive) return;
+    const position = () => {
+      const root = rootRef.current;
+      const panel = panelRef.current;
+      if (!root || !panel) return;
+      const box = root.getBoundingClientRect();
+      let top = 16;
+      let bottom = window.innerHeight - 16;
+      // Ancestor scroll areas also clip the panel: leave their fixed headers
+      // clear even when the badge is at the bottom of a long stacked pipeline.
+      for (let parent = root.parentElement; parent; parent = parent.parentElement) {
+        if (!/(auto|scroll|hidden|clip)/.test(getComputedStyle(parent).overflowY)) continue;
+        const bounds = parent.getBoundingClientRect();
+        top = Math.max(top, bounds.top);
+        bottom = Math.min(bottom, bounds.bottom);
+      }
+      const below = bottom - box.bottom - 8;
+      const above = box.top - top - 8;
+      const maxHeight = Math.min(448, window.innerHeight * 0.7);
+      const upwards = below < maxHeight && above > below;
+      panel.style.top = upwards ? "auto" : "100%";
+      panel.style.bottom = upwards ? "100%" : "auto";
+      panel.style.marginTop = upwards ? "0" : "8px";
+      panel.style.marginBottom = upwards ? "8px" : "0";
+      panel.style.maxHeight = `${Math.max(0, Math.min(maxHeight, upwards ? above : below))}px`;
+    };
+    position();
+    window.addEventListener("resize", position);
+    document.addEventListener("scroll", position, true);
+    return () => {
+      window.removeEventListener("resize", position);
+      document.removeEventListener("scroll", position, true);
+    };
+  }, [open, isActive]);
 
   const counts = SEVERITIES.map(
     (severity) =>
@@ -666,6 +722,7 @@ export function MultiReviewFindingsBadge({
       </button>
       {open ? (
         <section
+          ref={panelRef}
           id={panelId}
           aria-labelledby={headingId}
           data-testid="multi-review-findings"

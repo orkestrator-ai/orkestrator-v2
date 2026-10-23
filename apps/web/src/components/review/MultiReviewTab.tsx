@@ -1606,6 +1606,7 @@ function MultiReviewOverviewTab({
             {/* Floats beside the inspector header, and stays in view while the
                 inspector scrolls. */}
             <MultiReviewFindingsBadge
+              isActive={isActive}
               findings={findings}
               reviewerCount={reviewerCount}
               provisionalCount={provisionalCount}

@@ -23,9 +23,11 @@ import {
   type MultiReviewStepTranscript,
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
+import type { NativeAgentToolDetails } from "@orkestrator/protocol/native-agent";
 import type { BuildPipelineProvider } from "./build-pipeline-provider.js";
 import {
   readReviewerTranscript,
+  readReviewerToolDetails,
   type ReviewerTranscriptRead,
 } from "./multi-review-reviewer-transcript.js";
 
@@ -91,4 +93,25 @@ export async function readMultiReviewStepTranscript(
     ...(read?.sourceToken ? { sourceToken: read.sourceToken } : {}),
     ...(read?.kind === "snapshot" && read.truncated ? { truncated: true } : {}),
   };
+}
+
+/** Resolve a deferred body only while this step still owns the authoritative session. */
+export async function readMultiReviewStepToolDetails(
+  host: StepTranscriptHost,
+  workflowId: string,
+  step: MultiReviewStepKind,
+  detailRef: string,
+): Promise<NativeAgentToolDetails> {
+  const workflow = await host.loadWorkflow(workflowId);
+  const access = multiReviewStepSessionAccess(workflow, step);
+  if (access.kind !== "own") throw new Error("Step tool details are no longer available");
+  const sessionId = access.session.providerSessionId;
+  const details = await host.withProvider(workflow, access.session, (provider) =>
+    readReviewerToolDetails(provider, sessionId, detailRef),
+  );
+  const current = multiReviewStepSessionAccess(await host.loadWorkflow(workflowId), step);
+  if (current.kind !== "own" || current.session.providerSessionId !== sessionId) {
+    throw new Error("Step tool details are no longer available");
+  }
+  return details;
 }

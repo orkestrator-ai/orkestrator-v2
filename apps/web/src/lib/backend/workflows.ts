@@ -395,6 +395,19 @@ export async function getMultiReviewStepTranscript(
   });
 }
 
+/** The body behind a step row, resolved against its authoritative owned session. */
+export async function getMultiReviewStepToolDetails(
+  workflowId: string,
+  step: MultiReviewStepKind,
+  detailRef: string,
+): Promise<NativeAgentToolDetails> {
+  return invoke<NativeAgentToolDetails>("get_multi_review_step_tool_details", {
+    workflowId,
+    step,
+    detailRef,
+  });
+}
+
 /** The body behind a reviewer row's deferred `detailRef`, read on expansion. */
 export async function getMultiReviewReviewerToolDetails(
   workflowId: string,

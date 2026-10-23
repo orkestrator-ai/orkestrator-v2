@@ -112,7 +112,11 @@ import {
   stalledMinutes,
 } from "./multi-review-progress.js";
 import { readTranscriptProgressSample } from "./transcript-progress.js";
-import { readMultiReviewStepTranscript } from "./multi-review-step-transcript.js";
+import {
+  readMultiReviewStepTranscript,
+  readMultiReviewStepToolDetails,
+  type StepTranscriptHost,
+} from "./multi-review-step-transcript.js";
 import {
   clearReviewerAdmission,
   compactReviewerAdmissionQueue,
@@ -885,49 +889,61 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     knownSourceToken?: string,
   ): Promise<MultiReviewStepTranscript> {
     return readMultiReviewStepTranscript(
-      {
-        loadWorkflow: async (id) => {
-          const record = await this.storage.getMultiReviewWorkflow(id);
-          if (!record || !isMultiReviewWorkflow(record.snapshot)) {
-            throw new Error(`Multi review workflow not found: ${id}`);
-          }
-          return record.snapshot;
-        },
-        // A read holds the provider like a reviewer read does, and never
-        // registers the session: an interactive Fix belongs to its native tab.
-        withProvider: async (workflow, session, read) => {
-          const key = this.providerKey(workflow, session);
-          this.providerReaders.set(key, (this.providerReaders.get(key) ?? 0) + 1);
-          try {
-            const provider = await this.providerInstance(workflow, session);
-            const release = retainProvider(provider);
-            try {
-              return await read(provider);
-            } finally {
-              release();
-            }
-          } finally {
-            await this.releaseProviderReaderByKey(key);
-          }
-        },
-        recordRead: (read, elapsedMs) =>
-          recordEfficiency(this.options.efficiency, {
-            owner: "multi-review",
-            operation:
-              read.kind === "unchanged"
-                ? "transcript.ui_unchanged"
-                : read.fallback
-                  ? "transcript.ui_fallback"
-                  : "transcript.ui_read",
-            phase: "ui",
-            bytes: read.kind === "snapshot" ? read.bytes : 0,
-            elapsedMs,
-          }),
-      },
+      this.stepTranscriptHost(),
       workflowId,
       step,
       knownSourceToken,
     );
+  }
+
+  async stepToolDetails(
+    workflowId: string,
+    step: MultiReviewStepKind,
+    detailRef: string,
+  ): Promise<NativeAgentToolDetails> {
+    return readMultiReviewStepToolDetails(this.stepTranscriptHost(), workflowId, step, detailRef);
+  }
+
+  private stepTranscriptHost(): StepTranscriptHost {
+    return {
+      loadWorkflow: async (id) => {
+        const record = await this.storage.getMultiReviewWorkflow(id);
+        if (!record || !isMultiReviewWorkflow(record.snapshot)) {
+          throw new Error(`Multi review workflow not found: ${id}`);
+        }
+        return record.snapshot;
+      },
+      // A read holds the provider like a reviewer read does, and never
+      // registers the session: an interactive Fix belongs to its native tab.
+      withProvider: async (workflow, session, read) => {
+        const key = this.providerKey(workflow, session);
+        this.providerReaders.set(key, (this.providerReaders.get(key) ?? 0) + 1);
+        try {
+          const provider = await this.providerInstance(workflow, session);
+          const release = retainProvider(provider);
+          try {
+            return await read(provider);
+          } finally {
+            release();
+          }
+        } finally {
+          await this.releaseProviderReaderByKey(key);
+        }
+      },
+      recordRead: (read, elapsedMs) =>
+        recordEfficiency(this.options.efficiency, {
+          owner: "multi-review",
+          operation:
+            read.kind === "unchanged"
+              ? "transcript.ui_unchanged"
+              : read.fallback
+                ? "transcript.ui_fallback"
+                : "transcript.ui_read",
+          phase: "ui",
+          bytes: read.kind === "snapshot" ? read.bytes : 0,
+          elapsedMs,
+        }),
+    };
   }
 
   /**

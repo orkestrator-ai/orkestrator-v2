@@ -73,3 +73,11 @@
 - **Suite counts:** backend: 10,078 passed, 86 skipped and one failed across 10,165 tests in 586 files (475.13 s); every other workspace package and the root, bridge and protocol groups passed. The aggregate exited 1 after 493.2 s.
 - **Evidence:** `orkestrator-test-run.LHocuH/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory; the aggregate wrapper is `orkestrator-test-run.MeKvlm/repository-tests.log.gz`.
 - **Assessment:** confirmed intermittent recurrence. Aggregate load remains a hypothesis; no implementation, deadline, assertion or skip was changed.
+
+## Multi Review inspector validation — 2026-10-23
+
+- **Command:** `mise run test:logged -- --name repository-tests -- mise run test`, alongside component-browser validation; the aggregate workspace group reserved four worker slots.
+- **Failure:** the branch-baseline case timed out at 5099.79 ms against the 5000 ms deadline. Its owning test and Git implementation were unchanged.
+- **Complete owning-file rerun:** `mise run test:logged -- --name container-fetch-isolated -- bun --cwd=apps/backend test ./src/core/container-git-fetch-git.test.ts --parallel=1 --only-failures` passed (13.0 seconds logged, exit 0).
+- **Evidence:** `orkestrator-test-run.tXLYBH/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory.
+- **Assessment:** confirmed intermittent recurrence; concurrent load remains a hypothesis. No assertion, deadline or skip changed.

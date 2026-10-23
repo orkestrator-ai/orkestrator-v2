@@ -475,6 +475,19 @@ test("shows the selected step's transcript tail in the inspector", async ({ page
   await expect(tail).toContainText("Merging four reviewer reports");
 });
 
+test("the transcript tail fills the inspector down to the footer", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 1400 });
+  await page.goto("/multi-review-flow?phase=consolidating&reviewers=4");
+  const tail = page.getByRole("log", { name: "Latest consolidation activity" });
+  await expect(tail).toContainText("Merging four reviewer reports");
+  const footer = page.getByRole("button", { name: "Cancel" }).locator("xpath=..");
+  const tailBox = (await tail.boundingBox())!;
+  const footerBox = (await footer.boundingBox())!;
+  // Only the inspector's bottom padding sits between them.
+  expect(footerBox.y - (tailBox.y + tailBox.height)).toBeLessThanOrEqual(24);
+  await page.screenshot({ path: "output/playwright/multi-review-tail-fill.png" });
+});
+
 test("shows each queued reviewer's place in the admission queue", async ({ page }) => {
   await page.goto("/multi-review-flow?phase=reviewing&reviewers=8");
   await expect(page.getByRole("tab", { name: /^Reviewer 4 ·/ })).toContainText("starting");

@@ -281,7 +281,9 @@ function lateUnique(): EvaluationCase {
           line: 133,
         },
       ],
-      verdict: "no",
+      // The contract's "with-fixes" means the listed issues should be
+      // addressed first; a P0 with a clear fix is that, not "no".
+      verdict: "with-fixes",
     },
   };
 }

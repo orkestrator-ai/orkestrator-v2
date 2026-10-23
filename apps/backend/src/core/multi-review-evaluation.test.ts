@@ -14,6 +14,7 @@ import {
   evaluationConsolidationPrompt,
   referenceConsolidation,
   referenceOverlap,
+  overlapFromModelLabels,
   scoreConsolidation,
   summarizePanelValue,
 } from "./multi-review-evaluation.js";
@@ -21,6 +22,7 @@ import { buildConsolidationEvidence } from "./review-consolidation-evidence.js";
 import {
   consolidationOverlap,
   consolidationReports,
+  deriveConsolidatedProvenance,
   parseStructuredReportResult,
 } from "./review-fanout.js";
 
@@ -369,5 +371,47 @@ describe("panel value summaries", () => {
     expect(summaries[0]!.laterCacheReadShareDelta).toBeCloseTo(0.4);
     expect(summaries[1]).not.toHaveProperty("laterCacheReadShareDelta");
     expect(summaries[1]).not.toHaveProperty("overlap");
+  });
+});
+
+describe("overlap from stored model labels", () => {
+  /** A stored workflow as certification leaves it: labels, no source IDs. */
+  function stored(entry: EvaluationCase) {
+    const certified = deriveConsolidatedProvenance(referenceConsolidation(entry), entry.reviewers);
+    return { reviewers: entry.reviewers, consolidatedReport: certified.report };
+  }
+
+  test("matches the source-ID counts when every reviewer label is distinct", () => {
+    for (const id of ["late-unique", "severity-disagreement", "coverage-gaps"]) {
+      const entry = byId(id);
+      const {
+        citedSourceFindings: _cited,
+        positions,
+        version: _version,
+        ...exact
+      } = referenceOverlap(entry);
+      const fromLabels = overlapFromModelLabels(stored(entry))!;
+      expect(fromLabels).toMatchObject(exact);
+      expect(fromLabels.positions).toEqual(
+        positions.map(({ citedSourceFindings: _c, ...position }) => position),
+      );
+    }
+  });
+
+  test("refuses a panel whose reviewers share a label", () => {
+    const entry = byId("late-unique");
+    const shared = entry.reviewers.map((reviewer) => ({ ...reviewer, model: "same" }));
+    expect(overlapFromModelLabels({ ...stored(entry), reviewers: shared })).toBeUndefined();
+  });
+
+  test("is reported only for a workflow without stored overlap counts", () => {
+    const entry = byId("late-unique");
+    const [legacy] = summarizePanelValue(stored(entry) as never);
+    expect(legacy).toHaveProperty("overlapFromModelLabels");
+    const [current] = summarizePanelValue({
+      ...stored(entry),
+      consolidationOverlap: referenceOverlap(entry),
+    } as never);
+    expect(current).not.toHaveProperty("overlapFromModelLabels");
   });
 });

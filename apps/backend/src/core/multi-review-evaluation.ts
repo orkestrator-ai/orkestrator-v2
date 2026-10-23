@@ -17,7 +17,10 @@ import {
   type BuildPipeline,
 } from "@orkestrator/protocol/build-pipeline";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
-import type { ReviewPanelOverlapV1 } from "@orkestrator/protocol/review-fanout";
+import type {
+  ReviewPanelOverlapPosition,
+  ReviewPanelOverlapV1,
+} from "@orkestrator/protocol/review-fanout";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import type { EvaluationCase, EvaluationFindingKind } from "./multi-review-evaluation-corpus.js";
 import { createMultiReviewConsolidationPrompt } from "./multi-review-prompts.js";
@@ -26,6 +29,7 @@ import {
   consolidationOverlap,
   consolidationReports,
   deriveConsolidatedProvenance,
+  reviewerProvenanceLabel,
 } from "./review-fanout-provenance.js";
 
 export type ConsolidationEvidenceVariant = "compact" | "full";
@@ -241,6 +245,12 @@ export interface PanelValueSummary {
   /** Build Pipeline review iteration; absent for Multi Review. */
   iteration?: number;
   overlap?: ReviewPanelOverlapV1;
+  /**
+   * Overlap recovered from the stored report's model labels, for a Multi
+   * Review written before `consolidationOverlap` existed. See
+   * {@link overlapFromModelLabels}.
+   */
+  overlapFromModelLabels?: ModelLabelOverlap;
   reviewers: PanelValueReviewer[];
   /**
    * Mean cache-read share of reviewers 2..N on reviewer 1's agent and model,
@@ -248,6 +258,70 @@ export interface PanelValueSummary {
    * of their prompt from cache. Absent without comparable data.
    */
   laterCacheReadShareDelta?: number;
+}
+
+/**
+ * {@link ReviewPanelOverlapV1} without `citedSourceFindings`, which model labels
+ * cannot recover: they say which reviewers substantiated a finding, not which of
+ * their findings.
+ */
+export interface ModelLabelOverlap {
+  reviewers: number;
+  sourceFindings: number;
+  consolidatedFindings: number;
+  singleSourceFindings: number;
+  positions: Array<Omit<ReviewPanelOverlapPosition, "citedSourceFindings">>;
+}
+
+/**
+ * Overlap for a stored Multi Review that has no `consolidationOverlap`. The
+ * certified report keeps each finding's `reviewModels` labels; when every
+ * consolidated reviewer has a distinct `agent/model` label, a label names
+ * exactly one configured position. Returns nothing when labels are shared,
+ * because a shared label cannot say which of its reviewers found a finding.
+ */
+export function overlapFromModelLabels(
+  workflow: Pick<MultiReviewWorkflow, "reviewers" | "consolidatedReport">,
+): ModelLabelOverlap | undefined {
+  const report = workflow.consolidatedReport;
+  if (!report) return undefined;
+  const positions = new Map<string, Omit<ReviewPanelOverlapPosition, "citedSourceFindings">>();
+  for (const [index, reviewer] of workflow.reviewers.entries()) {
+    if (reviewer.status !== "completed" || !reviewer.report) continue;
+    const label = reviewerProvenanceLabel(reviewer);
+    if (positions.has(label)) return undefined;
+    positions.set(label, {
+      position: index + 1,
+      sourceFindings: reviewer.report.issues.length + reviewer.report.testCoverageGaps.length,
+      consolidatedFindings: 0,
+      singleSourceFindings: 0,
+      novelFindings: 0,
+    });
+  }
+  let singleSourceFindings = 0;
+  const findings = [...report.issues, ...report.testCoverageGaps];
+  for (const finding of findings) {
+    const cited = (finding.reviewModels ?? []).flatMap((label) => {
+      const entry = positions.get(label);
+      return entry ? [entry] : [];
+    });
+    if (cited.length === 0) continue;
+    for (const entry of cited) entry.consolidatedFindings += 1;
+    const first = cited.reduce((a, b) => (b.position < a.position ? b : a));
+    first.novelFindings += 1;
+    if (cited.length === 1) {
+      singleSourceFindings += 1;
+      first.singleSourceFindings += 1;
+    }
+  }
+  const entries = [...positions.values()].sort((a, b) => a.position - b.position);
+  return {
+    reviewers: entries.length,
+    sourceFindings: entries.reduce((total, entry) => total + entry.sourceFindings, 0),
+    consolidatedFindings: findings.length,
+    singleSourceFindings,
+    positions: entries,
+  };
 }
 
 function panelReviewer(
@@ -298,10 +372,12 @@ export function summarizePanelValue(
     const reviewers = workflow.reviewers.map((reviewer, index) =>
       panelReviewer(index + 1, reviewer),
     );
+    const fromLabels = workflow.consolidationOverlap ? undefined : overlapFromModelLabels(workflow);
     return [
       {
         source: "multi-review",
         ...(workflow.consolidationOverlap ? { overlap: workflow.consolidationOverlap } : {}),
+        ...(fromLabels ? { overlapFromModelLabels: fromLabels } : {}),
         reviewers,
         ...withDelta(reviewers),
       },

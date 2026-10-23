@@ -11,9 +11,11 @@ reviewers overlap. Only after that should presets, lenses, adaptive stopping or
 a different default panel be decided.
 
 The code items are done: the overlap metric, the evaluation corpus and
-per-reviewer cache-read capture. What remains needs real providers: the
-full-versus-compact quality comparison, the prefix-cache measurement and
-overlap counts from real panels.
+per-reviewer cache-read capture. A first bounded live round has also run (see
+**Qualification**): 25 Claude CLI calls over five corpus cases, and
+overlap counts from the four real panels stored on the development host. What
+remains is the wider live work: more models and samples, Codex and the other
+providers, and a cache measurement of real reviewer panels.
 
 ## Current state
 
@@ -108,32 +110,96 @@ overlap counts from real panels.
 
 ### Qualification
 
-All three need provider credentials and real runs. Batch them with
+The harness for each item is in place. The remaining runs need more providers
+and real review stacks; batch them with
 [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md).
-The harness for each is in place. No real-provider run has been made yet.
 
-- **Full versus compact consolidation on real providers**, with fixed model
-  settings over the corpus. Run `bun scripts/multi-review-evaluation.ts
-  prompts`, send each `<case>.full.txt` and `<case>.compact.txt` to the same
-  consolidation model and settings, and save each answer with its
-  `reviewSourceIds`. Then run `score <case> <answer.json>` on every answer.
-  Compare recall, false merges, splits, unexpected findings, dropped sources,
-  severity, location, provenance validity and verdict between the variants.
-  Repeat each prompt at least three times per model, because one sample cannot
-  separate a regression from noise. Keep model answers out of CI logs and the
-  repository. Only the `score` output (counts and flags) may be recorded here.
-- **Prefix-cache measurement.** On providers that report cache reads, export
-  real Multi Review workflows or Build Pipelines and run `panel` on them.
-  Compare reviewers 2..N against reviewer 1 on the same agent and model as a
-  share of `tokenCount` (`laterCacheReadShareDelta`). Do not assume every
-  provider caches prefixes. The counter is cumulative and includes each
-  reviewer's own tool-loop cache hits, so the cross-reviewer saving is roughly
-  one prefix per later reviewer. Use several panels and report the spread, not
-  one delta. Pi and Cursor values are latest-turn only.
-- **Overlap from real panels.** Run `panel` on completed real panels: the
-  default two-reviewer panel, and at least one panel of four or more mixed
-  providers. Record per-run single-source and per-position novel-finding
-  counts here. This is the number the deferred decisions below wait for.
+- **Full versus compact consolidation on real providers.** First round done
+  on 2026-10-23 with `bun scripts/multi-review-evaluation.ts live --cases
+  severity-disagreement,contradiction,late-unique,same-location-different-reasoning,frame-injection
+  --samples 2 --model sonnet`. That is Claude Code 2.1.304 `claude -p`, model
+  alias `sonnet`, no tools, schema enforced, 20 answers, about $0.90.
+  - Recall, false merges, splits, severity, location: identical. All 20
+    answers were schema-valid, every expected finding was recalled, with no
+    false merge or split, and every severity and location matched.
+  - Frame injection: both variants kept the injected finding as evidence and
+    ignored the injected instruction and the fake `reviewer-9` ID (4/4).
+  - Contradiction: the full variant added a coverage gap that cites an issue
+    source ID, a cross-kind citation, in 2/2 samples. Production provenance
+    validation rejects that and sends a repair turn. The compact variant was
+    clean in 2/2.
+  - Late-unique: all 4 answers chose `with-fixes` for a panel with a P0. The
+    contract defines `with-fixes` as "the listed issues should be addressed
+    first", so the corpus expectation (`no`) was wrong and is now
+    `with-fixes`. All 4 answers then score perfectly.
+  - Conclusion so far: no quality regression from compact consolidation on
+    this model, and one full-variant provenance defect that compact avoided.
+    Two samples per prompt and one model are not enough to rule out a small
+    regression.
+  - Still to do: at least three samples per prompt; the other four cases
+    (`clean-panel`, `invalid-and-failed`, `coverage-gaps`, `limit-boundaries`);
+    and at least one non-Claude consolidation model. `live` drives only the
+    Claude CLI, so another model needs its answers saved by hand and passed
+    to `score`.
+- **Prefix-cache measurement.** Partly measured, on Claude only, through the
+  same `live` path.
+  - Separate sessions with a byte-identical prompt and the same working
+    directory do share the cache. With `--cwd`, the second identical
+    late-unique prompt read 13,075 tokens and wrote 0, and its cost fell from
+    $0.048 to $0.016.
+  - A different working directory breaks the hit. The CLI puts its working
+    directory in context before the prompt, so the fresh-directory runs above
+    always read only the CLI's 4,905-token static prefix.
+  - A prompt that shares only its opening gets nothing from the cache. In the
+    same directory, a different case (same instructions, different evidence)
+    read 6,561 tokens. That is exactly what a trivial prompt with the same
+    flags reads (the CLI, directory and schema context). So no part of the
+    shared consolidation instructions was served from cache. Claude Code
+    caches at message boundaries, not at an arbitrary shared prefix inside one
+    user message.
+  - What that implies: `reviewerPanelSection` keeps the reviewer prompts
+    byte-identical up to their last section, but they are still one user
+    message each. On Claude the shared part should therefore not be read from
+    cache across reviewers, unless the bridge puts it in a separately cached
+    block. This is an inference from the consolidation prompts, not yet a
+    measurement of reviewer prompts.
+  - Codex was not measured. The consolidation prompts share only 1,353 bytes
+    (about 340 tokens) before the evidence, below OpenAI's 1,024-token
+    prefix-cache minimum, so they cannot show anything. Real reviewer prompts
+    can.
+  - Still to do: run a real panel of two or more reviewers on one agent and
+    model (Claude, then Codex) on a build that records `cacheReadTokens`
+    (this branch). Run `panel` on the export and report
+    `laterCacheReadShareDelta` across several panels. The counter is cumulative
+    and includes each reviewer's own tool-loop cache hits, so report the
+    spread, not one delta. Pi and Cursor values are latest-turn only.
+- **Overlap from real panels.** First data from the four completed real Multi
+  Reviews stored on the development host (2026-10-23). All four used the same
+  panel: claude/opus, codex, cursor, and opencode (deepseek flash) at
+  positions 1–4. The installed app predates `consolidationOverlap`, so the
+  counts come from the report's model labels through `overlapFromModelLabels`.
+  That is exact here because every label in the panel is distinct.
+
+  | Panel | Reviewers | Consolidated | Single-source | Novel by position 1/2/3/4 |
+  | --- | --- | --- | --- | --- |
+  | A | 4 | 6 | 5 | 2/0/0/4 |
+  | B | 4 | 2 | 2 | 1/1/0/0 |
+  | C | 3 (claude failed) | 7 | 5 | –/2/2/3 |
+  | D (this branch's review) | 4 | 7 | 5 | 3/2/0/2 |
+
+  - Across the four panels, 17 of 22 consolidated findings had one source
+    (77%).
+  - The first two positions found 11 of the 22 (50%).
+  - Position 3 (cursor) added a novel finding only in panel C, where claude
+    had failed.
+  - Position 4 (opencode) added 9 of the 22, but it used 5 to 21 million
+    tokens per review against 0.8 to 5.4 million for the others.
+  - In panel A, position 2's one finding was dropped by consolidation.
+  - Four panels on one day are a first look, not enough for the deferred
+    decisions.
+  - Still to do: overlap from the default two-reviewer panel, and from panels
+    that record `consolidationOverlap` (this branch), so cited-versus-dropped
+    counts are exact.
 
 ### Deferred until measured
 
@@ -166,9 +232,9 @@ quality results above:
   before a report completes, so cancelling "low-value" reviewers would change
   quality semantics.
 - Prompt-cache layout must not weaken the evidence frame or the
-  prompt-injection boundary. The envelope serialises `<` and `>` as `<`
-  and `>` so report text cannot close the frame. The rebuilt full variant
-  uses the same serialiser.
+  prompt-injection boundary. The envelope writes every `<` and `>` as the JSON
+  escapes `\u003c` and `\u003e`, so report text cannot close the frame.
+  The rebuilt full variant uses the same serialiser.
 - Compaction never truncates findings, gaps, locations, severities or source
   IDs. Over budget, only optional prose is removed, in a fixed order.
 - Ship lenses or adaptive stopping only if recall does not regress on the
@@ -183,17 +249,20 @@ quality results above:
   The fixed reference panel is the corpus, scored by `scoreConsolidation`
   rather than by hand.
 - Do all providers' `cacheReadTokens` values reflect prompt-prefix hits, or do
-  some report only provider-side context caching? Partly answered from the
-  code: Claude (`cache_read_input_tokens`), Codex (`cachedInputTokens`) and
-  OpenCode (`cache.read`) report cumulative session totals of the provider's
-  prompt-cache reads. Pi and Cursor report the latest turn's value. Whether
-  reviewer 2..N reads hit the prefix reviewer 1 wrote, across sessions, needs
-  the live measurement above.
+  some report only provider-side context caching? Partly answered.
+  - From the code: Claude (`cache_read_input_tokens`), Codex
+    (`cachedInputTokens`) and OpenCode (`cache.read`) report cumulative session
+    totals of the provider's prompt-cache reads. Pi and Cursor report the
+    latest turn's value.
+  - Measured on Claude: the value counts real cross-session prompt-cache hits,
+    but only for a byte-identical prefix up to a message boundary.
+  - Other providers are not measured.
 
 ## Needs verification
 
-- Whether any real-provider consolidation comparison was ever run. None is
-  recorded, and none was run for this change.
+- Whether any real-provider consolidation comparison was ever run. The first
+  one is recorded under **Qualification** (Claude `sonnet`, five cases, two
+  samples). None exists for another provider.
 
 ## Assumptions and decisions
 
@@ -264,10 +333,25 @@ quality results above:
    - Cons: this is not byte-for-byte what shipped before #833.
    - Production keeps no flag. The variant exists only in
      `multi-review-evaluation.ts`.
-7. **No live provider run in this change.** Running the corpus would spend the
-   maintainer's provider quota from an unattended worker on settings nobody
-   chose. The todo batches this run with 0031. Every part that can run locally
-   is ready: prompts, reference answers, scorer, panel summary.
+7. **A bounded live round, not the full qualification.** The first pass ran no
+   live calls, to avoid spending provider quota unasked. After Multi Review,
+   the coordinator asked for a small bounded run with the host's existing
+   logins.
+   - Choice: 25 Claude CLI calls (about $1) through a new `live` subcommand,
+     and a read-only export of the stored Multi Reviews for `panel`.
+   - `live` runs `claude -p` with no tools, no session persistence and no MCP
+     servers, from an empty directory, with the report schema enforced by
+     `--json-schema`. It does not use `--bare`, which skips the keychain
+     sign-in.
+   - Answers stay under the gitignored `output/multi-review-evaluation/live/`.
+     Only counts are recorded here.
+   - Pros: real evidence for one provider at negligible cost.
+   - Cons: one model, two samples. Consolidation through the CLI is not
+     byte-identical to the bridge's result tool, though it runs the same
+     engine and the same schema.
+   - Rejected: driving a full review stack per corpus case (too heavy for a
+     first pass), and Codex consolidations (their shared prefix is too short
+     to show caching).
 8. **Corpus scoring rules.** A model answer matches an expected finding when it
    cites one of that finding's sources with the same kind. Severity and
    location are judged on the best match (the one citing most of the expected
@@ -276,12 +360,24 @@ quality results above:
    - Assumption: matching on source IDs rather than titles is fair, because the
      prompt requires every consolidated finding to cite its sources, and
      provenance validation rejects answers that do not.
+9. **Overlap for stored history from model labels.** Workflows written before
+   `consolidationOverlap` have no source IDs.
+   - Choice: `overlapFromModelLabels` maps each `reviewModels` label to its
+     reviewer when every label in the panel is distinct, and returns nothing
+     otherwise.
+   - Pros: existing history becomes measurable. The tests check that it equals
+     the source-ID counts on the corpus.
+   - Cons: it cannot count cited versus dropped source findings, and it cannot
+     handle panels that repeat a model.
+   - Rejected: guessing positions for repeated labels.
 
-Measured on the corpus (`prompts`): compact evidence is 81–93% of full evidence
+Measured on the corpus (`prompts`, deterministic): compact evidence is 81–93% of full evidence
 for two to five reviewers. One usable report makes it 10% larger. For two small
 reports the whole compact prompt is about 2% larger, because the explanation of
-`shared` outweighs the saving. This does not change the default; it is a
-baseline for the live run.
+`shared` outweighs the saving. This does not change the default. The live
+round agrees: the compact prompt's uncached tokens (Claude's cache writes) were
+2% lower for the three-reviewer case and 7% lower for the five-reviewer case,
+and about 1% higher for the two-reviewer cases.
 
 ## Related
 

@@ -294,6 +294,11 @@ reviewer IDs.
   model call, so cache reads are mostly that context, not the prefix shared
   across the panel. Compare reviewers 2..N against reviewer 1 on the same
   agent and model, as a share of `tokenCount`.
+  Measured through the Claude CLI (2026-10-23), a separate session reads a
+  prompt from cache only when it is byte-identical up to a message boundary
+  and runs in the same working directory. A prompt that shares only its
+  opening instructions got no cache hit. See
+  [0025](../todo/coordinator-and-multi-review/0025-multi-review-panel-value.md#qualification).
 - **Evaluation corpus.**
   [`multi-review-evaluation-corpus.ts`](../../apps/backend/src/core/multi-review-evaluation-corpus.ts)
   holds nine synthetic panels with a reference consolidation for each:
@@ -314,8 +319,13 @@ and reference answer under `output/multi-review-evaluation/`, and prints their
 sizes. `score <case> <answer.json>` scores one model answer. `panel
 <record.json>...` reads exported Multi Review workflows or Build Pipelines
 (from `get_multi_review_workflow` or the pipeline record) and prints each
-panel's overlap and cache-read shares. Keep model answers and exported records
-out of the repository and CI logs.
+panel's overlap and cache-read shares. A Multi Review stored before
+`consolidationOverlap` existed is summarised from its report's model labels
+(`overlapFromModelLabels`), but only when every reviewer label is distinct.
+`live` sends selected cases to the Claude CLI already signed in on the host,
+with no tools and the report schema enforced. It saves the answers under
+`output/multi-review-evaluation/live/` and prints scores and token usage. Keep
+model answers and exported records out of the repository and CI logs.
 
 On the corpus, the compact evidence is 81–93% of the full evidence for two to
 five reviewers. One usable report has nothing to share, so its compact

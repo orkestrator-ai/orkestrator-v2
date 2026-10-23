@@ -23,8 +23,6 @@ import {
   isFallbackExecutionProfileId,
   NATIVE_DISCOVERY_RETRY_MS,
   NATIVE_MISSING_SESSION_GRACE_MS,
-  NATIVE_MODEL_CATALOG_CACHE_LIMIT,
-  NATIVE_MODEL_CATALOG_TTL_MS,
   NATIVE_PROJECTION_CACHE_LIMIT,
   NATIVE_PROJECTION_MAX_BYTES,
   NATIVE_PROJECTION_MAX_MESSAGES,
@@ -111,11 +109,7 @@ import {
   coordinatorRuntimeId,
   agentSessionOwnerKey,
 } from "@orkestrator/protocol/coordinator";
-import {
-  NativeAgentCommandCatalogueCache,
-  commandCatalogueKey,
-  type CommandCatalogueSnapshot,
-} from "./native-agent-command-catalogue.js";
+import { type CommandCatalogueSnapshot } from "./native-agent-command-catalogue.js";
 import {
   type NativeAgentCommandRefreshOutcome,
   type NativeAgentDefaultModelResolution,
@@ -176,6 +170,7 @@ import {
   type NativeAgentObservationWakeReason,
 } from "./native-agent-observation.js";
 import { NativeAgentTurnRecovery } from "./native-agent-turn-recovery.js";
+import { NativeAgentCatalogCache } from "./native-agent-catalog-cache.js";
 import { NativeQueueScheduling } from "./native-agent-queue-scheduling.js";
 import { DEFAULT_WORKFLOW_DISCOVERY_MS, keyedSchedulingEnabled } from "./workflow-supervisor.js";
 import { randomUUID } from "node:crypto";
@@ -306,7 +301,6 @@ type NativeAgentResumeEntry = shared.NativeAgentResumeEntry;
 type NativeAgentSessionProjection = shared.NativeAgentSessionProjection;
 type NativeAgentSessionAction = shared.NativeAgentSessionAction;
 type NativeAgentSessionActionOutcome = shared.NativeAgentSessionActionOutcome;
-type NativeAgentSlashCommand = shared.NativeAgentSlashCommand;
 type NativeAgentToolDetails = shared.NativeAgentToolDetails;
 type Environment = shared.Environment;
 type IncompleteTurnNotice = shared.IncompleteTurnNotice;
@@ -946,25 +940,8 @@ export class NativeAgentService {
   /** Entries temporarily protected while an authoritative refresh recreates them. */
   protected readonly pinnedToolDetailRefs = new Set<string>();
   protected toolDetailCacheBytes = 0;
-  protected readonly modelCatalogCache = new Map<
-    string,
-    { models: AgentModel[]; expiresAt: number }
-  >();
-  /** Authoritative, bounded command catalogues; see native-agent-command-catalogue.ts. */
-  protected readonly commandCatalogues = new NativeAgentCommandCatalogueCache({
-    now: () => this.now(),
-    announce: (environmentId) => {
-      if (!this.stopped) this.storage.announceNativeAgentSessionProjection(environmentId);
-    },
-  });
-  /** Coalesced stale-while-revalidate tasks for projection-only metadata. */
-  protected readonly modelCatalogRefreshes = new Map<
-    string,
-    {
-      operation: Promise<AgentModel[]>;
-      validity: { current: boolean };
-    }
-  >();
+  /** Projection-only model and command catalogues. */
+  private readonly catalogs: NativeAgentCatalogCache;
   protected readonly launchTasks = new Map<string, Promise<void>>();
   protected readonly launchRetryAt = new Map<string, number>();
   protected readonly queueTasks = new Map<string, Promise<void>>();
@@ -1071,6 +1048,13 @@ export class NativeAgentService {
     protected readonly invoke: CommandInvoker,
     protected readonly options: NativeAgentServiceOptions = {},
   ) {
+    this.catalogs = new NativeAgentCatalogCache({
+      invoke,
+      now: () => this.now(),
+      announce: (environmentId) => {
+        if (!this.stopped) this.storage.announceNativeAgentSessionProjection(environmentId);
+      },
+    });
     this.displayTailScheduler = new NativeAgentDisplayTailScheduler({
       write: (key, tail, fence) => this.storage.putNativeAgentDisplayTail(key, tail, { fence }),
       // Optional because narrow test doubles of the storage omit them.
@@ -1928,23 +1912,11 @@ export class NativeAgentService {
     const session = await this.storage.getNativeAgentSession(sessionKey);
     if (session) this.assertSessionIdentity(session, input, sessionKey);
     const provider = await this.provider(input);
-    const slashCommandKey = commandCatalogueKey(
-      input.environmentId,
-      input.agent,
-      session?.providerSessionId,
-    );
-    // Discard in-flight discovery rather than waiting for it. Each refresh
-    // re-checks its validity flag immediately before writing its cache, with no
-    // await in between, so an invalidated read can no longer land. Awaiting one
-    // would only make this explicit user action inherit the latency of the very
-    // work it just discarded — up to a full bridge request timeout.
-    const pendingModelCatalog = this.modelCatalogRefreshes.get(input.environmentId);
-    if (pendingModelCatalog) {
-      pendingModelCatalog.validity.current = false;
-      this.modelCatalogRefreshes.delete(input.environmentId);
-    }
-    this.modelCatalogCache.delete(input.environmentId);
-    this.commandCatalogues.invalidate(slashCommandKey);
+    // Discard in-flight discovery rather than waiting for it. Awaiting it would
+    // only make this explicit user action inherit the latency of the very work
+    // it just discarded — up to a full bridge request timeout.
+    this.catalogs.invalidateModels(input.environmentId);
+    this.catalogs.invalidateCommands(input, session?.providerSessionId);
     // Best-effort, and dropped *after* the caches above rather than before.
     // Some providers answer this by reaching their bridge process — Pi has to,
     // because its `ModelRuntime` owns a credential snapshot this side cannot
@@ -1991,12 +1963,7 @@ export class NativeAgentService {
     const supported =
       capabilities.slashCommands && Boolean(provider.slashCommands || provider.commandCatalogue);
     const result = supported
-      ? await this.commandCatalogues.refresh(
-          commandCatalogueKey(input.environmentId, input.agent, session?.providerSessionId),
-          input.environmentId,
-          provider,
-          session?.providerSessionId,
-        )
+      ? await this.catalogs.refreshCommands(input, provider, session?.providerSessionId)
       : { outcome: "unsupported" as const };
     this.invalidateProjection(sessionKey);
     return { ...result, projection: await this.refreshProjection(input, true) };
@@ -2004,7 +1971,7 @@ export class NativeAgentService {
 
   /** Called when an environment is deleted; never on tab unmount or switch. */
   forgetEnvironmentCommandCatalogues(environmentId: string): void {
-    this.commandCatalogues.forgetEnvironment(environmentId);
+    this.catalogs.forgetEnvironmentCommands(environmentId);
   }
 
   async listProjectionModels(input: NativeAgentProjectionInput): Promise<AgentModel[]> {
@@ -5537,9 +5504,8 @@ export class NativeAgentService {
     if (snapshot.status === "missing") return null;
     const commandRevision = (snapshot as ProviderSessionStateSnapshot).commandCatalogueRevision;
     if (commandRevision !== undefined) {
-      this.commandCatalogues.observeProviderRevision(
-        commandCatalogueKey(input.environmentId, input.agent, resolved.session.providerSessionId),
-        input.environmentId,
+      this.catalogs.observeCommandRevision(
+        input,
         resolved.provider,
         resolved.session.providerSessionId,
         commandRevision,
@@ -5917,11 +5883,11 @@ export class NativeAgentService {
     const read = async (): Promise<unknown> => {
       switch (section) {
         case "models":
-          return (await this.refreshProjectionModelCatalog(input.environmentId)).filter(
+          return (await this.catalogs.refreshModels(input.environmentId)).filter(
             (model) => model.platform === input.agent,
           );
         case "commands":
-          return this.projectionSlashCommands(input, provider, providerSessionId);
+          return this.catalogs.slashCommands(input, provider, providerSessionId);
         case "mcp":
           return provider.mcpServers
             ? (await provider.mcpServers(providerSessionId)).slice(0, 512)
@@ -6040,9 +6006,7 @@ export class NativeAgentService {
       if (section === "commands") {
         // The richer catalogue state rides beside the generic availability so a
         // composer can tell ready-empty, unsupported and stale apart.
-        const catalogue = this.commandCatalogues.peek(
-          commandCatalogueKey(input.environmentId, input.agent, resolved.session.providerSessionId),
-        );
+        const catalogue = this.catalogs.peekCommands(input, resolved.session.providerSessionId);
         const unsupported = !nativeCapabilities(input.agent).slashCommands;
         const detail = unsupported ? unsupportedCommandCatalogueState() : catalogue?.state;
         if (catalogue && !unsupported) {
@@ -6585,7 +6549,7 @@ export class NativeAgentService {
   ): Promise<NativeAgentComposerState> {
     let models = providerComposer?.models ?? [];
     if (models.length === 0) {
-      const cached = this.modelCatalogCache.get(input.environmentId);
+      const cached = this.catalogs.cachedModels(input.environmentId);
       if (cached) {
         models = cached.models.filter((model) => model.platform === input.agent);
         if (cached.expiresAt <= this.now()) {
@@ -6594,7 +6558,8 @@ export class NativeAgentService {
           // transcript and existing picker selection, so refresh it out of the
           // transcript-critical path. The next projection poll observes the
           // refreshed catalogue.
-          void this.refreshProjectionModelCatalog(input.environmentId)
+          void this.catalogs
+            .refreshModels(input.environmentId)
             .then((refreshed) => {
               // The same catalogue changes no view; announcing it would wake
               // every idle view of the environment once per TTL.
@@ -6603,14 +6568,15 @@ export class NativeAgentService {
               }
             })
             .catch(() => {
-              const retained = this.modelCatalogCache.get(input.environmentId);
-              if (retained === cached) {
-                retained.expiresAt = this.now() + NATIVE_DISCOVERY_RETRY_MS;
-              }
+              this.catalogs.retryModelsAfter(
+                input.environmentId,
+                cached,
+                NATIVE_DISCOVERY_RETRY_MS,
+              );
             });
         }
       } else {
-        const refresh = this.refreshProjectionModelCatalog(input.environmentId);
+        const refresh = this.catalogs.refreshModels(input.environmentId);
         if (discoveryInBackground) {
           void refresh
             .then(() => {
@@ -6817,73 +6783,6 @@ export class NativeAgentService {
         ? { approvalModes, selectedApprovalModeId }
         : {}),
     };
-  }
-
-  protected refreshProjectionModelCatalog(environmentId: string): Promise<AgentModel[]> {
-    const pending = this.modelCatalogRefreshes.get(environmentId);
-    if (pending) return pending.operation;
-    const validity = { current: true };
-    const operation = (async () => {
-      const catalog = await this.invoke<AgentModel[]>("get_native_agent_model_catalog", {
-        environmentId,
-      });
-      const bounded = Array.isArray(catalog) ? catalog.slice(0, 512) : [];
-      if (!validity.current) {
-        throw new ProviderUnavailableError("Model catalog refresh was invalidated");
-      }
-      if (
-        !this.modelCatalogCache.has(environmentId) &&
-        this.modelCatalogCache.size >= NATIVE_MODEL_CATALOG_CACHE_LIMIT
-      ) {
-        const oldest = this.modelCatalogCache.keys().next().value as string | undefined;
-        if (oldest) this.modelCatalogCache.delete(oldest);
-      }
-      this.modelCatalogCache.set(environmentId, {
-        models: bounded,
-        expiresAt: this.now() + NATIVE_MODEL_CATALOG_TTL_MS,
-      });
-      return bounded;
-    })();
-    const entry = { operation, validity };
-    this.modelCatalogRefreshes.set(environmentId, entry);
-    return operation.finally(() => {
-      if (this.modelCatalogRefreshes.get(environmentId) === entry) {
-        this.modelCatalogRefreshes.delete(environmentId);
-      }
-    });
-  }
-
-  /**
-   * Provider command rows plus their catalogue state, without session actions.
-   *
-   * Session actions are merged by the caller *after* runtime qualification, so
-   * an unqualified `/steer` never shadows (or deletes) a provider command.
-   */
-  protected async projectionCommandCatalogue(
-    input: NativeAgentProjectionInput,
-    provider: NativeAgentRuntimeProvider,
-    sessionId?: string,
-  ): Promise<CommandCatalogueSnapshot> {
-    const capabilities = nativeCapabilities(input.agent);
-    if (!capabilities.slashCommands || (!provider.slashCommands && !provider.commandCatalogue)) {
-      return { commands: [], state: unsupportedCommandCatalogueState() };
-    }
-    return this.commandCatalogues.read(
-      commandCatalogueKey(input.environmentId, input.agent, sessionId),
-      input.environmentId,
-      provider,
-      sessionId,
-    );
-  }
-
-  /** Command rows as a composer sees them: provider commands plus runtime actions. */
-  protected async projectionSlashCommands(
-    input: NativeAgentProjectionInput,
-    provider: NativeAgentRuntimeProvider,
-    sessionId?: string,
-  ): Promise<NativeAgentSlashCommand[]> {
-    const snapshot = await this.projectionCommandCatalogue(input, provider, sessionId);
-    return withSessionActionSlashCommands(snapshot.commands, nativeCapabilities(input.agent));
   }
 
   protected invalidateProjection(key: string): void {
@@ -7103,14 +7002,12 @@ export class NativeAgentService {
       const queuePromise = advertisedCapabilities.queue
         ? this.storage.getPromptQueue(`${input.agent}\0${input.logicalSessionKey}`)
         : Promise.resolve(null);
-      const slashCommandsPromise = this.projectionCommandCatalogue(
-        input,
-        resolved.provider,
-        resolved.session.providerSessionId,
-      ).catch((): CommandCatalogueSnapshot => ({
-        commands: [],
-        state: { status: "unavailable", revision: 0, enhanced: false },
-      }));
+      const slashCommandsPromise = this.catalogs
+        .commandCatalogue(input, resolved.provider, resolved.session.providerSessionId)
+        .catch((): CommandCatalogueSnapshot => ({
+          commands: [],
+          state: { status: "unavailable", revision: 0, enhanced: false },
+        }));
       const steerSupportedPromise = advertisedCapabilities.actions?.steer
         ? (resolved.provider
             .steerSupported?.(resolved.session.providerSessionId)
@@ -7148,9 +7045,8 @@ export class NativeAgentService {
           ? steerQualified
           : { ...steerQualified, interactions: { kinds: liveInteractionKinds } };
       if (snapshot.commandCatalogueRevision !== undefined) {
-        this.commandCatalogues.observeProviderRevision(
-          commandCatalogueKey(input.environmentId, input.agent, resolved.session.providerSessionId),
-          input.environmentId,
+        this.catalogs.observeCommandRevision(
+          input,
           resolved.provider,
           resolved.session.providerSessionId,
           snapshot.commandCatalogueRevision,
@@ -8813,16 +8709,9 @@ export class NativeAgentService {
     }
     const supported =
       capabilities.slashCommands && Boolean(provider.slashCommands || provider.commandCatalogue);
-    const key = commandCatalogueKey(input.environmentId, input.agent, session.providerSessionId);
     const read = async (force: boolean) =>
       supported
-        ? this.commandCatalogues.readForDispatch(
-            key,
-            input.environmentId,
-            provider,
-            session.providerSessionId,
-            force,
-          )
+        ? this.catalogs.readCommandsForDispatch(input, provider, session.providerSessionId, force)
         : { commands: [], state: unsupportedCommandCatalogueState() };
     let snapshot = await read(false);
     const busy = (await readProviderStatus(provider, session.providerSessionId)).status !== "idle";
@@ -8919,8 +8808,7 @@ export class NativeAgentService {
     this.interactionTimer = null;
     await Promise.allSettled([
       ...this.projectionRefreshes.values(),
-      ...[...this.modelCatalogRefreshes.values()].map((entry) => entry.operation),
-      this.commandCatalogues.settle(),
+      ...this.catalogs.pendingWork(),
     ]);
     await this.settleAndClearProgressiveReads();
     await Promise.allSettled(this.scanTasks);
@@ -8938,9 +8826,7 @@ export class NativeAgentService {
     await this.providerRegistry.shutdown();
     this.observations.clear();
     this.turnRecovery.clear();
-    this.modelCatalogCache.clear();
-    this.commandCatalogues.clear();
-    this.modelCatalogRefreshes.clear();
+    this.catalogs.clear();
     this.projectionCache.clear();
     this.projectionSync.clear();
     this.projectionSyncBytes = 0;

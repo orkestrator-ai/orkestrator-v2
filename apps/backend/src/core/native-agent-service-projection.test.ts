@@ -39,6 +39,7 @@ import {
   NATIVE_PROJECTION_CACHE_LIMIT,
   nativeAgentSessionStorageKey,
 } from "./native-agent-service.js";
+import { collaborators } from "./native-agent-service-test-collaborators.js";
 import {
   mergeContextUsageTurns,
   mergeNativeAgentQueueItems,
@@ -3896,14 +3897,11 @@ describe("NativeAgentService", () => {
 
         // A failed optional endpoint must not be re-probed on every 500ms
         // projection poll, so the retained entry carries an explicit back-off.
-        const caches = service as unknown as {
-          modelCatalogCache: Map<string, { expiresAt: number }>;
-          commandCatalogues: { expiresAt(key: string): number | undefined };
-        };
+        const { catalogs } = collaborators(service);
         await waitForCondition(
           () =>
-            caches.modelCatalogCache.get("env-1")?.expiresAt === now + 5_000 &&
-            caches.commandCatalogues.expiresAt("env-1\0codex\0provider-session") === now + 5_000,
+            catalogs.cachedModels("env-1")?.expiresAt === now + 5_000 &&
+            catalogs.commandExpiresAt(identity, "provider-session") === now + 5_000,
         );
         expect(catalogReads).toBe(2);
         expect(commandReads).toBe(2);

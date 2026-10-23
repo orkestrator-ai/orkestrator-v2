@@ -32,7 +32,7 @@ names a provider command runs that command.
 - `session prompt` (`sessionPrompt` in `public-api/actions-sessions.ts`)
   refuses a busy session (`busy`, exit 8) and calls
   `dispatch_native_agent_intent` without `command` or `allowProviderCommands`.
-- `planDispatchCommand` in `apps/backend/src/core/native-agent-service-prompt.ts`
+- `planDispatchCommand` in `apps/backend/src/core/native-agent-service.ts`
   treats absent intent on an `interactive-native` session as `typed`. Job tabs
   created by `launch_native_agent_job` (`commands-registry-control.ts`), which
   `session start` uses, are `interactive-native`. So both `session start` and
@@ -65,7 +65,7 @@ names a provider command runs that command.
 2. **Durable enqueue for busy sessions.** Add an explicit `--enqueue` that
    wraps the existing backend-drained native prompt queue
    (`enqueue_prompt_queue_message` in `commands-registry-prompts.ts`, drained
-   by `drainPromptQueue` in `native-agent-service-reconciliation.ts`).
+   by `drainPromptQueue` in `native-agent-prompt-queue-dispatcher.ts`).
    - Bind the request key to the queued item, so a replay finds the same item.
    - Follow each provider's `queue` capability (`providerCapabilities` in
      `public-api/providers.ts`) for ordering and availability.

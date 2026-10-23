@@ -1,4 +1,15 @@
-import * as shared from "./native-agent-service-shared.js";
+import type {
+  BuildPipelineAgent,
+  AgentActivityState,
+  PersistedNativeAgentSession,
+  StorageService,
+  NativeAgentRuntimeProvider,
+  CommandInvoker,
+  EnsureNativeAgentSessionInput,
+  DispatchNativeAgentPromptInput,
+  NativeAgentServiceOptions,
+  PromptDispatchPreparation,
+} from "./native-agent-service-shared.js";
 import {
   nativeAgentSessionStorageKey,
   isEnvironmentReadyForAgents,
@@ -40,17 +51,6 @@ import { buildTerminalAgentLaunchCommand } from "@orkestrator/protocol/terminal-
 import { readActivityGroup } from "./native-agent-activity-reads.js";
 import type { ViewRevisionStamp } from "@orkestrator/protocol/view-sync";
 import { queueString } from "./native-agent-queue-message.js";
-
-type BuildPipelineAgent = shared.BuildPipelineAgent;
-type AgentActivityState = shared.AgentActivityState;
-type PersistedNativeAgentSession = shared.PersistedNativeAgentSession;
-type StorageService = shared.StorageService;
-type NativeAgentRuntimeProvider = shared.NativeAgentRuntimeProvider;
-type CommandInvoker = shared.CommandInvoker;
-type EnsureNativeAgentSessionInput = shared.EnsureNativeAgentSessionInput;
-type DispatchNativeAgentPromptInput = shared.DispatchNativeAgentPromptInput;
-type NativeAgentServiceOptions = shared.NativeAgentServiceOptions;
-type PromptDispatchPreparation = shared.PromptDispatchPreparation;
 
 type ObservedSessionActivity = {
   providerSessionId: string;
@@ -238,8 +238,6 @@ export class NativeAgentLaunchActivityReconciler {
     );
     return count;
   }
-
-  // ---- from native-agent-service-prompt.ts ----
   sessionActivitySnapshot(
     environmentId: string,
     agent: BuildPipelineAgent,
@@ -304,8 +302,6 @@ export class NativeAgentLaunchActivityReconciler {
    * Rebuild the durable environment activity projection from provider-owned
    * session state. This does not depend on a mounted tab or a renderer event.
    */
-
-  // ---- from native-agent-service-reconciliation.ts ----
   /**
    * Run (or join) one activity sweep.
    *

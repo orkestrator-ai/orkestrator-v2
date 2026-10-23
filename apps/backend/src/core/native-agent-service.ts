@@ -1,5 +1,51 @@
 export * from "./native-agent-service-shared.js";
 import * as shared from "./native-agent-service-shared.js";
+import type {
+  BuildPipelineAgent,
+  TaskSnapshotImage,
+  AgentActivityState,
+  AgentInteractionApplyOutcome,
+  AgentInteractionResolution,
+  AgentModel,
+  NativeAgentCapabilities,
+  NativeAgentComposerState,
+  NativeAgentControlUpdate,
+  NativeAgentDispatchOutcome,
+  NativeAgentForkOutcome,
+  NativeAgentResumeEntry,
+  NativeAgentSessionProjection,
+  NativeAgentSessionAction,
+  NativeAgentSessionActionOutcome,
+  NativeAgentToolDetails,
+  Environment,
+  PersistedNativeAgentSession,
+  PersistedNativeAgentPendingDispatch,
+  StorageService,
+  BridgeConnection,
+  NativeAgentRuntimeProvider,
+  ProviderInteractionObservationEvent,
+  PromptAttachment,
+  CommandInvoker,
+  EnsureNativeAgentSessionInput,
+  DispatchNativeAgentPromptInput,
+  AdoptNativeAgentSessionInput,
+  InspectNativeAgentSessionInput,
+  NativeAgentProjectionInput,
+  NativeAgentServiceOptions,
+  AgentInteractionObservation,
+  PromptDispatchPreparation,
+  NativeAgentAuthStatus,
+  NativeAgentMcpServerAction,
+  PersistedNativeAgentPendingSteer,
+  NativeAgentProjectionUpdateInput,
+  NativeAgentMessagePageInput,
+  NativeAgentProjectionUpdate,
+  NativeAgentTranscriptUpdateInput,
+  NativeAgentProgressiveInput,
+  NativeAgentDiscoveryUpdateInput,
+  NativeAgentMessagePage,
+  MailInjectDispatchOutcome,
+} from "./native-agent-service-shared.js";
 import {
   BUILD_PIPELINE_AGENTS,
   INITIAL_PROMPT_STAGING_DIRECTORY,
@@ -125,26 +171,6 @@ import {
 } from "./workflow-artifact-turns.js";
 import type { ViewRevisionStamp } from "@orkestrator/protocol/view-sync";
 import { composeDraftHoldsQueue } from "./compose-draft-occupancy.js";
-
-// ---- module code from native-agent-service-base.ts ----
-type BuildPipelineAgent = shared.BuildPipelineAgent;
-type TaskSnapshotImage = shared.TaskSnapshotImage;
-type AgentActivityState = shared.AgentActivityState;
-type AgentInteractionApplyOutcome = shared.AgentInteractionApplyOutcome;
-type AgentInteractionResolution = shared.AgentInteractionResolution;
-type AgentModel = shared.AgentModel;
-type NativeAgentCapabilities = shared.NativeAgentCapabilities;
-type NativeAgentComposerState = shared.NativeAgentComposerState;
-type NativeAgentControlUpdate = shared.NativeAgentControlUpdate;
-type NativeAgentDispatchOutcome = shared.NativeAgentDispatchOutcome;
-type NativeAgentForkOutcome = shared.NativeAgentForkOutcome;
-type NativeAgentResumeEntry = shared.NativeAgentResumeEntry;
-type NativeAgentSessionProjection = shared.NativeAgentSessionProjection;
-type NativeAgentSessionAction = shared.NativeAgentSessionAction;
-type NativeAgentSessionActionOutcome = shared.NativeAgentSessionActionOutcome;
-type NativeAgentToolDetails = shared.NativeAgentToolDetails;
-type Environment = shared.Environment;
-type PersistedNativeAgentSession = shared.PersistedNativeAgentSession;
 /**
  * An ensured session, plus the model substitution its creation made. The
  * substitution is reported to the caller only and is never persisted.
@@ -152,21 +178,6 @@ type PersistedNativeAgentSession = shared.PersistedNativeAgentSession;
 export type EnsuredNativeAgentSession = PersistedNativeAgentSession & {
   modelSubstitution?: NativeAgentModelSubstitution;
 };
-type PersistedNativeAgentPendingDispatch = shared.PersistedNativeAgentPendingDispatch;
-type StorageService = shared.StorageService;
-type BridgeConnection = shared.BridgeConnection;
-type NativeAgentRuntimeProvider = shared.NativeAgentRuntimeProvider;
-type ProviderInteractionObservationEvent = shared.ProviderInteractionObservationEvent;
-type PromptAttachment = shared.PromptAttachment;
-type CommandInvoker = shared.CommandInvoker;
-type EnsureNativeAgentSessionInput = shared.EnsureNativeAgentSessionInput;
-type DispatchNativeAgentPromptInput = shared.DispatchNativeAgentPromptInput;
-type AdoptNativeAgentSessionInput = shared.AdoptNativeAgentSessionInput;
-type InspectNativeAgentSessionInput = shared.InspectNativeAgentSessionInput;
-type NativeAgentProjectionInput = shared.NativeAgentProjectionInput;
-type NativeAgentServiceOptions = shared.NativeAgentServiceOptions;
-type AgentInteractionObservation = shared.AgentInteractionObservation;
-type PromptDispatchPreparation = shared.PromptDispatchPreparation;
 
 /**
  * In-process marker that `trustedSessionInput` already prepended the coordinator
@@ -183,25 +194,6 @@ type PromptDispatchPreparation = shared.PromptDispatchPreparation;
  * object spreads inside the dispatch path carry it forward.
  */
 const COORDINATOR_CONTEXT_APPLIED = Symbol("orkestrator.coordinatorContextApplied");
-
-// ---- module code from native-agent-service-dispatch.ts ----
-type NativeAgentAuthStatus = shared.NativeAgentAuthStatus;
-type NativeAgentMcpServerAction = shared.NativeAgentMcpServerAction;
-type PersistedNativeAgentPendingSteer = shared.PersistedNativeAgentPendingSteer;
-
-type NativeAgentProjectionUpdateInput = shared.NativeAgentProjectionUpdateInput;
-type NativeAgentMessagePageInput = shared.NativeAgentMessagePageInput;
-type NativeAgentProjectionUpdate = shared.NativeAgentProjectionUpdate;
-type NativeAgentTranscriptUpdateInput = shared.NativeAgentTranscriptUpdateInput;
-type NativeAgentProgressiveInput = shared.NativeAgentProgressiveInput;
-type NativeAgentDiscoveryUpdateInput = shared.NativeAgentDiscoveryUpdateInput;
-type NativeAgentMessagePage = shared.NativeAgentMessagePage;
-// ---- module code from native-agent-service-prompt.ts ----
-type MailInjectDispatchOutcome = shared.MailInjectDispatchOutcome;
-
-// ---- module code from native-agent-service-reconciliation.ts ----
-
-// ---- module code from native-agent-service-provider.ts ----
 
 export class NativeAgentService {
   /** Orders publication admission against dispatch and Stop for this session only. */
@@ -252,7 +244,7 @@ export class NativeAgentService {
   }
 
   /** Cached runtime providers, their bridge generations and their retirement. */
-  protected readonly providerRegistry: ProviderRegistry;
+  private readonly providerRegistry: ProviderRegistry;
 
   getTranscriptUpdate(
     input: NativeAgentTranscriptUpdateInput,
@@ -308,8 +300,6 @@ export class NativeAgentService {
   private readonly launches: NativeAgentLaunchActivityReconciler;
   /** Prompt-queue drains, session work fences and parked-dispatch settles. */
   private readonly promptQueues: NativeAgentPromptQueueDispatcher;
-
-  // ---- from native-agent-service-prompt.ts ----
   sessionActivitySnapshot(
     environmentId: string,
     agent: BuildPipelineAgent,
@@ -357,8 +347,6 @@ export class NativeAgentService {
    * Rebuild the durable environment activity projection from provider-owned
    * session state. This does not depend on a mounted tab or a renderer event.
    */
-
-  // ---- from native-agent-service-reconciliation.ts ----
   /**
    * Run (or join) one activity sweep.
    *
@@ -415,20 +403,20 @@ export class NativeAgentService {
   reconcileInitialLaunch(environmentId: string): Promise<void> {
     return this.launches.reconcileInitialLaunch(environmentId);
   }
-  protected readonly scanTasks = new Set<Promise<void>>();
+  private readonly scanTasks = new Set<Promise<void>>();
   /**
    * Shared observation records, dispatch/generation fences and next-due
    * provider groups (recurring-processes step 07). `observedSessionActivity`
    * above stays the edge state machine; the broker says how old, how
    * trustworthy and how reusable each answer is.
    */
-  protected readonly observations: NativeAgentObservationBroker;
-  protected unsubscribeObservationWakeups: (() => void) | null = null;
+  private readonly observations: NativeAgentObservationBroker;
+  private unsubscribeObservationWakeups: (() => void) | null = null;
   /**
    * Automatic continuation of incomplete turns, for platforms with a recovery
    * strategy, and the manual-prompt claims that keep it from racing the user.
    */
-  protected readonly turnRecovery: NativeAgentTurnRecovery;
+  private readonly turnRecovery: NativeAgentTurnRecovery;
 
   sessionPendingInteractions(
     input: NativeAgentProjectionInput,
@@ -469,13 +457,13 @@ export class NativeAgentService {
   reconcileAgentInteractions(): Promise<void> {
     return this.interactions.reconcileAgentInteractions();
   }
-  protected initialization: Promise<void> | null = null;
-  protected stopped = false;
+  private initialization: Promise<void> | null = null;
+  private stopped = false;
 
   constructor(
-    protected readonly storage: StorageService,
-    protected readonly invoke: CommandInvoker,
-    protected readonly options: NativeAgentServiceOptions = {},
+    private readonly storage: StorageService,
+    private readonly invoke: CommandInvoker,
+    private readonly options: NativeAgentServiceOptions = {},
   ) {
     this.catalogs = new NativeAgentCatalogCache({
       invoke,
@@ -610,17 +598,17 @@ export class NativeAgentService {
         : null;
   }
 
-  protected now(): number {
+  private now(): number {
     return this.options.now?.() ?? Date.now();
   }
 
   /** Resolve a provider, starting its bridge if needed. */
-  protected provider(input: EnsureNativeAgentSessionInput): Promise<NativeAgentRuntimeProvider> {
+  private provider(input: EnsureNativeAgentSessionInput): Promise<NativeAgentRuntimeProvider> {
     return this.providerRegistry.resolve(input);
   }
 
   /** Resolve a provider for observation only, never starting a bridge. */
-  protected observeProvider(
+  private observeProvider(
     input: EnsureNativeAgentSessionInput,
   ): Promise<NativeAgentRuntimeProvider | undefined> {
     return this.providerRegistry.observe(input);
@@ -635,7 +623,7 @@ export class NativeAgentService {
    * less than the tab path does. Storage doubles without a data directory get
    * no on-disk provider state.
    */
-  protected providerEnvironment(environmentId: string): NativeAgentProviderEnvironment {
+  private providerEnvironment(environmentId: string): NativeAgentProviderEnvironment {
     // Read per call rather than per provider: providers are cached for the
     // life of a bridge connection, so a settings edit would otherwise not
     // reach the model catalogue until the environment restarted.
@@ -646,7 +634,7 @@ export class NativeAgentService {
   }
 
   /** Stage base64 images into the workspace so a bridge will accept them. */
-  protected async stageImages(
+  private async stageImages(
     environmentId: string,
     images: readonly TaskSnapshotImage[],
   ): Promise<PromptAttachment[]> {
@@ -682,7 +670,7 @@ export class NativeAgentService {
     return stagePromptImages(this.invoke, environment, images, INITIAL_PROMPT_STAGING_DIRECTORY);
   }
 
-  protected async bridgeConnection(
+  private async bridgeConnection(
     agent: BuildPipelineAgent,
     environment: Environment,
     model?: string,
@@ -737,7 +725,7 @@ export class NativeAgentService {
    * cannot be answered without starting a process is reported as "not running"
    * rather than started on the observer's behalf.
    */
-  protected async observeBridgeConnection(
+  private async observeBridgeConnection(
     agent: BuildPipelineAgent,
     environment: Environment,
   ): Promise<BridgeConnection | undefined> {
@@ -776,9 +764,7 @@ export class NativeAgentService {
   }
 
   /** Resolve coordinator authority from persisted ownership, never caller metadata. */
-  protected async trustedSessionInput<T extends EnsureNativeAgentSessionInput>(
-    input: T,
-  ): Promise<T> {
+  private async trustedSessionInput<T extends EnsureNativeAgentSessionInput>(input: T): Promise<T> {
     const coordinator = await resolveCoordinatorRuntime(this.storage, input.environmentId);
     if (coordinator.status === "not-coordinator") {
       const environment = await this.storage.getEnvironment(input.environmentId);
@@ -948,7 +934,7 @@ export class NativeAgentService {
     return operation;
   }
 
-  protected async initialize(): Promise<void> {
+  private async initialize(): Promise<void> {
     await this.repairPersistedStartupTabs().catch(() => undefined);
     await Promise.allSettled([
       this.trackScan(this.launches.launchScan()),
@@ -988,7 +974,7 @@ export class NativeAgentService {
    * this runs on every backend start, so touching a healthy tab would be a
    * recurring rewrite of state this repair does not own.
    */
-  protected async repairPersistedStartupTabs(): Promise<void> {
+  private async repairPersistedStartupTabs(): Promise<void> {
     const sessions = (await this.storage.listNativeAgentSessions())
       .filter(
         (session) =>
@@ -1421,9 +1407,7 @@ export class NativeAgentService {
   async dispatchIntent(input: DispatchNativeAgentPromptInput): Promise<NativeAgentDispatchOutcome> {
     return this.dispatchIntentInternal(input, false);
   }
-
-  // ---- from native-agent-service-dispatch.ts ----
-  protected async dispatchIntentInternal(
+  private async dispatchIntentInternal(
     input: DispatchNativeAgentPromptInput,
     preserveExistingPending: boolean,
   ): Promise<NativeAgentDispatchOutcome> {
@@ -1490,7 +1474,7 @@ export class NativeAgentService {
    * record is settled against the provider — but only once, so a session that
    * keeps re-parking cannot drive an unbounded dispatch loop.
    */
-  protected async attemptDispatch(
+  private async attemptDispatch(
     input: DispatchNativeAgentPromptInput,
     allowRecoveryRetry: boolean,
     preserveExistingPending: boolean,
@@ -1603,7 +1587,7 @@ export class NativeAgentService {
    * ask, an unreachable bridge, and any failure at all leave the record exactly
    * where it was, because "I could not find out" must never read as "it ran".
    */
-  protected async settleAmbiguousDispatch(
+  private async settleAmbiguousDispatch(
     input: NativeAgentProjectionInput,
     key: string,
     requestId: string,
@@ -1628,7 +1612,7 @@ export class NativeAgentService {
     }
   }
 
-  protected async settleAmbiguousSteer(
+  private async settleAmbiguousSteer(
     input: NativeAgentProjectionInput,
     key: string,
     requestId: string,
@@ -2301,7 +2285,7 @@ export class NativeAgentService {
     return outcome;
   }
 
-  protected async dispatchQueuedAsyncQuestionAnswer(
+  private async dispatchQueuedAsyncQuestionAnswer(
     input: NativeAgentProjectionInput,
     resolved: {
       key: string;
@@ -2537,7 +2521,7 @@ export class NativeAgentService {
     return outcome;
   }
 
-  protected assertProjectionInput(input: NativeAgentProjectionInput): void {
+  private assertProjectionInput(input: NativeAgentProjectionInput): void {
     this.assertAcceptingWork();
     if (
       !nonBlank(input.environmentId) ||
@@ -2548,7 +2532,7 @@ export class NativeAgentService {
     }
   }
 
-  protected async resolveProjectionSession(
+  private async resolveProjectionSession(
     input: NativeAgentProjectionInput,
   ): Promise<ResolvedProjectionSession | null> {
     this.assertProjectionInput(input);
@@ -2567,7 +2551,7 @@ export class NativeAgentService {
     });
     return { key, session, provider, transient: false as const };
   }
-  protected async recordAsyncQuestionAttention(
+  private async recordAsyncQuestionAttention(
     environmentId: string,
     sessionKey: string,
     itemIds: readonly string[],
@@ -2608,7 +2592,7 @@ export class NativeAgentService {
   }
 
   /** Bounded retry bookkeeping for on-demand turn-outcome reads. */
-  protected readonly turnOutcomeAttempts = new Map<string, { attempts: number; retryAt: number }>();
+  private readonly turnOutcomeAttempts = new Map<string, { attempts: number; retryAt: number }>();
 
   /**
    * Whether the turn started by `requestId` finished on its own as the
@@ -2789,7 +2773,7 @@ export class NativeAgentService {
    * environment-wide (no per-tab credential), mint the turn's artifact-only
    * grant. Best-effort: artifact bookkeeping never blocks a prompt.
    */
-  protected beginArtifactTurn(
+  private beginArtifactTurn(
     durable: PersistedNativeAgentSession,
     requestId: string,
   ): string | undefined {
@@ -2804,7 +2788,7 @@ export class NativeAgentService {
     });
   }
 
-  protected settleArtifactTurn(
+  private settleArtifactTurn(
     session: Pick<PersistedNativeAgentSession, "environmentId" | "logicalSessionKey">,
     requestId: string,
   ): void {
@@ -2821,7 +2805,7 @@ export class NativeAgentService {
    * already made (the queue drain reads status before sending the next prompt).
    * An `idle` read counts only when the turn is not visibly still running.
    */
-  protected async recordObservedTurnOutcome(
+  private async recordObservedTurnOutcome(
     session: PersistedNativeAgentSession,
     status: string,
     detail: string | undefined,
@@ -3072,7 +3056,7 @@ export class NativeAgentService {
     return this.dispatchPromptInternal(input);
   }
 
-  protected async dispatchPromptInternal(
+  private async dispatchPromptInternal(
     input: DispatchNativeAgentPromptInput,
     prepare?: (
       session: PersistedNativeAgentSession,
@@ -3431,7 +3415,7 @@ export class NativeAgentService {
     }
   }
 
-  protected persistedPendingDispatch(
+  private persistedPendingDispatch(
     input: DispatchNativeAgentPromptInput,
   ): PersistedNativeAgentPendingDispatch {
     return {
@@ -3461,7 +3445,7 @@ export class NativeAgentService {
    * literal. A selection that is not found gets one forced catalogue re-read,
    * because a list refreshed since the user picked it may simply be newer.
    */
-  protected async planDispatchCommand(
+  private async planDispatchCommand(
     input: DispatchNativeAgentPromptInput,
     session: PersistedNativeAgentSession,
     provider: NativeAgentRuntimeProvider,
@@ -3520,7 +3504,7 @@ export class NativeAgentService {
   }
 
   /** Run a command that resolved to an Orkestrator session action. */
-  protected async performCommandSessionAction(
+  private async performCommandSessionAction(
     input: DispatchNativeAgentPromptInput,
     session: PersistedNativeAgentSession,
     provider: NativeAgentRuntimeProvider,
@@ -3593,8 +3577,6 @@ export class NativeAgentService {
    * instead: keying on them accumulated an undisposed provider — and for
    * OpenCode a permanent event stream — for every variant a user ever queued.
    */
-
-  // ---- from native-agent-service-provider.ts ----
   /**
    * Forget a closed provider session's in-memory registration on the cached
    * provider, if one exists. Never resolves or starts a bridge: tab teardown
@@ -3763,7 +3745,7 @@ export class NativeAgentService {
     return provider.mcpConfigEvidence(session.providerSessionId);
   }
 
-  protected trackScan(task: Promise<void>): Promise<void> {
+  private trackScan(task: Promise<void>): Promise<void> {
     const tracked = task.finally(() => {
       this.scanTasks.delete(tracked);
     });
@@ -3771,11 +3753,11 @@ export class NativeAgentService {
     return tracked;
   }
 
-  protected assertAcceptingWork(): void {
+  private assertAcceptingWork(): void {
     if (this.stopped) throw new Error("Native agent service is shut down");
   }
 
-  protected async assertEnvironmentLive(environmentId: string): Promise<Environment> {
+  private async assertEnvironmentLive(environmentId: string): Promise<Environment> {
     this.assertAcceptingWork();
     const coordinator = await resolveCoordinatorRuntime(this.storage, environmentId);
     if (coordinator.status === "unavailable") {
@@ -3792,7 +3774,7 @@ export class NativeAgentService {
     return environment;
   }
 
-  protected assertSessionIdentity(
+  private assertSessionIdentity(
     session: PersistedNativeAgentSession,
     input: EnsureNativeAgentSessionInput,
     key: string,
@@ -3819,7 +3801,7 @@ export class NativeAgentService {
     }
   }
 
-  protected async createProviderSession(
+  private async createProviderSession(
     provider: NativeAgentRuntimeProvider,
     input: EnsureNativeAgentSessionInput,
   ): Promise<string> {

@@ -215,7 +215,7 @@ describe("resolvedActionDefault", () => {
  * keeps the column only for persisted compatibility and always resolves native.
  */
 describe("agentSettingsTiers matches the backend's own assembly", () => {
-  /** Exactly what `native-agent-service-reconciliation.ts` constructs. */
+  /** Exactly what `native-agent-launch-activity-reconciler.ts` constructs. */
   const backendTiers = (
     config: Pick<AppConfig, "global" | "repositories">,
     projectId: string,

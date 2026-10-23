@@ -58,7 +58,7 @@ let several views of one session share their reads.
   always comes from a current status read.
 - The interaction observer (inventory B08) runs only when
   `ORKESTRATOR_AGENT_INTERACTION_OBSERVE_ONLY=1` sets `interactionMonitorMode`
-  to `"observe-only"` (`native-agent-service-prompt.ts`). It was left unchanged.
+  to `"observe-only"` (`native-agent-interaction-tracker.ts`). It was left unchanged.
 - Rollback: `ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0` restores the previous
   per-provider cadence; emptying `NATIVE_QUIET_BACKOFF_QUALIFIED_PLATFORMS`
   removes client backoff. See

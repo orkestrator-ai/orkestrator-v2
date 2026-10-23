@@ -102,7 +102,7 @@ conformance matrix records but does not resolve.
 - **A resume closes the session it replaced** (fixed 2026-10-17). A new
   agent tab creates a provider session as it mounts, before its resume picker
   opens. `resumeProjectionSession`
-  (`apps/backend/src/core/native-agent-service-dispatch.ts`) adopted the
+  (`apps/backend/src/core/native-agent-service.ts`) adopted the
   resumed id and left the created session running. On Grok that was a `grok`
   process holding an `ACP_MAX_SESSIONS` slot for the life of the bridge, with
   no reaper. On every other platform it was a bridge map entry (Codex drops
@@ -121,9 +121,9 @@ conformance matrix records but does not resolve.
   the fix, and exit when the resumed one started with it.
 - **OpenCode conversations are titled from their first prompt** (fixed
   2026-10-17). Every provider session is created as "Agent Session"
-  (`native-agent-service-provider.ts`). The projection replaced that
+  (`native-agent-service.ts`). The projection replaced that
   placeholder with the first prompt only for Claude
-  (`native-agent-service-projection.ts`), so every OpenCode conversation read
+  (`native-agent-transcript-projection.ts`), so every OpenCode conversation read
   "Agent Session" in the resume list. Live, before the fix, the only OpenCode
   row was "Agent Session". Now any platform's placeholder is replaced. A
   provider's own title (Codex's brief title, Grok's generated title) is still

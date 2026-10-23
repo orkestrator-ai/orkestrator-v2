@@ -46,7 +46,7 @@ resolve, retarget or dispatch work.
   "advisory (no read-only mode)", and it runs under the session's existing
   permissions.
 - Turn outcome and interactions: `sessionTurnOutcome` and
-  `sessionPendingInteractions` (`native-agent-service-prompt.ts`) read through
+  `sessionPendingInteractions` (`native-agent-interaction-tracker.ts`) read through
   `observeProvider`, which never starts a bridge. Several cases leave the
   outcome `unknown`: no running bridge after three attempts, a status that is
   neither idle nor error, or a later request dispatched first. When no live

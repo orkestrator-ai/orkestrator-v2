@@ -1,4 +1,15 @@
-import * as shared from "./native-agent-service-shared.js";
+import type {
+  BuildPipelineAgent,
+  NativeAgentSessionActionOutcome,
+  Environment,
+  PersistedNativeAgentSession,
+  StorageService,
+  NativeAgentRuntimeProvider,
+  PromptAttachment,
+  EnsureNativeAgentSessionInput,
+  DispatchNativeAgentPromptInput,
+  NativeAgentProjectionInput,
+} from "./native-agent-service-shared.js";
 import {
   BUILD_PIPELINE_AGENTS,
   nativeAgentSessionStorageKey,
@@ -24,17 +35,6 @@ import {
   queueReasoningEffort,
   queueString,
 } from "./native-agent-queue-message.js";
-
-type BuildPipelineAgent = shared.BuildPipelineAgent;
-type NativeAgentSessionActionOutcome = shared.NativeAgentSessionActionOutcome;
-type Environment = shared.Environment;
-type PersistedNativeAgentSession = shared.PersistedNativeAgentSession;
-type StorageService = shared.StorageService;
-type NativeAgentRuntimeProvider = shared.NativeAgentRuntimeProvider;
-type PromptAttachment = shared.PromptAttachment;
-type EnsureNativeAgentSessionInput = shared.EnsureNativeAgentSessionInput;
-type DispatchNativeAgentPromptInput = shared.DispatchNativeAgentPromptInput;
-type NativeAgentProjectionInput = shared.NativeAgentProjectionInput;
 
 type SettledSteer = "dispatched" | "absent" | undefined;
 
@@ -105,7 +105,6 @@ export interface NativeAgentPromptQueueDispatcherHost {
  * class only decides when a drain runs.
  */
 export class NativeAgentPromptQueueDispatcher {
-  // ---- from native-agent-service-base.ts ----
   private readonly sessionWorkFences = new Map<string, Promise<void>>();
   private sessionWorkFenceCount = 0;
   private readonly pendingSessionMutations = new Map<string, number>();

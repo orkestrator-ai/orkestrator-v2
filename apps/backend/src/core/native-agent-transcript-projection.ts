@@ -1,4 +1,34 @@
 import * as shared from "./native-agent-service-shared.js";
+import type {
+  BuildPipelineAgent,
+  AgentInteractionKind,
+  NativeAgentComposerState,
+  NativeAgentControlUpdate,
+  NativeAgentMessageWindow,
+  NativeAgentSessionProjection,
+  NativeAgentToolDetails,
+  IncompleteTurnNotice,
+  PersistedNativeAgentSession,
+  StorageService,
+  NativeAgentRuntimeProvider,
+  ProviderInteractiveSnapshot,
+  EnsureNativeAgentSessionInput,
+  NativeAgentProjectionInput,
+  NativeAgentProjectionCacheEntry,
+  NativeAgentSyncState,
+  NativeAgentHistoryState,
+  NativeAgentServiceOptions,
+  ProviderSessionStateSnapshot,
+  ProviderTranscriptSnapshot,
+  NativeAgentProjectionUpdateInput,
+  NativeAgentMessagePageInput,
+  NativeAgentProjectionUpdate,
+  NativeAgentTranscriptUpdateInput,
+  NativeAgentProgressiveInput,
+  NativeAgentDiscoveryUpdateInput,
+  NativeAgentProjectionDelta,
+  NativeAgentMessagePage,
+} from "./native-agent-service-shared.js";
 import path from "node:path";
 import {
   nativeAgentSessionStorageKey,
@@ -150,35 +180,6 @@ import {
 } from "./native-agent-projection-encoding.js";
 import { unsupportedCommandCatalogueState } from "@orkestrator/protocol/agent-command-catalogue";
 import { withSessionActionSlashCommands } from "@orkestrator/protocol/agent-slash-commands";
-
-type BuildPipelineAgent = shared.BuildPipelineAgent;
-type AgentInteractionKind = shared.AgentInteractionKind;
-type NativeAgentComposerState = shared.NativeAgentComposerState;
-type NativeAgentControlUpdate = shared.NativeAgentControlUpdate;
-type NativeAgentMessageWindow = shared.NativeAgentMessageWindow;
-type NativeAgentSessionProjection = shared.NativeAgentSessionProjection;
-type NativeAgentToolDetails = shared.NativeAgentToolDetails;
-type IncompleteTurnNotice = shared.IncompleteTurnNotice;
-type PersistedNativeAgentSession = shared.PersistedNativeAgentSession;
-type StorageService = shared.StorageService;
-type NativeAgentRuntimeProvider = shared.NativeAgentRuntimeProvider;
-type ProviderInteractiveSnapshot = shared.ProviderInteractiveSnapshot;
-type EnsureNativeAgentSessionInput = shared.EnsureNativeAgentSessionInput;
-type NativeAgentProjectionInput = shared.NativeAgentProjectionInput;
-type NativeAgentProjectionCacheEntry = shared.NativeAgentProjectionCacheEntry;
-type NativeAgentSyncState = shared.NativeAgentSyncState;
-type NativeAgentHistoryState = shared.NativeAgentHistoryState;
-type NativeAgentServiceOptions = shared.NativeAgentServiceOptions;
-type ProviderSessionStateSnapshot = shared.ProviderSessionStateSnapshot;
-type ProviderTranscriptSnapshot = shared.ProviderTranscriptSnapshot;
-type NativeAgentProjectionUpdateInput = shared.NativeAgentProjectionUpdateInput;
-type NativeAgentMessagePageInput = shared.NativeAgentMessagePageInput;
-type NativeAgentProjectionUpdate = shared.NativeAgentProjectionUpdate;
-type NativeAgentTranscriptUpdateInput = shared.NativeAgentTranscriptUpdateInput;
-type NativeAgentProgressiveInput = shared.NativeAgentProgressiveInput;
-type NativeAgentDiscoveryUpdateInput = shared.NativeAgentDiscoveryUpdateInput;
-type NativeAgentProjectionDelta = shared.NativeAgentProjectionDelta;
-type NativeAgentMessagePage = shared.NativeAgentMessagePage;
 
 interface ProjectedProgressiveTranscript {
   value: NativeAgentTranscriptView;
@@ -740,8 +741,6 @@ export class NativeAgentTranscriptProjection {
   private readonly stopNotices = new Map<string, string>();
   /** One best-effort provider title push per backend-derived title. */
   private readonly pushedSessionTitles = new Map<string, string>();
-
-  // ---- from native-agent-service-projection.ts ----
   private readonly progressiveInstanceId = randomUUID();
   private readonly progressiveTranscriptCache = new Map<string, ProgressiveTranscriptEntry>();
   private progressiveTranscriptBytes = 0;

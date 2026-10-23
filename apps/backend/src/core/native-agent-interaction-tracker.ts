@@ -1,4 +1,17 @@
-import * as shared from "./native-agent-service-shared.js";
+import type {
+  BuildPipelineAgent,
+  AgentInteractionKind,
+  AgentInteractionOrigin,
+  NativeAgentSessionProjection,
+  PersistedNativeAgentSession,
+  StorageService,
+  NativeAgentRuntimeProvider,
+  ProviderInteractionObservationEvent,
+  EnsureNativeAgentSessionInput,
+  NativeAgentProjectionInput,
+  NativeAgentServiceOptions,
+  AgentInteractionObservation,
+} from "./native-agent-service-shared.js";
 import {
   UNATTENDED_AGENT_INTERACTION_POLICY,
   nativeAgentSessionStorageKey,
@@ -17,19 +30,6 @@ import {
 } from "./native-agent-service-shared.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { type AgentInteractionRequest } from "@orkestrator/protocol/agent-interactions";
-
-type BuildPipelineAgent = shared.BuildPipelineAgent;
-type AgentInteractionKind = shared.AgentInteractionKind;
-type AgentInteractionOrigin = shared.AgentInteractionOrigin;
-type NativeAgentSessionProjection = shared.NativeAgentSessionProjection;
-type PersistedNativeAgentSession = shared.PersistedNativeAgentSession;
-type StorageService = shared.StorageService;
-type NativeAgentRuntimeProvider = shared.NativeAgentRuntimeProvider;
-type ProviderInteractionObservationEvent = shared.ProviderInteractionObservationEvent;
-type EnsureNativeAgentSessionInput = shared.EnsureNativeAgentSessionInput;
-type NativeAgentProjectionInput = shared.NativeAgentProjectionInput;
-type NativeAgentServiceOptions = shared.NativeAgentServiceOptions;
-type AgentInteractionObservation = shared.AgentInteractionObservation;
 
 /** What the interaction tracker needs from the service that wires it. */
 export interface NativeAgentInteractionTrackerHost {

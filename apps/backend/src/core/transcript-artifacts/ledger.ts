@@ -2,7 +2,7 @@
  * The publication ledger: synchronous, authoritative reads for transcript
  * projection, plus post-commit change hints.
  *
- * Projection integration (native-agent-service-projection.ts) reads
+ * Projection integration (native-agent-transcript-projection.ts) reads
  * `publicationsForConversation` and `ledgerRevision` when it builds or
  * reconciles a conversation; `onLedgerChange` only accelerates delivery. A
  * listener that misses a hint loses nothing: the ledger revision moves with

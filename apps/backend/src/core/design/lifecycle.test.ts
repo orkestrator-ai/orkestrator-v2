@@ -12,6 +12,7 @@ import { enforceRecycleBin, purge } from "./service-lifecycle.js";
 import { DesignService } from "./service.js";
 import {
   createDesignHarness,
+  createTestRenderer,
   deferred,
   trackUnhandledRejections,
   type DesignHarness,
@@ -254,6 +255,220 @@ describe("design lifecycle: tombstones, restore, purge, duplicate and fencing", 
     } finally {
       await rm(worktree, { recursive: true, force: true });
     }
+  });
+
+  describe("a duplicate stopped between its copy and its source receipt", () => {
+    // Fails this many writes of the source record; the copy's commit passes.
+    let failSource: { canvasId: string; times: number } | undefined;
+    const faulty = () => ({
+      ...serviceOptions(),
+      faults: {
+        beforeRename: (file: string) => {
+          if (!failSource?.times || !file.endsWith(`${failSource.canvasId}.orkrec`)) return;
+          failSource.times--;
+          throw new Error("injected source crash");
+        },
+      },
+    });
+    const prepareDuplicate = async () => {
+      await harness.restart(faulty());
+      const { canvasId } = await setup();
+      const prepared = await service().prepare("env-1", "user", {
+        canvasId,
+        input: { kind: "duplicate_canvas", name: "Copy" },
+        preconditions: { canvasRevision: 2 },
+        correlationId: "duplicate-once",
+      });
+      return { canvasId, token: prepared.token };
+    };
+    const copies = async (canvasId: string) =>
+      (await service().list("env-1")).map((entry) => entry.id).filter((id) => id !== canvasId);
+
+    test("records it committed when the source write fails once", async () => {
+      const { canvasId, token } = await prepareDuplicate();
+      failSource = { canvasId, times: 1 };
+      const status = await service().execute("env-1", canvasId, token);
+      const [copyId] = await copies(canvasId);
+      expect(copyId).toBeDefined();
+      expect(status).toMatchObject({
+        state: "committed",
+        result: { createdCanvasId: copyId, canvasRevision: 2 },
+      });
+      expect(await service().status("env-1", canvasId, token)).toEqual(status);
+      expect(await copies(canvasId)).toEqual([copyId!]);
+    });
+
+    test("reconciles a committed copy on its live owner while source writes keep failing", async () => {
+      const { canvasId, token } = await prepareDuplicate();
+      failSource = { canvasId, times: Number.POSITIVE_INFINITY };
+      const status = await service().execute("env-1", canvasId, token);
+      const [copyId] = await copies(canvasId);
+      expect(copyId).toBeDefined();
+      expect(status).toMatchObject({
+        state: "committed",
+        result: { createdCanvasId: copyId, canvasRevision: 2 },
+      });
+      expect(await service().status("env-1", canvasId, token)).toEqual(status);
+      expect(await service().execute("env-1", canvasId, token)).toEqual(status);
+      expect((await service().store.readPending(canvasId)).map((entry) => entry.token)).toEqual([
+        token,
+      ]);
+      const descriptor: DesignOperationDescriptor = {
+        canvasId,
+        input: { kind: "duplicate_canvas", name: "Copy" },
+        preconditions: { canvasRevision: 2 },
+        correlationId: "duplicate-once",
+      };
+      expect(await service().prepare("env-1", "user", descriptor)).toMatchObject({ token });
+      await expect(
+        service().prepare("env-1", "user", {
+          ...descriptor,
+          correlationId: "another-duplicate",
+        }),
+      ).rejects.toThrow("earlier duplicate already committed");
+      expect(await copies(canvasId)).toEqual([copyId!]);
+      // Once saving works, replay persists the receipt and removes pending.
+      failSource = undefined;
+      expect(await service().execute("env-1", canvasId, token)).toEqual(status);
+      expect(await service().store.readPending(canvasId)).toEqual([]);
+      expect(await service().status("env-1", canvasId, token)).toEqual(status);
+    });
+
+    test("records it committed with the copy after the backend restarts", async () => {
+      const { canvasId, token } = await prepareDuplicate();
+      failSource = { canvasId, times: Number.POSITIVE_INFINITY };
+      try {
+        expect(await service().execute("env-1", canvasId, token)).toMatchObject({
+          state: "committed",
+        });
+      } finally {
+        failSource = undefined;
+      }
+      const [copyId] = await copies(canvasId);
+      expect(copyId).toBeDefined();
+      await harness.restart(serviceOptions());
+      const status = await service().status("env-1", canvasId, token);
+      expect(status).toMatchObject({
+        state: "committed",
+        result: { createdCanvasId: copyId, canvasRevision: 2 },
+      });
+      expect(await service().execute("env-1", canvasId, token)).toEqual(status);
+      // The retry the client makes after a lost response reconciles to it.
+      await expect(
+        service().prepare("env-1", "user", {
+          canvasId,
+          input: { kind: "duplicate_canvas", name: "Copy" },
+          preconditions: { canvasRevision: 2 },
+          correlationId: "duplicate-once",
+        }),
+      ).rejects.toThrow("already has a settled operation");
+      expect(await copies(canvasId)).toEqual([copyId!]);
+    });
+
+    test("a later duplicate records an unsaved one's receipt once saving works", async () => {
+      const { canvasId, token } = await prepareDuplicate();
+      failSource = { canvasId, times: Number.POSITIVE_INFINITY };
+      const status = await service().execute("env-1", canvasId, token);
+      const [copyId] = await copies(canvasId);
+      failSource = undefined;
+      // Without a further execute of the first token, a new duplicate settles it.
+      const next = await service().prepare("env-1", "user", {
+        canvasId,
+        input: { kind: "duplicate_canvas", name: "Second copy" },
+        preconditions: { canvasRevision: 2 },
+        correlationId: "another-duplicate",
+      });
+      expect((await service().store.readPending(canvasId)).map((entry) => entry.token)).toEqual([
+        next.token,
+      ]);
+      const record = await service().loadFor(canvasId, "env-1");
+      expect(record.record.receipts.find((receipt) => receipt.token === token)).toEqual(status);
+      expect(await service().execute("env-1", canvasId, next.token)).toMatchObject({
+        state: "committed",
+      });
+      const all = await copies(canvasId);
+      expect(all).toHaveLength(2);
+      expect(all).toContain(copyId!);
+    });
+
+    test("an unsaved duplicate executed after its entry expired still reports its copy", async () => {
+      const { canvasId, token } = await prepareDuplicate();
+      failSource = { canvasId, times: Number.POSITIVE_INFINITY };
+      const status = await service().execute("env-1", canvasId, token);
+      failSource = undefined;
+      clock += DESIGN_LIMITS.preparedTtlMs + 1;
+      expect(await service().execute("env-1", canvasId, token)).toMatchObject({
+        state: "committed",
+        result: status.result,
+      });
+      expect(await service().status("env-1", canvasId, token)).toMatchObject({
+        state: "committed",
+      });
+      expect(await service().store.readPending(canvasId)).toEqual([]);
+      expect(await copies(canvasId)).toHaveLength(1);
+    });
+
+    test("status prefers a committed copy over an unrecorded live-owner failure", async () => {
+      const { canvasId, token } = await prepareDuplicate();
+      const store = service().store;
+      const readPending = store.readPending.bind(store);
+      let reads = 0;
+      failSource = { canvasId, times: Number.POSITIVE_INFINITY };
+      // Fail recovery's pending read after the copy and the first source write,
+      // forcing the operation's outer catch to remember an unknown outcome.
+      store.readPending = async (id) => {
+        if (id === canvasId && ++reads === 2) throw new Error("pending read unavailable");
+        return readPending(id);
+      };
+      try {
+        expect(String(await failureOf(service().execute("env-1", canvasId, token)))).toContain(
+          "pending read unavailable",
+        );
+      } finally {
+        store.readPending = readPending;
+      }
+      const [copyId] = await copies(canvasId);
+      expect(copyId).toBeDefined();
+      expect(await service().status("env-1", canvasId, token)).toMatchObject({
+        state: "committed",
+        result: { createdCanvasId: copyId },
+      });
+      expect(await service().execute("env-1", canvasId, token)).toMatchObject({
+        state: "committed",
+        result: { createdCanvasId: copyId },
+      });
+      expect(await copies(canvasId)).toEqual([copyId!]);
+    });
+
+    test("reports it committed to a running peer before any restart recovery", async () => {
+      const { canvasId, token } = await prepareDuplicate();
+      // A peer sharing the data directory that was already running.
+      const peer = new DesignService(harness.dir, () => {}, createTestRenderer(), serviceOptions());
+      try {
+        await peer.initialize();
+        failSource = { canvasId, times: Number.POSITIVE_INFINITY };
+        try {
+          await failureOf(service().execute("env-1", canvasId, token));
+        } finally {
+          failSource = undefined;
+        }
+        const [copyId] = await copies(canvasId);
+        // The owner stops; its replacement has not started (no recovery ran).
+        await harness.restart(serviceOptions());
+        expect((await peer.store.readPending(canvasId)).map((entry) => entry.token)).toEqual([
+          token,
+        ]);
+        const status = await peer.status("env-1", canvasId, token);
+        expect(status).toMatchObject({ state: "committed", result: { createdCanvasId: copyId } });
+        expect(await peer.execute("env-1", canvasId, token)).toMatchObject(status);
+        expect(await peer.status("env-1", canvasId, token)).toMatchObject({
+          state: "committed",
+          result: { createdCanvasId: copyId },
+        });
+      } finally {
+        await peer.close();
+      }
+    });
   });
 
   test("rename, duplicate and delete frame obey CAS and environment ownership", async () => {

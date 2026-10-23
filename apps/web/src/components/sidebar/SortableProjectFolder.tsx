@@ -9,7 +9,6 @@ import {
   FolderGit2,
   FolderOpen,
   FolderMinus,
-  GripVertical,
   Pencil,
 } from "lucide-react";
 import {
@@ -31,7 +30,10 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { MAX_PROJECT_FOLDER_NAME_LENGTH } from "@orkestrator/protocol/project-folders";
-import { parseProjectFolderDragId, projectFolderDragId } from "@/lib/project-folders";
+import {
+  parseProjectFolderDragId,
+  projectFolderDragId,
+} from "@/lib/project-folders";
 import { cn } from "@/lib/utils";
 
 interface SortableProjectFolderProps {
@@ -99,7 +101,8 @@ export function SortableProjectFolder({
     data: { sidebarGroup: true },
   });
   const canHighlightDrop =
-    !repository || (active && parseProjectFolderDragId(String(active.id)) !== null);
+    !repository ||
+    (active && parseProjectFolderDragId(String(active.id)) !== null);
   const destination = openMachineName ? ` on ${openMachineName}` : "";
 
   const style = {
@@ -118,7 +121,11 @@ export function SortableProjectFolder({
   // context menu restores focus to its trigger, which would blur — and so
   // cancel — an inline field the moment it appeared.
 
-  const FolderIcon = repository ? FolderGit2 : isCollapsed ? Folder : FolderOpen;
+  const FolderIcon = repository
+    ? FolderGit2
+    : isCollapsed
+      ? Folder
+      : FolderOpen;
   const hasMenu = Boolean(onRename || onSort || onUngroup);
 
   return (
@@ -138,24 +145,13 @@ export function SortableProjectFolder({
             : "border-transparent hover:bg-hover",
         )}
       >
-        {onOpen ? (
-          <button
-            {...attributes}
-            {...listeners}
-            ref={setActivatorNodeRef}
-            type="button"
-            aria-label={`Move repository ${label}`}
-            className="shrink-0 cursor-grab rounded-md p-1 text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing"
-          >
-            <GripVertical className="h-3 w-3" aria-hidden="true" />
-          </button>
-        ) : null}
         <ContextMenu>
           <ContextMenuTrigger className="contents">
+            {/* The whole name is the drag handle, as on project rows. */}
             <button
-              {...(onOpen ? {} : attributes)}
-              {...(onOpen ? {} : listeners)}
-              ref={onOpen ? undefined : setActivatorNodeRef}
+              {...attributes}
+              {...listeners}
+              ref={setActivatorNodeRef}
               type="button"
               aria-expanded={onOpen ? undefined : !isCollapsed}
               aria-label={onOpen ? `Open ${label}${destination}` : undefined}
@@ -166,10 +162,7 @@ export function SortableProjectFolder({
                     ? `Expand folder ${label}`
                     : `Collapse folder ${label}`
               }
-              className={cn(
-                "flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm text-foreground",
-                !onOpen && "cursor-grab active:cursor-grabbing",
-              )}
+              className="flex min-w-0 flex-1 cursor-grab items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm text-foreground active:cursor-grabbing"
               onClick={(event) => {
                 event.stopPropagation();
                 if (onOpen) onOpen();
@@ -227,7 +220,9 @@ export function SortableProjectFolder({
         <button
           type="button"
           aria-expanded={!isCollapsed}
-          aria-label={isCollapsed ? `Expand folder ${label}` : `Collapse folder ${label}`}
+          aria-label={
+            isCollapsed ? `Expand folder ${label}` : `Collapse folder ${label}`
+          }
           className="shrink-0 rounded-md p-1 transition-colors hover:bg-white/[0.07]"
           onClick={(event) => {
             event.stopPropagation();
@@ -250,7 +245,10 @@ export function SortableProjectFolder({
         still resolve drops.
       */}
       {!isCollapsed && (
-        <div className="ml-3 border-l border-zinc-800/80 pl-1" data-project-folder-content={name}>
+        <div
+          className="ml-3 border-l border-zinc-800/80 pl-1"
+          data-project-folder-content={name}
+        >
           {children}
         </div>
       )}
@@ -260,8 +258,9 @@ export function SortableProjectFolder({
           <DialogHeader>
             <DialogTitle>Rename Folder</DialogTitle>
             <DialogDescription>
-              Every project in <strong className="text-foreground">{name}</strong> moves to the new
-              name.
+              Every project in{" "}
+              <strong className="text-foreground">{name}</strong> moves to the
+              new name.
             </DialogDescription>
           </DialogHeader>
           <form
@@ -283,7 +282,11 @@ export function SortableProjectFolder({
               />
             </div>
             <DialogFooter>
-              <Button type="button" variant="ghost" onClick={() => setIsRenaming(false)}>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => setIsRenaming(false)}
+              >
                 Cancel
               </Button>
               <Button type="submit" disabled={!draftName.trim()}>

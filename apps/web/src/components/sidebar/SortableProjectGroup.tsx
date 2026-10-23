@@ -2,10 +2,16 @@ import { ProjectHomeActivity } from "./ProjectHomeActivity";
 import { useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { useSortable } from "@dnd-kit/sortable";
-import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import {
+  SortableContext,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { Button } from "@/components/ui/button";
-import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
+import {
+  HoverTooltipContent,
+  useHoverTooltip,
+} from "@/components/ui/hover-tooltip";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -16,7 +22,11 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -61,7 +71,10 @@ interface SortableProjectGroupProps {
   onStartEnvironment: (environmentId: string) => void;
   onStopEnvironment: (environmentId: string) => void;
   onRestartEnvironment: (environmentId: string) => void;
-  onForkEnvironment?: (environmentId: string, environmentType: EnvironmentType) => void;
+  onForkEnvironment?: (
+    environmentId: string,
+    environmentType: EnvironmentType,
+  ) => void;
   onCreateEnvironment: () => void;
   /** Opens the folder composer for this project. */
   onAddToFolder?: () => void;
@@ -73,6 +86,11 @@ interface SortableProjectGroupProps {
   sortableId?: string;
   /** Shown after the name, in lists that mix machines. */
   machineBadge?: ReactNode;
+  /**
+   * Shown before the name in a repository group, whose member rows put the
+   * chevron last, as the group's own heading does.
+   */
+  machineIcon?: ReactNode;
   /** Shown instead of the project name (a repository group names the machine). */
   label?: string;
 }
@@ -101,6 +119,7 @@ export function SortableProjectGroup({
   selectedEnvironmentIds = [],
   sortableId,
   machineBadge,
+  machineIcon,
   label = project.name,
 }: SortableProjectGroupProps) {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
@@ -108,7 +127,14 @@ export function SortableProjectGroup({
   const projectTooltipAnchorRef = useRef<HTMLButtonElement>(null);
   const projectTooltip = useHoverTooltip();
 
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({
     id: sortableId ?? project.id,
   });
 
@@ -138,7 +164,9 @@ export function SortableProjectGroup({
   };
 
   // Count running environments
-  const runningCount = environments.filter((e) => e.status === "running").length;
+  const runningCount = environments.filter(
+    (e) => e.status === "running",
+  ).length;
   const messagingEnabled = useConfigStore(
     (state) => state.config.global.agentMessaging?.enabled === true,
   );
@@ -146,7 +174,8 @@ export function SortableProjectGroup({
     if (!messagingEnabled) return 0;
     let count = 0;
     for (const mailbox of state.summary.values()) {
-      if (mailbox.projectId === project.id) count += mailbox.userUnseenCount ?? mailbox.unreadCount;
+      if (mailbox.projectId === project.id)
+        count += mailbox.userUnseenCount ?? mailbox.unreadCount;
     }
     return count;
   });
@@ -154,13 +183,43 @@ export function SortableProjectGroup({
     (state) =>
       messagingEnabled &&
       Array.from(state.summary.values()).some(
-        (mailbox) => mailbox.projectId === project.id && mailbox.failedInjectCount > 0,
+        (mailbox) =>
+          mailbox.projectId === project.id && mailbox.failedInjectCount > 0,
       ),
+  );
+
+  // The name is also the drag handle, and dnd-kit's keyboard sensor owns Enter
+  // and Space there. This chevron carries no drag listeners, so it is the
+  // control a keyboard user can actually expand the project with — and it
+  // needs its own label, because nothing inside it is text. Folder rows are
+  // built the same way.
+  const chevron = (
+    <CollapsibleTrigger
+      className="shrink-0 rounded-md p-1 transition-colors hover:bg-white/[0.07]"
+      aria-label={
+        isCollapsed
+          ? `Expand project ${project.name}`
+          : `Collapse project ${project.name}`
+      }
+      onClick={(e) => e.stopPropagation()}
+    >
+      <ChevronRight
+        aria-hidden="true"
+        className={cn(
+          "h-4 w-4 text-muted-foreground transition-transform duration-200",
+          !isCollapsed && "rotate-90",
+        )}
+      />
+    </CollapsibleTrigger>
   );
 
   return (
     <>
-      <div ref={setNodeRef} style={style} className={cn("px-2", isDragging && "opacity-50 z-50")}>
+      <div
+        ref={setNodeRef}
+        style={style}
+        className={cn("px-2", isDragging && "opacity-50 z-50")}
+      >
         <Collapsible open={!isCollapsed} onOpenChange={onToggleCollapse}>
           {/* Project Header with Context Menu */}
           <div
@@ -173,28 +232,7 @@ export function SortableProjectGroup({
             onMouseEnter={() => setIsHovered(true)}
             onMouseLeave={() => setIsHovered(false)}
           >
-            {/*
-              The name is also the drag handle, and dnd-kit's keyboard sensor
-              owns Enter and Space there. This chevron carries no drag
-              listeners, so it is the control a keyboard user can actually
-              expand the project with — and it needs its own label, because
-              nothing inside it is text. Folder rows are built the same way.
-            */}
-            <CollapsibleTrigger
-              className="shrink-0 rounded-md p-1 transition-colors hover:bg-white/[0.07]"
-              aria-label={
-                isCollapsed ? `Expand project ${project.name}` : `Collapse project ${project.name}`
-              }
-              onClick={(e) => e.stopPropagation()}
-            >
-              <ChevronRight
-                aria-hidden="true"
-                className={cn(
-                  "h-4 w-4 text-muted-foreground transition-transform duration-200",
-                  !isCollapsed && "rotate-90",
-                )}
-              />
-            </CollapsibleTrigger>
+            {!machineIcon && chevron}
             <ContextMenu>
               <ContextMenuTrigger className="contents">
                 <button
@@ -213,6 +251,7 @@ export function SortableProjectGroup({
                   onFocus={projectTooltip.show}
                   onBlur={projectTooltip.hide}
                 >
+                  {machineIcon}
                   <span className="truncate font-medium">{label}</span>
                   {machineBadge}
                   {environments.length > 0 && (
@@ -246,13 +285,18 @@ export function SortableProjectGroup({
               >
                 <p className="font-mono text-xs">{project.gitUrl}</p>
                 {project.localPath && (
-                  <p className="text-xs text-muted-foreground">{project.localPath}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {project.localPath}
+                  </p>
                 )}
                 <p className="text-xs text-muted-foreground mt-1">
-                  {environments.length} environment{environments.length !== 1 && "s"}
+                  {environments.length} environment
+                  {environments.length !== 1 && "s"}
                   {runningCount > 0 && ` (${runningCount} running)`}
                 </p>
-                <p className="text-xs text-muted-foreground">Click to open board</p>
+                <p className="text-xs text-muted-foreground">
+                  Click to open board
+                </p>
               </HoverTooltipContent>
               <ContextMenuContent>
                 <ContextMenuItem onClick={onSelectProject}>
@@ -297,14 +341,23 @@ export function SortableProjectGroup({
                   </>
                 )}
                 <ContextMenuSeparator />
-                <ContextMenuItem variant="destructive" onClick={() => setShowDeleteDialog(true)}>
+                <ContextMenuItem
+                  variant="destructive"
+                  onClick={() => setShowDeleteDialog(true)}
+                >
                   <Trash2 className="h-4 w-4 mr-2" />
                   Delete Project
                 </ContextMenuItem>
               </ContextMenuContent>
             </ContextMenu>
 
-            {home && <ProjectHomeActivity home={home} projectName={project.name} compact />}
+            {home && (
+              <ProjectHomeActivity
+                home={home}
+                projectName={project.name}
+                compact
+              />
+            )}
 
             {/* Add button - visible on compact layouts and revealed on desktop hover */}
             <Button
@@ -320,6 +373,7 @@ export function SortableProjectGroup({
             >
               <Plus className="h-3.5 w-3.5" />
             </Button>
+            {machineIcon && chevron}
           </div>
 
           {/* Environments List */}
@@ -356,7 +410,8 @@ export function SortableProjectGroup({
           <AlertDialogHeader>
             <AlertDialogTitle>Delete Project</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to remove <strong>{project.name}</strong> from your projects?
+              Are you sure you want to remove <strong>{project.name}</strong>{" "}
+              from your projects?
               {environments.length > 0 && (
                 <span className="block mt-2 text-orange-500">
                   Warning: This project has {environments.length} environment

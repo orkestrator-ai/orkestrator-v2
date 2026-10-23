@@ -20,7 +20,11 @@ import { ChevronDown, ChevronRight, GripVertical, WifiOff } from "lucide-react";
 import { toast } from "sonner";
 import { SortableProjectFolder } from "@/components/sidebar/SortableProjectFolder";
 import { SidebarRootDropZone } from "@/components/sidebar/SidebarRootDropZone";
-import { activityRows, isMachineWritable, type MachineView } from "@/lib/federation/aggregate";
+import {
+  activityRows,
+  isMachineWritable,
+  type MachineView,
+} from "@/lib/federation/aggregate";
 import {
   arrangeMachines,
   buildRepositoryTree,
@@ -35,7 +39,10 @@ import {
   type MergedProject,
 } from "@/lib/federation/sidebar-layout";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
-import { updatePortalLayout, usePortalLayout } from "@/lib/portal/portal-layout";
+import {
+  updatePortalLayout,
+  usePortalLayout,
+} from "@/lib/portal/portal-layout";
 import {
   buildProjectTree,
   normalizeProjectFolderName,
@@ -50,7 +57,10 @@ import {
 } from "@/lib/project-folders";
 import { cn } from "@/lib/utils";
 import { sidebarCollisionDetection } from "@/lib/sidebar-collision";
-import { sidebarFolderKey, useMachineViewStore } from "@/stores/machineViewStore";
+import {
+  sidebarFolderKey,
+  useMachineViewStore,
+} from "@/stores/machineViewStore";
 import { useRemoteEnvironmentShown } from "@/stores/remoteWorkspaceStore";
 import { SELECTED_ENVIRONMENT_ROW_CLASS } from "@/components/sidebar/SortableEnvironmentItem";
 import type { FederatedEnvironment } from "@/lib/federation/summaries";
@@ -74,7 +84,9 @@ function reportLayoutError(error: unknown): void {
 function useDragSensors() {
   return useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
   );
 }
 
@@ -129,7 +141,11 @@ export function MachineSectionHeader({
           <Chevron className="h-3.5 w-3.5" aria-hidden="true" />
         </button>
       ) : null}
-      <MachineDot colorToken={machine.colorToken} machineName={machine.name} status={status} />
+      <MachineDot
+        colorToken={machine.colorToken}
+        machineName={machine.name}
+        status={status}
+      />
       <span className="min-w-0 flex-1 truncate text-xs font-semibold uppercase tracking-wide text-muted-foreground">
         {machine.name}
       </span>
@@ -149,21 +165,33 @@ export function MachineSectionHeader({
 
 function MachineNotices({ machine }: { machine: MachineView }) {
   const notices: ReactNode[] = [];
-  if (!machine.bound && machine.transport !== "connected" && machine.loadedAt !== null) {
+  if (
+    !machine.bound &&
+    machine.transport !== "connected" &&
+    machine.loadedAt !== null
+  ) {
     notices.push(
       <p key="stale" className="px-3 py-1 text-[11px] text-amber-400/90">
-        Showing last known state. Live actions are disabled until {machine.name} reconnects.
+        Showing last known state. Live actions are disabled until {machine.name}{" "}
+        reconnects.
       </p>,
     );
   }
   if (machine.truncated) {
     notices.push(
-      <p key="truncated" className="px-3 py-1 text-[11px] text-muted-foreground">
+      <p
+        key="truncated"
+        className="px-3 py-1 text-[11px] text-muted-foreground"
+      >
         Not every project or environment on {machine.name} is shown here.
       </p>,
     );
   }
-  if (!machine.bound && machine.transportDetail && machine.transport !== "connected") {
+  if (
+    !machine.bound &&
+    machine.transportDetail &&
+    machine.transport !== "connected"
+  ) {
     notices.push(
       <p key="detail" className="px-3 py-1 text-[11px] text-muted-foreground">
         {machine.transportDetail}
@@ -181,7 +209,8 @@ function RemoteMachineBody({ machine }: { machine: MachineView }) {
       <UnknownOutcomesNotice connectionId={machine.connectionId} />
       {machine.loadedAt === null && machine.projects.length === 0 ? (
         <p className="px-3 py-2 text-xs text-muted-foreground">
-          {machine.transport === "connected" || machine.transport === "connecting"
+          {machine.transport === "connected" ||
+          machine.transport === "connecting"
             ? "Loading…"
             : "Not available yet."}
         </p>
@@ -209,8 +238,17 @@ function MachineSection({
   const collapsed = useMachineViewStore((state) =>
     state.collapsedMachines.includes(machine.connectionId),
   );
-  const setMachineCollapsed = useMachineViewStore((state) => state.setMachineCollapsed);
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+  const setMachineCollapsed = useMachineViewStore(
+    (state) => state.setMachineCollapsed,
+  );
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({
     id: `${MACHINE_DRAG_PREFIX}${machine.connectionId}`,
     disabled: !sortable,
   });
@@ -220,7 +258,9 @@ function MachineSection({
       style={{ transform: CSS.Translate.toString(transform), transition }}
       className={cn(isDragging && "relative z-50 opacity-50")}
       aria-label={`${machine.name} projects`}
-      data-testid={machine.bound ? "bound-machine-section" : "remote-machine-section"}
+      data-testid={
+        machine.bound ? "bound-machine-section" : "remote-machine-section"
+      }
     >
       <MachineSectionHeader
         machine={machine}
@@ -274,17 +314,28 @@ export function MachineSectionList({
       String(active.id).slice(MACHINE_DRAG_PREFIX.length),
       String(over.id).slice(MACHINE_DRAG_PREFIX.length),
     );
-    if (machineOrder) updatePortalLayout({ machineOrder }).catch(reportLayoutError);
+    if (machineOrder)
+      updatePortalLayout({ machineOrder }).catch(reportLayoutError);
   };
 
   return (
-    <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+    <DndContext
+      sensors={sensors}
+      collisionDetection={closestCenter}
+      onDragEnd={handleDragEnd}
+    >
       <SortableContext
-        items={shown.map((machine) => `${MACHINE_DRAG_PREFIX}${machine.connectionId}`)}
+        items={shown.map(
+          (machine) => `${MACHINE_DRAG_PREFIX}${machine.connectionId}`,
+        )}
         strategy={verticalListSortingStrategy}
       >
         {shown.map((machine) => (
-          <MachineSection key={machine.connectionId} machine={machine} sortable={sortable}>
+          <MachineSection
+            key={machine.connectionId}
+            machine={machine}
+            sortable={sortable}
+          >
             {machine.bound ? (
               <div className="py-1">{renderBound()}</div>
             ) : (
@@ -316,17 +367,33 @@ export function MergedProjectList({
   /** Machines whose projects are shown (connected, and not filtered out). */
   shownIds: ReadonlySet<string>;
   mode: "project" | "repository";
-  /** A project of this window's own machine, with its drag id and the label to show. */
-  renderBoundProject: (projectId: string, sortableId: string, label?: string) => ReactNode;
+  /**
+   * A project of this window's own machine, with its drag id, the label to
+   * show and how its row marks the machine.
+   */
+  renderBoundProject: (
+    projectId: string,
+    sortableId: string,
+    label: string | undefined,
+    machineMark: "dot" | "home",
+  ) => ReactNode;
   /** An environment of this window's own machine was dropped. */
   onBoundEnvironmentDragEnd: (activeId: string, overId: string) => void;
 }) {
   const layout = usePortalLayout();
   const { portalState } = useFederation();
-  const collapsedProjectKeys = useMachineViewStore((state) => state.collapsedProjectKeys);
-  const collapsedFolderKeys = useMachineViewStore((state) => state.collapsedFolderKeys);
-  const setProjectKeyCollapsed = useMachineViewStore((state) => state.setProjectKeyCollapsed);
-  const setFolderKeyCollapsed = useMachineViewStore((state) => state.setFolderKeyCollapsed);
+  const collapsedProjectKeys = useMachineViewStore(
+    (state) => state.collapsedProjectKeys,
+  );
+  const collapsedFolderKeys = useMachineViewStore(
+    (state) => state.collapsedFolderKeys,
+  );
+  const setProjectKeyCollapsed = useMachineViewStore(
+    (state) => state.setProjectKeyCollapsed,
+  );
+  const setFolderKeyCollapsed = useMachineViewStore(
+    (state) => state.setFolderKeyCollapsed,
+  );
   const { environmentsOf, reorder } = useRemoteEnvironments();
   const [draggingProject, setDraggingProject] = useState(false);
   const sensors = useDragSensors();
@@ -339,13 +406,23 @@ export function MergedProjectList({
     [layout, machines, mode, portalState.selfId, shownIds],
   );
   const tree = useMemo(
-    () => (mode === "repository" ? buildRepositoryTree(list.shown) : buildProjectTree(list.shown)),
+    () =>
+      mode === "repository"
+        ? buildRepositoryTree(list.shown)
+        : buildProjectTree(list.shown),
     [list.shown, mode],
   );
-  const projectIds = useMemo(() => new Set(list.shown.map((item) => item.id)), [list.shown]);
+  const projectIds = useMemo(
+    () => new Set(list.shown.map((item) => item.id)),
+    [list.shown],
+  );
   const folderCollapseKey = (name: string) =>
-    sidebarFolderKey(mode, mode === "repository" ? name : projectFolderKey(name));
-  const isFolderCollapsed = (name: string) => collapsedFolderKeys.includes(folderCollapseKey(name));
+    sidebarFolderKey(
+      mode,
+      mode === "repository" ? name : projectFolderKey(name),
+    );
+  const isFolderCollapsed = (name: string) =>
+    collapsedFolderKeys.includes(folderCollapseKey(name));
   const sortableIds =
     mode === "repository"
       ? tree.flatMap((entry) =>
@@ -353,11 +430,14 @@ export function MergedProjectList({
             ? [entry.project.id]
             : [
                 `project-folder:${entry.key}`,
-                ...(isFolderCollapsed(entry.name) ? [] : entry.projects.map((p) => p.id)),
+                ...(isFolderCollapsed(entry.name)
+                  ? []
+                  : entry.projects.map((p) => p.id)),
               ],
         )
       : projectSortableIds(tree, [], isFolderCollapsed);
-  const isProjectDrag = (id: string) => parseProjectFolderDragId(id) !== null || projectIds.has(id);
+  const isProjectDrag = (id: string) =>
+    parseProjectFolderDragId(id) !== null || projectIds.has(id);
   const apply = (arrangement: ProjectArrangement | null) => {
     const update =
       mode === "project"
@@ -385,7 +465,11 @@ export function MergedProjectList({
     }
     for (const item of list.shown) {
       if (item.machine.bound) continue;
-      const project = remoteEnvironmentProject(item.machine, [item.project], activeId);
+      const project = remoteEnvironmentProject(
+        item.machine,
+        [item.project],
+        activeId,
+      );
       if (project) {
         if (isMachineWritable(item.machine) && !item.machine.truncated) {
           reorder(item.machine, project, activeId, overId);
@@ -396,9 +480,17 @@ export function MergedProjectList({
     onBoundEnvironmentDragEnd(activeId, overId);
   };
 
+  const machineMark = mode === "repository" ? "home" : "dot";
   const renderProject = (item: MergedProject, label?: string) =>
     item.machine.bound ? (
-      <div key={item.id}>{renderBoundProject(item.project.ref.projectId, item.id, label)}</div>
+      <div key={item.id}>
+        {renderBoundProject(
+          item.project.ref.projectId,
+          item.id,
+          label,
+          machineMark,
+        )}
+      </div>
     ) : (
       <RemoteProjectGroup
         key={item.id}
@@ -408,7 +500,7 @@ export function MergedProjectList({
         isCollapsed={collapsedProjectKeys.includes(item.id)}
         onToggleCollapse={() => setProjectKeyCollapsed(item.id)}
         sortable={isMachineWritable(item.machine) && !item.machine.truncated}
-        showMachine
+        showMachine={machineMark}
         label={label}
       />
     );
@@ -416,10 +508,16 @@ export function MergedProjectList({
   return (
     <div
       className="py-1"
-      data-testid={mode === "project" ? "federated-project-list" : "federated-repository-list"}
+      data-testid={
+        mode === "project"
+          ? "federated-project-list"
+          : "federated-repository-list"
+      }
     >
       {list.shown.length === 0 ? (
-        <p className="px-4 py-6 text-center text-sm text-muted-foreground">No projects yet</p>
+        <p className="px-4 py-6 text-center text-sm text-muted-foreground">
+          No projects yet
+        </p>
       ) : null}
       <DndContext
         sensors={sensors}
@@ -428,7 +526,10 @@ export function MergedProjectList({
         onDragEnd={handleDragEnd}
         onDragCancel={() => setDraggingProject(false)}
       >
-        <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
+        <SortableContext
+          items={sortableIds}
+          strategy={verticalListSortingStrategy}
+        >
           {tree.map((entry) => {
             if (entry.kind === "project") return renderProject(entry.project);
             const folderActions =
@@ -438,12 +539,28 @@ export function MergedProjectList({
                       const normalized = normalizeProjectFolderName(nextName);
                       if (!normalized) return;
                       const collapsed = isFolderCollapsed(entry.name);
-                      apply(resolveRenameProjectFolder(list.shown, entry.name, nextName));
-                      setFolderKeyCollapsed(folderCollapseKey(entry.name), false);
-                      setFolderKeyCollapsed(folderCollapseKey(normalized), collapsed);
+                      apply(
+                        resolveRenameProjectFolder(
+                          list.shown,
+                          entry.name,
+                          nextName,
+                        ),
+                      );
+                      setFolderKeyCollapsed(
+                        folderCollapseKey(entry.name),
+                        false,
+                      );
+                      setFolderKeyCollapsed(
+                        folderCollapseKey(normalized),
+                        collapsed,
+                      );
                     },
-                    onSort: () => apply(resolveSortProjectFolder(list.shown, entry.name)),
-                    onUngroup: () => apply(resolveUngroupProjectFolder(list.shown, entry.name)),
+                    onSort: () =>
+                      apply(resolveSortProjectFolder(list.shown, entry.name)),
+                    onUngroup: () =>
+                      apply(
+                        resolveUngroupProjectFolder(list.shown, entry.name),
+                      ),
                   }
                 : {};
             const opens =
@@ -454,12 +571,22 @@ export function MergedProjectList({
               <SortableProjectFolder
                 key={`folder:${entry.key}`}
                 name={entry.name}
-                sortableId={mode === "repository" ? `project-folder:${entry.key}` : undefined}
-                label={mode === "repository" ? repositoryLabel(entry.name) : entry.name}
+                sortableId={
+                  mode === "repository"
+                    ? `project-folder:${entry.key}`
+                    : undefined
+                }
+                label={
+                  mode === "repository"
+                    ? repositoryLabel(entry.name)
+                    : entry.name
+                }
                 repository={mode === "repository"}
                 projectCount={entry.projects.length}
                 isCollapsed={isFolderCollapsed(entry.name)}
-                onToggleCollapse={() => setFolderKeyCollapsed(folderCollapseKey(entry.name))}
+                onToggleCollapse={() =>
+                  setFolderKeyCollapsed(folderCollapseKey(entry.name))
+                }
                 onOpen={
                   opens
                     ? () =>
@@ -484,7 +611,9 @@ export function MergedProjectList({
                 {entry.projects.map((item) =>
                   renderProject(
                     item,
-                    mode === "repository" ? repositoryMemberLabel(item, entry.projects) : undefined,
+                    mode === "repository"
+                      ? repositoryMemberLabel(item, entry.projects)
+                      : undefined,
                   ),
                 )}
               </SortableProjectFolder>
@@ -513,11 +642,15 @@ export function FederatedActivityList({
   return (
     <div className="px-1 pt-2" data-testid="federated-activity-list">
       {rows.length === 0 ? (
-        <p className="px-4 py-6 text-center text-sm text-muted-foreground">No environments yet</p>
+        <p className="px-4 py-6 text-center text-sm text-muted-foreground">
+          No environments yet
+        </p>
       ) : (
         rows.map((row) =>
           row.machine.bound ? (
-            <div key={row.environment.key}>{renderBoundRow(row.environment.ref.environmentId)}</div>
+            <div key={row.environment.key}>
+              {renderBoundRow(row.environment.ref.environmentId)}
+            </div>
           ) : (
             <RemoteActivityRow
               key={row.environment.key}
@@ -542,7 +675,10 @@ function RemoteActivityRow({
   environment: FederatedEnvironment;
   subtitle: string;
 }) {
-  const shown = useRemoteEnvironmentShown(machine.connectionId, environment.ref.environmentId);
+  const shown = useRemoteEnvironmentShown(
+    machine.connectionId,
+    environment.ref.environmentId,
+  );
   return (
     <div
       className={cn(
@@ -555,7 +691,11 @@ function RemoteActivityRow({
       data-selected={shown || undefined}
     >
       <div className="min-w-0 flex-1 pl-2">
-        <RemoteEnvironmentItem machine={machine} environment={environment} subtitle={subtitle} />
+        <RemoteEnvironmentItem
+          machine={machine}
+          environment={environment}
+          subtitle={subtitle}
+        />
       </div>
     </div>
   );

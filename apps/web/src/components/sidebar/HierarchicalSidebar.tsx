@@ -1,5 +1,8 @@
 import { useSidebarHydration } from "./useSidebarHydration";
-import { onCreateEnvironmentRequest, openMachineWorkspace } from "@/lib/federation/open-workspace";
+import {
+  onCreateEnvironmentRequest,
+  openMachineWorkspace,
+} from "@/lib/federation/open-workspace";
 import { startsOnSelection } from "@/lib/environment-auto-start";
 import {
   lazy,
@@ -74,7 +77,10 @@ import { ProjectSearchBar } from "./ProjectSearchBar";
 import { ServerConnectionSwitcher } from "./ServerConnectionSwitcher";
 import { useFederation } from "@/components/federation/FederationProvider";
 import { MachinesFilter } from "@/components/federation/MachinesFilter";
-import { MachineDot } from "@/components/federation/MachineDot";
+import {
+  MachineDot,
+  MachineHomeIcon,
+} from "@/components/federation/MachineDot";
 import {
   FederatedActivityList,
   MachineSectionList,
@@ -94,7 +100,11 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
   EnvironmentItem,
   resolveEnvironmentAgentActivity,
@@ -102,7 +112,10 @@ import {
 import { cn } from "@/lib/utils";
 import { sidebarCollisionDetection } from "@/lib/sidebar-collision";
 import { withoutProjectHomes } from "@/lib/project-home";
-import { LazyDialogLoadingFallback, LazyLoadBoundary } from "@/components/LazyLoadBoundary";
+import {
+  LazyDialogLoadingFallback,
+  LazyLoadBoundary,
+} from "@/components/LazyLoadBoundary";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import {
   buildProjectTree,
@@ -123,7 +136,8 @@ import {
 
 const NO_ENVIRONMENTS: Environment[] = [];
 const LazyRepositorySettings = lazy(async () => ({
-  default: (await import("@/components/settings/RepositorySettings")).RepositorySettings,
+  default: (await import("@/components/settings/RepositorySettings"))
+    .RepositorySettings,
 }));
 
 /**
@@ -133,7 +147,11 @@ const LazyRepositorySettings = lazy(async () => ({
  */
 export type SidebarDragType = "project" | "folder" | "environment";
 
-export type SidebarReorderResult = { type: "environment"; projectId: string; ids: string[] };
+export type SidebarReorderResult = {
+  type: "environment";
+  projectId: string;
+  ids: string[];
+};
 
 export type SidebarSelectionResult =
   | { type: "toggle"; environmentId: string }
@@ -151,7 +169,9 @@ export function sortEnvironmentsByActivity(
   environments: Environment[],
   projects: Project[],
 ): Environment[] {
-  const projectOrder = new Map(projects.map((project) => [project.id, project.order]));
+  const projectOrder = new Map(
+    projects.map((project) => [project.id, project.order]),
+  );
   return [...environments].sort((left, right) => {
     const leftActivity = parseActivityTime(left.lastActivityAt);
     const rightActivity = parseActivityTime(right.lastActivityAt);
@@ -189,7 +209,10 @@ export function animateActivityRowMovement(
   let animation: Animation | null = null;
   if (offset !== 0 && !reduceMotion && typeof element.animate === "function") {
     animation = element.animate(
-      [{ transform: `translateY(${offset}px)` }, { transform: "translateY(0)" }],
+      [
+        { transform: `translateY(${offset}px)` },
+        { transform: "translateY(0)" },
+      ],
       {
         duration: 280,
         easing: "cubic-bezier(0.22, 1, 0.36, 1)",
@@ -222,7 +245,10 @@ function AnimatedActivityRow({
     // Activity, unread, and status updates all re-render the sidebar. Only run
     // the FLIP animation when this row's actual list position changes so those
     // unrelated updates cannot restart transforms across the whole list.
-    if (previousTopRef.current !== null && previousPositionRef.current === position) {
+    if (
+      previousTopRef.current !== null &&
+      previousPositionRef.current === position
+    ) {
       // A preceding row may have changed height without changing this row's
       // numeric position. Refresh the transform-independent layout baseline,
       // but leave any in-flight animation alone.
@@ -240,7 +266,8 @@ function AnimatedActivityRow({
       const transformedTop = row.getBoundingClientRect().top - parentTop;
       activeAnimation.cancel();
       const layoutTop = row.getBoundingClientRect().top - parentTop;
-      previousTop = (previousTopRef.current ?? layoutTop) + (transformedTop - layoutTop);
+      previousTop =
+        (previousTopRef.current ?? layoutTop) + (transformedTop - layoutTop);
     }
 
     const reduceMotion =
@@ -310,8 +337,12 @@ export function resolveSidebarReorder(
 ): SidebarReorderResult | null {
   if (activeId === overId) return null;
   if (activeType === "environment") {
-    const activeEnvironment = environments.find((environment) => environment.id === activeId);
-    const overEnvironment = environments.find((environment) => environment.id === overId);
+    const activeEnvironment = environments.find(
+      (environment) => environment.id === activeId,
+    );
+    const overEnvironment = environments.find(
+      (environment) => environment.id === overId,
+    );
     if (
       !activeEnvironment ||
       !overEnvironment ||
@@ -320,10 +351,16 @@ export function resolveSidebarReorder(
       return null;
     }
     const projectEnvironments = environments
-      .filter((environment) => environment.projectId === activeEnvironment.projectId)
+      .filter(
+        (environment) => environment.projectId === activeEnvironment.projectId,
+      )
       .sort((left, right) => left.order - right.order);
-    const oldIndex = projectEnvironments.findIndex((environment) => environment.id === activeId);
-    const newIndex = projectEnvironments.findIndex((environment) => environment.id === overId);
+    const oldIndex = projectEnvironments.findIndex(
+      (environment) => environment.id === activeId,
+    );
+    const newIndex = projectEnvironments.findIndex(
+      (environment) => environment.id === overId,
+    );
     if (oldIndex === -1 || newIndex === -1) return null;
     const [removed] = projectEnvironments.splice(oldIndex, 1);
     if (!removed) return null;
@@ -349,7 +386,10 @@ export async function forkSidebarEnvironment(
       environmentType: EnvironmentType,
     ) => Promise<Environment>;
     setProjectCollapsed: (projectId: string, collapsed: boolean) => void;
-    selectProjectAndEnvironment: (projectId: string, environmentId: string) => void;
+    selectProjectAndEnvironment: (
+      projectId: string,
+      environmentId: string,
+    ) => void;
     startEnvironment: (
       environmentId: string,
       initialPrompt?: string,
@@ -357,7 +397,9 @@ export async function forkSidebarEnvironment(
     ) => Promise<unknown>;
   },
 ): Promise<void> {
-  const source = options.allEnvironments.find((environment) => environment.id === environmentId);
+  const source = options.allEnvironments.find(
+    (environment) => environment.id === environmentId,
+  );
   if (!source) return;
   if (environmentType === "containerized" && !options.dockerAvailable) {
     toast.warning("Docker is not running", {
@@ -369,13 +411,17 @@ export async function forkSidebarEnvironment(
     const project = options.projectsById.get(source.projectId);
     if (project && !project.localPath) {
       toast.warning("Local worktrees are unavailable", {
-        description: "Add a local checkout for this project before forking locally.",
+        description:
+          "Add a local checkout for this project before forking locally.",
       });
       return;
     }
   }
   try {
-    const created = await options.forkEnvironment(environmentId, environmentType);
+    const created = await options.forkEnvironment(
+      environmentId,
+      environmentType,
+    );
     options.setProjectCollapsed(created.projectId, false);
     options.selectProjectAndEnvironment(created.projectId, created.id);
     startEnvironmentInBackground(options.startEnvironment, created.id);
@@ -407,21 +453,31 @@ export async function deleteProjectAndEnvironments(
     const admittedHomes = await drainProjectHomeEnsures(projectId);
     const currentEnvironments = useEnvironmentStore
       .getState()
-      .environments.filter((environment) => environment.projectId === projectId);
+      .environments.filter(
+        (environment) => environment.projectId === projectId,
+      );
     const toDelete = new Map(
-      [...environments, ...currentEnvironments, ...admittedHomes].map((env) => [env.id, env]),
+      [...environments, ...currentEnvironments, ...admittedHomes].map((env) => [
+        env.id,
+        env,
+      ]),
     );
     const failedNames: string[] = [];
     for (const environment of toDelete.values()) {
       try {
         await deleteEnvironment(environment.id);
       } catch (error) {
-        console.error(`Failed to delete environment ${environment.name}:`, error);
+        console.error(
+          `Failed to delete environment ${environment.name}:`,
+          error,
+        );
         failedNames.push(environment.name);
       }
     }
     if (failedNames.length > 0) {
-      throw new Error(`Failed to delete some environments: ${failedNames.join(", ")}`);
+      throw new Error(
+        `Failed to delete some environments: ${failedNames.join(", ")}`,
+      );
     }
     await removeProject(projectId);
   } finally {
@@ -438,13 +494,19 @@ export function HierarchicalSidebar() {
   useEnvironmentDiffStats();
   const [showAddProjectDialog, setShowAddProjectDialog] = useState(false);
   const [showCreateEnvDialog, setShowCreateEnvDialog] = useState(false);
-  const [createEnvProjectId, setCreateEnvProjectId] = useState<string | null>(null);
+  const [createEnvProjectId, setCreateEnvProjectId] = useState<string | null>(
+    null,
+  );
   const [activeId, setActiveId] = useState<string | null>(null);
   const [activeType, setActiveType] = useState<SidebarDragType | null>(null);
-  const [folderDialogProjectId, setFolderDialogProjectId] = useState<string | null>(null);
+  const [folderDialogProjectId, setFolderDialogProjectId] = useState<
+    string | null
+  >(null);
   const [showBulkDeleteDialog, setShowBulkDeleteDialog] = useState(false);
   const [showSettingsDialog, setShowSettingsDialog] = useState(false);
-  const [settingsProjectId, setSettingsProjectId] = useState<string | null>(null);
+  const [settingsProjectId, setSettingsProjectId] = useState<string | null>(
+    null,
+  );
   const isMobile = useMediaQuery("(max-width: 767px)");
 
   const {
@@ -472,27 +534,46 @@ export function HierarchicalSidebar() {
 
   useEnvironmentListSync(
     projects.map((project) => project.id),
-    (projectId) => loadEnvironments(projectId, { silent: true, reconcileStatus: false }),
+    (projectId) =>
+      loadEnvironments(projectId, { silent: true, reconcileStatus: false }),
   );
 
   // Data via narrow selectors; actions are stable references on the store.
   const selectedProjectId = useUIStore((state) => state.selectedProjectId);
-  const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
+  const selectedEnvironmentId = useUIStore(
+    (state) => state.selectedEnvironmentId,
+  );
   const collapsedProjects = useUIStore((state) => state.collapsedProjects);
-  const collapsedProjectFolders = useUIStore((state) => state.collapsedProjectFolders);
-  const selectedEnvironmentIds = useUIStore((state) => state.selectedEnvironmentIds);
+  const collapsedProjectFolders = useUIStore(
+    (state) => state.collapsedProjectFolders,
+  );
+  const selectedEnvironmentIds = useUIStore(
+    (state) => state.selectedEnvironmentIds,
+  );
   const environmentSortMode = useUIStore((state) => state.environmentSortMode);
   const selectProject = useUIStore((state) => state.selectProject);
-  const selectProjectAndEnvironment = useUIStore((state) => state.selectProjectAndEnvironment);
+  const selectProjectAndEnvironment = useUIStore(
+    (state) => state.selectProjectAndEnvironment,
+  );
   const setProjectCollapsed = useUIStore((state) => state.setProjectCollapsed);
-  const toggleProjectCollapse = useUIStore((state) => state.toggleProjectCollapse);
-  const toggleProjectFolderCollapse = useUIStore((state) => state.toggleProjectFolderCollapse);
-  const setProjectFolderCollapsed = useUIStore((state) => state.setProjectFolderCollapsed);
-  const toggleEnvironmentSelection = useUIStore((state) => state.toggleEnvironmentSelection);
+  const toggleProjectCollapse = useUIStore(
+    (state) => state.toggleProjectCollapse,
+  );
+  const toggleProjectFolderCollapse = useUIStore(
+    (state) => state.toggleProjectFolderCollapse,
+  );
+  const setProjectFolderCollapsed = useUIStore(
+    (state) => state.setProjectFolderCollapsed,
+  );
+  const toggleEnvironmentSelection = useUIStore(
+    (state) => state.toggleEnvironmentSelection,
+  );
   const setMultiSelection = useUIStore((state) => state.setMultiSelection);
   const clearMultiSelection = useUIStore((state) => state.clearMultiSelection);
   const projectsLoaded = useProjectStore((state) => state.hasLoaded);
-  const setEnvironmentSortMode = useUIStore((state) => state.setEnvironmentSortMode);
+  const setEnvironmentSortMode = useUIStore(
+    (state) => state.setEnvironmentSortMode,
+  );
   // Multi-machine presentation. This sidebar's own machine keeps its full
   // tree; other machines appear as their own sections, or merged into one
   // projection when grouped by project/repository or sorted by activity.
@@ -507,19 +588,25 @@ export function HierarchicalSidebar() {
       federation.enabled
         ? filterMachines(
             machineViews,
-            machineViews.some((machine) => machine.connectionId === machineFilter)
+            machineViews.some(
+              (machine) => machine.connectionId === machineFilter,
+            )
               ? machineFilter
               : ALL_MACHINES,
           )
         : [],
     [federation.enabled, machineFilter, machineViews],
   );
-  const boundMachineView = machineViews.find((machine) => machine.bound) ?? null;
-  const remoteMachinesVisible = visibleMachines.filter((machine) => !machine.bound);
+  const boundMachineView =
+    machineViews.find((machine) => machine.bound) ?? null;
+  const remoteMachinesVisible = visibleMachines.filter(
+    (machine) => !machine.bound,
+  );
   // Machines are listed in the command node's order, whichever one this window
   // works on. Merged lists hide a machine that is not connected; its projects
   // keep their place for when it is back.
-  const federatedMode: "machine" | "activity" | "project" | "repository" | null =
+  const federatedMode:
+    "machine" | "activity" | "project" | "repository" | null =
     !federation.enabled
       ? null
       : remoteMachinesVisible.length === 0
@@ -530,7 +617,12 @@ export function HierarchicalSidebar() {
           ? "activity"
           : machineGrouping;
   const mergedShownIds = useMemo(
-    () => new Set(visibleMachines.filter(isMachineShown).map((machine) => machine.connectionId)),
+    () =>
+      new Set(
+        visibleMachines
+          .filter(isMachineShown)
+          .map((machine) => machine.connectionId),
+      ),
     [visibleMachines],
   );
   useBoundCollapseSync(
@@ -549,7 +641,8 @@ export function HierarchicalSidebar() {
   const selectedProjectHomeActive = useMemo(
     () =>
       allEnvironments.some(
-        (environment) => environment.id === selectedEnvironmentId && environment.projectHome,
+        (environment) =>
+          environment.id === selectedEnvironmentId && environment.projectHome,
       ),
     [allEnvironments, selectedEnvironmentId],
   );
@@ -561,13 +654,19 @@ export function HierarchicalSidebar() {
     () => suggestedCloneDirectory(projects.map((project) => project.localPath)),
     [projects],
   );
-  const projectGitUrls = useMemo(() => projects.map((project) => project.gitUrl), [projects]);
+  const projectGitUrls = useMemo(
+    () => projects.map((project) => project.gitUrl),
+    [projects],
+  );
   const projectsById = useMemo(
     () => new Map(projects.map((project) => [project.id, project])),
     [projects],
   );
   const projectTree = useMemo(() => buildProjectTree(projects), [projects]);
-  const projectFolderNames = useMemo(() => listProjectFolderNames(projects), [projects]);
+  const projectFolderNames = useMemo(
+    () => listProjectFolderNames(projects),
+    [projects],
+  );
   // Sortable ids and the rendered rows must be built from the same tree and the
   // same collapse state: a registered id with no visible row still resolves
   // drops, and would drop a project into a folder the user cannot see.
@@ -576,7 +675,9 @@ export function HierarchicalSidebar() {
     [projectTree, collapsedProjectFolders],
   );
   const totalEnvironmentCount = activityEnvironments.length;
-  const deletingEnvironments = useEnvironmentStore((state) => state.deletingEnvironments);
+  const deletingEnvironments = useEnvironmentStore(
+    (state) => state.deletingEnvironments,
+  );
   const waitingEnvironmentCount = useAgentActivityStore(
     (state) =>
       allEnvironments.filter(
@@ -610,7 +711,9 @@ export function HierarchicalSidebar() {
 
   useSidebarHydration(
     projects,
-    projectsLoaded && !projectsLoading && (!federation.supported || federation.portalState.loaded),
+    projectsLoaded &&
+      !projectsLoading &&
+      (!federation.supported || federation.portalState.loaded),
     allEnvironments,
     loadEnvironments,
   );
@@ -632,7 +735,8 @@ export function HierarchicalSidebar() {
 
   // Get environments for a specific project
   const getProjectEnvironments = useCallback(
-    (projectId: string): Environment[] => environmentsByProject.get(projectId) ?? NO_ENVIRONMENTS,
+    (projectId: string): Environment[] =>
+      environmentsByProject.get(projectId) ?? NO_ENVIRONMENTS,
     [environmentsByProject],
   );
 
@@ -657,11 +761,15 @@ export function HierarchicalSidebar() {
       setActiveType("folder");
       return;
     }
-    setActiveType(projects.some((p) => p.id === draggedId) ? "project" : "environment");
+    setActiveType(
+      projects.some((p) => p.id === draggedId) ? "project" : "environment",
+    );
   };
 
   /** Persists one arrangement, or nothing when the gesture was a no-op. */
-  const applyArrangement = async (arrangement: ProjectArrangement | null): Promise<void> => {
+  const applyArrangement = async (
+    arrangement: ProjectArrangement | null,
+  ): Promise<void> => {
     if (!arrangement) return;
     await arrangeProjects(arrangement.projectIds, arrangement.folders);
   };
@@ -676,7 +784,9 @@ export function HierarchicalSidebar() {
     const droppedOnId = String(over.id);
     try {
       if (activeType === "project" || activeType === "folder") {
-        await applyArrangement(resolveProjectArrangement(draggedId, droppedOnId, projects));
+        await applyArrangement(
+          resolveProjectArrangement(draggedId, droppedOnId, projects),
+        );
         return;
       }
       const reorder = resolveSidebarReorder(
@@ -692,15 +802,22 @@ export function HierarchicalSidebar() {
     }
   };
 
-  const handleAddToFolder = async (projectId: string, folderName: string): Promise<void> => {
-    await applyArrangement(resolveAddProjectToFolder(projects, projectId, folderName));
+  const handleAddToFolder = async (
+    projectId: string,
+    folderName: string,
+  ): Promise<void> => {
+    await applyArrangement(
+      resolveAddProjectToFolder(projects, projectId, folderName),
+    );
     // A folder the user just filed something into has to be visible, otherwise
     // the project appears to have vanished from the sidebar.
     setProjectFolderCollapsed(folderName, false);
   };
 
   const handleRemoveFromFolder = (projectId: string): void => {
-    void applyArrangement(resolveRemoveProjectFromFolder(projects, projectId)).catch((err) => {
+    void applyArrangement(
+      resolveRemoveProjectFromFolder(projects, projectId),
+    ).catch((err) => {
       console.error("Failed to remove project from folder:", err);
     });
   };
@@ -711,9 +828,14 @@ export function HierarchicalSidebar() {
     // runs, and a key that no longer matches leaves the renamed folder expanded
     // while stranding the old entry in the persisted list forever.
     const storedName = normalizeProjectFolderName(nextName);
-    void applyArrangement(resolveRenameProjectFolder(projects, folderName, nextName))
+    void applyArrangement(
+      resolveRenameProjectFolder(projects, folderName, nextName),
+    )
       .then(() => {
-        if (storedName && isProjectFolderCollapsed(collapsedProjectFolders, folderName)) {
+        if (
+          storedName &&
+          isProjectFolderCollapsed(collapsedProjectFolders, folderName)
+        ) {
           setProjectFolderCollapsed(folderName, false);
           setProjectFolderCollapsed(storedName, true);
         }
@@ -732,12 +854,18 @@ export function HierarchicalSidebar() {
   };
 
   const handleSortFolder = (folderName: string): void => {
-    void applyArrangement(resolveSortProjectFolder(projects, folderName)).catch((err) => {
-      console.error("Failed to sort project folder:", err);
-    });
+    void applyArrangement(resolveSortProjectFolder(projects, folderName)).catch(
+      (err) => {
+        console.error("Failed to sort project folder:", err);
+      },
+    );
   };
 
-  const handleAddProject = async (gitUrl: string, localPath?: string, cloneOnly?: boolean) => {
+  const handleAddProject = async (
+    gitUrl: string,
+    localPath?: string,
+    cloneOnly?: boolean,
+  ) => {
     try {
       await addProject(gitUrl, localPath, cloneOnly);
     } catch (err) {
@@ -761,7 +889,12 @@ export function HierarchicalSidebar() {
       (environment) => environment.projectId === projectId,
     );
     try {
-      await deleteProjectAndEnvironments(projectId, projectEnvs, deleteEnvironment, removeProject);
+      await deleteProjectAndEnvironments(
+        projectId,
+        projectEnvs,
+        deleteEnvironment,
+        removeProject,
+      );
     } catch (err) {
       console.error("Failed to delete project:", err);
       throw err;
@@ -794,7 +927,8 @@ export function HierarchicalSidebar() {
     const collectFrom = (project: Project): void => {
       // Skip collapsed projects - their environments aren't visible
       if (collapsedProjects.includes(project.id)) return;
-      for (const env of getProjectEnvironments(project.id)) orderedIds.push(env.id);
+      for (const env of getProjectEnvironments(project.id))
+        orderedIds.push(env.id);
     };
     for (const entry of projectTree) {
       if (entry.kind === "project") {
@@ -803,7 +937,8 @@ export function HierarchicalSidebar() {
       }
       // A collapsed folder hides every project inside it, so shift-range
       // selection must not run through environments that are not on screen.
-      if (isProjectFolderCollapsed(collapsedProjectFolders, entry.name)) continue;
+      if (isProjectFolderCollapsed(collapsedProjectFolders, entry.name))
+        continue;
       for (const project of entry.projects) collectFrom(project);
     }
     return orderedIds;
@@ -818,7 +953,10 @@ export function HierarchicalSidebar() {
 
   // useCallback so memo(EnvironmentItem) rows are not invalidated every render.
   const handleSelectEnvironment = useCallback(
-    (environmentId: string, modifiers: { shiftKey?: boolean; metaKey?: boolean } = {}) => {
+    (
+      environmentId: string,
+      modifiers: { shiftKey?: boolean; metaKey?: boolean } = {},
+    ) => {
       const selection = resolveSidebarSelection(
         environmentId,
         modifiers,
@@ -840,21 +978,29 @@ export function HierarchicalSidebar() {
         document.activeElement.blur();
       }
       clearMultiSelection();
-      const environment = allEnvironments.find((e) => e.id === selection.environmentId);
+      const environment = allEnvironments.find(
+        (e) => e.id === selection.environmentId,
+      );
       if (environment) {
         selectProjectAndEnvironment(environment.projectId, environmentId);
         // Auto-start local environments on selection so a terminal can open
         if (startsOnSelection(environment)) {
-          console.info("[HierarchicalSidebar] Auto-starting local environment:", {
-            environmentId: environment.id,
-            branch: environment.branch,
-            status: environment.status,
-            worktreePath: environment.worktreePath,
-          });
+          console.info(
+            "[HierarchicalSidebar] Auto-starting local environment:",
+            {
+              environmentId: environment.id,
+              branch: environment.branch,
+              status: environment.status,
+              worktreePath: environment.worktreePath,
+            },
+          );
           // Setup command handling (blocking, placeholder, resolve) is centralized
           // in useEnvironments.startEnvironment() for all code paths.
           startEnvironment(environment.id).catch((err) => {
-            console.error("[HierarchicalSidebar] Failed to auto-start local environment:", err);
+            console.error(
+              "[HierarchicalSidebar] Failed to auto-start local environment:",
+              err,
+            );
           });
         }
         // Already-started local environments resume their backend-owned setup
@@ -896,7 +1042,9 @@ export function HierarchicalSidebar() {
 
   const handleSearchSelectEnvironment = useCallback(
     (environmentId: string) => {
-      const environment = allEnvironments.find((entry) => entry.id === environmentId);
+      const environment = allEnvironments.find(
+        (entry) => entry.id === environmentId,
+      );
       if (environment) {
         revealProject(environment.projectId);
       }
@@ -909,14 +1057,22 @@ export function HierarchicalSidebar() {
   const handleStopSelected = async () => {
     const runningIds = selectedEnvironmentIds.filter((id) => {
       const env = allEnvironments.find((e) => e.id === id);
-      return env?.status === "running" && (env.environmentType === "local" || dockerAvailable);
+      return (
+        env?.status === "running" &&
+        (env.environmentType === "local" || dockerAvailable)
+      );
     });
 
-    const results = await Promise.allSettled(runningIds.map((id) => stopEnvironment(id)));
+    const results = await Promise.allSettled(
+      runningIds.map((id) => stopEnvironment(id)),
+    );
 
     results.forEach((result, index) => {
       if (result.status === "rejected") {
-        console.error(`Failed to stop environment ${runningIds[index]}:`, result.reason);
+        console.error(
+          `Failed to stop environment ${runningIds[index]}:`,
+          result.reason,
+        );
       }
     });
   };
@@ -924,14 +1080,22 @@ export function HierarchicalSidebar() {
   const handleRestartSelected = async () => {
     const runningIds = selectedEnvironmentIds.filter((id) => {
       const env = allEnvironments.find((e) => e.id === id);
-      return env?.status === "running" && (env.environmentType === "local" || dockerAvailable);
+      return (
+        env?.status === "running" &&
+        (env.environmentType === "local" || dockerAvailable)
+      );
     });
 
-    const results = await Promise.allSettled(runningIds.map((id) => restartEnvironment(id)));
+    const results = await Promise.allSettled(
+      runningIds.map((id) => restartEnvironment(id)),
+    );
 
     results.forEach((result, index) => {
       if (result.status === "rejected") {
-        console.error(`Failed to restart environment ${runningIds[index]}:`, result.reason);
+        console.error(
+          `Failed to restart environment ${runningIds[index]}:`,
+          result.reason,
+        );
       }
     });
   };
@@ -939,11 +1103,16 @@ export function HierarchicalSidebar() {
   const handleDeleteSelected = async () => {
     const idsToDelete = [...selectedEnvironmentIds];
 
-    const results = await Promise.allSettled(idsToDelete.map((id) => deleteEnvironment(id)));
+    const results = await Promise.allSettled(
+      idsToDelete.map((id) => deleteEnvironment(id)),
+    );
 
     results.forEach((result, index) => {
       if (result.status === "rejected") {
-        console.error(`Failed to delete environment ${idsToDelete[index]}:`, result.reason);
+        console.error(
+          `Failed to delete environment ${idsToDelete[index]}:`,
+          result.reason,
+        );
       }
     });
 
@@ -960,7 +1129,9 @@ export function HierarchicalSidebar() {
     })
     .filter(Boolean) as { id: string; name: string }[];
   const hasActionableRunningSelection = selectedEnvironmentIds.some((id) => {
-    const environment = allEnvironments.find((candidate) => candidate.id === id);
+    const environment = allEnvironments.find(
+      (candidate) => candidate.id === id,
+    );
     return (
       environment?.status === "running" &&
       (environment.environmentType === "local" || dockerAvailable)
@@ -1007,12 +1178,18 @@ export function HierarchicalSidebar() {
 
   const renderProjectGroup = (
     project: Project,
-    mixed?: { sortableId: string; machineBadge: ReactNode; label?: string },
+    mixed?: {
+      sortableId: string;
+      machineBadge?: ReactNode;
+      machineIcon?: ReactNode;
+      label?: string;
+    },
   ) => (
     <SortableProjectGroup
       key={project.id}
       sortableId={mixed?.sortableId}
       machineBadge={mixed?.machineBadge}
+      machineIcon={mixed?.machineIcon}
       label={mixed?.label}
       project={project}
       environments={getProjectEnvironments(project.id)}
@@ -1025,7 +1202,8 @@ export function HierarchicalSidebar() {
       )}
       isCollapsed={collapsedProjects.includes(project.id)}
       isSelected={
-        selectedProjectId === project.id && (!selectedEnvironmentId || selectedProjectHomeActive)
+        selectedProjectId === project.id &&
+        (!selectedEnvironmentId || selectedProjectHomeActive)
       }
       onToggleCollapse={() => toggleProjectCollapse(project.id)}
       selectedEnvironmentId={selectedEnvironmentId}
@@ -1039,9 +1217,13 @@ export function HierarchicalSidebar() {
       onRestartEnvironment={restartEnvironment}
       onForkEnvironment={handleForkEnvironment}
       onCreateEnvironment={() => handleOpenCreateEnvDialog(project.id)}
-      onAddToFolder={mixed ? undefined : () => setFolderDialogProjectId(project.id)}
+      onAddToFolder={
+        mixed ? undefined : () => setFolderDialogProjectId(project.id)
+      }
       onRemoveFromFolder={
-        !mixed && project.folder ? () => handleRemoveFromFolder(project.id) : undefined
+        !mixed && project.folder
+          ? () => handleRemoveFromFolder(project.id)
+          : undefined
       }
       isMultiSelectMode={isMultiSelectMode}
       selectedEnvironmentIds={selectedEnvironmentIds}
@@ -1049,9 +1231,12 @@ export function HierarchicalSidebar() {
   );
 
   // Get the active item for drag overlay
-  const activeProject = activeType === "project" ? projects.find((p) => p.id === activeId) : null;
+  const activeProject =
+    activeType === "project" ? projects.find((p) => p.id === activeId) : null;
   const activeFolderKey =
-    activeType === "folder" && activeId ? parseProjectFolderDragId(activeId) : null;
+    activeType === "folder" && activeId
+      ? parseProjectFolderDragId(activeId)
+      : null;
   const activeFolder =
     activeFolderKey === null
       ? null
@@ -1060,7 +1245,9 @@ export function HierarchicalSidebar() {
             entry.kind === "folder" && entry.key === activeFolderKey,
         ) ?? null);
   const activeEnvironment =
-    activeType === "environment" ? allEnvironments.find((e) => e.id === activeId) : null;
+    activeType === "environment"
+      ? allEnvironments.find((e) => e.id === activeId)
+      : null;
 
   /** An activity row of this window's machine, also used among other machines' rows. */
   const activityRowClassName = (environmentId: string) =>
@@ -1074,7 +1261,9 @@ export function HierarchicalSidebar() {
   const renderActivityItem = (environment: Environment) => (
     <EnvironmentItem
       environment={environment}
-      subtitle={projectsById.get(environment.projectId)?.name ?? "Unknown project"}
+      subtitle={
+        projectsById.get(environment.projectId)?.name ?? "Unknown project"
+      }
       isSelected={selectedEnvironmentId === environment.id}
       onSelect={handleSelectEnvironment}
       onDelete={deleteEnvironment}
@@ -1098,7 +1287,11 @@ export function HierarchicalSidebar() {
       <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
         <FolderGit2 className="h-8 w-8 mb-2 opacity-50" />
         <p className="text-sm">No projects yet</p>
-        <Button variant="link" size="sm" onClick={() => setShowAddProjectDialog(true)}>
+        <Button
+          variant="link"
+          size="sm"
+          onClick={() => setShowAddProjectDialog(true)}
+        >
           Add your first project
         </Button>
       </div>
@@ -1145,7 +1338,10 @@ export function HierarchicalSidebar() {
                     totalEnvironmentCount === 1 ? "environment" : "environments"
                   }`}
                 >
-                  <Boxes className="h-3.5 w-3.5 text-emerald-500" aria-hidden="true" />
+                  <Boxes
+                    className="h-3.5 w-3.5 text-emerald-500"
+                    aria-hidden="true"
+                  />
                   <span>{totalEnvironmentCount}</span>
                 </div>
               </TooltipTrigger>
@@ -1163,7 +1359,9 @@ export function HierarchicalSidebar() {
                       : "text-zinc-600",
                   )}
                   aria-label={`${waitingEnvironmentCount} waiting ${
-                    waitingEnvironmentCount === 1 ? "environment" : "environments"
+                    waitingEnvironmentCount === 1
+                      ? "environment"
+                      : "environments"
                   }`}
                 >
                   <Bell
@@ -1193,7 +1391,9 @@ export function HierarchicalSidebar() {
             <ProjectHomeActivity
               key={home.id}
               home={home}
-              projectName={projectsById.get(home.projectId)?.name ?? "Unknown project"}
+              projectName={
+                projectsById.get(home.projectId)?.name ?? "Unknown project"
+              }
             />
           ))}
         {activityEnvironments.length === 0 ? (
@@ -1207,9 +1407,14 @@ export function HierarchicalSidebar() {
                 key={environment.id}
                 environmentId={environment.id}
                 position={position}
-                className={cn(activityRowClassName(environment.id), "will-change-transform")}
+                className={cn(
+                  activityRowClassName(environment.id),
+                  "will-change-transform",
+                )}
               >
-                <div className="min-w-0 flex-1 pl-2">{renderActivityItem(environment)}</div>
+                <div className="min-w-0 flex-1 pl-2">
+                  {renderActivityItem(environment)}
+                </div>
               </AnimatedActivityRow>
             ))}
           </div>
@@ -1222,7 +1427,10 @@ export function HierarchicalSidebar() {
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
       >
-        <SortableContext items={projectSortableItems} strategy={verticalListSortingStrategy}>
+        <SortableContext
+          items={projectSortableItems}
+          strategy={verticalListSortingStrategy}
+        >
           {projectTree.map((entry) =>
             entry.kind === "project" ? (
               renderProjectGroup(entry.project)
@@ -1231,9 +1439,14 @@ export function HierarchicalSidebar() {
                 key={`folder:${entry.key}`}
                 name={entry.name}
                 projectCount={entry.projects.length}
-                isCollapsed={isProjectFolderCollapsed(collapsedProjectFolders, entry.name)}
+                isCollapsed={isProjectFolderCollapsed(
+                  collapsedProjectFolders,
+                  entry.name,
+                )}
                 onToggleCollapse={() => toggleProjectFolderCollapse(entry.name)}
-                onRename={(nextName) => handleRenameFolder(entry.name, nextName)}
+                onRename={(nextName) =>
+                  handleRenameFolder(entry.name, nextName)
+                }
                 onSort={() => handleSortFolder(entry.name)}
                 onUngroup={() => handleUngroupFolder(entry.name)}
               >
@@ -1250,14 +1463,19 @@ export function HierarchicalSidebar() {
             <div className="rounded-md bg-card border border-border px-3 py-2 shadow-lg">
               <div className="flex items-center gap-2">
                 <FolderGit2 className="h-4 w-4" />
-                <span className="text-sm font-medium">{activeProject.name}</span>
+                <span className="text-sm font-medium">
+                  {activeProject.name}
+                </span>
               </div>
             </div>
           )}
           {activeFolder && (
             <div className="rounded-md bg-card border border-border px-3 py-2 shadow-lg">
               <div className="flex items-center gap-2">
-                <Folder className="h-4 w-4 text-amber-400/80" aria-hidden="true" />
+                <Folder
+                  className="h-4 w-4 text-amber-400/80"
+                  aria-hidden="true"
+                />
                 <span className="text-sm font-medium">{activeFolder.name}</span>
               </div>
             </div>
@@ -1271,9 +1489,29 @@ export function HierarchicalSidebar() {
       </DndContext>
     );
 
-  const renderMergedBoundProject = (projectId: string, sortableId: string, label?: string) => {
+  const renderMergedBoundProject = (
+    projectId: string,
+    sortableId: string,
+    label: string | undefined,
+    machineMark: "dot" | "home",
+  ) => {
     const project = projectsById.get(projectId);
     if (!project) return null;
+    if (machineMark === "home") {
+      // Drawn even before this window's machine is identified, as it also
+      // decides where the row's chevron sits.
+      return renderProjectGroup(project, {
+        sortableId,
+        label,
+        machineIcon: (
+          <MachineHomeIcon
+            colorToken={boundMachineView?.colorToken}
+            machineName={boundMachineView?.name ?? "This machine"}
+            status="This window"
+          />
+        ),
+      });
+    }
     return renderProjectGroup(project, {
       sortableId,
       label,
@@ -1296,17 +1534,23 @@ export function HierarchicalSidebar() {
       allEnvironments,
     );
     if (!reorder) return;
-    reorderEnvironments(reorder.projectId, reorder.ids).catch((err: unknown) => {
-      console.error("Failed to persist sidebar reorder:", err);
-    });
+    reorderEnvironments(reorder.projectId, reorder.ids).catch(
+      (err: unknown) => {
+        console.error("Failed to persist sidebar reorder:", err);
+      },
+    );
   };
 
   const renderFederatedActivityRow = (environmentId: string) => {
-    const environment = sidebarEnvironments.find((entry) => entry.id === environmentId);
+    const environment = sidebarEnvironments.find(
+      (entry) => entry.id === environmentId,
+    );
     if (!environment) return null;
     return (
       <div className={activityRowClassName(environment.id)}>
-        <div className="min-w-0 flex-1 pl-2">{renderActivityItem(environment)}</div>
+        <div className="min-w-0 flex-1 pl-2">
+          {renderActivityItem(environment)}
+        </div>
       </div>
     );
   };
@@ -1370,7 +1614,8 @@ export function HierarchicalSidebar() {
                     size="icon"
                     className={cn(
                       "h-7 w-7",
-                      environmentSortMode === "activity" && "bg-zinc-800 text-foreground",
+                      environmentSortMode === "activity" &&
+                        "bg-zinc-800 text-foreground",
                     )}
                     title="Sort environments"
                     aria-label={`Sort environments: ${environmentSortMode === "project" ? "By project" : "By activity"}`}
@@ -1390,8 +1635,12 @@ export function HierarchicalSidebar() {
                       }
                     }}
                   >
-                    <DropdownMenuRadioItem value="project">By project</DropdownMenuRadioItem>
-                    <DropdownMenuRadioItem value="activity">By activity</DropdownMenuRadioItem>
+                    <DropdownMenuRadioItem value="project">
+                      By project
+                    </DropdownMenuRadioItem>
+                    <DropdownMenuRadioItem value="activity">
+                      By activity
+                    </DropdownMenuRadioItem>
                   </DropdownMenuRadioGroup>
                   {federation.enabled && environmentSortMode === "project" ? (
                     <>
@@ -1410,8 +1659,12 @@ export function HierarchicalSidebar() {
                           }
                         }}
                       >
-                        <DropdownMenuRadioItem value="machine">By machine</DropdownMenuRadioItem>
-                        <DropdownMenuRadioItem value="project">By project</DropdownMenuRadioItem>
+                        <DropdownMenuRadioItem value="machine">
+                          By machine
+                        </DropdownMenuRadioItem>
+                        <DropdownMenuRadioItem value="project">
+                          By project
+                        </DropdownMenuRadioItem>
                         <DropdownMenuRadioItem value="repository">
                           By repository
                         </DropdownMenuRadioItem>
@@ -1436,7 +1689,12 @@ export function HierarchicalSidebar() {
                 // picked on that machine, never on this device.
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" size="icon" className="h-7 w-7" title="Add project">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7"
+                      title="Add project"
+                    >
                       <Plus className="h-4 w-4" />
                     </Button>
                   </DropdownMenuTrigger>
@@ -1447,7 +1705,9 @@ export function HierarchicalSidebar() {
                     {machineViews.map((machine) => (
                       <DropdownMenuItem
                         key={machine.connectionId}
-                        disabled={!machine.bound && machine.transport !== "connected"}
+                        disabled={
+                          !machine.bound && machine.transport !== "connected"
+                        }
                         onSelect={() => {
                           if (machine.bound) setShowAddProjectDialog(true);
                           else
@@ -1458,7 +1718,10 @@ export function HierarchicalSidebar() {
                             });
                         }}
                       >
-                        <MachineDot colorToken={machine.colorToken} machineName={machine.name} />
+                        <MachineDot
+                          colorToken={machine.colorToken}
+                          machineName={machine.name}
+                        />
                         <span className="truncate">{machine.name}</span>
                         {machine.bound ? (
                           <span className="ml-auto text-[11px] text-muted-foreground">
@@ -1493,10 +1756,18 @@ export function HierarchicalSidebar() {
       />
 
       {/* Projects List */}
-      <div ref={listScrollRef} data-sidebar-scroll className="min-h-0 flex-1 overflow-y-auto">
+      <div
+        ref={listScrollRef}
+        data-sidebar-scroll
+        className="min-h-0 flex-1 overflow-y-auto"
+      >
         <div
           data-testid="sidebar-list-content"
-          className={environmentSortMode === "activity" && projects.length > 0 ? "pb-2" : "py-2"}
+          className={
+            environmentSortMode === "activity" && projects.length > 0
+              ? "pb-2"
+              : "py-2"
+          }
         >
           {federatedMode === "activity" ? (
             <FederatedActivityList
@@ -1567,28 +1838,38 @@ export function HierarchicalSidebar() {
           if (!open) setCreateEnvProjectId(null);
         }}
         projectId={createEnvProjectId}
-        projectName={projects.find((project) => project.id === createEnvProjectId)?.name}
+        projectName={
+          projects.find((project) => project.id === createEnvProjectId)?.name
+        }
         createEnvironment={createEnvironment}
         updateEnvironment={updateEnvironment}
         startEnvironment={startEnvironment}
       />
 
       {/* Bulk Delete Confirmation Dialog */}
-      <AlertDialog open={showBulkDeleteDialog} onOpenChange={setShowBulkDeleteDialog}>
+      <AlertDialog
+        open={showBulkDeleteDialog}
+        onOpenChange={setShowBulkDeleteDialog}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete {selectedEnvironmentIds.length} Environments</AlertDialogTitle>
+            <AlertDialogTitle>
+              Delete {selectedEnvironmentIds.length} Environments
+            </AlertDialogTitle>
             <AlertDialogDescription asChild>
               <div>
-                <p>Are you sure you want to delete the following environments?</p>
+                <p>
+                  Are you sure you want to delete the following environments?
+                </p>
                 <ul className="mt-2 list-disc list-inside text-foreground">
                   {selectedEnvironmentInfo.map(({ id, name }) => (
                     <li key={id}>{name}</li>
                   ))}
                 </ul>
                 <p className="mt-2 text-orange-500">
-                  This action cannot be undone. Running environments will be stopped first, and
-                  their containers, persistent storage and recovery copies are deleted.
+                  This action cannot be undone. Running environments will be
+                  stopped first, and their containers, persistent storage and
+                  recovery copies are deleted.
                 </p>
               </div>
             </AlertDialogDescription>
@@ -1608,7 +1889,9 @@ export function HierarchicalSidebar() {
       {/* Repository Settings Dialog */}
       {settingsProject && showSettingsDialog && (
         <LazyLoadBoundary
-          loadingFallback={<LazyDialogLoadingFallback label="Loading repository settings…" />}
+          loadingFallback={
+            <LazyDialogLoadingFallback label="Loading repository settings…" />
+          }
         >
           <LazyRepositorySettings
             project={settingsProject}

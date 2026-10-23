@@ -206,7 +206,10 @@ export async function executeLifecycle(
     return service.lane(entry.canvasId, async () => {
       const loaded = await service.load(entry.canvasId);
       const pending = await service.store.readPending(entry.canvasId);
-      const receipt = service.receipt(entry, "rejected", { failure });
+      // A duplicate that failed after its copy committed did run.
+      const receipt =
+        (await committedDuplicate(service, entry)) ??
+        service.receipt(entry, "rejected", { failure });
       if (loaded.kind === "record" && loaded.record.state !== "provisional") {
         const settled = loaded.record.receipts.find((candidate) => candidate.token === entry.token);
         if (settled) return settled;
@@ -407,6 +410,36 @@ function tokenUuid(token: string) {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
+/** The source receipt of a duplicate: the revision it copied and the copy's id. */
+function duplicateReceipt(
+  service: DesignService,
+  entry: DesignPendingOperation,
+  canvasRevision: number,
+): DesignOperationStatus {
+  return service.receipt(entry, "committed", {
+    result: { canvasRevision, createdCanvasId: tokenUuid(entry.token), frames: [] },
+  });
+}
+
+/**
+ * The receipt of a duplicate whose copy committed but whose source receipt
+ * was never written (the write failed, or its process stopped in between).
+ * The copy's id is derived from the token, so only this operation can have
+ * made it; a copy deleted since still counts.
+ */
+export async function committedDuplicate(
+  service: DesignService,
+  entry: DesignPendingOperation,
+): Promise<DesignOperationStatus | undefined> {
+  const expected = entry.descriptor.preconditions.canvasRevision;
+  if (entry.descriptor.input.kind !== "duplicate_canvas" || expected === undefined)
+    return undefined;
+  const copy = await service.load(tokenUuid(entry.token));
+  if (copy.kind !== "record" || copy.legacy || copy.record.environmentId !== entry.environmentId)
+    return undefined;
+  return duplicateReceipt(service, entry, expected);
+}
+
 async function executeDuplicate(
   service: DesignService,
   entry: DesignPendingOperation,
@@ -460,13 +493,8 @@ async function executeDuplicate(
     const settled = record.receipts.find((candidate) => candidate.token === entry.token);
     if (settled) return settled;
     const next = cloneRecord(record);
-    const receipt = service.receipt(entry, "committed", {
-      result: {
-        canvasRevision: record.document.revision,
-        createdCanvasId: destinationId,
-        frames: [],
-      },
-    });
+    // The revision copied, so a receipt rebuilt from the copy is identical.
+    const receipt = duplicateReceipt(service, entry, expected);
     addReceipt(next, receipt, entry.descriptor);
     await service.commit(next, legacy);
     await service.dropPending(

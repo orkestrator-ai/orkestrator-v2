@@ -12,6 +12,7 @@ import { enforceRecycleBin, purge } from "./service-lifecycle.js";
 import { DesignService } from "./service.js";
 import {
   createDesignHarness,
+  createTestRenderer,
   deferred,
   trackUnhandledRejections,
   type DesignHarness,
@@ -254,6 +255,109 @@ describe("design lifecycle: tombstones, restore, purge, duplicate and fencing", 
     } finally {
       await rm(worktree, { recursive: true, force: true });
     }
+  });
+
+  describe("a duplicate stopped between its copy and its source receipt", () => {
+    // Fails this many writes of the source record; the copy's commit passes.
+    let failSource: { canvasId: string; times: number } | undefined;
+    const faulty = () => ({
+      ...serviceOptions(),
+      faults: {
+        beforeRename: (file: string) => {
+          if (!failSource?.times || !file.endsWith(`${failSource.canvasId}.orkrec`)) return;
+          failSource.times--;
+          throw new Error("injected source crash");
+        },
+      },
+    });
+    const prepareDuplicate = async () => {
+      await harness.restart(faulty());
+      const { canvasId } = await setup();
+      const prepared = await service().prepare("env-1", "user", {
+        canvasId,
+        input: { kind: "duplicate_canvas", name: "Copy" },
+        preconditions: { canvasRevision: 2 },
+        correlationId: "duplicate-once",
+      });
+      return { canvasId, token: prepared.token };
+    };
+    const copies = async (canvasId: string) =>
+      (await service().list("env-1")).map((entry) => entry.id).filter((id) => id !== canvasId);
+
+    test("records it committed when the source write fails once", async () => {
+      const { canvasId, token } = await prepareDuplicate();
+      failSource = { canvasId, times: 1 };
+      const status = await service().execute("env-1", canvasId, token);
+      const [copyId] = await copies(canvasId);
+      expect(copyId).toBeDefined();
+      expect(status).toMatchObject({
+        state: "committed",
+        result: { createdCanvasId: copyId, canvasRevision: 2 },
+      });
+      expect(await service().status("env-1", canvasId, token)).toEqual(status);
+      expect(await copies(canvasId)).toEqual([copyId!]);
+    });
+
+    test("records it committed with the copy after the backend restarts", async () => {
+      const { canvasId, token } = await prepareDuplicate();
+      failSource = { canvasId, times: Number.POSITIVE_INFINITY };
+      try {
+        expect(String(await failureOf(service().execute("env-1", canvasId, token)))).toContain(
+          "injected source crash",
+        );
+      } finally {
+        failSource = undefined;
+      }
+      const [copyId] = await copies(canvasId);
+      expect(copyId).toBeDefined();
+      await harness.restart(serviceOptions());
+      const status = await service().status("env-1", canvasId, token);
+      expect(status).toMatchObject({
+        state: "committed",
+        result: { createdCanvasId: copyId, canvasRevision: 2 },
+      });
+      expect(await service().execute("env-1", canvasId, token)).toEqual(status);
+      // The retry the client makes after a lost response reconciles to it.
+      await expect(
+        service().prepare("env-1", "user", {
+          canvasId,
+          input: { kind: "duplicate_canvas", name: "Copy" },
+          preconditions: { canvasRevision: 2 },
+          correlationId: "duplicate-once",
+        }),
+      ).rejects.toThrow("already has a settled operation");
+      expect(await copies(canvasId)).toEqual([copyId!]);
+    });
+
+    test("reports it committed to a running peer before any restart recovery", async () => {
+      const { canvasId, token } = await prepareDuplicate();
+      // A peer sharing the data directory that was already running.
+      const peer = new DesignService(harness.dir, () => {}, createTestRenderer(), serviceOptions());
+      try {
+        await peer.initialize();
+        failSource = { canvasId, times: Number.POSITIVE_INFINITY };
+        try {
+          await failureOf(service().execute("env-1", canvasId, token));
+        } finally {
+          failSource = undefined;
+        }
+        const [copyId] = await copies(canvasId);
+        // The owner stops; its replacement has not started (no recovery ran).
+        await harness.restart(serviceOptions());
+        expect((await peer.store.readPending(canvasId)).map((entry) => entry.token)).toEqual([
+          token,
+        ]);
+        const status = await peer.status("env-1", canvasId, token);
+        expect(status).toMatchObject({ state: "committed", result: { createdCanvasId: copyId } });
+        expect(await peer.execute("env-1", canvasId, token)).toMatchObject(status);
+        expect(await peer.status("env-1", canvasId, token)).toMatchObject({
+          state: "committed",
+          result: { createdCanvasId: copyId },
+        });
+      } finally {
+        await peer.close();
+      }
+    });
   });
 
   test("rename, duplicate and delete frame obey CAS and environment ownership", async () => {

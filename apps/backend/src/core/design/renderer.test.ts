@@ -5,7 +5,9 @@ import { DesignRenderQueue } from "./render-queue.js";
 import {
   DEFAULT_DESIGN_RENDER_BUDGETS,
   DesignRenderer,
+  launchDesignBrowser,
   resolveDesignChromiumPath,
+  type DesignBrowserHandle,
   type DesignRenderBudgets,
   type DesignRenderJob,
 } from "./renderer.js";
@@ -58,13 +60,12 @@ interface FakeOptions {
   contextClose?: () => Promise<void>;
   browserClose?: () => Promise<void>;
   screenshot?: () => Buffer;
-  withProcess?: boolean;
 }
 
 function fakeBrowser(options: FakeOptions = {}) {
   const handlers = new Map<string, Array<() => void>>();
   const abort = mock(() => {});
-  const kill = mock((_signal?: string) => {});
+  const kill = mock(async () => {});
   const contextClose = mock(() => options.contextClose?.() ?? Promise.resolve());
   const contextOptions: unknown[] = [];
   const screenshotOptions: unknown[] = [];
@@ -108,16 +109,15 @@ function fakeBrowser(options: FakeOptions = {}) {
       handlers.set(event, [...(handlers.get(event) ?? []), handler]);
     },
     newContext,
-    close,
-    ...(options.withProcess ? { process: () => ({ kill }) } : {}),
   } as unknown as Browser;
+  const handle: DesignBrowserHandle = { browser, close, kill };
   const disconnect = () => {
     const list = handlers.get("disconnected") ?? [];
     handlers.delete("disconnected");
     for (const handler of list) handler();
   };
   return {
-    browser,
+    handle,
     abort,
     kill,
     close,
@@ -130,10 +130,10 @@ function fakeBrowser(options: FakeOptions = {}) {
   };
 }
 
-function launcher(...browsers: Array<Browser | (() => Promise<Browser>)>) {
+function launcher(...handles: Array<DesignBrowserHandle | (() => Promise<DesignBrowserHandle>)>) {
   let index = 0;
   return mock(async () => {
-    const next = browsers[Math.min(index++, browsers.length - 1)]!;
+    const next = handles[Math.min(index++, handles.length - 1)]!;
     return typeof next === "function" ? next() : next;
   });
 }
@@ -203,7 +203,7 @@ describe("resolveDesignChromiumPath", () => {
 describe("DesignRenderer isolation and results", () => {
   test("isolates each job and passes deterministic capture inputs", async () => {
     const fake = fakeBrowser();
-    const launch = launcher(fake.browser);
+    const launch = launcher(fake.handle);
     const instance = renderer(launch);
     expect(await instance.run<string>(job())).toBe(frame.html);
     const capture = await instance.run<{ mimeType: string; data: string }>(
@@ -227,7 +227,7 @@ describe("DesignRenderer isolation and results", () => {
 
   test("rejects oversized captures before encoding", async () => {
     const fake = fakeBrowser({ screenshot: () => Buffer.alloc(8 * 1024 * 1024 + 1) });
-    const instance = renderer(launcher(fake.browser));
+    const instance = renderer(launcher(fake.handle));
     const error = await failure(instance.run(job({ operation: { op: "capture" } })));
     expect(error.code).toBe("invalid-content");
     expect(error.message).toBe("Capture exceeds 8 MiB");
@@ -241,7 +241,7 @@ describe("DesignRenderer isolation and results", () => {
           ? new Error("Selector must match exactly one element")
           : true,
     });
-    const instance = renderer(launcher(fake.browser));
+    const instance = renderer(launcher(fake.handle));
     const rejection = instance.run(job({ operation: { op: "inspectElement", selector: "p" } }));
     await expect(rejection).rejects.toThrow("Selector must match exactly one element");
     const error = await rejection.catch((caught: unknown) => caught);
@@ -250,7 +250,7 @@ describe("DesignRenderer isolation and results", () => {
   });
 
   test("rejects oversized requests before admission", async () => {
-    const launch = launcher(fakeBrowser().browser);
+    const launch = launcher(fakeBrowser().handle);
     const instance = renderer(launch);
     const error = await failure(
       instance.run(job({ frame: { ...frame, html: "x".repeat(256 * 1024 + 1) } })),
@@ -270,7 +270,7 @@ describe("DesignRenderer admission and scheduling", () => {
         return operation.op === "render" ? true : rendered;
       },
     });
-    const instance = renderer(launcher(fake.browser));
+    const instance = renderer(launcher(fake.handle));
     const pending = Array.from({ length: 16 }, () => instance.run(job()));
     const error = await failure(instance.run(job()));
     expect(error.code).toBe("capacity");
@@ -298,7 +298,7 @@ describe("DesignRenderer admission and scheduling", () => {
         return rendered;
       },
     });
-    const instance = renderer(launcher(fake.browser));
+    const instance = renderer(launcher(fake.handle));
     const record = (name: string, promise: Promise<unknown>) =>
       promise.then(() => {
         completed.push(name);
@@ -335,7 +335,7 @@ describe("DesignRenderer admission and scheduling", () => {
         return rendered;
       },
     });
-    const instance = renderer(launcher(fake.browser));
+    const instance = renderer(launcher(fake.handle));
     const blocker = instance.run(job({ frame: { ...frame, html: "blocker" } }));
     await waitFor(() => fake.evaluated.some((operation) => operation.op === "serialize"));
     const background = instance.run(
@@ -388,7 +388,7 @@ describe("DesignRenderer admission and scheduling", () => {
         return operation.op === "render" ? true : rendered;
       },
     });
-    const instance = renderer(launcher(fake.browser), { budgets: { queueMs: 30 } });
+    const instance = renderer(launcher(fake.handle), { budgets: { queueMs: 30 } });
     const blocker = instance.run(job({ frame: { ...frame, html: "blocker" } }));
     await waitFor(() => fake.evaluated.length >= 2);
     const started = Date.now();
@@ -407,12 +407,12 @@ describe("DesignRenderer admission and scheduling", () => {
 describe("DesignRenderer lifecycle deadlines", () => {
   test("a hung launch settles within the deadline and a later job uses a new generation", async () => {
     const late = fakeBrowser();
-    const hung = deferred<Browser>();
+    const hung = deferred<DesignBrowserHandle>();
     const finish = deferred<string>();
     const good = fakeBrowser({
       evaluate: (operation) => (operation.op === "render" ? true : finish.promise),
     });
-    const launch = launcher(() => hung.promise, good.browser);
+    const launch = launcher(() => hung.promise, good.handle);
     const instance = renderer(launch, { budgets: { launchMs: 30, overallMs: 400 } });
     const started = Date.now();
     const error = await failure(instance.run(job()));
@@ -424,7 +424,7 @@ describe("DesignRenderer lifecycle deadlines", () => {
     expect(launch).toHaveBeenCalledTimes(2);
     expect(instance.status()).toMatchObject({ state: "running", generation: 2 });
     // A late launch cannot take over the new generation while its job runs.
-    hung.resolve(late.browser);
+    hung.resolve(late.handle);
     await waitFor(() => late.close.mock.calls.length === 1);
     expect(late.newContext).not.toHaveBeenCalled();
     finish.resolve(frame.html);
@@ -434,7 +434,7 @@ describe("DesignRenderer lifecycle deadlines", () => {
 
   test("launch failure is not reported as a missing executable", async () => {
     const good = fakeBrowser();
-    const launch = launcher(() => Promise.reject(new Error("spawn EACCES /secret")), good.browser);
+    const launch = launcher(() => Promise.reject(new Error("spawn EACCES /secret")), good.handle);
     const instance = renderer(launch);
     const error = await failure(instance.run(job()));
     expect(error.code).toBe("renderer-unavailable");
@@ -451,7 +451,7 @@ describe("DesignRenderer lifecycle deadlines", () => {
     const lateContext = deferred();
     const first = fakeBrowser({ newContext: () => lateContext.promise });
     const second = fakeBrowser();
-    const launch = launcher(first.browser, second.browser);
+    const launch = launcher(first.handle, second.handle);
     const instance = renderer(launch, { budgets: { contextMs: 30 } });
     const error = await failure(instance.run(job()));
     expect(error.code).toBe("renderer-unavailable");
@@ -474,7 +474,7 @@ describe("DesignRenderer lifecycle deadlines", () => {
         return operation.op === "render" ? true : rendered;
       },
     });
-    const launch = launcher(fake.browser);
+    const launch = launcher(fake.handle);
     const instance = renderer(launch, { budgets: { runMs: 30 } });
     const error = await failure(instance.run(job()));
     expect(error.code).toBe("deadline");
@@ -488,14 +488,12 @@ describe("DesignRenderer lifecycle deadlines", () => {
       evaluate: (operation) => (operation.op === "render" ? true : never()),
       contextClose: never,
       browserClose: never,
-      withProcess: true,
     });
     const second = fakeBrowser();
-    const launch = launcher(first.browser, second.browser);
+    const launch = launcher(first.handle, second.handle);
     const instance = renderer(launch, { budgets: { runMs: 20, cleanupMs: 20 } });
     expect((await failure(instance.run(job()))).code).toBe("deadline");
     await waitFor(() => first.kill.mock.calls.length === 1);
-    expect(first.kill).toHaveBeenCalledWith("SIGKILL");
     await expect(instance.run(job())).resolves.toBe(frame.html);
     expect(launch).toHaveBeenCalledTimes(2);
   });
@@ -506,7 +504,7 @@ describe("DesignRenderer lifecycle deadlines", () => {
       contextClose: never,
     });
     const second = fakeBrowser();
-    const launch = launcher(first.browser, second.browser);
+    const launch = launcher(first.handle, second.handle);
     const instance = renderer(launch, { budgets: { runMs: 20, cleanupMs: 20 } });
     await failure(instance.run(job()));
     await waitFor(() => first.close.mock.calls.length === 1);
@@ -523,7 +521,7 @@ describe("DesignRenderer lifecycle deadlines", () => {
       evaluate: (operation) => (operation.op === "render" ? true : never()),
     });
     const second = fakeBrowser();
-    const launch = launcher(first.browser, second.browser);
+    const launch = launcher(first.handle, second.handle);
     const instance = renderer(launch, { workers: 2 });
     const settled: string[] = [];
     const jobs = [0, 1].map((index) =>
@@ -566,9 +564,8 @@ describe("DesignRenderer shutdown", () => {
         evaluate: (operation) => (operation.op === "render" ? true : never()),
         contextClose: never,
         browserClose: never,
-        withProcess: true,
       });
-      const instance = renderer(launcher(fake.browser), {
+      const instance = renderer(launcher(fake.handle), {
         budgets: { cleanupMs: 30, runMs: 10_000, queueMs: 10_000, overallMs: 20_000 },
       });
       const active = failure(instance.run(job()));
@@ -579,7 +576,7 @@ describe("DesignRenderer shutdown", () => {
       expect(Date.now() - started).toBeLessThan(500);
       expect((await active).code).toBe("renderer-unavailable");
       expect((await queued).message).toBe("Design renderer is stopping");
-      expect(fake.kill).toHaveBeenCalledWith("SIGKILL");
+      expect(fake.kill).toHaveBeenCalledTimes(1);
       const after = await failure(instance.run(job()));
       expect(after.message).toBe("Design renderer is stopping");
       expect(instance.status().state).toBe("stopping");
@@ -592,7 +589,7 @@ describe("DesignRenderer shutdown", () => {
   });
 
   test("close() stops a launch in progress and closes the late browser", async () => {
-    const hung = deferred<Browser>();
+    const hung = deferred<DesignBrowserHandle>();
     const late = fakeBrowser();
     const instance = renderer(
       launcher(() => hung.promise),
@@ -602,14 +599,14 @@ describe("DesignRenderer shutdown", () => {
     await Bun.sleep(5);
     await instance.close();
     expect((await pending).code).toBe("renderer-unavailable");
-    hung.resolve(late.browser);
+    hung.resolve(late.handle);
     await waitFor(() => late.close.mock.calls.length === 1);
   });
 });
 
 describe("DesignRenderer health", () => {
   test("reports missing executables with install guidance", async () => {
-    const launch = launcher(fakeBrowser().browser);
+    const launch = launcher(fakeBrowser().handle);
     const instance = renderer(launch, { executablePath: () => undefined });
     const health = instance.status();
     expect(health).toMatchObject({ state: "missing-executable", ready: false });
@@ -622,7 +619,7 @@ describe("DesignRenderer health", () => {
   });
 
   test("is ready but unknown before any probe without launching a browser", () => {
-    const launch = launcher(fakeBrowser().browser);
+    const launch = launcher(fakeBrowser().handle);
     const instance = renderer(launch);
     expect(instance.status()).toMatchObject({
       state: "unknown",
@@ -638,7 +635,7 @@ describe("DesignRenderer health", () => {
 
   test("caches, deduplicates and force-refreshes probes", async () => {
     const fake = fakeBrowser();
-    const instance = renderer(launcher(fake.browser), { healthCacheMs: 60_000 });
+    const instance = renderer(launcher(fake.handle), { healthCacheMs: 60_000 });
     const [first, second] = await Promise.all([instance.probe(), instance.probe()]);
     expect(first.state).toBe("ready");
     expect(second.state).toBe("ready");
@@ -655,7 +652,7 @@ describe("DesignRenderer health", () => {
   test("a failed probe reports launch failure and death invalidates cached health", async () => {
     const good = fakeBrowser();
     const instance = renderer(
-      launcher(() => Promise.reject(new Error("boom")), good.browser),
+      launcher(() => Promise.reject(new Error("boom")), good.handle),
       { healthCacheMs: 60_000 },
     );
     expect(await instance.probe()).toMatchObject({ state: "launch-failed", ready: false });
@@ -702,7 +699,7 @@ describe("DesignRenderer with real Chromium", () => {
       const instance = new DesignRenderer({
         launchBrowser: (options) => {
           launchTimeout = options?.timeout;
-          return chromium.launch(options);
+          return launchDesignBrowser(options);
         },
       });
       renderers.push(instance);
@@ -721,7 +718,7 @@ describe("DesignRenderer with real Chromium", () => {
         launchBrowser: (options) => {
           const started = performance.now();
           const elapsed = () => `${Math.round(performance.now() - started)} ms`;
-          const browser = chromium.launch(options);
+          const browser = launchDesignBrowser(options);
           launch = browser.then(
             () => `started after ${elapsed()}`,
             (error: unknown) =>
@@ -744,7 +741,46 @@ describe("DesignRenderer with real Chromium", () => {
     },
     2 * DEFAULT_DESIGN_RENDER_BUDGETS.overallMs,
   );
+
+  test.skipIf(!realChromium || process.platform === "win32")(
+    "kills a browser whose close hangs instead of leaving it running",
+    async () => {
+      let handle: DesignBrowserHandle | undefined;
+      const instance = new DesignRenderer({
+        launchBrowser: async (options) => (handle = await launchDesignBrowser(options)),
+        budgets: { cleanupMs: 500 },
+      });
+      renderers.push(instance);
+      expect(await instance.run<string>(job())).toContain("Hello");
+      const pid = handle?.pid;
+      if (!pid) throw new Error("expected the browser process id");
+      expect(processAlive(pid)).toBe(true);
+      // A stopped browser never answers, so its graceful close hangs.
+      process.kill(pid, "SIGSTOP");
+      try {
+        const started = Date.now();
+        await instance.close();
+        expect(Date.now() - started).toBeLessThan(5_000);
+        await waitFor(() => !processAlive(pid), 5_000);
+      } finally {
+        if (processAlive(pid)) {
+          process.kill(pid, "SIGCONT");
+          process.kill(pid, "SIGKILL");
+        }
+      }
+    },
+    DEFAULT_DESIGN_RENDER_BUDGETS.overallMs + 10_000,
+  );
 });
+
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 async function rendersInRealChromium(instance: DesignRenderer): Promise<void> {
   const html =

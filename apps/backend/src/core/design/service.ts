@@ -430,8 +430,9 @@ export class DesignService {
 
   /**
    * Admitted work that has no terminal receipt and whose owning process is no
-   * longer alive did not commit: report it interrupted. Entries owned by a
-   * live backend sharing the data directory are left alone.
+   * longer alive did not commit: report it interrupted (or, for a duplicate
+   * whose copy exists, committed). Entries owned by a live backend sharing the
+   * data directory are left alone.
    */
   private async recoverPending(): Promise<void> {
     for (const id of await this.store.pendingIds()) {
@@ -455,17 +456,20 @@ export class DesignService {
       if (!entries.length) return;
       const kept = entries.filter((entry) => this.ownedElsewhere(entry));
       const loaded = await this.load(id);
-      if (loaded.kind !== "record" || loaded.legacy) {
+      if (loaded.kind !== "record") {
         if (kept.length !== entries.length) await this.store.writePending(id, kept);
         return;
       }
+      // A never-migrated canvas has nowhere to keep a receipt, and recovery
+      // must not migrate it: its dead owners' entries stay as their outcomes
+      // (see `retainedOutcomes`).
+      if (loaded.legacy) return;
       const record = cloneRecord(loaded.record);
       const settled = new Set(record.receipts.map((receipt) => receipt.token));
       let changed = false;
       for (const entry of entries) {
         if (settled.has(entry.token) || kept.includes(entry)) continue;
-        const receipt = this.receipt(entry, "interrupted", { failure: INTERRUPTED_FAILURE });
-        addReceipt(record, receipt, entry.descriptor);
+        addReceipt(record, await this.deadOutcome(entry), entry.descriptor);
         changed = true;
       }
       if (changed && record.state !== "provisional") {
@@ -580,6 +584,7 @@ export class DesignService {
   ): Promise<void> {
     if (this.environmentDeleted(record.environmentId))
       throw new DesignError("not-found", "Canvas not found in this environment");
+    if (legacy) await this.keepRetainedOutcomes(record);
     this.coordination.beginLibraryChange(record.canvasId);
     const started = performance.now();
     record.sequence++;
@@ -609,6 +614,17 @@ export class DesignService {
     this.library.upsert(summarizeRecord(record, written ?? { size: bytes, mtimeMs: Date.now() }));
     this.libraryChanged(record.canvasId);
     if (hint) this.publish({ canvasId: record.canvasId, ...hint });
+  }
+
+  /**
+   * The commit that migrates a never-migrated canvas records its retained
+   * outcomes as receipts. An unreadable pending file leaves them pending: a
+   * later restart's recovery records them instead.
+   */
+  private async keepRetainedOutcomes(record: DesignPrivateRecord): Promise<void> {
+    const pending = await this.store.readPending(record.canvasId).catch(() => []);
+    for (const entry of this.retainedOutcomes(record, pending))
+      addReceipt(record, await this.deadOutcome(entry), entry.descriptor);
   }
 
   /** Removes a canvas from the index after its files were removed. */
@@ -688,12 +704,14 @@ export class DesignService {
     if (!descriptor.canvasId) throw new DesignError("invalid-input", "canvasId is required");
     const canvasId = descriptor.canvasId;
     return this.lane(canvasId, async () => {
-      const { record } = await this.loadFor(canvasId, environmentId, {
+      const { record, legacy } = await this.loadFor(canvasId, environmentId, {
         allowDeleted: descriptor.input.kind === "restore_canvas",
       });
       const now = this.now();
+      const stored = await this.store.readPending(canvasId);
+      const retained = legacy ? this.retainedOutcomes(record, stored) : [];
       // Settled and expired entries are compacted away here, lazily.
-      const pending = this.livePending(record, await this.store.readPending(canvasId));
+      const pending = this.livePending(record, stored).filter((entry) => !retained.includes(entry));
       const digest = descriptorDigest({ environmentId, canvasId, descriptor });
       if (descriptor.correlationId) {
         const existing = pending.find(
@@ -709,12 +727,9 @@ export class DesignService {
             expiresAt: existing.expiresAt,
           };
         }
-        const settled = record.receipts.find(
-          (receipt) => receipt.correlationId === descriptor.correlationId,
-        );
+        const settled = this.settledUnder(record, retained, descriptor);
         if (settled) {
-          if (!settledMatches(settled, receiptDigest(record, settled.token), descriptor))
-            throw reusedCorrelation(settled.token);
+          if (!settled.matches) throw reusedCorrelation(settled.token);
           throw new DesignError(
             "invalid-input",
             "This correlation id already has a settled operation",
@@ -757,9 +772,63 @@ export class DesignService {
         state: "prepared",
         owner: this.generation,
       };
-      await this.store.writePending(canvasId, [...pending, entry]);
+      const live = [...pending, entry];
+      await this.store.writePending(canvasId, [...fittingOutcomes(retained, live), ...live]);
       return { token: entry.token, canvasId, state: "prepared", expiresAt: entry.expiresAt };
     });
+  }
+
+  /**
+   * The operation already settled under the descriptor's correlation id (a
+   * receipt, or a never-migrated canvas's retained outcome) and whether the
+   * descriptor is the same edit.
+   */
+  private settledUnder(
+    record: DesignPrivateRecord,
+    retained: DesignPendingOperation[],
+    descriptor: DesignOperationDescriptor,
+  ) {
+    const receipt = record.receipts.find(
+      (candidate) => candidate.correlationId === descriptor.correlationId,
+    );
+    if (receipt)
+      return {
+        token: receipt.token,
+        receipt,
+        matches: settledMatches(receipt, receiptDigest(record, receipt.token), descriptor),
+      };
+    const entry = retained.find(
+      (candidate) => candidate.descriptor.correlationId === descriptor.correlationId,
+    );
+    if (entry)
+      return {
+        token: entry.token,
+        entry,
+        matches: intentDigest(entry.descriptor) === intentDigest(descriptor),
+      };
+    return undefined;
+  }
+
+  /**
+   * What `submit_operation` replays for a correlated descriptor on an existing
+   * canvas: the settled outcome and whether the descriptor is the same edit.
+   */
+  async settledCorrelation(
+    environmentId: string,
+    canvasId: string,
+    descriptor: DesignOperationDescriptor,
+  ): Promise<{ status: DesignOperationStatus; matches: boolean } | undefined> {
+    await this.initialize();
+    const { record, legacy } = await this.loadFor(canvasId, environmentId, { allowDeleted: true });
+    const retained = legacy
+      ? this.retainedOutcomes(record, await this.store.readPending(canvasId))
+      : [];
+    const settled = this.settledUnder(record, retained, descriptor);
+    if (!settled) return undefined;
+    return {
+      status: settled.receipt ?? (await this.deadOutcome(settled.entry!)),
+      matches: settled.matches,
+    };
   }
 
   /** Executes a prepared token once. Repeats return its state; never a second copy. */
@@ -830,8 +899,7 @@ export class DesignService {
     );
     if (entry && entry.environmentId === environmentId) {
       // Side-effect free: the receipt is written when the token is next executed.
-      if (!this.running.has(token) && this.ownerDead(entry))
-        return this.receipt(entry, "interrupted", { failure: INTERRUPTED_FAILURE });
+      if (!this.running.has(token) && this.ownerDead(entry)) return this.deadOutcome(entry);
       const executing = this.running.has(token) || entry.state === "executing";
       return this.receipt(entry, executing ? "executing" : "prepared", {
         expiresAt: entry.expiresAt,
@@ -874,6 +942,8 @@ export class DesignService {
       const entry = pending.find((candidate) => candidate.token === token);
       if (!entry || entry.environmentId !== environmentId)
         return this.status(environmentId, canvasId, token);
+      if (!this.running.has(token) && this.ownerDead(entry))
+        return this.settleDead(record, legacy, pending, entry);
       if (entry.state === "executing" || this.running.has(token))
         throw new DesignError(
           "conflict",
@@ -923,16 +993,7 @@ export class DesignService {
       if (entry.state === "executing") return { done: this.receipt(entry, "executing") } as const;
       // Work admitted by a process that died never runs (as after a restart).
       if (this.ownerDead(entry))
-        return {
-          done: await this.settle(
-            record,
-            legacy,
-            pending,
-            entry,
-            "interrupted",
-            INTERRUPTED_FAILURE,
-          ),
-        } as const;
+        return { done: await this.settleDead(record, legacy, pending, entry) } as const;
       if (
         entry.incarnation !== record.incarnation ||
         entry.digest !== descriptorDigest({ environmentId, canvasId, descriptor: entry.descriptor })
@@ -1239,15 +1300,40 @@ export class DesignService {
     return receipt;
   }
 
-  private async settle(
+  private settle(
     record: DesignPrivateRecord,
     legacy: boolean,
     pending: DesignPendingOperation[],
     entry: DesignPendingOperation,
-    state: "rejected" | "expired" | "interrupted",
+    state: "rejected" | "expired",
     failure: DesignFailure,
   ): Promise<DesignOperationStatus> {
-    const receipt = this.receipt(entry, state, { failure });
+    return this.settleWith(record, legacy, pending, entry, this.receipt(entry, state, { failure }));
+  }
+
+  /**
+   * Settles a dead owner's entry with {@link deadOutcome}. On a never-migrated
+   * canvas an interrupted entry stays pending as its outcome instead: writing
+   * the receipt would migrate the canvas without an edit.
+   */
+  private async settleDead(
+    record: DesignPrivateRecord,
+    legacy: boolean,
+    pending: DesignPendingOperation[],
+    entry: DesignPendingOperation,
+  ): Promise<DesignOperationStatus> {
+    const outcome = await this.deadOutcome(entry);
+    if (legacy && outcome.state === "interrupted") return outcome;
+    return this.settleWith(record, legacy, pending, entry, outcome);
+  }
+
+  private async settleWith(
+    record: DesignPrivateRecord,
+    legacy: boolean,
+    pending: DesignPendingOperation[],
+    entry: DesignPendingOperation,
+    receipt: DesignOperationStatus,
+  ): Promise<DesignOperationStatus> {
     if (record.state === "provisional") {
       await this.dropPending(entry.canvasId, pending, entry.token);
       return receipt;
@@ -1273,6 +1359,31 @@ export class DesignService {
         pending.filter((candidate) => candidate.token !== token),
       )
       .catch(() => undefined);
+  }
+
+  /**
+   * What an unsettled entry of a dead owner amounts to. It never ran, except a
+   * duplicate whose copy exists: that committed before its source receipt.
+   */
+  async deadOutcome(entry: DesignPendingOperation): Promise<DesignOperationStatus> {
+    return (
+      (await lifecycle.committedDuplicate(this, entry)) ??
+      this.receipt(entry, "interrupted", { failure: INTERRUPTED_FAILURE })
+    );
+  }
+
+  /**
+   * A never-migrated canvas's outcomes for work its dead owners admitted. It
+   * has nowhere to keep receipts, so their pending entries stay: status
+   * answers them, prepare keeps them while they fit, and the commit that
+   * migrates the canvas turns them into receipts.
+   */
+  private retainedOutcomes(record: DesignPrivateRecord, pending: DesignPendingOperation[]) {
+    const settled = new Set(record.receipts.map((receipt) => receipt.token));
+    return pending.filter(
+      (entry) =>
+        !settled.has(entry.token) && !this.running.has(entry.token) && this.ownerDead(entry),
+    );
   }
 
   /**
@@ -1951,4 +2062,26 @@ function legacyInput(
     throw new DesignError("invalid-input", "Replace HTML and change geometry in separate edits");
   if (html !== undefined) return { kind: "replace_frame_html", frameId, html };
   return { kind: "update_frame", frameId, patch };
+}
+
+/**
+ * Retained outcomes that still fit in the pending file beside `live` (which
+ * already respects the count and byte bounds). The oldest give way first, so
+ * a kept outcome never blocks a new edit; one that gives way answers
+ * `unknown`, as it did before outcomes were kept.
+ */
+function fittingOutcomes(
+  retained: DesignPendingOperation[],
+  live: DesignPendingOperation[],
+): DesignPendingOperation[] {
+  const bytes = (entries: DesignPendingOperation[]) =>
+    entries.reduce((total, entry) => total + entry.bytes, 0);
+  const kept = [...retained];
+  while (
+    kept.length &&
+    (kept.length + live.length > DESIGN_LIMITS.preparedPerCanvas ||
+      bytes(kept) + bytes(live) > DESIGN_LIMITS.admittedPayloadBytes)
+  )
+    kept.shift();
+  return kept;
 }

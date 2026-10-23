@@ -45,8 +45,54 @@ export const DEFAULT_DESIGN_RENDER_BUDGETS: DesignRenderBudgets = {
   overallMs: 45_000,
 };
 
+export interface DesignBrowserLaunchOptions {
+  headless: boolean;
+  timeout: number;
+  executablePath: string;
+}
+
+/** A launched browser and control of its process. */
+export interface DesignBrowserHandle {
+  browser: Browser;
+  /** The browser process, when known (diagnostics and fault tests). */
+  pid?: number;
+  /** Closes the browser gracefully and ends its process. */
+  close(): Promise<void>;
+  /** Kills the browser process. */
+  kill(): Promise<void>;
+}
+
+export type DesignBrowserLauncher = (
+  options: DesignBrowserLaunchOptions,
+) => Promise<DesignBrowserHandle>;
+
+/**
+ * Starts Chromium as a Playwright browser server on loopback and connects to
+ * it, so the renderer owns the process: a `close()` that hangs is followed by
+ * a kill. A browser from `chromium.launch()` exposes no process (0037), and a
+ * hung close left it running.
+ */
+export async function launchDesignBrowser(
+  options: DesignBrowserLaunchOptions,
+): Promise<DesignBrowserHandle> {
+  // The endpoint's path is a random GUID; loopback keeps it off the network.
+  const server = await chromium.launchServer({ ...options, host: "127.0.0.1" });
+  try {
+    const browser = await chromium.connect(server.wsEndpoint(), { timeout: options.timeout });
+    return {
+      browser,
+      pid: server.process().pid,
+      close: () => server.close(),
+      kill: () => server.kill(),
+    };
+  } catch (error) {
+    await server.kill().catch(() => undefined);
+    throw error;
+  }
+}
+
 export interface DesignRendererOptions {
-  launchBrowser?: typeof chromium.launch;
+  launchBrowser?: DesignBrowserLauncher;
   executablePath?: () => string | undefined;
   budgets?: Partial<DesignRenderBudgets>;
   maxJobs?: number;
@@ -88,7 +134,7 @@ export function resolveDesignChromiumPath(
 interface Generation {
   id: number;
   dead: boolean;
-  browser?: Browser;
+  handle?: DesignBrowserHandle;
   ready: Promise<Browser>;
   launchTimer?: ReturnType<typeof setTimeout>;
   jobs: Set<Ticket>;
@@ -127,7 +173,7 @@ type RuntimeResult = { ok: true; value: unknown } | { ok: false; message: string
  * deadline, and nothing awaits Playwright without a bound.
  */
 export class DesignRenderer {
-  private readonly launchBrowser: typeof chromium.launch;
+  private readonly launchBrowser: DesignBrowserLauncher;
   private readonly executablePath: () => string | undefined;
   private readonly budgets: DesignRenderBudgets;
   private readonly maxJobs: number;
@@ -147,7 +193,7 @@ export class DesignRenderer {
   private closing: Promise<void> | undefined;
 
   constructor(options: DesignRendererOptions = {}) {
-    this.launchBrowser = options.launchBrowser ?? chromium.launch.bind(chromium);
+    this.launchBrowser = options.launchBrowser ?? launchDesignBrowser;
     this.executablePath = options.executablePath ?? resolveDesignChromiumPath;
     this.budgets = { ...DEFAULT_DESIGN_RENDER_BUDGETS, ...options.budgets };
     this.maxJobs = Math.max(1, options.maxJobs ?? DESIGN_LIMITS.renderJobs);
@@ -230,7 +276,7 @@ export class DesignRenderer {
     if (this.running.size > 0) return health("running", "Design renderer is running");
     if (probe && !probe.ok)
       return health(probe.state ?? "recovering", probe.message ?? "Design renderer check failed");
-    if (probe?.ok || (this.current?.browser && !this.current.dead))
+    if (probe?.ok || (this.current?.handle && !this.current.dead))
       return health("ready", "Design renderer ready");
     return health("unknown", "Design renderer has not been checked yet");
   }
@@ -287,7 +333,7 @@ export class DesignRenderer {
   private isRecovering(now: number): boolean {
     if (this.recoveringSince === undefined) return false;
     if (now - this.recoveringSince < RECOVERING_MS) return true;
-    const relaunching = this.current !== undefined && !this.current.browser && !this.current.dead;
+    const relaunching = this.current !== undefined && !this.current.handle && !this.current.dead;
     if (!relaunching) this.recoveringSince = undefined;
     return relaunching;
   }
@@ -389,7 +435,7 @@ export class DesignRenderer {
       unavailable("Design renderer did not start in time"),
     );
     if (gen.dead) throw unavailable("Design renderer stopped unexpectedly");
-    const browser = gen.browser!;
+    const browser = gen.handle!.browser;
     gen.jobs.add(ticket);
     let context: BrowserContext | undefined;
     let timedOut = false;
@@ -487,10 +533,11 @@ export class DesignRenderer {
       rejectReady(unavailable("Design renderer did not start in time"));
     }, launchMs);
     attempt(() => this.launchBrowser({ headless: true, timeout: launchMs, executablePath })).then(
-      (browser) => {
+      (handle) => {
         if (gen.launchTimer) clearTimeout(gen.launchTimer);
         gen.launchTimer = undefined;
-        gen.browser = browser;
+        gen.handle = handle;
+        const { browser } = handle;
         if (gen.dead) {
           // Launch finished after its deadline or shutdown: this process is ours to end.
           void this.terminate(gen);
@@ -547,7 +594,7 @@ export class DesignRenderer {
     if (this.current === gen) this.current = undefined;
     // A launch that never produced a browser owns nothing to terminate yet; a
     // late browser is terminated when it arrives.
-    if (!gen.browser) this.generations.delete(gen);
+    if (!gen.handle) this.generations.delete(gen);
     if (reason !== "stopping") this.invalidateHealth();
     for (const ticket of Array.from(gen.jobs)) this.settle(ticket, error());
     gen.jobs.clear();
@@ -559,19 +606,28 @@ export class DesignRenderer {
     void this.terminate(gen);
   }
 
-  /** Closes an owned browser within cleanupMs, then kills its process if exposed. */
+  /**
+   * Closes an owned browser within cleanupMs; a close that hangs or fails is
+   * followed by a kill of its process, also within cleanupMs.
+   */
   private terminate(gen: Generation): Promise<void> {
-    const browser = gen.browser;
-    if (!browser) return Promise.resolve();
+    const handle = gen.handle;
+    if (!handle) return Promise.resolve();
     gen.terminating ??= (async () => {
-      const closed = await within(
-        attempt(() => browser.close()),
+      let closed = false;
+      const settled = await within(
+        attempt(() => handle.close()).then(() => {
+          closed = true;
+        }),
         this.budgets.cleanupMs,
       );
-      if (!closed) {
-        warn("browser-close-deadline", { generation: gen.id });
-        killBrowserProcess(browser);
-      }
+      if (closed) return;
+      warn(settled ? "browser-close-failed" : "browser-close-deadline", { generation: gen.id });
+      const killed = await within(
+        attempt(() => handle.kill()),
+        this.budgets.cleanupMs,
+      );
+      if (!killed) warn("browser-kill-deadline", { generation: gen.id });
     })()
       .catch(() => undefined)
       .finally(() => {
@@ -619,17 +675,6 @@ function requestTooLarge(job: DesignRenderJob): string | undefined {
 
 function detachClose(context: BrowserContext): void {
   attempt(() => context.close()).catch(() => undefined);
-}
-
-function killBrowserProcess(browser: Browser): void {
-  try {
-    const child = (
-      browser as unknown as { process?: () => { kill: (signal?: string) => void } }
-    ).process?.();
-    child?.kill("SIGKILL");
-  } catch {
-    // The process may already be gone.
-  }
 }
 
 function unavailable(message: string): DesignError {

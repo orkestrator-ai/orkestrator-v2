@@ -103,7 +103,22 @@ Edits are **recoverable operations** (`design/service.ts`,
 
 Outcomes: `committed`, `no-op` (equal values: no revision, history or content
 hint), `rejected` (typed failure), `canceled`, `interrupted` (the backend
-restarted before commit — never replayed), `expired`, `unknown`. Failures carry
+restarted before commit — never replayed), `expired`, `unknown`.
+
+A dead owner's unsettled entry is `interrupted`, with one exception: a
+duplicate commits its copy under an id derived from its token
+(`tokenUuid`) before it writes the source receipt, so when that copy exists
+the operation is `committed` with `createdCanvasId`, also when the source
+write failed in-process (`committedDuplicate` in
+`design/service-lifecycle.ts`). Restart recovery, `status`, `execute`,
+`cancel` and a running peer all answer this way (`deadOutcome` in
+`design/service.ts`). A never-migrated legacy canvas has nowhere to keep a
+receipt and is never migrated by recovery, so its dead owners' pending entries
+stay in the pending file as their outcomes (`retainedOutcomes`): status,
+execute, cancel and a correlated retry answer `interrupted` from them, prepare
+keeps them while they fit the per-canvas pending bounds (the oldest give way
+to new edits and then answer `unknown`), and the commit that migrates the
+canvas turns them into receipts. Failures carry
 a code (`conflict`, `invalid-input`, `invalid-content`,
 `renderer-unavailable`, `capacity`, `deadline`, `deleted`, `not-found`,
 `expired-operation`, `unknown-outcome`, `export-collision`,
@@ -169,8 +184,14 @@ generation fails its jobs exactly once. Health distinguishes missing
 executable, launch failure, saturation, recovery and ready, and is probed on
 demand (cached 60 s).
 
-Playwright exposes no browser process handle, so a hung `close()` is bounded
-by the cleanup deadline rather than a process kill.
+Each generation's browser is a Playwright browser server on loopback
+(`launchDesignBrowser`: `chromium.launchServer({ host: "127.0.0.1" })` and
+`chromium.connect`), because a browser from `chromium.launch()` exposes no
+process. Retiring a generation closes the server within the cleanup deadline;
+a close that hangs or fails is followed by `BrowserServer.kill()`, also
+bounded. The endpoint's path is a random GUID that the renderer never logs. The fault
+test in `renderer.test.ts` stops a real browser with `SIGSTOP` and checks that
+shutdown kills it.
 
 ## Validation
 

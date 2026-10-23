@@ -18,7 +18,7 @@ import {
   selectorSchema,
   stylesSchema,
 } from "./schemas.js";
-import { receiptDigest, settledMatches } from "./records.js";
+import { settledMatches } from "./records.js";
 import { findCreate } from "./service-lifecycle.js";
 import type { DesignService } from "./service.js";
 import { validate as validateFrame } from "./validation.js";
@@ -103,16 +103,14 @@ export function designActions(
     // A settled correlation id replays only for the same input (intent
     // digest); `prepare` applies the same rule to pending ones.
     if (descriptor.canvasId) {
-      const { record } = await service.loadFor(descriptor.canvasId, environmentId, {
-        allowDeleted: true,
-      });
-      const settled = record.receipts.find(
-        (receipt) => receipt.correlationId === descriptor.correlationId,
+      const settled = await service.settledCorrelation(
+        environmentId,
+        descriptor.canvasId,
+        descriptor,
       );
       if (settled) {
-        if (!settledMatches(settled, receiptDigest(record, settled.token), descriptor))
-          throw reusedCorrelation(settled.token);
-        return compactStatus(settled);
+        if (!settled.matches) throw reusedCorrelation(settled.status.token);
+        return compactStatus(settled.status);
       }
     } else if (descriptor.input.kind === "create_canvas") {
       const found = await findCreate(service, environmentId, descriptor.correlationId);

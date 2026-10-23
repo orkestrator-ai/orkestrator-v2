@@ -65,8 +65,9 @@ function touchMidpoint(touches: TouchList): { clientX: number; clientY: number }
  * stacked column scrolls only sideways: its viewport grows with the scaled
  * column, so vertical scrolling stays with the page.
  *
- * In fullscreen the wide graph's viewport is `fillHeight` tall, the height it
- * is given, instead of its own.
+ * Given a `fillHeight`, the wide graph's viewport is that tall instead of its
+ * own height: the overlay's height in fullscreen, or the height dragged with
+ * the divider.
  */
 export function useFlowViewport({
   viewKey,
@@ -478,6 +479,129 @@ export function FlowZoomControls({
       >
         {fullscreen ? <Minimize className="size-3.5" /> : <Maximize className="size-3.5" />}
       </Button>
+    </div>
+  );
+}
+
+/** How far an arrow key moves the divider. */
+const DIVIDER_KEY_STEP = 16;
+
+/**
+ * The graph's bottom edge, dragged to make the graph taller or shorter. While
+ * it drags, `onResize` follows the pointer; `onCommit` takes the height it was
+ * let go at. A double-click, or Enter, gives the graph its own height back
+ * (`null`). Arrow keys move it in steps; Home and End go to either limit.
+ */
+export function FlowHeightDivider({
+  height,
+  min,
+  max,
+  onResize,
+  onCommit,
+}: {
+  height: number;
+  min: number;
+  max: number;
+  onResize: (height: number | null) => void;
+  onCommit: (height: number | null) => void;
+}) {
+  const dragRef = useRef<{
+    pointerId: number;
+    startY: number;
+    startHeight: number;
+    scale: number;
+    moved: boolean;
+  } | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const heightAt = (clientY: number) => {
+    const drag = dragRef.current!;
+    return Math.round(
+      Math.min(max, Math.max(min, drag.startHeight + (clientY - drag.startY) / drag.scale)),
+    );
+  };
+  const end = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const next = heightAt(event.clientY);
+    dragRef.current = null;
+    setDragging(false);
+    if (drag.moved) onCommit(next);
+  };
+  const cancel = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (dragRef.current?.pointerId !== event.pointerId) return;
+    dragRef.current = null;
+    setDragging(false);
+    onResize(null);
+  };
+  useEffect(
+    () => () => {
+      if (!dragRef.current) return;
+      dragRef.current = null;
+      onResize(null);
+    },
+    [onResize],
+  );
+  return (
+    <div
+      role="separator"
+      aria-orientation="horizontal"
+      aria-label="Resize graph"
+      aria-valuenow={height}
+      aria-valuemin={min}
+      aria-valuemax={max}
+      tabIndex={0}
+      data-testid="multi-review-graph-divider"
+      title="Drag to resize · double-click to reset"
+      className={cn(
+        "group absolute inset-x-0 -bottom-1 z-20 flex h-2 cursor-row-resize touch-none items-center outline-hidden",
+        dragging && "select-none",
+      )}
+      onPointerDown={(event) => {
+        if (event.button !== 0 || dragRef.current) return;
+        event.preventDefault();
+        event.currentTarget.focus();
+        event.currentTarget.setPointerCapture?.(event.pointerId);
+        // CSS zoom scales client coordinates, while native page zoom already
+        // reports them in layout pixels. Measure their ratio in either host.
+        const renderedHeight = event.currentTarget.getBoundingClientRect().height;
+        const layoutHeight = event.currentTarget.offsetHeight;
+        dragRef.current = {
+          pointerId: event.pointerId,
+          startY: event.clientY,
+          startHeight: height,
+          scale: renderedHeight > 0 && layoutHeight > 0 ? renderedHeight / layoutHeight : 1,
+          moved: false,
+        };
+        setDragging(true);
+      }}
+      onPointerMove={(event) => {
+        const drag = dragRef.current;
+        if (!drag || drag.pointerId !== event.pointerId) return;
+        if (Math.abs(event.clientY - drag.startY) / drag.scale >= 2) drag.moved = true;
+        if (drag.moved) onResize(heightAt(event.clientY));
+      }}
+      onPointerUp={end}
+      onPointerCancel={cancel}
+      onLostPointerCapture={cancel}
+      onDoubleClick={() => onCommit(null)}
+      onKeyDown={(event) => {
+        let next: number | null | undefined;
+        if (event.key === "ArrowUp") next = height - DIVIDER_KEY_STEP;
+        else if (event.key === "ArrowDown") next = height + DIVIDER_KEY_STEP;
+        else if (event.key === "Home") next = min;
+        else if (event.key === "End") next = max;
+        else if (event.key === "Enter") next = null;
+        if (next === undefined) return;
+        event.preventDefault();
+        onCommit(next === null ? null : Math.min(max, Math.max(min, next)));
+      }}
+    >
+      <div
+        className={cn(
+          "h-0.5 w-full transition-colors group-hover:bg-primary/50 group-focus-visible:bg-primary/70",
+          dragging && "bg-primary/70",
+        )}
+      />
     </div>
   );
 }

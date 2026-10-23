@@ -227,8 +227,9 @@ const FOLLOW_THRESHOLD_PX = 24;
  * The tail's scrolling log: the session's latest messages and tool calls,
  * rendered as a chat transcript is, following new output unless the reader
  * scrolled up. It fills the inspector's remaining height, never under 28rem;
- * its zero basis keeps a long transcript scrolling here rather than growing
- * the inspector.
+ * its explicit zero-length basis keeps a long transcript scrolling here rather
+ * than growing the inspector (a percentage basis becomes content-sized while
+ * the grid measures its intrinsic height).
  */
 function TranscriptTailLog({
   label,
@@ -270,6 +271,18 @@ function TranscriptTailLog({
     if (element && following.current) element.scrollTop = element.scrollHeight;
   }, [messages]);
 
+  useLayoutEffect(() => {
+    const element = scrollRef.current;
+    if (!element) return;
+    // A completed transcript receives no new messages when its pane shrinks.
+    // Keep its latest entry visible, unless the reader has scrolled up.
+    const observer = new ResizeObserver(() => {
+      if (following.current) element.scrollTop = element.scrollHeight;
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
   return (
     <div
       ref={scrollRef}
@@ -283,7 +296,7 @@ function TranscriptTailLog({
         following.current =
           element.scrollHeight - element.scrollTop - element.clientHeight < FOLLOW_THRESHOLD_PX;
       }}
-      className="@container h-0 min-h-[28rem] flex-1 overflow-y-auto overscroll-contain rounded-lg border border-divider bg-background py-2"
+      className="@container h-0 min-h-[28rem] flex-[1_1_0px] overflow-y-auto overscroll-contain rounded-lg border border-divider bg-background py-2"
     >
       {messages.length === 0 ? (
         <p className={cn("px-3 text-xs", error ? "text-failure" : "text-muted-foreground")}>

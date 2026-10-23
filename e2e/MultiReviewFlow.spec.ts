@@ -484,9 +484,102 @@ test("the transcript tail fills the inspector down to the footer", async ({ page
   const tailBox = (await tail.boundingBox())!;
   const footerBox = (await footer.boundingBox())!;
   // Only the inspector's bottom padding sits between them.
-  expect(footerBox.y - (tailBox.y + tailBox.height)).toBeLessThanOrEqual(24);
+  const gap = footerBox.y - (tailBox.y + tailBox.height);
+  expect(gap).toBeGreaterThanOrEqual(0);
+  expect(gap).toBeLessThanOrEqual(24);
   await page.screenshot({ path: "output/playwright/multi-review-tail-fill.png" });
 });
+
+test("a completed overflowing transcript follows pane resizing until the reader scrolls up", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 1800 });
+  await page.goto("/multi-review-flow?phase=consolidating&longTranscript");
+  await page.getByRole("tab", { name: /^Reviewer 1 ·/ }).click();
+  const tail = page.getByTestId("multi-review-transcript-tail");
+  await expect(tail).toContainText("Transcript entry 40.");
+  await expect(tail).not.toContainText("Working…");
+  const bottomGap = () =>
+    tail.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop);
+  const height = () => tail.evaluate((element) => element.clientHeight);
+  const scrollTop = () => tail.evaluate((element) => element.scrollTop);
+  await expect.poll(bottomGap).toBeLessThanOrEqual(1);
+  expect(await tail.evaluate((element) => element.scrollHeight)).toBeGreaterThan(await height());
+  const initialHeight = await height();
+  await page.setViewportSize({ width: 1280, height: 1500 });
+  await expect.poll(height).toBeLessThan(initialHeight);
+  await expect.poll(bottomGap).toBeLessThanOrEqual(1);
+
+  // Real wheel input scrolls only the log, leaving the overview in place.
+  await tail.scrollIntoViewIfNeeded();
+  const overview = page.getByTestId("multi-review-overview-scroll");
+  const overviewTop = await overview.evaluate((element) => element.scrollTop);
+  const beforeWheel = await scrollTop();
+  await tail.hover();
+  await page.mouse.wheel(0, -300);
+  await expect.poll(scrollTop).toBeLessThan(beforeWheel - 100);
+  const readingTop = await scrollTop();
+  const readingHeight = await height();
+  await page.setViewportSize({ width: 1280, height: 1200 });
+  await expect.poll(height).toBeLessThan(readingHeight);
+  await expect.poll(scrollTop).toBe(readingTop);
+  expect(await bottomGap()).toBeGreaterThan(100);
+  expect(await overview.evaluate((element) => element.scrollTop)).toBe(overviewTop);
+
+  await page.mouse.wheel(0, 100_000);
+  await expect.poll(bottomGap).toBeLessThanOrEqual(1);
+  expect(await overview.evaluate((element) => element.scrollTop)).toBe(overviewTop);
+  const followingHeight = await height();
+  await page.setViewportSize({ width: 1280, height: 1050 });
+  await expect.poll(height).toBeLessThan(followingHeight);
+  await expect.poll(bottomGap).toBeLessThanOrEqual(1);
+});
+
+for (const viewport of [
+  { width: 1280, height: 900 },
+  { width: 390, height: 844 },
+  { width: 1024, height: 600 },
+]) {
+  test(`inspector grid contains the tail and report at ${viewport.width}x${viewport.height}`, async ({
+    page,
+  }) => {
+    await page.setViewportSize(viewport);
+    await page.goto("/multi-review-flow?phase=ready&longTranscript");
+    await page.getByRole("tab", { name: /^Reviewer 1 ·/ }).click();
+    const inspector = page.getByTestId("multi-review-inspector");
+    const tail = page.getByTestId("multi-review-transcript-tail");
+    await expect(tail).toContainText("Transcript entry 40.");
+    const overview = page.getByTestId("multi-review-overview-scroll");
+    // Return to the inspector's start so the badge has not stuck over its body.
+    await overview.evaluate((element) => {
+      const panel = element.querySelector('[data-testid="multi-review-inspector"]')!;
+      element.scrollTop +=
+        panel.getBoundingClientRect().top - element.getBoundingClientRect().top - 16;
+    });
+    const badge = page.getByTestId("multi-review-findings-badge");
+    const header = inspector.getByRole("heading", { level: 2 }).first().locator("xpath=..");
+    const body = inspector.locator(":scope > div").nth(1);
+    const badgeBox = (await badge.boundingBox())!;
+    const headerBox = (await header.boundingBox())!;
+    expect(overlapping([badgeBox, headerBox])).toEqual([]);
+    expect(badgeBox.y).toBeLessThan(headerBox.y + headerBox.height);
+    expect(badgeBox.y + badgeBox.height).toBeLessThanOrEqual((await body.boundingBox())!.y + 1);
+    const tailBox = (await tail.boundingBox())!;
+    expect(tailBox.height).toBeGreaterThanOrEqual(448);
+    expect(inside(tailBox, (await inspector.boundingBox())!)).toBe(true);
+    expect(tailBox.x).toBeGreaterThanOrEqual(0);
+    expect(tailBox.x + tailBox.width).toBeLessThanOrEqual(viewport.width);
+    const report = page.getByRole("heading", { name: "Consolidated Multi Review", exact: true });
+    expect((await report.boundingBox())!.y).toBeGreaterThanOrEqual(tailBox.y + tailBox.height);
+    expect(await overview.evaluate((element) => element.scrollWidth - element.clientWidth)).toBe(0);
+    await report.scrollIntoViewIfNeeded();
+    await expect(report).toBeInViewport();
+    await expect(badge).toBeInViewport();
+    await page.screenshot({
+      path: `output/playwright/multi-review-report-${viewport.width}x${viewport.height}.png`,
+    });
+  });
+}
 
 test("shows each queued reviewer's place in the admission queue", async ({ page }) => {
   await page.goto("/multi-review-flow?phase=reviewing&reviewers=8");

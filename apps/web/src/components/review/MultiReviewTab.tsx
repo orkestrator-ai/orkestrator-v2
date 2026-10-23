@@ -1581,7 +1581,10 @@ function MultiReviewOverviewTab({
 
       {/* A stable gutter keeps the graph's width, and so its zoom, from
           changing when the inspector grows enough to need a scrollbar. */}
-      <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
+      <div
+        data-testid="multi-review-overview-scroll"
+        className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]"
+      >
         <div className="@container flex min-h-full flex-col">
           {notices.length > 0 ? (
             <div className="space-y-2 border-b border-divider px-4 py-3 sm:px-6">{notices}</div>
@@ -1625,9 +1628,7 @@ function MultiReviewOverviewTab({
                 <MultiReviewInspectorHeader node={selected.node} actions={selected.actions} />
               </div>
               {/* Full width: the badge only overlaps it once stuck. */}
-              <div className="col-span-full row-start-2 flex min-w-0 flex-col">
-                {selected.body}
-              </div>
+              <div className="col-span-full row-start-2 flex min-w-0 flex-col">{selected.body}</div>
             </section>
           </div>
           {workflow.consolidatedReport || workflow.fixResult ? (

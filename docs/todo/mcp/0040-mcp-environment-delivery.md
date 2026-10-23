@@ -191,7 +191,7 @@ remote runs with
   staged Codex inputs, and the migration refused with `root-symlink` twice.
   C14, which stages no inputs, passes, and a fresh staged container has no
   symlinks in its homes. This is tracked in
-  [0056-legacy-migration-root-symlink.md](../containers-and-environments/0056-legacy-migration-root-symlink.md).
+  [0058-legacy-migration-root-symlink.md](../containers-and-environments/0058-legacy-migration-root-symlink.md).
 - UI (`apps/web/src/components/settings/mcp-servers/`):
   - `McpEnvironmentOverlay.tsx` shows each overlay state with its actions:
     reapply when pending; import or reapply when diverged; keep or use
@@ -351,7 +351,7 @@ None left; both earlier questions are answered in decisions 9 and 10.
   for state layout and staged inputs, and
   [0018-container-network-and-credential-isolation.md](../containers-and-environments/0018-container-network-and-credential-isolation.md)
   for the allowlist and staged-input credentials.
-- [0056-legacy-migration-root-symlink.md](../containers-and-environments/0056-legacy-migration-root-symlink.md)
+- [0058-legacy-migration-root-symlink.md](../containers-and-environments/0058-legacy-migration-root-symlink.md)
   for the migration refusal seen while qualifying this file.
 - [`container-lifecycle.md`](../../architecture/container-lifecycle.md)
   ("Provider state", the provider-state inventory).

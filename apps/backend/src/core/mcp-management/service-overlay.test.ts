@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
@@ -508,6 +508,38 @@ describe("boot recovery regressions", () => {
     expect(await fixture.service.materialiseEnvironment("env-1")).toBe(1);
     expect(codexServers().mine).toEqual({ command: "mine" });
     expect(source((await snapshotOf()).snapshot).overlay?.state).toBe("in-sync");
+  });
+
+  test("a boot write that lands before its record is never rebased on its own output", async () => {
+    await addCodex("mine");
+    const directory = environmentStateDirectory(
+      fixture.dataDir,
+      "mcp-environment-overlays",
+      "env-1",
+    );
+    // The container accepts the write, then the record write fails.
+    fixture.containerWriteControl.afterWrite = async () => {
+      fixture.containerWriteControl.afterWrite = undefined;
+      chmodSync(directory, 0o500);
+    };
+    // The inherited copy changed this boot, so the stale record's last output
+    // differs from both the file and what it would write now.
+    const changed = `${INHERITED_CODEX}\n[mcp_servers.fresh]\ncommand = "fresh"\n`;
+    try {
+      expect(await restart(changed, "boot-2")).toBe(0);
+    } finally {
+      chmodSync(directory, 0o700);
+    }
+    expect(Object.keys(codexServers()).sort()).toEqual(["fresh", "inherited", "mine", "other"]);
+    expect(source((await snapshotOf()).snapshot).overlay).toMatchObject({
+      state: "in-sync",
+      added: ["mine"],
+    });
+    // The retry stamps the boot without treating the output as inherited.
+    expect(await fixture.service.materialiseEnvironment("env-1")).toBe(1);
+    expect(source((await snapshotOf()).snapshot).overlay?.added).toEqual(["mine"]);
+    await restart(changed);
+    expect(Object.keys(codexServers()).sort()).toEqual(["fresh", "inherited", "mine", "other"]);
   });
 
   for (const kind of ["reset", "keep-environment", "take-inherited"] as const) {

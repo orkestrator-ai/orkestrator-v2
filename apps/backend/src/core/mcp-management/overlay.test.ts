@@ -134,6 +134,13 @@ describe("observing the container's file", () => {
     });
   });
 
+  test("a file already holding the expected servers is in sync whatever its boot stamp", () => {
+    // The container write landed but the record still carries the old stamp.
+    const overlay = recordEdit(record({ a: A }), ["x"], { a: A, x: B }, digest);
+    const stale = { ...overlay, materialisedFingerprint: digest({ a: A }) };
+    expect(observeOverlay(stale, { a: A, x: B }, "boot-2", digest)).toEqual({ kind: "in-sync" });
+  });
+
   test("import adopts in-container edits but leaves a held conflict alone", () => {
     let overlay = record({ a: A, c: B });
     overlay = recordEdit(overlay, ["a"], { a: { command: "mine" }, c: B }, digest);

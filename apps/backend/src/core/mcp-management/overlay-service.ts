@@ -302,10 +302,13 @@ export class EnvironmentOverlays {
     const { source } = context;
     const text = source.state === "absent" ? "" : (source.file?.text ?? "");
     const current = this.entries(source);
-    // A missing staged input leaves the previous output intact on restart.
-    // Matching our last verified output is no evidence of a new baseline.
+    // A missing staged input leaves the previous output intact on restart, and
+    // a write can land before its record does. A file matching our last
+    // verified output, or the output we would write now, is no evidence of a
+    // new baseline.
     const rebased =
-      digest(current) === record.materialisedFingerprint
+      digest(current) === record.materialisedFingerprint ||
+      digest(current) === digest(expectedEntries(record))
         ? record
         : rebaseOverlay(record, current, digest);
     const expected = expectedEntries(rebased);
@@ -318,7 +321,12 @@ export class EnvironmentOverlays {
       materialisedAt: now,
       updatedAt: now,
     };
-    // Leave the old boot stamp retryable until the container accepts the write.
+    // Three steps, each safe to stop after. Keep the new inherited copy (and
+    // any conflicts it raised) but leave the old boot stamp, so a failed write
+    // stays pending and retryable. Then write the container. Only then stamp
+    // success; if that last record write fails, the file already equals this
+    // record's expected servers, which `observeOverlay` reads as in sync.
+    if (rebased !== record) await this.records.write({ ...rebased, updatedAt: now });
     if (digest(expected) !== digest(current)) {
       await this.write(context, rewriteServerMap(source.spec, text, expected));
     }

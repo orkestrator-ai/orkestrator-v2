@@ -264,9 +264,12 @@ export function observeOverlay(
   digest: Digest,
 ): OverlayObservation {
   if (digest(current) === record.materialisedFingerprint) return { kind: "in-sync" };
-  if (bootId !== null && bootId !== record.materialisedBootId) return { kind: "pending" };
+  // A file that already holds the expected servers needs nothing, whatever
+  // boot stamp the record carries (a write that landed before its record did).
   const names = divergedNames(record, current);
-  return names.length ? { kind: "diverged", names } : { kind: "in-sync" };
+  if (!names.length) return { kind: "in-sync" };
+  if (bootId !== null && bootId !== record.materialisedBootId) return { kind: "pending" };
+  return { kind: "diverged", names };
 }
 
 export function publicOverlayState(

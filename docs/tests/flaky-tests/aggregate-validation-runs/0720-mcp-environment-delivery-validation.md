@@ -1,6 +1,6 @@
 # MCP environment delivery (0040) validation under aggregate load
 
-- **ID:** 0694
+- **ID:** 0720
 - **Status:** open
 - **Date observed:** 2026-10-23.
 - **Baseline:** `062971245`, with the todo 0040 environment-overlay changes in the working tree.

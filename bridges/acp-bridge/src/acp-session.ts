@@ -2217,6 +2217,9 @@ export function finalizeTurnUsage(state: SessionState): void {
     ...(state.usage.turns ?? []).filter((entry) => entry.turnId !== turnId),
     {
       turnId,
+      // `finalizeTurnUsage` commits one completed turn exactly once, so this
+      // is the turn's own time.
+      at: new Date().toISOString(),
       ...(turn.costUsd === undefined ? {} : { costUsd: turn.costUsd }),
       ...(turn.inputTokens === undefined ? {} : { inputTokens: turn.inputTokens }),
       ...(turn.outputTokens === undefined ? {} : { outputTokens: turn.outputTokens }),

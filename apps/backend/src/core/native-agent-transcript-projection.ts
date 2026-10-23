@@ -141,6 +141,7 @@ import {
   displayTailRecoveryWindow,
 } from "./native-agent-display-tails.js";
 import { NativeAgentDisplayTailScheduler } from "./native-agent-display-tail-scheduler.js";
+import { UsageHistoryRecorder } from "./usage-history-recorder.js";
 import {
   ProgressiveReadMetrics,
   ProgressiveReadPhaseTimer,
@@ -838,6 +839,24 @@ export class NativeAgentTranscriptProjection {
   >();
   /** Bounded restart-preview checkpoints; see native-agent-display-tail-scheduler.ts. */
   private readonly displayTailScheduler: NativeAgentDisplayTailScheduler;
+  /**
+   * Durable token and spend history, fed from the per-turn usage every
+   * provider already reports. The recorder de-duplicates and writes off the
+   * projection path, so a projection never waits on it.
+   */
+  private readonly usageRecorder = new UsageHistoryRecorder({
+    // Optional because narrow test doubles of the storage omit it.
+    write: ({ sessionKey, environmentId, platform, providerSessionId, turns }) =>
+      typeof this.storage.recordAgentUsageTurns === "function"
+        ? this.storage.recordAgentUsageTurns({
+            sessionKey,
+            environmentId,
+            platform,
+            ...(providerSessionId ? { providerSessionId } : {}),
+            turns: turns ?? [],
+          })
+        : 0,
+  });
   private readonly progressiveHydrations = new Map<string, ProgressiveHydrationEntry>();
   private readonly progressiveHydrationTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly progressiveMetrics = new ProgressiveReadMetrics();
@@ -4899,6 +4918,19 @@ export class NativeAgentTranscriptProjection {
         input.agent,
         input.logicalSessionKey,
       );
+      // Usage history is recorded from the merged turns, which carry every
+      // turn the provider still republishes rather than only the newest one.
+      // The provider session scopes their ids: this key belongs to the tab,
+      // which outlives the conversation in it.
+      this.usageRecorder.observe({
+        sessionKey,
+        environmentId: input.environmentId,
+        platform: input.agent,
+        ...(resolved.session.providerSessionId
+          ? { providerSessionId: resolved.session.providerSessionId }
+          : {}),
+        usage: contextUsage,
+      });
       const normalized = this.projectionMessages(
         sessionKey,
         snapshot.messages,

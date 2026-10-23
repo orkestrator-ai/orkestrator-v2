@@ -1,5 +1,7 @@
 import * as shared from "./storage-shared.js";
 import { StoreCorruptError } from "./storage-database.js";
+import { UsageHistoryStore, type RecordUsageTurnsInput } from "./usage-history-store.js";
+import type { UsageHistoryQuery, UsageHistoryReport } from "@orkestrator/protocol/usage-history";
 import { MAX_TABS_PER_ENVIRONMENT } from "@orkestrator/protocol/pane-layout";
 import {
   MAX_SESSIONS_PER_ENVIRONMENT,
@@ -149,6 +151,42 @@ export type StorageLayerTypes = [
 ];
 
 export abstract class StorageSessions extends StorageConfig {
+  private usageHistoryStoreInstance: UsageHistoryStore | null = null;
+
+  /**
+   * Recorded agent usage: its own database store, one row per agent session.
+   * Constructed lazily so an installation that never runs an agent never
+   * creates it.
+   */
+  protected usageHistoryStore(): UsageHistoryStore {
+    this.usageHistoryStoreInstance ??= new UsageHistoryStore({ database: () => this.database });
+    return this.usageHistoryStoreInstance;
+  }
+
+  /**
+   * Records the turns of one agent session that are not recorded yet, and
+   * answers how many were new. Content-free: counts, a model name and a
+   * platform.
+   */
+  recordAgentUsageTurns(input: RecordUsageTurnsInput): number {
+    return this.usageHistoryStore().recordTurns(input);
+  }
+
+  /** The range report the usage panes render. */
+  getAgentUsageHistory(query: UsageHistoryQuery = {}): UsageHistoryReport {
+    return this.usageHistoryStore().report(query);
+  }
+
+  /**
+   * Forgets one environment's recorded usage. Deleting an environment does
+   * not call this: a usage report of the last ninety days must not change
+   * because an environment was removed today, and the rows hold no
+   * conversation content.
+   */
+  deleteAgentUsageHistoryByEnvironment(environmentId: string): number {
+    return this.usageHistoryStore().deleteByEnvironment(environmentId);
+  }
+
   async createSession(
     environmentId: string,
     containerId: string,

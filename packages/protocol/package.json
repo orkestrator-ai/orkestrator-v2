@@ -144,6 +144,7 @@
     "./transcript-part-ids": "./src/transcript-part-ids.ts",
     "./node/transcript-budget": "./src/node/transcript-budget.ts",
     "./node/transcript-window": "./src/node/transcript-window.ts",
+    "./usage-history": "./src/usage-history.ts",
     "./view-sync": "./src/view-sync.ts",
     "./node/worktree-paths": "./src/node/worktree-paths.ts",
     "./worktree-snapshots": "./src/worktree-snapshots.ts",

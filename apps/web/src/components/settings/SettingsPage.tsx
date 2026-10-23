@@ -24,11 +24,13 @@ import {
   Volume2,
   Server,
   HardDrive,
+  ChartArea,
 } from "lucide-react";
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import { GlobalSettings } from "./GlobalSettings";
 import { SkillsSettings } from "./SkillsSettings";
 import { DiskUsageSettings } from "./DiskUsageSettings";
+import { UsageSettings } from "./usage/UsageSettings";
 import { McpSettings } from "./McpSettings";
 import { ProviderMcpSettings } from "./mcp-servers/ProviderMcpSettings";
 import { PreviewSettings } from "./PreviewSettings";
@@ -43,6 +45,7 @@ const MENU_ITEMS: SettingsMenuItem<GlobalSettingsSection>[] = [
   { id: "general", label: "General", icon: <Settings2 className="h-4 w-4" /> },
   { id: "machines", label: "Machines", icon: <Network className="h-4 w-4" /> },
   { id: "disk-usage", label: "Disk usage", icon: <HardDrive className="h-4 w-4" /> },
+  { id: "usage", label: "Usage", icon: <ChartArea className="h-4 w-4" /> },
   { id: "defaults", label: "Defaults", icon: <SlidersHorizontal className="h-4 w-4" /> },
   { id: "platforms", label: "Platforms", icon: <Boxes className="h-4 w-4" /> },
   { id: "review", label: "Review", icon: <Eye className="h-4 w-4" /> },
@@ -202,6 +205,8 @@ export function SettingsPage({
               <MachinesSettings />
             ) : activeSection === "disk-usage" ? (
               <DiskUsageSettings />
+            ) : activeSection === "usage" ? (
+              <UsageSettings />
             ) : activeSection === "skills" ? (
               <SkillsSettings />
             ) : activeSection === "mcp" ? (

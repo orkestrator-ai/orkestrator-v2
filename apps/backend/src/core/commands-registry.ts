@@ -44,6 +44,7 @@ import { registerGitHubPullRequestCommands } from "./commands-registry-github-pu
 import { registerKanbanCommands } from "./commands-registry-kanban.js";
 import { registerAgentMailCommands } from "./commands-registry-mail.js";
 import { registerDiskUsageCommands } from "./commands-registry-disk-usage.js";
+import { registerUsageCommands } from "./commands-registry-usage.js";
 import {
   registerAgentAccountCommands,
   registerOpenCodeProviderLoginCommands,
@@ -313,6 +314,7 @@ export function createCommandRegistry(
   registerKanbanCommands(register, dependencies);
   registerAgentMailCommands(register);
   registerDiskUsageCommands(register);
+  registerUsageCommands(register);
   registerAgentAccountCommands(register, dependencies);
   registerOpenCodeProviderLoginCommands(register);
   registerWorkflowResultCommands(register);

@@ -890,6 +890,8 @@ export interface SessionUsageSnapshot {
   }>;
   turns?: Array<{
     turnId: string;
+    /** When this turn was finalized, ISO-8601; what dates recorded usage. */
+    at?: string;
     costUsd?: number;
     inputTokens?: number;
     outputTokens?: number;

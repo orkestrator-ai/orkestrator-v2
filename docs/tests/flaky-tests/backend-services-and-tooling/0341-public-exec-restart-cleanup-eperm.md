@@ -41,6 +41,21 @@
 - **Evidence:** `orkestrator-test-run.HnWfCT/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and outer `orkestrator-test-run.MmnVTZ/oct22-full.log.gz`, below the host temporary directory.
 - **Assessment:** intermittent cleanup failure confirmed; no implementation, assertion, timeout or skip changed.
 
+## Recurrence during the Usage-tab main merge (2026-10-22)
+
+- **Command:** `mise run test:logged -- --name merge-full-suite -- mise run test`
+  on branch `t3/settings-usage-tab` after merging `origin/main` at `edcd60d9`.
+  No public-API, exec or test-support change on that branch.
+- **Failure:** `EPERM: operation not permitted, rm '/tmp/ork-public-api-c6iJS9'`
+  from `cleanup` (`test-support.ts:143`), the same symptom (1059.90 ms). The
+  only failure of the whole suite: root and agent-support, bridges and the
+  codex protocol lockfile all passed, and the workspace group's other packages
+  passed (web 8,752, protocol 1,728, desktop 1,125, CLI 148, toolchain 91,
+  web-public 41).
+- **Alone:** `mise run test:logged -- --name merge-exec-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts src/core/public-api/public-api-exec.test.ts --parallel=1`
+  passed the unchanged owning file, exit 0 (31.8 seconds logged).
+- **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.uDtv0l/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
 ## Shared creation-dialog draft validation — 2026-10-23
 
 - **Original command:** `mise run test:logged -- --name draft-fix-suite -- mise run test`, validating `7a667390d`; workspace/root/bridges/protocol reserved 4/1/2/1 slots and backend used two isolated workers.

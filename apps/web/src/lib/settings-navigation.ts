@@ -7,6 +7,7 @@ export const GLOBAL_SETTINGS_SECTIONS = [
   "general",
   "machines",
   "disk-usage",
+  "usage",
   "defaults",
   "platforms",
   "review",

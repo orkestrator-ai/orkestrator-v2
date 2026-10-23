@@ -393,6 +393,9 @@ function restoreUsage(value: unknown): SessionState["usage"] {
             }
             if (nonBlank(candidate.requestId)) entry.requestId = candidate.requestId;
             if (nonBlank(candidate.modelId)) entry.modelId = candidate.modelId;
+            // Restored so a turn kept across a restart is still dated by when
+            // it ran, not by when the reattached session republishes it.
+            if (nonBlank(candidate.at)) entry.at = candidate.at;
             return [entry];
           }),
         }

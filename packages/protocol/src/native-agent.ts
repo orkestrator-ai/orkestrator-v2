@@ -1318,6 +1318,16 @@ export interface NativeAgentContextUsage {
 
 export interface NativeAgentTurnUsage {
   turnId: string;
+  /**
+   * When the bridge finalized this turn, ISO-8601.
+   *
+   * Providers republish their recent turns on every usage read, and several
+   * bridges restore them across a restart, so the moment a consumer first sees
+   * a turn can be long after it ran. Anything bucketing usage by time has to
+   * read this rather than its own clock. A bridge that cannot date a turn
+   * leaves it unset.
+   */
+  at?: string;
   costUsd?: number;
   /** Cursor's undiscounted price, retained separately from charged cost. */
   rawCostUsd?: number;

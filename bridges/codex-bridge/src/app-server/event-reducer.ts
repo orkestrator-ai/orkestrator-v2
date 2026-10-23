@@ -282,6 +282,7 @@ export function reduceNotification(
               turns: [
                 {
                   turnId,
+                  at: new Date().toISOString(),
                   inputTokens: num(last.inputTokens),
                   outputTokens: num(last.outputTokens),
                   cacheReadTokens: num(last.cachedInputTokens),

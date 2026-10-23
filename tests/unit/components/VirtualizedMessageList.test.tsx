@@ -14,6 +14,8 @@ mock.module("react-virtuoso", () => ({
   Virtuoso: (props: any) => {
     lastVirtuosoProps = props;
     const { data, itemContent, components, context } = props;
+    // Like Virtuoso, rendered indices include `firstItemIndex`.
+    const base: number = props.firstItemIndex ?? 0;
 
     // Render EmptyPlaceholder when data is empty
     if (data.length === 0 && components?.EmptyPlaceholder) {
@@ -31,7 +33,7 @@ mock.module("react-virtuoso", () => ({
         {data.map((item: any, index: number) =>
           !renderedItemIndexes || renderedItemIndexes.has(index) ? (
             <div key={index} data-testid={`virtuoso-item-${index}`}>
-              {itemContent(index, item)}
+              {itemContent(base + index, item)}
             </div>
           ) : null,
         )}
@@ -581,7 +583,27 @@ describe("VirtualizedMessageList", () => {
       />,
     );
 
-    expect(lastVirtuosoProps.computeItemKey).toBe(computeItemKey);
+    // Virtuoso passes absolute indices (offset by firstItemIndex); the list
+    // hands callers the local index.
+    const seen: number[] = [];
+    const key = lastVirtuosoProps.computeItemKey as (index: number, msg: TestMessage) => string;
+    expect(typeof lastVirtuosoProps.firstItemIndex).toBe("number");
+    expect(key(lastVirtuosoProps.firstItemIndex, { id: "1", text: "Hi" })).toBe("1");
+    const spy = (index: number, msg: TestMessage) => {
+      seen.push(index);
+      return computeItemKey(index, msg);
+    };
+    cleanup();
+    render(
+      <VirtualizedMessageList
+        messages={[{ id: "1", text: "Hi" }]}
+        computeItemKey={spy}
+        renderMessage={(_i, msg) => <span>{msg.text}</span>}
+        scrollProps={makeScrollProps()}
+        virtuosoRef={createRef<VirtuosoHandle>()}
+      />,
+    );
+    expect(seen.every((index) => index === 0)).toBe(true);
   });
 
   test("sets the transcript estimate and overscan", () => {

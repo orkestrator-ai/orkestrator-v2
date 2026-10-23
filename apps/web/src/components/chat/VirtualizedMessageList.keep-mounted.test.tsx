@@ -15,23 +15,25 @@ import { pinRichViewKey } from "@/stores/richContentViewStore";
  */
 let visible: ListRange = { startIndex: 0, endIndex: 2 };
 let scrollVirtuoso: ((range: ListRange) => void) | null = null;
-let lastFollowOutput: ((atBottom: boolean) => "auto" | false) | null = null;
+let lastFollowOutput: ((atBottom: boolean) => "auto" | false) | false | null = null;
 const realVirtuosoSnapshot = { ...realVirtuoso };
 
 function FakeVirtuoso({
   data,
   itemContent,
+  firstItemIndex = 0,
   computeItemKey,
   minOverscanItemCount,
   rangeChanged,
   followOutput,
 }: {
   data: unknown[];
+  firstItemIndex?: number;
   itemContent: (index: number, item: unknown) => ReactNode;
   computeItemKey: (index: number, item: unknown) => string;
   minOverscanItemCount?: number | { top: number; bottom: number };
   rangeChanged?: (range: ListRange) => void;
-  followOutput?: (atBottom: boolean) => "auto" | false;
+  followOutput?: ((atBottom: boolean) => "auto" | false) | false;
 }) {
   const [range, setRange] = useState(visible);
   useLayoutEffect(() => {
@@ -48,12 +50,14 @@ function FakeVirtuoso({
   const start = Math.max(0, range.startIndex - overscan.top);
   const end = Math.min(data.length - 1, range.endIndex + overscan.bottom);
   useEffect(() => {
-    rangeChanged?.({ startIndex: start, endIndex: end });
-  }, [start, end, rangeChanged]);
+    rangeChanged?.({ startIndex: firstItemIndex + start, endIndex: firstItemIndex + end });
+  }, [firstItemIndex, start, end, rangeChanged]);
   const rows: ReactNode[] = [];
   for (let index = start; index <= end; index++) {
     rows.push(
-      <div key={computeItemKey(index, data[index])}>{itemContent(index, data[index])}</div>,
+      <div key={computeItemKey(firstItemIndex + index, data[index])}>
+        {itemContent(firstItemIndex + index, data[index])}
+      </div>,
     );
   }
   return (
@@ -291,7 +295,8 @@ describe("VirtualizedMessageList follow pausing", () => {
     const { followOutput } = renderList();
     expect(lastFollowOutput).toBe(followOutput);
     selectText(rowElement("m-1")!.querySelector("p")!.firstChild!);
-    expect(lastFollowOutput?.(true)).toBe(false);
+    // The literal false: Virtuoso's size paths treat any function as enabled.
+    expect(lastFollowOutput).toBe(false);
     clearSelection();
     expect(lastFollowOutput).toBe(followOutput);
   });

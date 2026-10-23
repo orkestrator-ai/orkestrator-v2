@@ -6,7 +6,7 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import type { StateSnapshot, VirtuosoHandle } from "react-virtuoso";
+import type { VirtuosoHandle } from "react-virtuoso";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { AlertCircle, ArrowDown, History, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -15,7 +15,10 @@ import { SessionRefreshShimmer } from "@/components/chat/SessionRefreshShimmer";
 import { AgentThinkingIndicator } from "@/components/chat/AgentThinkingIndicator";
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import { NativeComposeDock } from "@/components/chat/NativeComposeDock";
-import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList";
+import {
+  VirtualizedMessageList,
+  type TranscriptListScrollProps,
+} from "@/components/chat/VirtualizedMessageList";
 import { NativeMessage } from "@/components/chat/NativeMessage";
 import { getNativeMessageSearchText } from "@/components/chat/native-message-search";
 import { formatElapsed } from "@/lib/format-elapsed";
@@ -160,14 +163,7 @@ interface NativeChatShellProps<TMessage extends NativeMessageType> {
 
   isAtBottom: boolean;
   scrollToBottom: () => void;
-  scrollProps: {
-    followOutput: (isAtBottom: boolean) => "auto" | false;
-    atBottomStateChange: (atBottom: boolean) => void;
-    atBottomThreshold: number;
-    totalListHeightChanged?: (height: number) => void;
-    restoreStateFrom: StateSnapshot | undefined;
-    scrollerRef?: (el: HTMLElement | Window | null) => void;
-  };
+  scrollProps: TranscriptListScrollProps;
   virtuosoRef: RefObject<VirtuosoHandle | null>;
   /** Message id to highlight briefly after a jump to it. */
   highlightedMessageId?: string | null;

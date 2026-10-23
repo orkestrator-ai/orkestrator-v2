@@ -142,7 +142,11 @@ export function classifyKey(
   if (modalOwnsKeyboard(scroller)) return null;
   const doc = scroller.ownerDocument;
   const focused = doc.activeElement;
-  const focusInside = focused !== null && scroller.contains(focused);
+  // A key event targets the focused element; one targeted inside the
+  // transcript is the transcript's even if focus moved since.
+  const focusInside =
+    (target instanceof Node && scroller.contains(target)) ||
+    (focused !== null && scroller.contains(focused));
   const focusOnBody = focused === null || focused === doc.body || focused === doc.documentElement;
   if (!focusInside && !(focusOnBody && lastPointerInside)) return null;
   if (focusInside && nestedScrollerConsumes(event, scroller, direction)) return null;

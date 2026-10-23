@@ -79,11 +79,15 @@ export class VirtuosoScrollAdapter {
     const handle = this.handle();
     if (!handle) return false;
     this.writes += 1;
+    // Index navigation is always instant (Virtuoso's default); it corrects
+    // estimates, and smoothing each correction would read as jitter.
     handle.scrollToIndex({
       index: location.index,
       align: location.align,
-      behavior: "auto",
-      ...(location.offset !== undefined && location.offset !== 0 ? { offset: location.offset } : {}),
+      ...(location.index === "LAST" ? {} : { behavior: "auto" as const }),
+      ...(location.offset !== undefined && location.offset !== 0
+        ? { offset: location.offset }
+        : {}),
     });
     return true;
   }

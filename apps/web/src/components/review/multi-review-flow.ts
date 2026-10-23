@@ -86,6 +86,7 @@ export interface MultiReviewFlowEdges {
   intoConsolidation: MultiReviewFlowEdgeState[];
   intoFix: MultiReviewFlowEdgeState;
   intoPr: MultiReviewFlowEdgeState;
+  prSource?: "consolidation" | "fix";
 }
 
 export function multiReviewFlowEdges(states: {
@@ -110,6 +111,7 @@ export function multiReviewFlowEdges(states: {
       multiReviewFlowEdgeState(reviewer, states.consolidation, { waitingIsReady: true }),
     ),
     intoFix: multiReviewFlowEdgeState(states.consolidation, states.fix, { waitingIsReady: true }),
+    prSource: states.prFromConsolidation ? "consolidation" : "fix",
     intoPr: multiReviewFlowEdgeState(
       states.prFromConsolidation ? states.consolidation : states.fix,
       states.pr,
@@ -559,4 +561,13 @@ export function flowEdgePath(from: FlowRect, to: FlowRect): string {
   if (y1 === y2) return `M${x1} ${y1} L${x2} ${y2}`;
   const mid = (x1 + x2) / 2;
   return `M${x1} ${y1} C${mid} ${y1} ${mid} ${y2} ${x2} ${y2}`;
+}
+
+/** Route a clean report above the skipped Fix node. */
+export function cleanReviewPrEdgePath(from: FlowRect, to: FlowRect): string {
+  const start = from.x + from.width;
+  const y = from.y + from.height / 2;
+  const endY = to.y + to.height / 2;
+  const bypassY = Math.min(from.y, to.y) - 24;
+  return `M${start} ${y} C${start + 24} ${y} ${start + 24} ${bypassY} ${start + 48} ${bypassY} L${to.x - 48} ${bypassY} C${to.x - 24} ${bypassY} ${to.x - 24} ${endY} ${to.x} ${endY}`;
 }

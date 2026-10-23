@@ -37,6 +37,7 @@ import {
   MULTI_REVIEW_SEVERITIES,
   flowEdgePath,
   multiReviewFlowLayout,
+  cleanReviewPrEdgePath,
   summarizeFlowEdges,
   type FlowRect,
   type MultiReviewFlowEdgeState,
@@ -424,12 +425,23 @@ function isDashed(state: MultiReviewFlowEdgeState): boolean {
   return state === "pending" || state === "ready";
 }
 
-function FlowEdge({ id, d, state }: { id: string; d: string; state: MultiReviewFlowEdgeState }) {
+function FlowEdge({
+  id,
+  d,
+  state,
+  source,
+}: {
+  id: string;
+  d: string;
+  state: MultiReviewFlowEdgeState;
+  source?: string;
+}) {
   return (
     <>
       <path
         d={d}
         data-flow-edge={id}
+        data-flow-source={source}
         data-edge-state={state}
         className={EDGE_CLASS[state]}
         strokeWidth={2}
@@ -896,10 +908,28 @@ export function MultiReviewFlowGraph({
               {connector(summarizeFlowEdges(edges.intoConsolidation), "into-consolidation")}
               <ColumnLabel>Consolidate</ColumnLabel>
               {renderNode(consolidationNode, undefined, "w-full")}
-              {connector(edges.intoFix, "into-fix")}
-              <ColumnLabel>Fix</ColumnLabel>
-              {renderNode(fixNode, undefined, "w-full")}
-              {connector(edges.intoPr, "into-pr")}
+              <div className="relative flex flex-col gap-1.5">
+                {connector(edges.intoFix, "into-fix")}
+                <ColumnLabel>Fix</ColumnLabel>
+                {renderNode(fixNode, undefined, "w-full")}
+                {edges.prSource === "consolidation" ? (
+                  <>
+                    <div
+                      aria-hidden="true"
+                      data-flow-edge="into-pr"
+                      data-flow-source="consolidation"
+                      data-edge-state={edges.intoPr}
+                      className={cn(
+                        "pointer-events-none absolute inset-y-0 left-1/2 w-[calc(50%+8px)] rounded-r-xl border-y-2 border-r-2",
+                        CONNECTOR_CLASS[edges.intoPr],
+                      )}
+                    />
+                    <div aria-hidden="true" className="h-5" />
+                  </>
+                ) : (
+                  connector(edges.intoPr, "into-pr")
+                )}
+              </div>
               <ColumnLabel>PR</ColumnLabel>
               {renderNode(prNode, undefined, "w-full")}
             </div>
@@ -993,7 +1023,12 @@ export function MultiReviewFlowGraph({
               />
               <FlowEdge
                 id="into-pr"
-                d={flowEdgePath(geometry.fix, geometry.pr)}
+                source={edges.prSource ?? "fix"}
+                d={
+                  edges.prSource === "consolidation"
+                    ? cleanReviewPrEdgePath(geometry.consolidation, geometry.pr)
+                    : flowEdgePath(geometry.fix, geometry.pr)
+                }
                 state={edges.intoPr}
               />
               <Port rect={geometry.package} side="out" state={packageNode.state} />

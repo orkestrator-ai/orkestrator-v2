@@ -323,7 +323,7 @@ const ACTIVE_AGENT_PHASES: ReadonlySet<NativeAgentTurnPhase> = new Set<NativeAge
  * agent was launched for it or the step before it finished, so one that was
  * already open does not complete the pipeline before it has run.
  *
- * `agentPhase` is the launched PR tab's turn, when this client has it. While
+ * `agentPhase` is read from the backend while the overview is active. While
  * it works the node runs; once it settles without a pull request having been
  * detected the node says so rather than claiming one.
  */
@@ -344,6 +344,14 @@ export function pullRequestStep({
   upstreamComplete: boolean;
 }): PullRequestStepStatus {
   const launched = launch?.state === "launched";
+  if (prUrl && (launched || upstreamComplete)) {
+    const state = prState ?? "open";
+    return {
+      state: "complete",
+      label: `Pull request ${state}`,
+      statusWord: { text: state, tone: state === "closed" ? "warning" : "muted" },
+    };
+  }
   if (launched && agentPhase && ACTIVE_AGENT_PHASES.has(agentPhase)) {
     if (agentPhase === "blocked") {
       return {
@@ -356,14 +364,6 @@ export function pullRequestStep({
       state: "running",
       label: "The PR agent is committing, pushing, and opening the pull request",
       statusWord: { text: "working", tone: "running" },
-    };
-  }
-  if (prUrl && (launched || upstreamComplete)) {
-    const state = prState ?? "open";
-    return {
-      state: "complete",
-      label: `Pull request ${state}`,
-      statusWord: { text: state, tone: state === "closed" ? "warning" : "muted" },
     };
   }
   switch (launch?.state) {
@@ -389,9 +389,9 @@ export function pullRequestStep({
         };
       }
       return {
-        state: "running",
-        label: "The PR agent was launched",
-        statusWord: { text: "launched", tone: "running" },
+        state: "paused",
+        label: "The PR agent was launched; its current status is unavailable",
+        statusWord: { text: "status unknown", tone: "warning" },
       };
     case "skipped":
       return {

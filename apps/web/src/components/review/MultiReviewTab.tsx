@@ -27,9 +27,8 @@ import { StructuredReviewReportView } from "./StructuredReviewReportView";
 import { StackedEyes } from "./MultiReviewLaunchDialog";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { useMultiReviewPrPhase } from "./useMultiReviewPrPhase";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import { createSessionKey } from "@/lib/utils";
 import { hydrateMultiReviewWorkflow } from "@/lib/multi-review-persistence";
 import { useOptionalTerminalContext } from "@/contexts/TerminalContext";
 import { MultiReviewReviewerTab } from "./MultiReviewReviewerTab";
@@ -140,6 +139,7 @@ interface MultiReviewTabProps {
   loadReviewerTranscript?: typeof backend.getMultiReviewReviewerTranscript;
   /** Reads the selected step's transcript tail for the inspector. */
   loadStepTranscript?: typeof backend.getMultiReviewStepTranscript;
+  loadPrSessionState?: typeof backend.getNativeAgentSessionStateUpdate;
 }
 
 function phaseCopy(workflow: MultiReviewWorkflow): string {
@@ -375,6 +375,7 @@ function MultiReviewOverviewTab({
   openReviewer,
   loadReviewerTranscript,
   loadStepTranscript,
+  loadPrSessionState,
 }: MultiReviewTabProps) {
   const createTab = useOptionalTerminalContext()?.createTab;
   const workflow = useMultiReviewStore((state) => state.workflows.get(data.workflowId));
@@ -423,7 +424,7 @@ function MultiReviewOverviewTab({
       workflow.stepRuntimes.fix.completedAt === undefined);
   const hasRunningValidation =
     workflow?.validationRun?.status === "planned" || workflow?.validationRun?.status === "running";
-  // The header's workflow clock counts while any stage is at work.
+  // The header measures review, validation and Fix; PR work has no workflow timing record.
   const hasLiveClock = Boolean(
     hasRunningReviewer ||
     hasRunningFixSession ||
@@ -715,15 +716,32 @@ function MultiReviewOverviewTab({
   const prState = useEnvironmentStore(
     (state) => state.getEnvironmentById(data.environmentId)?.prState ?? null,
   );
+  const cleanReviewPr =
+    workflow?.phase === "ready" &&
+    workflow.consolidatedReport?.issues.length === 0 &&
+    workflow.consolidatedReport.testCoverageGaps.length === 0;
+  // A delivered launch survives restarts as history, not as the rerun's outcome.
+  const currentPrLaunch =
+    workflow?.autoPrLaunch?.basis === "clean-review" && !cleanReviewPr
+      ? undefined
+      : workflow?.autoPrLaunch;
   const prTabId = workflow?.autoPrLaunch?.tabId;
-  const prAgentPhase = useNativeAgentProjectionStore((state) =>
+  const prTabAgent = usePaneLayoutStore((state) =>
     prTabId
-      ? state.projections.get(createSessionKey(data.environmentId, prTabId))?.turn.phase
+      ? state.findPaneWithTab(prTabId, data.environmentId)?.tabs.find((tab) => tab.id === prTabId)
+          ?.nativeAgentData?.platform
       : undefined,
   );
   const prTabOpen = usePaneLayoutStore((state) =>
     prTabId ? state.findPaneWithTab(prTabId, data.environmentId) !== null : false,
   );
+  const prAgentPhase = useMultiReviewPrPhase({
+    environmentId: data.environmentId,
+    tabId: prTabId,
+    agent: prTabAgent,
+    active: isActive && currentPrLaunch?.state === "launched" && !prUrl,
+    loadSessionState: loadPrSessionState,
+  });
   const openPrTab = useCallback(() => {
     if (!prTabId) return;
     const layout = usePaneLayoutStore.getState();
@@ -1083,10 +1101,9 @@ function MultiReviewOverviewTab({
     ) : null,
   });
 
-  const cleanReviewPr = workflow.autoPrLaunch?.basis === "clean-review";
   const prStatus = pullRequestStep({
     autoPr: workflow.autoPr === true,
-    launch: workflow.autoPrLaunch,
+    launch: currentPrLaunch,
     prUrl: prUrl,
     prState: prState,
     agentPhase: prAgentPhase,
@@ -1095,9 +1112,7 @@ function MultiReviewOverviewTab({
       : fixStatus.state === "complete",
   });
   const canOpenPrTab = workflow.autoPrLaunch?.state === "launched" && prTabOpen;
-  const prLaunchNotice = workflow.autoPrLaunch
-    ? autoPrLaunchNotice(workflow.autoPrLaunch).text
-    : null;
+  const prLaunchNotice = currentPrLaunch ? autoPrLaunchNotice(currentPrLaunch).text : null;
   const prView: MultiReviewFlowNodeView = {
     node: {
       id: "pr",
@@ -1168,6 +1183,12 @@ function MultiReviewOverviewTab({
           <dd>{workflow.autoPr === true ? "On" : "Off"}</dd>
         </dl>
         <p className="text-xs text-foreground/85">{prLaunchNotice ?? prStatus.label}</p>
+        {workflow.autoPrLaunch && !currentPrLaunch ? (
+          <p className="text-xs text-muted-foreground">
+            The previous automatic PR launch ({workflow.autoPrLaunch.state}) belongs to an earlier
+            review.
+          </p>
+        ) : null}
       </div>
     ),
   };
@@ -1398,11 +1419,7 @@ function MultiReviewOverviewTab({
     prFromConsolidation: cleanReviewPr,
   });
   const { findings, reviewerCount, provisionalCount } = mergeReviewerFindings(workflow.reviewers);
-  const elapsedSeconds = multiReviewElapsedSeconds(
-    workflow,
-    busy || views.some((view) => view.node.state === "running"),
-    reviewPanelNow,
-  );
+  const elapsedSeconds = multiReviewElapsedSeconds(workflow, hasLiveClock, reviewPanelNow);
   const totalTokens = multiReviewTotalTokens(workflow);
   const headerStalled = reviewSessionStalled || fixSessionStalled;
 

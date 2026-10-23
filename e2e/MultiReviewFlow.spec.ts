@@ -514,8 +514,30 @@ for (const phase of ["ready", "interactive", "reviewing", "consolidating"]) {
     await page.goto(`/multi-review-flow?phase=${phase}&cleanReviewPr`);
     await expect(page.getByRole("tablist", { name: "Multi Review pipeline" })).toBeVisible();
     await expect(page.getByTestId("multi-review-auto-pr-notice")).toHaveCount(0);
+    const assertCurrentReview = async () => {
+      const pr = page.getByRole("tab", { name: /^Pull request,/ });
+      await expect(pr).toHaveAttribute("data-flow-state", "not-started");
+      await expect(pr).toHaveAttribute("aria-selected", "false");
+      const edge = page.locator('[data-flow-edge="into-pr"]');
+      await expect(edge).toHaveAttribute("data-edge-state", "pending");
+      if (await page.locator('[data-flow-layout="graph"]').count()) {
+        const right = await page
+          .locator('[data-flow-node="fix"]')
+          .evaluate(
+            (node: HTMLElement) => parseFloat(node.style.left) + parseFloat(node.style.width),
+          );
+        expect(await edge.getAttribute("d")).toMatch(new RegExp(`^M${right} `));
+      }
+      await pr.click();
+      await expect(page.getByTestId("multi-review-inspector")).not.toContainText(
+        "The review found nothing to fix",
+      );
+      await expect(page.getByTestId("multi-review-inspector")).toContainText("earlier review");
+    };
+    await assertCurrentReview();
     await page.reload();
     await expect(page.getByRole("tablist", { name: "Multi Review pipeline" })).toBeVisible();
     await expect(page.getByTestId("multi-review-auto-pr-notice")).toHaveCount(0);
+    await assertCurrentReview();
   });
 }

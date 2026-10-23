@@ -20,6 +20,8 @@ import {
 import { ContextMenuItem } from "@/components/ui/context-menu";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
 import { useMultiReviewFlowViewStore } from "@/stores/multiReviewFlowViewStore";
+import { useEnvironmentStore } from "@/stores/environmentStore";
+import type { Environment } from "@/types";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { MultiReviewTab } from "./MultiReviewTab";
 import {
@@ -144,10 +146,13 @@ interface PhaseCase {
     intoReviewers: MultiReviewFlowEdgeState[];
     intoConsolidation: MultiReviewFlowEdgeState[];
     intoFix: MultiReviewFlowEdgeState;
+    intoPr?: MultiReviewFlowEdgeState;
   };
   selected: string;
   /** The PR node, which stays queued unless a phase says otherwise. */
   pr?: MultiReviewFlowState;
+  prUrl?: string;
+  prSource?: "consolidation" | "fix";
 }
 
 const NOT = "not-started" as const;
@@ -284,6 +289,7 @@ const PHASES: PhaseCase[] = [
       intoReviewers: ["complete", "complete", "complete"],
       intoConsolidation: ["complete", "complete", "complete"],
       intoFix: "complete",
+      intoPr: "ready",
     },
     selected: "Fix,",
   },
@@ -341,6 +347,56 @@ const PHASES: PhaseCase[] = [
   },
 ];
 
+for (const launchState of ["pending", "launched"] as const) {
+  PHASES.push({
+    name: `clean review PR ${launchState}`,
+    workflow: workflow({
+      phase: "ready",
+      reviewers: allDone(),
+      consolidatedReport: { ...report, issues: [], testCoverageGaps: [] },
+      autoPr: true,
+      autoPrLaunch: {
+        basis: "clean-review",
+        state: launchState,
+        requestId: "pr",
+        tabId: "background-pr",
+      },
+    }),
+    nodes: ["complete", ["complete", "complete", "complete"], "complete", NOT],
+    edges: {
+      intoReviewers: ["complete", "complete", "complete"],
+      intoConsolidation: ["complete", "complete", "complete"],
+      intoFix: "ready",
+      intoPr: launchState === "pending" ? "active" : "ready",
+    },
+    selected: "Pull request,",
+    pr: launchState === "pending" ? "running" : "paused",
+    prSource: "consolidation",
+  });
+}
+for (const clean of [true, false]) {
+  PHASES.push({
+    name: `detected PR after ${clean ? "clean review" : "Fix"}`,
+    workflow: workflow({
+      phase: clean ? "ready" : "completed",
+      reviewers: allDone(),
+      consolidatedReport: clean ? { ...report, issues: [], testCoverageGaps: [] } : report,
+      autoPr: false,
+    }),
+    nodes: ["complete", ["complete", "complete", "complete"], "complete", clean ? NOT : "complete"],
+    edges: {
+      intoReviewers: ["complete", "complete", "complete"],
+      intoConsolidation: ["complete", "complete", "complete"],
+      intoFix: clean ? "ready" : "complete",
+      intoPr: "complete",
+    },
+    selected: "Pull request,",
+    pr: "complete",
+    prUrl: "https://github.com/o/r/pull/42",
+    prSource: clean ? "consolidation" : "fix",
+  });
+}
+
 function renderTab(target: MultiReviewWorkflow) {
   useMultiReviewStore.getState().replaceWorkflow(target);
   return render(
@@ -368,33 +424,50 @@ afterEach(cleanup);
 
 describe("flow graph by phase", () => {
   test.each(PHASES)("maps nodes and edges while $name", (phase) => {
-    renderTab(phase.workflow);
-    const pipeline = screen.getByRole("tablist", { name: "Multi Review pipeline" });
-    const states = within(pipeline)
-      .getAllByRole("tab")
-      .map((node) => node.dataset.flowState);
-    const [packageState, reviewerStates, consolidationState, fixState] = phase.nodes;
-    expect(states).toEqual([
-      packageState,
-      ...reviewerStates,
-      consolidationState,
-      fixState,
-      phase.pr ?? NOT,
-    ]);
+    const environments = useEnvironmentStore.getState().environments;
+    if (phase.prUrl)
+      useEnvironmentStore.setState({
+        environments: [{ id: "env-1", prUrl: phase.prUrl, prState: "open" } as Environment],
+      });
+    try {
+      renderTab(phase.workflow);
+      const pipeline = screen.getByRole("tablist", { name: "Multi Review pipeline" });
+      const states = within(pipeline)
+        .getAllByRole("tab")
+        .map((node) => node.dataset.flowState);
+      const [packageState, reviewerStates, consolidationState, fixState] = phase.nodes;
+      expect(states).toEqual([
+        packageState,
+        ...reviewerStates,
+        consolidationState,
+        fixState,
+        phase.pr ?? NOT,
+      ]);
 
-    phase.edges.intoReviewers.forEach((state, index) =>
-      expect(edgeState(`into-reviewer-${index}`)).toBe(state),
-    );
-    phase.edges.intoConsolidation.forEach((state, index) =>
-      expect(edgeState(`into-consolidation-${index}`)).toBe(state),
-    );
-    expect(edgeState("into-fix")).toBe(phase.edges.intoFix);
+      phase.edges.intoReviewers.forEach((state, index) =>
+        expect(edgeState(`into-reviewer-${index}`)).toBe(state),
+      );
+      phase.edges.intoConsolidation.forEach((state, index) =>
+        expect(edgeState(`into-consolidation-${index}`)).toBe(state),
+      );
+      expect(edgeState("into-fix")).toBe(phase.edges.intoFix);
+      expect(edgeState("into-pr")).toBe(phase.edges.intoPr ?? "pending");
+      if (phase.prSource) {
+        const source = document.querySelector<HTMLElement>(`[data-flow-node="${phase.prSource}"]`)!;
+        expect(document.querySelector('[data-flow-edge="into-pr"]')!.getAttribute("d")).toStartWith(
+          `M${parseFloat(source.style.left) + parseFloat(source.style.width)} `,
+        );
+      }
 
-    const selected = within(pipeline)
-      .getAllByRole("tab")
-      .filter((node) => node.getAttribute("aria-selected") === "true");
-    expect(selected).toHaveLength(1);
-    expect(selected[0]!.getAttribute("aria-label")).toStartWith(phase.selected);
+      const selected = within(pipeline)
+        .getAllByRole("tab")
+        .filter((node) => node.getAttribute("aria-selected") === "true");
+      expect(selected).toHaveLength(1);
+      expect(selected[0]!.getAttribute("aria-label")).toStartWith(phase.selected);
+    } finally {
+      cleanup();
+      useEnvironmentStore.setState({ environments });
+    }
   });
 
   test("draws pending edges dashed, live edges solid cyan and finished edges solid green", () => {
@@ -739,6 +812,21 @@ describe("stacked layout", () => {
     expect(edgeState("into-pr")).toBe("pending");
   });
 
+  test("routes the stacked clean-review connector around Fix from consolidation", () => {
+    render(
+      <MultiReviewFlowGraph
+        {...props}
+        layout="stacked"
+        edges={{ ...props.edges, intoPr: "complete", prSource: "consolidation" }}
+      />,
+    );
+    const edge = document.querySelector<HTMLElement>('[data-flow-edge="into-pr"]')!;
+    expect(edge.dataset.flowSource).toBe("consolidation");
+    expect(edge.dataset.edgeState).toBe("complete");
+    expect(edge.className).toContain("absolute");
+    expect(edge.parentElement!.querySelector('[data-flow-node="fix"]')).toBeTruthy();
+  });
+
   test("switches to the stacked layout below the threshold width", () => {
     const descriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
     Object.defineProperty(HTMLElement.prototype, "clientWidth", {
@@ -1009,6 +1097,37 @@ describe("zoom and pan", () => {
       expect(viewport().scrollLeft).toBe(40);
     } finally {
       window.matchMedia = matchMedia;
+      if (descriptor) Object.defineProperty(HTMLElement.prototype, "clientWidth", descriptor);
+      else delete (HTMLElement.prototype as { clientWidth?: number }).clientWidth;
+    }
+  });
+
+  test("restores remembered pan before centering, then recenters the same stage on resize", () => {
+    let width = 1200;
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
+    const originalObserver = globalThis.ResizeObserver;
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+      configurable: true,
+      get: () => width,
+    });
+    // Exercise the measurement fallback so resizing can be driven deterministically.
+    globalThis.ResizeObserver = undefined as unknown as typeof ResizeObserver;
+    useMultiReviewFlowViewStore
+      .getState()
+      .saveView("workflow-zoom", { zoom: 1.25, scrollLeft: 37, scrollTop: 12, width });
+    const view = render(<MultiReviewFlowGraph {...panel(4)} selectedId="pr" />);
+    try {
+      expect(viewport().scrollLeft).toBe(37);
+      expect(zoomLevel()).toBe("125%");
+      width = 1000;
+      fireEvent(window, new Event("resize"));
+      const layout = multiReviewFlowLayout({ width, reviewerCount: 4, packageHasChips: false });
+      expect(zoomLevel()).toBe("100%");
+      expect(viewport().scrollLeft).toBe(layout.width - width);
+      expect(viewport().scrollLeft).not.toBe(37);
+    } finally {
+      view.unmount();
+      globalThis.ResizeObserver = originalObserver;
       if (descriptor) Object.defineProperty(HTMLElement.prototype, "clientWidth", descriptor);
       else delete (HTMLElement.prototype as { clientWidth?: number }).clientWidth;
     }

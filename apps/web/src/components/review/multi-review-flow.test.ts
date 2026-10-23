@@ -125,6 +125,7 @@ describe("node and edge states", () => {
       intoConsolidation: ["ready", "pending", "pending", "pending", "pending"],
       intoFix: "pending",
       intoPr: "pending",
+      prSource: "fix",
     });
     expect(
       multiReviewFlowEdges({
@@ -139,6 +140,7 @@ describe("node and edge states", () => {
       intoConsolidation: ["complete", "pending"],
       intoFix: "active",
       intoPr: "pending",
+      prSource: "fix",
     });
   });
 

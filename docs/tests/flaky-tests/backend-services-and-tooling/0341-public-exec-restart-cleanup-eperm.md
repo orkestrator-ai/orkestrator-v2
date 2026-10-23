@@ -40,3 +40,12 @@
 - **Isolated rerun:** `mise run test:logged -- --name oct22-public-exec-owner -- bun test --cwd apps/backend ./src/core/public-api/public-api-exec.test.ts --parallel=1` passed the entire unchanged owning file, exit 0, in 32.2 seconds.
 - **Evidence:** `orkestrator-test-run.HnWfCT/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and outer `orkestrator-test-run.MmnVTZ/oct22-full.log.gz`, below the host temporary directory.
 - **Assessment:** intermittent cleanup failure confirmed; no implementation, assertion, timeout or skip changed.
+
+## Shared creation-dialog draft validation — 2026-10-23
+
+- **Original command:** `mise run test:logged -- --name draft-fix-suite -- mise run test`, validating `7a667390d`; workspace/root/bridges/protocol reserved 4/1/2/1 slots and backend used two isolated workers.
+- **Failure:** the restart case again failed during temporary-directory cleanup with `EPERM` at `public-api/test-support.ts:143` (1297.11 ms).
+- **Isolated rerun:** `mise run test:logged -- --name draft-fix-rerun-public-exec -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/public-api/public-api-exec.test.ts --parallel=1 --only-failures` passed the complete unchanged owning file, exit 0 in 18.9 seconds logged.
+- **Partial aggregate results:** web reported 8,818 passed, 10 skipped and zero failed; desktop reported 1,197 passed, 14 skipped and one failed (0694); root/support reported 3,376 passed, two failed and one error (Pi staging and disk-report timeouts). Backend totals are unavailable: the outer logger reached its 1,800-second deadline after workspace admission had waited 1,075.3 seconds. This run does not establish complete backend validation.
+- **Evidence:** `orkestrator-test-run.x5x58l/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and outer `orkestrator-test-run.NEAVB6/draft-fix-suite.log.gz` below the host temporary directory. The child log was compressed after the outer watchdog stopped the process tree.
+- **Assessment:** another confirmed intermittent cleanup failure. No public API implementation, assertion, timeout or skip changed.

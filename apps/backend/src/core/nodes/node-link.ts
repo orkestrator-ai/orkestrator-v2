@@ -96,6 +96,8 @@ interface ActiveRoute {
   opened: OpenedRoute;
   hello: BackendHello;
   unsubscribeClosed?: () => void;
+  retained?: number;
+  detached?: boolean;
 }
 
 const defaultTimers: NodeLinkTimers = {
@@ -220,7 +222,11 @@ export class NodeLink {
    * For a forgotten node: verify its identity over the first working route
    * and run one command without attaching (used to confirm a detach).
    */
-  async invokeWithoutAttaching<T>(command: string, args: Record<string, unknown>): Promise<T> {
+  async invokeWithoutAttaching<T>(
+    command: string,
+    args: Record<string, unknown>,
+    options: { timeoutMs?: number } = {},
+  ): Promise<T> {
     const token = this.record.credential?.token;
     if (!token) throw new NodeUnavailableError(`${this.label()} has no credential.`);
     let lastError: unknown = new NodeUnavailableError("No route is enabled.");
@@ -235,10 +241,15 @@ export class NodeLink {
         if (outcome.kind !== "hello" || outcome.hello.installationId !== this.record.nodeId) {
           throw new NodeUnavailableError("The route reached a different machine.");
         }
-        return await this.request<T>(opened.baseUrl, token, command, args);
+        return await this.request<T>(opened.baseUrl, token, command, args, options);
       } catch (error) {
         lastError = error;
-        if (classifyRouteFailure(error).quarantine || isCertificateFailure(error)) break;
+        if (
+          error instanceof NodeOutcomeUnknownError ||
+          classifyRouteFailure(error).quarantine ||
+          isCertificateFailure(error)
+        )
+          break;
       } finally {
         opened?.release();
       }
@@ -640,12 +651,40 @@ export class NodeLink {
     }
   }
 
+  /** Keep the authenticated transport alive even when the registry link stops. */
+  retainTransport(): {
+    invoke<T>(
+      command: string,
+      args: Record<string, unknown>,
+      options?: { timeoutMs?: number },
+    ): Promise<T>;
+    release(): void;
+  } {
+    const active = this.active;
+    const token = this.record.credential?.token;
+    if (!active || !token || this.state !== "connected")
+      throw new NodeUnavailableError(`${this.label()} is not connected. Connect to it first.`);
+    active.retained = (active.retained ?? 0) + 1;
+    let released = false;
+    return {
+      invoke: <T>(command: string, args: Record<string, unknown>, options = {}) =>
+        this.request<T>(active.opened.baseUrl, token, command, args, options),
+      release: () => {
+        if (released) return;
+        released = true;
+        active.retained = (active.retained ?? 1) - 1;
+        if (active.detached && active.retained === 0) active.opened.release();
+      },
+    };
+  }
+
   private dropActive(): void {
     const active = this.active;
     this.active = null;
     if (!active) return;
     active.unsubscribeClosed?.();
-    active.opened.release();
+    active.detached = true;
+    if (!active.retained) active.opened.release();
     this.epoch += 1;
   }
 

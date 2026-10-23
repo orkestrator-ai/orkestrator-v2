@@ -124,9 +124,15 @@ export function SettingsScopeBanner({ section }: { section: GlobalSettingsSectio
       />
       <span>
         {section === "machines" ? (
-          <>
-            Command node: <strong>{commandNode.name}</strong>. These are the machines it controls.
-          </>
+          enabled ? (
+            <>
+              Command node: <strong>{commandNode.name}</strong>. These are the machines it controls.
+            </>
+          ) : (
+            <>
+              This window is on <strong>{commandNode.name}</strong>.
+            </>
+          )
         ) : inherited ? (
           <>
             Preferences for <strong>{commandNode.name}</strong>, inherited by work on every machine

@@ -36,6 +36,9 @@ describe("MCP management commands", () => {
       "apply_mcp_configuration",
       "get_mcp_operation",
       "cancel_mcp_apply",
+      "resolve_mcp_environment_overlay",
+      "preview_mcp_environment_defaults",
+      "refresh_mcp_environment_defaults",
     ]) {
       expect(commands.has(name)).toBe(true);
     }

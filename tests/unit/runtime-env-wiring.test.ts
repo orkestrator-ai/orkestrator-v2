@@ -312,7 +312,13 @@ describe("container runtime environment wiring", () => {
     // One mechanism for every agent. An unguarded `find -maxdepth 1 -type f`
     // or a bare recursive `cp` of a mounted home is what these helpers replaced;
     // none of them should reappear for any agent.
-    for (const mount of ["/claude-config", "/codex-home", "/opencode-data", "/grok-home"]) {
+    for (const mount of [
+      "/claude-config",
+      "/codex-home",
+      "/opencode-data",
+      "/grok-home",
+      "/cursor-config",
+    ]) {
       expect(entrypoint).toContain(`copy_agent_file ${mount}`);
       expect(entrypoint).not.toContain(`find ${mount} -maxdepth 1 -type f`);
       expect(entrypoint).not.toContain(`cp -r ${mount}/.`);
@@ -327,7 +333,7 @@ describe("container runtime environment wiring", () => {
     expect(entrypoint).toContain("copy_agent_directory_entries /grok-home");
     expect(entrypoint).toContain("copy_agent_directory /grok-config");
     // Each call site names its agent so a skipped file is attributable.
-    for (const label of ["Claude", "Codex", "OpenCode", "Grok"]) {
+    for (const label of ["Claude", "Codex", "OpenCode", "Grok", "Cursor"]) {
       expect(entrypoint).toMatch(
         new RegExp(`copy_agent_(file|directory) [^\\n]*\\s${label}$`, "m"),
       );
@@ -530,6 +536,63 @@ describe("container runtime environment wiring", () => {
       } as Record<string, string>);
       expect(rerun.exitCode).toBe(0);
       expect(statSync(copied).mode & 0o777).toBe(0o600);
+    });
+  });
+
+  test("container startup copies only Cursor's mcp.json", () => {
+    const cursorSection = section(
+      read("docker/entrypoint.sh"),
+      "# Set up Cursor configuration.",
+      'log_progress "Cursor configuration ready"',
+    );
+    // User MCP servers only: account state, IDE state, hooks, plugins and the
+    // SDK's own state stay on the host.
+    const copies = [...cursorSection.matchAll(/^\s*copy_agent_[a-z_]+ .*$/gm)].map((match) =>
+      match[0].trim(),
+    );
+    expect(copies).toEqual(['copy_agent_file /cursor-config "$HOME/.cursor" mcp.json Cursor']);
+    expect(cursorSection).toContain('mkdir -p "$HOME/.cursor"');
+    expect(cursorSection).toContain('chmod 600 "$HOME/.cursor/mcp.json"');
+    expect(cursorSection).toContain('[ ! -L "$HOME/.cursor/mcp.json" ]');
+    expect(cursorSection).toContain("report_agent_copy_skips Cursor");
+  });
+
+  test("Cursor setup leaves a copied mcp.json owner-only and a symlink target untouched", () => {
+    withTempDir((dir) => {
+      const source = join(dir, "source");
+      mkdirSync(source);
+      writeFileSync(join(source, "mcp.json"), '{"mcpServers":{}}\n');
+      chmodSync(join(source, "mcp.json"), 0o644);
+      const cursorSection = section(
+        read("docker/entrypoint.sh"),
+        "# Set up Cursor configuration.",
+        'log_progress "Cursor configuration ready"',
+      ).replaceAll("/cursor-config", shellQuote(source));
+      const home = join(dir, "home");
+      const result = runShell(agentCopyHelperHarness(cursorSection), {
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        HOME: home,
+      });
+      expect(result.exitCode).toBe(0);
+      const copied = join(home, ".cursor", "mcp.json");
+      expect(readFileSync(copied, "utf8")).toBe('{"mcpServers":{}}\n');
+      expect(statSync(copied).mode & 0o777).toBe(0o600);
+
+      // A destination a previous workload replaced with a link is refused,
+      // and the link's target keeps its mode.
+      const linkedHome = join(dir, "linked-home");
+      mkdirSync(join(linkedHome, ".cursor"), { recursive: true });
+      const target = join(dir, "outside.json");
+      writeFileSync(target, "{}\n");
+      chmodSync(target, 0o644);
+      symlinkSync(target, join(linkedHome, ".cursor", "mcp.json"));
+      const linked = runShell(agentCopyHelperHarness(cursorSection), {
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        HOME: linkedHome,
+      });
+      expect(linked.exitCode).toBe(0);
+      expect(readFileSync(target, "utf8")).toBe("{}\n");
+      expect(statSync(target).mode & 0o777).toBe(0o644);
     });
   });
 

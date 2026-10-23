@@ -840,8 +840,10 @@ export const CONTAINER_WORKSPACE = "/workspace";
 
 /**
  * Container sources the entrypoint fills from the backend user's own files
- * (docker/entrypoint.sh). Everything else in a container home is the
- * container's own file.
+ * (docker/entrypoint.sh) on every boot. These are the environment-private
+ * sources: an edit is kept in the backend's overlay and written back over
+ * every fresh copy. Cursor's `mcp.json` is copied by images with
+ * `staged-inputs` 2 or later; on older images the overlay alone fills it.
  */
 function copiedFromBackend(spec: SourceSpec): boolean {
   return (
@@ -849,13 +851,28 @@ function copiedFromBackend(spec: SourceSpec): boolean {
     spec.sourceId === "codex:user" ||
     spec.sourceId.startsWith("opencode:user-") ||
     spec.sourceId === "grok:user" ||
-    spec.sourceId === "pi:user"
+    spec.sourceId === "pi:user" ||
+    spec.sourceId === "cursor:user"
   );
 }
 
 export const CONTAINER_OWN_FILE_REASON =
-  "This is the container's own file. Orkestrator does not copy it from the backend user, so editing the " +
-  "backend user's copy does not change it.";
+  "This is the container's own file. Orkestrator does not copy it from the backend user and does not edit it; change it inside the container.";
+
+export const CONTAINER_CLAUDE_LOCAL_REASON =
+  "The container rebuilds Claude's private local settings on every start, so an edit here would not last. Add the server to this environment instead.";
+
+export const CONTAINER_PROJECT_EPHEMERAL_REASON =
+  "This environment keeps /workspace in the container itself, so a project edit made here would be lost when it is rebuilt. Change the project file in the repository, or add the server to this environment instead.";
+
+export interface ContainerSourceOptions {
+  /** This backend can write into the container (a writer is configured). */
+  writable: boolean;
+  /** `/workspace` is a persistent volume (`volume-v1`), so project files survive rebuilds. */
+  persistentWorkspace: boolean;
+  /** Why nothing in the container can be written, when `writable` is false. */
+  unavailableReason: string;
+}
 
 function containerProbes(
   containerId: string,
@@ -884,17 +901,17 @@ function containerProbes(
 }
 
 /**
- * The container's own copies of provider configuration, read-only. Container
- * homes are copied from the backend user when the container is created and are
- * not a durable store of user intent, so editing them here would be lost on
- * recreation; see CONTAINER_READ_ONLY_REASON. With a reader, optional files
+ * The container's provider configuration. The copies the entrypoint makes
+ * from the backend user are this environment's private sources, written
+ * through the overlay; project files are writable only on a persistent
+ * workspace; everything else is read-only. With a reader, optional files
  * (OpenCode's alternate names, Grok's compat switches) are probed inside the
  * container; without one, only the default files are listed.
  */
 export async function containerSources(
   provider: AgentPlatform,
   containerId: string,
-  readOnlyReason: string,
+  options: ContainerSourceOptions,
   reader?: ContainerFileReader,
 ): Promise<SourceSpec[]> {
   const specs = await providerSources(provider, {
@@ -908,36 +925,59 @@ export async function containerSources(
     const inProject = spec.path.startsWith(`${CONTAINER_WORKSPACE}/`);
     const compat = spec.owner === "compatibility";
     const copied = copiedFromBackend(spec);
+    const base = { ...spec, container: { containerId }, allowedRoot: undefined };
+    if (compat || spec.owner === "managed-policy") {
+      return {
+        ...base,
+        writable: false,
+        displayPath: inProject ? spec.path : `container:${spec.path}`,
+        label: compat ? spec.label : `Container ${spec.label.toLowerCase()}`,
+        readOnlyReason: spec.readOnlyReason ?? "This configuration is read-only.",
+      };
+    }
+    if (inProject) {
+      const writable = options.writable && options.persistentWorkspace && spec.writable;
+      return {
+        ...base,
+        writable,
+        readOnlyReason: writable
+          ? undefined
+          : !options.writable
+            ? options.unavailableReason
+            : !options.persistentWorkspace
+              ? CONTAINER_PROJECT_EPHEMERAL_REASON
+              : spec.readOnlyReason,
+        displayPath: spec.path,
+        // Container sessions opt into project resources; the host exclusions do not apply.
+        trust: "allowed" as const,
+        trustReason: "Loaded by sessions in this container.",
+        excludedReason: undefined,
+      };
+    }
+    if (copied) {
+      return {
+        ...base,
+        scope: "environment-private" as const,
+        owner: "environment-overlay" as const,
+        writable: options.writable,
+        readOnlyReason: options.writable ? undefined : options.unavailableReason,
+        displayPath: `container:${spec.path}`,
+        label: "This environment (container home)",
+        // Credentials may be saved literally here, exactly as in the user file it copies.
+        createMode: 0o600,
+        sharedWith: spec.sharedWith,
+      };
+    }
     return {
-      ...spec,
-      container: { containerId },
+      ...base,
       writable: false,
       readOnlyReason:
-        compat || spec.owner === "managed-policy"
-          ? spec.readOnlyReason
-          : inProject || copied || spec.scope === "claude-local"
-            ? readOnlyReason
-            : `${CONTAINER_OWN_FILE_REASON} ${readOnlyReason}`,
-      allowedRoot: undefined,
-      displayPath: inProject ? spec.path : `container:${spec.path}`,
+        spec.scope === "claude-local" ? CONTAINER_CLAUDE_LOCAL_REASON : CONTAINER_OWN_FILE_REASON,
+      displayPath: `container:${spec.path}`,
       label:
-        inProject || compat
-          ? spec.label
-          : spec.scope === "claude-local"
-            ? "Container private local"
-            : spec.owner === "managed-policy"
-              ? `Container ${spec.label.toLowerCase()}`
-              : copied
-                ? "Container home (copied from backend user)"
-                : "Container home (container's own file)",
-      // Container sessions opt into project resources; the host exclusions do not apply.
-      ...(inProject && !compat
-        ? {
-            trust: "allowed" as const,
-            trustReason: "Loaded by sessions in this container.",
-            excludedReason: undefined,
-          }
-        : {}),
+        spec.scope === "claude-local"
+          ? "Container private local"
+          : "Container home (container's own file)",
     };
   });
 }

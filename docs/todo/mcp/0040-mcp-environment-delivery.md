@@ -1,113 +1,219 @@
 # MCP environment delivery
 
-Checked against `main` at `2459b05c` (2026-10-15).
+Checked against `main` at `2459b05c` (2026-10-15). Code items implemented and
+re-checked on branch `todo-0040-mcp-env-delivery-024e7c80895b` (base
+`06297124`, 2026-10-23).
 
-MCP scopes are only truthful on the backend host today. A container's provider
-homes are copies made when the container was created, so the editor cannot
-offer environment-private configuration, and Cursor's user servers never reach
-containers at all. Remote backends and restricted container networks also
-change where a server runs, what it can reach and whether a sign-in callback
-works. This file covers durable container-private configuration, deliberate
-delivery of host defaults, and those location, network and authentication
-semantics. Until it lands, container MCP targets stay read-only.
+MCP scopes used to be truthful only on the backend host: a container's
+provider homes are copies made by the entrypoint, so the editor could not
+offer environment-private configuration, and Cursor's user servers never
+reached containers. This file covered durable container-private
+configuration, deliberate delivery of host defaults, and the location,
+network and authentication semantics outside the backend host. The code is
+done; what is left is live qualification with real provider sessions and a
+remote browser.
 
 ## Current state
 
-- Container targets are read-only with `CONTAINER_READ_ONLY_REASON`
-  (`apps/backend/src/core/mcp-management/targets.ts`). The catalogue reads the
-  container's own files with a bounded `docker exec --user node`, or reports
-  `offline`. The protocol reserves the `environment-private` scope and the
-  `environment-overlay` source kind (`packages/protocol/src/mcp-management.ts`);
-  nothing produces either.
-- `containerDelivery` (`apps/backend/src/core/mcp-management/apply.ts`)
-  reports container sessions as `restart-required` for backend-user changes,
-  with the copy "recreate the environment", and Cursor container sessions as
-  `blocked-policy`.
-- Since #877, `stagePortableInputs` (`apps/backend/src/core/portable-inputs.ts`)
-  stages allowlisted host inputs into a per-environment revision, including
-  Pi `agent/mcp.json`, Codex and Grok `config.toml` and a filtered Claude
-  `.claude.json`. There is no Cursor entry. `docker/entrypoint.sh` copies them
-  into the writable homes (Pi `mcp.json` with mode 0600, symlinks refused).
-- For images with the `staged-inputs` capability, `createDockerContainer`
-  (`apps/backend/src/core/commands-containers.ts`) stages a fresh revision
-  every time it runs, and a rebuild creates its candidate through it
-  (`container-replacement.ts`). From the code, a rebuild therefore re-imports
-  the host's current defaults and drops any edit made inside the old
-  container's homes; no run has confirmed it.
-- The persistent `state` volume holds only the session paths in
-  `PROVIDER_STATE_LAYOUT` (`apps/backend/src/core/container-state-layout.ts`);
-  provider MCP config lives in the container layer. `/workspace` is a
-  persistent volume for `volume-v1` environments
-  (`apps/backend/src/core/container-storage.ts`), so project files there
-  survive rebuilds.
-- `McpServerForm.tsx` says where a stdio command runs. Nothing warns about the
-  container allowlist or OAuth callback reachability.
+- **Environment overlay** (`apps/backend/src/core/mcp-management/overlay.ts`,
+  `overlay-store.ts`, `overlay-service.ts`). A container target's copies of the
+  backend user's files are `environment-private` sources (owner
+  `environment-overlay`) and the target's default source. A save records the
+  intent in a private record under the `mcp-environment-overlays` environment
+  state root, keyed by environment id, then writes the container's file
+  through a narrow writer. After every boot, `startContainerRuntime` calls
+  `materialiseEnvironment`, which rebases each record on the fresh inherited
+  copy and writes it back before any bridge or terminal starts.
+  `CONTAINER_READ_ONLY_REASON` is retired. The full behaviour is in
+  [`mcp-management.md`](../../architecture/mcp-management.md#containers).
+- **Writer** (`writeContainerMcpFile`, `commands-registry-mcp.ts`): a fixed
+  Node program run with `docker exec -i --user node`. The destination, expected
+  digest, mode and bound go in argv; the payload goes on stdin. It only writes
+  under `/home/node` or `/workspace`, follows no symlinks, compares and swaps
+  on the exact bytes, and replaces the file atomically. The renderer never
+  supplies a command or a path.
+- **Container project scope**: writable through the same writer, without an
+  overlay, only when the environment's workspace is a persistent `volume-v1`
+  volume. Otherwise it is read-only, with
+  `CONTAINER_PROJECT_EPHEMERAL_REASON`.
+- **Cursor** (`portable-inputs.ts`, `docker/entrypoint.sh`, `staged-inputs=2`):
+  only `~/.cursor/mcp.json` is staged and copied (mode 0600), and existing
+  opt-outs apply. The `blocked-policy` branch in `containerDelivery` is gone.
+- **Refresh defaults** (`preview_mcp_environment_defaults`,
+  `refresh_mcp_environment_defaults`): shows the change first and refuses a
+  stale preview. It keeps this environment's changes on top and rewrites the
+  container's staged input, so the next boot inherits the refreshed servers.
+- **Copy** (`containerDelivery`, `backendUserContainerNote`): Claude
+  containers pick a backend-user change up at their next start, because
+  `.claude.json` is staged again before every start. Other providers point at
+  "refresh defaults, or rebuild". A real rebuild was run to confirm this (see
+  Evidence).
+- **Hints** (`network-hints.ts`, `path-audit.ts`):
+  - Save previews say when `localhost` is the container itself.
+  - Save previews say when a restricted container's allowlist lacks the URL's
+    host and port. The allowlist is never changed.
+  - Rows flag host-only or Windows `command` and `cwd` paths that are missing
+    in the container. Nothing is installed.
+  - Container targets do not advertise in-app sign-in.
 
 ## Outstanding work
 
 ### Code
 
-1. **Durable environment overlay.** No module exists yet.
-   - Store it in private backend data, keyed by environment id (not container
-     generation, so it survives preserving rebuilds) and provider, with a
-     schema version and byte limits.
-   - Record explicit additions, replacements and removals relative to the
-     inherited container inputs: overlay revision, baseline fingerprint,
-     materialised fingerprint, and tombstones so a removed inherited server
-     does not come back on rebuild.
-   - Materialise after the entrypoint copies and before the bridge or tmux
-     starts, merging only the MCP subtree and keeping other settings.
-   - On refresh, detect divergence caused by in-container edits and offer an
-     explicit import or reapply, never a silent overwrite. On rebuild, reapply
-     over the fresh baseline and stop with a conflict on an incompatible
-     change rather than choosing a side or failing the whole environment.
-   - Exclude it from diagnostic bundles, delete it with the environment, and
-     do not copy its secrets when an environment is cloned.
-   - If a write must happen before the bridge runs, use a narrow
-     backend-owned writer: structured stdin, bounded payload, exact
-     destination, private mode. The renderer never supplies a command or a
-     container path.
-   - Then enable container write capabilities and retire
-     `CONTAINER_READ_ONLY_REASON`.
-2. **Container project scope.** With `/workspace` persistent, consider
-   allowing project-file writes inside `volume-v1` containers through the same
-   bounded writer, without an overlay. User scope still needs the overlay.
-3. **Cursor user-MCP delivery.** Add a staged input that copies only
-   `~/.cursor/mcp.json`, never Cursor account, IDE, hooks or plugin state,
-   respecting the existing credential-source opt-outs. Then retire Cursor's
-   `blocked-policy` branch in `containerDelivery`.
-4. **Refresh defaults.** Since a rebuild already re-stages inputs, change the
-   "recreate the environment" copy to point at rebuild once a run confirms it.
-   Add a separate operation that re-imports changed host defaults into an
-   existing container after previewing overlay and divergence conflicts.
-5. **Path audit.** Check the filtered `.claude.json` copy and the Grok and
-   OpenCode portable configs for host-absolute `command` and `cwd` paths. A
-   missing binary is an actionable runtime failure; nothing is installed
-   automatically.
-6. **Network and authentication.** Show the execution location near URL
-   fields and in connection errors. Warn that restricted container
-   networking may need an allowlist entry, and never widen the allowlist on
-   save or apply. Advertise in-app sign-in for containers or remote backends
-   only after the callback is proven reachable from the browser to the
-   owning runtime, and never copy host OAuth stores into containers.
+All six code items are done; the decisions behind them are in
+[Assumptions and decisions](#assumptions-and-decisions).
+
+1. ~~**Durable environment overlay.**~~ Done. Records are private, keyed by
+   environment and source, schema-versioned and bounded
+   (`overlayRecordMaxBytes`). They hold additions, replacements and tombstones
+   relative to the inherited entries, plus the overlay revision, the baseline
+   fingerprint and the materialised fingerprint.
+   - Materialisation runs after the entrypoint copies and before bridges
+     start, and touches only the server map.
+   - Divergence is reported (`diverged`). Edits are refused with
+     `environment-diverged` until the user imports or reapplies. A rebuild over
+     a changed inherited entry holds a conflict instead of choosing a side.
+   - The record is in an environment state root, so environment deletion and
+     the orphan reconciler remove it. No export or diagnostic bundle exists to
+     exclude it from, and no environment-clone feature exists to copy it.
+   - Writes go through the narrow writer. Container write capabilities are
+     enabled and `CONTAINER_READ_ONLY_REASON` is removed.
+2. ~~**Container project scope.**~~ Done for `volume-v1` workspaces; read-only on
+   legacy layers.
+3. ~~**Cursor user-MCP delivery.**~~ Done (`staged-inputs=2`). Only `mcp.json`
+   is staged, with opt-outs, bounds, symlink refusal and 0600.
+4. ~~**Refresh defaults.**~~ Done. The copy now points at rebuild, confirmed by a
+   real rebuild run. The preview → refresh operation is implemented.
+5. ~~**Path audit.**~~ Done. Every container source is checked, including the
+   copied `.claude.json`, Grok and OpenCode. Missing absolute `command` and
+   `cwd` paths, and Windows paths, become row warnings. Nothing is installed.
+6. ~~**Network and authentication.**~~ Done on the backend:
+   - container-`localhost` and allowlist warnings in previews (the allowlist
+     is never widened);
+   - container sign-in unsupported, with a reason;
+   - host OAuth stores never copied.
+
+   The editor shows the execution location near URL fields, and the agent
+   info panel shows it beside failed MCP connections (see the UI note in
+   Evidence).
 
 ### Qualification
 
 Container runs batch with
-[0019-container-platform-qualification.md](../containers-and-environments/0019-container-platform-qualification.md)
-through `mise run test:agent:docker`; remote runs with
+[0019-container-platform-qualification.md](../containers-and-environments/0019-container-platform-qualification.md);
+remote runs with
 [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md).
 
-- The overlay survives backend restart, container stop and start, and a
-  preserving rebuild; tombstones hold.
-- Host files are byte-for-byte unchanged by container-private edits.
-- An in-container edit produces a conflict and can be imported.
-- Environment deletion removes only its own overlay and jobs.
-- Pi and Cursor delivery respect opt-outs, size bounds, symlink rules and
-  modes.
+- ~~The overlay survives backend restart, container stop and start, and a
+  preserving rebuild; tombstones hold.~~ Proved on real Docker (Evidence).
+- ~~Host files are byte-for-byte unchanged by container-private edits.~~ Proved
+  for the host user file (service test) and the staged input (live).
+- ~~An in-container edit produces a conflict and can be imported.~~ Proved live
+  (`diverged`, then `import`, then a restart keeps it).
+- ~~Environment deletion removes only its own overlay and jobs.~~ The overlay is
+  in `ENVIRONMENT_STATE_ROOTS`, so the per-environment cleanup entry and the
+  orphan reconciler cover it (`environment-cleanup.test.ts`,
+  `environment-state-paths.test.ts`). The overlay has no jobs. No real-stack
+  deletion was run for this change.
+- ~~Pi and Cursor delivery respect opt-outs, size bounds, symlink rules and
+  modes.~~ Cursor: unit tests plus the live entrypoint run. Pi was already
+  covered.
 - A remote browser and a restricted network show the right execution and
-  callback scope.
+  callback scope. **Restricted network: done** (service tests). **Remote
+  browser: open.** It needs a browser on a second machine against a remote
+  backend: check that the URL location hint and the container sign-in reason
+  show, and that no callback is offered.
 - Existing terminal work and background native sessions are not interrupted.
+  **Open for a live run.** By construction the save path writes one file and
+  schedules no restart, and materialisation runs only after a boot, before
+  launch. What is still missing is a run with real provider sessions in a
+  container: save an environment-private server during a running turn, then
+  check the turn continues and the next turn loads it (Claude, Codex reload,
+  Cursor and Pi reattach).
+- **Real-browser pass of the overlay UI: open.** The overlay states, the
+  conflict and divergence actions, and the refresh dialog need a check in a
+  real browser on a `dev:test` profile with a container fixture. See the UI note
+  in Evidence for what the unit tests cover.
+
+### Evidence
+
+- Unit and service tests:
+  - `overlay.test.ts`: merge, rebase, tombstones, conflicts, divergence,
+    import and the server-map rewrite.
+  - `service-overlay.test.ts`: 20 cases covering the private save, an
+    unchanged host file, backend restart, stop and start, rebuild, pending
+    restarts, conflicts and both resolutions, blocked divergence, import,
+    reapply, reset, an unreadable record, defaults refresh with a stale token,
+    persistent project writes, the container apply plan, network and
+    `localhost` warnings, the path audit and sign-in.
+  - Also updated: `providers.test.ts`, `service.test.ts`,
+    `service-apply.test.ts`, `service-limits.test.ts`, `service-pi.test.ts`,
+    `commands-registry-mcp.test.ts`, `environment-state-paths.test.ts`, and the
+    Cursor staging tests in `apps/backend/tests/portable-inputs.test.ts` and
+    `tests/unit/runtime-env-wiring.test.ts`.
+- Live Docker, 2026-10-23: `apps/backend/tests/mcp-overlay-live.test.ts`
+  against an image built from this tree (`orkestrator-v2:mcp0040-qual`,
+  capabilities include `staged-inputs=2`), run with `RUN_LIVE_DOCKER_TESTS=1`.
+  All three cases passed:
+  1. Cursor and the writer:
+     - only `mcp.json` is copied, with mode 0600;
+     - the writer reports a conflict on a stale digest;
+     - environment-private files are written 0600 and owned by `node`;
+     - a new project file gets 0644;
+     - writes are refused outside the homes, on traversal, and through file
+       and directory symlinks;
+     - the boot id and the path probe work.
+  2. Overlay round trip:
+     - a save, then a backend restart (new service), then a real
+       `docker stop`/`docker start`: the entrypoint restored the inherited copy,
+       the snapshot showed `pending`, and materialising restored the overlay
+       (the tombstone held);
+     - a replacement container for the same environment: the overlay was
+       reapplied;
+     - an in-container `sed` edit was reported `diverged`, imported, and kept
+       after another restart;
+     - the staged input was byte-for-byte unchanged.
+  3. Real rebuild:
+     - a `volume-v1` environment created by `createDockerContainer`, with the
+       backend user's Codex `config.toml` changed between creation and
+       rebuild;
+     - `replaceRuntimePreservingState` returned `rebuild` with a new inputs
+       revision label;
+     - the real `startAssignedContainerRuntimeTask` produced the new host
+       servers plus the overlay's server, without the in-container edit.
+
+  This confirms item 4's premise that a rebuild re-imports current defaults
+  and drops edits made only inside the old container.
+  The existing `container-live-replacement.test.ts` C14 rebuild case also
+  passed on the same image.
+- Observation, not investigated here: my first version of the rebuild test
+  went through a legacy-to-volume **migration** of a container that had
+  staged Codex inputs, and the migration refused with `root-symlink` twice.
+  C14, which stages no inputs, passes, and a fresh staged container has no
+  symlinks in its homes. This is tracked in
+  [0056-legacy-migration-root-symlink.md](../containers-and-environments/0056-legacy-migration-root-symlink.md).
+- UI (`apps/web/src/components/settings/mcp-servers/`):
+  - `McpEnvironmentOverlay.tsx` shows each overlay state with its actions:
+    reapply when pending; import or reapply when diverged; keep or use
+    inherited per conflict; and reset behind a confirm dialog.
+  - It also adds "Refresh from backend user…": a preview dialog, then a
+    confirm that sends the preview token. A stale token offers "Preview
+    again".
+  - Rows show the path-audit warnings.
+  - The URL field says "Connects from {location}, not from this browser" and
+    shows the container sign-in reason.
+  - The agent info panel shows the execution location next to failed or
+    needs-auth MCP servers. This is the one place users see live connection
+    errors. Its label is built in the renderer with the same wording as
+    `targets.ts`.
+  - Tests: `McpEnvironmentOverlay.test.tsx` (14) and
+    `AgentInfoMcpSection.test.tsx` (3 new). The web typecheck and the MCP web
+    tests pass.
+  - `mise run test:browser` has no MCP settings spec. Two unrelated specs,
+    `AgentLaunchDialog.spec.ts:7` and `MonacoRuntime.spec.ts:3`, failed in the
+    aggregate run. MonacoRuntime passed on rerun. AgentLaunchDialog `:7` also
+    fails on an untouched checkout of the base commit `062971245`, so it is
+    pre-existing and not caused by this change.
 
 ## Constraints and rationale
 
@@ -116,7 +222,9 @@ through `mise run test:agent:docker`; remote runs with
   records intent relative to inherited inputs rather than a copy of a whole
   provider home.
 - Do not mount writable host homes into containers, and never write a
-  container-home edit through to the host staging copy.
+  container-home edit through to the host staging copy. A defaults refresh
+  rewrites only the server map of the environment's own staged input, from the
+  backend user's file, never from the container.
 - All paths, environment references and stdio executables resolve on the
   execution machine: a remote browser's `localhost`, the backend's and a
   container's are three different hosts.
@@ -125,11 +233,115 @@ through `mise run test:agent:docker`; remote runs with
 - Terminal sessions get guidance only; no command is injected and nothing is
   restarted.
 
+## Assumptions and decisions
+
+1. **Where the overlay lives.**
+   - Options: a JSON record per environment and source under an environment
+     state root; a table in the backend SQLite database; files inside the
+     container's persistent `state` volume.
+   - Chosen: a private JSON record under a new `mcp-environment-overlays`
+     state root, keyed by `environmentStateKey`.
+   - Why: deletion, the orphan reconciler and the hashed naming already exist
+     for state roots. It never enters a container, a volume or a recovery copy.
+   - Pros: no new cleanup path; it is outside every container boundary.
+   - Cons: it is one more private directory, and it holds literal
+     credentials. The mitigation is owner-only files, written atomically and
+     bounded. A SQLite table would have given transactions with the
+     operation store, but needs a migration and its own deletion hook. The
+     volume option was rejected because a rebuild copies volumes into
+     recovery copies, and the backend would have to reach into a volume to
+     read its own intent.
+2. **What a change records.**
+   - Options: per-name changes with the keyed digest of the inherited entry
+     they were made against, plus a stored baseline; a copy of the whole
+     desired server map.
+   - Chosen: per-name changes plus the baseline.
+   - Why: rebase can tell "inherited unchanged" from "inherited changed under
+     my change", which is what the conflict rule needs. Tombstones fall out
+     naturally.
+   - Pros: precise conflicts; additions and removals survive rebuilds.
+   - Cons: the stored baseline duplicates inherited entries, which can carry
+     credentials, in backend data. That data is private and on the same
+     machine as the host file.
+3. **Conflict outcome.**
+   - Options: the inherited value wins until the user decides; the
+     environment's change wins; fail materialisation.
+   - Chosen: the inherited value is written, the change is held, and the
+     conflict is surfaced with "keep this environment's" or "use inherited".
+   - Why: the todo forbids silently choosing a side and failing the
+     environment. Something must be in the file, and the inherited value is
+     what every other environment sees.
+   - Pros: starts always succeed; no intent is lost.
+   - Cons: until the user resolves it, sessions use the inherited server for
+     that name.
+4. **Divergence.**
+   - Options: block edits until resolved; auto-import; auto-reapply.
+   - Chosen: block, and offer import or reapply.
+   - Why: the todo says "never a silent overwrite".
+   - Pros: no lost edits.
+   - Cons: one extra click after an in-container edit.
+5. **Restarts outside Orkestrator** (`docker start` by hand).
+   - Options: rewrite during the snapshot; report `pending` and write on the
+     next save or reapply; ignore.
+   - Chosen: report `pending`. A boot id that differs from the one recorded is
+     treated as a fresh inherited copy, never as an edit.
+   - Why: snapshots stay passive.
+   - Cons: bridges launched before the next save or reapply load the inherited
+     copy, and a draft made against the bare copy becomes stale (revision
+     conflict, reload).
+6. **Edits need a running container.**
+   - Options: also allow recording against the stored baseline while stopped.
+   - Chosen: running only. A stopped container is `offline`, as before.
+   - Why: every save is checked against the bytes actually in the file.
+   - Cons: the environment must be started to edit.
+7. **The writer.**
+   - Options: a script shipped in the image (a new capability); a fixed
+     program passed to the image's `node`; shell `cat >`.
+   - Chosen: a fixed Node program in backend code.
+   - Why: it works on every existing image, which already ships Node 24, and
+     it can do lstat checks, compare-and-swap, atomic rename and modes,
+     which `cat` cannot.
+   - Cons: the program text is passed on each exec. It is a constant and is
+     never built from data.
+8. **Claude private-local in containers.**
+   - Options: make it writable through the overlay too.
+   - Chosen: read-only, with a reason.
+   - Why: the entrypoint rebuilds `.claude.json`'s project map on every start.
+     The environment-private user map covers the same need without a second
+     overlay subtree in one file.
+9. **Open question 1: container project-scope writes without the overlay.**
+   - Chosen: yes, but only on `volume-v1` workspaces. There `/workspace` is
+     persistent and behaves like a worktree file.
+   - Legacy layers stay read-only because a rebuild would lose the edit.
+10. **Open question 2: overlay in rebuild recovery copies.**
+    - Chosen: excluded.
+    - Why: the overlay is backend data keyed by environment id, not container
+      storage. A rebuild or a restored recovery copy gets it reapplied at its
+      next boot, so copying it would only duplicate credentials.
+11. **Cursor capability.**
+    - Chosen: bump `staged-inputs` to 2 rather than add a new capability. The
+      backend skips staging Cursor for images below 2, so input status stays
+      truthful.
+12. **Container `runtimeSignIn`.**
+    - Chosen: unsupported for every container target, with a reason.
+    - Why: no callback path from a browser to a container has been proven.
+      Remote backends are not detected on the backend side; the editor shows
+      where the connection is made from instead.
+13. **Defaults refresh scope.**
+    - Chosen: only the server map is refreshed, in both the container file and
+      the staged input. Claude's staged file is not rewritten because it is
+      already re-staged before every start.
+    - Cons: other non-MCP settings changed on the host still need a rebuild.
+14. **Resolutions do not schedule runtime apply.**
+    - Chosen: import, reapply, conflict resolution, reset and refresh do not
+      create an apply operation. Sessions adopt the file the way they adopt
+      any external change: Claude at the next message, Cursor and Pi at the
+      next turn, Codex, OpenCode and Grok at their next process start.
+    - Cons: Codex does not reload immediately after a resolution.
+
 ## Open questions
 
-- Is container project-scope writing (item 2) acceptable without the overlay?
-- Should overlay data be included in or excluded from rebuild recovery
-  copies?
+None left; both earlier questions are answered in decisions 9 and 10.
 
 ## Related
 
@@ -139,6 +351,8 @@ through `mise run test:agent:docker`; remote runs with
   for state layout and staged inputs, and
   [0018-container-network-and-credential-isolation.md](../containers-and-environments/0018-container-network-and-credential-isolation.md)
   for the allowlist and staged-input credentials.
+- [0056-legacy-migration-root-symlink.md](../containers-and-environments/0056-legacy-migration-root-symlink.md)
+  for the migration refusal seen while qualifying this file.
 - [`container-lifecycle.md`](../../architecture/container-lifecycle.md)
   ("Provider state", the provider-state inventory).
 - [`mcp-management.md`](../../architecture/mcp-management.md) ("Containers").

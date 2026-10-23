@@ -13,7 +13,9 @@ import type { McpManagementSnapshot, McpMutation } from "@orkestrator/protocol/m
 
 import type { ApplySession, CodexReloadOutcome, RuntimeProbe } from "./apply.js";
 import type { RuntimeEvidenceRead } from "./evidence.js";
+import type { ContainerNetworkView } from "./network-hints.js";
 import { McpManagementService } from "./service.js";
+import { contentDigest } from "./source-store.js";
 
 export const SENTINEL = "SENTINEL-SECRET-7f3a";
 
@@ -46,6 +48,16 @@ export interface Fixture {
   extraEnvironments: Record<string, unknown>[];
   /** Files inside the fake container, by absolute container path. */
   containerFiles: Map<string, string>;
+  /** Every accepted container write, in order: path and mode. */
+  containerWrites: Array<{ path: string; mode: "private" | "preserve" }>;
+  /** Current boot id of the fake container; `null` is an image without boot status. */
+  containerBoot: { value: string | null };
+  /** Absolute paths that exist in the fake container, and as what. */
+  containerPaths: Map<string, "file" | "directory">;
+  /** The fake container's network policy. */
+  containerNetwork: { value: ContainerNetworkView | null };
+  /** Staged inputs a defaults refresh rewrote, by source id. */
+  stagedDefaults: Map<string, string>;
   service: McpManagementService;
   now: { value: number };
   write(relative: string, content: string): string;
@@ -75,6 +87,11 @@ export function createFixture(
   const evidenceHook: { onRead?: (id: string) => void } = {};
   const now = { value: Date.parse("2026-09-23T12:00:00Z") };
   const containerFiles = new Map<string, string>();
+  const containerWrites: Array<{ path: string; mode: "private" | "preserve" }> = [];
+  const containerBoot = { value: "boot-1" as string | null };
+  const containerPaths = new Map<string, "file" | "directory">();
+  const containerNetwork = { value: null as ContainerNetworkView | null };
+  const stagedDefaults = new Map<string, string>();
   const environment: Record<string, unknown> = {
     id: "env-1",
     name: "env-one",
@@ -150,6 +167,27 @@ export function createFixture(
           ? { state: "absent" }
           : { state: "ok", bytes: new TextEncoder().encode(text) };
       },
+      // Compare-and-swap on the exact bytes, like the real writer.
+      writeContainerFile: async (_containerId, filePath, write) => {
+        if (environment.status !== "running") return { state: "offline" };
+        const current = containerFiles.get(filePath);
+        const digest =
+          current === undefined ? "absent" : contentDigest(new TextEncoder().encode(current));
+        if (digest !== write.expectedDigest) return { state: "conflict" };
+        containerFiles.set(filePath, new TextDecoder().decode(write.bytes));
+        containerWrites.push({ path: filePath, mode: write.mode });
+        return { state: "ok" };
+      },
+      readContainerBootId: async () => containerBoot.value,
+      probeContainerPaths: async (_containerId, paths) =>
+        new Map(paths.map((candidate) => [candidate, containerPaths.get(candidate) ?? "absent"])),
+      containerNetwork: async () => containerNetwork.value,
+      stagedDefaults: {
+        update: async (_environmentId, _containerId, sourceId, rewrite) => {
+          stagedDefaults.set(sourceId, rewrite(stagedDefaults.get(sourceId) ?? ""));
+          return "updated";
+        },
+      },
     });
   const fixture: Fixture = {
     root,
@@ -170,6 +208,11 @@ export function createFixture(
     environment,
     extraEnvironments,
     containerFiles,
+    containerWrites,
+    containerBoot,
+    containerPaths,
+    containerNetwork,
+    stagedDefaults,
     now,
     service: newService(),
     newService,

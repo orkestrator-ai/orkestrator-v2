@@ -20,7 +20,7 @@ and "Control MCP").
 | Layer | Owner | Responsibility |
 | --- | --- | --- |
 | Contract | `packages/protocol/src/mcp-management.ts` | DTOs, bounds, error codes, capability model, validation and redaction helpers |
-| Commands | `apps/backend/src/core/commands-registry-mcp.ts` | `list_mcp_management_targets`, `get_mcp_management_snapshot`, `get_mcp_definition`, `validate_mcp_mutation`, `mutate_mcp_definition`, `apply_mcp_configuration`, `get_mcp_operation`, `cancel_mcp_apply`, `get_mcp_management_rollout`, `set_mcp_management_rollout`; runtime probe; container reader; correlation ids |
+| Commands | `apps/backend/src/core/commands-registry-mcp.ts` | `list_mcp_management_targets`, `get_mcp_management_snapshot`, `get_mcp_definition`, `validate_mcp_mutation`, `mutate_mcp_definition`, `apply_mcp_configuration`, `get_mcp_operation`, `cancel_mcp_apply`, `get_mcp_management_rollout`, `set_mcp_management_rollout`, `resolve_mcp_environment_overlay`, `preview_mcp_environment_defaults`, `refresh_mcp_environment_defaults`; runtime probe; container reader, writer, boot id, path probe, network view and staged-defaults writer; correlation ids |
 | Service | `mcp-management/service.ts` | Targets, snapshots, preview, locked conflict-checked writes, idempotency, apply scheduling, crash recovery |
 | Targets | `mcp-management/targets.ts` | Opaque target ids (`mcp1~<provider>~backend~<backend hash>`, `mcp1~<provider>~env~<id>~<incarnation>`) |
 | Sources | `mcp-management/providers.ts`, `native-policy.ts` | Per-provider source paths, precedence, trust (Codex/Grok trust files, Grok compatibility switches), capabilities, apply strategy |
@@ -32,6 +32,8 @@ and "Control MCP").
 | Files | `mcp-management/source-store.ts` | Bounded reads, keyed revisions, cross-process locks, atomic replace |
 | Operations | `mcp-management/operations-store.ts` | Durable operation records and recovery intent |
 | Apply | `mcp-management/apply.ts` | Per-runtime plan and the Codex reload queue |
+| Environment overlays | `mcp-management/overlay.ts`, `overlay-store.ts`, `overlay-service.ts`, `overlay-requests.ts` | Container-private MCP changes: pure merge/rebase/conflict rules, private durable records, materialisation after boot, divergence actions, defaults refresh |
+| Container hints | `mcp-management/network-hints.ts`, `path-audit.ts` | Restricted-network and container-`localhost` warnings, container sign-in reason, host-only command and `cwd` path warnings |
 | UI | `apps/web/src/components/settings/mcp-servers/` | Section, editor, preview, row actions, apply status |
 | Bridges | `bridges/pi-bridge/src/mcp.ts`, `bridges/cursor-bridge/src/agent-session.ts`, `bridges/claude-bridge/src/services/mcp-config.ts`, `bridges/acp-bridge/src/acp-mcp-inventory.ts`, `bridges/codex-bridge/src/mcp-reload-route.ts` | Adopt saved file changes at the next turn boundary; report which MCP files a runtime was built from; Codex reload that never cold-starts |
 
@@ -272,9 +274,15 @@ Coordinator sessions (by policy, or by their coordinator runtime id, which
 matches no environment) are `blocked-policy`: they load no user MCP servers.
 Project-scope changes are `blocked-policy` for sessions whose policy excludes
 project resources. Container sessions are `restart-required` for backend-user
-changes the entrypoint copies (their home is a copy made at creation); Cursor
-container sessions are `blocked-policy`, because nothing copies Cursor's
-`mcp.json` into containers. Queued work for a deleted environment is
+changes the entrypoint copies: Claude's `.claude.json` is staged again before
+every container start, so stop and start is enough; every other provider's
+inputs (Cursor's `mcp.json` on images with `staged-inputs` 2) are staged when
+the container is created, so the outcome points at refreshing the
+environment's defaults or rebuilding it. A save written into a container
+itself (its environment-private copy or a persistent project file) is planned
+for that container's own sessions exactly like a local save (Claude next
+message, Codex reload, Cursor and Pi next turn, OpenCode and Grok restart),
+without evidence polling. Queued work for a deleted environment is
 `cancelled`. Terminal sessions are never touched; the operation carries restart
 guidance instead.
 
@@ -479,18 +487,108 @@ recovered as saved; anything else → `conflict`. A mutation is never repeated.
 
 ## Containers
 
-A container's provider homes are copies made at creation, not a durable store
-of intent, so **container targets are read-only**. When the container is
-running, the catalog reads the container's own files (`/home/node/...`,
-`/workspace/...`) with `docker exec --user node` (bounded, path passed as an
-argument, never shell text); a stopped container is `offline`. Environment-
-private editing needs the durable overlay from plan step 13, which is not
-implemented; the UI says so and points to backend-user configuration for what
-new containers receive.
+A container's provider homes are copies `docker/entrypoint.sh` makes on every
+boot from the environment's staged inputs, so a file inside a container is
+never a durable statement of intent. When the container is running, the
+catalog reads the container's own files (`/home/node/...`, `/workspace/...`)
+with `docker exec --user node` (bounded, path passed as an argument, never
+shell text); a stopped container is `offline`, and a container environment
+with no container yet is read-only.
 
-`docker/entrypoint.sh` now copies Pi's `agent/mcp.json` into new containers
-(size and symlink rules of `copy_agent_file`, mode 0600), closing the delivery
-gap the investigation found. Cursor still has no user-MCP copy into containers.
+**Sources.** The copies the entrypoint makes from the backend user (Claude
+`~/.claude.json` `mcpServers`, Codex and Grok `config.toml`, OpenCode's user
+files, Pi `agent/mcp.json`, Cursor `~/.cursor/mcp.json`) are the
+**environment-private** sources (scope `environment-private`, owner
+`environment-overlay`, label "This environment (container home)"), and the
+target's default source. Project files under `/workspace` are writable only
+when the environment's workspace is a persistent `volume-v1` volume; on a
+legacy layer they are read-only because a rebuild would lose the edit.
+Claude's private-local map, managed policy, compatibility imports and files
+the container owns itself stay read-only, each with its reason.
+
+**Environment overlay.** A save to an environment-private source records the
+intent in a private backend record and writes the container's file:
+
+- Records live under the `mcp-environment-overlays` environment state root
+  (`environment-state-paths.ts`), one owner-only JSON file per environment and
+  source, keyed by environment id (never by container or runtime generation),
+  bounded by `overlayRecordMaxBytes`. Environment deletion and the orphan
+  reconciler remove the root with the rest of the environment's state. Nothing
+  copies it: it is not in the container, in rebuild recovery copies or in any
+  export, and no environment-clone feature exists.
+- A record holds the inherited entries as last seen (`baseline`), this
+  environment's `changes` by name — `set` (addition or replacement) or
+  `remove` (a tombstone) — each with the keyed digest of the inherited entry it
+  was made against, held `conflicts`, and fingerprints of the baseline and of
+  the server map Orkestrator last wrote, plus the boot that write belonged to.
+- Writes into the container go through `writeContainerMcpFile`: a fixed Node
+  program run with `docker exec -i --user node`, destination, expected digest,
+  mode and bound as argv and the payload on stdin. It refuses anything outside
+  `/home/node` and `/workspace`, any symlink on the way down and a
+  non-regular destination, compares the current bytes with the digest the
+  change was prepared against, and replaces the file atomically (0600 for
+  environment-private files; project files keep their mode, 0644 when new).
+  The record is written first, so a crash leaves the intent durable and the
+  container reported as diverged, never the reverse.
+- After every boot (`startContainerRuntime`, which a rebuild's commit also
+  goes through) and before any bridge or terminal starts, the backend
+  rebases each record on the fresh inherited copy and writes the result back
+  (`materialiseEnvironment`). A change whose inherited entry is unchanged is
+  reapplied; a removed inherited server stays removed; a replacement the new
+  inherited copy matches exactly is dropped as redundant; anything else is a
+  **conflict**: the change is kept, the name shows the inherited value, and the
+  user keeps this environment's version or takes the inherited one. A failure
+  never fails the start.
+- Only the server map is rewritten (`rewriteServerMap`, through the same
+  verified single-entry edits a save uses); every other setting in the file is
+  the container's.
+- The snapshot reports each overlay source's `overlay` state: `in-sync`;
+  `pending` (a boot Orkestrator has not written, such as a `docker start`
+  outside Orkestrator — the next save or reapply writes it first, which makes
+  a draft of the bare copy stale); `diverged` (edited inside the container
+  since Orkestrator last wrote it — edits are refused with
+  `environment-diverged` until the user imports the edits or reapplies); or
+  `conflict`. `resolve_mcp_environment_overlay` runs `import`, `reapply`,
+  `keep-environment`, `take-inherited` or `reset`, guarded by the file's
+  revision.
+
+**Refreshing defaults.** `preview_mcp_environment_defaults` compares the
+backend user's current file for the same source with the container's inherited
+copy and names what would be added, changed or removed, which of this
+environment's changes would conflict, and which in-container edits would be
+overwritten. `refresh_mcp_environment_defaults` applies exactly that preview
+(a changed file on either side refuses the token), keeps this environment's
+changes on top, and rewrites the server map of the container's staged input so
+the next boot inherits the same servers. Claude's staged `.claude.json` is
+already re-staged before every start, so it needs no staged rewrite.
+
+**Rebuilds.** A real rebuild creates its candidate through
+`createDockerContainer`, which stages a fresh input revision from the backend
+user's current files; edits made only inside the old container's homes do not
+survive, and the overlay is reapplied when the rebuilt container starts
+(`apps/backend/tests/mcp-overlay-live.test.ts`).
+
+**Delivery.** `docker/entrypoint.sh` copies Pi's `agent/mcp.json` (size and
+symlink rules of `copy_agent_file`, mode 0600). Images that declare
+`staged-inputs` version 2 or later (`CURSOR_MCP_STAGED_INPUTS_VERSION`,
+`imageCopiesCursorMcpConfig` in `packages/protocol/src/image-manifest.ts`) also
+copy Cursor's `~/.cursor/mcp.json` the same way, when Cursor is enabled and not
+revoked for the environment; nothing else of Cursor's is staged. An older image
+gives container Cursor sessions no user MCP servers until the environment is
+rebuilt on a newer image.
+
+**Where things run.** Every path, environment reference and stdio command in a
+container source resolves inside the container. The snapshot flags rows whose
+absolute `command` or `cwd` does not exist there, or is a Windows path, from
+one bounded `docker exec` (at most `containerPathProbesMax` paths); nothing is
+installed or rewritten. A save preview for a URL says when `localhost` means
+the container itself, and when a restricted container's allowlist does not
+include the URL's host and port (policy 3 matches `host:port`); saving never
+changes an allowlist, and the warning never contains the query string.
+In-app sign-in is not advertised for container targets
+(`runtimeSignIn.supported: false`), because no callback has been proven to
+reach a container from the browser; host OAuth stores are never copied into
+containers.
 
 ## Events and rehydration
 
@@ -524,6 +622,8 @@ worktrees; nothing reads or writes the operator's configuration):
 | Bridges | Pi `mcp.test.ts`, `mcp-config.test.ts`, `mcp-config-upstream.test.ts`, `mcp-lifecycle.test.ts`, `agent-session.test.ts`, `http.test.ts`; Cursor `agent-session.test.ts`, `agent-session-mcp-reattach.test.ts`, `http.test.ts`, `persistence.test.ts`; Claude `mcp-config-scope.test.ts`, `session-manager-prompt-mcp.test.ts`, `runtime-health-body.test.ts`; ACP `acp-mcp-inventory.test.ts`; Codex `mcp-reload-route.test.ts`, `process-supervisor.test.ts` |
 | UI | `mcp-draft.test.ts`, `mcp-local-validation.test.ts`, `ProviderMcpSettings.test.tsx`, `McpEditorFlows.test.tsx`, `McpEntryFlows.test.tsx`, `McpStatusAndStates.test.tsx`, `AgentInfoMcpSection.test.tsx`, `FullscreenSettingsLayout.test.tsx`, `ActionBar.test.tsx` — focus return, keyboard-only flows, conflict reload, discard prompt, rollout gate, empty/offline/partial states |
 | Container reader | Manual smoke against a throwaway container: ok, absent, oversized, offline, shell-metacharacter path |
+| Environment overlay | `overlay.test.ts` (merge, rebase, tombstones, conflicts, divergence, import, server-map rewrite), `service-overlay.test.ts` (private save, host file unchanged, backend restart, stop/start and rebuild reapply, pending restart, conflicts and both resolutions, divergence blocks edits, import, reapply, reset, unreadable record, defaults refresh and stale token, persistent project writes, container apply plan, network and `localhost` warnings, path audit, sign-in) |
+| Containers (live) | 2026-10-23, `apps/backend/tests/mcp-overlay-live.test.ts` on an image built from this tree (`RUN_LIVE_DOCKER_TESTS=1`): Cursor `mcp.json` copied alone with 0600; writer conflict, private and preserved modes, refusals outside the homes, through file and directory symlinks; boot id and path probe; overlay across backend restart, a real stop and start, a replacement container and an in-container edit with import; a real `volume-v1` rebuild re-staging the backend user's current Codex file and dropping an in-container edit, then the real start path reapplying the overlay |
 | Inactive environment (live) | 2026-10-18, `e2e/agent-testing/mcp-apply-inactive.spec.ts` with real Claude sessions (CLI 2.1.296): save and apply during a running turn (turn uninterrupted, `pending-next-turn` held after it), the next turn while inactive with the page's event stream cut, a hard reload, a bridge restart (`applied` names the newer generation), a removal while a refresh fails offline, a pre-marker bridge, and a user file shared by two environments. The apply half passed in full; the model's tool calls were proven for the first add only, because the provider rate limited the seeded login. Record and remaining reruns in the todo file. |
 | Real browser | 2026-09-24, `dev:test` profile `agent-mcp-settings-qa` with the fixture project, Playwright at 1440×900 and 390×844: section and pickers for all six platforms, Control MCP kept separate, add → edit → rename → remove of a Claude project-scope server in a fixture worktree (previews named the worktree path and the execution warning; the file ended `{"mcpServers": {}}`), keyboard open/Escape with focus return, reload rehydration, discard prompt on a dirty target switch, platform-settings deep link. Found that every MCP dialog rendered behind the fullscreen settings layer (default `z-50` under `z-[60]`); fixed with the fullscreen dialog layers and pinned by `McpEditorFlows.test.tsx`; the fix was confirmed in that browser session by raising the layer, not by a second full pass. The agent-panel link was not exercised (no live session in the fixture). Operator MCP files were hashed before and after and were unchanged. |
 
@@ -541,7 +641,8 @@ Inactive-environment apply evidence and recovery passed for Claude, including
 a cut stream, reload, bridge generation changes and a shared user file (see
 the live row above). Not yet verified: the remaining full-mode tool calls in
 that spec, the process-wide inactive variant for Codex or OpenCode, Grok and
-Pi live probes, the remaining real-browser matrix, and container QA. For
+Pi live probes, the remaining real-browser matrix, container sessions adopting an
+environment-private save with real providers, and a remote browser. For
 those, treat `pending-next-turn` / `restart-required` as the backend's plan;
 `applied` is observed adoption per the evidence rule above.
 

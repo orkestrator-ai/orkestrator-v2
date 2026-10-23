@@ -109,26 +109,30 @@ export const COORDINATOR_BLOCKED =
 
 /**
  * What a container runtime of `provider` does with a backend-user change.
- * Containers copy provider configuration when they are created — except
- * Cursor's, which `docker/entrypoint.sh` never copies at all.
+ * Every boot copies the inputs staged for the container. Claude's
+ * `.claude.json` is staged again before each start; every other provider's
+ * inputs, Cursor's `mcp.json` included (images with `staged-inputs` 2), are
+ * staged when the container is created, and a defaults refresh rewrites them.
  */
 export function containerDelivery(provider: AgentPlatform): {
   state: McpApplyState;
   reason: string;
 } {
-  if (provider === "cursor") {
+  if (provider === "claude") {
     return {
-      state: "blocked-policy",
+      state: "restart-required",
       reason:
-        "Cursor's MCP configuration is not copied into containers, so this change never reaches container sessions.",
+        "This container copies Claude's configuration each time it starts; stop and start the environment to use the change.",
     };
   }
   return {
     state: "restart-required",
-    reason:
-      "This container copied its configuration when it was created; recreate the environment to use the change.",
+    reason: CONTAINER_DEFAULTS_REASON,
   };
 }
+
+export const CONTAINER_DEFAULTS_REASON =
+  "This container copied its configuration when it was created; refresh its defaults from the environment's MCP settings, or rebuild the environment, to use the change.";
 
 function entry(
   session: ApplySession,
@@ -280,7 +284,10 @@ export async function planRuntimes(
       continue;
     }
     if (!environment) continue;
-    if (environment.environmentType === "containerized") {
+    // A backend-user change reaches a container only through its copy; a
+    // save written into the container itself is adopted like a local one.
+    const container = environment.environmentType === "containerized";
+    if (container && scope === "backend-user") {
       const delivery = containerDelivery(provider);
       add(session, environment, delivery.state, delivery.reason);
       continue;
@@ -295,8 +302,10 @@ export async function planRuntimes(
       );
       continue;
     }
+    // Evidence and generations come from host files and host bridge pids only.
+    const local = !container;
     if (environment.status !== "running" || !environment.providerRunning(provider)) {
-      add(session, environment, "pending-next-turn", NOT_RUNNING, true);
+      add(session, environment, "pending-next-turn", NOT_RUNNING, local);
       continue;
     }
     switch (provider) {
@@ -306,7 +315,7 @@ export async function planRuntimes(
           environment,
           "pending-next-turn",
           "Loads on the session's next message.",
-          true,
+          local,
         );
         break;
       case "cursor":
@@ -316,11 +325,11 @@ export async function planRuntimes(
           environment,
           "pending-next-turn",
           "Reconnects MCP servers before the session's next message.",
-          true,
+          local,
         );
         break;
       case "codex":
-        add(session, environment, "queued", "Waiting to reload Codex's MCP configuration.", true);
+        add(session, environment, "queued", "Waiting to reload Codex's MCP configuration.", local);
         break;
       case "opencode":
         add(
@@ -328,7 +337,7 @@ export async function planRuntimes(
           environment,
           "restart-required",
           "OpenCode reads configuration when its server starts; stop and start the environment to load the change.",
-          true,
+          local,
         );
         break;
       case "grok":
@@ -337,7 +346,7 @@ export async function planRuntimes(
           environment,
           "restart-required",
           "Grok Build loads MCP servers when it starts; stop and start the environment to load the change.",
-          true,
+          local,
         );
         break;
     }

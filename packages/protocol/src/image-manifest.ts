@@ -35,8 +35,12 @@ export const IMAGE_CAPABILITIES = {
   "graceful-shutdown": 1,
   /** Workspace and provider state on owner-labelled named volumes (step 05). */
   "persistent-workspace": 1,
-  /** Portable inputs staged by the backend instead of whole-home mounts (step 08). */
-  "staged-inputs": 1,
+  /**
+   * Portable inputs staged by the backend instead of whole-home mounts (step
+   * 08). Version 2 also copies Cursor's `~/.cursor/mcp.json` from
+   * `/cursor-config` (`CURSOR_MCP_STAGED_INPUTS_VERSION`).
+   */
+  "staged-inputs": 2,
   /**
    * Per-environment network with explicit host service rules and IPv6 policy
    * (step 09, version 2); allowed traffic as address, protocol and port tuples
@@ -57,6 +61,20 @@ export const IMAGE_CAPABILITIES = {
 } as const;
 
 export type ImageCapability = keyof typeof IMAGE_CAPABILITIES;
+
+/**
+ * The `staged-inputs` version from which an image's entrypoint copies Cursor's
+ * user MCP configuration (`~/.cursor/mcp.json`, and nothing else of Cursor's)
+ * into the container. An older image gives Cursor no user MCP servers.
+ */
+export const CURSOR_MCP_STAGED_INPUTS_VERSION = 2;
+
+/** Whether an image with these capabilities imports Cursor's `mcp.json`. */
+export function imageCopiesCursorMcpConfig(
+  capabilities: Partial<Record<ImageCapability, number>> | null | undefined,
+): boolean {
+  return (capabilities?.["staged-inputs"] ?? 0) >= CURSOR_MCP_STAGED_INPUTS_VERSION;
+}
 
 export function isImageCapability(value: unknown): value is ImageCapability {
   return typeof value === "string" && Object.hasOwn(IMAGE_CAPABILITIES, value);

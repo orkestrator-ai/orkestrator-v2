@@ -571,9 +571,10 @@ describe("prompt dispatch", () => {
     });
     expect(response.status).toBe(410);
     expect(((await response.json()) as { error: string }).error).toContain("new requestId");
-    // And it still reports unknown, so a caller cannot read it as delivered.
+    // And it reports lost, never dispatched, so a caller cannot read it as
+    // delivered but can retire it without asking for a retry.
     expect(await (await call(`/session/${state.id}/dispatch?requestId=r1`)).json()).toEqual({
-      dispatch: "unknown",
+      dispatch: "lost",
     });
   });
 
@@ -1496,6 +1497,149 @@ describe("provider commands", () => {
       "/steer is a word in this workflow input",
     );
     expect(state.promptJournal.get("literal-1")?.local).toBeUndefined();
+  });
+});
+
+/**
+ * A backend from before the version-1 catalogue (#827, ff4026b4e) driving
+ * this bridge. Its `HttpBridgeCatalogAdapter.slashCommands`
+ * (`ff4026b4e^:apps/backend/src/core/http-bridge-catalog.ts`) read
+ * `/session/:id/commands` and fell back to `/global/slash-commands` only on a
+ * 404; it read nothing but `payload.commands`. The exact current bodies are
+ * pinned in "provider commands" above; these assert the old reader's view.
+ */
+describe("mixed-version: old backend, current bridge", () => {
+  const OLD_SOURCES = new Set([
+    "builtin",
+    "project",
+    "user",
+    "plugin",
+    "skill",
+    "template",
+    "extension",
+    "orkestrator",
+  ]);
+
+  /** The pre-#827 row projection, so a row that would read differently fails here. */
+  function readAsOldBackend(payload: unknown): Array<{ name: string; source: string }> {
+    const record = payload as { commands?: unknown } | null;
+    if (!record || !Array.isArray(record.commands)) return [];
+    return record.commands.flatMap((candidate: unknown) => {
+      const row = (typeof candidate === "string" ? { name: candidate } : candidate) as Record<
+        string,
+        unknown
+      > | null;
+      if (!row || typeof row.name !== "string" || !row.name.trim()) return [];
+      return [
+        {
+          name: row.name.startsWith("/") ? row.name : `/${row.name}`,
+          source:
+            typeof row.source === "string" && OLD_SOURCES.has(row.source) ? row.source : "unknown",
+        },
+      ];
+    });
+  }
+
+  /** Every row keeps the legacy types; the envelope only adds top-level keys. */
+  function expectOldReadable(body: Record<string, unknown>, extraKeys: string[]): void {
+    expect(Array.isArray(body.commands)).toBe(true);
+    for (const row of body.commands as unknown[]) {
+      if (typeof row === "string") continue;
+      const command = row as Record<string, unknown>;
+      expect(typeof command.name === "string" && command.name.startsWith("/")).toBe(true);
+      expect(OLD_SOURCES.has(String(command.source))).toBe(true);
+      for (const field of ["description", "argumentHint"]) {
+        if (field in command) expect(typeof command[field]).toBe("string");
+      }
+      if ("aliases" in command) {
+        expect((command.aliases as unknown[]).every((alias) => typeof alias === "string")).toBe(
+          true,
+        );
+      }
+    }
+    expect(Object.keys(body).sort()).toEqual(["commands", ...extraKeys].sort());
+  }
+
+  test("the legacy global route still answers 200 with a commands array the old reader takes", async () => {
+    // Pre-#827 this route answered `{ commands: [] }`.
+    const response = await call("/global/slash-commands");
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as Record<string, unknown>;
+    expectOldReadable(body, ["catalogueVersion", "status"]);
+    expect(readAsOldBackend(body)).toEqual([]);
+  });
+
+  test("a held session's catalogue answers 200, so the old reader uses it and never falls back", async () => {
+    const state = await createSession();
+    const response = await call(`/session/${state.id}/commands`);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as Record<string, unknown>;
+    expectOldReadable(body, ["catalogueVersion", "status"]);
+    expect(readAsOldBackend(body)).toEqual([]);
+  });
+
+  test("an unknown session reads as an empty list in band instead of the old 404 and fallback", async () => {
+    // Pre-#827 Cursor answered 404 "Session not found" here, so the old
+    // backend fell back to `/global/slash-commands` (`{ commands: [] }`). It
+    // now stops at this 200: one request fewer, the same empty list.
+    const response = await call("/session/nope/commands");
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as Record<string, unknown>;
+    expectOldReadable(body, ["catalogueVersion", "status"]);
+    expect(body.commands).toEqual([]);
+    expect(readAsOldBackend(body)).toEqual([]);
+  });
+
+  test("the status snapshot keeps the legacy keys an old backend validates", async () => {
+    // The old `interactiveSnapshot` (`ff4026b4e^:.../http-bridge-provider.ts`)
+    // required status idle|running|error, an integer `revision` and a
+    // composer with `models`/`modes` arrays; the old progressive reader took
+    // `messageRevision`, else `revision`, as the provider revision.
+    const state = await createSession();
+    const read = async () =>
+      (await (await call(`/session/${state.id}/status`)).json()) as Record<string, unknown>;
+    const before = await read();
+    expect(["idle", "running", "error"]).toContain(before.status as string);
+    expect(Number.isSafeInteger(before.revision)).toBe(true);
+    const composer = before.composer as Record<string, unknown>;
+    expect(Array.isArray(composer.models)).toBe(true);
+    expect(Array.isArray(composer.modes)).toBe(true);
+    if (before.error !== undefined) expect(typeof before.error).toBe("string");
+    // Cursor tracks no command inventory, so it publishes no `commandRevision`
+    // (optional by contract: docs/architecture/native-agent-commands.md "Push
+    // freshness"), and nothing shadows the old reader's revision either.
+    expect(before).not.toHaveProperty("commandRevision");
+    expect(before).not.toHaveProperty("messageRevision");
+
+    // A catalogue read or refresh moves no revision the old reader consumes.
+    await call(`/session/${state.id}/commands`);
+    await call(`/session/${state.id}/commands/refresh`, { method: "POST" });
+    const after = await read();
+    expect(after.revision).toBe(before.revision);
+    expect(after.status).toBe(before.status);
+  });
+
+  test("a prompt without the command fields is sent as text, as it always was", async () => {
+    // An old backend never sends `allowProviderCommands` or `command`; absent
+    // means "interpret" (`readBridgePromptCommandFields`). Cursor interprets
+    // only the application `/steer` (pinned by "answers an idle /steer
+    // locally" above); any other slash text reaches the SDK verbatim.
+    const state = await createSession();
+    let release = () => undefined as void;
+    const agent = attachFake(state, {
+      hold: new Promise<void>((resolve) => (release = () => resolve())),
+    });
+    const response = await call(`/session/${state.id}/prompt`, {
+      method: "POST",
+      body: JSON.stringify({ prompt: "/review src", requestId: "old-backend-1" }),
+    });
+    expect(response.status).toBe(202);
+    expect(await response.json()).toEqual({ accepted: true });
+    // The send is awaited before the 202, so nothing here needs to wait.
+    expect(agent.sends).toHaveLength(1);
+    expect(JSON.stringify(agent.sends[0]?.message)).toContain("/review src");
+    expect(state.promptJournal.get("old-backend-1")?.local).toBeUndefined();
+    release();
   });
 });
 

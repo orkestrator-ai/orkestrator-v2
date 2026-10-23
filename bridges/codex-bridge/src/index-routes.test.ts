@@ -1,4 +1,7 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { CompressionStream as NodeCompressionStream } from "node:stream/web";
 import { gunzipSync } from "node:zlib";
 import { HTTPException } from "hono/http-exception";
@@ -14,6 +17,8 @@ import {
   expectSignInShape,
 } from "../../../tests/helpers/auth-secret-canaries.js";
 import { AppServerRpcError } from "./app-server/errors.js";
+import type { CodexCommandCatalogue } from "./commands/codex-command-catalogue.js";
+import { normalizeSkillsList } from "./commands/skill-inventory.js";
 
 process.env.CODEX_BRIDGE_NO_ENGINE = "1";
 process.env.CODEX_BRIDGE_NO_SERVER = "1";
@@ -2442,5 +2447,340 @@ describe("command catalogue routes", () => {
       command,
     });
     expect(calls).toHaveLength(3);
+  });
+});
+
+/**
+ * Mixed versions: a backend built before the version-1 catalogue (#827,
+ * ff4026b4e) talking to this bridge. Every reader below is a port of
+ * `ff4026b4e^:apps/backend/src/core/http-bridge-catalog.ts` (`slashCommands`,
+ * lines 44-111) or `ff4026b4e^:apps/backend/src/core/http-bridge-progressive.ts`
+ * (the status snapshot read), so the assertions say what that backend would
+ * actually display, not just that the JSON parses.
+ */
+describe("mixed-version: old backend, current bridge", () => {
+  const OLD_SOURCES = new Set([
+    "builtin",
+    "project",
+    "user",
+    "plugin",
+    "skill",
+    "template",
+    "extension",
+    "orkestrator",
+  ]);
+  type OldBackendCommand = {
+    name: string;
+    source: string;
+    description?: string;
+    argumentHint?: string;
+    aliases?: string[];
+    scope?: "global" | "session";
+  };
+  const asRecord = (value: unknown): Record<string, unknown> | null =>
+    value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : null;
+
+  /** The pre-#827 row reader: unknown fields are ignored, names gain a `/`. */
+  function oldBackendRows(body: unknown): OldBackendCommand[] {
+    const payload = asRecord(body);
+    if (!payload || !Array.isArray(payload.commands)) return [];
+    const commands = new Map<string, OldBackendCommand>();
+    for (const candidate of payload.commands.slice(0, 512)) {
+      const command = typeof candidate === "string" ? { name: candidate } : asRecord(candidate);
+      const rawName =
+        typeof command?.name === "string" && command.name.length > 0 ? command.name : null;
+      if (!rawName) continue;
+      const name = rawName.startsWith("/") ? rawName : `/${rawName}`;
+      const record = command as Record<string, unknown>;
+      commands.set(name, {
+        name: name.slice(0, 256),
+        source:
+          typeof record.source === "string" && OLD_SOURCES.has(record.source)
+            ? record.source
+            : "unknown",
+        ...(typeof record.description === "string" ? { description: record.description } : {}),
+        ...(typeof record.argumentHint === "string" ? { argumentHint: record.argumentHint } : {}),
+        ...(Array.isArray(record.aliases)
+          ? {
+              aliases: record.aliases.filter((alias): alias is string => typeof alias === "string"),
+            }
+          : {}),
+        ...(record.scope === "global" || record.scope === "session" ? { scope: record.scope } : {}),
+      });
+    }
+    return [...commands.values()];
+  }
+
+  /** The old session-then-global order: only a 404 consults the global route. */
+  async function oldBackendSlashCommands(
+    sessionId: string,
+  ): Promise<{ usedGlobalRoute: boolean; commands: OldBackendCommand[] }> {
+    let response = await app.request(`/session/${encodeURIComponent(sessionId)}/commands`);
+    const usedGlobalRoute = response.status === 404;
+    if (usedGlobalRoute) response = await app.request("/global/slash-commands");
+    expect(response.ok).toBe(true);
+    return { usedGlobalRoute, commands: oldBackendRows(await response.json()) };
+  }
+
+  /** Every wire row keeps the legacy field types the old reader relies on. */
+  function expectLegacyRows(body: unknown): unknown[] {
+    const rows = asRecord(body)?.commands;
+    expect(Array.isArray(rows)).toBe(true);
+    for (const row of rows as unknown[]) {
+      if (typeof row === "string") {
+        expect(row.length).toBeGreaterThan(0);
+        continue;
+      }
+      const record = asRecord(row)!;
+      expect(record).not.toBeNull();
+      expect(typeof record.name).toBe("string");
+      expect((record.name as string).length).toBeGreaterThan(0);
+      // An unlisted source would show as "unknown" in the old menu.
+      expect(OLD_SOURCES.has(record.source as string)).toBe(true);
+      for (const key of ["description", "argumentHint"] as const) {
+        if (key in record) expect(typeof record[key]).toBe("string");
+      }
+      if ("aliases" in record) {
+        expect(Array.isArray(record.aliases)).toBe(true);
+        for (const alias of record.aliases as unknown[]) expect(typeof alias).toBe("string");
+      }
+      if ("scope" in record) expect(["global", "session"]).toContain(record.scope as string);
+    }
+    return rows as unknown[];
+  }
+
+  // The real runtime's catalogue, with a deterministic skill inventory: the
+  // in-process bridge runs no app-server, so `skills/list` is replaced here.
+  const runtimeContext = (
+    runtime as unknown as {
+      context: {
+        commandCatalogue: CodexCommandCatalogue;
+        options: { engine: { info(): { generation: number } } };
+      };
+    }
+  ).context;
+  const catalogue = runtimeContext.commandCatalogue;
+  const skillsHolder = catalogue.skills as unknown as Record<string, unknown>;
+  const originalSkillsRead = skillsHolder.read;
+  const previousCodexHome = process.env.CODEX_HOME;
+  let codexHome = "";
+  const sessionIds: string[] = [];
+
+  beforeAll(async () => {
+    // A user prompt template in an isolated CODEX_HOME (read per scan).
+    codexHome = await mkdtemp(join(tmpdir(), "codex-mixed-version-home-"));
+    await mkdir(join(codexHome, "prompts"), { recursive: true });
+    await writeFile(
+      join(codexHome, "prompts", "mixedreview.md"),
+      "---\ndescription: Review a target\nargument-hint: <target>\n---\nReview $ARGUMENTS",
+    );
+    process.env.CODEX_HOME = codexHome;
+    skillsHolder.read = async () => ({
+      snapshot: normalizeSkillsList(
+        {
+          data: [
+            {
+              cwd: "/workspace",
+              skills: [
+                {
+                  name: "deploy",
+                  description: "Deploy the app",
+                  path: "/workspace/.codex/skills/deploy/SKILL.md",
+                  scope: "repo",
+                  enabled: true,
+                  pluginId: null,
+                },
+              ],
+              errors: [],
+            },
+          ],
+        },
+        {
+          generation: runtimeContext.options.engine.info().generation,
+          cwd: "/workspace",
+          now: 0,
+        },
+      ),
+      fresh: true,
+    });
+  });
+
+  afterAll(async () => {
+    skillsHolder.read = originalSkillsRead;
+    if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previousCodexHome;
+    for (const sessionId of sessionIds) runtime.getRegistry().releaseSession(sessionId);
+    await rm(codexHome, { recursive: true, force: true });
+  });
+
+  async function createRealSession(): Promise<string> {
+    const response = await jsonRequest("/session/create", "POST", { mode: "build" });
+    expect(response.status).toBe(201);
+    const { sessionId } = (await response.json()) as { sessionId: string };
+    sessionIds.push(sessionId);
+    return sessionId;
+  }
+
+  test("the legacy global route still parses under the old reader without dropping a row", async () => {
+    const response = await app.request("/global/slash-commands");
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    const rows = expectLegacyRows(body);
+    const old = oldBackendRows(body);
+    // Names are unique, so the old Map keeps every row.
+    expect(old).toHaveLength(rows.length);
+    expect(old).toContainEqual(expect.objectContaining({ name: "/help", source: "builtin" }));
+    expect(old).toContainEqual(expect.objectContaining({ name: "/models", source: "builtin" }));
+    expect(old).toContainEqual({
+      name: "/mixedreview",
+      source: "user",
+      description: "Review a target",
+      argumentHint: "<target>",
+      scope: "global",
+    });
+  });
+
+  test("the enhanced session catalogue is read as-is, envelope fields being top-level additions", async () => {
+    const sessionId = await createRealSession();
+    const response = await app.request(`/session/${sessionId}/commands`);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(body.catalogueVersion).toBe(1);
+    // Everything but `commands` is new, and the old reader ignores it.
+    expect(
+      Object.keys(body).every((key) =>
+        [
+          "catalogueVersion",
+          "status",
+          "revision",
+          "generation",
+          "freshness",
+          "truncated",
+          "commands",
+        ].includes(key),
+      ),
+    ).toBe(true);
+    expectLegacyRows(body);
+
+    const old = await oldBackendSlashCommands(sessionId);
+    expect(old.usedGlobalRoute).toBe(false);
+    expect(old.commands.map((row) => row.name)).toEqual(
+      expect.arrayContaining(["/help", "/models", "/mixedreview"]),
+    );
+
+    // Skill rows: the wire name is `$deploy`, which the old reader prefixes
+    // to `/$deploy`. The pre-#827 bridge named the row `/skill:deploy`
+    // (`ff4026b4e^:bridges/codex-bridge/src/index.ts:1239`); that spelling now
+    // survives only as an alias, which the old menu neither shows nor inserts
+    // (it inserts `${command.name} `).
+    const wireSkill = (body.commands as Array<Record<string, unknown>>).find(
+      (row) => row.executionKind === "structured-skill",
+    );
+    expect(wireSkill).toMatchObject({ name: "$deploy", aliases: ["/skill:deploy"] });
+    expect(old.commands.find((row) => row.source === "skill")).toEqual({
+      name: "/$deploy",
+      source: "skill",
+      description: "Deploy the app",
+      aliases: ["/skill:deploy"],
+      scope: "session",
+    });
+    expect(old.commands.some((row) => row.name === "/skill:deploy")).toBe(false);
+  });
+
+  test("an unknown session is an empty in-band list, so the old reader never falls back", async () => {
+    // Pre-#827 Codex answered 404 here and the old backend then read
+    // `/global/slash-commands`; this bridge answers 200 `missing` instead.
+    let globalReads = 0;
+    await withRuntimeMethod(
+      "listGlobalCommandRows",
+      async () => {
+        globalReads += 1;
+        return [];
+      },
+      async () => {
+        const raw = await app.request("/session/never-created-mixed/commands");
+        expect(raw.status).toBe(200);
+        expect(await raw.json()).toMatchObject({ status: "missing", commands: [] });
+        expect(await oldBackendSlashCommands("never-created-mixed")).toEqual({
+          usedGlobalRoute: false,
+          commands: [],
+        });
+      },
+    );
+    expect(globalReads).toBe(0);
+  });
+
+  test("commandRevision is additive: the old snapshot fields and provider revision do not move", async () => {
+    const sessionId = await createRealSession();
+    // A catalogue read observes the inventory, so the revision is published.
+    expect((await app.request(`/session/${sessionId}/commands`)).status).toBe(200);
+    const read = async () => {
+      const response = await app.request(`/session/${sessionId}/status`);
+      expect(response.status).toBe(200);
+      return (await response.json()) as Record<string, unknown>;
+    };
+    const before = await read();
+    // The fields the old snapshot reader took, with their old types.
+    expect(["idle", "running", "blocked", "error"]).toContain(before.status as string);
+    expect(typeof before.phase).toBe("string");
+    expect(Number.isSafeInteger(before.messageRevision)).toBe(true);
+    expect(Number.isSafeInteger(before.engineGeneration)).toBe(true);
+    // The old reader fell back to a top-level `revision` for providerRevision
+    // when `messageRevision` was absent; the command revision must not use it.
+    expect("revision" in before).toBe(false);
+    expect(Number.isSafeInteger(before.commandRevision)).toBe(true);
+    expect(before.commandRevision as number).toBeGreaterThan(0);
+
+    catalogue.markPolicyChanged();
+    const after = await read();
+    expect(after.commandRevision).toBe((before.commandRevision as number) + 1);
+    const { commandRevision: _before, ...legacyBefore } = before;
+    const { commandRevision: _after, ...legacyAfter } = after;
+    expect(legacyAfter).toEqual(legacyBefore);
+  });
+
+  test("an old prompt body is interpreted as before: /skill: and templates resolve, /$name is text", async () => {
+    const forwarded: Array<Record<string, unknown>> = [];
+    await withRuntimeMethod(
+      "prompt",
+      async (_sessionId: string, input: Record<string, unknown>) => {
+        forwarded.push(input);
+        return { ok: true, result: { status: "processing", requestId: input.requestId } };
+      },
+      async () => {
+        // The pre-#827 Codex body: no `allowProviderCommands`, no `command`.
+        const response = await jsonRequest("/session/session-1/prompt", "POST", {
+          prompt: "/mixedreview src/a.ts",
+          requestId: "request-old-backend",
+          attachments: [],
+          readOnly: false,
+          fastMode: false,
+        });
+        expect(response.status).toBe(202);
+      },
+    );
+    expect(forwarded).toHaveLength(1);
+    // Absent means interpret (`input.allowProviderCommands !== false`).
+    expect("allowProviderCommands" in forwarded[0]!).toBe(false);
+    expect("command" in forwarded[0]!).toBe(false);
+
+    // What the prompt path does with that typed text (the same resolver).
+    expect(await catalogue.resolveTyped(forwarded[0]!.prompt as string)).toMatchObject({
+      kind: "template",
+      entry: { displayName: "/mixedreview" },
+      args: "src/a.ts",
+    });
+    expect(await catalogue.resolveTyped("/help")).toEqual({ kind: "builtin", builtin: "help" });
+    expect(await catalogue.resolveTyped("/skill:deploy now")).toMatchObject({
+      kind: "skill",
+      binding: { name: "deploy" },
+      args: "now",
+    });
+    // What the old menu inserts for the skill row: not a bridge command, so it
+    // reaches Codex as plain text rather than a structured skill input.
+    expect(await catalogue.resolveTyped("/$deploy now")).toEqual({ kind: "text" });
+    expect(await catalogue.resolveTyped("$deploy now")).toEqual({ kind: "text" });
   });
 });

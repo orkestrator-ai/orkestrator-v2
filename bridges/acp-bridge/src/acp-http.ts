@@ -6,6 +6,7 @@ import { tryParseStructuredOutputText } from "@orkestrator/protocol/structured-o
 import {
   DISPATCH_OUTCOME_LOST_KIND,
   isNativeAgentExecutionPolicy,
+  type BridgePromptDispatchStatus,
 } from "@orkestrator/protocol/native-agent";
 import { parseWorkflowResultTurn } from "@orkestrator/protocol/workflow-results";
 import {
@@ -419,20 +420,25 @@ export async function route(
    *
    * Read-only, and never spawns: it exists so a caller whose prompt request
    * lost its acknowledgement can settle the question from the journal instead
-   * of asking the user to. `dispatched` is only ever an explicit positive.
+   * of asking the user to. `dispatched` is only ever an explicit positive;
+   * `lost` is exactly the prompt route's 410 `DISPATCH_OUTCOME_LOST_KIND`.
    */
   if (action === "dispatch" && request.method === "GET") {
     const requestId = url.searchParams.get("requestId") || "";
     const entry = requestId ? state.promptJournal.get(requestId) : undefined;
+    // `prepared` means the route owns the id but has not handed the prompt to
+    // the agent yet: `unknown`. `ambiguous` means a previous process died
+    // without a durable answer and the prompt route refuses the id for good:
+    // `lost`, which is neither "dispatched" nor "never sent".
+    const dispatch: BridgePromptDispatchStatus =
+      entry &&
+      (entry.state === "accepted" || entry.state === "completed" || entry.state === "failed")
+        ? "dispatched"
+        : entry?.state === "ambiguous"
+          ? "lost"
+          : "unknown";
     return json(response, 200, {
-      // `prepared` means the route owns the id but has not handed the prompt to
-      // the agent yet. `ambiguous` means a previous process died without a
-      // durable answer. Neither is an explicit positive.
-      dispatch:
-        entry &&
-        (entry.state === "accepted" || entry.state === "completed" || entry.state === "failed")
-          ? "dispatched"
-          : "unknown",
+      dispatch,
       // How the turn ended, once it has: the backend's `turnTerminalError`.
       ...(entry && (entry.state === "completed" || entry.state === "failed")
         ? {

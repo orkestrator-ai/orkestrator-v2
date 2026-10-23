@@ -113,7 +113,9 @@ class Sink {
       return;
     }
     response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-    response.end("<!doctype html><title>sink</title>");
+    // A data-URL icon: Firefox otherwise requests a control page's
+    // /favicon.ico after its context closes, landing in the next observation.
+    response.end('<!doctype html><title>sink</title><link rel="icon" href="data:,">');
   });
 
   async start(): Promise<void> {

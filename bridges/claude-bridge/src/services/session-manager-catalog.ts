@@ -26,7 +26,7 @@ import { claudePermissionMode, claudeTurnPolicy } from "./claude-query-config.js
 import { eventEmitter } from "./event-emitter.js";
 import { markTranscriptChanged } from "./transcript-revision.js";
 import { MAX_STEER_JOURNAL_ENTRIES, updateSessionPreferences } from "./session-preferences.js";
-import { recordPromptDispatch } from "./session-manager-lifecycle.js";
+import { idleSteerUserMessageId, recordPromptDispatch } from "./session-manager-lifecycle.js";
 import { ultracodeFlagSetting } from "./ultracode.js";
 import type {
   ClaudeSteerJournalEntry,
@@ -161,7 +161,10 @@ function idleSteerMessageIds(requestId?: string): { userId: string; assistantId:
   if (!requestId) {
     return { userId: generateMessageId(), assistantId: generateMessageId() };
   }
-  return { userId: `idle-steer:${requestId}`, assistantId: `idle-steer-reply:${requestId}` };
+  return {
+    userId: idleSteerUserMessageId(requestId),
+    assistantId: `idle-steer-reply:${requestId}`,
+  };
 }
 
 export async function answerIdleSteerPrompt(

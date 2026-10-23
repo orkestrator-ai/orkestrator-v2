@@ -952,8 +952,9 @@ async function handleCancel(response: ServerResponse, state: SessionState): Prom
 }
 
 /**
- * Cursor's SDK (`@cursor/sdk` 1.0.31) has no command discovery or invocation
- * API: `SDKAgent` offers `send`, `reload`, artifacts and usage only. Editor
+ * Cursor's SDK (`@cursor/sdk` 1.0.37, re-checked live 2026-10-17) has no
+ * command discovery or invocation API: `SDKAgent` offers `send`, `reload`,
+ * artifacts and usage only. Editor
  * commands under `.cursor/commands` are not read, so the enhanced catalogue
  * says `unsupported` — never an empty `ready`, which would claim the provider
  * has been asked and has none. `commands: []` keeps older backends working.

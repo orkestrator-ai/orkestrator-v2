@@ -1176,6 +1176,26 @@ describe("useNativeAgentSession progressive view", () => {
     },
   );
 
+  test("carries a retired dispatch from session state and drops it once state omits it", async () => {
+    const retiredDispatch = {
+      requestId: "lost-1",
+      retiredAt: "2026-10-23T10:00:00.000Z",
+      message: "Claude Code could not confirm this message, so it may not have run.",
+    };
+    transcriptUpdates = [() => transcriptSnapshot("transcript-1", [message("m1")])];
+    stateUpdates = [() => stateSnapshot("state-1", { retiredDispatch })];
+    const { result } = renderSession();
+    await waitFor(() => expect(result.current.sessionStateAvailability).toBe("current"));
+    expect(result.current.projection?.retiredDispatch).toEqual(retiredDispatch);
+
+    transcriptUpdates = [];
+    stateUpdates = [() => stateSnapshot("state-2")];
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.projection?.retiredDispatch).toBeUndefined();
+  });
+
   test("clears cached agent tasks when a fresh snapshot omits backgroundTasks", async () => {
     const backgroundTasks = [
       {

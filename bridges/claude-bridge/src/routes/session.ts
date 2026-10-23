@@ -11,6 +11,7 @@ import {
 import {
   DISPATCH_OUTCOME_LOST_KIND,
   NATIVE_AGENT_STEER_REJECTION_HTTP_STATUS,
+  type BridgePromptDispatchStatus,
 } from "@orkestrator/protocol/native-agent";
 import { idleSteerPromptReply } from "@orkestrator/protocol/agent-slash-commands";
 import {
@@ -31,6 +32,8 @@ import {
   getSessionInitData,
   claimPromptDispatch,
   getPromptDispatchState,
+  restoredDispatchClaimLost,
+  persistedDispatchClaimLost,
   respondToPlanApproval,
   getPendingPlanApprovals,
   respondToInteraction,
@@ -1241,19 +1244,31 @@ session.get("/:id/runtime-health", (c) => {
  * parking it for the user to resolve by hand.
  *
  * `dispatched` is only ever an explicit positive: a turn this process is
- * running, or one it has finished. `new` and `not-found` both answer `unknown`,
- * because neither distinguishes "never sent" from "sent to a bridge process
- * that has since restarted" — and reporting the second as never-sent would have
- * the caller dispatch the same turn twice.
+ * running, or one it has finished. It wins over everything else. `lost` is
+ * exactly the prompt route's 410 `DISPATCH_OUTCOME_LOST_KIND`: an id an
+ * earlier process claimed (restored from disk without an outcome, or still in
+ * the durable journal of a session this process has not registered yet) that
+ * this one will refuse for good. Neither says "never sent". Everything else is
+ * `unknown`, because it cannot distinguish "never sent" from "sent to a bridge
+ * process that has since restarted" — and reporting the second as never-sent
+ * would have the caller dispatch the same turn twice.
  *
- * Registered before `/:id/...` catch-alls for the same reason as `/activity`.
+ * Read-only like `/activity`: no touch, no hydration, no re-attach. Registered
+ * before `/:id/...` catch-alls for the same reason.
  */
-session.get("/:id/dispatch", (c) => {
+session.get("/:id/dispatch", async (c) => {
+  const answer = (dispatch: BridgePromptDispatchStatus) => c.json({ dispatch });
   const requestId = c.req.query("requestId")?.trim();
-  if (!requestId) return c.json({ dispatch: "unknown" });
-  const state = getPromptDispatchState(c.req.param("id"), requestId);
-  const dispatched = state === "processing" || state === "already-processed";
-  return c.json({ dispatch: dispatched ? "dispatched" : "unknown" });
+  if (!requestId) return answer("unknown");
+  const id = c.req.param("id");
+  const state = getPromptDispatchState(id, requestId);
+  if (state === "processing" || state === "already-processed") return answer("dispatched");
+  if (state === "new") {
+    return answer(restoredDispatchClaimLost(peekSession(id), requestId) ? "lost" : "unknown");
+  }
+  // An error is not evidence of anything, so it answers `unknown`.
+  const lost = await persistedDispatchClaimLost(id, requestId).catch(() => false);
+  return answer(lost ? "lost" : "unknown");
 });
 
 // Get pending questions for a session

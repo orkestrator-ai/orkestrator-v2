@@ -158,3 +158,47 @@ profiles (`merge-main-0054`, `merge-main-0054-browser`) were stopped and reset;
 exact-owner Docker resources and profile state were removed. The automated
 isolated profile `qa-browser-62ec73a9-ade` also confirmed stop/reset. Live-provider
 qualification and iOS tests were not run for this merge.
+
+## Further main refresh (2026-10-23)
+
+Merged `9da8131c8dd35328fadfa654379533c3cbcd6767` into
+`ae2eb774ef8f98e334b83a19140ea51fc706c42b`. The common ancestor is
+`01d052e0b040c891dd86f38d7f6f08dcb0072c49`; the complete combined delta contains
+142 paths. The only original conflict was the aggregate validation index:
+both this Pi record and main's new cross-service-read record were retained.
+Its complete original path list and both parent IDs were saved in local Git
+metadata before staging. No conflict markers or missing local index links
+remained.
+
+Every check below used `mise run test:logged -- --name <label> -- <command>`.
+
+| Check | Result |
+| --- | --- |
+| `mise run check` | Passed: format, lint and all typechecks (41.4 s). |
+| `ORKESTRATOR_TEST_AREA_BASE=01d052e0b040c891dd86f38d7f6f08dcb0072c49 mise run test` | Passed all four groups on the combined tree (620.9 s). The original previous merge's failures remain historical failures. |
+| `mise run test:preview:browser --workers=2` | Passed Chromium, Firefox and WebKit private-origin coverage (34.2 s). |
+| `mise run test:agent:design:isolated` | Passed (70.2 s); profile `qa-browser-7662f61f-00a` was stopped/reset by the runner. |
+| `bunx playwright test --config e2e/public-site/playwright.config.ts --workers=1` | Passed (20.5 s) on an available port. |
+| `bunx playwright test --config e2e/playwright.config.ts --workers=2 --output output/playwright/main-refresh` | 505 passed, 4 failed, 95 skipped (540.6 s), using a free `ORKESTRATOR_E2E_PORT`. Original exit remains 1. |
+
+Each of the three complete failing browser owners was then run separately as
+`bunx playwright test --config e2e/playwright.config.ts <owner> --workers=1`,
+through `test:logged`, with its own free fixture port and output directory.
+
+| Owner and exact original failing case | Original failure | Complete owner rerun |
+| --- | --- | --- |
+| `e2e/AgentLaunchDialog.spec.ts`: `selects a native branch suggestion with the keyboard and confirms` (mobile and desktop) | Target branch remained `rel` instead of `release/2.0` after 5 s. | Same two failures reproduced; 2 other tests passed (20.6 s). Not classified as flaky. |
+| `e2e/CloseRetention.spec.ts`: `steering a Cursor turn whose steer history is full is refused, the turn carries on and the draft survives` (desktop) | The runtime panel opened but `agent-runtime-steer-saturated` was absent after 30 s. | Same failure reproduced; 19 passed, 1 failed, 20 skipped (120.2 s). Not classified as flaky. |
+| `e2e/ToolGroupFold.spec.ts`: `folding below a released reader preserves their history position` (desktop) | History anchor moved 66.75 px against a maximum 2 px in the two-worker run. | Complete unchanged owner passed with one worker (9.8 s). No assertion, timeout or skip was changed. |
+
+Failure evidence is in the platform temporary directories
+`orkestrator-test-run.nz7WcK` (component suite), `orkestrator-test-run.JSlA1t`
+(Cursor retention owner), and `orkestrator-test-run.fRFUdj` (native branch owner).
+The component run remains non-green despite the folding owner pass; the two
+persistent browser behaviors were not hidden or weakened to complete the merge.
+
+Electron, Docker, live-provider/Tailscale and iOS scenarios were not rerun for
+this refresh: the new delta has no Electron, Docker lifecycle or iOS edits;
+private preview transport used the isolated browser suite, and live external
+qualification remains opt-in. The prior merge's separate Electron limitation
+is retained above.

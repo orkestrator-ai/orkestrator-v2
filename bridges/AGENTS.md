@@ -36,12 +36,18 @@ calls them (`apps/backend/src/core/http-bridge-provider*.ts`,
   same reason the claude bridge answers a failed existence probe `idle`, never
   `missing` — an error is not evidence of deletion.
 - `GET /session/:id/dispatch?requestId=` answers `dispatched` **only** on an
-  explicit positive from that bridge's own dispatch journal. No record, a record
-  that predates a bridge restart (the ACP journal's `ambiguous`, the codex
-  journal's `prepared`), an unreadable journal and a missing route are all
-  `unknown`. The backend clears a parked dispatch on `dispatched` alone, so
-  reporting a *lost* record as "never sent" would have it run the same turn
-  twice. Like `/activity`, it must never touch liveness, hydrate or re-attach.
+  explicit positive from that bridge's own dispatch journal. It answers `lost`
+  **only** where the prompt route would refuse the id with 410
+  `dispatch-outcome-lost`: a record an earlier process left without an outcome
+  (Claude's `restoredDispatchedRequestIds`, the ACP, Cursor and Pi journals'
+  `ambiguous`), never a local reply, and never over a `dispatched`. No record, a
+  record that may still run (the codex journal's `prepared`), an unreadable
+  journal and a missing route are all `unknown`. The backend confirms a parked
+  dispatch on `dispatched` and retires it on `lost` (cleared, never recorded as
+  run, the draft's id released); `unknown` leaves it parked. Neither `lost` nor
+  `unknown` means "never sent": reporting a lost record that way would have it
+  run the same turn twice. Like `/activity`, it must never touch liveness,
+  hydrate or re-attach.
 - Prompt dispatch and `POST /session/:id/attach` share the same client timeout,
   because they do the same work. A bridge with no attached agent process pays a
   full spawn plus `initialize` plus `session/load` on whichever request arrives

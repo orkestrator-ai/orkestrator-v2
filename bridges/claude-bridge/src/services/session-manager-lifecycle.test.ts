@@ -7,6 +7,7 @@ import {
   abortSession,
   captureEvents,
   claimPromptDispatch,
+  claudeSessionPreferencesDir,
   clearPromptSuggestion,
   createOrRecoverSession,
   createSession,
@@ -14,6 +15,8 @@ import {
   deleteSessionDurably,
   getLastIdleTranscriptSweep,
   getPromptDispatchState,
+  persistedDispatchClaimLost,
+  restoredDispatchClaimLost,
   getSession,
   getSessionInitData,
   getSessionMessages,
@@ -29,6 +32,7 @@ import {
   sessionManagerTestHome,
   setClaudeHomeForTesting,
   setSessionPreferences,
+  updateSessionPreferences,
   track,
   waitFor,
   withTemporaryClaudeHome,
@@ -844,5 +848,60 @@ describe("session lifecycle", () => {
       setClaudeHomeForTesting(sessionManagerTestHome);
       await rm(directory, { recursive: true, force: true });
     }
+  });
+
+  test("recognises a restored claim without an outcome, but not a local /steer reply", () => {
+    const restored = {
+      restoredDispatchedRequestIds: new Set(["before-restart", "steer-1"]),
+      localTranscript: [
+        {
+          id: "idle-steer:steer-1",
+          role: "user" as const,
+          content: "/steer",
+          parts: [],
+          createdAt: new Date(0).toISOString(),
+        },
+      ],
+    };
+    expect(restoredDispatchClaimLost(restored, "before-restart")).toBe(true);
+    expect(restoredDispatchClaimLost(restored, "steer-1")).toBe(false);
+    expect(restoredDispatchClaimLost(restored, "never-seen")).toBe(false);
+    expect(restoredDispatchClaimLost(undefined, "before-restart")).toBe(false);
+  });
+
+  test("reads an unregistered session's durable journal without registering it", async () => {
+    await withTemporaryClaudeHome("claude-dispatch-lost-", async () => {
+      const sdkSessionId = "4f9d7a52-1c3b-4e8a-9f60-2b7d1e0c5a91";
+      const bridgeId = `session-${sdkSessionId}`;
+      await updateSessionPreferences(sdkSessionId, {
+        dispatchedRequestIds: ["before-restart", "steer-1"],
+        localTranscript: [
+          {
+            id: "idle-steer:steer-1",
+            role: "user",
+            content: "/steer",
+            createdAt: new Date(0).toISOString(),
+          },
+        ],
+      });
+
+      expect(await persistedDispatchClaimLost(bridgeId, "before-restart")).toBe(true);
+      expect(await persistedDispatchClaimLost(bridgeId, "steer-1")).toBe(false);
+      expect(await persistedDispatchClaimLost(bridgeId, "never-seen")).toBe(false);
+      // No journal at all, and an id no bridge session can map to a rollout.
+      expect(
+        await persistedDispatchClaimLost(
+          "session-00000000-0000-4000-8000-000000000000",
+          "before-restart",
+        ),
+      ).toBe(false);
+      expect(await persistedDispatchClaimLost("not a session id", "before-restart")).toBe(false);
+      // Read-only: answering registers nothing.
+      expect(getSession(bridgeId)).toBeUndefined();
+
+      // An unreadable journal is not evidence of anything.
+      await writeFile(join(claudeSessionPreferencesDir(), `${sdkSessionId}.json`), "{", "utf-8");
+      expect(await persistedDispatchClaimLost(bridgeId, "before-restart")).toBe(false);
+    });
   });
 });

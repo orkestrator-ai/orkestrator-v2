@@ -56,6 +56,7 @@ import {
   INTERACTIVE_RUNTIME_METADATA_TTL_MS,
   isTransientHttpStatus,
   MAX_TRACKED_INTERACTION_SESSIONS,
+  commandCatalogueRevisionField,
   nonEmptyString,
   normalizeProviderRateLimits,
   normalizeProviderRuntimeSummary,
@@ -266,7 +267,8 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     const body = asRecord(
       await boundedJson(response, `${this.agent} dispatch status`).catch(() => null),
     );
-    return body?.dispatch === "dispatched" ? "dispatched" : "unknown";
+    // `lost` is additive: a bridge that predates it answers `unknown` there.
+    return body?.dispatch === "dispatched" || body?.dispatch === "lost" ? body.dispatch : "unknown";
   }
 
   async activeSteerRun(sessionId: string): Promise<ProviderActiveSteerRun> {
@@ -749,9 +751,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         composer: composer as unknown as NativeAgentComposerState,
         ...(readiness ? { readiness } : {}),
         providerRevision: providerRevision as number,
-        ...(Number.isSafeInteger(payload?.commandRevision)
-          ? { commandCatalogueRevision: payload!.commandRevision as number }
-          : {}),
+        ...commandCatalogueRevisionField(payload?.commandRevision),
         ...(contextUsage ? { contextUsage } : {}),
         ...(policy ? { policy } : {}),
         ...(runtime ? { runtime } : {}),
@@ -885,9 +885,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         ...(Number.isSafeInteger(payload.engineGeneration)
           ? { providerGeneration: payload.engineGeneration as number }
           : {}),
-        ...(Number.isSafeInteger(payload.commandRevision)
-          ? { commandCatalogueRevision: payload.commandRevision as number }
-          : {}),
+        ...commandCatalogueRevisionField(payload.commandRevision),
         ...(codexContextUsage ? { contextUsage: codexContextUsage } : {}),
         ...(codexReadiness ? { readiness: codexReadiness } : {}),
         ...(isNativeAgentExecutionPolicy(config?.policy) ? { policy: config.policy } : {}),
@@ -984,6 +982,10 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       ...(typeof payload.turnStartedAt === "number" && Number.isFinite(payload.turnStartedAt)
         ? { turnStartedAt: payload.turnStartedAt }
         : {}),
+      // Claude publishes its inventory revision on `GET /session/:id`, as the
+      // other bridges do on `/status`; without it this path never revalidates
+      // on `commands_changed`.
+      ...commandCatalogueRevisionField(payload.commandRevision),
       ...(claudeTurnActivity ? { turnActivity: claudeTurnActivity } : {}),
       ...(claudeReadiness ? { readiness: claudeReadiness } : {}),
       ...(claudeContextUsage ? { contextUsage: claudeContextUsage } : {}),

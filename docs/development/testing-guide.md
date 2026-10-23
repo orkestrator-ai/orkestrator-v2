@@ -334,8 +334,9 @@ copy first (see `test-fixtures/preview-vite/README.md`).
 ORKESTRATOR_TEST_DOCKER_PREVIEW_IMAGE=orkestrator-v2:latest \
   mise run test:logged -- --name preview-docker -- mise run test:preview:docker
 
-# Real Chromium against private preview origins (add the Vite variable for HMR;
-# Playwright arguments such as --grep pass through)
+# Real Chromium, Firefox and WebKit against private preview origins.
+# Install the engines once: mise exec -- bunx playwright install chromium firefox webkit
+# Add the Vite variable for HMR; --project=firefox or --grep can narrow the run.
 ORKESTRATOR_TEST_PREVIEW_VITE_DIR=/tmp/preview-vite \
   mise run test:logged -- --name preview-browser -- mise run test:preview:browser
 
@@ -343,7 +344,35 @@ ORKESTRATOR_TEST_PREVIEW_VITE_DIR=/tmp/preview-vite \
 mise run test:preview:bench
 ```
 
-None of these tasks runs in `mise run test` or in CI.
+The preview suite uses a browser-local loopback proxy, throwaway certificates
+and fresh contexts; it changes neither system DNS nor the trust store. Chromium
+pins the test leaf. Firefox and WebKit bypass certificate validation only in
+those contexts. WebKit engine coverage does **not** qualify shipping Safari or
+iOS. The suite covers sibling reads/frames, visible links, hostile workers and
+same-service iframe returns through a synthetic external identity provider.
+
+Live Tailscale Serve header preservation is a separate opt-in transport check:
+
+```bash
+ORKESTRATOR_TEST_TAILSCALE_SERVE_METADATA=1 \
+  mise run test:logged -- --name tailscale-metadata-live -- \
+  bun test --cwd apps/backend ./src/tailscale-serve-metadata.test.ts --parallel=1
+```
+
+It requires a signed-in tailnet node with HTTPS enabled and unused HTTPS port
+18443 (`ORKESTRATOR_TEST_TAILSCALE_SERVE_PORT` overrides it). It creates a
+synthetic loopback metadata receiver and a temporary, tailnet-only Serve root
+handler. Existing listeners are refused, teardown removes only that handler,
+and no tailnet names or credentials are recorded. It verifies `Sec-Fetch-Site`,
+`Sec-Fetch-Mode`, `Sec-Fetch-Dest` and `Sec-Purpose` (including prefetch/prerender)
+arrive unchanged, then evaluates the read policy on the received headers.
+This is transport evidence; wildcard DNS, preview certificates and a browser
+through `publicPort` still need the real deployment qualification in
+[the two-machine runbook](preview-two-machine-runbook.md#5-publication-from-the-second-machine).
+
+These opt-in scenarios do not run in `mise run test` or in CI. The preview
+spec-loading check runs in the default suite; the live metadata case is
+reported as skipped unless its opt-in variable is set.
 
 The real Electron window with the desktop tunnel on needs no variable: it is
 `e2e/agent-testing/service-preview-electron.spec.ts`, part of

@@ -157,16 +157,25 @@ Deduplication is by identity, never by lower-cased display name.
 
 ## Provider support
 
-Support was qualified from installed SDK declarations and source, then
-exercised through each integration's real execution path with transport-level
-fakes (bridge route tests, SDK client fakes, a spawned fake ACP agent). No live
-provider session or real browser has confirmed it, and the provider versions it
-was read from (2026-09-23: Claude Agent SDK 0.3.276, Codex app-server 0.155.0,
-OpenCode 1.18.31, Pi 0.85.1, Grok 1.0.34 with ACP SDK 1.4.0, Cursor SDK 1.0.31)
-have all since moved. Mocks do not confer support: a behaviour that could not be
-qualified is listed unavailable with a reason. Live qualification at current
-pins is tracked in
+Support was first qualified from installed SDK declarations and source and
+exercised with transport-level fakes. It was then qualified live, against real
+providers, at these pins:
+
+| Provider | Pin | Live record |
+| --- | --- | --- |
+| Claude | Agent SDK 0.3.296 / CLI 2.1.296 | 2026-10-17: discovery, templates, local output, `/compact`, refusals, restart; browser scenario on a host worktree. 2026-10-23: browser scenario on a host worktree and in a container |
+| Codex | app-server 0.162.1 | 2026-10-17: skills, templates, built-ins, refusals, restart; browser scenario on a host worktree. 2026-10-23: disabled skills; browser scenario on a host worktree and in a container |
+| OpenCode | SDK and server 1.19.0 | 2026-10-17: discovery, `session.command`, refusals, reload |
+| Grok | 1.0.52 / ACP SDK 1.8.0 | 2026-10-17: user skills, push updates, re-send after `session/load`; project skills after the folder-trust fix |
+| Pi | SDK 1.2.0 | 2026-10-23: discovery, extension-before-template precedence, headless extensions, templates, literal opt-out, mid-turn refresh |
+| Cursor | SDK 1.0.37 | 2026-10-17: still `unsupported` |
+
+The record, including what each run did not cover (a backend restart,
+and OpenCode, Grok and Pi in the browser scenario), is in
 [0015-slash-command-qualification.md](../todo/cli-and-slash-commands/0015-slash-command-qualification.md).
+Mocks do not confer support: a behaviour that could not be qualified is listed
+unavailable with a reason. Re-qualify on every pin change
+([`upgrade-agents.md`](../development/upgrade-agents.md#repository-wide-validation)).
 
 | Provider | Discovery | Names | Execution | Catalogue status |
 | --- | --- | --- | --- | --- |
@@ -190,7 +199,7 @@ These are listed with a reason and never executed:
 | Claude | Init `terminal_slash_commands` (before a session's first turn, the list the same CLI version reported on an earlier turn), `/login`, `/logout` | `requires-interactive-ui` |
 | Claude | `/config`, `/doctor`, `/exit`, `/ide`, `/quit`, `/statusline`, `/terminal-setup`, `/theme`, `/vim` | `unqualified` |
 | Codex | Duplicate skill names | `ambiguous` |
-| Codex | Disabled skills | `disabled` |
+| Codex | Disabled skills (`[[skills.config]] enabled = false` in the user `config.toml`; 0.162.1 ignores the same entry in a project `.codex/config.toml`, trusted or not) | `disabled` |
 | Codex | Templates named after a reserved command | `reserved-name` |
 | Codex | Templates containing `` !`…` `` | `requires-shell-execution` |
 | Codex | Templates with malformed frontmatter | `unsupported` |
@@ -254,8 +263,13 @@ catalogue read cannot let `/clear` reach the CLI.
   the effective winner is listed. Literal intent uses
   `expandPromptTemplates: false`, which cannot stop extension `input` handlers.
   `reload()` replaces the extension runner, including the approval gate, so
-  refresh answers `deferred` while a turn runs and reloads when idle.
-  Extension commands wait for idle and take no attachments.
+  refresh answers `deferred` while a turn runs and reloads when idle. SDK 1.2.0
+  still has no guard of its own: `reload()` fires `session_shutdown`,
+  invalidates the runner and resets the API providers, and Pi's terminal still
+  refuses `/reload` while streaming. Extension commands wait for idle and take
+  no attachments. Run headless they see `ctx.hasUI === false`, and
+  `ctx.ui.confirm` answers `false` at once rather than blocking (checked live
+  on 1.2.0); an extension that needs an answer has to handle that itself.
 - **Grok**: push-only inventory. Grok may push its list before the session is
   attached on the bridge, so the bridge buffers the latest list and applies it
   on attach. A list restored from disk is `stale` and not executable until

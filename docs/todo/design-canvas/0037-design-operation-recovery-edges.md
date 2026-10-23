@@ -1,16 +1,17 @@
 # Design operation recovery edges
 
 Checked against `main` at `2459b05c` (2026-10-15); the correlation-id item
-was re-checked and closed against `9906db30` (2026-10-16).
+was re-checked and closed against `9906db30` (2026-10-16). Items 1–3 were
+fixed and re-checked against `06297124` (2026-10-23). Only item 4, a
+compatibility path waiting for a support window, is left.
 
 Design edits are recoverable operations: every submitted edit should end in a
 truthful terminal outcome and never run twice
 ([`design-canvas.md`](../../architecture/design-canvas.md), "Operations"). A
 client that loses a response reconciles by reading status, so the status it
-reads must be exact. Three edges give a less precise outcome than that
-promise, and one renderer edge can leave a hung Chromium process running.
-(A fourth edge, a reused correlation id with different input replaying a
-settled receipt, is fixed; see "Constraints and rationale".)
+reads must be exact. The three restart and renderer edges this file tracked
+are fixed (see "Done"). What remains is retiring the pre-digest receipt
+fallback once older receipts and backends are out of the support window.
 
 ## Current state
 
@@ -18,8 +19,9 @@ settled receipt, is fixed; see "Constraints and rationale".)
   `intentDigest` (`core/design/records.ts`) hashes the canonical JSON of the
   validated descriptor; the record keeps it per correlated receipt in the
   private `receiptDigests` index (`addReceipt`, pruned with the receipts by
-  `pruneReceipts`). `submit` in `core/design/tools.ts`, `prepare` in
-  `core/design/service.ts` and `prepareCreate`/`findCreate` in
+  `pruneReceipts`). `prepare` and `settledCorrelation` in
+  `core/design/service.ts` (through `settledUnder`), `submit` in
+  `core/design/tools.ts` and `prepareCreate`/`findCreate` in
   `core/design/service-lifecycle.ts` all apply `settledMatches`; a mismatch
   throws `reusedCorrelation` (`core/design/errors.ts`). Tests:
   `mcp.test.ts` ("submit_operation is idempotent by correlationId…", "a
@@ -27,52 +29,188 @@ settled receipt, is fixed; see "Constraints and rationale".)
   settled correlation id refuses different input at preparation", "a create
   prepared twice…", "a correlation id binds style order but not other key
   order") and `records.test.ts` (digest pruning, key and style order).
-- Restart recovery (`recoverPendingFor` in `core/design/service.ts`) writes
-  `interrupted` receipts only for migrated records. On a never-migrated legacy
-  canvas (`loaded.legacy`) it rewrites the pending file without the dead
-  owner's entries and records nothing, so `status()` later answers `unknown`
-  with `expired-operation` instead of `interrupted`.
-- `executeDuplicate` (`core/design/service-lifecycle.ts`) commits the copy
-  under a deterministic id (`tokenUuid(entry.token)`) inside the global guard,
-  then writes the source receipt in the source lane. A crash between the two
-  leaves a live copy while recovery records the source operation as
-  `interrupted`.
-- Renderer shutdown (`terminate` in `core/design/renderer.ts`) closes the
-  browser within the cleanup deadline and then calls `killBrowserProcess`,
-  which works only when the browser exposes `process()`. Browsers from
-  `chromium.launch()` do not (in the pinned `playwright-core` 1.64.0 only
-  `BrowserServer` has `process()`), so a hung `close()` is bounded and the
-  generation retired, but the process may keep running.
+- Receipts with no kept digest (settled before `receiptDigests` existed, or
+  written by a backend older than 2.21.0 sharing the data directory) still use
+  the fallback in `settledMatches`: kind, preconditions, gesture and client
+  ids. Digests first shipped in v2.21.0 (2026-10-16).
+- A dead owner's unsettled entry resolves through `deadOutcome`
+  (`core/design/service.ts`): `interrupted`, or `committed` for a duplicate
+  whose copy exists (`committedDuplicate` in `service-lifecycle.ts`).
+  Restart recovery, `status`, `execute`, `cancel` and a running peer use it.
+- On a never-migrated legacy canvas, dead owners' pending entries stay in the
+  pending file as their outcomes (`retainedOutcomes`, `settleDead`,
+  `fittingOutcomes`), and the migrating commit turns them into receipts
+  (`keepRetainedOutcomes`, called from `commit`).
+- The renderer launches each generation through `launchDesignBrowser`
+  (`core/design/renderer.ts`): a loopback browser server plus `connect`, so
+  `terminate` can close it and then kill it.
 
 ## Outstanding work
 
 ### Code
 
-1. **Report restart interruptions on legacy canvases.** Give pending entries
-   on never-migrated canvases the same outcome as migrated ones: either write
-   `interrupted` receipts (which needs a migration on that path, since a
-   legacy document has nowhere to keep receipts) or have `status()` report
-   `interrupted` for a dead-owner token on a legacy canvas. Done when "the
-   backend restarted before commit" is distinguishable from "expired" on both
-   paths.
-2. **Make an interrupted duplicate truthful.** Reproduce the crash between the
-   copy commit and the source receipt in `lifecycle.test.ts` with the storage
-   fault hooks. On recovery, either detect the deterministic destination and
-   record the source operation as `committed` with `createdCanvasId`, or
-   document why an `interrupted` outcome beside an existing copy is harmless
-   (the deterministic id already stops a second copy).
-3. **Prove or fix renderer termination.** Write a fault test showing whether a
-   hung `browser.close()` leaves a Chromium process behind. If it does, launch
-   through a handle that exposes the process (`chromium.launchServer()` plus a
-   connection, or a dedicated render worker process under a supervisor with
-   the repository fatal-rejection guard). Choose from the demonstrated fault,
-   not from assumptions about the API.
-4. **Retire the pre-digest receipt fallback** (low; no index line). Receipts
-   settled before `receiptDigests` existed are compared on kind,
-   preconditions, gesture and client ids only, so a reused id that changes
-   only the input body still replays them. They age out of the 128-receipt
-   window; once a release has shipped long enough, drop the fallback in
-   `settledMatches` and treat a missing digest as "replay only".
+4. **Retire the pre-digest receipt fallback** (low; deferred until the
+   support window allows). Receipts settled before `receiptDigests` existed
+   are compared on kind, preconditions, gesture and client ids only, so a
+   reused id that changes only the input body still replays them. When it is
+   retired, drop the fallback in `settledMatches` and treat a missing digest
+   as a mismatch: the call is refused with `reusedCorrelation`, which runs
+   nothing, and the client reconciles through `details.token` and
+   `operation_status`.
+
+   Not done on 2026-10-23, deliberately. The item's own condition ("once a
+   release has shipped long enough") is not met: digests shipped seven days
+   earlier in v2.21.0, a canvas that is not edited keeps its receipts
+   indefinitely (they only leave the 128-receipt window when newer ones push
+   them out), and a backend older than 2.21.0 sharing the data directory
+   still writes receipts with no digest. There is no agreed support window to
+   measure "long enough" against; that decision is owned by
+   [0034-mixed-version-compatibility.md](../cross-cutting/0034-mixed-version-compatibility.md),
+   whose compatibility-path index now lists this fallback. Done when the
+   window no longer covers backends older than 2.21.0 and the fallback is
+   removed with its `mcp.test.ts` case ("a receipt settled before digests
+   were kept…") rewritten to expect the refusal.
+
+## Done
+
+1. **Restart interruptions on legacy canvases** (2026-10-23). Recovery no
+   longer drops a dead owner's entries on a never-migrated canvas; they stay
+   in the pending file as the canvas's outcomes. `status` answers
+   `interrupted` from them, `execute` and `cancel` answer the same without
+   writing (so nothing migrates), and a retry with the same correlation id is
+   refused as settled, or as a different edit. `submit_operation` replays the
+   outcome for the same edit (`settledCorrelation`). Prepare keeps them while
+   they fit the 8-entry and 8 MiB pending bounds; the oldest give way to new
+   edits. The first real edit's commit migrates the canvas and records them as
+   receipts with their intent digests. Evidence: `records.test.ts` ("restart
+   reports a never-migrated canvas's admitted edits as interrupted without
+   migrating it", "a never-migrated canvas keeps restart outcomes within the
+   pending bounds"). Both failed on `06297124` (status answered `unknown`
+   with `expired-operation`) and pass with the change.
+2. **Truthful interrupted duplicates** (2026-10-23). Reproduced in
+   `lifecycle.test.ts` ("a duplicate stopped between its copy and its source
+   receipt") with the storage fault hooks failing the source record's rename
+   after the copy committed. On `06297124` three outcomes were wrong:
+   in-process, a single failed source write left the source operation
+   `rejected` beside the copy (a variant this file had not recorded); after a
+   restart it was `interrupted`; and a running peer answered `interrupted`
+   before any recovery. In each case the client's "submit it again" would
+   have made a second copy. Now all three are `committed` with
+   `createdCanvasId` and the copied revision, and a correlated retry is
+   refused as settled. The live duplicate's receipt also reports the copied
+   revision (the precondition), so a receipt rebuilt from the copy is
+   identical. After Multi Review the live owner is covered too: while the
+   source receipt keeps failing to save, execute answers `committed` and keeps
+   the entry; status and later executes (also past the entry's TTL) answer
+   from the copy; and the next duplicate on that canvas records the missing
+   receipt first, refusing with `unknown-outcome` only while that write still
+   fails (`lifecycle.test.ts`: "reconciles a committed copy on its live owner
+   while source writes keep failing", "a later duplicate records an unsaved
+   one's receipt once saving works", "an unsaved duplicate executed after its
+   entry expired still reports its copy", "status prefers a committed copy
+   over an unrecorded live-owner failure").
+3. **Renderer termination proved and fixed** (2026-10-23). Fault probe on
+   macOS (arm64, Bun 1.4.2, `playwright-core` 1.64.0, Playwright's Chromium
+   build 1248): with `chromium.launch()`, a browser stopped with `SIGSTOP` did
+   not finish `browser.close()` within 3 s, `process()` was `undefined`, and
+   the browser process was still running afterwards. With
+   `chromium.launchServer({ host: "127.0.0.1" })` plus `chromium.connect`,
+   launch and connect took about 340 ms, the server listened on loopback only,
+   and `BrowserServer.kill()` ended the stopped process in 14 ms. The renderer
+   now launches that way; `terminate` closes the server within the cleanup
+   deadline and kills it, also bounded, when the close hangs or fails.
+   Evidence: `renderer.test.ts` ("kills a browser whose close hangs instead
+   of leaving it running", real Chromium, skipped where Chromium is missing
+   and on Windows). After Multi Review, a generation whose connection drops is
+   retired the same way, because the server process can outlive its
+   connection ("terminates an owned server after its browser connection
+   disconnects and renders with a replacement"). With the kill replaced by a no-op the test fails ("condition
+   not met": the process survived), so it detects the leak. The fake-browser
+   cases now cover the kill through the launch handle.
+
+## Assumptions and decisions
+
+- **Item 1: keep outcomes in the pending file, not migrate.**
+  - *Options:* (a) migrate the canvas during recovery and write `interrupted`
+    receipts; (b) have `status` infer `interrupted` for a dead-owner token on
+    a legacy canvas while recovery keeps the entries; (c) a new sidecar file
+    of outcomes per legacy canvas.
+  - *Choice:* (b), with the migrating commit folding the kept entries into
+    receipts.
+  - *Why:* (a) breaks the rule that a never-migrated document is read
+    directly until its first real edit. (c) adds a file kind that deletion,
+    the orphan sweep and older backends would all have to learn. (b) needs no
+    new storage: `status` already answered `interrupted` for a dead owner's
+    entry, and the entry already has the descriptor a receipt needs.
+  - *Pros:* no migration on recovery or on reading; same answers as migrated
+    canvases; older backends sharing the directory read the file unchanged
+    (no new fields, no new state value).
+  - *Cons:* outcomes compete for the 8 pending slots and 8 MiB with new
+    edits. The oldest give way, and one that gives way answers `unknown` as
+    before; that needs more than eight edits admitted before a crash and no
+    edit committed since. An older backend's recovery still drops them.
+- **Item 1: answers that write nothing.** `execute` and `cancel` of a kept
+  outcome answer `interrupted` without a commit, because writing the receipt
+  would migrate the canvas without an edit. Only a commit that changes the
+  canvas, or a committed duplicate, migrates it.
+- **Item 2: record the duplicate as committed rather than document
+  `interrupted` as harmless.**
+  - *Options:* detect the deterministic copy and record `committed` with
+    `createdCanvasId`; or keep `interrupted` and document it.
+  - *Choice:* detect the copy.
+  - *Why:* `interrupted` tells the client to review and submit again, and a
+    new submission has a new token and therefore a new copy id, so the
+    deterministic id does not stop a second copy. It only stops the same
+    token from copying twice.
+  - *Pros:* status is exact on every path (in-process failure, restart,
+    peer); the client never duplicates twice.
+  - *Cons:* one extra record read for duplicate entries on these paths. A copy
+    purged before recovery runs is not found, so that duplicate reads as
+    `interrupted`; a copy that was deleted (still in the recycle bin) counts.
+- **Item 2: the receipt's `canvasRevision` is the copied revision**, the
+  duplicate's `canvasRevision` precondition, which execution has checked
+  equals the source at copy time. Before, the live path used the source's
+  revision when the receipt was written; the two differ only if the source
+  changed between the copy and the receipt. Reporting what was copied lets
+  recovery rebuild an identical receipt.
+- **Item 3: loopback browser server rather than a supervised worker
+  process.**
+  - *Options:* `chromium.launchServer` plus `connect`; a dedicated render
+    worker process under a supervisor; find the browser's PID by a marker
+    argument and `pgrep`.
+  - *Choice:* the browser server, bound to `127.0.0.1`.
+  - *Why:* the fault probe showed it fixes the leak with Playwright's own
+    process handle and works under Bun. A worker process adds a second
+    supervision protocol, IPC bounds and fatal-rejection wiring for the same
+    result. A marker and `pgrep` is platform-specific and could match an
+    unrelated process.
+  - *Pros:* `close` then `kill` is exact and bounded; no new process
+    protocol; the renderer's generation and deadline logic is unchanged.
+  - *Cons:* the browser is reachable over a loopback WebSocket instead of a
+    private pipe. Any local process that learned the endpoint's random GUID
+    path could drive it; the path is not logged by the renderer, and the
+    renderer's contexts hold no credentials (every request is aborted). The
+    connection adds a WebSocket hop per Playwright call, which the existing
+    real-Chromium cases ran within the production budgets.
+- **Item 3, assumption:** the kill was proved on macOS with Playwright's
+  bundled Chromium. Linux uses the same Playwright code path
+  (`BrowserServer.kill()` sends `SIGKILL` to the spawned process), so it is
+  expected to behave the same; it was not run here. Windows has no
+  `SIGSTOP`, so the fault test skips there.
+- **Item 4: defer, do not retire yet.**
+  - *Options:* retire now and refuse every receipt with no digest; retire
+    now but replay every receipt with no digest; keep the fallback until the
+    support window allows.
+  - *Choice:* keep it, register it in 0034's compatibility-path index, and
+    record the removal semantics (missing digest means mismatch).
+  - *Why:* the item's own condition is not met (digests shipped seven days
+    ago), backends older than 2.21.0 may still write digest-less receipts into
+    a shared data directory, and replaying every digest-less receipt would
+    bring back the original bug.
+  - *Pros:* no identical retry of an older receipt is refused as a
+    "different edit".
+  - *Cons:* until then, a reused id that changes only the input body still
+    replays a pre-digest receipt.
 
 ## Constraints and rationale
 
@@ -84,7 +222,8 @@ settled receipt, is fixed; see "Constraints and rationale".)
 - Legacy one-shot adapters (`design_action`, the per-action MCP tools) keep
   their original response shapes.
 - Never-migrated legacy documents are read directly until their first real
-  edit, and reading never migrates. A fix for item 1 must not migrate on read.
+  edit, and reading never migrates. Recovery and the answers about a kept
+  outcome do not migrate either.
 - Renderer recovery fails a dead generation's jobs exactly once and never
   reruns a semantic edit in a new generation.
 - **Correlation ids follow the public API's request-key rule** (compare
@@ -108,10 +247,12 @@ settled receipt, is fixed; see "Constraints and rationale".)
     which would loop on the same id, and a protocol code would need renderer
     mapping for a path the renderer never takes.
   - *Pending:* `prepare` compares intent digests of the stored and incoming
-    descriptors (no stored value needed), so pending and settled agree.
-  - *Settled:* `submit_operation` replays the stored receipt only on a match;
-    `prepare` keeps refusing any settled id but names a mismatch as "different
-    edit". `find_operation` and `operation_status` are unchanged.
+    descriptors (no stored value needed), so pending and settled agree. A
+    kept outcome on a legacy canvas counts as settled.
+  - *Settled:* `submit_operation` replays the stored receipt (or a kept
+    outcome) only on a match; `prepare` keeps refusing any settled id but
+    names a mismatch as "different edit". `find_operation` and
+    `operation_status` are unchanged.
   - *Storage:* a backend-private `receiptDigests` map on the record keyed by
     token, not a field on the receipt, so `DesignOperationStatus` and every
     response stay byte-identical. It is counted inside the 128 KiB receipt
@@ -119,7 +260,7 @@ settled receipt, is fixed; see "Constraints and rationale".)
     `passthrough`, so an older backend sharing the directory keeps the map;
     receipts it writes simply have no digest and use the fallback below.
   - *Older receipts:* with no digest, kind, preconditions, gesture and client
-    ids are compared; an identical retry still replays.
+    ids are compared; an identical retry still replays (item 4).
   - *Clients:* the renderer never reuses an id for new input (a new intent,
     `resume` and `runDesignLifecycle` mint fresh ids) and uses
     prepare/execute, not `submit_operation`, so its retry paths are
@@ -130,8 +271,10 @@ settled receipt, is fixed; see "Constraints and rationale".)
 
 - [0036-design-canvas-qualification.md](0036-design-canvas-qualification.md), whose
   real-container export run exercises the same reconciliation rules.
-- [0034-mixed-version-compatibility.md](../cross-cutting/0034-mixed-version-compatibility.md): the
-  never-migrated legacy canvas path is a compatibility path.
+- [0034-mixed-version-compatibility.md](../cross-cutting/0034-mixed-version-compatibility.md):
+  owns the support window that gates item 4, and lists the pre-digest
+  fallback in its compatibility-path index. The never-migrated legacy canvas
+  path is also a compatibility path.
 - Flake [0215](../../tests/flaky-tests/design-canvas-and-artifacts/0215-design-operation-replay-event-count.md)
   (resolved): the lost-execute and duplicate-execute case now holds the
   background validation before it counts hints.

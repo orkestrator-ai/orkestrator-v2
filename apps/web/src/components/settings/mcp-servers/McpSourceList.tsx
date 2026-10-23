@@ -1,4 +1,12 @@
-import { FileWarning, Lock, Pencil, Power, TextCursorInput, Trash2 } from "lucide-react";
+import {
+  AlertTriangle,
+  FileWarning,
+  Lock,
+  Pencil,
+  Power,
+  TextCursorInput,
+  Trash2,
+} from "lucide-react";
 
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
 import type {
@@ -11,6 +19,8 @@ import type {
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+
+import { McpEnvironmentSourceControls } from "./McpEnvironmentOverlay";
 
 /** Row actions report the button that opened them, so focus can return there. */
 export type McpRowAction = (definition: McpDefinitionSummary, trigger: HTMLElement) => void;
@@ -144,6 +154,16 @@ function DefinitionRow({
             {shadowedBy && shadowedBy.name !== definition.name ? ` (${shadowedBy.name})` : ""}
           </p>
         ) : null}
+        {definition.warnings?.length ? (
+          <ul className="space-y-0.5" aria-label={`Warnings for ${definition.name}`}>
+            {definition.warnings.map((warning) => (
+              <li key={warning} className="flex items-start gap-1 text-xs text-amber-300">
+                <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" aria-hidden="true" />
+                <span className="min-w-0 break-words">{warning}</span>
+              </li>
+            ))}
+          </ul>
+        ) : null}
       </div>
       {definition.status !== "protected" ? (
         <div className="flex shrink-0 flex-wrap gap-0.5">
@@ -186,9 +206,12 @@ export function McpSourceList({
   onRename,
   onRemove,
   onSetEnabled,
+  onReload,
 }: {
   snapshot: McpManagementSnapshot;
   highlightName?: string;
+  /** Re-read the snapshot; environment overlay actions end with one. */
+  onReload: () => void;
   onEdit: McpRowAction;
   onRename: McpRowAction;
   onRemove: McpRowAction;
@@ -258,6 +281,12 @@ export function McpSourceList({
               {!source.writable && source.readOnlyReason && source.format !== "runtime" ? (
                 <p className="text-xs text-muted-foreground">{source.readOnlyReason}</p>
               ) : null}
+              <McpEnvironmentSourceControls
+                key={`${snapshot.target.targetId}:${source.sourceId}`}
+                snapshot={snapshot}
+                source={source}
+                onReload={onReload}
+              />
             </header>
             {definitions.length ? (
               <ul className="divide-y divide-white/5">

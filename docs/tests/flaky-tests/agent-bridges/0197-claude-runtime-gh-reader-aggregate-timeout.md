@@ -30,3 +30,7 @@ No assertion, timeout or skip was changed.
 - **Failure:** the case failed at 2018.61 ms; bridge counts 1602 passed, one failed across 1608 tests in 76 files.
 - **Owning-file rerun:** `bun test ./src/services/runtime-env.test.ts` in `bridges/claude-bridge` passed (12 tests, 2.24 seconds). The change did not touch the bridge.
 - **Evidence:** `/tmp/orkestrator-test-run.pQullD/bridges.log.gz`.
+
+## MCP overlay review validation — 2026-10-23
+
+The unchanged fake-token reader returned `undefined` at 2021.13 ms in `mise run test:logged -- --name repository-tests -- mise run test`. The complete owner passed with `mise run test:logged -- --name claude-runtime-owner -- bun test --cwd bridges/claude-bridge ./src/services/runtime-env.test.ts --parallel=1 --only-failures` (exit 0, 2.2 s). No assertion, timeout or skip changed. Evidence: host temporary directory `orkestrator-test-run.ZHucAO/bridges.log.gz` and outer `orkestrator-test-run.MYw34M/repository-tests.log.gz`. The aggregate remains failed; subprocess contention remains a hypothesis.

@@ -322,8 +322,17 @@ re-traced ([upgrading agents](../development/upgrade-agents.md#re-trace-preserve
 | Codex | `codex/sessions`, `codex/archived_sessions` (rollouts, fork lineage); `codex/orkestrator-bridge` (session map, dispatch journal, the title index that keeps names set in Orkestrator); `codex/sqlite` at `CODEX_SQLITE_HOME` (every `*_N.sqlite` runtime database: state, thread history, goals, queue, memories, logs) | `session_index.jsonl` (Codex's own thread names, at the home root; only a name set in the Codex CLI itself is lost), `history.jsonl` (prompt recall), `shell_snapshots`, `auth.json`, `config.toml`, caches |
 | OpenCode | `opencode/db` via `OPENCODE_DB` (session database: sessions, messages, parts, todos, permissions) | `snapshot/` (revert and diff git directory, recreated on demand), `tool-output/` (full copies of truncated tool output), legacy `storage/`, the TUI state under `~/.local/state/opencode`, `auth.json`, configuration, plugins, mise installs under `~/.local/share` |
 | Pi | `pi/sessions` → `~/.pi/agent/sessions` (`PI_SESSION_DIR`); `pi/bridge-state` → `/tmp/orkestrator-pi-state` | `auth.json`, `models.json`, settings, extensions, themes |
-| Cursor | `cursor/bridge-state` → `/tmp/orkestrator-cursor-sdk-state` (SDK agent store and bridge journals) | `/tmp/orkestrator-ai/cursor-sdk-auth.json`, API-key files, `~/.cursor` auxiliaries |
+| Cursor | `cursor/bridge-state` → `/tmp/orkestrator-cursor-sdk-state` (SDK agent store and bridge journals) | `/tmp/orkestrator-ai/cursor-sdk-auth.json`, API-key files, `~/.cursor/mcp.json` (a staged input: snapshotted at creation, re-imported on every start), other `~/.cursor` auxiliaries |
 | Grok | `grok/sessions` → `~/.grok/sessions` (per-cwd session directories, which hold everything `session/load` reads, and the rebuildable search index); `grok/bridge-state` → `/tmp/orkestrator-acp-state` | `active_sessions.json` (live-process registry), `worktrees.db` (registry of Grok's own worktrees, which live outside the preserved set), opt-in `memory-v2/`, `auth.json`, configuration |
+
+Provider MCP configuration is never preserved in the container: the
+entrypoint copies it from the staged inputs on every boot. A container
+environment's own MCP changes live in the backend's environment overlay
+(`mcp-environment-overlays` state root, keyed by environment id), which the
+backend writes back over the fresh copies after every boot, so they survive
+stop and start, a preserving rebuild and a backend restart without being part
+of any volume or recovery copy
+([`mcp-management.md`](mcp-management.md#containers)).
 
 SQLite stores (Codex runtime databases, OpenCode's database, Grok's search
 index) keep their `-wal` and `-shm` files beside them on the volume, and are
@@ -466,6 +475,23 @@ under `<data>/portable-inputs/<environment key>/`, and binds each staged
 subtree read-only at the mount point the entrypoint already reads. The two
 allowlists must stay in step; a unit test checks every staged target and file
 name appears in `entrypoint.sh`.
+
+Staged per provider (`portableInputSpec`):
+
+| Provider | Mount | Staged |
+| --- | --- | --- |
+| Claude | `/claude-config`, `/claude-config.json` | `CLAUDE.md`, `settings.local.json`, `.credentials.json` (access-only), `commands`, `agents`, `ide`, `plugins`; `~/.claude.json` |
+| OpenCode | `/opencode-config`, `/opencode-data`, `/opencode-state/model.json` | configuration (except `node_modules`); `auth.json` (access-only), `account.json`, `storage`, `snapshot`; `model.json` |
+| Codex | `/codex-home` | `auth.json` (access-only), `config.toml`, `AGENTS.md`, `hooks.json`, `.codex-global-state.json`, model and cloud caches, `rules`, `skills`, `prompts`, `vendor_imports`, `plugins/cache` |
+| Grok | `/grok-home`, `/grok-config` | `xai-api-key`, `auth.json` (access-only), `config.toml`, `trusted_folders.toml`, `agent_id`, `models_cache.json`, `hooks`, `skills`; `~/.config/grok` |
+| Pi | `/pi-config` | `agent/auth.json` (access-only), `models.json`, `settings.json`, `mcp.json`, `SYSTEM.md`, `APPEND_SYSTEM.md`, `skills`, `prompts`, `extensions`, `themes` |
+| Cursor (`staged-inputs=2`) | `/cursor-config` | `mcp.json` only, copied to `~/.cursor/mcp.json` mode `0600`; never account or login state, IDE state, hooks, plugins, extensions, `sdk/` or `cli-config.json` (the login arrives through the key sync) |
+| Git | `/tmp/gitconfig` | `~/.gitconfig` (not in agent-test profiles) |
+
+An image at `staged-inputs=1` has no `/cursor-config` copy, so its Cursor
+sessions get no user MCP servers until the environment is rebuilt on a newer
+image. Backend code that needs to know checks
+`imageCopiesCursorMcpConfig` (`packages/protocol/src/image-manifest.ts`).
 
 - Reading: the host home entry itself is resolved (a dotfiles manager may link
   it, and the bind mount it replaces followed that link); nothing below it is

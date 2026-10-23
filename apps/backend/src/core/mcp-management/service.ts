@@ -20,8 +20,10 @@ import {
   mcpFailure,
   parseMcpMutation,
   utf8ByteLength,
+  type McpDefaultsRefreshPreview,
   type McpDefinitionSummary,
   type McpEditableDefinition,
+  type McpEnvironmentOverlayState,
   type McpFieldError,
   type McpImpactPreview,
   type McpManagementChangedEvent,
@@ -31,6 +33,7 @@ import {
   type McpMutation,
   type McpMutationResult,
   type McpOperationSnapshot,
+  type McpOverlayResolutionResult,
   type McpTargetCapabilities,
   type McpTargetList,
   type McpValidationResult,
@@ -87,6 +90,20 @@ import {
 } from "./mutation.js";
 import { McpOperationStore, type StoredOperation } from "./operations-store.js";
 import {
+  EnvironmentOverlays,
+  isOverlaySpec,
+  withOverlay,
+  type OverlaySourceContext,
+  type StagedDefaultsWriter,
+} from "./overlay-service.js";
+import { auditContainerPaths } from "./path-audit.js";
+import { parseDefaultsRefreshRequest, parseOverlayResolution } from "./overlay-requests.js";
+import {
+  CONTAINER_SIGN_IN_REASON,
+  urlReachabilityWarning,
+  type ContainerNetworkView,
+} from "./network-hints.js";
+import {
   containerSources,
   providerCapabilities,
   providerLabel,
@@ -96,7 +113,6 @@ import {
 } from "./providers.js";
 import { ABSENT_REVISION, McpSourceStore, contentDigest } from "./source-store.js";
 import {
-  CONTAINER_READ_ONLY_REASON,
   backendTargetId,
   environmentTargetId,
   listTargets,
@@ -105,7 +121,13 @@ import {
   type TargetStorage,
 } from "./targets.js";
 import { tomlDeepEqual } from "./toml-edit.js";
-import type { ContainerFileReader, SourceSpec } from "./types.js";
+import type {
+  ContainerBootReader,
+  ContainerFileReader,
+  ContainerFileWriter,
+  ContainerPathProbe,
+  SourceSpec,
+} from "./types.js";
 
 export interface McpServiceStorage extends TargetStorage {
   getPreviewBackendIdentity(): Promise<{ instanceId: string }>;
@@ -121,8 +143,21 @@ export interface McpManagementServiceOptions {
   now?: () => number;
   lockDir?: string;
   tickMs?: number;
-  /** Reads container files for container targets' read-only catalogs. */
+  /** Reads container files for container targets' catalogs. */
   readContainerFile?: ContainerFileReader;
+  /**
+   * Narrow writer for container files (environment overlays and persistent
+   * project files). Without it every container source is read-only.
+   */
+  writeContainerFile?: ContainerFileWriter;
+  /** Current container boot, so a restart outside the start path is not mistaken for an edit. */
+  readContainerBootId?: ContainerBootReader;
+  /** Keeps a container's staged inputs on refreshed defaults. */
+  stagedDefaults?: StagedDefaultsWriter;
+  /** A container's network policy, for URL reachability warnings. */
+  containerNetwork?: (environmentId: string) => Promise<ContainerNetworkView | null>;
+  /** Existence of absolute command and `cwd` paths inside a container. */
+  probeContainerPaths?: ContainerPathProbe;
   /** Reads the stored rollout settings (`global.mcpManagement`). Absent: everything enabled. */
   loadRollout?: () => Promise<unknown>;
   /** How long a write waits for another Orkestrator writer before `busy`. */
@@ -141,6 +176,28 @@ interface Prepared {
 }
 
 /** Events name at most this many targets; beyond it they say "all" (`[]`). */
+export const CONTAINER_WRITES_UNAVAILABLE =
+  "This backend cannot write into containers, so this container's configuration is read-only here.";
+
+const OVERLAY_SAVE_NOTE =
+  "This change is kept for this environment only and written back over the container's copy every time it starts or is rebuilt. The backend user's configuration is unchanged.";
+
+const CONTAINER_PROJECT_NOTE =
+  "This edits the project file in this environment's persistent workspace. Commit it to share it with other environments.";
+
+/**
+ * What existing containers do with a backend-user change, by provider.
+ * Claude's `.claude.json` is staged again before every container start; the
+ * other providers' inputs are staged when the container is created.
+ */
+function backendUserContainerNote(provider: AgentPlatform): string {
+  if (provider === "claude")
+    return "Existing containers pick this up the next time they start, unless this environment changed the same server.";
+  if (provider === "cursor")
+    return "Containers receive Cursor's servers when they are created or rebuilt, or when their defaults are refreshed; containers on images that predate Cursor delivery never receive them until rebuilt.";
+  return "Existing containers keep the copy they were created with until you refresh their defaults from the environment's MCP settings, or rebuild them.";
+}
+
 const EVENT_TARGETS_MAX = 256;
 
 function nowIso(now: () => number): string {
@@ -161,6 +218,7 @@ export class McpManagementService {
   private disposed = false;
   private readonly evidence: EvidenceScheduler;
   private readonly externalEdits: ExternalEditWatch;
+  private readonly overlays: EnvironmentOverlays;
 
   constructor(private readonly options: McpManagementServiceOptions) {
     const dir = path.join(options.dataDir, "mcp-management");
@@ -177,6 +235,14 @@ export class McpManagementService {
       this.now,
     );
     this.homes = resolveProviderHomes(options.env ?? process.env, options.home);
+    this.overlays = new EnvironmentOverlays({
+      dataDir: options.dataDir,
+      store: this.store,
+      now: this.now,
+      writeContainerFile: options.writeContainerFile,
+      readBootId: options.readContainerBootId,
+      stagedDefaults: options.stagedDefaults,
+    });
     this.evidence = new EvidenceScheduler({
       probe: options.probe,
       now: this.now,
@@ -227,7 +293,14 @@ export class McpManagementService {
       return containerSources(
         target.provider,
         target.info.containerId,
-        target.readOnlyReason ?? CONTAINER_READ_ONLY_REASON,
+        {
+          writable: this.overlays.writable,
+          persistentWorkspace: !!target.persistentWorkspace,
+          unavailableReason: CONTAINER_WRITES_UNAVAILABLE,
+          overlaySourceIds: target.info.environmentId
+            ? await this.overlays.records.sourceIds(target.info.environmentId)
+            : [],
+        },
         this.options.readContainerFile,
       );
     }
@@ -252,10 +325,17 @@ export class McpManagementService {
   ): Promise<McpManagementTarget> {
     const identity = await this.options.storage.getPreviewBackendIdentity();
     const sources = specs ?? (await this.specsFor(target));
+    // A container's own servers go to its environment-private copy by default.
+    const defaultScope =
+      target.info.kind === "backend"
+        ? "backend-user"
+        : target.info.location === "container"
+          ? "environment-private"
+          : undefined;
     const defaultSource =
-      target.info.kind === "backend" && !target.readOnlyReason
+      defaultScope && !target.readOnlyReason
         ? sources
-            .filter((spec) => spec.scope === "backend-user" && spec.writable)
+            .filter((spec) => spec.scope === defaultScope && spec.writable)
             .sort((a, b) => b.precedence - a.precedence)[0]
         : undefined;
     return {
@@ -272,10 +352,51 @@ export class McpManagementService {
 
   /** Provider capabilities with the rollout gate applied. */
   private capabilitiesFor(target: ResolvedTarget): McpTargetCapabilities {
-    return this.gate.overlay(
-      target.provider,
-      providerCapabilities(target.provider, target.readOnlyReason),
-    );
+    const capabilities = providerCapabilities(target.provider, target.readOnlyReason);
+    if (
+      target.info.location === "container" &&
+      capabilities.authentication.runtimeSignIn.supported
+    ) {
+      // A sign-in callback has never been proven to reach a container from the browser.
+      capabilities.authentication.runtimeSignIn = {
+        supported: false,
+        reason: CONTAINER_SIGN_IN_REASON,
+      };
+    }
+    return this.gate.overlay(target.provider, capabilities);
+  }
+
+  /**
+   * Load a target's catalog and, for a container, each environment-private
+   * source's overlay state. A diverged or unreadable overlay blocks edits to
+   * its source through the file's write block, so every row says why.
+   */
+  private async loadTargetCatalog(
+    target: ResolvedTarget,
+    specs: SourceSpec[],
+  ): Promise<{ catalog: LoadedCatalog; overlays: Map<string, McpEnvironmentOverlayState> }> {
+    const catalog = await loadCatalog(this.store, specs, this.options.readContainerFile);
+    const overlays = new Map<string, McpEnvironmentOverlayState>();
+    if (target.info.location === "container" && target.info.containerId) {
+      for (const source of catalog.sources) {
+        if (!isOverlaySpec(source.spec)) continue;
+        const observed = await this.overlays.observe(this.overlayContext(target, source));
+        if (observed.overlay) overlays.set(source.spec.sourceId, observed.overlay);
+        if (observed.writeBlock && source.file) source.file.writeBlock ??= observed.writeBlock;
+      }
+    }
+    return { catalog, overlays };
+  }
+
+  private overlayContext(target: ResolvedTarget, source: LoadedSource): OverlaySourceContext {
+    if (!target.info.environmentId || !target.info.containerId)
+      throw mcpFailure("read-only-source", { message: target.readOnlyReason });
+    return {
+      environmentId: target.info.environmentId,
+      containerId: target.info.containerId,
+      provider: target.provider,
+      source,
+    };
   }
 
   /** Why every row of `target` is read-only: the target itself, or the gate. */
@@ -301,13 +422,21 @@ export class McpManagementService {
     await this.operations.refresh();
     const target = await resolveTarget(args.targetId, this.options.storage);
     const specs = await this.specsFor(target);
-    const catalog = await loadCatalog(this.store, specs, this.options.readContainerFile);
+    const { catalog, overlays } = await this.loadTargetCatalog(target, specs);
     const capabilities = this.capabilitiesFor(target);
     const { definitions, effective } = summarizeEntries(
       catalog,
       capabilities,
       this.rowReadOnly(target),
     );
+    if (target.info.containerId && this.options.probeContainerPaths) {
+      await auditContainerPaths(
+        catalog,
+        definitions,
+        target.info.containerId,
+        this.options.probeContainerPaths,
+      );
+    }
     const sorted = sortDefinitions(definitions, catalog);
     const rows = sorted.slice(0, MCP_MANAGEMENT_LIMITS.catalogRowsMax);
     const sourceErrors = catalog.sources.some(
@@ -319,7 +448,9 @@ export class McpManagementService {
     const snapshot: McpManagementSnapshot = {
       protocolVersion: MCP_MANAGEMENT_PROTOCOL_VERSION,
       target: await this.publicTarget(target, specs),
-      sources: catalog.sources.map(publicSource),
+      sources: catalog.sources.map((source) =>
+        withOverlay(publicSource(source), overlays.get(source.spec.sourceId)),
+      ),
       definitions: [],
       effective,
       operations: this.operations.forTarget(target.targetId).map(publicOperation),
@@ -341,11 +472,7 @@ export class McpManagementService {
   }): Promise<McpEditableDefinition> {
     await this.init();
     const target = await resolveTarget(args.targetId, this.options.storage);
-    const catalog = await loadCatalog(
-      this.store,
-      await this.specsFor(target),
-      this.options.readContainerFile,
-    );
+    const { catalog } = await this.loadTargetCatalog(target, await this.specsFor(target));
     const entry = findEntry(catalog, args.entryId);
     return editableDefinition(entry, this.capabilitiesFor(target), this.rowReadOnly(target));
   }
@@ -369,7 +496,7 @@ export class McpManagementService {
     const target = await resolveTarget(mutation.targetId, this.options.storage);
     this.gate.assertWritable(target.provider);
     const specs = await this.specsFor(target);
-    const catalog = await loadCatalog(this.store, specs, this.options.readContainerFile);
+    const { catalog } = await this.loadTargetCatalog(target, specs);
     if (fieldErrors.length) return { valid: false, fieldErrors, preview: null };
     const prepared = await this.prepare(mutation, target, specs, catalog);
     // Report a stale draft now, before the user reviews a preview of it.
@@ -409,7 +536,12 @@ export class McpManagementService {
     const specs = await this.specsFor(target);
     const spec = specFor(mutation, specs);
     if (!spec.writable) throw mcpFailure("read-only-source", { message: spec.readOnlyReason });
-    const locked = await this.store.withLock(spec.path, async () => {
+    // Container paths repeat in every container; lock the environment's own record instead.
+    const lockPath =
+      spec.container && target.info.environmentId
+        ? this.overlays.lockPath(target.info.environmentId, spec.sourceId)
+        : spec.path;
+    const locked = await this.store.withLock(lockPath, async () => {
       await this.operations.refresh();
       const replay = this.operations.byRequest(mutation.targetId, mutation.requestId);
       if (replay) {
@@ -417,7 +549,17 @@ export class McpManagementService {
         return { stored: replay, replayed: true };
       }
       // Everything is re-read under the lock; nothing cached authorizes a write.
-      const catalog = await loadCatalog(this.store, specs, this.options.readContainerFile);
+      let { catalog, overlays } = await this.loadTargetCatalog(target, specs);
+      if (spec.container) {
+        const loaded = catalog.sources.find(
+          (candidate) => candidate.spec.sourceId === spec.sourceId,
+        );
+        // A restart outside the start path left the inherited copy: write the overlay first.
+        if (loaded && (await this.overlays.settle(this.overlayContext(target, loaded))))
+          ({ catalog, overlays } = await this.loadTargetCatalog(target, specs));
+        if (overlays.get(spec.sourceId)?.state === "diverged")
+          throw mcpFailure("environment-diverged");
+      }
       const prepared = await this.prepare(mutation, target, specs, catalog);
       assertNoFieldErrors(prepared.fieldErrors);
       const source = prepared.source;
@@ -467,14 +609,22 @@ export class McpManagementService {
         // Taken before the write: a runtime that read the file earlier cannot
         // have loaded this save, whatever it reports.
         const writeStartedAt = nowIso(this.now);
-        const written = unchanged
-          ? source.file!
-          : await this.store.commit(source.file!, expected ?? ABSENT_REVISION, next, {
-              allowedRoot: spec.allowedRoot,
-              createMode: spec.createMode,
-              privateExisting: spec.scope === "backend-user",
-              maxBytes: spec.maxBytes,
-            });
+        const savedRevision = unchanged
+          ? source.file!.revision
+          : spec.container
+            ? await this.overlays.commitEdit(
+                this.overlayContext(target, source),
+                next,
+                [prepared.entryName, prepared.resultName].filter((name): name is string => !!name),
+              )
+            : (
+                await this.store.commit(source.file!, expected ?? ABSENT_REVISION, next, {
+                  allowedRoot: spec.allowedRoot,
+                  createMode: spec.createMode,
+                  privateExisting: spec.scope === "backend-user",
+                  maxBytes: spec.maxBytes,
+                })
+              ).revision;
         // The exact bytes now in the file, in the format bridges report.
         const savedDigest = unchanged
           ? source.file!.contentDigest
@@ -487,7 +637,7 @@ export class McpManagementService {
         }
         if (savedEntriesDigest) operation.recovery.savedEntriesDigest = savedEntriesDigest;
         operation.snapshot.phase = "saved";
-        operation.snapshot.savedRevision = written.revision ?? undefined;
+        operation.snapshot.savedRevision = savedRevision ?? undefined;
         operation.snapshot.resultEntryId = prepared.resultName
           ? entryIdFor(spec.sourceId, prepared.resultName)
           : undefined;
@@ -763,12 +913,17 @@ export class McpManagementService {
       warnings.push(
         `${spec.sharedWith.map(providerLabel).join(", ")} also ${spec.sharedWith.length === 1 ? "reads" : "read"} this file.`,
       );
-    if (spec.scope === "backend-user")
-      warnings.push(
-        target.provider === "cursor"
-          ? "Container environments do not receive Cursor's MCP configuration."
-          : "Existing container environments keep the copy they were created with.",
-      );
+    if (spec.scope === "backend-user") warnings.push(backendUserContainerNote(target.provider));
+    if (isOverlaySpec(spec)) warnings.push(OVERLAY_SAVE_NOTE);
+    else if (spec.container && spec.scope === "project") warnings.push(CONTAINER_PROJECT_NOTE);
+    const url = intendedUrl(operation, entry);
+    if (url && target.info.location === "container" && target.info.environmentId) {
+      const network = await this.options
+        .containerNetwork?.(target.info.environmentId)
+        .catch(() => null);
+      const hint = urlReachabilityWarning(url, network ?? null);
+      if (hint) warnings.push(hint);
+    }
     if (capabilities.terminal.readsNativeConfig) warnings.push(capabilities.terminal.guidance);
     return {
       sourceId: spec.sourceId,
@@ -798,7 +953,9 @@ export class McpManagementService {
     const scoped = spec.scope === "backend-user" ? null : target.info.environmentId;
     const result: McpImpactPreview["affectedEnvironments"] = [];
     for (const environment of environments) {
-      if (environment.environmentType !== "local") continue;
+      // A backend-user save reaches local environments; a save into a
+      // container reaches that container's own sessions.
+      if (environment.environmentType !== "local" && !(scoped && spec.container)) continue;
       if (scoped !== null && environment.id !== scoped) continue;
       const own = sessions.filter((session) => session.environmentId === environment.id);
       if (scoped === null && !own.length) continue;
@@ -818,6 +975,173 @@ export class McpManagementService {
       if (result.length >= 50) break;
     }
     return result;
+  }
+
+  // -------------------------------------------------------------------------
+  // Environment overlays
+  // -------------------------------------------------------------------------
+
+  /** One container source, loaded with its overlay state, for an overlay action. */
+  private async overlaySource(
+    targetId: unknown,
+    sourceId: string,
+  ): Promise<{ target: ResolvedTarget; specs: SourceSpec[]; spec: SourceSpec }> {
+    const target = await resolveTarget(targetId, this.options.storage);
+    this.gate.assertWritable(target.provider);
+    if (target.readOnlyReason)
+      throw mcpFailure("read-only-source", { message: target.readOnlyReason });
+    if (target.info.location !== "container")
+      throw mcpFailure("unsupported-operation", {
+        message: "Only container environments keep their own copy of this configuration.",
+      });
+    const specs = await this.specsFor(target);
+    const spec = specs.find((candidate) => candidate.sourceId === sourceId);
+    if (!spec) throw mcpFailure("unknown-source");
+    if (!isOverlaySpec(spec))
+      throw mcpFailure("unsupported-operation", {
+        message: "Only this environment's own configuration has changes to resolve or refresh.",
+      });
+    if (!spec.writable) throw mcpFailure("read-only-source", { message: spec.readOnlyReason });
+    return { target, specs, spec };
+  }
+
+  private async loadedOverlaySource(target: ResolvedTarget, spec: SourceSpec) {
+    const { catalog } = await this.loadTargetCatalog(target, [spec]);
+    const source = catalog.sources[0]!;
+    if (source.state !== "ok" && source.state !== "absent") {
+      throw source.state === "offline"
+        ? mcpFailure("target-offline", { message: source.error })
+        : mcpFailure("malformed-source", { message: source.error });
+    }
+    return source;
+  }
+
+  /**
+   * Import in-container edits, reapply this environment's changes, resolve a
+   * conflict or reset the environment's changes for one container source.
+   */
+  async resolveOverlay(args: { resolution?: unknown }): Promise<McpOverlayResolutionResult> {
+    await this.init();
+    const resolution = parseOverlayResolution(args.resolution);
+    const { target, spec } = await this.overlaySource(resolution.targetId, resolution.sourceId);
+    const result = await this.store.withLock(
+      this.overlays.lockPath(target.info.environmentId!, spec.sourceId),
+      async () => {
+        const source = await this.loadedOverlaySource(target, spec);
+        if ((source.file?.revision ?? null) !== resolution.expectedRevision)
+          throw mcpFailure("revision-conflict");
+        return this.overlays.resolve(this.overlayContext(target, source), resolution.action, () =>
+          this.hostDefaults(target, spec),
+        );
+      },
+    );
+    this.catalogRevision += 1;
+    this.publish([target.targetId], []);
+    return result;
+  }
+
+  /** The backend user's file a container source inherits, read on this host. */
+  private async hostDefaults(target: ResolvedTarget, spec: SourceSpec): Promise<LoadedSource> {
+    const hostSpecs = await providerSources(target.provider, {
+      ...this.sourceContext({ kind: "backend", location: "backend-host" }),
+      retainedSourceIds: [spec.sourceId],
+    });
+    const host = hostSpecs.find(
+      (candidate) => candidate.sourceId === spec.sourceId && candidate.scope === "backend-user",
+    );
+    if (!host)
+      throw mcpFailure("unknown-source", {
+        message: "The backend user has no matching configuration file to refresh from.",
+      });
+    return (await loadCatalog(this.store, [host])).sources[0]!;
+  }
+
+  /** What refreshing one container source from the backend user's file would change. */
+  async previewDefaultsRefresh(args: { request?: unknown }): Promise<McpDefaultsRefreshPreview> {
+    await this.init();
+    const request = parseDefaultsRefreshRequest(args.request, false);
+    const { target, spec } = await this.overlaySource(request.targetId, request.sourceId);
+    const source = await this.loadedOverlaySource(target, spec);
+    return this.overlays.previewRefresh(
+      this.overlayContext(target, source),
+      await this.hostDefaults(target, spec),
+      target.targetId,
+    );
+  }
+
+  /**
+   * Re-import the backend user's current servers into one container source,
+   * keeping this environment's changes on top. Refused unless both files are
+   * still the ones the preview read.
+   */
+  async refreshDefaults(args: {
+    request?: unknown;
+  }): Promise<
+    McpOverlayResolutionResult & { stagedCopy: "updated" | "unavailable" | "not-needed" }
+  > {
+    await this.init();
+    const request = parseDefaultsRefreshRequest(args.request, true);
+    const { target, spec } = await this.overlaySource(request.targetId, request.sourceId);
+    const result = await this.store.withLock(
+      this.overlays.lockPath(target.info.environmentId!, spec.sourceId),
+      async () => {
+        const source = await this.loadedOverlaySource(target, spec);
+        return this.overlays.refresh(
+          this.overlayContext(target, source),
+          await this.hostDefaults(target, spec),
+          request.previewToken,
+        );
+      },
+    );
+    this.catalogRevision += 1;
+    this.publish([target.targetId], []);
+    return result;
+  }
+
+  /**
+   * After a container boot, before any bridge or terminal starts: write every
+   * recorded overlay of the environment back over the entrypoint's fresh
+   * copies. Best effort; returns how many sources were written.
+   */
+  async materialiseEnvironment(environmentId: string): Promise<number> {
+    await this.init();
+    if (!this.overlays.writable) return 0;
+    const environment = await this.options.storage.getEnvironment(environmentId);
+    if (!environment?.containerId || environment.environmentType !== "containerized") return 0;
+    const targets = new Map<
+      AgentPlatform,
+      Promise<{ target: ResolvedTarget; specs: SourceSpec[] }>
+    >();
+    const written = await this.overlays.materialiseEnvironment(
+      environmentId,
+      environment.containerId,
+      async (provider, sourceId) => {
+        let entry = targets.get(provider);
+        if (!entry) {
+          entry = (async () => {
+            const target = await resolveTarget(
+              environmentTargetId(provider, environment),
+              this.options.storage,
+            );
+            return { target, specs: await this.specsFor(target) };
+          })();
+          targets.set(provider, entry);
+        }
+        const { target, specs } = await entry;
+        const spec = specs.find((candidate) => candidate.sourceId === sourceId);
+        if (!spec) return null;
+        return (await this.loadTargetCatalog(target, [spec])).catalog.sources[0] ?? null;
+      },
+    );
+    if (written) {
+      this.catalogRevision += 1;
+      const ids = [...targets.values()];
+      this.publish(
+        (await Promise.all(ids)).map(({ target }) => target.targetId),
+        [],
+      );
+    }
+    return written;
   }
 
   // -------------------------------------------------------------------------
@@ -1308,7 +1632,7 @@ export class McpManagementService {
       fail("Interrupted, and the source no longer exists.");
       return;
     }
-    const catalog = await loadCatalog(this.store, [spec]);
+    const catalog = await loadCatalog(this.store, [spec], this.options.readContainerFile);
     const source = catalog.sources[0]!;
     const revision = source.file?.revision ?? null;
     if (revision === (stored.recovery.expectedRevision ?? ABSENT_REVISION)) {
@@ -1405,6 +1729,24 @@ function publicRuntime(
       ? { cancelReason: runtime.cancelReason }
       : {}),
   };
+}
+
+/** The URL a change leaves on the definition, when it has one. Never logged. */
+function intendedUrl(
+  operation: McpMutation["operation"],
+  entry: LoadedEntry | undefined,
+): string | undefined {
+  if (operation.kind === "remove") return undefined;
+  if (operation.kind === "add")
+    return operation.definition.transport === "stdio" ? undefined : operation.definition.url;
+  const transport =
+    operation.kind === "update"
+      ? (operation.patch.transport?.to ?? entry?.definition?.transport)
+      : entry?.definition?.transport;
+  if (transport === "stdio") return undefined;
+  if (operation.kind === "update" && operation.patch.url?.kind === "set")
+    return operation.patch.url.value;
+  return entry?.definition?.url;
 }
 
 /** The source text after the edit, refused when the server map would outgrow its budget. */

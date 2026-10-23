@@ -1,12 +1,12 @@
 # Agent-test profiles and the host's Pi default model
 
-Checked against `main` at `06297124` (2026-10-23).
+Checked against `main` at `459d2944` (2026-10-23).
 
 An agent-test profile authorized for Pi (`dev:test --credential-source pi`)
 shared the host's Pi login but not the host's choice of model, so Pi fell back
 to a model the login may not be allowed to use. Every live Pi run on such a
-host failed before the model answered. The code fix is in; the live rerun is
-still owed.
+host failed before the model answered. The code fix is in (#1177), and the
+live Pi coordinator rerun passed on 2026-10-23. Nothing is left in this file.
 
 ## Current state
 
@@ -84,13 +84,10 @@ still owed.
 
 ### Qualification
 
-- **Still owed: a passing `mise run test:agent:coordinator --credential-source pi`**
-  (owed by
-  [0024-coordinator-live-conformance.md](../coordinator-and-multi-review/0024-coordinator-live-conformance.md);
-  record it in 0024's read-only, async, family and peer rows). It needs a host
-  whose saved Pi default is a model its login actually runs. Build the bridge
-  first (`bun run --cwd bridges/pi-bridge build`); see
-  [0056-agent-test-stale-bridge-builds.md](0056-agent-test-stale-bridge-builds.md).
+- ~~**A passing `mise run test:agent:coordinator --credential-source pi`**~~
+  Done 2026-10-23 (run 3 below), recorded in
+  [0024-coordinator-live-conformance.md](../coordinator-and-multi-review/0024-coordinator-live-conformance.md)'s
+  read-only, async, family and peer columns.
 - **Live runs on 2026-10-23 (this host).** The host's Pi state had changed
   since the original report. `auth.json` held a single `openai` OAuth
   (ChatGPT-backed) login, and `settings.json` saved `openai/gpt-5.5` as the
@@ -111,11 +108,37 @@ still owed.
      the user to save a model the login runs (`/model` in `pi`; agent-testing
      pins `openai/gpt-6-sol` for this kind of login), then rerun. The host's
      settings were not changed for this run.
-- The live Cursor and Pi close-retention run owed by
+  3. After the user saved `"defaultProvider": "openai"`,
+     `"defaultModel": "gpt-6.1-sol"` in the host's `settings.json`, on
+     `main` at `459d2944` with every bridge rebuilt first
+     (`qa-coordinator-2026-10-23T12-26-47-009Z`): **1 passed, 0 failed, 0
+     skipped**. All four scenarios passed (read-only, async, family, peer;
+     6.5 minutes), and the profile was stopped and reset. The evidence that
+     the bridge asked for exactly the host's default:
+     - The running Pi bridge's environment held
+       `PI_BRIDGE_DEFAULT_MODEL=openai/gpt-6.1-sol` beside
+       `PI_BRIDGE_AUTH_FILE` naming the host `auth.json`.
+     - Both Pi session files written during the read-only and async scenarios
+       recorded a `model_change` to provider `openai`, model `gpt-6.1-sol`.
+       Every assistant message in them carried the same provider and model.
+       The turns ended in `toolUse` and `stop`, with no error.
+     - The provider id survives unchanged from `settings.json` through
+       `readPiDefaultModel`, `PI_BRIDGE_DEFAULT_MODEL` and `defaultModelIds`
+       to the SDK. The host `auth.json` holds one credential, under `openai`,
+       of type `oauth`. In Pi 1.2.0 that is the ChatGPT sign-in for the
+       `openai` provider itself (`openaiProvider` in pi-ai registers
+       "Sign in with ChatGPT" OAuth beside the API key). `openai-codex` is a
+       separate provider that pi-ai now labels "(legacy)". So `openai` is the
+       right id for this login, and nothing needed rewriting. The earlier
+       failures on `openai/gpt-4` and `openai/gpt-5.5` were the ChatGPT
+       backend refusing those models, not a provider-id mismatch.
+- The live close-retention run owed by
   [0002-session-lifecycle-consistency.md](../agent-engines/0002-session-lifecycle-consistency.md)
-  also waits on a usable Pi model: on 2026-10-23 its Pi case failed on the
-  default `gpt-4` and on an explicit `openai/gpt-5.5` override with the same
-  "not supported when using Codex with a ChatGPT account" error.
+  waited on a usable Pi model. Earlier on 2026-10-23 its Pi case failed on
+  the default `gpt-4` and on an explicit `openai/gpt-5.5` override with the
+  same "not supported when using Codex with a ChatGPT account" error. After
+  run 3 its Pi case passed with no model override. Its Cursor case failed for
+  a reason unrelated to Pi; see 0002.
 
 ## Assumptions and decisions
 
@@ -189,20 +212,42 @@ still owed.
    `defaultModel`, in plain JSON with an optional BOM (true of Pi 1.2.0's
    `SettingsManager`). A provider id never contains `/`.
 
+10. **No code change for the 2026-10-23 rerun.** The rerun was to fix a
+    provider-id mismatch if it found one. It found none (run 3), so this change
+    is evidence and docs only. A test was not added, because no defect needed
+    one, and the verbatim pass-through of `defaultProvider` is already covered
+    by `host-agent-credentials.test.ts` and
+    `agent-session-default-model.test.ts`. Docs that described a ChatGPT
+    login only as `openai-codex` now say that Pi 1.2.0 signs ChatGPT in under
+    `openai`. So does a live spec's comment that said `openai/…` needs an API
+    key.
+11. **Mark the file Finished and keep it for now.** Options: (a) delete it,
+    as `docs/README.md` asks once durable behaviour has moved; (b) mark it
+    Finished and keep it. Choice: (b), as with 0055. The durable behaviour is
+    already in `agent-engines.md`, `credentials-and-models.md` and the Pi
+    bridge's `AGENTS.md`. But 0024, 0002, 0031 and 0056 link here for the
+    live evidence, and deleting it would break those links in the same change
+    that records them. Con: one finished file stays until someone removes it
+    with its links.
+12. **The open question moved to its own file.** Whether a ChatGPT login with
+    no saved default should start on a model it accepts is new work, so per
+    `docs/README.md` it went into a new file,
+    [0062-pi-chatgpt-login-without-saved-default.md](../agent-engines/0062-pi-chatgpt-login-without-saved-default.md),
+    rather than staying open here. 0062 was the first number free on
+    `origin/main`, on open PRs and on local worktrees: another worker's branch
+    already holds 0061, so 0060 was skipped in case it is also claimed.
+
 ## Open questions
 
-- Should Pi's own fallback be treated as a product issue too? With the bridge
-  fix, a user who saved a default is covered. A fresh install with no saved
-  default whose only provider is a ChatGPT-backed `openai-codex` login still
-  starts on the catalogue's first model, which that login refuses. Whether Pi
-  upstream should order or filter its catalogue, or Orkestrator's picker should
-  learn which models a login accepts, is still undecided.
+- None left. The fresh-install fallback question is
+  [0062](../agent-engines/0062-pi-chatgpt-login-without-saved-default.md).
 
 ## Related
 
 - [0024-coordinator-live-conformance.md](../coordinator-and-multi-review/0024-coordinator-live-conformance.md)
 - [0031-live-provider-and-platform-qualification.md](0031-live-provider-and-platform-qualification.md)
 - [0056-agent-test-stale-bridge-builds.md](0056-agent-test-stale-bridge-builds.md) (found by the first 2026-10-23 run)
+- [0062-pi-chatgpt-login-without-saved-default.md](../agent-engines/0062-pi-chatgpt-login-without-saved-default.md) (the open question this file left)
 - [`bridges/pi-bridge/AGENTS.md`](../../../bridges/pi-bridge/AGENTS.md) (models as provider/model pairs, default model)
 - [credentials-and-models.md](../../development/credentials-and-models.md) § Pi
 

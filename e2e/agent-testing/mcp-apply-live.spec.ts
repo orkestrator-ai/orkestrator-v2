@@ -518,8 +518,9 @@ test.describe("live MCP apply", () => {
                 // The tab's `initialAgentModel` seeds only the UI composer; a
                 // dispatch without a model takes the provider's first available
                 // one (for Pi, a model a ChatGPT login refuses). Pi ids are
-                // `provider/modelId`: a ChatGPT login is `openai-codex/…`;
-                // `openai/…` needs an API key and silently keeps the fallback.
+                // `provider/modelId`: since Pi 1.2.0 a ChatGPT login is
+                // `openai/…` (the legacy one `openai-codex/…`), and it runs
+                // only the models ChatGPT allows, such as `gpt-6.1-sol`.
                 ...(model ? { model } : {}),
               }),
             randomUUID,

@@ -10,9 +10,10 @@ deterministic tests for all of it. Close retention through the UI is a
 permanent browser spec for Cursor, Pi, OpenCode and Grok, and since
 2026-10-23 so are the lifecycle faults that spec could not reach before:
 persistence shedding, steer saturation, a dead generation, an old Claude
-bridge and a stop during Pi's startup. What is left is the live Cursor and Pi
-run, the legacy close fallback (blocked on a support window) and one live
-check of Cursor's resume rows.
+bridge and a stop during Pi's startup. Pi's live close retention passed on
+2026-10-23. What is left is the live Cursor run (whose resumed transcript
+lost the first prompt on 2026-10-23), the legacy close fallback (blocked on a
+support window) and one live check of Cursor's resume rows.
 
 ## Current state
 
@@ -257,25 +258,42 @@ check of Cursor's resume rows.
 Live items need provider credentials; batch them with
 [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md).
 
-1. **Live close retention for Cursor and Pi.** Run
+1. **Live close retention for Cursor** (Pi done 2026-10-23). Run
    `e2e/agent-testing/close-retention-live.spec.ts`
    ([agent-testing.md](../../development/agent-testing.md#live-close-retention))
-   with a profile where both are signed in. Attempted 2026-10-23 on an
-   isolated `dev:test` profile with host credentials
-   (`--agent-platforms cursor,pi`), neither case reached the close:
-   - Pi is now signed in (the profile reads the host's `auth.json` through
-     `PI_BRIDGE_AUTH_FILE`), but its first turn failed: Pi's own default
-     `gpt-4` is "not supported when using Codex with a ChatGPT account". With
-     `ORKESTRATOR_AGENT_TEST_CLOSE_RETENTION_MODELS=pi=openai/gpt-5.5` the
-     same error named `gpt-5.5`, and `pi=openai-codex/gpt-5.5` never sent.
-     A usable Pi model for agent-test profiles is
-     [0054-agent-test-pi-default-model.md](../cross-cutting/0054-agent-test-pi-default-model.md);
-     rerun this after it.
-   - Cursor's case timed out waiting for its first prompt to appear: the
-     test environment it created was still starting (sidebar spinner) when
-     the 60-second wait ran out, so this is environment setup in that
-     profile, not close retention. Rerun on a profile whose environments
-     start.
+   with a profile where Cursor is signed in.
+   - First attempt, 2026-10-23, on an isolated `dev:test` profile with host
+     credentials (`--agent-platforms cursor,pi`): neither case reached the
+     close. Pi's first turn was refused by the host's ChatGPT login (default
+     `gpt-4`, then an explicit `openai/gpt-5.5`, both "not supported when
+     using Codex with a ChatGPT account"). Cursor timed out waiting for its
+     first prompt because the test environment was still starting.
+   - **Pi passed** on 2026-10-23, later the same day: profile
+     `qa-close-live-0054` (`--credential-source cursor --credential-source pi
+     --agent-platforms cursor,pi`, `main` at `459d2944`, bridges rebuilt),
+     with `ORKESTRATOR_AGENT_TEST_CLOSE_RETENTION_PLATFORMS=cursor,pi` and no
+     model override. By then the user had saved `openai/gpt-6.1-sol` as the
+     host's Pi default, so the profile started on it
+     ([0054](../cross-cutting/0054-agent-test-pi-default-model.md)). The
+     tab closed, stayed closed after a reload, resumed from the list and
+     answered the codeword.
+   - **Cursor failed** in the same run (1 failed, 1 passed, 2.1 minutes).
+     This time its environment started. The first turn answered `OK`, the
+     close and reload held, and the resume picker listed the conversation.
+     After the newest row was picked, the resumed tab showed the first
+     turn's reasoning ("The codeword ORK… is noted") and its `OK` reply, but
+     not the first prompt. `close-retention-live.spec.ts:315` waits 60
+     seconds for that exact prompt text, and no element on the page held it. The bridge
+     sends the prompt unwrapped (`prompt.ts`, no schema in this case). So
+     the likely cause is that the resumed history
+     (`hydrateHistory` → `historicUserTexts` in
+     `bridges/cursor-bridge/src/agent-session.ts`) found no user text in the
+     run record `@cursor/sdk` 1.0.37 returned. Its fields are read from
+     `userMessages`, `userMessage` and `userMessage` steps. Not confirmed: the
+     test deletes its environment, so the run record was not captured.
+     Next step: rerun with the environment kept, and read
+     `run.conversation()` for the resumed agent. The profile was stopped and
+     reset afterwards.
 
 ## Constraints and rationale
 
@@ -571,7 +589,8 @@ bounded-state occupancy in `/runtime-health`) are decided below.
 - [0050-transcript-history-efficiency.md](../transcripts-and-observation/0050-transcript-history-efficiency.md):
   truncated history views.
 - [0054-agent-test-pi-default-model.md](../cross-cutting/0054-agent-test-pi-default-model.md):
-  the Pi model the live run in Qualification item 1 needs.
+  the Pi model the live run in Qualification item 1 needed (Pi's case passed
+  on 2026-10-23).
 
 ## Replaces
 

@@ -609,8 +609,9 @@ rather than a name, and "signed in" is one answer per provider.
   provider serves it, then on `PI_BRIDGE_DEFAULT_MODEL`, then on the
   catalogue's first model (`defaultModelIds` in `agent-session.ts`). Never fall
   straight to the first model: a login can refuse models its provider lists,
-  and a ChatGPT-backed `openai-codex` login refuses the first one. Project
-  settings count only when the session trusts the project.
+  and a ChatGPT login refuses the first one (under `openai` since Pi 1.2.0,
+  and under the legacy `openai-codex`). Project settings count only when the
+  session trusts the project.
 - Tests run with `src/testing/test-isolation.ts` preloaded (`test:bridge`). It points
   `PI_CODING_AGENT_DIR` at a temporary directory, so no test reads the
   developer's saved default or writes `auth.json`/`models-store.json` into

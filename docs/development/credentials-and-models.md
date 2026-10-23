@@ -261,8 +261,11 @@ writes), as long as a signed-in provider serves it. A project's
 usable default, the bridge falls back to `PI_BRIDGE_DEFAULT_MODEL`, then to the
 catalogue's first model. Pi's own fallback table of per-provider defaults is
 not exported by the SDK, so the bridge does not reproduce it. The first model
-can be one the login refuses: a ChatGPT-backed `openai-codex` login lists
-`gpt-5.3-codex-spark` first and rejects it.
+can be one the login refuses. Pi 1.2.0 signs ChatGPT in under the `openai`
+provider, whose catalogue starts with `gpt-4`, and the ChatGPT backend
+rejects it. The legacy `openai-codex` provider lists `gpt-5.3-codex-spark`
+first and rejects that. See
+[0062](../todo/agent-engines/0062-pi-chatgpt-login-without-saved-default.md).
 
 ### Grok Build
 

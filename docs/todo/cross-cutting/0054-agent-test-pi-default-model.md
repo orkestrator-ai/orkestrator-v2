@@ -198,8 +198,8 @@ live Pi coordinator rerun passed on 2026-10-23. Nothing is left in this file.
    defaults keep blocking qualification.
 7. **Runs 1–2 used unchanged host Pi settings and failed.** Run 3 passed after
    the user saved the ChatGPT-runnable default `openai/gpt-6.1-sol` in the
-   host's `settings.json`. These settings are the user's, outside the profile,
-   and also choose what the user's own `pi` runs. Hosts with no saved default
+   host's `settings.json`. No run edited them: they are the user's, outside
+   the profile, and also choose what the user's own `pi` runs. Hosts with no saved default
    or a saved default their login refuses still need a runnable selection;
    see [0062](../agent-engines/0062-pi-chatgpt-login-without-saved-default.md)
    for the remaining fallback issue.

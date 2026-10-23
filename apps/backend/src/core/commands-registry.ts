@@ -40,6 +40,7 @@ import { registerCoordinatorCommands } from "./commands-registry-coordinator.js"
 import { registerDockerCommands } from "./commands-registry-docker.js";
 import { registerEnvironmentCommands } from "./commands-registry-environments.js";
 import { registerGitHubCommands } from "./commands-registry-github.js";
+import { registerGitHubPullRequestCommands } from "./commands-registry-github-pull-requests.js";
 import { registerKanbanCommands } from "./commands-registry-kanban.js";
 import { registerAgentMailCommands } from "./commands-registry-mail.js";
 import { registerDiskUsageCommands } from "./commands-registry-disk-usage.js";
@@ -291,6 +292,7 @@ export function createCommandRegistry(
   registerCoordinatorCommands(register, dependencies);
   registerLinearCommands(register, dependencies);
   registerGitHubCommands(register, dependencies);
+  registerGitHubPullRequestCommands(register, dependencies);
   registerEnvironmentCommands(register, dependencies);
   registerSystemCommands(register);
   registerBackendProfileCommands(register);

@@ -1930,3 +1930,43 @@ describe("pane field preservation", () => {
     ).toBeUndefined();
   });
 });
+
+test("pull request restore sanitizes refs, views, titles and transient requests", () => {
+  for (const view of ["summary", "timeline", "code", "bad", undefined]) {
+    const result = reconcilePersistedLayout(
+      saved({
+        kind: "leaf",
+        id: "pane",
+        activeTabId: "pr",
+        tabs: [
+          {
+            id: "bad",
+            type: "pull-request",
+            pullRequestData: { ref: { owner: "acme", repo: "../x", number: 1 } },
+          },
+          {
+            id: "pr",
+            type: "pull-request",
+            pullRequestData: {
+              ref: { owner: "acme", repo: "repo", number: 42, extra: "discard" },
+              title: "x".repeat(400),
+              view,
+              openRequest: 900,
+            },
+          },
+        ],
+      }),
+      context,
+    );
+    const root = result?.root;
+    expect(root?.kind).toBe("leaf");
+    if (root?.kind !== "leaf") throw new Error("Expected leaf");
+    expect(root.tabs).toHaveLength(1);
+    expect(root.tabs[0]?.pullRequestData).toEqual({
+      ref: { owner: "acme", repo: "repo", number: 42 },
+      title: "x".repeat(300),
+      ...(view === "summary" || view === "timeline" || view === "code" ? { view } : {}),
+    });
+    expect(root.tabs[0]?.pullRequestData?.openRequest ?? 0).toBe(0);
+  }
+});

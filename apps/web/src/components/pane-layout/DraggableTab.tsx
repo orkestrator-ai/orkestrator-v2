@@ -3,6 +3,7 @@ import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
   FileCode,
+  GitPullRequest,
   Globe2,
   Paintbrush,
   Terminal as TerminalIcon,
@@ -174,6 +175,10 @@ export function DraggableTab({
 
   // Get tab title based on type and session name
   const getTabTitle = () => {
+    if (tab.type === "pull-request" && tab.pullRequestData) {
+      const { ref, title } = tab.pullRequestData;
+      return title ? `#${ref.number} ${title}` : `${ref.repo} #${ref.number}`;
+    }
     if (tab.type === "file" && tab.fileData) {
       const parts = tab.fileData.filePath.split("/").filter(Boolean);
       return parts.at(-1) ?? tab.fileData.filePath;
@@ -271,6 +276,9 @@ export function DraggableTab({
     if (tab.type === "browser") {
       return <Globe2 className="h-3 w-3 shrink-0 text-sky-400" />;
     }
+    if (tab.type === "pull-request") {
+      return <GitPullRequest className="h-3 w-3 shrink-0 text-success" />;
+    }
     if (tab.type === "agent-native") {
       const platform = nativeAgentData?.platform;
       if (!platform) return <TerminalIcon className="h-3 w-3 shrink-0 text-muted-foreground" />;
@@ -313,9 +321,11 @@ export function DraggableTab({
   const isFileTab = tab.type === "file" && !!tab.fileData;
   const tooltipContent = isFileTab
     ? tab.fileData?.filePath
-    : workflowTitle
-      ? session?.name || nativeSessionTitle
-      : undefined;
+    : tab.type === "pull-request" && tab.pullRequestData
+      ? `${tab.pullRequestData.ref.owner}/${tab.pullRequestData.ref.repo} #${tab.pullRequestData.ref.number}${tab.pullRequestData.title ? ` · ${tab.pullRequestData.title}` : ""}`
+      : workflowTitle
+        ? session?.name || nativeSessionTitle
+        : undefined;
   const setTabRefs = useCallback(
     (node: HTMLDivElement | null) => {
       setNodeRef(node);

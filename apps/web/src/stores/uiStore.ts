@@ -26,7 +26,14 @@ const addRecentProject = (recentProjectIds: string[], projectId: string): string
  * The panel a project's page shows. `home` is the project home's own tabs;
  * the rest are the project board.
  */
-export type ProjectBoardTab = "home" | "coordinator" | "kanban" | "github" | "linear" | "features";
+export type ProjectBoardTab =
+  | "home"
+  | "coordinator"
+  | "kanban"
+  | "github"
+  | "linear"
+  | "features"
+  | "pull-requests";
 export type EnvironmentSortMode = "project" | "activity";
 
 /**

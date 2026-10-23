@@ -25,6 +25,7 @@ import { KanbanCard } from "./KanbanCard";
 import { KanbanTaskDialog } from "./KanbanTaskDialog";
 import { ProjectNotesView } from "./ProjectNotesView";
 import { FeaturesView } from "./FeaturesView";
+import { ProjectPullRequestsView } from "@/components/pull-requests";
 import { LinearTicketsView } from "@/components/linear";
 import { GitHubIssuesView } from "@/components/github";
 
@@ -353,6 +354,13 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
           className="m-0 h-full min-h-0 flex-1 overflow-hidden data-[state=active]:flex data-[state=active]:flex-col"
         >
           <FeaturesView projectId={projectId} />
+        </TabsContent>
+
+        <TabsContent
+          value="pull-requests"
+          className="m-0 h-full min-h-0 flex-1 overflow-hidden data-[state=active]:flex data-[state=active]:flex-col"
+        >
+          <ProjectPullRequestsView projectId={projectId} />
         </TabsContent>
       </Tabs>
 

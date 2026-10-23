@@ -3,6 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import { toast } from "sonner";
 import { useFilesPanelStore, useConfigStore, usePaneLayoutStore } from "@/stores";
 import { useUIStore, useEnvironmentStore, useProjectStore } from "@/stores";
+import { isFilesPanelFileTab } from "@/stores/filesPanelStore";
 import * as backend from "@/lib/backend";
 import { environmentBaselineCommit, resolveComparisonRef } from "@/lib/diff-baseline";
 import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
@@ -227,7 +228,12 @@ export function useFilesPanel() {
   const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
   const selectedProjectId = useUIStore((state) => state.selectedProjectId);
   const { isOpen, activeTab } = useFilesPanelStore(
-    useShallow((state) => ({ isOpen: state.isOpen, activeTab: state.activeTab })),
+    useShallow((state) => ({
+      // Pull request tabs read GitHub, not this target's files: while one is
+      // shown the file views are treated as closed and nothing polls.
+      isOpen: state.isOpen && isFilesPanelFileTab(state.activeTab),
+      activeTab: state.activeTab === "all-files" ? ("all-files" as const) : ("changes" as const),
+    })),
   );
   // Actions are stable references on the store.
   const { setChanges, setFileTree, setLoadingChanges, setLoadingTree, setTargetBranch } =

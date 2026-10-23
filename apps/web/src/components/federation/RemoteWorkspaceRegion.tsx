@@ -177,9 +177,32 @@ function useRealmRequests(nodeId: string, send: ((message: ShellToRealmMessage) 
     if (send && ready.current) send({ type: "sidebar", open: sidebarOpen });
   }, [send, sidebarOpen]);
 
+  // The window's title bar opening or closing one of the realm's popovers.
+  // Asked while the realm is not listening, it is dropped: the title bar
+  // only offers it once the realm has reported.
+  const panelRequest = useRemoteWorkspaceStore((state) => state.panelRequests[nodeId]);
+  const deliveredPanel = useRef(0);
+  useEffect(() => {
+    if (!send || !ready.current || !panelRequest || panelRequest.seq <= deliveredPanel.current) {
+      return;
+    }
+    deliveredPanel.current = panelRequest.seq;
+    send({
+      type: "panel",
+      panel: panelRequest.panel,
+      open: panelRequest.open,
+      inset: panelRequest.inset,
+    });
+  }, [panelRequest, send]);
+
   /** A new realm document: it was opened on the latest request and is not listening yet. */
   const restart = useCallback(() => {
     ready.current = false;
+    // A new document has none of the old one's popovers open.
+    const titleBar = useRemoteWorkspaceStore.getState().titleBars[nodeId];
+    if (titleBar?.panel) {
+      useRemoteWorkspaceStore.getState().noteRealmTitleBar(nodeId, { ...titleBar, panel: null });
+    }
     const request = latest.current.request;
     if (request && request.seq > delivered.current) {
       delivered.current = request.seq;
@@ -189,7 +212,7 @@ function useRealmRequests(nodeId: string, send: ((message: ShellToRealmMessage) 
     // Dialogs are one-shot requests; a replacement resumes only the selection.
     const { projectId, environmentId } = selection.current;
     return { projectId, environmentId };
-  }, []);
+  }, [nodeId]);
 
   const onMessage = useCallback(
     (value: unknown) => {
@@ -210,6 +233,12 @@ function useRealmRequests(nodeId: string, send: ((message: ShellToRealmMessage) 
         if (ui.sidebarOpen !== message.open) ui.toggleSidebar();
       } else if (message.type === "settings") {
         if (isGlobalSettingsSection(message.section)) requestGlobalSettings(message.section);
+      } else if (message.type === "titleBar") {
+        useRemoteWorkspaceStore.getState().noteRealmTitleBar(nodeId, {
+          usage: message.usage,
+          usageStale: message.usageStale,
+          panel: message.panel,
+        });
       } else {
         openMachineWorkspace({
           connectionId: message.nodeId,

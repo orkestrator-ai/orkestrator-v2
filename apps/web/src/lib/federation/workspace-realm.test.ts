@@ -41,3 +41,43 @@ test("only known messages with bounded IDs cross between a window and its realm"
   expect(parseRealmMessage({ type: "open", nodeId: "bk_a" })).toBeNull();
   expect(readFrameEnvelope({ kind: "other", workspaceId: "w", message: {} })).toBeNull();
 });
+
+test("title-bar popovers and meters cross only in their known shapes", () => {
+  expect(parseShellMessage({ type: "panel", panel: "usage", open: true, inset: 48 })).toEqual({
+    type: "panel",
+    panel: "usage",
+    open: true,
+    inset: 48,
+  });
+  expect(parseShellMessage({ type: "panel", panel: "agent", open: false, inset: -5 })).toEqual({
+    type: "panel",
+    panel: "agent",
+    open: false,
+    inset: 0,
+  });
+  expect(parseShellMessage({ type: "panel", panel: "settings", open: true })).toBeNull();
+  expect(parseShellMessage({ type: "panel", panel: "usage", open: "yes" })).toBeNull();
+
+  const usage = {
+    cpuPercent: 31,
+    ramPercent: 73,
+    gpuPercent: null,
+    diskPercent: 59,
+    sampledAt: "2026-10-23T12:00:00.000Z",
+  };
+  expect(parseRealmMessage({ type: "titleBar", usage, usageStale: true, panel: "agent" })).toEqual({
+    type: "titleBar",
+    usage,
+    usageStale: true,
+    panel: "agent",
+  });
+  // A malformed reading is no reading; an unknown popover is none.
+  expect(
+    parseRealmMessage({
+      type: "titleBar",
+      usage: { cpuPercent: "31", ramPercent: 73, sampledAt: "now" },
+      usageStale: "no",
+      panel: "other",
+    }),
+  ).toEqual({ type: "titleBar", usage: null, usageStale: false, panel: null });
+});

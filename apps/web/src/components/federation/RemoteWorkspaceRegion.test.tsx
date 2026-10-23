@@ -153,6 +153,58 @@ describe("desktop: another machine's workspace in the central region", () => {
     act(() => useUIStore.setState({ sidebarOpen: open }));
   });
 
+  test("the realm reports the title bar's meters, and the title bar opens its popovers", async () => {
+    const fake = install(true);
+    renderRegion(anchorElement());
+    act(() => useRemoteWorkspaceStore.getState().open("bk_a", { projectId: "project-1" }));
+    await waitFor(() => expect(fake.workspaceViews.setVisible).toHaveBeenCalled());
+
+    // Asked before the realm listens: dropped, not replayed once it does.
+    act(() => useRemoteWorkspaceStore.getState().requestRealmPanel("bk_a", "agent", true, 6));
+    act(() =>
+      fake.emitViewEvent({ viewId: "view-1", type: "message", message: { type: "ready" } }),
+    );
+    expect(fake.workspaceViews.send).not.toHaveBeenCalledWith(
+      "view-1",
+      expect.objectContaining({ type: "panel" }),
+    );
+
+    const usage = {
+      cpuPercent: 31,
+      ramPercent: 73,
+      gpuPercent: 0,
+      diskPercent: 59,
+      sampledAt: "2026-10-23T12:00:00.000Z",
+    };
+    act(() =>
+      fake.emitViewEvent({
+        viewId: "view-1",
+        type: "message",
+        message: { type: "titleBar", usage, usageStale: false, panel: null },
+      }),
+    );
+    expect(useRemoteWorkspaceStore.getState().titleBars.bk_a).toMatchObject({
+      usage,
+      usageStale: false,
+      panel: null,
+    });
+
+    act(() => useRemoteWorkspaceStore.getState().requestRealmPanel("bk_a", "usage", true, 48));
+    await waitFor(() =>
+      expect(fake.workspaceViews.send).toHaveBeenCalledWith("view-1", {
+        type: "panel",
+        panel: "usage",
+        open: true,
+        inset: 48,
+      }),
+    );
+
+    // A closed realm takes what it reported with it.
+    act(() => useRemoteWorkspaceStore.getState().closeRealm("bk_a"));
+    expect(useRemoteWorkspaceStore.getState().titleBars.bk_a).toBeUndefined();
+    expect(useRemoteWorkspaceStore.getState().panelRequests.bk_a).toBeUndefined();
+  });
+
   test.each(["crashed", "load-failed"] as const)(
     "a %s realm closes before retry; one closed by the window is dropped",
     async (type) => {

@@ -2,11 +2,13 @@ import { resolveAgentHandoffChangeSummaries } from "@/lib/changes/handoff";
 import {
   useCallback,
   useEffect,
+  useEffectEvent,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type CSSProperties,
+  type Ref,
 } from "react";
 import {
   ArrowRight,
@@ -77,6 +79,11 @@ import { AgentInfoMcpSection } from "./AgentInfoMcpSection";
 interface AgentInfoButtonProps {
   activeTab: TabInfo | null;
   mobile?: boolean;
+  /**
+   * In a realm: the window's title bar shows the trigger and asks for the
+   * popover, which opens here under it (see `RealmTitleBarPanels`).
+   */
+  remote?: RealmPanelControl;
 }
 
 interface SessionActionState {
@@ -165,6 +172,7 @@ import {
   ConnectionPathPanel,
 } from "./AgentInfoButton.panels";
 import { useFederation } from "@/components/federation/FederationProvider";
+import type { RealmPanelControl } from "@/lib/federation/workspace-realm";
 import { workspaceTarget } from "@/lib/portal/portal-transport";
 
 export {
@@ -176,8 +184,45 @@ export {
   windowDurationMinutes,
 } from "./AgentInfoButton.panels";
 
-export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonProps) {
+/** The agent-information trigger, shared with a window's title bar over a realm. */
+export function AgentInfoTrigger({
+  open,
+  mobile = false,
+  onClick,
+  ref,
+}: {
+  open: boolean;
+  mobile?: boolean;
+  onClick: () => void;
+  ref?: Ref<HTMLButtonElement>;
+}) {
+  return (
+    <Button
+      ref={ref}
+      variant={open ? "secondary" : "ghost"}
+      size="icon"
+      className={mobile ? "h-9 w-9" : "h-8 w-8 text-muted-foreground hover:text-foreground"}
+      onClick={onClick}
+      aria-label={open ? "Close agent information" : "Open agent information"}
+      aria-expanded={open}
+      aria-haspopup="dialog"
+      aria-controls="agent-information-popover"
+    >
+      <Info className={mobile ? "h-4.5 w-4.5" : "h-4 w-4"} />
+    </Button>
+  );
+}
+
+export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfoButtonProps) {
   const [open, setOpen] = useState(false);
+  const remoteRequest = remote?.request ?? null;
+  const [appliedRequest, setAppliedRequest] = useState(remoteRequest);
+  if (appliedRequest !== remoteRequest) {
+    setAppliedRequest(remoteRequest);
+    if (remoteRequest) setOpen(remoteRequest.open);
+  }
+  const reportOpen = useEffectEvent((next: boolean) => remote?.onOpenChange(next));
+  useEffect(() => reportOpen(open), [open]);
   const federation = useFederation();
   // How this window reaches the node its workspace is on, when that is not
   // the command node it connected to.
@@ -796,23 +841,19 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
 
   return (
     <div
-      className={cn("relative", mobile ? "h-9 w-9" : "h-8 w-8")}
+      className={cn("relative", remote ? "h-0 w-0" : mobile ? "h-9 w-9" : "h-8 w-8")}
+      data-testid={remote ? "realm-agent-info-panel" : undefined}
       style={{ WebkitAppRegion: "no-drag" } as CSSProperties}
       onMouseDown={(event) => event.stopPropagation()}
     >
-      <Button
-        ref={triggerRef}
-        variant={open ? "secondary" : "ghost"}
-        size="icon"
-        className={mobile ? "h-9 w-9" : "h-8 w-8 text-muted-foreground hover:text-foreground"}
-        onClick={() => setOpen((value) => !value)}
-        aria-label={open ? "Close agent information" : "Open agent information"}
-        aria-expanded={open}
-        aria-haspopup="dialog"
-        aria-controls="agent-information-popover"
-      >
-        <Info className={mobile ? "h-4.5 w-4.5" : "h-4 w-4"} />
-      </Button>
+      {remote ? null : (
+        <AgentInfoTrigger
+          ref={triggerRef}
+          open={open}
+          mobile={mobile}
+          onClick={() => setOpen((value) => !value)}
+        />
+      )}
 
       {open ? (
         <button

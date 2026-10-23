@@ -16,6 +16,38 @@
 const REALM_PARAM = "realm";
 const REALM_VALUE = "workspace";
 const MAX_ID_LENGTH = 256;
+const MAX_PANEL_INSET = 4096;
+
+/**
+ * The title-bar popovers of a realm's node. The window's title bar shows
+ * their triggers, as it does for its own node; the realm draws the popovers,
+ * whose content comes from its node, under that title bar.
+ */
+export type RealmPanel = "usage" | "agent";
+
+/** The realm's node's host meters, for the window's title bar. */
+export interface RealmUsageReading {
+  cpuPercent: number;
+  ramPercent: number;
+  gpuPercent: number | null;
+  diskPercent: number | null;
+  sampledAt: string;
+}
+
+/** The window's title bar asking a realm to open or close one of its popovers. */
+export interface RealmPanelRequest {
+  /** Increases with every request, so the same request twice is applied twice. */
+  seq: number;
+  open: boolean;
+  /** Distance from the realm's right edge to the trigger's, so the popover lines up with it. */
+  inset: number;
+}
+
+/** A realm title-bar popover driven by the window's title bar, which owns its trigger. */
+export interface RealmPanelControl {
+  request: RealmPanelRequest | null;
+  onOpenChange: (open: boolean) => void;
+}
 
 /** What the window asks its realm to show. */
 export interface RealmSelectRequest {
@@ -31,7 +63,9 @@ export interface RealmSelectRequest {
 export type ShellToRealmMessage =
   | RealmSelectRequest
   /** The window's sidebar was shown or hidden (the realm's toolbar toggles it). */
-  | { type: "sidebar"; open: boolean };
+  | { type: "sidebar"; open: boolean }
+  /** The window's title bar opened or closed one of the realm's popovers. */
+  | { type: "panel"; panel: RealmPanel; open: boolean; inset: number };
 
 /** What a realm tells its window. */
 export type RealmToShellMessage =
@@ -44,7 +78,14 @@ export type RealmToShellMessage =
   /** Show or hide the window's sidebar. */
   | { type: "sidebar"; open: boolean }
   /** Open the window's settings: they belong to the command node. */
-  | { type: "settings"; section: string };
+  | { type: "settings"; section: string }
+  /** What the window's title bar shows for this node: its host meters and open popover. */
+  | {
+      type: "titleBar";
+      usage: RealmUsageReading | null;
+      usageStale: boolean;
+      panel: RealmPanel | null;
+    };
 
 function params(): URLSearchParams | null {
   if (typeof window === "undefined") return null;
@@ -53,6 +94,31 @@ function params(): URLSearchParams | null {
   } catch {
     return null;
   }
+}
+
+function isRealmPanel(value: unknown): value is RealmPanel {
+  return value === "usage" || value === "agent";
+}
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function parseUsageReading(value: unknown): RealmUsageReading | null {
+  if (!value || typeof value !== "object") return null;
+  const reading = value as Record<string, unknown>;
+  const cpuPercent = finiteNumber(reading.cpuPercent);
+  const ramPercent = finiteNumber(reading.ramPercent);
+  const sampledAt = reading.sampledAt;
+  if (cpuPercent === null || ramPercent === null) return null;
+  if (typeof sampledAt !== "string" || sampledAt.length > 64) return null;
+  return {
+    cpuPercent,
+    ramPercent,
+    gpuPercent: finiteNumber(reading.gpuPercent),
+    diskPercent: finiteNumber(reading.diskPercent),
+    sampledAt,
+  };
 }
 
 function boundedId(value: unknown): string | undefined {
@@ -105,6 +171,16 @@ export function parseShellMessage(value: unknown): ShellToRealmMessage | null {
   if (message.type === "sidebar") {
     return typeof message.open === "boolean" ? { type: "sidebar", open: message.open } : null;
   }
+  if (message.type === "panel") {
+    if (!isRealmPanel(message.panel) || typeof message.open !== "boolean") return null;
+    const inset = finiteNumber(message.inset);
+    return {
+      type: "panel",
+      panel: message.panel,
+      open: message.open,
+      inset: Math.min(Math.max(inset ?? 0, 0), MAX_PANEL_INSET),
+    };
+  }
   if (message.type !== "select") return null;
   const projectId = boundedId(message.projectId);
   const environmentId = boundedId(message.environmentId);
@@ -137,6 +213,14 @@ export function parseRealmMessage(value: unknown): RealmToShellMessage | null {
     return typeof message.section === "string" && /^[a-z-]{1,40}$/.test(message.section)
       ? { type: "settings", section: message.section }
       : null;
+  }
+  if (message.type === "titleBar") {
+    return {
+      type: "titleBar",
+      usage: parseUsageReading(message.usage),
+      usageStale: message.usageStale === true,
+      panel: isRealmPanel(message.panel) ? message.panel : null,
+    };
   }
   if (message.type !== "selection") return null;
   const projectId = boundedId(message.projectId) ?? null;

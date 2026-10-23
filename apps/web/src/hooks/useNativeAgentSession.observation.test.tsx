@@ -29,6 +29,7 @@ const realBackendSnapshot = { ...realBackend };
 let platform: AgentPlatform = "pi";
 let observationEventVersions: number[] | undefined = [1];
 let quietObservation = false;
+let runningObservation = false;
 
 const identity = (): NativeAgentViewIdentity => ({
   backendInstanceId: "backend-1",
@@ -43,11 +44,14 @@ const getNativeAgentSessionStateUpdateMock = mock(
   async (): Promise<NativeAgentSessionStateUpdate> => ({
     viewVersion: 1,
     status: "snapshot",
-    token: "state-idle",
+    token: runningObservation ? "state-running" : "state-idle",
     value: {
       identity: identity(),
       connection: "connected",
-      turn: { phase: "idle", ...(quietObservation ? { quietObservation: true as const } : {}) },
+      turn: {
+        phase: runningObservation ? "running" : "idle",
+        ...(quietObservation ? { quietObservation: true as const } : {}),
+      },
       interactions: [],
       composerControls: [],
       capabilities: nativeAgentCapabilities(platform),
@@ -139,6 +143,7 @@ beforeEach(() => {
   platform = "pi";
   observationEventVersions = [1];
   quietObservation = false;
+  runningObservation = false;
   handlers.clear();
   listenMock.mockImplementation((event, handler) => {
     handlers.set(event, handler);
@@ -327,6 +332,41 @@ describe("useNativeAgentSession observation invalidations", () => {
     });
     await waitFor(() => expect(stateReads()).toBe(quiet + 1));
     await readsExactlyAfter(clock, 1_500);
+  });
+
+  test("a released Claude view at maximum backoff reads a resumed working turn immediately", async () => {
+    platform = "claude";
+    quietObservation = true;
+    const { clock } = installFakeReadCoordinator();
+    const view = await settledSession();
+    await readsExactlyAfter(clock, 1_500);
+    await readsExactlyAfter(clock, 3_000);
+    await readsExactlyAfter(clock, 5_000);
+    await readsExactlyAfter(clock, 10_000);
+    await readsExactlyAfter(clock, 15_000);
+
+    const quiet = stateReads();
+    runningObservation = true;
+    await act(async () => {
+      // Background work kept aggregate activity working throughout the
+      // release. Resumption arrives as an invalidation, not a transition.
+      announce({
+        environment_id: "env-1",
+        agent: "claude",
+        logical_session_key: "env-env-1:tab-1",
+        state: "working",
+        reason: "content",
+        generation: "observer-1",
+        revision: 1,
+      });
+    });
+    await waitFor(() => expect(stateReads()).toBe(quiet + 1));
+    await waitFor(() => expect(view.result.current.runtimeProjection?.turn.phase).toBe("running"));
+
+    // Running reads keep the 500 ms cadence without further announcements.
+    await readsExactlyAfter(clock, 500);
+    await readsExactlyAfter(clock, 500);
+    await readsExactlyAfter(clock, 500);
   });
 
   test("two mounted views of one session share one read per coordinated round", async () => {

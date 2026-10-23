@@ -771,21 +771,23 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
       ...(completionPending !== undefined ? { completionPending } : {}),
       ...(contentRevision !== undefined ? { contentRevision } : {}),
     });
-    if (
-      previous === state &&
+    const resumedForegroundTurn =
+      state === "working" && currentObservation?.readyForInput === true && readyForInput !== true;
+    const changedQuietContent =
       contentRevision !== undefined &&
       currentObservation?.contentRevision !== undefined &&
       currentObservation.contentRevision !== contentRevision &&
-      (state === "idle" || readyForInput === true)
-    ) {
+      (state === "idle" || readyForInput === true);
+    if (previous === state && (resumedForegroundTurn || changedQuietContent)) {
       /*
        * The view of a session whose turn is over changed without a
        * transition: a Claude background task reported, a Codex async question
        * or late command change landed. Announce it in the same stamp
        * sequence, so an idle view that reads less often is told to read and
-       * a missed announcement still shows as a gap. A running turn is not
-       * announced: its views keep their responsive cadence anyway, and every
-       * streamed write would otherwise become an invalidation.
+       * a missed announcement still shows as a gap. Resuming a released
+       * composer also wakes the view, even if background work kept aggregate
+       * activity working. Subsequent running content changes stay silent:
+       * the view has returned to its responsive cadence.
        */
       this.options.onObservationInvalidation?.({
         observation: this.observations.nextStamp(),

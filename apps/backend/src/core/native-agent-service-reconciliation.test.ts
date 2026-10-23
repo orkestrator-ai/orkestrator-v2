@@ -5208,6 +5208,58 @@ describe("NativeAgentService shared observations", () => {
     );
   });
 
+  test.each([
+    { readyForInput: undefined, contentRevision: "g:2" },
+    { readyForInput: false, contentRevision: "g:1" },
+    { readyForInput: undefined, contentRevision: undefined },
+  ])("announces a released working turn resuming once (%j)", async (resumed) => {
+    let observation: ProviderActivityObservation = {
+      state: "working",
+      readyForInput: true,
+      contentRevision: "g:1",
+    };
+    const { provider } = createProviderStub("claude", {
+      observeActivity: async () => observation,
+    });
+    const transitions = mock();
+    const invalidations = mock();
+    await withService(
+      {
+        prefix: "orkestrator-native-observation-resume-",
+        provider: async () => provider,
+        onActivityTransition: transitions,
+        onObservationInvalidation: invalidations,
+      },
+      async ({ storage, service }) => {
+        const key = await adopt(storage, "tab-1", "provider-1", "claude");
+        await service.reconcileAgentActivity();
+        expect(transitions).toHaveBeenCalledTimes(1);
+        expect(invalidations).not.toHaveBeenCalled();
+
+        // Aggregate activity stays working when the root turn resumes. The
+        // readiness edge must wake the idle view even without a new revision.
+        observation = { state: "working", ...resumed };
+        await service.reconcileAgentActivity();
+        expect(invalidations).toHaveBeenCalledTimes(1);
+        expect(invalidations.mock.calls[0]?.[0]).toMatchObject({
+          observation: { revision: 2 },
+          sessionKey: key,
+          providerSessionId: "provider-1",
+          state: "working",
+          agent: "claude",
+        });
+
+        await service.reconcileAgentActivity();
+        observation = { state: "working", contentRevision: "g:3" };
+        await service.reconcileAgentActivity();
+        observation = { state: "working", contentRevision: "g:4" };
+        await service.reconcileAgentActivity();
+        expect(invalidations).toHaveBeenCalledTimes(1);
+        expect(transitions).toHaveBeenCalledTimes(1);
+      },
+    );
+  });
+
   test("mail injection trusts only a fresh, post-dispatch idle", async () => {
     let clock = 100_000;
     let providerStatus: ProviderStatus = "idle";

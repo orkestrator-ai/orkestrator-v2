@@ -182,7 +182,6 @@ import { useConversationScrollTarget } from "./useConversationScrollTarget";
 import { NativeAgentQuestionCard } from "./NativeAgentQuestionCard";
 import { CodexPlanModeCard } from "@/components/codex/CodexPlanModeCard";
 import { nativeMessageHasPlanTool } from "@/lib/plan-tool";
-import { useElapsedTimer } from "@/hooks/useElapsedTimer";
 import {
   findLatestBackendTurnElapsedSeconds,
   findLatestBackendUserTurnStartedAt,
@@ -1184,12 +1183,10 @@ export function SharedNativeAgentController({
           ) ?? null),
     [isTurnActive, normalizedMessages],
   );
-  const { elapsedSeconds, finalElapsedSeconds } = useElapsedTimer(
-    isTurnActive,
-    projection?.sessionId,
-    turnStartedAt,
-    completedElapsedSeconds,
-  );
+  // The running clock ticks inside the footer (`elapsedStartedAt`): holding
+  // the tick here would re-render this whole tab every second of a turn.
+  const elapsedStartedAt = isTurnActive ? turnStartedAt : undefined;
+  const finalElapsedSeconds = isTurnActive ? null : (completedElapsedSeconds ?? null);
   const canQueue = isRunning && (projection?.capabilities.queue ?? adapter.capabilities.queue);
   // Older mocked/legacy hook surfaces have no domain availability field; a
   // complete projection remains authoritative on that compatibility path.
@@ -2860,7 +2857,8 @@ export function SharedNativeAgentController({
       respondToAsyncQuestion={platform === "codex" ? respondToAsyncQuestion : undefined}
       isLoading={isTurnActive}
       statusLabel={phaseStatusLabel}
-      elapsedSeconds={elapsedSeconds}
+      elapsedSeconds={null}
+      elapsedStartedAt={elapsedStartedAt}
       finalElapsedSeconds={finalElapsedSeconds}
       centerCompose={composerCentered}
       emptyStateMessage={`Ask ${label} to work on this repository.`}

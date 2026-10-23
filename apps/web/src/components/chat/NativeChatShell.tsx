@@ -22,6 +22,7 @@ import {
 import { NativeMessage } from "@/components/chat/NativeMessage";
 import { getNativeMessageSearchText } from "@/components/chat/native-message-search";
 import { formatElapsed } from "@/lib/format-elapsed";
+import { LiveElapsed } from "@/components/chat/LiveElapsed";
 import type { NativeMessage as NativeMessageType } from "@/lib/chat/native-message-types";
 import type {
   NativeAgentAsyncQuestionResponse,
@@ -101,7 +102,13 @@ interface NativeChatShellProps<TMessage extends NativeMessageType> {
    * (Codex's "Stopping…" / "Reconnecting…").
    */
   statusLabel?: ReactNode;
+  /** A fixed elapsed figure; prefer `elapsedStartedAt`, which ticks on its own. */
   elapsedSeconds: number | null;
+  /**
+   * The running turn's backend clock. The footer's clock then updates itself
+   * each second instead of the shell's owner re-rendering the whole transcript.
+   */
+  elapsedStartedAt?: number;
   finalElapsedSeconds: number | null;
 
   /**
@@ -199,6 +206,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
   agentActivityAnnouncement,
   statusLabel,
   elapsedSeconds,
+  elapsedStartedAt,
   finalElapsedSeconds,
   blockingCards,
   transcriptCards,
@@ -481,11 +489,13 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
                   <div className="chat-status-row mx-auto max-w-3xl min-w-0">
                     <div className="flex items-center gap-2 text-muted-foreground">
                       {statusLabel ?? <AgentThinkingIndicator agentName={agentLabel} />}
-                      {elapsedSeconds !== null && elapsedSeconds > 0 && (
+                      {elapsedStartedAt !== undefined ? (
+                        <LiveElapsed startedAt={elapsedStartedAt} />
+                      ) : elapsedSeconds !== null && elapsedSeconds > 0 ? (
                         <span className="text-xs text-muted-foreground/50">
                           {formatElapsed(elapsedSeconds)}
                         </span>
-                      )}
+                      ) : null}
                     </div>
                   </div>
                 </div>

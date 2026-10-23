@@ -37,9 +37,9 @@ import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList
 import { getNativeMessageSearchText } from "@/components/chat/native-message-search";
 import { StructuredReviewReportView } from "@/components/review/StructuredReviewReportView";
 import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useElapsedTimer, useVirtuosoScrollState } from "@/hooks";
+import { useVirtuosoScrollState } from "@/hooks";
 import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
-import { formatElapsed } from "@/lib/format-elapsed";
+import { LiveElapsed } from "@/components/chat/LiveElapsed";
 import { multiReviewReviewerScrollKey } from "@/lib/multi-review-keys";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import {
@@ -802,13 +802,8 @@ export function MultiReviewReviewerTab({
   const running = snapshot?.status === "running";
   const stalled = Boolean(snapshot?.stalledSince && running);
   const turnStartedAtMs = snapshot?.startedAt ? Date.parse(snapshot.startedAt) : Number.NaN;
-  // Hidden tabs stay mounted. Tick only while visible so a stale running
-  // snapshot cannot keep the virtualized transcript rerendering every second.
-  const { elapsedSeconds } = useElapsedTimer(
-    running && isActive,
-    data.reviewerId,
-    Number.isFinite(turnStartedAtMs) ? turnStartedAtMs : undefined,
-  );
+  // The clock ticks in its own small component, and only while visible: a
+  // stale running snapshot cannot keep the transcript re-rendering.
   // A refused action stays visible until the user acts again, so an ordinary
   // transcript failure must not displace it. A gone workflow or reviewer is the
   // exception: it makes the action failure moot and is terminal for this view,
@@ -851,11 +846,9 @@ export function MultiReviewReviewerTab({
           ) : (
             <AgentThinkingIndicator agentName={label} />
           )}
-          {elapsedSeconds !== null && elapsedSeconds > 0 && (
-            <span className="text-xs text-muted-foreground/50">
-              {formatElapsed(elapsedSeconds)}
-            </span>
-          )}
+          {Number.isFinite(turnStartedAtMs) ? (
+            <LiveElapsed startedAt={turnStartedAtMs} running={running && isActive} />
+          ) : null}
         </div>
       </div>
     </div>

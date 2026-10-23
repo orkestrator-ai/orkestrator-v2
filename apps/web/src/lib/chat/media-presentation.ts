@@ -186,7 +186,7 @@ export function dataUrlByteLength(url: string | null | undefined): number | null
   return base64 === null ? null : base64ByteLength(base64);
 }
 
-export type MediaLoadFailure = "denied" | "unavailable" | "too-large";
+export type MediaLoadFailure = "outside-workspace" | "denied" | "unavailable" | "too-large";
 
 const DENIED_CODES = new Set([
   "policy_denied",
@@ -199,17 +199,23 @@ const DENIED_CODES = new Set([
 ]);
 const TOO_LARGE_CODES = new Set(["capacity_exceeded", "package_size_exceeded", "too_large"]);
 
+/** Path-confinement refusals from the host and container readers and the media stream. */
+const OUTSIDE_WORKSPACE_MESSAGE =
+  /outside Orkestrator workspace storage|outside the (?:environment's|container) workspace|unsafe container media path/i;
 const DENIED_MESSAGE =
-  /outside Orkestrator workspace storage|unsafe container media path|permission denied|access denied|not permitted|forbidden|unauthori[sz]ed|\bEACCES\b|\bEPERM\b/i;
+  /permission denied|access denied|not permitted|forbidden|unauthori[sz]ed|\bEACCES\b|\bEPERM\b/i;
 const TOO_LARGE_MESSAGE = /\bexceeds \d+ bytes\b|too large/i;
 
 /**
- * Classify a media read failure. Authorization and path-confinement refusals
- * are `denied`; size ceilings are `too-large`; everything else (missing,
- * moved, expired, offline, malformed) is `unavailable`.
+ * Classify a media read failure. A path outside the environment's workspace
+ * is `outside-workspace` (checked first: the stream reports it as
+ * `policy_denied`); other authorization refusals are `denied`; size ceilings
+ * are `too-large`; everything else (missing, moved, expired, offline,
+ * malformed) is `unavailable`.
  */
 export function mediaLoadFailure(error: unknown): MediaLoadFailure {
   const { code, message } = artifactErrorInfo(error);
+  if (OUTSIDE_WORKSPACE_MESSAGE.test(message)) return "outside-workspace";
   const normalizedCode = code?.toLowerCase();
   if (normalizedCode && DENIED_CODES.has(normalizedCode)) return "denied";
   if (normalizedCode && TOO_LARGE_CODES.has(normalizedCode)) return "too-large";

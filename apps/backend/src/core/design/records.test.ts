@@ -222,6 +222,94 @@ describe("design private records, legacy migration and recovery states", () => {
     });
   });
 
+  test("retained outcomes give way oldest first at the pending byte limit", async () => {
+    const canvas = legacyCanvas();
+    await writeLegacy(canvas);
+    const descriptor: DesignOperationDescriptor = {
+      canvasId: canvas.id,
+      input: { kind: "update_frame", frameId: canvas.frames[0]!.id, patch: { x: 40 } },
+      preconditions: { frameRevision: 3 },
+    };
+    const bytes = Buffer.byteLength(JSON.stringify(descriptor));
+    const first = await service().prepare("env-1", "user", descriptor);
+    const second = await service().prepare("env-1", "user", descriptor);
+    const restarted = await harness.restart();
+    // The count bound has ample room; only bytes force out the oldest entry.
+    await withDesignLimit("admittedPayloadBytes", 2 * bytes, async () => {
+      const third = await restarted.prepare("env-1", "user", descriptor);
+      let pending = await restarted.store.readPending(canvas.id);
+      expect(pending.map((entry) => entry.token)).toEqual([second.token, third.token]);
+      expect(pending.reduce((total, entry) => total + entry.bytes, 0)).toBe(2 * bytes);
+      expect((await restarted.status("env-1", canvas.id, first.token)).state).toBe("unknown");
+      expect((await restarted.status("env-1", canvas.id, second.token)).state).toBe("interrupted");
+      const fourth = await restarted.prepare("env-1", "user", descriptor);
+      pending = await restarted.store.readPending(canvas.id);
+      expect(pending.map((entry) => entry.token)).toEqual([third.token, fourth.token]);
+      expect((await restarted.status("env-1", canvas.id, second.token)).state).toBe("unknown");
+      expect((await restarted.status("env-1", canvas.id, third.token)).state).toBe("prepared");
+      await expect(restarted.prepare("env-1", "user", descriptor)).rejects.toThrow(
+        "Too much pending edit data",
+      );
+      expect(await restarted.store.readPending(canvas.id)).toEqual(pending);
+    });
+  });
+
+  test("legacy migration retains a dead owner's duplicate as committed when its copy exists", async () => {
+    const canvas = legacyCanvas();
+    const original = await writeLegacy(canvas);
+    await harness.restart({
+      faults: {
+        beforeRename: (file) => {
+          if (file.endsWith(`${canvas.id}.orkrec`)) throw new Error("source receipt unavailable");
+        },
+      },
+    });
+    const descriptor: DesignOperationDescriptor = {
+      canvasId: canvas.id,
+      input: { kind: "duplicate_canvas", name: "Legacy copy" },
+      preconditions: { canvasRevision: 5 },
+      correlationId: "legacy-duplicate",
+    };
+    const prepared = await service().prepare("env-1", "user", descriptor);
+    const committed = await service().execute("env-1", canvas.id, prepared.token);
+    expect(committed.state).toBe("committed");
+    const copyId = committed.result!.createdCanvasId!;
+    expect(copyId).toBeDefined();
+    expect(await files()).not.toContain(`${canvas.id}.orkrec`);
+    const restarted = await harness.restart();
+    expect(restarted.ownerDead((await restarted.store.readPending(canvas.id))[0]!)).toBe(true);
+    expect(await restarted.status("env-1", canvas.id, prepared.token)).toMatchObject({
+      state: "committed",
+      result: { createdCanvasId: copyId, canvasRevision: 5 },
+    });
+    expect(await restarted.settledCorrelation("env-1", canvas.id, descriptor)).toMatchObject({
+      matches: true,
+      status: { token: prepared.token, state: "committed", result: { createdCanvasId: copyId } },
+    });
+    expect(await files()).not.toContain(`${canvas.id}.orkrec`);
+    // A different edit migrates the source and records the duplicate's outcome.
+    await restarted.mutate(canvas.id, "env-1", canvas.frames[0]!.id, 3, { x: 99 }, "user");
+    const record = JSON.parse(
+      await readFile(restarted.store.recordFile(canvas.id), "utf8"),
+    ) as DesignPrivateRecord;
+    expect(record.receipts.find((receipt) => receipt.token === prepared.token)).toMatchObject({
+      state: "committed",
+      result: { createdCanvasId: copyId, canvasRevision: 5 },
+    });
+    expect(receiptDigest(record, prepared.token)).toBe(intentDigest(descriptor));
+    expect(await readFile(restarted.store.legacyBackupFile(canvas.id), "utf8")).toBe(original);
+    expect(await restarted.execute("env-1", canvas.id, prepared.token)).toMatchObject({
+      state: "committed",
+      result: { createdCanvasId: copyId },
+    });
+    await harness.restart();
+    await service().initialize();
+    expect(await service().store.readPending(canvas.id)).toEqual([]);
+    expect((await service().list("env-1")).map((entry) => entry.id).sort()).toEqual(
+      [canvas.id, copyId].sort(),
+    );
+  });
+
   test("deleting the environment also removes a migrated canvas's legacy backup", async () => {
     const canvas = legacyCanvas();
     await writeLegacy(canvas);

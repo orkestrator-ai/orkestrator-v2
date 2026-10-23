@@ -298,13 +298,49 @@ describe("design lifecycle: tombstones, restore, purge, duplicate and fencing", 
       expect(await copies(canvasId)).toEqual([copyId!]);
     });
 
+    test("reconciles a committed copy on its live owner while source writes keep failing", async () => {
+      const { canvasId, token } = await prepareDuplicate();
+      failSource = { canvasId, times: Number.POSITIVE_INFINITY };
+      const status = await service().execute("env-1", canvasId, token);
+      const [copyId] = await copies(canvasId);
+      expect(copyId).toBeDefined();
+      expect(status).toMatchObject({
+        state: "committed",
+        result: { createdCanvasId: copyId, canvasRevision: 2 },
+      });
+      expect(await service().status("env-1", canvasId, token)).toEqual(status);
+      expect(await service().execute("env-1", canvasId, token)).toEqual(status);
+      expect((await service().store.readPending(canvasId)).map((entry) => entry.token)).toEqual([
+        token,
+      ]);
+      const descriptor: DesignOperationDescriptor = {
+        canvasId,
+        input: { kind: "duplicate_canvas", name: "Copy" },
+        preconditions: { canvasRevision: 2 },
+        correlationId: "duplicate-once",
+      };
+      expect(await service().prepare("env-1", "user", descriptor)).toMatchObject({ token });
+      await expect(
+        service().prepare("env-1", "user", {
+          ...descriptor,
+          correlationId: "another-duplicate",
+        }),
+      ).rejects.toThrow("earlier duplicate already committed");
+      expect(await copies(canvasId)).toEqual([copyId!]);
+      // Once saving works, replay persists the receipt and removes pending.
+      failSource = undefined;
+      expect(await service().execute("env-1", canvasId, token)).toEqual(status);
+      expect(await service().store.readPending(canvasId)).toEqual([]);
+      expect(await service().status("env-1", canvasId, token)).toEqual(status);
+    });
+
     test("records it committed with the copy after the backend restarts", async () => {
       const { canvasId, token } = await prepareDuplicate();
       failSource = { canvasId, times: Number.POSITIVE_INFINITY };
       try {
-        expect(String(await failureOf(service().execute("env-1", canvasId, token)))).toContain(
-          "injected source crash",
-        );
+        expect(await service().execute("env-1", canvasId, token)).toMatchObject({
+          state: "committed",
+        });
       } finally {
         failSource = undefined;
       }
@@ -326,6 +362,38 @@ describe("design lifecycle: tombstones, restore, purge, duplicate and fencing", 
           correlationId: "duplicate-once",
         }),
       ).rejects.toThrow("already has a settled operation");
+      expect(await copies(canvasId)).toEqual([copyId!]);
+    });
+
+    test("status prefers a committed copy over an unrecorded live-owner failure", async () => {
+      const { canvasId, token } = await prepareDuplicate();
+      const store = service().store;
+      const readPending = store.readPending.bind(store);
+      let reads = 0;
+      failSource = { canvasId, times: Number.POSITIVE_INFINITY };
+      // Fail recovery's pending read after the copy and the first source write,
+      // forcing the operation's outer catch to remember an unknown outcome.
+      store.readPending = async (id) => {
+        if (id === canvasId && ++reads === 2) throw new Error("pending read unavailable");
+        return readPending(id);
+      };
+      try {
+        expect(String(await failureOf(service().execute("env-1", canvasId, token)))).toContain(
+          "pending read unavailable",
+        );
+      } finally {
+        store.readPending = readPending;
+      }
+      const [copyId] = await copies(canvasId);
+      expect(copyId).toBeDefined();
+      expect(await service().status("env-1", canvasId, token)).toMatchObject({
+        state: "committed",
+        result: { createdCanvasId: copyId },
+      });
+      expect(await service().execute("env-1", canvasId, token)).toMatchObject({
+        state: "committed",
+        result: { createdCanvasId: copyId },
+      });
       expect(await copies(canvasId)).toEqual([copyId!]);
     });
 

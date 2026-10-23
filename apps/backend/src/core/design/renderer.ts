@@ -571,14 +571,11 @@ export class DesignRenderer {
   }
 
   private onDisconnected(gen: Generation): void {
-    if (gen.dead) {
-      this.generations.delete(gen);
-      return;
-    }
+    if (gen.dead) return;
     warn("generation-disconnected", { generation: gen.id, running: gen.jobs.size });
-    this.recoveringSince = Date.now();
-    this.markDead(gen, "disconnected");
-    this.generations.delete(gen);
+    // The connection can disappear while the separately owned server lives.
+    // Keep it tracked until termination settles so shutdown can join cleanup.
+    this.retire(gen, "disconnected");
   }
 
   /** Marks a generation unusable and fails its running jobs exactly once. */

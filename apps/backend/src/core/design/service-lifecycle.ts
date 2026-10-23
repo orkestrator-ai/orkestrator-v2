@@ -215,7 +215,14 @@ export async function executeLifecycle(
         if (settled) return settled;
         const next = cloneRecord(loaded.record);
         addReceipt(next, receipt, entry.descriptor);
-        await service.commit(next, loaded.legacy);
+        try {
+          await service.commit(next, loaded.legacy);
+        } catch (saveError) {
+          // The copy is durable even when its source receipt cannot be saved.
+          // Retain pending so status, retries and restart recovery can prove it.
+          if (receipt.state === "committed") return receipt;
+          throw saveError;
+        }
       } else if (loaded.kind === "record") {
         await discardProvisional(service, entry.canvasId);
       }

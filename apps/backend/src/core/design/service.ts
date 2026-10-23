@@ -739,6 +739,17 @@ export class DesignService {
           );
         }
       }
+      if (descriptor.input.kind === "duplicate_canvas") {
+        for (const candidate of stored) {
+          if (record.receipts.some((receipt) => receipt.token === candidate.token)) continue;
+          if (await lifecycle.committedDuplicate(this, candidate))
+            throw new DesignError(
+              "unknown-outcome",
+              "An earlier duplicate already committed. Reconcile its token before duplicating again.",
+              { retry: "review", details: { token: candidate.token } },
+            );
+        }
+      }
       if (
         pending.reduce((total, candidate) => total + candidate.bytes, 0) + bytes >
         DESIGN_LIMITS.admittedPayloadBytes
@@ -886,6 +897,15 @@ export class DesignService {
     });
     const receipt = record.receipts.find((candidate) => candidate.token === token);
     if (receipt) return receipt;
+    const entry = (await this.store.readPending(canvasId)).find(
+      (candidate) => candidate.token === token && candidate.environmentId === environmentId,
+    );
+    // A duplicate's copy commits before its source receipt. Its owner may
+    // still be alive after that receipt repeatedly fails to persist.
+    if (entry) {
+      const committed = await lifecycle.committedDuplicate(this, entry);
+      if (committed) return committed;
+    }
     const unrecorded = this.unrecorded.get(token);
     if (
       unrecorded &&
@@ -894,10 +914,7 @@ export class DesignService {
       !this.running.has(token)
     )
       return unrecorded;
-    const entry = (await this.store.readPending(canvasId)).find(
-      (candidate) => candidate.token === token,
-    );
-    if (entry && entry.environmentId === environmentId) {
+    if (entry) {
       // Side-effect free: the receipt is written when the token is next executed.
       if (!this.running.has(token) && this.ownerDead(entry)) return this.deadOutcome(entry);
       const executing = this.running.has(token) || entry.state === "executing";

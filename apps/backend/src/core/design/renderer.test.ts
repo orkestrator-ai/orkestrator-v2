@@ -499,13 +499,15 @@ describe("DesignRenderer lifecycle deadlines", () => {
   });
 
   test("an old generation's disconnect does not clear the replacement browser", async () => {
+    const closing = deferred();
     const first = fakeBrowser({
       evaluate: (operation) => (operation.op === "render" ? true : never()),
       contextClose: never,
+      browserClose: () => closing.promise,
     });
     const second = fakeBrowser();
     const launch = launcher(first.handle, second.handle);
-    const instance = renderer(launch, { budgets: { runMs: 20, cleanupMs: 20 } });
+    const instance = renderer(launch, { budgets: { runMs: 20, cleanupMs: 500 } });
     await failure(instance.run(job()));
     await waitFor(() => first.close.mock.calls.length === 1);
     await instance.run(job());
@@ -514,6 +516,16 @@ describe("DesignRenderer lifecycle deadlines", () => {
     await instance.run(job());
     expect(launch).toHaveBeenCalledTimes(2);
     expect(instance.status().generation).toBe(2);
+    let stopped = false;
+    const shutdown = instance.close().then(() => {
+      stopped = true;
+    });
+    await waitFor(() => second.close.mock.calls.length === 1);
+    expect(stopped).toBe(false);
+    closing.resolve();
+    await shutdown;
+    expect(first.close).toHaveBeenCalledTimes(1);
+    expect(first.kill).not.toHaveBeenCalled();
   });
 
   test("generation death fails running jobs exactly once without rerunning them", async () => {
@@ -539,6 +551,33 @@ describe("DesignRenderer lifecycle deadlines", () => {
     expect(launch).toHaveBeenCalledTimes(2);
     expect(first.evaluated.filter((op) => op.op === "serialize")).toHaveLength(2);
     expect(instance.status()).toMatchObject({ state: "ready", generation: 2 });
+    await instance.close();
+    expect(first.close).toHaveBeenCalledTimes(1);
+    expect(second.close).toHaveBeenCalledTimes(1);
+    expect(first.kill).not.toHaveBeenCalled();
+  });
+
+  test("shutdown joins disconnected generation cleanup and kills after close rejects", async () => {
+    const closing = deferred();
+    const first = fakeBrowser({ browserClose: () => closing.promise });
+    const second = fakeBrowser();
+    const launch = launcher(first.handle, second.handle);
+    const instance = renderer(launch, { budgets: { cleanupMs: 1_000 } });
+    await instance.run(job());
+    first.disconnect();
+    await waitFor(() => first.close.mock.calls.length === 1);
+    await instance.run(job());
+    let stopped = false;
+    const shutdown = instance.close().then(() => {
+      stopped = true;
+    });
+    await waitFor(() => second.close.mock.calls.length === 1);
+    expect(stopped).toBe(false);
+    closing.reject(new Error("browser close failed"));
+    await shutdown;
+    expect(first.close).toHaveBeenCalledTimes(1);
+    expect(first.kill).toHaveBeenCalledTimes(1);
+    expect(second.close).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -737,6 +776,54 @@ describe("DesignRenderer with real Chromium", () => {
           : "never attempted";
         console.error(`[real Chromium] launch ${outcome}`);
         throw error;
+      }
+    },
+    2 * DEFAULT_DESIGN_RENDER_BUDGETS.overallMs,
+  );
+
+  test.skipIf(!realChromium || process.platform === "win32")(
+    "terminates an owned server after its browser connection disconnects and renders with a replacement",
+    async () => {
+      const handles: DesignBrowserHandle[] = [];
+      const cleanup = deferred();
+      const instance = new DesignRenderer({
+        launchBrowser: async (options) => {
+          const handle = await launchDesignBrowser(options);
+          handles.push(handle);
+          if (handles.length !== 1) return handle;
+          return {
+            ...handle,
+            close: async () => {
+              await cleanup.promise;
+              await handle.close();
+            },
+          };
+        },
+        budgets: { cleanupMs: 2_000 },
+      });
+      renderers.push(instance);
+      try {
+        expect(await instance.run<string>(job())).toContain("Hello");
+        const first = handles[0]!;
+        const pid = first.pid;
+        if (!pid) throw new Error("expected the browser process id");
+        await first.browser.close();
+        expect(first.browser.isConnected()).toBe(false);
+        // Only the connection has closed; the server is still ours to end.
+        expect(processAlive(pid)).toBe(true);
+        cleanup.resolve();
+        await waitFor(() => !processAlive(pid), 5_000);
+        expect(await instance.run<string>(job())).toContain("Hello");
+        expect(handles).toHaveLength(2);
+        expect(instance.status()).toMatchObject({ state: "ready", generation: 2 });
+        await instance.close();
+        for (const handle of handles) {
+          if (handle.pid) await waitFor(() => !processAlive(handle.pid!), 5_000);
+        }
+      } finally {
+        cleanup.resolve();
+        await instance.close();
+        await Promise.all(handles.map((handle) => handle.kill().catch(() => undefined)));
       }
     },
     2 * DEFAULT_DESIGN_RENDER_BUDGETS.overallMs,

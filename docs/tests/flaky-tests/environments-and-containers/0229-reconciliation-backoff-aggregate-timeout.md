@@ -44,6 +44,9 @@ mise run test:logged -- --name reconciliation-rerun -- bun test --cwd apps/backe
 Evidence: `/tmp/orkestrator-test-run.aDyLLJ/root-tests.log.gz`. No assertion,
 implementation, skip or timeout was changed for these cases.
 
+## Cross-service read policy final validation recurrence — 2026-10-23
+
+`mise run test` on the 0054 branch merged with `origin/main` at `cda435fc9` (no command-registry source changes) timed out at 5000.49 ms, alongside two neighbouring rename cases. The complete owning file then passed alone twice (52 passed, 24.6 s and 20.9 s) after one alone failure in the A-to-B-to-A rename case. Details in [0696](../aggregate-validation-runs/0696-cross-service-reads-validation.md). No assertion, timeout or skip changed.
 
 ## Session lifecycle review recurrence — 2026-10-23
 

@@ -83,6 +83,7 @@ import {
   ReviewFanoutRunner,
   attachAgentBeforeDispatch,
   commitProgressObservation,
+  consolidationOverlap,
   consolidationReports,
   createReviewConsolidationPrompt,
   deriveConsolidatedProvenance,
@@ -570,6 +571,14 @@ export class BuildPipelineReviewFanout {
         session.tokenCount = reviewer.tokenCount;
         changed = true;
       }
+      if (
+        settled &&
+        reviewer.cacheReadTokens !== undefined &&
+        session.cacheReadTokens !== reviewer.cacheReadTokens
+      ) {
+        session.cacheReadTokens = reviewer.cacheReadTokens;
+        changed = true;
+      }
     }
     if (changed) await this.save(pipeline);
   }
@@ -988,6 +997,7 @@ export class BuildPipelineReviewFanout {
     state.report = provenance.report;
     session.status = "idle";
     session.reviewReport = provenance.report;
+    session.reviewOverlap = consolidationOverlap(parsed.data, state.reviewers);
     session.structuredRequestId = consolidation.requestId;
     session.structuredResultStatus = "accepted";
     pipeline.structuredReview = provenance.report;

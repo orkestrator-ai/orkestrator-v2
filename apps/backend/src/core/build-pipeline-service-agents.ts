@@ -390,6 +390,9 @@ export class BuildPipelineAgents {
         if (session) {
           session.completedAt = now;
           if (reviewer.tokenCount !== undefined) session.tokenCount = reviewer.tokenCount;
+          if (reviewer.cacheReadTokens !== undefined) {
+            session.cacheReadTokens = reviewer.cacheReadTokens;
+          }
           if (!reviewer.modelUnpinned) session.model = reviewer.model;
           if (reviewer.reasoningEffort) session.reasoningEffort = reviewer.reasoningEffort;
         }

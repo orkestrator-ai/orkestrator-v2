@@ -5,7 +5,12 @@
  * finding is attributed by the backend, and a consolidated finding must cite
  * the source findings it merges; the backend derives its review models.
  */
-import type { ReviewerModelSelection, ReviewerRecord } from "@orkestrator/protocol/review-fanout";
+import type {
+  ReviewPanelOverlapPosition,
+  ReviewPanelOverlapV1,
+  ReviewerModelSelection,
+  ReviewerRecord,
+} from "@orkestrator/protocol/review-fanout";
 import {
   stripStructuredReviewProvenance,
   type ReviewContractValidationIssue,
@@ -41,6 +46,8 @@ type SourceFindingKind = "issue" | "coverage-gap";
 interface ProvenanceSource {
   kind: SourceFindingKind;
   model: string;
+  /** One-based configured position of the reviewer that reported it. */
+  position: number;
 }
 
 function sourceFindingId(
@@ -88,12 +95,14 @@ function provenanceSources(
       sources.set(sourceFindingId(reviewerIndex, "issue", findingIndex), {
         kind: "issue",
         model,
+        position: reviewerIndex + 1,
       });
     });
     reviewer.report.testCoverageGaps.forEach((_gap, findingIndex) => {
       sources.set(sourceFindingId(reviewerIndex, "coverage-gap", findingIndex), {
         kind: "coverage-gap",
         model,
+        position: reviewerIndex + 1,
       });
     });
   });
@@ -179,5 +188,71 @@ export function deriveConsolidatedProvenance(
         ),
       })),
     },
+  };
+}
+
+/**
+ * Counts how much the reviewers overlapped, from the source IDs a consolidated
+ * report cites. Call it with the report as the model returned it, before
+ * {@link deriveConsolidatedProvenance} replaces the IDs with model labels.
+ *
+ * A consolidated finding's sources are the distinct reviewer positions among
+ * its valid citations; an ID that names no source finding of the right kind is
+ * ignored here (provenance validation rejects it separately). The output holds
+ * counts and positions only.
+ */
+export function consolidationOverlap(
+  report: StructuredReviewReport,
+  reviewers: readonly ReviewerRecord[],
+): ReviewPanelOverlapV1 {
+  const sources = provenanceSources(reviewers);
+  const positions = new Map<number, ReviewPanelOverlapPosition>();
+  reviewers.forEach((reviewer, index) => {
+    if (reviewer.status !== "completed" || !reviewer.report) return;
+    positions.set(index + 1, {
+      position: index + 1,
+      sourceFindings: reviewer.report.issues.length + reviewer.report.testCoverageGaps.length,
+      citedSourceFindings: 0,
+      consolidatedFindings: 0,
+      singleSourceFindings: 0,
+      novelFindings: 0,
+    });
+  });
+  const cited = new Set<string>();
+  let singleSourceFindings = 0;
+  const findings = [
+    ...report.issues.map((finding) => ({ kind: "issue" as const, ids: finding.reviewSourceIds })),
+    ...report.testCoverageGaps.map((finding) => ({
+      kind: "coverage-gap" as const,
+      ids: finding.reviewSourceIds,
+    })),
+  ];
+  for (const finding of findings) {
+    const cites = new Set<number>();
+    for (const sourceId of finding.ids ?? []) {
+      const source = sources.get(sourceId);
+      if (!source || source.kind !== finding.kind) continue;
+      cites.add(source.position);
+      if (cited.has(sourceId)) continue;
+      cited.add(sourceId);
+      positions.get(source.position)!.citedSourceFindings += 1;
+    }
+    if (cites.size === 0) continue;
+    for (const position of cites) positions.get(position)!.consolidatedFindings += 1;
+    positions.get(Math.min(...cites))!.novelFindings += 1;
+    if (cites.size === 1) {
+      singleSourceFindings += 1;
+      positions.get(Math.min(...cites))!.singleSourceFindings += 1;
+    }
+  }
+  const entries = [...positions.values()];
+  return {
+    version: 1,
+    reviewers: entries.length,
+    sourceFindings: entries.reduce((total, entry) => total + entry.sourceFindings, 0),
+    citedSourceFindings: cited.size,
+    consolidatedFindings: findings.length,
+    singleSourceFindings,
+    positions: entries,
   };
 }

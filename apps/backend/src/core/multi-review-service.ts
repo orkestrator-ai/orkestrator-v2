@@ -174,6 +174,7 @@ import {
   captureReviewWorktreeSnapshot,
   commitProgressObservation,
   consolidationReports,
+  consolidationOverlap,
   deriveConsolidatedProvenance,
   consolidationResultContext,
   parseStructuredReportResult,
@@ -425,6 +426,7 @@ function resetReviewerForRestart(
   delete reviewer.progressDigest;
   delete reviewer.stalledSince;
   delete reviewer.tokenCount;
+  delete reviewer.cacheReadTokens;
   delete reviewer.usageFinalizationPolls;
   delete reviewer.report;
   delete reviewer.error;
@@ -1320,6 +1322,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           delete reviewer.progressDigest;
           delete reviewer.stalledSince;
           delete reviewer.tokenCount;
+          delete reviewer.cacheReadTokens;
           delete reviewer.usageFinalizationPolls;
           delete reviewer.startedAt;
           delete reviewer.completedAt;
@@ -1350,6 +1353,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         clearReviewSession(workflow);
         delete workflow.activeRequest;
         delete workflow.consolidatedReport;
+        delete workflow.consolidationOverlap;
         delete workflow.fixResult;
         delete workflow.addressPromptPending;
         delete workflow.addressPromptAttempts;
@@ -1420,6 +1424,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
             delete reviewer.progressDigest;
             delete reviewer.stalledSince;
             delete reviewer.tokenCount;
+            delete reviewer.cacheReadTokens;
             delete reviewer.usageFinalizationPolls;
             delete reviewer.completedAt;
           }
@@ -1619,6 +1624,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         clearReviewSession(workflow);
         delete workflow.activeRequest;
         delete workflow.consolidatedReport;
+        delete workflow.consolidationOverlap;
         delete workflow.fixResult;
         delete workflow.stepRuntimes?.consolidate;
         delete workflow.stepRuntimes?.fix;
@@ -1811,6 +1817,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           }
           workflow.restartFixAfterConsolidation = shouldReplayFix || undefined;
           delete workflow.consolidatedReport;
+          delete workflow.consolidationOverlap;
         } else {
           delete workflow.restartFixAfterConsolidation;
         }
@@ -4343,6 +4350,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         return;
       }
       workflow.consolidatedReport = provenance.report;
+      workflow.consolidationOverlap = consolidationOverlap(parsed.data, workflow.reviewers);
       if (workflow.restartFixAfterConsolidation) {
         delete workflow.restartFixAfterConsolidation;
         queueRestartedFix(workflow);

@@ -168,7 +168,6 @@ function internals(service: NativeAgentService) {
   return service as unknown as {
     drainPromptQueues(): Promise<void>;
     drainPromptQueueOnce(queueKey: string): Promise<void>;
-    reconcilePendingLaunches(): Promise<void>;
     provider(input: EnsureNativeAgentSessionInput): Promise<AgentSessionProvider>;
     createProviderSession(
       provider: NativeAgentRuntimeProvider,
@@ -181,18 +180,8 @@ function internals(service: NativeAgentService) {
       effort?: string,
     ): Promise<BridgeConnection>;
     providerRegistry: ProviderRegistry;
-    activityRetryAt: Map<string, number>;
-    activityAttempts: Map<string, number>;
-    observedSessionActivity: Map<
-      string,
-      { providerSessionId: string; state: ProviderActivityState }
-    >;
-    pendingPrRefreshEnvironmentIds: Set<string>;
-    launchTasks: Map<string, Promise<void>>;
     queueRetryAt: Map<string, number>;
     queueAttempts: Map<string, number>;
-    launchRetryAt: Map<string, number>;
-    launchTimer: ReturnType<typeof setInterval> | null;
   };
 }
 

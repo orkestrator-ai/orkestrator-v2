@@ -55,7 +55,10 @@ import {
 } from "@orkestrator/protocol/coordinator";
 import { upgradeNativeAgentSessionRecords } from "./storage-record-upgrades.js";
 import { readStoredValue, seedStore } from "./storage-test-support.js";
-import { interactionInternals } from "./native-agent-service-test-collaborators.js";
+import {
+  interactionInternals,
+  launchInternals,
+} from "./native-agent-service-test-collaborators.js";
 
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -204,7 +207,6 @@ function internals(service: NativeAgentService) {
   return service as unknown as {
     drainPromptQueues(): Promise<void>;
     drainPromptQueueOnce(queueKey: string): Promise<void>;
-    reconcilePendingLaunches(): Promise<void>;
     provider(input: EnsureNativeAgentSessionInput): Promise<AgentSessionProvider>;
     bridgeConnection(
       agent: BuildPipelineAgent,
@@ -213,18 +215,8 @@ function internals(service: NativeAgentService) {
       effort?: string,
     ): Promise<BridgeConnection>;
     providerRegistry: ProviderRegistry;
-    activityRetryAt: Map<string, number>;
-    activityAttempts: Map<string, number>;
-    observedSessionActivity: Map<
-      string,
-      { providerSessionId: string; state: ProviderActivityState }
-    >;
-    pendingPrRefreshEnvironmentIds: Set<string>;
-    launchTasks: Map<string, Promise<void>>;
     queueRetryAt: Map<string, number>;
     queueAttempts: Map<string, number>;
-    launchRetryAt: Map<string, number>;
-    launchTimer: ReturnType<typeof setInterval> | null;
   };
 }
 
@@ -2405,8 +2397,8 @@ describe("NativeAgentService", () => {
           agentActivitySources: { "native-agent": { state: "idle" } },
         });
         expect(await storage.getNativeAgentSession(key)).not.toBeNull();
-        expect(internals(service).activityAttempts.size).toBe(0);
-        expect(internals(service).activityRetryAt.size).toBe(0);
+        expect(launchInternals(service).activityAttempts.size).toBe(0);
+        expect(launchInternals(service).activityRetryAt.size).toBe(0);
       },
     );
   });
@@ -3001,7 +2993,7 @@ describe("NativeAgentService", () => {
         });
         // The failure left backoff bookkeeping behind; a tab opened afterwards
         // puts a provider back in the cache.
-        expect(internals(service).activityRetryAt.size).toBe(1);
+        expect(launchInternals(service).activityRetryAt.size).toBe(1);
         await internals(service).provider({
           environmentId: "env-1",
           agent: "codex",
@@ -3010,11 +3002,11 @@ describe("NativeAgentService", () => {
         expect(internals(service).providerRegistry.stateForTesting().providers.size).toBe(1);
 
         await storage.removeEnvironment("env-1");
-        await internals(service).reconcilePendingLaunches();
+        await launchInternals(service).reconcilePendingLaunches();
 
         expect(internals(service).providerRegistry.stateForTesting().providers.size).toBe(0);
-        expect(internals(service).activityRetryAt.size).toBe(0);
-        expect(internals(service).activityAttempts.size).toBe(0);
+        expect(launchInternals(service).activityRetryAt.size).toBe(0);
+        expect(launchInternals(service).activityAttempts.size).toBe(0);
         expect(internals(service).providerRegistry.stateForTesting().absentBridgeUntil.size).toBe(
           0,
         );
@@ -3325,7 +3317,7 @@ describe("NativeAgentService", () => {
           origin: "interactive-native" as const,
         };
         const session = await service.ensureSession(identity);
-        internals(service).observedSessionActivity.set(session.key, {
+        launchInternals(service).observedSessionActivity.set(session.key, {
           providerSessionId: session.providerSessionId,
           state: "idle",
         });
@@ -3359,7 +3351,7 @@ describe("NativeAgentService", () => {
         expect(provider.send).toHaveBeenCalledTimes(1);
         expect(provider.send.mock.calls[0]?.[1]).toBe("user prompt");
 
-        internals(service).observedSessionActivity.set(session.key, {
+        launchInternals(service).observedSessionActivity.set(session.key, {
           providerSessionId: session.providerSessionId,
           state: "idle",
         });
@@ -3374,7 +3366,7 @@ describe("NativeAgentService", () => {
           allowProviderCommands: false,
         });
 
-        internals(service).observedSessionActivity.delete(session.key);
+        launchInternals(service).observedSessionActivity.delete(session.key);
         expect(
           await service.dispatchMailInject({
             ...identity,
@@ -3418,7 +3410,7 @@ describe("NativeAgentService", () => {
             origin: "interactive-native" as const,
           };
           const session = await service.ensureSession(identity);
-          internals(service).observedSessionActivity.set(session.key, {
+          launchInternals(service).observedSessionActivity.set(session.key, {
             providerSessionId: session.providerSessionId,
             state: "idle",
           });
@@ -3466,7 +3458,7 @@ describe("NativeAgentService", () => {
           origin: "interactive-native" as const,
         };
         const session = await service.ensureSession(identity);
-        internals(service).observedSessionActivity.set(session.key, {
+        launchInternals(service).observedSessionActivity.set(session.key, {
           providerSessionId: session.providerSessionId,
           state: "idle",
         });

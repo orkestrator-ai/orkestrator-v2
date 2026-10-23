@@ -61,7 +61,10 @@ import {
   openCodeIncompleteTurnRequestId,
 } from "./opencode-turn-recovery.js";
 import { seedStore } from "./storage-test-support.js";
-import { interactionInternals } from "./native-agent-service-test-collaborators.js";
+import {
+  interactionInternals,
+  launchInternals,
+} from "./native-agent-service-test-collaborators.js";
 
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -215,7 +218,6 @@ function internals(service: NativeAgentService) {
   return service as unknown as {
     drainPromptQueues(): Promise<void>;
     drainPromptQueueOnce(queueKey: string): Promise<void>;
-    reconcilePendingLaunches(): Promise<void>;
     provider(input: EnsureNativeAgentSessionInput): Promise<AgentSessionProvider>;
     bridgeConnection(
       agent: BuildPipelineAgent,
@@ -224,18 +226,8 @@ function internals(service: NativeAgentService) {
       effort?: string,
     ): Promise<BridgeConnection>;
     providerRegistry: ProviderRegistry;
-    activityRetryAt: Map<string, number>;
-    activityAttempts: Map<string, number>;
-    observedSessionActivity: Map<
-      string,
-      { providerSessionId: string; state: ProviderActivityState }
-    >;
-    pendingPrRefreshEnvironmentIds: Set<string>;
-    launchTasks: Map<string, Promise<void>>;
     queueRetryAt: Map<string, number>;
     queueAttempts: Map<string, number>;
-    launchRetryAt: Map<string, number>;
-    launchTimer: ReturnType<typeof setInterval> | null;
   };
 }
 
@@ -1658,7 +1650,7 @@ describe("NativeAgentService", () => {
         expect(observeActivity).toHaveBeenCalledTimes(2);
         expect(dispose).not.toHaveBeenCalled();
         expect((await storage.getEnvironment("env-1"))?.agentActivityState).toBe("working");
-        expect(internals(service).activityRetryAt.size).toBe(0);
+        expect(launchInternals(service).activityRetryAt.size).toBe(0);
       },
     );
   });
@@ -2327,7 +2319,7 @@ describe("NativeAgentService", () => {
         clock += 1_000;
         activityState = "idle";
         await service.reconcileAgentActivity();
-        expect(internals(service).observedSessionActivity.get(key)?.state).toBe("idle");
+        expect(launchInternals(service).observedSessionActivity.get(key)?.state).toBe("idle");
         expect(await storage.getEnvironment("env-1")).toMatchObject({
           agentActivityState: "idle",
         });
@@ -2440,7 +2432,7 @@ describe("NativeAgentService", () => {
           clock += 1_000;
           activityState = "idle";
           await service.reconcileAgentActivity();
-          expect(internals(service).observedSessionActivity.get(key)?.state).toBe("working");
+          expect(launchInternals(service).observedSessionActivity.get(key)?.state).toBe("working");
 
           clock += 2_000;
           await service.reconcileAgentActivity();
@@ -2449,7 +2441,7 @@ describe("NativeAgentService", () => {
 
         expect(attempts).toBe(2);
         expect(warnings.some((warning) => warning.includes("Activity reconciliation"))).toBe(true);
-        expect(internals(service).observedSessionActivity.get(key)?.state).toBe("idle");
+        expect(launchInternals(service).observedSessionActivity.get(key)?.state).toBe("idle");
         expect(await storage.getEnvironment("env-1")).toMatchObject({
           agentActivityState: "idle",
           hasUnreadWork: true,
@@ -2618,7 +2610,7 @@ describe("NativeAgentService", () => {
           });
         }
         for (const environmentId of environmentIds) {
-          internals(service).pendingPrRefreshEnvironmentIds.add(environmentId);
+          launchInternals(service).pendingPrRefreshEnvironmentIds.add(environmentId);
         }
 
         const scan = service.reconcileAgentActivity();
@@ -2671,7 +2663,7 @@ describe("NativeAgentService", () => {
           await service.reconcileAgentActivity();
         });
         expect(warnings).toHaveLength(1);
-        expect(internals(service).pendingPrRefreshEnvironmentIds).toEqual(new Set(["env-1"]));
+        expect(launchInternals(service).pendingPrRefreshEnvironmentIds).toEqual(new Set(["env-1"]));
 
         // Delivery does not depend on keeping the completed tab/session alive.
         // A renderer may close it before the next background sweep retries.
@@ -2683,12 +2675,12 @@ describe("NativeAgentService", () => {
         await service.reconcileAgentActivity();
 
         expect(invoke).toHaveBeenCalledTimes(2);
-        expect(internals(service).pendingPrRefreshEnvironmentIds.size).toBe(0);
+        expect(launchInternals(service).pendingPrRefreshEnvironmentIds.size).toBe(0);
 
-        internals(service).pendingPrRefreshEnvironmentIds.add("env-1");
+        launchInternals(service).pendingPrRefreshEnvironmentIds.add("env-1");
         await storage.removeEnvironment("env-1");
         await service.reconcileAgentActivity();
-        expect(internals(service).pendingPrRefreshEnvironmentIds.size).toBe(0);
+        expect(launchInternals(service).pendingPrRefreshEnvironmentIds.size).toBe(0);
       },
     );
   });
@@ -2728,7 +2720,7 @@ describe("NativeAgentService", () => {
         await captureWarnings(() => service.reconcileAgentActivity());
 
         expect(invoke).toHaveBeenCalledTimes(2);
-        expect(internals(service).pendingPrRefreshEnvironmentIds).toEqual(new Set(["env-1"]));
+        expect(launchInternals(service).pendingPrRefreshEnvironmentIds).toEqual(new Set(["env-1"]));
 
         await storage.updateEnvironment("env-1", {
           prRecheckAfterAgentCompletionArmedAt: undefined,
@@ -2736,7 +2728,7 @@ describe("NativeAgentService", () => {
         await service.reconcileAgentActivity();
 
         expect(invoke).toHaveBeenCalledTimes(2);
-        expect(internals(service).pendingPrRefreshEnvironmentIds.size).toBe(0);
+        expect(launchInternals(service).pendingPrRefreshEnvironmentIds.size).toBe(0);
       },
     );
   });
@@ -2805,7 +2797,7 @@ describe("NativeAgentService", () => {
           providerSessionId: "provider-old",
         });
         await service.reconcileAgentActivity();
-        expect(internals(service).observedSessionActivity.get(key)).toEqual({
+        expect(launchInternals(service).observedSessionActivity.get(key)).toEqual({
           providerSessionId: "provider-old",
           state: "working",
         });
@@ -2820,7 +2812,7 @@ describe("NativeAgentService", () => {
         });
         activityState = "idle";
         await service.reconcileAgentActivity();
-        expect(internals(service).observedSessionActivity.get(key)).toEqual({
+        expect(launchInternals(service).observedSessionActivity.get(key)).toEqual({
           providerSessionId: "provider-new",
           state: "idle",
         });
@@ -2828,7 +2820,7 @@ describe("NativeAgentService", () => {
 
         await storage.invalidateNativeAgentSession(key, "provider-new");
         await service.reconcileAgentActivity();
-        expect(internals(service).observedSessionActivity.has(key)).toBe(false);
+        expect(launchInternals(service).observedSessionActivity.has(key)).toBe(false);
       },
     );
   });
@@ -2849,7 +2841,7 @@ describe("NativeAgentService", () => {
           provider: async () => provider,
         },
         async ({ storage, service }) => {
-          await internals(service).reconcilePendingLaunches();
+          await launchInternals(service).reconcilePendingLaunches();
 
           expect(createSession).not.toHaveBeenCalled();
           expect(await storage.getEnvironment("env-1")).toMatchObject({
@@ -2891,7 +2883,7 @@ describe("NativeAgentService", () => {
           provider: async () => provider,
         },
         async ({ storage, service }) => {
-          await internals(service).reconcilePendingLaunches();
+          await launchInternals(service).reconcilePendingLaunches();
           expect(createSession).not.toHaveBeenCalled();
 
           const duringSetup = await storage.getPaneLayout("env-1");
@@ -2999,7 +2991,7 @@ describe("NativeAgentService", () => {
 
           // Armed backoff means the very next sweep is a no-op rather than an
           // unthrottled retry every two seconds.
-          await internals(service).reconcilePendingLaunches();
+          await launchInternals(service).reconcilePendingLaunches();
           expect(createSession).not.toHaveBeenCalled();
         },
       );
@@ -3227,7 +3219,7 @@ describe("NativeAgentService", () => {
           expect(staged?.initialPromptAttachments).toBeUndefined();
           expect(staged?.initialPrompt).toContain("/workspace/.orkestrator/initial-prompt");
 
-          internals(service).launchRetryAt.delete("env-1");
+          launchInternals(service).launchRetryAt.delete("env-1");
           await service.reconcileInitialLaunch("env-1");
 
           expect(writeAttachments).toHaveBeenCalledTimes(1);
@@ -3448,7 +3440,7 @@ describe("NativeAgentService", () => {
             duringRetry.revision,
           );
 
-          internals(service).launchRetryAt.delete("env-1");
+          launchInternals(service).launchRetryAt.delete("env-1");
           await service.reconcileInitialLaunch("env-1");
 
           expect(createSession).not.toHaveBeenCalled();
@@ -4067,7 +4059,7 @@ describe("NativeAgentService", () => {
             initialPromptAttachments: [expect.objectContaining({ id: "file-1" })],
             startupAgentSession: { status: "error" },
           });
-          expect(internals(service).launchRetryAt.has("env-1")).toBe(true);
+          expect(launchInternals(service).launchRetryAt.has("env-1")).toBe(true);
 
           await service.reconcileInitialLaunch("env-1");
 
@@ -4253,16 +4245,16 @@ describe("NativeAgentService", () => {
         async ({ storage, service }) => {
           const first = service.reconcileInitialLaunch("env-1");
           await createEntered;
-          const tracked = internals(service).launchTasks.get("env-1");
+          const tracked = launchInternals(service).launchTasks.get("env-1");
           const second = service.reconcileInitialLaunch("env-1");
           // The second caller joins the in-flight task. Starting a parallel one
           // would leave storage as the only thing fencing a duplicate launch.
-          expect(internals(service).launchTasks.get("env-1")).toBe(tracked);
+          expect(launchInternals(service).launchTasks.get("env-1")).toBe(tracked);
           releaseCreate?.();
           await Promise.all([first, second]);
 
           expect(createSession).toHaveBeenCalledTimes(1);
-          expect(internals(service).launchTasks.size).toBe(0);
+          expect(launchInternals(service).launchTasks.size).toBe(0);
           expect(await storage.getEnvironment("env-1")).toMatchObject({
             pendingAgentLaunch: false,
           });
@@ -4361,7 +4353,7 @@ describe("NativeAgentService", () => {
             },
           });
           expect(environment?.initialPromptAttachments).toBeUndefined();
-          expect(internals(service).launchRetryAt.has("env-1")).toBe(false);
+          expect(launchInternals(service).launchRetryAt.has("env-1")).toBe(false);
           expect(send).toHaveBeenCalledTimes(1);
         },
       );
@@ -4408,7 +4400,7 @@ describe("NativeAgentService", () => {
           });
           // The images must survive: the retry still needs something to attach.
           expect(environment?.initialPromptAttachments).toHaveLength(1);
-          expect(internals(service).launchRetryAt.get("env-1")).toBeGreaterThanOrEqual(
+          expect(launchInternals(service).launchRetryAt.get("env-1")).toBeGreaterThanOrEqual(
             before + 10_000,
           );
         },
@@ -4449,7 +4441,7 @@ describe("NativeAgentService", () => {
           deletionRequestedAt: new Date().toISOString(),
         });
         await storage.removeEnvironment("env-3");
-        await internals(service).reconcilePendingLaunches();
+        await launchInternals(service).reconcilePendingLaunches();
 
         // A cached provider for a departed environment holds its bridge
         // connection open for the life of the process.
@@ -4794,7 +4786,7 @@ describe("NativeAgentService shared observations", () => {
         held = undefined;
         await racingSweep;
 
-        expect(internals(service).observedSessionActivity.get(key)?.state).toBe("working");
+        expect(launchInternals(service).observedSessionActivity.get(key)?.state).toBe("working");
         expect(turnEnds(transitions)).toEqual([]);
         // Nothing waiting for idle may trust the dispatch-time `working`
         // either: a post-dispatch demand reads the provider again.
@@ -4843,7 +4835,7 @@ describe("NativeAgentService shared observations", () => {
         expect(send).toHaveBeenCalledTimes(1);
         release.resolve();
         await sweep;
-        expect(internals(service).observedSessionActivity.get(key)?.state).toBe("working");
+        expect(launchInternals(service).observedSessionActivity.get(key)?.state).toBe("working");
       },
     );
   });
@@ -5463,7 +5455,7 @@ describe("NativeAgentService shared observations", () => {
         late.resolve("idle");
         await sweep;
 
-        expect(internals(service).observedSessionActivity.get(key)?.state).toBe("working");
+        expect(launchInternals(service).observedSessionActivity.get(key)?.state).toBe("working");
         expect(turnEnds(transitions)).toEqual([]);
         await waitForCondition(() => first.dispose.mock.calls.length === 1);
         expect(second.dispose).not.toHaveBeenCalled();

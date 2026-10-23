@@ -601,12 +601,12 @@ from it (`orkestrator-v2:dev-182ff15b4e1f`):
 | Run | Environment | Providers | Result |
 | --- | --- | --- | --- |
 | `slash-inactive-local` | host worktree | Codex, Claude | **2 passed, 0 skipped** (Codex 136 s, Claude 113 s), with the outage now dropping the stream and the reconnect asserted |
-| `slash-inactive-container` | container | Codex, Claude | 2 failed at the first selection: the picker never opened (host load average about 70 from other worktrees). [0694](../../tests/flaky-tests/native-agents-and-transcripts/0694-container-slash-picker-closed-after-load.md) |
+| `slash-inactive-container` | container | Codex, Claude | 2 failed at the first selection: the picker never opened (host load average about 70 from other worktrees). [0710](../../tests/flaky-tests/native-agents-and-transcripts/0710-container-slash-picker-closed-after-load.md) |
 | `slash-inactive-container2` | container | Codex | Failed at the stale-draft step: the refusal took 5.7 s, past Playwright's 5 s default. The assertion now waits 30 s, like its neighbours |
 | `slash-inactive-container3` | container | Codex, Claude | **Codex passed every step** (193 s, 0 skipped). Claude passed the first four steps, including the stale draft, then hit the picker symptom again after the narrow-viewport reload |
 | `slash-inactive-container4` | container | Claude | **Passed every step** (284 s, 0 skipped) |
-| `slash-claude-local-retired` | host worktree | Claude | Failed: the restart right after Send parked the dispatch, and the same-id retry came back `unknown (HTTP 500)`. The restarted bridge waited out the killed process's preference lock ([0056](../agent-engines/0056-claude-preference-lock-after-restart.md)). The spec retried once only, so the card stayed |
-| `slash-claude-container-retired` | container | Claude | Failed: the 0694 picker symptom after the hard reload |
+| `slash-claude-local-retired` | host worktree | Claude | Failed: the restart right after Send parked the dispatch, and the same-id retry came back `unknown (HTTP 500)`. The restarted bridge waited out the killed process's preference lock ([0059](../agent-engines/0059-claude-preference-lock-after-restart.md)). The spec retried once only, so the card stayed |
+| `slash-claude-container-retired` | container | Claude | Failed: the 0710 picker symptom after the hard reload |
 | `slash-claude-local-r2` | host worktree | Claude | **Passed** (101 s, 0 skipped), after the spec learned to retry again on `unknown` |
 | `slash-claude-container-r2` | container | Claude | **Passed** (209 s, 0 skipped) |
 
@@ -615,7 +615,7 @@ written into `/workspace` was listed by the provider inside the container, ran
 while the environment was inactive, survived the stream outage, the inventory
 change, a refresh, a reload, a narrow viewport, and both bridge restarts
 without running twice; a stale selection was refused and kept. The picker
-symptom (3 of 7 container runs) is recorded as flake 0694 with its evidence;
+symptom (3 of 7 container runs) is recorded as flake 0710 with its evidence;
 it was not hidden with a retry or a longer wait.
 
 Spec changes made during these runs:
@@ -624,7 +624,7 @@ Spec changes made during these runs:
   (diagnosed: the dispatch revalidates against the bridge, 5.7 s under load).
 - After a restart, a same-id retry that answers `unknown` is retried again, up
   to four times, as a user would press Retry again; at-most-once is still
-  asserted. The cause of the `unknown` is todo 0056.
+  asserted. The cause of the `unknown` is todo 0059.
 - The restart steps annotate `retired-without-retry` when a parked dispatch is
   settled as lost by reconciliation (follow-up 1). None of the passing runs
   parked a dispatch at all (the restart came after the turn's first reply), so
@@ -637,7 +637,7 @@ Spec changes made during these runs:
 - `mise run test`: the root, bridge and Codex protocol groups pass. The
   workspace group's failures were load timeouts while live runs shared the
   host. Every owning file passed alone (existing flakes 0258, 0514, 0518, 0661,
-  0691 and 0093; new 0695 and 0696), except two:
+  0691 and 0093; new 0711 and 0712), except two:
   - `agent provider module boundaries > keeps every provider implementation
     module within 1,500 lines`: real, caused by this branch, fixed by sharing
     the three `commandRevision` mappings (`commandCatalogueRevisionField`).
@@ -782,9 +782,9 @@ Made on 2026-10-23 while closing items 1 to 5 and both follow-ups.
    timing, not product: leave them failing; raise every wait; change only the
    diagnosed waits and record the rest. Chosen: the last. The stale-draft
    refusal waits 30 s (measured 5.7 s under load) and an `unknown` retry is
-   retried again (cause filed as 0056). The picker symptom keeps its 30 s wait
-   and is flake 0694. Pro: the scenario stays strict where the cause is
-   unknown. Con: 0694 can still fail a container run until it is fixed.
+   retried again (cause filed as 0059). The picker symptom keeps its 30 s wait
+   and is flake 0710. Pro: the scenario stays strict where the cause is
+   unknown. Con: 0710 can still fail a container run until it is fixed.
 10. **Small defects found by the matrix were fixed here** (unknown availability
     state ran a command; Claude's sync-v1 snapshot dropped `commandRevision`),
     because both were small, each is pinned by a new test, and one was a

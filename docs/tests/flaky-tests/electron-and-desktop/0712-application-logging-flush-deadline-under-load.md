@@ -1,6 +1,6 @@
 # Application logging shutdown deadline fails under load
 
-- **ID:** 0696
+- **ID:** 0712
 - **Status:** open
 - **Date observed:** 2026-10-23
 - **Test:** `application logging shutdown > quits anyway when the flush outlives its deadline`

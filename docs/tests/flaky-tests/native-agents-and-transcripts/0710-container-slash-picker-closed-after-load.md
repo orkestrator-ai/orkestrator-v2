@@ -1,6 +1,6 @@
 # Container slash picker stays closed after a load
 
-- **ID:** 0694
+- **ID:** 0710
 - **Status:** open
 - **Date observed:** 2026-10-23
 - **Test:** `live slash commands in an inactive container environment (<provider>) > a selected command completes while inactive, survives reload and restarts, and never runs twice`

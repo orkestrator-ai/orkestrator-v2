@@ -736,7 +736,7 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provide
           // An `unknown` retry answer leaves the card up, as it would for a
           // user, who presses Retry again. A restarted Claude bridge answers
           // 500 for up to 30 s while it waits out the killed process's
-          // preference lock (docs/todo 0056).
+          // preference lock (docs/todo 0059).
           let retryAgain = false;
           let retries = 0;
           let retiredSeen = false;

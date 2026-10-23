@@ -1,6 +1,6 @@
 # Looped review package refusal times out in the aggregate suite
 
-- **ID:** 0695
+- **ID:** 0711
 - **Status:** open
 - **Date observed:** 2026-10-23
 - **Test:** `generateLoopedReviewPackage > refuses a command that ran but names no verified artifacts`

@@ -217,6 +217,32 @@ describe("container sources", () => {
     expect(specs.every((spec) => spec.format === "runtime" || spec.writable === false)).toBe(true);
   });
 
+  test("persisted OpenCode source ids retain only fixed supported user filenames", async () => {
+    const specs = await containerSources(
+      "opencode",
+      "c1",
+      {
+        ...WRITABLE,
+        overlaySourceIds: [
+          "opencode:user-config.json",
+          "opencode:user-../../escape.json",
+          "opencode:user-arbitrary.json",
+          "opencode:project-config.json",
+        ],
+      },
+      reader({ "/home/node/.config/opencode/opencode.jsonc": "{}" }),
+    );
+    const own = specs.filter((spec) => spec.scope === "environment-private");
+    expect(own.map((spec) => spec.sourceId)).toEqual([
+      "opencode:user-config.json",
+      "opencode:user-opencode.jsonc",
+    ]);
+    expect(own.map((spec) => spec.path)).toEqual([
+      "/home/node/.config/opencode/config.json",
+      "/home/node/.config/opencode/opencode.jsonc",
+    ]);
+  });
+
   test("Grok's compat switches are read from the container's own config", async () => {
     const specs = await containerSources(
       "grok",

@@ -297,6 +297,9 @@ export class McpManagementService {
           writable: this.overlays.writable,
           persistentWorkspace: !!target.persistentWorkspace,
           unavailableReason: CONTAINER_WRITES_UNAVAILABLE,
+          overlaySourceIds: target.info.environmentId
+            ? await this.overlays.records.sourceIds(target.info.environmentId)
+            : [],
         },
         this.options.readContainerFile,
       );
@@ -1027,7 +1030,9 @@ export class McpManagementService {
         const source = await this.loadedOverlaySource(target, spec);
         if ((source.file?.revision ?? null) !== resolution.expectedRevision)
           throw mcpFailure("revision-conflict");
-        return this.overlays.resolve(this.overlayContext(target, source), resolution.action);
+        return this.overlays.resolve(this.overlayContext(target, source), resolution.action, () =>
+          this.hostDefaults(target, spec),
+        );
       },
     );
     this.catalogRevision += 1;
@@ -1037,10 +1042,10 @@ export class McpManagementService {
 
   /** The backend user's file a container source inherits, read on this host. */
   private async hostDefaults(target: ResolvedTarget, spec: SourceSpec): Promise<LoadedSource> {
-    const hostSpecs = await providerSources(
-      target.provider,
-      this.sourceContext({ kind: "backend", location: "backend-host" }),
-    );
+    const hostSpecs = await providerSources(target.provider, {
+      ...this.sourceContext({ kind: "backend", location: "backend-host" }),
+      retainedSourceIds: [spec.sourceId],
+    });
     const host = hostSpecs.find(
       (candidate) => candidate.sourceId === spec.sourceId && candidate.scope === "backend-user",
     );
@@ -1071,7 +1076,9 @@ export class McpManagementService {
    */
   async refreshDefaults(args: {
     request?: unknown;
-  }): Promise<McpOverlayResolutionResult & { stagedCopy: "updated" | "unavailable" }> {
+  }): Promise<
+    McpOverlayResolutionResult & { stagedCopy: "updated" | "unavailable" | "not-needed" }
+  > {
     await this.init();
     const request = parseDefaultsRefreshRequest(args.request, true);
     const { target, spec } = await this.overlaySource(request.targetId, request.sourceId);

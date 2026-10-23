@@ -294,11 +294,12 @@ export interface McpEnvironmentOverlayState {
    *   its file holds the inherited copy again; reapply writes the changes.
    * - `diverged`: the file was edited inside the container after Orkestrator
    *   last wrote it. Edits are blocked until the user imports or reapplies.
+   * - `corrupt`: the saved record is unreadable; reset restores verified backend defaults.
    * - `conflict`: some changes were made against an inherited server that has
    *   since changed or gone; those names keep the inherited value until the
    *   user keeps this environment's version or takes the inherited one.
    */
-  state: "in-sync" | "pending" | "diverged" | "conflict";
+  state: "in-sync" | "pending" | "diverged" | "conflict" | "corrupt";
   /** Server names this environment added (absent from the inherited copy). */
   added: string[];
   /** Inherited server names this environment replaced. */

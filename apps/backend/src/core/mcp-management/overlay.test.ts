@@ -192,3 +192,22 @@ describe("rewriting only the server map", () => {
     expect(fresh.mcp_servers).toEqual({ a: A });
   });
 });
+
+for (const name of ["toString", "valueOf", "hasOwnProperty"]) {
+  test(`overlay maps treat ${name} as an own server name`, () => {
+    const added = recordEdit(record({}), [name], { [name]: A }, digest);
+    expect(added.changes[name]).toEqual({ kind: "set", entry: A, base: null });
+    expect(expectedEntries(added)).toEqual({ [name]: A });
+    expect(publicOverlayState(added, null).added).toEqual([name]);
+    const rebased = rebaseOverlay(added, {}, digest);
+    expect(expectedEntries(rebased)).toEqual({ [name]: A });
+    expect(recordEdit(rebased, [name], {}, digest).changes).toEqual({});
+    const conflict = rebaseOverlay(added, { [name]: B }, digest);
+    expect(Object.keys(conflict.conflicts)).toEqual([name]);
+    expect(expectedEntries(conflict)).toEqual({ [name]: B });
+    const removed = recordEdit(record({ [name]: A }), [name], {}, digest);
+    expect(expectedEntries(rebaseOverlay(removed, {}, digest))).toEqual({});
+    expect(divergedNames(added, {})).toEqual([name]);
+    expect(importCurrent(added, {}, digest).changes).toEqual({});
+  });
+}

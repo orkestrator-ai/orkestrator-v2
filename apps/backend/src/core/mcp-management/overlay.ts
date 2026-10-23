@@ -1,8 +1,9 @@
 /**
  * The durable environment overlay: pure rules, no I/O.
  *
- * A container's provider homes are copies `docker/entrypoint.sh` makes on
- * every boot, so the file inside a container is never a durable statement of
+ * A container's provider homes inherit copies from `docker/entrypoint.sh`.
+ * An absent staged input can leave the previous output intact on restart;
+ * the file inside a container is never a durable statement of
  * what the user wants. The overlay is. For one container source it holds:
  *
  * - `baseline`: the inherited server entries as Orkestrator last saw them
@@ -65,7 +66,7 @@ function canonical(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonical);
   if (value instanceof Date) return { $date: value.toISOString() };
   if (value && typeof value === "object") {
-    const out: Record<string, unknown> = {};
+    const out: Record<string, unknown> = Object.create(null);
     for (const key of Object.keys(value).sort())
       out[key] = canonical((value as Record<string, unknown>)[key]);
     return out;
@@ -83,6 +84,10 @@ export function overlayDigester(key: Buffer): Digest {
 
 export function entriesOf(parsed: ParsedSource | null | undefined): Record<string, NativeEntry> {
   return parsed ? Object.fromEntries(parsed.entries) : {};
+}
+
+export function ownEntry<T>(map: Record<string, T>, name: string): T | undefined {
+  return Object.hasOwn(map, name) ? map[name] : undefined;
 }
 
 const same = (a: unknown, b: unknown) => tomlDeepEqual(a, b);
@@ -120,7 +125,7 @@ export function newOverlayRecord(
 export function expectedEntries(record: OverlayRecord): Record<string, NativeEntry> {
   const entries = structuredClone(record.baseline);
   for (const [name, change] of Object.entries(record.changes)) {
-    if (record.conflicts[name] !== undefined) continue;
+    if (ownEntry(record.conflicts, name) !== undefined) continue;
     if (change.kind === "set") entries[name] = structuredClone(change.entry);
     else delete entries[name];
   }
@@ -148,7 +153,7 @@ export function rebaseOverlay(
     baselineFingerprint: digest(baseline),
   };
   for (const [name, change] of Object.entries(record.changes)) {
-    const inherited = baseline[name];
+    const inherited = ownEntry(baseline, name);
     const inheritedDigest = inherited === undefined ? null : digest(inherited);
     if (change.kind === "set") {
       if (inherited !== undefined && same(inherited, change.entry)) {
@@ -188,8 +193,8 @@ export function recordEdit(
     conflicts: { ...record.conflicts },
   };
   for (const name of new Set(names)) {
-    const value = after[name];
-    const inherited = record.baseline[name];
+    const value = ownEntry(after, name);
+    const inherited = ownEntry(record.baseline, name);
     delete next.conflicts[name];
     if (value === undefined) {
       if (inherited === undefined) delete next.changes[name];
@@ -214,7 +219,9 @@ export function divergedNames(
 ): string[] {
   const expected = expectedEntries(record);
   const names = new Set([...Object.keys(expected), ...Object.keys(current)]);
-  return [...names].filter((name) => !same(expected[name], current[name])).sort();
+  return [...names]
+    .filter((name) => !same(ownEntry(expected, name), ownEntry(current, name)))
+    .sort();
 }
 
 /**
@@ -228,7 +235,11 @@ export function importCurrent(
   digest: Digest,
 ): OverlayRecord {
   const names = divergedNames(record, current).filter(
-    (name) => !(record.conflicts[name] !== undefined && same(current[name], record.baseline[name])),
+    (name) =>
+      !(
+        ownEntry(record.conflicts, name) !== undefined &&
+        same(ownEntry(current, name), ownEntry(record.baseline, name))
+      ),
   );
   return recordEdit(record, names, current, digest);
 }
@@ -267,7 +278,8 @@ export function publicOverlayState(
   const removed: string[] = [];
   for (const [name, change] of Object.entries(record.changes)) {
     if (change.kind === "remove") removed.push(name);
-    else if (record.baseline[name] === undefined && change.base === null) added.push(name);
+    else if (ownEntry(record.baseline, name) === undefined && change.base === null)
+      added.push(name);
     else replaced.push(name);
   }
   const conflicts = Object.entries(record.conflicts)
@@ -313,7 +325,7 @@ export function rewriteServerMap(
   // Each step re-parses into a new map; this one stays the original's.
   const original = parsed.entries;
   for (const name of original.keys()) {
-    if (target[name] === undefined) step({ kind: "remove", name });
+    if (ownEntry(target, name) === undefined) step({ kind: "remove", name });
   }
   for (const [name, entry] of Object.entries(target)) {
     const previous = parsed.entries.get(name);

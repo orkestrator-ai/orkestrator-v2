@@ -250,6 +250,8 @@ export interface SourceContext {
   grokCompatDisabled?(name: "claude" | "cursor", worktree?: string): Promise<boolean>;
   /** Container catalogs: project trust is the container's, not the host's. */
   inContainer?: boolean;
+  /** Keep persisted optional sources discoverable; names still come from the fixed allowlist. */
+  retainedSourceIds?: string[];
 }
 
 const OPENCODE_FILES: ReadonlyArray<["opencode.json" | "opencode.jsonc", "json" | "jsonc"]> = [
@@ -272,7 +274,10 @@ async function opencodeSources(
   const present: SourceSpec[] = [];
   for (const [name, format, precedence] of candidates) {
     const filePath = path.join(dir, name);
-    if (await input.exists(filePath)) {
+    if (
+      input.retainedSourceIds?.includes(`opencode:user-${name}`) ||
+      (await input.exists(filePath))
+    ) {
       present.push(
         userSource("opencode", `user-${name}`, filePath, homes, {
           format,
@@ -872,6 +877,8 @@ export interface ContainerSourceOptions {
   persistentWorkspace: boolean;
   /** Why nothing in the container can be written, when `writable` is false. */
   unavailableReason: string;
+  /** Persisted source identities; only fixed, supported filenames are honoured. */
+  overlaySourceIds?: string[];
 }
 
 function containerProbes(
@@ -919,6 +926,7 @@ export async function containerSources(
     homes: CONTAINER_HOMES,
     inContainer: true,
     ...containerProbes(containerId, reader),
+    retainedSourceIds: options.overlaySourceIds,
   });
   return specs.map((spec) => {
     if (spec.format === "runtime") return spec;

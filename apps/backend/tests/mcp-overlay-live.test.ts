@@ -58,7 +58,7 @@ async function exec(id: string, script: string, user = "node"): Promise<string> 
 }
 
 /** A labelled container on the real entrypoint, with staged inputs mounted read-only. */
-async function startContainer(name: string): Promise<string> {
+async function startContainer(name: string, absentCodex = false): Promise<string> {
   const id = await docker([
     "run",
     "-d",
@@ -73,7 +73,7 @@ async function startContainer(name: string): Promise<string> {
     "-e",
     "GIT_URL=https://example.invalid/none.git",
     "--mount",
-    `type=bind,src=${path.join(staged, "codex-home")},dst=/codex-home,readonly`,
+    `type=bind,src=${path.join(staged, absentCodex ? "empty-codex-home" : "codex-home")},dst=/codex-home,readonly`,
     "--mount",
     `type=bind,src=${path.join(staged, "cursor-config")},dst=/cursor-config,readonly`,
     IMAGE,
@@ -94,6 +94,7 @@ beforeAll(async () => {
   staged = path.join(root, "staged");
   await fs.mkdir(path.join(staged, "codex-home"), { recursive: true });
   await fs.mkdir(path.join(staged, "cursor-config"), { recursive: true });
+  await fs.mkdir(path.join(staged, "empty-codex-home"), { recursive: true, mode: 0o755 });
   await fs.writeFile(path.join(staged, "codex-home", "config.toml"), INHERITED);
   await fs.writeFile(
     path.join(staged, "cursor-config", "mcp.json"),
@@ -358,6 +359,65 @@ describe("environment overlay on a real container", () => {
       expect(await fs.readFile(path.join(staged, "codex-home", "config.toml"), "utf8")).toBe(
         INHERITED,
       );
+      // No staged provider file: stop/start retains our previous output,
+      // whereas a replacement container starts with no file at all.
+      service.dispose();
+      await docker(["rm", "-f", id]);
+      id = await startContainer("absent-input", true);
+      environment.containerId = id;
+      // Keep this scenario independent from the earlier inherited baseline.
+      await fs.rm(dataDir, { recursive: true, force: true });
+      await fs.mkdir(dataDir, { recursive: true });
+      service = newService();
+      const absentTarget = (await service.listTargets({ environmentId: "env-live" })).targets.find(
+        (t) => t.provider === "codex" && t.context.kind === "environment",
+      )!.targetId;
+      expect(await containerText(id, CODEX)).toBeNull();
+      await service.mutate({
+        mutation: {
+          requestId: "absent-add",
+          targetId: absentTarget,
+          applyIntent: "save",
+          operation: {
+            kind: "add",
+            sourceId: "codex:user",
+            expectedRevision: null,
+            definition: { name: "private", transport: "stdio", command: "private" },
+          },
+        },
+      });
+      await docker(["stop", "-t", "5", id]);
+      await docker(["start", id]);
+      await waitForContainerBoot(id);
+      expect(await containerText(id, CODEX)).toContain('command = "private"');
+      expect(await service.materialiseEnvironment("env-live")).toBe(1);
+      expect(
+        (await service.snapshot({ targetId: absentTarget })).sources.find(
+          (s) => s.sourceId === "codex:user",
+        )!.overlay?.added,
+      ).toEqual(["private"]);
+      await docker(["rm", "-f", id]);
+      id = await startContainer("absent-replacement", true);
+      environment.containerId = id;
+      expect(await containerText(id, CODEX)).toBeNull();
+      expect(await service.materialiseEnvironment("env-live")).toBe(1);
+      const recovered = (await service.snapshot({ targetId: absentTarget })).sources.find(
+        (s) => s.sourceId === "codex:user",
+      )!;
+      expect(recovered.overlay?.added).toEqual(["private"]);
+      expect(await containerText(id, CODEX)).toContain('command = "private"');
+      await service.resolveOverlay({
+        resolution: {
+          targetId: absentTarget,
+          sourceId: "codex:user",
+          expectedRevision: recovered.revision,
+          action: { kind: "reset" },
+        },
+      });
+      expect(
+        (Bun.TOML.parse((await containerText(id, CODEX))!) as { mcp_servers?: object })
+          .mcp_servers ?? {},
+      ).toEqual({});
       service.dispose();
     },
     LIVE_TIMEOUT_MS * 2,

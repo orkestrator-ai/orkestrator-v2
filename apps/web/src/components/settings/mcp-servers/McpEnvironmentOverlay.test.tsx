@@ -361,3 +361,66 @@ describe("where a container's servers run", () => {
     await expectReloaded(before);
   });
 });
+
+test("a corrupt record exposes reset recovery and rehydrates the writable source", async () => {
+  let corrupt = true;
+  install(
+    containerHandlers(
+      () => ({
+        sources: [
+          environmentSource(
+            corrupt
+              ? {
+                  writable: false,
+                  readOnlyReason: "The saved changes could not be read.",
+                  overlay: overlay({ state: "corrupt" }),
+                }
+              : {},
+          ),
+        ],
+      }),
+      {
+        resolve_mcp_environment_overlay: () => {
+          corrupt = false;
+          return { sourceRevision: "c1.rev2", overlay: null };
+        },
+      },
+    ),
+  );
+  requestMcpServerSettings({ provider: "claude", environmentId: "c1" });
+  const mounted = render(<ProviderMcpSettings />);
+  expect(await screen.findByText("Saved changes could not be read")).toBeTruthy();
+  const reset = screen.getByRole("button", { name: /Reset to inherited/ }) as HTMLButtonElement;
+  expect(reset.disabled).toBe(false);
+  fireEvent.click(reset);
+  const dialog = await screen.findByRole("alertdialog");
+  expect(within(dialog).getByText(/saved baseline cannot be read/)).toBeTruthy();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Reset" }));
+  await expectResolved("reset");
+  await waitFor(() =>
+    expectDomAbsent(screen.queryByText("Saved changes could not be read"), "corrupt state"),
+  );
+  mounted.unmount();
+  requestMcpServerSettings({ provider: "claude", environmentId: "c1" });
+  render(<ProviderMcpSettings />);
+  expect(await screen.findByRole("button", { name: /Refresh from backend user/ })).toBeTruthy();
+  expectDomAbsent(
+    screen.queryByRole("button", { name: /Reset to inherited/ }),
+    "reset after recovery",
+  );
+});
+
+test("a Claude refresh with no staged rewrite needed reports success", async () => {
+  await renderOverlay(undefined, {
+    preview_mcp_environment_defaults: () => refreshPreview({ unchanged: false, added: ["fresh"] }),
+    refresh_mcp_environment_defaults: () => ({ ...resolved(), stagedCopy: "not-needed" }),
+  });
+  fireEvent.click(screen.getByRole("button", { name: /Refresh from backend user/ }));
+  const dialog = await screen.findByRole("dialog");
+  await within(dialog).findByLabelText("Refresh preview");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Refresh" }));
+  await waitFor(() =>
+    expect(mockToastSuccess).toHaveBeenCalledWith("Refreshed from the backend user"),
+  );
+  expect(mockToastWarning).not.toHaveBeenCalled();
+});

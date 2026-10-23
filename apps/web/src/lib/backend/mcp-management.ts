@@ -76,6 +76,6 @@ export function previewMcpEnvironmentDefaults(
 /** Apply a previewed refresh; a stale `previewToken` fails with `revision-conflict`. */
 export function refreshMcpEnvironmentDefaults(
   request: McpDefaultsRefreshRequest,
-): Promise<McpOverlayResolutionResult & { stagedCopy: "updated" | "unavailable" }> {
+): Promise<McpOverlayResolutionResult & { stagedCopy: "updated" | "unavailable" | "not-needed" }> {
   return invoke("refresh_mcp_environment_defaults", { request });
 }

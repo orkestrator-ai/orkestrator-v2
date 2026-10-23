@@ -79,8 +79,8 @@ async function restart(inherited = INHERITED_CODEX, boot = `boot-${Math.random()
 }
 
 function codexServers(): Record<string, unknown> {
-  return (Bun.TOML.parse(fixture.containerFiles.get(CODEX)!) as { mcp_servers?: object })
-    .mcp_servers as Record<string, unknown>;
+  return ((Bun.TOML.parse(fixture.containerFiles.get(CODEX)!) as { mcp_servers?: object })
+    .mcp_servers ?? {}) as Record<string, unknown>;
 }
 
 async function resolve(action: McpOverlayAction) {
@@ -294,6 +294,15 @@ describe("in-container edits", () => {
     writeFileSync(path.join(directory, readdirSync(directory)[0]!), "{not json");
     const { snapshot } = await snapshotOf();
     expect(source(snapshot).readOnlyReason).toBe(OVERLAY_UNREADABLE_REASON);
+    expect(source(snapshot).overlay?.state).toBe("corrupt");
+    const host = `[mcp_servers.verified]\ncommand = "host"\n`;
+    fixture.write("home/.codex/config.toml", host);
+    await resolve({ kind: "reset" });
+    expect(readdirSync(directory)).toEqual([]);
+    expect(codexServers()).toEqual({ verified: { command: "host" } });
+    expect(fixture.read("home/.codex/config.toml")).toBe(host);
+    expect(source((await snapshotOf()).snapshot).writable).toBe(true);
+    await addCodex("recovered");
   });
 });
 
@@ -472,4 +481,225 @@ describe("containers without a writer, project files, apply and hints", () => {
       existsSync(environmentStateDirectory(fixture.dataDir, "mcp-environment-overlays", "env-1")),
     ).toBe(true);
   });
+});
+
+describe("boot recovery regressions", () => {
+  test("an absent staged file leaves intent intact across retained output and an empty rebuild", async () => {
+    fixture.containerFiles.delete(CODEX);
+    await addCodex("mine");
+    fixture.containerBoot.value = "retained-output";
+    expect(await fixture.service.materialiseEnvironment("env-1")).toBe(1);
+    expect(source((await snapshotOf()).snapshot).overlay?.added).toEqual(["mine"]);
+    fixture.containerFiles.delete(CODEX);
+    fixture.containerBoot.value = "empty-rebuild";
+    expect(await fixture.service.materialiseEnvironment("env-1")).toBe(1);
+    expect(codexServers()).toEqual({ mine: { command: "mine" } });
+    expect(source((await snapshotOf()).snapshot).overlay?.added).toEqual(["mine"]);
+    await resolve({ kind: "reset" });
+    expect(codexServers()).toEqual({});
+  });
+
+  test("a failed boot write remains pending and retries in the same boot", async () => {
+    await addCodex("mine");
+    fixture.containerWriteControl.failNext = true;
+    expect(await restart(INHERITED_CODEX, "retry-boot")).toBe(0);
+    expect(source((await snapshotOf()).snapshot).overlay?.state).toBe("pending");
+    expect(source((await snapshotOf()).snapshot).overlay?.added).toEqual(["mine"]);
+    expect(await fixture.service.materialiseEnvironment("env-1")).toBe(1);
+    expect(codexServers().mine).toEqual({ command: "mine" });
+    expect(source((await snapshotOf()).snapshot).overlay?.state).toBe("in-sync");
+  });
+
+  for (const kind of ["reset", "keep-environment", "take-inherited"] as const) {
+    test(`${kind} while pending preserves the new inherited servers`, async () => {
+      await removeCodex("other");
+      await addCodex("mine");
+      fixture.containerFiles.set(
+        CODEX,
+        `[mcp_servers.other]\ncommand = "new-other"\n[mcp_servers.fresh]\ncommand = "fresh"\n`,
+      );
+      fixture.containerBoot.value = "external-boot";
+      await resolve(kind === "reset" ? { kind } : { kind, name: "other" });
+      expect(codexServers().fresh).toEqual({ command: "fresh" });
+      expect(Object.hasOwn(codexServers(), "inherited")).toBe(false);
+      expect(Object.hasOwn(codexServers(), "mine")).toBe(kind !== "reset");
+      expect(Object.hasOwn(codexServers(), "other")).toBe(kind !== "keep-environment");
+      expect(source((await snapshotOf()).snapshot).overlay?.state).toBe(
+        kind === "reset" ? undefined : "in-sync",
+      );
+    });
+  }
+
+  test("an OpenCode overlay stays visible when the inherited filename changes", async () => {
+    const original = "/home/node/.config/opencode/config.json";
+    fixture.containerFiles.set(original, '{"mcp":{}}');
+    const { targetId, snapshot } = await snapshotOf("opencode");
+    await fixture.service.mutate(
+      mutation(targetId, {
+        kind: "add",
+        sourceId: "opencode:user-config.json",
+        expectedRevision: revision(snapshot, "opencode:user-config.json"),
+        definition: { name: "mine", transport: "stdio", command: "mine" },
+      }),
+    );
+    fixture.containerFiles.delete(original);
+    fixture.containerFiles.set(
+      "/home/node/.config/opencode/opencode.jsonc",
+      '{"mcp":{"fresh":{"type":"local","command":["fresh"]}}}',
+    );
+    fixture.containerBoot.value = "opencode-rebuild";
+    expect(
+      source((await snapshotOf("opencode")).snapshot, "opencode:user-config.json").overlay?.added,
+    ).toEqual(["mine"]);
+    expect(await fixture.service.materialiseEnvironment("env-1")).toBe(1);
+    expect(JSON.parse(fixture.containerFiles.get(original)!).mcp.mine.command).toEqual(["mine"]);
+    const after = (await snapshotOf("opencode")).snapshot;
+    expect(after.sources.some((s) => s.sourceId === "opencode:user-opencode.jsonc")).toBe(true);
+    expect(source(after, "opencode:user-config.json").overlay?.state).toBe("in-sync");
+  });
+
+  for (const name of ["toString", "valueOf", "hasOwnProperty"]) {
+    test(`${name} survives add, rebuild, conflict resolution and removal`, async () => {
+      await addCodex(name);
+      await restart();
+      expect(codexServers()[name]).toEqual({ command: name });
+      const changed = `${INHERITED_CODEX}\n[mcp_servers.${name}]\ncommand = "upstream"\n`;
+      await restart(changed);
+      expect(source((await snapshotOf()).snapshot).overlay?.conflicts.map((c) => c.name)).toEqual([
+        name,
+      ]);
+      await resolve({ kind: "keep-environment", name });
+      expect(codexServers()[name]).toEqual({ command: name });
+      await removeCodex(name);
+      await restart(changed);
+      expect(Object.hasOwn(codexServers(), name)).toBe(false);
+    });
+  }
+});
+
+function barrier() {
+  let release!: () => void;
+  const promise = new Promise<void>((done) => {
+    release = done;
+  });
+  return { promise, release };
+}
+
+for (const action of ["save", "reset", "refresh"] as const) {
+  test(`boot materialisation serializes with ${action}`, async () => {
+    await addCodex("mine");
+    fixture.containerFiles.set(CODEX, INHERITED_CODEX);
+    fixture.containerBoot.value = "concurrent-boot";
+    const entered = barrier();
+    const resume = barrier();
+    fixture.containerWriteControl.afterWrite = async () => {
+      entered.release();
+      await resume.promise;
+    };
+    const boot = fixture.service.materialiseEnvironment("env-1");
+    await entered.promise;
+    let finished = false;
+    const { targetId } = await snapshotOf();
+    fixture.write("home/.codex/config.toml", INHERITED_CODEX);
+    const preview =
+      action === "refresh"
+        ? await fixture.service.previewDefaultsRefresh({
+            request: { targetId, sourceId: "codex:user" },
+          })
+        : null;
+    const edit = (
+      action === "save"
+        ? addCodex("latest")
+        : action === "reset"
+          ? resolve({ kind: "reset" })
+          : fixture.service.refreshDefaults({
+              request: { targetId, sourceId: "codex:user", previewToken: preview!.previewToken },
+            })
+    )
+      .then(
+        (value) => ({ value }),
+        (error) => ({ error }),
+      )
+      .finally(() => {
+        finished = true;
+      });
+    // Give the competing operation a chance to reach the lock without releasing boot.
+    await new Promise((done) => setTimeout(done, 80));
+    try {
+      expect(finished).toBe(false);
+    } finally {
+      delete fixture.containerWriteControl.afterWrite;
+      resume.release();
+    }
+    expect(await boot).toBe(1);
+    const result = await edit;
+    if (action === "refresh") {
+      expect("error" in result && mcpManagementErrorFromUnknown(result.error)?.code).toBe(
+        "revision-conflict",
+      );
+      const fresh = await fixture.service.previewDefaultsRefresh({
+        request: { targetId, sourceId: "codex:user" },
+      });
+      await fixture.service.refreshDefaults({
+        request: { targetId, sourceId: "codex:user", previewToken: fresh.previewToken },
+      });
+    } else expect("error" in result).toBe(false);
+    expect(Object.hasOwn(codexServers(), "mine")).toBe(action !== "reset");
+    if (action === "save") expect(codexServers().latest).toEqual({ command: "latest" });
+    const after = source((await snapshotOf()).snapshot).overlay;
+    expect(after?.state).toBe(action === "reset" ? undefined : "in-sync");
+    await restart();
+    if (action === "save") expect(codexServers().latest).toEqual({ command: "latest" });
+    if (action === "reset") expect(Object.hasOwn(codexServers(), "mine")).toBe(false);
+  });
+}
+
+test("Claude refresh needs no staged copy update", async () => {
+  fixture.containerFiles.set(CLAUDE, '{"theme":"dark","mcpServers":{}}');
+  fixture.write("home/.claude.json", '{"mcpServers":{"fresh":{"command":"fresh"}}}');
+  const { targetId } = await snapshotOf("claude");
+  const preview = await fixture.service.previewDefaultsRefresh({
+    request: { targetId, sourceId: "claude:user" },
+  });
+  const result = await fixture.service.refreshDefaults({
+    request: { targetId, sourceId: "claude:user", previewToken: preview.previewToken },
+  });
+  expect(result.stagedCopy).toBe("not-needed");
+  expect(JSON.parse(fixture.containerFiles.get(CLAUDE)!)).toEqual({
+    theme: "dark",
+    mcpServers: { fresh: { command: "fresh" } },
+  });
+});
+
+test("reset after a retained-output restart restores the recorded empty baseline", async () => {
+  fixture.containerFiles.delete(CODEX);
+  await addCodex("mine");
+  fixture.containerBoot.value = "retained-output-reset";
+  await fixture.service.materialiseEnvironment("env-1");
+  await resolve({ kind: "reset" });
+  expect(codexServers()).toEqual({});
+});
+
+test("corrupt-record recovery refuses unreadable defaults and retains the record on a failed write", async () => {
+  await addCodex("mine");
+  const directory = environmentStateDirectory(fixture.dataDir, "mcp-environment-overlays", "env-1");
+  const record = path.join(directory, readdirSync(directory)[0]!);
+  writeFileSync(record, "{corrupt");
+  fixture.write("home/.codex/config.toml", "not valid = [");
+  let error = await resolve({ kind: "reset" }).catch((error) => error);
+  expect(mcpManagementErrorFromUnknown(error)?.code).toBe("malformed-source");
+  expect(codexServers().mine).toEqual({ command: "mine" });
+  expect(source((await snapshotOf()).snapshot).overlay?.state).toBe("corrupt");
+  fixture.write("home/.codex/config.toml", INHERITED_CODEX);
+  fixture.containerWriteControl.failNext = true;
+  error = await resolve({ kind: "reset" }).catch((error) => error);
+  expect(mcpManagementErrorFromUnknown(error)?.code).toBe("internal");
+  expect(source((await snapshotOf()).snapshot).overlay?.state).toBe("corrupt");
+  expect(existsSync(record)).toBe(true);
+  await resolve({ kind: "reset" });
+  expect(codexServers()).toEqual({
+    inherited: { command: "inherited" },
+    other: { command: "other" },
+  });
+  expect(existsSync(record)).toBe(false);
 });

@@ -49,6 +49,7 @@ export interface Fixture {
   /** Files inside the fake container, by absolute container path. */
   containerFiles: Map<string, string>;
   /** Every accepted container write, in order: path and mode. */
+  containerWriteControl: { failNext?: boolean; afterWrite?: () => Promise<void> };
   containerWrites: Array<{ path: string; mode: "private" | "preserve" }>;
   /** Current boot id of the fake container; `null` is an image without boot status. */
   containerBoot: { value: string | null };
@@ -88,6 +89,7 @@ export function createFixture(
   const now = { value: Date.parse("2026-09-23T12:00:00Z") };
   const containerFiles = new Map<string, string>();
   const containerWrites: Array<{ path: string; mode: "private" | "preserve" }> = [];
+  const containerWriteControl: Fixture["containerWriteControl"] = {};
   const containerBoot = { value: "boot-1" as string | null };
   const containerPaths = new Map<string, "file" | "directory">();
   const containerNetwork = { value: null as ContainerNetworkView | null };
@@ -170,12 +172,17 @@ export function createFixture(
       // Compare-and-swap on the exact bytes, like the real writer.
       writeContainerFile: async (_containerId, filePath, write) => {
         if (environment.status !== "running") return { state: "offline" };
+        if (containerWriteControl.failNext) {
+          containerWriteControl.failNext = false;
+          return { state: "failed" };
+        }
         const current = containerFiles.get(filePath);
         const digest =
           current === undefined ? "absent" : contentDigest(new TextEncoder().encode(current));
         if (digest !== write.expectedDigest) return { state: "conflict" };
         containerFiles.set(filePath, new TextDecoder().decode(write.bytes));
         containerWrites.push({ path: filePath, mode: write.mode });
+        await containerWriteControl.afterWrite?.();
         return { state: "ok" };
       },
       readContainerBootId: async () => containerBoot.value,
@@ -184,6 +191,7 @@ export function createFixture(
       containerNetwork: async () => containerNetwork.value,
       stagedDefaults: {
         update: async (_environmentId, _containerId, sourceId, rewrite) => {
+          if (sourceId === "claude:user") return "not-needed";
           stagedDefaults.set(sourceId, rewrite(stagedDefaults.get(sourceId) ?? ""));
           return "updated";
         },
@@ -209,6 +217,7 @@ export function createFixture(
     extraEnvironments,
     containerFiles,
     containerWrites,
+    containerWriteControl,
     containerBoot,
     containerPaths,
     containerNetwork,

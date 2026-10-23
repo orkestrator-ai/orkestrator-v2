@@ -5,9 +5,10 @@
  * Every write into a container goes through the injected
  * {@link ContainerFileWriter}: a fixed program, a path from the backend's own
  * source specs, the payload on stdin, compare-and-swap on the bytes the change
- * was prepared against. The record is written before the container file, so
- * a crash between the two leaves the user's intent durable and the container
- * reported as diverged, never the reverse.
+ * was prepared against. Edits record their intent before writing the container
+ * file and roll back on rejection. Boot materialisation already has durable
+ * intent; its success fingerprint and boot stamp are committed after the write
+ * succeeds, so a failed attempt stays retryable.
  */
 
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
@@ -28,6 +29,7 @@ import {
   importCurrent,
   newOverlayRecord,
   observeOverlay,
+  ownEntry,
   overlayDigester,
   publicOverlayState,
   rebaseOverlay,
@@ -59,7 +61,7 @@ export interface StagedDefaultsWriter {
     containerId: string,
     sourceId: string,
     rewrite: (text: string) => string,
-  ): Promise<"updated" | "unavailable">;
+  ): Promise<"updated" | "unavailable" | "not-needed">;
 }
 
 export interface OverlayDependencies {
@@ -182,7 +184,19 @@ export class EnvironmentOverlays {
     writeBlock?: string;
   }> {
     const read = await this.records.read(context.environmentId, context.source.spec.sourceId);
-    if (read.state === "corrupt") return { writeBlock: OVERLAY_UNREADABLE_REASON };
+    if (read.state === "corrupt")
+      return {
+        writeBlock: OVERLAY_UNREADABLE_REASON,
+        overlay: {
+          revision: 0,
+          state: "corrupt",
+          added: [],
+          replaced: [],
+          removed: [],
+          conflicts: [],
+          divergedNames: [],
+        },
+      };
     if (read.state === "absent") return {};
     let observation: OverlayObservation | null = null;
     if (context.source.state === "ok" || context.source.state === "absent") {
@@ -288,7 +302,12 @@ export class EnvironmentOverlays {
     const { source } = context;
     const text = source.state === "absent" ? "" : (source.file?.text ?? "");
     const current = this.entries(source);
-    const rebased = rebaseOverlay(record, current, digest);
+    // A missing staged input leaves the previous output intact on restart.
+    // Matching our last verified output is no evidence of a new baseline.
+    const rebased =
+      digest(current) === record.materialisedFingerprint
+        ? record
+        : rebaseOverlay(record, current, digest);
     const expected = expectedEntries(rebased);
     const now = this.nowIso();
     const next: OverlayRecord = {
@@ -299,10 +318,11 @@ export class EnvironmentOverlays {
       materialisedAt: now,
       updatedAt: now,
     };
-    await this.records.write(next);
+    // Leave the old boot stamp retryable until the container accepts the write.
     if (digest(expected) !== digest(current)) {
       await this.write(context, rewriteServerMap(source.spec, text, expected));
     }
+    await this.records.write(next);
     return next;
   }
 
@@ -323,17 +343,22 @@ export class EnvironmentOverlays {
     let written = 0;
     for (const sourceId of await this.records.sourceIds(environmentId)) {
       try {
-        const record = await this.load(environmentId, sourceId);
-        if (!record) continue;
-        const source = await loadSource(record.provider, sourceId);
-        if (!source || !isOverlaySpec(source.spec)) continue;
-        if (source.state !== "ok" && source.state !== "absent") continue;
-        // Already written for this boot: anything different now is an
-        // in-container edit, which only the user may import or overwrite.
-        if (bootId !== null && record.materialisedBootId === bootId) continue;
-        const context = { environmentId, containerId, provider: record.provider, source };
-        await this.materialiseOne(context, record, bootId, digest);
-        written += 1;
+        written += await this.deps.store.withLock(
+          this.lockPath(environmentId, sourceId),
+          async () => {
+            const record = await this.load(environmentId, sourceId);
+            if (!record) return 0;
+            const source = await loadSource(record.provider, sourceId);
+            if (!source || !isOverlaySpec(source.spec)) return 0;
+            if (source.state !== "ok" && source.state !== "absent") return 0;
+            // Already written for this boot: anything different now is an
+            // in-container edit, which only the user may import or overwrite.
+            if (bootId !== null && record.materialisedBootId === bootId) return 0;
+            const context = { environmentId, containerId, provider: record.provider, source };
+            await this.materialiseOne(context, record, bootId, digest);
+            return 1;
+          },
+        );
       } catch (error) {
         const code = (error as { detail?: { code?: string } }).detail?.code ?? "unexpected";
         console.warn(`[mcp-management] overlay materialise failed: code=${code}`);
@@ -346,6 +371,7 @@ export class EnvironmentOverlays {
   async resolve(
     context: OverlaySourceContext,
     action: McpOverlayAction,
+    inheritedDefaults?: () => Promise<LoadedSource>,
   ): Promise<McpOverlayResolutionResult> {
     const { source } = context;
     if (!isOverlaySpec(source.spec))
@@ -356,15 +382,33 @@ export class EnvironmentOverlays {
     const bootId = await this.bootId(context.containerId);
     const current = this.entries(source);
     const text = source.state === "absent" ? "" : (source.file?.text ?? "");
-    const record = await this.load(context.environmentId, source.spec.sourceId);
-    if (!record) {
+    const read = await this.records.read(context.environmentId, source.spec.sourceId);
+    if (read.state === "corrupt") {
+      if (action.kind !== "reset" || !inheritedDefaults)
+        throw mcpFailure("internal", { message: OVERLAY_UNREADABLE_REASON });
+      // An unreadable record cannot supply a trusted baseline. Reset explicitly
+      // discards it only after restoring verified defaults from the backend user.
+      const host = await inheritedDefaults();
+      if (host.state !== "ok" && host.state !== "absent") throw mcpFailure("malformed-source");
+      const target = this.entries(host);
+      const revision =
+        digest(target) === digest(current)
+          ? (source.file?.revision ?? null)
+          : await this.write(context, rewriteServerMap(source.spec, text, target));
+      await this.records.remove(context.environmentId, source.spec.sourceId);
+      return { sourceRevision: revision, overlay: null };
+    }
+    const previous = read.state === "ok" ? read.record : null;
+    if (!previous) {
       if (action.kind === "reset")
         return { sourceRevision: source.file?.revision ?? null, overlay: null };
       throw mcpFailure("unsupported-operation", {
         message: "This environment has no changes recorded for this file.",
       });
     }
-    const observation = observeOverlay(record, current, bootId, digest);
+    const observation = observeOverlay(previous, current, bootId, digest);
+    const record =
+      observation.kind === "pending" ? rebaseOverlay(previous, current, digest) : previous;
     const now = this.nowIso();
     const stamp = (next: OverlayRecord, materialised: Record<string, NativeEntry>) => ({
       ...next,
@@ -388,16 +432,14 @@ export class EnvironmentOverlays {
       case "reapply": {
         // A restart outside the start path is a fresh inherited copy to rebase on;
         // an in-container edit is overwritten by the recorded intent.
-        const rebased =
-          observation.kind === "pending" ? rebaseOverlay(record, current, digest) : record;
-        target = expectedEntries(rebased);
-        next = stamp(rebased, target);
+        target = expectedEntries(record);
+        next = stamp(record, target);
         break;
       }
       case "keep-environment":
       case "take-inherited": {
         if (observation.kind === "diverged") throw mcpFailure("environment-diverged");
-        if (record.conflicts[action.name] === undefined)
+        if (ownEntry(record.conflicts, action.name) === undefined)
           throw mcpFailure("unknown-entry", { message: "That name has no conflict to resolve." });
         const resolved: OverlayRecord = {
           ...record,
@@ -409,7 +451,7 @@ export class EnvironmentOverlays {
           delete resolved.changes[action.name];
         } else {
           const change = resolved.changes[action.name]!;
-          const inherited = record.baseline[action.name];
+          const inherited = ownEntry(record.baseline, action.name);
           const base = inherited === undefined ? null : digest(inherited);
           if (change.kind === "set") resolved.changes[action.name] = { ...change, base };
           else if (base === null) delete resolved.changes[action.name];
@@ -436,7 +478,7 @@ export class EnvironmentOverlays {
           overlay: action.kind === "reset" ? null : publicOverlayState(next, { kind: "in-sync" }),
         };
       } catch (error) {
-        await this.records.write(record).catch(() => undefined);
+        await this.records.write(previous).catch(() => undefined);
         throw error;
       }
     }
@@ -516,8 +558,8 @@ export class EnvironmentOverlays {
     const changed: string[] = [];
     const removed: string[] = [];
     for (const name of names) {
-      const before = oldBaseline[name];
-      const after = hostEntries[name];
+      const before = ownEntry(oldBaseline, name);
+      const after = ownEntry(hostEntries, name);
       if (before === undefined && after !== undefined) added.push(name);
       else if (before !== undefined && after === undefined) removed.push(name);
       else if (digest(before) !== digest(after)) changed.push(name);
@@ -570,7 +612,9 @@ export class EnvironmentOverlays {
     context: OverlaySourceContext,
     host: LoadedSource,
     previewToken: string,
-  ): Promise<McpOverlayResolutionResult & { stagedCopy: "updated" | "unavailable" }> {
+  ): Promise<
+    McpOverlayResolutionResult & { stagedCopy: "updated" | "unavailable" | "not-needed" }
+  > {
     const plan = await this.planRefresh(context, host);
     if (plan.token !== previewToken) throw mcpFailure("revision-conflict");
     const { source } = context;

@@ -188,7 +188,7 @@ export const readContainerMcpFile: ContainerFileReader = async (
  * creates missing parents owner-only; compares the current bytes with the
  * expected digest (exit 3 on mismatch); and replaces the file atomically.
  */
-const CONTAINER_WRITER_SCRIPT = `"use strict";
+export const CONTAINER_WRITER_SCRIPT = `"use strict";
 const fs = require("fs"), path = require("path"), crypto = require("crypto");
 const [file, expected, mode, maxText] = process.argv.slice(1);
 const max = Number(maxText);
@@ -350,6 +350,7 @@ export function createStagedDefaultsWriter(
 ): StagedDefaultsWriter {
   return {
     async update(environmentId, containerId, sourceId, rewrite) {
+      if (sourceId === "claude:user") return "not-needed";
       const relative = stagedInputPath(sourceId);
       if (!relative) return "unavailable";
       const revision = await containerLabel(containerId, DOCKER_LABEL_INPUTS_REVISION);

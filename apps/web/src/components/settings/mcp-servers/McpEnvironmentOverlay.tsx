@@ -41,6 +41,7 @@ const STATE_TEXT: Record<McpEnvironmentOverlayState["state"], string> = {
   pending: "Not in the container yet",
   diverged: "Edited inside the container",
   conflict: "Needs a decision",
+  corrupt: "Saved changes could not be read",
 };
 
 const STATE_TONE: Record<McpEnvironmentOverlayState["state"], string> = {
@@ -48,6 +49,7 @@ const STATE_TONE: Record<McpEnvironmentOverlayState["state"], string> = {
   pending: "border-amber-500/30 text-amber-300",
   diverged: "border-amber-500/30 text-amber-300",
   conflict: "border-amber-500/30 text-amber-300",
+  corrupt: "border-amber-500/30 text-amber-300",
 };
 
 const UNSUPPORTED_BACKEND =
@@ -185,15 +187,22 @@ export function McpEnvironmentSourceControls({
               {STATE_TEXT[overlay.state]}
             </span>
           </div>
-          {overlay.added.length || overlay.replaced.length || overlay.removed.length ? (
-            <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-0.5">
-              <NameList label="Added" names={overlay.added} />
-              <NameList label="Replaced" names={overlay.replaced} />
-              <NameList label="Removed" names={overlay.removed} />
-            </dl>
-          ) : (
-            <p className="text-muted-foreground">No servers differ from the inherited ones.</p>
-          )}
+          {overlay.state === "corrupt" ? (
+            <p className="text-amber-300">
+              Reset to discard the unreadable changes and restore the backend user's current
+              servers.
+            </p>
+          ) : null}
+          {overlay.state !== "corrupt" &&
+            (overlay.added.length || overlay.replaced.length || overlay.removed.length ? (
+              <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-0.5">
+                <NameList label="Added" names={overlay.added} />
+                <NameList label="Replaced" names={overlay.replaced} />
+                <NameList label="Removed" names={overlay.removed} />
+              </dl>
+            ) : (
+              <p className="text-muted-foreground">No servers differ from the inherited ones.</p>
+            ))}
           {overlay.state === "pending" ? (
             <p className="text-amber-300">
               The container restarted outside Orkestrator and holds the inherited servers again.
@@ -274,7 +283,7 @@ export function McpEnvironmentSourceControls({
           </div>
         </div>
       ) : null}
-      {refreshable ? (
+      {refreshable && overlay?.state !== "corrupt" ? (
         <Button
           ref={refreshTrigger}
           type="button"
@@ -304,8 +313,11 @@ export function McpEnvironmentSourceControls({
             <AlertDialogTitle>Reset to the inherited servers?</AlertDialogTitle>
             <AlertDialogDescription>
               Every change this environment made to {source.label} is dropped, including edits made
-              inside the container, and the servers it inherited are restored. Nothing else in the
-              file changes.
+              inside the container.{" "}
+              {overlay?.state === "corrupt"
+                ? "The backend user's current servers are restored because the saved baseline cannot be read."
+                : "The servers it inherited are restored."}{" "}
+              Nothing else in the file changes.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

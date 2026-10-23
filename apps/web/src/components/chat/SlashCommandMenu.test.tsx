@@ -366,6 +366,43 @@ describe("SlashCommandMenu", () => {
   });
 });
 
+/** Catalogue states and rows from a backend on either side of the command catalogue (#827). */
+describe("mixed-version: SlashCommandMenu", () => {
+  afterEach(() => cleanup());
+
+  test("an older backend's id-less rows with no status list as before", () => {
+    render(
+      <SlashCommandMenu
+        commands={[{ name: "/review", description: "Review changes", source: "project" }]}
+        selectedIndex={0}
+        onSelect={() => {}}
+        onClose={() => {}}
+        query="/"
+      />,
+    );
+    expect(screen.getByRole("option", { name: /review/ })).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toBe("1 command available");
+  });
+
+  test("a status this renderer does not know shows the rows without a state line", () => {
+    render(
+      <SlashCommandMenu
+        commands={[{ id: "codex:/review", name: "/review", source: "project" }]}
+        selectedIndex={0}
+        onSelect={() => {}}
+        onClose={() => {}}
+        query="/"
+        status={{ state: "degraded" as never, providerCommandCount: 1, onRefresh: () => {} }}
+      />,
+    );
+    expect(screen.getByRole("option", { name: /review/ })).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toBe("1 command available");
+    expect(screen.queryByText(/Loading|couldn't be loaded|out of date/) === null).toBe(true);
+    // Refresh is offered only for states this renderer understands.
+    expect(screen.queryByRole("button", { name: /Refresh/ }) === null).toBe(true);
+  });
+});
+
 describe("SlashCommandMenu placement", () => {
   const originalVisualViewport = Object.getOwnPropertyDescriptor(window, "visualViewport");
 

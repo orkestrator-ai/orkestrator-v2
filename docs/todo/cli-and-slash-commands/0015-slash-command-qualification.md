@@ -1,21 +1,22 @@
 # Slash-command qualification
 
-Checked against `main` at `31d0fb06` (2026-10-17).
+Checked against `main` at `06297124` (2026-10-23).
 
 Every slash-command executor was first qualified from installed SDK
 declarations and source, then exercised through each integration's real
 execution path with transport-level fakes. The live provider probes and the
-inactive-environment browser scenario then ran on 2026-10-17 (record below).
-This file collects the evidence still needed before the feature can be called
-complete. Failures found here become code items in
+inactive-environment browser scenario then ran on 2026-10-17, and Pi, Codex
+disabled skills, the container paths, the mixed-version matrix and the
+performance harness on 2026-10-23 (records below). This file collects the
+evidence still needed before the feature can be called complete. Failures
+found here become code items in
 [0016-slash-command-catalogue.md](0016-slash-command-catalogue.md).
 
 ## Current state
 
 - The per-provider support, unavailable-command and literal-suppression tables
-  are in [`native-agent-commands.md`](../../architecture/native-agent-commands.md#provider-support).
-  They still carry the 2026-09-23 source-and-fakes pins and caveat; item 5
-  below updates them from the live record.
+  are in [`native-agent-commands.md`](../../architecture/native-agent-commands.md#provider-support),
+  which now names the pin and date each provider was qualified live on.
 - The composer is covered by component tests
   (`apps/web/src/components/chat/SlashCommandMenu.test.tsx`,
   `apps/web/src/hooks/useSlashCommandMenu.test.tsx`,
@@ -361,50 +362,313 @@ The same run found the spec's Claude refresh expectation out of date. Since
 treats Claude like Codex. That also runs Claude's stale-draft check, which
 passed.
 
+## Qualification record (2026-10-23)
+
+Run on `main` at `06297124` plus this branch, on macOS (Apple M5 Pro), Bun
+1.4.2. The pins are unchanged from the 2026-10-17 record.
+
+### Pi 1.2.0, live (item 2)
+
+`scripts/slash-probes/pi-commands-probe.mjs` starts the real Pi bridge with a
+disposable agent directory, session directory, bridge state and git
+repository, and shares only the host's `auth.json` by path
+(`PI_BRIDGE_AUTH_FILE`, never a copy: the host login is OAuth with a rotating
+refresh token). Every command file lives in the disposable repository's `.pi/`.
+Proof is a random nonce in the command file or a marker file the extension
+writes. Model `openai/gpt-5.6-luna` (`openai/gpt-5.5` is refused for this
+ChatGPT login). The final run:
+
+| Check | Result |
+| --- | --- |
+| Discovery | Unattached session: `stale`, no rows. After `attach` (0.2 s): `ready`, 8 rows (3 templates, 3 extension commands, `/steer`, `/compact`), read in 2 ms |
+| Extension-before-template precedence | `/probe-shadow` (a template and an extension command) listed once, as the extension; selecting it ran the extension, and the template never reached the model |
+| Headless extension completion | Selected `/probe-ext alpha beta` returned 202, ran with its arguments and finished in 7 ms with no model turn; its `sendMessage` output reached the transcript |
+| Extension that asks the user | `ctx.hasUI` is `false`, and `ctx.ui.confirm` answers `false` at once; nothing blocks |
+| Template with arguments | One model turn (3.6 s); the reply carried the nonce with `zeta` substituted |
+| Literal opt-out | In a fresh session with tool calls denied: `/probe-ext literal-arg` and `/probe-tpl omega` sent with `allowProviderCommands: false` ran neither the extension nor the template, and each was an ordinary model turn. Control: the same typed text, interpreted, expanded |
+| `reload()` mid-turn | Refresh during a running template turn answered `deferred`, the list read `stale`, and the turn completed. A template added on disk during the turn was listed after it (`ready`) |
+| Idle refresh | `reloaded`; a template deleted on disk left the list |
+| Stale selection | Selecting the deleted template answered 422 `command-unavailable`; nothing was sent |
+
+`reload()` is still unsafe mid-turn in SDK 1.2.0: it fires `session_shutdown`,
+invalidates the extension runner and resets the API providers with no guard of
+its own, and Pi's terminal still refuses `/reload` while streaming
+(`interactive-mode.js`). So the bridge keeps deferring. An earlier attempt with
+tools allowed looked like a literal-opt-out failure: the model read `.pi/` with
+`bash` and imitated both commands (it even wrote the extension's marker file).
+Hence tools are denied in the literal step.
+
+### Codex disabled skills (item 2)
+
+`scripts/slash-probes/codex-disabled-skills-probe.mjs` runs the pinned
+`codex app-server` 0.162.1 with a disposable `CODEX_HOME` and git repository
+(no sign-in needed) and calls `skills/list`:
+
+| Disabled by | Skill scope | `enabled` |
+| --- | --- | --- |
+| `[[skills.config]] path = … enabled = false` in `$CODEX_HOME/config.toml` | user | `false` |
+| The same, naming a repository skill | repo | `false` |
+| The same entry in the repository's `.codex/config.toml` | repo | `true` (ignored, also with the repository trusted, `CODEX_PROBE_TRUST_PROJECT=1`) |
+| Not disabled | user and repo | `true` |
+
+The bridge lists an `enabled: false` skill unavailable with reason `disabled`
+(`skillUnavailability` in `bridges/codex-bridge/src/commands/skill-inventory.ts`,
+pinned by `codex-command-catalogue.test.ts`). So disabled skills are qualified
+for the user `config.toml`, the only place 0.162.1 honours.
+
+### Containers (item 1)
+
+- `slash-command-inactive.spec.ts` takes
+  `ORKESTRATOR_AGENT_TEST_SLASH_ENVIRONMENT=local|container` (default `local`).
+  The container variant creates a `containerized` environment with no
+  `projectResources` override (the container default is what is qualified),
+  writes command files and reads the execution marker in `/workspace` through
+  `docker exec`, and restarts the container's bridge. No step is skipped. It
+  needs a profile started with `--fixture-environments local,container`
+  (`docs/development/agent-testing.md`).
+- Path resolution, from code, with the tests that pin it. In a container every
+  bridge and `opencode serve` run as `node` in `/workspace`, with no
+  `CODEX_HOME`, `GROK_HOME` or `CLAUDE_CONFIG_DIR` override:
+
+  | Provider | Where discovery resolves | Pinned by |
+  | --- | --- | --- |
+  | Claude | `claudeWorkspaceCwd()` (`CWD`, else the process cwd, `claude-query-config.ts`); the container start runs `cd /workspace`; project settings and plugins load only when `projectResources` is not false | new `claude-query-config.discovery.test.ts`; Claude container start test |
+  | Codex | Templates in `<cwd>/.codex/prompts` and `$CODEX_HOME/prompts`; `skills/list` with `cwds: [cwd]`; the container exports `CWD=/workspace` | `rollout.test.ts`, `codex-command-catalogue.test.ts`; Codex container start test |
+  | OpenCode | `command.list` with no `directory` for a container connection, so the server's own cwd (`cd /workspace` before `opencode serve`) | `native-agent-service-provider.test.ts`; OpenCode container start test |
+  | Grok | `CWD` for the child and `session/new`; `$HOME/.grok`; folder trust off because containers load project resources by default | `acp-provider-config.test.ts`, `native-agent-execution-policy.test.ts`; Grok container start test |
+  | Pi | `CWD=/workspace`, `PI_AGENT_DIR=/home/node/.pi/agent` | `runtime.test.ts`; Pi container start test |
+  | Cursor | Unsupported | `cursor-bridge/src/http.test.ts` |
+
+  The container start assertions are in
+  `apps/backend/tests/commands-registry-servers.test.ts`. The backend never
+  reads `.claude/commands`, `.codex/prompts` or `.grok/commands`; it only asks
+  the bridge over HTTP. The renderer never receives a path: the protocol
+  rebuilds each row from an allowlist (`agent-command-catalogue.test.ts`).
+- Found on the way, not changed: host `~/.claude/skills` and `~/.grok/commands`
+  are not staged into containers (`portable-inputs.ts`), so those user rows are
+  missing in a container. That is what is listed, not where it resolves.
+
+### Mixed-version matrix (item 3)
+
+Transport-level fakes, in `mixed-version:` describe blocks, against the shapes
+before #827 (`ff4026b4e^`, the version 1 catalogue; first released in
+v2.21.0). Correction to the earlier premise: inside that window the old bridges
+did not 404 on the session route. They all served `{ commands: [...] }` without
+`catalogueVersion`. A 404 there comes only from bridges before #599 or from an
+old Codex bridge asked about a session it does not hold. Both are covered.
+
+- **New backend, old bridge** (`apps/backend/src/core/http-bridge-commands.test.ts`,
+  all five bridges): pre-#827 rows read as non-enhanced `legacy:` rows that run
+  as typed text, and a guessed enhanced id is refused with nothing sent; a 404
+  falls back per read (never stickily) to the agent's legacy route, and ACP,
+  which has none, reads `unavailable`; old Claude `"/name - description"`
+  strings keep only bare names, so no built-in row survives; a version 1 body
+  without its optional fields stays enhanced; an unknown `catalogueVersion`
+  degrades to display rows; a malformed body is `unavailable` and keeps any
+  held list as `stale`; a snapshot without `commandRevision` triggers nothing.
+- **Old backend, new bridge** (each bridge's route tests): the legacy routes,
+  session catalogue, snapshot and a prompt body without command flags are
+  still readable; `commandRevision` is additive; ACP still has no legacy route.
+- **Renderer and backend** (`commands-validation.test.ts`,
+  `useNativeAgentSession.commands.test.tsx`, `workflows.commands.test.ts`,
+  `useSlashCommandMenu.test.tsx`, `SlashCommandMenu.test.tsx`,
+  `native-command-submission.test.ts`): an older renderer's dispatch without
+  `command`; extra fields ignored and an unknown intent kind refused; old
+  projections with display-only rows or no commands section; unknown fields
+  carried along; a picker with no rows, id-less rows or unknown states degrades
+  without errors.
+- **Defects fixed:**
+  - An availability state a backend does not know (a newer bridge's) was
+    dropped and the command ran. `normalizeAvailability`
+    (`packages/protocol/src/agent-command-catalogue.ts`) now makes it
+    unavailable with reason `unsupported`.
+  - The Claude branch of the sync-v1 snapshot dropped `commandRevision`
+    (`http-bridge-provider.ts`), so those projections never re-read on
+    `commands_changed`.
+- **Limits, recorded in tests rather than changed:** a sync-v1 delta with a
+  field outside `PROJECTION_FIELD_SET` is refused whole (current renderers read
+  sync-v1 only as forced snapshots, which accept unknown fields; `policy` has
+  been missing from the set since #604); an unknown discovery availability
+  word fails the whole discovery read; a non-JSON or oversized catalogue body
+  reports `provider-error`, never `malformed` or `too-large`.
+
+### Performance (item 4)
+
+`bun scripts/benchmark-slash-command-catalogue.ts` (`--json`, `--quick`) reads
+through the real `HttpBridgeCatalogAdapter`, the cache and
+`NativeAgentService.getProjection` against an in-process fake bridge serving
+seeded synthetic inventories. No network, no provider. Three runs on Apple M5
+Pro, Bun 1.4.2 (200 cold and 5,000 warm samples, 40 projection samples,
+200 rounds of 21 keystrokes). Times in ms, ranges over the three runs:
+
+| Inventory (wire bytes) | Cache cold p50 / p95 | Cache warm p50 / p95 | Projection cold p50 / p95 | Projection warm p50 / p95 | Provider reads (cold / warm) | Filter per keystroke p50 / p95 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 10 rows (3,238) | 0.04 / 0.09–0.19 | 0 / ≤0.001 | 0.70–1.04 / 1.6–2.7 | 0.26–0.31 / 0.5–1.0 | 1 / 0 | 0.002 / 0.006 |
+| 100 rows (33,081) | 0.19–0.23 / 0.6–9.1 | 0 / ≤0.001 | 0.96–1.22 / 1.5–2.1 | 0.32–0.35 / 0.54–0.59 | 1 / 0 | 0.023 / 0.034 |
+| 1,000 rows, cut to 512 (324,556) | 1.28–1.42 / 6.2–40 | 0 / ≤0.001 | 2.41–2.61 / 5.4–86 | 0.63–0.64 / 0.86–1.3 | 1 / 0 | 0.12 / 0.21–1.04 |
+| 512 rows at the wire maximum (523,798) | 1.72–1.81 / 7.1–30 | 0 / ≤0.001 | 2.58–2.88 / 4.2–34 | 0.79–0.82 / 1.2–15 | 1 / 0 | 0.32–0.33 / 0.58–2.7 |
+
+- **Budget.** 256 keys filled with 100-row inventories keep 254 entries
+  (16,761,206 bytes, 2 evictions); with wire-maximum inventories, 16 entries
+  (16,758,768 bytes, 240 evictions). No insert ever exceeded 16 MiB, the
+  counted bytes match an independent recount, and the heap delta is 1.01–1.05×
+  the counted bytes. The cache charges about twice the wire size per entry
+  (the rows plus the change-detection signature).
+- **Provider reads.** Cold read 1, warm read 0, warm dispatch read 0, forced
+  dispatch read 1, expired read 1 (served from cache, re-read in the
+  background), refresh 1 reload plus 1 read. Against an old bridge each read
+  costs one extra request (the session-route 404, then the global route).
+  `ensureSession` makes no provider read, the first projection one, later ones
+  none.
+- **Coalescing.** 50 concurrent cold reads, dispatch reads, a mix, or expired
+  reads of one key cost one provider read. 100 cold reads across keys never run
+  more than 4 provider reads at once; 68 are admitted (4 running, 64 queued) and
+  32 are refused at once as `unavailable` (`provider-error`, 5 s backoff).
+- **Defect found and fixed: concurrent refreshes.** 50 concurrent refreshes of
+  one key cost 50 reloads and 50 reads, and 49 callers got `failed` although
+  the provider answered: each refresh's forced re-read invalidated the one
+  before it, and a late failure could overwrite the winner's `lastRefresh`.
+  `NativeAgentCommandCatalogueCache.refresh` now coalesces per key into one
+  running and one queued refresh. Measured after the fix: 2 reloads, 2 reads,
+  all 50 `reloaded`.
+- **Picker.** Typing 20 characters after `/` over 512 rows makes no projection
+  fetch, catalogue refresh or file-tree call
+  (`AgentNativeTab.commands.test.tsx`); a deliberate refresh-per-keystroke
+  change failed it with 20 calls.
+- Regression tests (counts and bytes, never timing):
+  `apps/backend/src/core/native-agent-command-catalogue-scale.test.ts`.
+
+### Follow-ups
+
+**Lost Claude dispatch settles without a click (follow-up 1).**
+
+- `GET /session/:id/dispatch` has a third in-band answer, `lost`
+  (`BridgePromptDispatchStatus` in `packages/protocol/src/native-agent.ts`),
+  given exactly where the prompt route refuses the id with 410
+  `dispatch-outcome-lost`. `dispatched` still wins.
+  - Claude: dispatch state `new` and the id in `restoredDispatchedRequestIds`,
+    unless the persisted idle-`/steer` reply row shows it was a local answer.
+    A session the restarted bridge has not loaded yet is answered from its
+    preferences file, without registering, touching or hydrating it (an
+    unreadable file answers `unknown`); otherwise an inactive environment
+    would keep answering `unknown`.
+  - ACP, Cursor and Pi: an `ambiguous` journal entry that is not a local reply
+    (and, on Cursor, not this process's own failed send, which a retry may
+    still deliver).
+  - Older bridges never send `lost`, so they behave as before.
+- The backend maps `lost` to `ProviderDispatchStatus` `"lost"`. Its
+  reconciliation (`settleAmbiguousDispatch`, now `"confirmed" | "retired"`)
+  clears the parked record without adding the id to `dispatchedRequestIds`, and
+  stores `retiredDispatch: { requestId, retiredAt }` on the session
+  (`retireNativeAgentDispatch`). The next retirement replaces it, the next
+  accepted dispatch clears it, and it is ignored after 24 h
+  (`NATIVE_AGENT_RETIRED_DISPATCH_TTL_MS`). A send whose own acknowledgement
+  was lost and reconciles as `lost` is answered `rejected` with
+  `requestIdRetired` at once.
+- The projection and session-state view carry `retiredDispatch` with the
+  message (`dispatchOutcomeLostMessage`, now also used by
+  `assertPromptOutcomeKnown`), plus a `warning` notice
+  (`dispatch-outcome-lost:<id>`) so an older renderer still shows it.
+- The tab, also on a later mount, releases the draft's id when it still holds
+  the retired one, keeps the text, clears the optimistic bubble and shows the
+  message; the notice's toast is then suppressed. A queued prompt never parks,
+  so the queue path needed no change.
+- Tests: Claude `routes/session.test.ts` and `session-manager-lifecycle.test.ts`;
+  ACP, Cursor and Pi route tests (four assertions moved from `unknown` to
+  `lost`); backend `native-agent-service-dispatch.test.ts`,
+  `native-agent-retired-dispatch.test.ts`, `storage-native-agent-sessions.test.ts`,
+  `http-bridge-provider.test.ts`; web `AgentNativeTab.test.tsx` and
+  `useNativeAgentSession.progressive.test.tsx`. Not run live (see below).
+- Skew: an older renderer's sync-v1 delta check refuses the unknown
+  `retiredDispatch` field, as it does every earlier additive field; full
+  snapshots and the progressive view accept it.
+
+**Outage drops the stream (follow-up 2).** The scenario's 10 s outage now
+calls `context.setOffline(true)` and then `window.stop()`, and waits for the
+page to log the event-stream disconnect. On return it requires a new answered
+(2xx) response on the main event stream, which nothing can produce while
+offline, so it proves a reconnect. The helper is shared with
+`mcp-apply-inactive.spec.ts` (`e2e/agent-testing/event-stream-outage.ts`),
+whose own check counted requests and is now the stricter response check too.
+
+### Live browser runs (2026-10-23)
+
+Disposable profile `qa-slash-0015` (`--fixture --fixture-environments
+local,container --credential-source codex --credential-source claude
+--agent-platforms codex,claude`), this branch's code, the container image built
+from it (`orkestrator-v2:dev-182ff15b4e1f`):
+
+| Run | Environment | Providers | Result |
+| --- | --- | --- | --- |
+| `slash-inactive-local` | host worktree | Codex, Claude | **2 passed, 0 skipped** (Codex 136 s, Claude 113 s), with the outage now dropping the stream and the reconnect asserted |
+| `slash-inactive-container` | container | Codex, Claude | 2 failed at the first selection: the picker never opened (host load average about 70 from other worktrees). [0694](../../tests/flaky-tests/native-agents-and-transcripts/0694-container-slash-picker-closed-after-load.md) |
+| `slash-inactive-container2` | container | Codex | Failed at the stale-draft step: the refusal took 5.7 s, past Playwright's 5 s default. The assertion now waits 30 s, like its neighbours |
+| `slash-inactive-container3` | container | Codex, Claude | **Codex passed every step** (193 s, 0 skipped). Claude passed the first four steps, including the stale draft, then hit the picker symptom again after the narrow-viewport reload |
+| `slash-inactive-container4` | container | Claude | **Passed every step** (284 s, 0 skipped) |
+| `slash-claude-local-retired` | host worktree | Claude | Failed: the restart right after Send parked the dispatch, and the same-id retry came back `unknown (HTTP 500)`. The restarted bridge waited out the killed process's preference lock ([0056](../agent-engines/0056-claude-preference-lock-after-restart.md)). The spec retried once only, so the card stayed |
+| `slash-claude-container-retired` | container | Claude | Failed: the 0694 picker symptom after the hard reload |
+| `slash-claude-local-r2` | host worktree | Claude | **Passed** (101 s, 0 skipped), after the spec learned to retry again on `unknown` |
+| `slash-claude-container-r2` | container | Claude | **Passed** (209 s, 0 skipped) |
+
+So both providers are qualified in a container: a selected project command
+written into `/workspace` was listed by the provider inside the container, ran
+while the environment was inactive, survived the stream outage, the inventory
+change, a refresh, a reload, a narrow viewport, and both bridge restarts
+without running twice; a stale selection was refused and kept. The picker
+symptom (3 of 7 container runs) is recorded as flake 0694 with its evidence;
+it was not hidden with a retry or a longer wait.
+
+Spec changes made during these runs:
+
+- The stale-draft refusal waits 30 s instead of Playwright's 5 s default
+  (diagnosed: the dispatch revalidates against the bridge, 5.7 s under load).
+- After a restart, a same-id retry that answers `unknown` is retried again, up
+  to four times, as a user would press Retry again; at-most-once is still
+  asserted. The cause of the `unknown` is todo 0056.
+- The restart steps annotate `retired-without-retry` when a parked dispatch is
+  settled as lost by reconciliation (follow-up 1). None of the passing runs
+  parked a dispatch at all (the restart came after the turn's first reply), so
+  the click-free path is proved by unit and route tests only (outstanding
+  item 2).
+
+### Validation (2026-10-23)
+
+- `mise run format:check`, `mise run lint` and `mise run typecheck` pass.
+- `mise run test`: the root, bridge and Codex protocol groups pass. The
+  workspace group's failures were load timeouts while live runs shared the
+  host. Every owning file passed alone (existing flakes 0258, 0514, 0518, 0661,
+  0691 and 0093; new 0695 and 0696), except two:
+  - `agent provider module boundaries > keeps every provider implementation
+    module within 1,500 lines`: real, caused by this branch, fixed by sharing
+    the three `commandRevision` mappings (`commandCatalogueRevisionField`).
+  - `executable document policy in firefox > popups, new-window links and top
+    navigation reach the sink zero times`
+    (`content-server.engines.test.ts`) fails alone too: this host's Firefox
+    fetches `/favicon.ico` from the sink origin. The branch changes nothing
+    under `transcript-artifacts`; not checked on `main`.
+- The backend suite run on its own afterwards: 10,155 pass, 5 fail, the four
+  load timeouts passing alone and the Firefox case above.
+
 ## Outstanding work
 
 ### Qualification
 
-1. **Containers.** Check that skill and template paths resolve inside the
-   provider's environment, not on the host or in the renderer, and run
-   `slash-command-inactive.spec.ts` against a container environment (it takes
-   `environmentType: "local"` today; make it a parameter).
-2. **Pi and the remaining provider gaps.**
-   - Pi 1.2.0 with credentials: discovery, extension-before-template
-     precedence, headless extension completion, whether `reload()` is still
-     unsafe mid-turn, and the literal opt-out (`expandPromptTemplates: false`).
-   - Codex disabled skills, with a disposable `CODEX_HOME` whose
-     `config.toml` disables one skill.
-3. **Mixed-version matrix.** New backend with an old bridge, old backend with
-   a new bridge, and old and new renderer projections, within the support
-   window decided in [0016-slash-command-catalogue.md](0016-slash-command-catalogue.md).
-4. **Performance**, with synthetic large inventories:
-   - cold and warm discovery latency (p50 and p95);
-   - refresh coalescing;
-   - retained catalogue bytes against the 16 MiB cache budget
-     (`COMMAND_CATALOGUE_MAX_BYTES`);
-   - provider probe count.
-
-   Opening the picker must not trigger a provider process or filesystem scan
-   per keystroke. Report measured numbers; do not set latency claims in
-   advance.
-5. After a pass, update the qualification paragraph and tables in
-   `native-agent-commands.md` "Provider support" (pins, and drop the "no live
-   session" caveat for what passed), and the owner comments listed in
-   [0016-slash-command-catalogue.md](0016-slash-command-catalogue.md).
-
-### Follow-ups
-
-1. **Settle a lost Claude dispatch without a click.** After a restart Claude's
-   `GET /:id/dispatch` still answers `unknown` for an id an earlier process
-   claimed, so the card waits out the grace window and asks for a Retry that
-   can only report the lost outcome. Answer that case from
-   `restoredDispatchedRequestIds` so the backend can resolve the card and
-   show the message on its own.
-2. **Make the inactive scenario's outage drop the stream.** Cut the event
-   stream as `mcp-apply-inactive.spec.ts` does (`window.stop()` while
-   offline) so the reconnect and replay path is actually exercised, and
-   assert that the page reconnected.
+1. **Mixed versions against real old builds.** The matrix above uses fakes.
+   Still unproven: a real pre-#827 bridge (in particular the old Claude
+   `/session/:id/commands` running a CLI probe), a real older renderer bundle
+   in a browser, and an older backend's sync-v1 polling. Build the bridges and
+   backend from `ff4026b4e^` (or the last v2.20.x release) into a disposable
+   profile, pair an old bridge with a current backend and the reverse, run the
+   scenario, and serve the v2.20.x renderer against a current backend while
+   watching for "Invalid native agent projection update response". Needs the
+   support window from
+   [0034-mixed-version-compatibility.md](../cross-cutting/0034-mixed-version-compatibility.md)
+   to say which old builds count.
+2. **Live proof of the click-free lost dispatch.** Restart a Claude bridge
+   right after Send in a host and a container environment and check that the
+   card never asks for a Retry, the draft keeps its text and the message
+   shows. The browser scenario's restart steps pass but do not tell the two
+   paths apart; add an assertion there, or a dedicated step.
 
 ## Constraints and rationale
 
@@ -431,15 +695,112 @@ passed.
   running-turn restart. The backend tells the user it may not have run, rather
   than leaving a retry card that can never succeed.
 
+## Assumptions and decisions
+
+Made on 2026-10-23 while closing items 1 to 5 and both follow-ups.
+
+1. **Mixed-version window.** No support window is agreed (0034).
+   - Options: wait for 0034; test only the previous release; test the shapes
+     immediately before the version 1 catalogue (#827, `ff4026b4e^`).
+   - Chosen: the pre-#827 shapes, plus a version 1 bridge missing optional
+     fields and an unknown future version.
+   - Why: #827 is the only wire break in the catalogue's history, so it is the
+     oldest shape any window could include; waiting would have left the matrix
+     untested.
+   - Pros: covers every shape a plausible window contains, and found two real
+     defects. Cons: if 0034 picks a longer window (before #599), the pre-#599
+     bridges are covered only by the 404 path, and nothing was run against a
+     real old build (outstanding item 2).
+2. **Pi credentials.** The host has an OAuth Pi login with a rotating refresh
+   token.
+   - Options: copy `auth.json` into the disposable agent directory; share it
+     by path with `PI_BRIDGE_AUTH_FILE`; skip Pi again.
+   - Chosen: share by path, everything else disposable.
+   - Why: a refresh made from a copy would rotate the host's token away and
+     sign the user out of `pi`. The bridge already supports this for
+     agent-test profiles.
+   - Pros: no credential copies, the host login survives. Cons: the probe can
+     refresh the host's token (as running `pi` would) and spends a few short
+     model turns on the user's plan.
+3. **Pi literal step without tools.** With tools allowed the model read `.pi/`
+   and imitated the commands, which makes a nonce prove nothing. Chosen:
+   `approvals: "deny"` for the literal and control sessions, plus a count of
+   model turns. Pro: the nonce can only come from expansion. Con: it does not
+   show what a tool-enabled literal turn does, which is the model's business,
+   not the opt-out's.
+4. **Codex disabled skills at the protocol level.**
+   - Options: a full Orkestrator session with a disposable `CODEX_HOME`; the
+     pinned `codex app-server` called directly with one.
+   - Chosen: the app-server directly, plus the existing bridge mapping tests.
+   - Why: the bridge passes app-server's `enabled` flag through
+     `skillUnavailability` unchanged, and the open question was what Codex
+     reports. Pros: no sign-in, no host `~/.codex`, seconds to run, repeatable.
+     Cons: the bridge-to-browser path for a disabled row is proved by unit
+     tests, not live.
+5. **Refresh coalescing.**
+   - Options: keep concurrent refreshes (status quo); join the refresh in
+     flight; one running plus one queued refresh per key.
+   - Chosen: one running plus one queued.
+   - Why: joining the running refresh can hand a caller a list read before its
+     own request (a file added after the reload started would be missed). The
+     queued refresh starts after every caller that joined it.
+   - Pros: at most two reloads per burst, no false `failed`, every caller sees
+     a list at least as new as its request. Cons: a caller arriving mid-refresh
+     waits for up to two refreshes.
+6. **Lost Claude dispatch.**
+   - Options: keep the card and let Retry report the loss (status quo); keep
+     the parked record with a new `lost` status the card renders; clear the
+     record and project a separate content-free `retiredDispatch` marker plus a
+     notice.
+   - Chosen: a new in-band `lost` answer from every bridge that can tell, and
+     the third option in the backend.
+   - Why: a parked record blocks the whole session, so keeping it costs the
+     user a click for nothing; a separate marker lets the tab, mounted or not,
+     restore the draft the same way the retry path already does, and a notice
+     covers older renderers.
+   - Pros: no click, the session unblocks at the first reconciliation, the
+     draft survives inactive environments. Cons: a new optional wire value and
+     projection field (older sync-v1 delta readers refuse it), and the Claude
+     bridge reads a not-yet-loaded session's preferences file to answer.
+7. **Container scenario.**
+   - Options: a separate container spec; the same spec with a parameter;
+     container steps marked skipped where awkward.
+   - Chosen: one parameter, no policy override, files through `docker exec`,
+     no skipped step.
+   - Why: the container default (`projectResources` on) is what users get,
+     and `/workspace` is a clone inside the container, not a host mount.
+   - Pros: one scenario, both kinds. Cons: the container variant needs a
+     profile started with container fixtures and a built image.
+8. **Re-probing after upgrades (the open question).** Chosen: re-qualify the
+   moved provider on every pin change, with the scripted probes for all and
+   the browser scenario for Codex and Claude, written into
+   `upgrade-agents.md`. Rejected: only on a major version (minor releases
+   changed command behaviour before, e.g. Grok folder trust), and never (the
+   tables would claim versions nobody checked). Con: a few minutes and a few
+   model turns per upgrade.
+9. **Spec adjustments from the live runs.** Options for the failures that were
+   timing, not product: leave them failing; raise every wait; change only the
+   diagnosed waits and record the rest. Chosen: the last. The stale-draft
+   refusal waits 30 s (measured 5.7 s under load) and an `unknown` retry is
+   retried again (cause filed as 0056). The picker symptom keeps its 30 s wait
+   and is flake 0694. Pro: the scenario stays strict where the cause is
+   unknown. Con: 0694 can still fail a container run until it is fixed.
+10. **Small defects found by the matrix were fixed here** (unknown availability
+    state ran a command; Claude's sync-v1 snapshot dropped `commandRevision`),
+    because both were small, each is pinned by a new test, and one was a
+    safety issue. The larger limits (sync-v1 delta strictness, error codes)
+    are recorded above and in tests rather than changed, because changing them
+    needs the support window.
+
 ## Open questions
 
-- Should qualified rows be re-probed after every agent SDK or CLI upgrade? See
-  [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md).
+None. Re-probing after an upgrade is decided above (decision 8) and written into
+[`upgrade-agents.md`](../../development/upgrade-agents.md#repository-wide-validation).
 
 ## Needs verification
 
-- Whether any of these runs happened informally after #827. No artifacts or
-  records were found.
+None. The question whether these runs happened informally after #827 is moot:
+the 2026-10-17 and 2026-10-23 records above are the qualification.
 
 ## Related
 

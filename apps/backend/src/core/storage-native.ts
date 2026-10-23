@@ -1010,6 +1010,7 @@ export abstract class StorageNative extends StorageReviews {
         // Any successfully accepted prompt supersedes a prior recovery notice.
         openCodeIncompleteTurnNotice: undefined,
         pendingDispatch: undefined,
+        retiredDispatch: undefined,
         dispatchedRequestIds: [...(session.dispatchedRequestIds ?? []).slice(-999), requestId],
         updatedAt: nowIso(),
       };
@@ -1049,6 +1050,7 @@ export abstract class StorageNative extends StorageReviews {
       sessions[key] = {
         ...session,
         pendingDispatch: undefined,
+        retiredDispatch: undefined,
         dispatchedRequestIds: session.dispatchedRequestIds?.includes(requestId)
           ? session.dispatchedRequestIds
           : [...(session.dispatchedRequestIds ?? []).slice(-999), requestId],
@@ -1084,6 +1086,43 @@ export abstract class StorageNative extends StorageReviews {
       sessions[key] = {
         ...session,
         pendingDispatch: undefined,
+        updatedAt: nowIso(),
+      };
+      await this.saveNativeAgentSession(key, sessions[key]);
+      await this.scrubPendingNativeAgentDispatchBackups(key, requestId);
+      this.announceNativeAgentRecord(sessions[key]!);
+      return true;
+    });
+  }
+
+  /**
+   * Resolve a parked dispatch the provider reports lost.
+   *
+   * The provider recorded this id in an earlier process and will refuse it for
+   * good, so the record can never be retried into a turn. It is cleared like a
+   * retry refused with `requestIdRetired`, and a content-free
+   * `retiredDispatch` marker replaces any earlier one so every renderer can
+   * release the draft's id without a click. The id never joins
+   * `dispatchedRequestIds`: nothing proves its turn ran.
+   *
+   * Returns false when this key has no pending record for `requestId`.
+   */
+  async retireNativeAgentDispatch(key: string, requestId: string): Promise<boolean> {
+    if (!isNonBlankString(key) || !isNonBlankString(requestId)) {
+      throw new Error("Native agent dispatch identity must not be blank");
+    }
+    return this.enqueueNativeAgentSessionMutation(key, async () => {
+      const loaded = await this.loadNativeAgentSessions();
+      const { sessions } = loaded;
+      this.assertReadableNativeAgentSession(loaded, key);
+      const session = sessions[key];
+      if (!session || session.pendingDispatch?.requestId !== requestId) {
+        return false;
+      }
+      sessions[key] = {
+        ...session,
+        pendingDispatch: undefined,
+        retiredDispatch: { requestId, retiredAt: nowIso() },
         updatedAt: nowIso(),
       };
       await this.saveNativeAgentSession(key, sessions[key]);

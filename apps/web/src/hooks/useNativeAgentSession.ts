@@ -1768,6 +1768,9 @@ export function useNativeAgentSession<TMessage = unknown>({
         ...(hasAuthoritativeState && current.recoverableDispatch
           ? { recoverableDispatch: current.recoverableDispatch }
           : {}),
+        ...(hasAuthoritativeState && current.retiredDispatch
+          ? { retiredDispatch: current.retiredDispatch }
+          : {}),
         // Task cards are cached presentation, like the transcript itself. A
         // failed state read or remount revokes action authority, not knowledge
         // of the children: removing these makes pinned agents disappear (or
@@ -1914,6 +1917,7 @@ export function useNativeAgentSession<TMessage = unknown>({
           : { runtimeHealthAuthoritative: value.runtimeHealthAuthoritative }),
         notices: value.notices,
         ...(value.recoverableDispatch ? { recoverableDispatch: value.recoverableDispatch } : {}),
+        ...(value.retiredDispatch ? { retiredDispatch: value.retiredDispatch } : {}),
         ...(value.backgroundTasks ? { backgroundTasks: value.backgroundTasks } : {}),
         ...(value.suggestedPrompt ? { suggestedPrompt: value.suggestedPrompt } : {}),
         ...(value.completionBlockedByBackgroundTasks === undefined

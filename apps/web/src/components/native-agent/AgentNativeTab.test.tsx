@@ -4321,6 +4321,102 @@ describe("AgentNativeTab", () => {
     expect(resent.requestId).not.toBe("retired-direct");
   });
 
+  test("settles a dispatch the backend retired on its own, without a click and on a later mount", async () => {
+    const tabId = "tab-auto-retired";
+    const sessionKey = createSessionKey("env-1", tabId);
+    const lost =
+      "Claude Code could not confirm this message, so it may not have run. Check the conversation and send it again if it did not.";
+    useNativeComposeStore.getState().updateDraft(sessionKey, {
+      text: "Deploy the preview",
+      requestId: "lost-auto",
+      pendingTranscriptConfirmation: {
+        requestId: "lost-auto",
+        sessionId: "s-1",
+        priorMessageIds: [],
+      },
+    });
+    // What the backend projects once it has retired the parked dispatch: no
+    // card, the content-free marker, and the notice older renderers show.
+    getNativeAgentProjectionMock.mockImplementation(async (projectionInput) => ({
+      ...(await defaultProjection(projectionInput)),
+      notices: [
+        {
+          kind: "warning" as const,
+          message: lost,
+          occurrenceId: "dispatch-outcome-lost:lost-auto",
+        },
+      ],
+      retiredDispatch: {
+        requestId: "lost-auto",
+        retiredAt: "2026-10-23T10:00:00.000Z",
+        message: lost,
+      },
+    }));
+
+    // The tab was not mounted when it happened; it learns from the snapshot.
+    const mounted = render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+    expect(await screen.findByText(lost)).toBeTruthy();
+    await waitFor(() =>
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.requestId).toBeUndefined(),
+    );
+    const draft = useNativeComposeStore.getState().drafts.get(sessionKey);
+    expect(draft?.text).toBe("Deploy the preview");
+    expect(draft?.pendingTranscriptConfirmation).toBeUndefined();
+    expect(draft?.submissionError).toBe(lost);
+    expect(screen.queryByRole("button", { name: "Retry send" }) === null).toBe(true);
+    expect(retryNativeAgentDispatchMock).not.toHaveBeenCalled();
+    // Shown once, in the composer: the duplicate notice is not toasted.
+    expect(mockToastWarning.mock.calls.some(([message]) => message === lost)).toBe(false);
+
+    // Idempotent across a remount: still shown, still no toast, still no id.
+    mounted.unmount();
+    render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+    expect(await screen.findByText(lost)).toBeTruthy();
+    expect(mockToastWarning.mock.calls.some(([message]) => message === lost)).toBe(false);
+
+    // The bridge refuses the old id for good, so a resend needs a new one.
+    fireEvent.keyDown(await screen.findByRole("textbox"), { key: "Enter" });
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+    const resent = dispatchNativeAgentIntentMock.mock.calls[0]![0] as { requestId?: string };
+    expect(resent.requestId).toBeString();
+    expect(resent.requestId).not.toBe("lost-auto");
+  });
+
+  test("leaves a draft that no longer owns a retired dispatch alone", async () => {
+    const tabId = "tab-auto-retired-other";
+    const sessionKey = createSessionKey("env-1", tabId);
+    const lost =
+      "Claude Code could not confirm this message, so it may not have run. Check the conversation and send it again if it did not.";
+    useNativeComposeStore.getState().updateDraft(sessionKey, {
+      text: "Something newer",
+      requestId: "newer",
+    });
+    getNativeAgentProjectionMock.mockImplementation(async (projectionInput) => ({
+      ...(await defaultProjection(projectionInput)),
+      notices: [
+        {
+          kind: "warning" as const,
+          message: lost,
+          occurrenceId: "dispatch-outcome-lost:lost-auto",
+        },
+      ],
+      retiredDispatch: {
+        requestId: "lost-auto",
+        retiredAt: "2026-10-23T10:00:00.000Z",
+        message: lost,
+      },
+    }));
+
+    render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+    // The notice still tells the user; the unrelated draft keeps its id.
+    await waitFor(() =>
+      expect(mockToastWarning.mock.calls.some(([message]) => message === lost)).toBe(true),
+    );
+    const draft = useNativeComposeStore.getState().drafts.get(sessionKey);
+    expect(draft?.requestId).toBe("newer");
+    expect(draft?.submissionError).toBeUndefined();
+  });
+
   test("keeps the recovery card mounted and disabled while a retry is running", async () => {
     getNativeAgentProjectionMock.mockImplementation(async (projectionInput) => ({
       ...(await defaultProjection(projectionInput)),

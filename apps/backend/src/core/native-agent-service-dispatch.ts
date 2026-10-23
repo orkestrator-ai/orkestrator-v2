@@ -1,6 +1,7 @@
 import * as shared from "./native-agent-service-shared.js";
 import { randomUUID } from "node:crypto";
 import {
+  dispatchOutcomeLostMessage,
   nativeAgentSteerRejectionMessage,
   nativeAsyncQuestionItemId,
 } from "@orkestrator/protocol/native-agent";
@@ -205,8 +206,9 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
     } catch (error) {
       if (error instanceof PendingNativeAgentDispatchError) {
         // The only thing refusing this prompt is an older dispatch nobody has
-        // resolved. If the provider can prove that one landed, the block was
-        // stale and this prompt was never in conflict with anything.
+        // resolved. If the provider can prove that one landed, or that it never
+        // will (retired), the block was stale and this prompt was never in
+        // conflict with anything.
         if (
           allowRecoveryRetry &&
           (await this.settleAmbiguousDispatch(input, key, error.pendingRequestId))
@@ -230,9 +232,20 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
         // Ask the provider before handing the ambiguity to the user. A lost
         // acknowledgement is not the same fact as a lost prompt, and the
         // provider's own dispatch journal can usually tell the two apart.
-        if (await this.settleAmbiguousDispatch(input, key, input.requestId)) {
+        const settled = await this.settleAmbiguousDispatch(input, key, input.requestId);
+        if (settled === "confirmed") {
           void this.refreshProjection(input, true).catch(() => undefined);
           return { outcome: "accepted", requestId: input.requestId };
+        }
+        if (settled === "retired") {
+          // The bridge restarted under this very request and will refuse the
+          // id for good: the same answer a retry would get, without the card.
+          void this.refreshProjection(input, true).catch(() => undefined);
+          return {
+            outcome: "rejected",
+            error: dispatchOutcomeLostMessage(input.agent),
+            requestIdRetired: true,
+          };
         }
         void this.refreshProjection(input, true).catch(() => undefined);
         return {
@@ -297,32 +310,47 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
    * accepted dispatch, instead of a banner the user has to act on.
    *
    * Read-only and strictly one-directional: it can only ever *clear* a pending
-   * record, and only on an explicit `dispatched`. Providers with no journal to
+   * record, and only on an explicit answer. `dispatched` confirms it
+   * (`confirmed`). `lost` means the provider recorded the id in an earlier
+   * process and will refuse it for good, so a retry could only report that:
+   * the record is retired instead (`retired`), with a content-free marker the
+   * projection carries so every renderer releases the draft's id and shows
+   * the message without a click. A parked prompt never belongs to a queue
+   * item — the queue dispatches without parking and retries its own in-flight
+   * id, which the bridge then refuses as retired. Providers with no journal to
    * ask, an unreachable bridge, and any failure at all leave the record exactly
-   * where it was, because "I could not find out" must never read as "it ran".
+   * where it was (`undefined`), because "I could not find out" must never read
+   * as "it ran".
    */
   protected async settleAmbiguousDispatch(
     input: NativeAgentProjectionInput,
     key: string,
     requestId: string,
     resolved?: NativeAgentRuntimeProvider,
-  ): Promise<boolean> {
+  ): Promise<"confirmed" | "retired" | undefined> {
     try {
       // Cheapest question first. Projection reads drive this on every refresh,
       // and a provider with no journal to ask must not cost a storage read each
       // time to establish that it still has nothing to say.
       const provider = resolved ?? (await this.provider(input));
-      if (!provider.dispatchStatus) return false;
+      if (!provider.dispatchStatus) return undefined;
       // Re-read rather than trusting the caller's snapshot: a real
       // acknowledgement may have landed since, and confirming against a stale
       // record would resurrect a request id that is no longer parked.
       const session = await this.storage.getNativeAgentSession(key);
-      if (session?.pendingDispatch?.requestId !== requestId) return false;
+      if (session?.pendingDispatch?.requestId !== requestId) return undefined;
       const status = await provider.dispatchStatus(session.providerSessionId, requestId);
-      if (status !== "dispatched") return false;
-      return await this.storage.confirmNativeAgentDispatch(key, requestId);
+      if (status === "lost") {
+        return (await this.storage.retireNativeAgentDispatch(key, requestId))
+          ? "retired"
+          : undefined;
+      }
+      if (status !== "dispatched") return undefined;
+      return (await this.storage.confirmNativeAgentDispatch(key, requestId))
+        ? "confirmed"
+        : undefined;
     } catch {
-      return false;
+      return undefined;
     }
   }
 

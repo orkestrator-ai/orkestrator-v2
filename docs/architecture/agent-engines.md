@@ -171,7 +171,8 @@ bridges keep running. Backend stores are rows in `orkestrator.sqlite`
 | --- | --- | --- | --- |
 | Logical tab → provider session mapping | Backend `native-agent-sessions` store | Kept | Kept |
 | Tab teardown intent | Backend `environments` store, `tabTeardownIntents` | Kept | Kept; replayed by `reconcile_tab_teardowns` |
-| Parked prompt or steer with an unknown outcome | `pendingDispatch` on the native session record (`storage-native.ts`), with retry and discard controls | Kept | Kept |
+| Parked prompt or steer with an unknown outcome | `pendingDispatch` on the native session record (`storage-native.ts`), with retry and discard controls | Kept; a prompt the restarted bridge reports `lost` is retired without a click | Kept |
+| Last retired dispatch (content-free `requestId`, `retiredAt`) | `retiredDispatch` on the native session record, projected as `retiredDispatch` plus a warning notice | Kept | Kept; replaced by the next one, cleared by the next accepted dispatch, hidden after 24 hours |
 | Compose draft (text, attachments, metadata) | Backend `compose-drafts` store; the renderer copy is a cache | Kept | Kept |
 | Cursor session identity, prompt and steer journals, steer fence, rendered transcript | `CURSOR_BRIDGE_STATE_DIR/state.json` | Kept; unfinished prompts reload as `ambiguous`, transcripts may be shed with an explicit truncation base | Unaffected |
 | Cursor closing state | `closing` tombstones in `state.json` until the removal is published | Tombstone kept; close finished on start | Unaffected |

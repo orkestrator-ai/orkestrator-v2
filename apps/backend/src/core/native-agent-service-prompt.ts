@@ -653,7 +653,9 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
     for (const { candidate, key, session } of records) {
       if (session?.pendingDispatch?.requestId !== input.requestId) continue;
       if (session.pendingDispatch.mailRefused) refused = true;
-      else if (await this.settleAmbiguousDispatch(candidate, key, input.requestId)) {
+      else if (
+        (await this.settleAmbiguousDispatch(candidate, key, input.requestId)) === "confirmed"
+      ) {
         return "dispatched";
       } else unresolved = true;
     }

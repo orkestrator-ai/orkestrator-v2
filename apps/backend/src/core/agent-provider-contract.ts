@@ -252,13 +252,20 @@ export class AmbiguousPromptDispatchError extends ProviderUnavailableError {
  * What a provider can still prove about one dispatch request id.
  *
  * `dispatched` is an assertion, not a guess: the provider holds a durable
- * record that this exact id was accepted. Everything else — no record, a record
- * that predates a provider restart, an unreadable journal — is `unknown`, so a
- * lost record can never be mistaken for a prompt that was never sent.
+ * record that this exact id was accepted. `lost` is the other assertion: an
+ * earlier provider process recorded the id, this one cannot tell whether its
+ * turn ran, and it will refuse the id for good (the read-only twin of a prompt
+ * refused with `requestIdRetired`). Neither is "never sent". Everything else —
+ * no record, an unreadable journal, a provider that predates `lost` — is
+ * `unknown`, so a lost record can never be mistaken for a prompt that was never
+ * sent.
  */
-export type ProviderDispatchStatus = "dispatched" | "unknown";
-/** Steering additionally reports positive evidence that a queued instruction was removed. */
-export type ProviderSteerDispatchStatus = ProviderDispatchStatus | "absent";
+export type ProviderDispatchStatus = "dispatched" | "unknown" | "lost";
+/**
+ * Steering reports positive evidence that a queued instruction was removed,
+ * and never `lost`: a steer journal has no retired state.
+ */
+export type ProviderSteerDispatchStatus = "dispatched" | "unknown" | "absent";
 
 /** The provider run a backend-owned steer may still target. */
 export type ProviderActiveSteerRun =
@@ -564,7 +571,8 @@ export interface AgentSessionProvider {
    * Ask whether the provider already holds this request id.
    *
    * Read-only. It exists so an ambiguous dispatch can be settled from the
-   * provider's own durable journal instead of being parked for the user.
+   * provider's own durable journal instead of being parked for the user:
+   * `dispatched` confirms it, `lost` retires it, `unknown` leaves it parked.
    */
   dispatchStatus?(sessionId: string, requestId: string): Promise<ProviderDispatchStatus>;
   /**

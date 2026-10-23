@@ -1075,6 +1075,68 @@ describe("StorageService native agent sessions", () => {
     });
   });
 
+  test("retires a parked dispatch the provider reports lost, keeping only a content-free marker", async () => {
+    await withStorage(async (first) => {
+      await first.getOrCreateNativeAgentSession(input, async () => "provider-session");
+      const park = (requestId: string) =>
+        expect(
+          first.dispatchNativeAgentPromptOnce(
+            input.key,
+            requestId,
+            async () => {
+              throw new Error("acknowledgement lost");
+            },
+            { requestId, prompt: "secret prompt", createdAt: new Date(1).toISOString() },
+          ),
+        ).rejects.toThrow("acknowledgement lost");
+      await park("request-a");
+
+      // Only the exact parked id may be retired.
+      expect(await first.retireNativeAgentDispatch(input.key, "request-b")).toBe(false);
+      expect(await first.retireNativeAgentDispatch(input.key, "request-a")).toBe(true);
+      let session = await first.getNativeAgentSession(input.key);
+      expect(session?.pendingDispatch).toBeUndefined();
+      // Nothing proves its turn ran, so it is never recorded as dispatched.
+      expect(session?.dispatchedRequestIds ?? []).not.toContain("request-a");
+      expect(Object.keys(session?.retiredDispatch ?? {}).sort()).toEqual([
+        "requestId",
+        "retiredAt",
+      ]);
+      expect(session?.retiredDispatch?.requestId).toBe("request-a");
+      expect(JSON.stringify(session)).not.toContain("secret prompt");
+      expect(await first.retireNativeAgentDispatch(input.key, "request-a")).toBe(false);
+
+      // A later retirement replaces it.
+      await park("request-c");
+      expect(await first.retireNativeAgentDispatch(input.key, "request-c")).toBe(true);
+      session = await first.getNativeAgentSession(input.key);
+      expect(session?.retiredDispatch?.requestId).toBe("request-c");
+
+      // A confirmed dispatch clears it.
+      await first.dispatchNativeAgentPromptOnce(input.key, "request-d", async () => undefined);
+      session = await first.getNativeAgentSession(input.key);
+      expect(session?.retiredDispatch).toBeUndefined();
+      expect(session?.dispatchedRequestIds).toContain("request-d");
+    });
+  });
+
+  test("reads a session whose retired-dispatch marker is malformed", async () => {
+    await withStorage(async (first) => {
+      const session = await first.getOrCreateNativeAgentSession(
+        input,
+        async () => "provider-session",
+      );
+      const dataDir = first.getDataDir();
+      const stored = readStoredValue<Record<string, unknown>>(dataDir, SESSIONS_STORE)!;
+      stored[input.key] = { ...session, retiredDispatch: { requestId: 42 } };
+      seedStore(dataDir, SESSIONS_STORE, stored);
+      // The marker is validated where it is read, never with the record.
+      expect((await first.getNativeAgentSession(input.key))?.providerSessionId).toBe(
+        "provider-session",
+      );
+    });
+  });
+
   test("leaves resolved and invalidated dispatch and steer content unrecoverable on disk", async () => {
     await withStorage(async (first) => {
       await first.getOrCreateNativeAgentSession(input, async () => "provider-session");

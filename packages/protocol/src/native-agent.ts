@@ -3,7 +3,7 @@ import {
   type AgentInteractionKind,
   type AgentInteractionRequest,
 } from "./agent-interactions.js";
-import { isAgentPlatform, type AgentPlatform } from "./agent-platforms.js";
+import { AGENT_PLATFORM_LABELS, isAgentPlatform, type AgentPlatform } from "./agent-platforms.js";
 import {
   applyNativeAgentMessagePatch,
   isNativeAgentMessagePatchList,
@@ -647,6 +647,43 @@ export type NativeAgentConnectionState = "connecting" | "connected" | "error";
  * whether that turn ran, and will never run the id again.
  */
 export const DISPATCH_OUTCOME_LOST_KIND = "dispatch-outcome-lost";
+
+/**
+ * What `GET /session/:id/dispatch?requestId=` answers.
+ *
+ * `dispatched` is an explicit positive from the bridge's own dispatch journal.
+ * `lost` is the read-only twin of the prompt route's 410
+ * {@link DISPATCH_OUTCOME_LOST_KIND}: an earlier bridge process recorded the id
+ * and this one cannot tell whether its turn ran, so it will refuse the id for
+ * good. Everything else is `unknown`. Older bridges never answer `lost`.
+ */
+export type BridgePromptDispatchStatus = "dispatched" | "unknown" | "lost";
+
+/** How long a retired dispatch stays visible on its native agent session. */
+export const NATIVE_AGENT_RETIRED_DISPATCH_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** What the user is told when a bridge can no longer say whether a prompt ran. */
+export function dispatchOutcomeLostMessage(platform: AgentPlatform): string {
+  return `${AGENT_PLATFORM_LABELS[platform] ?? platform} could not confirm this message, so it may not have run. Check the conversation and send it again if it did not.`;
+}
+
+/** Notice identity for a retired dispatch, so a dismissal sticks to that request. */
+export function dispatchOutcomeLostOccurrenceId(requestId: string): string {
+  return `${DISPATCH_OUTCOME_LOST_KIND}:${requestId}`;
+}
+
+/**
+ * A parked dispatch the backend resolved on its own because the provider
+ * reported its outcome lost (`BridgePromptDispatchStatus` `lost`). Content-free
+ * apart from the fixed {@link dispatchOutcomeLostMessage}. A renderer whose
+ * draft still holds `requestId` drops that id, keeps the text and shows
+ * `message`, exactly as for a retry answered with `requestIdRetired`.
+ */
+export interface NativeAgentRetiredDispatch {
+  requestId: string;
+  retiredAt: string;
+  message: string;
+}
 
 /**
  * A dispatch may have reached the provider even when its HTTP response was
@@ -2119,6 +2156,8 @@ export interface NativeAgentSessionProjection<TMessage = unknown> {
   notices?: NativeAgentNotice[];
   /** Content-free marker for an idempotent backend-owned retry. */
   recoverableDispatch?: NativeAgentRecoverableDispatch;
+  /** The last parked dispatch the backend retired on its own; absent from older backends. */
+  retiredDispatch?: NativeAgentRetiredDispatch;
   backgroundTasks?: NativeAgentBackgroundTaskSummary[];
   suggestedPrompt?: string;
   completionBlockedByBackgroundTasks?: boolean;
@@ -2215,6 +2254,7 @@ export interface NativeAgentSessionStateView {
    */
   notices: NativeAgentNotice[];
   recoverableDispatch?: NativeAgentRecoverableDispatch;
+  retiredDispatch?: NativeAgentRetiredDispatch;
   backgroundTasks?: NativeAgentBackgroundTaskSummary[];
   suggestedPrompt?: string;
   completionBlockedByBackgroundTasks?: boolean;
@@ -2347,6 +2387,7 @@ export type NativeAgentProjectionField =
   | "runtimeHealthAuthoritative"
   | "notices"
   | "recoverableDispatch"
+  | "retiredDispatch"
   | "backgroundTasks"
   | "suggestedPrompt"
   | "completionBlockedByBackgroundTasks"
@@ -2436,6 +2477,7 @@ const PROJECTION_FIELD_SET: ReadonlySet<string> = new Set([
   "runtimeHealthAuthoritative",
   "notices",
   "recoverableDispatch",
+  "retiredDispatch",
   "backgroundTasks",
   "suggestedPrompt",
   "completionBlockedByBackgroundTasks",
@@ -2459,6 +2501,7 @@ const OPTIONAL_PROJECTION_FIELD_SET: ReadonlySet<string> = new Set([
   "runtimeHealthAuthoritative",
   "notices",
   "recoverableDispatch",
+  "retiredDispatch",
   "backgroundTasks",
   "suggestedPrompt",
   "completionBlockedByBackgroundTasks",

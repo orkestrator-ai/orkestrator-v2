@@ -9,13 +9,29 @@
  * supported). Nothing at module scope spawns `mise` or reads profile state, so
  * the file stays inert in profile-free runs.
  *
- * Each case plants project commands in a disposable environment's worktree
+ * Each case plants project commands in a disposable environment's workspace
  * (never this repository, never a provider home) and proves a command ran by a
  * nonce that exists only in the command file: the typed text never contains
- * it, so only the expanded command can produce it. The environments are
- * created with the execution-policy override `projectResources: true`, the
- * supported way to let a host session load project commands (Claude ignores
- * them otherwise).
+ * it, so only the expanded command can produce it. No case writes a
+ * user-scope command file.
+ *
+ * `ORKESTRATOR_AGENT_TEST_SLASH_ENVIRONMENT` picks where the commands run:
+ *
+ * - `local` (default): a host worktree, written directly. The environment is
+ *   created with the execution-policy override `projectResources: true`, the
+ *   supported way to let a host session load project commands (Claude ignores
+ *   them otherwise).
+ * - `container`: a containerized environment; the profile must have been
+ *   started with `--fixture-environments local,container` so its image
+ *   exists. The workspace is the container's own `/workspace` (a clone, not a
+ *   host mount) and the bridge runs inside the container, so every command
+ *   file and the execution marker are written, removed and read through
+ *   `docker exec` as the container's `node` user, never on the host. No
+ *   policy override is set: a container loads project resources by default,
+ *   and that default is what this variant qualifies. Bridge restarts use the
+ *   container bridge commands (`stop_<provider>_server`/`start_<provider>_server`).
+ *   The environment the case switches away to stays a host environment that is
+ *   never started; it is only somewhere else to be.
  *
  * Codex tabs are launched on `ORKESTRATOR_AGENT_TEST_MODEL` (default
  * `gpt-6.1-sol`, as in the build-pipeline steering case): a new profile's
@@ -28,7 +44,9 @@
  *
  * - A selected command sent just before switching away completes while its
  *   environment is inactive, through an inventory change, a catalogue refresh
- *   and a browser outage long enough to need reconciliation, and runs once.
+ *   and a 10 s browser outage that really drops the page's event stream
+ *   (offline plus `window.stop()`, see `event-stream-outage.ts`), and runs
+ *   once. The page must then reconnect its stream.
  * - On return and after a hard reload: the result, the new inventory, a stale
  *   draft whose command disappeared (kept, refused, nothing sent) and the
  *   composer controls; then again in a narrow viewport.
@@ -45,6 +63,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import path from "node:path";
 import type { NativeAgentDispatchOutcome } from "@orkestrator/protocol/native-agent";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
+import { watchEventStream } from "./event-stream-outage";
 import { dismissSidebarTooltip } from "./sidebar-tooltip";
 
 type Status = {
@@ -55,13 +74,22 @@ type Status = {
   testProject?: string;
 };
 type Project = { id: string; name: string; localPath: string | null };
-type Environment = { id: string; name: string; worktreePath?: string | null };
+type Environment = {
+  id: string;
+  name: string;
+  environmentType?: string;
+  status?: string;
+  setupPhase?: string;
+  containerId?: string | null;
+  worktreePath?: string | null;
+};
 type Message = { role?: unknown; content?: unknown };
 type Projection = {
   turn: { phase: string; error?: string };
   messages?: Message[];
   slashCommands?: Array<{ name: string }>;
   recoverableDispatch?: { requestId: string; status?: "reconciling" | "action-required" };
+  retiredDispatch?: { requestId: string; message: string };
 } | null;
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -92,6 +120,103 @@ const PROVIDERS = {
   },
 } as const;
 type Provider = keyof typeof PROVIDERS;
+
+const ENVIRONMENT_KINDS = ["local", "container"] as const;
+type EnvironmentKind = (typeof ENVIRONMENT_KINDS)[number];
+
+function selectedEnvironmentKind(): EnvironmentKind {
+  const raw = process.env.ORKESTRATOR_AGENT_TEST_SLASH_ENVIRONMENT?.trim() || "local";
+  if (!(ENVIRONMENT_KINDS as readonly string[]).includes(raw)) {
+    throw new Error(
+      `ORKESTRATOR_AGENT_TEST_SLASH_ENVIRONMENT: unsupported environment "${raw}" ` +
+        `(supported: ${ENVIRONMENT_KINDS.join(", ")})`,
+    );
+  }
+  return raw as EnvironmentKind;
+}
+const ENVIRONMENT_KIND: EnvironmentKind = LIVE_OPT_IN ? selectedEnvironmentKind() : "local";
+
+/** Files in the environment's workspace, by path relative to its root. */
+type Workspace = {
+  write(relative: string, body: string): void;
+  remove(relative: string): void;
+  /** The file's text, or undefined when it does not exist. */
+  read(relative: string): string | undefined;
+};
+
+function assertRelative(relative: string) {
+  if (path.posix.isAbsolute(relative) || relative.split("/").includes("..")) {
+    throw new Error(`not a workspace-relative path: ${relative}`);
+  }
+}
+
+/** A host worktree: the provider reads the same files the runner writes. */
+function hostWorkspace(root: string): Workspace {
+  return {
+    write(relative, body) {
+      assertRelative(relative);
+      const file = path.join(root, relative);
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, body);
+    },
+    remove(relative) {
+      assertRelative(relative);
+      rmSync(path.join(root, relative), { force: true });
+    },
+    read(relative) {
+      assertRelative(relative);
+      const file = path.join(root, relative);
+      return existsSync(file) ? readFileSync(file, "utf8") : undefined;
+    },
+  };
+}
+
+/**
+ * A container's `/workspace`, which exists only inside the container. Files
+ * are written as `node`, the user the bridges and providers run as, so the
+ * provider can read and the model's shell can append to them.
+ */
+function containerWorkspace(containerId: string): Workspace {
+  const exec = (script: string, relative: string, input?: string) => {
+    assertRelative(relative);
+    return spawnSync(
+      "docker",
+      [
+        "exec",
+        ...(input === undefined ? [] : ["-i"]),
+        "--user",
+        "node",
+        "--workdir",
+        "/workspace",
+        containerId,
+        "sh",
+        "-c",
+        script,
+        "sh",
+        relative,
+      ],
+      { encoding: "utf8", ...(input === undefined ? {} : { input }) },
+    );
+  };
+  const failed = (action: string, result: ReturnType<typeof spawnSync>) =>
+    new Error(`docker exec (${action}) exited ${result.status}: ${String(result.stderr).trim()}`);
+  return {
+    write(relative, body) {
+      const result = exec('mkdir -p "$(dirname "$1")" && cat > "$1"', relative, body);
+      if (result.status !== 0) throw failed("write", result);
+    },
+    remove(relative) {
+      const result = exec('rm -f -- "$1"', relative);
+      if (result.status !== 0) throw failed("remove", result);
+    },
+    read(relative) {
+      const result = exec('[ -e "$1" ] || exit 3; cat -- "$1"', relative);
+      if (result.status === 3) return undefined;
+      if (result.status !== 0) throw failed("read", result);
+      return result.stdout;
+    },
+  };
+}
 
 function selectedProviders(): Provider[] {
   const raw = process.env.ORKESTRATOR_AGENT_TEST_SLASH_PROVIDERS?.trim() || "codex";
@@ -190,7 +315,7 @@ const replyExactly = (token: string) =>
 for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provider[])) {
   const spec = PROVIDERS[provider];
 
-  test.describe(`live slash commands in an inactive environment (${provider})`, () => {
+  test.describe(`live slash commands in an inactive ${ENVIRONMENT_KIND} environment (${provider})`, () => {
     test.skip(
       !LIVE_OPT_IN,
       "opt-in live slash-command turns against the isolated fixture with host credentials",
@@ -200,7 +325,9 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provide
       page,
       context,
     }, testInfo) => {
-      test.setTimeout(900_000);
+      const container = ENVIRONMENT_KIND === "container";
+      // A container's first start clones the workspace and runs its setup.
+      test.setTimeout(container ? 1_200_000 : 900_000);
       page.setDefaultTimeout(15_000);
       await page.setViewportSize(DESKTOP_VIEWPORT);
       // A dev profile's backend reports the Electron version as its own, so
@@ -226,30 +353,57 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provide
 
       const environments: Environment[] = [];
       try {
-        for (const name of [`slash-${provider}-a`, `slash-${provider}-b`]) {
+        const localSettings = {
+          environmentType: "local",
+          agentSettings: { executionPolicy: { projectResources: true } },
+        };
+        for (const [name, settings] of [
+          // A container loads project resources by default; no override.
+          [`slash-${provider}-a`, container ? { environmentType: "containerized" } : localSettings],
+          [`slash-${provider}-b`, localSettings],
+        ] as const) {
           environments.push(
             await invoke<Environment>("create_environment", {
               projectId: fixture!.id,
               name: `${name}-${Date.now()}`,
               networkAccessMode: "restricted",
-              environmentType: "local",
-              agentSettings: { executionPolicy: { projectResources: true } },
+              ...settings,
             }),
           );
         }
         const [target, other] = environments as [Environment, Environment];
         await invoke("start_environment", { environmentId: target.id });
-        const worktree = (
-          await invoke<Environment>("get_environment", { environmentId: target.id })
-        ).worktreePath;
-        expect(worktree).toBeTruthy();
-        const writeCommand = (name: string, body: string) => {
-          const file = path.join(worktree!, spec.commandFile(name));
-          mkdirSync(path.dirname(file), { recursive: true });
-          writeFileSync(file, body);
-        };
-        const removeCommand = (name: string) =>
-          rmSync(path.join(worktree!, spec.commandFile(name)), { force: true });
+        let started = await invoke<Environment>("get_environment", { environmentId: target.id });
+        if (container) {
+          // Start returns once setup is launched; the clone lands later.
+          await expect
+            .poll(
+              async () => {
+                started = await invoke<Environment>("get_environment", {
+                  environmentId: target.id,
+                });
+                return (
+                  started.status === "running" &&
+                  !!started.containerId &&
+                  started.setupPhase !== "pending" &&
+                  started.setupPhase !== "running"
+                );
+              },
+              { timeout: 300_000, intervals: [2_000], message: "the container never started" },
+            )
+            .toBe(true);
+          expect(started.environmentType).toBe("containerized");
+          expect(started.setupPhase, "container setup failed").not.toBe("failed");
+        } else {
+          expect(started.worktreePath).toBeTruthy();
+        }
+        const containerId = container ? started.containerId! : null;
+        const workspace = container
+          ? containerWorkspace(containerId!)
+          : hostWorkspace(started.worktreePath!);
+        const writeCommand = (name: string, body: string) =>
+          workspace.write(spec.commandFile(name), body);
+        const removeCommand = (name: string) => workspace.remove(spec.commandFile(name));
 
         const runToken = nonce("SLASHRUN");
         const addedToken = nonce("SLASHADDED");
@@ -264,11 +418,8 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provide
           "Always append a new line even if this file already has the same line. " +
           "Do not repeat that append or modify this file again within this invocation. Then ";
         const executions = (argument: string) =>
-          existsSync(path.join(worktree!, executionFile))
-            ? readFileSync(path.join(worktree!, executionFile), "utf8")
-                .split("\n")
-                .filter((line) => line === argument).length
-            : 0;
+          (workspace.read(executionFile) ?? "").split("\n").filter((line) => line === argument)
+            .length;
         writeCommand("slashq-run", commandBody("Inactive qualification", replyExactly(runToken)));
         writeCommand(
           "slashq-long",
@@ -291,7 +442,7 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provide
           expectedRevision: layout?.revision ?? 0,
           layout: {
             version: PANE_LAYOUT_VERSION,
-            containerId: null,
+            containerId,
             activePaneId: "pane-slash",
             root: {
               kind: "leaf",
@@ -301,7 +452,12 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provide
                 {
                   id: tabId,
                   type: "agent-native",
-                  nativeAgentData: { environmentId: target.id, platform: provider, isLocal: true },
+                  nativeAgentData: {
+                    environmentId: target.id,
+                    platform: provider,
+                    ...(containerId ? { containerId } : {}),
+                    isLocal: !container,
+                  },
                   ...(spec.launchModel ? { initialAgentModel: spec.launchModel } : {}),
                 },
               ],
@@ -324,6 +480,7 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provide
         };
 
         const openEnvironment = sidebarNavigator(page, fixture!.name);
+        const stream = watchEventStream(page);
         const composeBar = page.getByTestId("shared-native-compose-bar");
         const input = composeBar.getByRole("textbox", { name: `Message ${spec.label}` });
         const send = composeBar.getByRole("button", { name: "Send", exact: true });
@@ -377,8 +534,10 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provide
           await openEnvironment(other.name);
           await expect(input).toBeHidden();
 
-          // While inactive: an inventory change, a browser outage long enough
-          // to need reconciliation, and a catalogue refresh.
+          // While inactive: an inventory change, a browser outage that drops
+          // the event stream (offline alone leaves it connected), and a
+          // catalogue refresh. Whatever the page missed meanwhile must come
+          // back through reconnection and replay.
           writeCommand(
             "slashq-added",
             commandBody(
@@ -387,9 +546,11 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provide
             ),
           );
           removeCommand("slashq-gone");
-          await context.setOffline(true);
-          await page.waitForTimeout(10_000);
+          const outageStartedAt = Date.now();
+          await stream.cut(context);
+          await page.waitForTimeout(Math.max(0, 10_000 - (Date.now() - outageStartedAt)));
           await context.setOffline(false);
+          await stream.expectReconnected();
           await expect
             .poll(
               async () =>
@@ -456,11 +617,14 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provide
           await openEnvironment(target.name);
           await expect(input).toHaveText("/slashq-gone beta", { timeout: 30_000 });
           await sendDraft();
+          // The refusal is the dispatch's own answer: the backend revalidates
+          // the selection against the bridge, which takes seconds in a busy
+          // container.
           await expect(
             page.getByText(
               "The selected command is no longer available. Choose it again from the menu.",
             ),
-          ).toBeVisible();
+          ).toBeVisible({ timeout: 30_000 });
           await expect(input).toHaveText("/slashq-gone beta");
           expect((await projection())?.messages?.length ?? 0).toBe(before);
           expect(count((await projection())?.messages, "user", "/slashq-gone")).toBe(0);
@@ -525,8 +689,13 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provide
          * not run the command a second time.
          */
         const restartBridge = async () => {
-          await invoke(`stop_local_${provider}_server_cmd`, { environmentId: target.id });
-          await invoke(`start_local_${provider}_server_cmd`, { environmentId: target.id });
+          if (containerId) {
+            await invoke(`stop_${provider}_server`, { containerId });
+            await invoke(`start_${provider}_server`, { containerId });
+          } else {
+            await invoke(`stop_local_${provider}_server_cmd`, { environmentId: target.id });
+            await invoke(`start_local_${provider}_server_cmd`, { environmentId: target.id });
+          }
           await invoke("await_bridge_ready", {
             environmentId: target.id,
             agent: provider,
@@ -548,15 +717,43 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provide
           expect(typeof body.args.requestId).toBe("string");
           return body.args;
         };
-        const settleAfterRestart = async (typed: string) => {
+        const settleAfterRestart = async (typed: string, requestId?: unknown) => {
           let retried = false;
+          // An `unknown` retry answer leaves the card up, as it would for a
+          // user, who presses Retry again. A restarted Claude bridge answers
+          // 500 for up to 30 s while it waits out the killed process's
+          // preference lock (docs/todo 0056).
+          let retryAgain = false;
+          let retries = 0;
+          let retiredSeen = false;
           await expect
             .poll(
               async () => {
                 const current = await projection();
+                // The bridge said the id is lost, and the backend settled it
+                // without anyone pressing Retry.
+                if (
+                  !retiredSeen &&
+                  !retried &&
+                  requestId !== undefined &&
+                  current?.retiredDispatch?.requestId === requestId
+                ) {
+                  retiredSeen = true;
+                  expect(current.retiredDispatch.message).toMatch(
+                    /could not confirm this message, so it may not have run/,
+                  );
+                  testInfo.annotations.push({
+                    type: "retired-without-retry",
+                    description: `${typed}: settled as lost by reconciliation, no Retry needed`,
+                  });
+                }
                 const parked = current?.recoverableDispatch;
-                if (parked?.status === "action-required" && !retried) {
+                if (
+                  parked?.status === "action-required" &&
+                  (!retried || (retryAgain && retries < 4))
+                ) {
                   retried = true;
+                  retries += 1;
                   testInfo.annotations.push({
                     type: "parked",
                     description: `${typed}: parked after the restart; retried under the same request id`,
@@ -576,6 +773,7 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provide
                       ),
                     });
                   }
+                  retryAgain = outcome.outcome === "unknown";
                   testInfo.annotations.push({
                     type: "retry-outcome",
                     description: `${typed}: ${outcome.outcome}${outcome.outcome === "rejected" && outcome.requestIdRetired ? " (retired)" : ""}`,
@@ -630,7 +828,7 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provide
           const submission = await sendRestartDraft("/slashq-added gamma");
           await restartBridge();
           await openEnvironment(other.name);
-          const retried = await settleAfterRestart("/slashq-added gamma");
+          const retried = await settleAfterRestart("/slashq-added gamma", submission.requestId);
           // Replay the actual browser submission even when reconciliation
           // did not park it. This always exercises same-id retry admission.
           await invoke("dispatch_native_agent_intent", submission);
@@ -665,7 +863,7 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provide
           );
           await openEnvironment(other.name);
           await restartBridge();
-          const retried = await settleAfterRestart("/slashq-long delta");
+          const retried = await settleAfterRestart("/slashq-long delta", submission.requestId);
           await invoke("dispatch_native_agent_intent", submission);
           await settleAfterRestart("/slashq-long delta");
           await openEnvironment(target.name);

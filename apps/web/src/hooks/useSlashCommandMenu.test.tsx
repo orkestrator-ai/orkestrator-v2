@@ -2,7 +2,7 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { KeyboardEvent } from "react";
 import type { SlashCommandOption } from "@/components/chat/SlashCommandMenu";
-import { useSlashCommandMenu } from "./useSlashCommandMenu";
+import { slashCommandKey, useSlashCommandMenu } from "./useSlashCommandMenu";
 
 const COMMANDS = [
   { name: "/review", description: "Review changes" },
@@ -381,5 +381,58 @@ describe("useSlashCommandMenu", () => {
       expect(/\s/.test(id)).toBe(false);
     }
     expect(result.current.activeOptionId).toBe(ids[0]);
+  });
+});
+
+/*
+ * Mixed-version: rows and states from a backend on either side of the command
+ * catalogue (#827). An older backend's projection has no command fields, so
+ * the composer passes no rows and no catalogue state (`openWhenEmpty` false).
+ */
+describe("mixed-version: useSlashCommandMenu", () => {
+  test("a projection without command fields leaves the picker closed and Enter to the composer", () => {
+    const setText = mock(() => {});
+    const { result } = renderHook(() =>
+      useSlashCommandMenu({ commands: [], text: "/review", setText, openWhenEmpty: false }),
+    );
+    expect(result.current.isOpen).toBe(false);
+    expect(result.current.filteredCommands).toEqual([]);
+    expect(result.current.handleKeyDown(keyEvent("Enter"))).toBe(false);
+    expect(setText).not.toHaveBeenCalled();
+  });
+
+  test("an older backend's id-less rows get stable legacy option ids", () => {
+    const { result } = renderHook(() =>
+      useSlashCommandMenu<SlashCommandOption>({
+        commands: [COMMANDS[0]!],
+        text: "/",
+        setText: () => {},
+      }),
+    );
+    expect(result.current.isOpen).toBe(true);
+    expect(result.current.activeOptionId).toBe(result.current.optionId(COMMANDS[0]!));
+    // The same identity the backend gives a legacy row (`legacyCommandId`), so
+    // a highlight survives a refresh that adds it.
+    expect(slashCommandKey(COMMANDS[0]!)).toBe("legacy:/review");
+    expect(result.current.optionId({ ...COMMANDS[0]!, id: "legacy:/review" })).toBe(
+      result.current.optionId(COMMANDS[0]!),
+    );
+  });
+
+  test("an availability state this renderer does not know inserts; the backend judges it", () => {
+    const future = {
+      id: "codex:/review",
+      name: "/review",
+      availability: { state: "requires-confirmation" },
+    } as unknown as SlashCommandOption;
+    const setText = mock((_text: string, _command: SlashCommandOption) => {});
+    const { result } = renderHook(() =>
+      useSlashCommandMenu({ commands: [future], text: "/", setText }),
+    );
+    act(() => {
+      expect(result.current.handleKeyDown(keyEvent("Enter"))).toBe(true);
+    });
+    expect(setText).toHaveBeenCalledTimes(1);
+    expect(result.current.blockedMessage).toBeNull();
   });
 });

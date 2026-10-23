@@ -269,3 +269,55 @@ describe("command submission helpers", () => {
     expect(draftCommandBusyTitle(undefined, running)).toBeUndefined();
   });
 });
+
+/*
+ * Mixed-version: catalogue values from a backend newer than this renderer. The
+ * backend resolves every submission again, so the composer must never decide
+ * on a value it cannot read; it defers rather than refusing or downgrading.
+ */
+describe("mixed-version: catalogue values from a newer backend", () => {
+  test("a missing selection under an unknown catalogue status is left to the backend", () => {
+    const future = {
+      status: "degraded",
+      revision: 4,
+      enhanced: true,
+    } as unknown as NativeAgentCommandCatalogueState;
+    const submission = classify({
+      text: "/gone x",
+      commands: [REVIEW],
+      catalogue: future,
+      selection: { commandId: "codex:/gone", bindingRevision: "g-1", token: "/gone" },
+    });
+    // Neither refused as stale (only `ready` proves that) nor sent as text.
+    expect(submission).toEqual({
+      kind: "command",
+      intent: { kind: "selected", commandId: "codex:/gone", bindingRevision: "g-1" },
+    });
+  });
+
+  test("an availability state this renderer does not know is sent for the backend to judge", () => {
+    const future = {
+      ...REVIEW,
+      availability: { state: "requires-confirmation" },
+    } as unknown as NativeAgentSlashCommand;
+    const submission = classify({
+      text: "/review x",
+      commands: [future],
+      selection: { commandId: "codex:/review", bindingRevision: "rev-1", token: "/review" },
+    });
+    // A selection, never plain text: the backend refuses what it cannot run.
+    expect(commandSubmissionIntent(submission)).toEqual({
+      kind: "selected",
+      commandId: "codex:/review",
+      bindingRevision: "rev-1",
+    });
+  });
+
+  test("unknown row fields do not change how a row resolves", () => {
+    const future = { ...REVIEW, futureRowField: { anything: true } } as NativeAgentSlashCommand;
+    expect(classify({ text: "/review x", commands: [future] })).toMatchObject({
+      kind: "command",
+      intent: { kind: "selected", commandId: "codex:/review", bindingRevision: "rev-1" },
+    });
+  });
+});

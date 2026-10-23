@@ -1013,7 +1013,6 @@ export function HierarchicalSidebar() {
     project: Project,
     mixed?: {
       sortableId: string;
-      machineBadge?: ReactNode;
       machineIcon?: ReactNode;
       label?: string;
     },
@@ -1021,7 +1020,6 @@ export function HierarchicalSidebar() {
     <SortableProjectGroup
       key={project.id}
       sortableId={mixed?.sortableId}
-      machineBadge={mixed?.machineBadge}
       machineIcon={mixed?.machineIcon}
       label={mixed?.label}
       project={project}
@@ -1285,35 +1283,21 @@ export function HierarchicalSidebar() {
     projectId: string,
     sortableId: string,
     label: string | undefined,
-    machineMark: "dot" | "home",
   ) => {
     const project = projectsById.get(projectId);
     if (!project) return null;
-    if (machineMark === "home") {
-      // Drawn even before this window's machine is identified, as it also
-      // decides where the row's chevron sits.
-      return renderProjectGroup(project, {
-        sortableId,
-        label,
-        machineIcon: (
-          <MachineHomeIcon
-            colorToken={boundMachineView?.colorToken}
-            machineName={boundMachineView?.name ?? "This machine"}
-            status="This window"
-          />
-        ),
-      });
-    }
+    // Show that this is the bound project even before this window's machine
+    // is identified; its colour and name become available once identified.
     return renderProjectGroup(project, {
       sortableId,
       label,
-      machineBadge: boundMachineView ? (
-        <MachineDot
-          colorToken={boundMachineView.colorToken}
-          machineName={boundMachineView.name}
+      machineIcon: (
+        <MachineHomeIcon
+          colorToken={boundMachineView?.colorToken}
+          machineName={boundMachineView?.name ?? "This machine"}
           status="This window"
         />
-      ) : null,
+      ),
     });
   };
 

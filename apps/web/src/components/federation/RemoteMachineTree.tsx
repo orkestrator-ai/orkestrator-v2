@@ -357,12 +357,8 @@ export function RemoteProjectGroup({
   isCollapsed: boolean;
   onToggleCollapse: () => void;
   sortable: boolean;
-  /**
-   * Mark the machine in the header, in lists that mix machines: a dot after the
-   * name, or a home before it in a repository group, whose member rows put the
-   * chevron last, as the group's own heading does.
-   */
-  showMachine?: "dot" | "home";
+  /** Mark the machine with a home before the name, in lists that mix machines. */
+  showMachine?: boolean;
   /** Shown instead of the project name (a repository group names the machine). */
   label?: string;
 }) {
@@ -405,7 +401,6 @@ export function RemoteProjectGroup({
     >
       <Collapsible open={!isCollapsed} onOpenChange={onToggleCollapse}>
         <div className="relative mx-1 flex items-center group/project rounded-lg border border-transparent transition-colors hover:bg-hover">
-          {showMachine !== "home" && chevron}
           <ContextMenu>
             <ContextMenuTrigger className="contents">
               <button
@@ -419,13 +414,10 @@ export function RemoteProjectGroup({
                 onClick={() => openProject()}
                 title={`Open ${project.name} on ${machine.name}`}
               >
-                {showMachine === "home" ? (
+                {showMachine ? (
                   <MachineHomeIcon colorToken={machine.colorToken} machineName={machine.name} />
                 ) : null}
                 <span className="truncate font-medium">{label}</span>
-                {showMachine === "dot" ? (
-                  <MachineDot colorToken={machine.colorToken} machineName={machine.name} />
-                ) : null}
                 {environments.length > 0 && (
                   <span className="flex h-4 min-w-[16px] shrink-0 items-center justify-center rounded-md bg-white/[0.07] px-1 text-[10px] text-zinc-300">
                     {environments.length}
@@ -466,7 +458,7 @@ export function RemoteProjectGroup({
           >
             <Plus className="h-3.5 w-3.5" />
           </Button>
-          {showMachine === "home" && chevron}
+          {chevron}
         </div>
         <CollapsibleContent>
           {environments.length > 0 && (

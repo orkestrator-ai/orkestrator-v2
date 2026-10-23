@@ -12,7 +12,8 @@ import type { Project, Environment } from "@/types";
 
 function install() {
   const params = new URLSearchParams(location.search);
-  const merged = params.has("merged");
+  const byMachine = params.has("machines");
+  const merged = params.has("merged") || byMachine;
   const groups = params.has("groups");
   const repository = params.has("repository");
   const storageKey = `sidebar-drag-fixture:${location.search}`;
@@ -72,7 +73,7 @@ function install() {
                   {
                     nodeId: "bk_remote",
                     available: true,
-                    freshness: "current",
+                    freshness: params.has("catching-up") ? "catching-up" : "current",
                     loadedAt: 1,
                     truncated: false,
                     lastError: null,
@@ -139,7 +140,8 @@ function install() {
     environmentSortMode: "project",
   });
   useMachineViewStore.setState({
-    grouping: repository ? "repository" : merged ? "project" : "machine",
+    grouping: repository ? "repository" : merged && !byMachine ? "project" : "machine",
+    collapsedMachines: [],
     collapsedProjectKeys: [],
     collapsedFolderKeys: [],
   });

@@ -153,6 +153,149 @@ describe("desktop: another machine's workspace in the central region", () => {
     act(() => useUIStore.setState({ sidebarOpen: open }));
   });
 
+  test("the realm reports the title bar's meters, and the title bar opens its popovers", async () => {
+    const fake = install(true);
+    renderRegion(anchorElement());
+    act(() => useRemoteWorkspaceStore.getState().open("bk_a", { projectId: "project-1" }));
+    await waitFor(() => expect(fake.workspaceViews.setVisible).toHaveBeenCalled());
+
+    // Asked before the realm listens: the latest request is replayed on ready.
+    act(() => useRemoteWorkspaceStore.getState().requestRealmPanel("bk_a", "agent", true, 6));
+    act(() =>
+      fake.emitViewEvent({ viewId: "view-1", type: "message", message: { type: "ready" } }),
+    );
+    expect(fake.workspaceViews.send).toHaveBeenCalledWith(
+      "view-1",
+      expect.objectContaining({ type: "panel", panel: "agent", open: true }),
+    );
+
+    const usage = {
+      cpuPercent: 31,
+      ramPercent: 73,
+      gpuPercent: 0,
+      diskPercent: 59,
+      sampledAt: "2026-10-23T12:00:00.000Z",
+    };
+    act(() =>
+      fake.emitViewEvent({
+        viewId: "view-1",
+        type: "message",
+        message: { type: "titleBar", usage, usageStale: false, panel: null },
+      }),
+    );
+    expect(useRemoteWorkspaceStore.getState().titleBars.bk_a).toMatchObject({
+      usage,
+      usageStale: false,
+      panel: null,
+    });
+
+    act(() => useRemoteWorkspaceStore.getState().requestRealmPanel("bk_a", "usage", true, 48));
+    await waitFor(() =>
+      expect(fake.workspaceViews.send).toHaveBeenCalledWith("view-1", {
+        type: "panel",
+        seq: useRemoteWorkspaceStore.getState().panelRequests.bk_a!.seq,
+        panel: "usage",
+        open: true,
+        inset: 48,
+      }),
+    );
+
+    // A closed realm takes what it reported with it.
+    act(() => useRemoteWorkspaceStore.getState().closeRealm("bk_a"));
+    expect(useRemoteWorkspaceStore.getState().titleBars.bk_a).toBeUndefined();
+    expect(useRemoteWorkspaceStore.getState().panelRequests.bk_a).toBeUndefined();
+  });
+
+  test.each([false, true])(
+    "restart cancels panels (acknowledged: %s) and delivers requests made before replacement readiness",
+    async (acknowledged) => {
+      const fake = install(true);
+      renderRegion(anchorElement());
+      act(() => useRemoteWorkspaceStore.getState().open("bk_a", { projectId: "project-1" }));
+      await waitFor(() => expect(fake.workspaceViews.setVisible).toHaveBeenCalled());
+      act(() => {
+        fake.emitViewEvent({ viewId: "view-1", type: "message", message: { type: "ready" } });
+        fake.emitViewEvent({
+          viewId: "view-1",
+          type: "message",
+          message: { type: "titleBar", panel: null },
+        });
+        useRemoteWorkspaceStore.getState().requestRealmPanel("bk_a", "agent", true, 6);
+      });
+      const seq = useRemoteWorkspaceStore.getState().panelRequests.bk_a!.seq;
+      if (acknowledged)
+        act(() =>
+          fake.emitViewEvent({
+            viewId: "view-1",
+            type: "message",
+            message: {
+              type: "titleBar",
+              usage: null,
+              usageStale: false,
+              panel: "agent",
+              requestSeq: seq,
+            },
+          }),
+        );
+      act(() => fake.emitViewEvent({ viewId: "view-1", type: "crashed" }));
+      expect(useRemoteWorkspaceStore.getState().titleBars.bk_a?.panel).toBeNull();
+      expect(useRemoteWorkspaceStore.getState().panelRequests.bk_a?.open).toBe(false);
+      // A new click on the failure screen belongs to the replacement document.
+      act(() => useRemoteWorkspaceStore.getState().requestRealmPanel("bk_a", "usage", true, 44));
+      fireEvent.click(await screen.findByRole("button", { name: "Try again" }));
+      await waitFor(() =>
+        expect(fake.workspaceViews.setVisible).toHaveBeenLastCalledWith("view-2", true),
+      );
+      expect(
+        fake.workspaceViews.send.mock.calls.some(
+          ([id, message]) => id === "view-2" && (message as { type: string }).type === "panel",
+        ),
+      ).toBe(false);
+      act(() =>
+        fake.emitViewEvent({ viewId: "view-2", type: "message", message: { type: "ready" } }),
+      );
+      expect(fake.workspaceViews.send).toHaveBeenCalledWith(
+        "view-2",
+        expect.objectContaining({ type: "panel", panel: "usage", open: true, inset: 44 }),
+      );
+    },
+  );
+
+  test("only a current visible panel's user dismissal requests return focus", async () => {
+    const fake = install(true);
+    renderRegion(anchorElement());
+    act(() => useRemoteWorkspaceStore.getState().open("bk_a", {}));
+    await waitFor(() => expect(fake.workspaceViews.setVisible).toHaveBeenCalled());
+    const dismiss = (panel: "usage" | "agent", seq: number) =>
+      fake.emitViewEvent({
+        viewId: "view-1",
+        type: "message",
+        message: { type: "panelDismissed", panel, seq },
+      });
+    act(() => {
+      fake.emitViewEvent({ viewId: "view-1", type: "message", message: { type: "ready" } });
+      useRemoteWorkspaceStore.getState().requestRealmPanel("bk_a", "agent", true, 6);
+    });
+    const old = useRemoteWorkspaceStore.getState().panelRequests.bk_a!;
+    act(() => useRemoteWorkspaceStore.getState().requestRealmPanel("bk_a", "usage", true, 6));
+    const current = useRemoteWorkspaceStore.getState().panelRequests.bk_a!;
+    act(() => dismiss("agent", old.seq));
+    expect(useRemoteWorkspaceStore.getState().panelRequests.bk_a).toBe(current);
+    act(() => dismiss("usage", current.seq));
+    expect(useRemoteWorkspaceStore.getState().panelRequests.bk_a).toMatchObject({
+      panel: "usage",
+      open: false,
+      restoreFocus: true,
+    });
+    act(() => useRemoteWorkspaceStore.getState().requestRealmPanel("bk_a", "agent", true, 6));
+    const hidden = useRemoteWorkspaceStore.getState().panelRequests.bk_a!;
+    act(() => {
+      useRemoteWorkspaceStore.getState().showLocal();
+      dismiss("agent", hidden.seq);
+    });
+    expect(useRemoteWorkspaceStore.getState().panelRequests.bk_a).toBe(hidden);
+  });
+
   test.each(["crashed", "load-failed"] as const)(
     "a %s realm closes before retry; one closed by the window is dropped",
     async (type) => {
@@ -300,6 +443,54 @@ describe("browser and iOS: a frame on a grant the window keeps", () => {
     expect(reload).not.toHaveBeenCalled();
     expect(fake.calls.filter((call) => /^(stop|delete)_/.test(call.command))).toEqual([]);
   });
+});
+
+test("frame title-bar reports and sequenced panel requests use the current document envelope", async () => {
+  install(false);
+  renderRegion(anchorElement());
+  act(() => useRemoteWorkspaceStore.getState().open("bk_a", {}));
+  const frame = (await screen.findByTitle(/^Workspace on /)) as HTMLIFrameElement;
+  const post = mock(() => undefined);
+  Object.defineProperty(frame, "contentWindow", {
+    configurable: true,
+    value: { postMessage: post },
+  });
+  act(() => useRemoteWorkspaceStore.getState().requestRealmPanel("bk_a", "agent", true, 24));
+  const request = useRemoteWorkspaceStore.getState().panelRequests.bk_a!;
+  expect(post).not.toHaveBeenCalled();
+  act(() => frameMessage(frame, "workspace-1", { type: "ready" }));
+  expect(post).toHaveBeenCalledWith(
+    frameEnvelope("workspace-1", { type: "panel", ...request }),
+    window.location.origin,
+  );
+  act(() =>
+    frameMessage(frame, "workspace-1", {
+      type: "titleBar",
+      usage: null,
+      usageStale: true,
+      panel: "agent",
+      requestSeq: request.seq,
+    }),
+  );
+  expect(useRemoteWorkspaceStore.getState().titleBars.bk_a).toMatchObject({
+    panel: "agent",
+    requestSeq: request.seq,
+    usageStale: true,
+  });
+  act(() =>
+    frameMessage(frame, "workspace-1", {
+      type: "panelDismissed",
+      panel: "agent",
+      seq: request.seq,
+    }),
+  );
+  expect(post).toHaveBeenLastCalledWith(
+    frameEnvelope("workspace-1", {
+      type: "panel",
+      ...useRemoteWorkspaceStore.getState().panelRequests.bk_a,
+    }),
+    window.location.origin,
+  );
 });
 
 function workspaceReply(id: string) {

@@ -1,5 +1,9 @@
 import { create } from "zustand";
-import type { RealmSelectRequest } from "@/lib/federation/workspace-realm";
+import type {
+  RealmPanel,
+  RealmSelectRequest,
+  RealmUsageReading,
+} from "@/lib/federation/workspace-realm";
 import { useUIStore } from "./uiStore";
 
 /**
@@ -29,6 +33,27 @@ export interface RealmRequest {
   request: RealmSelectRequest;
 }
 
+/** What a realm last reported for the window's title bar. */
+export interface RealmTitleBar {
+  usage: RealmUsageReading | null;
+  usageStale: boolean;
+  panel: RealmPanel | null;
+  /** Last panel request applied by this realm document. */
+  requestSeq?: number;
+  /** When the report arrived (`Date.now()`), so a realm that went quiet reads as stale. */
+  receivedAt: number;
+}
+
+/** The window's title bar asking a realm to open or close one of its popovers. */
+export interface RealmPanelMessage {
+  seq: number;
+  panel: RealmPanel;
+  open: boolean;
+  inset: number;
+  /** A user dismissal asks for a focus handoff back to the shell trigger. */
+  restoreFocus?: boolean;
+}
+
 interface RemoteWorkspaceState {
   /** The other node shown in the central region, or `null` for this window's own. */
   active: RemoteWorkspaceSelection | null;
@@ -36,6 +61,10 @@ interface RemoteWorkspaceState {
   realms: string[];
   /** The latest request for each open realm. */
   requests: Record<string, RealmRequest>;
+  /** What each open realm last reported for the window's title bar. */
+  titleBars: Record<string, RealmTitleBar>;
+  /** The title bar's latest popover request for each open realm. */
+  panelRequests: Record<string, RealmPanelMessage>;
   /** Show a node's workspace, on what the user opened there. */
   open: (nodeId: string, request: Omit<RealmSelectRequest, "type">) => void;
   /** Return the central region to this window's own node. */
@@ -47,16 +76,48 @@ interface RemoteWorkspaceState {
   ) => void;
   /** A realm went away (failed, or its node was removed). */
   closeRealm: (nodeId: string) => void;
+  /** A realm reported what the window's title bar shows for it. */
+  noteRealmTitleBar: (nodeId: string, titleBar: Omit<RealmTitleBar, "receivedAt">) => void;
+  /** Ask a realm to open or close one of its title-bar popovers. */
+  requestRealmPanel: (
+    nodeId: string,
+    panel: RealmPanel,
+    open: boolean,
+    inset: number,
+    restoreFocus?: boolean,
+  ) => void;
+}
+
+function pick<T>(record: Record<string, T>, ids: readonly string[]): Record<string, T> {
+  const picked: Record<string, T> = {};
+  for (const id of ids) if (record[id]) picked[id] = record[id];
+  return picked;
 }
 
 let nextSeq = 1;
 /** Set while this store itself clears the window's own selection. */
 let clearingLocalSelection = false;
 
+/** Pending intent wins over reports from an earlier request. */
+export function realmPanel(
+  state: Pick<RemoteWorkspaceState, "panelRequests" | "titleBars">,
+  nodeId: string,
+): RealmPanel | null {
+  const request = state.panelRequests[nodeId];
+  const report = state.titleBars[nodeId];
+  return request && request.seq > (report?.requestSeq ?? 0)
+    ? request.open
+      ? request.panel
+      : null
+    : (report?.panel ?? null);
+}
+
 export const useRemoteWorkspaceStore = create<RemoteWorkspaceState>()((set, get) => ({
   active: null,
   realms: [],
   requests: {},
+  titleBars: {},
+  panelRequests: {},
   open: (nodeId, request) => {
     const realms = [...get().realms.filter((id) => id !== nodeId), nodeId].slice(-MAX_OPEN_REALMS);
     const requests: Record<string, RealmRequest> = {};
@@ -73,6 +134,8 @@ export const useRemoteWorkspaceStore = create<RemoteWorkspaceState>()((set, get)
       },
       realms,
       requests,
+      titleBars: pick(get().titleBars, realms),
+      panelRequests: pick(get().panelRequests, realms),
     });
     clearLocalSelection();
   },
@@ -91,13 +154,41 @@ export const useRemoteWorkspaceStore = create<RemoteWorkspaceState>()((set, get)
     set({ active: { nodeId, ...selection } });
   },
   closeRealm: (nodeId) => {
-    const { active, realms, requests } = get();
+    const { active, realms, requests, titleBars, panelRequests } = get();
     if (!realms.includes(nodeId)) return;
     const { [nodeId]: _closed, ...rest } = requests;
+    const { [nodeId]: _titleBar, ...otherTitleBars } = titleBars;
+    const { [nodeId]: _panelRequest, ...otherPanelRequests } = panelRequests;
     set({
       realms: realms.filter((id) => id !== nodeId),
       requests: rest,
+      titleBars: otherTitleBars,
+      panelRequests: otherPanelRequests,
       active: active?.nodeId === nodeId ? null : active,
+    });
+  },
+  noteRealmTitleBar: (nodeId, titleBar) => {
+    if (!get().realms.includes(nodeId)) return;
+    const previous = get().titleBars[nodeId];
+    const report =
+      previous && (previous.requestSeq ?? 0) > (titleBar.requestSeq ?? 0)
+        ? { ...titleBar, panel: previous.panel, requestSeq: previous.requestSeq }
+        : titleBar;
+    set({ titleBars: { ...get().titleBars, [nodeId]: { ...report, receivedAt: Date.now() } } });
+  },
+  requestRealmPanel: (nodeId, panel, open, inset, restoreFocus) => {
+    if (!get().realms.includes(nodeId)) return;
+    set({
+      panelRequests: {
+        ...get().panelRequests,
+        [nodeId]: {
+          seq: nextSeq++,
+          panel,
+          open,
+          inset,
+          ...(restoreFocus ? { restoreFocus: true } : {}),
+        },
+      },
     });
   },
 }));

@@ -73,7 +73,7 @@ export function WorkspaceRealmHost() {
           return;
         }
         // The window's sidebar: the toolbar here shows and toggles it.
-        if (useUIStore.getState().sidebarOpen !== message.open) {
+        if (message.type === "sidebar" && useUIStore.getState().sidebarOpen !== message.open) {
           useUIStore.setState({ sidebarOpen: message.open });
         }
       }),
@@ -151,6 +151,7 @@ export function WorkspaceRealmHost() {
     if (!request.environmentId) {
       appliedSeq.current = request.seq;
       ui.selectProject(request.projectId);
+      if (request.boardTab) ui.setProjectBoardTab(request.boardTab);
       return;
     }
     const environment = allEnvironments.find((candidate) => candidate.id === request.environmentId);
@@ -159,6 +160,7 @@ export function WorkspaceRealmHost() {
       if (environmentsReady) {
         appliedSeq.current = request.seq;
         ui.selectProject(request.projectId);
+        if (request.boardTab) ui.setProjectBoardTab(request.boardTab);
       }
       return;
     }

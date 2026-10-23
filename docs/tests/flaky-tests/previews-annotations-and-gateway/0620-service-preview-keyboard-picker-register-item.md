@@ -56,3 +56,20 @@
 ## Agent-interactions main merge recurrence, 2026-10-22
 
 `mise run test:logged -- --name merge-electron -- mise run test:agent:electron` failed the keyboard picker case alongside three other cases (18 passed, 4 failed, 1 skipped, 7 did not run; 846.4 s). `mise run test:logged -- --name merge-electron-owner-service-preview-electron -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts --workers=1 service-preview-electron.spec.ts` passed the complete unchanged owner (64.2 s). Original evidence: `orkestrator-test-run.oTkYDB/merge-electron.log.gz` under the host temporary directory. No assertion, timeout, skip or implementation changed.
+
+## Command-handover repair follow-up — 2026-10-23
+
+`mise run test:logged -- --name handover-electron -- mise run test:agent:electron`
+failed this owner at `chooseFromPicker`, this time while focusing
+`Preview service svc-b`: the element detached during a renderer navigation and
+`locator.focus` exceeded 30 seconds. Source edits overlapped the beginning of
+this suite, so this observation does not establish the earlier roving-focus
+hypothesis as its cause. The suite reported 23 passed, two failed, one skipped,
+and six not run (400.3 s); the other failure concerned native annotation focus.
+
+`mise run test:logged -- --name handover-electron-preview-owner -- bunx playwright
+test --config e2e/agent-testing/playwright.electron.config.ts
+e2e/agent-testing/service-preview-electron.spec.ts --workers=1` passed the
+complete unchanged owner in 62.6 s after source edits stopped. Original evidence:
+`orkestrator-test-run.NWWiZg/handover-electron.log.gz` under the host temporary
+directory. No preview implementation, assertion, timeout or skip changed.

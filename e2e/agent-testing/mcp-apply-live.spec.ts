@@ -479,8 +479,8 @@ test.describe("live MCP apply", () => {
 
         for (const tab of tabs) {
           try {
-            // Without a model the session is created on the provider's first
-            // available one, and Pi keeps it when a later model has no login.
+            // Pass the override at creation too: Pi otherwise selects its
+            // default and keeps it when a later model has no login.
             await call("ensure_native_agent_session", {
               ...identity(tab),
               ...(model ? { model } : {}),
@@ -516,10 +516,13 @@ test.describe("live MCP apply", () => {
                 requestId,
                 mode: "build",
                 // The tab's `initialAgentModel` seeds only the UI composer; a
-                // dispatch without a model takes the provider's first available
-                // one (for Pi, a model a ChatGPT login refuses). Pi ids are
-                // `provider/modelId`: a ChatGPT login is `openai-codex/…`;
-                // `openai/…` needs an API key and silently keeps the fallback.
+                // model-less Pi session prefers its saved default, then the
+                // host default in `PI_BRIDGE_DEFAULT_MODEL`. Only when neither
+                // is served by a signed-in provider does it fall back to the
+                // first catalogue model, which a ChatGPT login may refuse.
+                // Pi ids are `provider/modelId`: since Pi 1.2.0 a ChatGPT
+                // login is `openai/…` (legacy `openai-codex/…`), and it runs
+                // only the models ChatGPT allows, such as `gpt-6.1-sol`.
                 ...(model ? { model } : {}),
               }),
             randomUUID,

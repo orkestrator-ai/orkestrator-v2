@@ -2,6 +2,8 @@ import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import { projectFolderKey } from "@orkestrator/protocol/project-folders";
 import { windowStorageKey } from "@/lib/desktop-storage-key";
+import { workspaceTarget } from "@/lib/portal/portal-transport";
+import { portalStore } from "@/lib/portal/portal-store";
 import { createUIStateStorage } from "@/lib/ui-state-storage";
 
 /** Zoom level constraints */
@@ -26,6 +28,15 @@ const addRecentProject = (recentProjectIds: string[], projectId: string): string
  */
 export type ProjectBoardTab = "home" | "coordinator" | "kanban" | "github" | "linear" | "features";
 export type EnvironmentSortMode = "project" | "activity";
+
+/**
+ * A project opens on its coordinator, except on a leaf node: coordination
+ * happens on the command node, so a leaf's project opens on its home.
+ */
+const initialProjectBoardTab = (): ProjectBoardTab =>
+  workspaceTarget() !== null || portalStore.getState().status?.mode === "leaf"
+    ? "home"
+    : "coordinator";
 
 interface UIState {
   // Sidebar state
@@ -109,7 +120,7 @@ export const createUIStore = () =>
         selectedEnvironmentId: null,
         sidebarOpen: true,
         recentProjectIds: [],
-        projectBoardTab: "coordinator",
+        projectBoardTab: initialProjectBoardTab(),
         projectBoardNotesOpen: false,
         sidebarWidth: 280,
         collapsedProjects: [],
@@ -125,7 +136,7 @@ export const createUIStore = () =>
           set((state) => ({
             selectedProjectId: projectId,
             projectSelectionRevision: state.projectSelectionRevision + 1,
-            projectBoardTab: "coordinator",
+            projectBoardTab: initialProjectBoardTab(),
             projectBoardNotesOpen: false,
             selectedEnvironmentId: null,
             selectedEnvironmentIds: [],

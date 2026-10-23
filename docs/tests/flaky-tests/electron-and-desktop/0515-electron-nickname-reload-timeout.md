@@ -33,3 +33,16 @@ Aggregate evidence: `orkestrator-test-run.DprrE3/electron-tests.log.gz` below th
 host temporary directory. The rerun writes to
 `output/agent-testing/handover-electron-owner/electron/`. No assertion, timeout
 or skip changed.
+
+
+## Node event main merge recurrence — 2026-10-23
+
+`mise run test:logged -- --name merge-electron -- mise run test:agent:electron`
+ran with one Playwright worker alongside repository, component-browser and
+isolated-browser checks. It reported 30 passed, one skipped and the same
+five-second `Workstation` reload poll failure (397.9 s). The merged workspace
+realm navigation/focus scenario passed. The complete unchanged owning file
+passed in 27.0 s with
+`mise run test:logged -- --name merge-electron-main-owner -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts e2e/agent-testing/electron-main.spec.ts --workers=1`.
+Evidence: host temporary artifact `orkestrator-test-run.C6gvdK/merge-electron.log.gz`.
+No assertion, timeout, skip or implementation changed.

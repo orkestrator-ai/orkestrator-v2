@@ -2,10 +2,12 @@ import { afterEach, expect, test } from "bun:test";
 import { createUIStore } from "./uiStore";
 import { desktopConnectionStorageKey } from "@/lib/desktop-storage-key";
 import { writeRealmWorkspace } from "@/lib/portal/workspace-target-storage";
+import { portalStore } from "@/lib/portal/portal-store";
 
 const originalNative = window.orkestrator;
 const happyDOM = (window as unknown as { happyDOM: { setURL(url: string): void } }).happyDOM;
 const originalHref = window.location.href;
+const originalPortal = portalStore.getState();
 
 /** This document as the realm of a node's workspace, or (`null`) as the window. */
 function realmOn(nodeId: string | null) {
@@ -32,6 +34,7 @@ afterEach(() => {
   delete window.orkestratorWorkspaceTarget;
   localStorage.clear();
   sessionStorage.clear();
+  portalStore.store.setState(originalPortal, true);
 });
 
 test("a realm hydrates its node's stores before gateway initialization, apart from its window's", () => {
@@ -71,4 +74,32 @@ test("a realm hydrates its node's stores before gateway initialization, apart fr
   expect(back.getState().recentProjectIds).toEqual(["command-project"]);
   expect(back.getState().collapsedProjects).toEqual(["same-id"]);
   expect(back.getState().zoomLevel).toBe(120);
+});
+
+test("a project opens on its coordinator, but on its home on a leaf node", () => {
+  window.orkestrator = undefined;
+  delete window.orkestratorWorkspaceTarget;
+  const command = createUIStore();
+  command.getState().setProjectBoardTab("kanban");
+  command.getState().selectProject("command-project");
+  expect(command.getState().projectBoardTab).toBe("coordinator");
+
+  window.orkestratorWorkspaceTarget = { nodeId: "leaf", nodeName: "leaf", path: "relay" } as never;
+  const leaf = createUIStore();
+  expect(leaf.getState().projectBoardTab).toBe("home");
+  leaf.getState().setProjectBoardTab("kanban");
+  leaf.getState().selectProject("leaf-project");
+  expect(leaf.getState().projectBoardTab).toBe("home");
+});
+
+test("directly connected leaf nodes default to Home when a project is selected", () => {
+  delete window.orkestratorWorkspaceTarget;
+  const direct = createUIStore();
+  // Status loads asynchronously after the UI store is created.
+  portalStore.store.setState({ status: { mode: "leaf" } as never, loaded: true });
+  direct.getState().selectProject("leaf-project");
+  expect(direct.getState().projectBoardTab).toBe("home");
+  direct.getState().setProjectBoardTab("kanban");
+  direct.getState().selectProject("another-project");
+  expect(direct.getState().projectBoardTab).toBe("home");
 });

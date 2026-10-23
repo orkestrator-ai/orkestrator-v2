@@ -188,3 +188,27 @@ call is running`. The later red `main` runs did not repeat it. On 2026-10-22,
 `mise run test:logged -- --name cursor-http-owner -- bun test --cwd bridges/cursor-bridge --preload ../../tests/setup-node.ts ./src/http.test.ts --parallel=1 --only-failures`
 passed unchanged on macOS (1.7 s). No implementation, assertion, timeout or
 skip changed.
+
+
+## Node event main merge — 2026-10-23
+
+On macOS with Bun 1.4.3, merging `fc0a64b78d426013e29d1e325455723fea6cc2a4`
+and `b36e74b08e8109c3d3f8935ba707ccdfde8d66fa`,
+`ORKESTRATOR_TEST_AREA_BASE=6038aec050867deb76f89a0bfe71799ea27a70a6 mise run test:logged -- --name merge-tests -- mise run test`
+ran workspace/root/bridge/protocol groups with 4/1/2/1 worker slots, alongside
+component-browser, Electron and isolated-browser validation. The Cursor bridge
+reported 777 passed and two failed across 43 files (50.18 s):
+
+- `authentication > reports an authenticated credential as ready`: a
+  beforeEach/afterEach hook timed out at 10006.14 ms.
+- `prompt dispatch > a run that fails to start rolls the turn back rather than wedging it`:
+  expected `{ dispatch: "unknown" }`, received `{ error: "Session not found" }`
+  at 12.80 ms.
+
+The complete unchanged owner passed in 3.6 s with
+`mise run test:logged -- --name merge-cursor-http-owner -- bun test --cwd bridges/cursor-bridge --preload ../../tests/setup-node.ts ./src/http.test.ts --parallel=1 --only-failures`.
+The original aggregate remains failed; workspace, root and protocol groups
+passed. Evidence: host temporary artifacts `orkestrator-test-run.0lon9o/bridges.log.gz`
+and `orkestrator-test-run.ROiLL4/merge-tests.log.gz`. The setup timeout followed
+by missing session state is consistent with earlier fixture failures; the cause
+is unconfirmed. No assertion, timeout, skip or implementation changed.

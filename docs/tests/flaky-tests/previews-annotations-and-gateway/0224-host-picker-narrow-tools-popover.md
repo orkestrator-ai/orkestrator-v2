@@ -530,3 +530,39 @@ Evidence is `orkestrator-test-run.IcTGSf/merge-isolated-browser.log.gz` below th
 - **Complete unchanged owner rerun:** fresh credential-free Codex fixture `merge-gateway-owner-20daf002`; `ORKESTRATOR_AGENT_TEST_PROFILE=merge-gateway-owner-20daf002 ORKESTRATOR_AGENT_TEST_RUN_ID=merge-gateway-owner-20daf002 mise run test:logged -- --name merge-gateway-owner -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/browser-gateway.spec.ts --workers=1` reported 13 passed, 10 skipped and the same single failure, exit 1 after 140.4 seconds. The authoritative local-environment smoke, both maintenance viewports and persisted-diff baseline cases passed.
 - **Evidence:** `orkestrator-test-run.bjwqdi/merge-isolated-browser.log.gz` and `orkestrator-test-run.FYNbrS/merge-gateway-owner.log.gz` below the host temporary directory; sanitized artifacts under `output/agent-testing/qa-browser-8dbc46b0-80e/browser/` and `output/agent-testing/merge-gateway-owner-20daf002/browser/`.
 - **Assessment:** the known failure persists in the unchanged owning file, so browser validation remains non-green; this observation does not establish intermittence. No implementation, assertion, timeout or skip changed. Both profiles were stopped and reset.
+
+
+## Node event main merge — 2026-10-23
+
+`mise run test:logged -- --name merge-isolated-browser -- mise run test:agent:browser:isolated`
+ran 82 cases with one Playwright worker in profile `qa-browser-3e02ccfc-572`,
+alongside repository, component-browser and Electron suites: 26 passed,
+53 skipped, three failed (574.7 s including lifecycle). Failures were:
+
+- `host picker creates and browses folders through the authenticated gateway above fullscreen settings (narrow)`:
+  the Repository settings button became hidden and its click exceeded 15 s.
+- `real browser gateway exercises an authoritative local environment`:
+  the fixture project `origin` was not visible at the 30 s deadline.
+- `capped file tree retains source files and shows incomplete folders after reload`:
+  the `build` folder button was missing at five seconds.
+
+Teardown also reported a trace exceeding the 16 MiB sanitization limit for
+the capped-file-tree case. This is a separate artifact error, not a test pass.
+The one-shot profile was stopped and reset.
+
+A fresh credential-free Codex profile, `merge-gateway-0331564a`, then ran the
+complete unchanged owner with one worker:
+
+```sh
+mise run dev:test --profile merge-gateway-0331564a --fixture --no-agent-credentials --agent-platforms codex
+ORKESTRATOR_AGENT_TEST_PROFILE=merge-gateway-0331564a ORKESTRATOR_AGENT_TEST_RUN_ID=merge-gateway-0331564a mise run test:logged -- --name merge-gateway-owner -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/browser-gateway.spec.ts --workers=1
+```
+
+It reported 13 passed, ten skipped and only the same narrow settings click
+failure (125.7 s). Fixture visibility and capped-file-tree cases passed, but
+the complete owner remains non-green; no new flake classification is made.
+The manual profile was stopped and reset with `dev:stop` and `dev:reset`.
+Evidence: host temporary artifacts `orkestrator-test-run.QHhbhR/merge-isolated-browser.log.gz`
+and `orkestrator-test-run.AMX0fi/merge-gateway-owner.log.gz`; rerun artifacts
+under `output/agent-testing/merge-gateway-0331564a/browser/`. No implementation,
+assertion, timeout or skip changed.

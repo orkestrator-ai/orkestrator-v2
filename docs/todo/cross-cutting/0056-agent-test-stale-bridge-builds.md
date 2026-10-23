@@ -21,6 +21,10 @@ spends real tokens doing so.
   saved default (`gpt-5.5`).
 - The backend itself runs from source in a profile, so a change spanning the
   backend and a bridge can look half-applied.
+- The passing Pi rerun later on 2026-10-23 built every bridge by hand first
+  (each bridge's `build` script, for all five) and checked that
+  `bridges/pi-bridge/dist/index.js` contained `PI_BRIDGE_DEFAULT_MODEL`. That
+  is still the only guard.
 
 ## Outstanding work
 

@@ -491,6 +491,35 @@ afterEach(() => {
 });
 
 describe("AgentInfoButton popover lifecycle", () => {
+  test("remote mode applies initial and subsequent requests and reports user dismissals", () => {
+    const onOpenChange = mock(() => undefined);
+    const onDismiss = mock(() => undefined);
+    const remote = (seq: number, open: boolean) => ({
+      request: { seq, open, inset: 6 },
+      onOpenChange,
+      onDismiss,
+    });
+    const { rerender } = render(<AgentInfoButton activeTab={null} remote={remote(1, true)} />);
+    const dialog = screen.getByRole("dialog", { name: "Agent information" });
+    expect(screen.getByTestId("realm-agent-info-panel")).toBeTruthy();
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    expect(onOpenChange).toHaveBeenLastCalledWith(true);
+    expect(screen.queryByRole("button", { name: "Open agent information" }) === null).toBe(true);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close agent information" }));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    expect(onOpenChange).toHaveBeenLastCalledWith(false);
+    rerender(<AgentInfoButton activeTab={null} remote={remote(2, true)} />);
+    expect(
+      screen.getByRole("dialog", { name: "Agent information" }).contains(document.activeElement),
+    ).toBe(true);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(onDismiss).toHaveBeenCalledTimes(2);
+    rerender(<AgentInfoButton activeTab={null} remote={remote(3, true)} />);
+    rerender(<AgentInfoButton activeTab={null} remote={remote(4, false)} />);
+    expect(onOpenChange).toHaveBeenLastCalledWith(false);
+    expect(onDismiss).toHaveBeenCalledTimes(2);
+  });
+
   test("shows the tab messages action only while agent messaging is enabled", () => {
     const original = structuredClone(useConfigStore.getState().config);
     const disabled = structuredClone(original);

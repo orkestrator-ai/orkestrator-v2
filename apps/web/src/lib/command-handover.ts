@@ -1,5 +1,6 @@
 import type {
   CommandHandoverPreview,
+  CommandHandoverRepair,
   CommandHandoverResult,
 } from "@orkestrator/protocol/command-nodes";
 import type { ConnectionList, ConnectionSummary } from "@orkestrator/protocol/connections";
@@ -64,6 +65,9 @@ export type HandoverPlan =
       preview: CommandHandoverPreview;
       /** Machines the target does not control yet, all chosen by default. */
       machines: HandoverMachine[];
+      /** Records on the target that refuse the current command node, cleared on confirm. */
+      repairs: CommandHandoverRepair[];
+      targetInspectionComplete: boolean;
     };
 
 /**
@@ -108,10 +112,14 @@ export async function loadHandoverPlan(target: HandoverTarget): Promise<Handover
     return { kind: "already-command-node" };
   }
   let preview: CommandHandoverPreview;
+  let repairs: CommandHandoverRepair[] = [];
+  let targetInspectionComplete = true;
   if (api?.previewCommandHandover && target.connectionId) {
     const result = await api.previewCommandHandover(target.connectionId);
     if (result.kind === "already-command-node") return result;
     preview = result.preview;
+    repairs = result.repairs ?? [];
+    targetInspectionComplete = result.targetInspectionComplete !== false;
   } else if (target.nodeId) {
     preview = await portalInvoke<CommandHandoverPreview>("preview_command_handover", {
       nodeId: target.nodeId,
@@ -128,7 +136,7 @@ export async function loadHandoverPlan(target: HandoverTarget): Promise<Handover
     ...(entry.hasCredential ? {} : { note: "No token is saved for it" }),
   }));
   if (api) machines.push(...deviceOnlyMachines(await api.list(), preview, target.connectionId));
-  return { kind: "plan", preview, machines };
+  return { kind: "plan", preview, machines, repairs, targetInspectionComplete };
 }
 
 export async function runHandover(
@@ -149,6 +157,12 @@ export async function runHandover(
       nodeIds,
       connectionIds,
       includeSelf: chosen.includeSelf,
+      confirmation: {
+        sourceNodeId: plan.preview.self.nodeId,
+        targetNodeId: plan.preview.targetNodeId,
+        repairs: plan.repairs,
+        targetInspectionComplete: plan.targetInspectionComplete,
+      },
     });
   }
   return portalInvoke<CommandHandoverResult>("hand_over_command", {

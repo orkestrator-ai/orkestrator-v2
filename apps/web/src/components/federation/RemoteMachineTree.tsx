@@ -91,7 +91,7 @@ import { sidebarFolderKey, useMachineViewStore } from "@/stores/machineViewStore
 import { useRemoteEnvironmentShown } from "@/stores/remoteWorkspaceStore";
 import { SELECTED_ENVIRONMENT_ROW_CLASS } from "@/components/sidebar/SortableEnvironmentItem";
 import { useFederation } from "./FederationProvider";
-import { MachineDot, machineStatusText } from "./MachineDot";
+import { MachineDot, MachineHomeIcon, machineStatusText } from "./MachineDot";
 import {
   newFederatedEnvironment,
   useFederatedEnvironmentActions,
@@ -109,7 +109,9 @@ const ACTIVITY_TEXT: Record<FederatedEnvironment["activity"], string> = {
 
 function reportWriteError(machine: MachineView, what: string, error: unknown): void {
   if (error instanceof OutcomeUnknownError) {
-    toast.warning(`${what}: outcome unknown on ${machine.name}`, { description: error.message });
+    toast.warning(`${what}: outcome unknown on ${machine.name}`, {
+      description: error.message,
+    });
   } else {
     toast.error(`Could not ${what.toLowerCase()} on ${machine.name}`, {
       description: error instanceof Error ? error.message : String(error),
@@ -233,7 +235,9 @@ export function RemoteMachineTree({ machine }: { machine: MachineView }) {
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
   );
 
   const arrange = (arrangement: ProjectArrangement | null) => {
@@ -344,7 +348,7 @@ export function RemoteProjectGroup({
   isCollapsed,
   onToggleCollapse,
   sortable,
-  showMachine = false,
+  showMachine,
   label = project.name,
 }: {
   machine: MachineView;
@@ -353,8 +357,12 @@ export function RemoteProjectGroup({
   isCollapsed: boolean;
   onToggleCollapse: () => void;
   sortable: boolean;
-  /** Name the machine in the header, in lists that mix machines. */
-  showMachine?: boolean;
+  /**
+   * Mark the machine in the header, in lists that mix machines: a dot after the
+   * name, or a home before it in a repository group, whose member rows put the
+   * chevron last, as the group's own heading does.
+   */
+  showMachine?: "dot" | "home";
   /** Shown instead of the project name (a repository group names the machine). */
   label?: string;
 }) {
@@ -370,6 +378,22 @@ export function RemoteProjectGroup({
       ...(board ? { boardTab: "coordinator" as const } : {}),
       title: project.name,
     });
+  const chevron = (
+    <CollapsibleTrigger
+      className="shrink-0 rounded-md p-1 transition-colors hover:bg-white/[0.07]"
+      aria-label={
+        isCollapsed ? `Expand project ${project.name}` : `Collapse project ${project.name}`
+      }
+    >
+      <ChevronRight
+        aria-hidden="true"
+        className={cn(
+          "h-4 w-4 text-muted-foreground transition-transform duration-200",
+          !isCollapsed && "rotate-90",
+        )}
+      />
+    </CollapsibleTrigger>
+  );
 
   return (
     <div
@@ -381,20 +405,7 @@ export function RemoteProjectGroup({
     >
       <Collapsible open={!isCollapsed} onOpenChange={onToggleCollapse}>
         <div className="relative mx-1 flex items-center group/project rounded-lg border border-transparent transition-colors hover:bg-hover">
-          <CollapsibleTrigger
-            className="shrink-0 rounded-md p-1 transition-colors hover:bg-white/[0.07]"
-            aria-label={
-              isCollapsed ? `Expand project ${project.name}` : `Collapse project ${project.name}`
-            }
-          >
-            <ChevronRight
-              aria-hidden="true"
-              className={cn(
-                "h-4 w-4 text-muted-foreground transition-transform duration-200",
-                !isCollapsed && "rotate-90",
-              )}
-            />
-          </CollapsibleTrigger>
+          {showMachine !== "home" && chevron}
           <ContextMenu>
             <ContextMenuTrigger className="contents">
               <button
@@ -408,8 +419,11 @@ export function RemoteProjectGroup({
                 onClick={() => openProject()}
                 title={`Open ${project.name} on ${machine.name}`}
               >
+                {showMachine === "home" ? (
+                  <MachineHomeIcon colorToken={machine.colorToken} machineName={machine.name} />
+                ) : null}
                 <span className="truncate font-medium">{label}</span>
-                {showMachine ? (
+                {showMachine === "dot" ? (
                   <MachineDot colorToken={machine.colorToken} machineName={machine.name} />
                 ) : null}
                 {environments.length > 0 && (
@@ -452,6 +466,7 @@ export function RemoteProjectGroup({
           >
             <Plus className="h-3.5 w-3.5" />
           </Button>
+          {showMachine === "home" && chevron}
         </div>
         <CollapsibleContent>
           {environments.length > 0 && (

@@ -74,7 +74,9 @@ function reportLayoutError(error: unknown): void {
 function useDragSensors() {
   return useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
   );
 }
 
@@ -316,8 +318,16 @@ export function MergedProjectList({
   /** Machines whose projects are shown (connected, and not filtered out). */
   shownIds: ReadonlySet<string>;
   mode: "project" | "repository";
-  /** A project of this window's own machine, with its drag id and the label to show. */
-  renderBoundProject: (projectId: string, sortableId: string, label?: string) => ReactNode;
+  /**
+   * A project of this window's own machine, with its drag id, the label to
+   * show and how its row marks the machine.
+   */
+  renderBoundProject: (
+    projectId: string,
+    sortableId: string,
+    label: string | undefined,
+    machineMark: "dot" | "home",
+  ) => ReactNode;
   /** An environment of this window's own machine was dropped. */
   onBoundEnvironmentDragEnd: (activeId: string, overId: string) => void;
 }) {
@@ -396,9 +406,12 @@ export function MergedProjectList({
     onBoundEnvironmentDragEnd(activeId, overId);
   };
 
+  const machineMark = mode === "repository" ? "home" : "dot";
   const renderProject = (item: MergedProject, label?: string) =>
     item.machine.bound ? (
-      <div key={item.id}>{renderBoundProject(item.project.ref.projectId, item.id, label)}</div>
+      <div key={item.id}>
+        {renderBoundProject(item.project.ref.projectId, item.id, label, machineMark)}
+      </div>
     ) : (
       <RemoteProjectGroup
         key={item.id}
@@ -408,7 +421,7 @@ export function MergedProjectList({
         isCollapsed={collapsedProjectKeys.includes(item.id)}
         onToggleCollapse={() => setProjectKeyCollapsed(item.id)}
         sortable={isMachineWritable(item.machine) && !item.machine.truncated}
-        showMachine
+        showMachine={machineMark}
         label={label}
       />
     );

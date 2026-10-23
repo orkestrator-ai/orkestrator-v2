@@ -23,11 +23,35 @@ test("a client that shows no machines leaves the line out", () => {
     <EnvironmentTooltipBody
       name="feature"
       machine={null}
-      details={{ environmentType: "containerized", entryPort: 3000, hostEntryPort: 49152 }}
+      details={{
+        environmentType: "containerized",
+        networkAccessMode: "restricted",
+        entryPort: 3000,
+        hostEntryPort: 49152,
+      }}
     />,
   );
   expect(screen.queryByTestId("environment-tooltip-machine") === null).toBe(true);
   expect(screen.getByText("Restricted network")).toBeTruthy();
   // No copy action without a handler: the port is on another machine.
   expect(screen.getByText(/port 49152 on that machine/)).toBeTruthy();
+});
+
+test("remote summary waits for an explicit network mode", () => {
+  const { rerender } = render(
+    <EnvironmentTooltipBody
+      name="remote"
+      machine={null}
+      details={{ environmentType: "containerized" }}
+    />,
+  );
+  expect(screen.queryByText("Restricted network") === null).toBe(true);
+  rerender(
+    <EnvironmentTooltipBody
+      name="remote"
+      machine={null}
+      details={{ environmentType: "containerized", networkAccessMode: "full" }}
+    />,
+  );
+  expect(screen.getByText("Full network access")).toBeTruthy();
 });

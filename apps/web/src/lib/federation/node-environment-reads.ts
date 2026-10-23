@@ -33,6 +33,7 @@ export function nodeAgentSummarySource(nodeId: BackendId): AgentSummarySource {
   let source = agentSources.get(nodeId);
   if (!source) {
     source = {
+      resyncOnSubscribe: true,
       read: (environmentId) =>
         portalStore.invokeOnNode<AgentRegistrySnapshot>(nodeId, "get_agent_registry", {
           environmentId,
@@ -40,7 +41,7 @@ export function nodeAgentSummarySource(nodeId: BackendId): AgentSummarySource {
       subscribe: (environmentId, refresh) =>
         subscribeNodeEvents(nodeId, {
           events: [NATIVE_AGENT_ACTIVITY_EVENT, RESOURCE_CHANGED_EVENT],
-          onResync: refresh,
+          onResync: () => refresh(true),
           onEvent: (event, payload) => {
             if (event === NATIVE_AGENT_ACTIVITY_EVENT) {
               const announcement = parseNativeAgentActivityAnnouncement(payload);
@@ -85,13 +86,16 @@ export function useNodeEnvironment(ref: EnvironmentRef, open: boolean): Environm
         .catch(() => undefined);
     };
     const refresh = () => {
+      latest++;
       if (timer) clearTimeout(timer);
       timer = setTimeout(read, REFRESH_DEBOUNCE_MS);
     };
-    read();
     const stop = subscribeNodeEvents(nodeId, {
       events: [RESOURCE_CHANGED_EVENT],
-      onResync: refresh,
+      onResync: () => {
+        if (timer) clearTimeout(timer);
+        read();
+      },
       onEvent: (_event, payload) => {
         const change = changedResource(payload);
         if (change?.resource === "environment" && change.id === environmentId) refresh();

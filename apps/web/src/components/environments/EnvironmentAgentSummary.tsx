@@ -15,8 +15,10 @@ const REFRESH_DEBOUNCE_MS = 250;
 /** Where an environment's agent registry is read from, and what invalidates it. */
 export interface AgentSummarySource {
   read(environmentId: string): Promise<AgentRegistrySnapshot>;
-  /** Calls `refresh` whenever the environment's registry may have changed. */
-  subscribe(environmentId: string, refresh: () => void): () => void;
+  /** The source requests the first read once its event subscription is ready. */
+  resyncOnSubscribe?: boolean;
+  /** Requests a refresh on changes; subscription readiness/resync may bypass debounce. */
+  subscribe(environmentId: string, refresh: (immediate?: boolean) => void): () => void;
 }
 
 /** This window's own backend. */
@@ -82,12 +84,14 @@ export function EnvironmentAgentSummary({
           if (!cancelled && request === latest) setSummary(null);
         });
     };
-    const refresh = () => {
+    const refresh = (immediate = false) => {
+      latest++;
       if (timer) clearTimeout(timer);
-      timer = setTimeout(read, REFRESH_DEBOUNCE_MS);
+      if (immediate) read();
+      else timer = setTimeout(read, REFRESH_DEBOUNCE_MS);
     };
-    read();
     const stop = source.subscribe(environmentId, refresh);
+    if (!source.resyncOnSubscribe) read();
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);

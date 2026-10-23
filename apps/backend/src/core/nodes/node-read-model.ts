@@ -21,6 +21,7 @@ import {
 } from "@orkestrator/protocol/node-summaries";
 import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
 
+import { BackendActivityJobs } from "../backend-activity-jobs.js";
 import { NodeEventStream, type NodeEventTransport } from "./node-event-stream.js";
 
 /**
@@ -120,7 +121,7 @@ export class NodeReadModel {
   private persistTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly changed = new Set<BackendId>();
   private changeTimer: ReturnType<typeof setTimeout> | null = null;
-  private reconcileTimer: ReturnType<typeof setInterval> | null = null;
+  private reconcileJobs: BackendActivityJobs | null = null;
   private started = false;
   private readonly listeners = new Set<
     (event: string, payload: unknown, nodeId: BackendId) => void
@@ -151,29 +152,38 @@ export class NodeReadModel {
     await this.restore();
     this.unsubscribe = this.options.nodes.subscribe(() => void this.sync());
     await this.sync();
-    this.reconcileTimer = setInterval(
-      () => this.reconcile(),
-      this.options.reconcileMs ?? SUMMARY_RECONCILE_MS,
-    );
-    this.reconcileTimer.unref?.();
+    if (!this.started) return;
+    this.reconcileJobs = new BackendActivityJobs([
+      {
+        name: "node-summary-reconcile",
+        kind: "node-summary-reconcile",
+        priority: "discovery",
+        intervalMs: this.options.reconcileMs ?? SUMMARY_RECONCILE_MS,
+        run: () => this.reconcile(),
+        onError: () => undefined,
+      },
+    ]);
+    this.reconcileJobs.start();
   }
 
   /** Re-read every node whose subscription is up; a hydrate already running absorbs it. */
-  private reconcile(): void {
+  private async reconcile(): Promise<void> {
     if (!this.started) return;
+    const reads: Promise<void>[] = [];
     for (const [nodeId, state] of this.states) {
       if (state.stream && this.options.nodes.link(nodeId)?.connected) {
-        void this.requestHydrate(nodeId);
+        reads.push(this.requestHydrate(nodeId));
       }
     }
+    await Promise.all(reads);
   }
 
   stop(): void {
     this.started = false;
     this.unsubscribe?.();
     this.unsubscribe = null;
-    if (this.reconcileTimer) clearInterval(this.reconcileTimer);
-    this.reconcileTimer = null;
+    this.reconcileJobs?.stop();
+    this.reconcileJobs = null;
     for (const state of this.states.values()) {
       state.stream?.stop();
       state.stream = null;

@@ -295,7 +295,7 @@ A command node attached to another command node operates in leaf mode:
   subscriptions to each node's event stream. A subscription that receives
   nothing, not even the node's 25 s keepalive, for 75 s is reopened (a
   half-open route never errors on its own), and every connected node is
-  re-read every 60 s as a last resort; a re-read that finds nothing new
+  re-read every 60 s by the named `node-summary-reconcile` activity due job as a last resort; a re-read that finds nothing new
   announces nothing.
 - Every resource is node-qualified (`{ nodeId, projectId }`,
   `{ nodeId, environmentId }`), so identical IDs on two nodes never collide.
@@ -313,8 +313,12 @@ A command node attached to another command node operates in leaf mode:
   - *Events* are relayed on request. A client leases a watch on a node for
     some event prefixes (`watch_node_events`, renewed every 30 s, expiring
     after 90 s; `unwatch_node_events`). The command node keeps one stream
-    per watched node for the union of the prefixes
-    (`nodes/node-event-relay.ts`) and re-emits each event as
+    per watched node (`nodes/node-event-relay.ts`). Portal badge and hover
+    events share a stable prefix superset so opening or closing a card does
+    not reconnect the stream or resync unrelated views. Other prefix additions
+    may expand the subscription; removals filter locally until the last watch
+    leaves. Accumulated prefixes are bounded. The relay filters against the
+    current watch union and re-emits each matching event as
     `relayed-node-event` `{ nodeId, kind: "event", event, payload }`. A
     `{ nodeId, kind: "resync" }` frame (every stream open, every gap) means
     re-read what is shown from that node. Terminal output is never relayed.

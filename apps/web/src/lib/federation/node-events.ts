@@ -44,6 +44,8 @@ interface NodeWatch {
   /** Subscribers that have not had their first resync yet. */
   unsynced: Set<NodeEventSubscriber>;
   syncing: boolean;
+  /** Invalidates a pending confirmation after renewal or command reconnect. */
+  revision: number;
   dirty: boolean;
   renewTimer: ReturnType<typeof setInterval> | null;
 }
@@ -86,6 +88,7 @@ function ensureListening(): Promise<void> {
       // lost every lease, and relayed events may have been missed.
       onResync: () => {
         for (const watch of watches.values()) {
+          watch.revision++;
           watch.confirmedKey = null;
           for (const subscriber of watch.subscribers) watch.unsynced.add(subscriber);
           void syncWatch(watch);
@@ -121,15 +124,24 @@ async function syncWatch(watch: NodeWatch): Promise<void> {
       watch.dirty = false;
       if (watches.get(watch.nodeId) !== watch) return;
       const key = eventsKey(watch);
+      const revision = watch.revision;
       let live = true;
       try {
         await ensureListening();
+        if (watches.get(watch.nodeId) !== watch) return;
         if (key && key !== watch.confirmedKey) {
           const result = await portalInvoke<NodeEventWatchResult>("watch_node_events", {
             nodeId: watch.nodeId,
             prefixes: key.split(","),
             watchId: watch.watchId,
           });
+          if (watches.get(watch.nodeId) !== watch) {
+            await portalInvoke("unwatch_node_events", { watchId: watch.watchId }).catch(
+              () => undefined,
+            );
+            return;
+          }
+          if (watch.revision !== revision) continue;
           watch.confirmedKey = key;
           // A lease the command node had lost: whatever it relayed is incomplete.
           if (!result.renewed)
@@ -141,8 +153,13 @@ async function syncWatch(watch: NodeWatch): Promise<void> {
         live = false;
       }
       if (watches.get(watch.nodeId) !== watch) return;
-      const pending = [...watch.unsynced].filter((subscriber) => watch.subscribers.has(subscriber));
-      watch.unsynced.clear();
+      const confirmed = new Set(watch.confirmedKey?.split(",") ?? []);
+      const pending = [...watch.unsynced].filter(
+        (subscriber) =>
+          watch.subscribers.has(subscriber) &&
+          (!live || subscriber.events.every((event) => confirmed.has(event))),
+      );
+      for (const subscriber of pending) watch.unsynced.delete(subscriber);
       resync(pending);
       if (!live) watch.confirmedKey = null;
     } while (watch.dirty);
@@ -154,6 +171,7 @@ async function syncWatch(watch: NodeWatch): Promise<void> {
 function startRenewing(watch: NodeWatch): void {
   watch.renewTimer = setInterval(() => {
     // Renewal resends the same lease; an expired one comes back unrenewed.
+    watch.revision++;
     watch.confirmedKey = null;
     void syncWatch(watch);
   }, NODE_EVENT_WATCH_RENEW_MS);
@@ -162,22 +180,26 @@ function startRenewing(watch: NodeWatch): void {
 function subscribeSelf(subscriber: NodeEventSubscriber): () => void {
   const stops: Array<() => void> = [];
   let released = false;
-  void Promise.all(
+  let ready = false;
+  const resyncWhenReady = () => {
+    if (ready && !released) resync([subscriber]);
+  };
+  void Promise.allSettled(
     subscriber.events.map((event, index) =>
       portalListenAuthoritative<unknown>(
         event,
-        ({ payload }) => subscriber.onEvent(event, payload),
-        // One resync per subscriber is enough: every listener shares the stream.
-        index === 0
-          ? { onResync: () => subscriber.onResync(), resyncOnSubscribe: true }
-          : { onResync: () => undefined },
+        ({ payload }) => {
+          if (!released) subscriber.onEvent(event, payload);
+        },
+        { onResync: index === 0 ? resyncWhenReady : () => undefined },
       ).then((stop) => {
         if (released) stop();
         else stops.push(stop);
       }),
     ),
-  ).catch(() => {
-    if (!released) subscriber.onResync();
+  ).then(() => {
+    ready = true;
+    resyncWhenReady();
   });
   return () => {
     released = true;
@@ -200,6 +222,7 @@ export function subscribeNodeEvents(
       confirmedKey: null,
       unsynced: new Set(),
       syncing: false,
+      revision: 0,
       dirty: false,
       renewTimer: null,
     };

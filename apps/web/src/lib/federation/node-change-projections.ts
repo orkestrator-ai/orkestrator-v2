@@ -39,9 +39,14 @@ function storeKey(nodeId: BackendId, resourceKey: string): string {
   return `${nodeId}\0${resourceKey}`;
 }
 
+interface ResourceInterest {
+  count: number;
+  version: number;
+}
+
 interface NodeInterest {
-  /** Resource key → number of views showing it. */
-  resources: Map<string, number>;
+  /** Resource key → views holding it and its snapshot invalidation version. */
+  resources: Map<string, ResourceInterest>;
   release: () => void;
   /** Advances on every resync; fences reads started before it. */
   epoch: number;
@@ -50,6 +55,7 @@ interface NodeInterest {
 const nodes = new Map<BackendId, NodeInterest>();
 const queue: Array<{ nodeId: BackendId; resourceKey: string }> = [];
 const queued = new Set<string>();
+const running = new Set<string>();
 let active = 0;
 
 function apply(nodeId: BackendId, projection: ChangeProjection): void {
@@ -82,19 +88,34 @@ function forget(nodeId: BackendId, resourceKey: string): void {
 
 function drain(): void {
   while (active < MAX_CONCURRENT_READS && queue.length > 0) {
-    const { nodeId, resourceKey } = queue.shift()!;
+    const available = queue.findIndex(
+      ({ nodeId, resourceKey }) => !running.has(storeKey(nodeId, resourceKey)),
+    );
+    if (available < 0) return;
+    const { nodeId, resourceKey } = queue.splice(available, 1)[0]!;
     queued.delete(storeKey(nodeId, resourceKey));
     const interest = nodes.get(nodeId);
     if (!interest?.resources.has(resourceKey)) continue;
+    const resource = interest.resources.get(resourceKey)!;
+    const key = storeKey(nodeId, resourceKey);
     active++;
-    void read(nodeId, resourceKey, interest.epoch).finally(() => {
+    running.add(key);
+    void read(nodeId, resourceKey, interest, resource).finally(() => {
+      running.delete(key);
       active--;
       drain();
     });
   }
 }
 
-async function read(nodeId: BackendId, resourceKey: string, epoch: number): Promise<void> {
+async function read(
+  nodeId: BackendId,
+  resourceKey: string,
+  interest: NodeInterest,
+  resource: ResourceInterest,
+): Promise<void> {
+  const epoch = interest.epoch;
+  const version = resource.version;
   const current = nodeChangeProjectionStore
     .getState()
     .projections.get(storeKey(nodeId, resourceKey));
@@ -105,10 +126,16 @@ async function read(nodeId: BackendId, resourceKey: string, epoch: number): Prom
         ? { knownGeneration: current.ownerGeneration, knownRevision: current.revision }
         : {}),
     });
-    const interest = nodes.get(nodeId);
-    if (!interest || interest.epoch !== epoch || !interest.resources.has(resourceKey)) return;
+    if (
+      nodes.get(nodeId) !== interest ||
+      interest.epoch !== epoch ||
+      interest.resources.get(resourceKey) !== resource ||
+      resource.version !== version
+    )
+      return;
     if (result.kind === "projection" || result.kind === "reset") {
-      if (isChangeProjection(result.projection)) apply(nodeId, result.projection);
+      if (isChangeProjection(result.projection) && result.projection.resourceKey === resourceKey)
+        apply(nodeId, result.projection);
     } else if (result.kind === "deleted") {
       forget(nodeId, resourceKey);
     }
@@ -139,6 +166,11 @@ function nodeInterest(nodeId: BackendId): NodeInterest {
     },
     onEvent: (_event, payload) => {
       if (!isChangeProjectionEvent(payload)) return;
+      const resourceKey =
+        payload.kind === "projection" ? payload.projection.resourceKey : payload.resourceKey;
+      const resource = interest.resources.get(resourceKey);
+      if (!resource) return;
+      if (payload.kind !== "content-invalidated") resource.version++;
       switch (payload.kind) {
         case "projection":
           if (interest.resources.has(payload.projection.resourceKey))
@@ -162,17 +194,21 @@ function nodeInterest(nodeId: BackendId): NodeInterest {
 /** Register interest in one resource on a node; returns the release function. */
 export function subscribeNodeChangeResource(nodeId: BackendId, resourceKey: string): () => void {
   const interest = nodeInterest(nodeId);
-  const count = interest.resources.get(resourceKey) ?? 0;
-  interest.resources.set(resourceKey, count + 1);
+  let resource = interest.resources.get(resourceKey);
+  const count = resource?.count ?? 0;
+  if (resource) resource.count++;
+  else {
+    resource = { count: 1, version: 0 };
+    interest.resources.set(resourceKey, resource);
+  }
   // A resource added to a node already subscribed has missed nothing it held.
   if (count === 0 && interest.epoch > 0) requestRead(nodeId, resourceKey);
   let released = false;
   return () => {
     if (released) return;
     released = true;
-    const remaining = (interest.resources.get(resourceKey) ?? 1) - 1;
+    const remaining = --resource.count;
     if (remaining > 0) {
-      interest.resources.set(resourceKey, remaining);
       return;
     }
     interest.resources.delete(resourceKey);
@@ -205,6 +241,7 @@ export function resetNodeChangeProjectionsForTests(): void {
   nodes.clear();
   queue.length = 0;
   queued.clear();
+  running.clear();
   active = 0;
   nodeChangeProjectionStore.setState({ projections: new Map() });
 }

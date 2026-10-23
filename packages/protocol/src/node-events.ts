@@ -15,7 +15,7 @@
  * re-read everything shown from that node.
  */
 
-import type { BackendId } from "./federation.js";
+import { isBackendId, type BackendId } from "./federation.js";
 
 export const RELAYED_NODE_EVENT = "relayed-node-event";
 
@@ -97,7 +97,15 @@ export function isNodeEventWatchId(value: unknown): value is string {
 export function isRelayedNodeEvent(value: unknown): value is RelayedNodeEvent {
   if (!value || typeof value !== "object") return false;
   const frame = value as Record<string, unknown>;
-  if (typeof frame.nodeId !== "string" || !frame.nodeId) return false;
+  if (!isBackendId(frame.nodeId)) return false;
   if (frame.kind === "resync") return true;
-  return frame.kind === "event" && typeof frame.event === "string";
+  return (
+    frame.kind === "event" &&
+    typeof frame.event === "string" &&
+    frame.event.length > 0 &&
+    frame.event.length <= MAX_NODE_EVENT_PREFIX_LENGTH &&
+    /^[\w.:/-]+$/.test(frame.event) &&
+    isRelayableEvent(frame.event) &&
+    "payload" in frame
+  );
 }

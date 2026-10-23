@@ -78,7 +78,7 @@ export function EnvironmentTooltipBody({
           <Laptop className="h-3 w-3" />
           Local worktree
         </p>
-      ) : details.environmentType ? (
+      ) : details.environmentType && details.networkAccessMode ? (
         <p className="text-xs text-muted-foreground flex items-center gap-1">
           {details.networkAccessMode === "full" ? (
             <>

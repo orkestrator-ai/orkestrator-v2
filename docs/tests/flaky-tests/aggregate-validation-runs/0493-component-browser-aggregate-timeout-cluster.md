@@ -197,3 +197,10 @@ Exact original failed cases:
 - **Complete unchanged owner:** `ORKESTRATOR_E2E_PORT=19431 mise run test:logged -- --name merge-native-browser-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentLaunchDialog.spec.ts --workers=1 --output=output/agent-testing/merge-native-browser-owner` reported two passed and the same two failed in 22.2 s. This matches the previously recorded non-green native-dropdown cases; this rerun does not establish a flake. No source, assertion, timeout or skip changed.
 - **Evidence:** host temporary directories `orkestrator-test-run.e52ASg/merge-component-browser.log.gz` and `orkestrator-test-run.k1qDoe/merge-native-browser-owner.log.gz`; isolated traces are under `output/agent-testing/merge-native-browser-owner/`.
 - **Public-site checks:** the failed aggregate did not reach them. `mise run test:logged -- --name merge-public-browser -- bunx playwright test --config e2e/public-site/playwright.config.ts` passed separately (11.5 s).
+
+
+## Node event review validation — 2026-10-23
+
+- `mise run test:browser` reported 501 passed, 95 skipped and eight failures. Six sidebar drag cases exposed a fixture that recorded `changes_get_view` reads as reorder writes; the fixture now handles projection and hover reads separately. All 28 cases in the complete `e2e/MergedProjectList.spec.ts` owner then passed with one worker (`sidebar-browser`, 31.3 s).
+- The two native Chrome branch suggestion failures reproduced in the complete unchanged `e2e/AgentLaunchDialog.spec.ts` owner with one worker (`native-branch-owner`, 21.6 s): two passed, two failed, input `rel` instead of `release/2.0`. This matches the existing non-green native dropdown limitation; no assertion or skip changed. Evidence: host temporary directory `orkestrator-test-run.nnnkE4/native-branch-owner.log.gz`, traces under `output/playwright/native-branch-review/`.
+- The separately run public-site browser suite passed (`public-browser`, 11.1 s).

@@ -220,4 +220,131 @@ describe("another node's change projections", () => {
     unmount();
     expect(held()).toBeUndefined();
   });
+  function deferredReads() {
+    const pending: Array<{ resourceKey: string; resolve: (result: unknown) => void }> = [];
+    const original = invokeMock.getMockImplementation()!;
+    invokeMock.mockImplementation((command: string, args: Record<string, unknown>) => {
+      if (command !== "invoke_on_node") return original(command, args);
+      calls.push({ command, args });
+      return new Promise((resolve) =>
+        pending.push({
+          resourceKey: String((args.args as Record<string, unknown>).resourceKey),
+          resolve: (result) => resolve({ outcome: "ok", result }),
+        }),
+      );
+    });
+    return pending;
+  }
+
+  for (const kind of ["projection", "deleted", "generation"] as const) {
+    test(`live ${kind} supersedes an older pending snapshot`, async () => {
+      const pending = deferredReads();
+      const release = subscribeNodeChangeResource(LEAF, KEY);
+      await settle();
+      const next = {
+        ...projection(2),
+        ...(kind === "generation" ? { ownerGeneration: "new-owner" } : {}),
+      };
+      relay({
+        nodeId: LEAF,
+        kind: "event",
+        event: CHANGE_PROJECTION_CHANGED_EVENT,
+        payload:
+          kind === "deleted"
+            ? { kind: "deleted", resourceKey: KEY, ownerGeneration: "gen-1", revision: 2 }
+            : { kind: "projection", projection: next },
+      });
+      pending[0]!.resolve(
+        kind === "projection"
+          ? { kind: "deleted" }
+          : { kind: "projection", projection: projection(100) },
+      );
+      await settle();
+      expect(held()).toEqual(kind === "deleted" ? undefined : next);
+      release();
+    });
+  }
+
+  test("release and resubscribe fences both resource and node interest identities", async () => {
+    const pending = deferredReads();
+    const keep = subscribeNodeChangeResource(LEAF, environmentChangeResourceKey("keep"));
+    const first = subscribeNodeChangeResource(LEAF, KEY);
+    await settle();
+    first();
+    const second = subscribeNodeChangeResource(LEAF, KEY);
+    pending
+      .find((item) => item.resourceKey === KEY)!
+      .resolve({ kind: "projection", projection: projection(99) });
+    pending.find((item) => item.resourceKey !== KEY)!.resolve({ kind: "deleted" });
+    await settle();
+    expect(held()).toBeUndefined();
+    pending.at(-1)!.resolve({ kind: "projection", projection: projection(2) });
+    await settle();
+    expect(held()?.revision).toBe(2);
+    second();
+    keep();
+    const third = subscribeNodeChangeResource(LEAF, KEY);
+    await settle();
+    third();
+    const fourth = subscribeNodeChangeResource(LEAF, KEY);
+    await settle();
+    pending.at(-1)!.resolve({ kind: "projection", projection: projection(99) });
+    await settle();
+    expect(held()).toBeUndefined();
+    pending.at(-1)!.resolve({ kind: "projection", projection: projection(3) });
+    await settle();
+    expect(held()?.revision).toBe(3);
+    fourth();
+  });
+
+  test("resync fences pending reads and coalesces one trailing read per resource", async () => {
+    const pending = deferredReads();
+    const release = subscribeNodeChangeResource(LEAF, KEY);
+    await settle();
+    for (let i = 0; i < 10; i++) relay({ nodeId: LEAF, kind: "resync" });
+    expect(pending).toHaveLength(1);
+    pending[0]!.resolve({ kind: "projection", projection: projection(99) });
+    await settle();
+    expect(held()).toBeUndefined();
+    expect(pending).toHaveLength(2);
+    pending[1]!.resolve({ kind: "projection", projection: projection(2) });
+    await settle();
+    expect(held()?.revision).toBe(2);
+    release();
+  });
+
+  test("bounds concurrent reads while draining every interested resource", async () => {
+    const pending = deferredReads();
+    const releases = Array.from({ length: 10 }, (_, i) =>
+      subscribeNodeChangeResource(LEAF, environmentChangeResourceKey(`env-${i}`)),
+    );
+    await settle();
+    expect(pending).toHaveLength(6);
+    for (const item of pending.slice()) item.resolve({ kind: "deleted" });
+    await settle();
+    expect(pending).toHaveLength(10);
+    for (const item of pending.slice(6)) item.resolve({ kind: "deleted" });
+    await settle();
+    for (const release of releases) release();
+  });
+  test("a live reset invalidates the pending snapshot and queues a fresh generation read", async () => {
+    const pending = deferredReads();
+    const release = subscribeNodeChangeResource(LEAF, KEY);
+    await settle();
+    relay({
+      nodeId: LEAF,
+      kind: "event",
+      event: CHANGE_PROJECTION_CHANGED_EVENT,
+      payload: { kind: "reset", resourceKey: KEY, ownerGeneration: "new-owner" },
+    });
+    pending[0]!.resolve({ kind: "projection", projection: projection(99) });
+    await settle();
+    expect(held()).toBeUndefined();
+    expect(pending).toHaveLength(2);
+    const next = { ...projection(1), ownerGeneration: "new-owner" };
+    pending[1]!.resolve({ kind: "reset", projection: next });
+    await settle();
+    expect(held()).toEqual(next);
+    release();
+  });
 });

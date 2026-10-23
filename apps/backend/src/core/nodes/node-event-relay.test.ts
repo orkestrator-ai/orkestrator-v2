@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import type { NodeRoute } from "@orkestrator/protocol/command-nodes";
-import type { RouteId } from "@orkestrator/protocol/federation";
+import type { BackendId, RouteId } from "@orkestrator/protocol/federation";
 import {
   NODE_EVENT_WATCH_TTL_MS,
   RELAYED_NODE_EVENT,
@@ -138,5 +138,113 @@ describe("relaying another node's events on request", () => {
         args: { nodeId: "bk_other", prefixes: ["a-"] },
       }),
     ).rejects.toThrow("cannot be run on another node");
+  });
+  test("portal hover prefixes do not reconnect or resync unrelated badges", async () => {
+    const { command, leaf } = await commandWithLeaf();
+    const badge = command.portal.events.watch({
+      nodeId: "bk_leaf",
+      prefixes: ["change-projection-changed"],
+    });
+    await settle(40);
+    const streams = [...leaf.streams];
+    const before = relayed(command).filter((frame) => frame.kind === "resync").length;
+    const hover = command.portal.events.watch({
+      nodeId: "bk_leaf",
+      prefixes: ["resource-changed", "native-agent-session-activity"],
+    });
+    await settle(40);
+    leaf.emit("resource-changed", { resource: "environment", id: "e" });
+    await settle(40);
+    expect(
+      relayed(command).some(
+        (frame) => frame.kind === "event" && frame.event === "resource-changed",
+      ),
+    ).toBe(true);
+    command.portal.events.unwatch(hover.watchId);
+    await settle(40);
+    expect([...leaf.streams]).toEqual(streams);
+    expect(relayed(command).filter((frame) => frame.kind === "resync")).toHaveLength(before);
+    const events = relayed(command).length;
+    leaf.emit("resource-changed", {});
+    await settle(40);
+    expect(relayed(command)).toHaveLength(events);
+    command.portal.events.unwatch(badge.watchId);
+  });
+
+  test("disconnect, epoch replacement and leaf mode stop stale streams", async () => {
+    const { network, command, leaf } = await commandWithLeaf();
+    const link = command.service.link("bk_leaf" as BackendId)!;
+    let connected = true;
+    let epoch = link.view.epoch;
+    let isLeaf = false;
+    let notify: () => void = () => undefined;
+    const frames: RelayedNodeEvent[] = [];
+    const relay = new NodeEventRelay({
+      nodes: {
+        subscribe: (listener) => {
+          notify = listener;
+          return () => {
+            notify = () => undefined;
+          };
+        },
+        isLeaf: () => isLeaf,
+        link: () => ({
+          get connected() {
+            return connected;
+          },
+          get view() {
+            return { epoch };
+          },
+          invoke: link.invoke.bind(link),
+          transport: link.transport.bind(link),
+        }),
+      },
+      emit: (_event, payload) => frames.push(payload as RelayedNodeEvent),
+      fetchImpl: network.fetch,
+    });
+    relay.start();
+    try {
+      relay.watch({ nodeId: "bk_leaf", prefixes: ["a-"] });
+      await settle(40);
+      expect(relay.diagnostics().relays).toHaveLength(1);
+      connected = false;
+      notify();
+      await settle(40);
+      expect(relay.diagnostics().relays).toHaveLength(0);
+      const before = frames.length;
+      leaf.emit("a-old", {});
+      await settle(40);
+      expect(frames).toHaveLength(before);
+      const disconnectedResyncs = frames.filter((frame) => frame.kind === "resync").length;
+      connected = true;
+      epoch++;
+      notify();
+      await settle(40);
+      const reconnectedResyncs = frames.filter((frame) => frame.kind === "resync").length;
+      expect(reconnectedResyncs).toBeGreaterThan(disconnectedResyncs);
+      epoch++;
+      notify();
+      await settle(40);
+      expect(frames.filter((frame) => frame.kind === "resync").length).toBeGreaterThan(
+        reconnectedResyncs,
+      );
+      leaf.emit("a-new", {});
+      await settle(40);
+      expect(frames.filter((frame) => frame.kind === "event")).toHaveLength(1);
+      isLeaf = true;
+      notify();
+      await settle(40);
+      expect(relay.diagnostics().relays).toHaveLength(0);
+      const end = frames.length;
+      leaf.emit("a-hidden", {});
+      await settle(40);
+      expect(frames).toHaveLength(end);
+      isLeaf = false;
+      notify();
+      await settle(40);
+      expect(relay.diagnostics().relays).toHaveLength(1);
+    } finally {
+      relay.stop();
+    }
   });
 });

@@ -1,11 +1,15 @@
 import { randomUUID } from "node:crypto";
 
+import { CHANGE_PROJECTION_CHANGED_EVENT } from "@orkestrator/protocol/change-resources";
+import { NATIVE_AGENT_ACTIVITY_EVENT } from "@orkestrator/protocol/native-agent-observation";
+import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
 import { isBackendId, type BackendId } from "@orkestrator/protocol/federation";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@orkestrator/protocol/gateway-event-stream";
 import {
   isNodeEventWatchId,
   isRelayableEvent,
   MAX_NODE_EVENT_WATCHES,
+  MAX_NODE_EVENT_PREFIXES,
   NODE_EVENT_WATCH_TTL_MS,
   parseNodeEventPrefixes,
   RELAYED_NODE_EVENT,
@@ -27,8 +31,8 @@ import type { ReadModelLink } from "./node-read-model.js";
  * renewed expires, so a client that went away costs nothing for long.
  *
  * Every stream open and every gap the node could not replay is relayed as a
- * `resync` frame: the client re-reads what it shows from that node. Changing
- * the watched prefixes replaces the stream, which opens with a resync too.
+ * `resync` frame: the client re-reads what it shows from that node. Portal
+ * prefixes share a stable superset; other prefix additions may replace the stream. Removing prefixes filters locally without reconnecting.
  */
 
 export interface RelayNodes {
@@ -47,9 +51,17 @@ interface Watch {
 interface Relay {
   stream: NodeEventStream;
   prefixes: string[];
-  key: string;
+  subscribedPrefixes: string[];
   epoch: number;
 }
+
+// Portal badges and hover cards share a stable stream. Other prefixes grow
+// monotonically until the last watch leaves, avoiding reconnects on shrink.
+const PORTAL_PREFIXES: readonly string[] = [
+  CHANGE_PROJECTION_CHANGED_EVENT,
+  RESOURCE_CHANGED_EVENT,
+  NATIVE_AGENT_ACTIVITY_EVENT,
+];
 
 const SWEEP_INTERVAL_MS = 15_000;
 
@@ -155,11 +167,31 @@ export class NodeEventRelay {
         continue;
       }
       const prefixes = [...set].sort();
-      const key = prefixes.join(",");
       const epoch = link.view.epoch;
-      if (current && current.key === key && current.epoch === epoch) continue;
+      if (
+        current &&
+        current.epoch === epoch &&
+        prefixes.every((prefix) =>
+          current.subscribedPrefixes.some((held) => prefix.startsWith(held)),
+        )
+      ) {
+        current.prefixes = prefixes;
+        continue;
+      }
+      let subscribedPrefixes = [
+        ...new Set([
+          ...(current?.subscribedPrefixes ?? []),
+          ...prefixes,
+          ...(prefixes.some((prefix) => PORTAL_PREFIXES.includes(prefix)) ? PORTAL_PREFIXES : []),
+        ]),
+      ].sort();
+      // Bound accumulated subscriptions even when a long-lived watch keeps
+      // cycling arbitrary prefixes. A fresh stream recovers through resync.
+      if (subscribedPrefixes.length > MAX_NODE_EVENT_WATCHES * MAX_NODE_EVENT_PREFIXES) {
+        subscribedPrefixes = prefixes;
+      }
       if (current) this.stopRelay(nodeId, current);
-      this.startRelay(nodeId, link, prefixes, key, epoch);
+      this.startRelay(nodeId, link, prefixes, subscribedPrefixes, epoch);
     }
     this.scheduleSweep();
   }
@@ -168,16 +200,16 @@ export class NodeEventRelay {
     nodeId: BackendId,
     link: ReadModelLink,
     prefixes: string[],
-    key: string,
+    subscribedPrefixes: string[],
     epoch: number,
   ): void {
     const relay: Relay = {
       prefixes,
-      key,
+      subscribedPrefixes,
       epoch,
       stream: new NodeEventStream({
         transport: () => (link.connected && link.view.epoch === epoch ? link.transport() : null),
-        prefixes,
+        prefixes: subscribedPrefixes,
         ...(this.options.fetchImpl ? { fetchImpl: this.options.fetchImpl } : {}),
         // A fresh or resumed stream may have missed events since the client read.
         onOpen: () => {
@@ -191,7 +223,10 @@ export class NodeEventRelay {
           }
           // The node filters by prefix too; this keeps the relay's promise
           // even if it does not.
-          if (!isRelayableEvent(event) || !prefixes.some((prefix) => event.startsWith(prefix))) {
+          if (
+            !isRelayableEvent(event) ||
+            !relay.prefixes.some((prefix) => event.startsWith(prefix))
+          ) {
             return;
           }
           const frame: RelayedNodeEvent = { nodeId, kind: "event", event, payload };

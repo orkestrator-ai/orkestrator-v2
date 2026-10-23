@@ -39,12 +39,27 @@ async function invoke<T>(
   return payload.result as T;
 }
 
+/** The `create_environment` arguments for one fixture environment. */
+export function fixtureEnvironmentArgs(
+  projectId: string,
+  kind: "local" | "container",
+  containerNetwork: "restricted" | "full" = "restricted",
+): Record<string, unknown> {
+  return {
+    projectId,
+    name: `fixture-${kind}`,
+    networkAccessMode: kind === "container" ? containerNetwork : "restricted",
+    environmentType: kind === "container" ? "containerized" : "local",
+  };
+}
+
 export async function seedFixture(options: {
   profile: RuntimeProfile;
   templateRoot: string;
   browserUrl: string;
   authFile: string;
   environments: Array<"local" | "container">;
+  containerNetwork?: "restricted" | "full";
 }): Promise<string> {
   const projectPath = await prepareFixtureRepository(options.profile, options.templateRoot);
   const originPath = path.join(options.profile.fixtureDir, "origin.git");
@@ -65,12 +80,7 @@ export async function seedFixture(options: {
       options.browserUrl,
       options.authFile,
       "create_environment",
-      {
-        projectId: project.id,
-        name: `fixture-${kind}`,
-        networkAccessMode: "restricted",
-        environmentType: kind === "container" ? "containerized" : "local",
-      },
+      fixtureEnvironmentArgs(project.id, kind, options.containerNetwork),
     );
     await invoke(options.browserUrl, options.authFile, "start_environment", {
       environmentId: environment.id,

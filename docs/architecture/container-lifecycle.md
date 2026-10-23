@@ -188,10 +188,12 @@ host-gateway alias is added only for a Linux Engine; Docker Desktop (including
 Desktop for Linux) provides its own DNS entry.
 
 Qualified locally: Docker Engine 29.7.2 on Linux amd64 and Docker Desktop
-4.93.0 (Engine 29.8.1) on Apple Silicon (native arm64). Rootless daemons are
-detected and reported but not yet qualified; features that depend on cgroup or
-firewall enforcement gate on them explicitly. The evidence and what each run
-covered are in
+4.93.0 to 4.95.0 (Engine 29.8.1 and 29.8.2) on Apple Silicon (native arm64).
+Rootless daemons are supported with gated features but not yet qualified on a
+Linux host. A resource budget axis the daemon reports it cannot enforce is
+refused (see [Resource budgets](#resource-budgets-and-usage-container-resourcests)),
+and a restricted firewall that cannot be applied fails the boot closed. The
+evidence and what each run covered are in
 [container-qualification.md](../development/container-qualification.md).
 
 ## Readiness
@@ -215,6 +217,20 @@ start, so a record or marker from an earlier boot can never release work.
 - `workspace-setup.sh` applies the same rule inside the container and fails
   (retryably) instead of "proceeding anyway" on timeout.
 - In restricted mode a missing firewall script is as fatal as a failed one.
+- The root repair of `/project-files` access runs after readiness, because a
+  boot that fails closed exits at once and an earlier repair `docker exec`
+  turned that typed `not-ready` into an untyped "container is not running"
+  error. Account startup may invalidate the Codex marker with a pre-readiness
+  `docker exec`; this is deliberately best-effort, with failures caught and
+  logged so they cannot preempt the readiness result.
+- A boot that fails closed usually exits before the next poll, so the failure
+  reads `container-exited`; the exact code stays in the container's last
+  boot record and its log.
+
+Qualified live by `container-live-readiness.test.ts`: missing firewall
+script, DNS and bootstrap failure, an unwritable status directory, a torn
+status write, a container restart during launch, a firewall re-run that
+loses DNS (C23) and setup interrupted after a side effect (C10).
 
 Readiness is orchestration evidence, not a security boundary against the
 container user.
@@ -246,11 +262,16 @@ and uncertain operations reconciled on the next start.
 
 A stop never approves a pending approval. The drain signals the bridge and the
 provider process that raised the request, so nothing is left that could act on
-it (Claude's bridge has no shutdown handler of its own and simply exits). Until
-the session reattaches after the next start, the backend's projection can
-still list the request as `pending`. A stopped environment renders no agent
-tabs, though, so there is nothing to answer, and the reattached session no
-longer lists it. Qualified live for Claude (C11,
+it (Claude's bridge has no shutdown handler of its own and simply exits). Once
+the stop commits, `withdrawEnvironmentInteractions` drops the environment's
+outstanding requests from every cached session projection in a new announced
+revision, fenced so a refresh that read them before the stop cannot commit
+them back. The public CLI (`session get`, `session interactions`) and the
+coordinator's `get_tab_state` read that projection, so they no longer report a
+dead request as pending. A local stop withdraws only when every bridge
+terminated. Stops that do not go through `stopEnvironmentOnce` (a container
+that dies on its own, recovery copies, replacement) still keep the last
+snapshot until the session reattaches. Qualified live for Claude (C11,
 `e2e/agent-testing/container-approval-stop.spec.ts`).
 
 A stop also clears the renderer's local panes for that environment, together
@@ -380,6 +401,17 @@ databases (`~/.codex/*.sqlite*`) and OpenCode's `opencode.db*` are relocated
 into their state sub-directories; the rest of those homes (configuration,
 credentials, caches, OpenCode snapshots) is not copied. Hashes and paths never
 leave the helper — its result line carries counts only.
+
+A source path counts as absent (nothing to preserve) only when the daemon
+itself answers `Error response from daemon: Could not find the file`. Any
+other failure to read the source, including the CLI's own `connect: no such
+file or directory` when the daemon socket is gone, fails the step and rolls
+back with the original authoritative; an outage that ended mid-copy once let
+an empty candidate commit. When the helper side of a copy dies, the
+producer's remaining output is discarded so both processes settle, rather
+than leaving the rebuild holding its queue and copy slot. Both were found by
+the live rebuild-fault suite (C15), which also covers a kill just before and
+just after the commit write.
 
 Capacity: the estimate is the source's writable-layer size (`docker ps
 --size`) or the measured source volumes, plus 10% and 512 MiB headroom, checked
@@ -735,7 +767,15 @@ shown or read.
 
 The applied value is always read back from `docker inspect`
 (`HostConfig.NanoCpus`, `Memory`, `PidsLimit`) and reported separately from the
-request, with axes the daemon says it cannot enforce. `update_environment_resources`
+request, with axes the daemon says it cannot enforce. A daemon without cgroup
+enforcement (rootless with cgroup driver `none`, or a controller that is not
+delegated) accepts `--cpus`, `--memory` and `--pids-limit`, stores them and
+enforces nothing, so the read-back alone would show them as applied. Every
+create, `update_environment_resources` (stored or applied) and the rebuild
+preflight therefore refuse a budget axis whose support `docker info` reports
+`false`, with `unsupported-topology`, before anything is created or stopped.
+On a rootless daemon whose support is unknown the budget is refused as
+`daemon-unavailable`. `update_environment_resources`
 stores an override and, when asked, applies it to the running container with
 `docker update` as an `update-resources` lifecycle operation; it refuses a
 limit above the daemon's capacity and a memory limit within 10% of current use

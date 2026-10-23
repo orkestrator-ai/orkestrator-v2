@@ -680,6 +680,7 @@ export async function startDevelopment(
         browserUrl: fixtureUrl,
         authFile: ready.authFile,
         environments: args.fixtureEnvironments,
+        containerNetwork: args.fixtureContainerNetwork,
       });
     }
     await writeStatus({

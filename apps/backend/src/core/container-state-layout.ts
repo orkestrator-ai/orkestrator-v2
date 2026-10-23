@@ -166,7 +166,7 @@ export const PROVIDER_PRESERVATION: Record<
   codex: {
     level: "partial",
     limitations:
-      "Rollouts, archived rollouts, the runtime databases and the bridge session map and title index are preserved. Codex's own thread-name index at its home root is not, so a name set inside the Codex CLI rather than in Orkestrator is lost; the relocated runtime databases are pending qualification against the pinned Codex.",
+      "Rollouts, archived rollouts, the runtime databases and the bridge session map and title index are preserved, and a conversation continues from them after a rebuild. Codex's own thread-name index at its home root is not, so a name set inside the Codex CLI rather than in Orkestrator is lost.",
   },
   opencode: {
     level: "partial",

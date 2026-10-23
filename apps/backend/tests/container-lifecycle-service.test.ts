@@ -21,9 +21,12 @@ import {
 } from "../src/core/container-lifecycle-service";
 import { dockerContainerRuntimeName, dockerOwnerNamespace } from "../src/core/docker-ownership";
 import { recreateEnvironmentOnce, startEnvironmentOnce } from "../src/core/commands-environment";
+import { deleteEnvironmentTask } from "../src/core/commands-servers";
 import {
+  BlockedRegistryWriter,
   REGISTRY_SCHEMA_MARKER_FILE,
   REGISTRY_WRITER_LEASE_FILE,
+  RegistrySchemaBlockedError,
   RegistryWriterLease,
   checkRegistrySchemaMarker,
   openRegistryWriter,
@@ -326,6 +329,28 @@ describe("container lifecycle operations", () => {
       "ContainerLifecycleError:unsupported-format",
     );
     expect(writes).toHaveLength(0);
+  });
+
+  test("a read-only backend refuses to delete a container environment", async () => {
+    // Found live by scripts/qualify-backend-upgrade-rollback.ts: under a
+    // newer writer's marker the delete removed the container and volumes
+    // while every lifecycle operation was refused.
+    const { context, writes } = memoryLifecycleContext(
+      [lifecycleEnvironment({ containerId: "container-1", allowedDomains: ["one.example"] })],
+      await dataDir(),
+    );
+    context.registryWriterLease = new BlockedRegistryWriter(new RegistrySchemaBlockedError());
+    await withDockerScript(
+      '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$FAKE_DOCKER_LOG"\n',
+      async (log) => {
+        await expect(deleteEnvironmentTask("env-lifecycle", context)).rejects.toThrow(
+          "ContainerLifecycleError:unsupported-format",
+        );
+        expect(writes).toHaveLength(0);
+        expect(await log.read()).not.toMatch(/\brm\b|volume|network rm/);
+      },
+    );
+    expect(context.registryWriterLease.isHeld()).toBe(false);
   });
 
   test("validates operation identities", () => {

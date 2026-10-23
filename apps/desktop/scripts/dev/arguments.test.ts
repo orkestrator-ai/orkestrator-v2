@@ -92,6 +92,27 @@ describe("development CLI arguments", () => {
     );
   });
 
+  test("selects the fixture container's network mode only with a container fixture", () => {
+    expect(
+      parseAgentTestArguments(["--fixture-environments", "local,container"])
+        .fixtureContainerNetwork,
+    ).toBeUndefined();
+    expect(
+      parseAgentTestArguments([
+        "--fixture-environments",
+        "local,container",
+        "--fixture-network",
+        "full",
+      ]).fixtureContainerNetwork,
+    ).toBe("full");
+    expect(() =>
+      parseAgentTestArguments(["--fixture-environments", "container", "--fixture-network", "open"]),
+    ).toThrow("--fixture-network accepts restricted or full");
+    expect(() => parseAgentTestArguments(["--fixture", "--fixture-network", "full"])).toThrow(
+      "--fixture-network needs --fixture-environments with container",
+    );
+  });
+
   test("only dev:test opts into the configured dev worktree folder", () => {
     expect(parseAgentTestArguments(["--fixture"]).useDevWorktreeFolder).toBeUndefined();
     expect(parseAgentTestArguments(["--use-dev-worktree-folder"]).useDevWorktreeFolder).toBe(true);

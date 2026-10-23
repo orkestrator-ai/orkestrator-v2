@@ -5,6 +5,12 @@ export type DevArguments = {
   profile?: string;
   fixture: boolean;
   fixtureEnvironments: Array<"local" | "container">;
+  /**
+   * Network mode of the `fixture-container` environment. Absent means
+   * restricted; `full` lets real-stack checks run against a full-network
+   * container, since the mode can only be chosen when an environment is created.
+   */
+  fixtureContainerNetwork?: "restricted" | "full";
   json: boolean;
   keepToolchains: boolean;
   stopFirst: boolean;
@@ -74,6 +80,12 @@ function parseArguments(args: string[], options: ParseOptions): DevArguments {
       }
       result.fixtureEnvironments = [...new Set(values)] as DevArguments["fixtureEnvironments"];
       result.fixture = true;
+    } else if (argument === "--fixture-network") {
+      const value = valueAfter(index++, argument);
+      if (value !== "restricted" && value !== "full") {
+        throw new Error("--fixture-network accepts restricted or full");
+      }
+      result.fixtureContainerNetwork = value;
     } else if (argument === "--agent-platforms") {
       if (!options.agentTest) {
         throw new Error("--agent-platforms is only supported by mise run dev:test");
@@ -94,6 +106,9 @@ function parseArguments(args: string[], options: ParseOptions): DevArguments {
     } else {
       throw new Error(`Unknown development option: ${argument}`);
     }
+  }
+  if (result.fixtureContainerNetwork && !result.fixtureEnvironments.includes("container")) {
+    throw new Error("--fixture-network needs --fixture-environments with container");
   }
   result.credentialSources = [...new Set(result.credentialSources)];
   result.agentPlatforms = [...new Set(result.agentPlatforms)];

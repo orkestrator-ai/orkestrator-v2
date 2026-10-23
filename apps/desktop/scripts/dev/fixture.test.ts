@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { resolveRuntimeProfile } from "../../electron/runtime-profile.js";
-import { prepareFixtureRepository } from "./fixture.js";
+import { fixtureEnvironmentArgs, prepareFixtureRepository } from "./fixture.js";
 
 const directories: string[] = [];
 
@@ -55,5 +55,22 @@ describe("disposable agent-test fixture", () => {
     expect(await gitOutput(second, "rev-parse", "HEAD")).toBe(firstCommit);
     expect(await gitOutput(second, "status", "--porcelain")).toBe("");
     expect(await readFile(path.join(template, "package.json"), "utf8")).toBe(before);
+  });
+
+  test("creates a restricted fixture container unless full network is requested", () => {
+    expect(fixtureEnvironmentArgs("project", "container")).toEqual({
+      projectId: "project",
+      name: "fixture-container",
+      networkAccessMode: "restricted",
+      environmentType: "containerized",
+    });
+    expect(fixtureEnvironmentArgs("project", "container", "full").networkAccessMode).toBe("full");
+    // The mode only applies to containers; a local environment has no firewall.
+    expect(fixtureEnvironmentArgs("project", "local", "full")).toEqual({
+      projectId: "project",
+      name: "fixture-local",
+      networkAccessMode: "restricted",
+      environmentType: "local",
+    });
   });
 });

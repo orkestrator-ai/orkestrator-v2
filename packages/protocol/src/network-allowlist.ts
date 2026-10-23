@@ -92,7 +92,13 @@ export const AGENT_NETWORK_DOMAINS_BY_PLATFORM = Object.freeze({
    * reply in a restricted container.
    */
   codex: Object.freeze(["chatgpt.com", "auth.openai.com"] as readonly string[]),
+  /**
+   * The Cursor SDK opens its agent through `api.cursor.com` as well as the
+   * `cursor.sh` API hosts. Without it every container attach failed in
+   * restricted mode while full-network containers worked (live, 2026-10-23).
+   */
   cursor: Object.freeze([
+    "api.cursor.com",
     "api2.cursor.sh",
     "api3.cursor.sh",
     "api4.cursor.sh",

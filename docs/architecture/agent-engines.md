@@ -1006,7 +1006,7 @@ Both flags are persisted, so a backend restart cannot reset either budget.
 ### Provisional findings (`report_finding`)
 
 A Multi Review reviewer's report arrives whole, when its result is accepted.
-To let "Findings so far" fill in while reviewers work, a live reviewer's own
+To let the "Issues so far" list fill in while reviewers work, a live reviewer's own
 attempt capability also carries `report_finding`: one finding per call, in the
 shape of one entry of the report's `issues`. The reviewer instruction
 (`workflowResultInstruction(..., { provisionalFindings: true })`) encourages,

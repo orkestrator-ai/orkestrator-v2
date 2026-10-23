@@ -69,17 +69,6 @@ export function flowViewportHeight(contentHeight: number): number {
   return clamp(contentHeight, FLOW_GRAPH_MIN_HEIGHT, FLOW_VIEWPORT_MAX_HEIGHT);
 }
 
-/**
- * The zoom that shows the whole graph. It never magnifies: the layout already
- * fills the width at 100%, so Fit only ever zooms out.
- */
-export function fitFlowZoom(content: FlowSize, viewport: FlowSize): number {
-  if (content.width <= 0 || content.height <= 0) return 1;
-  return clampFlowZoom(
-    Math.min(1, viewport.width / content.width, viewport.height / content.height),
-  );
-}
-
 /** Where the scaled canvas starts inside the viewport: centred when it is smaller. */
 export function flowContentOffset(
   zoom: number,
@@ -127,11 +116,6 @@ export function zoomFlowView(
     content,
     viewport,
   );
-}
-
-/** Fit the whole graph; it is then centred, so nothing is scrolled. */
-export function fitFlowView(content: FlowSize, viewport: FlowSize): FlowView {
-  return { zoom: fitFlowZoom(content, viewport), scrollLeft: 0, scrollTop: 0 };
 }
 
 function revealAxis(
@@ -236,14 +220,4 @@ export function wheelZoomFactor(deltaY: number, deltaMode: number): number {
 export function pinchFlowZoom(startZoom: number, startDistance: number, distance: number): number {
   if (!(startDistance > 0) || !Number.isFinite(distance)) return clampFlowZoom(startZoom);
   return clampFlowZoom((startZoom * distance) / startDistance);
-}
-
-/**
- * The stacked layout's Fit: the whole column within the height the page shows
- * it in. It never magnifies, and a height that could not be measured leaves
- * the column at 100%.
- */
-export function fitStackedFlowZoom(contentHeight: number, availableHeight: number | null): number {
-  if (!(contentHeight > 0) || availableHeight === null || !(availableHeight > 0)) return 1;
-  return clampFlowZoom(Math.min(1, availableHeight / contentHeight));
 }

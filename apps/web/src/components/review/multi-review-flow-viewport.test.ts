@@ -8,10 +8,8 @@ import {
   canZoomIn,
   canZoomOut,
   clampFlowZoom,
-  fitFlowZoom,
   flowContentOffset,
   flowViewportHeight,
-  fitStackedFlowZoom,
   pinchFlowZoom,
   revealFlowRect,
   steppedFlowZoom,
@@ -58,33 +56,23 @@ describe("zoom bounds", () => {
   });
 });
 
-describe("viewport and fit", () => {
+describe("viewport", () => {
   test("keeps up to eight reviewers whole at 100% and caps taller panels", () => {
     expect(graph(8).viewport.height).toBe(graph(8).layout.height);
     expect(graph(32).viewport.height).toBe(FLOW_VIEWPORT_MAX_HEIGHT);
     expect(graph(1).viewport.height).toBe(graph(1).layout.height);
   });
 
-  test("fits nothing tighter than the content needs and never magnifies", () => {
-    // Wide enough for the PR column as well, so nothing scrolls at 100%.
-    const small = graph(2, 2000);
-    expect(fitFlowZoom(small.content, small.viewport)).toBe(1);
+  test("centres a canvas smaller than the viewport", () => {
     const full = graph(32);
-    const zoom = fitFlowZoom(full.content, full.viewport);
-    expect(zoom).toBeLessThan(0.33);
-    expect(zoom).toBeGreaterThanOrEqual(FLOW_ZOOM_MIN);
-    // The whole 32-reviewer graph lies inside the viewport at that zoom.
+    const zoom = Math.min(
+      full.viewport.width / full.content.width,
+      full.viewport.height / full.content.height,
+    );
     const offset = flowContentOffset(zoom, full.content, full.viewport);
     expect(offset.x + full.content.width * zoom).toBeLessThanOrEqual(full.viewport.width);
     expect(offset.y + full.content.height * zoom).toBeLessThanOrEqual(full.viewport.height);
     expect(offset.x).toBeGreaterThan(0);
-  });
-
-  test("fits the full panel in a narrow pane too", () => {
-    const narrow = graph(32, 960);
-    const zoom = fitFlowZoom(narrow.content, narrow.viewport);
-    expect(narrow.content.width * zoom).toBeLessThanOrEqual(narrow.viewport.width);
-    expect(narrow.content.height * zoom).toBeLessThanOrEqual(narrow.viewport.height);
   });
 });
 
@@ -157,7 +145,7 @@ describe("keeping a node in view", () => {
   });
 });
 
-describe("touch pinch and the stacked Fit", () => {
+describe("touch pinch", () => {
   test("a pinch scales the zoom it started from, within bounds", () => {
     expect(pinchFlowZoom(1, 100, 150)).toBe(1.5);
     expect(pinchFlowZoom(0.5, 200, 100)).toBe(0.25);
@@ -165,14 +153,6 @@ describe("touch pinch and the stacked Fit", () => {
     expect(pinchFlowZoom(1, 100, 1)).toBe(FLOW_ZOOM_MIN);
     // Fingers that started together give no ratio to scale by.
     expect(pinchFlowZoom(0.8, 0, 50)).toBe(0.8);
-  });
-
-  test("Fit sizes the stacked column to the visible height and never magnifies", () => {
-    expect(fitStackedFlowZoom(2_000, 800)).toBeCloseTo(0.4);
-    expect(fitStackedFlowZoom(400, 800)).toBe(1);
-    expect(fitStackedFlowZoom(40_000, 800)).toBe(FLOW_ZOOM_MIN);
-    expect(fitStackedFlowZoom(2_000, null)).toBe(1);
-    expect(fitStackedFlowZoom(0, 800)).toBe(1);
   });
 });
 

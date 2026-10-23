@@ -35,7 +35,7 @@ import {
   type MultiReviewFlowEdgeState,
   type MultiReviewFlowState,
 } from "./multi-review-flow";
-import { fitFlowZoom, flowViewportHeight } from "./multi-review-flow-viewport";
+import { flowViewportHeight } from "./multi-review-flow-viewport";
 
 const STARTED = "2026-08-14T00:00:00.000Z";
 
@@ -1013,23 +1013,6 @@ describe("zoom and pan", () => {
     expect(sizer.style.width).toBe(`${geometry(2).width * 1.25}px`);
   });
 
-  test("fits the 32-reviewer maximum inside the viewport", () => {
-    render(<MultiReviewFlowGraph {...panel(32)} />);
-    const layout = geometry(32);
-    const height = flowViewportHeight(layout.height);
-    expect(viewport().style.height).toBe(`${height}px`);
-    fireEvent.click(screen.getByRole("button", { name: "Fit the whole pipeline" }));
-    const fit = fitFlowZoom(
-      { width: layout.width, height: layout.height },
-      { width: 1440, height },
-    );
-    expect(fit).toBeLessThan(0.33);
-    expect(zoomLevel()).toBe(`${Math.round(fit * 100)}%`);
-    const sizer = screen.getByRole("tablist", { name: "Multi Review pipeline" }).parentElement!;
-    expect(Number.parseFloat(sizer.style.height)).toBeLessThanOrEqual(height);
-    expect(Number.parseFloat(sizer.style.width)).toBeLessThanOrEqual(1440);
-  });
-
   test("keeps a node reached from the keyboard in view", () => {
     render(<SelectableGraph {...panel(32)} />);
     const layout = geometry(32);
@@ -1310,7 +1293,7 @@ describe("zoom and pan", () => {
   test("the stacked layout has the same controls and bounds, with 44 px targets", () => {
     render(<MultiReviewFlowGraph {...panel(4)} layout="stacked" />);
     const controls = screen.getByRole("group", { name: "Zoom" });
-    for (const name of ["Zoom out", "Zoom in", "Fit the whole pipeline"]) {
+    for (const name of ["Zoom out", "Zoom in"]) {
       expect(within(controls).getByRole("button", { name }).className).toContain("size-11");
     }
     expect(screen.getByTestId("multi-review-zoom-level").className).toContain("h-11");
@@ -1328,9 +1311,6 @@ describe("zoom and pan", () => {
     expect(zoomLevel()).toBe("20%");
     expect(zoomOut.disabled).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Zoom 20%, reset to 100%" }));
-    expect(zoomLevel()).toBe("100%");
-    // Unmeasured, Fit leaves the column as it is rather than guessing.
-    fireEvent.click(screen.getByRole("button", { name: "Fit the whole pipeline" }));
     expect(zoomLevel()).toBe("100%");
   });
 
@@ -1536,6 +1516,7 @@ describe("provisional findings", () => {
         ],
       }),
     );
+    fireEvent.click(screen.getByTestId("multi-review-findings-badge"));
     expect(screen.getByTestId("multi-review-findings-count").textContent).toBe(
       "1 · from 1 reviewer · 2 provisional",
     );
@@ -1560,6 +1541,7 @@ describe("provisional findings", () => {
 
   test("a backend without provisional findings shows confirmed reports only, as before", () => {
     renderTab(workflow({ reviewers: [completed(0), running(1)] }));
+    fireEvent.click(screen.getByTestId("multi-review-findings-badge"));
     expect(screen.getByTestId("multi-review-findings-count").textContent).toBe(
       "1 · from 1 reviewer",
     );

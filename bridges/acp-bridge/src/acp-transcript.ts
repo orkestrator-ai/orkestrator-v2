@@ -161,6 +161,27 @@ export function boundedNullableString(value: unknown, maximumBytes: number): str
   return value === null ? undefined : boundedString(value, maximumBytes);
 }
 
+/** Bytes kept of an agent-reported session title. */
+export const MAX_SESSION_TITLE_BYTES = 512;
+
+/**
+ * An agent-reported session title as one bounded line, or `undefined` for a
+ * value that names nothing. Control characters and runs of whitespace become
+ * single spaces: the title lands in a tab label, never as multi-line text.
+ */
+export function sessionTitle(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  // Every UTF-16 unit is at least one byte, so this cut cannot hide an
+  // overflow; it only keeps a hostile megabyte out of the replace below.
+  const line = value
+    .slice(0, MAX_SESSION_TITLE_BYTES * 4)
+    // oxlint-disable-next-line no-control-regex -- folding control characters is the point
+    .replace(/[\s\u0000-\u001f\u007f]+/gu, " ")
+    .trim();
+  const title = truncateUtf8(line, MAX_SESSION_TITLE_BYTES).trim();
+  return title || undefined;
+}
+
 export function boundedToolArguments(value: JsonObject): JsonObject {
   const { _toolName: _ignoredToolName, ...argumentsWithoutHint } = value;
   if (Buffer.byteLength(JSON.stringify(argumentsWithoutHint)) <= MAX_TOOL_ARGUMENT_BYTES) {

@@ -206,7 +206,7 @@ export type ProviderAuthFormat = "opencode" | "pi";
 /**
  * OAuth providers whose stored `refresh` is a long-lived token that refreshing
  * reuses rather than rotates, so a copy that refreshes cannot spend the host's.
- * Checked against OpenCode 1.19.0 and Pi 1.2.0 (2026-10-21):
+ * Checked against OpenCode 1.19.0 and Pi 1.4.0 (2026-10-21):
  *
  * - `github-copilot`: `refresh` is the GitHub OAuth token. OpenCode sends it
  *   directly (`access` is the same token, `expires` 0); Pi exchanges it for a

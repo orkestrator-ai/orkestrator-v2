@@ -143,3 +143,20 @@ The unchanged owning file passed alone (48 pass, 2.3 s, after failing twice more
 ## Cross-service read policy validation recurrence — 2026-10-23
 
 `mise run test` with the 0054 change (no desktop source changes) timed out at 5022.15 ms with `git rev-parse exited -1` between tests, at host load about 43. The owning file failed alone once more (5022.78 ms, `git rev-parse` exited 128: "Unable to read current working directory") and then passed alone in 5.6 s (`coordinator-live-alone-2`). Details in [0696](../aggregate-validation-runs/0696-cross-service-reads-validation.md). No assertion, timeout or skip changed.
+
+## Bridge review-fix validation recurrence — 2026-10-23
+
+- **Command:** `mise run test`, Bun 1.4.3 on macOS arm64. Workspace/root/
+  bridges/protocol reserved 4/1/2/1 workers; three groups initially queued
+  behind other shared-host work.
+- **Failure:** the fixture digest case exceeded its 5000 ms deadline at
+  5065.66 ms, with a racing `git rev-parse exited -1` between-tests error.
+  This was the aggregate's only failed case. All other workspace packages,
+  root/support, bridges and the protocol lockfile check passed; the aggregate
+  exited 1 after 444.3 seconds.
+- **Complete unchanged owner:** `mise run test:logged -- --name coordinator-live-isolated -- bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./scripts/dev/coordinator-live.test.ts --parallel=1 --only-failures`
+  passed, exit 0 in 1.4 seconds logged.
+- **Evidence:** `orkestrator-test-run.g8prVr/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+  below the host temporary directory.
+- **Assessment:** confirmed recurrence of the existing intermittent failure;
+  no desktop implementation, timeout, assertion or skip changed.

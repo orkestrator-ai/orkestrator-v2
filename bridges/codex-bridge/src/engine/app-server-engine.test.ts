@@ -1,197 +1,25 @@
+import {
+  BUILD,
+  PLAN,
+  HOSTED_NETWORK_LOCKED,
+  harness,
+  thread,
+  settle,
+} from "./app-server-engine-test-harness.js";
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
 import { coordinatorCapabilityPolicy } from "@orkestrator/protocol/coordinator-web-research";
 import { afterEach, describe, test, expect, spyOn } from "bun:test";
-import { EventEmitter } from "node:events";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  AppServerEngine,
-  CODEX_SIGN_IN_EXPIRED_NOTICE,
-  ROOT_THREAD_SOURCE_KINDS,
-} from "./app-server-engine.js";
-import type { AppServerSupervisorOptions } from "../app-server/process-supervisor.js";
-import { FakeReadable, FakeWritable } from "../app-server/testing/fake-app-server.js";
-import type { EngineEvent, EngineTurnConfig } from "./types.js";
+import { CODEX_SIGN_IN_EXPIRED_NOTICE, ROOT_THREAD_SOURCE_KINDS } from "./app-server-engine.js";
+import type { EngineTurnConfig } from "./types.js";
 import {
   AUTH_SECRET_CANARIES,
   captureOutput,
   expectNothingSecretLogged,
 } from "../../../../tests/helpers/auth-secret-canaries.js";
-
-const BUILD: EngineTurnConfig = { mode: "build", model: "gpt-5.6-sol", cwd: "/tmp/workspace" };
-const PLAN: EngineTurnConfig = { mode: "plan", cwd: "/tmp/workspace" };
-
-/** What app-server's `config/read` reports once `-c web_search="disabled"` is applied. */
-const HOSTED_NETWORK_LOCKED = () => ({
-  config: { web_search: "disabled", features: { standalone_web_search: false } },
-  origins: {},
-  layers: null,
-});
-
-/**
- * A scripted app-server child. Handlers may be replaced per test, and
- * notifications can be injected to model the real interleaving of a response with
- * the events it triggers.
- */
-class ScriptedChild extends EventEmitter {
-  readonly stdin = new FakeWritable();
-  readonly stdout = new FakeReadable();
-  readonly stderr = { setEncoding() {}, on() {} };
-  exitCode: number | null = null;
-  signalCode: string | null = null;
-  readonly requests: Array<{ method: string; params: Record<string, unknown> }> = [];
-
-  constructor(
-    readonly pid: number,
-    private readonly handlers: Record<string, (params: Record<string, unknown>) => unknown>,
-  ) {
-    super();
-    const write = this.stdin.write.bind(this.stdin);
-    this.stdin.write = (chunk: string, callback?: (error?: Error | null) => void) => {
-      const result = write(chunk, callback);
-      queueMicrotask(() => this.answer(chunk));
-      return result;
-    };
-  }
-
-  private answer(chunk: string): void {
-    let message: { id?: unknown; method?: unknown; params?: unknown };
-    try {
-      message = JSON.parse(chunk.trim());
-    } catch {
-      return;
-    }
-    const method = String(message.method ?? "");
-    if (!method) return;
-    this.requests.push({ method, params: (message.params ?? {}) as Record<string, unknown> });
-    if (message.id === undefined) return;
-
-    const handler = this.handlers[method];
-    if (!handler) {
-      this.stdout.pushMessage({
-        jsonrpc: "2.0",
-        id: message.id,
-        error: { code: -32601, message: `unknown ${method}` },
-      });
-      return;
-    }
-    const respondWithError = (error: unknown) => {
-      this.stdout.pushMessage({
-        jsonrpc: "2.0",
-        id: message.id,
-        error: {
-          code: (error as { rpcCode?: number }).rpcCode ?? -32603,
-          message: error instanceof Error ? error.message : String(error),
-        },
-      });
-    };
-    try {
-      const result = handler((message.params ?? {}) as Record<string, unknown>);
-      if (result instanceof Promise) {
-        void result.then(
-          (value) => this.stdout.pushMessage({ jsonrpc: "2.0", id: message.id, result: value }),
-          respondWithError,
-        );
-      } else {
-        this.stdout.pushMessage({ jsonrpc: "2.0", id: message.id, result });
-      }
-    } catch (error) {
-      respondWithError(error);
-    }
-  }
-
-  notify(method: string, params: unknown): void {
-    this.stdout.pushMessage({ jsonrpc: "2.0", method, params });
-  }
-
-  kill(signal: string): boolean {
-    this.exit(null, signal);
-    return true;
-  }
-
-  exit(code: number | null, signal: string | null = null): void {
-    if (this.exitCode !== null || this.signalCode !== null) return;
-    this.exitCode = code;
-    this.signalCode = signal;
-    this.stdout.end();
-    this.emit("exit", code, signal);
-  }
-}
-
-const INITIALIZE = () => ({
-  userAgent: "orkestrator/0.145.0 (test)",
-  codexHome: "/tmp/codex-home",
-  platformFamily: "unix",
-  platformOs: "macos",
-});
-
-function thread(id: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    id,
-    sessionId: id,
-    cwd: "/tmp/workspace",
-    preview: "hello",
-    source: "appServer",
-    parentThreadId: null,
-    createdAt: 1_700_000_000,
-    updatedAt: 1_700_000_100,
-    name: null,
-    turns: [],
-    ...extra,
-  };
-}
-
-interface Harness {
-  engine: AppServerEngine;
-  children: ScriptedChild[];
-  events: EngineEvent[];
-  child: () => ScriptedChild;
-}
-
-function harness(
-  handlers: Record<string, (params: Record<string, unknown>) => unknown> = {},
-  engineOptions: Partial<ConstructorParameters<typeof AppServerEngine>[0]> = {},
-): Harness {
-  const children: ScriptedChild[] = [];
-  const merged = {
-    initialize: INITIALIZE,
-    "skills/list": () => ({ data: [{ errors: [], skills: [] }] }),
-    ...handlers,
-  };
-  let index = 0;
-
-  const engine = new AppServerEngine({
-    codexPath: "/fake/codex",
-    cwd: "/tmp/workspace",
-    codexHome: "/tmp/codex-home",
-    clientInfo: { name: "orkestrator", title: "Orkestrator", version: "2.4.9" },
-    interruptTimeoutMs: 30,
-    // The engine always owns its own supervisor wiring; only the process spawn
-    // and timings are overridden here.
-    supervisorOverrides: {
-      pidFileEnabled: false,
-      shutdownGraceMs: 10,
-      backoffScheduleMs: [1],
-      refreshEnvironment: async () => undefined,
-      spawnProcess: (() => {
-        index += 1;
-        const child = new ScriptedChild(1000 + index, merged);
-        children.push(child);
-        return child;
-      }) as unknown as AppServerSupervisorOptions["spawnProcess"],
-    },
-    ...engineOptions,
-  });
-
-  const events: EngineEvent[] = [];
-  engine.subscribe((event) => events.push(event));
-
-  return { engine, children, events, child: () => children.at(-1)! };
-}
-
-const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 describe("device login", () => {
   const deviceLogin = {
@@ -368,6 +196,29 @@ describe("thread lifecycle", () => {
     await h.engine.start();
 
     expect((await h.engine.resumeThread("t1", { config: BUILD })).model).toBeUndefined();
+  });
+
+  test("a resume names the session's model, or adopts the one the thread kept", async () => {
+    // Codex 0.164 resumes a thread on its own saved model, not the global
+    // default. A configured model is still stated on every resume; an unset
+    // one is left to the thread, and the model app-server reports is bound so
+    // the transcript labels what the next turn will run.
+    const h = harness({
+      "thread/resume": (params) => ({
+        thread: thread("t1"),
+        model: (params as { model?: string }).model ?? "gpt-6-astra",
+      }),
+    });
+    await h.engine.start();
+
+    const named = await h.engine.resumeThread("t1", { config: BUILD });
+    const unset = await h.engine.resumeThread("t1", { config: PLAN });
+
+    const resumes = h.child().requests.filter((r) => r.method === "thread/resume");
+    expect(resumes[0]!.params).toMatchObject({ threadId: "t1", model: "gpt-5.6-sol" });
+    expect(resumes[1]!.params).not.toHaveProperty("model");
+    expect(named.model).toBe("gpt-5.6-sol");
+    expect(unset.model).toBe("gpt-6-astra");
   });
 
   test("thread/start passes explicit policy and clears the service tier", async () => {
@@ -772,6 +623,57 @@ describe("thread lifecycle", () => {
     expect(turn.config).toBeUndefined();
   });
 
+  test("a search-denied resume or fork is refused while the history still declares tools", async () => {
+    const denied: EngineTurnConfig = {
+      ...BUILD,
+      sandbox: "read-only",
+      networkAccessEnabled: false,
+      policy: {
+        id: "pipeline",
+        sandbox: "provider",
+        approvals: "auto-approve",
+        projectResources: true,
+        capabilityPolicy: { deny: ["network"] },
+        networkAccess: "restricted",
+      },
+    };
+    const checked: string[] = [];
+    for (const verdict of ["declares", "unknown"] as const) {
+      const h = harness(
+        {
+          "thread/resume": () => ({ thread: thread("t1") }),
+          "thread/fork": () => ({ thread: thread("t2") }),
+          "thread/unsubscribe": () => ({ status: "unsubscribed" }),
+        },
+        {
+          toolHistoryVerdict: async (threadId) => {
+            checked.push(threadId);
+            return verdict;
+          },
+        },
+      );
+      await h.engine.start();
+      await expect(h.engine.resumeThread("t1", { config: denied })).rejects.toThrow(
+        "a turn with web search off was refused",
+      );
+      // The resumed thread is let go, so no turn can reach it.
+      const methods = h.child().requests.map((request) => request.method);
+      expect(methods.at(-1)).toBe("thread/unsubscribe");
+      // A fork is refused before it exists, and its source is left loaded.
+      await expect(h.engine.forkThread("t1", denied)).rejects.toThrow("web search off");
+      expect(h.child().requests.some((request) => request.method === "thread/fork")).toBe(false);
+      expect(
+        h
+          .child()
+          .requests.map((request) => request.method)
+          .at(-1),
+      ).toBe(methods.at(-1));
+      // Search is allowed on a build turn, so its history is not consulted.
+      await h.engine.resumeThread("t1", { config: BUILD });
+    }
+    expect(checked).toEqual(["t1", "t1", "t1", "t1"]);
+  });
+
   test("a network-denied policy turns hosted web search off on the thread", async () => {
     const h = harness({ "thread/start": () => ({ thread: thread("t1") }) });
     const config: EngineTurnConfig = {
@@ -799,8 +701,11 @@ describe("thread lifecycle", () => {
       // Project resources are off, so the checkout's own `.codex` stays out.
       projects: { "/tmp/workspace": { trust_level: "untrusted" } },
     });
-    // Not a coordinator process, so there is no process setting to read back.
-    expect(h.child().requests.some((request) => request.method === "config/read")).toBe(false);
+    // Not a coordinator process: the search mode is the thread's own, so only
+    // the process's tool-history setting is read back (codex 0.164).
+    expect(h.child().requests.filter((request) => request.method === "config/read")).toHaveLength(
+      1,
+    );
   });
 
   test("keeps hosted web search off alongside a scoped MCP connection", async () => {
@@ -884,6 +789,7 @@ describe("thread lifecycle", () => {
 
     // An app-server that cannot answer at all is refused the same way.
     const unanswered = harness({
+      "config/read": undefined as unknown as () => unknown,
       "thread/start": () => ({
         thread: thread("t1"),
         activePermissionProfile: { id: "coordinator-conversation-1" },
@@ -912,7 +818,11 @@ describe("thread lifecycle", () => {
     };
     const started = (webSearch: string) =>
       harness({
-        "config/read": () => ({ config: { web_search: webSearch }, origins: {}, layers: null }),
+        "config/read": () => ({
+          config: { web_search: webSearch, features: { incremental_tools: false } },
+          origins: {},
+          layers: null,
+        }),
         "thread/start": () => ({
           thread: thread("t1"),
           activePermissionProfile: { id: "coordinator-conversation-1" },

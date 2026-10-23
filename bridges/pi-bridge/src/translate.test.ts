@@ -1000,6 +1000,86 @@ describe("retries that settle", () => {
     expect(retries.map((part) => part.toolState)).toEqual(["success", "failure"]);
   });
 
+  test("a compaction's summary retries are one retry row, settled by the compaction", () => {
+    const state = newSessionState();
+    applySessionEvent(state, { type: "compaction_start", reason: "threshold" });
+    for (const [attempt, errorMessage] of [
+      [1, "overloaded"],
+      [2, "still overloaded"],
+    ] as const) {
+      applySessionEvent(state, {
+        type: "summarization_retry_scheduled",
+        attempt,
+        maxAttempts: 3,
+        delayMs: 0,
+        errorMessage,
+      });
+      applySessionEvent(state, {
+        type: "summarization_retry_attempt_start",
+        source: "compaction",
+        reason: "threshold",
+      });
+    }
+    applySessionEvent(state, { type: "summarization_retry_finished" });
+
+    const retries = () =>
+      state.messages.flatMap((message) => message.parts.filter((part) => part.type === "retry"));
+    // `finished` does not say whether the last attempt worked.
+    expect(retries()).toMatchObject([
+      { toolState: "pending", retryAttempt: 2, content: "still overloaded" },
+    ]);
+
+    applySessionEvent(state, {
+      type: "compaction_end",
+      reason: "threshold",
+      result: { summary: "s", tokensBefore: 10 },
+      aborted: false,
+      willRetry: false,
+    });
+    expect(retries()).toMatchObject([{ toolState: "success", retryAttempt: 2 }]);
+    expect(state.health.drift()?.unknownKinds ?? []).toEqual([]);
+  });
+
+  test("a compaction that fails after retrying settles its retry row as failed", () => {
+    const state = newSessionState();
+    applySessionEvent(state, { type: "compaction_start", reason: "manual" });
+    applySessionEvent(state, {
+      type: "summarization_retry_scheduled",
+      attempt: 1,
+      maxAttempts: 1,
+      delayMs: 0,
+      errorMessage: "overloaded",
+    });
+    applySessionEvent(state, {
+      type: "compaction_end",
+      reason: "manual",
+      result: undefined,
+      aborted: false,
+      willRetry: false,
+      errorMessage: "Summarization failed: overloaded",
+    });
+    expect(
+      state.messages.flatMap((message) => message.parts.filter((part) => part.type === "retry")),
+    ).toMatchObject([{ toolState: "failure", content: "Summarization failed: overloaded" }]);
+  });
+
+  test("a branch summary's retries are left to the navigate route", () => {
+    const state = newSessionState();
+    applySessionEvent(state, {
+      type: "summarization_retry_scheduled",
+      attempt: 1,
+      maxAttempts: 3,
+      delayMs: 0,
+      errorMessage: "overloaded",
+    });
+    applySessionEvent(state, {
+      type: "summarization_retry_attempt_start",
+      source: "branchSummary",
+    });
+    applySessionEvent(state, { type: "summarization_retry_finished" });
+    expect(state.messages).toHaveLength(0);
+  });
+
   test("an end with no open retry is a no-op, not a throw", () => {
     const state = newSessionState();
     state.status = "running";

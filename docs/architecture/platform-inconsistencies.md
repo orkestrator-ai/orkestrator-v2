@@ -110,7 +110,8 @@ verified. **partial** = present but weaker, different, or vendor-dependent.
 | Local settings / prompt suggestions | full | **none** | none | none | none | none |
 | Compact | full | **partial** (`/compact` typed) | full | none | none | full |
 | Rewind files | full | **none** | none | none | none | none |
-| Undo / redo / share | none | none | none | none | none | **full** |
+| Undo / redo | none | none | none | none | none | **full** |
+| Share | none | none | none | none | none | none (discontinued upstream in OpenCode 1.19.1) |
 | Steer | **full** | none | **full** | **full** | none | none |
 | Native “Review changes” | none | none | **full** | none | none | none |
 | Questions | full | full (own cards) | partial | partial | partial | full |
@@ -302,10 +303,10 @@ child that already exited.
   **Fixed:** `projectionComposer` ands the table into `fastModeAvailable`, which
   closes the latent leak at the surface the compose bar actually reads. The
   unassigned composer ands it into the catalogue's `supportsSpeed` too.
-- Agent Info still hardcodes `provider === "claude"|"opencode"|"codex"` for
-  rewind / undo / share / review / steer instead of `capabilities.actions.*`.
-  Compact and fork *do* read the capability flag, with a provider-string
-  fallback if projection is missing.
+- Agent Info still hardcodes `provider === "claude"|"codex"` for
+  rewind / review / steer instead of `capabilities.actions.*`. Fork, compact,
+  undo, redo and share read the capability flag, falling back to the shared
+  capability table (not a provider string) before projection arrives.
 - ~~`nativeComposerControls()` never reads the capability table.~~ **Fixed:** it
   now takes capabilities as a required argument and skips speed / mode /
   execution-profile / local-settings / prompt-suggestions when the flag is
@@ -336,7 +337,7 @@ Each native platform grew unique Agent Info verbs and never back-ported them:
 | --- | --- |
 | Claude Native | rewind files, background tasks, local settings, prompt suggestions |
 | Codex | steer (`turn/steer`), native review (`review/start`), `CodexPlanModeCard`, hermetic titles |
-| OpenCode | undo (`session.revert`), redo (`unrevert`), share / unshare |
+| OpenCode | undo (`session.revert`), redo (`unrevert`); share / unshare until upstream discontinued sharing in 1.19.1 |
 | Cursor | steer (`Run.steer`), rewind messages |
 | Grok | none (`actions: {}`) |
 | Claude Tmux | none of those APIs; compact/fast/model are TUI keystrokes |
@@ -514,9 +515,9 @@ cheap to fix relative to vendor protocol work.
    control. Table `true` is no longer treated as “always show” anywhere: every
    speed path now requires the table *and* a live `fastModeAvailable` /
    `supportsSpeed`.
-5. Gate Agent Info rewind / undo / share / review / steer / localSettings on
+5. Gate Agent Info rewind / review / steer / localSettings on
    `capabilities.actions` / `composer.*`, and drop the `?? provider === …`
-   fallbacks.
+   fallbacks. Fork, compact, undo, redo and share are done.
 6. Stop generating `composerControls` the renderer ignores, or actually render
    that array in `NativeComposeBar` so table → generator → UI is one path.
 7. Gate `useSlashCommandMenu` on `capabilities.slashCommands` (plus injected

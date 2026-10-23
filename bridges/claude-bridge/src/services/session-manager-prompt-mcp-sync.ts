@@ -1,11 +1,12 @@
 import type { HookCallback, HookJSONOutput, McpServerStatus } from "@anthropic-ai/claude-agent-sdk";
 import type { ClaudeQueryControl } from "../types/index.js";
 import type { SdkMcpServersConfig } from "./mcp-config.js";
+import { claudeMcpToolPrefix } from "./mcp-tool-prefix.js";
 import { sessionOperationError } from "./session-manager-core.js";
 
 // Keeping a running CLI's MCP servers in step with the saved configuration.
 //
-// Pinned against CLI 2.1.296, and proved on the real CLI by
+// Pinned against CLI 2.1.309, and proved on the real CLI by
 // `session-manager-prompt-mcp-sync.live.test.ts`:
 //
 // - `setMcpServers` replaces only the servers an earlier `setMcpServers` call
@@ -169,11 +170,6 @@ export async function syncClaudeRuntimeMcp(
 export function reportedStaleServers(mcp: ClaudeRuntimeMcp): string[] | undefined {
   if (!mcp.stale.size) return undefined;
   return Array.from(mcp.stale).sort().slice(0, MAX_REPORTED_STALE_SERVERS);
-}
-
-/** The prefix the CLI gives a server's tools: `mcp__<name>__<tool>`. */
-export function claudeMcpToolPrefix(name: string): string {
-  return `mcp__${name.replace(/[^a-zA-Z0-9_-]/g, "_")}__`;
 }
 
 /**

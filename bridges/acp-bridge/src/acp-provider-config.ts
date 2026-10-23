@@ -43,17 +43,15 @@ const GROK_PROVIDER: AcpProviderConfig = {
  * Prompt content a provider is known to accept although its `initialize`
  * answer does not declare it.
  *
- * Grok answers `promptCapabilities.image: false` yet reads a standard inline
- * `image` block: against 1.0.52 a 64px red PNG sent only as an image block
- * (no path in the text, no tool call) was named "Red". The declaration is
- * conservative rather than accurate, and refusing on it would break the image
- * attachments the platform's capability row offers. Keyed by provider id, not
- * by launcher record, so the backend's serialized config and the built-in one
- * agree. Remove an entry once the agent declares the capability itself.
+ * Empty today. Grok 1.0.52 answered `promptCapabilities.image: false` yet read
+ * a standard inline `image` block, so it was credited here; 1.0.67 declares
+ * `image: true` itself, and its entry was removed. Keyed by provider id, not by
+ * launcher record, so the backend's serialized config and the built-in one
+ * agree. Add an entry only with evidence that the agent reads the content
+ * (an image sent only as a block, no path in the text, described correctly),
+ * and remove it once the agent declares the capability itself.
  */
-const UNDECLARED_PROMPT_CAPABILITIES: Readonly<Record<string, { image?: true }>> = {
-  grok: { image: true },
-};
+const UNDECLARED_PROMPT_CAPABILITIES: Readonly<Record<string, { image?: true }>> = {};
 
 export function undeclaredPromptCapabilities(providerId: string): { image?: true } {
   return Object.hasOwn(UNDECLARED_PROMPT_CAPABILITIES, providerId)
@@ -141,6 +139,25 @@ const PROJECT_TRUST: Readonly<
   },
 };
 
+/**
+ * Environment every child of a provider gets, whatever the session's policy.
+ *
+ * Grok 1.0.67 lets a git worktree use its main checkout's saved "always allow"
+ * answers by default (`[features] worktree_inherits_main_approvals`). Every
+ * Orkestrator environment is a worktree of a checkout the user may also run
+ * Grok in, so a TUI grant there would let a tool run without the
+ * `session/request_permission` the bridge answers from the execution policy.
+ * `GROK_WORKTREE_INHERITS_MAIN_APPROVALS=false` turns the inheritance off for
+ * this process only; the main checkout's "never allow" answers still apply.
+ *
+ * Applied after the launcher record's own `env`, and keyed by provider id for
+ * the same reason as `NETWORK_DENIED_ARGUMENTS`: the backend's serialized
+ * record carries `env: {}`, and the policy must not depend on it.
+ */
+const POLICY_ENV: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  grok: { GROK_WORKTREE_INHERITS_MAIN_APPROVALS: "false" },
+};
+
 function projectTrust(config: AcpProviderConfig, trustProject: boolean | undefined) {
   return trustProject && Object.hasOwn(PROJECT_TRUST, config.id)
     ? PROJECT_TRUST[config.id]!
@@ -153,7 +170,12 @@ export function providerEnv(
   options: { trustProject?: boolean },
   base: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
-  return { ...base, ...config.env, ...projectTrust(config, options.trustProject)?.env };
+  return {
+    ...base,
+    ...config.env,
+    ...(Object.hasOwn(POLICY_ENV, config.id) ? POLICY_ENV[config.id] : {}),
+    ...projectTrust(config, options.trustProject)?.env,
+  };
 }
 
 export function providerArgv(

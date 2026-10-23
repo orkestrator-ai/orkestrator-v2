@@ -82,7 +82,7 @@ export function codexNetworkDeniedConfig(
  * once the user trusts the project, or its main checkout, in Codex. Pinning
  * the thread's cwd untrusted drops that layer for this thread only, and stops
  * a writable thread from marking the project trusted in the user's
- * `config.toml`. Verified against 0.162.1 (`live-project-trust.test.ts`):
+ * `config.toml`. Verified against 0.164.0 (`live-project-trust.test.ts`):
  *
  * - The pin must be a nested table. A dotted `projects."<path>".trust_level`
  *   key, which works as a process `-c` override, is ignored in thread config.
@@ -185,8 +185,34 @@ export function codexReadOnlyTurnPolicy(
 }
 
 /**
+ * Whether an effective configuration (`config/read`) keeps tool declarations
+ * out of thread history.
+ *
+ * With `features.incremental_tools` (stable and on by default since codex
+ * 0.164.0) each turn's tools are appended to the history as an
+ * `additional_tools` record, and a resumed thread replays them: a turn that
+ * denies hosted search would still carry an earlier turn's `web__run`. Off,
+ * the request declares only the current turn's tools and writes no record
+ * (`live-network-lock.test.ts`). Thread configuration cannot turn it off, so
+ * the process override must hold; only an explicit `false` passes.
+ */
+export function codexToolHistoryGaps(config: unknown): string[] {
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    return ["config/read returned no configuration"];
+  }
+  const features = (config as Record<string, unknown>).features;
+  const value =
+    features && typeof features === "object" && !Array.isArray(features)
+      ? (features as Record<string, unknown>).incremental_tools
+      : undefined;
+  return value === false
+    ? []
+    : [`features.incremental_tools is ${JSON.stringify(value ?? null)}, not false`];
+}
+
+/**
  * Whether an effective configuration (`config/read`) runs search in the
- * expected mode.
+ * expected mode, with tool declarations kept out of history.
  *
  * Returns what is wrong, so a refusal can say which switch failed. An empty
  * list is the only passing answer; a missing or unparseable `config` fails.
@@ -211,6 +237,7 @@ export function codexHostedNetworkLockGaps(
   ) {
     gaps.push("features.standalone_web_search is on");
   }
+  gaps.push(...codexToolHistoryGaps(config));
   return gaps;
 }
 
@@ -277,6 +304,9 @@ export function codexAppServerConfigOverrides(
     // Supplying both CLI overrides makes the Orkestrator setting authoritative
     // regardless of which multi-agent implementation Codex selects.
     "features.multi_agent_v2.max_concurrent_threads_per_session": String(childLimit + 1),
+    // Off for every bridge, since any thread can later run a turn that denies
+    // hosted search. See `codexToolHistoryGaps`.
+    "features.incremental_tools": "false",
   };
   const rawUrl = env[ORKESTRATOR_AGENT_MCP_URL_ENV]?.trim();
   const token = env[ORKESTRATOR_AGENT_MCP_TOKEN_ENV]?.trim();

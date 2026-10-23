@@ -182,6 +182,11 @@ export interface ImageItem {
   text: string;
   path?: string;
   source: "generated" | "viewed";
+  /**
+   * Local files a generation read as its inputs (codex 0.164+), in order.
+   * Paths only, like `path`; never the bytes or their digests.
+   */
+  input_paths?: string[];
 }
 
 /** A context compaction boundary reported as a thread item. */

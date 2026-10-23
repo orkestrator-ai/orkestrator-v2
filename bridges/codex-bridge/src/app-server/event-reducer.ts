@@ -138,6 +138,10 @@ const IGNORED_METHODS = new Set([
   // protocol has no client method that asks for one, so the bridge has no
   // surface it could belong to.
   "thread/prediction/updated",
+  // Codex's per-thread unread marker (codex 0.164). Orkestrator keeps its own
+  // read state for a tab, so adopting Codex's would give the user two unread
+  // markers that can disagree.
+  "thread/readState/changed",
   // The review-mode counterpart of the approval flow. Code review is an
   // Orkestrator-owned pipeline (see the plan index), so the strict-review
   // demand has no surface here to raise; the approval itself still arrives as

@@ -23,6 +23,7 @@ import {
   normalizeOpenCodeModelProviders,
   openCodeModelDisplayLabel,
   openCodeModelProviderId,
+  reasoningOptionLabel,
   synthesizedOpenCodeAgentModel,
 } from "@orkestrator/protocol/native-agent";
 import type {
@@ -86,13 +87,8 @@ export function firstUseCatalogFetchTimeoutMs(deadline: number, now = Date.now()
   return Math.max(1_000, deadline - now);
 }
 
-function effortLabel(effort: string): string {
-  if (effort === "xhigh") return "Extra high";
-  return effort.replace(/[-_]+/g, " ").replace(/^\w/, (letter) => letter.toUpperCase());
-}
-
 function reasoningOptions(ids: readonly string[]): AgentReasoningOption[] {
-  return ids.map((effort) => ({ id: effort, label: effortLabel(effort) }));
+  return ids.map((effort) => ({ id: effort, label: reasoningOptionLabel(effort) }));
 }
 
 function normalizedClaudeModels(models: readonly ClaudeModelCatalogEntry[]): AgentModel[] {

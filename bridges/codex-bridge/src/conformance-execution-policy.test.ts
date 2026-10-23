@@ -103,7 +103,10 @@ runExecutionPolicyConformance({
       const h = await harness({
         // Coordinators must read back the hosted-network lock before dispatch.
         "config/read": () => ({
-          config: { web_search: "disabled", features: { standalone_web_search: false } },
+          config: {
+            web_search: "disabled",
+            features: { standalone_web_search: false, incremental_tools: false },
+          },
           origins: {},
           layers: null,
         }),

@@ -10,8 +10,12 @@ the provider's cumulative token and charged-cost totals into
 The provider's bounded `runs` list becomes the generic `turns` breakdown. Each
 entry retains both undiscounted (`rawCostUsd`) and charged (`costUsd`) cost;
 terminal run metadata adds the request id, model and duration when Cursor
-reports them. Account totals use the generic `account` windows consumed by the
-shared usage panel.
+reports them, and the shared `pricingTier` (`premium` when the run's resolved
+selection carried `maxMode`, else `standard`). Before a send, the composer's
+`selectionPricing` marks a selection the SDK would run in Max mode: every
+catalogue variant consistent with the chosen parameters is `isMaxMode`.
+Account totals use the generic `account` windows consumed by the shared usage
+panel.
 
 Opening the usage panel asks the bridge's `GET /session/:id/usage` route for a
 fresh SDK snapshot. A failed or unavailable detailed read is supplementary and

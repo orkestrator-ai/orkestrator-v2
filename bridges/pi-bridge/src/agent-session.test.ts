@@ -365,6 +365,97 @@ describe("session ownership", () => {
     });
   });
 
+  test("rebuilds a resumed tool's nested calls under it, as the live turn showed them", async () => {
+    const sessionFile = join(sessionDirectory, "nested-history.jsonl");
+    const timestamp = "2026-10-23T00:00:00.000Z";
+    const usage = {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    };
+    const entries = [
+      { type: "session", version: 3, id: "nested-history", timestamp, cwd: workingDirectory },
+      {
+        type: "message",
+        id: "assistant-entry",
+        parentId: null,
+        timestamp,
+        message: {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "code-1", name: "codemode", arguments: {} }],
+          api: "openai-completions",
+          provider: "test",
+          model: "test",
+          usage,
+          stopReason: "toolUse",
+          timestamp: Date.parse(timestamp),
+        },
+      },
+      {
+        type: "message",
+        id: "tool-result-entry",
+        parentId: "assistant-entry",
+        timestamp,
+        message: {
+          role: "toolResult",
+          toolCallId: "code-1",
+          toolName: "codemode",
+          content: [{ type: "text", text: "done" }],
+          isError: false,
+          durationMs: 40,
+          nestedCalls: {
+            complete: false,
+            calls: [
+              {
+                id: "code-1/1",
+                name: "read",
+                arguments: { path: "a.ts" },
+                status: "ok",
+                durationMs: 5,
+              },
+              {
+                id: "code-1/1/1",
+                name: "bash",
+                argumentsBytes: 9000,
+                status: "error",
+                error: "no",
+              },
+              { id: "code-1/2", name: "bash", arguments: { command: "ls" }, status: "unfinished" },
+            ],
+          },
+          timestamp: Date.parse(timestamp),
+        },
+      },
+    ];
+    await writeFile(sessionFile, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+
+    const resumed = await resumeSession(sessionFile, undefined);
+    expect(resumed.messages).toHaveLength(1);
+    const tools = resumed.messages[0]!.parts.filter((part) => part.type === "tool-invocation");
+    expect(tools).toMatchObject([
+      { toolUseId: "code-1", toolState: "success", toolOutput: "done", toolDurationMs: 40 },
+      {
+        toolUseId: "code-1/1",
+        parentTaskUseId: "code-1",
+        toolName: "read",
+        toolArgs: { path: "a.ts" },
+        toolState: "success",
+        toolDurationMs: 5,
+      },
+      {
+        toolUseId: "code-1/1/1",
+        parentTaskUseId: "code-1/1",
+        toolState: "failure",
+        toolError: "no",
+      },
+      { toolUseId: "code-1/2", parentTaskUseId: "code-1", toolState: "failure" },
+    ]);
+    expect(tools[2]!.toolArgs).toBeUndefined();
+  });
+
   test("puts journaled shell-command changes back on a resumed transcript", async () => {
     // Pi's session file carries no measurement, so a resume only has the
     // badge if the journal beside the bridge state supplies it by call id.

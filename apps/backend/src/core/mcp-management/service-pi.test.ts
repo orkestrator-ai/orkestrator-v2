@@ -507,6 +507,29 @@ describe("Pi adapter", () => {
     expect(entry(after, "pi:user", "work").preservedFields).toEqual([]);
   });
 
+  test("Pi: a file saved with a UTF-8 BOM is read and edited, and saved the way Pi saves it", async () => {
+    // Pi 1.4 strips one leading BOM when it reads `mcp.json`; its own editor
+    // writes the file back without one, and so does this one.
+    fixture.write(
+      "home/.pi/agent/mcp.json",
+      `﻿${JSON.stringify({ mcpServers: { a: { command: "a" } } })}`,
+    );
+    const targetId = await targetIdFor(fixture, "pi", "backend");
+    const snapshot = await fixture.service.snapshot({ targetId });
+    expect(entry(snapshot, "pi:user", "a").status).toBe("effective");
+    await fixture.service.mutate(
+      mutation(targetId, {
+        kind: "set-enabled",
+        entryId: entry(snapshot, "pi:user", "a").entryId,
+        expectedRevision: revision(snapshot, "pi:user")!,
+        enabled: false,
+      }),
+    );
+    const text = fixture.read("home/.pi/agent/mcp.json");
+    expect(text.startsWith("{")).toBe(true);
+    expect(JSON.parse(text).mcpServers).toEqual({ a: { command: "a", enabled: false } });
+  });
+
   test("Pi: a new file uses the wrapped form and provider limits apply", async () => {
     const targetId = await targetIdFor(fixture, "pi", "backend");
     await expect(

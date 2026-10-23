@@ -56,9 +56,12 @@ describe.if(existsSync(distEntry))("the built bundle", () => {
     expect(existsSync(path.join(vendored, "@cursor", "sdk"))).toBe(true);
     // The flat build the `bun` condition selects imports these by bare
     // specifier, so an absent one fails at the first transport call.
+    // `zod` is a peer dependency of the SDK, so it is only here because the
+    // vendor walk follows required peers too.
     for (const dependency of [
       path.join("@bufbuild", "protobuf"),
       path.join("@connectrpc", "connect"),
+      "zod",
     ]) {
       expect(existsSync(path.join(vendored, dependency))).toBe(true);
     }

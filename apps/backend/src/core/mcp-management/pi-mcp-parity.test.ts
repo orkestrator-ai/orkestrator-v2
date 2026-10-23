@@ -6,6 +6,7 @@ import type { McpManagementSnapshot } from "@orkestrator/protocol/mcp-management
 import { resolvePiMcpServers } from "../../../../../bridges/pi-bridge/src/mcp-config.js";
 import {
   PI_MCP_CONFIG_FIXTURES,
+  mcpConfigFileText,
   type PiMcpConfigFixture,
 } from "../../../../../bridges/pi-bridge/src/testing/mcp-config-fixtures.js";
 import { piSanitizedName } from "./codecs.js";
@@ -44,12 +45,12 @@ async function bridgeStarts(
   if (config.user !== undefined)
     fixture.write(
       host ? "home/.pi/agent/mcp.json" : "bridge/agent/mcp.json",
-      JSON.stringify(config.user),
+      mcpConfigFileText(config.user),
     );
   if (config.project !== undefined)
     fixture.write(
       host ? "worktree/.pi/mcp.json" : "bridge/project/.pi/mcp.json",
-      JSON.stringify(config.project),
+      mcpConfigFileText(config.project),
     );
   const servers = await resolvePiMcpServers({
     agentDir,
@@ -105,9 +106,9 @@ describe("the Pi catalogue starts exactly what the Pi bridge starts", () => {
       fixture.environment.environmentType = "containerized";
       fixture.environment.containerId = "container-1";
       if (config.user !== undefined)
-        fixture.containerFiles.set("/home/node/.pi/agent/mcp.json", JSON.stringify(config.user));
+        fixture.containerFiles.set("/home/node/.pi/agent/mcp.json", mcpConfigFileText(config.user));
       if (config.project !== undefined)
-        fixture.containerFiles.set("/workspace/.pi/mcp.json", JSON.stringify(config.project));
+        fixture.containerFiles.set("/workspace/.pi/mcp.json", mcpConfigFileText(config.project));
       const snapshot = await fixture.service.snapshot({
         targetId: await targetIdFor(fixture, "pi", "environment"),
       });
@@ -119,9 +120,9 @@ describe("the Pi catalogue starts exactly what the Pi bridge starts", () => {
       test(`host, project resources ${projectResources ? "on" : "off"}: ${config.name}`, async () => {
         fixture.environment.agentSettings = { executionPolicy: { projectResources } };
         if (config.user !== undefined)
-          fixture.write("home/.pi/agent/mcp.json", JSON.stringify(config.user));
+          fixture.write("home/.pi/agent/mcp.json", mcpConfigFileText(config.user));
         if (config.project !== undefined)
-          fixture.write("worktree/.pi/mcp.json", JSON.stringify(config.project));
+          fixture.write("worktree/.pi/mcp.json", mcpConfigFileText(config.project));
         const snapshot = await fixture.service.snapshot({
           targetId: await targetIdFor(fixture, "pi", "environment"),
         });

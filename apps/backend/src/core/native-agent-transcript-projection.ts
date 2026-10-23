@@ -109,6 +109,7 @@ import {
   type NativeAgentRetiredDispatch,
   isNativeInlineErrorMessageId,
   nativeAgentApprovalModes,
+  normalizeNativeAgentSelectionPricing,
   resolveNativeAgentApprovalMode,
 } from "@orkestrator/protocol/native-agent";
 import { sessionIncompleteTurnNotice } from "./models.js";
@@ -4417,7 +4418,7 @@ export class NativeAgentTranscriptProjection {
       session.policy,
       providerControls?.approvalMode ?? session.controls?.approvalMode,
     );
-    return {
+    const composer: NativeAgentComposerState = {
       models,
       ...(resolvedSelection.selectedModelId
         ? { selectedModelId: resolvedSelection.selectedModelId }
@@ -4494,6 +4495,7 @@ export class NativeAgentTranscriptProjection {
         ? { approvalModes, selectedApprovalModeId }
         : {}),
     };
+    return withProviderSelectionPricing(composer, providerComposer);
   }
 
   /**
@@ -5457,4 +5459,31 @@ function revisedRowsChanged(previous: readonly unknown[], next: readonly unknown
     const before = held.get((message as { id?: unknown }).id);
     return before === undefined || !sameEncoding(before, message);
   });
+}
+
+/**
+ * Carry the bridge's premium-pricing indicator onto the projected composer.
+ *
+ * The bridge computes it for *its* selection. The projection can override that
+ * selection with stored or pending controls, and an indicator describing a
+ * different combination would be wrong in both directions, so it is kept only
+ * when model, reasoning, speed and parameters all agree with the bridge's.
+ */
+function withProviderSelectionPricing(
+  composer: NativeAgentComposerState,
+  providerComposer: NativeAgentComposerState | undefined,
+): NativeAgentComposerState {
+  const pricing = normalizeNativeAgentSelectionPricing(providerComposer?.selectionPricing);
+  if (!pricing || !providerComposer) return composer;
+  const providerValues = providerComposer.parameterValues ?? {};
+  const sameSelection =
+    composer.selectedModelId === providerComposer.selectedModelId &&
+    composer.selectedReasoningId === providerComposer.selectedReasoningId &&
+    // The projection shows an untouched speed toggle as off where the bridge
+    // still holds "never chosen"; both mean the default, standard-speed run.
+    (composer.fastModeEnabled ?? false) === (providerComposer.fastModeEnabled ?? false) &&
+    Object.entries(composer.parameterValues ?? {}).every(
+      ([id, value]) => providerValues[id] === value,
+    );
+  return sameSelection ? { ...composer, selectionPricing: pricing } : composer;
 }

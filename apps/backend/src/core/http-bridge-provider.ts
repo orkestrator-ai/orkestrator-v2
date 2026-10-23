@@ -1288,8 +1288,10 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     sessionId: string,
     action: ProviderNativeAgentSessionAction,
   ): Promise<NativeAgentSessionActionOutcome> {
-    if (this.agent === "grok") {
-      throw new PromptRejectedError(`${this.agent} does not support session actions`);
+    // The ACP bridge serves only `compact`, by running the agent's own
+    // `/compact` (422 `command-unavailable` when the agent offers none).
+    if (this.agent === "grok" && action.kind !== "compact") {
+      throw new PromptRejectedError(`${this.agent} does not support ${action.kind}`);
     }
     const base = `/session/${encodeURIComponent(sessionId)}`;
     if (action.kind === "compact") {

@@ -22,6 +22,7 @@ export function acpTranscriptSource(
     contentEpoch: state.droppedMessages,
     revision: state.revision,
     complete: !state.transcriptTruncated && state.droppedMessages === 0,
+    ...(state.title ? { title: state.title } : {}),
     // Rows changed after newer ones followed them. Those already outside the
     // live window travel with the v2 summary as `revisedMessages`.
     ...(state.revisedRows

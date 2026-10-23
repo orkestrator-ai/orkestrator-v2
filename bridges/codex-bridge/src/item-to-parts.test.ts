@@ -35,6 +35,50 @@ async function withGitWorkspace<T>(callback: (dir: string) => Promise<T> | T): P
 }
 
 describe("itemToParts", () => {
+  test("shows a generation's input images as read images before the result", async () => {
+    const parts = await itemToParts(
+      {
+        id: "img-1",
+        type: "image",
+        text: "the same cat, in a hard hat",
+        path: "/workspace/out/edit.png",
+        source: "generated",
+        input_paths: ["/workspace/in/cat.png"],
+      },
+      DUMMY_CWD,
+    );
+
+    expect(parts).toEqual([
+      {
+        type: "image",
+        content: "cat.png",
+        fileUrl: "file:///workspace/in/cat.png",
+        filename: "/workspace/in/cat.png",
+        imageSource: "viewed",
+      },
+      {
+        type: "image",
+        content: "the same cat, in a hard hat",
+        fileUrl: "file:///workspace/out/edit.png",
+        filename: "/workspace/out/edit.png",
+        imageSource: "generated",
+      },
+    ]);
+  });
+
+  test("an attachment-backed generation without a saved file renders as its caption", async () => {
+    // What `fileId`-only (codex 0.164) adapts to: no path, so no `fileUrl`,
+    // and the renderer shows a caption rather than a broken thumbnail.
+    const parts = await itemToParts(
+      { id: "img-2", type: "image", text: "a lighthouse at dusk", source: "generated" },
+      DUMMY_CWD,
+    );
+
+    expect(parts).toEqual([
+      { type: "image", content: "a lighthouse at dusk", imageSource: "generated" },
+    ]);
+  });
+
   test("converts agent_message to text part", async () => {
     const item: ThreadItem = {
       id: "msg-1",

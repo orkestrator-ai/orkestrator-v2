@@ -35,6 +35,7 @@ import type { MentionableInputRef } from "@/components/chat/MentionableInput";
 import { NativeAttachmentMenu } from "@/components/chat/NativeAttachmentMenu";
 import { NativeComposeBar } from "@/components/chat/NativeComposeBar";
 import { NativeChatShell } from "@/components/chat/NativeChatShell";
+import { SelectionPricingBadge } from "@/components/chat/SelectionPricingBadge";
 import { RichTranscriptScopeContext } from "@/lib/chat/rich-identity";
 import { useRichTranscriptScopeValue } from "@/hooks/useTranscriptArtifactCapabilities";
 import { useArtifactPublications } from "@/hooks/useArtifactPublications";
@@ -3184,6 +3185,7 @@ export function SharedNativeAgentController({
                     </DropdownMenu>
                   );
                 })}
+                <SelectionPricingBadge pricing={composer.selectionPricing} />
                 {!isReadOnlyCoordinator && composer.modes.length > 0 ? (
                   <ComposerIconPicker
                     label="Mode"

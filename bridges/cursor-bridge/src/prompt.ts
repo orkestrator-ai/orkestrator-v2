@@ -7,7 +7,10 @@
  * outcome a previous bridge process could not record.
  */
 import { tryParseStructuredOutputText } from "@orkestrator/protocol/structured-output";
-import type { NativeAgentTurnUsage } from "@orkestrator/protocol/native-agent";
+import type {
+  NativeAgentPricingTier,
+  NativeAgentTurnUsage,
+} from "@orkestrator/protocol/native-agent";
 import type { ModelSelection, SDKAgent, SDKImage, TokenUsage } from "@cursor/sdk";
 import {
   CANCEL_ACK_TIMEOUT_MS,
@@ -502,6 +505,14 @@ function recordUsage(
   const elapsed =
     result?.durationMs ?? (state.turnStartedAt ? Date.now() - state.turnStartedAt : undefined);
   const modelId = result?.model?.id ?? state.composer.selectedModelId;
+  // `RunResult.model` is the selection the SDK actually sent, with `maxMode`
+  // set when its catalogue forced Max mode (1.0.40+). No model means no
+  // evidence either way, so the tier stays unreported rather than "standard".
+  const pricingTier: NativeAgentPricingTier | undefined = result?.model
+    ? result.model.maxMode === true
+      ? "premium"
+      : "standard"
+    : undefined;
   const previous = state.usage;
   const measured = turn !== undefined && Object.keys(turn).length > 0;
   const previousFloor = Math.max(previous?.sessionTokenFloor ?? 0, previous?.sessionTokens ?? 0);
@@ -523,6 +534,7 @@ function recordUsage(
           ? { requestId: result?.requestId ?? input.requestId }
           : {}),
         ...(modelId ? { modelId } : {}),
+        ...(pricingTier ? { pricingTier } : {}),
       },
     ].slice(-20);
     state.usage = {
@@ -741,6 +753,7 @@ function normalizeAgentUsageRuns(
         ...(prior?.durationMs === undefined ? {} : { durationMs: prior.durationMs }),
         ...(prior?.requestId === undefined ? {} : { requestId: prior.requestId }),
         ...(prior?.modelId === undefined ? {} : { modelId: prior.modelId }),
+        ...(prior?.pricingTier === undefined ? {} : { pricingTier: prior.pricingTier }),
       },
     ];
   });

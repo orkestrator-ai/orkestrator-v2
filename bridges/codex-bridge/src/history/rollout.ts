@@ -134,11 +134,8 @@ async function walkJsonlFiles(dir: string): Promise<string[]> {
   return files;
 }
 
-export async function listTranscriptPaths(): Promise<string[]> {
-  const searchRoots = [
-    join(getCodexHomeDir(), "sessions"),
-    join(getCodexHomeDir(), "archived_sessions"),
-  ];
+export async function listTranscriptPaths(codexHome = getCodexHomeDir()): Promise<string[]> {
+  const searchRoots = [join(codexHome, "sessions"), join(codexHome, "archived_sessions")];
   return (await Promise.all(searchRoots.map((root) => walkJsonlFiles(root)))).flat();
 }
 
@@ -1372,6 +1369,20 @@ async function replayPersistedRollout(
   const settleCodeModeCell = (cell: CodeModeCell, output?: unknown): void => {
     openCells.delete(cell.callId);
     const outcome = output === undefined ? undefined : codeModeCellOutcome(cellOutputText(output));
+    if (outcome?.interrupted) {
+      // Stopped by the user (codex 0.164's code-mode interrupt), so not a
+      // success. Live shows no row for it (`RefusedCellTail`); a cell that
+      // recorded other work keeps its row, since nothing else shows that work.
+      const { toolState: _claimed, ...stopped } = cell.message.parts[cell.execPartIndex]!;
+      cell.message.parts[cell.execPartIndex] = stopped;
+      if (!cell.keepExecRow) {
+        dropPart(cell.message, cell.execPartIndex);
+        for (const call of cell.sourceCalls) {
+          if (!call.replaced) dropPart(cell.message, call.partIndex);
+        }
+        return;
+      }
+    }
     if (cell.sawMcpRecord) {
       // The rollout recorded the calls that ran; a source-only call never did.
       for (const call of cell.sourceCalls) {

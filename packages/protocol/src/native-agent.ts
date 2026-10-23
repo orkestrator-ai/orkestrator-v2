@@ -61,6 +61,19 @@ export interface AgentReasoningOption {
 }
 
 /**
+ * Display label for a reasoning or effort id a provider reports without one.
+ *
+ * Every provider names the same levels (`minimal`, `low`, `high`, `xhigh`,
+ * `max`, …), so labels come from this one vocabulary rather than each
+ * catalogue: `xhigh` reads "Extra high"; any other id has separators turned
+ * into spaces and its first letter capitalised ("max-thinking" → "Max thinking").
+ */
+export function reasoningOptionLabel(id: string): string {
+  if (id === "xhigh") return "Extra high";
+  return id.replace(/[-_]+/g, " ").replace(/^\w/, (letter) => letter.toUpperCase());
+}
+
+/**
  * Catalog option meaning "leave this to the model / agent default".
  *
  * OpenCode injects this as a real choice; launch dialogs do too. When it is
@@ -475,6 +488,57 @@ export interface NativeAgentComposerState {
   /** The provider's own approval modes, capped by the session's execution policy. */
   approvalModes?: NativeAgentApprovalModeOption[];
   selectedApprovalModeId?: string;
+  /**
+   * Set when the *current* combination of model, reasoning, speed and
+   * parameters bills above the provider's standard rate. Computed by the
+   * bridge from its provider's own rule and recomputed on every publication;
+   * absent means standard or unknown, never premium.
+   */
+  selectionPricing?: NativeAgentSelectionPricing;
+}
+
+/**
+ * Whether a selection or a run billed at the provider's standard rate or a
+ * premium one (Cursor Max mode, Claude long-context pricing, Codex priority
+ * credit rates). Provider-neutral: the provider's own name for it belongs in
+ * {@link NativeAgentSelectionPricing.label}.
+ */
+export type NativeAgentPricingTier = "standard" | "premium";
+
+/**
+ * A premium-rate selection, described for display. Attached to the composer
+ * rather than to a parameter option because it is usually a property of the
+ * combination (Cursor: every catalogue variant matching the chosen parameters
+ * is Max mode), not of any one value.
+ */
+export interface NativeAgentSelectionPricing {
+  tier: "premium";
+  /** Short provider-supplied badge text, e.g. "Max mode". */
+  label: string;
+  /** One sentence on why the selection is premium, for a tooltip. */
+  description?: string;
+}
+
+export function isNativeAgentPricingTier(value: unknown): value is NativeAgentPricingTier {
+  return value === "standard" || value === "premium";
+}
+
+/**
+ * Read a bridge's `selectionPricing` defensively. Bridge payloads are
+ * untrusted, so anything other than a premium tier with a non-blank label is
+ * dropped and the text is bounded.
+ */
+export function normalizeNativeAgentSelectionPricing(
+  value: unknown,
+): NativeAgentSelectionPricing | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (record.tier !== "premium" || typeof record.label !== "string") return undefined;
+  const label = record.label.trim().slice(0, 64);
+  if (!label) return undefined;
+  const description =
+    typeof record.description === "string" ? record.description.trim().slice(0, 512) : "";
+  return { tier: "premium", label, ...(description ? { description } : {}) };
 }
 
 /**
@@ -979,7 +1043,10 @@ export function nativeAgentCapabilities(agent: AgentPlatform): NativeAgentCapabi
       // a sibling `…-fast` model id, and both announce session modes. They are
       // per-build, not per-platform, so the flag means "this platform may offer
       // it" and the live composer's `fastModeAvailable` / `modes` decides.
-      actions: agent === "cursor" ? { steer: true, rewindMessages: true } : {},
+      // Grok compacts through its own `/compact`, which the ACP bridge runs as
+      // a selected command; a session whose live inventory lacks it answers
+      // the action 422 `command-unavailable`.
+      actions: agent === "cursor" ? { steer: true, rewindMessages: true } : { compact: true },
       // Cursor's SDK exposes no approval hook at all, so a Cursor tab never
       // raises anything. Grok's ACP wire does: it answers
       // `session/request_permission` for tool calls. Reporting the empty set
@@ -1039,7 +1106,8 @@ export function nativeAgentCapabilities(agent: AgentPlatform): NativeAgentCapabi
         executionProfile: true,
       },
       agentTools: false,
-      actions: { compact: true, undo: true, redo: true, share: true },
+      // No `share`: OpenCode 1.19.1 discontinued session sharing upstream.
+      actions: { compact: true, undo: true, redo: true },
       // `permission.asked` and the v2-only `question.asked`. No MCP
       // elicitation surface on the v1 wire this repo uses.
       interactions: { kinds: ["question", "permission", "command-approval", "file-approval"] },
@@ -1165,6 +1233,44 @@ export interface NativeAgentAsyncQuestionResponse {
   state: "queued" | "dispatching" | "sent" | "failed";
 }
 
+/**
+ * Provider-neutral names for rows of a context-window breakdown. A bridge maps
+ * its provider's own row ids onto these; a row it cannot place carries no id,
+ * and readers then fall back to the provider's display `name`. `reserved` is
+ * the compaction reserve; the `deferred-` rows are tool schemas the provider
+ * holds outside the window, so they do not count toward its use.
+ */
+export const NATIVE_AGENT_CONTEXT_CATEGORY_IDS = [
+  "system-prompt",
+  "tools",
+  "deferred-tools",
+  "mcp-tools",
+  "deferred-mcp-tools",
+  "mcp-instructions",
+  "agents",
+  "memory",
+  "skills",
+  "messages",
+  "reserved",
+  "free-space",
+] as const;
+
+export type NativeAgentContextCategoryId = (typeof NATIVE_AGENT_CONTEXT_CATEGORY_IDS)[number];
+
+export function isNativeAgentContextCategoryId(
+  value: unknown,
+): value is NativeAgentContextCategoryId {
+  return (NATIVE_AGENT_CONTEXT_CATEGORY_IDS as readonly unknown[]).includes(value);
+}
+
+export interface NativeAgentContextCategory {
+  /** Stable row identity; match on this, never on the English `name`. */
+  id?: NativeAgentContextCategoryId;
+  name: string;
+  tokens: number;
+  color?: string;
+}
+
 export interface NativeAgentContextUsage {
   usedTokens: number;
   maximumTokens?: number;
@@ -1194,7 +1300,7 @@ export interface NativeAgentContextUsage {
     unlimited?: boolean;
     balance?: string;
   };
-  contextCategories?: Array<{ name: string; tokens: number; color?: string }>;
+  contextCategories?: NativeAgentContextCategory[];
   permissionDenials?: number;
   /** Bounded, non-secret descriptions of permission denials from the provider. */
   permissionDenialDetails?: Array<{
@@ -1228,6 +1334,8 @@ export interface NativeAgentTurnUsage {
   toolCalls?: number;
   requestId?: string;
   modelId?: string;
+  /** The rate the provider says this run actually billed at; absent when unreported. */
+  pricingTier?: NativeAgentPricingTier;
 }
 
 export interface NativeAgentAccountUsageWindow {

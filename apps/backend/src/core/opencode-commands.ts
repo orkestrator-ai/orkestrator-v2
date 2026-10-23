@@ -471,6 +471,10 @@ export async function resolveOpenCodeCommandDispatch(
  * metadata only: they never enter the executable catalogue, and a server that
  * advertises a same-named command takes precedence because the catalogue is
  * consulted first.
+ *
+ * `/share` and `/unshare` stay listed although OpenCode 1.19.1 discontinued
+ * session sharing: the entry is what refuses them, and without it the
+ * literal text would reach the model as a prompt.
  */
 const OPENCODE_TERMINAL_ONLY_COMMANDS: ReadonlySet<string> = new Set([
   "/editor",

@@ -282,3 +282,38 @@ export function resolveSelectedCommand(
       invocation.arguments.length > 0 ? `${command.name} ${invocation.arguments}` : command.name,
   };
 }
+
+/** The agent command the shared `compact` session action runs. */
+const COMPACT_COMMAND_NAME = "compact";
+
+/**
+ * The selection the shared `compact` session action sends.
+ *
+ * ACP defines no compaction request; an agent that compacts offers it as its
+ * own `/compact` command (Grok does). The action therefore runs that command
+ * through the prompt route like any selection — journaled, revalidated after
+ * an attach, and refused rather than ever sent as text when the agent stops
+ * offering it. A live inventory without the command is refused here, before
+ * anything is journaled; a restored one is left to the prompt route, which
+ * attaches and checks the list the agent re-reports.
+ */
+export function compactCommandSelection(
+  state: SessionState,
+): { ok: true; command: NativeAgentBridgeCommandInvocation } | { ok: false; message: string } {
+  const id = commandId(COMPACT_COMMAND_NAME);
+  if (state.commandsLive && !state.availableCommands?.some((command) => command.id === id)) {
+    return {
+      ok: false,
+      message: `${PROVIDER_LABEL} does not offer /${COMPACT_COMMAND_NAME} in this session`,
+    };
+  }
+  return {
+    ok: true,
+    command: {
+      id,
+      name: `/${COMPACT_COMMAND_NAME}`,
+      executionKind: "provider-prompt",
+      arguments: "",
+    },
+  };
+}

@@ -80,7 +80,10 @@ export function renderToolCall(source: ToolCallSource): RenderedToolCall {
   const text = toolResultText(source.result);
   if (source.isError) {
     // The model reads the same text as its tool result, so an error card must
-    // carry it verbatim rather than a generic failure line.
+    // carry it verbatim rather than a generic failure line. That includes a
+    // call whose arguments were not a JSON object (Pi 1.3+ `argumentsError`):
+    // Pi fails it in validation, before any hook, with `{}` as its input and
+    // the text the model sent in this error, so no arguments are invented.
     rendered.toolError = boundText(text || `The ${toolName} tool failed`, MAX_TOOL_OUTPUT_BYTES);
   } else if (text) {
     rendered.toolOutput = boundText(text, MAX_TOOL_OUTPUT_BYTES);

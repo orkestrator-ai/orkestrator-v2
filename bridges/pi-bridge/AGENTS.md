@@ -118,7 +118,7 @@ entry, so live and resumed transcripts have the same shape.
   abort that hangs or rejects (the next request retries it). The prompt route
   checks for it after every preparation await and settles without calling Pi.
   In Pi's preflight the cancel calls `session.abort()` at once (pinned SDK
-  1.2 aborts an auto-compaction and pre-empts a run `_startRun` is preparing;
+  1.4 aborts an auto-compaction and pre-empts a run `_startRun` is preparing;
   that abort waits for the run to settle, so it is never awaited) and again
   when Pi accepts, because `_startRun` resets the abort flag when it begins.
   A run Pi reports settled with `aborted: true` — whoever aborted it,
@@ -145,14 +145,15 @@ entry, so live and resumed transcripts have the same shape.
   a fingerprint of the MCP files it was built from and rebuilds at the next
   turn start when they change (never mid-turn), which is how saved edits from
   the MCP servers settings reach a live session. `mcp-config.ts` reads that
-  file as Pi's own format (`enabled: false`, `$NAME`/`${NAME}` values, `~/`,
-  `cwd`) and never runs a `!command` value — an entry needing one is skipped,
+  file as Pi's own format (one leading UTF-8 BOM stripped, `enabled: false`,
+  `$NAME`/`${NAME}` values, `~/`, `cwd`) and never runs a `!command` value — an entry needing one is skipped,
   and the bridge's own secret variables cannot be named by a `${…}` reference.
   It merges the files with Pi 1.x's rules (project overrides, `-`/`_` name
   clashes, `auth` refused in a project file); an entry Pi's validator rejects
   hides nothing. `src/mcp-config-upstream.test.ts` runs it against the pinned
   Pi's own loader, and the backend's MCP catalogue mirrors it under
-  `pi-mcp-parity.test.ts`, both over `src/testing/mcp-config-fixtures.ts`.
+  `pi-mcp-parity.test.ts`, both over `src/testing/mcp-config-fixtures.ts` (a `RawMcpConfigText` fixture
+  is written verbatim, for bytes `JSON.stringify` cannot produce).
   Settings-pane
   discovery still reports an empty MCP list (pre-session fallback). The
   composer reports `mode: false` because plan/build is still something an

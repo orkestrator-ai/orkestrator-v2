@@ -149,6 +149,14 @@ import { buildTerminalAgentLaunchCommand } from "@orkestrator/protocol/terminal-
 import { readActivityGroup } from "./native-agent-activity-reads.js";
 import type { ViewRevisionStamp } from "@orkestrator/protocol/view-sync";
 import { composeDraftHoldsQueue } from "./compose-draft-occupancy.js";
+import {
+  queueBoolean,
+  queueDispatchMode,
+  queueExecutionMode,
+  queueFastMode,
+  queueReasoningEffort,
+  queueString,
+} from "./native-agent-queue-message.js";
 
 // ---- module code from native-agent-service-base.ts ----
 type BuildPipelineAgent = shared.BuildPipelineAgent;
@@ -181,7 +189,6 @@ type StorageService = shared.StorageService;
 type BridgeConnection = shared.BridgeConnection;
 type NativeAgentRuntimeProvider = shared.NativeAgentRuntimeProvider;
 type ProviderInteractionObservationEvent = shared.ProviderInteractionObservationEvent;
-type ProviderExecutionMode = shared.ProviderExecutionMode;
 type PromptAttachment = shared.PromptAttachment;
 type CommandInvoker = shared.CommandInvoker;
 type EnsureNativeAgentSessionInput = shared.EnsureNativeAgentSessionInput;
@@ -2999,7 +3006,7 @@ export class NativeAgentService {
       }
       if (!isEnvironmentReadyForAgents(environment)) return "environment_unready";
     }
-    if (this.composeDraftHoldsQueue(draft?.value)) return "draft";
+    if (composeDraftHoldsQueue(draft?.value)) return "draft";
     if (
       session?.pendingDispatch ||
       (queue && (queue.inFlight !== undefined || queue.messages.length > 0))
@@ -3082,7 +3089,7 @@ export class NativeAgentService {
           }
           const draftKey = `${input.agent}:${input.environmentId}:${encodeURIComponent(input.logicalSessionKey)}`;
           const draft = await this.storage.getComposeDraft(draftKey);
-          if (this.composeDraftHoldsQueue(draft?.value)) {
+          if (composeDraftHoldsQueue(draft?.value)) {
             heldReason = "draft";
             return { dispatch: false };
           }
@@ -4651,7 +4658,7 @@ export class NativeAgentService {
     }
     const draftKey = `${agent}:${queue.environmentId}:${encodeURIComponent(logicalSessionKey)}`;
     const draft = await this.storage.getComposeDraft(draftKey);
-    if (this.composeDraftHoldsQueue(draft?.value)) return;
+    if (composeDraftHoldsQueue(draft?.value)) return;
 
     const head = queue.inFlight?.message ?? queue.messages[0];
     /*
@@ -4669,21 +4676,21 @@ export class NativeAgentService {
       recurringWorkMetrics.cacheHit("native-queue-scan");
       return;
     }
-    const mode = this.queueExecutionMode(agent, head);
+    const mode = queueExecutionMode(agent, head);
     const session = await this.ensureSession({
       environmentId: queue.environmentId,
       agent,
       logicalSessionKey,
-      model: this.queueString(head, "model"),
-      reasoningEffort: this.queueReasoningEffort(head),
+      model: queueString(head, "model"),
+      reasoningEffort: queueReasoningEffort(head),
       phase: mode === "plan" ? "review" : "build",
     });
     const provider = await this.provider({
       environmentId: queue.environmentId,
       agent,
       logicalSessionKey,
-      model: this.queueString(head, "model"),
-      reasoningEffort: this.queueReasoningEffort(head),
+      model: queueString(head, "model"),
+      reasoningEffort: queueReasoningEffort(head),
     });
     await this.assertEnvironmentLive(queue.environmentId);
     // Read as data: a failed last turn must defer with a bounded backoff and a
@@ -4700,8 +4707,8 @@ export class NativeAgentService {
     if (status === "running") {
       const requestId =
         head && typeof head === "object"
-          ? (this.queueString(head as Record<string, unknown>, "requestId") ??
-            this.queueString(head as Record<string, unknown>, "id"))
+          ? (queueString(head as Record<string, unknown>, "requestId") ??
+            queueString(head as Record<string, unknown>, "id"))
           : undefined;
       if (agent !== "codex" || !requestId || !nativeAsyncQuestionItemId(requestId)) return;
 
@@ -4774,7 +4781,7 @@ export class NativeAgentService {
     }
     if (this.stopped) return;
     const latestDraft = await this.storage.getComposeDraft(draftKey);
-    if (this.composeDraftHoldsQueue(latestDraft?.value)) return;
+    if (composeDraftHoldsQueue(latestDraft?.value)) return;
     const reservation = await this.storage.reservePromptQueueHeadForDispatch(queueKey);
     if (!reservation || typeof reservation.message !== "object") return;
     const message = reservation.message as Record<string, unknown>;
@@ -4802,16 +4809,15 @@ export class NativeAgentService {
         environmentId: queue.environmentId,
         agent,
         logicalSessionKey,
-        model: this.queueString(message, "model"),
-        reasoningEffort: this.queueReasoningEffort(message),
-        phase: this.queueExecutionMode(agent, message) === "plan" ? "review" : "build",
-        mode: this.queueDispatchMode(agent, message),
-        fastMode: this.queueFastMode(agent, message),
-        subAgent: this.queueString(message, "agent"),
-        executionAgent:
-          this.queueString(message, "executionAgent") ?? this.queueString(message, "agent"),
-        includeLocalSettings: this.queueBoolean(message, "includeLocalSettings"),
-        promptSuggestions: this.queueBoolean(message, "promptSuggestions"),
+        model: queueString(message, "model"),
+        reasoningEffort: queueReasoningEffort(message),
+        phase: queueExecutionMode(agent, message) === "plan" ? "review" : "build",
+        mode: queueDispatchMode(agent, message),
+        fastMode: queueFastMode(agent, message),
+        subAgent: queueString(message, "agent"),
+        executionAgent: queueString(message, "executionAgent") ?? queueString(message, "agent"),
+        includeLocalSettings: queueBoolean(message, "includeLocalSettings"),
+        promptSuggestions: queueBoolean(message, "promptSuggestions"),
         attachments,
         prompt: message.text,
         requestId: reservation.requestId,
@@ -4852,8 +4858,8 @@ export class NativeAgentService {
   ): boolean {
     const requestId =
       head && typeof head === "object"
-        ? (this.queueString(head as Record<string, unknown>, "requestId") ??
-          this.queueString(head as Record<string, unknown>, "id"))
+        ? (queueString(head as Record<string, unknown>, "requestId") ??
+          queueString(head as Record<string, unknown>, "id"))
         : undefined;
     if (this.options.observationSharing === false) return false;
     // An async-question answer is delivered *into* a running Codex turn.
@@ -5578,93 +5584,5 @@ export class NativeAgentService {
     }
     await this.assertEnvironmentLive(input.environmentId);
     return providerSessionId;
-  }
-
-  protected composeDraftHoldsQueue(value: unknown): boolean {
-    return composeDraftHoldsQueue(value);
-  }
-
-  protected queueBoolean(message: unknown, field: string): boolean | undefined {
-    if (!message || typeof message !== "object" || Array.isArray(message)) {
-      return undefined;
-    }
-    const value = (message as Record<string, unknown>)[field];
-    return typeof value === "boolean" ? value : undefined;
-  }
-
-  protected queueString(message: unknown, field: string): string | undefined {
-    if (!message || typeof message !== "object" || Array.isArray(message)) {
-      return undefined;
-    }
-    const value = (message as Record<string, unknown>)[field];
-    return nonBlank(value) ? value : undefined;
-  }
-
-  protected queueReasoningEffort(message: unknown): string | undefined {
-    return (
-      this.queueString(message, "reasoningEffort") ??
-      this.queueString(message, "effort") ??
-      this.queueString(message, "variant")
-    );
-  }
-
-  protected queueFastMode(agent: BuildPipelineAgent, message: unknown): boolean | undefined {
-    if (!message || typeof message !== "object" || Array.isArray(message)) {
-      return undefined;
-    }
-    const record = message as Record<string, unknown>;
-    // Native compose queues persist the shared `fastMode` field for every
-    // provider. Keep accepting Claude's legacy `fastModeEnabled` shape while
-    // forwarding the shared field to Codex, Cursor, and Grok.
-    //
-    // Each candidate is type-checked before the next is considered rather than
-    // coalesced first: `??` only falls through on null/undefined, so a garbage
-    // legacy value would otherwise shadow a perfectly good shared field and
-    // silently drop the user's speed selection.
-    const candidates =
-      agent === "claude" ? [record.fastModeEnabled, record.fastMode] : [record.fastMode];
-    for (const candidate of candidates) {
-      if (typeof candidate === "boolean") return candidate;
-    }
-    return undefined;
-  }
-
-  protected queueExecutionMode(agent: BuildPipelineAgent, message: unknown): ProviderExecutionMode {
-    if (!message || typeof message !== "object" || Array.isArray(message)) {
-      return "plan";
-    }
-    const record = message as Record<string, unknown>;
-    if (agent === "claude") {
-      if (record.planModeEnabled === true) return "plan";
-      if (record.planModeEnabled === false || record.planModeEnabled === undefined) {
-        return "build";
-      }
-      return "plan";
-    }
-    if (record.mode === "plan" || record.mode === "build") return record.mode;
-    return record.mode === undefined ? "build" : "plan";
-  }
-
-  /**
-   * The mode actually sent with a queued prompt. Backend-authored prompts may
-   * ask to leave the session's own mode untouched (`preserveSessionMode`):
-   * several providers persist a prompt's mode on the session, so sending the
-   * `build` default would silently change a mode the user chose.
-   */
-  protected queueDispatchMode(
-    agent: BuildPipelineAgent,
-    message: unknown,
-  ): ProviderExecutionMode | undefined {
-    if (
-      message &&
-      typeof message === "object" &&
-      !Array.isArray(message) &&
-      (message as Record<string, unknown>).preserveSessionMode === true &&
-      (message as Record<string, unknown>).mode === undefined &&
-      (message as Record<string, unknown>).planModeEnabled === undefined
-    ) {
-      return undefined;
-    }
-    return this.queueExecutionMode(agent, message);
   }
 }

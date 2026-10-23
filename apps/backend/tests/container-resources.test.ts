@@ -16,6 +16,7 @@ import {
   sharedMemoryMiB,
   updateEnvironmentResources,
 } from "../src/core/container-resources";
+import { resetDockerTopologyCache } from "../src/core/docker-image";
 import { dockerOwnerNamespace } from "../src/core/docker-ownership";
 import type { Environment } from "../src/core/models";
 import {
@@ -28,6 +29,7 @@ import {
 const cleanup: string[] = [];
 afterEach(async () => {
   resetResourceCaches();
+  resetDockerTopologyCache();
   await Promise.all(cleanup.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
@@ -355,6 +357,37 @@ describe("rootless daemon without cgroup enforcement", () => {
         expect(await log.read()).not.toMatch(/^update /m);
       });
       expect(writes).toEqual([]);
+    });
+  }
+
+  for (const applyNow of [true, false]) {
+    test(`failed capacity probing preserves rootless update admission (applyNow=${applyNow})`, async () => {
+      const { context, writes } = await rootlessFixture({ containerId: "c1" });
+      await withDockerScript(
+        `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  info)
+    [ "$3" = "{{json .}}" ] && exit 1
+    printf '%s\\n' '{"SecurityOptions":["name=rootless"]}' ;;
+esac
+exit 0
+`,
+        async (log) => {
+          await expect(
+            updateEnvironmentResources(
+              {
+                environmentId: "env-lifecycle",
+                limits: { cpus: 1, memoryMiB: null, pids: null },
+                applyNow,
+              },
+              context,
+            ),
+          ).rejects.toThrow("ContainerLifecycleError:daemon-unavailable: Docker runs rootless");
+          expect(await log.read()).not.toMatch(/^update /m);
+          expect(writes).toEqual([]);
+        },
+      );
     });
   }
 

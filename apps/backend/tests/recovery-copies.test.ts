@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { parseContainerLifecycle } from "@orkestrator/protocol/container-lifecycle";
+import { resetDockerTopologyCache } from "../src/core/docker-image";
+import { resetResourceCaches } from "../src/core/container-resources";
 import { groupRecoveryCopies } from "../src/core/recovery-copy-model";
 import {
   discardRecoveryCopy,
@@ -27,6 +29,8 @@ import {
 const cleanup: string[] = [];
 afterEach(async () => {
   resetCleanupGrants();
+  resetDockerTopologyCache();
+  resetResourceCaches();
   resetContainerOwnershipCache();
   await Promise.all(cleanup.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
@@ -316,6 +320,54 @@ exit 0
       },
     );
   });
+
+  for (const failedCapacity of [false, true]) {
+    test(`missing retained runtime rejects its budget before quiescing (failedCapacity=${failedCapacity})`, async () => {
+      const { dir, owner } = await dataDir();
+      const environment = recoveryEnvironment(owner);
+      environment.status = "running";
+      environment.containerResourceLimits = { cpus: 1, memoryMiB: null, pids: null };
+      const { context, environments } = memoryLifecycleContext([environment], dir);
+      Object.assign(context.storage, {
+        loadConfig: async () => ({ version: "1.0.0", global: {}, repositories: {} }),
+      });
+      await withDockerScript(
+        `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1:$2" in
+  inspect:*) printf 'Error: No such object\\n' >&2; exit 1 ;;
+  volume:inspect) printf '{}\\n' ;;
+  info:*)
+    ${failedCapacity ? '[ "$3" = "{{json .}}" ] && exit 1' : ""}
+    printf '%s\\n' '{"SecurityOptions":["name=rootless"],"CpuCfsQuota":false}' ;;
+esac
+exit 0
+`,
+        async (log) => {
+          await expect(
+            restoreRecoveryCopy(
+              {
+                environmentId: environment.id,
+                copyId: "set-a",
+                expectedContainerId: "current-container",
+              },
+              context,
+            ),
+          ).rejects.toThrow(
+            failedCapacity
+              ? "ContainerLifecycleError:daemon-unavailable"
+              : "ContainerLifecycleError:unsupported-topology",
+          );
+          const calls = await log.read();
+          expect(calls).not.toMatch(/^(stop|exec|create|run) /m);
+          expect(environments.get(environment.id)).toMatchObject({
+            containerId: "current-container",
+            status: "running",
+          });
+        },
+      );
+    });
+  }
 
   test("a changed runtime is refused", async () => {
     const { dir, owner } = await dataDir();

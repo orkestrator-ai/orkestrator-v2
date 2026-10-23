@@ -272,54 +272,122 @@ describe("NativeAgentService projection lifecycle", () => {
     );
   });
 
-  test("a refresh that read a request before the stop cannot commit it back", async () => {
-    let hold: Promise<void> | null = null;
-    let release!: () => void;
-    let snapshotHeld = false;
-    const stub = createProviderStub("codex", {
-      interactiveSnapshot: async () => {
-        if (hold) {
-          snapshotHeld = true;
-          await hold;
-        }
-        return { status: "running", messages: [] };
-      },
-      interactions: {
-        listPendingInteractions: async () => pendingInteractionSnapshot(10_000, ["permission"]),
-        resolveInteraction: async () => ({
-          result: "stale",
-          interactionId: "interaction-0",
-          sessionId: "provider-session",
-          revision: 1,
-        }),
-      },
-    });
-    await withService(
-      { prefix: "orkestrator-native-stop-withdraw-fence-", provider: async () => stub.provider },
-      async ({ service }) => {
-        const identity = {
-          environmentId: "env-1",
-          agent: "codex" as const,
-          logicalSessionKey: "env-env-1:tab-1",
-        };
-        await service.ensureSession(identity);
-        expect((await service.getProjection(identity))?.interactions).toHaveLength(1);
-
-        hold = new Promise<void>((resolve) => {
-          release = resolve;
+  for (const initial of ["pending", "empty", "absent"] as const) {
+    for (const representation of [undefined, "sync-v1"] as const) {
+      test(`stop fences a refresh with ${initial} projection (${representation ?? "legacy"})`, async () => {
+        let pending = initial === "pending";
+        let interactionsRead = false;
+        let hold: Promise<void> | null = null;
+        let release!: () => void;
+        let snapshotHeld = false;
+        const stub = createProviderStub("codex", {
+          interactiveSnapshot: async () => {
+            if (hold) {
+              snapshotHeld = true;
+              await hold;
+            }
+            return { status: "running", messages: [] };
+          },
+          interactions: {
+            listPendingInteractions: async () => {
+              interactionsRead = true;
+              return pendingInteractionSnapshot(10_000, pending ? ["permission"] : []);
+            },
+            resolveInteraction: async () => ({
+              result: "stale",
+              interactionId: "interaction-0",
+              sessionId: "provider-session",
+              revision: 1,
+            }),
+          },
         });
-        const inFlight = service.getProjection(identity);
-        await waitForCondition(() => snapshotHeld);
-        service.withdrawEnvironmentInteractions("env-1");
-        release();
+        await withService(
+          {
+            prefix: "orkestrator-native-stop-withdraw-fence-",
+            provider: async () => stub.provider,
+          },
+          async ({ service }) => {
+            const identity = {
+              representation,
+              environmentId: "env-1",
+              agent: "codex" as const,
+              logicalSessionKey: "env-env-1:tab-1",
+            };
+            await service.ensureSession(identity);
+            if (initial !== "absent") {
+              expect((await service.getProjection(identity))?.interactions).toHaveLength(
+                initial === "pending" ? 1 : 0,
+              );
+            }
+            pending = true;
+            interactionsRead = false;
 
-        expect((await inFlight)?.interactions).toEqual([]);
-        expect(
-          service.cachedProjectionSnapshot("env-1", "codex", "env-env-1:tab-1")?.interactions,
-        ).toEqual([]);
-      },
-    );
-  });
+            hold = new Promise<void>((resolve) => {
+              release = resolve;
+            });
+            const inFlight = service.getProjection(identity);
+            await waitForCondition(() => snapshotHeld && interactionsRead);
+            service.withdrawEnvironmentInteractions("env-1");
+            release();
+
+            const refreshed = await inFlight;
+            if (initial !== "absent") expect(refreshed?.interactions).toEqual([]);
+            expect(
+              service.cachedProjectionSnapshot("env-1", "codex", "env-env-1:tab-1")?.interactions ??
+                [],
+            ).toEqual([]);
+          },
+        );
+      });
+    }
+  }
+
+  for (const overlapping of [false, true]) {
+    test(`stop evicts pending reads without a projection (overlapping=${overlapping})`, async () => {
+      let offline = false;
+      let readEntered = false;
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const stub = createProviderStub("codex", {
+        interactions: {
+          listPendingInteractions: async () => {
+            if (offline) throw new ProviderUnavailableError("stopped");
+            readEntered = true;
+            if (overlapping) await held;
+            return pendingInteractionSnapshot(10_000, ["permission"]);
+          },
+          resolveInteraction: async () => ({
+            result: "stale",
+            interactionId: "interaction-0",
+            sessionId: "provider-session",
+            revision: 1,
+          }),
+        },
+      });
+      await withService(
+        { prefix: "orkestrator-stop-pending-only-", provider: async () => stub.provider },
+        async ({ service }) => {
+          const identity = {
+            environmentId: "env-1",
+            agent: "codex" as const,
+            logicalSessionKey: "tab-1",
+          };
+          await service.ensureSession(identity);
+          const reading = service.sessionPendingInteractions(identity);
+          if (overlapping) await waitForCondition(() => readEntered);
+          else expect(await reading).toHaveLength(1);
+          expect(service.cachedProjectionSnapshot("env-1", "codex", "tab-1")).toBeNull();
+          service.withdrawEnvironmentInteractions("env-1");
+          offline = true;
+          release();
+          if (overlapping) expect(await reading).toBeNull();
+          expect(await service.sessionPendingInteractions(identity)).toBeNull();
+        },
+      );
+    });
+  }
 
   test("invalidates a missing session through the status fallback", async () => {
     const { provider, status } = createProviderStub("codex", {

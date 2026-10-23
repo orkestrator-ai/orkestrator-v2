@@ -1,3 +1,4 @@
+import { detectDockerTopology } from "./docker-image.js";
 import { containerOomEvents } from "./container-oom-events.js";
 import {
   UNRESTRICTED_LIMITS,
@@ -249,6 +250,15 @@ export async function dockerCapacity(options: { refresh?: boolean } = {}): Promi
   const value = { ...base, disk: await dockerDisk() };
   capacityCache = { at: now, value };
   return value;
+}
+
+/** Admission must preserve known rootless topology even when capacity probing fails. */
+export async function dockerAdmissionCapacity(topology?: {
+  rootless: boolean;
+}): Promise<DockerCapacity> {
+  const knownTopology = topology ?? (await detectDockerTopology());
+  const capacity = await dockerCapacity();
+  return { ...capacity, rootless: capacity.rootless || knownTopology.rootless };
 }
 
 async function dockerDisk(): Promise<DockerCapacity["disk"]> {
@@ -532,11 +542,12 @@ export async function assertEnvironmentBudgetEnforceable(
   environment: Pick<Environment, "containerResourceLimits">,
   context: Pick<CommandContext, "storage">,
   outcome: string,
+  topology?: { rootless: boolean },
 ): Promise<void> {
   const config = await context.storage.loadConfig();
   refuseUnenforceableLimits(
     resolveResourceLimits(environment, config.global).limits,
-    await dockerCapacity(),
+    await dockerAdmissionCapacity(topology),
     outcome,
   );
 }
@@ -598,7 +609,7 @@ export async function updateEnvironmentResources(
     { containerResourceLimits: request.limits },
     config.global,
   ).limits;
-  const capacity = await dockerCapacity();
+  const capacity = await dockerAdmissionCapacity();
   // Refused even when only stored: the next runtime could not be created with it.
   refuseUnenforceableLimits(next, capacity, "Nothing was changed.");
   if (next.cpus !== null && capacity.cpus !== null && next.cpus > capacity.cpus) {

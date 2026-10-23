@@ -217,10 +217,12 @@ start, so a record or marker from an earlier boot can never release work.
 - `workspace-setup.sh` applies the same rule inside the container and fails
   (retryably) instead of "proceeding anyway" on timeout.
 - In restricted mode a missing firewall script is as fatal as a failed one.
-- Nothing runs in the container between `docker start` and readiness: the
-  root repair of `/project-files` access runs after it, because a boot that
-  fails closed exits at once and an earlier `docker exec` turned that typed
-  `not-ready` into an untyped "container is not running" error.
+- The root repair of `/project-files` access runs after readiness, because a
+  boot that fails closed exits at once and an earlier repair `docker exec`
+  turned that typed `not-ready` into an untyped "container is not running"
+  error. Account startup may invalidate the Codex marker with a pre-readiness
+  `docker exec`; this is deliberately best-effort, with failures caught and
+  logged so they cannot preempt the readiness result.
 - A boot that fails closed usually exits before the next poll, so the failure
   reads `container-exited`; the exact code stays in the container's last
   boot record and its log.

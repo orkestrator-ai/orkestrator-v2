@@ -331,89 +331,114 @@ exit 0
     expect(lifecycle.outcomes.at(-1)).toMatchObject({ kind: "migrate", status: "failed" });
   });
 
-  test("a budget a rootless daemon cannot enforce is refused before the source stops", async () => {
-    const { context, environments, owner } = await fixture({
-      containerResourceLimits: { cpus: null, memoryMiB: 2048, pids: 512 },
-    });
-    Object.assign(context.storage, {
-      loadConfig: async () => ({ version: "1.0.0", global: {}, repositories: {} }),
-    });
-    const manifestDir = await tempDir("ork-rootless-manifest-");
-    cleanup.push(manifestDir);
-    await fs.writeFile(
-      path.join(manifestDir, "image-manifest.json"),
-      JSON.stringify({
-        schemaVersion: 1,
-        appVersion: "2.26.0",
-        sourceRevision: "b27421dcfa8de61b9c20a08e79efd7dfbd0c7fc2",
-        architecture: "amd64",
-        runtimes: { bun: "1.4.3", node: "24.21.0" },
-        agents: {},
-        bridges: [],
-        capabilities: { "persistent-workspace": 1 },
-        stateFormats: {},
-      }),
-    );
-    const tar = path.join(manifestDir, "manifest.tar");
-    const archived = spawnSync(
-      "tar",
-      ["--format=ustar", "-cf", tar, "-C", manifestDir, "image-manifest.json"],
-      { env: { ...process.env, COPYFILE_DISABLE: "1" } },
-    );
-    expect(archived.status).toBe(0);
-    // A rootless daemon without delegated cgroups (driver `none`).
-    const info = JSON.stringify({
-      OSType: "linux",
-      OperatingSystem: "Ubuntu 24.04",
-      Architecture: "x86_64",
-      ServerVersion: "29.9.2",
-      SecurityOptions: ["name=seccomp,profile=builtin", "name=rootless", "name=cgroupns"],
-      CgroupVersion: "2",
-      CgroupDriver: "none",
-      CpuCfsQuota: false,
-      MemoryLimit: false,
-      PidsLimit: false,
-    });
-    resetResourceCaches();
-    try {
-      await withDockerScript(
-        `#!/bin/sh
+  for (const kind of ["migrate", "rebuild"] as const) {
+    for (const failedCapacity of [false, true]) {
+      test(`${kind} rootless budget refusal precedes source stop (failedCapacity=${failedCapacity})`, async () => {
+        const { context, environments, owner } = await fixture({
+          containerResourceLimits: { cpus: null, memoryMiB: 2048, pids: 512 },
+        });
+        if (kind === "rebuild") {
+          const source = environments.get("env-lifecycle")!;
+          source.containerLifecycle = {
+            ...record(source.containerLifecycle),
+            storage: {
+              format: "volume-v1",
+              workspaceGeneration: 1,
+              storageSetId: "source-set",
+              volumes: [
+                { role: "workspace", name: "source-workspace" },
+                { role: "provider-state", name: "source-state" },
+              ],
+            },
+          };
+        }
+        const sourceStorage = record(environments.get("env-lifecycle")?.containerLifecycle).storage;
+        Object.assign(context.storage, {
+          loadConfig: async () => ({ version: "1.0.0", global: {}, repositories: {} }),
+        });
+        const manifestDir = await tempDir("ork-rootless-manifest-");
+        cleanup.push(manifestDir);
+        await fs.writeFile(
+          path.join(manifestDir, "image-manifest.json"),
+          JSON.stringify({
+            schemaVersion: 1,
+            appVersion: "2.26.0",
+            sourceRevision: "b27421dcfa8de61b9c20a08e79efd7dfbd0c7fc2",
+            architecture: "amd64",
+            runtimes: { bun: "1.4.3", node: "24.21.0" },
+            agents: {},
+            bridges: [],
+            capabilities: { "persistent-workspace": 1 },
+            stateFormats: {},
+          }),
+        );
+        const tar = path.join(manifestDir, "manifest.tar");
+        const archived = spawnSync(
+          "tar",
+          ["--format=ustar", "-cf", tar, "-C", manifestDir, "image-manifest.json"],
+          { env: { ...process.env, COPYFILE_DISABLE: "1" } },
+        );
+        expect(archived.status).toBe(0);
+        // A rootless daemon without delegated cgroups (driver `none`).
+        const info = JSON.stringify({
+          OSType: "linux",
+          OperatingSystem: "Ubuntu 24.04",
+          Architecture: "x86_64",
+          ServerVersion: "29.9.2",
+          SecurityOptions: ["name=seccomp,profile=builtin", "name=rootless", "name=cgroupns"],
+          CgroupVersion: "2",
+          CgroupDriver: "none",
+          CpuCfsQuota: false,
+          MemoryLimit: false,
+          PidsLimit: false,
+        });
+        resetResourceCaches();
+        try {
+          await withDockerScript(
+            `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 case "$1" in
   inspect) printf '${owner}\\trunning\\torkestrator-v2\\tsource-container\\n' ;;
   image) printf 'sha256:${"b".repeat(64)}\\t[]\\tamd64\\n' ;;
   context) printf 'unix:///run/user/1000/docker.sock\\n' ;;
-  info) printf '%s\\n' '${info}' ;;
+  info)
+    ${failedCapacity ? '[ "$3" = "{{json .}}" ] && exit 1' : ""}
+    printf '%s\\n' '${info}' ;;
   create) printf 'probe\\n' ;;
   cp) cat '${tar}' ;;
 esac
 exit 0
 `,
-        async (log) => {
-          await expect(
-            replaceRuntimePreservingState(
-              { environmentId: "env-lifecycle", expectedContainerId: "source-container" },
-              context,
-            ),
-          ).rejects.toThrow(
-            "ContainerLifecycleError:unsupported-topology: This Docker engine (rootless) cannot enforce the memory, process (PID) limits in the environment's budget. The original container was not changed.",
+            async (log) => {
+              await expect(
+                replaceRuntimePreservingState(
+                  { environmentId: "env-lifecycle", expectedContainerId: "source-container" },
+                  context,
+                ),
+              ).rejects.toThrow(
+                failedCapacity
+                  ? "ContainerLifecycleError:daemon-unavailable: Docker runs rootless and did not report whether it can enforce the environment's budget. The original container was not changed."
+                  : "ContainerLifecycleError:unsupported-topology: This Docker engine (rootless) cannot enforce the memory, process (PID) limits in the environment's budget. The original container was not changed.",
+              );
+              const calls = await log.read();
+              expect(calls).not.toMatch(/^stop /m);
+              expect(calls).not.toMatch(/^volume create/m);
+            },
           );
-          const calls = await log.read();
-          expect(calls).not.toMatch(/^stop /m);
-          expect(calls).not.toMatch(/^volume create/m);
-        },
-      );
-    } finally {
-      resetResourceCaches();
+        } finally {
+          resetResourceCaches();
+        }
+        const stored = environments.get("env-lifecycle");
+        expect(stored?.containerId).toBe("source-container");
+        expect(stored?.status).toBe("running");
+        expect(record(stored?.containerLifecycle).storage).toEqual(sourceStorage);
+        expect(record(stored?.containerLifecycle).outcomes.at(-1)).toMatchObject({
+          kind,
+          status: "failed",
+        });
+      });
     }
-    const stored = environments.get("env-lifecycle");
-    expect(stored?.containerId).toBe("source-container");
-    expect(stored?.status).toBe("running");
-    expect(record(stored?.containerLifecycle).outcomes.at(-1)).toMatchObject({
-      kind: "migrate",
-      status: "failed",
-    });
-  });
+  }
 });
 
 describe("restart reconciliation", () => {

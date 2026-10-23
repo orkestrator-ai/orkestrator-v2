@@ -36,8 +36,8 @@ import {
   verifyStorageSet,
 } from "./container-storage.js";
 import { configuredImageRef, resolveDockerImage } from "./docker-image.js";
+import { assertEnvironmentBudgetEnforceable, parseMemorySize } from "./container-resources.js";
 import { createDockerContainer } from "./commands-containers.js";
-import { parseMemorySize } from "./container-resources.js";
 import { quiesceRuntime, rollbackCandidate } from "./container-replacement.js";
 import {
   groupRecoveryCopies,
@@ -466,6 +466,13 @@ async function restoreRecoveryCopyUnfenced(
   let createdCandidate = false;
   let committed = false;
   try {
+    if (!reuseRuntime) {
+      await assertEnvironmentBudgetEnforceable(
+        environment,
+        context,
+        "The current container was not changed.",
+      );
+    }
     if (environment.containerId) {
       await advanceContainerOperation(context, environment.id, operationId, {
         phase: "quiescing",

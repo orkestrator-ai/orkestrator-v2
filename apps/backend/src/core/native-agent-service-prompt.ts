@@ -268,21 +268,28 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
    * request before the stop, so it cannot commit it back.
    */
   withdrawEnvironmentInteractions(environmentId: string): void {
-    for (const [key, entry] of Array.from(this.projectionCache)) {
-      if (entry.input.environmentId !== environmentId) continue;
-      this.forgetPendingInteractions(
-        nativeAgentSessionStorageKey(
-          environmentId,
-          entry.input.agent,
-          entry.input.logicalSessionKey,
-        ),
-      );
+    for (const [key, entry] of Array.from(this.pendingInteractionReads)) {
+      if (entry.environmentId === environmentId) this.pendingInteractionReads.delete(key);
+    }
+    for (const read of this.activePendingInteractionReads) {
+      if (read.environmentId === environmentId) read.withdrawn = true;
+    }
+    const keys = new Set<string>();
+    for (const [key, entry] of this.projectionCache) {
+      if (entry.input.environmentId === environmentId) keys.add(key);
+    }
+    for (const [key, descriptor] of this.projectionRefreshDescriptors) {
+      if (descriptor.environmentId === environmentId) keys.add(key);
+    }
+    for (const key of keys) {
+      // Empty and not-yet-cached projections can also have stale reads in flight.
+      const epoch = (this.projectionEpochs.get(key) ?? 0) + 1;
+      this.projectionEpochs.set(key, epoch);
+      const entry = this.projectionCache.get(key);
+      if (!entry) continue;
       const interactions = entry.projection.interactions.filter(
         (interaction) => interaction.state !== "pending" && interaction.state !== "answering",
       );
-      if (interactions.length === entry.projection.interactions.length) continue;
-      const epoch = (this.projectionEpochs.get(key) ?? 0) + 1;
-      this.projectionEpochs.set(key, epoch);
       this.commitProjection(
         key,
         entry.input,
@@ -298,8 +305,14 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
   /** Short-lived cache of on-demand pending-interaction reads, per session. */
   protected readonly pendingInteractionReads = new Map<
     string,
-    { at: number; requests: AgentInteractionRequest[] }
+    { at: number; environmentId: string; requests: AgentInteractionRequest[] }
   >();
+
+  /** Only live reads are retained; withdrawal marks their results inadmissible. */
+  protected readonly activePendingInteractionReads = new Set<{
+    environmentId: string;
+    withdrawn: boolean;
+  }>();
 
   /**
    * Whether the turn started by `requestId` finished on its own as the
@@ -584,6 +597,8 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
       );
       return projection?.interactions ? live(projection.interactions) : null;
     };
+    const read = { environmentId: input.environmentId, withdrawn: false };
+    this.activePendingInteractionReads.add(read);
     try {
       const session = await this.storage.getNativeAgentSession(key);
       if (!session) return null;
@@ -592,14 +607,21 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
       const snapshot = await provider.interactions.listPendingInteractions(
         session.providerSessionId,
       );
+      if (read.withdrawn) return fallback();
       if (!cached && this.pendingInteractionReads.size >= 128) {
         const oldest = this.pendingInteractionReads.keys().next().value;
         if (oldest !== undefined) this.pendingInteractionReads.delete(oldest);
       }
-      this.pendingInteractionReads.set(key, { at: this.now(), requests: snapshot.requests });
+      this.pendingInteractionReads.set(key, {
+        at: this.now(),
+        environmentId: input.environmentId,
+        requests: snapshot.requests,
+      });
       return live(snapshot.requests);
     } catch {
       return fallback();
+    } finally {
+      this.activePendingInteractionReads.delete(read);
     }
   }
 

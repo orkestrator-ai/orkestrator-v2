@@ -104,7 +104,7 @@ import {
 } from "./container-network.js";
 import { githubRangesSeed } from "./github-ranges-cache.js";
 import {
-  dockerCapacity,
+  dockerAdmissionCapacity,
   logDriverArguments,
   refuseUnenforceableLimits,
   resolveResourceLimits,
@@ -236,12 +236,8 @@ export async function createDockerContainer(
   // rootless daemon without cgroups records it and enforces nothing. The
   // topology probe's rootless flag survives a failed capacity probe.
   const resourceLimits = resolveResourceLimits(environment, config.global).limits;
-  const capacity = await dockerCapacity();
-  refuseUnenforceableLimits(
-    resourceLimits,
-    { support: capacity.support, rootless: capacity.rootless || topology.rootless },
-    "Nothing was created.",
-  );
+  const capacity = await dockerAdmissionCapacity(topology);
+  refuseUnenforceableLimits(resourceLimits, capacity, "Nothing was created.");
   const runtimeGeneration = identity.runtimeGeneration ?? 1;
   const args = [
     "create",

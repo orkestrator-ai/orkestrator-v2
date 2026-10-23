@@ -452,7 +452,7 @@ export abstract class NativeAgentServiceBase {
   >();
   protected readonly projectionRefreshDescriptors = new Map<
     string,
-    { epoch: number; signature: string }
+    { epoch: number; signature: string; environmentId: string }
   >();
   /** Invalidates an in-flight read when a logical tab changes provider identity. */
   protected readonly projectionEpochs = new Map<string, number>();

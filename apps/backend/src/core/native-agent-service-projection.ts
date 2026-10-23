@@ -4499,7 +4499,11 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       return this.refreshProjectionOnce(input, force, key, coveredEpoch, resolvedSession);
     })();
     this.projectionRefreshes.set(key, operation);
-    this.projectionRefreshDescriptors.set(key, { epoch, signature });
+    this.projectionRefreshDescriptors.set(key, {
+      epoch,
+      signature,
+      environmentId: input.environmentId,
+    });
     return operation.finally(() => {
       if (this.projectionRefreshes.get(key) === operation) {
         this.projectionRefreshes.delete(key);

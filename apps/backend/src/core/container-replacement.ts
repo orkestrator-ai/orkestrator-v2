@@ -714,6 +714,7 @@ async function replaceRuntimePreservingStateUnfenced(
       environment,
       context,
       "The original container was not changed.",
+      topology,
     );
     const sum = (values: Array<number | null>) =>
       values.some((value) => value === null)

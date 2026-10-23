@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import os from "node:os";
 import { CliError } from "./errors.js";
 import type { ClientIo } from "./io.js";
+import { throwIfInterrupted } from "./wait.js";
 
 /**
  * The interactive half of `service install`: asks how clients will reach the
@@ -89,8 +90,19 @@ function quote(arg: string): string {
  */
 export async function askServeArguments(
   io: ClientIo,
-  options: { installCommand: string[]; probe?: SetupProbe },
+  options: { installCommand: string[]; probe?: SetupProbe; signal?: AbortSignal },
 ): Promise<string[]> {
+  const source = io;
+  io = {
+    ...source,
+    question: async (prompt) => {
+      throwIfInterrupted(options.signal);
+      const answer = await source.question!(prompt, options.signal);
+      throwIfInterrupted(options.signal);
+      return answer;
+    },
+  };
+  throwIfInterrupted(options.signal);
   const probe = options.probe ?? systemSetupProbe;
   io.stderr("Set up the Orkestrator backend service.\n\n");
   const access = await choose(io, "How will you connect to this machine?", [
@@ -102,6 +114,7 @@ export async function askServeArguments(
     { value: "ssh", label: "SSH only: the desktop app through an SSH tunnel, no Tailscale" },
   ]);
   const args: string[] = [];
+  if (access === "ssh") args.push("--host", "127.0.0.1", "--allow-non-tailscale-bind");
   if (access !== "ssh" && !probe.hasTailscaleAddress()) {
     io.stderr(
       "\nThis machine has no Tailscale address yet. Connect Tailscale before the service starts, or it will not serve.\n",

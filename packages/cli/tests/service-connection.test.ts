@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { BackendInstanceDescriptor } from "@orkestrator/protocol/backend-instance";
 import {
   awaitServiceConnection,
   currentDescriptorGeneration,
@@ -22,7 +23,7 @@ async function dataDirectory(): Promise<string> {
 
 async function publish(
   dataDir: string,
-  overrides: { generation?: string; pid?: number; browserUrl?: string } = {},
+  overrides: Partial<BackendInstanceDescriptor> = {},
 ): Promise<string> {
   const authFile = path.join(dataDir, "gateway-auth.json");
   await writeFile(authFile, `${JSON.stringify({ token: TOKEN })}\n`, { mode: 0o600 });
@@ -41,6 +42,7 @@ async function publish(
       dataDir,
       appVersion: "2.26.3-beta",
       publicApiSchemaVersion: 1,
+      ...overrides,
     }),
     { mode: 0o600 },
   );
@@ -60,6 +62,73 @@ function instant() {
 }
 
 describe("service connection", () => {
+  test.each([
+    { url: "http://100.64.0.10:4317", endpoints: [], expected: "http://100.64.0.10:4317" },
+    { url: "http://100.64.0.10:4317", expected: "http://100.64.0.10:4317" },
+    { url: "http://127.0.0.1:40000", expected: null },
+    {
+      url: "http://127.0.0.1:40000",
+      endpoints: [{ role: "control" as const, url: "http://127.0.0.1:40000" }],
+      expected: null,
+    },
+    {
+      url: "http://127.0.0.1:34125",
+      endpoints: [{ role: "client" as const, url: "http://127.0.0.1:34125" }],
+      expected: null,
+    },
+  ])(
+    "resolves a primary address by endpoint semantics: %j",
+    async ({ expected, ...descriptor }) => {
+      const dataDir = await dataDirectory();
+      await publish(dataDir, {
+        ...descriptor,
+        endpoints: descriptor.endpoints ? [...descriptor.endpoints] : undefined,
+        browserUrl: undefined,
+      });
+      expect((await awaitServiceConnection(dataDir, null, instant()))?.browserUrl).toBe(expected);
+    },
+  );
+
+  test.each(["permissions", "missing", "malformed", "invalid"])(
+    "keeps readiness and auth path on %s credentials",
+    async (failure) => {
+      const dataDir = await dataDirectory();
+      const authFile = await publish(dataDir);
+      if (failure === "permissions")
+        await (await import("node:fs/promises")).chmod(authFile, 0o644);
+      if (failure === "missing") await rm(authFile);
+      if (failure === "malformed") await writeFile(authFile, "{broken-json");
+      if (failure === "invalid") await writeFile(authFile, '{"token":"short"}');
+      const result = await awaitServiceConnection(dataDir, null, instant());
+      expect(result).toMatchObject({
+        browserUrl: "https://host.tailnet.ts.net",
+        authFile,
+        token: null,
+      });
+      expect(result?.credentialError).toBeString();
+      expect(JSON.stringify(result)).not.toContain(TOKEN);
+    },
+  );
+
+  test.each(["SIGINT", "SIGTERM"])("propagates %s while waiting", async (name) => {
+    const dataDir = await dataDirectory();
+    const controller = new AbortController();
+    await expect(
+      awaitServiceConnection(dataDir, null, {
+        timeoutMs: 1000,
+        signal: controller.signal,
+        sleep: async () => {
+          controller.abort(name);
+        },
+      }),
+    ).rejects.toMatchObject({ code: "observation-interrupted" });
+  });
+
+  test("ignores a descriptor from another data directory", async () => {
+    const dataDir = await dataDirectory();
+    await publish(dataDir, { dataDir: path.join(dataDir, "other") });
+    expect(await awaitServiceConnection(dataDir, null, instant())).toBeNull();
+  });
   test("reads the address and token once a new generation is published", async () => {
     const dataDir = await dataDirectory();
     const authFile = await publish(dataDir);

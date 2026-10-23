@@ -15,6 +15,7 @@ import { askServeArguments } from "../service-setup.js";
 import { serviceManagerCommands, serviceUnit } from "../service-units.js";
 import type { CommandContext, CommandSpec, ParsedCommand } from "../spec.js";
 import { stringOption } from "./common.js";
+import { throwIfInterrupted } from "../wait.js";
 
 /**
  * `service install | uninstall | status`: run a standalone backend under
@@ -181,6 +182,7 @@ export const serviceCommands: CommandSpec[] = [
       const serveArgs = interactive
         ? await askServeArguments(context.io, {
             installCommand: installCommandLine(parsed),
+            signal: context.signal,
           })
         : parsed.rest;
       const bun = process.execPath;
@@ -213,6 +215,7 @@ export const serviceCommands: CommandSpec[] = [
         };
       }
       context.io.stderr(`Installing orkestrator@${version}…\n`);
+      throwIfInterrupted(context.signal);
       let releaseDir: string;
       try {
         releaseDir = await service.installRelease(layout, version, { bun });
@@ -265,6 +268,7 @@ export const serviceCommands: CommandSpec[] = [
           ready: connection !== null,
           browserUrl: connection?.browserUrl ?? null,
           authFile: connection?.authFile ?? null,
+          ...(connection?.credentialError ? { credentialError: connection.credentialError } : {}),
           ...summary,
         },
         human: [
@@ -282,9 +286,18 @@ export const serviceCommands: CommandSpec[] = [
                 "",
                 ...keyValues([
                   ["address", connection.browserUrl ?? "(no browser listener; see the log)"],
-                  ["token", connection.token],
+                  ["auth file", connection.authFile],
+                  ...(context.io.stdoutIsTty &&
+                  context.global.output === "human" &&
+                  connection.token
+                    ? [["token", connection.token] as [string, string]]
+                    : []),
                 ]),
-                "Keep the token private: it grants full access to this backend.",
+                ...(connection.credentialError
+                  ? [`Credential file error: ${connection.credentialError}`]
+                  : context.io.stdoutIsTty && context.global.output === "human"
+                    ? ["Keep the token private: it grants full access to this backend."]
+                    : ["Read the gateway token locally from the private auth file."]),
               ]
             : started && readyWaitMs > 0
               ? [

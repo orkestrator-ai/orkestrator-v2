@@ -4,8 +4,8 @@ import {
   type BackendInstanceDescriptor,
 } from "@orkestrator/protocol/backend-instance";
 import { CliError } from "./errors.js";
-import { processIsAlive, readDescriptor, readTokenFile } from "./targets.js";
-import { observe, ObservationStopped, type ObserveOptions } from "./wait.js";
+import { isLoopbackHost, processIsAlive, readDescriptor, readTokenFile } from "./targets.js";
+import { observe, ObservationStopped, throwIfInterrupted, type ObserveOptions } from "./wait.js";
 
 /**
  * How to reach a freshly started service: the address it serves browsers on
@@ -16,7 +16,8 @@ export interface ServiceConnection {
   /** Browser listener (the Tailscale Serve URL with `--tailscale-serve`). */
   browserUrl: string | null;
   authFile: string;
-  token: string;
+  token: string | null;
+  credentialError?: string;
 }
 
 /** Generation of the descriptor in `dataDir` now, so a restart can be told apart. */
@@ -52,15 +53,32 @@ export async function awaitServiceConnection(
         return { done: false as const };
       }
     }, options);
-    return {
-      browserUrl: descriptor.browserUrl ?? null,
+    const connection: ServiceConnection = {
+      // Publishers omit browserUrl when it equals the primary URL. Loopback
+      // URLs may instead be control or SSH listeners, including old descriptors
+      // without endpoint roles, so only fall back to a remote primary address.
+      browserUrl:
+        descriptor.browserUrl ??
+        (isLoopbackHost(new URL(descriptor.url).hostname) ||
+        descriptor.endpoints?.some((endpoint) => endpoint.url === descriptor.url)
+          ? null
+          : descriptor.url),
       authFile: descriptor.authFile,
-      token: await readTokenFile(descriptor.authFile, true),
+      token: null,
     };
+    try {
+      connection.token = await readTokenFile(descriptor.authFile, true);
+    } catch (error) {
+      if (!(error instanceof CliError)) throw error;
+      connection.credentialError = error.message;
+    }
+    throwIfInterrupted(options.signal);
+    return connection;
   } catch (error) {
-    // The install itself succeeded; a slow start or an unreadable token file
-    // only means the operator reads the token from the file instead.
-    if (error instanceof ObservationStopped || error instanceof CliError) return null;
+    if (error instanceof ObservationStopped) {
+      if (error.reason === "deadline") return null;
+      throw new CliError("observation-interrupted", "Stopped waiting for the backend to start");
+    }
     throw error;
   }
 }

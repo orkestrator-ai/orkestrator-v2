@@ -62,3 +62,14 @@
 - **Suite counts:** backend: 9901 passed, 80 skipped, five failed and one error across 9986 tests in 571 files (821.53 s). Three Codex fixture failures were fixed separately; the PATH timeout is tracked in 0671.
 - **Evidence:** `orkestrator-test-run.rkxXtB/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` beneath the host temporary directory; passing focused output was removed by `test:logged`.
 - **Assessment:** another confirmed intermittent recurrence. Neither the owning test nor the container Git implementation changed. Shared-host load remains a hypothesis; no deadline, assertion or skip was changed.
+
+## Service installation review fixes — 2026-10-23
+
+- **Snapshot:** `6e26d05ea` plus the service installation review fixes on `backend-installation-97564095f43d-r1`. Neither the owning test nor the container Git implementation changed.
+- **Original command:** `mise run test:logged -- --name repository-tests -- mise run test`.
+- **Workers:** workspace/root/bridges/protocol reserved 4/1/2/1 slots; workspace allowed two package tasks with two Bun workers per package. The published CLI scenarios also ran during part of the aggregate.
+- **Failure:** `container status and fetch scripts against a local remote > a branch baseline follows origin/<ref> only when the policy fetches` exceeded the 5000 ms deadline (reported at 5200.34 ms), with one dangling process killed.
+- **Isolated rerun:** `mise run test:logged -- --name container-git-isolated -- bun test --cwd apps/backend ./src/core/container-git-fetch-git.test.ts --parallel=1` passed the unchanged complete six-test owner (15.2 s logged, exit 0).
+- **Suite counts:** backend: 10,078 passed, 86 skipped and one failed across 10,165 tests in 586 files (475.13 s); every other workspace package and the root, bridge and protocol groups passed. The aggregate exited 1 after 493.2 s.
+- **Evidence:** `orkestrator-test-run.LHocuH/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory; the aggregate wrapper is `orkestrator-test-run.MeKvlm/repository-tests.log.gz`.
+- **Assessment:** confirmed intermittent recurrence. Aggregate load remains a hypothesis; no implementation, deadline, assertion or skip was changed.

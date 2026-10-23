@@ -79,7 +79,7 @@ export function normalizeBaseUrl(value: string): string {
   return `${url.protocol}//${url.host}`;
 }
 
-function isLoopbackHost(hostname: string): boolean {
+export function isLoopbackHost(hostname: string): boolean {
   return (
     hostname === "localhost" ||
     hostname === "::1" ||

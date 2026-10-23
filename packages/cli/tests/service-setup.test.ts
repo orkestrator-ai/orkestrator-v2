@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import path from "node:path";
+import { runClient } from "../src/client/main.js";
 import {
   askServeArguments,
   HOSTED_WEB_ORIGINS,
@@ -46,7 +48,13 @@ describe("service setup questions", () => {
   test("SSH only listens on the loopback client port without asking about Tailscale", async () => {
     const { io, asked } = scripted(["3", "y"]);
     const args = await askServeArguments(io, { installCommand, probe: tailscaleReady });
-    expect(args).toEqual(["--loopback-client-port", SSH_LOOPBACK_PORT]);
+    expect(args).toEqual([
+      "--host",
+      "127.0.0.1",
+      "--allow-non-tailscale-bind",
+      "--loopback-client-port",
+      SSH_LOOPBACK_PORT,
+    ]);
     expect(asked).toHaveLength(2);
   });
 
@@ -89,6 +97,38 @@ describe("service setup questions", () => {
 });
 
 describe("service install interactivity", () => {
+  test.each(["before setup", "between prompts", "before confirmation"])(
+    "abort %s prevents installation",
+    async (when) => {
+      const box = await createSandbox();
+      sandboxes.push(box);
+      const dataDir = path.join(box.root, "data");
+      const controller = new AbortController();
+      const { io } = scripted(["3", "y"]);
+      const question = io.question!;
+      io.question = async (prompt) => {
+        const answer = await question(prompt);
+        if (when === "between prompts") controller.abort("SIGTERM");
+        return answer;
+      };
+      const stderr = io.stderr;
+      io.stderr = (text) => {
+        stderr(text);
+        if (when === "before confirmation" && text.includes("Equivalent command"))
+          controller.abort("SIGTERM");
+      };
+      if (when === "before setup") controller.abort("SIGTERM");
+      const code = await runClient(["service", "install", "--data-dir", dataDir], {
+        io,
+        version: "9.9.9",
+        signal: controller.signal,
+      });
+      expect(code).toBe(143);
+      expect(existsSync(dataDir)).toBe(false);
+      expect(io.err.join("")).not.toContain("Installing orkestrator");
+    },
+  );
+
   async function dryRun(extra: string[], answers: Array<string | null>) {
     const box = await createSandbox();
     sandboxes.push(box);
@@ -106,6 +146,32 @@ describe("service install interactivity", () => {
     expect(result.code).toBe(0);
     expect(asked).toHaveLength(2);
     expect(result.out).toContain(`--loopback-client-port ${SSH_LOOPBACK_PORT}`);
+  });
+
+  test("the equivalent command preserves install options and quotes a data path with spaces", async () => {
+    const box = await createSandbox();
+    sandboxes.push(box);
+    const dataDir = path.join(box.root, "data with spaces");
+    const { io } = scripted(["3", "y"]);
+    const result = await box.run(
+      [
+        "service",
+        "install",
+        "--data-dir",
+        dataDir,
+        "--release",
+        "2.22.0",
+        "--timeout",
+        "1500ms",
+        "--skip-start",
+        "--dry-run",
+      ],
+      io,
+    );
+    expect(result.code).toBe(0);
+    expect(result.err).toContain(
+      `--data-dir '${dataDir}' --release 2.22.0 --timeout 2s --skip-start --dry-run --yes -- --host 127.0.0.1 --allow-non-tailscale-bind --loopback-client-port ${SSH_LOOPBACK_PORT}`,
+    );
   });
 
   test("serve arguments, --yes and JSON output each skip the questions", async () => {

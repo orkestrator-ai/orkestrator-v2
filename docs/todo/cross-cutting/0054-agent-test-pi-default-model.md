@@ -237,9 +237,10 @@ live Pi coordinator rerun passed on 2026-10-23. Nothing is left in this file.
     no saved default should start on a model it accepts is new work, so per
     `docs/README.md` it went into a new file,
     [0062-pi-chatgpt-login-without-saved-default.md](../agent-engines/0062-pi-chatgpt-login-without-saved-default.md),
-    rather than staying open here. 0062 was the first number free on
-    `origin/main`, on open PRs and on local worktrees: another worker's branch
-    already holds 0061, so 0060 was skipped in case it is also claimed.
+    rather than staying open here. It takes 0062, the number after the
+    highest in use: 0061 (container qualification) is on `main`, and no open
+    PR or remote branch used 0062. 0060 stays unused, because numbers follow
+    the highest one in use.
 
 ## Open questions
 

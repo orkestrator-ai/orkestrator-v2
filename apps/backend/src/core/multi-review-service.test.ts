@@ -5720,6 +5720,22 @@ test("MultiReviewService derives all provenance labels from cited source IDs", a
         "codex/default",
       ]);
       expect(ready?.consolidatedReport?.issues[0]).not.toHaveProperty("reviewSourceIds");
+      // The source IDs are gone from the stored report, so overlap is counted
+      // at certification: both reviewers substantiated every finding.
+      const findings =
+        consolidatedReport.issues.length + consolidatedReport.testCoverageGaps.length;
+      expect(ready?.consolidationOverlap).toMatchObject({
+        version: 1,
+        reviewers: 2,
+        sourceFindings: findings * 2,
+        citedSourceFindings: findings * 2,
+        consolidatedFindings: findings,
+        singleSourceFindings: 0,
+      });
+      expect(ready?.consolidationOverlap?.positions.map((entry) => entry.novelFindings)).toEqual([
+        findings,
+        0,
+      ]);
       const consolidation = [...provider.sends.values()].find((sent) =>
         sent.prompt.includes("<multi-review-reports-json>"),
       );

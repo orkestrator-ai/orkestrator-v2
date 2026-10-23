@@ -85,7 +85,9 @@ class FakeProvider {
   messagesValue: () => unknown[] = () => [{ text: `tail ${this.messagesCalls}` }];
   sendImpl: (sessionId: string, options: ProviderSendOptions) => Promise<void> = async () => {};
   readonly sends: string[] = [];
-  contextUsage: { usedTokens: number; sessionTokens?: number } | undefined = {
+  contextUsage:
+    | { usedTokens: number; sessionTokens?: number; cacheReadTokens?: number }
+    | undefined = {
     usedTokens: 1,
     sessionTokens: 1,
   };
@@ -290,6 +292,36 @@ describe("lazy reviewer transcript observation", () => {
     expect(provider.messagesOptions).toEqual([{ limit: 64 }]);
     expect(reviewers[0]!.tokenCount).toBe(4_321);
     expect(h.efficiency.count("transcript.provider_read_started")).toBe(1);
+  });
+
+  test("cache reads are kept as a count beside the token total, never lowered", async () => {
+    const reviewers = [sentReviewer(0)];
+    const h = harness(reviewers);
+    const provider = h.providers.claude!;
+    provider.contextUsage = { usedTokens: 1, sessionTokens: 900, cacheReadTokens: 600 };
+    await h.runner().advanceReviewers(reviewers);
+    expect(reviewers[0]).toMatchObject({ tokenCount: 900, cacheReadTokens: 600 });
+
+    // A provider that reports only its latest turn can report less later.
+    provider.contextUsage = { usedTokens: 1, sessionTokens: 1_200, cacheReadTokens: 50 };
+    h.clock.now += 60_000;
+    await h.runner().advanceReviewers(reviewers);
+    expect(reviewers[0]).toMatchObject({ tokenCount: 1_200, cacheReadTokens: 600 });
+
+    // A provider that reports no cache reads leaves the count untouched.
+    provider.contextUsage = { usedTokens: 1, sessionTokens: 1_300 };
+    h.clock.now += 60_000;
+    await h.runner().advanceReviewers(reviewers);
+    expect(reviewers[0]).toMatchObject({ tokenCount: 1_300, cacheReadTokens: 600 });
+  });
+
+  test("a reviewer whose provider reports no cache reads records none", async () => {
+    const reviewers = [sentReviewer(0)];
+    const h = harness(reviewers);
+    h.providers.claude!.contextUsage = { usedTokens: 1, sessionTokens: 900 };
+    await h.runner().advanceReviewers(reviewers);
+    expect(reviewers[0]!.tokenCount).toBe(900);
+    expect(reviewers[0]).not.toHaveProperty("cacheReadTokens");
   });
 
   test("a replaced session starts a fresh probe clock", async () => {

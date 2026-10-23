@@ -19,10 +19,8 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import {
   ChevronRight,
-  Container,
   GripVertical,
   LayoutGrid,
-  Laptop,
   Link2,
   Loader2,
   MoreVertical,
@@ -56,6 +54,7 @@ import {
   type EnvironmentMenuItem,
 } from "@/components/environments/EnvironmentItem";
 import { EnvironmentAgentSummary } from "@/components/environments/EnvironmentAgentSummary";
+import { EnvironmentStatusMarker } from "@/components/environments/EnvironmentStatusMarker";
 import { EnvironmentTooltipBody } from "@/components/environments/EnvironmentTooltipBody";
 import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
 import { UnreadBellIcon } from "@/components/environments/UnreadBellIcon";
@@ -536,7 +535,9 @@ function RemoteSortableEnvironmentItem({
 
 /**
  * The row content of another machine's environment, laid out like
- * `EnvironmentItem`: type icon, machine dot, name and an optional subtitle.
+ * `EnvironmentItem`: an activity ring around a machine-coloured circle (local)
+ * or square (container), followed by the name and optional subtitle. During
+ * transitions and actions, a spinner leads and a machine dot stays by the name.
  * Selecting it moves the window to the owner's workspace.
  */
 export function RemoteEnvironmentItem({
@@ -575,7 +576,6 @@ export function RemoteEnvironmentItem({
   const isRunning = isLocalEnvironment || environment.status === "running";
   const isTransitioning =
     !isLocalEnvironment && (environment.status === "creating" || environment.status === "stopping");
-  const EnvironmentIcon = isLocalEnvironment ? Laptop : Container;
 
   const menuItems: EnvironmentMenuItem[] = [
     {
@@ -648,30 +648,27 @@ export function RemoteEnvironmentItem({
               ) : isTransitioning || busy ? (
                 <Loader2 className="h-4 w-4 shrink-0 animate-spin text-amber-500" />
               ) : (
-                <EnvironmentIcon
-                  className={cn(
-                    "h-4 w-4 shrink-0 transition-colors",
-                    (!isRunning || !live) && "text-muted-foreground",
-                    isRunning &&
-                      live &&
-                      environment.activity === "waiting" &&
-                      "text-amber-500 animate-pulse",
-                    isRunning &&
-                      live &&
-                      environment.activity === "working" &&
-                      "text-blue-500 animate-pulse",
-                    isRunning && live && environment.activity === "idle" && "text-success",
-                  )}
+                <EnvironmentStatusMarker
+                  local={isLocalEnvironment}
+                  state={isRunning && live ? environment.activity : "inactive"}
+                  machine={{
+                    name: machine.name,
+                    colorToken: machine.colorToken,
+                    status: statusText,
+                  }}
                 />
               )}
               <span className="flex min-w-0 flex-1 flex-col">
                 <span className="flex min-w-0 items-center gap-1.5">
-                  <MachineDot
-                    colorToken={machine.colorToken}
-                    machineName={machine.name}
-                    status={statusText}
-                  />
                   <span className="truncate font-medium leading-4">{environment.name}</span>
+                  {(environment.deleting || isTransitioning || busy) && (
+                    <MachineDot
+                      machineName={machine.name}
+                      colorToken={machine.colorToken}
+                      status={statusText}
+                      shape={isLocalEnvironment ? "circle" : "square"}
+                    />
+                  )}
                   {environment.hasUnreadWork && (
                     <UnreadBellIcon className="h-3 w-3" aria-label="New completed activity" />
                   )}

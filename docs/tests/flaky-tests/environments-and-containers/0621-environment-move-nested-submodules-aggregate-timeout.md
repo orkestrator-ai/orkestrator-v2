@@ -38,3 +38,11 @@
 - **Owning-file rerun:** `mise run test:logged -- --name env-move-alone -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts --parallel=1 --only-failures` passed twice (35.4 s and 36.7 s logged).
 - **Evidence:** `orkestrator-test-run.EveQv4/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
 - **Changes:** recorded evidence only; no test, timeout, assertion or skip changed.
+
+## Environment marker review fixes — 2026-10-23
+
+- **Original command:** `mise run test:logged -- --name default-tests -- mise run test` on `environment-status-indicator-8f5602a246be-r1`; no backend or Git implementation changed.
+- **Failure:** `move_environment > moves a worktree with nested submodules (same disk)` timed out after five seconds (5054.20 ms) in `expectSubmodulesLinked`, followed by a terminated Git command reporting an invalid submodule gitfile.
+- **Owning-file rerun:** `mise run test:logged -- --name backend-submodule-recheck -- bun test --cwd apps/backend ./src/core/environment-move.test.ts --parallel=1 --only-failures` passed unchanged (34.4 s logged).
+- **Evidence:** `orkestrator-test-run.45VcQo/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
+- **Changes:** recorded recurrence only; no backend tests, timeouts or skips changed.

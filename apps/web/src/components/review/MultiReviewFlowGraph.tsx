@@ -821,13 +821,29 @@ export function MultiReviewFlowGraph({
     "bg-flow-canvas bg-[radial-gradient(var(--color-divider)_1px,transparent_1px)] bg-size-[20px_20px]";
 
   if (stacked) {
-    const connector = (state: MultiReviewFlowEdgeState, id: string) => (
-      <div
-        aria-hidden="true"
-        data-flow-edge={id}
-        data-edge-state={state}
-        className={cn("mx-auto h-5 w-0 border-l-2", CONNECTOR_CLASS[state])}
-      />
+    // A hop and the next stage's label. The negative margin takes back the
+    // column's gaps, so the line runs from one node's edge to the next's and
+    // the label sits beside it. `afterBranch` follows the clean-review route
+    // around Fix: that route has already brought the line down, so the hop
+    // only continues it into the PR node.
+    const connector = (
+      state: MultiReviewFlowEdgeState,
+      id: string,
+      label: ReactNode,
+      afterBranch = false,
+    ) => (
+      <div className={cn("relative -my-1.5 flex flex-col pb-1.5", afterBranch ? "pt-1.5" : "pt-8")}>
+        <div
+          aria-hidden="true"
+          data-flow-edge={afterBranch ? undefined : id}
+          data-edge-state={afterBranch ? undefined : state}
+          className={cn(
+            "pointer-events-none absolute inset-y-0 left-1/2 -ml-px w-0 border-l-2",
+            CONNECTOR_CLASS[state],
+          )}
+        />
+        {label}
+      </div>
     );
     const { zoom, offset, panning, viewportHandlers } = stackedViewport;
     // Until the column is measured it renders unscaled, exactly as at 100%.
@@ -902,15 +918,20 @@ export function MultiReviewFlowGraph({
             >
               <ColumnLabel>Prepare</ColumnLabel>
               {renderNode(packageNode, undefined, "w-full")}
-              {connector(summarizeFlowEdges(edges.intoReviewers), "into-reviewers")}
-              <ColumnLabel title={reviewTitle}>{reviewLabel}</ColumnLabel>
+              {connector(
+                summarizeFlowEdges(edges.intoReviewers),
+                "into-reviewers",
+                <ColumnLabel title={reviewTitle}>{reviewLabel}</ColumnLabel>,
+              )}
               {reviewerNodes.map((node) => renderNode(node, undefined, "w-full"))}
-              {connector(summarizeFlowEdges(edges.intoConsolidation), "into-consolidation")}
-              <ColumnLabel>Consolidate</ColumnLabel>
+              {connector(
+                summarizeFlowEdges(edges.intoConsolidation),
+                "into-consolidation",
+                <ColumnLabel>Consolidate</ColumnLabel>,
+              )}
               {renderNode(consolidationNode, undefined, "w-full")}
               <div className="relative flex flex-col gap-1.5">
-                {connector(edges.intoFix, "into-fix")}
-                <ColumnLabel>Fix</ColumnLabel>
+                {connector(edges.intoFix, "into-fix", <ColumnLabel>Fix</ColumnLabel>)}
                 {renderNode(fixNode, undefined, "w-full")}
                 {edges.prSource === "consolidation" ? (
                   <>
@@ -926,11 +947,14 @@ export function MultiReviewFlowGraph({
                     />
                     <div aria-hidden="true" className="h-5" />
                   </>
-                ) : (
-                  connector(edges.intoPr, "into-pr")
-                )}
+                ) : null}
               </div>
-              <ColumnLabel>PR</ColumnLabel>
+              {connector(
+                edges.intoPr,
+                "into-pr",
+                <ColumnLabel>PR</ColumnLabel>,
+                edges.prSource === "consolidation",
+              )}
               {renderNode(prNode, undefined, "w-full")}
             </div>
           </div>

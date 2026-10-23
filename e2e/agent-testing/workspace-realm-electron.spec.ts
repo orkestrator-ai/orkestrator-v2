@@ -330,6 +330,75 @@ test("a leaf's workspace opens in the window's central region without moving or 
     await expect(window).toHaveTitle(/leaf-app/);
     await sameWindow();
 
+    // Native keyboard input requires the containing window to be focused.
+    const windowFocused = await electronApp.evaluate(async ({ app, BrowserWindow }) => {
+      if (process.platform === "darwin") app.focus({ steal: true });
+      const host = BrowserWindow.getAllWindows()[0]!;
+      host.show();
+      host.focus();
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      return host.isFocused();
+    });
+    if (!windowFocused)
+      test.info().annotations.push({
+        type: "native-focus",
+        description:
+          "The desktop session did not activate Electron. DOM keyboard handoffs are checked; native focus calls are covered by WorkspaceViews unit tests.",
+      });
+    // Keyboard focus crosses the native webContents boundary in both directions.
+    const panelState = () =>
+      electronApp.evaluate(async ({ webContents }) => {
+        const realm = webContents
+          .getAllWebContents()
+          .find((contents) => contents.getURL().includes("realm=workspace"))!;
+        const dom = (await realm.executeJavaScript(`(() => {
+        const panel = document.querySelector('section[role="dialog"][aria-hidden="false"]');
+        return { label: panel?.getAttribute('aria-label') ?? null, focused: Boolean(panel?.contains(document.activeElement)) };
+      })()`)) as { label: string | null; focused: boolean };
+        return { ...dom, nativeFocus: realm.isFocused() };
+      });
+    for (const [triggerLabel, panelLabel] of [
+      ["Open agent information", "Agent information"],
+      ["Open environment process usage", "Environment process usage"],
+    ]) {
+      const trigger = window.getByRole("button", { name: triggerLabel, exact: true });
+      await expect(trigger).not.toHaveAttribute("aria-controls");
+      for (const dismiss of ["close", "Escape"]) {
+        await electronApp.evaluate(({ BrowserWindow }) =>
+          BrowserWindow.getAllWindows()[0]!.webContents.focus(),
+        );
+        await trigger.focus();
+        await expect(trigger).toBeFocused();
+        await electronApp.evaluate(({ BrowserWindow }) => {
+          const host = BrowserWindow.getAllWindows()[0]!.webContents;
+          host.sendInputEvent({ type: "keyDown", keyCode: "Enter" });
+          host.sendInputEvent({ type: "char", keyCode: "\r" });
+          host.sendInputEvent({ type: "keyUp", keyCode: "Enter" });
+        });
+        await expect.poll(panelState).toMatchObject({ label: panelLabel, focused: true });
+        if (windowFocused)
+          await expect.poll(async () => (await panelState()).nativeFocus).toBe(true);
+        // Clear the shell's retained DOM focus so return-focus cannot pass
+        // merely because the original trigger stayed its active element.
+        await window.evaluate(() => {
+          if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+        });
+        // Send actual native keyboard input to the focused child document.
+        await electronApp.evaluate(({ webContents }, dismiss) => {
+          const realm = webContents
+            .getAllWebContents()
+            .find((contents) => contents.getURL().includes("realm=workspace"))!;
+          const keyCode = dismiss === "Escape" ? "Escape" : "Enter";
+          realm.sendInputEvent({ type: "keyDown", keyCode });
+          if (keyCode === "Enter") realm.sendInputEvent({ type: "char", keyCode: "\r" });
+          realm.sendInputEvent({ type: "keyUp", keyCode });
+        }, dismiss);
+        await expect.poll(async () => (await panelState()).label).toBeNull();
+        await expect(trigger).toBeFocused();
+        await expect.poll(async () => (await panelState()).nativeFocus).toBe(false);
+      }
+    }
+
     // A sidebar menu that stays clear of the central region leaves the
     // workspace live.
     await leafRow

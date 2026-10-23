@@ -58,6 +58,30 @@ test("title-bar popovers and meters cross only in their known shapes", () => {
   expect(parseShellMessage({ type: "panel", panel: "settings", open: true })).toBeNull();
   expect(parseShellMessage({ type: "panel", panel: "usage", open: "yes" })).toBeNull();
 
+  expect(
+    parseShellMessage({
+      type: "panel",
+      panel: "agent",
+      open: false,
+      inset: 6,
+      seq: 42,
+      restoreFocus: true,
+    }),
+  ).toEqual({ type: "panel", panel: "agent", open: false, inset: 6, seq: 42, restoreFocus: true });
+  expect(parseRealmMessage({ type: "panelDismissed", panel: "usage", seq: 42 })).toEqual({
+    type: "panelDismissed",
+    panel: "usage",
+    seq: 42,
+  });
+  for (const seq of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1, "42", undefined]) {
+    expect(parseRealmMessage({ type: "panelDismissed", panel: "usage", seq })).toBeNull();
+  }
+  expect(parseRealmMessage({ type: "panelDismissed", panel: "settings", seq: 42 })).toBeNull();
+  expect(parseRealmMessage({ type: "titleBar", panel: "agent", requestSeq: 42 })).toMatchObject({
+    panel: "agent",
+    requestSeq: 42,
+  });
+
   const usage = {
     cpuPercent: 31,
     ramPercent: 73,

@@ -31,6 +31,7 @@ function fakeContents() {
     loadURL: mock(async (url: string) => {
       contents.url = url;
     }),
+    focus: mock(() => undefined),
     send: (...args: unknown[]) => void contents.sent.push(args),
     setZoomFactor: (factor: number) => {
       contents.zoom = factor;
@@ -148,6 +149,34 @@ describe("workspace realms in a desktop window", () => {
       [WORKSPACE_VIEWS_EVENT_CHANNEL, { viewId, type: "message", message: { type: "ready" } }],
     ]);
     expect(() => views.post(parent.webContents.id, { type: "ready" })).toThrow("workspace realm");
+  });
+
+  test("panel focus crosses native contents only for visible user handoffs", async () => {
+    const { views } = harness();
+    const parent = fakeParent();
+    const { viewId } = await views.open(parent as never, { nodeId: "bk_leaf", search: {} });
+    const child = (parent.children[0] as FakeView).webContents;
+    const send = (open: boolean, restoreFocus = false) =>
+      views.send(parent.webContents.id, viewId, {
+        type: "panel",
+        panel: "agent",
+        open,
+        restoreFocus,
+      });
+    send(true);
+    expect(child.focus).not.toHaveBeenCalled();
+    views.setVisible(parent.webContents.id, viewId, true);
+    send(true);
+    expect(child.focus).toHaveBeenCalledTimes(1);
+    send(false);
+    expect(parent.webContents.focus).not.toHaveBeenCalled();
+    send(false, true);
+    expect(parent.webContents.focus).toHaveBeenCalledTimes(1);
+    views.setVisible(parent.webContents.id, viewId, false);
+    send(false, true);
+    send(true);
+    expect(child.focus).toHaveBeenCalledTimes(1);
+    expect(parent.webContents.focus).toHaveBeenCalledTimes(1);
   });
 
   test("a still of a realm is a JPEG data URL for its own window only", async () => {

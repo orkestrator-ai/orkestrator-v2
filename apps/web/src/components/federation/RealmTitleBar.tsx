@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import type { TabInfo } from "@/types/paneLayout";
 import { AgentInfoButton, AgentInfoTrigger } from "@/components/layout/AgentInfoButton";
 import {
@@ -13,7 +13,7 @@ import {
   type RealmPanel,
   type RealmPanelRequest,
 } from "@/lib/federation/workspace-realm";
-import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
+import { realmPanel, useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 
 /**
  * The title bar of a window showing another node's workspace looks as it does
@@ -39,15 +39,17 @@ export function RealmTitleBarPanels({ activeTab }: { activeTab: TabInfo | null }
   // The same coordinated read the popover's own meters join.
   const usageView = useSystemUsage({ intervalMs: SYSTEM_USAGE_POLL_INTERVAL_MS });
   const [requests, setRequests] = useState<Partial<Record<RealmPanel, RealmPanelRequest>>>({});
-  const [openPanel, setOpenPanel] = useState<RealmPanel | null>(null);
+  const [report, setReport] = useState<{ panel: RealmPanel | null; requestSeq: number }>({
+    panel: null,
+    requestSeq: 0,
+  });
   const nextSeq = useRef(1);
 
   useEffect(
     () =>
       onShellMessage((message) => {
         if (message.type !== "panel") return;
-        const seq = nextSeq.current;
-        nextSeq.current += 2;
+        const seq = message.seq ?? nextSeq.current++;
         const other = OTHER_PANEL[message.panel];
         setRequests((current) => ({
           ...current,
@@ -59,16 +61,13 @@ export function RealmTitleBarPanels({ activeTab }: { activeTab: TabInfo | null }
               ? message.inset
               : (current[message.panel]?.inset ?? DEFAULT_PANEL_INSET),
           },
-          // One popover at a time, as in the window's own title bar.
-          ...(message.open
-            ? {
-                [other]: {
-                  seq: seq + 1,
-                  open: false,
-                  inset: current[other]?.inset ?? DEFAULT_PANEL_INSET,
-                },
-              }
-            : {}),
+          // Each request describes the whole desired state. A close must also
+          // cancel a replacement whose open request was superseded before delivery.
+          [other]: {
+            seq,
+            open: false,
+            inset: current[other]?.inset ?? DEFAULT_PANEL_INSET,
+          },
         }));
       }),
     [],
@@ -77,13 +76,25 @@ export function RealmTitleBarPanels({ activeTab }: { activeTab: TabInfo | null }
   const usage = usageView.sample;
   const usageStale = usageView.stale;
   useEffect(() => {
-    postToShell({ type: "titleBar", usage, usageStale, panel: openPanel });
-  }, [openPanel, usage, usageStale]);
+    postToShell({ type: "titleBar", usage, usageStale, ...report });
+  }, [report, usage, usageStale]);
 
   const control = (panel: RealmPanel) => ({
     request: requests[panel] ?? null,
-    onOpenChange: (open: boolean) =>
-      setOpenPanel((current) => (open ? panel : current === panel ? null : current)),
+    onOpenChange: (open: boolean) => {
+      const requestSeq = requests[panel]?.seq ?? 0;
+      setReport((current) => {
+        if (requestSeq < current.requestSeq) return current;
+        const next = open ? panel : current.panel === panel ? null : current.panel;
+        return next === current.panel && requestSeq === current.requestSeq
+          ? current
+          : { panel: next, requestSeq };
+      });
+    },
+    onDismiss: () => {
+      const seq = requests[panel]?.seq;
+      if (seq !== undefined) postToShell({ type: "panelDismissed", panel, seq });
+    },
   });
 
   return (
@@ -134,6 +145,31 @@ function toggleRealmPanel(
   useRemoteWorkspaceStore.getState().requestRealmPanel(nodeId, panel, open, inset);
 }
 
+function usePanelTrigger(
+  nodeId: string,
+  panel: RealmPanel,
+  trigger: RefObject<HTMLButtonElement | null>,
+) {
+  const open = useRemoteWorkspaceStore((state) => realmPanel(state, nodeId) === panel);
+  useEffect(
+    () =>
+      useRemoteWorkspaceStore.subscribe((state, previous) => {
+        const request = state.panelRequests[nodeId];
+        if (
+          state.active?.nodeId === nodeId &&
+          request !== previous.panelRequests[nodeId] &&
+          request?.panel === panel &&
+          !request.open &&
+          request.restoreFocus
+        ) {
+          trigger.current?.focus();
+        }
+      }),
+    [nodeId, panel, trigger],
+  );
+  return open;
+}
+
 /** Window side: the shown realm's host meters, in the title bar's own place for them. */
 export function RealmSystemUsageMeters({
   nodeId,
@@ -144,7 +180,7 @@ export function RealmSystemUsageMeters({
 }) {
   const { titleBar, quiet } = useRealmTitleBar(nodeId);
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const open = titleBar?.panel === "usage";
+  const open = usePanelTrigger(nodeId, "usage", triggerRef);
   return (
     <div
       className="relative flex items-center"
@@ -153,6 +189,7 @@ export function RealmSystemUsageMeters({
     >
       <SystemUsageMeters
         triggerRef={triggerRef}
+        remote
         usage={titleBar?.usage ?? null}
         stale={quiet || titleBar?.usageStale === true}
         open={open}
@@ -170,13 +207,13 @@ export function RealmAgentInfoTrigger({
   nodeId: string;
   region: HTMLElement | null;
 }) {
-  const { titleBar } = useRealmTitleBar(nodeId);
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const open = titleBar?.panel === "agent";
+  const open = usePanelTrigger(nodeId, "agent", triggerRef);
   return (
     <div className="relative h-8 w-8" {...{ [TRIGGER_ATTRIBUTE]: "agent" }}>
       <AgentInfoTrigger
         ref={triggerRef}
+        remote
         open={open}
         onClick={() => toggleRealmPanel(nodeId, "agent", !open, triggerRef.current, region)}
       />
@@ -190,20 +227,18 @@ export function RealmAgentInfoTrigger({
  * being shown. Presses inside the realm are its own to handle.
  */
 export function useRealmPanelDismiss(nodeId: string | null): void {
-  const panel = useRemoteWorkspaceStore((state) =>
-    nodeId ? (state.titleBars[nodeId]?.panel ?? null) : null,
-  );
+  const panel = useRemoteWorkspaceStore((state) => (nodeId ? realmPanel(state, nodeId) : null));
 
   useEffect(() => {
     if (!nodeId || !panel) return;
-    const close = () =>
+    const close = (restoreFocus = false) =>
       useRemoteWorkspaceStore
         .getState()
-        .requestRealmPanel(nodeId, panel, false, DEFAULT_PANEL_INSET);
+        .requestRealmPanel(nodeId, panel, false, DEFAULT_PANEL_INSET, restoreFocus);
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
       event.preventDefault();
-      close();
+      close(true);
     };
     const handlePointerDown = (event: PointerEvent) => {
       if (event.target instanceof Element && event.target.closest(`[${TRIGGER_ATTRIBUTE}]`)) {
@@ -222,7 +257,8 @@ export function useRealmPanelDismiss(nodeId: string | null): void {
   useEffect(() => {
     if (!nodeId) return;
     return () => {
-      const open = useRemoteWorkspaceStore.getState().titleBars[nodeId]?.panel;
+      const state = useRemoteWorkspaceStore.getState();
+      const open = realmPanel(state, nodeId);
       if (open) {
         useRemoteWorkspaceStore
           .getState()

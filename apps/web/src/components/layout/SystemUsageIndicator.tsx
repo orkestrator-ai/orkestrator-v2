@@ -153,12 +153,14 @@ export function SystemUsageMeters({
   open,
   onToggle,
   triggerRef,
+  remote = false,
 }: {
   usage: SystemUsageSnapshot | null;
   stale: boolean;
   open: boolean;
   onToggle: () => void;
   triggerRef?: Ref<HTMLButtonElement>;
+  remote?: boolean;
 }) {
   const freshUsage = usage && !stale ? usage : null;
   const sampleTime = formatSampleTime(usage?.sampledAt ?? null);
@@ -201,7 +203,7 @@ export function SystemUsageMeters({
       aria-label={open ? "Close environment process usage" : "Open environment process usage"}
       aria-expanded={open}
       aria-haspopup="dialog"
-      aria-controls="environment-process-usage-popover"
+      aria-controls={remote ? undefined : "environment-process-usage-popover"}
       data-sampled-at={usage?.sampledAt ?? undefined}
       data-stale={usage !== null && freshUsage === null ? "true" : undefined}
     >
@@ -258,8 +260,9 @@ export function SystemUsageIndicator({
   // pauses it while the document is hidden and reconciles once on return.
   const usageView = useSystemUsage({ intervalMs: SYSTEM_USAGE_POLL_INTERVAL_MS });
   const usage = usageView.sample;
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(remote?.request?.open ?? false);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLElement>(null);
   const restoreFocusRef = useRef(false);
 
   const remoteRequest = remote?.request ?? null;
@@ -269,7 +272,14 @@ export function SystemUsageIndicator({
     if (remoteRequest) setOpen(remoteRequest.open);
   }
   const reportOpen = useEffectEvent((next: boolean) => remote?.onOpenChange(next));
-  useEffect(() => reportOpen(open), [open]);
+  useEffect(() => reportOpen(open), [open, remoteRequest?.seq]);
+
+  const reportDismiss = useEffectEvent(() => remote?.onDismiss?.());
+  useEffect(() => {
+    if (open && remoteRequest?.open) {
+      panelRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    }
+  }, [open, remoteRequest?.open, remoteRequest?.seq]);
 
   const close = useCallback(() => {
     restoreFocusRef.current = true;
@@ -279,6 +289,7 @@ export function SystemUsageIndicator({
   useEffect(() => {
     if (!open && restoreFocusRef.current) {
       restoreFocusRef.current = false;
+      reportDismiss();
       triggerRef.current?.focus();
     }
   }, [open]);
@@ -321,6 +332,7 @@ export function SystemUsageIndicator({
       ) : null}
 
       <section
+        ref={panelRef}
         id="environment-process-usage-popover"
         role="dialog"
         aria-label="Environment process usage"
@@ -389,16 +401,13 @@ function EnvironmentProcessPanel() {
   const rawGroups = fresh?.environments ?? snapshot?.environments ?? [];
   const groups = orderEnvironmentProcessGroups(rawGroups, frozenIds);
 
-  useEffect(() => {
-    const nextGroups = snapshot?.environments ?? [];
-    if (!rankable || nextGroups.length === 0) return;
-    setFrozenIds((current) => {
-      const next = mergeFrozenEnvironmentIds(current, nextGroups);
-      return next.length === current.length && next.every((id, index) => id === current[index])
-        ? current
-        : next;
-    });
-  }, [rankable, snapshot]);
+  const nextGroups = snapshot?.environments ?? [];
+  if (rankable && nextGroups.length > 0) {
+    const next = mergeFrozenEnvironmentIds(frozenIds, nextGroups);
+    if (next.length !== frozenIds.length || next.some((id, index) => id !== frozenIds[index])) {
+      setFrozenIds(next);
+    }
+  }
 
   if (snapshot === null) {
     return <p className="text-xs text-muted-foreground">Loading processes…</p>;

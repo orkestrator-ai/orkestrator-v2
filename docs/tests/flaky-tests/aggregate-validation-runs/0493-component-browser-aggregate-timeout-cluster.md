@@ -197,3 +197,10 @@ Exact original failed cases:
 - **Complete unchanged owner:** `ORKESTRATOR_E2E_PORT=19431 mise run test:logged -- --name merge-native-browser-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentLaunchDialog.spec.ts --workers=1 --output=output/agent-testing/merge-native-browser-owner` reported two passed and the same two failed in 22.2 s. This matches the previously recorded non-green native-dropdown cases; this rerun does not establish a flake. No source, assertion, timeout or skip changed.
 - **Evidence:** host temporary directories `orkestrator-test-run.e52ASg/merge-component-browser.log.gz` and `orkestrator-test-run.k1qDoe/merge-native-browser-owner.log.gz`; isolated traces are under `output/agent-testing/merge-native-browser-owner/`.
 - **Public-site checks:** the failed aggregate did not reach them. `mise run test:logged -- --name merge-public-browser -- bunx playwright test --config e2e/public-site/playwright.config.ts` passed separately (11.5 s).
+
+## Realm title-bar review validation — 2026-10-23
+
+- **Aggregate:** `mise run test:logged -- --name browser-validation -- mise run test:browser`: 506 passed, 95 skipped and three failed out of 604 component cases. Public-site smoke was run separately because the aggregate stopped at component failures.
+- **Failures:** both unchanged `AgentLaunchDialog.spec.ts` native branch-suggestion cases retained `rel` instead of selecting `release/2.0`; the desktop 240px `AnnotationDestinationLayout.spec.ts` case also failed in the aggregate.
+- **Owner rerun:** `mise run test:logged -- --name browser-failure-isolation -- bunx playwright test --config e2e/playwright.config.ts AgentLaunchDialog.spec.ts AnnotationDestinationLayout.spec.ts --workers=1`: eight passed and both native branch cases failed. All six unchanged annotation-layout cases passed. The branch cases remain non-green independently, as in the previous validation records; only the annotation failure is classified as an aggregate flake.
+- **Evidence:** host temporary artifacts `orkestrator-test-run.XqFDpu/browser-validation.log.gz` and `orkestrator-test-run.NHzPRI/browser-failure-isolation.log.gz`.

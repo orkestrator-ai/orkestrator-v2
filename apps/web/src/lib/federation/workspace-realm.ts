@@ -47,6 +47,8 @@ export interface RealmPanelRequest {
 export interface RealmPanelControl {
   request: RealmPanelRequest | null;
   onOpenChange: (open: boolean) => void;
+  /** User dismissal, rather than a replacement or shell-driven close. */
+  onDismiss?: () => void;
 }
 
 /** What the window asks its realm to show. */
@@ -65,7 +67,16 @@ export type ShellToRealmMessage =
   /** The window's sidebar was shown or hidden (the realm's toolbar toggles it). */
   | { type: "sidebar"; open: boolean }
   /** The window's title bar opened or closed one of the realm's popovers. */
-  | { type: "panel"; panel: RealmPanel; open: boolean; inset: number };
+  | {
+      type: "panel";
+      panel: RealmPanel;
+      open: boolean;
+      inset: number;
+      /** Window-assigned sequence, echoed by the realm after application. */
+      seq?: number;
+      /** Return native keyboard focus to the shell after user dismissal. */
+      restoreFocus?: boolean;
+    };
 
 /** What a realm tells its window. */
 export type RealmToShellMessage =
@@ -79,12 +90,16 @@ export type RealmToShellMessage =
   | { type: "sidebar"; open: boolean }
   /** Open the window's settings: they belong to the command node. */
   | { type: "settings"; section: string }
+  /** A user dismissed the popover opened by this request. */
+  | { type: "panelDismissed"; panel: RealmPanel; seq: number }
   /** What the window's title bar shows for this node: its host meters and open popover. */
   | {
       type: "titleBar";
       usage: RealmUsageReading | null;
       usageStale: boolean;
       panel: RealmPanel | null;
+      /** Last applied window panel request; absent in older realms. */
+      requestSeq?: number;
     };
 
 function params(): URLSearchParams | null {
@@ -98,6 +113,10 @@ function params(): URLSearchParams | null {
 
 function isRealmPanel(value: unknown): value is RealmPanel {
   return value === "usage" || value === "agent";
+}
+
+function sequence(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 
 function finiteNumber(value: unknown): number | null {
@@ -179,6 +198,8 @@ export function parseShellMessage(value: unknown): ShellToRealmMessage | null {
       panel: message.panel,
       open: message.open,
       inset: Math.min(Math.max(inset ?? 0, 0), MAX_PANEL_INSET),
+      ...(sequence(message.seq) !== undefined ? { seq: sequence(message.seq) } : {}),
+      ...(message.restoreFocus === true ? { restoreFocus: true } : {}),
     };
   }
   if (message.type !== "select") return null;
@@ -214,12 +235,21 @@ export function parseRealmMessage(value: unknown): RealmToShellMessage | null {
       ? { type: "settings", section: message.section }
       : null;
   }
+  if (message.type === "panelDismissed") {
+    const seq = sequence(message.seq);
+    return isRealmPanel(message.panel) && seq !== undefined
+      ? { type: "panelDismissed", panel: message.panel, seq }
+      : null;
+  }
   if (message.type === "titleBar") {
     return {
       type: "titleBar",
       usage: parseUsageReading(message.usage),
       usageStale: message.usageStale === true,
       panel: isRealmPanel(message.panel) ? message.panel : null,
+      ...(sequence(message.requestSeq) !== undefined
+        ? { requestSeq: sequence(message.requestSeq) }
+        : {}),
     };
   }
   if (message.type !== "selection") return null;

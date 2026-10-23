@@ -38,6 +38,8 @@ export interface RealmTitleBar {
   usage: RealmUsageReading | null;
   usageStale: boolean;
   panel: RealmPanel | null;
+  /** Last panel request applied by this realm document. */
+  requestSeq?: number;
   /** When the report arrived (`Date.now()`), so a realm that went quiet reads as stale. */
   receivedAt: number;
 }
@@ -48,6 +50,8 @@ export interface RealmPanelMessage {
   panel: RealmPanel;
   open: boolean;
   inset: number;
+  /** A user dismissal asks for a focus handoff back to the shell trigger. */
+  restoreFocus?: boolean;
 }
 
 interface RemoteWorkspaceState {
@@ -75,7 +79,13 @@ interface RemoteWorkspaceState {
   /** A realm reported what the window's title bar shows for it. */
   noteRealmTitleBar: (nodeId: string, titleBar: Omit<RealmTitleBar, "receivedAt">) => void;
   /** Ask a realm to open or close one of its title-bar popovers. */
-  requestRealmPanel: (nodeId: string, panel: RealmPanel, open: boolean, inset: number) => void;
+  requestRealmPanel: (
+    nodeId: string,
+    panel: RealmPanel,
+    open: boolean,
+    inset: number,
+    restoreFocus?: boolean,
+  ) => void;
 }
 
 function pick<T>(record: Record<string, T>, ids: readonly string[]): Record<string, T> {
@@ -87,6 +97,20 @@ function pick<T>(record: Record<string, T>, ids: readonly string[]): Record<stri
 let nextSeq = 1;
 /** Set while this store itself clears the window's own selection. */
 let clearingLocalSelection = false;
+
+/** Pending intent wins over reports from an earlier request. */
+export function realmPanel(
+  state: Pick<RemoteWorkspaceState, "panelRequests" | "titleBars">,
+  nodeId: string,
+): RealmPanel | null {
+  const request = state.panelRequests[nodeId];
+  const report = state.titleBars[nodeId];
+  return request && request.seq > (report?.requestSeq ?? 0)
+    ? request.open
+      ? request.panel
+      : null
+    : (report?.panel ?? null);
+}
 
 export const useRemoteWorkspaceStore = create<RemoteWorkspaceState>()((set, get) => ({
   active: null,
@@ -145,14 +169,25 @@ export const useRemoteWorkspaceStore = create<RemoteWorkspaceState>()((set, get)
   },
   noteRealmTitleBar: (nodeId, titleBar) => {
     if (!get().realms.includes(nodeId)) return;
-    set({ titleBars: { ...get().titleBars, [nodeId]: { ...titleBar, receivedAt: Date.now() } } });
+    const previous = get().titleBars[nodeId];
+    const report =
+      previous && (previous.requestSeq ?? 0) > (titleBar.requestSeq ?? 0)
+        ? { ...titleBar, panel: previous.panel, requestSeq: previous.requestSeq }
+        : titleBar;
+    set({ titleBars: { ...get().titleBars, [nodeId]: { ...report, receivedAt: Date.now() } } });
   },
-  requestRealmPanel: (nodeId, panel, open, inset) => {
+  requestRealmPanel: (nodeId, panel, open, inset, restoreFocus) => {
     if (!get().realms.includes(nodeId)) return;
     set({
       panelRequests: {
         ...get().panelRequests,
-        [nodeId]: { seq: nextSeq++, panel, open, inset },
+        [nodeId]: {
+          seq: nextSeq++,
+          panel,
+          open,
+          inset,
+          ...(restoreFocus ? { restoreFocus: true } : {}),
+        },
       },
     });
   },

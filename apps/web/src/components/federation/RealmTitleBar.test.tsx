@@ -1,14 +1,15 @@
-import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import * as realAgentInfoButton from "@/components/layout/AgentInfoButton";
-import * as realSystemUsageIndicator from "@/components/layout/SystemUsageIndicator";
-import * as realUseSystemUsage from "@/hooks/useSystemUsage";
-import type { RealmPanelControl } from "@/lib/federation/workspace-realm";
+import { invoke as nativeInvoke } from "@/lib/native/backend";
+import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
+import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
-
-const realAgentInfoButtonSnapshot = { ...realAgentInfoButton };
-const realSystemUsageIndicatorSnapshot = { ...realSystemUsageIndicator };
-const realUseSystemUsageSnapshot = { ...realUseSystemUsage };
+import {
+  RealmAgentInfoTrigger,
+  RealmSystemUsageMeters,
+  RealmTitleBarPanels,
+  useRealmPanelDismiss,
+} from "./RealmTitleBar";
 
 const USAGE = {
   cpuPercent: 31,
@@ -17,62 +18,12 @@ const USAGE = {
   diskPercent: 59,
   sampledAt: "2026-10-23T12:00:00.000Z",
 };
-let usageView = {
-  sample: USAGE as typeof USAGE | null,
-  sampledAt: USAGE.sampledAt as string | null,
-  observedAt: 0 as number | null,
-  stale: false,
-};
-
-// The popovers' own behaviour has its own suites; here they only show what
-// the title bar asked of them and report back.
-function PanelStub({ name, remote }: { name: string; remote?: RealmPanelControl }) {
-  return (
-    <div
-      data-testid={`${name}-panel`}
-      data-request={remote?.request ? JSON.stringify(remote.request) : "none"}
-    >
-      <button type="button" onClick={() => remote?.onOpenChange(true)}>
-        {`${name} opened`}
-      </button>
-      <button type="button" onClick={() => remote?.onOpenChange(false)}>
-        {`${name} closed`}
-      </button>
-    </div>
-  );
-}
-
-mock.module("@/components/layout/AgentInfoButton", () => ({
-  ...realAgentInfoButtonSnapshot,
-  AgentInfoButton: ({ remote }: { remote?: RealmPanelControl }) => (
-    <PanelStub name="agent" remote={remote} />
-  ),
-}));
-mock.module("@/components/layout/SystemUsageIndicator", () => ({
-  ...realSystemUsageIndicatorSnapshot,
-  SystemUsageIndicator: ({ remote }: { remote?: RealmPanelControl }) => (
-    <PanelStub name="usage" remote={remote} />
-  ),
-}));
-mock.module("@/hooks/useSystemUsage", () => ({
-  ...realUseSystemUsageSnapshot,
-  useSystemUsage: () => usageView,
-}));
-
-const { RealmAgentInfoTrigger, RealmSystemUsageMeters, RealmTitleBarPanels, useRealmPanelDismiss } =
-  await import("./RealmTitleBar");
-
-afterAll(() => {
-  mock.module("@/components/layout/AgentInfoButton", () => realAgentInfoButtonSnapshot);
-  mock.module("@/components/layout/SystemUsageIndicator", () => realSystemUsageIndicatorSnapshot);
-  mock.module("@/hooks/useSystemUsage", () => realUseSystemUsageSnapshot);
-});
-
 const INITIAL_REMOTE = useRemoteWorkspaceStore.getState();
 
 afterEach(() => {
   cleanup();
   useRemoteWorkspaceStore.setState(INITIAL_REMOTE, true);
+  resetReadCoordinatorForTests();
 });
 
 describe("window: another node's title-bar controls", () => {
@@ -94,7 +45,10 @@ describe("window: another node's title-bar controls", () => {
   }
 
   beforeEach(() => {
-    useRemoteWorkspaceStore.setState({ realms: ["bk_a"] });
+    useRemoteWorkspaceStore.setState({
+      realms: ["bk_a"],
+      active: { nodeId: "bk_a", projectId: null, environmentId: null },
+    });
   });
 
   test("shows what the realm reported and asks it for the popover under the trigger", () => {
@@ -118,9 +72,12 @@ describe("window: another node's title-bar controls", () => {
 
     // The realm says it opened: the trigger shows it, and pressing it again closes.
     act(() =>
-      useRemoteWorkspaceStore
-        .getState()
-        .noteRealmTitleBar("bk_a", { usage: USAGE, usageStale: false, panel: "usage" }),
+      useRemoteWorkspaceStore.getState().noteRealmTitleBar("bk_a", {
+        usage: USAGE,
+        usageStale: false,
+        panel: "usage",
+        requestSeq: useRemoteWorkspaceStore.getState().panelRequests.bk_a?.seq,
+      }),
     );
     fireEvent.pointerDown(screen.getByRole("button", { name: "Close environment process usage" }));
     expect(useRemoteWorkspaceStore.getState().panelRequests.bk_a?.open).toBe(true);
@@ -155,15 +112,96 @@ describe("window: another node's title-bar controls", () => {
       open: false,
     });
 
+    act(() => useRemoteWorkspaceStore.getState().requestRealmPanel("bk_a", "agent", true, 6));
     const seq = useRemoteWorkspaceStore.getState().panelRequests.bk_a!.seq;
     fireEvent.pointerDown(screen.getByText("Elsewhere"));
     expect(useRemoteWorkspaceStore.getState().panelRequests.bk_a!.seq).toBeGreaterThan(seq);
 
+    act(() => useRemoteWorkspaceStore.getState().requestRealmPanel("bk_a", "agent", true, 6));
     const before = useRemoteWorkspaceStore.getState().panelRequests.bk_a!.seq;
     rerender(<TitleBar nodeId={null} region={anchor} />);
     expect(useRemoteWorkspaceStore.getState().panelRequests.bk_a!.seq).toBeGreaterThan(before);
     expect(useRemoteWorkspaceStore.getState().panelRequests.bk_a!.open).toBe(false);
   });
+
+  test.each(["Escape", "outside", "switch"])("cancels an unacknowledged open on %s", (dismiss) => {
+    const anchor = region();
+    const { rerender } = render(<TitleBar nodeId="bk_a" region={anchor} />);
+    const trigger = screen.getByRole("button", { name: "Open agent information" });
+    expect(trigger.hasAttribute("aria-controls")).toBe(false);
+    expect(
+      screen
+        .getByRole("button", { name: "Open environment process usage" })
+        .hasAttribute("aria-controls"),
+    ).toBe(false);
+    fireEvent.click(trigger);
+    const opening = useRemoteWorkspaceStore.getState().panelRequests.bk_a!;
+    expect(
+      screen.getByRole("button", { name: "Close agent information" }).getAttribute("aria-expanded"),
+    ).toBe("true");
+    if (dismiss === "Escape") fireEvent.keyDown(window, { key: "Escape" });
+    else if (dismiss === "outside") fireEvent.pointerDown(screen.getByText("Elsewhere"));
+    else rerender(<TitleBar nodeId={null} region={anchor} />);
+    expect(useRemoteWorkspaceStore.getState().panelRequests.bk_a).toMatchObject({
+      panel: "agent",
+      open: false,
+    });
+    act(() =>
+      useRemoteWorkspaceStore.getState().noteRealmTitleBar("bk_a", {
+        usage: USAGE,
+        usageStale: false,
+        panel: "agent",
+        requestSeq: opening.seq,
+      }),
+    );
+    // Even after the close is acknowledged, an older open report stays obsolete.
+    const closing = useRemoteWorkspaceStore.getState().panelRequests.bk_a!;
+    act(() => {
+      useRemoteWorkspaceStore.getState().noteRealmTitleBar("bk_a", {
+        usage: USAGE,
+        usageStale: false,
+        panel: null,
+        requestSeq: closing.seq,
+      });
+      useRemoteWorkspaceStore.getState().noteRealmTitleBar("bk_a", {
+        usage: USAGE,
+        usageStale: false,
+        panel: "agent",
+        requestSeq: opening.seq,
+      });
+    });
+    rerender(<TitleBar nodeId="bk_a" region={anchor} />);
+    expect(
+      screen.getByRole("button", { name: "Open agent information" }).getAttribute("aria-expanded"),
+    ).toBe("false");
+  });
+
+  test("a second press toggles a pending open closed", () => {
+    render(<TitleBar nodeId="bk_a" region={region()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Open environment process usage" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close environment process usage" }));
+    expect(useRemoteWorkspaceStore.getState().panelRequests.bk_a?.open).toBe(false);
+  });
+
+  test.each(["usage", "agent"] as const)(
+    "returns focus to the %s trigger only on an explicit handoff",
+    (panel) => {
+      render(<TitleBar nodeId="bk_a" region={region()} />);
+      const trigger = screen.getByRole("button", {
+        name: panel === "agent" ? "Open agent information" : "Open environment process usage",
+      });
+      const outside = document.createElement("button");
+      document.body.appendChild(outside);
+      outside.focus();
+      act(() => useRemoteWorkspaceStore.getState().requestRealmPanel("bk_a", panel, false, 6));
+      expect(document.activeElement).toBe(outside);
+      act(() =>
+        useRemoteWorkspaceStore.getState().requestRealmPanel("bk_a", panel, false, 6, true),
+      );
+      expect(document.activeElement).toBe(trigger);
+      outside.remove();
+    },
+  );
 
   test("a realm that goes quiet shows its meters as unavailable", async () => {
     useRemoteWorkspaceStore.setState({
@@ -183,7 +221,13 @@ describe("realm: the popovers of the window's title bar", () => {
 
   beforeEach(() => {
     posted = [];
-    usageView = { sample: USAGE, sampledAt: USAGE.sampledAt, observedAt: 0, stale: false };
+    installFakeReadCoordinator();
+    (nativeInvoke as ReturnType<typeof mock>).mockImplementation(async (command: string) => {
+      if (command === "get_system_usage") return USAGE;
+      if (command === "get_environment_process_usage")
+        return { sampledAt: USAGE.sampledAt, environments: [], truncated: false };
+      return undefined;
+    });
     window.orkestrator = {
       ...originalOrkestrator,
       workspaceRealm: {
@@ -202,35 +246,55 @@ describe("realm: the popovers of the window's title bar", () => {
     window.orkestrator = originalOrkestrator;
   });
 
-  test("reports the meters and open popover, and opens what the title bar asks for", () => {
+  test("real popovers apply requests, report state, focus controls and distinguish user dismissals", async () => {
     render(<RealmTitleBarPanels activeTab={null} />);
-    expect(posted.at(-1)).toEqual({
-      type: "titleBar",
-      usage: USAGE,
-      usageStale: false,
-      panel: null,
-    });
-
-    act(() => deliver({ type: "panel", panel: "agent", open: true, inset: 6 }));
-    const agentRequest = JSON.parse(
-      screen.getByTestId("agent-panel").getAttribute("data-request")!,
+    await screen.findByTestId("realm-agent-info-panel");
+    expect(screen.queryByRole("button", { name: "Open agent information" }) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Open environment process usage" }) === null).toBe(
+      true,
     );
-    expect(agentRequest).toMatchObject({ open: true, inset: 6 });
-    expect(screen.getByTestId("agent-panel").parentElement?.style.right).toBe("6px");
-    // One popover at a time.
+    for (const [panel, label] of [
+      ["agent", "Agent information"],
+      ["usage", "Environment process usage"],
+    ] as const) {
+      const seq = panel === "agent" ? 10 : 20;
+      act(() => deliver({ type: "panel", panel, open: true, inset: 48, seq }));
+      const dialog = screen.getByRole("dialog", { name: label });
+      expect(dialog.contains(document.activeElement)).toBe(true);
+      expect(posted).toContainEqual(
+        expect.objectContaining({ type: "titleBar", panel, requestSeq: seq }),
+      );
+      expect(
+        screen.getByTestId(
+          panel === "agent" ? "realm-agent-info-panel" : "realm-system-usage-panel",
+        ).parentElement?.style.right,
+      ).toBe("48px");
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(screen.queryByRole("dialog", { name: label }) === null).toBe(true);
+      expect(posted).toContainEqual({ type: "panelDismissed", panel, seq });
+      expect(posted).toContainEqual(
+        expect.objectContaining({ type: "titleBar", panel: null, requestSeq: seq }),
+      );
+    }
+    act(() => deliver({ type: "panel", panel: "agent", open: true, inset: 6, seq: 30 }));
+    act(() => deliver({ type: "panel", panel: "usage", open: true, inset: 6, seq: 31 }));
+    expect(screen.queryByRole("dialog", { name: "Agent information" }) === null).toBe(true);
     expect(
-      JSON.parse(screen.getByTestId("usage-panel").getAttribute("data-request")!),
-    ).toMatchObject({ open: false });
-
-    fireEvent.click(screen.getByRole("button", { name: "agent opened" }));
-    expect(posted.at(-1)).toMatchObject({ type: "titleBar", panel: "agent" });
-
-    // Closed from the title bar: it stays where it opened while it fades.
-    act(() => deliver({ type: "panel", panel: "agent", open: false, inset: 0 }));
+      screen
+        .getByRole("dialog", { name: "Environment process usage" })
+        .contains(document.activeElement),
+    ).toBe(true);
+    act(() => deliver({ type: "panel", panel: "usage", open: false, inset: 0, seq: 32 }));
     expect(
-      JSON.parse(screen.getByTestId("agent-panel").getAttribute("data-request")!),
-    ).toMatchObject({ open: false, inset: 6 });
-    fireEvent.click(screen.getByRole("button", { name: "agent closed" }));
-    expect(posted.at(-1)).toMatchObject({ type: "titleBar", panel: null });
+      posted.filter((message) => (message as { type: string }).type === "panelDismissed"),
+    ).toHaveLength(2);
+    expect(screen.getByTestId("realm-system-usage-panel").parentElement?.style.right).toBe("6px");
+    act(() => deliver({ type: "panel", panel: "agent", open: true, inset: 6, seq: 40 }));
+    // The usage open was superseded in the shell before it reached the realm.
+    act(() => deliver({ type: "panel", panel: "usage", open: false, inset: 0, seq: 42 }));
+    expect(screen.queryByRole("dialog") === null).toBe(true);
+    expect(posted).toContainEqual(
+      expect.objectContaining({ type: "titleBar", panel: null, requestSeq: 42 }),
+    );
   });
 });

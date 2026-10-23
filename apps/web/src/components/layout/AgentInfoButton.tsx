@@ -188,11 +188,13 @@ export {
 export function AgentInfoTrigger({
   open,
   mobile = false,
+  remote = false,
   onClick,
   ref,
 }: {
   open: boolean;
   mobile?: boolean;
+  remote?: boolean;
   onClick: () => void;
   ref?: Ref<HTMLButtonElement>;
 }) {
@@ -206,7 +208,7 @@ export function AgentInfoTrigger({
       aria-label={open ? "Close agent information" : "Open agent information"}
       aria-expanded={open}
       aria-haspopup="dialog"
-      aria-controls="agent-information-popover"
+      aria-controls={remote ? undefined : "agent-information-popover"}
     >
       <Info className={mobile ? "h-4.5 w-4.5" : "h-4 w-4"} />
     </Button>
@@ -214,7 +216,7 @@ export function AgentInfoTrigger({
 }
 
 export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfoButtonProps) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(remote?.request?.open ?? false);
   const remoteRequest = remote?.request ?? null;
   const [appliedRequest, setAppliedRequest] = useState(remoteRequest);
   if (appliedRequest !== remoteRequest) {
@@ -222,7 +224,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
     if (remoteRequest) setOpen(remoteRequest.open);
   }
   const reportOpen = useEffectEvent((next: boolean) => remote?.onOpenChange(next));
-  useEffect(() => reportOpen(open), [open]);
+  useEffect(() => reportOpen(open), [open, remoteRequest?.seq]);
   const federation = useFederation();
   // How this window reaches the node its workspace is on, when that is not
   // the command node it connected to.
@@ -246,7 +248,14 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
   });
   const [controlUpdateState, setControlUpdateState] = useState<ControlUpdateState | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLElement>(null);
   const restoreFocusRef = useRef(false);
+  const reportDismiss = useEffectEvent(() => remote?.onDismiss?.());
+  useEffect(() => {
+    if (open && remoteRequest?.open) {
+      panelRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    }
+  }, [open, remoteRequest?.open, remoteRequest?.seq]);
   const actionIdRef = useRef(0);
   const controlUpdateIdRef = useRef(0);
   const controlUpdateInFlightRef = useRef<ControlUpdateState | null>(null);
@@ -813,6 +822,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
   useEffect(() => {
     if (!open && restoreFocusRef.current) {
       restoreFocusRef.current = false;
+      reportDismiss();
       triggerRef.current?.focus();
     }
   }, [open]);
@@ -865,6 +875,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
       ) : null}
 
       <section
+        ref={panelRef}
         id="agent-information-popover"
         role="dialog"
         aria-label="Agent information"

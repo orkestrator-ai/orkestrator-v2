@@ -31,6 +31,7 @@ import { cn } from "@/lib/utils";
 import {
   startRemoteWorkspaceSelectionSync,
   useRemoteWorkspaceStore,
+  realmPanel,
   type RealmRequest,
 } from "@/stores/remoteWorkspaceStore";
 import { useFederation } from "./FederationProvider";
@@ -177,32 +178,41 @@ function useRealmRequests(nodeId: string, send: ((message: ShellToRealmMessage) 
     if (send && ready.current) send({ type: "sidebar", open: sidebarOpen });
   }, [send, sidebarOpen]);
 
-  // The window's title bar opening or closing one of the realm's popovers.
-  // Asked while the realm is not listening, it is dropped: the title bar
-  // only offers it once the realm has reported.
+  // Retain only the latest intent while a document is loading or restarting.
   const panelRequest = useRemoteWorkspaceStore((state) => state.panelRequests[nodeId]);
   const deliveredPanel = useRef(0);
+  const flushPanel = useCallback(
+    (allowFocusReturn = false) => {
+      const current = useRemoteWorkspaceStore.getState().panelRequests[nodeId];
+      const deliver = latest.current.send;
+      if (!deliver || !ready.current || !current || current.seq <= deliveredPanel.current) return;
+      deliveredPanel.current = current.seq;
+      const { seq, panel, open, inset, restoreFocus } = current;
+      deliver({
+        type: "panel",
+        seq,
+        panel,
+        open,
+        inset,
+        ...(restoreFocus && allowFocusReturn ? { restoreFocus } : {}),
+      });
+    },
+    [nodeId],
+  );
   useEffect(() => {
-    if (!send || !ready.current || !panelRequest || panelRequest.seq <= deliveredPanel.current) {
-      return;
-    }
-    deliveredPanel.current = panelRequest.seq;
-    send({
-      type: "panel",
-      panel: panelRequest.panel,
-      open: panelRequest.open,
-      inset: panelRequest.inset,
-    });
-  }, [panelRequest, send]);
+    flushPanel(true);
+  }, [flushPanel, panelRequest, send]);
 
   /** A new realm document: it was opened on the latest request and is not listening yet. */
   const restart = useCallback(() => {
+    const wasReady = ready.current;
     ready.current = false;
-    // A new document has none of the old one's popovers open.
-    const titleBar = useRemoteWorkspaceStore.getState().titleBars[nodeId];
-    if (titleBar?.panel) {
-      useRemoteWorkspaceStore.getState().noteRealmTitleBar(nodeId, { ...titleBar, panel: null });
-    }
+    // Cancel the previous document's pending opens as well as its reported panel.
+    const state = useRemoteWorkspaceStore.getState();
+    const panel = realmPanel(state, nodeId);
+    if (wasReady && panel) state.requestRealmPanel(nodeId, panel, false, 0);
+    const titleBar = state.titleBars[nodeId];
+    if (titleBar) state.noteRealmTitleBar(nodeId, { ...titleBar, panel: null });
     const request = latest.current.request;
     if (request && request.seq > delivered.current) {
       delivered.current = request.seq;
@@ -222,6 +232,7 @@ function useRealmRequests(nodeId: string, send: ((message: ShellToRealmMessage) 
         ready.current = true;
         latest.current.send?.({ type: "sidebar", open: latest.current.sidebarOpen });
         flush();
+        flushPanel();
       } else if (message.type === "selection") {
         selection.current = {
           projectId: message.projectId ?? undefined,
@@ -233,11 +244,24 @@ function useRealmRequests(nodeId: string, send: ((message: ShellToRealmMessage) 
         if (ui.sidebarOpen !== message.open) ui.toggleSidebar();
       } else if (message.type === "settings") {
         if (isGlobalSettingsSection(message.section)) requestGlobalSettings(message.section);
+      } else if (message.type === "panelDismissed") {
+        const state = useRemoteWorkspaceStore.getState();
+        const request = state.panelRequests[nodeId];
+        // A delayed close from a replaced panel or hidden realm cannot steal focus.
+        if (
+          state.active?.nodeId === nodeId &&
+          request?.open &&
+          request.panel === message.panel &&
+          request.seq === message.seq
+        ) {
+          state.requestRealmPanel(nodeId, message.panel, false, request.inset, true);
+        }
       } else if (message.type === "titleBar") {
         useRemoteWorkspaceStore.getState().noteRealmTitleBar(nodeId, {
           usage: message.usage,
           usageStale: message.usageStale,
           panel: message.panel,
+          requestSeq: message.requestSeq,
         });
       } else {
         openMachineWorkspace({
@@ -248,7 +272,7 @@ function useRealmRequests(nodeId: string, send: ((message: ShellToRealmMessage) 
         });
       }
     },
-    [flush, nodeId],
+    [flush, flushPanel, nodeId],
   );
 
   return { restart, onMessage };
@@ -339,6 +363,7 @@ function NativeRealm({
       if (event.type !== "closed" && opened) void api.close(opened).catch(() => undefined);
       opened = null;
       setViewId(null);
+      restart();
       // Closed by the window's main process (its command node changed): gone.
       if (event.type === "closed") {
         useRemoteWorkspaceStore.getState().closeRealm(nodeId);

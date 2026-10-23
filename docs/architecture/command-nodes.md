@@ -346,9 +346,14 @@ command node.
 - **Creating on another node** opens that node's New Environment dialog in
   its realm, so the node's defaults — the command node's inherited settings
   laid over its own — and start apply as they would there.
-- **The title bar** shows the shown environment's name. The agent info and
-  system usage, which describe the environment's agent and the machine it
-  runs on, are shown at the end of the realm's toolbar.
+- **The title bar** shows the shown environment's name, host meters and agent
+  information trigger. For another node, the realm reports the readings and
+  renders the popovers under those triggers. The latest panel request waits
+  for readiness; Escape, outside presses and leaving the realm also cancel
+  pending opens. Sequence acknowledgments prevent late reports from reviving
+  dismissed panels. Opening transfers focus into the realm; a user dismissal
+  returns it to the corresponding title-bar trigger. Workspace switches and
+  panel replacements do not request return focus.
 - **Native views** a realm opens (browser previews, live artifacts) are
   children of the window placed in the realm's coordinates, and shown only
   while the realm is (`realmChildViewClass`). The window hides a realm while

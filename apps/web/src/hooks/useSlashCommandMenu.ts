@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useId, useMemo, useState } from "react";
 import type { KeyboardEvent } from "react";
 import type { SlashCommandOption } from "@/components/chat/SlashCommandMenu";
 import { rankSlashCommands } from "@/lib/chat/slash-command-search";
@@ -96,11 +96,12 @@ export function useSlashCommandMenu<TCommand extends SlashCommandOption>({
 }: UseSlashCommandMenuOptions<TCommand>): UseSlashCommandMenuResult<TCommand> {
   const listboxId = `slash-commands-${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
   const [dismissedText, setDismissedText] = useState<string | null>(null);
-  const [highlight, setHighlight] = useState<{ query: string; key: string } | null>(null);
+  const [highlight, setHighlight] = useState<{ query: string; key: string; index: number } | null>(
+    null,
+  );
   const [blocked, setBlocked] = useState<{ query: string; key: string; message: string } | null>(
     null,
   );
-  const lastIndexRef = useRef(0);
 
   const acceptsDollar = useMemo(
     () =>
@@ -118,6 +119,9 @@ export function useSlashCommandMenu<TCommand extends SlashCommandOption>({
     if (sigil !== "/" && !(sigil === "$" && acceptsDollar)) return null;
     return /\s/.test(text) ? null : text.slice(1);
   }, [acceptsDollar, text]);
+  // Dismissal belongs to this token only. Clearing it or moving into arguments
+  // starts a new completion interaction, even if the same token is typed later.
+  if (query === null && dismissedText !== null) setDismissedText(null);
   const isOpen = query !== null && (commands.length > 0 || openWhenEmpty) && dismissedText !== text;
 
   const filteredCommands = useMemo(
@@ -133,19 +137,22 @@ export function useSlashCommandMenu<TCommand extends SlashCommandOption>({
       found >= 0
         ? found
         : activeKey
-          ? Math.min(lastIndexRef.current, filteredCommands.length - 1)
+          ? Math.min(highlight?.index ?? 0, filteredCommands.length - 1)
           : 0;
   }
   const selectedKey = selectedIndex >= 0 ? keys[selectedIndex] : undefined;
 
   // Pin the highlight to the row under it, so a later refresh keeps that row.
-  useEffect(() => {
-    if (!isOpen || selectedKey === undefined || query === null) return;
-    lastIndexRef.current = selectedIndex;
-    if (highlight?.query !== query || highlight.key !== selectedKey) {
-      setHighlight({ query, key: selectedKey });
-    }
-  }, [highlight, isOpen, query, selectedIndex, selectedKey]);
+  if (
+    isOpen &&
+    selectedKey !== undefined &&
+    query !== null &&
+    (highlight?.query !== query ||
+      highlight.key !== selectedKey ||
+      highlight.index !== selectedIndex)
+  ) {
+    setHighlight({ query, key: selectedKey, index: selectedIndex });
+  }
 
   const optionId = useCallback(
     (command: TCommand) => `${listboxId}-option-${domToken(slashCommandKey(command))}`,
@@ -162,7 +169,7 @@ export function useSlashCommandMenu<TCommand extends SlashCommandOption>({
       if (unavailable) {
         // Listed so the user can see it exists, never inserted as if it could run.
         const key = slashCommandKey(command);
-        setHighlight({ query: query ?? "", key });
+        setHighlight({ query: query ?? "", key, index: Math.max(0, keys.indexOf(key)) });
         setBlocked({ query: query ?? "", key, message: unavailable });
         return;
       }
@@ -171,14 +178,14 @@ export function useSlashCommandMenu<TCommand extends SlashCommandOption>({
       setText(completedCommand, command);
       focusInputAtEnd?.(completedCommand);
     },
-    [focusInputAtEnd, query, setText],
+    [focusInputAtEnd, keys, query, setText],
   );
 
   const moveHighlight = useCallback(
     (delta: 1 | -1) => {
       if (query === null || selectedIndex < 0) return;
       const next = Math.max(0, Math.min(filteredCommands.length - 1, selectedIndex + delta));
-      setHighlight({ query, key: keys[next]! });
+      setHighlight({ query, key: keys[next]!, index: next });
     },
     [filteredCommands.length, keys, query, selectedIndex],
   );

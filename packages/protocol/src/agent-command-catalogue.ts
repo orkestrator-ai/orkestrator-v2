@@ -138,7 +138,9 @@ export function displayCommandName(name: string): string {
 
 function normalizeAvailability(value: unknown): NativeAgentCommandAvailability | undefined {
   if (!isRecord(value)) return undefined;
-  if (value.state !== "available" && value.state !== "unavailable") return undefined;
+  // A state this version does not know (a newer bridge's) falls through to
+  // unavailable below: it is never read as permission to run the command.
+  if (typeof value.state !== "string") return undefined;
   const reason =
     typeof value.reason === "string" && UNAVAILABLE_REASONS.has(value.reason)
       ? (value.reason as NativeAgentCommandAvailability["reason"])

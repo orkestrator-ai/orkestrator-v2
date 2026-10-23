@@ -1,5 +1,7 @@
-import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
-import { DISPATCH_OUTCOME_LOST_KIND } from "@orkestrator/protocol/native-agent";
+import {
+  DISPATCH_OUTCOME_LOST_KIND,
+  dispatchOutcomeLostMessage,
+} from "@orkestrator/protocol/native-agent";
 import {
   PromptRejectedError,
   type BridgeConnection,
@@ -97,8 +99,5 @@ export function assertPromptOutcomeKnown(
   detail: Record<string, unknown> | null | undefined,
 ): void {
   if (status !== 410 || detail?.kind !== DISPATCH_OUTCOME_LOST_KIND) return;
-  throw new PromptRejectedError(
-    `${AGENT_PLATFORM_LABELS[agent]} could not confirm this message, so it may not have run. Check the conversation and send it again if it did not.`,
-    { requestIdRetired: true },
-  );
+  throw new PromptRejectedError(dispatchOutcomeLostMessage(agent), { requestIdRetired: true });
 }

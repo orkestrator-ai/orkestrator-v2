@@ -684,6 +684,34 @@ records the MCP files a query was built from when the query starts, so the
 apply half still runs when the provider refuses requests (a rate limit, say).
 A full-mode pass is still needed for the tool-call checks.
 
+### Live slash commands in an inactive environment
+
+`e2e/agent-testing/slash-command-inactive.spec.ts` sends a selected project
+command, switches environments, and checks that it completes while inactive
+and runs exactly once. Meanwhile it changes the inventory, refreshes the
+catalogue and drops the event stream for 10 s. It then checks the result after a
+reload, a narrow viewport and two bridge restarts. It needs
+`ORKESTRATOR_AGENT_TEST_LIVE_SLASH=1` and the providers' credentials.
+`ORKESTRATOR_AGENT_TEST_SLASH_PROVIDERS` picks `codex` (default) and/or
+`claude`. `ORKESTRATOR_AGENT_TEST_SLASH_ENVIRONMENT` is `local` (default, a
+host worktree with the `projectResources: true` override) or `container`. The
+container variant needs a profile started with
+`--fixture-environments local,container`. It writes the command files and the
+execution marker inside the container's `/workspace` through `docker exec`,
+sets no policy override (containers load project resources by default) and
+restarts the container's bridge. Neither variant writes a user-scope command
+file.
+
+```bash
+mise run dev:test --profile qa-slash --fixture --fixture-environments local,container \
+  --credential-source codex --credential-source claude --agent-platforms codex,claude
+# In a second terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-slash ORKESTRATOR_AGENT_TEST_LIVE_SLASH=1 \
+  ORKESTRATOR_AGENT_TEST_SLASH_PROVIDERS=codex,claude ORKESTRATOR_AGENT_TEST_SLASH_ENVIRONMENT=container \
+  mise run test:logged -- --name slash-inactive -- mise run test:agent:browser -- \
+  e2e/agent-testing/slash-command-inactive.spec.ts
+```
+
 ### Live close retention
 
 `e2e/agent-testing/close-retention-live.spec.ts` checks, with real providers
@@ -1179,7 +1207,9 @@ Two traps when scripting this path:
   requests but leaves the open event stream connected, so events still arrive
   and nothing reconnects. To drop the stream, also call `window.stop()` in the
   page while offline; the gateway client then reconnects and replays from its
-  cursor once back online.
+  cursor once back online. `watchEventStream`
+  (`e2e/agent-testing/event-stream-outage.ts`) does both and asserts the
+  reconnection.
 
 For each failure record profile and commit, automated commands, route used,
 reproduction steps, expected and actual results, severity, and evidence paths.

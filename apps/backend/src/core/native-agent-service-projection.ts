@@ -27,6 +27,7 @@ import {
   type NativeAgentAsyncQuestionResponse,
   type NativeAgentContextUsage,
   type NativeAgentNotice,
+  type NativeAgentRetiredDispatch,
   isNativeInlineErrorMessageId,
   nativeAgentApprovalModes,
   resolveNativeAgentApprovalMode,
@@ -101,6 +102,10 @@ import { heldSessionModel } from "./session-held-model.js";
 import { providerCacheKey } from "./native-agent-provider-registry.js";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
 import { sessionIncompleteTurnNotice } from "./models.js";
+import {
+  projectedRetiredDispatch,
+  retiredDispatchNotice,
+} from "./native-agent-retired-dispatch.js";
 import {
   createNativeAgentDisplayTail,
   displayTailRecoveryWindow,
@@ -294,22 +299,24 @@ function visibleProjectionNotices(
   agent: BuildPipelineAgent,
   notices: readonly NativeAgentNotice[] | undefined,
   incompleteTurn: IncompleteTurnNotice | undefined,
+  retiredDispatch?: NativeAgentRetiredDispatch,
 ): NativeAgentNotice[] {
-  const visible = (notices ?? [])
-    .filter((notice) => notice.kind !== "error" && notice.kind !== "stopped")
-    .slice(0, incompleteTurn ? 511 : 512);
-  if (!incompleteTurn) return visible;
-  const label = AGENT_PLATFORM_LABELS[agent] ?? agent;
-  return [
-    ...visible,
-    {
+  const owned: NativeAgentNotice[] = [];
+  if (incompleteTurn) {
+    const label = AGENT_PLATFORM_LABELS[agent] ?? agent;
+    owned.push({
       kind: "incomplete-turn",
       message:
         incompleteTurn.kind === "failed"
           ? `The previous ${label} turn ended before completion.`
           : `${label} could not complete the previous turn after recovery.`,
-    },
-  ];
+    });
+  }
+  if (retiredDispatch) owned.push(retiredDispatchNotice(retiredDispatch));
+  const visible = (notices ?? [])
+    .filter((notice) => notice.kind !== "error" && notice.kind !== "stopped")
+    .slice(0, 512 - owned.length);
+  return [...visible, ...owned];
 }
 export type NativeAgentServiceLayerTypes = [
   BuildPipelineAgent,
@@ -3181,10 +3188,12 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     }
     recordResponse(queue?.inFlight?.requestId, "dispatching");
     recordResponse(queue?.dispatchError?.messageId, "failed");
+    const retiredDispatch = projectedRetiredDispatch(input.agent, resolved.session, this.now());
     const notices = visibleProjectionNotices(
       input.agent,
       stateSnapshot.notices,
       sessionIncompleteTurnNotice(resolved.session),
+      retiredDispatch,
     );
     return {
       identity: this.progressiveIdentity(
@@ -3288,6 +3297,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
             },
           }
         : {}),
+      ...(retiredDispatch ? { retiredDispatch } : {}),
       ...(stateSnapshot.backgroundTasks ? { backgroundTasks: stateSnapshot.backgroundTasks } : {}),
       ...(stateSnapshot.suggestedPrompt ? { suggestedPrompt: stateSnapshot.suggestedPrompt } : {}),
       ...(stateSnapshot.completionBlockedByBackgroundTasks === undefined
@@ -5031,10 +5041,12 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       }
       recordAsyncQuestionResponse(queue?.inFlight?.requestId, "dispatching");
       recordAsyncQuestionResponse(queue?.dispatchError?.messageId, "failed");
+      const retiredDispatch = projectedRetiredDispatch(input.agent, resolved.session, this.now());
       const notices = visibleProjectionNotices(
         input.agent,
         snapshot.notices,
         sessionIncompleteTurnNotice(resolved.session),
+        retiredDispatch,
       );
 
       const projection: NativeAgentSessionProjection = {
@@ -5146,6 +5158,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
               },
             }
           : {}),
+        ...(retiredDispatch ? { retiredDispatch } : {}),
         ...(snapshot.backgroundTasks ? { backgroundTasks: snapshot.backgroundTasks } : {}),
         ...(snapshot.suggestedPrompt ? { suggestedPrompt: snapshot.suggestedPrompt } : {}),
         ...(snapshot.completionBlockedByBackgroundTasks === undefined

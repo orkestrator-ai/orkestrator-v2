@@ -124,14 +124,20 @@ export function SlashCommandMenu<TCommand extends SlashCommandOption>({
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
-        onClose();
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      // aria-controls identifies the composer that owns this menu, including
+      // descendants of its contenteditable surface.
+      const composer = target.closest("[aria-controls]");
+      if (listboxId && composer?.getAttribute("aria-controls")?.split(/\s+/).includes(listboxId)) {
+        return;
       }
+      if (menuRef.current && !menuRef.current.contains(target)) onClose();
     }
 
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [menuRef, onClose]);
+  }, [listboxId, menuRef, onClose]);
 
   // Escape is handled by `useSlashCommandMenu` alongside the other keys.
 

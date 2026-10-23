@@ -1243,6 +1243,143 @@ describe("NativeAgentService", () => {
     );
   });
 
+  test("retires a parked dispatch the provider reports lost, without a click", async () => {
+    // Storage stamps records with the wall clock; only the projection's
+    // lifetime check reads the service clock, which the test moves.
+    let clockOffset = 0;
+    let status: "unknown" | "lost" = "unknown";
+    let sendOutcome: "ambiguous" | "accepted" = "ambiguous";
+    const lost =
+      "Claude Code could not confirm this message, so it may not have run. Check the conversation and send it again if it did not.";
+    const stub = createProviderStub("claude", {
+      send: async () => {
+        if (sendOutcome === "ambiguous") {
+          throw new AmbiguousPromptDispatchError("Response was lost");
+        }
+      },
+      dispatchStatus: async () => status,
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-dispatch-auto-retire-",
+        provider: async () => stub.provider,
+        now: () => Date.now() + clockOffset,
+      },
+      async ({ service, storage }) => {
+        const base = {
+          environmentId: "env-1",
+          agent: "claude" as const,
+          logicalSessionKey: "env-env-1:tab-1",
+          prompt: "/deploy now",
+        };
+        const key = nativeAgentSessionStorageKey(
+          base.environmentId,
+          base.agent,
+          base.logicalSessionKey,
+        );
+        await expect(
+          service.dispatchIntent({ ...base, requestId: "parked" }),
+        ).resolves.toMatchObject({ outcome: "unknown" });
+
+        // `unknown` is still no evidence: the record stays parked.
+        await service.getProjection(base);
+        await waitForCondition(() => stub.dispatchStatus!.mock.calls.length >= 2);
+        expect((await storage.getNativeAgentSession(key))?.pendingDispatch?.requestId).toBe(
+          "parked",
+        );
+
+        // The restarted bridge retired the id. The next projection read settles
+        // the card on its own: cleared, never recorded as dispatched, and the
+        // outcome kept for every renderer to pick up.
+        status = "lost";
+        await service.getProjection(base);
+        await waitForCondition(
+          async () => (await storage.getNativeAgentSession(key))?.pendingDispatch === undefined,
+        );
+        const session = await storage.getNativeAgentSession(key);
+        expect(session?.dispatchedRequestIds ?? []).not.toContain("parked");
+        const retiredAt = session?.retiredDispatch?.retiredAt ?? "";
+        expect(session?.retiredDispatch).toEqual({ requestId: "parked", retiredAt });
+        expect(Number.isFinite(Date.parse(retiredAt))).toBe(true);
+
+        const retiredDispatch = { requestId: "parked", retiredAt, message: lost };
+        const notice = {
+          kind: "warning" as const,
+          message: lost,
+          occurrenceId: "dispatch-outcome-lost:parked",
+        };
+        await waitForCondition(async () =>
+          Boolean((await service.getProjection(base))?.retiredDispatch),
+        );
+        const projection = await service.getProjection(base);
+        expect(projection).not.toHaveProperty("recoverableDispatch");
+        expect(projection?.retiredDispatch).toEqual(retiredDispatch);
+        expect(projection?.notices).toContainEqual(notice);
+        const state = await service.getSessionStateUpdate({ ...base, viewVersion: 1 });
+        expect(state).toMatchObject({ status: "snapshot" });
+        if (state.status !== "snapshot") throw new Error("expected a state snapshot");
+        expect(state.value.retiredDispatch).toEqual(retiredDispatch);
+        expect(state.value.notices).toContainEqual(notice);
+        expect(state.value).not.toHaveProperty("recoverableDispatch");
+
+        // Bounded: it stops being shown once its lifetime has passed.
+        clockOffset = 24 * 60 * 60 * 1000;
+        const expired = await service.getSessionStateUpdate({
+          ...base,
+          viewVersion: 1,
+          forceSnapshot: true,
+        });
+        if (expired.status !== "snapshot") throw new Error("expected a state snapshot");
+        expect(expired.value).not.toHaveProperty("retiredDispatch");
+        expect(expired.value.notices).not.toContainEqual(notice);
+        clockOffset = 0;
+
+        // The session is unblocked, and the next accepted prompt clears it.
+        sendOutcome = "accepted";
+        await expect(
+          service.dispatchIntent({ ...base, prompt: "/deploy now", requestId: "fresh" }),
+        ).resolves.toEqual({ outcome: "accepted", requestId: "fresh" });
+        expect((await storage.getNativeAgentSession(key))?.retiredDispatch).toBeUndefined();
+      },
+    );
+  });
+
+  test("answers a dispatch whose bridge restarted under it as retired", async () => {
+    const stub = createProviderStub("claude", {
+      send: async () => {
+        throw new AmbiguousPromptDispatchError("Response was lost");
+      },
+      dispatchStatus: async () => "lost" as const,
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-dispatch-lost-now-",
+        provider: async () => stub.provider,
+      },
+      async ({ service, storage }) => {
+        const base = {
+          environmentId: "env-1",
+          agent: "claude" as const,
+          logicalSessionKey: "env-env-1:tab-1",
+          prompt: "/deploy now",
+        };
+        // The same answer a retry would get, without parking a card first.
+        await expect(service.dispatchIntent({ ...base, requestId: "lost-now" })).resolves.toEqual({
+          outcome: "rejected",
+          error:
+            "Claude Code could not confirm this message, so it may not have run. Check the conversation and send it again if it did not.",
+          requestIdRetired: true,
+        });
+        const session = await storage.getNativeAgentSession(
+          nativeAgentSessionStorageKey(base.environmentId, base.agent, base.logicalSessionKey),
+        );
+        expect(session?.pendingDispatch).toBeUndefined();
+        expect(session?.retiredDispatch?.requestId).toBe("lost-now");
+        expect(session?.dispatchedRequestIds ?? []).not.toContain("lost-now");
+      },
+    );
+  });
+
   test("retries once past a parked dispatch the provider can now vouch for", async () => {
     let sendOutcome: "ambiguous" | "accepted" = "ambiguous";
     let dispatched = false;

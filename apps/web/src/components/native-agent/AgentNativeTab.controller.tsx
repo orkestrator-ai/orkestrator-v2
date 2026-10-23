@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { ChevronDown, Loader2, LogIn, X } from "lucide-react";
 import { claudeNativeParameterValues } from "@orkestrator/protocol/agent-settings";
 import {
+  dispatchOutcomeLostOccurrenceId,
   nativeAgentSteerRejectionMessage,
   normalizePendingSignIn,
   NATIVE_AGENT_PENDING_SIGN_IN_TTL_MS,
@@ -495,9 +496,19 @@ export function SharedNativeAgentController({
   );
   const dismissNotice = useNativeNoticeDismissalStore((state) => state.dismiss);
   const reconcileNoticeDismissals = useNativeNoticeDismissalStore((state) => state.reconcile);
+  const [releasedDispatchNotices, setReleasedDispatchNotices] = useState<
+    Array<{ sessionIdentity: string; noticeId: string }>
+  >([]);
   const activeNoticeIds = useMemo(
-    () => (projection?.notices ?? []).map(nativeNoticeDismissalId),
-    [projection?.notices],
+    () => [
+      ...(projection?.notices ?? []).map(nativeNoticeDismissalId),
+      // A response can arrive before its notice. Keep these dismissals through
+      // intervening projections so a delayed notice cannot toast the same error.
+      ...releasedDispatchNotices
+        .filter((notice) => notice.sessionIdentity === noticeSessionIdentity)
+        .map((notice) => notice.noticeId),
+    ],
+    [noticeSessionIdentity, projection?.notices, releasedDispatchNotices],
   );
   const noticeToastRecordsRef = useRef(new Map<string, string>());
   const programmaticNoticeDismissalsRef = useRef(new Set<string>());
@@ -1267,6 +1278,23 @@ export function SharedNativeAgentController({
 
   const releaseRetiredRequestId = useCallback(
     (requestId: string, error: string) => {
+      // A synchronous response can release ownership before its projection
+      // arrives. Dismiss now so the notice cannot repeat the inline error.
+      const noticeId = nativeNoticeDismissalId({
+        kind: "warning",
+        message: error,
+        occurrenceId: dispatchOutcomeLostOccurrenceId(requestId),
+      });
+      setReleasedDispatchNotices((current) => [
+        ...current
+          .filter(
+            (notice) =>
+              notice.sessionIdentity !== noticeSessionIdentity || notice.noticeId !== noticeId,
+          )
+          .slice(-19),
+        { sessionIdentity: noticeSessionIdentity, noticeId },
+      ]);
+      dismissNotice(noticeSessionIdentity, noticeId);
       const current = useNativeComposeStore.getState().drafts.get(sessionKey);
       if (current?.requestId !== requestId) return;
       updateDraft(sessionKey, {
@@ -1275,8 +1303,50 @@ export function SharedNativeAgentController({
         submissionError: error,
       });
     },
-    [sessionKey, updateDraft],
+    [dismissNotice, noticeSessionIdentity, sessionKey, updateDraft],
   );
+
+  /*
+   * The backend retires a parked dispatch on its own when the provider reports
+   * the outcome lost (a bridge restarted under it), which is the answer a
+   * Retry could only have reported. Do what that Retry does, from the
+   * authoritative projection so it also happens when the tab mounts later:
+   * keep the text under a new id and say what happened. Only for the draft
+   * that still owns the id, and only once — releasing the id ends ownership.
+   * A renderer that handles it this way dismisses the matching notice, which
+   * exists for renderers that predate the field.
+   */
+  const retiredDispatch = projection?.retiredDispatch;
+  const retiredDispatchOwnedByDraft =
+    retiredDispatch !== undefined && draft.requestId === retiredDispatch.requestId;
+  const retiredDispatchNoticeId = retiredDispatch
+    ? nativeNoticeDismissalId({
+        kind: "warning",
+        message: retiredDispatch.message,
+        occurrenceId: dispatchOutcomeLostOccurrenceId(retiredDispatch.requestId),
+      })
+    : undefined;
+  useEffect(() => {
+    if (!retiredDispatch || !retiredDispatchOwnedByDraft || !retiredDispatchNoticeId) return;
+    // A submission or recovery action in flight settles the draft itself;
+    // this runs again once it has.
+    if (submitInFlightRef.current || isSubmitting || isResolvingDispatch) return;
+    releaseRetiredRequestId(retiredDispatch.requestId, retiredDispatch.message);
+    setOptimisticPrompt((current) =>
+      current?.requestId === retiredDispatch.requestId ? null : current,
+    );
+    setSendError(retiredDispatch.message);
+    dismissNotice(noticeSessionIdentity, retiredDispatchNoticeId);
+  }, [
+    dismissNotice,
+    isResolvingDispatch,
+    isSubmitting,
+    noticeSessionIdentity,
+    releaseRetiredRequestId,
+    retiredDispatch,
+    retiredDispatchNoticeId,
+    retiredDispatchOwnedByDraft,
+  ]);
 
   const clearConfirmedDraft = useCallback(
     (requestId: string | undefined): boolean => {
@@ -1733,6 +1803,9 @@ export function SharedNativeAgentController({
         }
         if (outcome.outcome === "rejected") setOptimisticPrompt(null);
         requestIdRetired = outcome.outcome === "rejected" && outcome.requestIdRetired === true;
+        if (outcome.outcome === "rejected" && requestIdRetired && dispatchRequestId) {
+          releaseRetiredRequestId(dispatchRequestId, outcome.error);
+        }
         keepTranscriptConfirmation = outcome.outcome === "unknown";
         /*
          * A backend-reported unknown is a parked dispatch: the
@@ -1812,6 +1885,7 @@ export function SharedNativeAgentController({
       projection?.slashCommands,
       recoverableDispatch,
       actionableDispatch,
+      releaseRetiredRequestId,
       selectedModel?.supportsImageInput,
       send,
       sendLocked,
@@ -2304,6 +2378,10 @@ export function SharedNativeAgentController({
     const notices = (isActive ? (projection?.notices ?? []) : []).filter(
       (notice) =>
         !dismissedNoticeIds.includes(nativeNoticeDismissalId(notice)) &&
+        // Shown in the composer instead, by the release above.
+        !(
+          retiredDispatchOwnedByDraft && nativeNoticeDismissalId(notice) === retiredDispatchNoticeId
+        ) &&
         // A recovered state is authoritative even if an older renderer cache
         // briefly carries the recovery notice into the same projection.
         !(notice.kind === "recovery" && connectionState === "connected"),
@@ -2349,6 +2427,8 @@ export function SharedNativeAgentController({
     isActive,
     noticeSessionIdentity,
     projection?.notices,
+    retiredDispatchNoticeId,
+    retiredDispatchOwnedByDraft,
   ]);
   useEffect(() => {
     const mounted = noticeToastsMountedRef;

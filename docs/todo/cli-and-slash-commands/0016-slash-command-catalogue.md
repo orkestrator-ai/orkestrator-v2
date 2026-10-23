@@ -66,10 +66,10 @@ and need a decision. A new tab on a current bridge never sees those rows (see
 - The picker groups rows by `source` (`groupSlashCommandRuns` in
   `apps/web/src/lib/chat/slash-command-search.ts`, rendered by
   `SlashCommandMenu.tsx`). This is covered by component tests only.
-- The comment in `bridges/cursor-bridge/src/http.ts` still says Cursor SDK
-  1.0.31 (now 1.0.37). The OpenCode (`opencode-commands.ts`) and Claude
-  (`session-manager-commands.ts`) owner comments were re-checked against
-  1.19.0 and 0.3.296 on 2026-10-17.
+- The Cursor (`bridges/cursor-bridge/src/http.ts`, 1.0.37), OpenCode
+  (`opencode-commands.ts`, 1.19.0) and Claude (`session-manager-commands.ts`,
+  0.3.296) owner comments match the pins (re-checked 2026-10-17 and
+  2026-10-23).
 
 ## Outstanding work
 
@@ -109,9 +109,8 @@ and need a decision. A new tab on a current bridge never sees those rows (see
 5. **Further Orkestrator shortcuts** beyond `/steer` and `/compact`: clear or
    new session, model and permission changes, review. Each needs its own
    qualified semantics.
-6. **Stale pin comment.** After re-qualification in
-   [0015-slash-command-qualification.md](0015-slash-command-qualification.md), update
-   the Cursor pin fact in `bridges/cursor-bridge/src/http.ts`.
+6. **Stale pin comment.** Done 2026-10-23: the Cursor comment names 1.0.37,
+   whose declarations were re-checked.
 7. **CLI selection.** `session commands` and `session command` are tracked in
    [0017-cli-command-surface.md](0017-cli-command-surface.md).
 8. **Claude terminal-only commands before the first turn.** Done
@@ -257,9 +256,13 @@ and need a decision. A new tab on a current bridge never sees those rows (see
 
 ## Needs verification
 
-- Whether old-backend/new-bridge and old/new renderer projections are tested.
-  Only the backend 404-fallback test in `http-bridge-commands.test.ts` was
-  found.
+- Old-backend/new-bridge and old/new renderer projections are now tested with
+  transport-level fakes (the `mixed-version:` blocks listed in
+  [0015-slash-command-qualification.md](0015-slash-command-qualification.md)).
+  They found that a session-route 404 on Claude does not show the 15
+  `BUILTIN_COMMANDS` rows: the old global shape (`"/name - description"`) keeps
+  only bare names, so every built-in row is dropped and the list is marked
+  truncated. A run against a real pre-#827 build is still open there.
 
 ## Related
 

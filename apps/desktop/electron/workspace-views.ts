@@ -29,6 +29,7 @@ type WebContentsLike = {
   id: number;
   isDestroyed(): boolean;
   close(): void;
+  focus?(): void;
   loadURL(url: string): Promise<void>;
   send(channel: string, ...args: unknown[]): void;
   setZoomFactor?(factor: number): void;
@@ -53,6 +54,7 @@ export type ParentWindowLike = {
     send(channel: string, ...args: unknown[]): void;
     isDestroyed(): boolean;
     getZoomFactor?(): number;
+    focus?(): void;
   };
 };
 
@@ -304,6 +306,21 @@ export class WorkspaceViews {
     const entry = this.owned(parentWebContentsId, viewId);
     if (!entry.webContents.isDestroyed()) {
       entry.webContents.send(WORKSPACE_REALM_MESSAGE_CHANNEL, message);
+      // DOM focus cannot cross the native child webContents boundary by itself.
+      // Only the shell requests this handoff, after validating the dismissal.
+      if (entry.visible && message && typeof message === "object") {
+        const panel = message as { type?: unknown; open?: unknown; restoreFocus?: unknown };
+        if (panel.type === "panel") {
+          if (panel.open === true) entry.webContents.focus?.();
+          else if (
+            panel.open === false &&
+            panel.restoreFocus === true &&
+            !entry.parent.webContents.isDestroyed()
+          ) {
+            entry.parent.webContents.focus?.();
+          }
+        }
+      }
     }
   }
 

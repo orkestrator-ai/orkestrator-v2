@@ -73,7 +73,7 @@ export function WorkspaceRealmHost() {
           return;
         }
         // The window's sidebar: the toolbar here shows and toggles it.
-        if (useUIStore.getState().sidebarOpen !== message.open) {
+        if (message.type === "sidebar" && useUIStore.getState().sidebarOpen !== message.open) {
           useUIStore.setState({ sidebarOpen: message.open });
         }
       }),

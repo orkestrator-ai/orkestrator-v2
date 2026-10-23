@@ -18,6 +18,9 @@ const originalHref = window.location.href;
 const originalNative = window.orkestrator;
 const originalPortal = portalStore.getState();
 const originalRemote = useRemoteWorkspaceStore.getState();
+const originalUI = useUIStore.getState();
+const originalProjects = useProjectStore.getState();
+const originalEnvironments = useEnvironmentStore.getState();
 const nativeInvoke = invoke as ReturnType<typeof mock>;
 const nodeId = "bk_leaf" as BackendId;
 const project = { id: "project", name: "Checkout", localPath: "/checkout", order: 0 } as Project;
@@ -93,6 +96,9 @@ afterEach(() => {
   happyDOM.setURL(originalHref);
   window.orkestrator = originalNative;
   delete window.orkestratorWorkspaceTarget;
+  useUIStore.setState(originalUI, true);
+  useProjectStore.setState(originalProjects, true);
+  useEnvironmentStore.setState(originalEnvironments, true);
   portalStore.store.setState(originalPortal, true);
   useRemoteWorkspaceStore.setState(originalRemote, true);
 });
@@ -177,3 +183,38 @@ for (const board of [false, true]) {
     );
   });
 }
+
+test("panel messages leave sidebar and selection untouched; only sidebar messages change its visibility", async () => {
+  let deliver: (message: unknown) => void = () => undefined;
+  window.orkestrator = {
+    ...originalNative,
+    workspaceRealm: {
+      post: () => undefined,
+      onMessage: (callback: (message: unknown) => void) => {
+        deliver = callback;
+        return () => {
+          deliver = () => undefined;
+        };
+      },
+    },
+  } as typeof window.orkestrator;
+  nativeInvoke.mockImplementation(async (command: string) => {
+    if (command === "get_projects") return [];
+    return undefined;
+  });
+  useProjectStore.setState({ projects: [], hasLoaded: true });
+  useUIStore.setState({ sidebarOpen: true, selectedProjectId: null, selectedEnvironmentId: null });
+  render(<WorkspaceRealmHost />);
+  await waitFor(() => expect(useProjectStore.getState().isLoading).toBe(false));
+  const selection = useUIStore.getState().projectSelectionRevision;
+  for (const open of [false, true]) {
+    act(() => deliver({ type: "panel", panel: "agent", open, inset: 6, seq: 1 }));
+    expect(useUIStore.getState().sidebarOpen).toBe(true);
+    expect(useUIStore.getState().projectSelectionRevision).toBe(selection);
+  }
+  act(() => deliver({ type: "sidebar", open: false }));
+  expect(useUIStore.getState().sidebarOpen).toBe(false);
+  act(() => deliver({ type: "panel", panel: "usage", open: true, inset: 6, seq: 2 }));
+  expect(useUIStore.getState().sidebarOpen).toBe(false);
+  expect(useUIStore.getState().projectSelectionRevision).toBe(selection);
+});

@@ -4,7 +4,7 @@
  * list and, from its place at the top of that list, folds it again.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { TerminalProvider } from "@/contexts";
 import type { NativeMessagePart } from "@/lib/chat/native-message-types";
 import { NativeMessage } from "./NativeMessage";
@@ -185,7 +185,7 @@ describe("folded tool group", () => {
     ).toBe("true");
   });
 
-  test("keeps a pending question visible and folds it only after completion", () => {
+  test("keeps a pending question visible and folds it only after completion", async () => {
     const id = `question-${++messageCounter}`;
     const question = shell(2, "", {
       toolName: "AskUserQuestion",
@@ -197,6 +197,16 @@ describe("folded tool group", () => {
     expect(screen.queryByRole("button", { name: /^Show .*tool calls:/ }) === null).toBe(true);
     expect(screen.getByText("Which approach?")).toBeTruthy();
     rerender(messageView(id, [...calls.slice(0, 2), { ...question, toolState: "success" }]));
+    // A group that was on screen unfolded mounts open and folds a frame later,
+    // so the collapse animates rather than snapping shut.
+    const trigger = () => screen.getByRole("button", { name: /^Show 3 tool calls:/ });
+    expect(trigger().getAttribute("aria-expanded")).toBe("true");
+    await waitFor(() => expect(trigger().getAttribute("aria-expanded")).toBe("false"));
+  });
+
+  test("renders a group that arrives already long folded without animating", () => {
+    const calls = [shell(0, "git status"), shell(1, "git diff --stat"), shell(2, "git log -5")];
+    render(messageView(`arrives-folded-${++messageCounter}`, calls));
     expect(
       screen.getByRole("button", { name: /^Show 3 tool calls:/ }).getAttribute("aria-expanded"),
     ).toBe("false");

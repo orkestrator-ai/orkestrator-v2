@@ -570,6 +570,7 @@ describe("pinNativeAgentParts", () => {
       at("assistant-launch", "2026-06-28T12:00:00.000Z", [
         { type: "text", content: "Delegating" },
         settledWorker("2026-06-28T12:01:15.000Z"),
+        { type: "text", content: "Checking files" },
       ]),
       at("assistant-tool-1", "2026-06-28T12:01:00.000Z", [
         { type: "tool-invocation", content: "Read", toolName: "Read" },
@@ -583,15 +584,17 @@ describe("pinNativeAgentParts", () => {
     expect(messages.map((message) => message.id)).toEqual([
       "assistant-launch",
       "assistant-launch:text-block:1",
+      "assistant-launch:text-block:2",
       "assistant-tool-1",
       "assistant-after",
     ]);
-    expect(messages[2]?.createdAt).toBe("2026-06-28T12:01:30.000Z");
-    expect(messages[2]?.settleAnchorCreatedAt).toBe("2026-06-28T12:01:00.000Z");
+    expect(messages[3]?.createdAt).toBe("2026-06-28T12:01:30.000Z");
+    expect(messages[3]?.settleAnchorCreatedAt).toBe("2026-06-28T12:01:00.000Z");
 
     const pinned = pinNativeAgentParts(messages);
     expect(pinned.map((message) => message.id)).toEqual([
       "assistant-launch",
+      "assistant-launch:text-block:2",
       "assistant-tool-1",
       "assistant-tool-1:settled-agents",
       "assistant-after",

@@ -211,3 +211,14 @@ Second full suite on the same branch (2026-10-22): `mise run test:logged -- --na
 - Complete unchanged owner rerun: `mise run test:logged -- --name merge-firewall-isolated -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` passed (exit 0, 13.8 s).
 - Aggregate evidence: `orkestrator-test-run.JCIgd6/root-and-agent-support-tests.log.gz` below the host temporary directory; wrapper evidence: `orkestrator-test-run.JxjaBc/merge-tests.log.gz`.
 - The isolated pass confirms an intermittent shell-fixture deadline. Host contention remains a hypothesis; no firewall implementation, assertion, timeout or skip changed.
+
+## Command-handover repair follow-up — 2026-10-23
+
+`mise run test:logged -- --name handover-tests -- mise run test` timed out
+`GitHub ranges come from a fresh backend seed, else live, else this container's
+cache` at 5007.56 ms. The root group had 3382 passed and one failed test.
+`mise run test:logged -- --name handover-firewall-owner -- bun test
+./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` passed the
+complete unchanged owner in 19.6 s. Original group evidence is
+`orkestrator-test-run.AW4scv/root-and-agent-support-tests.log.gz` under the host
+temporary directory. No firewall implementation, assertion, timeout or skip changed.

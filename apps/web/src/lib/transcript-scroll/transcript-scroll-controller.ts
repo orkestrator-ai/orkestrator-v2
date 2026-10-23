@@ -241,6 +241,7 @@ export class TranscriptScrollController {
   private growthFrame: number | null = null;
   private anchorTimer: ReturnType<typeof setTimeout> | null = null;
   private lastReadingAnchor: SemanticAnchor | null = null;
+
   private rowIndexOf: ((key: string) => number) | null = null;
   private structuralHold = false;
   private preCommitAnchor: SemanticAnchor | null = null;

@@ -25,6 +25,7 @@ import {
 } from "./NativeMessage.shared";
 import { toolRowPreview } from "./NativeMessage.basic-parts";
 import { pureprependCount } from "@/lib/transcript-scroll/prepend";
+import { keepMountedOverscan } from "@/lib/transcript-scroll/keep-mounted";
 
 /** Inner `firstItemIndex` start; lowered by members a history page prepends. */
 const INNER_FIRST_ITEM_INDEX_BASE = 1_000_000;
@@ -45,6 +46,8 @@ export const TOOL_GROUP_BODY_MAX_HEIGHT = "min(28rem, 55dvh)";
 
 /** Bootstrap estimate for an unmeasured entry; measured sizes replace it. */
 const ENTRY_ESTIMATE_PX = 40;
+
+const INNER_FOLLOW = () => "auto" as const;
 
 /** Within this of the inner end, the inner list counts as following its tail. */
 const INNER_END_TOLERANCE_PX = 2;
@@ -82,13 +85,16 @@ const ToolGroupEntry = memo(function ToolGroupEntry({
   part,
   containerId,
   partKey,
+  index,
 }: {
   part: NativeMessagePart;
   containerId?: string;
   partKey: string;
+  /** Local index inside a virtualized body (selection protection). */
+  index?: number;
 }) {
   return (
-    <div className="px-2 py-0.5">
+    <div className="px-2 py-0.5" data-tool-group-entry-index={index}>
       <NativeMessagePartRenderer part={part} containerId={containerId} partKey={partKey} />
     </div>
   );
@@ -204,18 +210,55 @@ function VirtualizedToolGroupBody({
     setTracked({ entries, base });
   }
   const baseRef = useRef(INNER_FIRST_ITEM_INDEX_BASE);
+  const innerScrollerRef = useRef<HTMLElement | null>(null);
+  const [following, setFollowing] = useState(initialPlace.atEnd);
   useLayoutEffect(() => {
     baseRef.current = base;
   });
+  // A selection inside an entry keeps that entry mounted while it stays near
+  // the window, with the transcript's own bound; virtualization stays on.
+  const hostRef = useRef<HTMLDivElement>(null);
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  const [visibleRange, setVisibleRange] = useState<{ startIndex: number; endIndex: number } | null>(
+    null,
+  );
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    const onSelectionChange = () => {
+      const selection = host.ownerDocument.getSelection();
+      const node = selection && !selection.isCollapsed ? selection.focusNode : null;
+      const element = node instanceof Element ? node : (node?.parentElement ?? null);
+      const entry =
+        element && host.contains(element)
+          ? element.closest<HTMLElement>("[data-tool-group-entry-index]")
+          : null;
+      setSelectedIndex(entry ? Number(entry.dataset.toolGroupEntryIndex) : null);
+    };
+    host.ownerDocument.addEventListener("selectionchange", onSelectionChange);
+    return () => host.ownerDocument.removeEventListener("selectionchange", onSelectionChange);
+  }, []);
+  const keepMounted =
+    selectedIndex === null ? null : keepMountedOverscan(selectedIndex, visibleRange);
   const onRange = useCallback(
     (range: ListRange) => {
+      const local = {
+        startIndex: range.startIndex - baseRef.current,
+        endIndex: range.endIndex - baseRef.current,
+      };
       const current = readPlace();
-      if (!current.atEnd) writePlace({ ...current, index: range.startIndex - baseRef.current });
+      if (!current.atEnd) writePlace({ ...current, index: local.startIndex });
+      setVisibleRange((previous) =>
+        previous?.startIndex === local.startIndex && previous.endIndex === local.endIndex
+          ? previous
+          : local,
+      );
     },
     [readPlace, writePlace],
   );
   return (
     <div
+      ref={hostRef}
       // The transcript's anchor capture skips members inside: the group frame
       // stands for them while this viewport owns their scrolling.
       data-transcript-inner-viewport="true"
@@ -230,23 +273,45 @@ function VirtualizedToolGroupBody({
         defaultItemHeight={ENTRY_ESTIMATE_PX}
         increaseViewportBy={{ top: 120, bottom: 120 }}
         computeItemKey={(absolute, child) => toolGroupEntryKey(child, absolute - base)}
+        // The top is Virtuoso's default; only another opening place is passed.
         initialTopMostItemIndex={
           initialPlace.atEnd
             ? { index: "LAST", align: "end" }
-            : { index: initialPlace.index, align: "start", offset: -initialPlace.offset }
+            : initialPlace.index > 0 || initialPlace.offset !== 0
+              ? { index: initialPlace.index, align: "start", offset: -initialPlace.offset }
+              : undefined
         }
-        // Follows only an append that finds the reader at the inner end;
-        // a status update or details arriving changes no count, so never
-        // starts following.
-        followOutput={(atBottom) => (atBottom ? "auto" : false)}
-        atBottomStateChange={(atBottom) => writePlace({ ...readPlace(), atEnd: atBottom })}
+        // Follows only an append that finds the reader at the inner end; a
+        // status update or details arriving changes no count, so never starts
+        // following. Literal false otherwise: Virtuoso's viewport-shrink and
+        // size paths test `followOutput !== false`, and would otherwise pull
+        // this list to its end as its own height settles.
+        followOutput={following ? INNER_FOLLOW : false}
+        // Trusted only when the scroller's geometry agrees: an empty list at
+        // mount reports at-bottom before any entry has rendered.
+        atBottomStateChange={(atBottom) => {
+          const element = innerScrollerRef.current;
+          const atEnd =
+            atBottom &&
+            element !== null &&
+            element.scrollHeight > element.clientHeight &&
+            element.scrollHeight - element.clientHeight - element.scrollTop <=
+              INNER_END_TOLERANCE_PX;
+          writePlace({ ...readPlace(), atEnd });
+          setFollowing(atEnd);
+        }}
+        scrollerRef={(element) => {
+          innerScrollerRef.current = element instanceof HTMLElement ? element : null;
+        }}
         atBottomThreshold={INNER_END_TOLERANCE_PX}
         rangeChanged={onRange}
+        minOverscanItemCount={keepMounted ?? undefined}
         itemContent={(absolute, child) => (
           <ToolGroupEntry
             part={child}
             containerId={containerId}
             partKey={entryPartKey(partKey, child, absolute - base)}
+            index={absolute - base}
           />
         )}
       />

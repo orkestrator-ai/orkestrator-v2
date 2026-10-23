@@ -104,22 +104,37 @@ function TrackedNativeMessage({
   return <NativeMessage message={message} previousMessage={previousMessage} platform="codex" />;
 }
 
+/** One finished tool run of `count` calls: the bounded-rendering stress case. */
+function bigGroupMessage(count: number): Message {
+  return {
+    id: "big-tool-group",
+    role: "assistant",
+    content: "",
+    createdAt: "2026-09-21T09:00:00Z",
+    parts: Array.from({ length: count }, (_, index) => command(5_000 + index)),
+  };
+}
+
 export function StreamingTranscriptFixture() {
-  const longTranscript = new URLSearchParams(window.location.search).has("long");
-  const folding = new URLSearchParams(window.location.search).has("fold");
+  const query = new URLSearchParams(window.location.search);
+  const longTranscript = query.has("long");
+  const folding = query.has("fold");
+  const bigGroup = Number(query.get("bigGroup") ?? 0);
   const [messages, setMessages] = useState(() =>
-    folding
-      ? [
-          ...initialMessages(longTranscript),
-          {
-            id: "live-fold",
-            role: "assistant" as const,
-            content: "",
-            createdAt: "2026-09-21T11:00:00Z",
-            parts: [command(3_000), command(3_001)],
-          },
-        ]
-      : initialMessages(longTranscript),
+    bigGroup > 0
+      ? [...initialMessages(longTranscript), bigGroupMessage(bigGroup)]
+      : folding
+        ? [
+            ...initialMessages(longTranscript),
+            {
+              id: "live-fold",
+              role: "assistant" as const,
+              content: "",
+              createdAt: "2026-09-21T11:00:00Z",
+              parts: [command(3_000), command(3_001)],
+            },
+          ]
+        : initialMessages(longTranscript),
   );
   const [listGeneration, setListGeneration] = useState(0);
   const [restoreStateFrom, setRestoreStateFrom] = useState<StateSnapshot>();

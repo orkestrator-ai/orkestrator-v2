@@ -113,6 +113,9 @@ test("a live group growing below a released reader leaves their place where it i
   await page.mouse.wheel(0, -250);
   await scrollEnded;
   await expect.poll(() => bottomGap(page)).toBeGreaterThan(100);
+  // The reader has stopped and is reading: the wheel's animation (which can
+  // restart around writes and so end more than once) is over.
+  await page.waitForTimeout(400);
   const anchorIndex = await scroller.evaluate((element) => {
     const viewport = element.getBoundingClientRect();
     return Array.from(element.querySelectorAll<HTMLElement>("[data-chat-message-index]")).find(
@@ -130,4 +133,81 @@ test("a live group growing below a released reader leaves their place where it i
   expect(probe.missing).toBe(0);
   expect(probe.maxError).toBeLessThanOrEqual(2);
   await expect.poll(() => bottomGap(page)).toBeGreaterThan(100);
+});
+
+test("a 1,500-call group opens in a bounded viewport that owns its own scrolling", async ({
+  page,
+}) => {
+  await page.goto("/streaming-transcript?long=1&bigGroup=1500");
+  const scroller = page.locator(scrollerSelector);
+  const show = page.getByRole("button", { name: /^Show 1500 tool calls:/ });
+  await expect(show).toBeVisible();
+  await show.click();
+  const viewport = page.locator("[data-transcript-inner-viewport]");
+  await expect(viewport).toBeVisible();
+  // Mounted work is proportional to the visible window, not to the group.
+  await expect.poll(() => viewport.locator("[data-transcript-part-id]").count()).toBeGreaterThan(0);
+  const mounted = await viewport.locator("[data-transcript-part-id]").count();
+  expect(mounted).toBeLessThan(60);
+  // The open group's row stays within the body ceiling plus its head line.
+  const row = page.locator("[data-chat-message-index]").last();
+  const ceiling = await page.evaluate(() =>
+    Math.min(
+      28 * Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
+      0.55 * innerHeight,
+    ),
+  );
+  const rowHeight = (await row.boundingBox())!.height;
+  expect(rowHeight).toBeLessThanOrEqual(ceiling + 120);
+  // A wheel over the group scrolls the group, not the transcript.
+  const outerBefore = await scroller.evaluate((element) => element.scrollTop);
+  const innerScroller = viewport.locator("[data-virtuoso-scroller]");
+  const innerBefore = await innerScroller.evaluate((element) => element.scrollTop);
+  await innerScroller.hover();
+  await page.mouse.wheel(0, 600);
+  await expect
+    .poll(() => innerScroller.evaluate((element) => element.scrollTop))
+    .toBeGreaterThan(innerBefore + 100);
+  expect(await scroller.evaluate((element) => element.scrollTop)).toBeCloseTo(outerBefore, 0);
+  // Still bounded after scrolling deep into it.
+  expect(await viewport.locator("[data-transcript-part-id]").count()).toBeLessThan(60);
+});
+
+test("a selection inside a long group's viewport survives nearby inner scrolling", async ({
+  page,
+}) => {
+  await page.goto("/streaming-transcript?long=1&bigGroup=1500");
+  await page.getByRole("button", { name: /^Show 1500 tool calls:/ }).click();
+  const viewport = page.locator("[data-transcript-inner-viewport]");
+  const innerScroller = viewport.locator("[data-virtuoso-scroller]");
+  await expect
+    .poll(() => viewport.locator("[data-tool-group-entry-index]").count())
+    .toBeGreaterThan(2);
+  const entry = viewport.locator('[data-tool-group-entry-index="1"]');
+  const held = await entry.elementHandle();
+  await entry.evaluate((element) => {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const selection = document.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+  });
+  // Let selectionchange deliver, then move a few rows past it: inside the
+  // protection bound (8 rows beyond the visible range), it stays mounted.
+  await page.waitForTimeout(50);
+  const entryHeight = (await entry.boundingBox())!.height;
+  await innerScroller.evaluate((element, by) => {
+    element.scrollTop += by;
+  }, entryHeight * 5);
+  await page.waitForTimeout(200);
+  expect(await held!.evaluate((element) => element.isConnected)).toBe(true);
+  expect(
+    await page.evaluate(() => document.getSelection()?.toString().length ?? 0),
+  ).toBeGreaterThan(0);
+  // Far past it, protection releases and the window stays bounded.
+  await innerScroller.evaluate((element) => {
+    element.scrollTop += 20_000;
+  });
+  await expect.poll(() => held!.evaluate((element) => element.isConnected)).toBe(false);
+  expect(await viewport.locator("[data-tool-group-entry-index]").count()).toBeLessThan(60);
 });

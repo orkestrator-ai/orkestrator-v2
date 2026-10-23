@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { scrollDiagnostics, startAnchorProbe, stopAnchorProbe } from "./transcript-anchor-probe";
 
 declare global {
   interface Window {
@@ -230,4 +231,57 @@ test("a selection in the first row survives clipped overscan up to the protectio
   }
   // Past protection and the ordinary 400px viewport buffer it virtualizes away.
   await expect(row).toHaveCount(0);
+});
+
+test("a detached reader's row holds every painted frame while new rows stream", async ({
+  page,
+}) => {
+  await page.goto("/streaming-transcript?long=1");
+  await releaseStickyScroll(page);
+  await page.getByRole("button", { name: "Scroll to tool history" }).click();
+  const scroller = page.locator(scrollerSelector);
+  const historicToolRow = page.locator('[data-chat-message-index="40"]');
+  await expect(historicToolRow).toBeVisible();
+  await expect
+    .poll(async () => (await scrollDiagnostics(scroller)).lastOutcome)
+    .toMatch(/converged|clamped/);
+  await startAnchorProbe(scroller, 'css:[data-chat-message-index="40"]');
+  for (let index = 0; index < 4; index++) {
+    await page.getByRole("button", { name: "Append turn" }).click();
+    await expect(page.getByTestId("transcript-row-count")).toHaveText(String(84 + index));
+  }
+  await waitForFrames(page, 12);
+  const probe = await stopAnchorProbe(scroller);
+  expect(probe.count).toBeGreaterThan(8);
+  expect(probe.missing).toBe(0);
+  expect(probe.maxError).toBeLessThanOrEqual(2);
+  await expect.poll(() => distanceFromBottom(page)).toBeGreaterThan(100);
+});
+
+test("a downward wheel during a history jump keeps the reader in control", async ({ page }) => {
+  await page.goto("/streaming-transcript?long=1");
+  await releaseStickyScroll(page);
+  const scroller = page.locator(scrollerSelector);
+  await scroller.hover();
+  const before = await scrollDiagnostics(scroller);
+  await page.getByRole("button", { name: "Scroll to tool history" }).click();
+  // Interrupt immediately, in the direction a naive cancel ignores.
+  await scroller.hover();
+  await page.mouse.wheel(0, 240);
+  await waitForFrames(page, 10);
+  const afterWheel = await scroller.evaluate((element) => element.scrollTop);
+  const writesAfterWheel = (await scrollDiagnostics(scroller)).writes as number;
+  // Past every guardrail the retired operation could have used.
+  await page.waitForTimeout(1_000);
+  const diagnostics = await scrollDiagnostics(scroller);
+  expect(diagnostics.operationsStarted).toBe((before.operationsStarted as number) + 1);
+  expect(await scroller.evaluate((element) => element.scrollTop)).toBeCloseTo(afterWheel, 0);
+  expect(diagnostics.writes).toBe(writesAfterWheel);
+  // The wheel arrived while the jump was still converging, and retired it.
+  expect(diagnostics.lastOutcome).toBe("cancelled");
+  expect(diagnostics.userInterruptions).toBe((before.userInterruptions as number) + 1);
+  // The reader stays detached: streaming does not pull them to the tail.
+  await page.getByRole("button", { name: "Append turn" }).click();
+  await waitForFrames(page, 6);
+  expect(await scroller.evaluate((element) => element.scrollTop)).toBeCloseTo(afterWheel, 0);
 });

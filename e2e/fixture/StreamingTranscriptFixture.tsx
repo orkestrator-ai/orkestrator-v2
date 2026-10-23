@@ -123,7 +123,7 @@ export function StreamingTranscriptFixture() {
   );
   const [listGeneration, setListGeneration] = useState(0);
   const [restoreStateFrom, setRestoreStateFrom] = useState<StateSnapshot>();
-  const { scrollProps, virtuosoRef } = useVirtuosoScrollState();
+  const { scrollProps, virtuosoRef, scrollToIndex, scrollToBottom } = useVirtuosoScrollState();
   const rows = useMemo(() => normalizeNativeMessages(messages), [messages]);
   const historicToolIndex = rows.findIndex((row) => row.id === toolHeavyMessage.id);
 
@@ -179,18 +179,10 @@ export function StreamingTranscriptFixture() {
     });
   };
 
+  // Navigation goes through the scroll controller like the product's own
+  // jumps: one bounded operation that measured convergence settles.
   const scrollToToolHistory = () => {
-    const scroll = () =>
-      virtuosoRef.current?.scrollToIndex({
-        index: historicToolIndex,
-        align: "start",
-        behavior: "auto",
-      });
-    scroll();
-    requestAnimationFrame(() => {
-      scroll();
-      requestAnimationFrame(scroll);
-    });
+    scrollToIndex(historicToolIndex, { rowKey: toolHeavyMessage.id, offset: 0 });
   };
 
   return (
@@ -229,16 +221,7 @@ export function StreamingTranscriptFixture() {
       <button type="button" onClick={saveAndRemount}>
         Save and remount
       </button>
-      <button
-        type="button"
-        onClick={() =>
-          virtuosoRef.current?.scrollToIndex({
-            index: rows.length - 1,
-            align: "end",
-            behavior: "auto",
-          })
-        }
-      >
+      <button type="button" onClick={scrollToBottom}>
         Jump to latest
       </button>
       <output data-testid="transcript-row-count">{rows.length}</output>

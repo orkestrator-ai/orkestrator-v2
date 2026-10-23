@@ -19,16 +19,19 @@ export interface AnchorProbeResult {
  * anchor and the scroller only; stores a bounded numeric ring buffer and never
  * touches React. Stop it with `stopAnchorProbe`.
  *
- * `partId` names a `[data-transcript-part-id]` element. The anchor must be
+ * `anchor` is a source part id (`[data-transcript-part-id]`) or, prefixed
+ * with `css:`, a selector resolved inside the scroller. The anchor must be
  * visible when the probe starts.
  */
-export async function startAnchorProbe(scroller: Locator, partId: string, capacity = 2048) {
+export async function startAnchorProbe(scroller: Locator, anchor: string, capacity = 2048) {
   await scroller.evaluate(
-    (el, { partId, capacity }) => {
+    (el, { anchor, capacity }) => {
       const resolve = () =>
-        Array.from(el.querySelectorAll<HTMLElement>("[data-transcript-part-id]")).find(
-          (node) => node.dataset.transcriptPartId === partId,
-        ) ?? null;
+        anchor.startsWith("css:")
+          ? el.querySelector<HTMLElement>(anchor.slice(4))
+          : (Array.from(el.querySelectorAll<HTMLElement>("[data-transcript-part-id]")).find(
+              (node) => node.dataset.transcriptPartId === anchor,
+            ) ?? null);
       const offsetOf = (node: HTMLElement) =>
         node.getBoundingClientRect().top - el.getBoundingClientRect().top;
       const first = resolve();
@@ -71,7 +74,7 @@ export async function startAnchorProbe(scroller: Locator, partId: string, capaci
         },
       };
     },
-    { partId, capacity },
+    { anchor, capacity },
   );
 }
 

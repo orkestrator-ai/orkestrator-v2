@@ -73,6 +73,7 @@ import type { Environment, EnvironmentType, Project } from "@/types";
 import { ProjectSearchBar } from "./ProjectSearchBar";
 import { ServerConnectionSwitcher } from "./ServerConnectionSwitcher";
 import { useFederation } from "@/components/federation/FederationProvider";
+import { useProjectCopyStore } from "@/stores/projectCopyStore";
 import { MachinesFilter } from "@/components/federation/MachinesFilter";
 import { MachineDot, MachineHomeIcon } from "@/components/federation/MachineDot";
 import {
@@ -519,6 +520,11 @@ export function HierarchicalSidebar() {
     [federation.enabled, machineFilter, machineViews],
   );
   const boundMachineView = machineViews.find((machine) => machine.bound) ?? null;
+  // This sidebar's own projects can be copied to the machines it commands.
+  const copySourceNodeId = federation.enabled
+    ? (boundMachineView?.backendId ?? federation.portalState.selfId)
+    : null;
+  const openProjectCopy = useProjectCopyStore((state) => state.open);
   const remoteMachinesVisible = visibleMachines.filter((machine) => !machine.bound);
   // Machines are listed in the command node's order, whichever one this window
   // works on. Merged lists hide a machine that is not connected; its projects
@@ -1049,6 +1055,11 @@ export function HierarchicalSidebar() {
       onRestartEnvironment={restartEnvironment}
       onForkEnvironment={handleForkEnvironment}
       onCreateEnvironment={() => handleOpenCreateEnvDialog(project.id)}
+      onCopyToMachine={
+        copySourceNodeId
+          ? () => openProjectCopy({ source: { nodeId: copySourceNodeId, projectId: project.id } })
+          : undefined
+      }
       onAddToFolder={mixed ? undefined : () => setFolderDialogProjectId(project.id)}
       onRemoveFromFolder={
         !mixed && project.folder ? () => handleRemoveFromFolder(project.id) : undefined

@@ -54,6 +54,7 @@ import { registerLinearCommands } from "./commands-registry-linear.js";
 import { registerNativeAgentCommands } from "./commands-registry-native.js";
 import { registerPullRequestCommands } from "./commands-registry-pr.js";
 import { registerProjectCommands } from "./commands-registry-projects.js";
+import { registerProjectCopyCommands } from "./commands-registry-project-copy.js";
 import { registerPromptCommands } from "./commands-registry-prompts.js";
 import { registerReviewWorkflowCommands } from "./commands-registry-reviews.js";
 import { registerServerCommands } from "./commands-registry-servers.js";
@@ -289,6 +290,7 @@ export function createCommandRegistry(
   registerTranscriptArtifactCommands(register);
   registerTranscriptArtifactPdfCommands(register, (name) => commands.get(name));
   registerProjectCommands(register, dependencies);
+  registerProjectCopyCommands(register, dependencies);
   registerControlCommands(register, dependencies);
   registerCoordinatorCommands(register, dependencies);
   registerLinearCommands(register, dependencies);

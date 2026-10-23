@@ -19,6 +19,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import {
   ChevronRight,
+  Copy,
   GripVertical,
   LayoutGrid,
   Link2,
@@ -68,6 +69,7 @@ import {
   useNodeEnvironment,
 } from "@/lib/federation/node-environment-reads";
 import { useStore } from "zustand";
+import { useProjectCopyStore } from "@/stores/projectCopyStore";
 import { remoteOrdersFor } from "@/lib/federation/remote-order-writes";
 import { remoteProjectsFor, withArrangement } from "@/lib/federation/remote-project-writes";
 import { moveId, withOrder } from "@/lib/federation/remote-order";
@@ -445,6 +447,17 @@ export function RemoteProjectGroup({
               >
                 <Plus className="h-4 w-4 mr-2" />
                 New Environment
+              </ContextMenuItem>
+              <ContextMenuItem
+                disabled={!writable}
+                onClick={() =>
+                  useProjectCopyStore.getState().open({
+                    source: { nodeId: machine.backendId, projectId: project.ref.projectId },
+                  })
+                }
+              >
+                <Copy className="h-4 w-4 mr-2" />
+                Copy to Machine…
               </ContextMenuItem>
             </ContextMenuContent>
           </ContextMenu>

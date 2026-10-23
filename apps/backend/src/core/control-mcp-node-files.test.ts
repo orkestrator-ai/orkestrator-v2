@@ -165,6 +165,25 @@ describe("FL-02/FL-07/FL-08 file requests wait for the user", () => {
     ).rejects.toThrow("absolute path");
   });
 
+  test("a copy request may leave the location to the node and suggest files", async () => {
+    const { call, calls } = harness(commandStatus, false);
+    await call("request_project_on_node", {
+      nodeId: "bk_leaf",
+      files: [".env", "config/"],
+      reason: "The user asked.",
+    });
+    const target = (
+      calls.find((entry) => entry.command === "create_node_action_request")!.args as {
+        targets: Array<Record<string, unknown>>;
+      }
+    ).targets[0];
+    expect(target).toMatchObject({ nodeId: "bk_leaf", files: [".env", "config/"] });
+    expect(target).not.toHaveProperty("location");
+    await expect(
+      call("request_project_on_node", { nodeId: "bk_leaf", files: ["../x"], reason: "x" }),
+    ).rejects.toThrow("inside this project");
+  });
+
   test("updates and reveals are requests; nothing is written or read until approved", async () => {
     const { call, calls } = harness();
     await call("request_project_file_update", {

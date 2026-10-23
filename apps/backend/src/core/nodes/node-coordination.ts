@@ -11,6 +11,7 @@ import type { StorageService } from "../storage.js";
 import {
   describeNodeAction,
   NodeActionRequests,
+  type NodeActionApproval,
   type NodeActionKind,
   type NodeActionRequest,
   type NodeActionTarget,
@@ -28,6 +29,8 @@ import {
 import { NodeFiles } from "./node-files.js";
 import type { NodePortal } from "./node-portal.js";
 import { NodeProjectFiles } from "./node-project-files.js";
+import { NodeProjectCopies } from "./node-project-copy.js";
+import type { ProjectCopyRecord } from "@orkestrator/protocol/project-copy";
 import type { NodeService } from "./node-service.js";
 
 /**
@@ -56,6 +59,7 @@ export class NodeCoordination {
   readonly actions: NodeActionRequests;
   readonly files: NodeFiles;
   readonly projectFiles: NodeProjectFiles;
+  readonly copies: NodeProjectCopies;
 
   constructor(
     private readonly options: {
@@ -153,6 +157,17 @@ export class NodeCoordination {
           requestId: input.requestId,
         }),
     });
+    this.copies = new NodeProjectCopies({
+      selfId: () => nodes.selfIdentity(),
+      selfName: async () => (await nodes.selfProfile()).displayName,
+      summaries: (nodeIds) => portal.summaries(nodeIds),
+      invokerFor: this.projectFiles.invokerFor,
+      transfer: this.projectFiles.transfer,
+      emit: options.emit,
+      onFinished: (record) => {
+        if (record.actionRequestId) void this.notifyCopyFinished(record);
+      },
+    });
     portal.afterRouted = async (nodeId, command, args, result) => {
       if (command !== "create_environment" || typeof args.projectId !== "string") return;
       const environmentId = (result as { id?: unknown } | null)?.id;
@@ -167,7 +182,7 @@ export class NodeCoordination {
         "delete-environment": (request) => this.executeDeletion(request),
         "update-project-files": (request) => this.projectFiles.executeUpdate(request),
         "reveal-env-value": (request) => this.projectFiles.executeReveal(request),
-        "create-project": (request) => this.projectFiles.executeCreateProject(request),
+        "create-project": (request, approval) => this.executeCreateProject(request, approval),
       },
       notify: (request) => this.notifyRequester(request),
     });
@@ -406,9 +421,87 @@ export class NodeCoordination {
     return { code: "deleted", message: `Deleted ${done.join(", ")}.` };
   }
 
+  /**
+   * Approved: copy the coordinator's project (this node's copy) to each
+   * target, with the location and files the user settled on while approving.
+   * The copy runs in the background; its outcome is mailed when it ends.
+   */
+  private async executeCreateProject(
+    request: NodeActionRequest,
+    approval: NodeActionApproval,
+  ): Promise<{ code: string; message: string }> {
+    const self = await this.options.nodes.selfIdentity();
+    const started: string[] = [];
+    for (const target of request.targets) {
+      const record = await this.copies.start({
+        requestKey: `node-action:${request.requestId}:${target.nodeId}`,
+        source: { nodeId: self, projectId: request.requestedBy.projectId },
+        target: {
+          nodeId: target.nodeId,
+          ...((approval.location ?? target.location)
+            ? { location: approval.location ?? target.location }
+            : {}),
+        },
+        paths: approval.paths ?? target.files ?? [],
+        rememberFiles: approval.rememberFiles ?? false,
+        actionRequestId: request.requestId,
+      });
+      started.push(
+        `${record.source.projectName} to ${record.target.nodeName}${record.target.location ? ` at ${record.target.location}` : ""}`,
+      );
+    }
+    return {
+      code: "copying",
+      message: `Started copying ${started.join(", ")}. You will get a message when it finishes.`,
+    };
+  }
+
+  private async notifyCopyFinished(record: ProjectCopyRecord): Promise<void> {
+    const request = await this.actions.get(record.actionRequestId!).catch(() => null);
+    if (!request) return;
+    const done = record.stage === "completed";
+    const what = `${record.source.projectName} to ${record.target.nodeName}${record.target.location ? ` at ${record.target.location}` : ""}`;
+    await this.options.storage
+      .sendAgentMail(
+        // A system notice in the coordinator's own project, so it wakes the
+        // conversation that asked rather than waiting unread.
+        {
+          kind: "system",
+          projectId: request.requestedBy.projectId,
+          source: "workflow",
+          resourceId: `node-copy:${record.copyId}`,
+        },
+        {
+          requestId: `node-copy:${record.copyId}:${record.stage}:${record.finishedAt ?? ""}`.slice(
+            0,
+            256,
+          ),
+          toEnvironmentId: request.requestedBy.coordinatorEnvironmentId,
+          toTabId: request.requestedBy.coordinatorTabId,
+          subject: `Project copy ${done ? "finished" : "failed"}: ${what}`.slice(0, 200),
+          body: done
+            ? `Copied ${what}: ${record.progress.files} file(s) besides the clone${record.tooLarge.length ? `; ${record.tooLarge.length} file(s) over 64 MiB were not copied` : ""}. Its environments can now be launched there with nodeId ${record.target.nodeId}.`
+            : `Copying ${what} failed: ${record.error?.message ?? "unknown error"}`,
+        },
+      )
+      .catch((error: unknown) => {
+        console.warn(
+          "[nodes] Could not tell the coordinator a project copy finished:",
+          error instanceof Error ? error.name : "unknown",
+        );
+      });
+  }
+
   private async notifyRequester(request: NodeActionRequest): Promise<void> {
     await this.options.storage.sendAgentMail(
-      { kind: "external" },
+      // The coordinator asked and was told it would hear back: a system notice
+      // in its project wakes it, where external mail would wait unread.
+      {
+        kind: "system",
+        projectId: request.requestedBy.projectId,
+        source: "workflow",
+        resourceId: `node-action:${request.requestId}`,
+      },
       {
         requestId: `node-action:${request.requestId}:${request.state}`,
         toEnvironmentId: request.requestedBy.coordinatorEnvironmentId,

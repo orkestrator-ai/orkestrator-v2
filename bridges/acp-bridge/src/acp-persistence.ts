@@ -89,6 +89,7 @@ import {
   boundTranscript,
   boundedString,
   boundedToolArguments,
+  sessionTitle,
   truncateUtf8,
 } from "./acp-transcript.js";
 
@@ -414,6 +415,8 @@ export async function loadPersistedState(): Promise<void> {
       Number(candidate.commandsRevision) >= 0
         ? { commandsRevision: Number(candidate.commandsRevision) }
         : {}),
+      // Re-sanitized rather than trusted from disk, like the command rows.
+      ...(sessionTitle(candidate.title) ? { title: sessionTitle(candidate.title) } : {}),
     };
     if (Array.isArray(candidate.promptJournal)) {
       for (const rawEntry of candidate.promptJournal.slice(-MAX_PROMPT_JOURNAL)) {

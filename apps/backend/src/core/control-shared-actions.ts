@@ -16,7 +16,11 @@ import {
   type AgentSettingsTier,
   type AgentSettingsTiers,
 } from "@orkestrator/protocol/agent-settings";
-import { nativeAgentCapabilities, type AgentModel } from "@orkestrator/protocol/native-agent";
+import {
+  nativeAgentCapabilities,
+  reasoningOptionLabel,
+  type AgentModel,
+} from "@orkestrator/protocol/native-agent";
 import {
   claudeModelParameters,
   claudeModelReasoningIds,
@@ -212,11 +216,7 @@ export function reasoningOptions(ids: unknown): Array<{ id: string; label: strin
   if (!Array.isArray(ids)) return [];
   return ids.flatMap((id) => {
     if (typeof id !== "string" || !id.trim()) return [];
-    const label =
-      id === "xhigh"
-        ? "Extra high"
-        : id.replace(/[-_]+/g, " ").replace(/^\w/, (letter) => letter.toUpperCase());
-    return [{ id, label }];
+    return [{ id, label: reasoningOptionLabel(id) }];
   });
 }
 

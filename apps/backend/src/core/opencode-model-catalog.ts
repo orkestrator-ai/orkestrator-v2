@@ -10,6 +10,7 @@ import {
   openCodeModelDisplayLabel,
   openCodeModelProviderId,
   openCodeModelProvidersKey,
+  reasoningOptionLabel,
 } from "@orkestrator/protocol/native-agent";
 import { asRecord, nonEmptyString } from "./agent-provider-runtime.js";
 
@@ -321,16 +322,7 @@ export function normalizeOpenCodeComposerCatalog(
       ? Object.entries(variants)
           .flatMap(([id, candidate]) => {
             const variant = asRecord(candidate);
-            return variant?.disabled === true
-              ? []
-              : [
-                  {
-                    id,
-                    label: id
-                      .replace(/[-_]+/g, " ")
-                      .replace(/^\w/, (letter) => letter.toUpperCase()),
-                  },
-                ];
+            return variant?.disabled === true ? [] : [{ id, label: reasoningOptionLabel(id) }];
           })
           .slice(0, 64)
       : [];

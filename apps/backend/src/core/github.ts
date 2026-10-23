@@ -70,7 +70,16 @@ export type GitHubIssueDetail = GitHubIssue & {
   comments: GitHubIssueComment[];
 };
 
-type GitHubFetch = typeof fetch;
+export type GitHubFetch = typeof fetch;
+
+/** What a request is about; selects the wording of permission and 404 errors. */
+export type GitHubRequestSubject = "issue" | "pull-request";
+
+export type GitHubRequestOptions = {
+  subject?: GitHubRequestSubject;
+  /** Return `{ data: null }` for a 304 instead of failing (conditional GETs). */
+  allowNotModified?: boolean;
+};
 
 type GitHubRepositoryIdentity = {
   repository: GitHubRepository;
@@ -93,46 +102,49 @@ type GitHubApiErrorOptions = {
 export class GitHubApiError extends Error {
   readonly status?: number;
   readonly code: NonNullable<GitHubApiErrorOptions["code"]>;
+  /** GitHub's own short message (URLs stripped), when it sent one. */
+  readonly detail?: string;
 
-  constructor(message: string, options: GitHubApiErrorOptions = {}) {
+  constructor(message: string, options: GitHubApiErrorOptions & { detail?: string } = {}) {
     super(message);
     this.name = "GitHubApiError";
     this.status = options.status;
     this.code = options.code ?? "github";
+    this.detail = options.detail;
   }
 }
 
-const GITHUB_API_BASE = "https://api.github.com";
+export const GITHUB_API_BASE = "https://api.github.com";
 const GITHUB_API_VERSION = "2022-11-28";
 const GITHUB_REQUEST_TIMEOUT_MS = 30_000;
 const STATUS_LABEL_NAMES = Object.values(GITHUB_STATUS_LABELS);
 const ensureLabelLocks = new Map<string, Promise<void>>();
 const issueStatusLocks = new Map<string, Promise<unknown>>();
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function stringValue(value: unknown, fallback = ""): string {
+export function stringValue(value: unknown, fallback = ""): string {
   return typeof value === "string" ? value : fallback;
 }
 
-function optionalString(value: unknown): string | undefined {
+export function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-function numberValue(value: unknown, fallback = 0): number {
+export function numberValue(value: unknown, fallback = 0): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
-function requirePositiveInteger(value: number, name: string): number {
+export function requirePositiveInteger(value: number, name: string): number {
   if (!Number.isSafeInteger(value) || value <= 0) {
     throw new GitHubApiError(`${name} must be a positive integer.`, { code: "validation" });
   }
   return value;
 }
 
-function encodePathSegment(value: string): string {
+export function encodePathSegment(value: string): string {
   return encodeURIComponent(value);
 }
 
@@ -182,7 +194,7 @@ export function sanitizeGitHubError(error: unknown, secret?: string): string {
   return sanitized.trim() || "GitHub request failed. Try again.";
 }
 
-function safePayloadMessage(payload: unknown): string | undefined {
+export function safePayloadMessage(payload: unknown): string | undefined {
   if (!isRecord(payload)) return undefined;
   const message = optionalString(payload.message);
   if (!message) return undefined;
@@ -205,9 +217,16 @@ function rateLimitMessage(response: Response): string {
   return "GitHub rate limit reached. Wait a moment and try again.";
 }
 
-function responseError(response: Response, payload: unknown, operation: string): GitHubApiError {
+function responseError(
+  response: Response,
+  payload: unknown,
+  operation: string,
+  subject: GitHubRequestSubject = "issue",
+): GitHubApiError {
   const status = response.status;
-  const apiMessage = safePayloadMessage(payload)?.toLowerCase() ?? "";
+  const detail = safePayloadMessage(payload);
+  const apiMessage = detail?.toLowerCase() ?? "";
+  const isPullRequest = subject === "pull-request";
   const rateLimited =
     response.headers.get("x-ratelimit-remaining") === "0" ||
     response.headers.has("retry-after") ||
@@ -224,35 +243,42 @@ function responseError(response: Response, payload: unknown, operation: string):
   }
   if (status === 403) {
     return new GitHubApiError(
-      `GitHub denied permission to ${operation}. Check that your GitHub credentials have Issues write access.`,
-      { status, code: "permission" },
+      `GitHub denied permission to ${operation}. Check that your GitHub credentials have ${
+        isPullRequest ? "Pull requests" : "Issues"
+      } write access.`,
+      { status, code: "permission", detail },
     );
   }
   if (status === 404) {
     return new GitHubApiError(
-      `GitHub could not find the requested repository, issue, or comment while trying to ${operation}. It may have been deleted, or the token may not have access.`,
-      { status, code: "not-found" },
+      `GitHub could not find the requested repository, ${
+        isPullRequest ? "pull request" : "issue"
+      }, or comment while trying to ${operation}. It may have been deleted, or the token may not have access.`,
+      { status, code: "not-found", detail },
     );
   }
   if (status === 409) {
     return new GitHubApiError(
       `GitHub could not ${operation} because the repository state changed. Refresh and try again.`,
-      { status, code: "github" },
+      { status, code: "github", detail },
     );
   }
   if (status === 422) {
     return new GitHubApiError(
-      `GitHub rejected the request to ${operation}. Refresh the issue, check the entered values, and try again.`,
-      { status, code: "validation" },
+      `GitHub rejected the request to ${operation}. Refresh the ${
+        isPullRequest ? "pull request" : "issue"
+      }, check the entered values, and try again.`,
+      { status, code: "validation", detail },
     );
   }
   return new GitHubApiError(`GitHub could not ${operation} (HTTP ${status}). Try again.`, {
     status,
     code: "github",
+    detail,
   });
 }
 
-function requestUrl(pathOrUrl: string): string {
+export function requestUrl(pathOrUrl: string): string {
   const url = pathOrUrl.startsWith("http")
     ? new URL(pathOrUrl)
     : new URL(pathOrUrl, GITHUB_API_BASE);
@@ -262,12 +288,13 @@ function requestUrl(pathOrUrl: string): string {
   return url.toString();
 }
 
-async function githubRequest<T>(
+export async function githubRequest<T>(
   token: string,
   pathOrUrl: string,
   operation: string,
   init: RequestInit = {},
   fetchImpl: GitHubFetch = fetch,
+  options: GitHubRequestOptions = {},
 ): Promise<{ data: T; response: Response }> {
   const credential = token.trim();
   if (!credential) {
@@ -305,6 +332,9 @@ async function githubRequest<T>(
     );
   }
 
+  if (response.status === 304 && options.allowNotModified) {
+    return { data: null as T, response };
+  }
   let payload: unknown = null;
   if (response.status !== 204) {
     try {
@@ -318,11 +348,11 @@ async function githubRequest<T>(
       }
     }
   }
-  if (!response.ok) throw responseError(response, payload, operation);
+  if (!response.ok) throw responseError(response, payload, operation, options.subject);
   return { data: payload as T, response };
 }
 
-function nextLink(linkHeader: string | null): string | null {
+export function nextLink(linkHeader: string | null): string | null {
   if (!linkHeader) return null;
   for (const part of linkHeader.split(",")) {
     const match = part.match(/^\s*<([^>]+)>\s*;\s*rel="([^"]+)"\s*$/);
@@ -331,12 +361,19 @@ function nextLink(linkHeader: string | null): string | null {
   return null;
 }
 
-async function githubPaginatedArray(
-  token: string,
+/** One page fetch: the parsed JSON body and the `Link` header. */
+export type GitHubPageLoader = (url: string) => Promise<{ data: unknown; link: string | null }>;
+
+/**
+ * Walks `Link: rel="next"` pages from `path`, stopping once `maxItems` values
+ * are collected. `truncated` is true when that cap cut a longer list short.
+ */
+export async function githubPaginate(
   path: string,
   operation: string,
-  fetchImpl: GitHubFetch = fetch,
-): Promise<unknown[]> {
+  loadPage: GitHubPageLoader,
+  maxItems = Number.POSITIVE_INFINITY,
+): Promise<{ values: unknown[]; truncated: boolean }> {
   const separator = path.includes("?") ? "&" : "?";
   let next: string | null = `${path}${separator}per_page=100&page=1`;
   const visited = new Set<string>();
@@ -350,19 +387,36 @@ async function githubPaginatedArray(
       );
     }
     visited.add(url);
-    const { data, response } = await githubRequest<unknown>(token, url, operation, {}, fetchImpl);
+    const { data, link } = await loadPage(url);
     if (!Array.isArray(data)) {
       throw new GitHubApiError(
         `GitHub returned an invalid list while trying to ${operation}. Try again.`,
       );
     }
     values.push(...data);
-    next = nextLink(response.headers.get("link"));
+    next = nextLink(link);
+    if (values.length >= maxItems) {
+      const truncated = values.length > maxItems || next !== null;
+      return { values: values.slice(0, maxItems), truncated };
+    }
   }
+  return { values, truncated: false };
+}
+
+async function githubPaginatedArray(
+  token: string,
+  path: string,
+  operation: string,
+  fetchImpl: GitHubFetch = fetch,
+): Promise<unknown[]> {
+  const { values } = await githubPaginate(path, operation, async (url) => {
+    const { data, response } = await githubRequest<unknown>(token, url, operation, {}, fetchImpl);
+    return { data, link: response.headers.get("link") };
+  });
   return values;
 }
 
-function userFromApi(value: unknown): GitHubUser | null {
+export function userFromApi(value: unknown): GitHubUser | null {
   if (!isRecord(value)) return null;
   const login = stringValue(value.login);
   if (!login) return null;
@@ -373,7 +427,7 @@ function userFromApi(value: unknown): GitHubUser | null {
   };
 }
 
-function labelFromApi(value: unknown): GitHubLabel | null {
+export function labelFromApi(value: unknown): GitHubLabel | null {
   if (typeof value === "string") return { name: value, color: "" };
   if (!isRecord(value)) return null;
   const name = stringValue(value.name);
@@ -426,7 +480,7 @@ function issueFromApi(value: unknown): GitHubIssue | null {
   };
 }
 
-function commentFromApi(value: unknown, canEdit = false): GitHubIssueComment | null {
+export function commentFromApi(value: unknown, canEdit = false): GitHubIssueComment | null {
   if (!isRecord(value)) return null;
   const id = numberValue(value.id);
   const htmlUrl = stringValue(value.html_url);
@@ -445,7 +499,7 @@ function commentFromApi(value: unknown, canEdit = false): GitHubIssueComment | n
   };
 }
 
-function viewerCanEditComment(
+export function viewerCanEditComment(
   comment: GitHubIssueComment,
   viewer: GitHubViewer,
   viewerCanManageIssueComments: boolean,
@@ -783,7 +837,7 @@ export async function postGitHubIssueComment(
   return comment;
 }
 
-function commentBelongsToIssue(
+export function commentBelongsToIssue(
   value: unknown,
   ref: GitHubRepositoryRef,
   issueNumber: number,

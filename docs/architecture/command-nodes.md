@@ -208,7 +208,8 @@ one step:
    the command node controlling it) previews the handover
    (`preview_command_handover`): the machines it controls that the target
    does not, and whether it can follow as the target's leaf (it needs an
-   HTTPS address and its gateway token).
+   HTTPS address and its gateway token, or a usable record already saved on
+   the target).
 2. If the target lacks machines, the client asks which to bring (all are
    chosen by default). On the desktop the list also offers machines saved
    only on this device; Electron main adds their tokens.
@@ -220,6 +221,33 @@ one step:
    machines it moved (each is told to detach), and becomes the target's
    leaf once the target attaches.
 4. The window switches to the target and reloads in its multi-machine view.
+
+The target can refuse the command node in charge, so the handover cannot use
+its link. One cause is a loop: the target lists that command node among its
+own machines, for example after it was added from the target's window. The
+other is that the target's user detached it there. A refused link does not
+retry, and the source cannot fix either record. On the desktop, Electron
+main usually has its own connection to the target. It reads both records
+there for the preview and passes the target's machines to
+`preview_command_handover` (`targetNodeIds`), because the source's link cannot
+read them. The dialog then always asks for confirmation and says what it will
+clear. A connected target keeps its existing source record, including routes
+and credentials saved only there. Otherwise, on confirm, Electron main removes
+the source record that blocks attachment (`forget_node`) and allows a detached
+source again (`allow_controller`), as needed. It resolves required credentials
+before these writes. These repairs persist if a later step fails; the dialog
+explains this before confirmation and the error reports it afterward. The
+source then reconnects (`reconnect_node`) and hands over. The source becomes
+the target's machine again through the handover itself if it has usable access.
+
+Execution rechecks the previewed source and target identities, inspection
+completeness, and exact repair set before writing. A changed plan returns to
+confirmation. If either target read failed, the preview marks inspection as
+incomplete, disables automatic execution, and cannot authorize repairs discovered
+later. Without its own connection to the target, or from a browser, the
+handover fails with the refusal's own message. A standalone source skips
+handover only when its registry is empty; refused or pending machines still
+need the full preview and confirmation flow.
 
 Credentials travel only backend to backend (or from Electron main to a
 backend), over the routes the command node already uses, and are stored in
@@ -244,8 +272,12 @@ its controllers. Retrying the same ID resumes unfinished detach work or returns
 the original counts. The target keeps the most recent 64 receipts. Lost
 responses do not restore the old topology: the source retries immediately and
 keeps unresolved work for its background retry loop and restart recovery.
-Edits to existing machines and overlapping handovers are refused while recovery is pending.
-Detach tombstones continue retrying even when the source becomes a leaf.
+Capacity and controller-authorization refusals restore the source's saved target
+record and clear the uncommitted journal. Edits to existing machines and overlapping
+handovers are refused while recovery is pending. Adding another machine remains
+possible, but neither registration nor desktop migration can re-add the pending
+target, whose registry slot remains reserved for rollback. Detach tombstones
+continue retrying even when the source becomes a leaf.
 
 SSH private-key file paths are local to the source and are omitted from
 handover entries. The target may need its own SSH configuration. Independently
@@ -292,13 +324,42 @@ A command node attached to another command node operates in leaf mode:
 
 - The command node keeps a live read model of every connected node's
   projects and environments (summaries, status, activity), fed by its own
-  subscriptions to each node's event stream.
+  subscriptions to each node's event stream. A subscription that receives
+  nothing, not even the node's 25 s keepalive, for 75 s is reopened (a
+  half-open route never errors on its own), and every connected node is
+  re-read every 60 s by the named `node-summary-reconcile` activity due job as a last resort; a re-read that finds nothing new
+  announces nothing.
 - Every resource is node-qualified (`{ nodeId, projectId }`,
   `{ nodeId, environmentId }`), so identical IDs on two nodes never collide.
   Commands from the portal carry the node reference and the command node
   routes them to the owner.
 - Each environment shows its node's colour dot before its name. Unavailable
   nodes keep their last-known state, labelled, with writes disabled.
+- **Anything else on request.** The summaries stay small; a portal view that
+  needs more of another node's state reads it and subscribes to it:
+  - *Reads* go through `invoke_on_node` with the node's own command (for
+    example `changes_get_view`, `get_environment`, `get_agent_registry`).
+    `isNodeReadCommand` treats a read verb at the start of the name, or
+    after one namespace (`changes_get_…`), as a read: it is never recorded
+    as outcome-unknown and does not refresh the summaries.
+  - *Events* are relayed on request. A client leases a watch on a node for
+    some event prefixes (`watch_node_events`, renewed every 30 s, expiring
+    after 90 s; `unwatch_node_events`). The command node keeps one stream
+    per watched node (`nodes/node-event-relay.ts`). Portal badge and hover
+    events share a stable prefix superset so opening or closing a card does
+    not reconnect the stream or resync unrelated views. Other prefix additions
+    may expand the subscription; removals filter locally until the last watch
+    leaves. Accumulated prefixes are bounded. The relay filters against the
+    current watch union and re-emits each matching event as
+    `relayed-node-event` `{ nodeId, kind: "event", event, payload }`. A
+    `{ nodeId, kind: "resync" }` frame (every stream open, every gap) means
+    re-read what is shown from that node. Terminal output is never relayed.
+  - In the renderer, `lib/federation/node-events.ts` holds one lease per
+    node for every view and tells each view when to read (first after its
+    subscription, then after any possible gap). The sidebar's change badge
+    (`node-change-projections.ts`) and the environment hover card
+    (`node-environment-reads.ts`) are built on it; the command node's own
+    environments, shown from its self summary, subscribe directly.
 
 ## Opening an environment on another node
 
@@ -346,9 +407,14 @@ command node.
 - **Creating on another node** opens that node's New Environment dialog in
   its realm, so the node's defaults — the command node's inherited settings
   laid over its own — and start apply as they would there.
-- **The title bar** shows the shown environment's name. The agent info and
-  system usage, which describe the environment's agent and the machine it
-  runs on, are shown at the end of the realm's toolbar.
+- **The title bar** shows the shown environment's name, host meters and agent
+  information trigger. For another node, the realm reports the readings and
+  renders the popovers under those triggers. The latest panel request waits
+  for readiness; Escape, outside presses and leaving the realm also cancel
+  pending opens. Sequence acknowledgments prevent late reports from reviving
+  dismissed panels. Opening transfers focus into the realm; a user dismissal
+  returns it to the corresponding title-bar trigger. Workspace switches and
+  panel replacements do not request return focus.
 - **Native views** a realm opens (browser previews, live artifacts) are
   children of the window placed in the realm's coordinates, and shown only
   while the realm is (`realmChildViewClass`). The window hides a realm while

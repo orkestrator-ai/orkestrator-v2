@@ -55,6 +55,7 @@ export const RECURRING_JOB_KINDS = [
   "mail-retention",
   "activity-lease-expiry",
   "tab-cleanup",
+  "node-summary-reconcile",
   // Backend: workflows.
   "build-supervisor-tick",
   "looped-review-tick",
@@ -305,6 +306,15 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
     15_000,
     "unguarded",
     "lease-expiry",
+  ),
+  "node-summary-reconcile": backend(
+    "B26",
+    "interval",
+    "discovery",
+    60_000,
+    "trailing-rerun",
+    "snapshot-rehydrate",
+    false,
   ),
   "tab-cleanup": backend("B13", "interval", "maintenance", 60_000, "join", "storage-reconcile"),
   // Step 08 keyed supervision: one attempt is one pipeline's pass (every

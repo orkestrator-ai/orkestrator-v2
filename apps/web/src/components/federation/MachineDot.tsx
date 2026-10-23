@@ -1,5 +1,10 @@
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { machineColorLabel, machineDotClass } from "@/lib/federation/machine-colors";
+import { House } from "lucide-react";
+import {
+  machineColorLabel,
+  machineDotClass,
+  machineTextClass,
+} from "@/lib/federation/machine-colors";
 import { cn } from "@/lib/utils";
 
 /**
@@ -15,6 +20,7 @@ export function MachineDot({
   machineName,
   status,
   decorative = true,
+  shape = "circle",
   className,
 }: {
   colorToken: string | undefined;
@@ -23,26 +29,65 @@ export function MachineDot({
   status?: string;
   /** The surrounding label already names the machine. */
   decorative?: boolean;
+  /** Environment rows draw a container's dot as a square. */
+  shape?: "circle" | "square";
   className?: string;
 }) {
   const dot = (
     <span
       data-testid="machine-dot"
       data-machine-color={colorToken ?? "neutral"}
+      data-shape={shape}
       className={cn(
-        "inline-block size-2 shrink-0 rounded-full ring-1 ring-black/25 dark:ring-white/35",
+        "inline-block size-2 shrink-0 ring-1 ring-black/25 dark:ring-white/35",
+        shape === "square" ? "rounded-[1px]" : "rounded-full",
         "forced-colors:border forced-colors:border-[CanvasText] forced-colors:bg-[CanvasText]",
         machineDotClass(colorToken),
         className,
       )}
       {...(decorative
         ? { "aria-hidden": true }
-        : { role: "img", "aria-label": `${machineName} (${machineColorLabel(colorToken)})` })}
+        : {
+            role: "img",
+            "aria-label": `${machineName} (${machineColorLabel(colorToken)})`,
+          })}
     />
   );
   return (
     <Tooltip>
       <TooltipTrigger asChild>{dot}</TooltipTrigger>
+      <TooltipContent side="right" sideOffset={6}>
+        <span className="font-medium">{machineName}</span>
+        {status ? <span className="text-muted-foreground"> · {status}</span> : null}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+/**
+ * A home in the owning machine's colour, leading a repository group's member
+ * row: the row is that machine's copy of the repository. The same colour rules
+ * as `MachineDot` apply.
+ */
+export function MachineHomeIcon({
+  colorToken,
+  machineName,
+  status,
+}: {
+  colorToken: string | undefined;
+  machineName: string;
+  status?: string;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <House
+          data-testid="machine-home-icon"
+          data-machine-color={colorToken ?? "neutral"}
+          aria-hidden="true"
+          className={cn("h-3.5 w-3.5 shrink-0", machineTextClass(colorToken))}
+        />
+      </TooltipTrigger>
       <TooltipContent side="right" sideOffset={6}>
         <span className="font-medium">{machineName}</span>
         {status ? <span className="text-muted-foreground"> · {status}</span> : null}

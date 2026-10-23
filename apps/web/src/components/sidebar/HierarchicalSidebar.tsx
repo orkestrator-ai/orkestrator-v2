@@ -74,7 +74,7 @@ import { ProjectSearchBar } from "./ProjectSearchBar";
 import { ServerConnectionSwitcher } from "./ServerConnectionSwitcher";
 import { useFederation } from "@/components/federation/FederationProvider";
 import { MachinesFilter } from "@/components/federation/MachinesFilter";
-import { MachineDot } from "@/components/federation/MachineDot";
+import { MachineDot, MachineHomeIcon } from "@/components/federation/MachineDot";
 import {
   FederatedActivityList,
   MachineSectionList,
@@ -133,7 +133,11 @@ const LazyRepositorySettings = lazy(async () => ({
  */
 export type SidebarDragType = "project" | "folder" | "environment";
 
-export type SidebarReorderResult = { type: "environment"; projectId: string; ids: string[] };
+export type SidebarReorderResult = {
+  type: "environment";
+  projectId: string;
+  ids: string[];
+};
 
 export type SidebarSelectionResult =
   | { type: "toggle"; environmentId: string }
@@ -1007,12 +1011,18 @@ export function HierarchicalSidebar() {
 
   const renderProjectGroup = (
     project: Project,
-    mixed?: { sortableId: string; machineBadge: ReactNode; label?: string },
+    mixed?: {
+      sortableId: string;
+      machineBadge?: ReactNode;
+      machineIcon?: ReactNode;
+      label?: string;
+    },
   ) => (
     <SortableProjectGroup
       key={project.id}
       sortableId={mixed?.sortableId}
       machineBadge={mixed?.machineBadge}
+      machineIcon={mixed?.machineIcon}
       label={mixed?.label}
       project={project}
       environments={getProjectEnvironments(project.id)}
@@ -1271,9 +1281,29 @@ export function HierarchicalSidebar() {
       </DndContext>
     );
 
-  const renderMergedBoundProject = (projectId: string, sortableId: string, label?: string) => {
+  const renderMergedBoundProject = (
+    projectId: string,
+    sortableId: string,
+    label: string | undefined,
+    machineMark: "dot" | "home",
+  ) => {
     const project = projectsById.get(projectId);
     if (!project) return null;
+    if (machineMark === "home") {
+      // Drawn even before this window's machine is identified, as it also
+      // decides where the row's chevron sits.
+      return renderProjectGroup(project, {
+        sortableId,
+        label,
+        machineIcon: (
+          <MachineHomeIcon
+            colorToken={boundMachineView?.colorToken}
+            machineName={boundMachineView?.name ?? "This machine"}
+            status="This window"
+          />
+        ),
+      });
+    }
     return renderProjectGroup(project, {
       sortableId,
       label,

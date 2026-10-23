@@ -65,3 +65,17 @@
 - **Owning-file rerun:** `mise run test:logged -- --name merge-15f6cd-acp-owners -- bun test --cwd bridges/acp-bridge ./src/acp-http.test.ts ./src/acp-generalization.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed unchanged, exit 0, in 6.6 seconds.
 - **Evidence:** `orkestrator-test-run.KPQz1y/merge-15f6cd-acp-rerun.log.gz` below the host temporary directory.
 - **Disposition:** reopened as an intermittent recurrence; no source, assertion, timeout or skip changed. The older Happy DOM diagnosis is retained as history, not asserted for this observation.
+
+## Review-fix validation recurrence — 2026-10-23
+
+- **Command:** `mise run test:logged -- --name review-focused -- bun test ./bridges/acp-bridge/src/acp-http.test.ts ./bridges/cursor-bridge/src/models.test.ts ./bridges/codex-bridge/src/engine/app-server-tool-history.test.ts ./bridges/codex-bridge/src/engine/app-server-engine.test.ts ./bridges/claude-bridge/src/routes/session-selection-pricing.test.ts --parallel=4 --only-failures`.
+- **Failure:** the existing disconnect test timed out waiting for the fake
+  agent's `start:` line (`Timed out waiting for ACP state: ""`, 5256.87 ms).
+  The focused run reported 292 passed and 1 failed in 15.8 seconds; all new
+  regression cases passed.
+- **Owning-file rerun:** `mise run test:logged -- --name acp-http-isolated -- bun test ./bridges/acp-bridge/src/acp-http.test.ts --parallel=1 --only-failures`
+  passed unchanged in 9.4 seconds.
+- **Evidence:** `orkestrator-test-run.txlhBC/review-focused.log.gz` below the
+  host temporary directory.
+- **Disposition:** existing intermittent failure; no assertion, timeout, skip,
+  or production disconnect behavior changed.

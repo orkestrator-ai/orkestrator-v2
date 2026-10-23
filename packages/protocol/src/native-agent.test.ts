@@ -29,6 +29,7 @@ import {
   resolveNativeComposerSelectedModel,
   withResolvedNativeComposerModel,
   nativeAgentCapabilities,
+  reasoningOptionLabel,
   resolveReasoningId,
   BACKGROUND_TASK_ID_MAX_LENGTH,
   BACKGROUND_TASK_LAUNCH_SCAN_CHARS,
@@ -205,8 +206,9 @@ describe("native agent capability table", () => {
       // `fastModeAvailable` / `modes` decides per agent build.
       expect(nativeAgentCapabilities(platform).composer.speed).toBe(true);
       expect(nativeAgentCapabilities(platform).composer.mode).toBe(true);
+      // Grok compacts through its own `/compact`, run by the ACP bridge.
       expect(nativeAgentCapabilities(platform).actions).toEqual(
-        platform === "cursor" ? { steer: true, rewindMessages: true } : {},
+        platform === "cursor" ? { steer: true, rewindMessages: true } : { compact: true },
       );
     }
   });
@@ -891,6 +893,21 @@ describe("fallbackReasoningId", () => {
 
   test("returns undefined for an empty catalog", () => {
     expect(fallbackReasoningId([])).toBeUndefined();
+  });
+});
+
+describe("reasoningOptionLabel", () => {
+  test("labels every provider's effort ids from one vocabulary", () => {
+    expect(
+      ["none", "off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].map(
+        reasoningOptionLabel,
+      ),
+    ).toEqual(["None", "Off", "Minimal", "Low", "Medium", "High", "Extra high", "Max", "Ultra"]);
+  });
+
+  test("turns separators into spaces for provider-specific ids", () => {
+    expect(reasoningOptionLabel("max-thinking")).toBe("Max thinking");
+    expect(reasoningOptionLabel("deep__think")).toBe("Deep think");
   });
 });
 

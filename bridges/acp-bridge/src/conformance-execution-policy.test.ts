@@ -18,6 +18,7 @@ import {
   withPolicyCliFixture,
 } from "../../../tests/conformance/execution-policy/vendor-cli.js";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
+import { PINNED_TOOLCHAIN_VERSIONS } from "../../../packages/toolchain/src/manifest.js";
 import {
   runExecutionPolicyConformance,
   type AdapterEffects,
@@ -113,7 +114,7 @@ runExecutionPolicyConformance(
           // Inspect the pinned CLI's actual project discovery, in an empty home
           // and the environment the bridge launches Grok with.
           expect(await policyCliOutput(grokExecutable!, ["--version"], fixture)).toContain(
-            "1.0.52",
+            PINNED_TOOLCHAIN_VERSIONS.grok,
           );
           const inspection = JSON.parse(
             await policyCliOutput(grokExecutable!, ["inspect", "--json"], launched),

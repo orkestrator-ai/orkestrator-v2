@@ -197,3 +197,65 @@ Exact original failed cases:
 - **Complete unchanged owner:** `ORKESTRATOR_E2E_PORT=19431 mise run test:logged -- --name merge-native-browser-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentLaunchDialog.spec.ts --workers=1 --output=output/agent-testing/merge-native-browser-owner` reported two passed and the same two failed in 22.2 s. This matches the previously recorded non-green native-dropdown cases; this rerun does not establish a flake. No source, assertion, timeout or skip changed.
 - **Evidence:** host temporary directories `orkestrator-test-run.e52ASg/merge-component-browser.log.gz` and `orkestrator-test-run.k1qDoe/merge-native-browser-owner.log.gz`; isolated traces are under `output/agent-testing/merge-native-browser-owner/`.
 - **Public-site checks:** the failed aggregate did not reach them. `mise run test:logged -- --name merge-public-browser -- bunx playwright test --config e2e/public-site/playwright.config.ts` passed separately (11.5 s).
+
+
+## Node event review validation — 2026-10-23
+
+- `mise run test:browser` reported 501 passed, 95 skipped and eight failures. Six sidebar drag cases exposed a fixture that recorded `changes_get_view` reads as reorder writes; the fixture now handles projection and hover reads separately. All 28 cases in the complete `e2e/MergedProjectList.spec.ts` owner then passed with one worker (`sidebar-browser`, 31.3 s).
+- The two native Chrome branch suggestion failures reproduced in the complete unchanged `e2e/AgentLaunchDialog.spec.ts` owner with one worker (`native-branch-owner`, 21.6 s): two passed, two failed, input `rel` instead of `release/2.0`. This matches the existing non-green native dropdown limitation; no assertion or skip changed. Evidence: host temporary directory `orkestrator-test-run.nnnkE4/native-branch-owner.log.gz`, traces under `output/playwright/native-branch-review/`.
+- The separately run public-site browser suite passed (`public-browser`, 11.1 s).
+
+## Realm title-bar review validation — 2026-10-23
+
+- **Aggregate:** `mise run test:logged -- --name browser-validation -- mise run test:browser`: 506 passed, 95 skipped and three failed out of 604 component cases. Public-site smoke was run separately because the aggregate stopped at component failures.
+- **Failures:** both unchanged `AgentLaunchDialog.spec.ts` native branch-suggestion cases retained `rel` instead of selecting `release/2.0`; the desktop 240px `AnnotationDestinationLayout.spec.ts` case also failed in the aggregate.
+- **Owner rerun:** `mise run test:logged -- --name browser-failure-isolation -- bunx playwright test --config e2e/playwright.config.ts AgentLaunchDialog.spec.ts AnnotationDestinationLayout.spec.ts --workers=1`: eight passed and both native branch cases failed. All six unchanged annotation-layout cases passed. The branch cases remain non-green independently, as in the previous validation records; only the annotation failure is classified as an aggregate flake.
+- **Evidence:** host temporary artifacts `orkestrator-test-run.XqFDpu/browser-validation.log.gz` and `orkestrator-test-run.NHzPRI/browser-failure-isolation.log.gz`.
+
+
+## Leaf Home main merge — 2026-10-23
+
+- **Merged parents:** `d31dd98b9e16840170f4fad3a46d23207869f6a5` and `58f771281db8644f146cf02ea3ccca5beeb4eab3`; macOS, Bun 1.4.3. The complete original conflict list is retained in local Git metadata; both branches' workspace navigation and title-bar test coverage was preserved.
+- **Aggregate:** `mise run test:logged -- --name merge-browser -- mise run test:browser`, nine component workers, alongside the repository and Electron suites: 507 passed, 95 skipped, two failed (293.8 s). Both `e2e/AgentLaunchDialog.spec.ts:7` cases, `selects a native branch suggestion with the keyboard and confirms`, retained `rel` instead of `release/2.0` after five seconds.
+- **Complete unchanged owner:** `mise run test:logged -- --name merge-native-branch-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentLaunchDialog.spec.ts --workers=1`, with the aggregate browser and Electron runs finished: two passed and the same two failed (21.6 s). This repeats the existing non-green native branch-selection behavior; it does not establish a flake. No assertion, timeout or skip was changed.
+- **Evidence:** host temporary artifacts `orkestrator-test-run.3Jd9kd/merge-browser.log.gz` and `orkestrator-test-run.e5ic3N/merge-native-branch-owner.log.gz`; traces under `output/playwright/test-results/`.
+- **Other checks:** format, lint, all-package typechecking, focused merged realm tests, and the complete non-iOS repository suite passed. The aggregate stopped before public-site checks; `mise run test:logged -- --name merge-public-browser -- bunx playwright test --config e2e/public-site/playwright.config.ts --workers=1` passed separately (16.3 s). Electron's independently reproducible Notes-focus limitation is recorded in [0691](0691-main-merge-validation-timeout-cluster.md).
+
+
+## Node event main merge — 2026-10-23
+
+- **Parents:** `fc0a64b78d426013e29d1e325455723fea6cc2a4` and
+  `b36e74b08e8109c3d3f8935ba707ccdfde8d66fa`; macOS, Bun 1.4.3.
+  Both original conflicts were prose validation history; both branches' records
+  were retained. The complete conflict list and parent IDs remain in local Git
+  metadata. Validation assessed the combined delta from common ancestor
+  `6038aec050867deb76f89a0bfe71799ea27a70a6`.
+- **Component browser:** `mise run test:logged -- --name merge-browser -- mise run test:browser`,
+  nine workers alongside repository, Electron and isolated-browser suites:
+  507 passed, 95 skipped, two failed (392.1 s). Both unchanged native branch
+  suggestion cases retained `rel` instead of `release/2.0` at five seconds.
+- **Complete owner:** `mise run test:logged -- --name merge-native-branch-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentLaunchDialog.spec.ts --workers=1`:
+  two passed, the same two failed (22.1 s). This remains independently
+  non-green; it does not establish a new flake.
+- **Public client:** the aggregate stopped before public-site checks;
+  `mise run test:logged -- --name merge-public-browser -- bunx playwright test --config e2e/public-site/playwright.config.ts --workers=1`
+  passed separately (15.5 s).
+- **Other checks:** `mise run test:logged -- --name merge-check -- mise run check`
+  passed formatting, lint and all-package typechecking (9.0 s). The non-iOS
+  repository suite passed workspace, root and protocol groups; Cursor HTTP
+  failures passed the complete unchanged owner, recorded in
+  [0182](../agent-bridges/0182-cursor-auth-readiness-aggregate-timeout.md).
+  Electron's nickname reload timeout passed the complete unchanged owner,
+  recorded in [0515](../electron-and-desktop/0515-electron-nickname-reload-timeout.md).
+- **Evidence:** host temporary artifacts `orkestrator-test-run.z47re3/merge-browser.log.gz`
+  and `orkestrator-test-run.mDsJUT/merge-native-branch-owner.log.gz`.
+  No assertion, timeout or skip changed. Dedicated iOS, Docker and live-provider
+  qualification were outside this merge validation's scope.
+
+- **Isolated stack:** 26 passed, 53 skipped, three gateway failures plus a trace
+  sanitization size error (574.7 s). The fresh complete gateway owner had
+  13 passed, ten skipped and only the existing narrow Repository settings
+  click failure (125.7 s); both profiles were stopped and reset. Commands,
+  failure details and evidence are recorded in
+  [0224](../previews-annotations-and-gateway/0224-host-picker-narrow-tools-popover.md).
+  These scenario checks remain non-green.

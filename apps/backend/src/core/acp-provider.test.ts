@@ -468,4 +468,39 @@ describe("HTTP bridge provider (ACP)", () => {
       undefined,
     );
   });
+
+  test("routes Grok's compact action to the bridge and refuses every other action", async () => {
+    const { provider, requests } = httpProvider(
+      () => Response.json({ accepted: true }, { status: 202 }),
+      grokConnection,
+    );
+    await expect(provider.performSessionAction!("grok-1", { kind: "compact" })).resolves.toEqual({
+      outcome: "applied",
+    });
+    expect(requests.map((request) => [request.url, request.init.method])).toEqual([
+      ["http://grok.test/session/grok-1/compact", "POST"],
+    ]);
+    await expect(
+      provider.performSessionAction!("grok-1", {
+        kind: "steer",
+        text: "Keep going",
+        requestId: "steer-1",
+        expectedRunId: "turn-1",
+      }),
+    ).rejects.toThrow("grok does not support steer");
+    expect(requests).toHaveLength(1);
+
+    // A session whose agent offers no `/compact` says so; nothing was sent.
+    const refused = httpProvider(
+      () =>
+        Response.json(
+          { error: "Grok does not offer /compact in this session", kind: "command-unavailable" },
+          { status: 422 },
+        ),
+      grokConnection,
+    ).provider;
+    await expect(refused.performSessionAction!("grok-1", { kind: "compact" })).rejects.toThrow(
+      "Grok does not offer /compact in this session",
+    );
+  });
 });

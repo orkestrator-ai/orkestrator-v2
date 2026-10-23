@@ -6,6 +6,7 @@ import type { TranscriptWindowMetadata } from "@orkestrator/protocol/node/transc
 import type { TaskListSnapshot, TaskRegistry } from "@orkestrator/protocol/task-list";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import type { AgentInteractionHold } from "@orkestrator/protocol/agent-interactions";
+import type { NativeAgentContextCategory } from "@orkestrator/protocol/native-agent";
 
 export type {
   JsonSchema,
@@ -777,7 +778,7 @@ export interface SessionState {
    *
    * The SDK leaves the order of `background_tasks_changed` and
    * `task_notification` for one transition unspecified. Through Agent SDK
-   * 0.3.284 the level came first; 0.3.292 (still in 0.3.296) documents a
+   * 0.3.284 the level came first; 0.3.292 (still in 0.3.309) documents a
    * finishing task leaving the level *after* its edge. When the level does come first, the task
    * leaves the live set with no outcome attached. Parking the
    * snapshot here keeps liveness honest — the task is gone from
@@ -903,7 +904,7 @@ export interface SessionUsageSnapshot {
     numTurns?: number;
     modelId?: string;
   }>;
-  contextCategories?: Array<{ name: string; tokens: number; color?: string }>;
+  contextCategories?: NativeAgentContextCategory[];
   rateLimits?: SessionRateLimitWindow[];
 }
 

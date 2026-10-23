@@ -502,6 +502,12 @@ export interface SessionState {
   commandsRevision?: number;
   /** The last pushed inventory dropped advertised rows. */
   commandsTruncated?: boolean;
+  /**
+   * The agent's own name for the session, from standard ACP
+   * `session_info_update` (bounded and single-line). Persisted; absent until
+   * the agent names the session, and removed when it clears the title.
+   */
+  title?: string;
   /** Whether session/load is replaying transcript updates into this state. */
   historyReplay: false | "hydrate" | "ignore";
   /**
@@ -592,6 +598,7 @@ export interface PersistedSession {
   availableCommands?: NativeAgentSlashCommand[];
   commandsRevision?: number;
   commandsTruncated?: boolean;
+  title?: string;
   subagentLimitExceeded?: boolean;
   settledCursorAgentIds?: string[];
 }

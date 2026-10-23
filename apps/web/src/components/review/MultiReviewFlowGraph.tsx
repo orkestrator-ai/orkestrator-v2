@@ -535,15 +535,6 @@ function useMeasuredHeight(): [(element: HTMLDivElement | null) => void, number 
   return [setElement, height];
 }
 
-/** The scrolling ancestor that shows the stacked column, the window failing that. */
-function scrollingAncestor(element: HTMLElement | null): HTMLElement | null {
-  for (let node = element?.parentElement ?? null; node; node = node.parentElement) {
-    const overflow = getComputedStyle(node).overflowY;
-    if ((overflow === "auto" || overflow === "scroll") && node.clientHeight > 0) return node;
-  }
-  return null;
-}
-
 /**
  * Fullscreen lays the graph over its container until the button or Escape
  * leaves it. An Escape that a context menu, tooltip or dialog already handled
@@ -588,9 +579,6 @@ function useFlowFullscreen(
   }, []);
   return [fullscreen, toggle];
 }
-
-/** Room around the column when Fit sizes it: its zoom controls and a margin. */
-const STACKED_FIT_MARGIN_PX = 72;
 
 export interface MultiReviewFlowGraphProps {
   packageNode: MultiReviewFlowNodeModel;
@@ -700,13 +688,6 @@ export function MultiReviewFlowGraph({
     measuredWidth,
     content: { width: measuredWidth ?? 0, height: columnHeight ?? 0 },
     layout: "stacked",
-    fitHeight: () => {
-      const wrapper = stackedWrapperRef.current;
-      // In fullscreen the column scrolls inside its own wrapper.
-      const scroller = fullscreen ? wrapper : scrollingAncestor(wrapper);
-      const visible = scroller?.clientHeight ?? window.innerHeight;
-      return visible > STACKED_FIT_MARGIN_PX ? visible - STACKED_FIT_MARGIN_PX : null;
-    },
   });
   const attachStackedViewport = stackedViewport.attachViewport;
   const stackedViewportRef = useCallback(
@@ -715,22 +696,6 @@ export function MultiReviewFlowGraph({
     },
     [attachStackedViewport],
   );
-  const fitStacked = () => {
-    stackedViewport.fit();
-    // The column just got shorter; bring its top back into view.
-    requestAnimationFrame(() => {
-      const wrapper = stackedWrapperRef.current;
-      if (fullscreen && wrapper) {
-        wrapper.scrollTop = 0;
-        return;
-      }
-      const scroller = scrollingAncestor(wrapper);
-      if (!wrapper || !scroller) return;
-      const offset = wrapper.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
-      if (offset < 0) scroller.scrollTop += offset;
-    });
-  };
-
   const registerRef = useCallback((id: string, element: HTMLButtonElement | null) => {
     if (element) nodeRefs.current.set(id, element);
     else nodeRefs.current.delete(id);
@@ -821,13 +786,29 @@ export function MultiReviewFlowGraph({
     "bg-flow-canvas bg-[radial-gradient(var(--color-divider)_1px,transparent_1px)] bg-size-[20px_20px]";
 
   if (stacked) {
-    const connector = (state: MultiReviewFlowEdgeState, id: string) => (
-      <div
-        aria-hidden="true"
-        data-flow-edge={id}
-        data-edge-state={state}
-        className={cn("mx-auto h-5 w-0 border-l-2", CONNECTOR_CLASS[state])}
-      />
+    // A hop and the next stage's label. The negative margin takes back the
+    // column's gaps, so the line runs from one node's edge to the next's and
+    // the label sits beside it. `afterBranch` follows the clean-review route
+    // around Fix: that route has already brought the line down, so the hop
+    // only continues it into the PR node.
+    const connector = (
+      state: MultiReviewFlowEdgeState,
+      id: string,
+      label: ReactNode,
+      afterBranch = false,
+    ) => (
+      <div className={cn("relative -my-1.5 flex flex-col pb-1.5", afterBranch ? "pt-1.5" : "pt-8")}>
+        <div
+          aria-hidden="true"
+          data-flow-edge={afterBranch ? undefined : id}
+          data-edge-state={afterBranch ? undefined : state}
+          className={cn(
+            "pointer-events-none absolute inset-y-0 left-1/2 -ml-px w-0 border-l-2",
+            CONNECTOR_CLASS[state],
+          )}
+        />
+        {label}
+      </div>
     );
     const { zoom, offset, panning, viewportHandlers } = stackedViewport;
     // Until the column is measured it renders unscaled, exactly as at 100%.
@@ -851,7 +832,6 @@ export function MultiReviewFlowGraph({
               onZoomOut={() => stackedViewport.zoomBy(-1)}
               onZoomIn={() => stackedViewport.zoomBy(1)}
               onReset={stackedViewport.resetZoom}
-              onFit={fitStacked}
               fullscreen={fullscreen}
               onToggleFullscreen={toggleFullscreen}
             />
@@ -902,15 +882,20 @@ export function MultiReviewFlowGraph({
             >
               <ColumnLabel>Prepare</ColumnLabel>
               {renderNode(packageNode, undefined, "w-full")}
-              {connector(summarizeFlowEdges(edges.intoReviewers), "into-reviewers")}
-              <ColumnLabel title={reviewTitle}>{reviewLabel}</ColumnLabel>
+              {connector(
+                summarizeFlowEdges(edges.intoReviewers),
+                "into-reviewers",
+                <ColumnLabel title={reviewTitle}>{reviewLabel}</ColumnLabel>,
+              )}
               {reviewerNodes.map((node) => renderNode(node, undefined, "w-full"))}
-              {connector(summarizeFlowEdges(edges.intoConsolidation), "into-consolidation")}
-              <ColumnLabel>Consolidate</ColumnLabel>
+              {connector(
+                summarizeFlowEdges(edges.intoConsolidation),
+                "into-consolidation",
+                <ColumnLabel>Consolidate</ColumnLabel>,
+              )}
               {renderNode(consolidationNode, undefined, "w-full")}
               <div className="relative flex flex-col gap-1.5">
-                {connector(edges.intoFix, "into-fix")}
-                <ColumnLabel>Fix</ColumnLabel>
+                {connector(edges.intoFix, "into-fix", <ColumnLabel>Fix</ColumnLabel>)}
                 {renderNode(fixNode, undefined, "w-full")}
                 {edges.prSource === "consolidation" ? (
                   <>
@@ -926,11 +911,14 @@ export function MultiReviewFlowGraph({
                     />
                     <div aria-hidden="true" className="h-5" />
                   </>
-                ) : (
-                  connector(edges.intoPr, "into-pr")
-                )}
+                ) : null}
               </div>
-              <ColumnLabel>PR</ColumnLabel>
+              {connector(
+                edges.intoPr,
+                "into-pr",
+                <ColumnLabel>PR</ColumnLabel>,
+                edges.prSource === "consolidation",
+              )}
               {renderNode(prNode, undefined, "w-full")}
             </div>
           </div>
@@ -1071,7 +1059,6 @@ export function MultiReviewFlowGraph({
         onZoomOut={() => flowViewport.zoomBy(-1)}
         onZoomIn={() => flowViewport.zoomBy(1)}
         onReset={flowViewport.resetZoom}
-        onFit={flowViewport.fit}
         fullscreen={fullscreen}
         onToggleFullscreen={toggleFullscreen}
       />

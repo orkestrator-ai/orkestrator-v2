@@ -819,6 +819,34 @@ describe("terminal run usage", () => {
     expect(publicContextUsage(state)).not.toHaveProperty("estimated");
   });
 
+  test("records the pricing tier the SDK says the run actually billed at", async () => {
+    const tierFor = async (model: { id: string; maxMode?: boolean } | undefined) => {
+      const state = runningSession();
+      const run: FollowableRun = {
+        async *stream() {},
+        cancel: async () => undefined,
+        wait: async () => ({
+          id: "run-tier",
+          status: "finished",
+          ...(model ? { model } : {}),
+          usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 },
+        }),
+      };
+      await followRun(state, run, state.promptSequence, { prompt: "x", images: [] });
+      return publicContextUsage(state)?.turns?.at(-1);
+    };
+
+    // 1.0.40 sets `maxMode` on the resolved selection when the catalogue
+    // forces Max mode; a selection without it was sent at the standard rate.
+    expect(await tierFor({ id: "gpt-5", maxMode: true })).toMatchObject({
+      turnId: "run-tier",
+      pricingTier: "premium",
+    });
+    expect(await tierFor({ id: "gpt-5" })).toMatchObject({ pricingTier: "standard" });
+    // No resolved model is no evidence, so nothing is claimed.
+    expect(await tierFor(undefined)).not.toHaveProperty("pricingTier");
+  });
+
   test("publishes Cursor Grok tokens before account usage catches up", async () => {
     const state = runningSession();
     state.composer.selectedModelId = "grok-4.6";
@@ -1210,6 +1238,7 @@ describe("cumulative agent usage", () => {
           requestId: "request-1",
           modelId: "cursor/model",
           durationMs: 42,
+          pricingTier: "premium",
         },
       ],
       updatedAt: new Date(1).toISOString(),
@@ -1256,6 +1285,8 @@ describe("cumulative agent usage", () => {
           requestId: "request-1",
           modelId: "cursor/model",
           durationMs: 42,
+          // The account read has no tier of its own, so the run's is kept.
+          pricingTier: "premium",
         },
       ],
     });

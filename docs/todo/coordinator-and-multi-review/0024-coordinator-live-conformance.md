@@ -8,8 +8,9 @@ read-only boundary holds, that delegation stays asynchronous, and that worker
 mail flows between a coordinator and its workers with nobody answering
 anything, and (since 2026-10-22) that peer mail between two ordinary
 environments wakes each side with Wake peers on. Its first full runs passed on
-Claude, Codex, OpenCode and Cursor; Pi is blocked by the agent-test profile's
-Pi default model ([0054](../cross-cutting/0054-agent-test-pi-default-model.md)).
+Claude, Codex, OpenCode and Cursor, and (2026-10-23) all four scenarios
+passed on Pi once the agent-test profile started on the host's Pi default
+model ([0054](../cross-cutting/0054-agent-test-pi-default-model.md)).
 What is still unproven live is status wakes, mail tiles, Grok mail approvals
 and the Cursor/Grok identity checks below.
 
@@ -244,7 +245,7 @@ for prerequisites and how to batch them with other provider runs.
   | Codex | not rerun | not rerun | not rerun | Passed |
   | OpenCode | not rerun | not rerun | not rerun | Passed |
   | Cursor | Passed 3 of 4 (see Verify) | not rerun | not rerun | Passed |
-  | Pi | Failed: profile default model ([0054](../cross-cutting/0054-agent-test-pi-default-model.md)) | not run | not run | not run |
+  | Pi | Failed: profile default model ([0054](../cross-cutting/0054-agent-test-pi-default-model.md)); passed 2026-10-23 (below) | Passed 2026-10-23 | Passed 2026-10-23 | Passed 2026-10-23 |
   | Grok (`advisory`) | Skipped: `needs-auth` | Skipped (same) | Skipped (same) | Failed before the skip fix (below) |
 
   - Claude on the final suite: read-only passed with every `Bash` and
@@ -277,6 +278,15 @@ for prerequisites and how to batch them with other provider runs.
     bridge started on the host's saved default (`openai/gpt-5.5`), but this
     host's ChatGPT-backed `openai` login refuses that model too, so all four
     scenarios failed at their first turn again. Details in 0054.
+  - **Pi passed all four on 2026-10-23** (`main` at `459d2944`, every bridge
+    rebuilt first, run `qa-coordinator-2026-10-23T12-26-47-009Z`, 1 passed,
+    0 failed, 0 skipped, 6.5 minutes). The user had saved
+    `openai/gpt-6.1-sol` as the host's Pi default. The profile's bridge
+    received exactly that as `PI_BRIDGE_DEFAULT_MODEL`, and its session files
+    recorded provider `openai`, model `gpt-6.1-sol` on every assistant
+    message. Read-only, async, family and peer all passed with no model
+    override. The family scenario logged one 61-second wait for the exchange
+    to finish, then passed. Details in 0054.
   - Grok's host login was signed out again (`needs-auth`), so read-only,
     async and family skipped correctly. Peer, on the first version of the
     case, waited for a startup turn that never ran and failed instead of
@@ -290,16 +300,15 @@ for prerequisites and how to batch them with other provider runs.
     stalled for about 15 minutes. Run live profiles one at a time on a quiet
     host.
 - **Worker-mail family scenario**: covered by the `family` columns above.
-- **Re-runs still owed** (medium): Pi, now that
-  [0054](../cross-cutting/0054-agent-test-pi-default-model.md)'s code fix is
-  in;
+- **Re-runs still owed** (medium): ~~Pi~~ (done 2026-10-23: all four
+  passed, above);
   Grok, all four scenarios, once the host Grok is signed in; Claude on Linux,
   which has never run; and Cursor read-only until its `network` label is
   steady (see Verify). One command each:
   `mise run test:agent:coordinator --credential-source <platform>`.
 - **Peer scenario** between two ordinary environments with Wake peers turned
   on: done (2026-10-22) on Claude, Codex, OpenCode and Cursor (the `peer`
-  column above). Pi and Grok are in the re-runs owed.
+  column above), and on Pi on 2026-10-23. Grok is in the re-runs owed.
 - **Grok mail approvals** on the pinned Grok build: with a worker on an `ask`
   approval setting, its Orkestrator mail tools are answered with the allow
   option and never prompt, under both the `orkestrator__<tool>` name and the

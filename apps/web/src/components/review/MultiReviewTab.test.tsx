@@ -805,6 +805,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     expect(within(failed).getByTitle("1 P1 issue")).toBeTruthy();
     expect(within(stopped).getByTitle("1 P1 issue")).toBeTruthy();
     // Partial reports are not findings so far: only completed reviewers count.
+    fireEvent.click(screen.getByTestId("multi-review-findings-badge"));
     expect(screen.getByTestId("multi-review-findings-count").textContent).toBe(
       "0 · from 0 reviewers",
     );

@@ -59,6 +59,7 @@ deleted once their behaviour is in a living doc; git history keeps them. The
 | [environment-deletion.md](architecture/environment-deletion.md) | What deleting an environment removes and in what order, the cleanup ledger and its retries, the branch rules, and the sweeps that remove leftovers. |
 | [agent-accounts.md](architecture/agent-accounts.md) | Multiple Claude/Codex logins: account directories and shared links, global switching, backend-driven login and signing in again, plan usage, containers, coordinators, terminals, and Claude Keychain naming. |
 | [github-cli.md](architecture/github-cli.md) | Which `gh` the backend runs (managed copy, then PATH), the status command, device-flow sign-in through the account login driver, the startup reminder and its opt-out, and the container GitHub credential source. |
+| [github-pull-requests.md](architecture/github-pull-requests.md) | In-app pull request viewer backend: commands, REST vs GraphQL split, Settings credential, mapping rules, ETag conditional-request cache, PR monitor refresh after merges. |
 | [recurring-work.md](architecture/recurring-work.md) | Recurring background work: job catalogue and diagnostics, scheduler/admission/read-coordinator primitives, rollback switches, B/C/L inventory with current cadences, latency budgets. |
 | [cursor-usage.md](architecture/cursor-usage.md) | Cursor usage mapping. |
 | [cursor-diagnostics.md](architecture/cursor-diagnostics.md) | Historical: September 9 and 14 stall investigations. Current logging is in `bridge-diagnostics.md`. |

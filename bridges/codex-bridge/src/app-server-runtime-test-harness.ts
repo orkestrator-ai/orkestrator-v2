@@ -207,6 +207,7 @@ export function threadPayload(
 
 export const BASE_HANDLERS: Record<string, (params: Record<string, unknown>) => unknown> = {
   "skills/list": () => ({ data: [{ errors: [], skills: [] }] }),
+  "config/read": () => ({ config: { features: { incremental_tools: false } } }),
   initialize: () => ({
     userAgent: "orkestrator/0.145.0 (test)",
     codexHome: "/tmp/codex-home",
@@ -300,6 +301,7 @@ export async function harness(
     codexHome,
     clientInfo: { name: "orkestrator", title: "Orkestrator", version: "2.4.9" },
     interruptTimeoutMs: 30,
+    toolHistoryVerdict: async () => "clean",
     supervisorOverrides: {
       pidFileEnabled: false,
       shutdownGraceMs: 5,

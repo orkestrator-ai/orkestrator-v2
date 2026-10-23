@@ -332,8 +332,8 @@ be resolved without them, and an ambiguous dispatch survives reconstruction
 as unknown rather than unsent.
 
 Traced against the versions in `PROVIDER_STATE_TRACED_VERSIONS` (Claude CLI
-2.1.296, Codex 0.162.1, OpenCode 1.19.0, Pi 1.2.0, `@cursor/sdk` 1.0.37, Grok
-1.0.52), by reading the pinned binaries' strings and bundled docs. A pin bump
+2.1.309, Codex 0.164.0, OpenCode 1.19.4, Pi 1.4.0, `@cursor/sdk` 1.0.40, Grok
+1.0.67), by reading the pinned binaries' strings and bundled docs. A pin bump
 fails `apps/backend/tests/container-state-layout.test.ts` until the layout is
 re-traced ([upgrading agents](../development/upgrade-agents.md#re-trace-preserved-provider-state)).
 

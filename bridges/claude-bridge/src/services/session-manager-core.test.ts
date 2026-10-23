@@ -1473,6 +1473,37 @@ describe("claude usage snapshot", () => {
     });
   });
 
+  test("maps the CLI's row ids onto the shared category vocabulary", async () => {
+    const session = createSession("context category ids");
+    session.queryControl = {
+      getContextUsage: mock(async () => ({
+        totalTokens: 1_000,
+        maxTokens: 200_000,
+        categories: [
+          { id: "system_prompt", name: "System prompt", tokens: 300, color: "grey" },
+          { id: "custom_agents", name: "Custom agents", tokens: 100, color: "blue" },
+          { id: "autocompact_buffer", name: "Autocompact buffer", tokens: 50, color: "grey" },
+          { id: "mcp_tools_deferred", name: "MCP tools (deferred)", tokens: 40, color: "red" },
+          // A newer CLI's id is dropped, not guessed; the row itself stays.
+          { id: "future_row", name: "Future row", tokens: 20, color: "green" },
+          // A CLI that predates ids sends none.
+          { name: "Messages", tokens: 500, color: "purple" },
+        ],
+      })),
+    };
+
+    const usage = await refreshClaudeContextUsage(session);
+
+    expect(usage?.contextCategories).toEqual([
+      { id: "system-prompt", name: "System prompt", tokens: 300, color: "grey" },
+      { id: "agents", name: "Custom agents", tokens: 100, color: "blue" },
+      { id: "reserved", name: "Autocompact buffer", tokens: 50, color: "grey" },
+      { id: "deferred-mcp-tools", name: "MCP tools (deferred)", tokens: 40, color: "red" },
+      { name: "Future row", tokens: 20, color: "green" },
+      { name: "Messages", tokens: 500, color: "purple" },
+    ]);
+  });
+
   test("counts cache reads on a resumed turn", async () => {
     const { session } = await runPromptWithMessages([
       {

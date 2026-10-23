@@ -6,6 +6,7 @@ import { isBackendId, type BackendId } from "@orkestrator/protocol/federation";
 import type { NodeSummariesResult } from "@orkestrator/protocol/node-summaries";
 
 import { ClientGrantService, MAX_GRANT_TTL_MS, type ClientGrant } from "./client-grants.js";
+import { NodeEventRelay } from "./node-event-relay.js";
 import { NodeUnavailableError } from "./node-link.js";
 import {
   NodeReadModel,
@@ -25,8 +26,9 @@ import type { NodeService } from "./node-service.js";
  * The portal side of a command node, and the grant side of a leaf.
  *
  * Command node: the aggregated read model, node-qualified routing with the
- * outcome-unknown ledger, the relay target for each connected node, and
- * leaf workspaces (a client grant per open workspace, renewed while open).
+ * outcome-unknown ledger, other nodes' events relayed on request, the relay
+ * target for each connected node, and leaf workspaces (a client grant per
+ * open workspace, renewed while open).
  * Leaf: the client grants it issues to its attached controllers.
  */
 
@@ -60,6 +62,7 @@ const MAX_WORKSPACES = 128;
 
 export class NodePortal {
   readonly readModel: NodeReadModel;
+  readonly events: NodeEventRelay;
   readonly outcomes: NodeOutcomeLedger;
   readonly grants: ClientGrantService;
   private readonly workspaces = new Map<string, NodeWorkspace>();
@@ -93,6 +96,12 @@ export class NodePortal {
       ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
       ...(options.now ? { now: options.now } : {}),
     });
+    this.events = new NodeEventRelay({
+      nodes: options.nodes,
+      emit: options.emit,
+      ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+      ...(options.now ? { now: options.now } : {}),
+    });
     this.outcomes = new NodeOutcomeLedger(options.outcomes);
     this.grants = new ClientGrantService(options.now);
     options.nodes.onControllerDetached((controllerId) => {
@@ -103,10 +112,12 @@ export class NodePortal {
   async start(): Promise<void> {
     await this.outcomes.restore();
     await this.readModel.start();
+    this.events.start();
   }
 
   stop(): void {
     this.readModel.stop();
+    this.events.stop();
     this.grants.revokeAll();
     this.workspaces.clear();
   }

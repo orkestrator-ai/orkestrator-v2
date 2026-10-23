@@ -18,3 +18,4 @@ export * from "./backend/usage";
 export * from "./backend/transcript-artifacts";
 export * from "./backend/changes";
 export * from "./backend/machine-profile";
+export * from "./backend/github-pull-requests";

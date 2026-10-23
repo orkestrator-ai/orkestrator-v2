@@ -211,6 +211,43 @@ describe("handing command to another node", () => {
     expect((await mini.service.status()).mode).toBe("command");
   });
 
+  test("a target that lists its command node as a machine refuses it until a client clears the loop", async () => {
+    const network = new TestNodeNetwork();
+    const desktop = await addCommandable(network, "desktop");
+    const mini = await addCommandable(network, "mini");
+    const gram = await network.add("gram");
+    await attach(desktop, gram);
+    await attach(desktop, mini);
+    // The loop a real fleet got into: desktop is detached on mini, then
+    // desktop is added from mini's window. Each now refuses the other.
+    await mini.service.detachController(id(desktop), { byUser: true });
+    await mini.service.setRegistrationEnabled(true);
+    expect((await attach(mini, desktop)).connection.lastError?.code).toBe(
+      "controller-is-subordinate",
+    );
+    const relinked = await desktop.service.reconnectNode(id(mini));
+    expect(relinked.connection.lastError?.code).toBe("controller-is-subordinate");
+
+    // The refusal, not "connect first", says what is wrong.
+    const refused = await desktop.service.previewHandover(id(mini)).catch((caught) => caught);
+    expect(String((refused as Error).message)).toContain("registered under this node");
+    // A client that read mini directly supplies what mini controls.
+    const preview = await desktop.service.previewHandover(id(mini), []);
+    expect(preview.targetNodeIds).toEqual([]);
+    expect(preview.candidates.map((entry) => entry.nodeId)).toEqual([id(gram)]);
+    const invalid = await desktop.service.previewHandover(id(mini), [42]).catch((caught) => caught);
+    expect(String((invalid as Error).message)).toContain("targetNodeIds");
+
+    // What the desktop does on confirm: clear the loop on mini, reconnect, hand over.
+    await mini.service.forgetNode({ nodeId: id(desktop) });
+    await mini.service.allowController(id(desktop));
+    expect((await desktop.service.reconnectNode(id(mini))).connection.state).toBe("connected");
+    await desktop.service.handOverCommand({ nodeId: id(mini), includeSelf: true, entries: [] });
+    await settle(60);
+    expect(await registryOf(mini)).toEqual([id(desktop), id(gram)].map(String).sort());
+    expect((await desktop.service.status()).mode).toBe("leaf");
+  });
+
   test("only an attached command node can hand command to a node", async () => {
     const network = new TestNodeNetwork();
     const mini = await addCommandable(network, "mini");
@@ -553,6 +590,20 @@ describe("handover recovery and invariants", () => {
       await expect(source.service.forgetNode({ nodeId: id(moved) })).rejects.toThrow(
         "pending command handover",
       );
+      await expect(attach(source, target)).rejects.toThrow("already registered");
+      const imported = await source.service.importDesktopConnections([
+        {
+          importedFrom: "device:target",
+          verifiedNodeId: id(target),
+          fallbackName: "target",
+          routes: [httpsRoute(target)],
+          routeOrder: ["primary" as RouteId],
+          token: target.token,
+          enabled: true,
+        },
+      ]);
+      expect(imported).toMatchObject({ imported: 0, skipped: 1 });
+      expect(await registryOf(source)).not.toContain(id(target));
       await attach(source, extra);
     } finally {
       resume();
@@ -672,4 +723,48 @@ test("replaying a completed receipt cannot detach a controller attached afterwar
   await target.service.acceptHandover(id(source), [], receipt.id);
   expect(await controllersOf(target)).toEqual([id(source)]);
   expect(target.storage.registry.handoverReceipts).toHaveLength(1);
+});
+
+test("notController during acceptance restores the target and clears the uncommitted journal", async () => {
+  const network = new TestNodeNetwork();
+  const source = await addCommandable(network, "desktop");
+  const target = await addCommandable(network, "target");
+  await attach(source, target);
+  target.commands.set("accept_command_handover", async (args) => {
+    await target.service.detachController(id(source), { byUser: true });
+    return target.service.acceptHandover(
+      args.controllerId,
+      args.entries as NodeImportEntry[],
+      args.handoverId,
+    );
+  });
+  const error = await source.service
+    .handOverCommand({ nodeId: id(target), includeSelf: true, entries: [] })
+    .catch((caught) => caught);
+  expect(parseNodeRefusal((error as Error).message)?.code).toBe("not-controller");
+  expect(await registryOf(source)).toEqual([id(target)]);
+  expect(source.storage.registry.pendingHandover).toBeUndefined();
+  expect(target.storage.registry.handoverReceipts).toBeUndefined();
+});
+
+test("connected preview uses the target's live registry instead of supplied target IDs", async () => {
+  const network = new TestNodeNetwork();
+  const source = await addCommandable(network, "desktop");
+  const target = await addCommandable(network, "target");
+  const moved = await network.add("moved");
+  await attach(source, target);
+  await attach(source, moved);
+  const preview = await source.service.previewHandover(id(target), [id(moved)]);
+  expect(preview.targetNodeIds).toEqual([]);
+  expect(preview.candidates.map((node) => node.nodeId)).toEqual([id(moved)]);
+});
+
+test("disconnected preview without a lastError gives a connect-first error", async () => {
+  const network = new TestNodeNetwork();
+  const source = await addCommandable(network, "desktop");
+  const target = await addCommandable(network, "target");
+  await attach(source, target);
+  await source.service.updateNode({ nodeId: id(target), enabled: false });
+  expect((await source.service.getNode(id(target))).connection.lastError).toBeUndefined();
+  await expect(source.service.previewHandover(id(target))).rejects.toThrow("Connect to it first");
 });

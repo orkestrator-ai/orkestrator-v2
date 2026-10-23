@@ -15,6 +15,7 @@
  * so a malformed or unknown item returns null and is counted rather than throwing
  * inside the reducer.
  */
+import { isAbsolute } from "node:path";
 import type { EngineItem } from "../engine/types.js";
 import type { CodexCollabAgentStatus, CodexCollabToolCallItem } from "../codex-collaboration.js";
 
@@ -35,6 +36,21 @@ function strArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((entry): entry is string => typeof entry === "string")
     : [];
+}
+
+/** Input images kept per generation; each one renders and loads as its own row. */
+export const MAX_IMAGE_GENERATION_INPUTS = 8;
+
+/** The distinct local paths a generation read (`inputImages`, codex 0.164+). */
+function imageGenerationInputPaths(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const paths = new Set<string>();
+  for (const entry of value) {
+    if (paths.size >= MAX_IMAGE_GENERATION_INPUTS) break;
+    const path = isRecord(entry) ? str(entry.path) : undefined;
+    if (path && isAbsolute(path)) paths.add(path);
+  }
+  return [...paths];
 }
 
 const MAX_ASYNC_QUESTIONS = 16;
@@ -392,7 +408,11 @@ export function adaptAppServerItem(raw: unknown): ItemAdaptationResult {
     case "imageGeneration": {
       // The path, never the bytes: a generated image is a file Codex wrote,
       // and reading it here would put a data URL in every transcript snapshot.
+      // Codex 0.164 carries the image either inline (`result`, base64) or as
+      // `fileId`, an attachment-store identity no Orkestrator surface can
+      // resolve. Neither is read, so without `savedPath` the row is a caption.
       const path = str(raw.savedPath);
+      const inputPaths = imageGenerationInputPaths(raw.inputImages);
       return {
         item: {
           id,
@@ -400,6 +420,7 @@ export function adaptAppServerItem(raw: unknown): ItemAdaptationResult {
           text: str(raw.revisedPrompt) ?? "Generated image",
           ...(path ? { path } : {}),
           source: "generated",
+          ...(inputPaths.length > 0 ? { input_paths: inputPaths } : {}),
         },
       };
     }

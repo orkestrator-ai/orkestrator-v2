@@ -5438,6 +5438,29 @@ describe("AgentNativeTab", () => {
     });
   });
 
+  test("marks a premium-rate selection in the composer without naming the provider", async () => {
+    getNativeAgentProjectionMock.mockImplementation(async (input) => {
+      const projection = await defaultProjection(input);
+      return {
+        ...projection,
+        composer: {
+          ...projection.composer!,
+          selectionPricing: {
+            tier: "premium" as const,
+            label: "Max mode",
+            description: "Bills at premium rates.",
+          },
+        },
+      };
+    });
+
+    render(<AgentNativeTab tabId="tab-cursor-pricing" data={identity("cursor")} isActive />);
+
+    const badge = await screen.findByTestId("composer-selection-pricing");
+    expect(badge.textContent).toBe("Max mode");
+    expect(badge.getAttribute("title")).toBe("Bills at premium rates.");
+  });
+
   test("applies configured Claude SDK parameters to a new session", async () => {
     useConfigStore.getState().updateGlobalConfig({
       agentSettings: {

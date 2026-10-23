@@ -5018,6 +5018,43 @@ describe("multi review commands", () => {
     );
   });
 
+  test("delegates step tool bodies with validated workflow, step and reference", async () => {
+    const stepToolDetails = mock(async () => ({ detailRef: "bd1.reference", toolOutput: "body" }));
+    const supervisor = { stepToolDetails } as unknown as NonNullable<
+      CommandContext["multiReviews"]
+    >;
+    await withCommands(
+      async (invoke) => {
+        await expect(
+          invoke("get_multi_review_step_tool_details", {
+            workflowId: "multi-1",
+            step: "prepare",
+            detailRef: "bd1.reference",
+          }),
+        ).resolves.toMatchObject({ toolOutput: "body" });
+        expect(stepToolDetails).toHaveBeenCalledWith("multi-1", "prepare", "bd1.reference");
+        for (const invalid of [
+          { step: "reviewers" },
+          { workflowId: " " },
+          { detailRef: "" },
+          { detailRef: 42 },
+          { detailRef: "x".repeat(2049) },
+        ]) {
+          await expect(
+            invoke("get_multi_review_step_tool_details", {
+              workflowId: "multi-1",
+              step: "fix",
+              detailRef: "bd1.reference",
+              ...invalid,
+            }),
+          ).rejects.toThrow("Invalid multi review step tool detail request");
+        }
+        expect(stepToolDetails).toHaveBeenCalledTimes(1);
+      },
+      { multiReviews: supervisor },
+    );
+  });
+
   test("delegates bounded reviewer history page reads", async () => {
     const reviewerHistoryPage = mock(async () => ({
       status: "page",

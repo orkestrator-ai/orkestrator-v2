@@ -3,6 +3,7 @@ import { renderHook, act, waitFor } from "@testing-library/react";
 import type { PrMonitorEnvironmentState } from "@orkestrator/protocol/pr-monitor";
 import { useEnvironmentStore } from "../../../apps/web/src/stores/environmentStore";
 import { usePrMonitorStore } from "../../../apps/web/src/stores/prMonitorStore";
+import { useFilesPanelStore } from "../../../apps/web/src/stores/filesPanelStore";
 import { createMockEnvironment } from "../utils/testFactories";
 
 // Mock backend module BEFORE importing the hook
@@ -63,6 +64,7 @@ describe("usePullRequest", () => {
     });
 
     usePrMonitorStore.setState({ states: new Map() });
+    useFilesPanelStore.setState({ isOpen: false, activeTab: "changes", pullRequestTabs: {} });
 
     // Reset mocks
     mockGetEnvironmentPrUrl.mockClear();
@@ -134,7 +136,7 @@ describe("usePullRequest", () => {
     });
   });
 
-  test("viewPR opens browser with prUrl", async () => {
+  test("viewPR opens GitHub when asked for an external open", async () => {
     const env = createMockEnvironment({
       id: "env-1",
       containerId: "container-123",
@@ -151,7 +153,7 @@ describe("usePullRequest", () => {
     const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
 
     await act(async () => {
-      await result.current.viewPR();
+      await result.current.viewPR({ external: true });
     });
 
     expect(mockOpenInBrowser).toHaveBeenCalledWith("https://github.com/test/repo/pull/123");
@@ -182,7 +184,30 @@ describe("usePullRequest", () => {
     });
 
     expect(mockGetEnvironmentPrUrl).toHaveBeenCalledWith("env-1");
-    expect(mockOpenInBrowser).toHaveBeenCalledWith("https://github.com/test/repo/pull/456");
+    expect(mockOpenInBrowser).not.toHaveBeenCalled();
+    expect(useFilesPanelStore.getState().pullRequestTabs["env-1"]?.map((tab) => tab.ref)).toEqual([
+      { owner: "test", repo: "repo", number: 456 },
+    ]);
+  });
+
+  test("viewPR opens the PR in the environment's files panel by default", async () => {
+    useEnvironmentStore.setState({
+      environments: [
+        createMockEnvironment({ id: "env-1", prUrl: "https://github.com/test/repo/pull/123" }),
+      ],
+      isLoading: false,
+      error: null,
+    });
+    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+
+    await act(async () => {
+      await result.current.viewPR();
+    });
+
+    expect(mockOpenInBrowser).not.toHaveBeenCalled();
+    const panel = useFilesPanelStore.getState();
+    expect(panel.isOpen).toBe(true);
+    expect(panel.activeTab).toBe("pull-request:test/repo#123");
   });
 
   test("viewPR reports browser rejection after fetching a missing URL", async () => {
@@ -196,7 +221,7 @@ describe("usePullRequest", () => {
     const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
 
     await act(async () => {
-      await result.current.viewPR();
+      await result.current.viewPR({ external: true });
     });
 
     expect(result.current.error).toBe("browser unavailable");
@@ -261,7 +286,7 @@ describe("usePullRequest", () => {
     const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
 
     await act(async () => {
-      await result.current.viewPR();
+      await result.current.viewPR({ external: true });
     });
 
     expect(result.current.error).toBe("Failed to open browser");
@@ -283,9 +308,9 @@ describe("usePullRequest", () => {
     });
     const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
 
-    await act(async () => result.current.viewPR());
+    await act(async () => result.current.viewPR({ external: true }));
     expect(result.current.error).toBe("browser unavailable");
-    await act(async () => result.current.viewPR());
+    await act(async () => result.current.viewPR({ external: true }));
 
     expect(result.current.error).toBeNull();
   });

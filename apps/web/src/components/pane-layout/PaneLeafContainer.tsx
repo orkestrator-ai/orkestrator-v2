@@ -40,6 +40,9 @@ const LazyLoopedReviewTab = lazy(async () => ({
 const LazyMultiReviewTab = lazy(async () => ({
   default: (await import("@/components/review/MultiReviewTab")).MultiReviewTab,
 }));
+const LazyPullRequestPaneTab = lazy(async () => ({
+  default: (await import("./PullRequestPaneTab")).PullRequestPaneTab,
+}));
 const LazyBrowserTab = lazy(async () => ({
   default: (await import("@/components/browser/BrowserTab")).BrowserTab,
 }));
@@ -287,6 +290,23 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                     const owner = layoutStore.findPaneWithTab(tab.id, environmentId);
                     if (owner) layoutStore.removeTab(owner.id, tab.id, environmentId);
                   }}
+                />
+              </LazyLoadBoundary>
+            );
+          }
+
+          if (tab.type === "pull-request" && tab.pullRequestData) {
+            return (
+              <LazyLoadBoundary
+                key={tab.id}
+                loadingFallback={renderTabFallback(isTabActive && isActive)}
+                renderError={renderTabError(isTabActive && isActive)}
+              >
+                <LazyPullRequestPaneTab
+                  tabId={tab.id}
+                  environmentId={environmentId}
+                  data={tab.pullRequestData}
+                  isActive={isTabActive && isActive}
                 />
               </LazyLoadBoundary>
             );

@@ -117,7 +117,16 @@ newest row, which every window holds.
   A `readOnly` turn adds the denial (`codexReadOnlyTurnPolicy`), and the
   runtime reloads the thread whenever the search setting changes between
   turns (`promptThreadConfig`); a resume that names no mode restores Codex's
-  own (verified against 0.162.1 by the loopback test). After a Codex bump, run `live-network-lock.test.ts` with
+  own (verified against 0.164.0 by the loopback test). Never let a
+  search-denied turn run on a history that declares tools: with
+  `features.incremental_tools` (default-on since 0.164.0) each turn's tools,
+  `web__run` included, are written into the history and replayed on resume,
+  and thread config cannot turn it off. Every bridge runs app-server with it
+  off (`codexAppServerConfigOverrides`); the engine reads that back
+  (`codexToolHistoryGaps`, and for coordinators `codexHostedNetworkLockGaps`)
+  and refuses a search-denied resume or fork whose rollout, or fork ancestor,
+  holds an `additional_tools` record (`sessions/tool-history-guard.ts`). The
+  loopback test asserts no `web__run` anywhere in a resumed read-only request. After a Codex bump, run `live-network-lock.test.ts` with
   `RUN_LIVE_CODEX_APP_SERVER=1` (no credits), and once with
   `RUN_LIVE_CODEX_WEB_SEARCH_CANARY=1`, which spends a few turns proving
   `cached` still refuses a page `live` opens.
@@ -133,11 +142,12 @@ newest row, which every window holds.
   behind a read before each new model response and before `turn.completed`,
   so a cell lands in the row of the response that ran it. It shows a cell as
   a failed `exec` row when no item of the turn started while it ran, or its
-  output reports a refusal. `fs.watch` cannot replace the poll: on macOS it
+  output reports a refusal, but never for a cell an interrupt stopped
+  (`code_mode_interrupt`, output "aborted by user after …"). `fs.watch` cannot replace the poll: on macOS it
   reports nothing for Codex's appends through its open descriptor. Raw
   response events cannot either: `experimentalRawEvents` exists only on
   `thread/start`, so a thread resumed in a new app-server never gets them.
-  Verified against 0.162.1 by `live-refused-calls.test.ts` (no credits).
+  Verified against 0.164.0 by `live-refused-calls.test.ts` (no credits).
 - Never reload a code-mode MCP call from its `exec` cell when the rollout
   recorded it. Each call is an `event_msg` `item_completed` record with an
   `McpToolCall` item; `history/code-mode-mcp-calls.ts` renders it through the

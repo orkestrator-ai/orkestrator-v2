@@ -121,6 +121,48 @@ export function SortableProjectFolder({
   const FolderIcon = repository ? FolderGit2 : isCollapsed ? Folder : FolderOpen;
   const hasMenu = Boolean(onRename || onSort || onUngroup);
 
+  // Navigation keeps native Enter/Space activation; only the grip starts a drag.
+  const heading = (
+    <button
+      {...(onOpen ? {} : attributes)}
+      {...(onOpen ? {} : listeners)}
+      ref={onOpen ? undefined : setActivatorNodeRef}
+      type="button"
+      aria-expanded={onOpen ? undefined : !isCollapsed}
+      aria-label={onOpen ? `Open ${label}${destination}` : undefined}
+      title={
+        onOpen
+          ? `Open ${name}${destination}`
+          : isCollapsed
+            ? `Expand folder ${label}`
+            : `Collapse folder ${label}`
+      }
+      className={cn(
+        "flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm text-foreground",
+        !onOpen && "cursor-grab active:cursor-grabbing",
+      )}
+      onClick={(event) => {
+        event.stopPropagation();
+        if (onOpen) onOpen();
+        else onToggleCollapse();
+      }}
+    >
+      <FolderIcon
+        className={cn(
+          "h-4 w-4 shrink-0",
+          repository ? "text-muted-foreground" : "text-amber-400/80",
+        )}
+        aria-hidden="true"
+      />
+      <span className="truncate font-medium">{label}</span>
+      {badge ?? (
+        <span className="flex h-4 min-w-[16px] shrink-0 items-center justify-center rounded-md bg-white/[0.07] px-1 text-[10px] text-zinc-300">
+          {projectCount}
+        </span>
+      )}
+    </button>
+  );
+
   return (
     <div
       ref={setNodeRef}
@@ -138,60 +180,9 @@ export function SortableProjectFolder({
             : "border-transparent hover:bg-hover",
         )}
       >
-        {onOpen ? (
-          <button
-            {...attributes}
-            {...listeners}
-            ref={setActivatorNodeRef}
-            type="button"
-            aria-label={`Move repository ${label}`}
-            className="shrink-0 cursor-grab rounded-md p-1 text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing"
-          >
-            <GripVertical className="h-3 w-3" aria-hidden="true" />
-          </button>
-        ) : null}
-        <ContextMenu>
-          <ContextMenuTrigger className="contents">
-            <button
-              {...(onOpen ? {} : attributes)}
-              {...(onOpen ? {} : listeners)}
-              ref={onOpen ? undefined : setActivatorNodeRef}
-              type="button"
-              aria-expanded={onOpen ? undefined : !isCollapsed}
-              aria-label={onOpen ? `Open ${label}${destination}` : undefined}
-              title={
-                onOpen
-                  ? `Open ${name}${destination}`
-                  : isCollapsed
-                    ? `Expand folder ${label}`
-                    : `Collapse folder ${label}`
-              }
-              className={cn(
-                "flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm text-foreground",
-                !onOpen && "cursor-grab active:cursor-grabbing",
-              )}
-              onClick={(event) => {
-                event.stopPropagation();
-                if (onOpen) onOpen();
-                else onToggleCollapse();
-              }}
-            >
-              <FolderIcon
-                className={cn(
-                  "h-4 w-4 shrink-0",
-                  repository ? "text-muted-foreground" : "text-amber-400/80",
-                )}
-                aria-hidden="true"
-              />
-              <span className="truncate font-medium">{label}</span>
-              {badge ?? (
-                <span className="flex h-4 min-w-[16px] shrink-0 items-center justify-center rounded-md bg-white/[0.07] px-1 text-[10px] text-zinc-300">
-                  {projectCount}
-                </span>
-              )}
-            </button>
-          </ContextMenuTrigger>
-          {hasMenu ? (
+        {hasMenu ? (
+          <ContextMenu>
+            <ContextMenuTrigger className="contents">{heading}</ContextMenuTrigger>
             <ContextMenuContent>
               {onRename ? (
                 <ContextMenuItem
@@ -220,8 +211,24 @@ export function SortableProjectFolder({
                 </>
               ) : null}
             </ContextMenuContent>
-          ) : null}
-        </ContextMenu>
+          </ContextMenu>
+        ) : (
+          heading
+        )}
+
+        {onOpen && (
+          <button
+            {...attributes}
+            {...listeners}
+            ref={setActivatorNodeRef}
+            type="button"
+            aria-label={`Move repository ${label}`}
+            className="shrink-0 cursor-grab rounded-md p-1 text-muted-foreground hover:bg-white/[0.07] active:cursor-grabbing"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <GripVertical aria-hidden="true" className="h-4 w-4" />
+          </button>
+        )}
 
         {/* The chevron collapses independently of navigation and dragging. */}
         <button

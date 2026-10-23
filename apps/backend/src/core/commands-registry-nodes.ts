@@ -174,6 +174,16 @@ export function registerNodeCommands(register: CommandRegistrar): void {
     return portal(context).invokeOnNode(args);
   });
 
+  register("watch_node_events", async (args, context) => {
+    assertOnlyKeys(args, ["nodeId", "prefixes", "watchId"], "arguments");
+    return portal(context).events.watch(args);
+  });
+
+  register("unwatch_node_events", async (args, context) => {
+    assertOnlyKeys(args, ["watchId"], "arguments");
+    return portal(context).events.unwatch(args.watchId);
+  });
+
   register("list_node_outcomes", async (args, context) => {
     assertOnlyKeys(args, ["nodeId"], "arguments");
     return portal(context).outcomes.list(typeof args.nodeId === "string" ? args.nodeId : undefined);
@@ -435,8 +445,8 @@ export function registerNodeCommands(register: CommandRegistrar): void {
   // Making another node the command node, from the current one: it hands over its
   // machines (credentials included) over its link and follows as the new one's leaf.
   register("preview_command_handover", async (args, context) => {
-    assertOnlyKeys(args, ["nodeId"], "arguments");
-    return nodes(context).previewHandover(args.nodeId);
+    assertOnlyKeys(args, ["nodeId", "targetNodeIds"], "arguments");
+    return nodes(context).previewHandover(args.nodeId, args.targetNodeIds);
   });
 
   register("hand_over_command", async (args, context) => {

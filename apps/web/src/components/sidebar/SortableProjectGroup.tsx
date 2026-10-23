@@ -73,6 +73,11 @@ interface SortableProjectGroupProps {
   sortableId?: string;
   /** Shown after the name, in lists that mix machines. */
   machineBadge?: ReactNode;
+  /**
+   * Shown before the name in a repository group, whose member rows put the
+   * chevron last, as the group's own heading does.
+   */
+  machineIcon?: ReactNode;
   /** Shown instead of the project name (a repository group names the machine). */
   label?: string;
 }
@@ -101,6 +106,7 @@ export function SortableProjectGroup({
   selectedEnvironmentIds = [],
   sortableId,
   machineBadge,
+  machineIcon,
   label = project.name,
 }: SortableProjectGroupProps) {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
@@ -158,6 +164,29 @@ export function SortableProjectGroup({
       ),
   );
 
+  // The name is also the drag handle, and dnd-kit's keyboard sensor owns Enter
+  // and Space there. This chevron carries no drag listeners, so it is the
+  // control a keyboard user can actually expand the project with — and it
+  // needs its own label, because nothing inside it is text. Folder rows are
+  // built the same way.
+  const chevron = (
+    <CollapsibleTrigger
+      className="shrink-0 rounded-md p-1 transition-colors hover:bg-white/[0.07]"
+      aria-label={
+        isCollapsed ? `Expand project ${project.name}` : `Collapse project ${project.name}`
+      }
+      onClick={(e) => e.stopPropagation()}
+    >
+      <ChevronRight
+        aria-hidden="true"
+        className={cn(
+          "h-4 w-4 text-muted-foreground transition-transform duration-200",
+          !isCollapsed && "rotate-90",
+        )}
+      />
+    </CollapsibleTrigger>
+  );
+
   return (
     <>
       <div ref={setNodeRef} style={style} className={cn("px-2", isDragging && "opacity-50 z-50")}>
@@ -173,28 +202,7 @@ export function SortableProjectGroup({
             onMouseEnter={() => setIsHovered(true)}
             onMouseLeave={() => setIsHovered(false)}
           >
-            {/*
-              The name is also the drag handle, and dnd-kit's keyboard sensor
-              owns Enter and Space there. This chevron carries no drag
-              listeners, so it is the control a keyboard user can actually
-              expand the project with — and it needs its own label, because
-              nothing inside it is text. Folder rows are built the same way.
-            */}
-            <CollapsibleTrigger
-              className="shrink-0 rounded-md p-1 transition-colors hover:bg-white/[0.07]"
-              aria-label={
-                isCollapsed ? `Expand project ${project.name}` : `Collapse project ${project.name}`
-              }
-              onClick={(e) => e.stopPropagation()}
-            >
-              <ChevronRight
-                aria-hidden="true"
-                className={cn(
-                  "h-4 w-4 text-muted-foreground transition-transform duration-200",
-                  !isCollapsed && "rotate-90",
-                )}
-              />
-            </CollapsibleTrigger>
+            {!machineIcon && chevron}
             <ContextMenu>
               <ContextMenuTrigger className="contents">
                 <button
@@ -213,6 +221,7 @@ export function SortableProjectGroup({
                   onFocus={projectTooltip.show}
                   onBlur={projectTooltip.hide}
                 >
+                  {machineIcon}
                   <span className="truncate font-medium">{label}</span>
                   {machineBadge}
                   {environments.length > 0 && (
@@ -249,7 +258,8 @@ export function SortableProjectGroup({
                   <p className="text-xs text-muted-foreground">{project.localPath}</p>
                 )}
                 <p className="text-xs text-muted-foreground mt-1">
-                  {environments.length} environment{environments.length !== 1 && "s"}
+                  {environments.length} environment
+                  {environments.length !== 1 && "s"}
                   {runningCount > 0 && ` (${runningCount} running)`}
                 </p>
                 <p className="text-xs text-muted-foreground">Click to open board</p>
@@ -320,6 +330,7 @@ export function SortableProjectGroup({
             >
               <Plus className="h-3.5 w-3.5" />
             </Button>
+            {machineIcon && chevron}
           </div>
 
           {/* Environments List */}

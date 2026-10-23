@@ -2,7 +2,10 @@
 // Handles session state and interacts with Claude Agent SDK
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import type {
+  SDKControlGetContextUsageResponse,
+  SDKUserMessage,
+} from "@anthropic-ai/claude-agent-sdk";
 import type {
   ImageBlockParam,
   TextBlockParam,
@@ -39,6 +42,10 @@ import { isSdkCompactBoundaryMessage, isSdkResultMessage } from "../types/index.
 import { TaskRegistry, isTaskListTool } from "@orkestrator/protocol/task-list";
 import { AGENT_INTERACTION_DEFAULT_TIMEOUT_MS } from "@orkestrator/protocol/agent-interactions";
 import { isRootAssistantRecord, normalizeBackendModelId } from "@orkestrator/protocol/model-id";
+import type {
+  NativeAgentContextCategory,
+  NativeAgentContextCategoryId,
+} from "@orkestrator/protocol/native-agent";
 import {
   CLAUDE_PLAN_WINDOW_LABELS,
   claudeModelWeeklyWindow,
@@ -860,7 +867,42 @@ interface ClaudeContextUsage {
   maxTokens?: number;
   percentage?: number;
   model?: string;
-  categories?: Array<{ name: string; tokens: number; color?: string }>;
+  categories?: NativeAgentContextCategory[];
+}
+
+type ClaudeContextCategoryId = NonNullable<
+  SDKControlGetContextUsageResponse["categories"][number]["id"]
+>;
+
+/**
+ * The CLI's stable row ids (its English names are not stable) onto the shared
+ * vocabulary. A `Record` over the SDK's union, so a bump that adds an id fails
+ * the typecheck until it is placed. An id a newer CLI sends at runtime that is
+ * not here is dropped, as the SDK asks.
+ */
+export const CLAUDE_CONTEXT_CATEGORY_IDS: Record<
+  ClaudeContextCategoryId,
+  NativeAgentContextCategoryId
+> = {
+  system_prompt: "system-prompt",
+  system_tools: "tools",
+  system_tools_deferred: "deferred-tools",
+  mcp_tools: "mcp-tools",
+  mcp_tools_deferred: "deferred-mcp-tools",
+  mcp_instructions: "mcp-instructions",
+  custom_agents: "agents",
+  memory_files: "memory",
+  skills: "skills",
+  messages: "messages",
+  autocompact_buffer: "reserved",
+  compact_buffer: "reserved",
+  free_space: "free-space",
+};
+
+function claudeContextCategoryId(value: unknown): NativeAgentContextCategoryId | undefined {
+  return typeof value === "string" && Object.hasOwn(CLAUDE_CONTEXT_CATEGORY_IDS, value)
+    ? CLAUDE_CONTEXT_CATEGORY_IDS[value as ClaudeContextCategoryId]
+    : undefined;
 }
 
 function parseClaudeContextUsage(raw: unknown): ClaudeContextUsage | undefined {
@@ -878,8 +920,10 @@ function parseClaudeContextUsage(raw: unknown): ClaudeContextUsage | undefined {
           const name = typeof item.name === "string" ? item.name : undefined;
           const tokens = parseTokenValue(item.tokens);
           if (!name || tokens === undefined) return [];
+          const id = claudeContextCategoryId(item.id);
           return [
             {
+              ...(id ? { id } : {}),
               name,
               tokens,
               color: typeof item.color === "string" ? item.color : undefined,

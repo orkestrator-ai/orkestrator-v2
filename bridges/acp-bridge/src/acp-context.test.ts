@@ -1679,38 +1679,42 @@ describe("ACP bridge", () => {
     expect(catalog.models.map((model) => model.id)).toContain("grok-next");
   });
 
-  test("refuses an image a provider neither declares nor is known to read", async () => {
-    const workspace = await temporaryDirectory();
-    const stateDirectory = await temporaryDirectory();
-    const blocksFile = resolve(workspace, "prompt-blocks.log");
-    await fs.writeFile(resolve(workspace, "shot.png"), ONE_PIXEL_PNG);
-    const bridge = await spawnBridge({
-      stateDirectory,
-      env: {
-        ACP_PROVIDER: "cursor",
-        CWD: workspace,
-        FAKE_ACP_PROMPT_BLOCKS_FILE: blocksFile,
-        FAKE_ACP_IMAGE_CAPABILITY: "false",
-      },
+  // Grok included: since 1.0.67 declares `promptCapabilities.image: true`, its
+  // own declaration decides, exactly as it does for every other ACP agent.
+  for (const acpProvider of ["cursor", "grok"] as const) {
+    test(`refuses an image ${acpProvider} neither declares nor is known to read`, async () => {
+      const workspace = await temporaryDirectory();
+      const stateDirectory = await temporaryDirectory();
+      const blocksFile = resolve(workspace, "prompt-blocks.log");
+      await fs.writeFile(resolve(workspace, "shot.png"), ONE_PIXEL_PNG);
+      const bridge = await spawnBridge({
+        stateDirectory,
+        env: {
+          ACP_PROVIDER: acpProvider,
+          CWD: workspace,
+          FAKE_ACP_PROMPT_BLOCKS_FILE: blocksFile,
+          FAKE_ACP_IMAGE_CAPABILITY: "false",
+        },
+      });
+      const created = (await nativeFetch(`${bridge.base}/session/create`, {
+        method: "POST",
+        headers: bridge.headers,
+      }).then((response) => response.json())) as { id: string };
+      const refused = await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+        method: "POST",
+        headers: bridge.headers,
+        body: JSON.stringify({
+          prompt: "DIRECT:describe it",
+          requestId: "image-refused",
+          attachments: [{ type: "image", path: "shot.png" }],
+        }),
+      });
+      expect(refused.status).toBe(400);
+      expect(((await refused.json()) as { error: string }).error).toContain("ACP image support");
+      expect(await fs.readFile(blocksFile, "utf8").catch(() => "")).toBe("");
+      await stopChild(bridge.child);
     });
-    const created = (await nativeFetch(`${bridge.base}/session/create`, {
-      method: "POST",
-      headers: bridge.headers,
-    }).then((response) => response.json())) as { id: string };
-    const refused = await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
-      method: "POST",
-      headers: bridge.headers,
-      body: JSON.stringify({
-        prompt: "DIRECT:describe it",
-        requestId: "image-refused",
-        attachments: [{ type: "image", path: "shot.png" }],
-      }),
-    });
-    expect(refused.status).toBe(400);
-    expect(((await refused.json()) as { error: string }).error).toContain("ACP image support");
-    expect(await fs.readFile(blocksFile, "utf8").catch(() => "")).toBe("");
-    await stopChild(bridge.child);
-  });
+  }
 
   for (const acpProvider of ["cursor", "grok"] as const) {
     test(`sends and rehydrates workspace images for ${acpProvider}`, async () => {
@@ -1724,10 +1728,9 @@ describe("ACP bridge", () => {
         ACP_PROVIDER: acpProvider,
         CWD: workspace,
         FAKE_ACP_PROMPT_BLOCKS_FILE: blocksFile,
-        // Real Grok declares `promptCapabilities.image: false` (1.0.52) but
-        // reads the standard image block, so the fake declares exactly that;
-        // the generic provider declares the capability honestly.
-        FAKE_ACP_IMAGE_CAPABILITY: acpProvider === "grok" ? "false" : "true",
+        // Both declare the capability: Grok 1.0.67 answers
+        // `promptCapabilities.image: true` (1.0.52 still said false).
+        FAKE_ACP_IMAGE_CAPABILITY: "true",
       };
       const first = await spawnBridge({ stateDirectory, env: bridgeEnv });
       const created = (await nativeFetch(`${first.base}/session/create`, {

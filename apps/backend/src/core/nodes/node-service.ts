@@ -672,7 +672,10 @@ export class NodeService {
             NODE_REFUSAL_CODES.tooManyNodes,
             "Too many nodes are registered.",
           );
-        if (current.nodes.some((node) => node.nodeId === record.nodeId)) {
+        if (
+          current.pendingHandover?.target.nodeId === record.nodeId ||
+          current.nodes.some((node) => node.nodeId === record.nodeId)
+        ) {
           throw new NodeRefusalError(
             NODE_REFUSAL_CODES.duplicateNode,
             "That node is already registered.",
@@ -854,8 +857,9 @@ export class NodeService {
         if (
           (once && importedSources.includes(entry.importedFrom)) ||
           nodeId === selfId ||
+          nodeId === registry.pendingHandover?.target.nodeId ||
           existing >= 0 ||
-          nodes.length >= MAX_REGISTERED_NODES
+          nodes.length + (registry.pendingHandover ? 1 : 0) >= MAX_REGISTERED_NODES
         ) {
           skipped += 1;
           if (once && !importedSources.includes(entry.importedFrom))
@@ -920,17 +924,30 @@ export class NodeService {
   /**
    * What making `nodeId` the command node would hand over. A target this
    * node does not control yet (a client registers it first) is previewed
-   * without asking it what it controls.
+   * without asking it what it controls. While its link is refused, a client
+   * that reads the target directly (to clear what refuses it) passes
+   * `knownTargetNodeIds` instead.
    */
-  async previewHandover(nodeId: unknown): Promise<CommandHandoverPreview> {
+  async previewHandover(
+    nodeId: unknown,
+    knownTargetNodeIds?: unknown,
+  ): Promise<CommandHandoverPreview> {
     if (!isBackendId(nodeId)) throw new Error("Expected nodeId to be a node identity.");
+    if (
+      knownTargetNodeIds !== undefined &&
+      !(Array.isArray(knownTargetNodeIds) && knownTargetNodeIds.every(isBackendId))
+    ) {
+      throw new Error("Expected targetNodeIds to be node identities.");
+    }
     const registry = await this.currentRegistry();
     const target = registry.nodes.find((node) => node.nodeId === nodeId) ?? null;
-    const targetNodeIds = target
-      ? (
-          await (await this.handoverTarget(nodeId)).link.invoke<NodeListResult>("list_nodes")
-        ).nodes.map((node) => node.nodeId)
-      : [];
+    const targetNodeIds = !target
+      ? []
+      : knownTargetNodeIds && !this.links.get(target.nodeId)?.connected
+        ? [...new Set(knownTargetNodeIds as BackendId[])]
+        : (
+            await (await this.handoverTarget(nodeId)).link.invoke<NodeListResult>("list_nodes")
+          ).nodes.map((node) => node.nodeId);
     const candidates: HandoverCandidate[] = registry.nodes
       .filter((node) => node.nodeId !== nodeId && !targetNodeIds.includes(node.nodeId))
       .filter((node) => remoteRoutes(node.routes).length > 0)
@@ -1089,7 +1106,11 @@ export class NodeService {
       } catch (error) {
         // Only these refusals prove adoption never committed. Other failures can
         // occur after persistence or during controller detach; keep the journal.
-        if (error instanceof NodeRefusalError && error.code === NODE_REFUSAL_CODES.tooManyNodes) {
+        if (
+          error instanceof NodeRefusalError &&
+          (error.code === NODE_REFUSAL_CODES.tooManyNodes ||
+            error.code === NODE_REFUSAL_CODES.notController)
+        ) {
           await this.mutateRegistry((current) => ({
             next: {
               ...current,
@@ -1098,13 +1119,6 @@ export class NodeService {
                 ? current.nodes
                 : [...current.nodes, target],
             },
-            result: undefined,
-          }));
-          throw error;
-        }
-        if (error instanceof NodeRefusalError && error.code === NODE_REFUSAL_CODES.notController) {
-          await this.mutateRegistry((current) => ({
-            next: { ...current, pendingHandover: undefined },
             result: undefined,
           }));
           throw error;
@@ -1248,7 +1262,14 @@ export class NodeService {
     }
     const link = this.links.get(target.nodeId);
     if (!link?.connected) {
-      throw new Error(`${this.view(target).displayName} is not connected. Connect to it first.`);
+      const name = this.view(target).displayName;
+      // A refusal names what to fix; "connect first" would only send the user in circles.
+      const refusal = link?.view.lastError;
+      throw new Error(
+        refusal
+          ? `${name} is not connected to this command node: ${refusal.message}`
+          : `${name} is not connected. Connect to it first.`,
+      );
     }
     return { target, link };
   }

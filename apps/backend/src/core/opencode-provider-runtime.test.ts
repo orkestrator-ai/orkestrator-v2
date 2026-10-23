@@ -693,6 +693,8 @@ describe("OpenCode provider runtime", () => {
                 variants: {
                   high: {},
                   disabled: { disabled: true },
+                  // Labelled from the shared vocabulary, like every provider.
+                  xhigh: {},
                 },
                 limit: { context: 200_000 },
                 capabilities: { input: { image: true } },
@@ -709,6 +711,8 @@ describe("OpenCode provider runtime", () => {
         id: "owned-session",
         directory: "/workspace",
         title: "Shared investigation",
+        // A link from before OpenCode 1.19.1 discontinued sharing: dead, so
+        // never surfaced.
         share: { url: "https://share.opencode.test/live" },
       },
     });
@@ -723,6 +727,7 @@ describe("OpenCode provider runtime", () => {
           reasoning: [
             { id: "default", label: "Default" },
             { id: "high", label: "High" },
+            { id: "xhigh", label: "Extra high" },
           ],
           defaultReasoningId: "default",
           supportsSpeed: false,
@@ -733,9 +738,9 @@ describe("OpenCode provider runtime", () => {
         },
       ]);
       const snapshot = await provider.interactiveSnapshot?.("owned-session");
+      expect(snapshot?.shareUrl).toBeUndefined();
       expect(snapshot).toMatchObject({
         title: "Shared investigation",
-        shareUrl: "https://share.opencode.test/live",
         composer: {
           selectedModelId: "opencode/claude-sonnet",
           models: [

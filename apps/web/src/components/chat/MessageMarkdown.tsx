@@ -17,6 +17,8 @@ import { toast } from "sonner";
 import { useOptionalTerminalContext } from "@/contexts";
 import { openInBrowser } from "@/lib/backend";
 import { parseLocalFileLinkTarget } from "@/lib/chat/file-url";
+import { usePullRequestOpener } from "@/lib/pull-request-opener";
+import { parseGitHubPullRequestLink } from "@orkestrator/protocol/github-pull-requests";
 import {
   blockMarkdownPlugins,
   INLINE_MARKDOWN_ELEMENTS,
@@ -153,6 +155,7 @@ export function MarkdownLink({
   ...props
 }: AnchorHTMLAttributes<HTMLAnchorElement> & ExtraProps) {
   const createFileTab = useOptionalTerminalContext()?.createFileTab;
+  const openPullRequest = usePullRequestOpener();
   const handleClick = useCallback(
     (event: ReactMouseEvent<HTMLAnchorElement>) => {
       onClick?.(event);
@@ -183,11 +186,15 @@ export function MarkdownLink({
         return;
       }
 
+      // Pull request links open in the app; Cmd/Ctrl-click opens GitHub.
+      const pullRequest = event.metaKey || event.ctrlKey ? null : parseGitHubPullRequestLink(href);
+      if (pullRequest && openPullRequest(pullRequest, pullRequest.view)) return;
+
       void openInBrowser(href).catch((error) => {
         console.error("[MessageMarkdown] Failed to open link:", error);
       });
     },
-    [createFileTab, href, onClick],
+    [createFileTab, href, onClick, openPullRequest],
   );
 
   return (

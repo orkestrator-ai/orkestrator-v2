@@ -9,6 +9,7 @@ import {
   type NativeAgentCapability,
   type NativeAgentExecutionPolicy,
 } from "@orkestrator/protocol/native-agent";
+import { claudeMcpToolPrefix } from "./mcp-tool-prefix.js";
 
 /**
  * Translation of the coordinator's read-only policy into this SDK's terms.
@@ -34,7 +35,7 @@ const CAPABILITY_TOOLS: ReadonlyMap<NativeAgentCapability, readonly string[]> = 
 ]);
 
 /** Tools a read-only coordinator turn may use, before MCP is added. */
-const READ_ONLY_TOOLS = Object.freeze([
+export const READ_ONLY_TOOLS = Object.freeze([
   "Read",
   "Glob",
   "Grep",
@@ -54,14 +55,13 @@ const READ_ONLY_TOOLS = Object.freeze([
  * unexplained "tool not available" invites it to try the next one on the list
  * rather than to finish its turn. Named separately so the refusal can say why.
  */
-const WAITING_TOOLS: ReadonlySet<string> = new Set([
+export const WAITING_TOOLS: ReadonlySet<string> = new Set([
   "Monitor",
   "ScheduleWakeup",
   "CronCreate",
   "CronList",
   "CronDelete",
   "SendMessage",
-  "TaskOutput",
 ]);
 
 /**
@@ -370,8 +370,8 @@ export function claudeReadOnlyAllowedTools(options: {
   return [
     ...READ_ONLY_TOOLS,
     ...(options.policy && !nativeAgentPolicyDeniesWebSearch(options.policy) ? ["WebSearch"] : []),
-    ...(options.agentMcpServerNames ?? []).map((name) => `mcp__${name}__*`),
-    ...(options.researchMcpServerNames ?? []).map((name) => `mcp__${name}__*`),
+    ...(options.agentMcpServerNames ?? []).map((name) => `${claudeMcpToolPrefix(name)}*`),
+    ...(options.researchMcpServerNames ?? []).map((name) => `${claudeMcpToolPrefix(name)}*`),
   ];
 }
 
@@ -487,8 +487,8 @@ export function createCoordinatorReadOnlyHook(
 ): HookCallback {
   const deniedTools = new Set(claudeDeniedTools(policy));
   const allowedMcpPrefixes = [
-    "mcp__orkestrator__",
-    ...researchMcpServerNames.map((name) => `mcp__${name}__`),
+    claudeMcpToolPrefix("orkestrator"),
+    ...researchMcpServerNames.map(claudeMcpToolPrefix),
   ];
   return async (input): Promise<HookJSONOutput> => {
     if (input.hook_event_name !== "PreToolUse") return {};

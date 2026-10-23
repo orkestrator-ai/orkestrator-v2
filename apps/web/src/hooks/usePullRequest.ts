@@ -12,6 +12,8 @@ import { useCallback, useState } from "react";
 import * as backend from "@/lib/backend";
 import { useEnvironmentStore } from "@/stores";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
+import { useFilesPanelStore } from "@/stores/filesPanelStore";
+import { parseGitHubPullRequestLink } from "@orkestrator/protocol/github-pull-requests";
 import type { PrState } from "@/types";
 import type { PrCheckSummary } from "@orkestrator/protocol/pr-monitor";
 
@@ -27,7 +29,8 @@ interface UsePullRequestReturn {
   isDetecting: boolean;
   error: string | null;
   /** Open the PR in the default browser */
-  viewPR: () => Promise<void>;
+  /** Opens the PR in the environment's files panel, or on GitHub when `external`. */
+  viewPR: (options?: { external?: boolean }) => Promise<void>;
   /** Clear the stored PR data */
   resetPR: () => Promise<void>;
   /** Set monitoring mode to create-pending (5s polling until PR found) */
@@ -58,34 +61,43 @@ export function usePullRequest({ environmentId }: UsePullRequestOptions): UsePul
   const isDetecting = monitorState?.checkInProgress ?? false;
   const checkSummary = monitorState?.checkSummary ?? null;
 
-  // View the PR in the default browser
-  const viewPR = useCallback(async () => {
-    setError(null);
-    let url = prUrl;
-    if (!url) {
-      // Fallback: try to get the PR URL from the backend
-      if (environmentId) {
-        try {
-          url = await backend.getEnvironmentPrUrl(environmentId);
-        } catch (err) {
-          console.error("Failed to get PR URL:", err);
+  // View the PR in the files panel, or in the default browser
+  const viewPR = useCallback(
+    async (options?: { external?: boolean }) => {
+      setError(null);
+      let url = prUrl;
+      if (!url) {
+        // Fallback: try to get the PR URL from the backend
+        if (environmentId) {
+          try {
+            url = await backend.getEnvironmentPrUrl(environmentId);
+          } catch (err) {
+            console.error("Failed to get PR URL:", err);
+          }
+        }
+
+        // If still no URL, set error
+        if (!url) {
+          setError("No PR URL available");
+          return;
         }
       }
 
-      // If still no URL, set error
-      if (!url) {
-        setError("No PR URL available");
+      const pullRequest = options?.external ? null : parseGitHubPullRequestLink(url);
+      if (pullRequest && environmentId) {
+        useFilesPanelStore.getState().openPullRequest(environmentId, pullRequest, pullRequest.view);
         return;
       }
-    }
 
-    try {
-      await backend.openInBrowser(url);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to open browser";
-      setError(message);
-    }
-  }, [prUrl, environmentId]);
+      try {
+        await backend.openInBrowser(url);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Failed to open browser";
+        setError(message);
+      }
+    },
+    [prUrl, environmentId],
+  );
 
   // Reset/clear the PR URL, state, and merge conflicts
   const resetPR = useCallback(async () => {

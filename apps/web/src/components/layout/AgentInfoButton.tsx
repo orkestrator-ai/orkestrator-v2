@@ -2,11 +2,13 @@ import { resolveAgentHandoffChangeSummaries } from "@/lib/changes/handoff";
 import {
   useCallback,
   useEffect,
+  useEffectEvent,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type CSSProperties,
+  type Ref,
 } from "react";
 import {
   ArrowRight,
@@ -59,6 +61,7 @@ import { normalizeNativeMessages } from "@/lib/chat/native-message-adapters";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import {
   describeNativeAgentExecutionPolicy,
+  nativeAgentCapabilities,
   nativeAgentSteerRejectionMessage,
   normalizePendingSignIn,
   NATIVE_AGENT_PENDING_SIGN_IN_TTL_MS,
@@ -77,6 +80,11 @@ import { AgentInfoMcpSection } from "./AgentInfoMcpSection";
 interface AgentInfoButtonProps {
   activeTab: TabInfo | null;
   mobile?: boolean;
+  /**
+   * In a realm: the window's title bar shows the trigger and asks for the
+   * popover, which opens here under it (see `RealmTitleBarPanels`).
+   */
+  remote?: RealmPanelControl;
 }
 
 interface SessionActionState {
@@ -165,6 +173,7 @@ import {
   ConnectionPathPanel,
 } from "./AgentInfoButton.panels";
 import { useFederation } from "@/components/federation/FederationProvider";
+import type { RealmPanelControl } from "@/lib/federation/workspace-realm";
 import { workspaceTarget } from "@/lib/portal/portal-transport";
 
 export {
@@ -176,8 +185,47 @@ export {
   windowDurationMinutes,
 } from "./AgentInfoButton.panels";
 
-export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonProps) {
-  const [open, setOpen] = useState(false);
+/** The agent-information trigger, shared with a window's title bar over a realm. */
+export function AgentInfoTrigger({
+  open,
+  mobile = false,
+  remote = false,
+  onClick,
+  ref,
+}: {
+  open: boolean;
+  mobile?: boolean;
+  remote?: boolean;
+  onClick: () => void;
+  ref?: Ref<HTMLButtonElement>;
+}) {
+  return (
+    <Button
+      ref={ref}
+      variant={open ? "secondary" : "ghost"}
+      size="icon"
+      className={mobile ? "h-9 w-9" : "h-8 w-8 text-muted-foreground hover:text-foreground"}
+      onClick={onClick}
+      aria-label={open ? "Close agent information" : "Open agent information"}
+      aria-expanded={open}
+      aria-haspopup="dialog"
+      aria-controls={remote ? undefined : "agent-information-popover"}
+    >
+      <Info className={mobile ? "h-4.5 w-4.5" : "h-4 w-4"} />
+    </Button>
+  );
+}
+
+export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfoButtonProps) {
+  const [open, setOpen] = useState(remote?.request?.open ?? false);
+  const remoteRequest = remote?.request ?? null;
+  const [appliedRequest, setAppliedRequest] = useState(remoteRequest);
+  if (appliedRequest !== remoteRequest) {
+    setAppliedRequest(remoteRequest);
+    if (remoteRequest) setOpen(remoteRequest.open);
+  }
+  const reportOpen = useEffectEvent((next: boolean) => remote?.onOpenChange(next));
+  useEffect(() => reportOpen(open), [open, remoteRequest?.seq]);
   const federation = useFederation();
   // How this window reaches the node its workspace is on, when that is not
   // the command node it connected to.
@@ -201,7 +249,14 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
   });
   const [controlUpdateState, setControlUpdateState] = useState<ControlUpdateState | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLElement>(null);
   const restoreFocusRef = useRef(false);
+  const reportDismiss = useEffectEvent(() => remote?.onDismiss?.());
+  useEffect(() => {
+    if (open && remoteRequest?.open) {
+      panelRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    }
+  }, [open, remoteRequest?.open, remoteRequest?.seq]);
   const actionIdRef = useRef(0);
   const controlUpdateIdRef = useRef(0);
   const controlUpdateInFlightRef = useRef<ControlUpdateState | null>(null);
@@ -319,18 +374,14 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
     () => normalizeNativeMessages((neutralProjection?.messages ?? []) as NativeMessage[]),
     [neutralProjection?.messages],
   );
-  const canFork =
-    !isBuildStage &&
-    (neutralProjection?.capabilities.fork ??
-      (activeSession?.provider === "claude" ||
-        activeSession?.provider === "codex" ||
-        activeSession?.provider === "opencode"));
-  const canCompact =
-    !isBuildStage &&
-    (neutralProjection?.capabilities.actions?.compact ??
-      (activeSession?.provider === "claude" ||
-        activeSession?.provider === "codex" ||
-        activeSession?.provider === "opencode"));
+  // The live projection's capabilities win; before one arrives, the shared
+  // capability table answers for the platform instead of a provider list here.
+  const sessionCapabilities =
+    neutralProjection?.capabilities ??
+    (activeSession ? nativeAgentCapabilities(activeSession.provider) : undefined);
+  const sessionActions = sessionCapabilities?.actions;
+  const canFork = !isBuildStage && (sessionCapabilities?.fork ?? false);
+  const canCompact = !isBuildStage && (sessionActions?.compact ?? false);
 
   const neutralContextUsage = neutralProjection?.contextUsage;
   const neutralMaximumTokens = neutralContextUsage?.maximumTokens;
@@ -393,7 +444,7 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
   const steerText = steerState.sessionIdentity === sessionIdentity ? steerState.value : "";
   // The projection's share URL is the backend's authoritative share state; the
   // local latch only covers the window before the next projection arrives.
-  const openCodeShared =
+  const sessionShared =
     neutralProjection?.shareUrl !== undefined
       ? neutralProjection.shareUrl !== null
       : shareState.sessionIdentity === sessionIdentity && shareState.value;
@@ -768,6 +819,7 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
   useEffect(() => {
     if (!open && restoreFocusRef.current) {
       restoreFocusRef.current = false;
+      reportDismiss();
       triggerRef.current?.focus();
     }
   }, [open]);
@@ -796,23 +848,19 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
 
   return (
     <div
-      className={cn("relative", mobile ? "h-9 w-9" : "h-8 w-8")}
+      className={cn("relative", remote ? "h-0 w-0" : mobile ? "h-9 w-9" : "h-8 w-8")}
+      data-testid={remote ? "realm-agent-info-panel" : undefined}
       style={{ WebkitAppRegion: "no-drag" } as CSSProperties}
       onMouseDown={(event) => event.stopPropagation()}
     >
-      <Button
-        ref={triggerRef}
-        variant={open ? "secondary" : "ghost"}
-        size="icon"
-        className={mobile ? "h-9 w-9" : "h-8 w-8 text-muted-foreground hover:text-foreground"}
-        onClick={() => setOpen((value) => !value)}
-        aria-label={open ? "Close agent information" : "Open agent information"}
-        aria-expanded={open}
-        aria-haspopup="dialog"
-        aria-controls="agent-information-popover"
-      >
-        <Info className={mobile ? "h-4.5 w-4.5" : "h-4 w-4"} />
-      </Button>
+      {remote ? null : (
+        <AgentInfoTrigger
+          ref={triggerRef}
+          open={open}
+          mobile={mobile}
+          onClick={() => setOpen((value) => !value)}
+        />
+      )}
 
       {open ? (
         <button
@@ -824,6 +872,7 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
       ) : null}
 
       <section
+        ref={panelRef}
         id="agent-information-popover"
         role="dialog"
         aria-label="Agent information"
@@ -1119,144 +1168,149 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                       </Button>
                     ) : null}
 
-                    {!isBuildStage && activeSession.provider === "opencode" && currentSessionId ? (
-                      <>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          disabled={busyAction !== null}
-                          className="justify-start gap-2"
-                          onClick={() =>
-                            void runAction("undo", async () => {
-                              const messageId = neutralMessages
-                                .filter((message) => message.role === "user")
-                                .at(-1)?.id;
-                              await performNativeAgentSessionAction({
-                                environmentId: activeSession.environmentId,
-                                agent: activeSession.provider,
-                                logicalSessionKey: activeSession.sessionKey,
-                                action: { kind: "undo", messageId },
-                              });
-                              toast.success("OpenCode session reverted");
-                            })
-                          }
-                        >
-                          <RotateCcw className="h-3.5 w-3.5" />
-                          Undo turn
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          disabled={busyAction !== null}
-                          className="justify-start gap-2"
-                          onClick={() =>
-                            void runAction(
-                              "share",
-                              async ({ isCurrent, sessionIdentity: actionIdentity }) => {
-                                if (
-                                  !window.confirm(
-                                    "Create an OpenCode share link? The conversation will leave this machine and be accessible to anyone with the link.",
-                                  )
+                    {!isBuildStage && currentSessionId && sessionActions?.undo ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={busyAction !== null}
+                        className="justify-start gap-2"
+                        onClick={() =>
+                          void runAction("undo", async () => {
+                            const messageId = neutralMessages
+                              .filter((message) => message.role === "user")
+                              .at(-1)?.id;
+                            await performNativeAgentSessionAction({
+                              environmentId: activeSession.environmentId,
+                              agent: activeSession.provider,
+                              logicalSessionKey: activeSession.sessionKey,
+                              action: { kind: "undo", messageId },
+                            });
+                            toast.success("Session reverted");
+                          })
+                        }
+                      >
+                        <RotateCcw className="h-3.5 w-3.5" />
+                        Undo turn
+                      </Button>
+                    ) : null}
+
+                    {!isBuildStage && currentSessionId && sessionActions?.share ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={busyAction !== null}
+                        className="justify-start gap-2"
+                        onClick={() =>
+                          void runAction(
+                            "share",
+                            async ({ isCurrent, sessionIdentity: actionIdentity }) => {
+                              if (
+                                !window.confirm(
+                                  "Create a share link? The conversation will leave this machine and be accessible to anyone with the link.",
                                 )
-                                  return;
-                                const { shareUrl: url } = await performNativeAgentSessionAction({
-                                  environmentId: activeSession.environmentId,
-                                  agent: activeSession.provider,
-                                  logicalSessionKey: activeSession.sessionKey,
-                                  action: { kind: "share" },
+                              )
+                                return;
+                              const { shareUrl: url } = await performNativeAgentSessionAction({
+                                environmentId: activeSession.environmentId,
+                                agent: activeSession.provider,
+                                logicalSessionKey: activeSession.sessionKey,
+                                action: { kind: "share" },
+                              });
+                              /*
+                               * The conversation is published the moment `share()`
+                               * resolves. Latch that first: every failure after this
+                               * point (a missing URL, a clipboard rejection on focus
+                               * or permission grounds) used to skip the flag, so the
+                               * user saw an error while the link was live and
+                               * "Stop sharing" never rendered.
+                               */
+                              if (isCurrent()) {
+                                setShareState({
+                                  sessionIdentity: actionIdentity,
+                                  value: true,
                                 });
-                                /*
-                                 * The conversation is published the moment `share()`
-                                 * resolves. Latch that first: every failure after this
-                                 * point (a missing URL, a clipboard rejection on focus
-                                 * or permission grounds) used to skip the flag, so the
-                                 * user saw an error while the link was live and
-                                 * "Stop sharing" never rendered.
-                                 */
-                                if (isCurrent()) {
-                                  setShareState({
-                                    sessionIdentity: actionIdentity,
-                                    value: true,
-                                  });
-                                }
-                                // The originating session is now shared, but a
-                                // different active session must not receive its URL,
-                                // clipboard side effect, or notification.
-                                if (!isCurrent()) return;
-                                if (!url) {
+                              }
+                              // The originating session is now shared, but a
+                              // different active session must not receive its URL,
+                              // clipboard side effect, or notification.
+                              if (!isCurrent()) return;
+                              if (!url) {
+                                toast.warning(
+                                  "Session shared, but the agent did not return the link. Use Stop sharing to revoke it.",
+                                );
+                                return;
+                              }
+                              try {
+                                await navigator.clipboard.writeText(url);
+                                if (isCurrent()) toast.success("Share link copied");
+                              } catch {
+                                if (isCurrent())
                                   toast.warning(
-                                    "Session shared, but OpenCode did not return the link. Use Stop sharing to revoke it.",
+                                    `Session shared, but the link could not be copied: ${url}`,
                                   );
-                                  return;
-                                }
-                                try {
-                                  await navigator.clipboard.writeText(url);
-                                  if (isCurrent()) toast.success("Share link copied");
-                                } catch {
-                                  if (isCurrent())
-                                    toast.warning(
-                                      `Session shared, but the link could not be copied: ${url}`,
-                                    );
-                                }
-                              },
-                            )
-                          }
-                        >
-                          <Share2 className="h-3.5 w-3.5" />
-                          Share…
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          disabled={busyAction !== null}
-                          className="justify-start gap-2"
-                          onClick={() =>
-                            void runAction("redo", async () => {
+                              }
+                            },
+                          )
+                        }
+                      >
+                        <Share2 className="h-3.5 w-3.5" />
+                        Share…
+                      </Button>
+                    ) : null}
+
+                    {!isBuildStage && currentSessionId && sessionActions?.redo ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={busyAction !== null}
+                        className="justify-start gap-2"
+                        onClick={() =>
+                          void runAction("redo", async () => {
+                            await performNativeAgentSessionAction({
+                              environmentId: activeSession.environmentId,
+                              agent: activeSession.provider,
+                              logicalSessionKey: activeSession.sessionKey,
+                              action: { kind: "redo" },
+                            });
+                            toast.success("Revert undone");
+                          })
+                        }
+                      >
+                        <RotateCcw className="h-3.5 w-3.5 scale-x-[-1]" />
+                        Redo turn
+                      </Button>
+                    ) : null}
+
+                    {!isBuildStage && currentSessionId && sessionActions?.share && sessionShared ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={busyAction !== null}
+                        className="justify-start gap-2"
+                        onClick={() =>
+                          void runAction(
+                            "unshare",
+                            async ({ isCurrent, sessionIdentity: actionIdentity }) => {
                               await performNativeAgentSessionAction({
                                 environmentId: activeSession.environmentId,
                                 agent: activeSession.provider,
                                 logicalSessionKey: activeSession.sessionKey,
-                                action: { kind: "redo" },
+                                action: { kind: "unshare" },
                               });
-                              toast.success("OpenCode revert undone");
-                            })
-                          }
-                        >
-                          <RotateCcw className="h-3.5 w-3.5 scale-x-[-1]" />
-                          Redo turn
-                        </Button>
-                        {openCodeShared ? (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            disabled={busyAction !== null}
-                            className="justify-start gap-2"
-                            onClick={() =>
-                              void runAction(
-                                "unshare",
-                                async ({ isCurrent, sessionIdentity: actionIdentity }) => {
-                                  await performNativeAgentSessionAction({
-                                    environmentId: activeSession.environmentId,
-                                    agent: activeSession.provider,
-                                    logicalSessionKey: activeSession.sessionKey,
-                                    action: { kind: "unshare" },
-                                  });
-                                  if (isCurrent()) {
-                                    setShareState({
-                                      sessionIdentity: actionIdentity,
-                                      value: false,
-                                    });
-                                    toast.success("OpenCode share link disabled");
-                                  }
-                                },
-                              )
-                            }
-                          >
-                            <X className="h-3.5 w-3.5" />
-                            Stop sharing
-                          </Button>
-                        ) : null}
-                      </>
+                              if (isCurrent()) {
+                                setShareState({
+                                  sessionIdentity: actionIdentity,
+                                  value: false,
+                                });
+                                toast.success("Share link disabled");
+                              }
+                            },
+                          )
+                        }
+                      >
+                        <X className="h-3.5 w-3.5" />
+                        Stop sharing
+                      </Button>
                     ) : null}
 
                     {!isBuildStage && activeSession.provider === "codex" && currentSessionId ? (

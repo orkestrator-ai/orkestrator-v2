@@ -3,7 +3,11 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadMcpConfigFile, resolvePiMcpServers } from "./mcp-config.js";
-import { PI_MCP_CONFIG_FIXTURES, type PiMcpConfigFixture } from "./testing/mcp-config-fixtures.js";
+import {
+  PI_MCP_CONFIG_FIXTURES,
+  mcpConfigFileText,
+  type PiMcpConfigFixture,
+} from "./testing/mcp-config-fixtures.js";
 
 /**
  * Pi's own `mcp.json` loader. It is not a public export, so it is loaded from
@@ -35,9 +39,9 @@ async function writeFixture(
   await mkdir(agentDir, { recursive: true });
   await mkdir(join(cwd, ".pi"), { recursive: true });
   if (fixture.user !== undefined)
-    await writeFile(join(agentDir, "mcp.json"), JSON.stringify(fixture.user));
+    await writeFile(join(agentDir, "mcp.json"), mcpConfigFileText(fixture.user));
   if (fixture.project !== undefined)
-    await writeFile(join(cwd, ".pi", "mcp.json"), JSON.stringify(fixture.project));
+    await writeFile(join(cwd, ".pi", "mcp.json"), mcpConfigFileText(fixture.project));
   return { agentDir, cwd };
 }
 

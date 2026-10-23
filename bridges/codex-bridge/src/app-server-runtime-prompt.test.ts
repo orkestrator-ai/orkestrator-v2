@@ -3920,8 +3920,7 @@ describe("composed approval settings", () => {
         "mcp_servers.orkestrator"
       ]!;
       expect(server.default_tools_approval_mode).toBe(readOnly ? undefined : "approve");
-      if (index > 0)
-        expect(requests[requests.lastIndexOf(thread) - 1]?.method).toBe("thread/unsubscribe");
+      if (index > 0) expect(methodBefore(requests, thread)).toBe("thread/unsubscribe");
       h.child().notify("turn/completed", {
         threadId: "thread-1",
         turn: { id: "turn-1", status: "completed" },
@@ -4028,7 +4027,12 @@ describe("composed approval settings", () => {
  */
 function methodBefore(requests: { method: string }[], request: { method: string }): string {
   const before = requests.slice(0, requests.lastIndexOf(request));
-  return before.findLast((candidate) => candidate.method !== "skills/list")?.method ?? "";
+  // Read-only resumes also read back the tool-history setting (`config/read`).
+  return (
+    before.findLast(
+      (candidate) => candidate.method !== "skills/list" && candidate.method !== "config/read",
+    )?.method ?? ""
+  );
 }
 
 describe("search configuration recovery", () => {

@@ -20,6 +20,9 @@
  * - its output carries a refusal ({@link STRONG_REFUSAL_MARKERS}), so a call
  *   inside a cell that also produced items was refused.
  *
+ * A cell an interrupt stopped is never reported, even with no item: it is not
+ * a refusal, and its output says only that the user stopped it.
+ *
  * A cell that produced items and reports no refusal is left alone: its calls
  * are already on screen. Codex writes the cell's output about 50 ms before it
  * asks the model for the next response, so a read every
@@ -51,6 +54,14 @@ export const STRONG_REFUSAL_MARKERS = [
 
 /** Codex's prefix for a cell that threw, including a rejected `apply_patch`. */
 const SCRIPT_FAILED = "script failed";
+
+/**
+ * Codex's whole output for a cell an interrupt stopped. With
+ * `features.code_mode_interrupt` (on by default since 0.164.0) a user stop
+ * terminates the running cell and records `aborted by user after 1.5s` as its
+ * output (`app-server/live-refused-calls.test.ts`).
+ */
+const INTERRUPTED_CELL = /^aborted by user\b/i;
 
 /** Pending cells kept while waiting for their output; more are ignored. */
 const MAX_PENDING_CELLS = 256;
@@ -134,10 +145,23 @@ export function reportsRefusal(output: string): boolean {
   return STRONG_REFUSAL_MARKERS.some((marker) => lower.includes(marker));
 }
 
-/** Whether a cell's output reports a refused call, or a script that threw. */
-export function codeModeCellOutcome(output: string): { refused: boolean; failed: boolean } {
+/**
+ * Whether a cell's output reports a refused call, a script that threw, or a
+ * cell an interrupt stopped. An interrupted cell is neither refused nor failed:
+ * the user stopped it, and whatever it called already shows as its own item.
+ */
+export function codeModeCellOutcome(output: string): {
+  refused: boolean;
+  failed: boolean;
+  interrupted: boolean;
+} {
   const refused = reportsRefusal(output);
-  return { refused, failed: refused || output.trimStart().toLowerCase().startsWith(SCRIPT_FAILED) };
+  const trimmed = output.trimStart();
+  return {
+    refused,
+    failed: refused || trimmed.toLowerCase().startsWith(SCRIPT_FAILED),
+    interrupted: !refused && INTERRUPTED_CELL.test(trimmed),
+  };
 }
 
 function defaultWatch(_path: string, onChange: () => void): RolloutWatcher {
@@ -295,7 +319,10 @@ export class RefusedCellTail {
     this.pending.delete(callId);
     const output = cellOutputText(payload.output);
     const completedAtMs = recordTimeMs(record, payload);
-    const { refused, failed } = codeModeCellOutcome(output);
+    const { refused, failed, interrupted } = codeModeCellOutcome(output);
+    // An interrupted cell is not a refusal, and the turn is ending at the
+    // user's request: no row, whatever it managed to start.
+    if (interrupted) return;
     const unseen =
       !Number.isFinite(cell.startedAtMs) ||
       !Number.isFinite(completedAtMs) ||

@@ -196,6 +196,7 @@ the running attempt.
 | B21 | `storage-lock-heartbeat` | `storage-context.ts`, `storage-database.ts` | Lease holders heartbeat at least every third of the stale threshold. Critical. |
 | B22 | `opencode-reconnect` | `opencode-observation-stream.ts` | Event stream; reconnect backs off from 1 s to 30 s and resets after a healthy stream. Gaps are marked and reconciled. |
 | B23 | `bridge-observation-stream` | `http-bridge-observation-stream.ts` | One content-free `/event/subscribe?observe=1` connection per observed Claude or Codex bridge, opened by the sweep. Reconnect backs off from 1 s to 30 s with jitter and resumes from its cursor; a connection silent for 75 s is torn down. Connects, gaps and disconnects wake the whole group. An older bridge that does not confirm the mode is not reconnected. |
+| B26 | `node-summary-reconcile` | `nodes/node-read-model.ts` | Named activity due job, every 60 s; reconciles connected node summaries and stops with the portal. |
 | C08 | `system-usage-sample`, `process-usage` | `commands-registry-system.ts` | Demand-driven by clients; concurrent reads join. |
 | L01 | `gateway-heartbeat` | `gateway-handlers.ts` | Shared 25 s keepalive. It also advances the scoped stream cursor and checks client buffers, so it is replay convergence, not a cosmetic ping. |
 
@@ -306,3 +307,7 @@ per read.
   deterministic harness (see
   [testing-guide.md](../development/testing-guide.md#recurring-work-harness))
   to show which counters moved.
+
+### B26 — Node summary reconciliation
+
+`NodeReadModel` owns the named `node-summary-reconcile` activity due job (60 s). It rereads connected node summaries as a safety pass for missed events, joins each node’s hydrate with one trailing rerun, and stops with the portal. Scheduler diagnostics expose its deadline; recurring-work metrics are not yet recorded for this kind. Unit tests can override `reconcileMs`.

@@ -2,7 +2,7 @@
  * Cursor's change-evidence adapter: native tool payloads in, canonical frames
  * out, and the spool routes the backend pulls them through.
  *
- * Fixtures are the SDK's own tool-call shapes (`@cursor/sdk` 1.0.37
+ * Fixtures are the SDK's own tool-call shapes (`@cursor/sdk` 1.0.40
  * `EditSuccess`, `WriteSuccess`, `DeleteSuccess`, `ShellArgs`), delivered the
  * way the interaction stream delivers them.
  */

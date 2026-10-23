@@ -73,7 +73,7 @@ import {
 } from "./models.js";
 import { modelRuntime } from "./runtime.js";
 import { withTimeout } from "./timeout.js";
-import { applySessionEvent } from "./translate.js";
+import { applySessionEvent, providerDuration, replayNestedToolCalls } from "./translate.js";
 import { boundTranscript, chargeTranscript, forgetRevisedRows } from "./transcript.js";
 import { renderToolCall } from "./tool-rendering.js";
 import { newSessionState } from "./session-factory.js";
@@ -1612,6 +1612,9 @@ function applyHistoricToolResult(state: SessionState, message: ToolResultMessage
       if (rendered.toolOutput !== undefined) part.toolOutput = rendered.toolOutput;
       if (rendered.toolError !== undefined) part.toolError = rendered.toolError;
       part.toolState = rendered.toolError === undefined ? "success" : "failure";
+      const durationMs = providerDuration(message.durationMs);
+      if (durationMs !== undefined) part.toolDurationMs = durationMs;
+      replayNestedToolCalls(state.messages[index]!, toolCallId, message.nestedCalls);
       return;
     }
   }

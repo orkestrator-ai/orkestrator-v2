@@ -89,6 +89,7 @@ import {
   isTranscriptUpdateKind,
   isTrimNotice,
   rememberHistoryMessage,
+  sessionTitle,
   toolArgumentPath,
   trimPartsTo,
   truncateUtf8,
@@ -1636,6 +1637,22 @@ function recordAcpNotice(state: SessionState, update: JsonObject): void {
   });
 }
 
+/**
+ * Standard ACP `session_info_update`: the agent names, renames or (with
+ * `title: null`) unnames the session. An absent or malformed `title` changes
+ * nothing. `updatedAt` is not kept: it is the agent's own activity clock, and
+ * nothing reads it from this bridge; the session list reads it from the agent.
+ */
+function applySessionInfoUpdate(state: SessionState, update: JsonObject): void {
+  if (update.title !== null && typeof update.title !== "string") return;
+  const title = sessionTitle(update.title);
+  if (title === state.title) return;
+  if (title) state.title = title;
+  else delete state.title;
+  state.revision += 1;
+  schedulePersist();
+}
+
 export function applySessionUpdate(state: SessionState, params: JsonObject): void {
   if (params.sessionId !== state.acpSessionId || !isObject(params.update)) return;
   const update = params.update;
@@ -1669,6 +1686,13 @@ export function applySessionUpdate(state: SessionState, params: JsonObject): voi
     // A reconnect replays notices already recorded, so they are dropped like
     // replayed usage rather than inflating the occurrence count.
     if (state.historyReplay !== "ignore") recordAcpNotice(state, update);
+    return;
+  }
+  if (kind === "session_info_update") {
+    // Session metadata, not transcript, so it is applied during a reconnect's
+    // replay too: a replayed title is still one this agent gave the session,
+    // and the last report wins.
+    applySessionInfoUpdate(state, update);
     return;
   }
   if (kind === "config_option_update") {

@@ -279,6 +279,19 @@ export function registerReviewWorkflowCommands(
       );
     },
   );
+  register("get_multi_review_step_tool_details", ({ workflowId, step, detailRef }, context) => {
+    if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
+    const request = { workflowId, step };
+    if (
+      !isMultiReviewStepTranscriptRequest(request) ||
+      typeof detailRef !== "string" ||
+      detailRef.length === 0 ||
+      detailRef.length > 2048
+    ) {
+      throw new Error("Invalid multi review step tool detail request");
+    }
+    return context.multiReviews.stepToolDetails(request.workflowId, request.step, detailRef);
+  });
   register(
     "get_multi_review_reviewer_tool_details",
     ({ workflowId, reviewerId, detailRef }, context) => {

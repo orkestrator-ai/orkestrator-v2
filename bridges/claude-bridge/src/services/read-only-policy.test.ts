@@ -101,6 +101,25 @@ describe("Claude coordinator read-only policy", () => {
     expect(denied?.permissionDecision).toBe("deny");
   });
 
+  test("MCP rules use the CLI's normalised server name", async () => {
+    // The CLI names a `docs.search v2` server's tools `mcp__docs_search_v2__…`
+    // and matches an allow rule only against that spelling.
+    expect(claudeReadOnlyAllowedTools({ researchMcpServerNames: ["docs.search v2"] })).toContain(
+      "mcp__docs_search_v2__*",
+    );
+    const hook = createCoordinatorReadOnlyHook(coordinatorPolicy, ["docs.search v2"]);
+    const output = await hook(
+      {
+        hook_event_name: "PreToolUse",
+        tool_name: "mcp__docs_search_v2__query",
+        tool_input: {},
+      } as never,
+      undefined as never,
+      { signal: new AbortController().signal } as never,
+    );
+    expect(output).toEqual({});
+  });
+
   test("a command asking to leave the sandbox is denied", async () => {
     const decision = await decide("Bash", {
       command: "ls",

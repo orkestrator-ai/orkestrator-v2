@@ -163,6 +163,26 @@ describe("ACP notice updates", () => {
   });
 });
 
+describe("ACP session info updates", () => {
+  test("a title names the session without drift or transcript, replayed or live", () => {
+    const session = state();
+    session.historyReplay = "ignore";
+    update(session, "session_info_update", { title: "Replayed name" });
+    session.historyReplay = false;
+    expect(session.title).toBe("Replayed name");
+    const revision = session.revision;
+
+    update(session, "session_info_update", { title: "Replayed name" });
+    expect(session.revision).toBe(revision);
+    update(session, "session_info_update", { title: "   " });
+    expect(session.title).toBeUndefined();
+    expect(session.revision).toBe(revision + 1);
+
+    expect(session.health.drift()).toBeUndefined();
+    expect(session.messages).toEqual([]);
+  });
+});
+
 /**
  * Non-text ACP content blocks.
  *

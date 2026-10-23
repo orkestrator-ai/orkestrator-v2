@@ -216,8 +216,10 @@ describe("composer", () => {
 });
 
 describe("default model", () => {
-  // The catalogue Pi 1.2.0 lists for a ChatGPT-backed `openai-codex` login,
-  // first entry first: that entry is the one the account cannot use.
+  // The catalogue Pi 1.2.0 listed for a ChatGPT-backed `openai-codex` login,
+  // first entry first: that entry is the one the account cannot use. Pi 1.4.0
+  // no longer lists either id there; the shape, a first model the login
+  // refuses, is what these pin.
   const spark = model({ provider: "openai-codex", id: "gpt-5.3-codex-spark" });
   const gpt55 = model({ provider: "openai-codex", id: "gpt-5.5" });
   const kimi = model({ provider: "opencode-go", id: "kimi-k3" });

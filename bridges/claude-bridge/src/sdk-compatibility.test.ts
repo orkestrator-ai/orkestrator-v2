@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { chmod, copyFile, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { READ_ONLY_TOOLS, WAITING_TOOLS } from "./services/read-only-policy.js";
 
 type PackageManifest = {
   dependencies?: Record<string, string>;
@@ -154,6 +155,42 @@ describe("Claude Agent SDK runtime compatibility", () => {
         getSettings: "function",
       },
     });
+  }, 15_000);
+
+  // A tool-name rule the CLI does not recognise matches nothing: a renamed
+  // tool silently leaves the read-only allowlist, and a waiting tool loses
+  // the refusal that tells the coordinator why.
+  test("names only tools the SDK lists as built-in or as a legacy alias", async () => {
+    const packageRoot = join(import.meta.dir, "..");
+    const probe = Bun.spawn(
+      [
+        process.execPath,
+        "-e",
+        `
+          import * as sdk from "@anthropic-ai/claude-agent-sdk";
+          console.log(JSON.stringify({
+            builtin: sdk.BUILTIN_TOOL_NAMES ?? null,
+            aliases: sdk.LEGACY_TOOL_NAME_ALIASES ?? null,
+          }));
+        `,
+      ],
+      { cwd: packageRoot, stdout: "pipe", stderr: "pipe" },
+    );
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(probe.stdout).text(),
+      new Response(probe.stderr).text(),
+      probe.exited,
+    ]);
+    expect(exitCode, stderr).toBe(0);
+    const { builtin, aliases } = JSON.parse(stdout) as {
+      builtin: string[] | null;
+      aliases: Record<string, string> | null;
+    };
+    // Both are @alpha exports; an SDK that drops them skips the guard.
+    if (!builtin || !aliases) return;
+    const known = new Set([...builtin, ...Object.keys(aliases)]);
+    const unknown = [...READ_ONLY_TOOLS, ...WAITING_TOOLS].filter((name) => !known.has(name));
+    expect(unknown).toEqual([]);
   }, 15_000);
 
   test("still accepts the listSessions option that scopes a bridge to its own worktree", async () => {

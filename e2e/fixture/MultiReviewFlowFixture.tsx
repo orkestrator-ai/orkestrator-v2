@@ -213,7 +213,12 @@ export function multiReviewFlowWorkflow(
         provisionalFindings: [
           reported(ISSUES[1]![0]!, 2, now),
           reported(
-            issue("P2", "Zoom level label reads 99% after Fit", "MultiReviewFlowViewport.tsx", 88),
+            issue(
+              "P2",
+              "Zoom level label reads 99% after reset",
+              "MultiReviewFlowViewport.tsx",
+              88,
+            ),
             3,
             now,
           ),
@@ -426,6 +431,17 @@ export function MultiReviewFlowFixture() {
   const count = Number(params.get("reviewers") ?? "4");
   const [workflow] = useState(() => {
     const snapshot = multiReviewFlowWorkflow(phase, count);
+    if (params.has("manyFindings")) {
+      snapshot.reviewers[0]!.report = {
+        ...snapshot.reviewers[0]!.report!,
+        issues: [
+          ...snapshot.reviewers[0]!.report!.issues,
+          ...Array.from({ length: 35 }, (_, index) =>
+            issue("P2", `Additional finding ${index + 1}`, "src/additional.ts", index + 1),
+          ),
+        ],
+      };
+    }
     if (params.has("cleanReviewPr")) {
       snapshot.autoPr = true;
       snapshot.autoPrLaunch = {

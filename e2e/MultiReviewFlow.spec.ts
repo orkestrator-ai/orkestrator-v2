@@ -224,32 +224,20 @@ async function visibleFrame(page: Page): Promise<Box> {
   return { x: 0, y: 0, width, height };
 }
 
-test("fits the 32-reviewer maximum and zooms within bounds", async ({ page }) => {
+test("scrolls the 32-reviewer maximum and zooms within bounds", async ({ page }) => {
   await page.goto("/multi-review-flow?phase=reviewing&reviewers=32");
   await expect(page.getByRole("tab", { name: /^Reviewer \d+ ·/ })).toHaveCount(32);
+  const controls = page.getByRole("group", { name: "Zoom" });
+  await expect(controls.getByRole("button")).toHaveCount(4);
+  await expect(page.getByRole("button", { name: "Fit the whole pipeline" })).toHaveCount(0);
   const level = page.getByTestId("multi-review-zoom-level");
   await expect(level).toHaveText("100%");
-
-  await page.getByRole("button", { name: "Fit the whole pipeline" }).click();
-  await expect(level).not.toHaveText("100%");
-  // Every node at once: inside the graph's viewport, or for the stacked
-  // column, on the screen once Fit has brought the column's top into view.
-  await expect
-    .poll(async () => {
-      const frame = await visibleFrame(page);
-      return (await nodeBoxes(page)).every((box) => inside(box, frame));
-    })
-    .toBe(true);
-  // Layout overflow must agree with the scaled canvas, including at Fit.
-  const overflow = await page.locator("[data-flow-viewport]").evaluate((element) => ({
-    x: element.scrollWidth - element.clientWidth,
-    y: element.scrollHeight - element.clientHeight,
-  }));
-  expect(overflow.x).toBeLessThanOrEqual(1);
-  expect(overflow.y).toBeLessThanOrEqual(1);
   const boxes = await nodeBoxes(page);
   expect(boxes).toHaveLength(36);
   expect(overlapping(boxes)).toEqual([]);
+  await page.getByRole("tab", { name: /^Reviewer 32 ·/ }).click();
+  const selectedBox = (await page.getByRole("tab", { name: /^Reviewer 32 ·/ }).boundingBox())!;
+  expect(inside(selectedBox, await visibleFrame(page))).toBe(true);
 
   const zoomIn = page.getByRole("button", { name: "Zoom in" });
   while (await zoomIn.isEnabled()) await zoomIn.click();
@@ -362,7 +350,7 @@ test("the stacked zoom controls are full-size touch targets", async ({ page }) =
   await page.goto("/multi-review-flow?phase=reviewing&reviewers=4");
   test.skip(!isStacked(page), "The wide graph's controls are sized for a fine pointer");
   const controls = page.getByRole("group", { name: "Zoom" });
-  await expect(controls.getByRole("button")).toHaveCount(5);
+  await expect(controls.getByRole("button")).toHaveCount(4);
   for (const button of await controls.getByRole("button").all()) {
     const box = (await button.boundingBox())!;
     expect(box.width).toBeGreaterThanOrEqual(44);
@@ -374,7 +362,7 @@ test("the stacked zoom controls are full-size touch targets", async ({ page }) =
   expect(groupBox.x + groupBox.width).toBeLessThanOrEqual(width);
 });
 
-test("fullscreen covers its tab and keeps Fit and scrolling usable", async ({ page }) => {
+test("fullscreen covers its tab and keeps zoom and scrolling usable", async ({ page }) => {
   await page.goto("/multi-review-flow?phase=reviewing&reviewers=8&paneControls");
   // The overlay covers the tab root, including its header and inspector.
   const root = page.getByTestId("review-pane");
@@ -390,21 +378,26 @@ test("fullscreen covers its tab and keeps Fit and scrolling usable", async ({ pa
       );
     })
     .toBeLessThanOrEqual(1);
-  await page.getByRole("button", { name: "Fit the whole pipeline" }).click();
-  const frame = (await overlay.boundingBox())!;
-  for (const box of await nodeBoxes(page)) {
-    expect(box.y).toBeGreaterThanOrEqual(frame.y);
-    expect(box.y + box.height).toBeLessThanOrEqual(frame.y + frame.height + 1);
-  }
+  const level = page.getByTestId("multi-review-zoom-level");
+  await page.getByRole("button", { name: "Zoom in" }).click();
+  await expect(level).toHaveText("125%");
+  await level.click();
+  await expect(level).toHaveText("100%");
   if (isStacked(page)) {
-    await page.getByTestId("multi-review-zoom-level").click();
     await overlay.evaluate((element) => {
       element.scrollTop = element.scrollHeight;
     });
     await expect.poll(() => overlay.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
     await expect(page.getByRole("button", { name: "Exit fullscreen" })).toBeInViewport();
-    await page.getByRole("button", { name: "Fit the whole pipeline" }).click();
-    await expect.poll(() => overlay.evaluate((element) => element.scrollTop)).toBe(0);
+  } else {
+    const zoomIn = page.getByRole("button", { name: "Zoom in" });
+    while (await zoomIn.isEnabled()) await zoomIn.click();
+    await expect(level).toHaveText("200%");
+    const viewport = page.locator("[data-flow-viewport]");
+    await viewport.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+    });
+    await expect.poll(() => viewport.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
   }
   await page.getByRole("button", { name: "Exit fullscreen" }).press("Escape");
   await expect(overlay).toHaveCount(0);
@@ -492,6 +485,7 @@ test("shows each queued reviewer's place in the admission queue", async ({ page 
 
 test("marks findings a running reviewer reported as provisional", async ({ page }) => {
   await page.goto("/multi-review-flow?phase=reviewing&reviewers=4");
+  await page.getByTestId("multi-review-findings-badge").click();
   const count = page.getByTestId("multi-review-findings-count");
   await expect(count).toContainText("provisional");
   const row = page.getByRole("listitem").filter({ hasText: "Zoom level label reads 99%" });
@@ -541,3 +535,69 @@ for (const phase of ["ready", "interactive", "reviewing", "consolidating"]) {
     await assertCurrentReview();
   });
 }
+
+test("findings stay reachable, fit the viewport and scroll internally", async ({ page }) => {
+  await page.goto("/multi-review-flow?phase=reviewing&reviewers=4&manyFindings&paneControls");
+  const badge = page.getByTestId("multi-review-findings-badge");
+  const panel = page.getByTestId("multi-review-findings");
+  await badge.scrollIntoViewIfNeeded();
+  await expect(badge).toBeInViewport();
+  const inspector = page.getByTestId("multi-review-inspector");
+  const header = inspector.getByRole("heading", { level: 2 }).first();
+  const badgeBox = (await badge.boundingBox())!;
+  expect(overlapping([badgeBox, (await header.boundingBox())!])).toEqual([]);
+  await badge.click();
+  await expect(panel).toBeInViewport();
+  const { width, height } = page.viewportSize()!;
+  expect(inside((await panel.boundingBox())!, { x: 0, y: 0, width, height })).toBe(true);
+  const list = panel.getByRole("list");
+  await expect(panel.getByRole("listitem")).toHaveCount(41);
+  await list.hover();
+  const pageScroll = await badge.evaluate((element) => {
+    let parent = element.parentElement;
+    while (parent && parent.scrollHeight <= parent.clientHeight) parent = parent.parentElement;
+    return parent?.scrollTop ?? 0;
+  });
+  await page.mouse.wheel(0, 10_000);
+  await expect.poll(() => list.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  await expect(panel.getByText("Additional finding 35", { exact: true })).toBeInViewport();
+  expect(
+    await badge.evaluate((element) => {
+      let parent = element.parentElement;
+      while (parent && parent.scrollHeight <= parent.clientHeight) parent = parent.parentElement;
+      return parent?.scrollTop ?? 0;
+    }),
+  ).toBe(pageScroll);
+  await panel.click({ position: { x: 10, y: 10 } });
+  await expect(panel).toBeVisible();
+  await badge.press("Escape");
+  await expect(panel).toHaveCount(0);
+  await expect(badge).toBeFocused();
+  await badge.click();
+  await header.click();
+  await expect(panel).toHaveCount(0);
+  await badge.click();
+  const outside = page.getByRole("textbox", { name: "Other pane input" });
+  expect(
+    await outside.evaluate((element) => {
+      const event = new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      });
+      element.dispatchEvent(event);
+      return event.defaultPrevented;
+    }),
+  ).toBe(false);
+  await expect(panel).toBeVisible();
+  await page.getByRole("button", { name: "Activate other pane" }).click();
+  await page.getByRole("button", { name: "Activate review pane" }).click();
+  await expect(panel).toHaveCount(0);
+  // Sticky positioning keeps the badge in view while reading further down.
+  await inspector.evaluate((element) => {
+    let parent = element.parentElement;
+    while (parent && parent.scrollHeight <= parent.clientHeight) parent = parent.parentElement;
+    if (parent) parent.scrollTop += 150;
+  });
+  await expect(badge).toBeInViewport();
+});

@@ -1107,7 +1107,6 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       messagesComplete: rawMessages.length < OPEN_CODE_MESSAGE_HISTORY_LIMIT,
       ...(turnStartedAt === undefined ? {} : { turnStartedAt }),
       ...(metadata.title ? { title: metadata.title } : {}),
-      ...(metadata.shareUrl === undefined ? {} : { shareUrl: metadata.shareUrl }),
       composer: {
         ...EMPTY_NATIVE_AGENT_COMPOSER_STATE,
         models: metadata.models,
@@ -1179,10 +1178,6 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
 
   private invalidateInteractiveMetadata(): void {
     this.discovery.invalidate();
-  }
-
-  private forgetInteractiveMetadata(sessionId: string): void {
-    this.discovery.forget(sessionId);
   }
 
   private applyStreamMetadata<
@@ -1409,26 +1404,8 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         );
         return { outcome: "applied" };
       }
-      if (action.kind === "share") {
-        const response = await this.client.session.share(
-          { sessionID: sessionId },
-          { ...this.requestOptions(), throwOnError: true },
-        );
-        const share = asRecord(asRecord(response.data)?.share);
-        this.forgetInteractiveMetadata(sessionId);
-        return {
-          outcome: "applied",
-          ...(typeof share?.url === "string" ? { shareUrl: share.url } : {}),
-        };
-      }
-      if (action.kind === "unshare") {
-        await this.client.session.unshare(
-          { sessionID: sessionId },
-          { ...this.requestOptions(), throwOnError: true },
-        );
-        this.forgetInteractiveMetadata(sessionId);
-        return { outcome: "applied" };
-      }
+      // No share/unshare: OpenCode 1.19.1 discontinued session sharing, so
+      // `session.share` always fails upstream and links it made no longer open.
     } catch (error) {
       throw new ProviderUnavailableError(`OpenCode ${action.kind} failed`, { cause: error });
     } finally {

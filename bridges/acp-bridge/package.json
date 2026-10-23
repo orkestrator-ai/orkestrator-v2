@@ -11,7 +11,7 @@
     "start": "bun dist/index.js"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "1.8.0",
+    "@agentclientprotocol/sdk": "2.0.1",
     "@orkestrator/protocol": "workspace:*"
   },
   "devDependencies": {

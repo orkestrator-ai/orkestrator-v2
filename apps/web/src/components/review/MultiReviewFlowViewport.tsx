@@ -6,7 +6,7 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { Maximize, Minimize, Minus, Plus, Scan } from "lucide-react";
+import { Maximize, Minimize, Minus, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useMultiReviewFlowViewStore } from "@/stores/multiReviewFlowViewStore";
@@ -17,8 +17,6 @@ import {
   canZoomIn,
   canZoomOut,
   centerFlowRect,
-  fitFlowView,
-  fitStackedFlowZoom,
   flowContentOffset,
   flowViewportHeight,
   pinchFlowZoom,
@@ -65,8 +63,7 @@ function touchMidpoint(touches: TouchList): { clientX: number; clientY: number }
  *
  * The wide graph scrolls both ways inside a viewport of bounded height. The
  * stacked column scrolls only sideways: its viewport grows with the scaled
- * column, so vertical scrolling stays with the page, and Fit fits the column
- * to the height `fitHeight` reports the page shows it in.
+ * column, so vertical scrolling stays with the page.
  *
  * In fullscreen the wide graph's viewport is `fillHeight` tall, the height it
  * is given, instead of its own.
@@ -76,14 +73,12 @@ export function useFlowViewport({
   measuredWidth,
   content,
   layout = "graph",
-  fitHeight,
   fillHeight = null,
 }: {
   viewKey: string;
   measuredWidth: number | null;
   content: FlowSize;
   layout?: "graph" | "stacked";
-  fitHeight?: () => number | null;
   fillHeight?: number | null;
 }) {
   const viewportRef = useRef<HTMLDivElement | null>(null);
@@ -106,9 +101,9 @@ export function useFlowViewport({
   const zoomRef = useRef(zoom);
   /** A scroll position waiting for the render at its zoom. */
   const pendingRef = useRef<FlowView | null>(null);
-  const sizesRef = useRef({ content, viewport, measuredWidth, viewKey, stacked, fitHeight });
+  const sizesRef = useRef({ content, viewport, measuredWidth, viewKey });
   useLayoutEffect(() => {
-    sizesRef.current = { content, viewport, measuredWidth, viewKey, stacked, fitHeight };
+    sizesRef.current = { content, viewport, measuredWidth, viewKey };
   });
 
   const attachViewport = useCallback((element: HTMLDivElement | null) => {
@@ -211,24 +206,6 @@ export function useFlowViewport({
   );
 
   const resetZoom = useCallback(() => zoomTo(DEFAULT_FLOW_VIEW.zoom), [zoomTo]);
-
-  const fit = useCallback(() => {
-    const {
-      content: size,
-      viewport: box,
-      stacked: column,
-      fitHeight: available,
-    } = sizesRef.current;
-    apply(
-      column
-        ? {
-            zoom: fitStackedFlowZoom(size.height, available?.() ?? null),
-            scrollLeft: 0,
-            scrollTop: 0,
-          }
-        : fitFlowView(size, box),
-    );
-  }, [apply]);
 
   const scrollTo = useCallback(
     (next: FlowView, smooth: boolean) => {
@@ -402,7 +379,6 @@ export function useFlowViewport({
     viewportHandlers,
     zoomBy,
     resetZoom,
-    fit,
     reveal,
     center,
   };
@@ -416,7 +392,7 @@ function prefersReducedMotion(): boolean {
 }
 
 /**
- * −, the zoom level (which resets to 100%), +, Fit and Fullscreen. Over the wide graph's
+ * −, the zoom level (which resets to 100%), + and Fullscreen. Over the wide graph's
  * bottom-right corner; at the top of the stacked column, where they stay in
  * reach while it scrolls. Touch targets are 44 px wherever the pointer is
  * coarse, and always in the stacked layout, which is the phone layout.
@@ -426,7 +402,6 @@ export function FlowZoomControls({
   onZoomOut,
   onZoomIn,
   onReset,
-  onFit,
   fullscreen,
   onToggleFullscreen,
   placement = "corner",
@@ -435,7 +410,6 @@ export function FlowZoomControls({
   onZoomOut: () => void;
   onZoomIn: () => void;
   onReset: () => void;
-  onFit: () => void;
   fullscreen: boolean;
   onToggleFullscreen: () => void;
   placement?: "corner" | "inline";
@@ -490,17 +464,6 @@ export function FlowZoomControls({
         onClick={onZoomIn}
       >
         <Plus className="size-3.5" />
-      </Button>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        className={CONTROL_CLASS}
-        aria-label="Fit the whole pipeline"
-        title="Fit"
-        onClick={onFit}
-      >
-        <Scan className="size-3.5" />
       </Button>
       <Button
         type="button"

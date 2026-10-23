@@ -82,6 +82,7 @@ describe("ACP provider configuration", () => {
     // trust in its own process, so it is kept out of the way.
     expect(providerEnv(config, { trustProject: true }, { HOME: "/home/u" })).toEqual({
       HOME: "/home/u",
+      GROK_WORKTREE_INHERITS_MAIN_APPROVALS: "false",
       GROK_FOLDER_TRUST: "0",
     });
     expect(providerArgv(config, { trustProject: true })).toEqual([
@@ -93,6 +94,7 @@ describe("ACP provider configuration", () => {
 
     // Off, Grok keeps its own gate, and a user's own setting is left alone.
     expect(providerEnv(config, { trustProject: false }, { GROK_FOLDER_TRUST: "1" })).toEqual({
+      GROK_WORKTREE_INHERITS_MAIN_APPROVALS: "false",
       GROK_FOLDER_TRUST: "1",
     });
     expect(providerArgv(config, { trustProject: false })).not.toContain("--no-leader");
@@ -152,10 +154,39 @@ describe("ACP provider configuration", () => {
     ).toThrow("ACP_PROVIDER_CONFIG is required");
   });
 
-  test("credits only Grok with the image prompts it reads but does not declare", () => {
-    expect(undeclaredPromptCapabilities("grok")).toEqual({ image: true });
+  test("credits no provider with prompt content it does not declare", () => {
+    // Grok 1.0.67 declares `promptCapabilities.image: true` itself, so its
+    // 1.0.52 entry is gone: the agent's own answer decides.
+    expect(undeclaredPromptCapabilities("grok")).toEqual({});
     expect(undeclaredPromptCapabilities("cursor")).toEqual({});
     expect(undeclaredPromptCapabilities("toString")).toEqual({});
+  });
+
+  test("keeps Grok from inheriting the main checkout's saved approvals", () => {
+    // A TUI "always allow" in the user's main checkout would otherwise run a
+    // tool in this worktree without the permission request the bridge answers
+    // from the execution policy. Forced over the launcher record and the
+    // inherited environment, so neither can turn the inheritance back on.
+    const config = loadAcpProviderConfig({ ACP_PROVIDER: "grok", ACP_AGENT_PATH: "/bin/grok" });
+    for (const trustProject of [false, true]) {
+      expect(
+        providerEnv(config, { trustProject }, { GROK_WORKTREE_INHERITS_MAIN_APPROVALS: "true" })
+          .GROK_WORKTREE_INHERITS_MAIN_APPROVALS,
+      ).toBe("false");
+    }
+    const serialized = loadAcpProviderConfig({
+      ACP_PROVIDER_CONFIG: JSON.stringify({
+        id: "grok",
+        executable: "grok",
+        argv: ["agent"],
+        env: { GROK_WORKTREE_INHERITS_MAIN_APPROVALS: "true" },
+      }),
+    });
+    expect(providerEnv(serialized, {}, {}).GROK_WORKTREE_INHERITS_MAIN_APPROVALS).toBe("false");
+    const generic = loadAcpProviderConfig({
+      ACP_PROVIDER_CONFIG: JSON.stringify({ id: "gemini", executable: "gemini", argv: ["--acp"] }),
+    });
+    expect(providerEnv(generic, {}, {})).toEqual({});
   });
 });
 

@@ -377,6 +377,43 @@ describe("exec-cell-only fallback", () => {
     expect(publishParts(messages)[0]!.toolState).toBe("failure");
   });
 
+  test("a cell an interrupt stopped leaves no row, matching the live stream", async () => {
+    // Codex 0.164's code-mode interrupt records the stop as the cell's whole
+    // output, as a plain string.
+    const messages = await hydrate(
+      THREAD,
+      rollout([
+        execCell(2, "cell-1", STRICT_PUBLISH),
+        response(3, {
+          type: "custom_tool_call_output",
+          call_id: "cell-1",
+          output: "aborted by user after 1.5s",
+        }),
+      ]),
+    );
+
+    expect(toolParts(messages)).toEqual([]);
+  });
+
+  test("an interrupted cell that recorded other work keeps its row without claiming success", async () => {
+    const messages = await hydrate(
+      THREAD,
+      rollout([
+        execCell(2, "cell-1", 'await tools.exec_command({ cmd: "sleep 30" });'),
+        completedItem(3, { type: "CommandExecution", id: "exec-sleep" }),
+        response(4, {
+          type: "custom_tool_call_output",
+          call_id: "cell-1",
+          output: "aborted by user after 1.5s",
+        }),
+      ]),
+    );
+
+    const [exec] = toolParts(messages);
+    expect(toolParts(messages).map((part) => part.toolUseId)).toEqual(["cell-1"]);
+    expect(exec!.toolState).toBeUndefined();
+  });
+
   test("a recorded call replaces the source-only one in place, never doubling it", async () => {
     const messages = await hydrate(
       THREAD,

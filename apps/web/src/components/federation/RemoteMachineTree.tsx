@@ -1,5 +1,5 @@
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   DndContext,
@@ -19,10 +19,8 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import {
   ChevronRight,
-  Container,
   GripVertical,
   LayoutGrid,
-  Laptop,
   Link2,
   Loader2,
   MoreVertical,
@@ -50,14 +48,25 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
+  EnvironmentChangeBadge,
+  EnvironmentChangeSummary,
   EnvironmentMenuItems,
   type EnvironmentMenuItem,
 } from "@/components/environments/EnvironmentItem";
+import { EnvironmentAgentSummary } from "@/components/environments/EnvironmentAgentSummary";
+import { EnvironmentStatusMarker } from "@/components/environments/EnvironmentStatusMarker";
+import { EnvironmentTooltipBody } from "@/components/environments/EnvironmentTooltipBody";
+import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
 import { UnreadBellIcon } from "@/components/environments/UnreadBellIcon";
 import { SortableProjectFolder } from "@/components/sidebar/SortableProjectFolder";
 import { SidebarRootDropZone } from "@/components/sidebar/SidebarRootDropZone";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { isMachineWritable, type MachineView } from "@/lib/federation/aggregate";
+import { useNodeEnvironmentChangeProjection } from "@/lib/federation/node-change-projections";
+import {
+  nodeAgentSummarySource,
+  useNodeEnvironment,
+} from "@/lib/federation/node-environment-reads";
 import { useStore } from "zustand";
 import { remoteOrdersFor } from "@/lib/federation/remote-order-writes";
 import { remoteProjectsFor, withArrangement } from "@/lib/federation/remote-project-writes";
@@ -82,7 +91,7 @@ import { sidebarFolderKey, useMachineViewStore } from "@/stores/machineViewStore
 import { useRemoteEnvironmentShown } from "@/stores/remoteWorkspaceStore";
 import { SELECTED_ENVIRONMENT_ROW_CLASS } from "@/components/sidebar/SortableEnvironmentItem";
 import { useFederation } from "./FederationProvider";
-import { MachineDot, machineStatusText } from "./MachineDot";
+import { MachineDot, MachineHomeIcon, machineStatusText } from "./MachineDot";
 import {
   newFederatedEnvironment,
   useFederatedEnvironmentActions,
@@ -100,7 +109,9 @@ const ACTIVITY_TEXT: Record<FederatedEnvironment["activity"], string> = {
 
 function reportWriteError(machine: MachineView, what: string, error: unknown): void {
   if (error instanceof OutcomeUnknownError) {
-    toast.warning(`${what}: outcome unknown on ${machine.name}`, { description: error.message });
+    toast.warning(`${what}: outcome unknown on ${machine.name}`, {
+      description: error.message,
+    });
   } else {
     toast.error(`Could not ${what.toLowerCase()} on ${machine.name}`, {
       description: error instanceof Error ? error.message : String(error),
@@ -224,7 +235,9 @@ export function RemoteMachineTree({ machine }: { machine: MachineView }) {
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
   );
 
   const arrange = (arrangement: ProjectArrangement | null) => {
@@ -335,7 +348,7 @@ export function RemoteProjectGroup({
   isCollapsed,
   onToggleCollapse,
   sortable,
-  showMachine = false,
+  showMachine,
   label = project.name,
 }: {
   machine: MachineView;
@@ -344,8 +357,12 @@ export function RemoteProjectGroup({
   isCollapsed: boolean;
   onToggleCollapse: () => void;
   sortable: boolean;
-  /** Name the machine in the header, in lists that mix machines. */
-  showMachine?: boolean;
+  /**
+   * Mark the machine in the header, in lists that mix machines: a dot after the
+   * name, or a home before it in a repository group, whose member rows put the
+   * chevron last, as the group's own heading does.
+   */
+  showMachine?: "dot" | "home";
   /** Shown instead of the project name (a repository group names the machine). */
   label?: string;
 }) {
@@ -354,12 +371,29 @@ export function RemoteProjectGroup({
     id: project.key,
     disabled: !sortable,
   });
-  const openBoard = () =>
+  const openProject = (board = false) =>
     openMachineWorkspace({
       connectionId: machine.connectionId,
       projectId: project.ref.projectId,
+      ...(board ? { boardTab: "coordinator" as const } : {}),
       title: project.name,
     });
+  const chevron = (
+    <CollapsibleTrigger
+      className="shrink-0 rounded-md p-1 transition-colors hover:bg-white/[0.07]"
+      aria-label={
+        isCollapsed ? `Expand project ${project.name}` : `Collapse project ${project.name}`
+      }
+    >
+      <ChevronRight
+        aria-hidden="true"
+        className={cn(
+          "h-4 w-4 text-muted-foreground transition-transform duration-200",
+          !isCollapsed && "rotate-90",
+        )}
+      />
+    </CollapsibleTrigger>
+  );
 
   return (
     <div
@@ -371,20 +405,7 @@ export function RemoteProjectGroup({
     >
       <Collapsible open={!isCollapsed} onOpenChange={onToggleCollapse}>
         <div className="relative mx-1 flex items-center group/project rounded-lg border border-transparent transition-colors hover:bg-hover">
-          <CollapsibleTrigger
-            className="shrink-0 rounded-md p-1 transition-colors hover:bg-white/[0.07]"
-            aria-label={
-              isCollapsed ? `Expand project ${project.name}` : `Collapse project ${project.name}`
-            }
-          >
-            <ChevronRight
-              aria-hidden="true"
-              className={cn(
-                "h-4 w-4 text-muted-foreground transition-transform duration-200",
-                !isCollapsed && "rotate-90",
-              )}
-            />
-          </CollapsibleTrigger>
+          {showMachine !== "home" && chevron}
           <ContextMenu>
             <ContextMenuTrigger className="contents">
               <button
@@ -395,11 +416,14 @@ export function RemoteProjectGroup({
                   "flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm text-foreground",
                   sortable && "cursor-grab active:cursor-grabbing",
                 )}
-                onClick={openBoard}
+                onClick={() => openProject()}
                 title={`Open ${project.name} on ${machine.name}`}
               >
+                {showMachine === "home" ? (
+                  <MachineHomeIcon colorToken={machine.colorToken} machineName={machine.name} />
+                ) : null}
                 <span className="truncate font-medium">{label}</span>
-                {showMachine ? (
+                {showMachine === "dot" ? (
                   <MachineDot colorToken={machine.colorToken} machineName={machine.name} />
                 ) : null}
                 {environments.length > 0 && (
@@ -410,7 +434,7 @@ export function RemoteProjectGroup({
               </button>
             </ContextMenuTrigger>
             <ContextMenuContent>
-              <ContextMenuItem onClick={openBoard}>
+              <ContextMenuItem onClick={() => openProject(true)}>
                 <LayoutGrid className="h-4 w-4 mr-2" />
                 Open Board
               </ContextMenuItem>
@@ -442,6 +466,7 @@ export function RemoteProjectGroup({
           >
             <Plus className="h-3.5 w-3.5" />
           </Button>
+          {showMachine === "home" && chevron}
         </div>
         <CollapsibleContent>
           {environments.length > 0 && (
@@ -525,7 +550,9 @@ function RemoteSortableEnvironmentItem({
 
 /**
  * The row content of another machine's environment, laid out like
- * `EnvironmentItem`: type icon, machine dot, name and an optional subtitle.
+ * `EnvironmentItem`: an activity ring around a machine-coloured circle (local)
+ * or square (container), followed by the name and optional subtitle. During
+ * transitions and actions, a spinner leads and a machine dot stays by the name.
  * Selecting it moves the window to the owner's workspace.
  */
 export function RemoteEnvironmentItem({
@@ -541,6 +568,14 @@ export function RemoteEnvironmentItem({
     useFederatedEnvironmentActions(machine, environment);
   const shown = useRemoteEnvironmentShown(machine.connectionId, environment.ref.environmentId);
   const isMobile = useMediaQuery(MOBILE_MEDIA_QUERY);
+  // The same `environment-net` projection the machine's own rows show, read
+  // through the command node and kept current by the machine's relayed events.
+  const changeProjection = useNodeEnvironmentChangeProjection(environment.ref);
+  // The hover card reads the full record and agent summary from the machine
+  // only while it is open; until then it shows what the summary carries.
+  const tooltipAnchorRef = useRef<HTMLDivElement>(null);
+  const tooltip = useHoverTooltip();
+  const details = useNodeEnvironment(environment.ref, tooltip.open);
 
   const live = machine.transport === "connected";
   const statusText = machineStatusText({
@@ -556,7 +591,6 @@ export function RemoteEnvironmentItem({
   const isRunning = isLocalEnvironment || environment.status === "running";
   const isTransitioning =
     !isLocalEnvironment && (environment.status === "creating" || environment.status === "stopping");
-  const EnvironmentIcon = isLocalEnvironment ? Laptop : Container;
 
   const menuItems: EnvironmentMenuItem[] = [
     {
@@ -603,6 +637,7 @@ export function RemoteEnvironmentItem({
       <ContextMenu>
         <ContextMenuTrigger className="contents">
           <div
+            ref={tooltipAnchorRef}
             className={cn(
               "group flex w-full items-center gap-2 py-1 pr-2 text-[13px] transition-colors",
               isMobile && "select-none",
@@ -612,6 +647,10 @@ export function RemoteEnvironmentItem({
             <button
               type="button"
               onClick={open}
+              onMouseEnter={tooltip.show}
+              onMouseLeave={tooltip.hide}
+              onFocus={tooltip.show}
+              onBlur={tooltip.hide}
               aria-label={`${environment.name}, on ${machine.name}, ${activityText}`}
               aria-current={shown ? "true" : undefined}
               className={cn(
@@ -624,30 +663,27 @@ export function RemoteEnvironmentItem({
               ) : isTransitioning || busy ? (
                 <Loader2 className="h-4 w-4 shrink-0 animate-spin text-amber-500" />
               ) : (
-                <EnvironmentIcon
-                  className={cn(
-                    "h-4 w-4 shrink-0 transition-colors",
-                    (!isRunning || !live) && "text-muted-foreground",
-                    isRunning &&
-                      live &&
-                      environment.activity === "waiting" &&
-                      "text-amber-500 animate-pulse",
-                    isRunning &&
-                      live &&
-                      environment.activity === "working" &&
-                      "text-blue-500 animate-pulse",
-                    isRunning && live && environment.activity === "idle" && "text-success",
-                  )}
+                <EnvironmentStatusMarker
+                  local={isLocalEnvironment}
+                  state={isRunning && live ? environment.activity : "inactive"}
+                  machine={{
+                    name: machine.name,
+                    colorToken: machine.colorToken,
+                    status: statusText,
+                  }}
                 />
               )}
               <span className="flex min-w-0 flex-1 flex-col">
                 <span className="flex min-w-0 items-center gap-1.5">
-                  <MachineDot
-                    colorToken={machine.colorToken}
-                    machineName={machine.name}
-                    status={statusText}
-                  />
                   <span className="truncate font-medium leading-4">{environment.name}</span>
+                  {(environment.deleting || isTransitioning || busy) && (
+                    <MachineDot
+                      machineName={machine.name}
+                      colorToken={machine.colorToken}
+                      status={statusText}
+                      shape={isLocalEnvironment ? "circle" : "square"}
+                    />
+                  )}
                   {environment.hasUnreadWork && (
                     <UnreadBellIcon className="h-3 w-3" aria-label="New completed activity" />
                   )}
@@ -658,6 +694,12 @@ export function RemoteEnvironmentItem({
                   </span>
                 )}
               </span>
+              {changeProjection && (
+                // Last known while the machine is away.
+                <span className={cn("contents", !live && "[&>*]:opacity-60")}>
+                  <EnvironmentChangeBadge projection={changeProjection} />
+                </span>
+              )}
             </button>
             {isMobile && (
               <DropdownMenu>
@@ -682,6 +724,45 @@ export function RemoteEnvironmentItem({
             )}
           </div>
         </ContextMenuTrigger>
+        <HoverTooltipContent
+          anchorRef={tooltipAnchorRef}
+          open={tooltip.open}
+          side="bottom"
+          align="start"
+          sideOffset={4}
+          onMouseEnter={tooltip.show}
+          onMouseLeave={tooltip.hide}
+        >
+          <EnvironmentTooltipBody
+            name={environment.name}
+            machine={{
+              name: machine.name,
+              colorToken: machine.colorToken,
+              ...(live ? {} : { status: statusText }),
+            }}
+            details={
+              details ?? {
+                projectHome: environment.isProjectHome,
+                ...(environment.branch ? { branch: environment.branch } : {}),
+                ...(environment.environmentType
+                  ? { environmentType: environment.environmentType }
+                  : {}),
+              }
+            }
+            agentSummary={
+              live ? (
+                <EnvironmentAgentSummary
+                  environmentId={environment.ref.environmentId}
+                  open={tooltip.open}
+                  source={nodeAgentSummarySource(environment.ref.backendId)}
+                />
+              ) : null
+            }
+            changes={
+              changeProjection ? <EnvironmentChangeSummary projection={changeProjection} /> : null
+            }
+          />
+        </HoverTooltipContent>
         <ContextMenuContent>
           <EnvironmentMenuItems
             items={menuItems}

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   RefusedCellTail,
+  codeModeCellOutcome,
   reportsRefusal,
   type RefusedCell,
   type RefusedCellTailOptions,
@@ -117,6 +118,33 @@ describe("RefusedCellTail", () => {
         completedAtMs: BASE_MS + 2_050,
       },
     ]);
+  });
+
+  test("a cell an interrupt stopped is never reported, even with no item", async () => {
+    const path = await rolloutPath();
+    await writeFile(path, "");
+    const { tail, cells } = tailFor(path);
+    await tail.poll();
+    // Codex 0.164 records a user stop as the cell's whole output.
+    await appendFile(
+      path,
+      cell("stopped", "while (true) {}", 1_000) +
+        record(2_500, {
+          type: "custom_tool_call_output",
+          call_id: "stopped",
+          output: "aborted by user after 1.5s",
+        }),
+    );
+    await tail.poll();
+
+    expect(cells).toEqual([]);
+    expect(codeModeCellOutcome("aborted by user after 1.5s")).toEqual({
+      refused: false,
+      failed: false,
+      interrupted: true,
+    });
+    // A refusal is still a refusal, whatever else the output says.
+    expect(codeModeCellOutcome("aborted by user: Operation not permitted").interrupted).toBe(false);
   });
 
   test("a cell whose calls produced items is left alone unless its output reports a refusal", async () => {

@@ -1,20 +1,23 @@
 import {
   useCallback,
   useEffect,
+  useEffectEvent,
   useRef,
   useState,
   type ComponentType,
   type CSSProperties,
+  type Ref,
   type SVGProps,
 } from "react";
 import { CircuitBoard, Cpu, HardDrive, MemoryStick, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { EnvironmentProcessGroup } from "@/lib/backend";
+import type { EnvironmentProcessGroup, SystemUsageSnapshot } from "@/lib/backend";
 import {
   formatSampleTime,
   useEnvironmentProcessUsage,
   useSystemUsage,
 } from "@/hooks/useSystemUsage";
+import type { RealmPanelControl } from "@/lib/federation/workspace-realm";
 import { getReadCoordinator } from "@/lib/read-coordinator";
 import { useProjectStore } from "@/stores";
 import { cn } from "@/lib/utils";
@@ -140,56 +143,27 @@ interface UsageMetric {
 }
 
 /**
- * Compact CPU/RAM/GPU/disk readouts for the desktop title bar.
- *
- * Clicking any meter opens a popover that lists child processes for each
- * running environment, grouped by environment, with live CPU and RAM.
- * The same host CPU/RAM/GPU/disk readings from the title bar are repeated
- * under the Process usage title, in the header above the divider. Each
- * environment shows summed CPU and RAM to the right of its name, and the
- * selected process count in brackets after the Process column title.
- * Environments are ranked by total CPU when the panel first loads and then
- * stay in that order while it remains open.
- * Host meters keep polling whether the panel is open. Every host-meter view
- * (this one and the agent-information popover) shares one coordinated read
- * and one staleness rule (`useSystemUsage`); a retained sample is never
- * presented as current once its observation is old, and its backend sample
- * time is shown in the meter tooltips.
+ * The title bar's CPU/RAM/GPU/disk readouts, and the trigger of the process
+ * usage popover. A retained sample that is no longer current shows as "—",
+ * with its sample time kept in the tooltips.
  */
-export function SystemUsageIndicator({ className }: { className?: string }) {
-  // One shared read with every other host-meter consumer; the coordinator
-  // pauses it while the document is hidden and reconciles once on return.
-  const usageView = useSystemUsage({ intervalMs: SYSTEM_USAGE_POLL_INTERVAL_MS });
-  const usage = usageView.sample;
-  const [open, setOpen] = useState(false);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const restoreFocusRef = useRef(false);
-
-  const close = useCallback(() => {
-    restoreFocusRef.current = true;
-    setOpen(false);
-  }, []);
-
-  useEffect(() => {
-    if (!open && restoreFocusRef.current) {
-      restoreFocusRef.current = false;
-      triggerRef.current?.focus();
-    }
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.defaultPrevented) return;
-      event.preventDefault();
-      close();
-    };
-    window.addEventListener("keydown", handleKeyDown, { capture: true });
-    return () => window.removeEventListener("keydown", handleKeyDown, { capture: true });
-  }, [close, open]);
-
-  const freshUsage = usage && !usageView.stale ? usage : null;
-  const sampleTime = formatSampleTime(usageView.sampledAt);
+export function SystemUsageMeters({
+  usage,
+  stale,
+  open,
+  onToggle,
+  triggerRef,
+  remote = false,
+}: {
+  usage: SystemUsageSnapshot | null;
+  stale: boolean;
+  open: boolean;
+  onToggle: () => void;
+  triggerRef?: Ref<HTMLButtonElement>;
+  remote?: boolean;
+}) {
+  const freshUsage = usage && !stale ? usage : null;
+  const sampleTime = formatSampleTime(usage?.sampledAt ?? null);
   const sampleLabel = sampleTime
     ? `${freshUsage ? "Sampled" : "Last sampled"} at ${sampleTime}`
     : undefined;
@@ -221,42 +195,132 @@ export function SystemUsageIndicator({ className }: { className?: string }) {
   ];
 
   return (
+    <button
+      ref={triggerRef}
+      type="button"
+      className="flex items-center gap-1.5 rounded-md px-0.5 text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+      onClick={onToggle}
+      aria-label={open ? "Close environment process usage" : "Open environment process usage"}
+      aria-expanded={open}
+      aria-haspopup="dialog"
+      aria-controls={remote ? undefined : "environment-process-usage-popover"}
+      data-sampled-at={usage?.sampledAt ?? undefined}
+      data-stale={usage !== null && freshUsage === null ? "true" : undefined}
+    >
+      {metrics.map(({ key, label, icon: Icon, value }) => {
+        const formatted = formatPercent(value);
+        return (
+          <span
+            key={key}
+            role="img"
+            aria-label={`${label}: ${formatted}`}
+            title={
+              sampleLabel ? `${label}: ${formatted} (${sampleLabel})` : `${label}: ${formatted}`
+            }
+            className="flex items-center gap-0.5 font-mono text-[10px] tabular-nums"
+          >
+            <Icon className="h-3 w-3" aria-hidden="true" />
+            <span>{formatted}</span>
+          </span>
+        );
+      })}
+    </button>
+  );
+}
+
+/**
+ * Compact CPU/RAM/GPU/disk readouts for the desktop title bar.
+ *
+ * Clicking any meter opens a popover that lists child processes for each
+ * running environment, grouped by environment, with live CPU and RAM.
+ * The same host CPU/RAM/GPU/disk readings from the title bar are repeated
+ * under the Process usage title, in the header above the divider. Each
+ * environment shows summed CPU and RAM to the right of its name, and the
+ * selected process count in brackets after the Process column title.
+ * Environments are ranked by total CPU when the panel first loads and then
+ * stay in that order while it remains open.
+ * Host meters keep polling whether the panel is open. Every host-meter view
+ * (this one and the agent-information popover) shares one coordinated read
+ * and one staleness rule (`useSystemUsage`); a retained sample is never
+ * presented as current once its observation is old, and its backend sample
+ * time is shown in the meter tooltips.
+ */
+export function SystemUsageIndicator({
+  className,
+  remote,
+}: {
+  className?: string;
+  /**
+   * In a realm: the window's title bar shows the meters and asks for the
+   * popover, which opens here under it (see `RealmTitleBarPanels`).
+   */
+  remote?: RealmPanelControl;
+}) {
+  // One shared read with every other host-meter consumer; the coordinator
+  // pauses it while the document is hidden and reconciles once on return.
+  const usageView = useSystemUsage({ intervalMs: SYSTEM_USAGE_POLL_INTERVAL_MS });
+  const usage = usageView.sample;
+  const [open, setOpen] = useState(remote?.request?.open ?? false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLElement>(null);
+  const restoreFocusRef = useRef(false);
+
+  const remoteRequest = remote?.request ?? null;
+  const [appliedRequest, setAppliedRequest] = useState(remoteRequest);
+  if (appliedRequest !== remoteRequest) {
+    setAppliedRequest(remoteRequest);
+    if (remoteRequest) setOpen(remoteRequest.open);
+  }
+  const reportOpen = useEffectEvent((next: boolean) => remote?.onOpenChange(next));
+  useEffect(() => reportOpen(open), [open, remoteRequest?.seq]);
+
+  const reportDismiss = useEffectEvent(() => remote?.onDismiss?.());
+  useEffect(() => {
+    if (open && remoteRequest?.open) {
+      panelRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    }
+  }, [open, remoteRequest?.open, remoteRequest?.seq]);
+
+  const close = useCallback(() => {
+    restoreFocusRef.current = true;
+    setOpen(false);
+  }, []);
+
+  useEffect(() => {
+    if (!open && restoreFocusRef.current) {
+      restoreFocusRef.current = false;
+      reportDismiss();
+      triggerRef.current?.focus();
+    }
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      event.preventDefault();
+      close();
+    };
+    window.addEventListener("keydown", handleKeyDown, { capture: true });
+    return () => window.removeEventListener("keydown", handleKeyDown, { capture: true });
+  }, [close, open]);
+
+  return (
     <div
-      className={cn("relative flex items-center", className)}
-      data-testid="system-usage-indicator"
+      className={cn("relative flex items-center", remote && "h-0 w-0", className)}
+      data-testid={remote ? "realm-system-usage-panel" : "system-usage-indicator"}
       style={{ WebkitAppRegion: "no-drag" } as CSSProperties}
       onMouseDown={(event) => event.stopPropagation()}
     >
-      <button
-        ref={triggerRef}
-        type="button"
-        className="flex items-center gap-1.5 rounded-md px-0.5 text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-        onClick={() => (open ? close() : setOpen(true))}
-        aria-label={open ? "Close environment process usage" : "Open environment process usage"}
-        aria-expanded={open}
-        aria-haspopup="dialog"
-        aria-controls="environment-process-usage-popover"
-        data-sampled-at={usageView.sampledAt ?? undefined}
-        data-stale={usage !== null && freshUsage === null ? "true" : undefined}
-      >
-        {metrics.map(({ key, label, icon: Icon, value }) => {
-          const formatted = formatPercent(value);
-          return (
-            <span
-              key={key}
-              role="img"
-              aria-label={`${label}: ${formatted}`}
-              title={
-                sampleLabel ? `${label}: ${formatted} (${sampleLabel})` : `${label}: ${formatted}`
-              }
-              className="flex items-center gap-0.5 font-mono text-[10px] tabular-nums"
-            >
-              <Icon className="h-3 w-3" aria-hidden="true" />
-              <span>{formatted}</span>
-            </span>
-          );
-        })}
-      </button>
+      {remote ? null : (
+        <SystemUsageMeters
+          triggerRef={triggerRef}
+          usage={usage}
+          stale={usageView.stale}
+          open={open}
+          onToggle={() => (open ? close() : setOpen(true))}
+        />
+      )}
 
       {open ? (
         <button
@@ -268,6 +332,7 @@ export function SystemUsageIndicator({ className }: { className?: string }) {
       ) : null}
 
       <section
+        ref={panelRef}
         id="environment-process-usage-popover"
         role="dialog"
         aria-label="Environment process usage"
@@ -336,16 +401,13 @@ function EnvironmentProcessPanel() {
   const rawGroups = fresh?.environments ?? snapshot?.environments ?? [];
   const groups = orderEnvironmentProcessGroups(rawGroups, frozenIds);
 
-  useEffect(() => {
-    const nextGroups = snapshot?.environments ?? [];
-    if (!rankable || nextGroups.length === 0) return;
-    setFrozenIds((current) => {
-      const next = mergeFrozenEnvironmentIds(current, nextGroups);
-      return next.length === current.length && next.every((id, index) => id === current[index])
-        ? current
-        : next;
-    });
-  }, [rankable, snapshot]);
+  const nextGroups = snapshot?.environments ?? [];
+  if (rankable && nextGroups.length > 0) {
+    const next = mergeFrozenEnvironmentIds(frozenIds, nextGroups);
+    if (next.length !== frozenIds.length || next.some((id, index) => id !== frozenIds[index])) {
+      setFrozenIds(next);
+    }
+  }
 
   if (snapshot === null) {
     return <p className="text-xs text-muted-foreground">Loading processes…</p>;

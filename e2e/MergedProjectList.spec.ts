@@ -97,7 +97,7 @@ test("the chevron collapses without navigating and the grip reorders with the ke
   await page.keyboard.press("ArrowDown");
   await expect(folder(page, hintA)).toHaveAttribute("style", /translate3d\(0px, [1-9]/);
   // Movement paints before DndContext publishes its new drop target.
-  await expect(heading(page, "team-b/shared/app", "Remote").locator("../..")).toHaveClass(
+  await expect(heading(page, "team-b/shared/app", "Remote").locator("..")).toHaveClass(
     /border-primary\/70/,
   );
   await page.keyboard.press("Space");
@@ -106,6 +106,7 @@ test("the chevron collapses without navigating and the grip reorders with the ke
     hintB,
   );
   await expect(grip).toBeFocused();
+  await expect(page.getByTestId("opened")).toBeEmpty();
   await expect(page.getByTestId("updates")).toContainText('"repositoryOrder"');
   await expect(page.getByTestId("selected")).toBeEmpty();
 });
@@ -119,7 +120,7 @@ test("a project over a repository header has no join highlight and its drop is r
     .click();
   await hoverDrag(page, page.getByTitle("Open p on Remote"), folder(page, hintB));
   await expect(page.getByTitle("Open p on Remote")).toHaveAttribute("aria-pressed", "true");
-  await expect(heading(page, "team-b/shared/app", "Remote").locator("../..")).not.toHaveClass(
+  await expect(heading(page, "team-b/shared/app", "Remote").locator("..")).not.toHaveClass(
     /border-primary\/70|bg-primary\/10/,
   );
   await expect(page.getByTestId("sidebar-root-drop-zone")).toHaveCount(0);

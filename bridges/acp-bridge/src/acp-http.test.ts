@@ -1134,6 +1134,240 @@ describe("ACP provider commands", () => {
       ]);
     });
   });
+
+  describe("the shared compact action", () => {
+    const compact = { name: "compact", description: "Compact the conversation" };
+    const postCompact = (
+      bridge: Awaited<ReturnType<typeof commandBridge>>,
+      body?: Record<string, unknown>,
+    ) =>
+      bridge.request("/compact", {
+        method: "POST",
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      });
+
+    test("runs the agent's own /compact as a selected command, journaled once", async () => {
+      const bridge = await commandBridge({ commands: [review, compact] });
+      await waitFor(bridge.catalogue, (value) => value.status === "ready");
+
+      // The backend sends no body; a caller may add a request id.
+      expect((await postCompact(bridge)).status).toBe(202);
+      await bridge.idle();
+      expect((await postCompact(bridge, { requestId: "compact-1" })).status).toBe(202);
+      await bridge.idle();
+      const retry = await postCompact(bridge, { requestId: "compact-1" });
+      expect(retry.status).toBe(202);
+      expect(await retry.json()).toMatchObject({ duplicate: true });
+      expect(
+        await bridge.request("/dispatch?requestId=compact-1").then((response) => response.json()),
+      ).toMatchObject({ dispatch: "dispatched" });
+
+      expect(await bridge.blocks()).toEqual([
+        [{ type: "text", text: "/compact" }],
+        [{ type: "text", text: "/compact" }],
+      ]);
+      const messages = (await bridge.request("/messages").then((response) => response.json())) as {
+        messages: Array<{ role: string; content: string }>;
+      };
+      expect(messages.messages.map((message) => [message.role, message.content])).toEqual([
+        ["user", "/compact"],
+        ["assistant", "ran:/compact"],
+        ["user", "/compact"],
+        ["assistant", "ran:/compact"],
+      ]);
+    });
+
+    test("keeps compact journal outcomes after the live command is removed", async () => {
+      const bridge = await commandBridge({ commands: [compact] });
+      await waitFor(bridge.catalogue, (value) => value.status === "ready");
+      expect((await postCompact(bridge, { requestId: "compact-removed" })).status).toBe(202);
+      await bridge.idle();
+      await fs.writeFile(bridge.commandsFile, "[]");
+      expect((await bridge.prompt({ prompt: "COMMANDS_UPDATE" })).status).toBe(202);
+      await bridge.idle();
+      expect(await bridge.catalogue()).toMatchObject({ status: "ready", commands: [] });
+      const before = await bridge.blocks();
+
+      const retry = await postCompact(bridge, { requestId: "compact-removed" });
+      expect(retry.status).toBe(202);
+      expect(await retry.json()).toEqual({ accepted: true, duplicate: true });
+      expect((await postCompact(bridge, { requestId: "compact-new" })).status).toBe(422);
+      expect(await bridge.request("/dispatch?requestId=compact-new").then((r) => r.json())).toEqual(
+        { dispatch: "unknown" },
+      );
+      expect(await bridge.blocks()).toEqual(before);
+
+      // Simulate a process that accepted a compact turn but lost its outcome.
+      await stopChild(bridge.child);
+      const path = resolve(bridge.stateDirectory, "state.json");
+      const saved = JSON.parse(await fs.readFile(path, "utf8"));
+      const session = saved.sessions.find(
+        (entry: { id: string }) => entry.id === bridge.created.id,
+      );
+      session.promptJournal.push({
+        requestId: "compact-lost",
+        state: "accepted",
+        acceptedAt: Date.now(),
+      });
+      await fs.writeFile(path, JSON.stringify(saved));
+      const restarted = await spawnBridge({
+        stateDirectory: bridge.stateDirectory,
+        env: bridge.env,
+      });
+      const request = (suffix: string, init: RequestInit = {}) =>
+        nativeFetch(`${restarted.base}/session/${bridge.created.id}${suffix}`, {
+          ...init,
+          headers: restarted.headers,
+        });
+      // Attach to obtain an authoritative empty live inventory after restart.
+      expect((await request("/attach", { method: "POST" })).status).toBe(200);
+      await waitFor(
+        () => request("/commands").then((r) => r.json()) as Promise<Catalogue>,
+        (value) => value.status === "ready" && value.commands.length === 0,
+      );
+      const lost = await request("/compact", {
+        method: "POST",
+        body: JSON.stringify({ requestId: "compact-lost" }),
+      });
+      expect(lost.status).toBe(410);
+      expect(await lost.json()).toMatchObject({ kind: "dispatch-outcome-lost" });
+      expect(await request("/dispatch?requestId=compact-lost").then((r) => r.json())).toEqual({
+        dispatch: "lost",
+      });
+      expect(await bridge.blocks()).toEqual(before);
+    });
+
+    test("is refused before journaling when the live inventory has no /compact", async () => {
+      const bridge = await commandBridge({ commands: [review] });
+      await waitFor(bridge.catalogue, (value) => value.status === "ready");
+      const refused = await postCompact(bridge, { requestId: "compact-missing" });
+      expect(refused.status).toBe(422);
+      expect(await refused.json()).toEqual({
+        error: "Grok does not offer /compact in this session",
+        kind: "command-unavailable",
+      });
+      expect(
+        await bridge
+          .request("/dispatch?requestId=compact-missing")
+          .then((response) => response.json()),
+      ).toEqual({ dispatch: "unknown" });
+      expect(await bridge.blocks()).toEqual([]);
+    });
+
+    test("after a restart attaches and revalidates against the re-reported list", async () => {
+      const bridge = await commandBridge({ commands: [compact] });
+      await waitFor(bridge.catalogue, (value) => value.status === "ready");
+      await stopChild(bridge.child);
+      const restarted = await spawnBridge({
+        stateDirectory: bridge.stateDirectory,
+        env: bridge.env,
+      });
+      const session = `${restarted.base}/session/${bridge.created.id}`;
+      const request = (path: string, init: RequestInit = {}) =>
+        nativeFetch(`${session}${path}`, { ...init, headers: restarted.headers });
+      expect(await request("/commands").then((response) => response.json())).toMatchObject({
+        status: "stale",
+      });
+
+      // Restored rows never authorize a command: the agent dropped it while
+      // the bridge was down, so the action is refused once it re-reports.
+      await fs.writeFile(bridge.commandsFile, "[]");
+      const refused = await request("/compact", { method: "POST" });
+      expect(refused.status).toBe(422);
+      expect(await refused.json()).toMatchObject({ kind: "command-unavailable" });
+
+      await fs.writeFile(bridge.commandsFile, JSON.stringify([compact]));
+      await stopChild(restarted.child);
+      const again = await spawnBridge({ stateDirectory: bridge.stateDirectory, env: bridge.env });
+      const accepted = await nativeFetch(`${again.base}/session/${bridge.created.id}/compact`, {
+        method: "POST",
+        headers: again.headers,
+      });
+      expect(accepted.status).toBe(202);
+      await waitFor(
+        () =>
+          nativeFetch(`${again.base}/session/${bridge.created.id}`, {
+            headers: again.headers,
+          }).then((response) => response.json() as Promise<{ status: string }>),
+        (value) => value.status === "idle",
+      );
+      expect((await bridge.blocks()).at(-1)).toEqual([{ type: "text", text: "/compact" }]);
+    });
+  });
+});
+
+describe("ACP session titles", () => {
+  test("session_info_update names the session on every route and survives a restart", async () => {
+    const workspace = await temporaryDirectory();
+    const stateDirectory = await temporaryDirectory();
+    const env = { ACP_PROVIDER: "grok", CWD: workspace };
+    const first = await spawnBridge({ stateDirectory, env });
+    const created = (await nativeFetch(`${first.base}/session/create`, {
+      method: "POST",
+      headers: first.headers,
+    }).then((response) => response.json())) as { id: string };
+    const routes = (bridge: { base: string; headers: Record<string, string> }) => {
+      const read = (path: string) =>
+        nativeFetch(`${bridge.base}/session/${created.id}${path}`, {
+          headers: bridge.headers,
+        }).then((response) => response.json() as Promise<Record<string, unknown>>);
+      return {
+        prompt: async (info: Record<string, unknown>) => {
+          const response = await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+            method: "POST",
+            headers: bridge.headers,
+            body: JSON.stringify({ prompt: `SESSION_INFO:${JSON.stringify(info)}` }),
+          });
+          expect(response.status).toBe(202);
+          await waitFor(
+            () => read(""),
+            (session) => session.status === "idle",
+          );
+        },
+        titles: async () => ({
+          status: (await read("/status")).title,
+          session: (await read("")).title,
+          transcript: ((await read("/transcript?version=2")).value as Record<string, unknown>)
+            .title,
+        }),
+      };
+    };
+    const live = routes(first);
+    expect(await live.titles()).toEqual({
+      status: undefined,
+      session: undefined,
+      transcript: undefined,
+    });
+
+    // One bounded line: control characters and whitespace runs fold to spaces.
+    await live.prompt({ title: "  Fix\nlogin\t\u0000 flow  ", updatedAt: "2026-10-23T10:00:00Z" });
+    const named = {
+      status: "Fix login flow",
+      session: "Fix login flow",
+      transcript: "Fix login flow",
+    };
+    expect(await live.titles()).toEqual(named);
+    // An update without a title, or with a malformed one, renames nothing.
+    await live.prompt({ updatedAt: "2026-10-23T11:00:00Z" });
+    await live.prompt({ title: 42 });
+    expect(await live.titles()).toEqual(named);
+
+    await stopChild(first.child);
+    const second = await spawnBridge({ stateDirectory, env });
+    const restored = routes(second);
+    expect(await restored.titles()).toEqual(named);
+
+    await restored.prompt({ title: "x".repeat(2_000) });
+    expect((await restored.titles()).status).toBe("x".repeat(512));
+    // `null` is ACP's explicit clear.
+    await restored.prompt({ title: null });
+    expect(await restored.titles()).toEqual({
+      status: undefined,
+      session: undefined,
+      transcript: undefined,
+    });
+    await stopChild(second.child);
+  });
 });
 
 describe("Grok sign-in routes carry no credential", () => {

@@ -29,7 +29,14 @@ import {
   sharedIdDataset,
   uninstallDesktopFake,
 } from "@/test/federation-desktop-fake";
+import { COMMAND_HANDOVER_PREVIEW_CHANGED } from "@orkestrator/protocol/command-nodes";
 import { requestCommandHandover } from "@/lib/command-handover";
+import { resetNodeChangeProjectionsForTests } from "@/lib/federation/node-change-projections";
+import { resetNodeEventsForTests } from "@/lib/federation/node-events";
+import {
+  environmentProjectionFixture,
+  exactCount,
+} from "@/components/files-panel/change-projection-test-fixture";
 import {
   mockToastError,
   mockToastSuccess,
@@ -41,6 +48,9 @@ import {
   MachineSectionList,
   RemoteMachineSection,
 } from "./FederatedSidebarSections";
+import { EnvironmentItem } from "@/components/environments/EnvironmentItem";
+import { useEnvironmentStore } from "@/stores/environmentStore";
+import type { Environment } from "@/types";
 import { RemoteEnvironmentItem, RemoteProjectGroup } from "./RemoteMachineTree";
 import { CommandHandoverDialog } from "./CommandHandoverDialog";
 import { FederationProvider } from "./FederationProvider";
@@ -136,7 +146,9 @@ function rowOf(connectionId: string): HTMLElement {
 }
 
 async function openRowActions(machineName: string) {
-  const row = screen.getByRole("button", { name: new RegExp(`^feature, on ${machineName},`) });
+  const row = screen.getByRole("button", {
+    name: new RegExp(`^feature, on ${machineName},`),
+  });
   await act(async () => {
     fireEvent.contextMenu(row);
   });
@@ -145,7 +157,11 @@ async function openRowActions(machineName: string) {
 
 function machineView(overrides: Partial<MachineView> = {}): MachineView {
   const backendId = "bk_a" as BackendId;
-  const project = { ref: projectRef(backendId, "project-1"), name: "app", order: 0 };
+  const project = {
+    ref: projectRef(backendId, "project-1"),
+    name: "app",
+    order: 0,
+  };
   const environment: FederatedEnvironment = {
     ref: environmentRef(backendId, "env-1"),
     key: environmentKey(environmentRef(backendId, "env-1")),
@@ -306,7 +322,9 @@ test("a repository group names each member by its machine and shows a machine do
       />,
     );
   });
-  const heading = screen.getByRole("button", { name: "Open acme/app on Machine A" });
+  const heading = screen.getByRole("button", {
+    name: "Open acme/app on Machine A",
+  });
   expect(heading.getAttribute("aria-expanded")).toBeNull();
   expect(heading.getAttribute("title")).toBe(`Open ${hint} on Machine A`);
   expect(within(heading).getByTestId("machine-dot").getAttribute("data-machine-color")).toBe(
@@ -318,6 +336,21 @@ test("a repository group names each member by its machine and shows a machine do
     "Machine A",
     "Machine B",
   ]);
+  // Members lead with a home in their machine's colour instead of a trailing
+  // dot, and put the chevron last.
+  expect(
+    members.map((member) =>
+      within(member).getByTestId("machine-home-icon").getAttribute("data-machine-color"),
+    ),
+  ).toEqual(["teal", "rose"]);
+  for (const member of members) {
+    const header = member.firstElementChild!.firstElementChild as HTMLElement;
+    expect(within(header).queryByTestId("machine-dot") === null).toBe(true);
+    expect(header.lastElementChild!.getAttribute("aria-label")).toMatch(/^Collapse project /);
+  }
+  const grip = screen.getByRole("button", { name: "Move repository acme/app" });
+  expect(grip.getAttribute("aria-roledescription")).toBe("sortable");
+  expect(heading.getAttribute("aria-roledescription")).toBeNull();
 });
 
 describe("CL-05: machine identity visual rules", () => {
@@ -364,8 +397,217 @@ describe("CL-05: machine identity visual rules", () => {
     expect(screen.getByText("app")).toBeTruthy();
   });
 
+  for (const environmentType of ["local", "containerized"] as const) {
+    for (const transport of ["connected", "unreachable"] as const) {
+      for (const status of ["running", "stopped"] as const) {
+        for (const activity of ["idle", "working", "waiting"] as const) {
+          test(`remote ${environmentType} ${status} on ${transport} machine maps ${activity} to its marker`, () => {
+            const machine = machineView({ transport });
+            const environment = { ...firstEnvironment(machine), environmentType, status, activity };
+            render(<RemoteEnvironmentItem machine={machine} environment={environment} />);
+            const row = screen.getByRole("button", { name: /^feature, on Machine A,/ });
+            const marker = within(row).getByTestId("environment-status-marker");
+            const active =
+              transport === "connected" && (environmentType === "local" || status === "running");
+            expect(marker.getAttribute("data-state")).toBe(active ? activity : "inactive");
+            expect(marker.getAttribute("data-shape")).toBe(
+              environmentType === "local" ? "circle" : "square",
+            );
+            const ring = within(marker).getByTestId("environment-status-ring");
+            const color = !active
+              ? "border-muted-foreground/60"
+              : activity === "idle"
+                ? "border-success"
+                : activity === "working"
+                  ? "border-blue-500"
+                  : "border-amber-500";
+            expect(ring.classList).toContain(color);
+            expect(ring.classList.contains("animate-pulse")).toBe(active && activity !== "idle");
+            expect(within(row).getAllByTestId("machine-dot")).toHaveLength(1);
+            expect(within(row).getByTestId("machine-dot").getAttribute("data-machine-color")).toBe(
+              "teal",
+            );
+          });
+        }
+      }
+    }
+  }
+
+  for (const state of ["creating", "stopping", "deleting"] as const) {
+    test(`remote ${state} row keeps the machine colour beside its name`, () => {
+      const machine = machineView();
+      const environment = {
+        ...firstEnvironment(machine),
+        environmentType: "containerized" as const,
+        ...(state === "deleting" ? { deleting: true } : { status: state }),
+      };
+      const { rerender } = render(
+        <RemoteEnvironmentItem machine={machine} environment={environment} />,
+      );
+      const row = screen.getByRole("button", { name: /^feature, on Machine A,/ });
+      expect(row.querySelector("svg.animate-spin")).not.toBeNull();
+      expect(within(row).queryByTestId("environment-status-marker") === null).toBe(true);
+      expect(within(row).getAllByTestId("machine-dot")).toHaveLength(1);
+      expect(within(row).getByTestId("machine-dot").getAttribute("data-machine-color")).toBe(
+        "teal",
+      );
+      rerender(
+        <RemoteEnvironmentItem
+          machine={machine}
+          environment={{ ...environment, status: "running", deleting: false }}
+        />,
+      );
+      expect(row.querySelector("svg.animate-spin") === null).toBe(true);
+      expect(within(row).getAllByTestId("machine-dot")).toHaveLength(1);
+      expect(within(row).getByTestId("environment-status-marker").getAttribute("data-state")).toBe(
+        "working",
+      );
+    });
+  }
+
+  test("a busy remote action keeps its machine colour until the action settles", async () => {
+    let finish: (() => void) | undefined;
+    installTwoMachines((call) =>
+      call.command === "stop_environment"
+        ? new Promise<void>((resolve) => {
+            finish = resolve;
+          })
+        : undefined,
+    );
+    renderWithFederation(<AggregateList mode="activity" />);
+    await waitForRows(2);
+    const menu = await openRowActions("Machine A");
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Stop" }));
+    const row = screen.getByRole("button", { name: /^feature, on Machine A,/ });
+    await waitFor(() => expect(row.querySelector("svg.animate-spin")).not.toBeNull());
+    expect(within(row).getAllByTestId("machine-dot")).toHaveLength(1);
+    expect(within(row).getByTestId("machine-dot").getAttribute("data-machine-color")).toBe("teal");
+    await waitFor(() => expect(finish).toBeDefined());
+    await act(async () => finish!());
+    await waitFor(() => expect(row.querySelector("svg.animate-spin") === null).toBe(true));
+    expect(within(row).getAllByTestId("machine-dot")).toHaveLength(1);
+  });
+
+  for (const state of ["creating", "stopping", "deleting", "selecting"] as const) {
+    test(`this window's ${state} row keeps its bound machine colour`, async () => {
+      installTwoMachines();
+      const environment: Environment = {
+        id: "bound-env",
+        projectId: "project-1",
+        name: "Bound environment",
+        branch: "main",
+        containerId: "container-1",
+        status: state === "creating" || state === "stopping" ? state : "running",
+        environmentType: "containerized",
+        prUrl: null,
+        prState: null,
+        hasMergeConflicts: null,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        networkAccessMode: "restricted",
+        order: 0,
+      };
+      if (state === "deleting") useEnvironmentStore.getState().setDeleting(environment.id, true);
+      try {
+        renderWithFederation(
+          <EnvironmentItem
+            environment={environment}
+            isSelected={false}
+            isMultiSelectMode={state === "selecting"}
+            onSelect={() => {}}
+            onDelete={() => {}}
+            onStart={() => {}}
+            onStop={() => {}}
+            onRestart={() => {}}
+          />,
+        );
+        const row = screen.getByRole("button", { name: /Bound environment/ });
+        await waitFor(() =>
+          expect(within(row).getByTestId("machine-dot").getAttribute("data-machine-color")).toBe(
+            "violet",
+          ),
+        );
+        expect(within(row).getAllByTestId("machine-dot")).toHaveLength(1);
+        expect(within(row).queryByTestId("environment-status-marker") === null).toBe(true);
+        if (state === "selecting") expect(screen.getByRole("checkbox")).toBeTruthy();
+        else expect(row.querySelector("svg.animate-spin")).not.toBeNull();
+      } finally {
+        useEnvironmentStore.getState().setDeleting(environment.id, false);
+      }
+    });
+  }
+
+  test("another machine's row shows its change counts and a hover card naming the machine", async () => {
+    const invokeMock = nativeInvoke as unknown as ReturnType<typeof mock>;
+    const inner: string[] = [];
+    invokeMock.mockImplementation(async (command: string, args: Record<string, unknown>) => {
+      if (command === "watch_node_events") {
+        return { watchId: args.watchId, expiresAt: 0, renewed: true };
+      }
+      if (command !== "invoke_on_node") return undefined;
+      expect(args.nodeId).toBe("bk_a");
+      const routed = String(args.command);
+      inner.push(routed);
+      if (routed === "changes_get_view") {
+        return {
+          outcome: "ok",
+          result: {
+            kind: "projection",
+            projection: environmentProjectionFixture("env-1", {
+              counters: {
+                additions: exactCount(12),
+                deletions: exactCount(3),
+                changedFiles: 2,
+              },
+            }),
+          },
+        };
+      }
+      if (routed === "get_environment") {
+        return {
+          outcome: "ok",
+          result: {
+            id: "env-1",
+            name: "feature",
+            createdAt: "2026-10-20T12:00:00.000Z",
+            environmentType: "containerized",
+            networkAccessMode: "full",
+            prUrl: "https://github.com/acme/app/pull/7",
+          },
+        };
+      }
+      return { outcome: "ok", result: { environments: [] } };
+    });
+    try {
+      const machine = machineView();
+      render(<RemoteEnvironmentItem machine={machine} environment={firstEnvironment(machine)} />);
+      const badge = await screen.findByTestId("environment-change-badge");
+      expect(badge.textContent).toContain("+12");
+      expect(badge.textContent).toContain("3");
+
+      await act(async () => {
+        fireEvent.focus(screen.getByRole("button", { name: /^feature, on Machine A/ }));
+      });
+      const machineLine = await screen.findByTestId("environment-tooltip-machine", undefined, {
+        timeout: 2000,
+      });
+      expect(machineLine.textContent).toBe("On Machine A");
+      expect(await screen.findByText("Full network access")).toBeTruthy();
+      expect(screen.getByText("PR: https://github.com/acme/app/pull/7")).toBeTruthy();
+      expect(inner).toContain("get_environment");
+      expect(inner).toContain("get_agent_registry");
+    } finally {
+      cleanup();
+      resetNodeChangeProjectionsForTests();
+      resetNodeEventsForTests();
+      invokeMock.mockImplementation(() => Promise.resolve());
+    }
+  });
+
   test("CL-05: an unavailable machine's row is dimmed and says connection lost, never stopped", () => {
-    const machine = machineView({ transport: "unreachable", freshness: "stale" });
+    const machine = machineView({
+      transport: "unreachable",
+      freshness: "stale",
+    });
     render(<FederatedActivityList machines={[machine]} renderBoundRow={() => null} />);
     const row = screen.getByTestId("federated-environment-row");
     expect(row.className).toContain("opacity-60");
@@ -402,10 +644,14 @@ describe("UI-01: machines with identical IDs and project names", () => {
       expect(within(section).getByText("app")).toBeTruthy();
     }
     expect(
-      within(rowOf("bk_a")).getByRole("button", { name: /^feature, on Machine A, Working/ }),
+      within(rowOf("bk_a")).getByRole("button", {
+        name: /^feature, on Machine A, Working/,
+      }),
     ).toBeTruthy();
     expect(
-      within(rowOf("bk_b")).getByRole("button", { name: /^feature, on Machine B, Awaiting input/ }),
+      within(rowOf("bk_b")).getByRole("button", {
+        name: /^feature, on Machine B, Awaiting input/,
+      }),
     ).toBeTruthy();
     expect(
       within(rowOf("bk_a")).getByTestId("machine-dot").getAttribute("data-machine-color"),
@@ -451,9 +697,27 @@ describe("remote machine sections follow the owner's sidebar", () => {
           // Storage (creation) order differs from the owner's sidebar order.
           environments: {
             "p-zeta": [
-              { id: "e-1", projectId: "p-zeta", name: "first", status: "running", order: 2 },
-              { id: "e-2", projectId: "p-zeta", name: "second", status: "running", order: 0 },
-              { id: "e-3", projectId: "p-zeta", name: "third", status: "running", order: 1 },
+              {
+                id: "e-1",
+                projectId: "p-zeta",
+                name: "first",
+                status: "running",
+                order: 2,
+              },
+              {
+                id: "e-2",
+                projectId: "p-zeta",
+                name: "second",
+                status: "running",
+                order: 0,
+              },
+              {
+                id: "e-3",
+                projectId: "p-zeta",
+                name: "third",
+                status: "running",
+                order: 1,
+              },
             ],
           },
         },
@@ -538,7 +802,9 @@ describe("RT-02/OP-05: actions keep the destination captured when they started",
 
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete on Machine A" }));
     await waitFor(() => expect(fake.callsTo("a", "delete_environment")).toHaveLength(1));
-    expect(fake.callsTo("a", "delete_environment")[0]!.args).toEqual({ environmentId: "env-1" });
+    expect(fake.callsTo("a", "delete_environment")[0]!.args).toEqual({
+      environmentId: "env-1",
+    });
     expect(fake.calls.filter((call) => call.command === "delete_environment")).toHaveLength(1);
     expect(fake.callsTo("b", "delete_environment")).toHaveLength(0);
   });
@@ -550,7 +816,11 @@ describe("UI-04: creating inside a project instance", () => {
     renderWithFederation(<RemoteSections />);
     await waitForRows(2);
 
-    fireEvent.click(screen.getByRole("button", { name: "New environment in app on Machine B" }));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "New environment in app on Machine B",
+      }),
+    );
     // The central region shows Machine B's workspace, which opens its own New
     // Environment dialog; the window stays where it is and nothing is created
     // until the user submits it.
@@ -576,7 +846,10 @@ describe("Machine filter is presentation only", () => {
     );
 
     await act(async () => {
-      fireEvent.pointerDown(screen.getByTestId("machines-filter"), { button: 0, ctrlKey: false });
+      fireEvent.pointerDown(screen.getByTestId("machines-filter"), {
+        button: 0,
+        ctrlKey: false,
+      });
     });
     fireEvent.click(await screen.findByRole("menuitemradio", { name: /^Machine B, / }));
 
@@ -600,7 +873,10 @@ describe("The command node in the machines menu", () => {
     );
 
     await act(async () => {
-      fireEvent.pointerDown(screen.getByTestId("machines-filter"), { button: 0, ctrlKey: false });
+      fireEvent.pointerDown(screen.getByTestId("machines-filter"), {
+        button: 0,
+        ctrlKey: false,
+      });
     });
     const row = await screen.findByTestId("command-node-row");
     expect(screen.getByTestId("command-node-switch")).toBeTruthy();
@@ -615,7 +891,9 @@ describe("The command node in the machines menu", () => {
     });
     const switcher = await screen.findByTestId("command-node-switcher");
     expect(
-      within(switcher).getByRole("menuitem", { name: /^Local, current command node/ }),
+      within(switcher).getByRole("menuitem", {
+        name: /^Local, current command node/,
+      }),
     ).toBeTruthy();
     fireEvent.click(within(switcher).getByRole("menuitem", { name: /^Machine B/ }));
 
@@ -628,6 +906,10 @@ describe("The command node in the machines menu", () => {
     await waitFor(() =>
       expect(fake.connections.handOverCommand).toHaveBeenCalledWith({
         targetConnectionId: MACHINE_B.id,
+        confirmation: expect.objectContaining({
+          sourceNodeId: "bk_self",
+          targetNodeId: MACHINE_B.backendId,
+        }),
         nodeIds: [MACHINE_A.backendId],
         connectionIds: [],
         includeSelf: true,
@@ -689,7 +971,9 @@ describe("OP-06/CR-03: opening another machine's environment", () => {
     await waitForRows(2);
 
     fireEvent.click(
-      within(rowOf("bk_a")).getByRole("button", { name: /^feature, on Machine A, Working/ }),
+      within(rowOf("bk_a")).getByRole("button", {
+        name: /^feature, on Machine A, Working/,
+      }),
     );
     await waitFor(() =>
       expect(useRemoteWorkspaceStore.getState().active).toEqual({
@@ -712,7 +996,9 @@ describe("OP-06/CR-03: opening another machine's environment", () => {
     const stop = startRemoteWorkspaceSelectionSync();
     try {
       fireEvent.click(
-        within(rowOf("bk_a")).getByRole("button", { name: /^feature, on Machine A, Working/ }),
+        within(rowOf("bk_a")).getByRole("button", {
+          name: /^feature, on Machine A, Working/,
+        }),
       );
       await waitFor(() => expect(useRemoteWorkspaceStore.getState().active).not.toBeNull());
       // The window's own selection was cleared for it.
@@ -740,7 +1026,9 @@ describe("SH-03: SSH prompts", () => {
     );
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText("SSH key passphrase")).toBeTruthy();
-    fireEvent.change(within(dialog).getByLabelText("Passphrase"), { target: { value: "s3cret" } });
+    fireEvent.change(within(dialog).getByLabelText("Passphrase"), {
+      target: { value: "s3cret" },
+    });
     fireEvent.click(within(dialog).getByRole("button", { name: "Connect" }));
 
     expect(fake.connections.answerSshPrompt).toHaveBeenCalledTimes(1);
@@ -752,10 +1040,16 @@ describe("SH-03: SSH prompts", () => {
     const fake = installTwoMachines();
     render(<SshPromptDialog />);
     act(() =>
-      fake.emit("ssh-auth-prompt", { promptId: "prompt-2", kind: "password", message: "" }),
+      fake.emit("ssh-auth-prompt", {
+        promptId: "prompt-2",
+        kind: "password",
+        message: "",
+      }),
     );
     const dialog = await screen.findByRole("dialog");
-    fireEvent.change(within(dialog).getByLabelText("Password"), { target: { value: "typed" } });
+    fireEvent.change(within(dialog).getByLabelText("Password"), {
+      target: { value: "typed" },
+    });
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
 
     expect(fake.connections.answerSshPrompt).toHaveBeenCalledTimes(1);
@@ -774,7 +1068,9 @@ describe("Unknown outcomes", () => {
 
     // Remote rows carry the same right-click menu as this window's rows.
     fireEvent.contextMenu(
-      within(rowOf("bk_a")).getByRole("button", { name: /^feature, on Machine A/ }),
+      within(rowOf("bk_a")).getByRole("button", {
+        name: /^feature, on Machine A/,
+      }),
     );
     const menu = await screen.findByRole("menu");
     fireEvent.click(within(menu).getByRole("menuitem", { name: "Stop" }));
@@ -806,7 +1102,11 @@ describe("the sidebar order the command node keeps", () => {
       datasets: { a: sharedIdDataset("idle"), b: sharedIdDataset("idle") },
       layout: { revision: 1, machineOrder: ["bk_b", "bk_self", "bk_a"] },
     });
-    window.orkestratorWorkspaceTarget = { nodeId: "bk_a", nodeName: "Machine A", path: "direct" };
+    window.orkestratorWorkspaceTarget = {
+      nodeId: "bk_a",
+      nodeName: "Machine A",
+      path: "direct",
+    };
     try {
       renderWithFederation(<MachineOrder />);
       await waitFor(() =>
@@ -825,7 +1125,9 @@ describe("the sidebar order the command node keeps", () => {
     installDesktopFake({
       list: connectionList([
         MACHINE_A,
-        remoteConnection("b", "Machine B", "rose", { transport: "unreachable" }),
+        remoteConnection("b", "Machine B", "rose", {
+          transport: "unreachable",
+        }),
       ]),
       datasets: { a: sharedIdDataset("idle"), b: sharedIdDataset("idle") },
     });
@@ -869,7 +1171,10 @@ for (const mode of ["remote", "merged"] as const) {
     installDesktopFake({
       list: connectionList([MACHINE_A]),
       datasets: {
-        a: { projects: [{ id: "p", name: "App", order: 0, folder: "Work" }], environments: {} },
+        a: {
+          projects: [{ id: "p", name: "App", order: 0, folder: "Work" }],
+          environments: {},
+        },
       },
     });
     renderWithFederation(mode === "remote" ? <RemoteSections /> : <AggregateList mode="project" />);
@@ -900,7 +1205,10 @@ describe("command handover dialog edge cases", () => {
         expect(screen.getByTestId("machines-connectivity").textContent).toBe("3/3"),
       );
       await act(async () => {
-        fireEvent.pointerDown(screen.getByTestId("machines-filter"), { button: 0, ctrlKey: false });
+        fireEvent.pointerDown(screen.getByTestId("machines-filter"), {
+          button: 0,
+          ctrlKey: false,
+        });
       });
       const row = await screen.findByTestId("command-node-row");
       await act(async () => {
@@ -921,24 +1229,39 @@ describe("command handover dialog edge cases", () => {
     const original = await fake.connections.previewCommandHandover(MACHINE_B.id);
     fake.connections.previewCommandHandover.mockResolvedValue({
       ...original,
-      preview: { ...original.preview, candidates: [], targetNodeIds: [MACHINE_A.backendId!] },
+      preview: {
+        ...original.preview,
+        candidates: [],
+        targetNodeIds: [MACHINE_A.backendId!],
+      },
     });
     fake.connections.handOverCommand.mockRejectedValueOnce(new Error("temporary failure"));
     render(<CommandHandoverDialog />);
-    act(() => requestCommandHandover({ name: MACHINE_B.name, connectionId: MACHINE_B.id }));
+    act(() =>
+      requestCommandHandover({
+        name: MACHINE_B.name,
+        connectionId: MACHINE_B.id,
+      }),
+    );
     await waitFor(() =>
       expect(mockToastError).toHaveBeenCalledWith("Could not change the command node", {
         description: "temporary failure",
       }),
     );
     const dialog = await screen.findByTestId("command-handover-dialog");
-    const retry = within(dialog).getByRole("button", { name: "Make command node" });
+    const retry = within(dialog).getByRole("button", {
+      name: "Make command node",
+    });
     expect(retry.hasAttribute("disabled")).toBe(false);
     fireEvent.click(retry);
     await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
     expect(fake.connections.handOverCommand).toHaveBeenCalledTimes(2);
     expect(fake.connections.handOverCommand).toHaveBeenLastCalledWith({
       targetConnectionId: MACHINE_B.id,
+      confirmation: expect.objectContaining({
+        sourceNodeId: "bk_self",
+        targetNodeId: MACHINE_B.backendId,
+      }),
       nodeIds: [],
       connectionIds: [],
       includeSelf: true,
@@ -946,13 +1269,168 @@ describe("command handover dialog edge cases", () => {
     expect(mockToastSuccess).toHaveBeenCalled();
   });
 
+  test("a loop on the target asks for confirmation even with nothing to choose", async () => {
+    const fake = installTwoMachines();
+    const original = await fake.connections.previewCommandHandover(MACHINE_B.id);
+    fake.connections.previewCommandHandover.mockResolvedValue({
+      ...original,
+      preview: {
+        ...original.preview,
+        candidates: [],
+        targetNodeIds: [MACHINE_A.backendId!],
+      },
+      repairs: ["forget-source-on-target", "allow-source-on-target"],
+    } as never);
+    render(<CommandHandoverDialog />);
+    act(() =>
+      requestCommandHandover({
+        name: MACHINE_B.name,
+        connectionId: MACHINE_B.id,
+      }),
+    );
+    const repairs = await screen.findByTestId("command-handover-repairs");
+    expect(repairs.textContent).toContain("lists This computer as one of its own machines");
+    expect(repairs.textContent).toContain("was detached on");
+    expect(repairs.textContent).toContain("remain on Machine B if a later handover step fails");
+    expect(fake.connections.handOverCommand).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Make command node" }));
+    await waitFor(() => expect(fake.connections.handOverCommand).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+  });
+
+  test("incomplete target inspection prevents automatic execution", async () => {
+    const fake = installTwoMachines();
+    const original = await fake.connections.previewCommandHandover(MACHINE_B.id);
+    fake.connections.previewCommandHandover.mockResolvedValue({
+      ...original,
+      targetInspectionComplete: false,
+      preview: {
+        ...original.preview,
+        candidates: [],
+        targetNodeIds: [MACHINE_A.backendId!],
+      },
+    } as never);
+    render(<CommandHandoverDialog />);
+    act(() =>
+      requestCommandHandover({
+        name: MACHINE_B.name,
+        connectionId: MACHINE_B.id,
+      }),
+    );
+    await screen.findByText(/could not fully inspect/);
+    expect(fake.connections.handOverCommand).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Make command node" }));
+    await waitFor(() =>
+      expect(fake.connections.handOverCommand).toHaveBeenCalledWith(
+        expect.objectContaining({
+          confirmation: expect.objectContaining({
+            targetInspectionComplete: false,
+          }),
+        }),
+      ),
+    );
+  });
+
+  for (const automatic of [false, true]) {
+    test(`new repairs return to confirmation after ${automatic ? "automatic" : "confirmed"} execution`, async () => {
+      const fake = installTwoMachines();
+      const original = await fake.connections.previewCommandHandover(MACHINE_B.id);
+      const initial = {
+        ...original,
+        preview: {
+          ...original.preview,
+          candidates: automatic ? [] : original.preview.candidates,
+          targetNodeIds: [MACHINE_A.backendId!],
+        },
+      };
+      fake.connections.previewCommandHandover.mockResolvedValueOnce(initial).mockResolvedValue({
+        ...initial,
+        repairs: ["allow-source-on-target"],
+      } as never);
+      fake.connections.handOverCommand.mockRejectedValueOnce(
+        new Error(COMMAND_HANDOVER_PREVIEW_CHANGED),
+      );
+      render(<CommandHandoverDialog />);
+      act(() =>
+        requestCommandHandover({
+          name: MACHINE_B.name,
+          connectionId: MACHINE_B.id,
+        }),
+      );
+      if (!automatic) {
+        await screen.findByRole("checkbox", { name: "Machine A" });
+        fireEvent.click(screen.getByRole("button", { name: "Make command node" }));
+      }
+      const warning = await screen.findByTestId("command-handover-repairs");
+      expect(warning.textContent).toContain("was detached");
+      expect(fake.connections.handOverCommand).toHaveBeenCalledTimes(1);
+      expect(reload).not.toHaveBeenCalled();
+      await waitFor(() =>
+        expect(
+          screen.getByRole("button", { name: "Make command node" }).hasAttribute("disabled"),
+        ).toBe(false),
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Make command node" }));
+      await waitFor(() => expect(fake.connections.handOverCommand).toHaveBeenCalledTimes(2));
+      expect(fake.connections.handOverCommand).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          confirmation: expect.objectContaining({
+            repairs: ["allow-source-on-target"],
+          }),
+        }),
+      );
+    });
+  }
+
+  for (const bringSaved of [true, false]) {
+    test(`a device-only saved machine is ${bringSaved ? "included" : "omitted"} by choice`, async () => {
+      const saved = remoteConnection("saved", "Saved machine", "teal");
+      const fake = installTwoMachines();
+      const original = await fake.connections.previewCommandHandover(MACHINE_B.id);
+      fake.connections.list.mockResolvedValue(connectionList([MACHINE_A, MACHINE_B, saved]));
+      fake.connections.previewCommandHandover.mockResolvedValue({
+        ...original,
+        preview: {
+          ...original.preview,
+          candidates: [],
+          targetNodeIds: [MACHINE_A.backendId!],
+        },
+      });
+      render(<CommandHandoverDialog />);
+      act(() =>
+        requestCommandHandover({
+          name: MACHINE_B.name,
+          connectionId: MACHINE_B.id,
+        }),
+      );
+      const checkbox = await screen.findByRole("checkbox", {
+        name: "Saved machine",
+      });
+      expect(checkbox.getAttribute("aria-checked")).toBe("true");
+      if (!bringSaved) fireEvent.click(checkbox);
+      fireEvent.click(screen.getByRole("button", { name: "Make command node" }));
+      await waitFor(() =>
+        expect(fake.connections.handOverCommand).toHaveBeenCalledWith(
+          expect.objectContaining({
+            connectionIds: bringSaved ? [saved.id] : [],
+          }),
+        ),
+      );
+    });
+  }
+
   test("an already-command-node result only switches the native connection", async () => {
     const fake = installTwoMachines();
     window.orkestrator!.connections!.previewCommandHandover = async () => ({
       kind: "already-command-node",
     });
     render(<CommandHandoverDialog />);
-    act(() => requestCommandHandover({ name: MACHINE_B.name, connectionId: MACHINE_B.id }));
+    act(() =>
+      requestCommandHandover({
+        name: MACHINE_B.name,
+        connectionId: MACHINE_B.id,
+      }),
+    );
     await waitFor(() => expect(fake.connections.use).toHaveBeenCalledWith(MACHINE_B.id));
     expect(fake.connections.handOverCommand).not.toHaveBeenCalled();
     await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
@@ -971,7 +1449,12 @@ describe("command handover dialog edge cases", () => {
       },
     });
     render(<CommandHandoverDialog />);
-    act(() => requestCommandHandover({ name: MACHINE_B.name, connectionId: MACHINE_B.id }));
+    act(() =>
+      requestCommandHandover({
+        name: MACHINE_B.name,
+        connectionId: MACHINE_B.id,
+      }),
+    );
     const warning = await screen.findByText(/has no web address/);
     expect(warning.textContent).toContain("cannot follow");
     const checkbox = screen.getByRole("checkbox", {
@@ -984,6 +1467,10 @@ describe("command handover dialog edge cases", () => {
     await waitFor(() =>
       expect(fake.connections.handOverCommand).toHaveBeenCalledWith({
         targetConnectionId: MACHINE_B.id,
+        confirmation: expect.objectContaining({
+          sourceNodeId: "bk_self",
+          targetNodeId: MACHINE_B.backendId,
+        }),
         nodeIds: [],
         connectionIds: [],
         includeSelf: false,

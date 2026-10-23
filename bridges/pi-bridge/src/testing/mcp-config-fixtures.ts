@@ -10,11 +10,24 @@
  *   reverse.
  */
 
+/**
+ * A fixture file written verbatim, for bytes `JSON.stringify` cannot produce
+ * (a byte order mark, a syntax error).
+ */
+export class RawMcpConfigText {
+  constructor(readonly text: string) {}
+}
+
+/** The exact text a fixture's `user` or `project` file is written with. */
+export function mcpConfigFileText(value: unknown): string {
+  return value instanceof RawMcpConfigText ? value.text : JSON.stringify(value);
+}
+
 export interface PiMcpConfigFixture {
   name: string;
-  /** `<agentDir>/mcp.json`, written as JSON. */
+  /** `<agentDir>/mcp.json`, written with {@link mcpConfigFileText}. */
   user?: unknown;
-  /** `<cwd>/.pi/mcp.json`, written as JSON. */
+  /** `<cwd>/.pi/mcp.json`, written with {@link mcpConfigFileText}. */
   project?: unknown;
   /** The bridge's environment, for `$NAME` values. */
   env?: Record<string, string>;
@@ -289,6 +302,17 @@ export const PI_MCP_CONFIG_FIXTURES: readonly PiMcpConfigFixture[] = [
     },
     bridge: [],
     pi: { enabled: ["user:late"], why: "Pi reads every entry; the bridge bounds each file." },
+  },
+  {
+    // Pi strips one leading BOM (since 1.4.0); the file after it must parse.
+    name: "one leading UTF-8 BOM is ignored and a second one fails the file",
+    user: new RawMcpConfigText(
+      `\uFEFF${JSON.stringify({ mcpServers: { bom: { command: "x" } } })}`,
+    ),
+    project: new RawMcpConfigText(
+      `\uFEFF\uFEFF${JSON.stringify({ mcpServers: { twice: { command: "y" } } })}`,
+    ),
+    bridge: ["user:bom"],
   },
   {
     name: "64 servers fill a file",

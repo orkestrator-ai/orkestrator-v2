@@ -2903,7 +2903,10 @@ describe("session lifecycle", () => {
     try {
       const h = await harness({
         "config/read": () => ({
-          config: { web_search: "disabled", features: { standalone_web_search: false } },
+          config: {
+            web_search: "disabled",
+            features: { standalone_web_search: false, incremental_tools: false },
+          },
           origins: {},
           layers: null,
         }),

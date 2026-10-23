@@ -39,6 +39,19 @@ const OUTLINE_CLASSES: Record<MachineColorToken | typeof FALLBACK_MACHINE_COLOR,
   neutral: "border-dashed border-muted-foreground",
 };
 
+// The same colours for an icon drawn in the machine's colour.
+const TEXT_CLASSES: Record<MachineColorToken | typeof FALLBACK_MACHINE_COLOR, string> = {
+  violet: "text-violet-500 dark:text-violet-400",
+  blue: "text-blue-500 dark:text-blue-400",
+  teal: "text-teal-500 dark:text-teal-400",
+  green: "text-emerald-500 dark:text-emerald-400",
+  amber: "text-amber-500 dark:text-amber-400",
+  orange: "text-orange-500 dark:text-orange-400",
+  rose: "text-rose-500 dark:text-rose-400",
+  slate: "text-slate-500 dark:text-slate-400",
+  neutral: "text-muted-foreground",
+};
+
 const LABELS: Record<MachineColorToken | typeof FALLBACK_MACHINE_COLOR, string> = {
   violet: "Violet",
   blue: "Blue",
@@ -59,9 +72,15 @@ export function machineOutlineClass(token: string | undefined): string {
   return OUTLINE_CLASSES[machineColorForDisplay(token)];
 }
 
+export function machineTextClass(token: string | undefined): string {
+  return TEXT_CLASSES[machineColorForDisplay(token)];
+}
+
 export function machineColorLabel(token: string | undefined): string {
   return LABELS[machineColorForDisplay(token)];
 }
 
-export const MACHINE_COLOR_CHOICES: ReadonlyArray<{ token: MachineColorToken; label: string }> =
-  MACHINE_COLOR_TOKENS.map((token) => ({ token, label: LABELS[token] }));
+export const MACHINE_COLOR_CHOICES: ReadonlyArray<{
+  token: MachineColorToken;
+  label: string;
+}> = MACHINE_COLOR_TOKENS.map((token) => ({ token, label: LABELS[token] }));

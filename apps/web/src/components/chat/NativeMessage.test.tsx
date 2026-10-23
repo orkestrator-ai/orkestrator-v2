@@ -5880,7 +5880,7 @@ describe("NativeMessage thinking parts", () => {
     // in one block rather than two blocks.
     expect(group?.textContent).toContain("Deciding what to run");
     expect(group?.textContent).toContain("ls -la");
-    expect(group?.children.length).toBe(2);
+    expect(group?.querySelectorAll(".tool-group-fold-content .px-2.py-0\\.5").length).toBe(2);
   });
 
   test("renders a thinking part supplied as a subagent child action", () => {

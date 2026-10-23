@@ -20,7 +20,7 @@ for (const view of ["native", "reviewer"]) {
       if (view === "reviewer") query.set("reviewer", "1");
       if (mixed) query.set("mixed", "1");
       await page.goto(`/transcript-paging?${query}`);
-      const list = page.locator("[data-virtuoso-scroller]");
+      const list = page.locator("[data-transcript-scroller]");
       const load = page.getByRole("button", { name: "Load earlier messages", exact: true });
       const check = async () => {
         await expect(list).toBeVisible();
@@ -83,7 +83,23 @@ for (const view of ["native", "reviewer"]) {
         const after = (await toolPosition(list, "call-40"))!;
         if (mixed) expect(Number(after.index)).toBeGreaterThan(Number(before.index));
         else expect(after.index).toBe("0");
-        await expect.poll(() => list.evaluate((el) => el.scrollTop)).toBeGreaterThan(500);
+        if (mixed) {
+          // The page added rows above: the transcript itself moved down.
+          await expect.poll(() => list.evaluate((el) => el.scrollTop)).toBeGreaterThan(500);
+        } else {
+          // The page merged older calls into the open group, which scrolls
+          // them in its own bounded viewport: that viewport moved instead.
+          await expect
+            .poll(() =>
+              list.evaluate(
+                (el) =>
+                  el.querySelector<HTMLElement>(
+                    "[data-transcript-inner-viewport] [data-virtuoso-scroller]",
+                  )?.scrollTop ?? 0,
+              ),
+            )
+            .toBeGreaterThan(500);
+        }
       };
       await check();
       await page.getByRole("button", { name: "Switch environment" }).click();

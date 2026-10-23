@@ -723,6 +723,7 @@ function mergeAdjacentToolMessages(previous: NativeMessage, message: NativeMessa
     content: "",
     createdAt: latestMessageCreatedAt(previous.createdAt, message.createdAt),
     latestSourceMessageId: getNativeMessageBoundarySourceId(message),
+    earliestSourceMessageId: previous.earliestSourceMessageId ?? previous.id,
     settleAnchorCreatedAt: previous.settleAnchorCreatedAt ?? previous.createdAt,
   };
   const resultCache = cachedForPrevious ?? new WeakMap<NativeMessage, NativeMessage>();
@@ -742,8 +743,79 @@ function mergeAdjacentToolMessages(previous: NativeMessage, message: NativeMessa
  * is deliberately ignored: a slow tool must not split a collapsed tool block
  * just because the clock rolled over to the next minute.
  */
-export function coalesceAdjacentToolMessages(messages: readonly NativeMessage[]): NativeMessage[] {
+/**
+ * The row id each source message was last displayed under inside a coalesced
+ * tool run. A run keeps that id while any member survives, so history paging
+ * that merges older calls in front (or live calls behind) does not rename the
+ * row — which would remount it and reset everything the reader opened inside.
+ * Weakly held: a member that leaves the projection takes its alias with it.
+ */
+const coalescedRowAliases = new WeakMap<NativeMessage, string>();
+const renamedCoalescedRows = new WeakMap<NativeMessage, Map<string, NativeMessage>>();
+
+function withRowId(row: NativeMessage, id: string): NativeMessage {
+  if (row.id === id) return row;
+  let byId = renamedCoalescedRows.get(row);
+  if (!byId) {
+    byId = new Map();
+    renamedCoalescedRows.set(row, byId);
+  }
+  let renamed = byId.get(id);
+  if (!renamed) {
+    renamed = { ...row, id };
+    byId.set(id, renamed);
+  }
+  return renamed;
+}
+
+/**
+ * Surviving row ids for a projection whose source objects are rebuilt on
+ * every read (a reviewer transcript parsed from raw records), keyed by member
+ * message id. Owned by the view that renders the projection and pruned to it
+ * on every pass, so it is bounded by the loaded history.
+ */
+export type CoalescedRowAliases = Map<string, string>;
+
+/** Give each coalesced run its surviving id; never two rows one id. */
+function assignCoalescedRowIds(
+  merged: NativeMessage[],
+  members: NativeMessage[][],
+  byId: CoalescedRowAliases | undefined,
+): void {
+  const used = new Set<string>();
+  members.forEach((group, index) => {
+    if (group.length < 2) used.add(merged[index]!.id);
+  });
+  members.forEach((group, index) => {
+    if (group.length < 2) return;
+    let id: string | undefined;
+    for (const member of group) {
+      const alias = byId ? byId.get(member.id) : coalescedRowAliases.get(member);
+      if (alias !== undefined && !used.has(alias)) {
+        id = alias;
+        break;
+      }
+    }
+    id ??= used.has(merged[index]!.id) ? group.at(-1)!.id : merged[index]!.id;
+    used.add(id);
+    for (const member of group) {
+      if (byId) byId.set(member.id, id);
+      else coalescedRowAliases.set(member, id);
+    }
+    merged[index] = withRowId(merged[index]!, id);
+  });
+  if (byId) {
+    const present = new Set(members.flatMap((group) => group.map((member) => member.id)));
+    for (const key of Array.from(byId.keys())) if (!present.has(key)) byId.delete(key);
+  }
+}
+
+export function coalesceAdjacentToolMessages(
+  messages: readonly NativeMessage[],
+  aliases?: CoalescedRowAliases,
+): NativeMessage[] {
   const merged: NativeMessage[] = [];
+  const members: NativeMessage[][] = [];
   for (const message of messages) {
     if (message.role === "assistant" && !messageHasVisibleContent(message)) {
       continue;
@@ -764,10 +836,13 @@ export function coalesceAdjacentToolMessages(messages: readonly NativeMessage[])
       (previous.planReview === true) === (message.planReview === true)
     ) {
       merged[merged.length - 1] = mergeAdjacentToolMessages(previous, message);
+      members[members.length - 1]!.push(message);
       continue;
     }
     merged.push(message);
+    members.push([message]);
   }
+  assignCoalescedRowIds(merged, members, aliases);
   return merged;
 }
 

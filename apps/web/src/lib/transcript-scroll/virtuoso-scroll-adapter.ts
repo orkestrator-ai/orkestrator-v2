@@ -112,6 +112,12 @@ export class VirtuosoScrollAdapter {
     return true;
   }
 
+  /** One instant write to a nested scroller (an inner viewport the transcript holds). */
+  writeElementScrollTop(element: HTMLElement, top: number): void {
+    this.writes += 1;
+    element.scrollTop = top;
+  }
+
   /** Retire the virtualizer's own pending positioning work. */
   cancelPendingNavigation(): void {
     const handle = this.handleRef.current;

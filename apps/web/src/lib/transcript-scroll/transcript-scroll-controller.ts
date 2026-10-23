@@ -70,6 +70,17 @@ export interface SemanticAnchor {
   index?: number;
   partId?: string;
   offsetPx: number;
+  /**
+   * A member inside an inner viewport (an open long tool group): `partId`
+   * then names the group frame the transcript holds, and this the member the
+   * inner viewport holds at its on-screen offset from the transcript's top.
+   */
+  inner?: InnerAnchor;
+}
+
+export interface InnerAnchor {
+  partId: string;
+  screenOffsetPx: number;
 }
 
 export type NavigationTarget =
@@ -83,6 +94,7 @@ export type NavigationTarget =
       /** Hold the target this far below the viewport top; otherwise `align`. */
       offsetPx?: number;
       align?: "start" | "center";
+      inner?: InnerAnchor;
     }
   | {
       /** A precise box inside a row, e.g. a find match; resolved every frame. */
@@ -578,15 +590,58 @@ export class TranscriptScrollController {
     const viewport = el.getBoundingClientRect();
     const top = viewport.top;
     const bottom = top + el.clientHeight;
-    const visible = (element: Element) => {
+    const visibleWithin = (element: Element, clipTop: number, clipBottom: number) => {
       const rect = element.getBoundingClientRect();
-      return rect.bottom > top && rect.top < bottom;
+      return rect.bottom > clipTop && rect.top < clipBottom;
     };
+    let inner: InnerAnchor | undefined;
+    let frameAnchor: HTMLElement | null = null;
     const part = Array.from(el.querySelectorAll<HTMLElement>("[data-transcript-part-id]")).find(
-      visible,
+      (element) => {
+        if (!visibleWithin(element, top, bottom)) return false;
+        const viewportElement = element.closest("[data-transcript-inner-viewport]");
+        if (!viewportElement) return true;
+        // A member an inner viewport may clip: it counts only where that
+        // viewport shows it, and the group frame stands for it outside.
+        const clip = viewportElement.getBoundingClientRect();
+        if (!visibleWithin(element, Math.max(top, clip.top), Math.min(bottom, clip.bottom))) {
+          return false;
+        }
+        const frame = viewportElement
+          .closest("[data-transcript-group-frame]")
+          ?.querySelector<HTMLElement>(":scope > [data-transcript-part-id]");
+        if (!frame) return false;
+        frameAnchor = frame;
+        inner = {
+          partId: element.dataset.transcriptPartId!,
+          screenOffsetPx: element.getBoundingClientRect().top - top,
+        };
+        return true;
+      },
     );
+    // The frame itself came first: hold the member its inner viewport shows
+    // at the top as well, so the composite place survives either moving.
+    const frameHost = part?.parentElement?.matches("[data-transcript-group-frame]")
+      ? part.parentElement
+      : null;
+    const innerViewport = frameHost?.querySelector("[data-transcript-inner-viewport]");
+    if (part && !inner && innerViewport) {
+      const clip = innerViewport.getBoundingClientRect();
+      const member = Array.from(
+        innerViewport.querySelectorAll<HTMLElement>("[data-transcript-part-id]"),
+      ).find((element) =>
+        visibleWithin(element, Math.max(top, clip.top), Math.min(bottom, clip.bottom)),
+      );
+      if (member) {
+        inner = {
+          partId: member.dataset.transcriptPartId!,
+          screenOffsetPx: member.getBoundingClientRect().top - top,
+        };
+      }
+    }
+    const held: HTMLElement | undefined = frameAnchor ?? part;
     const row =
-      part?.closest<HTMLElement>("[data-chat-message-index]") ??
+      held?.closest<HTMLElement>("[data-chat-message-index]") ??
       Array.from(el.querySelectorAll<HTMLElement>("[data-chat-message-index]")).find(
         (element) => element.getBoundingClientRect().bottom > top,
       );
@@ -595,8 +650,9 @@ export class TranscriptScrollController {
     return {
       rowKey: row.dataset.chatMessageKey,
       index: Number.isSafeInteger(index) ? index : undefined,
-      partId: part?.dataset.transcriptPartId,
-      offsetPx: (part ?? row).getBoundingClientRect().top - top,
+      partId: held?.dataset.transcriptPartId,
+      offsetPx: (held ?? row).getBoundingClientRect().top - top,
+      ...(inner ? { inner } : {}),
     };
   }
 
@@ -885,6 +941,17 @@ export class TranscriptScrollController {
     const heightStable = metrics.scrollHeight === op.lastScrollHeight;
     op.lastScrollHeight = metrics.scrollHeight;
     if (Math.abs(nextTop - metrics.scrollTop) <= CONVERGENCE_TOLERANCE_PX) {
+      // The transcript holds the frame (or cannot move further): the inner
+      // viewport then puts the member back where the reader saw it, which
+      // also absorbs what a clamped transcript could not.
+      if (
+        op.target.kind === "row" &&
+        op.target.inner &&
+        this.reconcileInner(op, op.target.inner, phase)
+      ) {
+        op.stableFrames = 0;
+        return;
+      }
       if (phase === "frame") {
         op.stableFrames = heightStable && !op.measuredSinceFrame ? op.stableFrames + 1 : 0;
         op.measuredSinceFrame = false;
@@ -904,6 +971,37 @@ export class TranscriptScrollController {
     op.correctedFrame = slot;
     this.counters.operationCorrections += 1;
     this.adapter.writeScrollTop(nextTop);
+  }
+
+  /** One inner-viewport correction toward `inner`; true when it wrote. */
+  private reconcileInner(op: Operation, inner: InnerAnchor, phase: "frame" | "layout"): boolean {
+    const el = this.scroller;
+    const frame = op.target.kind === "row" && op.target.partId ? this.resolve(op.target) : null;
+    if (!el || !frame) return false;
+    const frameElement = Array.from(
+      el.querySelectorAll<HTMLElement>("[data-transcript-group-frame]"),
+    ).find(
+      (candidate) =>
+        candidate.querySelector(":scope > [data-transcript-part-id]") !== null &&
+        findPart(candidate, (op.target as { partId: string }).partId) !== null,
+    );
+    const innerScroller = frameElement?.querySelector<HTMLElement>(
+      "[data-transcript-inner-viewport] [data-virtuoso-scroller]",
+    );
+    if (!innerScroller) return false;
+    const member = findPart(innerScroller, inner.partId);
+    if (!member) return false;
+    const viewportTop = el.getBoundingClientRect().top;
+    const error = member.getBoundingClientRect().top - viewportTop - inner.screenOffsetPx;
+    const max = Math.max(0, innerScroller.scrollHeight - innerScroller.clientHeight);
+    const next = Math.min(Math.max(innerScroller.scrollTop + error, 0), max);
+    if (Math.abs(next - innerScroller.scrollTop) <= CONVERGENCE_TOLERANCE_PX) return false;
+    const slot = (phase === "frame" ? this.frameId * 2 : this.frameId * 2 + 1) + 0.5;
+    if (op.correctedFrame === slot) return true;
+    op.correctedFrame = slot;
+    this.counters.operationCorrections += 1;
+    this.adapter.writeElementScrollTop(innerScroller, next);
+    return true;
   }
 
   private reconcileLatest(op: Operation, el: HTMLElement, phase: "frame" | "layout"): void {
@@ -1009,7 +1107,21 @@ export class TranscriptScrollController {
     const view = doc.defaultView ?? window;
     const onWheel = (event: WheelEvent) => {
       const direction = classifyWheel(event, el);
-      if (direction) this.userInput();
+      if (direction) {
+        this.userInput();
+        return;
+      }
+      // Scrolling an inner viewport is the reader's too when the current
+      // navigation is positioning a member inside one.
+      const target = this.op?.target;
+      if (
+        target?.kind === "row" &&
+        target.inner &&
+        event.target instanceof Element &&
+        event.target.closest("[data-transcript-inner-viewport]")
+      ) {
+        this.userInput();
+      }
     };
     const onScroll = () => this.handleScroll(el);
     const onPointerDown = () => {
@@ -1100,8 +1212,14 @@ export class TranscriptScrollController {
           for (const record of records) {
             if (record.type === "attributes") {
               // Virtuoso keeps rows in place across size changes with a list
-              // margin and a deferred scroll; neither resizes what is observed.
-              if (observed.has(record.target as Element)) shifted = true;
+              // margin and a deferred scroll; neither resizes what is observed
+              // (nor does an inner viewport's own compensation).
+              if (
+                observed.has(record.target as Element) ||
+                (record.target as Element).closest?.("[data-transcript-inner-viewport]")
+              ) {
+                shifted = true;
+              }
               continue;
             }
             structural = true;
@@ -1112,7 +1230,10 @@ export class TranscriptScrollController {
               observeChildren();
             }
           }
-          if (shifted && this.op) this.reconcile(this.op, "layout");
+          // During a navigation, a structural change (a header removed, rows
+          // replaced) can move the target with no resize: settle it before
+          // paint. Only while an operation runs, so streaming pays nothing.
+          if ((shifted || structural) && this.op) this.reconcile(this.op, "layout");
           if (structural) this.notifyLayout("mutation");
         });
         mutationObserver.observe(el, {

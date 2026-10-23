@@ -376,6 +376,12 @@ export interface NativeMessage {
    */
   latestSourceMessageId?: string;
   /**
+   * First source message of a coalesced display row. The row's own `id` is a
+   * surviving identity that history merging in front does not rename; this
+   * says where the row now starts.
+   */
+  earliestSourceMessageId?: string;
+  /**
    * Earliest source-row clock represented by a coalesced display row.
    * Settled child cards use it for placement while `createdAt` remains the
    * latest activity clock shown in the row footer.

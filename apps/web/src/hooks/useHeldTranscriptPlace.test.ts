@@ -136,7 +136,8 @@ describe("useRestoreHeldPlace", () => {
     });
     expect(scrollToIndex).toHaveBeenCalledWith(
       0,
-      { partId: "call53", rowKey: "r51", offset: -10 },
+      // The block keeps its id ("r52") although r51 merged in front of it.
+      { partId: "call53", rowKey: "r52", offset: -10 },
       "history",
     );
   });
@@ -163,7 +164,7 @@ describe("useRestoreHeldPlace", () => {
     );
   });
 
-  test("finds a head block that a cross-minute page merged into and renamed", () => {
+  test("finds a head block that a cross-minute page merged into", () => {
     // The live tail starts inside a tool run: its head block coalesces two reads.
     const tail = [
       read("r52", "2026-10-18T01:33:20.000Z"),
@@ -181,7 +182,9 @@ describe("useRestoreHeldPlace", () => {
       read("r51", "2026-10-18T01:33:05.000Z"),
       ...tail,
     ]);
-    expect(loaded.map((row) => row.id)).toEqual(["prompt", "r50", "answer"]);
+    // The merged block keeps its surviving id; where it now starts changed.
+    expect(loaded.map((row) => row.id)).toEqual(["prompt", "r52", "answer"]);
+    expect(loaded[1]!.earliestSourceMessageId).toBe("r50");
     hook.rerender({ messages: loaded });
     expect(scrollToIndex.mock.calls).toEqual([[1]]);
   });

@@ -10,6 +10,7 @@ import type { VirtuosoHandle, StateSnapshot } from "react-virtuoso";
 import type { NavigationOwner } from "@/lib/transcript-scroll/scroll-intent";
 import {
   TranscriptScrollController,
+  type InnerAnchor,
   type SemanticAnchor,
   type ScrollDiagnostics,
 } from "@/lib/transcript-scroll/transcript-scroll-controller";
@@ -142,6 +143,8 @@ export interface TranscriptScrollAnchor {
   rowKey?: string;
   /** Hold the target this far below the viewport top; centred when absent. */
   offset?: number;
+  /** A member an inner viewport holds, inside the group frame `partId` names. */
+  inner?: InnerAnchor;
 }
 
 interface UseVirtuosoScrollStateReturn {
@@ -335,6 +338,7 @@ export function useVirtuosoScrollState(
                 key: anchor.rowKey,
                 partId: anchor.partId,
                 offsetPx: anchor.offsetPx,
+                inner: anchor.inner,
               },
               "restore",
             );
@@ -425,6 +429,7 @@ export function useVirtuosoScrollState(
           partId: anchor?.partId,
           offsetPx: anchor?.offset,
           align: anchor?.offset !== undefined ? "start" : "center",
+          inner: anchor?.inner,
         },
         owner,
       );

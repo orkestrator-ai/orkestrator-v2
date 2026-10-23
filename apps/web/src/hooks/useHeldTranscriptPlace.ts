@@ -8,14 +8,20 @@ import type {
 import type { TranscriptScrollAnchor } from "./useVirtuosoScrollState";
 import type { NativeMessage, NativeMessagePart } from "@/lib/chat/native-message-types";
 
-/** A display row as it can be found again: its own id and its last source row. */
+/** A display row as it can be found again: its own id and its first and last source rows. */
 interface RowIdentity {
   id: string;
+  /** Where the row starts: changes when history merges into its front. */
+  firstSourceId: string;
   lastSourceId: string;
 }
 
 function identityOf(row: NativeMessage): RowIdentity {
-  return { id: row.id, lastSourceId: getNativeMessageBoundarySourceId(row) };
+  return {
+    id: row.id,
+    firstSourceId: row.earliestSourceMessageId ?? row.id,
+    lastSourceId: getNativeMessageBoundarySourceId(row),
+  };
 }
 
 /** Where each identity lives in one display projection; built once per array. */
@@ -60,7 +66,12 @@ export function sourceIndexOf(messages: readonly NativeMessage[]): SourceIndex {
 }
 
 function toScrollAnchor(anchor: SemanticAnchor): TranscriptScrollAnchor {
-  return { partId: anchor.partId, rowKey: anchor.rowKey, offset: anchor.offsetPx };
+  return {
+    partId: anchor.partId,
+    rowKey: anchor.rowKey,
+    offset: anchor.offsetPx,
+    ...(anchor.inner ? { inner: anchor.inner } : {}),
+  };
 }
 
 /** Legacy capture for a view without a scroll controller: first visible source part, else row. */
@@ -101,6 +112,7 @@ function captureFrom(scroller: HTMLElement): SemanticAnchor | null {
 export class HeldTranscriptPlace {
   private held: RowIdentity | null = null;
   private first: RowIdentity | null = null;
+  /** The head row's first source when the place was held: unchanged means still waiting. */
   private heldHeadId: string | undefined;
   private messages: readonly NativeMessage[] = [];
   private anchor: TranscriptScrollAnchor | undefined;
@@ -117,7 +129,7 @@ export class HeldTranscriptPlace {
    */
   hold(scroller?: HTMLElement | null, controller?: TranscriptScrollController): void {
     this.held = this.first;
-    this.heldHeadId = this.first?.id;
+    this.heldHeadId = this.first?.firstSourceId;
     this.anchor = undefined;
     this.controller?.endStructuralHold();
     this.controller = controller ?? null;
@@ -146,11 +158,12 @@ export class HeldTranscriptPlace {
     if (!held) return undefined;
     // An unchanged head is still waiting. A renamed head matched through a
     // source id has received history even if its display index stays zero.
-    if (messages[0]?.id === this.heldHeadId && previous !== messages) {
+    const headSource = this.first?.firstSourceId;
+    if (headSource === this.heldHeadId && previous !== messages) {
       this.refreshFromPreCommit(previous);
       return undefined;
     }
-    if (messages[0]?.id === this.heldHeadId) return undefined;
+    if (headSource === this.heldHeadId) return undefined;
     this.refreshFromPreCommit(previous);
     const place = this.held ?? held;
     const index = sourceIndexOf(messages);

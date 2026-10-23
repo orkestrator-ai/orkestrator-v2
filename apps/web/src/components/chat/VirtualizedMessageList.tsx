@@ -383,6 +383,16 @@ export function VirtualizedMessageList<TMessage>({
   );
 
   const controller = scrollProps.controller;
+  const forwardScrollerRef = scrollProps.scrollerRef;
+  // A library-independent name for the transcript's own scroller, distinct
+  // from any nested virtualized viewport (an open long tool group).
+  const transcriptScrollerRef = useCallback(
+    (element: HTMLElement | Window | null) => {
+      if (element instanceof HTMLElement) element.setAttribute("data-transcript-scroller", "true");
+      forwardScrollerRef?.(element);
+    },
+    [forwardScrollerRef],
+  );
   const messagesRef = useRef(messages);
   useLayoutEffect(() => {
     messagesRef.current = messages;
@@ -895,7 +905,7 @@ export function VirtualizedMessageList<TMessage>({
         atBottomThreshold={scrollProps.atBottomThreshold}
         totalListHeightChanged={scrollProps.totalListHeightChanged}
         restoreStateFrom={scrollProps.restoreStateFrom}
-        scrollerRef={scrollProps.scrollerRef}
+        scrollerRef={transcriptScrollerRef}
         rangeChanged={handleRangeChanged}
         minOverscanItemCount={keepMounted ?? undefined}
         // A tool block can be thousands of pixels tall. Using it as Virtuoso's

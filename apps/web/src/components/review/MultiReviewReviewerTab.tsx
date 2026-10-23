@@ -1,4 +1,7 @@
-import { coalesceAdjacentToolMessages } from "@/lib/chat/native-message-adapters";
+import {
+  coalesceAdjacentToolMessages,
+  type CoalescedRowAliases,
+} from "@/lib/chat/native-message-adapters";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
 import { useHeldTranscriptPlace, useRestoreHeldPlace } from "@/hooks/useHeldTranscriptPlace";
@@ -320,11 +323,15 @@ export function prependReviewerHistoryPage(
   };
 }
 
-export function toMultiReviewReviewerMessages(snapshot: MultiReviewReviewerTranscript) {
+export function toMultiReviewReviewerMessages(
+  snapshot: MultiReviewReviewerTranscript,
+  aliases?: CoalescedRowAliases,
+) {
   return toMultiReviewSessionMessages(
     snapshot.messages,
     snapshot.agent,
     snapshot.startedAt ?? "1970-01-01T00:00:00.000Z",
+    aliases,
   );
 }
 
@@ -337,6 +344,7 @@ export function toMultiReviewSessionMessages(
   messages: unknown[],
   agent: MultiReviewReviewerTranscript["agent"],
   startedAt: string,
+  aliases?: CoalescedRowAliases,
 ) {
   const transcript = toPipelineTranscript(messages, agent, startedAt);
   // This backend-owned session has no interactive composer. Initial and schema-
@@ -344,6 +352,7 @@ export function toMultiReviewSessionMessages(
   // reviewer outputs/tool calls instead of rendering pages of prompt or schema.
   const output = coalesceAdjacentToolMessages(
     transcript.filter((message) => message.role !== "user"),
+    aliases,
   );
   // The workflow's validated report is authoritative. Schema-shaped text in
   // the provider transcript is progress data and must never be shown as raw
@@ -726,19 +735,26 @@ export function MultiReviewReviewerTab({
   }, [workflowRevision]);
   /* oxlint-enable react-hooks/exhaustive-deps */
 
+  // Records are parsed afresh on every read, so a coalesced run's surviving
+  // id (kept across a page merging into it) is remembered by member id here.
+  const [coalescedAliases] = useState<CoalescedRowAliases>(() => new Map());
   const messages = useMemo(() => {
     if (!snapshot) return [];
-    if (history.earlier.length === 0) return toMultiReviewReviewerMessages(snapshot);
+    if (history.earlier.length === 0)
+      return toMultiReviewReviewerMessages(snapshot, coalescedAliases);
     const tailIds = new Set(snapshot.messages.map(messageId).filter(Boolean));
     const earlier = history.earlier.filter((message) => {
       const id = messageId(message);
       return id === undefined || !tailIds.has(id);
     });
-    return toMultiReviewReviewerMessages({
-      ...snapshot,
-      messages: [...earlier, ...snapshot.messages],
-    });
-  }, [history.earlier, snapshot]);
+    return toMultiReviewReviewerMessages(
+      {
+        ...snapshot,
+        messages: [...earlier, ...snapshot.messages],
+      },
+      coalescedAliases,
+    );
+  }, [coalescedAliases, history.earlier, snapshot]);
 
   /*
    * The reviewer session's own key owns what it publishes; a restart rotates

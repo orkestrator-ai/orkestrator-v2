@@ -555,7 +555,8 @@ describe("VirtualizedMessageList", () => {
   test("passes scrollerRef through to Virtuoso", () => {
     // The only scroll prop the pass-through test above omits; the scroll
     // container is what the find feature and the jump-to-bottom control need.
-    const scrollerRef = () => {};
+    const received: unknown[] = [];
+    const scrollerRef = (element: unknown) => received.push(element);
 
     render(
       <VirtualizedMessageList
@@ -567,7 +568,11 @@ describe("VirtualizedMessageList", () => {
       />,
     );
 
-    expect(lastVirtuosoProps.scrollerRef).toBe(scrollerRef);
+    // Forwarded, after naming the element as the transcript's own scroller.
+    const element = document.createElement("div");
+    lastVirtuosoProps.scrollerRef(element);
+    expect(received).toEqual([element]);
+    expect(element.getAttribute("data-transcript-scroller")).toBe("true");
   });
 
   test("passes computeItemKey through to Virtuoso", () => {

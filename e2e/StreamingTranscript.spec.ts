@@ -11,7 +11,7 @@ declare global {
   }
 }
 
-const scrollerSelector = '[data-virtuoso-scroller="true"]';
+const scrollerSelector = '[data-transcript-scroller="true"]';
 
 async function waitForFrames(page: Page, count = 4) {
   await page.evaluate(
@@ -262,12 +262,18 @@ test("a downward wheel during a history jump keeps the reader in control", async
   await page.goto("/streaming-transcript?long=1");
   await releaseStickyScroll(page);
   const scroller = page.locator(scrollerSelector);
-  await scroller.hover();
   const before = await scrollDiagnostics(scroller);
-  await page.getByRole("button", { name: "Scroll to tool history" }).click();
-  // Interrupt immediately, in the direction a naive cancel ignores.
-  await scroller.hover();
-  await page.mouse.wheel(0, 240);
+  // Start the jump and interrupt it in the same task, before its first
+  // correction can run, in the direction a naive cancel ignores. The native
+  // movement the wheel would cause is applied directly.
+  await scroller.evaluate((element) => {
+    const jump = Array.from(document.querySelectorAll("button")).find(
+      (button) => button.textContent === "Scroll to tool history",
+    )!;
+    jump.click();
+    element.dispatchEvent(new WheelEvent("wheel", { deltaY: 240, bubbles: true }));
+    element.scrollTop += 240;
+  });
   await waitForFrames(page, 10);
   const afterWheel = await scroller.evaluate((element) => element.scrollTop);
   const writesAfterWheel = (await scrollDiagnostics(scroller)).writes as number;
@@ -275,13 +281,25 @@ test("a downward wheel during a history jump keeps the reader in control", async
   await page.waitForTimeout(1_000);
   const diagnostics = await scrollDiagnostics(scroller);
   expect(diagnostics.operationsStarted).toBe((before.operationsStarted as number) + 1);
-  expect(await scroller.evaluate((element) => element.scrollTop)).toBeCloseTo(afterWheel, 0);
-  expect(diagnostics.writes).toBe(writesAfterWheel);
-  // The wheel arrived while the jump was still converging, and retired it.
   expect(diagnostics.lastOutcome).toBe("cancelled");
   expect(diagnostics.userInterruptions).toBe((before.userInterruptions as number) + 1);
+  expect(diagnostics.writes).toBe(writesAfterWheel);
+  expect(await scroller.evaluate((element) => element.scrollTop)).toBeCloseTo(afterWheel, 0);
   // The reader stays detached: streaming does not pull them to the tail.
   await page.getByRole("button", { name: "Append turn" }).click();
   await waitForFrames(page, 6);
+  expect(await scroller.evaluate((element) => element.scrollTop)).toBeCloseTo(afterWheel, 0);
+});
+
+test("a real wheel after a history jump is never pulled back", async ({ page }) => {
+  await page.goto("/streaming-transcript?long=1");
+  await releaseStickyScroll(page);
+  const scroller = page.locator(scrollerSelector);
+  await page.getByRole("button", { name: "Scroll to tool history" }).click();
+  await scroller.hover();
+  await page.mouse.wheel(0, 240);
+  await waitForFrames(page, 10);
+  const afterWheel = await scroller.evaluate((element) => element.scrollTop);
+  await page.waitForTimeout(1_000);
   expect(await scroller.evaluate((element) => element.scrollTop)).toBeCloseTo(afterWheel, 0);
 });

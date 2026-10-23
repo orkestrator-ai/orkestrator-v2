@@ -1232,13 +1232,72 @@ describe("zoom and pan", () => {
     expect(viewport().style.height).toBe(`${natural}px`);
   });
 
+  test("clicking the divider preserves automatic growth and focuses it for keyboard resizing", () => {
+    const { rerender } = render(<MultiReviewFlowGraph {...panel(4)} />);
+    const divider = screen.getByRole("separator", { name: "Resize graph" });
+    fireEvent.pointerDown(divider, { button: 0, pointerId: 1, clientY: 100 });
+    fireEvent.pointerMove(divider, { pointerId: 1, clientY: 101 });
+    fireEvent.pointerUp(divider, { pointerId: 1, clientY: 101 });
+    expect(useUIStore.getState().multiReviewGraphHeight).toBeNull();
+    expect(document.activeElement === divider).toBe(true);
+    rerender(<MultiReviewFlowGraph {...panel(8)} />);
+    expect(viewport().style.height).toBe(`${flowViewportHeight(geometry(8).height)}px`);
+    fireEvent.keyDown(divider, { key: "ArrowUp" });
+    expect(useUIStore.getState().multiReviewGraphHeight).toBe(
+      flowViewportHeight(geometry(8).height) - 16,
+    );
+  });
+
+  test("the stacked layout ignores a saved height and omits the divider", () => {
+    useUIStore.setState({ multiReviewGraphHeight: 300 });
+    const { rerender } = render(<MultiReviewFlowGraph {...panel(4)} layout="stacked" />);
+    const automaticHeight = viewport().style.height;
+    expect(screen.queryByRole("separator", { name: "Resize graph" }) === null).toBe(true);
+    act(() => useUIStore.getState().setMultiReviewGraphHeight(500));
+    expect(viewport().style.height).toBe(automaticHeight);
+    rerender(<MultiReviewFlowGraph {...panel(4)} layout="graph" />);
+    expect(viewport().style.height).toBe("500px");
+  });
+
+  for (const interruption of [
+    "stacked",
+    "fullscreen",
+    "pointerCancel",
+    "lostPointerCapture",
+  ] as const) {
+    test(`an interrupted resize (${interruption}) restores the latest saved height`, () => {
+      useUIStore.setState({ multiReviewGraphHeight: 300 });
+      const { rerender } = render(<MultiReviewFlowGraph {...panel(4)} />);
+      const divider = screen.getByRole("separator", { name: "Resize graph" });
+      fireEvent.pointerDown(divider, { button: 0, pointerId: 1, clientY: 100 });
+      fireEvent.pointerMove(divider, { pointerId: 1, clientY: 180 });
+      expect(viewport().style.height).toBe("380px");
+      // Another graph can save a preference while this one's drag is active.
+      act(() => useUIStore.getState().setMultiReviewGraphHeight(420));
+      if (interruption === "stacked") {
+        rerender(<MultiReviewFlowGraph {...panel(4)} layout="stacked" />);
+        rerender(<MultiReviewFlowGraph {...panel(4)} layout="graph" />);
+      } else if (interruption === "fullscreen") {
+        fireEvent.click(screen.getByTestId("multi-review-fullscreen"));
+        fireEvent.click(screen.getByTestId("multi-review-fullscreen"));
+      } else {
+        fireEvent[interruption](divider, { pointerId: 1, clientY: 180 });
+        fireEvent.pointerUp(divider, { pointerId: 1, clientY: 180 });
+      }
+      expect(useUIStore.getState().multiReviewGraphHeight).toBe(420);
+      expect(viewport().style.height).toBe("420px");
+      act(() => useUIStore.getState().setMultiReviewGraphHeight(460));
+      expect(viewport().style.height).toBe("460px");
+    });
+  }
+
   test("a remembered graph height applies to every graph, but not in fullscreen", () => {
     useUIStore.setState({ multiReviewGraphHeight: 300 });
     render(<MultiReviewFlowGraph {...panel(4)} />);
     expect(viewport().style.height).toBe("300px");
     fireEvent.click(screen.getByTestId("multi-review-fullscreen"));
     expect(viewport().style.height).toBe("");
-    expect(screen.queryByRole("separator", { name: "Resize graph" })).toBeNull();
+    expect(screen.queryByRole("separator", { name: "Resize graph" }) === null).toBe(true);
   });
 
   test("fullscreen lays the graph over the window until the button or Escape leaves it", () => {

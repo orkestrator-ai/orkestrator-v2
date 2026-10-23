@@ -601,3 +601,98 @@ test("findings stay reachable, fit the viewport and scroll internally", async ({
   });
   await expect(badge).toBeInViewport();
 });
+
+for (const scale of [0.75, 1, 1.5]) {
+  test(`divider follows a captured mouse at ${scale * 100}% application CSS zoom`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1800, height: 1400 });
+    await page.goto("/multi-review-flow?phase=reviewing&reviewers=4");
+    await page.evaluate((zoom) => {
+      document.documentElement.style.zoom = String(zoom);
+    }, scale);
+    const divider = page.getByRole("separator", { name: "Resize graph" });
+    await expect(divider).toBeVisible();
+    const before = Number(await divider.getAttribute("aria-valuenow"));
+    const box = (await divider.boundingBox())!;
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await expect(divider).toBeFocused();
+    // One jump beyond the original hit area exercises native pointer capture.
+    await page.mouse.move(x, y + 90);
+    await expect(divider).toHaveAttribute("aria-valuenow", String(before + Math.round(90 / scale)));
+    const moved = (await divider.boundingBox())!;
+    expect(Math.abs(moved.y - box.y - 90)).toBeLessThanOrEqual(1);
+    await page.mouse.up();
+    await page.reload();
+    await expect(page.getByRole("separator", { name: "Resize graph" })).toHaveAttribute(
+      "aria-valuenow",
+      String(before + Math.round(90 / scale)),
+    );
+    await page.getByRole("separator", { name: "Resize graph" }).press("Enter");
+    await page.reload();
+    await expect(page.getByRole("separator", { name: "Resize graph" })).toHaveAttribute(
+      "aria-valuenow",
+      String(before),
+    );
+  });
+}
+
+test("a divider click keeps automatic sizing and supports keyboard resizing without tabbing", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1400, height: 1000 });
+  await page.goto("/multi-review-flow?phase=reviewing&reviewers=4");
+  const divider = page.getByRole("separator", { name: "Resize graph" });
+  const before = Number(await divider.getAttribute("aria-valuenow"));
+  await divider.click();
+  await expect(divider).toBeFocused();
+  await page.keyboard.press("ArrowUp");
+  await expect(divider).toHaveAttribute("aria-valuenow", String(before - 16));
+  await page.keyboard.press("Enter");
+  await divider.click();
+  await page.goto("/multi-review-flow?phase=reviewing&reviewers=8");
+  await expect(page.getByRole("separator", { name: "Resize graph" })).not.toHaveAttribute(
+    "aria-valuenow",
+    String(before),
+  );
+});
+
+test("touch resize captures the finger beyond the handle and prevents page panning", async ({
+  page,
+  context,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-chromium", "Requires native touch input");
+  // A tablet-sized touch client uses the wide graph and its divider.
+  await page.setViewportSize({ width: 1400, height: 1200 });
+  await page.goto("/multi-review-flow?phase=reviewing&reviewers=4");
+  const divider = page.getByRole("separator", { name: "Resize graph" });
+  const before = Number(await divider.getAttribute("aria-valuenow"));
+  const box = (await divider.boundingBox())!;
+  const x = box.x + box.width / 2;
+  const y = box.y + box.height / 2;
+  const scrollY = await page.evaluate(() => window.scrollY);
+  const cdp = await context.newCDPSession(page);
+  try {
+    await cdp.send("Input.dispatchTouchEvent", {
+      type: "touchStart",
+      touchPoints: [{ x, y, id: 1 }],
+    });
+    await cdp.send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: [{ x, y: y + 80, id: 1 }],
+    });
+    await expect(divider).toHaveAttribute("aria-valuenow", String(before + 80));
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    expect(await page.evaluate(() => window.scrollY)).toBe(scrollY);
+    await page.reload();
+    await expect(page.getByRole("separator", { name: "Resize graph" })).toHaveAttribute(
+      "aria-valuenow",
+      String(before + 80),
+    );
+  } finally {
+    await cdp.detach();
+  }
+});

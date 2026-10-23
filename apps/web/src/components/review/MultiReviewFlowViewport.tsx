@@ -502,14 +502,22 @@ export function FlowHeightDivider({
   height: number;
   min: number;
   max: number;
-  onResize: (height: number) => void;
+  onResize: (height: number | null) => void;
   onCommit: (height: number | null) => void;
 }) {
-  const dragRef = useRef<{ pointerId: number; startY: number; startHeight: number } | null>(null);
+  const dragRef = useRef<{
+    pointerId: number;
+    startY: number;
+    startHeight: number;
+    scale: number;
+    moved: boolean;
+  } | null>(null);
   const [dragging, setDragging] = useState(false);
   const heightAt = (clientY: number) => {
     const drag = dragRef.current!;
-    return Math.round(Math.min(max, Math.max(min, drag.startHeight + clientY - drag.startY)));
+    return Math.round(
+      Math.min(max, Math.max(min, drag.startHeight + (clientY - drag.startY) / drag.scale)),
+    );
   };
   const end = (event: ReactPointerEvent<HTMLDivElement>) => {
     const drag = dragRef.current;
@@ -517,8 +525,22 @@ export function FlowHeightDivider({
     const next = heightAt(event.clientY);
     dragRef.current = null;
     setDragging(false);
-    onCommit(next);
+    if (drag.moved) onCommit(next);
   };
+  const cancel = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (dragRef.current?.pointerId !== event.pointerId) return;
+    dragRef.current = null;
+    setDragging(false);
+    onResize(null);
+  };
+  useEffect(
+    () => () => {
+      if (!dragRef.current) return;
+      dragRef.current = null;
+      onResize(null);
+    },
+    [onResize],
+  );
   return (
     <div
       role="separator"
@@ -535,23 +557,32 @@ export function FlowHeightDivider({
         dragging && "select-none",
       )}
       onPointerDown={(event) => {
-        if (event.button !== 0) return;
+        if (event.button !== 0 || dragRef.current) return;
         event.preventDefault();
+        event.currentTarget.focus();
         event.currentTarget.setPointerCapture?.(event.pointerId);
+        // CSS zoom scales client coordinates, while native page zoom already
+        // reports them in layout pixels. Measure their ratio in either host.
+        const renderedHeight = event.currentTarget.getBoundingClientRect().height;
+        const layoutHeight = event.currentTarget.offsetHeight;
         dragRef.current = {
           pointerId: event.pointerId,
           startY: event.clientY,
           startHeight: height,
+          scale: renderedHeight > 0 && layoutHeight > 0 ? renderedHeight / layoutHeight : 1,
+          moved: false,
         };
         setDragging(true);
       }}
       onPointerMove={(event) => {
         const drag = dragRef.current;
         if (!drag || drag.pointerId !== event.pointerId) return;
-        onResize(heightAt(event.clientY));
+        if (Math.abs(event.clientY - drag.startY) / drag.scale >= 2) drag.moved = true;
+        if (drag.moved) onResize(heightAt(event.clientY));
       }}
       onPointerUp={end}
-      onPointerCancel={end}
+      onPointerCancel={cancel}
+      onLostPointerCapture={cancel}
       onDoubleClick={() => onCommit(null)}
       onKeyDown={(event) => {
         let next: number | null | undefined;

@@ -15,7 +15,9 @@ import {
   MULTI_REVIEW_REVIEW_TAB_TITLE,
   multiReviewSharedSessionStep,
 } from "@orkestrator/protocol/multi-review";
+import type { NativeAgentTurnPhase } from "@orkestrator/protocol/native-agent";
 import type { CreateTabOptions } from "@/contexts/TerminalContext";
+import type { PrState } from "@/types";
 import { formatElapsed } from "@/lib/format-elapsed";
 import {
   formatRuntimeParts,
@@ -298,6 +300,130 @@ export function autoPrLaunchNotice(launch: NonNullable<MultiReviewWorkflow["auto
     text: `${reason}. The pull request agent is being launched in the background.`,
     tone: "muted",
   };
+}
+
+/** What the PR node shows: the automatic launch, its agent, and the environment's pull request. */
+export interface PullRequestStepStatus {
+  state: MultiReviewFlowState;
+  label: string;
+  pendingLabel?: string;
+  statusWord?: MultiReviewFlowNodeModel["statusWord"];
+  error?: string;
+}
+
+const ACTIVE_AGENT_PHASES: ReadonlySet<NativeAgentTurnPhase> = new Set<NativeAgentTurnPhase>([
+  "running",
+  "blocked",
+  "cancelling",
+  "recovering",
+]);
+
+/**
+ * The PR stage. A pull request counts as this review's outcome once the PR
+ * agent was launched for it or the step before it finished, so one that was
+ * already open does not complete the pipeline before it has run.
+ *
+ * `agentPhase` is the launched PR tab's turn, when this client has it. While
+ * it works the node runs; once it settles without a pull request having been
+ * detected the node says so rather than claiming one.
+ */
+export function pullRequestStep({
+  autoPr,
+  launch,
+  prUrl,
+  prState,
+  agentPhase,
+  upstreamComplete,
+}: {
+  autoPr: boolean;
+  launch: MultiReviewWorkflow["autoPrLaunch"];
+  prUrl: string | null;
+  prState: PrState | null;
+  agentPhase: NativeAgentTurnPhase | undefined;
+  /** The Fix, or the clean report that stood in for it, finished. */
+  upstreamComplete: boolean;
+}): PullRequestStepStatus {
+  const launched = launch?.state === "launched";
+  if (launched && agentPhase && ACTIVE_AGENT_PHASES.has(agentPhase)) {
+    if (agentPhase === "blocked") {
+      return {
+        state: "running",
+        label: "The PR agent is waiting for input",
+        statusWord: { text: "needs input", tone: "warning" },
+      };
+    }
+    return {
+      state: "running",
+      label: "The PR agent is committing, pushing, and opening the pull request",
+      statusWord: { text: "working", tone: "running" },
+    };
+  }
+  if (prUrl && (launched || upstreamComplete)) {
+    const state = prState ?? "open";
+    return {
+      state: "complete",
+      label: `Pull request ${state}`,
+      statusWord: { text: state, tone: state === "closed" ? "warning" : "muted" },
+    };
+  }
+  switch (launch?.state) {
+    case "pending":
+      return {
+        state: "running",
+        label: "The PR agent is being launched",
+        statusWord: { text: "launching", tone: "running" },
+      };
+    case "launched":
+      if (agentPhase === "error") {
+        return {
+          state: "failed",
+          label: "The PR agent stopped with an error",
+          error: "The PR agent stopped with an error. Open its session to see why.",
+        };
+      }
+      if (agentPhase === "idle") {
+        return {
+          state: "complete",
+          label: "The PR agent finished, but no pull request has been detected yet",
+          statusWord: { text: "no PR yet", tone: "warning" },
+        };
+      }
+      return {
+        state: "running",
+        label: "The PR agent was launched",
+        statusWord: { text: "launched", tone: "running" },
+      };
+    case "skipped":
+      return {
+        state: "not-started",
+        label: launch.message ?? "The automatic pull request was skipped",
+        pendingLabel: "skipped",
+      };
+    case "failed":
+      return {
+        state: "failed",
+        label: "The pull request could not be started automatically",
+        error: autoPrLaunchNotice(launch).text,
+      };
+    default:
+      return autoPr
+        ? {
+            state: "not-started",
+            label: "The PR agent starts once the Fix completes",
+            pendingLabel: "waiting",
+          }
+        : {
+            state: "not-started",
+            label: "Automatic PR is off. Use the PR button to create one",
+            pendingLabel: "manual",
+          };
+  }
+}
+
+/** `#123 · into main`, or just the target branch before a pull request exists. */
+export function pullRequestDetail(prUrl: string | null, targetBranch: string): string {
+  const number = prUrl?.match(/\/pull\/(\d+)/)?.[1];
+  return number ? `#${number} · into ${targetBranch}` : `into ${targetBranch}`;
 }
 
 export function openFixSessionError(

@@ -16,6 +16,8 @@ import {
 } from "@/contexts";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
+import { useEnvironmentStore } from "@/stores/environmentStore";
+import type { Environment } from "@/types";
 import { MultiReviewTab, allowsReviewTileActivation } from "./MultiReviewTab";
 import {
   autoPrLaunchNotice,
@@ -26,6 +28,8 @@ import {
   fixStep,
   multiReviewFixSessionTabOptions,
   multiReviewReviewSessionTabOptions,
+  pullRequestDetail,
+  pullRequestStep,
   reviewPackageGenerationStep,
   reviewerColumnLabel,
   reviewerProgressSummary,
@@ -277,6 +281,113 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("MultiReviewTab backend snapshot viewer", () => {
+  test("reads the PR stage from the launch, its agent and the environment's pull request", () => {
+    const requestId = "multi-review-pr:multi-1";
+    const launched = { state: "launched" as const, requestId, tabId: "agent-job-pr" };
+    const base = {
+      autoPr: true,
+      launch: undefined,
+      prUrl: null,
+      prState: null,
+      agentPhase: undefined,
+      upstreamComplete: false,
+    };
+    expect(pullRequestStep(base)).toMatchObject({ state: "not-started", pendingLabel: "waiting" });
+    expect(pullRequestStep({ ...base, autoPr: false })).toMatchObject({
+      state: "not-started",
+      pendingLabel: "manual",
+    });
+    expect(pullRequestStep({ ...base, launch: { state: "pending", requestId } })).toMatchObject({
+      state: "running",
+      statusWord: { text: "launching" },
+    });
+    expect(pullRequestStep({ ...base, launch: launched, agentPhase: "running" })).toMatchObject({
+      state: "running",
+      statusWord: { text: "working" },
+    });
+    expect(pullRequestStep({ ...base, launch: launched, agentPhase: "blocked" })).toMatchObject({
+      state: "running",
+      statusWord: { text: "needs input", tone: "warning" },
+    });
+    // A settled agent without a detected pull request does not claim one.
+    expect(pullRequestStep({ ...base, launch: launched, agentPhase: "idle" })).toMatchObject({
+      state: "complete",
+      statusWord: { text: "no PR yet", tone: "warning" },
+    });
+    expect(pullRequestStep({ ...base, launch: launched, agentPhase: "error" }).state).toBe(
+      "failed",
+    );
+    expect(
+      pullRequestStep({
+        ...base,
+        launch: launched,
+        agentPhase: "idle",
+        prUrl: "https://github.com/o/r/pull/42",
+        prState: "merged",
+      }),
+    ).toMatchObject({ state: "complete", label: "Pull request merged" });
+    // A pull request opened by hand counts once the Fix is done, not before.
+    const manual = { ...base, autoPr: false, prUrl: "https://github.com/o/r/pull/42" };
+    expect(pullRequestStep(manual).state).toBe("not-started");
+    expect(pullRequestStep({ ...manual, upstreamComplete: true }).state).toBe("complete");
+    expect(
+      pullRequestStep({
+        ...base,
+        launch: { state: "skipped", requestId, message: "PR exists" },
+      }),
+    ).toMatchObject({ state: "not-started", pendingLabel: "skipped", label: "PR exists" });
+    expect(
+      pullRequestStep({ ...base, launch: { state: "failed", requestId, message: "tab limit" } }),
+    ).toMatchObject({ state: "failed", error: expect.stringContaining("tab limit") });
+
+    expect(pullRequestDetail("https://github.com/o/r/pull/42", "main")).toBe("#42 · into main");
+    expect(pullRequestDetail(null, "main")).toBe("into main");
+  });
+
+  test("shows the opened pull request as the PR node", () => {
+    const workflow: MultiReviewWorkflow = {
+      ...readyWorkflow(),
+      phase: "interactive",
+      autoPr: true,
+      autoPrLaunch: {
+        state: "launched",
+        requestId: "multi-review-pr:multi-1",
+        tabId: "agent-job-pr",
+      },
+    };
+    const environments = useEnvironmentStore.getState().environments;
+    useEnvironmentStore.setState({
+      environments: [
+        {
+          id: "env-1",
+          prUrl: "https://github.com/o/r/pull/42",
+          prState: "open",
+        } as Environment,
+      ],
+    });
+    try {
+      useMultiReviewStore.getState().replaceWorkflow(workflow);
+      render(
+        <MultiReviewTab
+          data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
+          isActive
+          hydrateWorkflow={mock(async () => workflow)}
+        />,
+      );
+      const pr = flowNode("Pull request,");
+      expect(pr.getAttribute("data-flow-state")).toBe("complete");
+      expect(within(pr).getByText(`#42 · into ${workflow.targetBranch}`)).toBeTruthy();
+      fireEvent.click(pr);
+      expect(screen.getByRole("button", { name: "View pull request" })).toBeTruthy();
+      // The PR tab is not in this layout, so there is no session to show.
+      expect(
+        (screen.getByRole("button", { name: "Open PR session" }) as HTMLButtonElement).disabled,
+      ).toBe(true);
+    } finally {
+      useEnvironmentStore.setState({ environments });
+    }
+  });
+
   test("reports each auto-PR launch state after the Fix completes", () => {
     const requestId = "multi-review-pr:multi-1";
     expect(autoPrLaunchNotice({ state: "pending", requestId })).toMatchObject({ tone: "muted" });
@@ -3510,8 +3621,9 @@ describe("MultiReviewTab pipeline step cards", () => {
       "Reviewer 2 · codex, Complete, 1 issue found, 1 coverage gap found",
       expect.stringMatching(/^Consolidation, Consolidating findings, \d+/),
       "Fix, Not started",
+      "Pull request, Automatic PR is off. Use the PR button to create one",
     ]);
-    for (const label of ["Prepare", "Review · 2/2", "Consolidate"]) {
+    for (const label of ["Prepare", "Review · 2/2", "Consolidate", "PR"]) {
       expect(within(pipeline).getByText(label)).toBeTruthy();
     }
     // The running step is the one inspected until the user picks another.

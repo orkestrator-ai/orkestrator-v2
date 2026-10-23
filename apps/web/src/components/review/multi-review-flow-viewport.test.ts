@@ -65,7 +65,8 @@ describe("viewport and fit", () => {
   });
 
   test("fits nothing tighter than the content needs and never magnifies", () => {
-    const small = graph(2);
+    // Wide enough for the PR column as well, so nothing scrolls at 100%.
+    const small = graph(2, 2000);
     expect(fitFlowZoom(small.content, small.viewport)).toBe(1);
     const full = graph(32);
     const zoom = fitFlowZoom(full.content, full.viewport);
@@ -105,7 +106,9 @@ describe("zooming around a point", () => {
 
   test("clamps the scroll to the content and centres a canvas smaller than the viewport", () => {
     const { content, viewport } = graph(8);
-    const zoomedIn = zoomFlowView({ zoom: 1, scrollLeft: 0, scrollTop: 0 }, 2, content, viewport, {
+    // Scrolled to the far right, so the anchor is the canvas's bottom-right corner.
+    const start = { zoom: 1, scrollLeft: content.width - viewport.width, scrollTop: 0 };
+    const zoomedIn = zoomFlowView(start, 2, content, viewport, {
       x: viewport.width,
       y: viewport.height,
     });

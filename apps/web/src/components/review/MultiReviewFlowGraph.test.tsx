@@ -146,6 +146,8 @@ interface PhaseCase {
     intoFix: MultiReviewFlowEdgeState;
   };
   selected: string;
+  /** The PR node, which stays queued unless a phase says otherwise. */
+  pr?: MultiReviewFlowState;
 }
 
 const NOT = "not-started" as const;
@@ -372,7 +374,13 @@ describe("flow graph by phase", () => {
       .getAllByRole("tab")
       .map((node) => node.dataset.flowState);
     const [packageState, reviewerStates, consolidationState, fixState] = phase.nodes;
-    expect(states).toEqual([packageState, ...reviewerStates, consolidationState, fixState]);
+    expect(states).toEqual([
+      packageState,
+      ...reviewerStates,
+      consolidationState,
+      fixState,
+      phase.pr ?? NOT,
+    ]);
 
     phase.edges.intoReviewers.forEach((state, index) =>
       expect(edgeState(`into-reviewer-${index}`)).toBe(state),
@@ -614,7 +622,7 @@ describe("flow graph nodes", () => {
 
     const tabs = () => screen.getAllByRole("tab");
     // One tab stop: the selected node.
-    expect(tabs().map((node) => node.tabIndex)).toEqual([0, -1, -1, -1, -1]);
+    expect(tabs().map((node) => node.tabIndex)).toEqual([0, -1, -1, -1, -1, -1]);
     const packageNode = tabs()[0]!;
     packageNode.focus();
     fireEvent.keyDown(packageNode, { key: "ArrowRight" });
@@ -623,8 +631,10 @@ describe("flow graph nodes", () => {
     fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
     expect(document.activeElement?.getAttribute("aria-label")).toStartWith("Reviewer 2 ·");
     fireEvent.keyDown(document.activeElement!, { key: "End" });
-    expect(document.activeElement?.getAttribute("aria-label")).toStartWith("Fix,");
+    expect(document.activeElement?.getAttribute("aria-label")).toStartWith("Pull request,");
     fireEvent.keyDown(document.activeElement!, { key: "ArrowRight" });
+    expect(document.activeElement?.getAttribute("aria-label")).toStartWith("Pull request,");
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowLeft" });
     expect(document.activeElement?.getAttribute("aria-label")).toStartWith("Fix,");
     fireEvent.keyDown(document.activeElement!, { key: "Home" });
     expect(document.activeElement).toBe(tabs()[0]!);
@@ -692,10 +702,12 @@ describe("stacked layout", () => {
     ],
     consolidationNode: node("consolidation", "consolidation", "not-started"),
     fixNode: node("fix", "fix", "not-started"),
+    prNode: node("pr", "pr", "not-started"),
     edges: {
       intoReviewers: ["complete", "active"] as MultiReviewFlowEdgeState[],
       intoConsolidation: ["ready", "pending"] as MultiReviewFlowEdgeState[],
       intoFix: "pending" as const,
+      intoPr: "pending" as const,
     },
     reviewLabel: "Review · 1/2",
     selectedId: "reviewer:2",
@@ -715,6 +727,7 @@ describe("stacked layout", () => {
       "reviewer:2, running",
       "consolidation, not-started",
       "fix, not-started",
+      "pr, not-started",
     ]);
     expect(document.querySelector("path[data-flow-edge]") === null).toBe(true);
     expect(edgeState("into-reviewers")).toBe("active");
@@ -723,6 +736,7 @@ describe("stacked layout", () => {
     expect(document.querySelector('[data-flow-edge="into-fix"]')!.className).toContain(
       "border-dashed",
     );
+    expect(edgeState("into-pr")).toBe("pending");
   });
 
   test("switches to the stacked layout below the threshold width", () => {
@@ -861,10 +875,12 @@ describe("zoom and pan", () => {
     ),
     consolidationNode: node("consolidation", "consolidation", "not-started"),
     fixNode: node("fix", "fix", "not-started"),
+    prNode: node("pr", "pr", "not-started"),
     edges: {
       intoReviewers: Array.from({ length: count }, () => "active" as const),
       intoConsolidation: Array.from({ length: count }, () => "pending" as const),
       intoFix: "pending",
+      intoPr: "pending",
     },
     reviewLabel: `Review · 0/${count}`,
     selectedId: "reviewer:1",
@@ -944,11 +960,58 @@ describe("zoom and pan", () => {
     // At another zoom the scaled position is what has to be visible.
     fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
     fireEvent.keyDown(document.activeElement!, { key: "End" });
-    const fix = layout.fix;
+    const pr = layout.pr;
     const zoomed = viewport();
-    expect(fix.y * 1.25 - zoomed.scrollTop).toBeGreaterThanOrEqual(0);
-    expect((fix.y + fix.height) * 1.25 - zoomed.scrollTop).toBeLessThanOrEqual(height);
-    expect((fix.x + fix.width) * 1.25 - zoomed.scrollLeft).toBeLessThanOrEqual(1440);
+    expect(pr.y * 1.25 - zoomed.scrollTop).toBeGreaterThanOrEqual(0);
+    expect((pr.y + pr.height) * 1.25 - zoomed.scrollTop).toBeLessThanOrEqual(height);
+    // Unmeasured, the viewport is as wide as the canvas at 100%.
+    expect((pr.x + pr.width) * 1.25 - zoomed.scrollLeft).toBeLessThanOrEqual(layout.width);
+  });
+
+  test("centres a new stage within the scroll range, never past either edge", () => {
+    const width = 1200;
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+      configurable: true,
+      get: () => width,
+    });
+    // Reduced motion lands each scroll at once instead of gliding.
+    const matchMedia = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      ...matchMedia.call(window, query),
+      matches: query.includes("prefers-reduced-motion"),
+    })) as typeof window.matchMedia;
+    try {
+      render(<SelectableGraph {...panel(4)} />);
+      const layout = multiReviewFlowLayout({ width, reviewerCount: 4, packageHasChips: false });
+      const maxScroll = layout.width - width;
+      expect(maxScroll).toBeGreaterThan(0);
+      // Early stages sit at the left edge; the PR column starts out of view.
+      expect(viewport().scrollLeft).toBe(0);
+
+      fireEvent.click(screen.getByRole("tab", { name: "consolidation, not-started" }));
+      const centre = layout.consolidation.x + layout.consolidation.width / 2 - width / 2;
+      expect(viewport().scrollLeft).toBe(Math.round(Math.min(maxScroll, centre)));
+
+      // The PR column is at the far right, so the canvas stops at its edge.
+      fireEvent.click(screen.getByRole("tab", { name: "pr, not-started" }));
+      expect(viewport().scrollLeft).toBe(maxScroll);
+
+      fireEvent.click(screen.getByRole("tab", { name: "package, complete" }));
+      expect(viewport().scrollLeft).toBe(0);
+
+      // Another node in the same stage does not move the canvas.
+      fireEvent.click(screen.getByRole("tab", { name: "reviewer:2, running" }));
+      act(() => {
+        viewport().scrollLeft = 40;
+      });
+      fireEvent.click(screen.getByRole("tab", { name: "reviewer:3, running" }));
+      expect(viewport().scrollLeft).toBe(40);
+    } finally {
+      window.matchMedia = matchMedia;
+      if (descriptor) Object.defineProperty(HTMLElement.prototype, "clientWidth", descriptor);
+      else delete (HTMLElement.prototype as { clientWidth?: number }).clientWidth;
+    }
   });
 
   test("zooms with Ctrl + wheel or a pinch, and leaves a plain wheel to scrolling", () => {

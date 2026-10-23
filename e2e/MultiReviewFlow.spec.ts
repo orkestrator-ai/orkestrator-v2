@@ -48,7 +48,7 @@ for (const phase of PHASES) {
   test(`renders the ${phase} phase as a pipeline without overlapping nodes`, async ({ page }) => {
     await page.goto(`/multi-review-flow?phase=${phase}&reviewers=4`);
     const pipeline = page.getByRole("tablist", { name: "Multi Review pipeline" });
-    await expect(pipeline.getByRole("tab")).toHaveCount(7);
+    await expect(pipeline.getByRole("tab")).toHaveCount(8);
     // Exactly one node is inspected, and the inspector names it.
     const selected = pipeline.locator('[role="tab"][aria-selected="true"]');
     await expect(selected).toHaveCount(1);
@@ -67,7 +67,10 @@ for (const count of [1, 2, 4, 8]) {
     const boxes = await nodeBoxes(page);
     expect(overlapping(boxes)).toEqual([]);
     const viewport = page.viewportSize()!;
-    for (const box of boxes) expect(box.x + box.width).toBeLessThanOrEqual(viewport.width + 1);
+    // The PR column, last, runs past the right edge rather than narrowing the rest.
+    for (const box of boxes.slice(0, -1)) {
+      expect(box.x + box.width).toBeLessThanOrEqual(viewport.width + 1);
+    }
   });
 }
 
@@ -163,10 +166,37 @@ test("walks the pipeline from the keyboard", async ({ page }) => {
   await expect(selected).toHaveAttribute("aria-label", /^Reviewer 3 ·/);
   await expect(selected).toBeFocused();
   await page.keyboard.press("End");
-  await expect(selected).toHaveAttribute("aria-label", /^Fix,/);
+  await expect(selected).toHaveAttribute("aria-label", /^Pull request,/);
   await expect(
     page.getByTestId("multi-review-inspector").getByRole("heading", { level: 2 }).first(),
-  ).toHaveText("Fix");
+  ).toHaveText("Pull request");
+  await page.keyboard.press("ArrowLeft");
+  await expect(selected).toHaveAttribute("aria-label", /^Fix,/);
+});
+
+test("centres each new stage as far as the graph scrolls", async ({ page }) => {
+  await page.goto("/multi-review-flow?phase=reviewing&reviewers=4");
+  const viewportLocator = page.locator("[data-flow-viewport]");
+  test.skip(
+    await viewportLocator.evaluate((element) => element.scrollWidth <= element.clientWidth),
+    "The whole pipeline fits, so nothing scrolls",
+  );
+  const scrollLeft = () => viewportLocator.evaluate((element) => element.scrollLeft);
+  // The browser's own limit, which can differ from scrollWidth - clientWidth
+  // by the reserved scrollbar gutter.
+  const maxScroll = await viewportLocator.evaluate((element) => {
+    element.scrollLeft = element.scrollWidth;
+    const max = element.scrollLeft;
+    element.scrollLeft = 0;
+    return max;
+  });
+  // The review starts at the left edge, the PR column out of view.
+  expect(await scrollLeft()).toBe(0);
+  await page.getByRole("tab", { name: /^Pull request,/ }).click();
+  // At the far right the canvas stops at its edge rather than centring the node.
+  await expect.poll(scrollLeft).toBe(maxScroll);
+  await page.getByRole("tab", { name: /^Review package,/ }).click();
+  await expect.poll(scrollLeft).toBe(0);
 });
 
 async function viewportBox(page: Page): Promise<Box> {
@@ -218,7 +248,7 @@ test("fits the 32-reviewer maximum and zooms within bounds", async ({ page }) =>
   expect(overflow.x).toBeLessThanOrEqual(1);
   expect(overflow.y).toBeLessThanOrEqual(1);
   const boxes = await nodeBoxes(page);
-  expect(boxes).toHaveLength(35);
+  expect(boxes).toHaveLength(36);
   expect(overlapping(boxes)).toEqual([]);
 
   const zoomIn = page.getByRole("button", { name: "Zoom in" });
@@ -278,7 +308,7 @@ test("pans the zoomed graph by dragging the canvas and with Ctrl + wheel zoom", 
     expect(await viewportLocator.evaluate((element) => element.scrollTop)).toBe(0);
   } else {
     const frame = await viewportBox(page);
-    // Drag from empty canvas below the Fix column's label.
+    // Drag from empty canvas below the PR column's label.
     const start = { x: frame.x + frame.width - 60, y: frame.y + frame.height - 80 };
     await page.mouse.move(start.x, start.y);
     await page.mouse.down();

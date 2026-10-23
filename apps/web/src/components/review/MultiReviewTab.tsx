@@ -976,7 +976,7 @@ function MultiReviewOverviewTab({
         </>
       ),
       body: (
-        <div className="space-y-4">
+        <div className="flex flex-1 flex-col space-y-4">
           <StepFacts model={model} runtime={runtime} status={status} />
           {details}
           <StepTranscriptTail
@@ -1358,7 +1358,7 @@ function MultiReviewOverviewTab({
         </>
       ),
       body: (
-        <div className="space-y-3">
+        <div className="flex flex-1 flex-col space-y-3">
           <p className="truncate text-xs text-muted-foreground">
             {modelDetail(reviewer, true)} · Read only
             {runtime ? ` · ${formatRuntimeParts(runtime)}` : ""}
@@ -1581,7 +1581,10 @@ function MultiReviewOverviewTab({
 
       {/* A stable gutter keeps the graph's width, and so its zoom, from
           changing when the inspector grows enough to need a scrollbar. */}
-      <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
+      <div
+        data-testid="multi-review-overview-scroll"
+        className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]"
+      >
         <div className="@container flex min-h-full flex-col">
           {notices.length > 0 ? (
             <div className="space-y-2 border-b border-divider px-4 py-3 sm:px-6">{notices}</div>
@@ -1602,25 +1605,30 @@ function MultiReviewOverviewTab({
             fullscreenContainer={tabRoot}
             isActive={isActive}
           />
-          <div className="flow-root min-h-80 flex-1 px-4 py-4 sm:px-6">
-            {/* Floats beside the inspector header, and stays in view while the
+          {/* The body's row takes the rest of the window, so a transcript can
+              fill it down to the footer. */}
+          <div className="grid min-h-80 flex-1 grid-cols-[minmax(0,1fr)_auto] grid-rows-[auto_1fr] px-4 py-4 sm:px-6">
+            {/* Sits beside the inspector header, and stays in view while the
                 inspector scrolls. */}
             <MultiReviewFindingsBadge
               isActive={isActive}
               findings={findings}
               reviewerCount={reviewerCount}
               provisionalCount={provisionalCount}
-              className="sticky top-3 z-20 float-right ml-3"
+              className="sticky top-3 z-20 col-start-2 row-span-2 row-start-1 ml-3 self-start"
             />
             <section
               role="tabpanel"
               id={panelId}
               aria-labelledby={flowNodeElementId(panelId, selected.node.id)}
               data-testid="multi-review-inspector"
-              className="min-w-0"
+              className="col-span-full row-span-2 row-start-1 grid min-w-0 grid-cols-subgrid grid-rows-subgrid"
             >
-              <MultiReviewInspectorHeader node={selected.node} actions={selected.actions} />
-              {selected.body}
+              <div className="col-start-1 row-start-1 min-w-0">
+                <MultiReviewInspectorHeader node={selected.node} actions={selected.actions} />
+              </div>
+              {/* Full width: the badge only overlaps it once stuck. */}
+              <div className="col-span-full row-start-2 flex min-w-0 flex-col">{selected.body}</div>
             </section>
           </div>
           {workflow.consolidatedReport || workflow.fixResult ? (

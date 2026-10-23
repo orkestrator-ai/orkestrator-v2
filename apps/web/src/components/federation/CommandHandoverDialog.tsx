@@ -95,8 +95,8 @@ export function CommandHandoverDialog() {
         setPlan(loaded);
         setChosen(keys);
         setIncludeSelf(selfChoice);
-        // Nothing to choose: go ahead. A failure leaves the dialog open to retry.
-        if (loaded.machines.length === 0 && selfChoice) {
+        // Nothing to choose or clear: go ahead. A failure leaves the dialog open to retry.
+        if (loaded.machines.length === 0 && selfChoice && loaded.repairs.length === 0) {
           await execute(target, loaded, keys, true);
           return;
         }
@@ -198,6 +198,29 @@ export function CommandHandoverDialog() {
           ))}
         </div>
 
+        {plan.repairs.length > 0 ? (
+          <div
+            className="flex gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-2 text-xs text-amber-100"
+            data-testid="command-handover-repairs"
+          >
+            <ShieldAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <div className="space-y-1">
+              {plan.repairs.includes("forget-source-on-target") ? (
+                <p>
+                  {preview.targetName} lists {preview.self.displayName} as one of its own machines,
+                  so neither can control the other. That entry on {preview.targetName} is removed
+                  first.
+                </p>
+              ) : null}
+              {plan.repairs.includes("allow-source-on-target") ? (
+                <p>
+                  {preview.self.displayName} was detached on {preview.targetName} earlier. It is
+                  allowed again there first.
+                </p>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
         {!preview.self.reachable ? (
           <p className="flex gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-2 text-xs text-amber-100">
             <ShieldAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />

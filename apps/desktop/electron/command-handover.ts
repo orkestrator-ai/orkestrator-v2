@@ -1,6 +1,7 @@
 import type {
   CommandHandoverPreview,
   CommandHandoverPreviewResult,
+  CommandHandoverRepair,
   CommandHandoverResult,
   NodeImportEntry,
   NodeListResult,
@@ -17,6 +18,12 @@ import type { BackendId } from "@orkestrator/protocol/federation";
  * target itself when that command node does not control it yet, and the
  * saved machines the user chose, with their tokens. Tokens leave Electron
  * main only in requests to that command node.
+ *
+ * The target can refuse that command node: it may list it among its own
+ * machines (a loop left by an earlier switch), or its user may have
+ * detached it there. This device usually has its own connection to the
+ * target, so it reads those records in the preview and clears them on the
+ * target once the user confirms.
  */
 
 export interface CommandHandoverDeps {
@@ -61,6 +68,42 @@ function targetNodeId(deps: CommandHandoverDeps, targetConnectionId: string): Ba
   return nodeId;
 }
 
+interface TargetBlocks {
+  repairs: CommandHandoverRepair[];
+  /** What the target controls once the repairs are made. */
+  targetNodeIds: BackendId[];
+}
+
+/**
+ * What on the target refuses the source, read over this device's own
+ * connection to it. Nothing is known (and nothing repaired) when this
+ * device cannot reach the target itself.
+ */
+async function targetBlocks(
+  deps: CommandHandoverDeps,
+  targetConnectionId: string,
+  sourceNodeId: BackendId | null,
+): Promise<TargetBlocks> {
+  if (!sourceNodeId) return { repairs: [], targetNodeIds: [] };
+  const [status, nodes] = await Promise.all([
+    deps.invokeOn<NodeStatus>(targetConnectionId, "get_node_status").catch(() => null),
+    deps.invokeOn<NodeListResult>(targetConnectionId, "list_nodes").catch(() => null),
+  ]);
+  const repairs: CommandHandoverRepair[] = [];
+  if (nodes?.nodes.some((node) => node.nodeId === sourceNodeId)) {
+    repairs.push("forget-source-on-target");
+  }
+  if (status?.detachedControllers.some((entry) => entry.controllerId === sourceNodeId)) {
+    repairs.push("allow-source-on-target");
+  }
+  return {
+    repairs,
+    targetNodeIds: (nodes?.nodes ?? [])
+      .map((node) => node.nodeId)
+      .filter((id) => id !== sourceNodeId),
+  };
+}
+
 export async function previewCommandHandover(
   deps: CommandHandoverDeps,
   targetConnectionId: string,
@@ -70,11 +113,19 @@ export async function previewCommandHandover(
   if (status.mode === "standalone") return { kind: "already-command-node" };
   const nodeId = targetNodeId(deps, targetConnectionId);
   const source = await commandSource(deps);
-  if (deps.installationIdOf(source) === nodeId) return { kind: "already-command-node" };
+  const sourceNodeId = deps.installationIdOf(source);
+  if (sourceNodeId === nodeId) return { kind: "already-command-node" };
+  const blocks = await targetBlocks(deps, targetConnectionId, sourceNodeId);
   const preview = await deps.invokeOn<CommandHandoverPreview>(source, "preview_command_handover", {
     nodeId,
+    // The source's link to a target that refuses it cannot say what the target controls.
+    ...(blocks.repairs.length > 0 ? { targetNodeIds: blocks.targetNodeIds } : {}),
   });
-  return { kind: "preview", preview };
+  return {
+    kind: "preview",
+    preview,
+    ...(blocks.repairs.length > 0 ? { repairs: blocks.repairs } : {}),
+  };
 }
 
 export async function handOverCommandNode(
@@ -83,13 +134,32 @@ export async function handOverCommandNode(
 ): Promise<CommandHandoverResult | null> {
   const nodeId = targetNodeId(deps, input.targetConnectionId);
   const source = await commandSource(deps);
-  if (deps.installationIdOf(source) === nodeId) return null;
+  const sourceNodeId = deps.installationIdOf(source);
+  if (sourceNodeId === nodeId) return null;
 
   const registered = await deps.invokeOn<NodeListResult>(source, "list_nodes");
   const sourceStatus = await deps.invokeOn<NodeStatus>(source, "get_node_status");
   if (sourceStatus.mode === "standalone" && registered.nodes.length === 0) return null;
+
+  // The user confirmed: clear what refuses the source on the target. The
+  // source becomes the target's machine again through the handover itself.
+  const { repairs } = await targetBlocks(deps, input.targetConnectionId, sourceNodeId);
+  if (repairs.includes("forget-source-on-target")) {
+    await deps.invokeOn(input.targetConnectionId, "forget_node", { nodeId: sourceNodeId });
+  }
+  if (repairs.includes("allow-source-on-target")) {
+    await deps.invokeOn(input.targetConnectionId, "allow_controller", {
+      controllerId: sourceNodeId,
+    });
+  }
+
   let addedTarget = false;
-  if (!registered.nodes.some((node) => node.nodeId === nodeId)) {
+  const existing = registered.nodes.find((node) => node.nodeId === nodeId);
+  if (existing && existing.connection.state !== "connected") {
+    // A refused link does not retry by itself. If it still cannot connect,
+    // the handover reports why.
+    await deps.invokeOn(source, "reconnect_node", { nodeId });
+  } else if (!existing) {
     const target = await deps.machineImportEntry(input.targetConnectionId);
     if (!target?.token) {
       throw new Error(

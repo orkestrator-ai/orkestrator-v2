@@ -435,8 +435,8 @@ export function registerNodeCommands(register: CommandRegistrar): void {
   // Making another node the command node, from the current one: it hands over its
   // machines (credentials included) over its link and follows as the new one's leaf.
   register("preview_command_handover", async (args, context) => {
-    assertOnlyKeys(args, ["nodeId"], "arguments");
-    return nodes(context).previewHandover(args.nodeId);
+    assertOnlyKeys(args, ["nodeId", "targetNodeIds"], "arguments");
+    return nodes(context).previewHandover(args.nodeId, args.targetNodeIds);
   });
 
   register("hand_over_command", async (args, context) => {

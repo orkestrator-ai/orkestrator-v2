@@ -946,6 +946,25 @@ describe("command handover dialog edge cases", () => {
     expect(mockToastSuccess).toHaveBeenCalled();
   });
 
+  test("a loop on the target asks for confirmation even with nothing to choose", async () => {
+    const fake = installTwoMachines();
+    const original = await fake.connections.previewCommandHandover(MACHINE_B.id);
+    fake.connections.previewCommandHandover.mockResolvedValue({
+      ...original,
+      preview: { ...original.preview, candidates: [], targetNodeIds: [MACHINE_A.backendId!] },
+      repairs: ["forget-source-on-target", "allow-source-on-target"],
+    } as never);
+    render(<CommandHandoverDialog />);
+    act(() => requestCommandHandover({ name: MACHINE_B.name, connectionId: MACHINE_B.id }));
+    const repairs = await screen.findByTestId("command-handover-repairs");
+    expect(repairs.textContent).toContain("lists This computer as one of its own machines");
+    expect(repairs.textContent).toContain("was detached on");
+    expect(fake.connections.handOverCommand).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Make command node" }));
+    await waitFor(() => expect(fake.connections.handOverCommand).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+  });
+
   test("an already-command-node result only switches the native connection", async () => {
     const fake = installTwoMachines();
     window.orkestrator!.connections!.previewCommandHandover = async () => ({

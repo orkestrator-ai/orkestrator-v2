@@ -221,6 +221,22 @@ one step:
    leaf once the target attaches.
 4. The window switches to the target and reloads in its multi-machine view.
 
+The target can refuse the command node in charge, so the handover cannot use
+its link. One cause is a loop: the target lists that command node among its
+own machines, for example after it was added from the target's window. The
+other is that the target's user detached it there. A refused link does not
+retry, and the source cannot fix either record. On the desktop, Electron
+main usually has its own connection to the target. It reads both records
+there for the preview and passes the target's machines to
+`preview_command_handover` (`targetNodeIds`), because the source's link cannot
+read them. The dialog then always asks for confirmation and says what it will
+clear. On confirm, Electron main forgets the source on the target
+(`forget_node`) and allows it again there (`allow_controller`). The source
+then reconnects (`reconnect_node`) and hands over. The source becomes the
+target's machine again through the handover itself. Without its own
+connection to the target, or from a browser, the handover fails with the
+refusal's own message.
+
 Credentials travel only backend to backend (or from Electron main to a
 backend), over the routes the command node already uses, and are stored in
 the target's sensitive store. The commands are excluded from routing, grants

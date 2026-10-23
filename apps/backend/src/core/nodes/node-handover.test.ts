@@ -211,6 +211,43 @@ describe("handing command to another node", () => {
     expect((await mini.service.status()).mode).toBe("command");
   });
 
+  test("a target that lists its command node as a machine refuses it until a client clears the loop", async () => {
+    const network = new TestNodeNetwork();
+    const desktop = await addCommandable(network, "desktop");
+    const mini = await addCommandable(network, "mini");
+    const gram = await network.add("gram");
+    await attach(desktop, gram);
+    await attach(desktop, mini);
+    // The loop a real fleet got into: desktop is detached on mini, then
+    // desktop is added from mini's window. Each now refuses the other.
+    await mini.service.detachController(id(desktop), { byUser: true });
+    await mini.service.setRegistrationEnabled(true);
+    expect((await attach(mini, desktop)).connection.lastError?.code).toBe(
+      "controller-is-subordinate",
+    );
+    const relinked = await desktop.service.reconnectNode(id(mini));
+    expect(relinked.connection.lastError?.code).toBe("controller-is-subordinate");
+
+    // The refusal, not "connect first", says what is wrong.
+    const refused = await desktop.service.previewHandover(id(mini)).catch((caught) => caught);
+    expect(String((refused as Error).message)).toContain("registered under this node");
+    // A client that read mini directly supplies what mini controls.
+    const preview = await desktop.service.previewHandover(id(mini), []);
+    expect(preview.targetNodeIds).toEqual([]);
+    expect(preview.candidates.map((entry) => entry.nodeId)).toEqual([id(gram)]);
+    const invalid = await desktop.service.previewHandover(id(mini), [42]).catch((caught) => caught);
+    expect(String((invalid as Error).message)).toContain("targetNodeIds");
+
+    // What the desktop does on confirm: clear the loop on mini, reconnect, hand over.
+    await mini.service.forgetNode({ nodeId: id(desktop) });
+    await mini.service.allowController(id(desktop));
+    expect((await desktop.service.reconnectNode(id(mini))).connection.state).toBe("connected");
+    await desktop.service.handOverCommand({ nodeId: id(mini), includeSelf: true, entries: [] });
+    await settle(60);
+    expect(await registryOf(mini)).toEqual([id(desktop), id(gram)].map(String).sort());
+    expect((await desktop.service.status()).mode).toBe("leaf");
+  });
+
   test("only an attached command node can hand command to a node", async () => {
     const network = new TestNodeNetwork();
     const mini = await addCommandable(network, "mini");

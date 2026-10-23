@@ -198,10 +198,21 @@ export interface CommandHandoverPreview {
   };
 }
 
+/**
+ * A record on the target that keeps the command node in charge from
+ * controlling it. The desktop reads them over its own connection to the
+ * target and clears them there when the user confirms the handover.
+ */
+export type CommandHandoverRepair =
+  /** The target lists the command node in charge among its own machines: a loop. */
+  | "forget-source-on-target"
+  /** The target's user detached the command node in charge there. */
+  | "allow-source-on-target";
+
 /** The desktop's preview: nothing to do when the target already is the command node in charge. */
 export type CommandHandoverPreviewResult =
   | { kind: "already-command-node" }
-  | { kind: "preview"; preview: CommandHandoverPreview };
+  | { kind: "preview"; preview: CommandHandoverPreview; repairs?: CommandHandoverRepair[] };
 
 export interface CommandHandoverResult {
   targetNodeId: BackendId;

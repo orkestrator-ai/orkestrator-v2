@@ -920,17 +920,30 @@ export class NodeService {
   /**
    * What making `nodeId` the command node would hand over. A target this
    * node does not control yet (a client registers it first) is previewed
-   * without asking it what it controls.
+   * without asking it what it controls. While its link is refused, a client
+   * that reads the target directly (to clear what refuses it) passes
+   * `knownTargetNodeIds` instead.
    */
-  async previewHandover(nodeId: unknown): Promise<CommandHandoverPreview> {
+  async previewHandover(
+    nodeId: unknown,
+    knownTargetNodeIds?: unknown,
+  ): Promise<CommandHandoverPreview> {
     if (!isBackendId(nodeId)) throw new Error("Expected nodeId to be a node identity.");
+    if (
+      knownTargetNodeIds !== undefined &&
+      !(Array.isArray(knownTargetNodeIds) && knownTargetNodeIds.every(isBackendId))
+    ) {
+      throw new Error("Expected targetNodeIds to be node identities.");
+    }
     const registry = await this.currentRegistry();
     const target = registry.nodes.find((node) => node.nodeId === nodeId) ?? null;
-    const targetNodeIds = target
-      ? (
-          await (await this.handoverTarget(nodeId)).link.invoke<NodeListResult>("list_nodes")
-        ).nodes.map((node) => node.nodeId)
-      : [];
+    const targetNodeIds = !target
+      ? []
+      : knownTargetNodeIds && !this.links.get(target.nodeId)?.connected
+        ? [...new Set(knownTargetNodeIds as BackendId[])]
+        : (
+            await (await this.handoverTarget(nodeId)).link.invoke<NodeListResult>("list_nodes")
+          ).nodes.map((node) => node.nodeId);
     const candidates: HandoverCandidate[] = registry.nodes
       .filter((node) => node.nodeId !== nodeId && !targetNodeIds.includes(node.nodeId))
       .filter((node) => remoteRoutes(node.routes).length > 0)
@@ -1248,7 +1261,14 @@ export class NodeService {
     }
     const link = this.links.get(target.nodeId);
     if (!link?.connected) {
-      throw new Error(`${this.view(target).displayName} is not connected. Connect to it first.`);
+      const name = this.view(target).displayName;
+      // A refusal names what to fix; "connect first" would only send the user in circles.
+      const refusal = link?.view.lastError;
+      throw new Error(
+        refusal
+          ? `${name} is not connected to this command node: ${refusal.message}`
+          : `${name} is not connected. Connect to it first.`,
+      );
     }
     return { target, link };
   }

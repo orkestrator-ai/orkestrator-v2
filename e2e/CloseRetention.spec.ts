@@ -703,10 +703,13 @@ test("steering a Cursor turn whose steer history is full is refused, the turn ca
   await send(page, platform, held);
   await expect(page.getByRole("button", { name: /^Stop/ })).toBeVisible({ timeout: 30_000 });
 
-  const prompted = (await bridgeRequests(request, platform, requestsBefore)).find((line) =>
-    /^POST \/session\/[^/]+\/prompt$/.test(line),
-  );
-  expect(prompted, "the held turn reached the bridge").toBeTruthy();
+  // Stop shows as soon as the dispatch starts, before the bridge has the prompt.
+  const promptRequest = async () =>
+    (await bridgeRequests(request, platform, requestsBefore)).find((line) =>
+      /^POST \/session\/[^/]+\/prompt$/.test(line),
+    );
+  await expect.poll(promptRequest, { message: "the held turn reached the bridge" }).toBeTruthy();
+  const prompted = await promptRequest();
   const sessionId = decodeURIComponent(prompted!.split("/")[2]!);
   // Fill the running turn's steer history straight at the bridge, as a long
   // turn steered many times would have.

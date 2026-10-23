@@ -789,6 +789,51 @@ describe("AgentMailService", () => {
     }
   });
 
+  test("an idle presence going stale and fresh again keeps a held injection deferred", async () => {
+    // A backed-off observer group reads `unknown` between its safety reads and
+    // `idle` after them. That says nothing about the session, so it must not
+    // reset the inject backoff the way a real presence change does.
+    const { storage, dataDir } = await fixture();
+    let presence: "idle" | "unknown" | "working" = "idle";
+    try {
+      await storage.sendAgentMail(
+        { kind: "tab", environmentId: "sender", projectId: "project", tabId: "agent" },
+        {
+          requestId: "stale-presence-stays-deferred",
+          toEnvironmentId: "recipient",
+          toTabId: "agent",
+          body: "Hold this until the session changes.",
+        },
+      );
+      const service = new AgentMailService(
+        storage,
+        {
+          reconcileMailInject: async () => "unknown",
+          sessionActivitySnapshot: () => "idle",
+          mailInjectPresence: async () => presence,
+          dispatchMailInject: async () => ({ outcome: "held", reason: "busy" }),
+        },
+        { dispatchMailInject: async () => ({ outcome: "accepted" }) },
+      );
+      await service.init();
+      await service.drainInjects();
+      const deferred = () => storage.listPendingAgentMailInjects(100, { includeDeferred: false });
+      expect(await deferred()).toEqual([]);
+      for (const next of ["unknown", "idle", "unknown", "idle"] as const) {
+        presence = next;
+        await service.refreshPresence();
+        expect(await deferred()).toEqual([]);
+      }
+      // A real change still resets it.
+      presence = "working";
+      await service.refreshPresence();
+      expect(await deferred()).toHaveLength(1);
+      await service.shutdown();
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
   test("delivers mail that arrives during a drain without retrying a held sibling", async () => {
     const { storage, dataDir } = await fixture();
     let releaseFirst!: () => void;

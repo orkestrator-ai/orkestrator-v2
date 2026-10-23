@@ -4464,6 +4464,7 @@ describe("activity polling", () => {
   test("activity snapshots expose only bounded async-question item ids", async () => {
     const { h, sessionId } = await workingSession();
     const context = h.runtime.getRegistry().getThread("thread-1")!;
+    const before = h.runtime.getActivitySnapshot(sessionId).contentRevision;
     context.messages.push({
       id: "assistant-question",
       role: "assistant",
@@ -4485,8 +4486,23 @@ describe("activity polling", () => {
     expect(h.runtime.getActivitySnapshot(sessionId)).toEqual({
       activity: "working",
       asyncQuestionItemIds: ["question-1"],
+      contentRevision: expect.any(String),
     });
+    // The question changed the view without changing the activity.
+    expect(h.runtime.getActivitySnapshot(sessionId).contentRevision).not.toBe(before);
     expect(JSON.stringify(h.runtime.getActivitySnapshot(sessionId))).not.toContain("Which target?");
+  });
+
+  test("an activity snapshot's content revision moves with the transcript revision only", async () => {
+    const { h, sessionId } = await workingSession();
+    const session = h.runtime.getRegistry().getSession(sessionId)!;
+    const first = h.runtime.getActivitySnapshot(sessionId).contentRevision;
+    expect(h.runtime.getActivitySnapshot(sessionId).contentRevision).toBe(first);
+    session.messageRevision += 1;
+    const afterRow = h.runtime.getActivitySnapshot(sessionId).contentRevision;
+    expect(afterRow).not.toBe(first);
+    session.contentEpoch += 1;
+    expect(h.runtime.getActivitySnapshot(sessionId).contentRevision).not.toBe(afterRow);
   });
 
   test("activity snapshots do not inspect the transcript", async () => {
@@ -4498,7 +4514,10 @@ describe("activity polling", () => {
       },
     });
 
-    expect(h.runtime.getActivitySnapshot(sessionId)).toEqual({ activity: "working" });
+    expect(h.runtime.getActivitySnapshot(sessionId)).toEqual({
+      activity: "working",
+      contentRevision: expect.any(String),
+    });
   });
 
   test("a parked approval is waiting rather than working", async () => {

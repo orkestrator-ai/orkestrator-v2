@@ -190,6 +190,7 @@ mock.module("../services/session-manager.js", () => ({
   createOrRecoverSession: mockCreateOrRecoverSession,
   getSession: mockGetSession,
   peekSession: mockPeekSession,
+  backgroundTaskRevision: () => 0,
   listSessions: mockListSessions,
   getSessionMessages: mockGetSessionMessages,
   sendPrompt: mockSendPrompt,
@@ -2181,13 +2182,16 @@ describe("session routes", () => {
     test("returns the session's activity state", async () => {
       const res = await app.request("/session/s-1/activity");
       expect(res.status).toBe(200);
-      expect(await jsonBody(res)).toEqual({ activity: "working" });
+      expect(await jsonBody(res)).toEqual({
+        activity: "working",
+        contentRevision: expect.any(String),
+      });
       expect(mockGetSessionActivity).toHaveBeenCalledWith("s-1");
     });
 
     test("reports that input is ready independently of continuing work", async () => {
       mockPeekSession.mockImplementationOnce(
-        () => ({ id: "s-1", status: "idle" }) as ReturnType<typeof mockPeekSession>,
+        () => ({ id: "s-1", status: "idle", messages: [] }) as ReturnType<typeof mockPeekSession>,
       );
       const res = await app.request("/session/s-1/activity");
 
@@ -2195,17 +2199,21 @@ describe("session routes", () => {
         activity: "working",
         readyForInput: true,
         completionPending: false,
+        contentRevision: expect.any(String),
       });
     });
 
     test("withholds readiness while the session still holds a turn", async () => {
       for (const status of ["running", "failed"] as const) {
         mockPeekSession.mockImplementationOnce(
-          () => ({ id: "s-1", status }) as ReturnType<typeof mockPeekSession>,
+          () => ({ id: "s-1", status, messages: [] }) as ReturnType<typeof mockPeekSession>,
         );
         const res = await app.request("/session/s-1/activity");
 
-        expect(await jsonBody(res)).toEqual({ activity: "working" });
+        expect(await jsonBody(res)).toEqual({
+          activity: "working",
+          contentRevision: expect.any(String),
+        });
       }
     });
 
@@ -2213,7 +2221,10 @@ describe("session routes", () => {
       mockPeekSession.mockImplementationOnce(() => undefined);
       const res = await app.request("/session/s-1/activity");
 
-      expect(await jsonBody(res)).toEqual({ activity: "working" });
+      expect(await jsonBody(res)).toEqual({
+        activity: "working",
+        contentRevision: expect.any(String),
+      });
     });
 
     test("returns 200 with activity 'missing' for an unknown session", async () => {
@@ -2240,7 +2251,10 @@ describe("session routes", () => {
       mockGetSessionActivity.mockImplementation(async () => "waiting");
 
       const res = await app.request("/session/s-1/activity");
-      expect(await jsonBody(res)).toEqual({ activity: "waiting" });
+      expect(await jsonBody(res)).toEqual({
+        activity: "waiting",
+        contentRevision: expect.any(String),
+      });
     });
   });
 

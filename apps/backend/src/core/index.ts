@@ -553,6 +553,22 @@ export class OrkestratorBackend {
         observationSharing: process.env.ORKESTRATOR_NATIVE_OBSERVATION_SHARING !== "0",
         interactionMonitorAdoptionEnabled:
           process.env.ORKESTRATOR_AGENT_INTERACTION_MONITOR_KILL_SWITCH !== "1",
+        // A view-only invalidation for an idle session whose content changed:
+        // same channel and stamp sequence as transitions, so a client re-reads
+        // that view (or every view after a gap). Deliberately nothing else
+        // hangs off it; it is not a turn edge.
+        onObservationInvalidation: (event) => {
+          options.emit("native-agent-session-activity", {
+            environment_id: event.environmentId,
+            previous_state: event.state,
+            state: event.state,
+            reason: "content",
+            agent: event.agent,
+            logical_session_key: event.logicalSessionKey,
+            generation: event.observation.generation,
+            revision: event.observation.revision,
+          });
+        },
         onActivityTransition: (event) => {
           options.emit("native-agent-session-activity", {
             environment_id: event.environmentId,

@@ -8,6 +8,7 @@ import {
   carriedTaskMetadata,
   inheritBackgroundTaskHookRun,
   isHookRunningBackgroundTask,
+  noteBackgroundTasksChanged,
   parkSettlingBackgroundTask,
   takeShellTaskFields,
   takeProvisionalBackgroundTask,
@@ -61,6 +62,7 @@ interface TaskSystemMessage {
 }
 
 function emitBackgroundTasks(turn: TurnState): void {
+  noteBackgroundTasksChanged(turn.session);
   eventEmitter.emit({
     type: "session.updated",
     sessionId: turn.sessionId,

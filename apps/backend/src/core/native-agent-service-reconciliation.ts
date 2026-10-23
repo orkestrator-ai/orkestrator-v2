@@ -348,6 +348,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
             readyForInput?: boolean;
             completionPending?: boolean;
             pendingInteraction?: boolean;
+            contentRevision?: string;
           } = {},
         ): Promise<void> => {
           if (!this.observations.accepts(ticket, session.key)) {
@@ -367,6 +368,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
               details.readyForInput,
               () => this.observations.accepts(ticket, session.key),
               details.completionPending,
+              details.contentRevision,
             )
           )
             completionCandidates.add(session.environmentId);
@@ -468,6 +470,9 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
                   : {}),
                 ...(observation?.completionPending !== undefined
                   ? { completionPending: observation.completionPending }
+                  : {}),
+                ...(observation?.contentRevision !== undefined
+                  ? { contentRevision: observation.contentRevision }
                   : {}),
                 pendingInteraction:
                   activity === "waiting" || (observation?.asyncQuestionItemIds?.length ?? 0) > 0,
@@ -712,6 +717,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
     readyForInput?: boolean,
     stillApplicable?: () => boolean,
     completionPending?: boolean,
+    contentRevision?: string,
   ): Promise<boolean> {
     const observed = this.observedSessionActivity.get(session.key);
     const currentObservation =
@@ -763,7 +769,35 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
       state,
       ...(readyForInput !== undefined ? { readyForInput } : {}),
       ...(completionPending !== undefined ? { completionPending } : {}),
+      ...(contentRevision !== undefined ? { contentRevision } : {}),
     });
+    if (
+      previous === state &&
+      contentRevision !== undefined &&
+      currentObservation?.contentRevision !== undefined &&
+      currentObservation.contentRevision !== contentRevision &&
+      (state === "idle" || readyForInput === true)
+    ) {
+      /*
+       * The view of a session whose turn is over changed without a
+       * transition: a Claude background task reported, a Codex async question
+       * or late command change landed. Announce it in the same stamp
+       * sequence, so an idle view that reads less often is told to read and
+       * a missed announcement still shows as a gap. A running turn is not
+       * announced: its views keep their responsive cadence anyway, and every
+       * streamed write would otherwise become an invalidation.
+       */
+      this.options.onObservationInvalidation?.({
+        observation: this.observations.nextStamp(),
+        environmentId: session.environmentId,
+        sessionKey: session.key,
+        providerSessionId: session.providerSessionId,
+        state,
+        owner,
+        agent: session.agent,
+        logicalSessionKey: session.logicalSessionKey,
+      });
+    }
     if (previous !== state) {
       const observation = this.observations.nextStamp();
       this.options.onActivityTransition?.({

@@ -377,6 +377,19 @@ export interface NativeAgentActivityTransition {
   observation?: ViewRevisionStamp;
 }
 
+/** See `NativeAgentServiceOptions.onObservationInvalidation`. */
+export interface NativeAgentObservationInvalidation {
+  environmentId: string;
+  sessionKey: string;
+  providerSessionId: string;
+  /** Unchanged since the previous observation. */
+  state: AgentActivityState;
+  agent: BuildPipelineAgent;
+  logicalSessionKey: string;
+  owner: "environment" | "coordinator";
+  observation: ViewRevisionStamp;
+}
+
 /**
  * Whether a transition means an agent turn just ended in this backend.
  *
@@ -420,6 +433,13 @@ export interface NativeAgentServiceOptions {
   interactionMonitorMaxRetries?: number;
   onInteractionObservation?: (observation: AgentInteractionObservation) => void | Promise<void>;
   onActivityTransition?: (event: NativeAgentActivityTransition) => void;
+  /**
+   * An idle (or released) session's view changed without an activity
+   * transition: its provider's content revision moved. Stamped from the same
+   * sequence as transitions. Only a view invalidation; nothing that hangs off
+   * turn edges (workflows, PR probes, mail) may consume it.
+   */
+  onObservationInvalidation?: (event: NativeAgentObservationInvalidation) => void;
   /**
    * Backend change tracking (docs/architecture/change-tracking.md). A getter
    * because the tracking service is attached after this one is built.

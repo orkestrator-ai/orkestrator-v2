@@ -3,6 +3,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { DesignEnvironmentDeletionNotice } from "@/components/design/DesignEnvironmentDeletionNotice";
 import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
 import { EnvironmentAgentSummary } from "./EnvironmentAgentSummary";
+import { EnvironmentStatusMarker } from "./EnvironmentStatusMarker";
 import { EnvironmentTooltipBody } from "./EnvironmentTooltipBody";
 import { UnreadBellIcon } from "./UnreadBellIcon";
 import {
@@ -40,7 +41,6 @@ import {
   Loader2,
   Copy,
   MoreVertical,
-  House,
 } from "lucide-react";
 import { toast } from "sonner";
 import type { AgentActivityState, Environment, EnvironmentType } from "@/types";
@@ -56,7 +56,6 @@ import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import { useLocalEnvironmentAvailable } from "@/hooks/useLocalEnvironmentAvailable";
 import { useEnvironmentChangeProjection } from "@/hooks/useChangeProjection";
 import { ChangeCountBadge } from "@/components/changes/ChangeCountBadge";
-import { MachineDot } from "@/components/federation/MachineDot";
 import { useFederation } from "@/components/federation/FederationProvider";
 import {
   changeLabel,
@@ -268,8 +267,8 @@ export const EnvironmentItem = memo(function EnvironmentItem({
 }: EnvironmentItemProps) {
   const dockerAvailable = useDockerAvailability();
   const localEnvironmentAvailable = useLocalEnvironmentAvailable(environment.projectId);
-  // The owning machine's dot, before the name, whenever this client can show
-  // several machines. Identity, not activity.
+  // The owning machine's colour fills the row's status marker whenever this
+  // client can show several machines.
   const { boundMachine: windowMachine, supported: multiMachineClient } = useFederation();
   const boundMachine = multiMachineClient ? windowMachine : null;
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
@@ -334,7 +333,6 @@ export const EnvironmentItem = memo(function EnvironmentItem({
   const isProjectHome = environment.projectHome === true;
   const displayName =
     isProjectHome && environment.name === "project-home" ? "Project home" : environment.name;
-  const LocalEnvironmentIcon = isProjectHome ? House : Laptop;
   // Local environments are always considered "running" - they exist or they don't
   const isRunning = isLocalEnvironment || (dockerAvailable && environment.status === "running");
   const isCreating = environment.status === "creating";
@@ -545,46 +543,23 @@ export const EnvironmentItem = memo(function EnvironmentItem({
               ) : isMultiSelectMode ? null : isTransitioning ? (
                 // Show spinner when creating/stopping
                 <Loader2 className="h-4 w-4 shrink-0 animate-spin text-amber-500" />
-              ) : // Show House for the project home, Laptop for local environments,
-              // Container for containerized
-              environment.environmentType === "local" ? (
-                <LocalEnvironmentIcon
-                  className={cn(
-                    "h-4 w-4 shrink-0 transition-colors",
-                    !isRunning && "text-muted-foreground",
-                    isRunning &&
-                      displayedActivityState === "waiting" &&
-                      "text-amber-500 animate-pulse",
-                    isRunning &&
-                      displayedActivityState === "working" &&
-                      "text-blue-500 animate-pulse",
-                    isRunning && displayedActivityState === "idle" && "text-success",
-                  )}
-                />
               ) : (
-                <Container
-                  className={cn(
-                    "h-4 w-4 shrink-0 transition-colors",
-                    !isRunning && "text-muted-foreground",
-                    isRunning &&
-                      displayedActivityState === "waiting" &&
-                      "text-amber-500 animate-pulse",
-                    isRunning &&
-                      displayedActivityState === "working" &&
-                      "text-blue-500 animate-pulse",
-                    isRunning && displayedActivityState === "idle" && "text-success",
-                  )}
+                <EnvironmentStatusMarker
+                  local={isLocalEnvironment}
+                  state={isRunning ? displayedActivityState : "inactive"}
+                  machine={
+                    boundMachine
+                      ? {
+                          name: boundMachine.name,
+                          colorToken: boundMachine.colorToken,
+                          status: "This window",
+                        }
+                      : null
+                  }
                 />
               )}
               <span className="flex min-w-0 flex-1 flex-col">
                 <span className="flex min-w-0 items-center gap-1.5">
-                  {boundMachine ? (
-                    <MachineDot
-                      colorToken={boundMachine.colorToken}
-                      machineName={boundMachine.name}
-                      status="This window"
-                    />
-                  ) : null}
                   <span
                     id={environmentNameId}
                     className={cn(

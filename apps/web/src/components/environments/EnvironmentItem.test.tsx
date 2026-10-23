@@ -43,11 +43,19 @@ const callbacks = {
   onRestart: mock(() => undefined),
 };
 
-function environmentIcon(name = /Pulsing icon/): SVGElement {
+function environmentIcon(name = /Pulsing icon/): HTMLElement {
   const row = screen.getByRole("button", { name });
-  const icon = row.querySelector("svg");
-  if (!icon) throw new Error("Environment icon was not rendered");
-  return icon;
+  const ring = row.querySelector<HTMLElement>('[data-testid="environment-status-ring"]');
+  if (!ring) throw new Error("Environment status marker was not rendered");
+  return ring;
+}
+
+function environmentMarker(name: RegExp): HTMLElement {
+  const marker = screen
+    .getByRole("button", { name })
+    .querySelector<HTMLElement>('[data-testid="environment-status-marker"]');
+  if (!marker) throw new Error("Environment status marker was not rendered");
+  return marker;
 }
 
 function seedPipeline(
@@ -66,23 +74,23 @@ function renderItem(environment: Environment = environmentFixture()) {
   return render(<EnvironmentItem environment={environment} isSelected={false} {...callbacks} />);
 }
 
-function expectWorking(icon: SVGElement) {
-  expect(icon.classList).toContain("text-blue-500");
-  expect(icon.classList).toContain("animate-pulse");
-  expect(icon.classList).not.toContain("text-success");
-  expect(icon.classList).not.toContain("text-amber-500");
+function expectWorking(ring: HTMLElement) {
+  expect(ring.classList).toContain("border-blue-500");
+  expect(ring.classList).toContain("animate-pulse");
+  expect(ring.classList).not.toContain("border-success");
+  expect(ring.classList).not.toContain("border-amber-500");
 }
 
-function expectIdle(icon: SVGElement) {
-  expect(icon.classList).toContain("text-success");
-  expect(icon.classList).not.toContain("text-blue-500");
-  expect(icon.classList).not.toContain("animate-pulse");
+function expectIdle(ring: HTMLElement) {
+  expect(ring.classList).toContain("border-success");
+  expect(ring.classList).not.toContain("border-blue-500");
+  expect(ring.classList).not.toContain("animate-pulse");
 }
 
-function expectWaiting(icon: SVGElement) {
-  expect(icon.classList).toContain("text-amber-500");
-  expect(icon.classList).toContain("animate-pulse");
-  expect(icon.classList).not.toContain("text-blue-500");
+function expectWaiting(ring: HTMLElement) {
+  expect(ring.classList).toContain("border-amber-500");
+  expect(ring.classList).toContain("animate-pulse");
+  expect(ring.classList).not.toContain("border-blue-500");
 }
 
 beforeEach(() => {
@@ -213,14 +221,22 @@ describe("EnvironmentItem project home", () => {
     const row = screen.getByRole("button", { name: /Project home/ });
     expect(row.textContent).toContain("Project home");
     expect(row.textContent).not.toContain("project-home");
-    expect(row.querySelector("svg")?.classList).toContain("lucide-house");
+    expect(environmentMarker(/Project home/).dataset.shape).toBe("circle");
   });
 
-  test("keeps the worktree icon and name for ordinary local environments", () => {
+  test("marks a local environment with a dot and a container with a square", () => {
     renderItem(environmentFixture({ name: "feature-work" }));
+    expect(environmentMarker(/feature-work/).dataset.shape).toBe("circle");
+    cleanup();
 
-    const row = screen.getByRole("button", { name: /feature-work/ });
-    expect(row.querySelector("svg")?.classList).toContain("lucide-laptop");
+    renderItem(
+      environmentFixture({
+        name: "boxed-work",
+        environmentType: "containerized",
+        containerId: "container-1",
+      }),
+    );
+    expect(environmentMarker(/boxed-work/).dataset.shape).toBe("square");
   });
 });
 

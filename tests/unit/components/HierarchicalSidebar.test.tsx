@@ -270,7 +270,7 @@ describe("HierarchicalSidebar", () => {
     }
   });
 
-  test("repository members render the bound machine label through the full sidebar", async () => {
+  test("bound repository members keep their home icon, trailing collapse control, and selection", async () => {
     const previousView = useMachineViewStore.getState();
     const previousNative = window.orkestrator;
     installDesktopFake({
@@ -279,6 +279,15 @@ describe("HierarchicalSidebar", () => {
     });
     const sameRepository = { ...project, id: "project-2", name: "Second checkout", order: 1 };
     projectsValue = [project, sameRepository];
+    environmentsValue = [
+      { ...createdEnvironment, id: "first-worker", name: "First worker" },
+      {
+        ...createdEnvironment,
+        id: "second-worker",
+        name: "Second worker",
+        projectId: sameRepository.id,
+      },
+    ];
     useProjectStore.getState().setProjects(projectsValue);
     useMachineViewStore.getState().setGrouping("repository");
     let view: ReturnType<typeof render> | undefined;
@@ -295,8 +304,36 @@ describe("HierarchicalSidebar", () => {
         within(list).getByRole("button", { name: "Open acme/project-one on This computer" }),
       ).toBeTruthy();
       const member = within(list).getByText("This computer · Project One").closest("button")!;
+      const otherMember = within(list)
+        .getByText("This computer · Second checkout")
+        .closest("button")!;
+      for (const button of [member, otherMember]) {
+        const icon = within(button).getByTestId("machine-home-icon");
+        await waitFor(() => expect(icon.getAttribute("data-machine-color")).toBe("violet"));
+        expect(button.firstElementChild === icon).toBe(true);
+        expect(within(button).queryByTestId("machine-dot") === null).toBe(true);
+        expect(
+          button.parentElement!.parentElement!.lastElementChild!.getAttribute("aria-label"),
+        ).toMatch(/^Collapse project /);
+      }
+      fireEvent.click(otherMember);
+      expect(useUIStore.getState().selectedProjectId).toBe(sameRepository.id);
+      fireEvent.click(within(list).getByRole("button", { name: "Collapse project Project One" }));
+      await waitFor(() =>
+        expect(within(list).queryByRole("button", { name: "First worker" }) === null).toBe(true),
+      );
+      expect(within(list).getByRole("button", { name: "Second worker" })).toBeTruthy();
+      expect(useUIStore.getState().selectedProjectId).toBe(sameRepository.id);
+      expect(
+        within(list)
+          .getByRole("button", { name: "Collapse folder acme/project-one" })
+          .getAttribute("aria-expanded"),
+      ).toBe("true");
+      fireEvent.click(within(list).getByRole("button", { name: "Expand project Project One" }));
+      expect(await within(list).findByRole("button", { name: "First worker" })).toBeTruthy();
       fireEvent.click(member);
       expect(useUIStore.getState().selectedProjectId).toBe(project.id);
+      expect(member.getAttribute("aria-current")).toBe("page");
     } finally {
       view?.unmount();
       uninstallDesktopFake();

@@ -34,11 +34,7 @@ import {
 } from "lucide-react";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { Button } from "@/components/ui/button";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -61,18 +57,12 @@ import {
 } from "@/components/environments/EnvironmentItem";
 import { EnvironmentAgentSummary } from "@/components/environments/EnvironmentAgentSummary";
 import { EnvironmentTooltipBody } from "@/components/environments/EnvironmentTooltipBody";
-import {
-  HoverTooltipContent,
-  useHoverTooltip,
-} from "@/components/ui/hover-tooltip";
+import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
 import { UnreadBellIcon } from "@/components/environments/UnreadBellIcon";
 import { SortableProjectFolder } from "@/components/sidebar/SortableProjectFolder";
 import { SidebarRootDropZone } from "@/components/sidebar/SidebarRootDropZone";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
-import {
-  isMachineWritable,
-  type MachineView,
-} from "@/lib/federation/aggregate";
+import { isMachineWritable, type MachineView } from "@/lib/federation/aggregate";
 import { useNodeEnvironmentChangeProjection } from "@/lib/federation/node-change-projections";
 import {
   nodeAgentSummarySource,
@@ -80,15 +70,9 @@ import {
 } from "@/lib/federation/node-environment-reads";
 import { useStore } from "zustand";
 import { remoteOrdersFor } from "@/lib/federation/remote-order-writes";
-import {
-  remoteProjectsFor,
-  withArrangement,
-} from "@/lib/federation/remote-project-writes";
+import { remoteProjectsFor, withArrangement } from "@/lib/federation/remote-project-writes";
 import { moveId, withOrder } from "@/lib/federation/remote-order";
-import type {
-  FederatedEnvironment,
-  FederatedProject,
-} from "@/lib/federation/summaries";
+import type { FederatedEnvironment, FederatedProject } from "@/lib/federation/summaries";
 import {
   buildProjectTree,
   normalizeProjectFolderName,
@@ -104,10 +88,7 @@ import {
 import { OutcomeUnknownError } from "@/lib/portal/portal-store";
 import { cn } from "@/lib/utils";
 import { sidebarCollisionDetection } from "@/lib/sidebar-collision";
-import {
-  sidebarFolderKey,
-  useMachineViewStore,
-} from "@/stores/machineViewStore";
+import { sidebarFolderKey, useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteEnvironmentShown } from "@/stores/remoteWorkspaceStore";
 import { SELECTED_ENVIRONMENT_ROW_CLASS } from "@/components/sidebar/SortableEnvironmentItem";
 import { useFederation } from "./FederationProvider";
@@ -127,11 +108,7 @@ const ACTIVITY_TEXT: Record<FederatedEnvironment["activity"], string> = {
   idle: "Idle",
 };
 
-function reportWriteError(
-  machine: MachineView,
-  what: string,
-  error: unknown,
-): void {
+function reportWriteError(machine: MachineView, what: string, error: unknown): void {
   if (error instanceof OutcomeUnknownError) {
     toast.warning(`${what}: outcome unknown on ${machine.name}`, {
       description: error.message,
@@ -151,9 +128,7 @@ interface RemoteProjectItem {
   project: FederatedProject;
 }
 
-function remoteProjectItems(
-  projects: readonly FederatedProject[],
-): RemoteProjectItem[] {
+function remoteProjectItems(projects: readonly FederatedProject[]): RemoteProjectItem[] {
   return projects.map((project) => ({
     id: project.key,
     name: project.name,
@@ -174,10 +149,7 @@ export function useRemoteEnvironments() {
   const environmentsOf = useCallback(
     (machine: MachineView, project: FederatedProject) =>
       withOrder(
-        (
-          machine.environmentsByProject.get(project.ref.projectId) ??
-          NO_ENVIRONMENTS
-        )
+        (machine.environmentsByProject.get(project.ref.projectId) ?? NO_ENVIRONMENTS)
           .filter((environment) => !environment.isProjectHome)
           .sort((left, right) => left.order - right.order),
         orders.get(project.key),
@@ -188,12 +160,7 @@ export function useRemoteEnvironments() {
 
   /** Persists dragging environment `activeKey` onto `overKey`; false when neither is in `project`. */
   const reorder = useCallback(
-    (
-      machine: MachineView,
-      project: FederatedProject,
-      activeKey: string,
-      overKey: string,
-    ) => {
+    (machine: MachineView, project: FederatedProject, activeKey: string, overKey: string) => {
       const visible = environmentsOf(machine, project);
       const keys = moveId(
         visible.map((environment) => environment.key),
@@ -201,22 +168,17 @@ export function useRemoteEnvironments() {
         overKey,
       );
       if (!keys) return false;
-      const idByKey = new Map(
-        visible.map((environment) => [environment.key, environment]),
-      );
+      const idByKey = new Map(visible.map((environment) => [environment.key, environment]));
       const ids = keys.map((key) => idByKey.get(key)!.ref.environmentId);
       // Reorder only visible slots; home rows keep their owner position and are
       // included in the whole-project payload so the owner never appends them.
       let nextVisible = 0;
       const allIds = [
-        ...(machine.environmentsByProject.get(project.ref.projectId) ??
-          NO_ENVIRONMENTS),
+        ...(machine.environmentsByProject.get(project.ref.projectId) ?? NO_ENVIRONMENTS),
       ]
         .sort((left, right) => left.order - right.order)
         .map((environment) =>
-          environment.isProjectHome
-            ? environment.ref.environmentId
-            : ids[nextVisible++]!,
+          environment.isProjectHome ? environment.ref.environmentId : ids[nextVisible++]!,
         );
       orderWrites.submit(project.ref, allIds, (error: unknown) =>
         reportWriteError(machine, "Reorder environments", error),
@@ -236,10 +198,8 @@ export function remoteEnvironmentProject(
   environmentKey: string,
 ): FederatedProject | null {
   for (const project of projects) {
-    const environments =
-      machine.environmentsByProject.get(project.ref.projectId) ?? [];
-    if (environments.some((environment) => environment.key === environmentKey))
-      return project;
+    const environments = machine.environmentsByProject.get(project.ref.projectId) ?? [];
+    if (environments.some((environment) => environment.key === environmentKey)) return project;
   }
   return null;
 }
@@ -252,18 +212,10 @@ export function remoteEnvironmentProject(
  */
 export function RemoteMachineTree({ machine }: { machine: MachineView }) {
   const { portal } = useFederation();
-  const collapsedProjectKeys = useMachineViewStore(
-    (state) => state.collapsedProjectKeys,
-  );
-  const collapsedFolderKeys = useMachineViewStore(
-    (state) => state.collapsedFolderKeys,
-  );
-  const setProjectKeyCollapsed = useMachineViewStore(
-    (state) => state.setProjectKeyCollapsed,
-  );
-  const setFolderKeyCollapsed = useMachineViewStore(
-    (state) => state.setFolderKeyCollapsed,
-  );
+  const collapsedProjectKeys = useMachineViewStore((state) => state.collapsedProjectKeys);
+  const collapsedFolderKeys = useMachineViewStore((state) => state.collapsedFolderKeys);
+  const setProjectKeyCollapsed = useMachineViewStore((state) => state.setProjectKeyCollapsed);
+  const setFolderKeyCollapsed = useMachineViewStore((state) => state.setFolderKeyCollapsed);
   const projectWrites = useMemo(() => remoteProjectsFor(portal), [portal]);
   const arrangements = useStore(projectWrites.store);
   const { environmentsOf, reorder } = useRemoteEnvironments();
@@ -272,16 +224,14 @@ export function RemoteMachineTree({ machine }: { machine: MachineView }) {
   const sortable = writable && !machine.truncated;
 
   const projects = useMemo(
-    () =>
-      withArrangement(machine.projects, arrangements.get(machine.backendId)),
+    () => withArrangement(machine.projects, arrangements.get(machine.backendId)),
     [arrangements, machine.backendId, machine.projects],
   );
   const items = useMemo(() => remoteProjectItems(projects), [projects]);
   const tree = useMemo(() => buildProjectTree(items), [items]);
   const folderCollapseKey = (name: string) =>
     sidebarFolderKey(machine.backendId, projectFolderKey(name));
-  const isFolderCollapsed = (name: string) =>
-    collapsedFolderKeys.includes(folderCollapseKey(name));
+  const isFolderCollapsed = (name: string) => collapsedFolderKeys.includes(folderCollapseKey(name));
   const sortableIds = projectSortableIds(tree, [], isFolderCollapsed);
 
   const sensors = useSensors(
@@ -293,9 +243,7 @@ export function RemoteMachineTree({ machine }: { machine: MachineView }) {
 
   const arrange = (arrangement: ProjectArrangement | null) => {
     if (!sortable || !arrangement) return;
-    const byKey = new Map(
-      items.map((item) => [item.id, item.project.ref.projectId]),
-    );
+    const byKey = new Map(items.map((item) => [item.id, item.project.ref.projectId]));
     const folders: Record<string, string | null> = {};
     for (const [key, folder] of Object.entries(arrangement.folders)) {
       const projectId = byKey.get(key);
@@ -304,9 +252,7 @@ export function RemoteMachineTree({ machine }: { machine: MachineView }) {
     projectWrites.submit(
       machine.backendId as BackendId,
       {
-        projectIds: arrangement.projectIds.flatMap(
-          (key) => byKey.get(key) ?? [],
-        ),
+        projectIds: arrangement.projectIds.flatMap((key) => byKey.get(key) ?? []),
         folders,
       },
       (error: unknown) => reportWriteError(machine, "Arrange projects", error),
@@ -316,8 +262,7 @@ export function RemoteMachineTree({ machine }: { machine: MachineView }) {
   const handleDragStart = ({ active }: DragStartEvent) => {
     const id = String(active.id);
     setDragging(
-      parseProjectFolderDragId(id) !== null ||
-        items.some((item) => item.id === id)
+      parseProjectFolderDragId(id) !== null || items.some((item) => item.id === id)
         ? "project"
         : "other",
     );
@@ -328,10 +273,7 @@ export function RemoteMachineTree({ machine }: { machine: MachineView }) {
     if (!sortable || !over) return;
     const activeId = String(active.id);
     const overId = String(over.id);
-    if (
-      parseProjectFolderDragId(activeId) !== null ||
-      items.some((item) => item.id === activeId)
-    ) {
+    if (parseProjectFolderDragId(activeId) !== null || items.some((item) => item.id === activeId)) {
       arrange(resolveProjectArrangement(activeId, overId, items));
       return;
     }
@@ -360,10 +302,7 @@ export function RemoteMachineTree({ machine }: { machine: MachineView }) {
       onDragEnd={handleDragEnd}
       onDragCancel={() => setDragging(null)}
     >
-      <SortableContext
-        items={sortableIds}
-        strategy={verticalListSortingStrategy}
-      >
+      <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
         {tree.map((entry) => {
           if (entry.kind === "project") return renderProject(entry.project);
           const folderActions = sortable
@@ -372,19 +311,12 @@ export function RemoteMachineTree({ machine }: { machine: MachineView }) {
                   const normalized = normalizeProjectFolderName(nextName);
                   if (!normalized) return;
                   const collapsed = isFolderCollapsed(entry.name);
-                  arrange(
-                    resolveRenameProjectFolder(items, entry.name, nextName),
-                  );
+                  arrange(resolveRenameProjectFolder(items, entry.name, nextName));
                   setFolderKeyCollapsed(folderCollapseKey(entry.name), false);
-                  setFolderKeyCollapsed(
-                    folderCollapseKey(normalized),
-                    collapsed,
-                  );
+                  setFolderKeyCollapsed(folderCollapseKey(normalized), collapsed);
                 },
-                onSort: () =>
-                  arrange(resolveSortProjectFolder(items, entry.name)),
-                onUngroup: () =>
-                  arrange(resolveUngroupProjectFolder(items, entry.name)),
+                onSort: () => arrange(resolveSortProjectFolder(items, entry.name)),
+                onUngroup: () => arrange(resolveUngroupProjectFolder(items, entry.name)),
               }
             : {};
           return (
@@ -393,9 +325,7 @@ export function RemoteMachineTree({ machine }: { machine: MachineView }) {
               name={entry.name}
               projectCount={entry.projects.length}
               isCollapsed={isFolderCollapsed(entry.name)}
-              onToggleCollapse={() =>
-                setFolderKeyCollapsed(folderCollapseKey(entry.name))
-              }
+              onToggleCollapse={() => setFolderKeyCollapsed(folderCollapseKey(entry.name))}
               {...folderActions}
             >
               {entry.projects.map(renderProject)}
@@ -438,14 +368,7 @@ export function RemoteProjectGroup({
   label?: string;
 }) {
   const writable = isMachineWritable(machine);
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: project.key,
     disabled: !sortable,
   });
@@ -460,9 +383,7 @@ export function RemoteProjectGroup({
     <CollapsibleTrigger
       className="shrink-0 rounded-md p-1 transition-colors hover:bg-white/[0.07]"
       aria-label={
-        isCollapsed
-          ? `Expand project ${project.name}`
-          : `Collapse project ${project.name}`
+        isCollapsed ? `Expand project ${project.name}` : `Collapse project ${project.name}`
       }
     >
       <ChevronRight
@@ -500,17 +421,11 @@ export function RemoteProjectGroup({
                 title={`Open ${project.name} on ${machine.name}`}
               >
                 {showMachine === "home" ? (
-                  <MachineHomeIcon
-                    colorToken={machine.colorToken}
-                    machineName={machine.name}
-                  />
+                  <MachineHomeIcon colorToken={machine.colorToken} machineName={machine.name} />
                 ) : null}
                 <span className="truncate font-medium">{label}</span>
                 {showMachine === "dot" ? (
-                  <MachineDot
-                    colorToken={machine.colorToken}
-                    machineName={machine.name}
-                  />
+                  <MachineDot colorToken={machine.colorToken} machineName={machine.name} />
                 ) : null}
                 {environments.length > 0 && (
                   <span className="flex h-4 min-w-[16px] shrink-0 items-center justify-center rounded-md bg-white/[0.07] px-1 text-[10px] text-zinc-300">
@@ -547,9 +462,7 @@ export function RemoteProjectGroup({
             }}
             aria-label={`New environment in ${project.name} on ${machine.name}`}
             title={
-              writable
-                ? `New environment on ${machine.name}`
-                : `${machine.name} is unavailable`
+              writable ? `New environment on ${machine.name}` : `${machine.name} is unavailable`
             }
           >
             <Plus className="h-3.5 w-3.5" />
@@ -592,22 +505,12 @@ function RemoteSortableEnvironmentItem({
   environment: FederatedEnvironment;
   sortable: boolean;
 }) {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: environment.key,
     disabled: !sortable,
   });
   const live = machine.transport === "connected";
-  const shown = useRemoteEnvironmentShown(
-    machine.connectionId,
-    environment.ref.environmentId,
-  );
+  const shown = useRemoteEnvironmentShown(machine.connectionId, environment.ref.environmentId);
 
   return (
     <div
@@ -660,20 +563,9 @@ export function RemoteEnvironmentItem({
   environment: FederatedEnvironment;
   subtitle?: string;
 }) {
-  const {
-    busy,
-    writable,
-    open,
-    copyLink,
-    start,
-    stop,
-    requestDelete,
-    deleteDialog,
-  } = useFederatedEnvironmentActions(machine, environment);
-  const shown = useRemoteEnvironmentShown(
-    machine.connectionId,
-    environment.ref.environmentId,
-  );
+  const { busy, writable, open, copyLink, start, stop, requestDelete, deleteDialog } =
+    useFederatedEnvironmentActions(machine, environment);
+  const shown = useRemoteEnvironmentShown(machine.connectionId, environment.ref.environmentId);
   const isMobile = useMediaQuery(MOBILE_MEDIA_QUERY);
   // The same `environment-net` projection the machine's own rows show, read
   // through the command node and kept current by the machine's relayed events.
@@ -697,8 +589,7 @@ export function RemoteEnvironmentItem({
   // Local environments are always considered "running", as on their own machine.
   const isRunning = isLocalEnvironment || environment.status === "running";
   const isTransitioning =
-    !isLocalEnvironment &&
-    (environment.status === "creating" || environment.status === "stopping");
+    !isLocalEnvironment && (environment.status === "creating" || environment.status === "stopping");
   const EnvironmentIcon = isLocalEnvironment ? Laptop : Container;
 
   const menuItems: EnvironmentMenuItem[] = [
@@ -764,9 +655,7 @@ export function RemoteEnvironmentItem({
               aria-current={shown ? "true" : undefined}
               className={cn(
                 "flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left transition-colors",
-                shown
-                  ? "text-foreground"
-                  : "text-muted-foreground group-hover:text-foreground",
+                shown ? "text-foreground" : "text-muted-foreground group-hover:text-foreground",
               )}
             >
               {environment.deleting ? (
@@ -786,10 +675,7 @@ export function RemoteEnvironmentItem({
                       live &&
                       environment.activity === "working" &&
                       "text-blue-500 animate-pulse",
-                    isRunning &&
-                      live &&
-                      environment.activity === "idle" &&
-                      "text-success",
+                    isRunning && live && environment.activity === "idle" && "text-success",
                   )}
                 />
               )}
@@ -800,14 +686,9 @@ export function RemoteEnvironmentItem({
                     machineName={machine.name}
                     status={statusText}
                   />
-                  <span className="truncate font-medium leading-4">
-                    {environment.name}
-                  </span>
+                  <span className="truncate font-medium leading-4">{environment.name}</span>
                   {environment.hasUnreadWork && (
-                    <UnreadBellIcon
-                      className="h-3 w-3"
-                      aria-label="New completed activity"
-                    />
+                    <UnreadBellIcon className="h-3 w-3" aria-label="New completed activity" />
                   )}
                 </span>
                 {subtitle && (
@@ -881,9 +762,7 @@ export function RemoteEnvironmentItem({
               ) : null
             }
             changes={
-              changeProjection ? (
-                <EnvironmentChangeSummary projection={changeProjection} />
-              ) : null
+              changeProjection ? <EnvironmentChangeSummary projection={changeProjection} /> : null
             }
           />
         </HoverTooltipContent>

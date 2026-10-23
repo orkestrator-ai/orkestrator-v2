@@ -1,8 +1,4 @@
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { House } from "lucide-react";
 import {
   machineColorLabel,
@@ -57,9 +53,7 @@ export function MachineDot({
       <TooltipTrigger asChild>{dot}</TooltipTrigger>
       <TooltipContent side="right" sideOffset={6}>
         <span className="font-medium">{machineName}</span>
-        {status ? (
-          <span className="text-muted-foreground"> · {status}</span>
-        ) : null}
+        {status ? <span className="text-muted-foreground"> · {status}</span> : null}
       </TooltipContent>
     </Tooltip>
   );
@@ -91,9 +85,7 @@ export function MachineHomeIcon({
       </TooltipTrigger>
       <TooltipContent side="right" sideOffset={6}>
         <span className="font-medium">{machineName}</span>
-        {status ? (
-          <span className="text-muted-foreground"> · {status}</span>
-        ) : null}
+        {status ? <span className="text-muted-foreground"> · {status}</span> : null}
       </TooltipContent>
     </Tooltip>
   );
@@ -128,12 +120,7 @@ export function MachineBadge({
         {...(status ? { status } : {})}
         decorative={!compact}
       />
-      <span
-        className={cn(
-          "truncate",
-          compact && "sr-only forced-colors:not-sr-only",
-        )}
-      >
+      <span className={cn("truncate", compact && "sr-only forced-colors:not-sr-only")}>
         {machineName}
       </span>
     </span>

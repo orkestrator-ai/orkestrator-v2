@@ -14,10 +14,7 @@ import {
 } from "@orkestrator/protocol/backend-profile";
 
 // Full class strings so Tailwind keeps them.
-const DOT_CLASSES: Record<
-  MachineColorToken | typeof FALLBACK_MACHINE_COLOR,
-  string
-> = {
+const DOT_CLASSES: Record<MachineColorToken | typeof FALLBACK_MACHINE_COLOR, string> = {
   violet: "bg-violet-500 dark:bg-violet-400",
   blue: "bg-blue-500 dark:bg-blue-400",
   teal: "bg-teal-500 dark:bg-teal-400",
@@ -30,10 +27,7 @@ const DOT_CLASSES: Record<
 };
 
 // The same colours as an outline, for a machine shown while it is not connected.
-const OUTLINE_CLASSES: Record<
-  MachineColorToken | typeof FALLBACK_MACHINE_COLOR,
-  string
-> = {
+const OUTLINE_CLASSES: Record<MachineColorToken | typeof FALLBACK_MACHINE_COLOR, string> = {
   violet: "border-violet-500 dark:border-violet-400",
   blue: "border-blue-500 dark:border-blue-400",
   teal: "border-teal-500 dark:border-teal-400",
@@ -46,10 +40,7 @@ const OUTLINE_CLASSES: Record<
 };
 
 // The same colours for an icon drawn in the machine's colour.
-const TEXT_CLASSES: Record<
-  MachineColorToken | typeof FALLBACK_MACHINE_COLOR,
-  string
-> = {
+const TEXT_CLASSES: Record<MachineColorToken | typeof FALLBACK_MACHINE_COLOR, string> = {
   violet: "text-violet-500 dark:text-violet-400",
   blue: "text-blue-500 dark:text-blue-400",
   teal: "text-teal-500 dark:text-teal-400",
@@ -61,10 +52,7 @@ const TEXT_CLASSES: Record<
   neutral: "text-muted-foreground",
 };
 
-const LABELS: Record<
-  MachineColorToken | typeof FALLBACK_MACHINE_COLOR,
-  string
-> = {
+const LABELS: Record<MachineColorToken | typeof FALLBACK_MACHINE_COLOR, string> = {
   violet: "Violet",
   blue: "Blue",
   teal: "Teal",

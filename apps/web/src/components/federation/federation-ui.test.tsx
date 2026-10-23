@@ -48,6 +48,9 @@ import {
   MachineSectionList,
   RemoteMachineSection,
 } from "./FederatedSidebarSections";
+import { EnvironmentItem } from "@/components/environments/EnvironmentItem";
+import { useEnvironmentStore } from "@/stores/environmentStore";
+import type { Environment } from "@/types";
 import { RemoteEnvironmentItem, RemoteProjectGroup } from "./RemoteMachineTree";
 import { CommandHandoverDialog } from "./CommandHandoverDialog";
 import { FederationProvider } from "./FederationProvider";
@@ -370,6 +373,145 @@ describe("CL-05: machine identity visual rules", () => {
     expect(screen.getByRole("button", { name: /^feature, on Machine A, Working/ })).toBeTruthy();
     expect(screen.getByText("app")).toBeTruthy();
   });
+
+  for (const environmentType of ["local", "containerized"] as const) {
+    for (const transport of ["connected", "unreachable"] as const) {
+      for (const status of ["running", "stopped"] as const) {
+        for (const activity of ["idle", "working", "waiting"] as const) {
+          test(`remote ${environmentType} ${status} on ${transport} machine maps ${activity} to its marker`, () => {
+            const machine = machineView({ transport });
+            const environment = { ...firstEnvironment(machine), environmentType, status, activity };
+            render(<RemoteEnvironmentItem machine={machine} environment={environment} />);
+            const row = screen.getByRole("button", { name: /^feature, on Machine A,/ });
+            const marker = within(row).getByTestId("environment-status-marker");
+            const active =
+              transport === "connected" && (environmentType === "local" || status === "running");
+            expect(marker.getAttribute("data-state")).toBe(active ? activity : "inactive");
+            expect(marker.getAttribute("data-shape")).toBe(
+              environmentType === "local" ? "circle" : "square",
+            );
+            const ring = within(marker).getByTestId("environment-status-ring");
+            const color = !active
+              ? "border-muted-foreground/60"
+              : activity === "idle"
+                ? "border-success"
+                : activity === "working"
+                  ? "border-blue-500"
+                  : "border-amber-500";
+            expect(ring.classList).toContain(color);
+            expect(ring.classList.contains("animate-pulse")).toBe(active && activity !== "idle");
+            expect(within(row).getAllByTestId("machine-dot")).toHaveLength(1);
+            expect(within(row).getByTestId("machine-dot").getAttribute("data-machine-color")).toBe(
+              "teal",
+            );
+          });
+        }
+      }
+    }
+  }
+
+  for (const state of ["creating", "stopping", "deleting"] as const) {
+    test(`remote ${state} row keeps the machine colour beside its name`, () => {
+      const machine = machineView();
+      const environment = {
+        ...firstEnvironment(machine),
+        environmentType: "containerized" as const,
+        ...(state === "deleting" ? { deleting: true } : { status: state }),
+      };
+      const { rerender } = render(
+        <RemoteEnvironmentItem machine={machine} environment={environment} />,
+      );
+      const row = screen.getByRole("button", { name: /^feature, on Machine A,/ });
+      expect(row.querySelector("svg.animate-spin")).not.toBeNull();
+      expect(within(row).queryByTestId("environment-status-marker") === null).toBe(true);
+      expect(within(row).getAllByTestId("machine-dot")).toHaveLength(1);
+      expect(within(row).getByTestId("machine-dot").getAttribute("data-machine-color")).toBe(
+        "teal",
+      );
+      rerender(
+        <RemoteEnvironmentItem
+          machine={machine}
+          environment={{ ...environment, status: "running", deleting: false }}
+        />,
+      );
+      expect(row.querySelector("svg.animate-spin") === null).toBe(true);
+      expect(within(row).getAllByTestId("machine-dot")).toHaveLength(1);
+      expect(within(row).getByTestId("environment-status-marker").getAttribute("data-state")).toBe(
+        "working",
+      );
+    });
+  }
+
+  test("a busy remote action keeps its machine colour until the action settles", async () => {
+    let finish: (() => void) | undefined;
+    installTwoMachines((call) =>
+      call.command === "stop_environment"
+        ? new Promise<void>((resolve) => {
+            finish = resolve;
+          })
+        : undefined,
+    );
+    renderWithFederation(<AggregateList mode="activity" />);
+    await waitForRows(2);
+    const menu = await openRowActions("Machine A");
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Stop" }));
+    const row = screen.getByRole("button", { name: /^feature, on Machine A,/ });
+    await waitFor(() => expect(row.querySelector("svg.animate-spin")).not.toBeNull());
+    expect(within(row).getAllByTestId("machine-dot")).toHaveLength(1);
+    expect(within(row).getByTestId("machine-dot").getAttribute("data-machine-color")).toBe("teal");
+    await waitFor(() => expect(finish).toBeDefined());
+    await act(async () => finish!());
+    await waitFor(() => expect(row.querySelector("svg.animate-spin") === null).toBe(true));
+    expect(within(row).getAllByTestId("machine-dot")).toHaveLength(1);
+  });
+
+  for (const state of ["creating", "stopping", "deleting", "selecting"] as const) {
+    test(`this window's ${state} row keeps its bound machine colour`, async () => {
+      installTwoMachines();
+      const environment: Environment = {
+        id: "bound-env",
+        projectId: "project-1",
+        name: "Bound environment",
+        branch: "main",
+        containerId: "container-1",
+        status: state === "creating" || state === "stopping" ? state : "running",
+        environmentType: "containerized",
+        prUrl: null,
+        prState: null,
+        hasMergeConflicts: null,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        networkAccessMode: "restricted",
+        order: 0,
+      };
+      if (state === "deleting") useEnvironmentStore.getState().setDeleting(environment.id, true);
+      try {
+        renderWithFederation(
+          <EnvironmentItem
+            environment={environment}
+            isSelected={false}
+            isMultiSelectMode={state === "selecting"}
+            onSelect={() => {}}
+            onDelete={() => {}}
+            onStart={() => {}}
+            onStop={() => {}}
+            onRestart={() => {}}
+          />,
+        );
+        const row = screen.getByRole("button", { name: /Bound environment/ });
+        await waitFor(() =>
+          expect(within(row).getByTestId("machine-dot").getAttribute("data-machine-color")).toBe(
+            "violet",
+          ),
+        );
+        expect(within(row).getAllByTestId("machine-dot")).toHaveLength(1);
+        expect(within(row).queryByTestId("environment-status-marker") === null).toBe(true);
+        if (state === "selecting") expect(screen.getByRole("checkbox")).toBeTruthy();
+        else expect(row.querySelector("svg.animate-spin")).not.toBeNull();
+      } finally {
+        useEnvironmentStore.getState().setDeleting(environment.id, false);
+      }
+    });
+  }
 
   test("another machine's row shows its change counts and a hover card naming the machine", async () => {
     const invokeMock = nativeInvoke as unknown as ReturnType<typeof mock>;

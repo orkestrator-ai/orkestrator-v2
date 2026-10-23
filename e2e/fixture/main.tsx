@@ -1,3 +1,4 @@
+import { EnvironmentStatusMarkerFixture } from "./EnvironmentStatusMarkerFixture";
 import { MergedProjectListFixture } from "../../apps/web/src/test/MergedProjectListFixture";
 import { RemoteMachineTreeFixture } from "../../apps/web/src/test/RemoteMachineTreeFixture";
 import { NativeAttachmentsFixture } from "./NativeAttachmentsFixture";
@@ -1742,6 +1743,8 @@ function fixtureForPath() {
     );
   }
   if (window.location.pathname === "/merged-project-list") return <MergedProjectListFixture />;
+  if (window.location.pathname === "/environment-status-marker")
+    return <EnvironmentStatusMarkerFixture />;
   if (window.location.pathname === "/remote-machine-tree") return <RemoteMachineTreeFixture />;
   if (window.location.pathname === "/machines-settings") return <MachinesSettingsFixture />;
   if (window.location.pathname === "/fullscreen-settings") return <FullscreenSettingsFixture />;

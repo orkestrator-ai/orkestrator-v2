@@ -42,7 +42,7 @@ export function EnvironmentStatusMarker({
         data-testid="environment-status-ring"
         aria-hidden="true"
         className={cn(
-          "absolute inset-0 border-[3px] transition-colors forced-colors:border-[CanvasText]",
+          "pointer-events-none absolute inset-0 border-[3px] transition-colors forced-colors:border-[CanvasText]",
           rounded,
           RING_CLASSES[state],
         )}

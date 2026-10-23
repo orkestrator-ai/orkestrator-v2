@@ -535,7 +535,9 @@ function RemoteSortableEnvironmentItem({
 
 /**
  * The row content of another machine's environment, laid out like
- * `EnvironmentItem`: type icon, machine dot, name and an optional subtitle.
+ * `EnvironmentItem`: an activity ring around a machine-coloured circle (local)
+ * or square (container), followed by the name and optional subtitle. During
+ * transitions and actions, a spinner leads and a machine dot stays by the name.
  * Selecting it moves the window to the owner's workspace.
  */
 export function RemoteEnvironmentItem({
@@ -659,6 +661,14 @@ export function RemoteEnvironmentItem({
               <span className="flex min-w-0 flex-1 flex-col">
                 <span className="flex min-w-0 items-center gap-1.5">
                   <span className="truncate font-medium leading-4">{environment.name}</span>
+                  {(environment.deleting || isTransitioning || busy) && (
+                    <MachineDot
+                      machineName={machine.name}
+                      colorToken={machine.colorToken}
+                      status={statusText}
+                      shape={isLocalEnvironment ? "circle" : "square"}
+                    />
+                  )}
                   {environment.hasUnreadWork && (
                     <UnreadBellIcon className="h-3 w-3" aria-label="New completed activity" />
                   )}

@@ -56,6 +56,7 @@ import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import { useLocalEnvironmentAvailable } from "@/hooks/useLocalEnvironmentAvailable";
 import { useEnvironmentChangeProjection } from "@/hooks/useChangeProjection";
 import { ChangeCountBadge } from "@/components/changes/ChangeCountBadge";
+import { MachineDot } from "@/components/federation/MachineDot";
 import { useFederation } from "@/components/federation/FederationProvider";
 import {
   changeLabel,
@@ -569,6 +570,15 @@ export const EnvironmentItem = memo(function EnvironmentItem({
                   >
                     {isBuildEnvironment ? environment.name.replace(/^Build:\s*/, "") : displayName}
                   </span>
+                  {boundMachine &&
+                    (isEnvironmentDeleting || isMultiSelectMode || isTransitioning) && (
+                      <MachineDot
+                        machineName={boundMachine.name}
+                        colorToken={boundMachine.colorToken}
+                        status="This window"
+                        shape={isLocalEnvironment ? "circle" : "square"}
+                      />
+                    )}
                   {hasUnreadActivity && (
                     <UnreadBellIcon className="h-3 w-3" aria-label="New completed activity" />
                   )}

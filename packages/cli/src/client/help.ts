@@ -69,6 +69,7 @@ export function rootHelp(tree: CommandTree): string {
   return [
     "Usage:",
     "  orkestrator [serve] [service options]     Run the backend service in the foreground",
+    "  orkestrator service install [options]     Install the backend as a background service",
     "  orkestrator <group> <command> [options]   Talk to an already-running backend",
     "  orkestrator --fix AGENT                   Get an agent's help reporting a problem",
     "",

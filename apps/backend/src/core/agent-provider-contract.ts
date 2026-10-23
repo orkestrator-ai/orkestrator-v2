@@ -49,6 +49,12 @@ export interface ProviderActivityObservation {
   readyForInput?: boolean;
   /** A released root turn still owes a response, independently of composer readiness. */
   completionPending?: boolean;
+  /**
+   * Opaque revision of what the session view shows beyond its activity
+   * (`SessionActivityObservation.contentRevision`). A bridge that reports it
+   * lets the backend announce a change to an idle session's view.
+   */
+  contentRevision?: string;
 }
 
 /**

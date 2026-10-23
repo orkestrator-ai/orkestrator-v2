@@ -723,6 +723,22 @@ engines (`bridges/cursor-bridge/src/testing/fake-engine-server.ts`,
 `e2e/fixtures/close-retention-opencode.ts`). Its assertions read each engine's
 own store, so a duplicated or lost prompt fails there.
 
+The same host also carries the lifecycle cases that need a fault on the real
+stack. Its fixture page mounts the app shell's agent information button and
+toaster, and the host adds endpoints for the faults:
+
+- `/restart-bridge` stops a bridge and starts it again on the same port and
+  token. With `shed: true` for Cursor it first rewrites the state file as the
+  bridge's own budget pass would under a smaller budget, so a reload shows a
+  transcript that persistence shed.
+- `/cursor-saturate-steer` fills a held Cursor turn's steer journal straight at
+  the bridge until it refuses with `steer-capacity-exceeded`.
+- `/pi-startup-gate` holds Pi prompts at `AgentSession.prompt`, before Pi
+  accepts them.
+- `/seed-native-session` maps a tab to a provider session, as an earlier
+  backend run would have. Claude has no real bridge here: `peekBridge` answers
+  a stale Claude bridge whose close route is a 404.
+
 ### Live paused interactions
 
 `e2e/agent-testing/paused-interactions-live.spec.ts` checks that a question or

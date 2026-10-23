@@ -108,7 +108,11 @@ describe("POST /sessions/activity on the real Codex bridge router", () => {
         expect(body).toEqual({
           version: 1,
           observations: {
-            [sessionId]: { activity: "idle", asyncQuestionItemIds: ["question-1"] },
+            [sessionId]: {
+              activity: "idle",
+              asyncQuestionItemIds: ["question-1"],
+              contentRevision: expect.any(String),
+            },
             "never-existed": { activity: "missing" },
           },
         });

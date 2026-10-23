@@ -4,11 +4,14 @@ import {
   SESSION_ACTIVITY_BATCH_PATH,
 } from "@orkestrator/protocol/session-activity-batch";
 import {
+  backgroundTaskRevision,
   getSessionActivity,
   sessionCompletionPending,
   peekSession,
   type SessionActivity,
 } from "../services/session-manager.js";
+import { eventEmitter } from "../services/event-emitter.js";
+import { readTranscriptVersion } from "../services/transcript-revision.js";
 
 /**
  * The one activity read both `GET /session/:id/activity` and
@@ -24,9 +27,12 @@ import {
  * existence probe answers `idle` (see `persistedSessionExistsOnDisk`), because
  * an error is not evidence of deletion.
  */
-export async function readSessionActivityObservation(
-  sessionId: string,
-): Promise<{ activity: SessionActivity; readyForInput?: true; completionPending?: boolean }> {
+export async function readSessionActivityObservation(sessionId: string): Promise<{
+  activity: SessionActivity;
+  readyForInput?: true;
+  completionPending?: boolean;
+  contentRevision?: string;
+}> {
   const activity = await getSessionActivity(sessionId);
   const resident = peekSession(sessionId);
   const completionPending = resident ? sessionCompletionPending(resident) : undefined;
@@ -37,7 +43,35 @@ export async function readSessionActivityObservation(
     // must remain blue and pulsing. Only an explicitly settled root turn can
     // announce completion while a detached shell keeps the session working.
     ...(resident?.status === "idle" ? { readyForInput: true as const, completionPending } : {}),
+    ...(activity === "missing" ? {} : contentRevisionField(resident)),
   };
+}
+
+/** Never fails the activity read: an unreadable revision is simply absent. */
+function contentRevisionField(resident: ReturnType<typeof peekSession>): {
+  contentRevision?: string;
+} {
+  try {
+    return { contentRevision: sessionContentRevision(resident) };
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Opaque, content-free revision of what a session view shows beyond its
+ * activity: the transcript (subagent rows, tool progress, a task's report) and
+ * the background-task snapshot (progress, output tail, end). The backend
+ * compares it across its activity sweeps and announces a change on an idle
+ * session, which is what lets an idle Claude view read less often while a
+ * background task can still change it. O(1); it reads only what is resident
+ * and never touches the idle clock. A session that is not resident cannot
+ * change, so it answers the process generation alone.
+ */
+function sessionContentRevision(resident: ReturnType<typeof peekSession>): string {
+  if (!resident) return eventEmitter.generation;
+  const transcript = readTranscriptVersion(resident);
+  return `${eventEmitter.generation}:${transcript.epoch}.${transcript.revision}:${backgroundTaskRevision(resident)}`;
 }
 
 /**

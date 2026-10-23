@@ -4,6 +4,7 @@ import path from "node:path";
 
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 
+import { CONTAINER_DEFAULTS_REASON } from "./apply.js";
 import {
   createFixture,
   entry,
@@ -117,19 +118,20 @@ describe("runtime application", () => {
     fixture.environment.status = "running";
     fixture.environment.environmentType = "containerized";
     session("claude", "env-env-1:tab-k");
+    // Claude's user file is staged again before every container start.
     const container = await saveAndApply("claude", "claude:user");
     expect(container.operation.apply.runtimes[0]).toMatchObject({
       state: "restart-required",
-      reason: expect.stringContaining("recreate"),
+      reason: expect.stringContaining("stop and start the environment"),
     });
-    // Cursor's configuration never reaches a container, so recreating would not help.
+    // Cursor's mcp.json is staged at creation (staged-inputs 2), like the others.
     const cursor = await saveAndApply("cursor", "cursor:user");
     expect(cursor.operation.apply.runtimes).toEqual([]);
     session("cursor", "env-env-1:tab-c");
     const second = await fixture.service.apply({ operationId: cursor.operation.operationId });
     expect(second.apply.runtimes[0]).toMatchObject({
-      state: "blocked-policy",
-      reason: expect.stringContaining("not copied into containers"),
+      state: "restart-required",
+      reason: CONTAINER_DEFAULTS_REASON,
     });
   });
 

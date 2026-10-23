@@ -76,6 +76,26 @@ describe("StorageService drafts", () => {
     });
   });
 
+  test("keeps an attachment-only image draft across a backend restart", async () => {
+    await withStorage(async (storage, dataDir) => {
+      const value = {
+        text: "",
+        mentions: [],
+        attachments: [{ id: "shot", type: "image", path: "/workspace/shot.png", name: "shot.png" }],
+      };
+      const saved = await storage.saveComposeDraft("grok:e1:tab", "environment", "e1", value, 0);
+
+      const restarted = new StorageService(dataDir);
+      await restarted.init();
+      expect(await restarted.getComposeDraft(saved.draftKey)).toMatchObject({
+        ownerType: "environment",
+        ownerId: "e1",
+        value,
+        revision: saved.revision,
+      });
+    });
+  });
+
   test("round-trips and removes file drafts", async () => {
     await withStorage(async (storage) => {
       const saved = await storage.saveFileDraft(

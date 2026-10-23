@@ -45,7 +45,8 @@ import { environmentStateDirectory } from "./environment-state-paths.js";
  * half-written revision.
  */
 
-export const PORTABLE_INPUT_SPEC_VERSION = 1;
+/** Version 2 adds Cursor's `~/.cursor/mcp.json`. */
+export const PORTABLE_INPUT_SPEC_VERSION = 2;
 
 export type InputLimits = {
   fileBytes: number;
@@ -344,6 +345,22 @@ export function portableInputSpec(roots: InputSourceRoots): ProviderInputSpec[] 
             { path: "agent/themes", mode: "entries" },
           ],
           accessOnlyLogin: { file: "agent/auth.json", restrict: restrictPiAuthSnapshot },
+        },
+      ],
+      files: [],
+    },
+    {
+      provider: "cursor",
+      directories: [
+        {
+          stage: "cursor-config",
+          target: "/cursor-config",
+          root: path.join(hostHome, ".cursor"),
+          // User MCP servers only. Everything else under ~/.cursor (account
+          // and login state, IDE state, hooks, plugins, extensions, `sdk/`,
+          // `cli-config.json`) is the host's own and is never staged; the
+          // container's login arrives through the backend's key sync.
+          files: ["mcp.json"],
         },
       ],
       files: [],

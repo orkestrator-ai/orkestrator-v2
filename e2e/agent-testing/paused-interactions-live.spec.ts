@@ -279,14 +279,22 @@ test("a paused question and approval wait past ten minutes on every provider, th
           // shared database ("database is locked"), which is not what this
           // qualifies.
           const raise = async (run: Running) => {
-            await invoke("dispatch_native_agent_intent", {
-              ...run.identity,
-              requestId: `pause-${run.testCase.id}-${suffix}`,
-              mode: "build",
-              ...(run.testCase.approvalMode ? { approvalMode: run.testCase.approvalMode } : {}),
-              ...(MODELS[run.testCase.agent] ? { model: MODELS[run.testCase.agent] } : {}),
-              prompt: promptFor(run.testCase, run.marker, run.done),
-            });
+            // A refused dispatch never starts a turn, so polling for one would
+            // wait out the whole timeout; the outcome already says why.
+            const dispatched = await invoke<{ outcome: string; error?: string }>(
+              "dispatch_native_agent_intent",
+              {
+                ...run.identity,
+                requestId: `pause-${run.testCase.id}-${suffix}`,
+                mode: "build",
+                ...(run.testCase.approvalMode ? { approvalMode: run.testCase.approvalMode } : {}),
+                ...(MODELS[run.testCase.agent] ? { model: MODELS[run.testCase.agent] } : {}),
+                prompt: promptFor(run.testCase, run.marker, run.done),
+              },
+            );
+            if (dispatched.outcome === "rejected") {
+              throw new Error(`${run.testCase.id}: dispatch refused: ${dispatched.error ?? ""}`);
+            }
             let last = null as Projection;
             await expect
               .poll(

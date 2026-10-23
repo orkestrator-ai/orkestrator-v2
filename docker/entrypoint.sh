@@ -23,12 +23,13 @@ BOOT_PHASE=""
 BOOT_FAILURE_CODE=""
 
 # Portable input contract (docker/image-manifest.ts):
-# ORKESTRATOR_CAPABILITY staged-inputs=1
+# ORKESTRATOR_CAPABILITY staged-inputs=2
 #
 # Agent configuration and credentials arrive only at the read-only mount
 # points below (/claude-config, /codex-home, /opencode-*, /grok-*, /pi-config,
-# /claude-config.json, /tmp/gitconfig), and this script copies a bounded
-# allowlist from each. A backend that sees this capability stages exactly that
+# /cursor-config, /claude-config.json, /tmp/gitconfig), and this script copies
+# a bounded allowlist from each. Version 2 adds /cursor-config (Cursor's
+# mcp.json only). A backend that sees this capability stages exactly that
 # allowlist for enabled providers and binds the staged copies instead of whole
 # host agent homes (apps/backend/src/core/portable-inputs.ts); the two lists
 # must stay in step.
@@ -1077,6 +1078,25 @@ fi
 
 report_agent_copy_skips Pi
 log_progress "Pi configuration ready"
+
+# Set up Cursor configuration. Only the user's MCP servers (~/.cursor/mcp.json,
+# Cursor's user setting source) are imported; the bridge reads them from here.
+# Cursor's account, IDE state, hooks, plugins and SDK state stay on the host,
+# and its login arrives through the backend's key sync instead.
+log_progress "Setting up Cursor configuration..."
+mkdir -p "$HOME/.cursor"
+
+if [ -d /cursor-config ]; then
+    copy_agent_file /cursor-config "$HOME/.cursor" mcp.json Cursor
+    # Definitions can carry literal header or environment values, so keep the
+    # copy owner-only.
+    if [ -f "$HOME/.cursor/mcp.json" ] && [ ! -L "$HOME/.cursor/mcp.json" ]; then
+        chmod 600 "$HOME/.cursor/mcp.json" 2>/dev/null || true
+    fi
+fi
+
+report_agent_copy_skips Cursor
+log_progress "Cursor configuration ready"
 
 # Verify the config file exists and is valid
 if [ -f "$HOME/.claude.json" ]; then

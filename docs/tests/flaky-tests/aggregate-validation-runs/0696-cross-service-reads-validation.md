@@ -36,3 +36,29 @@ Every failing owner passed unchanged when rerun alone, so these are recorded as 
 | `bridges/pi-bridge/src/prompt-cancel-preflight.test.ts` | "cancel while Pi's preflight is held > acknowledges as pending and aborts the run the moment Pi accepts" (2004.93 ms) and an unnamed five-second hook timeout. | `pi-cancel-owner` passed in 0.4 s. |
 
 None of these owners imports the changed preview code; the branch changes no command-registry or Pi bridge source. No implementation, assertion, timeout or skip changed.
+
+## Further main merge validation — 2026-10-23
+
+- **Merge parents:** preview branch `cf65ce74b` and `origin/main` at `01d052e0b`; common ancestor `cda435fc9`.
+- **Scope:** the combined merge changes 208 paths from the common ancestor, including code and configuration. The two original conflicts were prose records: the aggregate index retains both 0696 and 0720; case 0229 retains both recurrence sections. The original NUL-delimited conflict list and parent IDs are retained in local Git metadata.
+- **Passed:** formatting, lint, typechecking, conflict-marker and relative-link checks, the private-preview browser suite (Chromium, Firefox and WebKit), and the separately run public-site browser suite.
+- **Repository suite:** the GNU-tool PATH invocation `ORKESTRATOR_TEST_AREA_BASE=cda435fc905eb43b73e8e6f0159ceb680a4bbc61 mise run test:logged -- --name merge-tests -- mise run test` completed with exit 1 in 1573.0 s. Workspace, root/support and bridge groups failed; the Codex protocol drift check passed. Backend: 10262 passed, 64 skipped, eight failed; web: 8888 passed, 10 skipped, one failed; root/support: two failing cases; ACP: 654 passed, three skipped, one failed. All ten complete failing unit owners subsequently passed unchanged as detailed below; the original aggregate exit remains failed. Evidence: `orkestrator-test-run.QHFNZ6/*.log.gz` and outer `orkestrator-test-run.884pLs/merge-tests.log.gz` under the host temporary directory.
+- **Component browser:** the first attempt refused port 1422 because its fixture belonged to another checkout. The run with `ORKESTRATOR_E2E_PORT=15422` and `ORKESTRATOR_PUBLIC_E2E_PORT=15423` completed with 469 passed, 95 skipped and 40 failed using nine workers (1172.1 s logged). Reload, layout and native branch-selection failures span multiple owners; no complete component-owner reruns were performed, so this run does not establish new flakes. Evidence: `orkestrator-test-run.LkMryB/merge-browser-retry.log.gz` under the host temporary directory. The separate public-site run used port 15424 and passed.
+- **Isolated application browser:** `mise run test:logged -- --name merge-agent-browser -- mise run test:agent:browser:isolated` failed the narrow Repository settings click in `browser-gateway.spec.ts`, then reached its 15-minute suite deadline after starting case 66/81 (916.4 s logged). This is not a complete passing run. The runner stopped and reset its exact disposable profile `qa-browser-0f31b3cd-33c` successfully. Evidence: `orkestrator-test-run.nbAgP0/merge-agent-browser.log.gz`.
+
+Complete unit-owner reruns used `mise run test:logged`, explicit paths and `--parallel=1 --only-failures`; backend/bridge runs used the aggregate's Node preload:
+
+| Complete owner | Aggregate failure | Rerun result |
+| --- | --- | --- |
+| `bridges/acp-bridge/src/acp-generalization.test.ts` | Filesystem/terminal case exceeded 60 s; recurrence of 0219. | Passed unchanged with the explicit Node preload (3.9 s logged). |
+| `tests/unit/preview-latency-baseline.test.ts` | `releases private-origin attachments after handoff failure (att-missing-url)` timed out in `get_preview_capabilities`. | Passed unchanged (5.8 s logged). |
+| `apps/backend/src/core/opencode-host-start.test.ts` | Shutdown between database-lock attempts observed early process exit. | Passed unchanged (13.2 s logged). |
+| `apps/backend/src/core/transcript-artifacts/content-server.engines.test.ts` | Firefox setup hook exceeded five seconds. | Passed unchanged in all installed engines (293.6 s logged). |
+| `apps/backend/src/core/coordinator-service.test.ts` | Two Git branch/discard cases timed out. | Passed unchanged (37.4 s logged). |
+| `apps/backend/src/core/public-api/public-api-exec.test.ts` | Process exit-status/stream separation case failed. | Passed unchanged (17.3 s logged). |
+| `apps/web/src/App.test.tsx` | Failed-retry Docker warning case failed. | First rerun: 114 passed and one different startup-probe case failed (22.7 s logged; evidence `orkestrator-test-run.CvOUQr`). The complete unchanged owner passed after the browser runs ended (6.1 s logged). |
+| `apps/backend/src/core/environment-move.test.ts` | Nested-submodule move and recovery cases exceeded five seconds. | First rerun: 36 passed, one recovery timeout and one associated late error (66.8 s logged; evidence `orkestrator-test-run.6c9J0C`). The complete unchanged owner passed after the browser runs ended (30.6 s logged). |
+| `tests/unit/hooks/useVirtuosoScrollState.test.ts` | Sticky reactivation scroll-state case failed. | Passed unchanged (2.9 s logged). |
+| `apps/backend/src/core/transcript-artifacts/mermaid-render.test.ts` | External watchdog case missed its elapsed deadline; recurrence of 0512. | Passed unchanged (24.9 s logged). |
+
+The passing whole-owner reruns establish intermittent aggregate recurrences for those owners. Host contention is a hypothesis; other worktrees were running suites concurrently. No implementation, assertion, timeout or skip was changed. Live-provider, Docker-image and iOS qualification were not run.

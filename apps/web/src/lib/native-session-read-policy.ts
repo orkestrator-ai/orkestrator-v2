@@ -1,5 +1,8 @@
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import { NATIVE_QUIET_BACKOFF_QUALIFIED_PLATFORMS } from "@orkestrator/protocol/native-agent-observation";
+import {
+  NATIVE_QUIET_BACKOFF_CONTENT_REVISION_PLATFORMS,
+  NATIVE_QUIET_BACKOFF_QUALIFIED_PLATFORMS,
+} from "@orkestrator/protocol/native-agent-observation";
 import type { ReadDemand } from "@/lib/read-coordinator";
 
 /**
@@ -26,15 +29,24 @@ export const NATIVE_QUIET_BACKOFF_TRIAL_MS: readonly number[] = [3_000, 5_000, 1
  * the backend announces every activity transition of the provider with a
  * stamped, session-scoped invalidation (`native-observation-events.ts` turns
  * those into coordinator invalidations, and a revision gap into a re-read of
- * every view), and an idle view of the provider cannot change without such a
- * transition. Claude and Codex are not qualified: background task output and
- * async questions change an idle view without one.
+ * every view), and an idle view of the provider cannot change without such an
+ * announcement.
  *
  * Backoff additionally requires the connected backend to advertise those
  * announcements (`observationEvents`); an older backend keeps the baseline.
  */
 export const NATIVE_QUIET_BACKOFF_QUALIFIED_PROVIDERS: ReadonlySet<AgentPlatform> = new Set(
   NATIVE_QUIET_BACKOFF_QUALIFIED_PLATFORMS,
+);
+
+/**
+ * Claude and Codex change an idle view without a transition (background task
+ * output, async questions). They back off only while the backend marks the
+ * session `turn.quietObservation`, meaning it announces those content changes
+ * too; otherwise they keep {@link IDLE_PROJECTION_REFRESH_MS}.
+ */
+export const NATIVE_QUIET_BACKOFF_CONTENT_REVISION_PROVIDERS: ReadonlySet<AgentPlatform> = new Set(
+  NATIVE_QUIET_BACKOFF_CONTENT_REVISION_PLATFORMS,
 );
 
 /** Turn phases that keep the responsive cadence and never back off. */
@@ -56,12 +68,16 @@ export function nativeSessionReadDemand(
     qualifiedProviders?: ReadonlySet<AgentPlatform>;
     /** The backend announces stamped, session-scoped activity invalidations. */
     observationEvents?: boolean;
+    /** The session's `turn.quietObservation`: content changes are announced too. */
+    quietObservation?: boolean;
   },
 ): Required<ReadDemand> {
   const responsive = isResponsiveNativeTurnPhase(phase);
   const qualified =
     options.observationEvents === true &&
-    (options.qualifiedProviders ?? NATIVE_QUIET_BACKOFF_QUALIFIED_PROVIDERS).has(platform);
+    (options.qualifiedProviders ?? NATIVE_QUIET_BACKOFF_QUALIFIED_PROVIDERS).has(platform) &&
+    (!NATIVE_QUIET_BACKOFF_CONTENT_REVISION_PROVIDERS.has(platform) ||
+      options.quietObservation === true);
   return {
     active: options.active,
     intervalMs: responsive ? ACTIVE_PROJECTION_REFRESH_MS : IDLE_PROJECTION_REFRESH_MS,

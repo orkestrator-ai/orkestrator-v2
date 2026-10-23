@@ -29,7 +29,7 @@ archived agents) are not adopted.
   - OpenCode: undo/redo through `session.revert` / `unrevert`.
   - Grok: no rewind or fork on ACP v1.
 - Titles:
-  - The backend projection title (`native-agent-service-projection.ts`) uses
+  - The backend projection title (`native-agent-transcript-projection.ts`) uses
     the provider's title, then the first user message cut to 80 characters
     (Claude's placeholder titles count as absent). It pushes the result back
     through `setSessionTitle`. A failed push is ignored and the projection keeps

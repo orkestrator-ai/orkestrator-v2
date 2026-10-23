@@ -4,10 +4,10 @@ import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
 import { openCodeContextUsage } from "./opencode-usage.js";
 import {
   createProviderStub,
-  internals,
   waitForCondition,
   withService,
 } from "./native-agent-service-projection-test-support.js";
+import { collaborators, projectionInternals } from "./native-agent-service-test-collaborators.js";
 
 const liveWindow = { messages: 100, targetBytes: 512 * 1024 } as const;
 
@@ -461,12 +461,12 @@ describe("native agent progressive remainder", () => {
           const input = { ...identity, viewVersion: 1 as const, liveWindow, forceSnapshot: true };
           await service.getTranscriptUpdate(input);
           if (change === "provider session") {
-            for (const entry of internals(service).progressiveTranscriptCache.values()) {
+            for (const entry of projectionInternals(service).progressiveTranscriptCache.values()) {
               const value = entry.value as { identity?: { providerSessionId: string } };
               if (value.identity) value.identity.providerSessionId = "provider-session-before";
             }
           } else {
-            internals(service)
+            collaborators(service)
               .providerRegistry.stateForTesting()
               .connections.set("env-1\0codex", "generation-2");
           }
@@ -1160,9 +1160,9 @@ describe("native agent progressive remainder", () => {
           identity.agent,
           identity.logicalSessionKey,
         );
-        const before = internals(service).projectionEpochs.get(sessionKey) ?? 0;
-        internals(service).invalidateProjection(sessionKey);
-        const after = internals(service).projectionEpochs.get(sessionKey) ?? 0;
+        const before = projectionInternals(service).projectionEpochs.get(sessionKey) ?? 0;
+        collaborators(service).projections.invalidateProjection(sessionKey);
+        const after = projectionInternals(service).projectionEpochs.get(sessionKey) ?? 0;
         expect(after).toBeGreaterThan(before);
         releaseFirst();
         const update = await first;
@@ -1212,10 +1212,10 @@ describe("native agent progressive remainder", () => {
           identity.agent,
           identity.logicalSessionKey,
         );
-        await internals(service).flushDisplayTailPersist(sessionKey);
+        await collaborators(service).projections.flushDisplayTailPersist(sessionKey);
         const persisted = await storage.getNativeAgentDisplayTail(sessionKey);
         expect(persisted?.messages).toHaveLength(1);
-        internals(service).progressiveTranscriptCache.clear();
+        projectionInternals(service).progressiveTranscriptCache.clear();
         const cached = await service.getTranscriptUpdate({
           ...identity,
           viewVersion: 1,
@@ -1276,8 +1276,8 @@ describe("native agent progressive remainder", () => {
           identity.agent,
           identity.logicalSessionKey,
         );
-        await internals(service).flushDisplayTailPersist(sessionKey);
-        internals(service).progressiveTranscriptCache.clear();
+        await collaborators(service).projections.flushDisplayTailPersist(sessionKey);
+        projectionInternals(service).progressiveTranscriptCache.clear();
         coldPreview = true;
 
         const restored = await service.getTranscriptUpdate({
@@ -1307,7 +1307,7 @@ describe("native agent progressive remainder", () => {
         expect(whileHydrating.value.messages).toMatchObject([
           { id: "m1", content: "persisted conversation" },
         ]);
-        await internals(service).flushDisplayTailPersist(sessionKey);
+        await collaborators(service).projections.flushDisplayTailPersist(sessionKey);
         expect((await storage.getNativeAgentDisplayTail(sessionKey))?.messages).toMatchObject([
           { id: "m1", content: "persisted conversation" },
         ]);
@@ -1334,7 +1334,7 @@ describe("native agent progressive remainder", () => {
           { id: "m1", content: "persisted conversation" },
         ]);
         expect(settled.value.freshness).toBe("current");
-        await internals(service).flushDisplayTailPersist(sessionKey);
+        await collaborators(service).projections.flushDisplayTailPersist(sessionKey);
         expect((await storage.getNativeAgentDisplayTail(sessionKey))?.messages).toMatchObject([
           { id: "m1", content: "persisted conversation" },
         ]);
@@ -1386,8 +1386,8 @@ describe("native agent progressive remainder", () => {
             identity.agent,
             identity.logicalSessionKey,
           );
-          await internals(service).flushDisplayTailPersist(sessionKey);
-          internals(service).progressiveTranscriptCache.clear();
+          await collaborators(service).projections.flushDisplayTailPersist(sessionKey);
+          projectionInternals(service).progressiveTranscriptCache.clear();
           coldPreview = true;
 
           const restored = await service.getTranscriptUpdate({
@@ -1408,7 +1408,7 @@ describe("native agent progressive remainder", () => {
             });
             return hydrated.status === "snapshot" && hydrated.value.messages.length === 2;
           });
-          await internals(service).flushDisplayTailPersist(sessionKey);
+          await collaborators(service).projections.flushDisplayTailPersist(sessionKey);
           expect((await storage.getNativeAgentDisplayTail(sessionKey))?.messages).toMatchObject([
             { id: "m1", content: "persisted conversation" },
             { id: "m2", content: "hydrated later turn" },
@@ -1458,8 +1458,8 @@ describe("native agent progressive remainder", () => {
           identity.agent,
           identity.logicalSessionKey,
         );
-        await internals(service).flushDisplayTailPersist(sessionKey);
-        internals(service).progressiveTranscriptCache.clear();
+        await collaborators(service).projections.flushDisplayTailPersist(sessionKey);
+        projectionInternals(service).progressiveTranscriptCache.clear();
         emptied = true;
 
         const update = await service.getTranscriptUpdate({
@@ -1472,7 +1472,7 @@ describe("native agent progressive remainder", () => {
         if (update.status !== "snapshot") throw new Error("expected snapshot");
         expect(update.value.messages).toEqual([]);
         expect(update.value.freshness).toBe("empty");
-        await internals(service).flushDisplayTailPersist(sessionKey);
+        await collaborators(service).projections.flushDisplayTailPersist(sessionKey);
         expect((await storage.getNativeAgentDisplayTail(sessionKey))?.messages).toEqual([]);
       },
     );
@@ -1513,7 +1513,7 @@ describe("native agent progressive remainder", () => {
           viewVersion: 1,
           liveWindow,
         });
-        for (const entry of internals(service).progressiveTranscriptCache.values()) {
+        for (const entry of projectionInternals(service).progressiveTranscriptCache.values()) {
           const value = entry.value as { identity?: { providerSessionId?: string } };
           if (value.identity) value.identity.providerSessionId = "other-provider-session";
         }
@@ -1678,7 +1678,8 @@ describe("native agent progressive remainder", () => {
             });
           await read();
           await waitForCondition(() => release !== undefined);
-          const pending = Array.from(internals(service).progressiveHydrations.values())[0]?.promise;
+          const pending = Array.from(projectionInternals(service).progressiveHydrations.values())[0]
+            ?.promise;
           if (!pending) throw new Error("expected pending hydration");
           try {
             state = "new";
@@ -1707,7 +1708,7 @@ describe("native agent progressive remainder", () => {
               identity.agent,
               identity.logicalSessionKey,
             );
-            await internals(service).flushDisplayTailPersist(sessionKey);
+            await collaborators(service).projections.flushDisplayTailPersist(sessionKey);
             expect((await storage.getNativeAgentDisplayTail(sessionKey))?.messages).toEqual(newer);
             expect(messages).toHaveBeenCalledTimes(1);
           } finally {
@@ -1757,7 +1758,7 @@ describe("native agent progressive remainder", () => {
             liveWindow: window,
           });
           expect(update.status).toBe("snapshot");
-          expect(internals(service).progressiveHydrations.size).toBe(0);
+          expect(projectionInternals(service).progressiveHydrations.size).toBe(0);
           await new Promise((resolve) => setTimeout(resolve, 50));
           expect(messages).not.toHaveBeenCalled();
           expect(announced).not.toHaveBeenCalled();
@@ -1806,7 +1807,7 @@ describe("native agent progressive remainder", () => {
             });
           await read();
           await waitForCondition(() => messages.mock.calls.length === 3);
-          await Array.from(internals(service).progressiveHydrations.values())[0]?.promise;
+          await Array.from(projectionInternals(service).progressiveHydrations.values())[0]?.promise;
           const retained = await read();
           expect(retained.status).toBe("snapshot");
           if (retained.status !== "snapshot") throw new Error("expected snapshot");
@@ -1924,7 +1925,7 @@ describe("native agent progressive remainder", () => {
         };
         await service.ensureSession(identity);
         await service.getTranscriptUpdate({ ...identity, viewVersion: 1, liveWindow });
-        const samples = internals(service).progressiveMetrics.list() as Array<{
+        const samples = projectionInternals(service).progressiveMetrics.list() as ReadonlyArray<{
           domain: string;
           outcome: string;
         }>;
@@ -2959,11 +2960,11 @@ describe("native agent progressive remainder recovery", () => {
           identity.agent,
           identity.logicalSessionKey,
         );
-        await internals(service).flushDisplayTailPersist(sessionKey);
+        await collaborators(service).projections.flushDisplayTailPersist(sessionKey);
         const persisted = await storage.getNativeAgentDisplayTail(sessionKey);
         expect(persisted?.historyComplete).toBe(false);
         expect(persisted?.messageWindow?.canLoadEarlier).toBe(true);
-        internals(service).progressiveTranscriptCache.clear();
+        projectionInternals(service).progressiveTranscriptCache.clear();
         failing = true;
         const cached = await service.getTranscriptUpdate({
           ...identity,
@@ -3112,7 +3113,7 @@ describe("native agent progressive failure and lifecycle", () => {
           viewVersion: 1,
           sections: ["commands"],
         });
-        const view = internals(service);
+        const view = projectionInternals(service);
         await waitForCondition(() =>
           Array.from(view.progressiveReads.keys()).some((key) => key.includes("discovery:")),
         );
@@ -3182,7 +3183,7 @@ describe("native agent progressive failure and lifecycle", () => {
           identity.agent,
           identity.logicalSessionKey,
         );
-        const view = internals(service);
+        const view = projectionInternals(service);
         const inFlight = service.getTranscriptUpdate({ ...identity, viewVersion: 1, liveWindow });
         await waitForCondition(() => calls === 1);
         view.invalidateProjection(sessionKey);

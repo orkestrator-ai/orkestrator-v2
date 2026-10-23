@@ -202,3 +202,40 @@ this refresh: the new delta has no Electron, Docker lifecycle or iOS edits;
 private preview transport used the isolated browser suite, and live external
 qualification remains opt-in. The prior merge's separate Electron limitation
 is retained above.
+
+## Collaborator refactor merged after the additional main update (2026-10-23)
+
+Merged main's `be53bdd8d488d2028ab1f536d9f736e6e099b028` into
+`d0e641244df6af7885d779882da0382a3d9f22ad` before pushing. The common ancestor
+is `9da8131c8dd35328fadfa654379533c3cbcd6767`; the combined delta has 97 paths.
+The original conflict list, retained with those parent IDs in local Git
+metadata before staging, contains only the aggregate validation index. Both
+this branch's Pi record and main's native-agent collaborator record were kept.
+No source conflict was resolved manually.
+
+The following commands each used `mise run test:logged -- --name <label> --`:
+
+| Inner command | Combined-tree result |
+| --- | --- |
+| `mise run check` | Passed formatting, lint and all typechecks (12.0 s). |
+| `ORKESTRATOR_TEST_AREA_BASE=9da8131c8dd35328fadfa654379533c3cbcd6767 mise run test` | All four repository groups passed (431.8 s). |
+| `mise run test:agent:browser:isolated` | Completed with 28 passed, 1 failed, 52 skipped (419.8 s). Only the narrow host-picker scenario failed. Profile `qa-browser-17ade722-e63` was stopped/reset. |
+| `bunx playwright test --config e2e/playwright.config.ts e2e/CloseRetention.spec.ts --workers=1 --output output/playwright/latest-main-retention` | Complete owner: 19 passed, 1 failed, 20 skipped (118.1 s), using an available fixture port. The same Cursor steering-status failure reported before this additional main commit remains: `agent-runtime-steer-saturated` is absent after 30 s at line 724. |
+| `bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/browser-gateway.spec.ts --workers=1` | Complete failing owner rerun: 13 passed, 1 failed, 10 skipped (127.0 s), on fresh ready profile `latest-main-validation` with run ID `latest-main-gateway-owner`. The same narrow host-picker scenario failed again. |
+
+The exact isolated-browser failure is `host path browsing > host picker creates
+and browses folders through the authenticated gateway above fullscreen settings
+(narrow)`, in `e2e/agent-testing/browser-gateway.spec.ts:150`. Both the original
+run and the complete owner retry timed out clicking `Repository settings`
+at line 241 (15 s): the button was unstable and then invisible. This is an
+unresolved UI-test limitation, not a flake classification. The original browser
+and retention exits remain failed. No production code, assertion, timeout or
+skip was changed for these results.
+
+Compressed failure evidence: `orkestrator-test-run.JatNYB` (isolated browser),
+`orkestrator-test-run.kzDQLZ` (retention), `orkestrator-test-run.ovmRcK` (gateway
+owner), under the platform temporary directory. The extra manual profile
+`latest-main-validation` was stopped and reset; no test profile state was kept.
+The previous refresh's private-preview/public/design passes and its native
+branch-selection limitation remain recorded above. Electron, Docker,
+live-provider and iOS qualification were not repeated for this backend refactor.

@@ -16,7 +16,7 @@ OpenCode and Grok steer are blocked upstream and are recorded here.
   `nativeAgentCapabilities()`, `packages/protocol/src/native-agent.ts`). The
   backend qualifies it at runtime with `HttpBridgeProvider.steerSupported`,
   which probes `/session/:id/steer/dispatch`. No platform is hard-coded.
-- Abort ladder (`apps/backend/src/core/native-agent-service-dispatch.ts`): it
+- Abort ladder (`apps/backend/src/core/native-agent-service.ts`): it
   calls `provider.abort`, waits up to `abortGraceMs` (default 5 s), then calls
   `hardAbort`, and records a stop notice naming the rung that fired.
 - Claude (`bridges/claude-bridge/src/services/`):
@@ -67,7 +67,7 @@ OpenCode and Grok steer are blocked upstream and are recorded here.
   `setSteeringMode` / `setFollowUpMode` from Pi's settings
   (`agent-session.ts`). The backend reads `/session/:id/queue` into
   `providerQueue` (`http-bridge-provider.ts`), and
-  `mergeNativeAgentQueueItems` (`native-agent-service-projection.ts`) merges it
+  `mergeNativeAgentQueueItems` (`native-agent-transcript-projection.ts`) merges it
   into the projection queue.
 - Grok: `actions: {}`. The dormant interjection extension
   (`bridges/acp-bridge/src/grok-interjection.ts`) runs only with

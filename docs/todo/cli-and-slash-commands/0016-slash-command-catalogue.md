@@ -28,7 +28,7 @@ and need a decision. A new tab on a current bridge never sees those rows (see
   when it has a session ID, falls back to a legacy global route on 404, and
   reads the global route directly when it has no session ID. Only
   `refreshProjectionCommands` for a tab with no stored session reads without
-  one (`native-agent-service-base.ts`), and its projection is `null`, so those
+  one (`native-agent-service.ts`), and its projection is `null`, so those
   rows are cached under `global` but never shown. Codex and Cursor
   map to `/global/slash-commands`; Claude, Pi and Grok map to
   `/plugins/commands`. Legacy rows are normalised as non-enhanced rows with a
@@ -222,9 +222,9 @@ and need a decision. A new tab on a current bridge never sees those rows (see
     (`bridges/claude-bridge/src/services/session-manager-core.ts:1576`).
   - A persisted mapping always carries `providerSessionId`
     (`apps/backend/src/core/models.ts:648`). Without one there is no
-    projection at all (`native-agent-service-dispatch.ts:1121`), so the picker
+    projection at all (`resolveProjectionSession` in `native-agent-service.ts`), so the picker
     is empty, and every projection catalogue read passes the session ID
-    (`native-agent-service-projection.ts:2824`, `:3287`, `:4344`).
+    (`NativeAgentCatalogCache.commandCatalogue` in `native-agent-catalog-cache.ts`, called from `native-agent-transcript-projection.ts`).
   - On the session route, a Claude session with no turn yet gets one
     control-only CLI probe, reported `stale` ("may be out of date"); while that read is in
     flight the picker shows `loading` (`native-agent-command-catalogue.ts:228`).

@@ -610,7 +610,7 @@ capability row says so.
 | Protocol, flags, carrier | `packages/protocol/src/agent-mail.ts` |
 | Persist, send, inject policy | `apps/backend/src/core/storage-agent-mail.ts` |
 | Drain, batch, presence cache | `apps/backend/src/core/agent-mail-service.ts` |
-| Native inject / presence | `apps/backend/src/core/native-agent-service-prompt.ts` |
+| Native inject / presence | `apps/backend/src/core/native-agent-service.ts` |
 | Tmux inject | `apps/backend/src/core/prompt-queue-drainer.ts` |
 | Agent Tools mail | `apps/backend/src/core/agent-tools-messaging.ts` |
 | Control MCP mail | `apps/backend/src/core/control-mcp-server.ts` |

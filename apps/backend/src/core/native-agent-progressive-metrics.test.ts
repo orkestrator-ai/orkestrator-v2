@@ -7,10 +7,10 @@ import {
 } from "./native-agent-progressive-metrics.js";
 import {
   createProviderStub,
-  internals,
   waitForCondition,
   withService,
 } from "./native-agent-service-projection-test-support.js";
+import { projectionInternals } from "./native-agent-service-test-collaborators.js";
 
 const liveWindow = { messages: 100, targetBytes: 512 * 1024 } as const;
 
@@ -153,8 +153,7 @@ describe("transcript read phase metrics", () => {
         await waitForCondition(() => reads === 1);
         // A second reader of the same window joins the in-flight read.
         const second = service.getTranscriptUpdate({ ...identity, viewVersion: 1, liveWindow });
-        const waiters = () =>
-          (service as unknown as { progressiveReadWaiterCount: number }).progressiveReadWaiterCount;
+        const waiters = projectionInternals(service).progressiveReadWaiterCount;
         await waitForCondition(() => waiters() === 1);
         await new Promise((resolve) => setTimeout(resolve, 5));
         release();
@@ -162,7 +161,9 @@ describe("transcript read phase metrics", () => {
         expect((await second).status).toBe("snapshot");
         expect(reads).toBe(1);
 
-        const samples = internals(service).progressiveMetrics.list() as ProgressiveReadMetric[];
+        const samples = projectionInternals(
+          service,
+        ).progressiveMetrics.list() as ProgressiveReadMetric[];
         const transcript = samples.filter((sample) => sample.domain === "transcript");
         expect(transcript).toHaveLength(2);
         const own = transcript.find((sample) => sample.joined !== true)!;

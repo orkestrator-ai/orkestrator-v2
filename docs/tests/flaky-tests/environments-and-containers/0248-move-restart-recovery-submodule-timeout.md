@@ -281,3 +281,12 @@ The aggregate exited 1 after 822.1 s. Backend counts were 9918 passed, 80 skippe
 - **Owning-file rerun:** `bun test --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts --parallel=1 --only-failures` from `apps/backend` passed all 37 tests twice (28.8 s and 19.6 s) at host load 46.
 - **Evidence:** `orkestrator-test-run.EZ31P0/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
 - **Assessment:** recurrence of the known deadline failure under heavy host load. A larger backend worker pool adds concurrent Git work, so watch this entry's frequency after the change lands.
+
+## Native agent collaborator extraction — 2026-10-23
+
+- **Failure:** `restart recovery re-links submodules of an adopted or abandoned copy` hit the five-second timeout (5091.28 ms) after an `lstat` ENOENT on a moved tree's `.git`.
+- **Original command:** `mise run test:logged -- --name full-tests -- mise run test` on `todo-0010-native-agent-collaborators-3fc4749e0985` (native agent service refactor; no environment-move or Git code changed), macOS arm64, Bun 1.4.2.
+- **Suite counts:** backend 10,120 passed, 86 skipped, 3 failed across 592 files (544.12 s); web 8,818 passed; root/support, bridges and the Codex protocol lockfile passed.
+- **Owning-file rerun:** `mise run test:logged -- --name env-move-alone -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts --parallel=1 --only-failures` passed twice (35.4 s and 36.7 s logged).
+- **Evidence:** `orkestrator-test-run.EveQv4/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
+- **Changes:** recorded evidence only; no test, timeout, assertion or skip changed.

@@ -56,7 +56,7 @@ open qualification cases from the 2026-10-21 run.
   O(1) and touch nothing; a failure to compute one omits the field rather
   than failing the read.
 - Content announcements. `recordActivity`
-  (`native-agent-service-reconciliation.ts`) compares the revision across
+  (`native-agent-launch-activity-reconciler.ts`) compares the revision across
   sweeps. When it moves while the state is unchanged and the session is idle
   (or working with a released composer), it calls `onObservationInvalidation`,
   stamped from the same contiguous sequence as transitions. `index.ts` emits it
@@ -70,7 +70,7 @@ open qualification cases from the 2026-10-21 run.
   advertises `observationEventVersions`. Claude and Codex are also in
   `NATIVE_QUIET_BACKOFF_CONTENT_REVISION_PLATFORMS`: they back off only while
   the session's `turn.quietObservation` is set. The backend sets it
-  (`quietObservationFlag` in `native-agent-service-projection.ts`, both
+  (`quietObservationFlag` in `native-agent-transcript-projection.ts`, both
   projection paths) only while its last observation of that provider session
   carried a content revision, so a view of an older bridge, or before the
   first sweep, keeps 1,500 ms.
@@ -93,7 +93,7 @@ open qualification cases from the 2026-10-21 run.
   model-catalogue refresh is compared order-insensitively (`modelCatalogKey`).
 - Mail presence keeps its 2 s refresh and 4 s TTL (`OBSERVED_PRESENCE_TTL_MS`
   in `agent-mail-service.ts`). `mailInjectPresence`
-  (`native-agent-service-prompt.ts`) answers `unknown` instead of `idle` when
+  (`native-agent-service.ts`) answers `unknown` instead of `idle` when
   the retained idle would not pass the injection gate: older than
   `MAIL_INJECT_OBSERVATION_MAX_AGE_MS` (4 s) or read before the session's
   latest dispatch. A flip between `idle` and `unknown` does not reset the
@@ -105,7 +105,7 @@ open qualification cases from the 2026-10-21 run.
   always comes from a current status read.
 - The interaction observer (inventory B08) runs only when
   `ORKESTRATOR_AGENT_INTERACTION_OBSERVE_ONLY=1` sets `interactionMonitorMode`
-  to `"observe-only"` (`native-agent-service-prompt.ts`). It was left
+  to `"observe-only"` (`native-agent-interaction-tracker.ts`). It was left
   unchanged; see Assumptions and decisions.
 - Rollback: `ORKESTRATOR_NATIVE_OBSERVATION_SHARING=0` restores the previous
   per-provider cadence, the bridge streams included (no group then qualifies
@@ -221,7 +221,7 @@ open qualification cases from the 2026-10-21 run.
    source token, only for an incomplete transcript). Still owed: rerun the
    idle OpenCode case and confirm reads per minute fall to Cursor's 12; if not,
    attribute the remaining hints by tagging the callers at
-   `native-agent-service-projection.ts` (hydration, the discovery deadline and
+   `native-agent-transcript-projection.ts` (hydration, the discovery deadline and
    success, the catalogue refresh).
 
 ### Qualification

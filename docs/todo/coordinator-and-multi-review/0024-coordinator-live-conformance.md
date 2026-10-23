@@ -555,7 +555,7 @@ is the truth, and this file is the backlog.
   `resolveDefaultModel`, and every Codex worker a coordinator launched on a
   ChatGPT login ran the shipped `gpt-5.4` and failed with HTTP 400. The
   startup dispatch now marks a settings model `modelSource: "default"` and an
-  `initialAgentModel` explicit (`native-agent-service-reconciliation.ts`;
+  `initialAgentModel` explicit (`native-agent-launch-activity-reconciler.ts`;
   test "the initial prompt's Codex model"). Writing the substitute into the
   settings was rejected: the settings keep the user's choice.
 - **An OpenCode coordinator keeps its Control MCP credential** (fixed

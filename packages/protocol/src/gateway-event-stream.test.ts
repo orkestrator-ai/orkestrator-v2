@@ -111,6 +111,27 @@ describe("SSE framing", () => {
     });
     expect(seen).toEqual(["a"]);
   });
+
+  test("an abort ends a read waiting on a silent connection", async () => {
+    const controller = new AbortController();
+    // Opens and then never sends or closes, as a half-open route does.
+    const silent = new ReadableStream<Uint8Array>({ start() {} });
+    const reading = readSseStream(silent, controller.signal, () => undefined);
+    setTimeout(() => controller.abort(), 5);
+    await reading;
+  });
+
+  test("reports every chunk, keepalive comments included", async () => {
+    let chunks = 0;
+    await readSseStream(
+      streamOf([": keepalive\n\n", "data: a\n\n"]),
+      new AbortController().signal,
+      () => undefined,
+      undefined,
+      () => chunks++,
+    );
+    expect(chunks).toBeGreaterThanOrEqual(2);
+  });
 });
 
 describe("gateway event envelopes", () => {

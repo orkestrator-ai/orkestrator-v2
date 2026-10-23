@@ -34,6 +34,9 @@ import { NodeEventStream, type NodeEventTransport } from "./node-event-stream.js
  * - An unavailable node keeps its last-known summaries, labelled stale;
  *   last-known state survives a command-node restart.
  * - Summary reads are bounded and never fetch transcripts or content.
+ * - Events keep summaries current; a re-read of every connected node every
+ *   {@link SUMMARY_RECONCILE_MS} bounds how long any missed change (an event
+ *   lost in transit, a change the node did not announce) can show.
  * - On request it also summarizes the command node itself, for a client
  *   whose workspace (and so whose full stores) is on another node.
  */
@@ -76,6 +79,8 @@ export const NODE_SUMMARY_EVENT_PREFIXES = [
 
 const SUMMARY_READ_CONCURRENCY = 4;
 const REFRESH_DEBOUNCE_MS = 250;
+/** Last-resort re-read of every connected node's summaries. */
+export const SUMMARY_RECONCILE_MS = 60_000;
 const PERSIST_DEBOUNCE_MS = 5_000;
 const MAX_PERSISTED_BYTES = 2 * 1024 * 1024;
 
@@ -97,6 +102,17 @@ interface NodeState {
   lastRevision: number | null;
 }
 
+/** What clients see of one node's summaries, to skip announcing an unchanged re-read. */
+function summaryFingerprint(state: NodeState): string {
+  return JSON.stringify([
+    state.freshness,
+    state.truncated,
+    state.lastError,
+    state.projects,
+    [...state.environmentsByProject],
+  ]);
+}
+
 export class NodeReadModel {
   private readonly states = new Map<BackendId, NodeState>();
   private readonly views = new Map<BackendId, NodeView>();
@@ -104,6 +120,7 @@ export class NodeReadModel {
   private persistTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly changed = new Set<BackendId>();
   private changeTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconcileTimer: ReturnType<typeof setInterval> | null = null;
   private started = false;
   private readonly listeners = new Set<
     (event: string, payload: unknown, nodeId: BackendId) => void
@@ -123,6 +140,8 @@ export class NodeReadModel {
       local?: ReadModelLocal;
       fetchImpl?: typeof fetch;
       now?: () => number;
+      /** Test seam; production uses {@link SUMMARY_RECONCILE_MS}. */
+      reconcileMs?: number;
     },
   ) {}
 
@@ -132,12 +151,29 @@ export class NodeReadModel {
     await this.restore();
     this.unsubscribe = this.options.nodes.subscribe(() => void this.sync());
     await this.sync();
+    this.reconcileTimer = setInterval(
+      () => this.reconcile(),
+      this.options.reconcileMs ?? SUMMARY_RECONCILE_MS,
+    );
+    this.reconcileTimer.unref?.();
+  }
+
+  /** Re-read every node whose subscription is up; a hydrate already running absorbs it. */
+  private reconcile(): void {
+    if (!this.started) return;
+    for (const [nodeId, state] of this.states) {
+      if (state.stream && this.options.nodes.link(nodeId)?.connected) {
+        void this.requestHydrate(nodeId);
+      }
+    }
   }
 
   stop(): void {
     this.started = false;
     this.unsubscribe?.();
     this.unsubscribe = null;
+    if (this.reconcileTimer) clearInterval(this.reconcileTimer);
+    this.reconcileTimer = null;
     for (const state of this.states.values()) {
       state.stream?.stop();
       state.stream = null;
@@ -497,12 +533,15 @@ export class NodeReadModel {
         truncated ||= result.truncated;
         environmentsByProject.set(project.ref.projectId, result.environments);
       }
+      const before = summaryFingerprint(state);
       state.projects = projects;
       state.environmentsByProject = environmentsByProject;
       state.loadedAt = (this.options.now ?? Date.now)();
       state.truncated = truncated;
       state.lastError = failed ? "Some environments could not be loaded." : null;
       state.freshness = failed ? "degraded" : "current";
+      // A periodic re-read that found nothing new tells no client.
+      if (summaryFingerprint(state) === before) return;
       this.noteChanged(state.nodeId);
       this.schedulePersist();
     } catch (error) {

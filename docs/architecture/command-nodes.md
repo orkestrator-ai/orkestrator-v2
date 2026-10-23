@@ -292,7 +292,11 @@ A command node attached to another command node operates in leaf mode:
 
 - The command node keeps a live read model of every connected node's
   projects and environments (summaries, status, activity), fed by its own
-  subscriptions to each node's event stream.
+  subscriptions to each node's event stream. A subscription that receives
+  nothing, not even the node's 25 s keepalive, for 75 s is reopened (a
+  half-open route never errors on its own), and every connected node is
+  re-read every 60 s as a last resort; a re-read that finds nothing new
+  announces nothing.
 - Every resource is node-qualified (`{ nodeId, projectId }`,
   `{ nodeId, environmentId }`), so identical IDs on two nodes never collide.
   Commands from the portal carry the node reference and the command node

@@ -37,7 +37,8 @@ test("namespaced headings retain distinct labels and full-hint titles", async ({
   await expect(heading(page, "team-b/shared/app", "Remote")).toContainText("team-b/shared/app");
 });
 
-for (const activation of ["click", "Enter", "Space"] as const) {
+// Space is the heading's keyboard drag, covered by the reorder test below.
+for (const activation of ["click", "Enter"] as const) {
   for (const fallback of [false, true]) {
     test(`${activation} opens the ${fallback ? "first shown fallback" : "command node"} workspace without dragging`, async ({
       page,
@@ -74,7 +75,7 @@ for (const activation of ["click", "Enter", "Space"] as const) {
   }
 }
 
-test("the chevron collapses without navigating and the grip reorders with the keyboard", async ({
+test("the chevron collapses without navigating and the heading reorders with Space", async ({
   page,
 }) => {
   await page.goto("/merged-project-list");
@@ -87,10 +88,10 @@ test("the chevron collapses without navigating and the grip reorders with the ke
   await page
     .getByRole("button", { name: "Collapse folder team-b/shared/app", exact: true })
     .press("Space");
-  const grip = page.getByRole("button", { name: "Move repository team-a/shared/app", exact: true });
-  await grip.focus();
-  await grip.press("Space");
-  await expect(grip).toHaveAttribute("aria-pressed", "true");
+  const source = page.getByRole("button", { name: /^Open team-a\/shared\/app on / });
+  await source.focus();
+  await source.press("Space");
+  await expect(source).toHaveAttribute("aria-pressed", "true");
   // KeyboardSensor installs its document listener on the next task; wait for
   // the browser to paint the activated drag before sending movement keys.
   await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
@@ -105,7 +106,7 @@ test("the chevron collapses without navigating and the grip reorders with the ke
     "data-project-folder",
     hintB,
   );
-  await expect(grip).toBeFocused();
+  await expect(source).toBeFocused();
   await expect(page.getByTestId("opened")).toBeEmpty();
   await expect(page.getByTestId("updates")).toContainText('"repositoryOrder"');
   await expect(page.getByTestId("selected")).toBeEmpty();
@@ -147,7 +148,7 @@ for (const mode of ["project", "repository"] as const) {
     const handle =
       mode === "project"
         ? page.getByTitle("Collapse folder Work")
-        : page.getByRole("button", { name: "Move repository team-a/shared/app" });
+        : page.getByRole("button", { name: /^Open team-a\/shared\/app on / });
     await hoverDrag(page, handle, folder(page, nextFolder));
     await page.mouse.up();
     await expect(page.locator("[data-project-folder]").first()).toHaveAttribute(

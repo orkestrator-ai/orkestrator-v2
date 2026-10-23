@@ -43,6 +43,9 @@ test("project header highlights Home selection, counts worker rows, and opens th
   );
   const row = screen.getByRole("button", { name: "Checkout" });
   expect(row.getAttribute("aria-current")).toBe("page");
+  // The chevron sits last even without a machine icon, as on folder headings.
+  const expand = screen.getByRole("button", { name: "Expand project Checkout" });
+  expect(expand.parentElement!.lastElementChild === expand).toBe(true);
   expect(screen.getByRole("button", { name: "Checkout Home needs attention" })).toBeTruthy();
   expect(screen.queryByText("project-home") === null).toBe(true);
   fireEvent.click(row);

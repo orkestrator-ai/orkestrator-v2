@@ -65,7 +65,7 @@ for (const repository of [false, true]) {
   }) => {
     await page.goto(`/sidebar-drag?groups=1${repository ? "&merged=1&repository=1" : ""}`);
     const source = repository
-      ? page.getByRole("button", { name: "Move repository acme/source", exact: true })
+      ? page.getByRole("button", { name: /^Open acme\/source( on |$)/ })
       : page.getByTitle("Collapse folder Source", { exact: true }).first();
     await expect(source).toBeVisible();
     await drag(page, source, project(page, "q"));

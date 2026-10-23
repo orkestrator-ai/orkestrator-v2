@@ -242,6 +242,40 @@ test("federated sortable wrappers preserve size when dragged over unequal items"
   }
 });
 
+test("a machine heading is dragged by its name and puts the chevron where its status was", () => {
+  try {
+    const machine = machineView();
+    const machines = [
+      { ...machine, connectionId: "self", name: "This Mac", bound: true },
+      machine,
+      { ...machine, connectionId: "c", name: "Machine C", transport: "disabled" as const },
+    ];
+    renderWithFederation(
+      <MachineSectionList machines={machines} shown={machines} renderBound={() => null} />,
+    );
+
+    const headers = screen.getAllByTestId("machine-section-header");
+    for (const header of headers) {
+      const name = machines.find(
+        (candidate) => candidate.connectionId === header.getAttribute("data-machine"),
+      )!.name;
+      const handle = within(header).getByRole("button", { name: `Move ${name}` });
+      expect(handle.getAttribute("aria-roledescription")).toBe("sortable");
+      expect(within(handle).getByText(name)).toBeTruthy();
+      expect(header.lastElementChild!.getAttribute("aria-label")).toBe(`Collapse ${name}`);
+      // The name carries the machine's colour; there is no dot beside it.
+      expect(within(handle).getByText(name).className).toContain("text-teal-500");
+      expect(within(header).queryByTestId("machine-dot")).toBeNull();
+    }
+    // A live machine shows no connection text; an unreachable one still warns.
+    expect(within(headers[0]!).queryByText("This window")).toBeNull();
+    expect(within(headers[1]!).queryByText("Connected")).toBeNull();
+    expect(within(headers[2]!).getByText("Not connected")).toBeTruthy();
+  } finally {
+    cleanup();
+  }
+});
+
 let reload = mock(() => undefined);
 
 beforeEach(() => {
@@ -348,9 +382,9 @@ test("a repository group names each member by its machine and shows a machine do
     expect(within(header).queryByTestId("machine-dot") === null).toBe(true);
     expect(header.lastElementChild!.getAttribute("aria-label")).toMatch(/^Collapse project /);
   }
-  const grip = screen.getByRole("button", { name: "Move repository acme/app" });
-  expect(grip.getAttribute("aria-roledescription")).toBe("sortable");
-  expect(heading.getAttribute("aria-roledescription")).toBeNull();
+  // The heading itself is the drag handle; there is no separate grip.
+  expect(heading.getAttribute("aria-roledescription")).toBe("sortable");
+  expect(screen.queryByRole("button", { name: /^Move repository/ })).toBeNull();
 });
 
 describe("CL-05: machine identity visual rules", () => {
@@ -620,7 +654,7 @@ describe("CL-05: machine identity visual rules", () => {
 });
 
 describe("UI-01: machines with identical IDs and project names", () => {
-  test("UI-01: each machine gets its own section, dot and rows for the same IDs", async () => {
+  test("UI-01: each machine gets its own section, colour and rows for the same IDs", async () => {
     installTwoMachines();
     renderWithFederation(<RemoteSections />);
     await waitForRows(2);
@@ -632,9 +666,11 @@ describe("UI-01: machines with identical IDs and project names", () => {
     ]);
     const headers = screen.getAllByTestId("machine-section-header");
     expect(
-      headers.map((header) => [
+      headers.map((header, index) => [
         header.getAttribute("data-machine"),
-        within(header).getByTestId("machine-dot").getAttribute("data-machine-color"),
+        within(header)
+          .getByText(["Machine A", "Machine B"][index]!)
+          .getAttribute("data-machine-color"),
       ]),
     ).toEqual([
       ["bk_a", "teal"],
@@ -674,12 +710,18 @@ describe("UI-01: machines with identical IDs and project names", () => {
       projectKey(projectRef("bk_a" as BackendId, "project-1")),
       projectKey(projectRef("bk_b" as BackendId, "project-1")),
     ]);
+    // Each header leads with a home in its machine's colour instead of a
+    // trailing dot, and puts the chevron last.
     expect(
-      within(projects[0]!).getAllByTestId("machine-dot")[0]!.getAttribute("data-machine-color"),
-    ).toBe("teal");
-    expect(
-      within(projects[1]!).getAllByTestId("machine-dot")[0]!.getAttribute("data-machine-color"),
-    ).toBe("rose");
+      projects.map((project) =>
+        within(project).getByTestId("machine-home-icon").getAttribute("data-machine-color"),
+      ),
+    ).toEqual(["teal", "rose"]);
+    for (const project of projects) {
+      const header = project.firstElementChild!.firstElementChild as HTMLElement;
+      expect(within(header).queryByTestId("machine-dot") === null).toBe(true);
+      expect(header.lastElementChild!.getAttribute("aria-label")).toMatch(/^Collapse project /);
+    }
   });
 });
 

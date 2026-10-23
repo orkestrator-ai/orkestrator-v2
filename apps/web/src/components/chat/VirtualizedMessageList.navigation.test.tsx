@@ -50,6 +50,9 @@ function fakeController() {
     generation: 7,
     currentOwner: null,
     onLatestRequested: () => () => {},
+    subscribe: () => () => {},
+    getSnapshot: () => ({ targetKey: null }),
+    holdingStructure: false,
     setRowIndexResolver: (next: ((key: string) => number) | null) => {
       resolver = next;
     },

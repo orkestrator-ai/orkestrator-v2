@@ -140,7 +140,8 @@ export interface TranscriptScrollAnchor {
   partId?: string;
   /** The display row's item key, when known; resolves before the index. */
   rowKey?: string;
-  offset: number;
+  /** Hold the target this far below the viewport top; centred when absent. */
+  offset?: number;
 }
 
 interface UseVirtuosoScrollStateReturn {
@@ -422,8 +423,8 @@ export function useVirtuosoScrollState(
           index,
           key: anchor?.rowKey,
           partId: anchor?.partId,
-          offsetPx: anchor ? anchor.offset : undefined,
-          align: anchor ? "start" : "center",
+          offsetPx: anchor?.offset,
+          align: anchor?.offset !== undefined ? "start" : "center",
         },
         owner,
       );

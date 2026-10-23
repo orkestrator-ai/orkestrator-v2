@@ -116,6 +116,13 @@ export interface ScrollDiagnostics {
   staleCallbacksRefused: number;
   growthPins: number;
   userInterruptions: number;
+  /** Frames operations ran, and the corrections they wrote. */
+  operationFrames: number;
+  operationCorrections: number;
+  /** Operations a newly taken follow pause retired. */
+  pauseRetirements: number;
+  /** Operations retired because the scroller element changed. */
+  scrollerRetirements: number;
   lastOutcome: OperationOutcome | null;
 }
 
@@ -131,6 +138,12 @@ interface Operation {
   unmountedFrames: number;
   partMissingFrames: number;
   reissues: number;
+  /** An index navigation has been issued for this operation. */
+  indexIssued: boolean;
+  /** A resize was delivered since the operation's last frame. */
+  measuredSinceFrame: boolean;
+  /** The target part's offset inside its row, when both were last measured. */
+  partDelta: number;
   smoothIssued: boolean;
   smoothHeight: number;
   correctedFrame: number;
@@ -143,7 +156,19 @@ export interface ScrollViewState {
   /** Literal `false` reaches the virtualizer's follow prop otherwise. */
   followAllowed: boolean;
   mode: ViewportMode;
+  /**
+   * Row key the current navigation targets. The list keeps that row mounted
+   * while the bounded navigation runs (the same budget as a selection).
+   */
+  targetKey: string | null;
 }
+
+/**
+ * The scroller exposes its controller's counters under this property, so
+ * browser tests and the performance runner can read them without React
+ * internals. Content-free numbers only.
+ */
+export const SCROLL_DIAGNOSTICS_PROPERTY = "orkTranscriptScrollDiagnostics";
 
 export interface TranscriptScrollControllerOptions {
   initialWantsFollow?: boolean;
@@ -194,6 +219,8 @@ export class TranscriptScrollController {
   private atBottom = true;
   private lastObservedTop = 0;
   private userScrollUntil = 0;
+  /** When the reader last gave input that will scroll this transcript. */
+  private lastInputAt = Number.NEGATIVE_INFINITY;
   private pointerHeld = false;
   private lastPointerInside = false;
   private touchActive = false;
@@ -203,6 +230,8 @@ export class TranscriptScrollController {
   private anchorTimer: ReturnType<typeof setTimeout> | null = null;
   private lastReadingAnchor: SemanticAnchor | null = null;
   private rowIndexOf: ((key: string) => number) | null = null;
+  private structuralHold = false;
+  private preCommitAnchor: SemanticAnchor | null = null;
   private snapshot: ScrollViewState;
   private readonly listeners = new Set<() => void>();
   private readonly latestListeners = new Set<() => void>();
@@ -218,6 +247,10 @@ export class TranscriptScrollController {
     staleCallbacksRefused: 0,
     growthPins: 0,
     userInterruptions: 0,
+    operationFrames: 0,
+    operationCorrections: 0,
+    pauseRetirements: 0,
+    scrollerRetirements: 0,
     lastOutcome: null,
   };
 
@@ -281,6 +314,39 @@ export class TranscriptScrollController {
 
   getSnapshot = (): ScrollViewState => this.snapshot;
 
+  // ------------------------------------------------- structural transactions
+
+  /**
+   * A structural update (a history page) is expected and the reader's place
+   * should survive it. While held, the list re-captures the place immediately
+   * before each data commit (`capturePreCommit`), so a reader who moved while
+   * the page loaded is held where they are now.
+   */
+  beginStructuralHold(): void {
+    this.structuralHold = true;
+  }
+
+  endStructuralHold(): void {
+    this.structuralHold = false;
+    this.preCommitAnchor = null;
+  }
+
+  get holdingStructure(): boolean {
+    return this.structuralHold;
+  }
+
+  /** Called by the list before a data commit mutates the DOM. */
+  capturePreCommit(): void {
+    if (!this.structuralHold || !this.state.active) return;
+    this.preCommitAnchor = this.captureAnchor() ?? this.preCommitAnchor;
+  }
+
+  takePreCommitAnchor(): SemanticAnchor | null {
+    const anchor = this.preCommitAnchor;
+    this.preCommitAnchor = null;
+    return anchor;
+  }
+
   /** The list's key → current local index lookup, for navigation by identity. */
   setRowIndexResolver(resolver: ((key: string) => number) | null): void {
     this.rowIndexOf = resolver;
@@ -301,10 +367,12 @@ export class TranscriptScrollController {
   }
 
   private computeSnapshot(): ScrollViewState {
+    const target = this.op?.target;
     return {
       isAtBottom: this.atBottom,
       followAllowed: followAllowed(this.state),
       mode: viewportMode(this.state),
+      targetKey: target?.kind === "row" ? (target.key ?? null) : null,
     };
   }
 
@@ -314,7 +382,8 @@ export class TranscriptScrollController {
     if (
       next.isAtBottom === previous.isAtBottom &&
       next.followAllowed === previous.followAllowed &&
-      next.mode === previous.mode
+      next.mode === previous.mode &&
+      next.targetKey === previous.targetKey
     ) {
       return;
     }
@@ -360,10 +429,21 @@ export class TranscriptScrollController {
     this.detachScroller?.();
     this.detachScroller = null;
     this.scroller = element;
-    if (this.op) this.dispatch({ type: "user-navigation" }, "cancelled");
+    if (this.op) {
+      this.counters.scrollerRetirements += 1;
+      this.dispatch({ type: "user-navigation" }, "cancelled");
+    }
     if (!element) return;
     this.lastObservedTop = element.scrollTop;
-    this.detachScroller = this.listen(element);
+    const detach = this.listen(element);
+    Object.defineProperty(element, SCROLL_DIAGNOSTICS_PROPERTY, {
+      configurable: true,
+      value: () => this.diagnostics(),
+    });
+    this.detachScroller = () => {
+      detach();
+      delete (element as unknown as Record<string, unknown>)[SCROLL_DIAGNOSTICS_PROPERTY];
+    };
   }
 
   dispose(): void {
@@ -408,6 +488,9 @@ export class TranscriptScrollController {
     const mounted = this.resolve(target) !== null;
     if (!mounted && (target.kind === "rect" || !this.adapter.ready)) return false;
     const op = this.begin(owner, target, "instant");
+    if (mounted && target.kind === "row" && target.partId) {
+      op.partDelta = this.measurePartDelta(target);
+    }
     if (!mounted && target.kind === "row") this.issueIndexNavigation(op, target);
     this.schedule(op);
     return true;
@@ -435,7 +518,9 @@ export class TranscriptScrollController {
   }
 
   setFollowPause(reason: string, paused: boolean): void {
+    const op = this.op;
     this.dispatch({ type: "pause", reason, paused }, "cancelled");
+    if (op && this.op !== op) this.counters.pauseRetirements += 1;
   }
 
   /** Virtuoso's functional follow callback; the authority is intent, not its argument. */
@@ -470,7 +555,17 @@ export class TranscriptScrollController {
     if (source === "resize") this.cancelGrowthFrame();
     const op = this.op;
     if (op) {
-      if (source === "resize") this.reconcile(op, "layout");
+      if (source === "resize") {
+        // A measurement changed: not converged until two frames pass without one.
+        op.stableFrames = 0;
+        op.measuredSinceFrame = true;
+        this.reconcile(op, "layout");
+        // Virtuoso handles item measurements in a frame it requests from its
+        // own resize delivery, which runs before this one. Re-requesting the
+        // operation's frame here orders it after that work, so next frame's
+        // single correction reads the layout the library actually produced.
+        this.reschedule(op);
+      }
       return;
     }
     this.followGrowth();
@@ -572,6 +667,9 @@ export class TranscriptScrollController {
       unmountedFrames: 0,
       partMissingFrames: 0,
       reissues: 0,
+      indexIssued: false,
+      measuredSinceFrame: false,
+      partDelta: 0,
       smoothIssued: false,
       smoothHeight: 0,
       correctedFrame: -1,
@@ -579,6 +677,7 @@ export class TranscriptScrollController {
     };
     this.op = op;
     this.counters.operationsStarted += 1;
+    this.publish();
     return op;
   }
 
@@ -601,6 +700,7 @@ export class TranscriptScrollController {
       }
       this.frameId += 1;
       op.frames += 1;
+      this.counters.operationFrames += 1;
       if (this.scroller) {
         this.reconcile(op, "frame");
       } else if (op.target.kind === "latest") {
@@ -621,6 +721,13 @@ export class TranscriptScrollController {
       }
       this.schedule(op);
     });
+  }
+
+  private reschedule(op: Operation): void {
+    if (op.frame === null || !this.isCurrent(op)) return;
+    cancelAnimationFrame(op.frame);
+    op.frame = null;
+    this.schedule(op);
   }
 
   private finish(op: Operation, outcome: OperationOutcome): void {
@@ -673,7 +780,13 @@ export class TranscriptScrollController {
     op: Operation,
     target: Extract<NavigationTarget, { kind: "row" }>,
   ): void {
-    const offset = target.offsetPx !== undefined ? -target.offsetPx : undefined;
+    op.indexIssued = true;
+    // The virtualizer positions rows: hold the row so its part lands at the
+    // anchor's offset; measured convergence then settles any estimate error.
+    const offset =
+      target.offsetPx !== undefined
+        ? -(target.offsetPx - (target.partId ? op.partDelta : 0))
+        : undefined;
     // Identity precedes indices: the row's current index, when the list knows it.
     const resolved = target.key !== undefined ? (this.rowIndexOf?.(target.key) ?? -1) : -1;
     this.adapter.scrollToIndex({
@@ -682,6 +795,15 @@ export class TranscriptScrollController {
       offset,
     });
     op.unmountedFrames = 0;
+  }
+
+  /** How far the target part sits below its row's top, if both are rendered. */
+  private measurePartDelta(target: Extract<NavigationTarget, { kind: "row" }>): number {
+    const row = this.resolve({ ...target, partId: undefined });
+    const part = this.resolve(target);
+    const rowRect = row?.();
+    const partRect = part?.();
+    return rowRect && partRect ? partRect.top - rowRect.top : 0;
   }
 
   /** The element (or box) a target names, if rendered. */
@@ -732,6 +854,12 @@ export class TranscriptScrollController {
     }
     if (!rectOf) {
       if (phase === "frame") op.unmountedFrames += 1;
+      // The target left the rendered window (estimates moved it): navigate by
+      // index at once — pre-paint when this is a layout delivery.
+      if (target.kind === "row" && !op.indexIssued) {
+        this.issueIndexNavigation(op, target);
+        return;
+      }
       if (
         target.kind === "row" &&
         op.unmountedFrames >= REISSUE_AFTER_UNMOUNTED_FRAMES &&
@@ -743,6 +871,9 @@ export class TranscriptScrollController {
       return;
     }
     op.unmountedFrames = 0;
+    if (op.target.kind === "row" && op.target.partId) {
+      op.partDelta = this.measurePartDelta(op.target);
+    }
     // Reads first, then at most one write.
     const rect = rectOf();
     if (!rect) return;
@@ -755,7 +886,8 @@ export class TranscriptScrollController {
     op.lastScrollHeight = metrics.scrollHeight;
     if (Math.abs(nextTop - metrics.scrollTop) <= CONVERGENCE_TOLERANCE_PX) {
       if (phase === "frame") {
-        op.stableFrames = heightStable ? op.stableFrames + 1 : 0;
+        op.stableFrames = heightStable && !op.measuredSinceFrame ? op.stableFrames + 1 : 0;
+        op.measuredSinceFrame = false;
         if (op.stableFrames >= CONVERGED_FRAMES) {
           this.finish(op, Math.abs(error) > CONVERGENCE_TOLERANCE_PX ? "clamped" : "converged");
         }
@@ -763,8 +895,14 @@ export class TranscriptScrollController {
       return;
     }
     op.stableFrames = 0;
-    if (op.correctedFrame === this.frameId && phase === "layout") return;
-    op.correctedFrame = this.frameId;
+    // At most one correction per phase per frame: the frame tick's, and the
+    // resize delivery's, which reads the layout this frame will paint (rows
+    // the frame's own correction brought in included) and so is the one that
+    // keeps a displaced anchor off screen.
+    const slot = phase === "frame" ? this.frameId * 2 : this.frameId * 2 + 1;
+    if (op.correctedFrame === slot) return;
+    op.correctedFrame = slot;
+    this.counters.operationCorrections += 1;
     this.adapter.writeScrollTop(nextTop);
   }
 
@@ -783,7 +921,8 @@ export class TranscriptScrollController {
     op.lastScrollHeight = metrics.scrollHeight;
     if (metrics.distanceFromEnd < STICK_RELEASE_DISTANCE_PX) {
       if (phase === "frame") {
-        op.stableFrames = heightStable ? op.stableFrames + 1 : 0;
+        op.stableFrames = heightStable && !op.measuredSinceFrame ? op.stableFrames + 1 : 0;
+        op.measuredSinceFrame = false;
         if (op.stableFrames >= CONVERGED_FRAMES) this.finish(op, "converged");
       }
       return;
@@ -799,8 +938,9 @@ export class TranscriptScrollController {
       }
       return;
     }
-    if (op.correctedFrame === this.frameId && phase === "layout") return;
-    op.correctedFrame = this.frameId;
+    const slot = phase === "frame" ? this.frameId * 2 : this.frameId * 2 + 1;
+    if (op.correctedFrame === slot) return;
+    op.correctedFrame = slot;
     this.adapter.writeScrollTop(metrics.maxScrollTop);
   }
 
@@ -808,7 +948,8 @@ export class TranscriptScrollController {
 
   /** Recognised reader input that will scroll this transcript. */
   private userInput(): void {
-    this.userScrollUntil = now() + INPUT_ARM_MS;
+    this.lastInputAt = now();
+    this.userScrollUntil = this.lastInputAt + INPUT_ARM_MS;
     if (this.op) this.counters.userInterruptions += 1;
     this.dispatch({ type: "user-navigation" }, "cancelled");
   }
@@ -822,16 +963,27 @@ export class TranscriptScrollController {
     const written = this.adapter.lastWrittenTop;
     this.adapter.lastWrittenTop = null;
     if (written !== null && Math.abs(metrics.scrollTop - written) < 0.5) return;
+    const op = this.op;
+    // While a navigation owns the viewport, its own and the virtualizer's
+    // compensation writes move it. Movement is the reader's only with a held
+    // pointer (a scrollbar drag fires no other event) or input given after
+    // the navigation began; the tail of an earlier gesture does not count.
+    if (op && !(this.pointerHeld || this.lastInputAt >= op.startedAt)) {
+      // The virtualizer moved the viewport (size compensation): the
+      // operation has not converged while that is still happening.
+      if (metrics.scrollTop !== previous) {
+        op.stableFrames = 0;
+        op.measuredSinceFrame = true;
+      }
+      return;
+    }
     const t = now();
     const armed = t < this.userScrollUntil;
     if (!armed && !this.pointerHeld && !this.touchActive) return;
     if (armed || this.touchActive) {
       this.userScrollUntil = Math.max(this.userScrollUntil, t + MOMENTUM_CHAIN_MS);
     }
-    const moved = metrics.scrollTop !== previous;
-    // A scrollbar drag fires no wheel, key or touch event: movement while a
-    // pointer is held is the reader's.
-    if (moved && !armed && !this.touchActive && this.op) {
+    if (op && metrics.scrollTop !== previous) {
       this.counters.userInterruptions += 1;
       this.dispatch({ type: "user-navigation" }, "cancelled");
     }
@@ -924,25 +1076,51 @@ export class TranscriptScrollController {
     if (typeof ResizeObserver !== "undefined") {
       resizeObserver = new ResizeObserver(() => this.notifyLayout("resize"));
       const observed = new WeakSet<Element>();
+      // Virtuoso's viewport child is absolutely sized to the scroller; the
+      // list inside it (and the header and footer) is what grows. Observe two
+      // levels so growth is delivered after layout and before paint.
       const observeChildren = () => {
         for (const child of Array.from(el.children)) {
-          if (!observed.has(child)) {
-            resizeObserver!.observe(child);
-            observed.add(child);
+          for (const element of [child, ...Array.from(child.children)]) {
+            if (!observed.has(element)) {
+              resizeObserver!.observe(element);
+              observed.add(element);
+            }
           }
         }
       };
       observeChildren();
       // Footer content is nested inside Virtuoso's wrappers, so watch the
-      // subtree; re-walk direct children only when one was added.
+      // subtree; re-walk the observed levels only when one gained a node.
       if (typeof MutationObserver !== "undefined") {
         mutationObserver = new MutationObserver((records) => {
-          if (records.some((record) => record.target === el && record.addedNodes.length > 0)) {
-            observeChildren();
+          // A delivery that cannot be classified is treated as structural.
+          let structural = records.length === 0;
+          let shifted = false;
+          for (const record of records) {
+            if (record.type === "attributes") {
+              // Virtuoso keeps rows in place across size changes with a list
+              // margin and a deferred scroll; neither resizes what is observed.
+              if (observed.has(record.target as Element)) shifted = true;
+              continue;
+            }
+            structural = true;
+            if (
+              record.addedNodes.length > 0 &&
+              (record.target === el || record.target.parentNode === el)
+            ) {
+              observeChildren();
+            }
           }
-          this.notifyLayout("mutation");
+          if (shifted && this.op) this.reconcile(this.op, "layout");
+          if (structural) this.notifyLayout("mutation");
         });
-        mutationObserver.observe(el, { childList: true, subtree: true });
+        mutationObserver.observe(el, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          attributeFilter: ["style"],
+        });
       }
     }
 

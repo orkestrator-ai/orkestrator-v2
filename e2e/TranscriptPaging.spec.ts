@@ -1,4 +1,5 @@
 import { expect, test, type Locator } from "@playwright/test";
+import { scrollDiagnostics, startAnchorProbe, stopAnchorProbe } from "./transcript-anchor-probe";
 
 async function toolPosition(list: Locator, id: string) {
   return list.evaluate((el, partId) => {
@@ -59,6 +60,9 @@ for (const view of ["native", "reviewer"]) {
         await expect.poll(() => toolPosition(list, "call-40")).not.toBeNull();
         const before = (await toolPosition(list, "call-40"))!;
         expect(before.index).toBe(mixed ? "1" : "0");
+        // Sample the held tool through the whole transition, not only once it
+        // settles: a visible jump followed by recovery is a failure.
+        await startAnchorProbe(list, "call-40");
         await load.click();
         await expect(load).toHaveCount(0);
         await expect(page.getByRole("button", { name: "Loading…", exact: true })).toHaveCount(0);
@@ -68,6 +72,14 @@ for (const view of ["native", "reviewer"]) {
             return after ? Math.abs(after.offset - before.offset) : Infinity;
           })
           .toBeLessThan(3);
+        // Let late measurement and the restoration's own frames finish.
+        await page.waitForTimeout(800);
+        const probe = await stopAnchorProbe(list);
+        expect(probe.count).toBeGreaterThan(10);
+        expect(probe.missing).toBe(0);
+        expect(probe.maxError).toBeLessThanOrEqual(2);
+        const diagnostics = await scrollDiagnostics(list);
+        expect(diagnostics.staleCallbacksRefused ?? 0).toBeGreaterThanOrEqual(0);
         const after = (await toolPosition(list, "call-40"))!;
         if (mixed) expect(Number(after.index)).toBeGreaterThan(Number(before.index));
         else expect(after.index).toBe("0");

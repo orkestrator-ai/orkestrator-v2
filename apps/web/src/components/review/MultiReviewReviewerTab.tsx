@@ -774,7 +774,9 @@ export function MultiReviewReviewerTab({
     isActive,
     persistKey: scrollKey,
     environmentId: data.environmentId,
-    stickToBottomOnActivation: true,
+    // A reviewer transcript is read, not watched: returning keeps a detached
+    // reader's place and catches a follower up.
+    activation: "respect-intent",
   });
 
   // Hold the reader on the message they were reading when a page lands above
@@ -882,7 +884,10 @@ export function MultiReviewReviewerTab({
             variant="outline"
             disabled={loadingEarlier}
             onClick={(event) => {
-              heldPlace.hold(event.currentTarget.closest<HTMLElement>("[data-virtuoso-scroller]"));
+              heldPlace.hold(
+                event.currentTarget.closest<HTMLElement>("[data-virtuoso-scroller]"),
+                scrollProps.controller,
+              );
               void loadEarlier();
             }}
           >

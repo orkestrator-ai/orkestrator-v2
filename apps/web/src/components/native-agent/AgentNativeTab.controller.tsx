@@ -132,6 +132,10 @@ import {
   retainSupportedAttachments,
 } from "@/lib/chat/workspace-attachments";
 import { createSessionKey } from "@/lib/utils";
+import {
+  conversationScrollTargetKey,
+  useConversationScrollTargetStore,
+} from "@/stores/conversationScrollTargetStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import {
@@ -604,14 +608,21 @@ export function SharedNativeAgentController({
     tabId === "startup-agent" &&
     (environment?.pendingAgentLaunch === true || environment?.startupAgentSession !== undefined);
   const { favorites, toggleFavorite, reorderFavorites } = useAgentModelFavorites();
+  // An "open full conversation" request parked for this tab outranks the
+  // activation policy, whichever effect happens to run first.
+  const explicitScrollTargetPending = useConversationScrollTargetStore((state) =>
+    state.targets.has(conversationScrollTargetKey(data.environmentId, tabId)),
+  );
   const { isAtBottom, scrollToBottom, scrollToIndex, virtuosoRef, scrollProps } =
     useVirtuosoScrollState({
-      // Every activation re-locks to the end, but a pane the mobile switcher
-      // hid is still laid out where the user left it.
+      // A pane the mobile switcher hid is still laid out where the user left it.
       isActive: isActive || hiddenByLayout,
       persistKey: sessionKey,
       environmentId: data.environmentId,
-      stickToBottomOnActivation: true,
+      // Returning respects intent: a follower catches up to the latest
+      // message, a reader who scrolled away comes back to their place.
+      activation: "respect-intent",
+      explicitTargetPending: explicitScrollTargetPending,
     });
 
   /*
@@ -2877,6 +2888,7 @@ export function SharedNativeAgentController({
                 onClick={(event) => {
                   loadEarlierPlace.hold(
                     event.currentTarget.closest<HTMLElement>("[data-virtuoso-scroller]"),
+                    scrollProps.controller,
                   );
                   setLoadingEarlier(true);
                   void loadEarlierMessages()

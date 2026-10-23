@@ -182,7 +182,15 @@ function ImageReadPreview({
 /** Render a single message part based on its type */
 export function MessagePart(props: Parameters<typeof MessagePartContent>[0]) {
   const part = props.part;
-  const id = part.type === "tool-invocation" ? (part.toolUseId ?? part.sourcePartId) : undefined;
+  // Source parts are the transcript's scroll anchors: a held or restored
+  // place finds its part again by this id, whatever row now contains it.
+  // Prose anchors at block level; file chips flow inline and stay unwrapped.
+  const id =
+    part.type === "tool-invocation"
+      ? (part.toolUseId ?? part.sourcePartId)
+      : part.type === "text"
+        ? part.sourcePartId
+        : undefined;
   const content = <MessagePartContent {...props} />;
   return id ? <div data-transcript-part-id={id}>{content}</div> : content;
 }

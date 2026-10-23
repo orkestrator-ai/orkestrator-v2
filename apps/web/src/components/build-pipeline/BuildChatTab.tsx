@@ -339,8 +339,9 @@ export function BuildChatTab({
     persistKey: `build-pipeline:${data.pipelineId}`,
     environmentId: data.environmentId,
     // A build runs unattended, so returning to the tab should show what the
-    // pipeline is doing now rather than where the transcript was left.
-    stickToBottomOnActivation: true,
+    // pipeline is doing now rather than where the transcript was left: the
+    // documented exception to returning readers to their place.
+    activation: "latest",
   });
 
   // A `useId` value is legal in an id and in an ARIA reference whatever
@@ -636,7 +637,7 @@ export function BuildChatTab({
 
   // Tests replaces the visible pane but must not remount or empty the
   // virtualized list — that would lose the reader's place and, with
-  // stickToBottomOnActivation, jump them to the bottom on return.
+  // the "latest" activation policy, jump them to the bottom on return.
   // The rows and the conversation their artifact cards resolve in stay together.
   const lastListViewRef = useRef({ messages, scope: stageScope });
   const lastListReportRef = useRef(selectedReviewReport);

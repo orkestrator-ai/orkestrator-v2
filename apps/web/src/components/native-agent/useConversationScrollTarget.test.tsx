@@ -41,7 +41,9 @@ describe("useConversationScrollTarget", () => {
     useConversationScrollTargetStore.getState().request("env-1", "tab-1", { messageId: "u-2" });
     const { result, scrollToIndex } = setup({ highlightMs: 300 });
 
-    await waitFor(() => expect(scrollToIndex).toHaveBeenCalledWith(2));
+    await waitFor(() =>
+      expect(scrollToIndex).toHaveBeenCalledWith(2, { rowKey: "u-2" }, "message-link"),
+    );
     expect(pending()).toBeNull();
     await waitFor(() => expect(result.current).toBe("u-2"));
     await waitFor(() => expect(result.current).toBeNull());
@@ -71,7 +73,9 @@ describe("useConversationScrollTarget", () => {
       messages: [{ id: "u-1" }, { id: "u-9" }, { id: "a-9" }],
       turnBoundaries: [{ turnId: "turn-9", messageId: "u-9" }],
     });
-    await waitFor(() => expect(scrollToIndex).toHaveBeenCalledWith(1));
+    await waitFor(() =>
+      expect(scrollToIndex).toHaveBeenCalledWith(1, { rowKey: "u-9" }, "message-link"),
+    );
     expect(pending()).toBeNull();
   });
 

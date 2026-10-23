@@ -1,5 +1,6 @@
 import { ChatFindActiveContext } from "./chat-find-context";
 import {
+  Component,
   type ReactNode,
   type RefObject,
   useCallback,
@@ -9,6 +10,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import { Virtuoso, type ListRange, type VirtuosoHandle, type StateSnapshot } from "react-virtuoso";
 import {
@@ -244,6 +246,32 @@ function enclosingRichBlockKeys(node: Node): Set<string> {
   return keys;
 }
 
+/**
+ * Captures the reader's place before a data commit mutates the transcript,
+ * while a structural update (a history page) is held. `getSnapshotBeforeUpdate`
+ * is the one point where the DOM still shows the previous rows.
+ */
+class PreCommitAnchor extends Component<{
+  messages: readonly unknown[];
+  controller: TranscriptScrollController | undefined;
+}> {
+  getSnapshotBeforeUpdate(previous: { messages: readonly unknown[] }) {
+    const { controller, messages } = this.props;
+    if (controller?.holdingStructure && previous.messages !== messages)
+      controller.capturePreCommit();
+    return null;
+  }
+
+  componentDidUpdate() {}
+
+  render() {
+    return null;
+  }
+}
+
+const NO_SCROLL_VIEW = () => () => {};
+const NO_TARGET = () => null;
+
 function FooterWrapper({ children }: { children: ReactNode }) {
   return <div className="min-w-0">{children}</div>;
 }
@@ -430,6 +458,8 @@ export function VirtualizedMessageList<TMessage>({
   const latestRangeRef = useRef<ListRange | null>(null);
   const protectedIndexRef = useRef<number | null>(null);
   const [visibleRange, setVisibleRange] = useState<ListRange | null>(null);
+  const [releasedTargetKey, setReleasedTargetKey] = useState<string | null>(null);
+  const navigationProtectedKeyRef = useRef<string | null>(null);
   useEffect(() => {
     const root = rootRef.current;
     if (!root) return;
@@ -512,6 +542,7 @@ export function VirtualizedMessageList<TMessage>({
         // Beyond the bound the row unmounts like any other: release it.
         setSelectionRowKey(null);
         setFocusRowKey(null);
+        setReleasedTargetKey(navigationProtectedKeyRef.current);
         setVisibleRange(null);
         return;
       }
@@ -523,7 +554,23 @@ export function VirtualizedMessageList<TMessage>({
     },
     [appliedOverscan, firstItemIndex, messages.length],
   );
-  const protectedRowKey = selectionRowKey ?? focusRowKey;
+  // A bounded navigation's target row stays mounted while it converges,
+  // within the same bound as a selection; beyond it the target is released
+  // (the navigation then re-navigates by index rather than holding it).
+  const navigationTargetKey = useSyncExternalStore(
+    controller?.subscribe ?? NO_SCROLL_VIEW,
+    controller ? () => controller.getSnapshot().targetKey : NO_TARGET,
+  );
+  const navigationProtectedKey =
+    navigationTargetKey !== null && navigationTargetKey !== releasedTargetKey
+      ? navigationTargetKey
+      : null;
+  useLayoutEffect(() => {
+    navigationProtectedKeyRef.current = navigationProtectedKey;
+    // Protection measures from the known viewport range, as a selection does.
+    if (navigationProtectedKey !== null) setVisibleRange(latestRangeRef.current);
+  }, [navigationProtectedKey]);
+  const protectedRowKey = selectionRowKey ?? focusRowKey ?? navigationProtectedKey;
   const protectedIndex = useMemo(() => {
     if (protectedRowKey === null) return null;
     const index = messages.findIndex(
@@ -534,7 +581,12 @@ export function VirtualizedMessageList<TMessage>({
   useLayoutEffect(() => {
     protectedIndexRef.current = protectedIndex;
   }, [protectedIndex]);
-  const keepMounted = keepMountedOverscan(protectedIndex, visibleRange);
+  // A navigation target is only protected against a known range: with none
+  // there is nothing to measure the bound from.
+  const keepMounted =
+    selectionRowKey === null && focusRowKey === null && visibleRange === null
+      ? null
+      : keepMountedOverscan(protectedIndex, visibleRange);
   useLayoutEffect(() => {
     appliedOverscan.current.top = keepMounted?.top ?? 0;
     appliedOverscan.current.bottom = keepMounted?.bottom ?? 0;
@@ -779,6 +831,7 @@ export function VirtualizedMessageList<TMessage>({
 
   return (
     <div ref={rootRef} className="relative min-h-0 flex-1">
+      <PreCommitAnchor messages={messages} controller={controller} />
       <AgentChatFindBar
         inputRef={chatFind.inputRef}
         query={chatFind.query}

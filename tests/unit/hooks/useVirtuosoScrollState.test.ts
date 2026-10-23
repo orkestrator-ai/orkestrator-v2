@@ -730,7 +730,14 @@ describe("useVirtuosoScrollState", () => {
         expect(harness.mutationObserveCalls).toEqual([
           {
             target: scroller,
-            options: { childList: true, subtree: true },
+            // Style attributes too: Virtuoso keeps rows in place with a list
+            // margin and a deferred scroll, which resize nothing observed.
+            options: {
+              childList: true,
+              subtree: true,
+              attributes: true,
+              attributeFilter: ["style"],
+            },
           },
         ]);
         expect(harness.mutationCallback).toBeDefined();
@@ -820,14 +827,18 @@ describe("useVirtuosoScrollState", () => {
       }
     });
 
-    test("skips re-observing direct children on deep subtree mutations", () => {
+    test("skips re-observing the observed levels on deeper subtree mutations", () => {
+      // Two levels are observed: Virtuoso's viewport child, and the list (and
+      // header, footer) inside it, which is what actually grows.
       const harness = installObservers();
       const { result, unmount } = renderHook(() => useVirtuosoScrollState());
       const scroller = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
+      const viewport = document.createElement("div");
       const directChild = document.createElement("div");
       const grandchild = document.createElement("span");
       directChild.appendChild(grandchild);
-      scroller.appendChild(directChild);
+      viewport.appendChild(directChild);
+      scroller.appendChild(viewport);
 
       result.current.virtuosoRef.current = {
         scrollToIndex: () => {},
@@ -838,13 +849,13 @@ describe("useVirtuosoScrollState", () => {
       try {
         act(() => result.current.scrollProps.scrollerRef(scroller));
 
-        // After mounting, the only observed element is the existing direct
-        // child. Capture that baseline before firing the deep mutation.
+        // After mounting, the viewport and the list inside it are observed.
+        // Capture that baseline before firing the deep mutation.
         const observedBeforeDeepMutation = harness.resizeObserved.length;
-        expect(observedBeforeDeepMutation).toBe(1);
+        expect(harness.resizeObserved).toEqual([viewport, directChild]);
 
-        // Add a new grandchild and dispatch a record whose target is the
-        // direct child (not the scroller) — observeChildren() should NOT run.
+        // Add a node below the observed levels and dispatch a record whose
+        // target is the list (not an observed parent) — no re-walk.
         const newGrandchild = document.createElement("em");
         directChild.appendChild(newGrandchild);
         const deepRecord = {

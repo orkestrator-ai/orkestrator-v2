@@ -898,7 +898,9 @@ export function NativeStyleChatPanel({
   const { isAtBottom, scrollToBottom, virtuosoRef, scrollProps } = useVirtuosoScrollState({
     isActive: true,
     persistKey,
-    stickToBottomOnActivation: true,
+    // The spec chat is a live conversation panel: it always opens on the
+    // latest exchange.
+    activation: "latest",
   });
 
   const handleSend = useCallback(() => {

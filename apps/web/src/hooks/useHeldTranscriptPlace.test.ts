@@ -35,7 +35,7 @@ const read = (id: string, createdAt: string): NativeMessage => ({
 });
 
 function setup(initial: NativeMessage[]) {
-  const scrollToIndex = mock((_index: number) => true);
+  const scrollToIndex = mock((_index: number, _anchor?: unknown, _owner?: string) => true);
   const hook = renderHook(
     ({ messages }) => {
       const place = useHeldTranscriptPlace();
@@ -134,7 +134,11 @@ describe("useRestoreHeldPlace", () => {
         read("r54", "2026-10-18T01:33:40.000Z"),
       ]),
     });
-    expect(scrollToIndex).toHaveBeenCalledWith(0, { partId: "call53", offset: -10 });
+    expect(scrollToIndex).toHaveBeenCalledWith(
+      0,
+      { partId: "call53", rowKey: "r51", offset: -10 },
+      "history",
+    );
   });
 
   test("holds a visible source tool below prose whose author header can change", () => {
@@ -152,7 +156,11 @@ describe("useRestoreHeldPlace", () => {
       rect(180, 230);
     hook.result.current.hold(scroller);
     hook.rerender({ messages: [text("earlier"), text("intro"), tool] });
-    expect(scrollToIndex).toHaveBeenCalledWith(2, { partId: "call52", offset: 80 });
+    expect(scrollToIndex).toHaveBeenCalledWith(
+      2,
+      { partId: "call52", rowKey: "intro:text-block:1", offset: 80 },
+      "history",
+    );
   });
 
   test("finds a head block that a cross-minute page merged into and renamed", () => {
@@ -193,6 +201,77 @@ describe("useRestoreHeldPlace", () => {
     expect(loaded.map((row) => row.id)).toEqual(["prompt", "r50", "r52", "answer"]);
     hook.rerender({ messages: loaded });
     expect(scrollToIndex.mock.calls).toEqual([[2]]);
+  });
+});
+
+describe("held place with the scroll controller", () => {
+  function fakeController(
+    anchors: Array<{ rowKey: string; index: number; partId?: string; offsetPx: number }>,
+  ) {
+    let holding = false;
+    let preCommit: (typeof anchors)[number] | null = null;
+    return {
+      captureAnchor: () => anchors[0] ?? null,
+      beginStructuralHold: mock(() => {
+        holding = true;
+      }),
+      endStructuralHold: mock(() => {
+        holding = false;
+      }),
+      get holdingStructure() {
+        return holding;
+      },
+      /** The list re-captures the reader's place just before a data commit. */
+      readerMovedTo(anchor: (typeof anchors)[number]) {
+        preCommit = anchor;
+      },
+      takePreCommitAnchor: () => {
+        const anchor = preCommit;
+        preCommit = null;
+        return anchor;
+      },
+    };
+  }
+
+  test("a reader who moved while the page loaded is held where they are, not where they clicked", () => {
+    const { hook, scrollToIndex } = setup([text("m52"), text("m53"), text("m54")]);
+    const controller = fakeController([{ rowKey: "m52", index: 0, offsetPx: 4 }]);
+    hook.result.current.hold(null, controller as never);
+    expect(controller.beginStructuralHold).toHaveBeenCalled();
+    // While the request is in flight the reader scrolls down to m54.
+    controller.readerMovedTo({ rowKey: "m54", index: 2, offsetPx: 120 });
+    hook.rerender({ messages: [text("m50"), text("m51"), text("m52"), text("m53"), text("m54")] });
+    expect(scrollToIndex.mock.calls).toEqual([
+      [4, { rowKey: "m54", offset: 120, partId: undefined }, "history"],
+    ]);
+    // The transaction is over: the controller stops capturing.
+    expect(controller.holdingStructure).toBe(false);
+  });
+
+  test("a tail update while waiting refreshes the place; the page then restores the latest one", () => {
+    const { hook, scrollToIndex } = setup([text("m52"), text("m53")]);
+    const controller = fakeController([{ rowKey: "m52", index: 0, offsetPx: 0 }]);
+    hook.result.current.hold(null, controller as never);
+    controller.readerMovedTo({ rowKey: "m53", index: 1, offsetPx: 30 });
+    hook.rerender({ messages: [text("m52"), text("m53"), text("m54")] });
+    expect(scrollToIndex).not.toHaveBeenCalled();
+    expect(controller.holdingStructure).toBe(true);
+    hook.rerender({ messages: [text("m51"), text("m52"), text("m53"), text("m54")] });
+    expect(scrollToIndex.mock.calls).toEqual([
+      [2, { rowKey: "m53", offset: 30, partId: undefined }, "history"],
+    ]);
+  });
+
+  test("release ends the structural hold; a removed anchor restores nothing rather than jumping", () => {
+    const { hook, scrollToIndex } = setup([text("m52"), text("m53")]);
+    const controller = fakeController([{ rowKey: "m52", index: 0, partId: "gone", offsetPx: 0 }]);
+    hook.result.current.hold(null, controller as never);
+    hook.result.current.release();
+    expect(controller.endStructuralHold).toHaveBeenCalled();
+    hook.result.current.hold(null, controller as never);
+    // Authoritative reconciliation replaced the held rows entirely.
+    hook.rerender({ messages: [text("n1"), text("n2"), text("n3")] });
+    expect(scrollToIndex).not.toHaveBeenCalled();
   });
 });
 

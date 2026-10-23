@@ -293,6 +293,7 @@ describe("pull request detail", () => {
         detailsUrl: undefined,
         summary: undefined,
       },
+      { name: "lint", conclusion: "success", detailsUrl: undefined, summary: undefined },
     ]);
     expect(detail.checksState).toBe("failure");
     expect(
@@ -392,7 +393,7 @@ describe("pull request detail", () => {
         [{ name: "x", status: "completed", conclusion: "startup_failure" }],
         [{ context: "X", state: "success" }],
       ).map((entry) => entry.conclusion),
-    ).toEqual(["failure"]);
+    ).toEqual(["failure", "success"]);
   });
 
   test("rejects refs that are not a valid pull request before any request", async () => {
@@ -495,3 +496,82 @@ function pullWithTitle(title: string) {
     base: { ref: "main", repo: { full_name: "acme/repo" } },
   };
 }
+
+test("same-named checks from different apps and legacy contexts remain independent", () => {
+  const checks = mergeChecks(
+    [
+      { id: 1, name: "build", app: { id: 1 }, status: "completed", conclusion: "failure" },
+      { id: 2, name: "build", app: { id: 2 }, status: "completed", conclusion: "success" },
+    ],
+    [{ context: "build", state: "pending" }],
+  );
+  expect(checks).toHaveLength(3);
+  expect(rollUpChecks(checks)).toBe("failure");
+  const legacyFailure = mergeChecks(
+    [{ id: 3, name: "test", app: { id: 1 }, status: "completed", conclusion: "success" }],
+    [{ context: "test", state: "failure" }],
+  );
+  expect(legacyFailure).toHaveLength(2);
+  expect(rollUpChecks(legacyFailure)).toBe("failure");
+});
+
+test("comment caps disclose omitted newer comments after a new comment is posted", async () => {
+  const fake = createFakeGitHub();
+  routePullRequestDetail(fake);
+  let total = 501;
+  fake.on("GET", "/repos/acme/repo/issues/7/comments", (request) => {
+    const page = Number(request.url.searchParams.get("page") ?? 1);
+    const start = (page - 1) * 100;
+    return json(
+      Array.from({ length: Math.min(100, total - start) }, (_, i) => ({
+        id: start + i + 1,
+        created_at: "2026-10-01T00:00:00Z",
+        html_url: `https://github.com/acme/repo/pull/7#issuecomment-${start + i + 1}`,
+        body: `comment ${start + i + 1}`,
+      })),
+      {
+        headers:
+          page * 100 < total
+            ? {
+                link: `<https://api.github.com/repos/acme/repo/issues/7/comments?per_page=100&page=${page + 1}>; rel="next"`,
+              }
+            : {},
+      },
+    );
+  });
+  for (total of [501, 502]) {
+    const detail = await getGitHubPullRequest(TOKEN, REF, fake.options);
+    expect(detail.comments).toHaveLength(500);
+    expect(detail.commentsTruncated).toBe(true);
+  }
+});
+
+test("same-app check IDs remain distinct while repeated API IDs update in place", () => {
+  const checks = mergeChecks(
+    [
+      { id: 1, app: { id: 5 }, name: "test", status: "in_progress", started_at: "t1" },
+      {
+        id: 2,
+        app: { id: 5 },
+        name: "test",
+        status: "completed",
+        conclusion: "failure",
+        started_at: "t1",
+        completed_at: "t2",
+      },
+      {
+        id: 1,
+        app: { id: 5 },
+        name: "test",
+        status: "completed",
+        conclusion: "success",
+        started_at: "t1",
+        completed_at: "t2",
+      },
+    ],
+    [],
+  );
+  expect(checks).toHaveLength(2);
+  expect(checks.map((x) => x.conclusion)).toEqual(["success", "failure"]);
+  expect(rollUpChecks(checks)).toBe("failure");
+});

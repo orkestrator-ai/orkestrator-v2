@@ -107,7 +107,13 @@ export function PullRequestDiff({
   canComment: boolean;
 }) {
   const addReviewComment = usePullRequestsStore((state) => state.addReviewComment);
-  const [composerAt, setComposerAt] = useState<string | null>(null);
+  const [composerAt, setComposerAt] = useState<{
+    key: string;
+    commitId: string;
+    path: string;
+    side: DiffSide;
+    line: number;
+  } | null>(null);
   const anchored = useMemo(() => anchorThreads(file, threads), [file, threads]);
   const gutterWidth = useMemo(() => {
     let max = 0;
@@ -132,7 +138,7 @@ export function PullRequestDiff({
             const key = lineKey(hunkIndex, lineIndex);
             const lineThreads = anchored.byLine.get(key);
             const anchor = canComment ? commentAnchorForLine(line) : null;
-            const composerOpen = composerAt === key && anchor !== null;
+            const composerOpen = composerAt?.key === key && anchor !== null;
             return (
               <Fragment key={lineIndex}>
                 <div
@@ -166,7 +172,7 @@ export function PullRequestDiff({
                       <button
                         type="button"
                         aria-label={`Comment on ${anchor.side === "LEFT" ? "old" : "new"} line ${anchor.line}`}
-                        onClick={() => setComposerAt(key)}
+                        onClick={() => setComposerAt({ key, commitId, path: file.path, ...anchor })}
                         className="absolute top-0.5 left-0 flex size-4 items-center justify-center rounded bg-primary text-primary-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
                       >
                         <Plus className="size-3" />
@@ -196,8 +202,14 @@ export function PullRequestDiff({
                         canReply={canComment}
                       />
                     ))}
-                    {composerOpen && anchor && (
+                    {composerOpen && composerAt && (
                       <div className="rounded-lg border border-border bg-card/60 p-2">
+                        {composerAt.commitId !== commitId && (
+                          <p className="mb-2 font-sans text-xs text-muted-foreground">
+                            Commenting on the original revision {composerAt.commitId.slice(0, 7)},{" "}
+                            {composerAt.path}, {composerAt.side} line {composerAt.line}.
+                          </p>
+                        )}
                         <CommentComposer
                           autoFocus
                           placeholder="Add a review comment"
@@ -205,10 +217,10 @@ export function PullRequestDiff({
                           submitLabel="Add comment"
                           onCancel={() => setComposerAt(null)}
                           onSubmit={async (body) => {
-                            await addReviewComment(pullRequest, commitId, {
-                              path: file.path,
-                              line: anchor.line,
-                              side: anchor.side,
+                            await addReviewComment(pullRequest, composerAt.commitId, {
+                              path: composerAt.path,
+                              line: composerAt.line,
+                              side: composerAt.side,
                               body,
                             });
                             setComposerAt(null);

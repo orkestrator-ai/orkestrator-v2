@@ -97,6 +97,23 @@ export function PullRequestReviewThread({
       </div>
       {expanded && (
         <div className="space-y-2 border-t border-border/50 px-2.5 py-2">
+          {thread.commentsTruncated && (
+            <p className="text-xs text-muted-foreground">
+              Newer replies are omitted from this conversation.{" "}
+              <a
+                href={
+                  first?.htmlUrl ||
+                  `https://github.com/${pullRequest.owner}/${pullRequest.repo}/pull/${pullRequest.number}`
+                }
+                target="_blank"
+                rel="noreferrer"
+                className="underline"
+              >
+                Read all replies on GitHub
+              </a>
+              .
+            </p>
+          )}
           {thread.comments.map((comment) => (
             <div key={comment.id} className="space-y-1" data-testid="review-thread-comment">
               <div className="flex items-center gap-1.5 text-xs">

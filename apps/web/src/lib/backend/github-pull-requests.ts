@@ -204,3 +204,15 @@ export async function listGitHubRepositoryLabels(repository: {
     repo: repository.repo,
   });
 }
+
+export async function changeGitHubPullRequestLabel(
+  ref: GitHubPullRequestRef,
+  name: string,
+  present: boolean,
+): Promise<GitHubPullRequestLabel[]> {
+  return invoke<GitHubPullRequestLabel[]>("change_github_pull_request_label", {
+    ...refArgs(ref),
+    name,
+    present,
+  });
+}

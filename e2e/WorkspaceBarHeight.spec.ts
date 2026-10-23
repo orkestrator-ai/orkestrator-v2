@@ -86,13 +86,15 @@ for (const presentation of ["bar", "grid"]) {
     await page.keyboard.press("Tab");
     const first = tabs.getByRole("tab", { name: "Home", exact: true });
     await first.focus();
-    for (const label of ["Home", "Kanban", "Features"]) {
+    for (const label of ["Home", "Kanban", "Pull requests", "Features"]) {
       const tab = tabs.getByRole("tab", { name: label, exact: true });
       if (label === "Kanban") {
         await page.keyboard.press("ArrowRight");
         await page.keyboard.press("ArrowRight");
-      } else if (label === "Features") {
+      } else if (label === "Pull requests") {
         await page.keyboard.press("End");
+      } else if (label === "Features") {
+        await page.keyboard.press("ArrowLeft");
       }
       await expect(tab).toBeFocused();
       await expect(tab).toHaveCSS("outline-style", "none");

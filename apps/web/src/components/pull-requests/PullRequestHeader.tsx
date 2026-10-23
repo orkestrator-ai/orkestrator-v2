@@ -89,6 +89,7 @@ export function MergeButton({
   const method =
     chosen && allowed.includes(chosen) ? chosen : defaultMergeMethod(detail.allowedMergeMethods);
   const [deleteBranch, setDeleteBranch] = useState(true);
+  const shouldDeleteBranch = deleteBranch && !detail.isCrossRepository;
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [merging, setMerging] = useState(false);
   const blocked = mergeBlockedReason(detail);
@@ -102,7 +103,7 @@ export function MergeButton({
     try {
       const result = await merge(pullRequest, {
         method,
-        deleteBranch,
+        deleteBranch: shouldDeleteBranch,
         expectedHeadSha: detail.headSha,
       });
       if (!result.merged) {
@@ -111,7 +112,7 @@ export function MergeButton({
       setConfirmOpen(false);
       toast.success(`Merged #${pullRequest.number}`, {
         description:
-          result.branchDeleted === false && deleteBranch
+          result.branchDeleted === false && shouldDeleteBranch
             ? "The head branch could not be deleted."
             : result.message,
       });
@@ -183,7 +184,8 @@ export function MergeButton({
             </DropdownMenuRadioGroup>
             <DropdownMenuSeparator />
             <DropdownMenuCheckboxItem
-              checked={deleteBranch}
+              checked={shouldDeleteBranch}
+              disabled={detail.isCrossRepository}
               onCheckedChange={(checked) => setDeleteBranch(checked === true)}
               onSelect={(event) => event.preventDefault()}
               className="text-xs"
@@ -207,7 +209,7 @@ export function MergeButton({
                   <span className="font-mono text-xs">{detail.baseRef}</span>.
                 </p>
                 <p>
-                  {deleteBranch
+                  {shouldDeleteBranch
                     ? `The ${detail.headRef} branch will be deleted after merging.`
                     : "The head branch will be kept."}
                 </p>
@@ -250,7 +252,7 @@ function PullRequestActionsMenu({
 }) {
   const updateState = usePullRequestsStore((state) => state.updateState);
   const url = detail?.htmlUrl ?? gitHubPullRequestUrl(pullRequest);
-  const checkout = `gh pr checkout ${pullRequest.number}`;
+  const checkout = `gh pr checkout ${pullRequest.number} --repo ${pullRequest.owner}/${pullRequest.repo}`;
   const canChangeState = Boolean(
     detail && (detail.viewerPermissions.canWrite || detail.viewerPermissions.isAuthor),
   );
@@ -342,7 +344,7 @@ export function PullRequestHeader({
   refreshing: boolean;
 }) {
   const url = detail?.htmlUrl ?? gitHubPullRequestUrl(pullRequest);
-  const checkout = `gh pr checkout ${pullRequest.number}`;
+  const checkout = `gh pr checkout ${pullRequest.number} --repo ${pullRequest.owner}/${pullRequest.repo}`;
   const baseWarning =
     detail?.state === "open" &&
     (detail.mergeability === "dirty" || detail.mergeability === "behind")

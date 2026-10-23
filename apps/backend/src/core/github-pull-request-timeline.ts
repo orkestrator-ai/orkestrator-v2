@@ -119,6 +119,8 @@ export function timelineItemFromApi(
     };
   }
 
+  if (event === "opened") return null; // The authoritative PR record supplies the opened row.
+
   if (event === "commented") {
     const comment = prComment(value);
     if (!comment) return null;

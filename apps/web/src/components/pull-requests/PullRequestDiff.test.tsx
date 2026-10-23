@@ -198,3 +198,52 @@ describe("PullRequestDiff", () => {
     expect(screen.queryByRole("button", { name: /Comment on/ }) === null).toBe(true);
   });
 });
+
+test("an open draft keeps its captured commit and line when polling replaces the diff", async () => {
+  installBackend({
+    add_github_pull_request_review_comment: () => ({ id: 901 }),
+    get_github_pull_request_files: () => makeFiles(),
+  });
+  const file = makeFile();
+  const props = { pullRequest: prRef, file, threads: [], commitId: "old-head", canComment: true };
+  const { rerender } = render(<PullRequestDiff {...props} />);
+  fireEvent.click(screen.getByRole("button", { name: "Comment on new line 2" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Review comment" }), {
+    target: { value: "original draft" },
+  });
+  const replacement = makeFile({
+    hunks: file.hunks.map((h) => ({
+      ...h,
+      lines: h.lines.map((l) =>
+        l.type === "add" ? { ...l, newLine: 99, text: "replacement" } : l,
+      ),
+    })),
+  });
+  rerender(<PullRequestDiff {...props} file={replacement} commitId="new-head" />);
+  expect(
+    (screen.getByRole("textbox", { name: "Review comment" }) as HTMLTextAreaElement).value,
+  ).toBe("original draft");
+  expect(screen.getByText(/Commenting on the original revision/)).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Add comment" }));
+  await waitFor(() => expect(callsFor("add_github_pull_request_review_comment")).toHaveLength(1));
+  expect(callsFor("add_github_pull_request_review_comment")[0]).toMatchObject({
+    commitId: "old-head",
+    comment: { path: file.path, side: "RIGHT", line: 2, body: "original draft" },
+  });
+});
+
+test("truncated review conversations explicitly disclose omitted newer replies", () => {
+  render(
+    <PullRequestDiff
+      pullRequest={prRef}
+      file={makeFile()}
+      threads={[thread("t1", "RIGHT", 2, { commentsTruncated: true })]}
+      commitId="head"
+      canComment
+    />,
+  );
+  expect(screen.getByText(/Newer replies are omitted/)).toBeTruthy();
+  expect(
+    screen.getByRole("link", { name: "Read all replies on GitHub" }).getAttribute("href"),
+  ).toContain("https://github.com/");
+});

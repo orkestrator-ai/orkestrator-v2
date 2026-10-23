@@ -639,8 +639,8 @@ function statusConclusion(state: unknown): GitHubPullRequestCheckConclusion {
 }
 
 /**
- * Check runs and legacy commit statuses for one commit, one entry per name
- * (check runs win over a status with the same context), sorted by name.
+ * Keep independent check runs and legacy contexts. Only revisions of the same
+ * API check identity and latest statuses in one context collapse.
  */
 export function mergeChecks(checkRuns: unknown[], statuses: unknown[]): GitHubPullRequestCheck[] {
   const byName = new Map<string, GitHubPullRequestCheck & { at: string }>();
@@ -648,11 +648,14 @@ export function mergeChecks(checkRuns: unknown[], statuses: unknown[]): GitHubPu
     if (!isRecord(value)) continue;
     const name = stringValue(value.name);
     if (!name) continue;
-    const at = stringValue(value.started_at) || stringValue(value.completed_at);
-    const key = name.toLowerCase();
-    const existing = byName.get(key);
-    if (existing && existing.at >= at) continue;
+    const at = stringValue(value.completed_at) || stringValue(value.started_at);
     const app = isRecord(value.app) ? value.app : {};
+    const key =
+      value.id != null
+        ? `check:${value.id}`
+        : `check:${app.id ?? app.slug ?? app.name ?? "unknown"}:${name}`;
+    const existing = byName.get(key);
+    if (existing && existing.at > at) continue;
     const output = isRecord(value.output) ? value.output : {};
     byName.set(key, {
       name,
@@ -666,13 +669,17 @@ export function mergeChecks(checkRuns: unknown[], statuses: unknown[]): GitHubPu
   for (const value of statuses) {
     if (!isRecord(value)) continue;
     const name = stringValue(value.context);
-    if (!name || byName.has(name.toLowerCase())) continue;
-    byName.set(name.toLowerCase(), {
+    if (!name) continue;
+    const key = `status:${name}`;
+    const at = stringValue(value.updated_at) || stringValue(value.created_at);
+    const existing = byName.get(key);
+    if (existing && existing.at > at) continue;
+    byName.set(key, {
       name,
       conclusion: statusConclusion(value.state),
       detailsUrl: optionalString(value.target_url),
       summary: optionalString(value.description),
-      at: "",
+      at,
     });
   }
   return Array.from(byName.values())
@@ -860,6 +867,7 @@ export async function getGitHubPullRequest(
   return buildPullRequestDetail(ref, pull, {
     reviews: reviews.values,
     comments: commentValues.values,
+    commentsTruncated: commentValues.truncated,
     identity,
     checks,
   });
@@ -871,6 +879,7 @@ export function buildPullRequestDetail(
   parts: {
     reviews: readonly unknown[];
     comments: readonly unknown[];
+    commentsTruncated?: boolean;
     identity: GitHubViewerIdentity;
     checks: GitHubPullRequestCheck[];
   },
@@ -922,6 +931,7 @@ export function buildPullRequestDetail(
     checks: parts.checks,
     checksState: rollUpChecks(parts.checks),
     comments,
+    commentsTruncated: parts.commentsTruncated ?? false,
     mergeability: mergeabilityFromApi(pull, state, isDraft),
     allowedMergeMethods: allowedMergeMethods(identity.repository),
     viewer: identity.viewer,

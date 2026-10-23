@@ -6,6 +6,7 @@ import {
   reviewerPayload,
   setGitHubPullRequestFileViewed,
   setGitHubPullRequestLabels,
+  changeGitHubPullRequestLabel,
   setGitHubPullRequestReviewers,
   setGitHubPullRequestThreadResolved,
   submitGitHubPullRequestReview,
@@ -93,6 +94,9 @@ describe("mergeGitHubPullRequest", () => {
     fake.on("PUT", MERGE_PATH, { merged: true });
     fake.on("DELETE", BRANCH_PATH, () =>
       json({ message: "Reference does not exist" }, { status: 422 }),
+    );
+    fake.on("GET", "/repos/acme/repo/git/ref/heads/feature/widgets", () =>
+      json({ message: "Not Found" }, { status: 404 }),
     );
     expect(
       (
@@ -424,4 +428,52 @@ describe("state, comments, reviewers and labels", () => {
       "Label names",
     );
   });
+});
+
+test("a 422 branch deletion refusal retains partial merge success and a warning", async () => {
+  const fake = createFakeGitHub();
+  fake.on("GET", "/repos/acme/repo/pulls/7", apiPull());
+  fake.on("PUT", MERGE_PATH, { merged: true });
+  fake.on("DELETE", BRANCH_PATH, () =>
+    json({ message: "Cannot delete default branch" }, { status: 422 }),
+  );
+  fake.on("GET", "/repos/acme/repo/git/ref/heads/feature/widgets", {
+    ref: "refs/heads/feature/widgets",
+  });
+  const result = await mergeGitHubPullRequest(
+    TOKEN,
+    REF,
+    { method: "merge", deleteBranch: true },
+    fake.options,
+  );
+  expect(result).toMatchObject({
+    merged: true,
+    branchDeleted: false,
+    message: expect.stringContaining("could not delete"),
+  });
+  expect(fake.unexpected).toEqual([]);
+});
+
+test("incremental label changes preserve concurrent unrelated labels", async () => {
+  const fake = createFakeGitHub();
+  const labels = new Set(["externally-added"]);
+  fake.on("POST", "/repos/acme/repo/issues/7/labels", (request) => {
+    for (const name of (request.body?.labels ?? []) as string[]) labels.add(name);
+    return json(Array.from(labels, (name) => ({ name, color: "abcdef" })));
+  });
+  fake.on("DELETE", "/repos/acme/repo/issues/7/labels/bug%2Ffix", () => {
+    labels.delete("bug/fix");
+    return json(Array.from(labels, (name) => ({ name, color: "abcdef" })));
+  });
+  expect(
+    (await changeGitHubPullRequestLabel(TOKEN, REF, "bug/fix", true, fake.options)).map(
+      (x) => x.name,
+    ),
+  ).toEqual(["externally-added", "bug/fix"]);
+  expect(
+    (await changeGitHubPullRequestLabel(TOKEN, REF, "bug/fix", false, fake.options)).map(
+      (x) => x.name,
+    ),
+  ).toEqual(["externally-added"]);
+  expect(fake.unexpected).toEqual([]);
 });

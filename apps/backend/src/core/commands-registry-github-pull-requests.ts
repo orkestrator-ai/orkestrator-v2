@@ -30,6 +30,7 @@ import {
   replyGitHubPullRequestReviewThread,
   setGitHubPullRequestFileViewed,
   setGitHubPullRequestLabels,
+  changeGitHubPullRequestLabel,
   setGitHubPullRequestReviewers,
   setGitHubPullRequestThreadResolved,
   submitGitHubPullRequestReview,
@@ -285,6 +286,15 @@ export function registerGitHubPullRequestCommands(
     const ref = refArgs(args, ["add", "remove"]);
     const changes = { add: stringList(args.add, "add"), remove: stringList(args.remove, "remove") };
     return withGitHubToken(context, (token) => setGitHubPullRequestReviewers(token, ref, changes));
+  });
+
+  register("change_github_pull_request_label", async (args, context) => {
+    const ref = refArgs(args, ["name", "present"]);
+    const name = asString(args.name, "name");
+    const present = asRequiredBoolean(args.present, "present");
+    return withGitHubToken(context, (token) =>
+      changeGitHubPullRequestLabel(token, ref, name, present),
+    );
   });
 
   register("set_github_pull_request_labels", async (args, context) => {

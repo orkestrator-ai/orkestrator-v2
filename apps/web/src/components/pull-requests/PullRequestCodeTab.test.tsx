@@ -34,7 +34,10 @@ describe("PullRequestCodeTab", () => {
   test("viewed checkbox is optimistic, collapses the file and reverts on failure", async () => {
     usePullRequestsStore.setState({ files: new Map([[key, makeFiles()]]) });
     const pending = deferred<never>();
-    installBackend({ set_github_pull_request_file_viewed: () => pending.promise });
+    installBackend({
+      set_github_pull_request_file_viewed: () => pending.promise,
+      get_github_pull_request_files: () => makeFiles(),
+    });
     render(<ConnectedCodeTab />);
 
     expect(screen.getByTestId("pull-request-diff")).toBeTruthy();

@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { GitHubPullRequestDetail } from "@orkestrator/protocol/github-pull-requests";
+import { useUIStore } from "@/stores/uiStore";
+import { mockWriteText } from "../../../../../tests/mocks/clipboard";
+import { mockToastSuccess } from "../../../../../tests/mocks/sonner";
 import { PullRequestView } from "./PullRequestView";
 import { mergeBlockedReason, mergeWarning } from "./pull-request-format";
 import {
@@ -18,7 +21,11 @@ function renderView(detail: GitHubPullRequestDetail, props: { onSummaryLoaded?: 
     get_github_pull_request: () => detail,
     get_github_pull_request_timeline: () => ({ ref: prRef, items: [], truncated: false }),
     get_github_pull_request_files: () => makeFiles(),
-    merge_github_pull_request: () => ({ merged: true, sha: "merged-sha", branchDeleted: true }),
+    merge_github_pull_request: () => ({
+      merged: true,
+      sha: "merged-sha",
+      branchDeleted: !detail.isCrossRepository,
+    }),
   });
   return render(
     <PullRequestView
@@ -48,7 +55,7 @@ describe("PullRequestView", () => {
     expect(screen.getByText("acme/widget")).toBeTruthy();
     expect(screen.getByText("#42")).toBeTruthy();
     expect(screen.getByTestId("pull-request-state-badge").textContent).toBe("Open");
-    expect(screen.getByText("gh pr checkout 42")).toBeTruthy();
+    expect(screen.getByText("gh pr checkout 42 --repo acme/widget")).toBeTruthy();
     expect(screen.getByText("main")).toBeTruthy();
     expect(screen.getByText("feature/usage")).toBeTruthy();
     expect(screen.getByText("56 files")).toBeTruthy();
@@ -178,4 +185,74 @@ describe("merge rules", () => {
   test("a repository without merge methods blocks merging", () => {
     expect(mergeBlockedReason(makeDetail({ allowedMergeMethods: [] }))).toMatch(/merge method/);
   });
+});
+
+test("fork merges keep the head branch and never report skipped deletion as a failure", async () => {
+  mockToastSuccess.mockClear();
+  renderView(makeDetail({ isCrossRepository: true, headRepositoryFullName: "fork/widget" }));
+  await screen.findByText("feat: add usage history tab");
+  fireEvent.click(screen.getByRole("button", { name: "Merge" }));
+  const dialog = await screen.findByRole("alertdialog");
+  expect(within(dialog).getByText("The head branch will be kept.")).toBeTruthy();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Squash and merge" }));
+  await waitFor(() => expect(callsFor("merge_github_pull_request")).toHaveLength(1));
+  expect(callsFor("merge_github_pull_request")[0]).toMatchObject({ deleteBranch: false });
+  expect(JSON.stringify(mockToastSuccess.mock.calls)).not.toContain("could not be deleted");
+});
+
+test("both checkout actions copy the viewed repository regardless of project selection", async () => {
+  mockWriteText.mockClear();
+  useUIStore.setState({ selectedProjectId: "unrelated-project" });
+  renderView(makeDetail());
+  const command = "gh pr checkout 42 --repo acme/widget";
+  fireEvent.click(await screen.findByTitle("Copy checkout command"));
+  await waitFor(() => expect(mockWriteText).toHaveBeenCalledWith(command));
+  mockWriteText.mockClear();
+  fireEvent.pointerDown(screen.getByRole("button", { name: "More actions" }), {
+    button: 0,
+    ctrlKey: false,
+  });
+  const item = await screen.findByRole("menuitem", { name: `Copy ${command}` });
+  fireEvent.click(item);
+  await waitFor(() => expect(mockWriteText).toHaveBeenCalledWith(command));
+});
+
+test("a capped summary clearly identifies missing newer comments and links to the full conversation", async () => {
+  renderView(makeDetail({ commentsTruncated: true }));
+  expect(await screen.findByText(/Newer comments are omitted/)).toBeTruthy();
+  expect(
+    screen.getByRole("link", { name: "Read the full conversation on GitHub" }).getAttribute("href"),
+  ).toBe("https://github.com/acme/widget/pull/42");
+});
+
+test("the label picker sends one change from a stale detail without replacing other labels", async () => {
+  let detail = makeDetail();
+  installBackend({
+    get_github_pull_request: () => detail,
+    list_github_repository_labels: () => [{ name: "bug", color: "ff0000" }],
+    change_github_pull_request_label: () => {
+      detail = makeDetail({
+        labels: [
+          { name: "externally-added", color: "aaaaaa" },
+          { name: "bug", color: "ff0000" },
+        ],
+      });
+      return detail.labels;
+    },
+  });
+  render(<PullRequestView pullRequest={prRef} layout="page" />);
+  await screen.findByText("feat: add usage history tab");
+  fireEvent.pointerDown(screen.getByRole("button", { name: "Edit labels" }), {
+    button: 0,
+    ctrlKey: false,
+  });
+  fireEvent.click(await screen.findByRole("menuitemcheckbox", { name: "bug" }));
+  await waitFor(() => expect(callsFor("change_github_pull_request_label")).toHaveLength(1));
+  expect(callsFor("change_github_pull_request_label")[0]).toEqual({
+    ...prRef,
+    name: "bug",
+    present: true,
+  });
+  expect(callsFor("set_github_pull_request_labels")).toHaveLength(0);
+  expect(await screen.findByText("externally-added")).toBeTruthy();
 });

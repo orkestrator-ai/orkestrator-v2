@@ -16,9 +16,9 @@ import { GitHubApiError, isRecord, numberValue, optionalString, stringValue } fr
 import {
   assertPullRequestRef,
   getList,
+  getJson,
   graphql,
   graphqlUser,
-  loadPullRequestRecord,
   prUser,
   pullHeadSha,
   pullPath,
@@ -203,6 +203,10 @@ export function reviewThreadFromGraphql(value: unknown): GitHubPullRequestReview
     isOutdated: value.isOutdated === true,
     viewerCanResolve: value.viewerCanResolve === true,
     comments,
+    commentsTruncated:
+      isRecord(value.comments) &&
+      isRecord(value.comments.pageInfo) &&
+      value.comments.pageInfo.hasNextPage === true,
   };
 }
 
@@ -215,6 +219,7 @@ export const REVIEW_THREAD_FIELDS = `id
   diffSide
   viewerCanResolve
   comments(first: 100) {
+    pageInfo { hasNextPage }
     nodes { databaseId id body author { login avatarUrl url } createdAt updatedAt url diffHunk }
   }`;
 
@@ -325,24 +330,39 @@ export async function getGitHubPullRequestFiles(
 ): Promise<GitHubPullRequestFiles> {
   assertPullRequestRef(ref);
   const client = pullRequestClient(token, options);
-  const [pull, fileList, reviewState] = await Promise.all([
-    loadPullRequestRecord(client, ref),
-    // File pages can be large; they bypass the conditional cache.
-    getList(
-      client,
-      `${pullPath(ref)}/files`,
-      `load files for pull request #${ref.number}`,
-      MAX_PULL_REQUEST_FILES,
-      { cached: false },
-    ),
-    loadReviewState(client, ref),
-  ]);
-  const files = mapPullRequestFiles(fileList.values, reviewState.viewedStates);
-  return {
-    ref: { owner: ref.owner, repo: ref.repo, number: ref.number },
-    headSha: pullHeadSha(pull),
-    files,
-    threads: reviewState.threads,
-    truncated: fileList.truncated || numberValue(pull.changed_files) > files.length,
+  // Bracket every paginated read with uncached head reads. Never expose mixed
+  // revision coordinates as an inline-comment target.
+  const readHead = async () => {
+    const { data } = await getJson(client, pullPath(ref), "validate pull request head", {
+      cached: false,
+    });
+    if (!isRecord(data) || !pullHeadSha(data))
+      throw new GitHubApiError("GitHub returned an invalid pull request head.");
+    return data;
   };
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const before = await readHead();
+    const [fileList, reviewState] = await Promise.all([
+      // File pages can be large; they bypass the conditional cache.
+      getList(
+        client,
+        `${pullPath(ref)}/files`,
+        `load files for pull request #${ref.number}`,
+        MAX_PULL_REQUEST_FILES,
+        { cached: false },
+      ),
+      loadReviewState(client, ref),
+    ]);
+    const pull = await readHead();
+    if (pullHeadSha(before) !== pullHeadSha(pull)) continue;
+    const files = mapPullRequestFiles(fileList.values, reviewState.viewedStates);
+    return {
+      ref: { owner: ref.owner, repo: ref.repo, number: ref.number },
+      headSha: pullHeadSha(pull),
+      files,
+      threads: reviewState.threads,
+      truncated: fileList.truncated || numberValue(pull.changed_files) > files.length,
+    };
+  }
+  throw new GitHubApiError("The pull request changed while loading files. Refresh and try again.");
 }

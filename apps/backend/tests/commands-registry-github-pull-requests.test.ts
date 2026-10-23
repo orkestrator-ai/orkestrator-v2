@@ -64,6 +64,7 @@ describe("GitHub pull request commands", () => {
       "set_github_pull_request_file_viewed",
       "set_github_pull_request_reviewers",
       "set_github_pull_request_labels",
+      "change_github_pull_request_label",
       "list_github_repository_assignable_users",
       "list_github_repository_labels",
     ]) {
@@ -205,4 +206,14 @@ describe("refreshMonitoredPullRequest", () => {
     };
     await expect(refreshMonitoredPullRequest(ref, context as never)).resolves.toBeUndefined();
   });
+});
+
+test("label toggle commands validate input and send only incremental intent", async () => {
+  const { fake, run } = setup();
+  fake.on("POST", "/repos/acme/repo/issues/7/labels", [{ name: "bug", color: "ff0000" }]);
+  await run("change_github_pull_request_label", { ...ref, name: "bug", present: true });
+  expect(fake.requests[0]?.body).toEqual({ labels: ["bug"] });
+  await expect(
+    run("change_github_pull_request_label", { ...ref, name: "bug", present: "yes" }),
+  ).rejects.toThrow("boolean");
 });

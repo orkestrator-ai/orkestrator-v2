@@ -106,7 +106,10 @@ describe("pullRequestsStore mutations", () => {
   test("setFileViewed is optimistic and reverts when GitHub rejects it", async () => {
     usePullRequestsStore.setState({ files: new Map([[key, makeFiles()]]) });
     const pending = deferred<never>();
-    installBackend({ set_github_pull_request_file_viewed: () => pending.promise });
+    installBackend({
+      set_github_pull_request_file_viewed: () => pending.promise,
+      get_github_pull_request_files: () => makeFiles(),
+    });
 
     const write = usePullRequestsStore.getState().setFileViewed(prRef, "src/app.ts", true);
     expect(usePullRequestsStore.getState().files.get(key)?.files[0]?.viewedState).toBe("viewed");
@@ -176,4 +179,24 @@ describe("pull request polling", () => {
     expect(clock.pendingCount()).toBe(0);
     await act(async () => {});
   });
+});
+
+test("a files read predating a viewed write cannot undo acknowledged state", async () => {
+  const old = deferred<ReturnType<typeof makeFiles>>();
+  const refreshed = deferred<ReturnType<typeof makeFiles>>();
+  const reads = [old, refreshed];
+  usePullRequestsStore.setState({ files: new Map([[key, makeFiles()]]) });
+  installBackend({
+    get_github_pull_request_files: () => reads.shift()!.promise,
+    set_github_pull_request_file_viewed: () => ({ viewedState: "viewed" }),
+  });
+  const read = usePullRequestsStore.getState().loadFiles(prRef);
+  await usePullRequestsStore.getState().setFileViewed(prRef, "src/app.ts", true);
+  old.resolve(makeFiles());
+  await read;
+  expect(usePullRequestsStore.getState().files.get(key)?.files[0]?.viewedState).toBe("viewed");
+  refreshed.resolve(makeFiles({ files: [{ ...makeFiles().files[0]!, viewedState: "viewed" }] }));
+  await act(async () => {});
+  expect(usePullRequestsStore.getState().files.get(key)?.files[0]?.viewedState).toBe("viewed");
+  expect(usePullRequestsStore.getState().loading.has(resourceKey("files", key))).toBe(false);
 });

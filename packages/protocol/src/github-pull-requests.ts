@@ -166,6 +166,8 @@ export type GitHubPullRequestDetail = {
   checksState: GitHubPullRequestChecksState;
   /** Top-level conversation comments (issue comments), oldest first. */
   comments: GitHubPullRequestComment[];
+  /** Older loaded subset; GitHub contains additional comments. */
+  commentsTruncated?: boolean;
   mergeability: GitHubPullRequestMergeability;
   /** Merge methods the repository allows. */
   allowedMergeMethods: GitHubPullRequestMergeMethod[];
@@ -275,6 +277,7 @@ export type GitHubPullRequestReviewThread = {
   isOutdated: boolean;
   viewerCanResolve: boolean;
   comments: GitHubPullRequestReviewThreadComment[];
+  commentsTruncated?: boolean;
 };
 
 export type GitHubPullRequestFiles = {

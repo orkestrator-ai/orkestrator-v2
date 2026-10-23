@@ -254,7 +254,7 @@ describe("getGitHubPullRequestFiles", () => {
       },
     ]);
     // File pages are large and never cached.
-    expect(fake.cache.size).toBe(1);
+    expect(fake.cache.size).toBe(0);
   });
 
   test("reports truncation when GitHub returns fewer files than changed", async () => {
@@ -274,4 +274,87 @@ describe("getGitHubPullRequestFiles", () => {
     const result = await getGitHubPullRequestFiles(TOKEN, REF, fake.options);
     expect(result.truncated).toBe(true);
   });
+});
+
+test("retries files when a push changes the head during pagination", async () => {
+  const fake = createFakeGitHub();
+  let head = HEAD_SHA;
+  let loads = 0;
+  fake.on("GET", "/repos/acme/repo/pulls/7", () => json(apiPull({ head: { sha: head } })));
+  fake.on("GET", "/repos/acme/repo/pulls/7/files", (request) => {
+    const second = request.url.searchParams.get("page") === "2";
+    if (second) head = "b".repeat(40);
+    else loads++;
+    return json(
+      [{ filename: second ? "b" : "a", status: "added", patch: `@@ -0,0 +1 @@\n+${head}` }],
+      {
+        headers: second
+          ? {}
+          : { link: '<https://api.github.com/repos/acme/repo/pulls/7/files?page=2>; rel="next"' },
+      },
+    );
+  });
+  fake.onGraphql("PullRequestReviewState", {
+    repository: { pullRequest: { files: { nodes: [] }, reviewThreads: { nodes: [] } } },
+  });
+  const result = await getGitHubPullRequestFiles(TOKEN, REF, fake.options);
+  expect(loads).toBe(2);
+  expect(result.headSha).toBe("b".repeat(40));
+  expect(result.files[0]?.hunks[0]?.lines[0]?.text).toBe(result.headSha);
+  expect(fake.unexpected).toEqual([]);
+});
+
+test("long threads disclose omitted newer replies after reload", async () => {
+  const fake = createFakeGitHub();
+  fake.on("GET", "/repos/acme/repo/pulls/7", apiPull());
+  fake.on("GET", "/repos/acme/repo/pulls/7/files", []);
+  let total = 101;
+  fake.onGraphql("PullRequestReviewState", () =>
+    json({
+      data: {
+        repository: {
+          pullRequest: {
+            files: { nodes: [] },
+            reviewThreads: {
+              nodes: [
+                {
+                  id: "thread",
+                  path: "a",
+                  comments: {
+                    pageInfo: { hasNextPage: total > 100 },
+                    nodes: Array.from({ length: 100 }, (_, i) => ({
+                      id: `c${i}`,
+                      databaseId: i + 1,
+                      body: `reply ${i}`,
+                    })),
+                  },
+                },
+              ],
+            },
+          },
+        },
+      },
+    }),
+  );
+  for (total of [101, 102]) {
+    const result = await getGitHubPullRequestFiles(TOKEN, REF, fake.options);
+    expect(result.threads[0]?.comments).toHaveLength(100);
+    expect(result.threads[0]?.commentsTruncated).toBe(true);
+  }
+});
+
+test("rejects an unstable head after bounded retries instead of returning comment coordinates", async () => {
+  const fake = createFakeGitHub();
+  let revision = 0;
+  fake.on("GET", "/repos/acme/repo/pulls/7", () =>
+    json(apiPull({ head: { sha: (++revision).toString(16).padStart(40, "0") } })),
+  );
+  fake.on("GET", "/repos/acme/repo/pulls/7/files", []);
+  fake.onGraphql("PullRequestReviewState", {
+    repository: { pullRequest: { files: { nodes: [] }, reviewThreads: { nodes: [] } } },
+  });
+  await expect(getGitHubPullRequestFiles(TOKEN, REF, fake.options)).rejects.toThrow(
+    "changed while loading files",
+  );
+  expect(fake.requestsTo("GET", "/repos/acme/repo/pulls/7/files")).toHaveLength(3);
 });

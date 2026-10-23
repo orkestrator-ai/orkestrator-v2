@@ -10,6 +10,7 @@ import {
   replyGitHubPullRequestReviewThread,
   setGitHubPullRequestFileViewed,
   setGitHubPullRequestLabels,
+  changeGitHubPullRequestLabel,
   setGitHubPullRequestReviewers,
   setGitHubPullRequestThreadResolved,
   submitGitHubPullRequestReview,
@@ -173,6 +174,7 @@ export interface PullRequestsState {
     ref: GitHubPullRequestRef,
     changes: { add: string[]; remove: string[] },
   ) => Promise<void>;
+  changeLabel: (ref: GitHubPullRequestRef, name: string, present: boolean) => Promise<void>;
   setLabels: (ref: GitHubPullRequestRef, labels: string[]) => Promise<void>;
 }
 
@@ -446,14 +448,20 @@ export const usePullRequestsStore = create<PullRequestsState>()((set, get) => {
               ),
             })),
           );
-        // Optimistic; the backend's answer is authoritative, so no file re-fetch.
+        // Invalidate any pre-write snapshot before applying the optimistic state.
+        nextRequest(resourceKey("files", key));
         apply(viewed ? "viewed" : "unviewed");
         try {
           const result = await setGitHubPullRequestFileViewed(ref, path, viewed);
+          nextRequest(resourceKey("files", key));
           apply(result.viewedState);
         } catch (error) {
+          nextRequest(resourceKey("files", key));
           apply(previous ?? (viewed ? "unviewed" : "viewed"));
           throw error;
+        } finally {
+          // Reconcile while inactive too; the replacement read owns loading cleanup.
+          void get().loadFiles(ref);
         }
       }),
 
@@ -467,6 +475,18 @@ export const usePullRequestsStore = create<PullRequestsState>()((set, get) => {
           loading: without(state.loading, resourceKey("detail", key)),
         }));
         void reloadTimelineIfLoaded(ref);
+      }),
+
+    changeLabel: (ref, name, present) =>
+      runMutation(set, get, `labels:${gitHubPullRequestKey(ref)}`, async () => {
+        const labels = await changeGitHubPullRequestLabel(ref, name, present);
+        const key = gitHubPullRequestKey(ref);
+        nextRequest(resourceKey("detail", key));
+        set((state) => ({
+          ...patchDetail(state, key, (detail) => ({ ...detail, labels })),
+          loading: without(state.loading, resourceKey("detail", key)),
+        }));
+        void Promise.all([reloadDetail(ref), reloadTimelineIfLoaded(ref)]);
       }),
 
     setLabels: (ref, labels) =>

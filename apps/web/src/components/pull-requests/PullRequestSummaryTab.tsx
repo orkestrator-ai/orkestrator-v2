@@ -307,7 +307,7 @@ function LabelsRow({
   pullRequest: GitHubPullRequestRef;
   detail: GitHubPullRequestDetail;
 }) {
-  const setLabels = usePullRequestsStore((state) => state.setLabels);
+  const changeLabel = usePullRequestsStore((state) => state.changeLabel);
   const busy = usePullRequestsStore((state) =>
     Array.from(state.mutations).some((key) => key.startsWith("labels:")),
   );
@@ -321,11 +321,8 @@ function LabelsRow({
   );
 
   const toggle = async (name: string) => {
-    const next = current.has(name)
-      ? detail.labels.map((label) => label.name).filter((candidate) => candidate !== name)
-      : [...detail.labels.map((label) => label.name), name];
     try {
-      await setLabels(pullRequest, next);
+      await changeLabel(pullRequest, name, !current.has(name));
     } catch (error) {
       toast.error(errorMessage(error, "Could not update labels."));
     }
@@ -615,12 +612,23 @@ export function PullRequestSummaryTab({
                 className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
               >
                 <ArrowUpDown className="size-3" />
-                {order === "newest" ? "Newest first" : "Oldest first"}
+                {order === "newest"
+                  ? "Loaded comments: newest first"
+                  : "Loaded comments: oldest first"}
               </button>
             )
           }
         />
         <CollapsibleContent className="space-y-2">
+          {detail.commentsTruncated && (
+            <p className="text-xs text-muted-foreground">
+              Showing the first {detail.comments.length} comments. Newer comments are omitted.{" "}
+              <a href={detail.htmlUrl} target="_blank" rel="noreferrer" className="underline">
+                Read the full conversation on GitHub
+              </a>
+              .
+            </p>
+          )}
           {comments.length === 0 && (
             <p className="text-xs text-muted-foreground">No comments yet.</p>
           )}

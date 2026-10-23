@@ -168,3 +168,11 @@ describe("getGitHubPullRequestTimeline", () => {
     expect(timeline.truncated).toBe(true);
   });
 });
+
+test("an API opened event does not duplicate the synthetic opened row", async () => {
+  const fake = createFakeGitHub();
+  routeTimeline(fake, [{ event: "opened", id: 777, actor: apiUser("author"), created_at: "t" }]);
+  const result = await getGitHubPullRequestTimeline(TOKEN, REF, fake.options);
+  expect(result.items).toHaveLength(1);
+  expect(result.items[0]).toMatchObject({ kind: "event", event: "opened" });
+});

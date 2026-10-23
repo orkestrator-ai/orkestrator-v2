@@ -186,7 +186,20 @@ async function deleteHeadBranch(
   } catch (error) {
     // Auto-delete or a concurrent cleanup already removed it.
     if (error instanceof GitHubApiError && (error.status === 404 || error.status === 422)) {
-      return true;
+      try {
+        // A refusal (including default-branch protection) is not proof of absence.
+        await githubRequest(
+          client.token,
+          `${repoPath(ref)}/git/ref/heads/${encoded}`,
+          "verify the head branch was deleted",
+          {},
+          client.fetchImpl,
+          { subject: "pull-request" },
+        );
+      } catch (lookupError) {
+        if (lookupError instanceof GitHubApiError && lookupError.status === 404) return true;
+        throw lookupError;
+      }
     }
     throw error;
   }
@@ -654,6 +667,32 @@ export async function setGitHubPullRequestLabels(
       `GitHub returned invalid labels for pull request #${ref.number}. Refresh and try again.`,
     );
   }
+  return prLabels(data);
+}
+
+/** Change only one label, leaving concurrent edits to other labels intact. */
+export async function changeGitHubPullRequestLabel(
+  token: string,
+  ref: GitHubPullRequestRef,
+  name: string,
+  present: boolean,
+  options: GitHubPullRequestRequestOptions = {},
+): Promise<GitHubPullRequestLabel[]> {
+  assertPullRequestRef(ref);
+  if (typeof name !== "string" || !name.trim() || name.length > MAX_LABEL_NAME_LENGTH) {
+    throw validation("Label names must be non-empty text.");
+  }
+  const client = pullRequestClient(token, options);
+  const path = `${issuePath(ref)}/labels`;
+  const data = await sendJson(
+    client,
+    present ? path : `${path}/${encodeURIComponent(name)}`,
+    "change a pull request label",
+    present ? "POST" : "DELETE",
+    present ? { labels: [name] } : undefined,
+  );
+  if (!Array.isArray(data))
+    throw new GitHubApiError("GitHub returned invalid labels. Refresh and try again.");
   return prLabels(data);
 }
 

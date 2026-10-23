@@ -1,8 +1,9 @@
-import { memo, useState, useId, useMemo, useRef, type ComponentType, type ReactNode } from "react";
+import { memo, useState, useId, useRef, type ComponentType, type ReactNode } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DesignEnvironmentDeletionNotice } from "@/components/design/DesignEnvironmentDeletionNotice";
 import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
 import { EnvironmentAgentSummary } from "./EnvironmentAgentSummary";
+import { EnvironmentTooltipBody } from "./EnvironmentTooltipBody";
 import { UnreadBellIcon } from "./UnreadBellIcon";
 import {
   AlertDialog,
@@ -34,12 +35,9 @@ import {
   Square,
   Container,
   Laptop,
-  Shield,
-  Globe,
   Settings2,
   RotateCw,
   Loader2,
-  Network,
   Copy,
   MoreVertical,
   House,
@@ -181,9 +179,9 @@ const APPROXIMATE_MARK = /^[~≥≤]/;
  * The row badge for the environment's `environment-net` projection. Shown
  * only when the backend says so; a stale or partial projection keeps the
  * row's muted `~` idiom (unless the counts already carry their own mark) and
- * explains itself in the tooltip.
+ * explains itself in the tooltip. Another machine's rows use it too.
  */
-function EnvironmentChangeBadge({ projection }: { projection: ChangeProjection }) {
+export function EnvironmentChangeBadge({ projection }: { projection: ChangeProjection }) {
   if (!projection.badge.visible) return null;
   const marked =
     APPROXIMATE_MARK.test(formatLineCount("+", projection.counters.additions)) ||
@@ -211,7 +209,7 @@ function EnvironmentChangeBadge({ projection }: { projection: ChangeProjection }
 }
 
 /** Hover-card detail for the same projection: files, counts and every backend reason. */
-function EnvironmentChangeSummary({ projection }: { projection: ChangeProjection }) {
+export function EnvironmentChangeSummary({ projection }: { projection: ChangeProjection }) {
   if (!projection.badge.visible) return null;
   const plus = formatLineCount("+", projection.counters.additions);
   const minus = formatLineCount("-", projection.counters.deletions);
@@ -351,7 +349,6 @@ export const EnvironmentItem = memo(function EnvironmentItem({
   };
 
   // Get network mode with null safety (defaults to "restricted")
-  const networkMode = environment.networkAccessMode ?? "restricted";
 
   const handleCheckboxChange = () => {
     // Toggle individual item selection (Cmd/Ctrl+Click behavior)
@@ -410,10 +407,6 @@ export const EnvironmentItem = memo(function EnvironmentItem({
       });
   };
 
-  const createdDate = useMemo(
-    () => new Date(environment.createdAt).toLocaleDateString(),
-    [environment.createdAt],
-  );
   const tooltipAnchorRef = useRef<HTMLDivElement>(null);
   const tooltip = useHoverTooltip();
   // Touch devices have no right-click, so the actions live behind an explicit
@@ -694,87 +687,52 @@ export const EnvironmentItem = memo(function EnvironmentItem({
           onMouseEnter={tooltip.show}
           onMouseLeave={tooltip.hide}
         >
-          <div className="space-y-1">
-            <p className="font-medium">{displayName}</p>
-            <p className="text-xs text-muted-foreground">Created: {createdDate}</p>
-            <EnvironmentAgentSummary environmentId={environment.id} open={tooltip.open} />
-            {isProjectHome ? (
-              <p className="text-xs text-muted-foreground flex items-center gap-1">
-                <House className="h-3 w-3" />
-                Project checkout · {environment.branch}
-              </p>
-            ) : isLocalEnvironment ? (
-              <p className="text-xs text-muted-foreground flex items-center gap-1">
-                <Laptop className="h-3 w-3" />
-                Local worktree
-              </p>
-            ) : (
-              <p className="text-xs text-muted-foreground flex items-center gap-1">
-                {networkMode === "full" ? (
-                  <>
-                    <Globe className="h-3 w-3" />
-                    Full network access
-                  </>
-                ) : (
-                  <>
-                    <Shield className="h-3 w-3" />
-                    Restricted network
-                  </>
-                )}
-              </p>
-            )}
-            {!isLocalEnvironment && environment.entryPort && (
-              <p className="text-xs text-muted-foreground flex items-center gap-1">
-                <Network className="h-3 w-3" />
-                {environment.hostEntryPort ? (
-                  <>
-                    Port:{" "}
-                    <span
-                      role="button"
-                      className="underline decoration-dotted cursor-pointer hover:text-foreground transition-colors"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        copyAddress();
-                      }}
-                    >
-                      localhost:{environment.hostEntryPort}
-                    </span>{" "}
-                    → {environment.entryPort}/tcp
-                  </>
-                ) : (
-                  <>Port: {environment.entryPort}/tcp (not mapped)</>
-                )}
-              </p>
-            )}
-            {changeProjection ? (
-              <EnvironmentChangeSummary projection={changeProjection} />
-            ) : (
-              diffStats &&
-              (diffStats.additions > 0 ||
-                diffStats.deletions > 0 ||
-                diffStats.filesChanged > 0) && (
-                <div className="border-t border-border/50 pt-1 mt-1">
-                  <p className="text-xs text-muted-foreground">
-                    {diffStats.filesChanged} file{diffStats.filesChanged !== 1 ? "s" : ""} changed
-                  </p>
-                  {diffStats.truncated && (
+          <EnvironmentTooltipBody
+            name={displayName}
+            machine={
+              boundMachine
+                ? {
+                    name: boundMachine.name,
+                    colorToken: boundMachine.colorToken,
+                    status: "this window",
+                  }
+                : null
+            }
+            details={environment}
+            agentSummary={
+              <EnvironmentAgentSummary environmentId={environment.id} open={tooltip.open} />
+            }
+            changes={
+              changeProjection ? (
+                <EnvironmentChangeSummary projection={changeProjection} />
+              ) : (
+                diffStats &&
+                (diffStats.additions > 0 ||
+                  diffStats.deletions > 0 ||
+                  diffStats.filesChanged > 0) && (
+                  <div className="border-t border-border/50 pt-1 mt-1">
                     <p className="text-xs text-muted-foreground">
-                      Line counts are approximate: too many untracked files to count them all.
+                      {diffStats.filesChanged} file{diffStats.filesChanged !== 1 ? "s" : ""} changed
                     </p>
-                  )}
-                  <div className="flex items-center gap-2 font-mono text-xs tabular-nums">
-                    {diffStats.additions > 0 && (
-                      <span className="text-success">+{diffStats.additions} added</span>
+                    {diffStats.truncated && (
+                      <p className="text-xs text-muted-foreground">
+                        Line counts are approximate: too many untracked files to count them all.
+                      </p>
                     )}
-                    {diffStats.deletions > 0 && (
-                      <span className="text-failure">-{diffStats.deletions} removed</span>
-                    )}
+                    <div className="flex items-center gap-2 font-mono text-xs tabular-nums">
+                      {diffStats.additions > 0 && (
+                        <span className="text-success">+{diffStats.additions} added</span>
+                      )}
+                      {diffStats.deletions > 0 && (
+                        <span className="text-failure">-{diffStats.deletions} removed</span>
+                      )}
+                    </div>
                   </div>
-                </div>
+                )
               )
-            )}
-            {environment.prUrl && <p className="text-xs text-blue-400">PR: {environment.prUrl}</p>}
-          </div>
+            }
+            onCopyAddress={copyAddress}
+          />
         </HoverTooltipContent>
         <ContextMenuContent>
           <EnvironmentMenuItems

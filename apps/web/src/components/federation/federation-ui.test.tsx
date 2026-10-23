@@ -31,6 +31,12 @@ import {
 } from "@/test/federation-desktop-fake";
 import { COMMAND_HANDOVER_PREVIEW_CHANGED } from "@orkestrator/protocol/command-nodes";
 import { requestCommandHandover } from "@/lib/command-handover";
+import { resetNodeChangeProjectionsForTests } from "@/lib/federation/node-change-projections";
+import { resetNodeEventsForTests } from "@/lib/federation/node-events";
+import {
+  environmentProjectionFixture,
+  exactCount,
+} from "@/components/files-panel/change-projection-test-fixture";
 import {
   mockToastError,
   mockToastSuccess,
@@ -363,6 +369,69 @@ describe("CL-05: machine identity visual rules", () => {
     );
     expect(screen.getByRole("button", { name: /^feature, on Machine A, Working/ })).toBeTruthy();
     expect(screen.getByText("app")).toBeTruthy();
+  });
+
+  test("another machine's row shows its change counts and a hover card naming the machine", async () => {
+    const invokeMock = nativeInvoke as unknown as ReturnType<typeof mock>;
+    const inner: string[] = [];
+    invokeMock.mockImplementation(async (command: string, args: Record<string, unknown>) => {
+      if (command === "watch_node_events") {
+        return { watchId: args.watchId, expiresAt: 0, renewed: true };
+      }
+      if (command !== "invoke_on_node") return undefined;
+      expect(args.nodeId).toBe("bk_a");
+      const routed = String(args.command);
+      inner.push(routed);
+      if (routed === "changes_get_view") {
+        return {
+          outcome: "ok",
+          result: {
+            kind: "projection",
+            projection: environmentProjectionFixture("env-1", {
+              counters: { additions: exactCount(12), deletions: exactCount(3), changedFiles: 2 },
+            }),
+          },
+        };
+      }
+      if (routed === "get_environment") {
+        return {
+          outcome: "ok",
+          result: {
+            id: "env-1",
+            name: "feature",
+            createdAt: "2026-10-20T12:00:00.000Z",
+            environmentType: "containerized",
+            networkAccessMode: "full",
+            prUrl: "https://github.com/acme/app/pull/7",
+          },
+        };
+      }
+      return { outcome: "ok", result: { environments: [] } };
+    });
+    try {
+      const machine = machineView();
+      render(<RemoteEnvironmentItem machine={machine} environment={firstEnvironment(machine)} />);
+      const badge = await screen.findByTestId("environment-change-badge");
+      expect(badge.textContent).toContain("+12");
+      expect(badge.textContent).toContain("3");
+
+      await act(async () => {
+        fireEvent.focus(screen.getByRole("button", { name: /^feature, on Machine A/ }));
+      });
+      const machineLine = await screen.findByTestId("environment-tooltip-machine", undefined, {
+        timeout: 2000,
+      });
+      expect(machineLine.textContent).toBe("On Machine A");
+      expect(await screen.findByText("Full network access")).toBeTruthy();
+      expect(screen.getByText("PR: https://github.com/acme/app/pull/7")).toBeTruthy();
+      expect(inner).toContain("get_environment");
+      expect(inner).toContain("get_agent_registry");
+    } finally {
+      cleanup();
+      resetNodeChangeProjectionsForTests();
+      resetNodeEventsForTests();
+      invokeMock.mockImplementation(() => Promise.resolve());
+    }
   });
 
   test("CL-05: an unavailable machine's row is dimmed and says connection lost, never stopped", () => {

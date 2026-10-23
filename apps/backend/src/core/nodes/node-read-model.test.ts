@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import type { BackendId } from "@orkestrator/protocol/federation";
+import { recurringDiagnosticsRegistry } from "../recurring-diagnostics.js";
 import { NodeReadModel } from "./node-read-model.js";
 
 function harness() {
@@ -78,5 +79,48 @@ test("partial self snapshot failure retains last known environments, marks trunc
     expect(recovered.truncated).toBe(false);
   } finally {
     h.model.stop();
+  }
+});
+
+test("named summary due job reconciles missed events and stops with the model", async () => {
+  const { TestNodeNetwork, settle } = await import("./node-network-test-support.js");
+  const network = new TestNodeNetwork();
+  const command = await network.add("command", { forceRegistration: true });
+  const leaf = await network.add("leaf");
+  let name = "before";
+  leaf.commands.set("get_projects", () => [{ id: "p1", name }]);
+  leaf.commands.set("get_environments", () => []);
+  await command.service.addNode({
+    routes: [{ id: "primary" as never, kind: "https", enabled: true, origin: leaf.origin }],
+    token: leaf.token,
+  });
+  const model = new NodeReadModel({
+    nodes: command.service,
+    emit: () => undefined,
+    fetchImpl: network.fetch,
+    reconcileMs: 20,
+  });
+  const summarySchedulers = () =>
+    recurringDiagnosticsRegistry
+      .snapshot()
+      .schedulers.filter((scheduler) => scheduler.byKind["node-summary-reconcile"]?.keys === 1)
+      .length;
+  const before = summarySchedulers();
+  try {
+    await model.start();
+    expect(summarySchedulers()).toBe(before + 1);
+    await settle(40);
+    expect((await model.summaries()).nodes[0]!.projects[0]!.name).toBe("before");
+    name = "missed-event";
+    await settle(80);
+    expect((await model.summaries()).nodes[0]!.projects[0]!.name).toBe("missed-event");
+    model.stop();
+    expect(summarySchedulers()).toBe(before);
+    await settle(40);
+    const reads = leaf.received.filter((call) => call.command === "get_projects").length;
+    await settle(60);
+    expect(leaf.received.filter((call) => call.command === "get_projects")).toHaveLength(reads);
+  } finally {
+    model.stop();
   }
 });

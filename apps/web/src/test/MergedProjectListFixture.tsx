@@ -93,6 +93,9 @@ function install() {
       if (commandName === "get_node_summaries") return { selfId: "bk_self", nodes: [] } as T;
       if (commandName === "get_backend_profile")
         return { revision: 1, displayName: "Command", colorToken: "teal", updatedAt: "t" } as T;
+      if (commandName === "watch_node_events")
+        return { watchId: args?.watchId, expiresAt: Date.now() + 90_000, renewed: true } as T;
+      if (commandName === "unwatch_node_events") return { removed: true } as T;
       if (commandName === "get_portal_layout") return layout as T;
       if (commandName === "update_portal_layout") {
         const update = args as PortalLayoutUpdate;
@@ -101,6 +104,15 @@ function install() {
         return layout as T;
       }
       if (commandName === "invoke_on_node") {
+        // Reads from mounted badges and hover cards are not reorder writes.
+        if (args?.command === "changes_get_view")
+          return { outcome: "ok", result: { kind: "deleted" } } as T;
+        if (args?.command === "get_environment") return { outcome: "ok", result: null } as T;
+        if (args?.command === "get_agent_registry")
+          return {
+            outcome: "ok",
+            result: { generatedAt: new Date(0).toISOString(), entries: [], environments: [] },
+          } as T;
         state.setState((current) => ({ reorders: [...current.reorders, args] }));
         return { outcome: "ok", result: {} } as T;
       }

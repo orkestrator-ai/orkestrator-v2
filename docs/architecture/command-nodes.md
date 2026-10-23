@@ -324,13 +324,42 @@ A command node attached to another command node operates in leaf mode:
 
 - The command node keeps a live read model of every connected node's
   projects and environments (summaries, status, activity), fed by its own
-  subscriptions to each node's event stream.
+  subscriptions to each node's event stream. A subscription that receives
+  nothing, not even the node's 25 s keepalive, for 75 s is reopened (a
+  half-open route never errors on its own), and every connected node is
+  re-read every 60 s by the named `node-summary-reconcile` activity due job as a last resort; a re-read that finds nothing new
+  announces nothing.
 - Every resource is node-qualified (`{ nodeId, projectId }`,
   `{ nodeId, environmentId }`), so identical IDs on two nodes never collide.
   Commands from the portal carry the node reference and the command node
   routes them to the owner.
 - Each environment shows its node's colour dot before its name. Unavailable
   nodes keep their last-known state, labelled, with writes disabled.
+- **Anything else on request.** The summaries stay small; a portal view that
+  needs more of another node's state reads it and subscribes to it:
+  - *Reads* go through `invoke_on_node` with the node's own command (for
+    example `changes_get_view`, `get_environment`, `get_agent_registry`).
+    `isNodeReadCommand` treats a read verb at the start of the name, or
+    after one namespace (`changes_get_…`), as a read: it is never recorded
+    as outcome-unknown and does not refresh the summaries.
+  - *Events* are relayed on request. A client leases a watch on a node for
+    some event prefixes (`watch_node_events`, renewed every 30 s, expiring
+    after 90 s; `unwatch_node_events`). The command node keeps one stream
+    per watched node (`nodes/node-event-relay.ts`). Portal badge and hover
+    events share a stable prefix superset so opening or closing a card does
+    not reconnect the stream or resync unrelated views. Other prefix additions
+    may expand the subscription; removals filter locally until the last watch
+    leaves. Accumulated prefixes are bounded. The relay filters against the
+    current watch union and re-emits each matching event as
+    `relayed-node-event` `{ nodeId, kind: "event", event, payload }`. A
+    `{ nodeId, kind: "resync" }` frame (every stream open, every gap) means
+    re-read what is shown from that node. Terminal output is never relayed.
+  - In the renderer, `lib/federation/node-events.ts` holds one lease per
+    node for every view and tells each view when to read (first after its
+    subscription, then after any possible gap). The sidebar's change badge
+    (`node-change-projections.ts`) and the environment hover card
+    (`node-environment-reads.ts`) are built on it; the command node's own
+    environments, shown from its self summary, subscribe directly.
 
 ## Opening an environment on another node
 

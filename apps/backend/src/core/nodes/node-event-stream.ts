@@ -14,7 +14,16 @@ import { ReconnectBackoff } from "@orkestrator/protocol/reconnect-backoff";
  * Only the named event prefixes are requested. The stream resumes from its
  * cursor on reconnect; a gap the node could not replay is reported as
  * `NATIVE_EVENT_STREAM_CONNECTED_EVENT` so the consumer re-reads.
+ *
+ * A connection that goes silent (a half-open route: a dropped SSH forward, a
+ * sleeping machine) never errors on its own, and consumers would keep stale
+ * state indefinitely. The node writes a keepalive every 25 s, so a
+ * connection with no bytes for {@link NODE_EVENT_STREAM_IDLE_MS} is dropped
+ * and reopened; `onOpen` then lets consumers re-read.
  */
+
+/** Three missed keepalives (the gateway writes one every 25 s). */
+export const NODE_EVENT_STREAM_IDLE_MS = 75_000;
 
 export interface NodeEventTransport {
   baseUrl: string;
@@ -32,6 +41,8 @@ export class NodeEventStream {
       onEvent: (event: string, payload: unknown) => void;
       onOpen?: () => void;
       fetchImpl?: typeof fetch;
+      /** Test seam; production uses {@link NODE_EVENT_STREAM_IDLE_MS}. */
+      idleMs?: number;
     },
   ) {}
 
@@ -58,9 +69,22 @@ export class NodeEventStream {
       maxDelayMs: 30_000,
       healthyAfterMs: 30_000,
     });
+    const idleMs = this.options.idleMs ?? NODE_EVENT_STREAM_IDLE_MS;
     while (!signal.aborted) {
       const transport = this.options.transport();
       if (!transport) return;
+      // One connection's lifetime: ended by the stream, by stop(), or by silence.
+      const connection = new AbortController();
+      const endConnection = () => connection.abort();
+      signal.addEventListener("abort", endConnection, { once: true });
+      let lastActivity = Date.now();
+      const watchdog = setInterval(
+        () => {
+          if (Date.now() - lastActivity >= idleMs) connection.abort();
+        },
+        Math.max(1, Math.floor(idleMs / 3)),
+      );
+      (watchdog as { unref?: () => void }).unref?.();
       try {
         const url = new URL("/__orkestrator/events", transport.baseUrl);
         url.searchParams.set("events", this.options.prefixes.join(","));
@@ -68,24 +92,36 @@ export class NodeEventStream {
         const response = await fetchImpl(url, {
           headers: { ...transport.headers, accept: "text/event-stream" },
           redirect: "manual",
-          signal,
+          signal: connection.signal,
         });
         if (!response.ok || !response.body) {
           await response.body?.cancel().catch(() => undefined);
           throw new Error(`The node's event stream answered HTTP ${response.status}`);
         }
         backoff.connected();
+        lastActivity = Date.now();
         this.options.onOpen?.();
-        await readSseStream(response.body, signal, (frame) => {
-          if (!frame.data) return;
-          const message = this.state.accept(frame.data, frame.id);
-          if (message.kind === "event") this.options.onEvent(message.event, message.payload);
-          else if (message.kind === "resync") {
-            this.options.onEvent(NATIVE_EVENT_STREAM_CONNECTED_EVENT, undefined);
-          }
-        });
+        await readSseStream(
+          response.body,
+          connection.signal,
+          (frame) => {
+            if (!frame.data) return;
+            const message = this.state.accept(frame.data, frame.id);
+            if (message.kind === "event") this.options.onEvent(message.event, message.payload);
+            else if (message.kind === "resync") {
+              this.options.onEvent(NATIVE_EVENT_STREAM_CONNECTED_EVENT, undefined);
+            }
+          },
+          undefined,
+          () => {
+            lastActivity = Date.now();
+          },
+        );
       } catch {
         if (signal.aborted) return;
+      } finally {
+        clearInterval(watchdog);
+        signal.removeEventListener("abort", endConnection);
       }
       if (signal.aborted) return;
       await new Promise<void>((resolve) => {

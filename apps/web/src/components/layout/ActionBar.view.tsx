@@ -218,8 +218,6 @@ function ToolbarTooltipTrigger({
 
 interface ActionBarProps {
   presentation?: "bar" | "grid";
-  /** Controls kept at the bar's right end, outside its scrolling area. */
-  trailing?: ReactNode;
 }
 
 /**
@@ -230,7 +228,7 @@ interface ActionBarProps {
  * not turn it into an error the user did not cause.
  */
 
-export function ActionBar({ presentation = "bar", trailing }: ActionBarProps) {
+export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   const {
     dockerAvailable,
     isGrid,
@@ -1517,9 +1515,6 @@ export function ActionBar({ presentation = "bar", trailing }: ActionBarProps) {
               )}
             </div>
           </div>
-          {trailing && !isGrid ? (
-            <div className="flex shrink-0 items-center gap-1 pr-1.5">{trailing}</div>
-          ) : null}
         </div>
         {!isGrid && isProjectView && (
           <div

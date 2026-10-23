@@ -11,11 +11,15 @@ import * as realSidebar from "./Sidebar";
 import * as realOpenFileDialog from "./OpenFileDialog";
 import * as realAgentInfoButton from "./AgentInfoButton";
 import * as realSystemUsageIndicator from "./SystemUsageIndicator";
+import * as realRealmTitleBar from "@/components/federation/RealmTitleBar";
+import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { TabInfo } from "@/types/paneLayout";
 
 const realAgentInfoButtonSnapshot = { ...realAgentInfoButton };
 const realSystemUsageIndicatorSnapshot = { ...realSystemUsageIndicator };
+const realRealmTitleBarSnapshot = { ...realRealmTitleBar };
+const INITIAL_REMOTE = useRemoteWorkspaceStore.getState();
 const realResizableSnapshot = { ...realResizable };
 const realFilesPanelComponentsSnapshot = { ...realFilesPanelComponents };
 const realStoresSnapshot = { ...realStores };
@@ -76,6 +80,18 @@ mock.module("./SystemUsageIndicator", () => ({
   SystemUsageIndicator: () => <div data-testid="system-usage-indicator" />,
 }));
 
+// Another node's title-bar controls, exercised in their own suite.
+mock.module("@/components/federation/RealmTitleBar", () => ({
+  RealmSystemUsageMeters: ({ nodeId }: { nodeId: string }) => (
+    <div data-testid="realm-system-usage-meters" data-node={nodeId} />
+  ),
+  RealmAgentInfoTrigger: ({ nodeId }: { nodeId: string }) => (
+    <div data-testid="realm-agent-info-trigger" data-node={nodeId} />
+  ),
+  RealmTitleBarPanels: () => <div data-testid="realm-title-bar-panels" />,
+  useRealmPanelDismiss: () => undefined,
+}));
+
 mock.module("@/hooks", () => ({
   ...realHooksSnapshot,
   useMediaQuery: () => isMobile,
@@ -120,6 +136,7 @@ afterAll(() => {
   mock.module("./OpenFileDialog", () => realOpenFileDialogSnapshot);
   mock.module("./AgentInfoButton", () => realAgentInfoButtonSnapshot);
   mock.module("./SystemUsageIndicator", () => realSystemUsageIndicatorSnapshot);
+  mock.module("@/components/federation/RealmTitleBar", () => realRealmTitleBarSnapshot);
 });
 
 function seedPaneLayout(tabs: TabInfo[], activeTabId: string | null, activePaneId = "pane-a") {
@@ -173,6 +190,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  useRemoteWorkspaceStore.setState(INITIAL_REMOTE, true);
   usePaneLayoutStore.setState({
     environments: new Map(),
     activeEnvironmentId: null,
@@ -291,6 +309,41 @@ describe("AppShell", () => {
     render(<AppShell>Workspace</AppShell>);
     expect(screen.queryByTestId("system-usage-indicator") === null).toBe(true);
     expect(screen.queryByTestId("title-bar-usage-separator") === null).toBe(true);
+  });
+
+  test("shows another node's meters and agent button in the same title-bar places", () => {
+    isMobile = false;
+    act(() =>
+      useRemoteWorkspaceStore.setState({
+        active: { nodeId: "bk_a", projectId: "project-9", environmentId: "environment-9" },
+      }),
+    );
+    render(<AppShell>Workspace</AppShell>);
+    const slot = screen.getByTestId("desktop-agent-info-slot");
+    const meters = screen.getByTestId("realm-system-usage-meters");
+    const slotChildren = Array.from(slot.children);
+    expect(slotChildren[0]).toBe(meters);
+    expect(slotChildren[1]).toBe(screen.getByTestId("title-bar-usage-separator"));
+    expect(slotChildren[2]?.contains(screen.getByTestId("realm-agent-info-trigger"))).toBe(true);
+    expect(meters.getAttribute("data-node")).toBe("bk_a");
+    // This window's own node's controls are not shown for another node's workspace.
+    expect(screen.queryByTestId("system-usage-indicator") === null).toBe(true);
+    expect(screen.queryByTestId("agent-info-button") === null).toBe(true);
+  });
+
+  test("a realm draws the title bar's popovers instead of controls in its toolbar", () => {
+    isMobile = false;
+    const happyDOM = (window as unknown as { happyDOM: { setURL(url: string): void } }).happyDOM;
+    const originalHref = window.location.href;
+    happyDOM.setURL("https://node.test/?realm=workspace&workspace=w1");
+    try {
+      render(<AppShell>Workspace</AppShell>);
+      expect(screen.getByTestId("realm-title-bar-panels")).toBeTruthy();
+      expect(screen.queryByTestId("system-usage-indicator") === null).toBe(true);
+      expect(screen.queryByTestId("agent-info-button") === null).toBe(true);
+    } finally {
+      happyDOM.setURL(originalHref);
+    }
   });
 
   test("resolves the active tab through the active pane of the selected environment", () => {

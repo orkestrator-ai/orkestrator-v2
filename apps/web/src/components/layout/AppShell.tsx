@@ -27,6 +27,12 @@ import { SystemUsageIndicator } from "./SystemUsageIndicator";
 import { HostPark, HostSlot } from "./HostSlot";
 import { AppDialogHost } from "./AppDialogHost";
 import { RemoteWorkspaceRegion } from "@/components/federation/RemoteWorkspaceRegion";
+import {
+  RealmAgentInfoTrigger,
+  RealmSystemUsageMeters,
+  RealmTitleBarPanels,
+  useRealmPanelDismiss,
+} from "@/components/federation/RealmTitleBar";
 import { useFederation } from "@/components/federation/FederationProvider";
 import { isWorkspaceRealm } from "@/lib/federation/workspace-realm";
 import {
@@ -144,6 +150,7 @@ export function AppShell({ children }: AppShellProps) {
     // A realm's document title is not shown; the window's is.
     if (!workspaceRealm) document.title = windowTitle;
   }, [windowTitle, workspaceRealm]);
+  useRealmPanelDismiss(isMobile ? null : (remoteWorkspace?.nodeId ?? null));
 
   if (workspaceRealm) {
     return (
@@ -151,25 +158,16 @@ export function AppShell({ children }: AppShellProps) {
         <OpenFileDialog />
         <AppDialogHost />
         <HostPark parkRef={contentParkRef} />
+        {/*
+          The window's title bar shows this node's host meters and agent
+          button, as it does for its own node's environments; their popovers
+          open here, under it.
+        */}
+        <RealmTitleBarPanels activeTab={activeTab} />
         <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
           <ResizablePanel defaultSize={filesPanelOpen ? 70 : 100} minSize={30}>
             <div className="flex h-full flex-col" style={centralPanelThemeVars}>
-              {/*
-                What the window's title bar shows for its own node's
-                environments: the agent of the active tab, and the machine it
-                runs on — this node.
-              */}
-              <ActionBar
-                trailing={
-                  isMobile ? undefined : (
-                    <>
-                      <SystemUsageIndicator />
-                      <span aria-hidden="true" className="mx-1 h-3 w-px self-center bg-border/50" />
-                      <AgentInfoButton activeTab={activeTab} />
-                    </>
-                  )
-                }
-              />
+              <ActionBar />
               <main className="min-h-0 flex-1 overflow-hidden bg-background">
                 <HostSlot host={contentHost} parkRef={contentParkRef} />
               </main>
@@ -261,20 +259,27 @@ export function AppShell({ children }: AppShellProps) {
               style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
               onMouseDown={(event) => event.stopPropagation()}
             >
-              {/* Another node's agent and machine are shown by its workspace's toolbar. */}
-              {!remoteShown && (
-                <>
-                  <SystemUsageIndicator />
-                  <span
-                    aria-hidden="true"
-                    data-testid="title-bar-usage-separator"
-                    className="mx-2 h-3 w-px self-center bg-border/50"
-                  />
-                </>
+              {/*
+                Another node's workspace reports its agent and machine, so
+                they show here as this node's do.
+              */}
+              {remoteWorkspace ? (
+                <RealmSystemUsageMeters nodeId={remoteWorkspace.nodeId} region={centralColumn} />
+              ) : (
+                <SystemUsageIndicator />
               )}
+              <span
+                aria-hidden="true"
+                data-testid="title-bar-usage-separator"
+                className="mx-2 h-3 w-px self-center bg-border/50"
+              />
               <div className="flex items-center gap-1">
                 <AgentMailButton />
-                {!remoteShown && <AgentInfoButton activeTab={activeTab} />}
+                {remoteWorkspace ? (
+                  <RealmAgentInfoTrigger nodeId={remoteWorkspace.nodeId} region={centralColumn} />
+                ) : (
+                  <AgentInfoButton activeTab={activeTab} />
+                )}
               </div>
             </div>
           </div>

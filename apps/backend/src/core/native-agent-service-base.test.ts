@@ -1,5 +1,4 @@
 import { describe, expect, mock, test } from "bun:test";
-import type { ProviderRegistry } from "./native-agent-provider-registry.js";
 
 import { promises as fs } from "node:fs";
 
@@ -56,8 +55,10 @@ import {
 import { upgradeNativeAgentSessionRecords } from "./storage-record-upgrades.js";
 import { readStoredValue, seedStore } from "./storage-test-support.js";
 import {
+  collaborators,
   interactionInternals,
   launchInternals,
+  queueInternals,
 } from "./native-agent-service-test-collaborators.js";
 
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
@@ -205,8 +206,6 @@ function createOpenCodeLifecycleProvider(existingSessionIds: readonly string[]) 
 /** Reach the timer-driven scans and backoff bookkeeping the service keeps private. */
 function internals(service: NativeAgentService) {
   return service as unknown as {
-    drainPromptQueues(): Promise<void>;
-    drainPromptQueueOnce(queueKey: string): Promise<void>;
     provider(input: EnsureNativeAgentSessionInput): Promise<AgentSessionProvider>;
     bridgeConnection(
       agent: BuildPipelineAgent,
@@ -214,9 +213,6 @@ function internals(service: NativeAgentService) {
       model?: string,
       effort?: string,
     ): Promise<BridgeConnection>;
-    providerRegistry: ProviderRegistry;
-    queueRetryAt: Map<string, number>;
-    queueAttempts: Map<string, number>;
   };
 }
 
@@ -585,9 +581,7 @@ describe("NativeAgentService", () => {
           ]);
 
           const drain = async () => {
-            await (
-              service as unknown as { drainPromptQueues(): Promise<void> }
-            ).drainPromptQueues();
+            await queueInternals(service).drainPromptQueues();
           };
 
           // Still running: the prompt must stay queued rather than race the turn.
@@ -2953,7 +2947,7 @@ describe("NativeAgentService", () => {
         // Swap the real HTTP provider for a stub so the read needs no socket. The
         // cooldown was already cleared by the caching above, which is what lets
         // this sweep consult the cache at all.
-        internals(service)
+        collaborators(service)
           .providerRegistry.stateForTesting()
           .providers.set("env-1\u0000codex", started.provider);
 
@@ -2999,17 +2993,17 @@ describe("NativeAgentService", () => {
           agent: "codex",
           logicalSessionKey: "tab-1",
         });
-        expect(internals(service).providerRegistry.stateForTesting().providers.size).toBe(1);
+        expect(collaborators(service).providerRegistry.stateForTesting().providers.size).toBe(1);
 
         await storage.removeEnvironment("env-1");
         await launchInternals(service).reconcilePendingLaunches();
 
-        expect(internals(service).providerRegistry.stateForTesting().providers.size).toBe(0);
+        expect(collaborators(service).providerRegistry.stateForTesting().providers.size).toBe(0);
         expect(launchInternals(service).activityRetryAt.size).toBe(0);
         expect(launchInternals(service).activityAttempts.size).toBe(0);
-        expect(internals(service).providerRegistry.stateForTesting().absentBridgeUntil.size).toBe(
-          0,
-        );
+        expect(
+          collaborators(service).providerRegistry.stateForTesting().absentBridgeUntil.size,
+        ).toBe(0);
         expect(failing.dispose).toHaveBeenCalledTimes(1);
       },
     );
@@ -3273,8 +3267,7 @@ describe("NativeAgentService", () => {
       },
       { provider: async () => provider },
     );
-    const drain = () =>
-      (service as unknown as { drainPromptQueues(): Promise<void> }).drainPromptQueues();
+    const drain = () => queueInternals(service).drainPromptQueues();
     try {
       const pendingDrain = drain();
       await statusEntered;
@@ -3520,7 +3513,7 @@ describe("NativeAgentService", () => {
         { provider: async () => provider },
       );
       try {
-        await (service as unknown as { drainPromptQueues(): Promise<void> }).drainPromptQueues();
+        await queueInternals(service).drainPromptQueues();
         return await storage.getPromptQueue(queueKey);
       } finally {
         await service.shutdown();

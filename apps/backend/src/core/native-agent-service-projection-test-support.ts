@@ -7,7 +7,6 @@
  * split from duplicating the stub provider and service fixture four times.
  */
 import { mock } from "bun:test";
-import type { ProviderRegistry } from "./native-agent-provider-registry.js";
 
 import { promises as fs } from "node:fs";
 
@@ -206,8 +205,6 @@ export function createProviderStub(
 /** Reach the timer-driven scans and backoff bookkeeping the service keeps private. */
 export function internals(service: NativeAgentService) {
   return service as unknown as {
-    drainPromptQueues(): Promise<void>;
-    drainPromptQueueOnce(queueKey: string): Promise<void>;
     provider(input: EnsureNativeAgentSessionInput): Promise<AgentSessionProvider>;
     bridgeConnection(
       agent: BuildPipelineAgent,
@@ -215,9 +212,6 @@ export function internals(service: NativeAgentService) {
       model?: string,
       effort?: string,
     ): Promise<BridgeConnection>;
-    providerRegistry: ProviderRegistry;
-    queueRetryAt: Map<string, number>;
-    queueAttempts: Map<string, number>;
   };
 }
 

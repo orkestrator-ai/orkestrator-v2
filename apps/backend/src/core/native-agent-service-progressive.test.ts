@@ -4,7 +4,6 @@ import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
 import { openCodeContextUsage } from "./opencode-usage.js";
 import {
   createProviderStub,
-  internals,
   waitForCondition,
   withService,
 } from "./native-agent-service-projection-test-support.js";
@@ -467,7 +466,7 @@ describe("native agent progressive remainder", () => {
               if (value.identity) value.identity.providerSessionId = "provider-session-before";
             }
           } else {
-            internals(service)
+            collaborators(service)
               .providerRegistry.stateForTesting()
               .connections.set("env-1\0codex", "generation-2");
           }

@@ -1,6 +1,5 @@
 import { launchSelectionReport } from "./control-shared-actions.js";
 import { describe, expect, mock, test } from "bun:test";
-import type { ProviderRegistry } from "./native-agent-provider-registry.js";
 
 import { promises as fs } from "node:fs";
 
@@ -62,8 +61,10 @@ import {
 } from "./opencode-turn-recovery.js";
 import { seedStore } from "./storage-test-support.js";
 import {
+  collaborators,
   interactionInternals,
   launchInternals,
+  queueInternals,
 } from "./native-agent-service-test-collaborators.js";
 
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
@@ -216,8 +217,6 @@ function startupNativeTabFromLayout(layout: { root?: unknown } | null): StartupN
 /** Reach the timer-driven scans and backoff bookkeeping the service keeps private. */
 function internals(service: NativeAgentService) {
   return service as unknown as {
-    drainPromptQueues(): Promise<void>;
-    drainPromptQueueOnce(queueKey: string): Promise<void>;
     provider(input: EnsureNativeAgentSessionInput): Promise<AgentSessionProvider>;
     bridgeConnection(
       agent: BuildPipelineAgent,
@@ -225,9 +224,6 @@ function internals(service: NativeAgentService) {
       model?: string,
       effort?: string,
     ): Promise<BridgeConnection>;
-    providerRegistry: ProviderRegistry;
-    queueRetryAt: Map<string, number>;
-    queueAttempts: Map<string, number>;
   };
 }
 
@@ -1131,7 +1127,7 @@ describe("NativeAgentService", () => {
       async ({ service }) => {
         await service.init();
         // The keyed launch/queue driver replaces the launch timer (step 08).
-        expect((service as unknown as { queueScheduling: unknown }).queueScheduling).not.toBeNull();
+        expect(queueInternals(service).queueScheduling()).not.toBeNull();
         expect(interactionInternals(service).interactionTimer()).toBeNull();
       },
     );
@@ -4435,7 +4431,7 @@ describe("NativeAgentService", () => {
             logicalSessionKey: `env-${environmentId}:tab-1`,
           });
         }
-        expect(internals(service).providerRegistry.stateForTesting().providers.size).toBe(3);
+        expect(collaborators(service).providerRegistry.stateForTesting().providers.size).toBe(3);
 
         await storage.updateEnvironment("env-2", {
           deletionRequestedAt: new Date().toISOString(),
@@ -4445,9 +4441,9 @@ describe("NativeAgentService", () => {
 
         // A cached provider for a departed environment holds its bridge
         // connection open for the life of the process.
-        expect([...internals(service).providerRegistry.stateForTesting().providers.keys()]).toEqual(
-          ["env-1\u0000codex"],
-        );
+        expect([
+          ...collaborators(service).providerRegistry.stateForTesting().providers.keys(),
+        ]).toEqual(["env-1\u0000codex"]);
         expect(doomed.dispose).toHaveBeenCalledTimes(2);
         expect(alive.dispose).not.toHaveBeenCalled();
       } finally {
@@ -4672,7 +4668,7 @@ describe("NativeAgentService shared observations", () => {
           // queue is released by the turn-end edge instead of its own reads.
           await service.observeSessionActivity(TAB);
           await service.observeSessionActivity(TAB, { maxAgeMs: -1, requirePostDispatch: true });
-          await internals(service).drainPromptQueues();
+          await queueInternals(service).drainPromptQueues();
           activity = "idle";
           await service.reconcileAgentActivity();
 
@@ -4892,7 +4888,7 @@ describe("NativeAgentService shared observations", () => {
         await storage.savePromptQueue(queueKey, "env-1", [
           { id: "stable-row", requestId: "retired-request", text: "Deploy once" },
         ]);
-        await internals(service).drainPromptQueueOnce(queueKey);
+        await queueInternals(service).drainPromptQueueOnce(queueKey);
         expect(send).toHaveBeenCalledTimes(1);
         const failed = await storage.getPromptQueue(queueKey);
         expect(failed?.dispatchError?.message).toContain("Outcome lost");
@@ -4901,10 +4897,10 @@ describe("NativeAgentService shared observations", () => {
         const freshId = (failed?.messages[0] as { requestId?: string } | undefined)?.requestId;
         expect(freshId).toBeString();
         expect(freshId).not.toBe("retired-request");
-        await internals(service).drainPromptQueueOnce(queueKey);
+        await queueInternals(service).drainPromptQueueOnce(queueKey);
         expect(send).toHaveBeenCalledTimes(1);
         await storage.retryPromptQueueDispatch(queueKey);
-        await internals(service).drainPromptQueueOnce(queueKey);
+        await queueInternals(service).drainPromptQueueOnce(queueKey);
         expect(send).toHaveBeenCalledTimes(2);
         expect(send.mock.calls[1]?.[2]?.requestId).toBe(freshId);
         expect((await storage.getPromptQueue(queueKey))?.messages).toEqual([]);
@@ -4952,7 +4948,7 @@ describe("NativeAgentService shared observations", () => {
 
         // Both busy: the queue pass reuses the observation — no status reads,
         // no liveness touches, nothing sent.
-        await internals(service).drainPromptQueues();
+        await queueInternals(service).drainPromptQueues();
         expect(statusReads).toEqual([]);
         expect(send).not.toHaveBeenCalled();
 
@@ -5447,7 +5443,7 @@ describe("NativeAgentService shared observations", () => {
 
         // A new bridge generation replaces the provider mid-read.
         current = second.provider;
-        internals(service).providerRegistry.cache(
+        collaborators(service).providerRegistry.cache(
           "env-1\u0000codex",
           second.provider,
           "bridge-generation-2",
@@ -5494,7 +5490,7 @@ describe("NativeAgentService shared observations", () => {
         current = second.provider;
         await captureWarnings(() => service.reconcileAgentActivity());
         // Evicted, but its send is inside the at-most-once window.
-        expect(internals(service).providerRegistry.cached("env-1\u0000codex")).toBeUndefined();
+        expect(collaborators(service).providerRegistry.cached("env-1\u0000codex")).toBeUndefined();
         await new Promise((resolve) => setTimeout(resolve, 5));
         expect(first.dispose).not.toHaveBeenCalled();
 
@@ -5526,12 +5522,12 @@ describe("NativeAgentService shared observations", () => {
         await adopt(storage, "tab-1", "provider-1");
         await captureWarnings(() => service.reconcileAgentActivity());
         expect(
-          internals(service).providerRegistry.stateForTesting().retiring.has(stub.provider),
+          collaborators(service).providerRegistry.stateForTesting().retiring.has(stub.provider),
         ).toBe(true);
         fail = false;
         await internals(service).provider(TAB);
         expect(
-          internals(service).providerRegistry.stateForTesting().retiring.has(stub.provider),
+          collaborators(service).providerRegistry.stateForTesting().retiring.has(stub.provider),
         ).toBe(false);
         expect(stub.dispose).not.toHaveBeenCalled();
       },

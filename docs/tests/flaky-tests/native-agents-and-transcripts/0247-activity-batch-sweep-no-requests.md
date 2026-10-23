@@ -154,3 +154,11 @@ Recorded evidence only; no test changed.
 The subsequent `mise run test:logged -- --name full-tests-warm -- mise run test`
 passed all four groups (exit 0, 442.9 seconds logged); root/support passed in
 190.9 seconds. Both owning implementations and tests remained unchanged.
+
+## Native agent collaborator extraction — 2026-10-23
+
+- **Original command:** `bun scripts/run-logged.ts --name na-s4b -- bun test --cwd apps/backend <the 49 native-agent-*.test.ts files> --parallel=8 --only-failures` on macOS arm64 with Bun 1.4.2, while extracting `NativeAgentPromptQueueDispatcher` on `todo-0010-native-agent-collaborators-3fc4749e0985`.
+- **Failure:** `activity sweep over the batch route > 1 sessions cost 1 request(s) and touch nothing` expected batch sizes `[1]`, received `[]` (152.22 ms), after `Activity reconciliation for env-1 failed: Error`.
+- **Owning-file change:** the test's `observed()` helper now reads `observedSessionActivity` through the new `NativeAgentLaunchActivityReconciler` test accessor instead of a cast on the service; the sweep, the fake bridge and the assertions are unchanged.
+- **Owning-file rerun:** `bun test ./src/core/native-agent-service-activity-batch.test.ts` from `apps/backend` passed three times in a row; the same 49-file parallel command then passed twice.
+- **Assessment:** same empty-request symptom under parallel load; no activity-sweep assertion, timeout or skip changed.

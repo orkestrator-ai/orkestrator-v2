@@ -22,10 +22,6 @@ import {
   isFallbackExecutionProfileId,
   ProviderUnavailableError,
   isEnvironmentReadyForAgents,
-  MAX_QUEUE_DISPATCH_ATTEMPTS,
-  QUEUE_RETRY_BASE_MS,
-  QUEUE_RETRY_CEILING_MS,
-  assertValidPromptAttachments,
   ACP_SESSION_CREATE_ATTEMPTS,
   ACP_SESSION_CREATE_RETRY_BASE_MS,
 } from "./native-agent-service-shared.js";
@@ -77,7 +73,6 @@ import {
   bridgeConnectionIdentity,
 } from "./native-agent-provider-registry.js";
 import { NATIVE_AGENT_SESSION_VERSION } from "./models.js";
-import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import {
   NativeAgentObservationBroker,
   MAIL_INJECT_OBSERVATION_MAX_AGE_MS,
@@ -92,11 +87,11 @@ import { NativeAgentTurnRecovery } from "./native-agent-turn-recovery.js";
 import { NativeAgentCatalogCache } from "./native-agent-catalog-cache.js";
 import { NativeAgentInteractionTracker } from "./native-agent-interaction-tracker.js";
 import { NativeAgentLaunchActivityReconciler } from "./native-agent-launch-activity-reconciler.js";
+import { NativeAgentPromptQueueDispatcher } from "./native-agent-prompt-queue-dispatcher.js";
 import {
   NativeAgentTranscriptProjection,
   type ResolvedProjectionSession,
 } from "./native-agent-transcript-projection.js";
-import { NativeQueueScheduling } from "./native-agent-queue-scheduling.js";
 import { DEFAULT_WORKFLOW_DISCOVERY_MS, keyedSchedulingEnabled } from "./workflow-supervisor.js";
 import { randomUUID } from "node:crypto";
 import {
@@ -106,10 +101,7 @@ import {
 import { claudeReasoningSelection } from "@orkestrator/protocol/claude-model-catalog";
 import { type AgentInteractionRequest } from "@orkestrator/protocol/agent-interactions";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
-import {
-  unsupportedCommandCatalogueState,
-  parseNativeAgentCommandIntent,
-} from "@orkestrator/protocol/agent-command-catalogue";
+import { unsupportedCommandCatalogueState } from "@orkestrator/protocol/agent-command-catalogue";
 import {
   isProjectHomeEnvironment,
   reconcileProjectHomeEnvironment,
@@ -133,14 +125,6 @@ import {
 } from "./workflow-artifact-turns.js";
 import type { ViewRevisionStamp } from "@orkestrator/protocol/view-sync";
 import { composeDraftHoldsQueue } from "./compose-draft-occupancy.js";
-import {
-  queueBoolean,
-  queueDispatchMode,
-  queueExecutionMode,
-  queueFastMode,
-  queueReasoningEffort,
-  queueString,
-} from "./native-agent-queue-message.js";
 
 // ---- module code from native-agent-service-base.ts ----
 type BuildPipelineAgent = shared.BuildPipelineAgent;
@@ -220,79 +204,51 @@ type MailInjectDispatchOutcome = shared.MailInjectDispatchOutcome;
 // ---- module code from native-agent-service-provider.ts ----
 
 export class NativeAgentService {
-  // ---- from native-agent-service-base.ts ----
-  private readonly sessionWorkFences = new Map<string, Promise<void>>();
-  private sessionWorkFenceCount = 0;
-  protected readonly pendingSessionMutations = new Map<string, number>();
-
-  /** Make waiting user work visible before it can acquire the publication fence. */
-  protected withSessionMutationFence<T>(
-    input: NativeAgentProjectionInput,
-    operation: () => Promise<T>,
-  ): Promise<T> {
-    return this.withSessionMutationIntent(input, () => this.withSessionWorkFence(input, operation));
-  }
-
-  /** Stop publishes its intent immediately, without waiting behind a cold dispatch. */
-  protected async withSessionMutationIntent<T>(
-    input: NativeAgentProjectionInput,
-    operation: () => Promise<T>,
-  ): Promise<T> {
-    const key = nativeAgentSessionStorageKey(
-      input.environmentId,
-      input.agent,
-      input.logicalSessionKey,
-    );
-    if (!this.pendingSessionMutations.has(key) && this.pendingSessionMutations.size >= 1024) {
-      throw new Error("Native session mutation admission is at capacity");
-    }
-    this.pendingSessionMutations.set(key, (this.pendingSessionMutations.get(key) ?? 0) + 1);
-    try {
-      return await operation();
-    } finally {
-      const remaining = (this.pendingSessionMutations.get(key) ?? 1) - 1;
-      if (remaining > 0) this.pendingSessionMutations.set(key, remaining);
-      else this.pendingSessionMutations.delete(key);
-    }
-  }
-  /** Failed interrupt writes remain publication fences until storage acknowledges them. */
-  protected readonly pendingTurnInterrupts = new Map<
-    string,
-    {
-      providerSessionId: string;
-      requestId: string;
-    }
-  >();
-  protected interruptFenceOverflow = false;
-
   /** Orders publication admission against dispatch and Stop for this session only. */
-  async withSessionWorkFence<T>(
+  withSessionWorkFence<T>(
     input: NativeAgentProjectionInput,
     operation: () => Promise<T>,
   ): Promise<T> {
-    const key = nativeAgentSessionStorageKey(
-      input.environmentId,
-      input.agent,
-      input.logicalSessionKey,
-    );
-    if (this.sessionWorkFenceCount >= 1024)
-      throw new Error("Native session work admission is at capacity");
-    this.sessionWorkFenceCount += 1;
-    const previous = this.sessionWorkFences.get(key) ?? Promise.resolve();
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const tail = previous.then(() => gate);
-    this.sessionWorkFences.set(key, tail);
-    await previous;
-    try {
-      return await operation();
-    } finally {
-      release();
-      this.sessionWorkFenceCount -= 1;
-      if (this.sessionWorkFences.get(key) === tail) this.sessionWorkFences.delete(key);
-    }
+    return this.promptQueues.withSessionWorkFence(input, operation);
+  }
+
+  /**
+   * Wake the durable queue worker after an intent-level queue mutation.
+   *
+   * The periodic scan remains the crash/restart safety net, but a newly queued
+   * interactive prompt should not wait for that timer. The worker owns all
+   * provider I/O and its per-queue task map coalesces concurrent notifications.
+   */
+  /** Step 08 diagnostics for the keyed launch/queue driver (`null` on rollback). */
+  schedulingStatus() {
+    return this.promptQueues.schedulingStatus();
+  }
+
+  wakeEnvironment(environmentId: string): void {
+    return this.promptQueues.wakeEnvironment(environmentId);
+  }
+
+  reconcileScheduling() {
+    return this.promptQueues.reconcileScheduling();
+  }
+
+  notifyPromptQueueChanged(queueKey: string): void {
+    return this.promptQueues.notifyPromptQueueChanged(queueKey);
+  }
+
+  /**
+   * Drain one session's queue now, named by the session's own identity.
+   *
+   * The turn-end edge already knows which session became free; waiting for the
+   * next two-second sweep to rediscover that is latency for nothing. A session
+   * with no queue costs one storage read, and the drain coalesces with any
+   * pass already running.
+   */
+  drainPromptQueueForSession(input: {
+    agent?: BuildPipelineAgent;
+    logicalSessionKey?: string;
+  }): Promise<void> {
+    return this.promptQueues.drainPromptQueueForSession(input);
   }
 
   /** Cached runtime providers, their bridge generations and their retirement. */
@@ -350,6 +306,8 @@ export class NativeAgentService {
   private readonly interactions: NativeAgentInteractionTracker;
   /** Activity sweeps, exact turn edges and the startup-launch scan. */
   private readonly launches: NativeAgentLaunchActivityReconciler;
+  /** Prompt-queue drains, session work fences and parked-dispatch settles. */
+  private readonly promptQueues: NativeAgentPromptQueueDispatcher;
 
   // ---- from native-agent-service-prompt.ts ----
   sessionActivitySnapshot(
@@ -457,11 +415,6 @@ export class NativeAgentService {
   reconcileInitialLaunch(environmentId: string): Promise<void> {
     return this.launches.reconcileInitialLaunch(environmentId);
   }
-  protected readonly queueTasks = new Map<string, Promise<void>>();
-  protected readonly queueRetryAt = new Map<string, number>();
-  /** Keyed launch/queue driver (step 08); `null` on the rollback timer. */
-  protected queueScheduling: NativeQueueScheduling | null = null;
-  protected readonly queueAttempts = new Map<string, number>();
   protected readonly scanTasks = new Set<Promise<void>>();
   /**
    * Shared observation records, dispatch/generation fences and next-due
@@ -476,13 +429,6 @@ export class NativeAgentService {
    * strategy, and the manual-prompt claims that keep it from racing the user.
    */
   protected readonly turnRecovery: NativeAgentTurnRecovery;
-
-  /**
-   * Parked dispatches currently being settled against their provider, keyed by
-   * session and request id. Projection reads are frequent and the settle is a
-   * network round trip, so this keeps one refresh from queueing another.
-   */
-  protected readonly settlingDispatches = new Set<string>();
 
   sessionPendingInteractions(
     input: NativeAgentProjectionInput,
@@ -587,9 +533,29 @@ export class NativeAgentService {
       recordAsyncQuestionAttention: (environmentId, sessionKey, itemIds) =>
         this.recordAsyncQuestionAttention(environmentId, sessionKey, itemIds),
       scheduleAmbiguousDispatchSettle: (input, key, requestId, provider) =>
-        this.scheduleAmbiguousDispatchSettle(input, key, requestId, provider),
+        this.promptQueues.scheduleAmbiguousDispatchSettle(input, key, requestId, provider),
       scheduleAmbiguousSteerSettle: (input, key, requestId, provider) =>
-        this.scheduleAmbiguousSteerSettle(input, key, requestId, provider),
+        this.promptQueues.scheduleAmbiguousSteerSettle(input, key, requestId, provider),
+    });
+    this.promptQueues = new NativeAgentPromptQueueDispatcher({
+      storage,
+      isStopped: () => this.stopped,
+      trackScan: (task) => this.trackScan(task),
+      refreshProjection: (input) => this.projections.refreshProjection(input, true),
+      queueSessionObservedBusy: (environmentId, agent, logicalSessionKey, head) =>
+        this.launches.queueSessionObservedBusy(environmentId, agent, logicalSessionKey, head),
+      assertEnvironmentLive: (environmentId) => this.assertEnvironmentLive(environmentId),
+      ensureSession: (input) => this.ensureSession(input),
+      provider: (input) => this.provider(input),
+      dispatchPrompt: (input) => this.dispatchPrompt(input),
+      dispatchQueuedAsyncQuestionAnswer: (input, resolved, text, requestId) =>
+        this.dispatchQueuedAsyncQuestionAnswer(input, resolved, text, requestId),
+      recordObservedTurnOutcome: (session, status, detail, provider) =>
+        this.recordObservedTurnOutcome(session, status, detail, provider),
+      settleAmbiguousDispatch: (input, key, requestId, provider) =>
+        this.settleAmbiguousDispatch(input, key, requestId, provider),
+      settleAmbiguousSteer: (input, key, requestId, provider) =>
+        this.settleAmbiguousSteer(input, key, requestId, provider),
     });
     this.launches = new NativeAgentLaunchActivityReconciler({
       storage,
@@ -631,11 +597,11 @@ export class NativeAgentService {
             // Step 08: queue mutations and environment changes (readiness,
             // identity, launch intent) wake only their own due keys.
             if (change.resource === "prompt-queue") {
-              this.queueScheduling?.queueChanged(change.id);
+              this.promptQueues.queueChanged(change.id);
               return;
             }
             if (change.resource === "environment") {
-              this.queueScheduling?.wakeEnvironment(change.id);
+              this.promptQueues.wakeEnvironment(change.id);
               return;
             }
             if (change.resource !== "native-agent-session") return;
@@ -986,7 +952,7 @@ export class NativeAgentService {
     await this.repairPersistedStartupTabs().catch(() => undefined);
     await Promise.allSettled([
       this.trackScan(this.launches.launchScan()),
-      this.trackScan(this.observedQueueScan()),
+      this.trackScan(this.promptQueues.queueScan()),
     ]);
     if (this.stopped) return;
     const launchReconcileIntervalMs = this.options.launchReconcileIntervalMs;
@@ -994,41 +960,24 @@ export class NativeAgentService {
       ? Math.max(20, launchReconcileIntervalMs as number)
       : 2_000;
     if (this.options.keyedQueueScheduling ?? keyedSchedulingEnabled("native-queues")) {
-      this.queueScheduling = new NativeQueueScheduling(
-        {
-          launchScan: () => this.launches.countedLaunchScan(),
-          listQueues: () => this.storage.listAllPromptQueues(),
-          drainQueue: (queueKey) => this.trackScan(this.drainPromptQueue(queueKey)),
-          queueRetryDelayMs: (queueKey) =>
-            Math.max(0, (this.queueRetryAt.get(queueKey) ?? 0) - Date.now()),
-        },
-        {
-          progressIntervalMs: progressMs,
-          // Safety discovery. A test that shortens the launch cadence keeps
-          // discovery at that cadence; production uses the 30 s interval.
-          discoveryIntervalMs:
-            this.options.queueDiscoveryIntervalMs ??
-            (Number.isFinite(launchReconcileIntervalMs)
-              ? progressMs
-              : DEFAULT_WORKFLOW_DISCOVERY_MS),
-          ...(this.options.queueSchedulerClock
-            ? {
-                now: this.options.queueSchedulerClock.now,
-                timers: this.options.queueSchedulerClock.timers,
-              }
-            : {}),
-        },
-      );
-      this.queueScheduling.start();
+      this.promptQueues.startKeyedScheduling(() => this.launches.countedLaunchScan(), {
+        progressIntervalMs: progressMs,
+        // Safety discovery. A test that shortens the launch cadence keeps
+        // discovery at that cadence; production uses the 30 s interval.
+        discoveryIntervalMs:
+          this.options.queueDiscoveryIntervalMs ??
+          (Number.isFinite(launchReconcileIntervalMs) ? progressMs : DEFAULT_WORKFLOW_DISCOVERY_MS),
+        ...(this.options.queueSchedulerClock
+          ? {
+              now: this.options.queueSchedulerClock.now,
+              timers: this.options.queueSchedulerClock.timers,
+            }
+          : {}),
+      });
     } else {
-      this.launches.startTimer(progressMs, () => this.observedQueueScan());
+      this.launches.startTimer(progressMs, () => this.promptQueues.queueScan());
     }
     await this.interactions.start();
-  }
-
-  private observedQueueScan(): Promise<void> {
-    recurringWorkMetrics.requested("native-queue-scan");
-    return recurringWorkMetrics.observe("native-queue-scan", () => this.drainPromptQueues());
   }
 
   /**
@@ -1201,7 +1150,9 @@ export class NativeAgentService {
   }
 
   async adoptSession(input: AdoptNativeAgentSessionInput): Promise<PersistedNativeAgentSession> {
-    return this.withSessionMutationFence(input, () => this.adoptSessionUnderFence(input));
+    return this.promptQueues.withSessionMutationFence(input, () =>
+      this.adoptSessionUnderFence(input),
+    );
   }
 
   private async adoptSessionUnderFence(
@@ -1476,7 +1427,7 @@ export class NativeAgentService {
     input: DispatchNativeAgentPromptInput,
     preserveExistingPending: boolean,
   ): Promise<NativeAgentDispatchOutcome> {
-    return this.withSessionMutationIntent(input, () =>
+    return this.promptQueues.withSessionMutationIntent(input, () =>
       this.dispatchIntentUnderIntent(input, preserveExistingPending),
     );
   }
@@ -1677,35 +1628,6 @@ export class NativeAgentService {
     }
   }
 
-  /**
-   * Settle a parked dispatch in the background, at most once at a time per
-   * session.
-   *
-   * Driven from projection reads so a record that outlived the dispatch that
-   * created it — a backend restart mid-flight, a bridge that came back after
-   * the tab was closed — is resolved by the next refresh rather than waiting
-   * for the user. Never awaited by the projection: an authoritative snapshot
-   * must not be delayed by, or fail because of, an optional reconciliation.
-   */
-  protected scheduleAmbiguousDispatchSettle(
-    input: NativeAgentProjectionInput,
-    key: string,
-    requestId: string,
-    resolved: NativeAgentRuntimeProvider,
-  ): void {
-    const inFlight = `${key}\0${requestId}`;
-    if (this.settlingDispatches.has(inFlight)) return;
-    this.settlingDispatches.add(inFlight);
-    void this.trackScan(
-      this.settleAmbiguousDispatch(input, key, requestId, resolved)
-        .then((settled) => {
-          if (settled) void this.projections.refreshProjection(input, true).catch(() => undefined);
-        })
-        .catch(() => undefined)
-        .finally(() => this.settlingDispatches.delete(inFlight)),
-    ).catch(() => undefined);
-  }
-
   protected async settleAmbiguousSteer(
     input: NativeAgentProjectionInput,
     key: string,
@@ -1740,25 +1662,6 @@ export class NativeAgentService {
       `${input.agent}\0${input.logicalSessionKey}`,
       requestId,
     );
-  }
-
-  protected scheduleAmbiguousSteerSettle(
-    input: NativeAgentProjectionInput,
-    key: string,
-    requestId: string,
-    resolved: NativeAgentRuntimeProvider,
-  ): void {
-    const inFlight = `steer\0${key}\0${requestId}`;
-    if (this.settlingDispatches.has(inFlight)) return;
-    this.settlingDispatches.add(inFlight);
-    void this.trackScan(
-      this.settleAmbiguousSteer(input, key, requestId, resolved)
-        .then((settled) => {
-          if (settled) void this.projections.refreshProjection(input, true).catch(() => undefined);
-        })
-        .catch(() => undefined)
-        .finally(() => this.settlingDispatches.delete(inFlight)),
-    ).catch(() => undefined);
   }
 
   async retryRecoverableDispatch(
@@ -1887,7 +1790,9 @@ export class NativeAgentService {
   async stopProjectionSession(
     input: NativeAgentProjectionInput,
   ): Promise<NativeAgentSessionProjection | null> {
-    return this.withSessionMutationIntent(input, () => this.stopProjectionSessionWithIntent(input));
+    return this.promptQueues.withSessionMutationIntent(input, () =>
+      this.stopProjectionSessionWithIntent(input),
+    );
   }
 
   private async stopProjectionSessionWithIntent(
@@ -1912,20 +1817,14 @@ export class NativeAgentService {
               .catch(() => false)
           : false;
       if ((before === "running" || before === "blocked") && !released) {
-        const interruptKey = `${resolved.key}\0${requestId}`;
-        if (this.pendingTurnInterrupts.size < 256 || this.pendingTurnInterrupts.has(interruptKey)) {
-          this.pendingTurnInterrupts.set(interruptKey, { providerSessionId, requestId });
-        } else {
-          // Never evict an unpersisted Stop to make room for another one.
-          this.interruptFenceOverflow = true;
-        }
+        this.promptQueues.fenceTurnInterrupt(resolved.key, providerSessionId, requestId);
         try {
           await this.storage.recordNativeAgentTurnInterrupt(
             resolved.key,
             providerSessionId,
             requestId,
           );
-          this.pendingTurnInterrupts.delete(interruptKey);
+          this.promptQueues.releaseTurnInterrupt(resolved.key, requestId);
         } catch {
           console.warn(
             "[native-agent] Turn interrupt persistence failed; automatic publication remains fenced",
@@ -2363,7 +2262,7 @@ export class NativeAgentService {
     if (resolved.session.pendingSteer) {
       if (resolved.session.pendingSteer.requestId !== requestId)
         throw new Error(PARKED_DISPATCH_CONFLICT_MESSAGE);
-      this.scheduleAmbiguousSteerSettle(
+      this.promptQueues.scheduleAmbiguousSteerSettle(
         input,
         resolved.key,
         resolved.session.pendingSteer.requestId,
@@ -2433,7 +2332,7 @@ export class NativeAgentService {
         await this.storage.clearPendingNativeAgentSteer(key, pending.requestId);
         return { outcome: "mismatch" };
       }
-      return await this.withSessionMutationFence(
+      return await this.promptQueues.withSessionMutationFence(
         {
           environmentId: session.environmentId,
           agent: session.agent,
@@ -2746,8 +2645,7 @@ export class NativeAgentService {
       ) {
         return { outcome: "unknown" as const };
       }
-      const interruptKey = `${key}\0${input.requestId}`;
-      const interrupt = this.pendingTurnInterrupts.get(interruptKey);
+      const interrupt = this.promptQueues.pendingTurnInterrupt(key, input.requestId);
       if (interrupt?.providerSessionId === session.providerSessionId) {
         try {
           await this.storage.recordNativeAgentTurnInterrupt(
@@ -2755,7 +2653,7 @@ export class NativeAgentService {
             session.providerSessionId,
             input.requestId,
           );
-          this.pendingTurnInterrupts.delete(interruptKey);
+          this.promptQueues.releaseTurnInterrupt(key, input.requestId);
         } catch {
           /* Retain the fence and retry on the next observation. */
         }
@@ -2763,12 +2661,12 @@ export class NativeAgentService {
       }
       if (session.interruptedRequestIds?.includes(input.requestId))
         return { outcome: "interrupted" as const };
-      if (this.interruptFenceOverflow) return { outcome: "unknown" as const };
+      if (this.promptQueues.interruptFencesOverflowed()) return { outcome: "unknown" as const };
       const ids = session.dispatchedRequestIds ?? [];
       if (!ids.includes(input.requestId)) return { outcome: "unknown" as const };
       if (ids.at(-1) !== input.requestId) return { outcome: "superseded" as const };
       if (
-        this.pendingSessionMutations.has(key) ||
+        this.promptQueues.hasPendingSessionMutation(key) ||
         session.pendingDispatch ||
         session.pendingSteer ||
         queue?.messages.length ||
@@ -3185,7 +3083,7 @@ export class NativeAgentService {
   ): Promise<PersistedNativeAgentSession> {
     const releaseAgentWork = beginEnvironmentAgentWork(input.environmentId);
     try {
-      return await this.withSessionMutationFence(input, () =>
+      return await this.promptQueues.withSessionMutationFence(input, () =>
         this.dispatchAdmittedPrompt(input, prepare, persistAmbiguousDispatch, mailInject),
       );
     } finally {
@@ -3657,40 +3555,12 @@ export class NativeAgentService {
     }
   }
 
-  /**
-   * Wake the durable queue worker after an intent-level queue mutation.
-   *
-   * The periodic scan remains the crash/restart safety net, but a newly queued
-   * interactive prompt should not wait for that timer. The worker owns all
-   * provider I/O and its per-queue task map coalesces concurrent notifications.
-   */
-  /** Step 08 diagnostics for the keyed launch/queue driver (`null` on rollback). */
-  schedulingStatus() {
-    return this.queueScheduling?.status() ?? null;
-  }
-
-  wakeEnvironment(environmentId: string): void {
-    this.queueScheduling?.wakeEnvironment(environmentId);
-  }
-
-  async reconcileScheduling() {
-    return this.queueScheduling ? this.queueScheduling.reconcileNow() : null;
-  }
-
-  notifyPromptQueueChanged(queueKey: string): void {
-    if (this.stopped || !nonBlank(queueKey)) return;
-    // Index the key so a busy session's queue keeps its 2 s due check.
-    this.queueScheduling?.wakeQueue(queueKey, "enqueue");
-    void this.drainPromptQueue(queueKey);
-  }
-
   async shutdown(): Promise<void> {
     this.stopped = true;
     this.unsubscribeObservationWakeups?.();
     this.unsubscribeObservationWakeups = null;
     this.launches.stopTimer();
-    this.queueScheduling?.stop();
-    this.queueScheduling = null;
+    this.promptQueues.stopScheduling();
     this.interactions.stop();
     await Promise.allSettled([
       ...this.projections.pendingRefreshes(),
@@ -3700,12 +3570,12 @@ export class NativeAgentService {
     await Promise.allSettled(this.scanTasks);
     while (
       this.launches.pendingLaunchTasks().length > 0 ||
-      this.queueTasks.size > 0 ||
+      this.promptQueues.pendingDrains().length > 0 ||
       this.turnRecovery.pendingTasks().length > 0
     ) {
       await Promise.allSettled([
         ...this.launches.pendingLaunchTasks(),
-        ...this.queueTasks.values(),
+        ...this.promptQueues.pendingDrains(),
         ...this.turnRecovery.pendingTasks(),
       ]);
     }
@@ -3714,386 +3584,6 @@ export class NativeAgentService {
     this.turnRecovery.clear();
     this.catalogs.clear();
     this.projections.clear();
-  }
-
-  /**
-   * Drain one session's queue now, named by the session's own identity.
-   *
-   * The turn-end edge already knows which session became free; waiting for the
-   * next two-second sweep to rediscover that is latency for nothing. A session
-   * with no queue costs one storage read, and the drain coalesces with any
-   * pass already running.
-   */
-  async drainPromptQueueForSession(input: {
-    agent?: BuildPipelineAgent;
-    logicalSessionKey?: string;
-  }): Promise<void> {
-    if (this.stopped) return;
-    const { agent, logicalSessionKey } = input;
-    if (!agent || !nonBlank(logicalSessionKey)) return;
-    if (!BUILD_PIPELINE_AGENTS.includes(agent)) return;
-    const queueKey = `${agent}\0${logicalSessionKey}`;
-    const queue = await this.storage.getPromptQueue(queueKey);
-    this.queueScheduling?.note(queue, queueKey);
-    if (!queue || (queue.dispatchError && !queue.inFlight?.steer)) return;
-    if (queue.inFlight === undefined && queue.messages.length === 0) return;
-    await this.drainPromptQueue(queueKey);
-  }
-
-  protected async drainPromptQueues(): Promise<void> {
-    if (this.stopped) return;
-    const now = Date.now();
-    const queues = await this.storage.listAllPromptQueues();
-    if (this.stopped) return;
-    await Promise.allSettled(
-      queues
-        .filter((queue) => {
-          const agent = queue.queueKey.split("\0", 1)[0];
-          return (
-            BUILD_PIPELINE_AGENTS.includes(agent as BuildPipelineAgent) &&
-            (queue.messages.length > 0 || queue.inFlight !== undefined) &&
-            (queue.inFlight?.steer || queue.dispatchError === undefined) &&
-            (this.queueRetryAt.get(queue.queueKey) ?? 0) <= now
-          );
-        })
-        .map((queue) => this.drainPromptQueue(queue.queueKey)),
-    );
-  }
-
-  /**
-   * Back off a queue and, once the attempts are clearly not transient, park it
-   * with a durable error the renderer can show.
-   *
-   * An unbounded 2s retry is invisible: nothing is logged, no dispatchError is
-   * latched, and the user sees a queue that simply never drains.
-   */
-  protected async deferQueue(
-    queueKey: string,
-    reason: string,
-    requestId?: string,
-    park?: {
-      /**
-       * Reserve the queue head so an exhausted deferral can park it even though
-       * no dispatch ever claimed it. Only for conditions the drain itself can
-       * never clear; a transient one must keep retrying instead.
-       */
-      reserveHead?: boolean;
-      /** Persisted for the user; `reason` is what reaches the log. */
-      message?: string;
-    },
-  ): Promise<void> {
-    const attempts = (this.queueAttempts.get(queueKey) ?? 0) + 1;
-    this.queueAttempts.set(queueKey, attempts);
-    if (attempts >= MAX_QUEUE_DISPATCH_ATTEMPTS) {
-      // The key and the reason are safe to log; the prompt itself never is, and
-      // neither is provider-authored detail — that is persisted, not logged.
-      console.warn(
-        `[native-agent] Prompt queue ${queueKey} has failed ${attempts} times: ${reason}`,
-      );
-      // A head no dispatch ever reserved has no request id, so the park path a
-      // failed dispatch uses could not run: the prompt was neither sent nor
-      // failed and the queue stalled at the backoff ceiling with nothing shown
-      // to the user. Reserving it here gives that path its identity.
-      const parkedRequestId =
-        requestId ??
-        (park?.reserveHead
-          ? (await this.storage.reservePromptQueueHeadForDispatch(queueKey))?.requestId
-          : undefined);
-      if (parkedRequestId !== undefined) {
-        this.queueAttempts.delete(queueKey);
-        this.queueRetryAt.delete(queueKey);
-        await this.storage.failPromptQueueDispatch(
-          queueKey,
-          parkedRequestId,
-          park?.message ?? reason,
-        );
-        return;
-      }
-    }
-    // Exponential up to a ceiling so a wedged provider is retried rarely rather
-    // than every two seconds forever.
-    const backoff = Math.min(
-      QUEUE_RETRY_CEILING_MS,
-      QUEUE_RETRY_BASE_MS * 2 ** Math.min(attempts - 1, 8),
-    );
-    this.queueRetryAt.set(queueKey, Date.now() + backoff);
-  }
-
-  protected clearQueueBackoff(queueKey: string): void {
-    this.queueAttempts.delete(queueKey);
-    this.queueRetryAt.delete(queueKey);
-  }
-
-  protected async drainPromptQueue(queueKey: string): Promise<void> {
-    if (this.stopped) return;
-    const existing = this.queueTasks.get(queueKey);
-    if (!existing) {
-      const task = this.drainPromptQueueOnce(queueKey).finally(() => {
-        if (this.queueTasks.get(queueKey) === task) {
-          this.queueTasks.delete(queueKey);
-        }
-      });
-      this.queueTasks.set(queueKey, task);
-      return task;
-    }
-    // Coalesce concurrent notifications onto the in-flight pass, but guarantee
-    // a fresh pass after it settles: that pass may already have read the queue
-    // before this notification's mutation was persisted, so only a follow-up
-    // pass is certain to see the new head. The in-flight pass removes itself
-    // from the task map before these follow-ups run, so any number of
-    // notifications collapse onto a single extra pass rather than one per
-    // notification.
-    return existing.finally(() => {
-      if (this.queueTasks.has(queueKey)) return;
-      void this.drainPromptQueue(queueKey);
-    });
-  }
-
-  protected async drainPromptQueueOnce(queueKey: string): Promise<void> {
-    try {
-      await this.drainReadyPromptQueue(queueKey);
-    } catch (error) {
-      // Any fault that escapes the drain must still back off. A storage read or
-      // reservation that throws bypasses every inner handler, and the scan's
-      // `allSettled` swallows the rejection — so without this the queue was
-      // retried every two seconds with no attempt counter, no latch and no log:
-      // the same invisible hot loop deferQueue exists to prevent, reached
-      // through a storage fault instead of a provider fault.
-      await this.deferQueue(
-        queueKey,
-        error instanceof Error ? error.name : "unknown drain error",
-      ).catch(() => undefined);
-    }
-  }
-
-  protected async drainReadyPromptQueue(queueKey: string): Promise<void> {
-    if (this.stopped) return;
-    const separator = queueKey.indexOf("\0");
-    if (separator <= 0) return;
-    const agent = queueKey.slice(0, separator) as BuildPipelineAgent;
-    const logicalSessionKey = queueKey.slice(separator + 1);
-    if (!BUILD_PIPELINE_AGENTS.includes(agent) || !nonBlank(logicalSessionKey)) {
-      return;
-    }
-    const queue = await this.storage.getPromptQueue(queueKey);
-    this.queueScheduling?.note(queue, queueKey);
-    if (!queue) return;
-    if (queue.inFlight?.steer) {
-      const key = nativeAgentSessionStorageKey(queue.environmentId, agent, logicalSessionKey);
-      await this.storage.recoverPromptQueueSteer(key, queue.inFlight.requestId);
-      const session = await this.storage.getNativeAgentSession(key);
-      if (session?.pendingSteer?.requestId === queue.inFlight.requestId) {
-        await this.settleAmbiguousSteer(
-          { environmentId: queue.environmentId, agent, logicalSessionKey },
-          key,
-          queue.inFlight.requestId,
-        );
-      }
-      return;
-    }
-    if (queue.dispatchError) return;
-    if (queue.inFlight === undefined && queue.messages.length === 0) return;
-    const environment = await this.assertEnvironmentLive(queue.environmentId);
-    // The launch path has always required this; so must the drain path. A
-    // stopped or still-provisioning environment must not be started by a
-    // leftover queued prompt.
-    if (!isEnvironmentReadyForAgents(environment)) {
-      await this.deferQueue(queueKey, "environment is not ready for agents");
-      return;
-    }
-    const draftKey = `${agent}:${queue.environmentId}:${encodeURIComponent(logicalSessionKey)}`;
-    const draft = await this.storage.getComposeDraft(draftKey);
-    if (composeDraftHoldsQueue(draft?.value)) return;
-
-    const head = queue.inFlight?.message ?? queue.messages[0];
-    /*
-     * Share the activity sweep's answer instead of reading the provider again.
-     * `ensureSession` and the status read below are tab-facing reads — a
-     * liveness touch on Codex, a transcript hydrate on Claude — and a busy
-     * session with a queued prompt used to pay both on every two-second pass
-     * for the whole turn. A fresh, confirmed busy answer ends this pass exactly
-     * as a `running` status would; the turn-end edge drains the queue, and an
-     * answer older than two sweeps falls back to the authoritative read.
-     * Idle is never taken from here: dispatch still requires the provider's
-     * own current status below.
-     */
-    if (
-      this.launches.queueSessionObservedBusy(queue.environmentId, agent, logicalSessionKey, head)
-    ) {
-      recurringWorkMetrics.cacheHit("native-queue-scan");
-      return;
-    }
-    const mode = queueExecutionMode(agent, head);
-    const session = await this.ensureSession({
-      environmentId: queue.environmentId,
-      agent,
-      logicalSessionKey,
-      model: queueString(head, "model"),
-      reasoningEffort: queueReasoningEffort(head),
-      phase: mode === "plan" ? "review" : "build",
-    });
-    const provider = await this.provider({
-      environmentId: queue.environmentId,
-      agent,
-      logicalSessionKey,
-      model: queueString(head, "model"),
-      reasoningEffort: queueReasoningEffort(head),
-    });
-    await this.assertEnvironmentLive(queue.environmentId);
-    // Read as data: a failed last turn must defer with a bounded backoff and a
-    // reason, not escape as a throw that the outer handler can only report as
-    // an anonymous drain fault.
-    const { status, error: statusDetail } = await readProviderStatus(
-      provider,
-      session.providerSessionId,
-    );
-    // This read is the last look at the previous turn before the next prompt
-    // replaces its status; keep its content-free outcome for observers.
-    await this.recordObservedTurnOutcome(session, status, statusDetail, provider);
-    await this.assertEnvironmentLive(queue.environmentId);
-    if (status === "running") {
-      const requestId =
-        head && typeof head === "object"
-          ? (queueString(head as Record<string, unknown>, "requestId") ??
-            queueString(head as Record<string, unknown>, "id"))
-          : undefined;
-      if (agent !== "codex" || !requestId || !nativeAsyncQuestionItemId(requestId)) return;
-
-      const reservation = await this.storage.reservePromptQueueHeadForDispatch(queueKey);
-      if (!reservation || typeof reservation.message !== "object") return;
-      const message = reservation.message as Record<string, unknown>;
-      const latestSession = await this.storage.getNativeAgentSession(session.key);
-      if (latestSession?.dispatchedRequestIds?.includes(reservation.requestId)) {
-        await this.storage.acknowledgePromptQueueDispatch(queueKey, reservation.requestId);
-        this.clearQueueBackoff(queueKey);
-        return;
-      }
-      if (!nonBlank(message.text)) {
-        await this.storage.acknowledgePromptQueueDispatch(queueKey, reservation.requestId);
-        return;
-      }
-      // Async-question answers are text-only and keep their queue reservation
-      // until reliable steering has either been confirmed or the live turn has
-      // ended. The latter case falls through to ordinary next-turn dispatch on
-      // a later drain pass without changing the request identity.
-      if (Array.isArray(message.attachments) && message.attachments.length > 0) {
-        await this.storage.failPromptQueueDispatch(
-          queueKey,
-          reservation.requestId,
-          "Asynchronous-question answers cannot include attachments",
-        );
-        return;
-      }
-      try {
-        const outcome = await this.dispatchQueuedAsyncQuestionAnswer(
-          { environmentId: queue.environmentId, agent, logicalSessionKey },
-          { key: session.key, session, provider },
-          message.text,
-          reservation.requestId,
-        );
-        if (outcome.outcome === "applied") {
-          await this.storage.acknowledgePromptQueueDispatch(queueKey, reservation.requestId);
-          this.clearQueueBackoff(queueKey);
-        }
-        // idle/mismatch means the turn ended during qualification, and
-        // rejected means the bridge refused more steering for this turn. Keep
-        // the reservation for the next idle pass, which sends it as a normal turn.
-        // unknown is protected by pendingSteer and the recoverable-dispatch UI.
-      } catch {
-        // A bridge without reliable steering can still deliver this response as
-        // an ordinary prompt after the active turn ends. Keep it reserved and
-        // avoid treating capability skew as a failed user answer.
-      }
-      return;
-    }
-    if (status === "blocked") return;
-    if (status !== "idle") {
-      await this.deferQueue(queueKey, `provider session is ${status}`, queue.inFlight?.requestId, {
-        /*
-         * A terminal turn error is sticky until the next turn runs, and the
-         * drain is the only thing that would have run it — so retrying can
-         * never clear this on its own. Deferring alone left the prompt
-         * neither sent nor failed and told the user nothing. Park it instead:
-         * the composer shows the provider's own explanation and the existing
-         * retry control resends it once the model is changed. Auto-sending
-         * here would be worse than silence, because an at-capacity model
-         * fails every queued prompt in turn and burns the whole queue.
-         */
-        reserveHead: true,
-        message: statusDetail
-          ? `The ${agent} session failed before this prompt was sent: ${statusDetail.slice(0, 500)}`
-          : `The ${agent} session is ${status}; the queued prompt was not sent.`,
-      });
-      return;
-    }
-    if (this.stopped) return;
-    const latestDraft = await this.storage.getComposeDraft(draftKey);
-    if (composeDraftHoldsQueue(latestDraft?.value)) return;
-    const reservation = await this.storage.reservePromptQueueHeadForDispatch(queueKey);
-    if (!reservation || typeof reservation.message !== "object") return;
-    const message = reservation.message as Record<string, unknown>;
-    if (!nonBlank(message.text)) {
-      await this.storage.acknowledgePromptQueueDispatch(queueKey, reservation.requestId);
-      return;
-    }
-
-    // Queued attachments were staged by the renderer, so they already carry
-    // workspace paths and can be attached for real. Flattening them into prose
-    // silently degraded an image to a filename the model had to guess at.
-    let attachments: PromptAttachment[] = [];
-    try {
-      attachments = Array.isArray(message.attachments)
-        ? assertValidPromptAttachments(message.attachments)
-        : [];
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : "Queued attachment is invalid";
-      await this.storage.failPromptQueueDispatch(queueKey, reservation.requestId, reason);
-      this.clearQueueBackoff(queueKey);
-      return;
-    }
-    try {
-      await this.dispatchPrompt({
-        environmentId: queue.environmentId,
-        agent,
-        logicalSessionKey,
-        model: queueString(message, "model"),
-        reasoningEffort: queueReasoningEffort(message),
-        phase: queueExecutionMode(agent, message) === "plan" ? "review" : "build",
-        mode: queueDispatchMode(agent, message),
-        fastMode: queueFastMode(agent, message),
-        subAgent: queueString(message, "agent"),
-        executionAgent: queueString(message, "executionAgent") ?? queueString(message, "agent"),
-        includeLocalSettings: queueBoolean(message, "includeLocalSettings"),
-        promptSuggestions: queueBoolean(message, "promptSuggestions"),
-        attachments,
-        prompt: message.text,
-        requestId: reservation.requestId,
-        // Revalidated now, at dequeue: a selection whose binding changed while
-        // queued fails with its reason instead of running something else.
-        ...(parseNativeAgentCommandIntent(message.command)
-          ? { command: parseNativeAgentCommandIntent(message.command) }
-          : {}),
-      });
-      await this.storage.acknowledgePromptQueueDispatch(queueKey, reservation.requestId);
-      this.clearQueueBackoff(queueKey);
-    } catch (error) {
-      if (error instanceof PromptRejectedError) {
-        await this.storage.failPromptQueueDispatch(queueKey, reservation.requestId, error.message, {
-          requestIdRetired: error.requestIdRetired,
-        });
-        this.clearQueueBackoff(queueKey);
-        return;
-      }
-      // Keep the in-flight record durable. The same request id is retried after
-      // backoff, so an ambiguous provider response cannot become a second turn.
-      // Handled here rather than rethrown so the attempt is counted once, with
-      // the reservation id the latch needs.
-      await this.deferQueue(
-        queueKey,
-        error instanceof Error ? error.name : "unknown dispatch error",
-        reservation.requestId,
-      );
-    }
   }
 
   /**

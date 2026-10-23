@@ -24,7 +24,8 @@ import { actionHash, requireCoordinatorConversation } from "./coordinator-action
 
 /**
  * A command node's coordinator acting on a node it controls, with the same
- * contract as on its own node (docs/development/leaf-parity-plan.md).
+ * contract as on its own node (docs/architecture/command-nodes.md, "One tool family,
+ * every node").
  *
  * The coordinator's idempotency receipts, workflow associations and
  * delegations stay here, each with the resource's `nodeId`; the work itself
@@ -96,12 +97,22 @@ export async function coordinatorNodeTarget(
     );
   }
   const call = async <T>(command: string, args: JsonRecord = {}, requestKey?: string) => {
-    const routed = await portal.invokeOnNode({
-      nodeId,
-      command,
-      args,
-      ...(requestKey ? { requestKey } : {}),
-    });
+    const routed = await portal
+      .invokeOnNode({
+        nodeId,
+        command,
+        args,
+        ...(requestKey ? { requestKey } : {}),
+      })
+      .catch((error: unknown) => {
+        // An older node does not know the controller commands yet.
+        if (error instanceof Error && error.message.includes(`Unknown command: ${command}`)) {
+          throw new Error(
+            `${node.view.displayName} runs an older Orkestrator that cannot do this yet; update it, then retry.`,
+          );
+        }
+        throw error;
+      });
     if (routed.outcome !== "ok") {
       throw Object.assign(
         new Error(
@@ -409,7 +420,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
     );
     const requestId = asNonBlankString(args.requestId, "requestId");
     const toEnvironmentId = asNonBlankString(args.toEnvironmentId, "toEnvironmentId");
-    await target.environment(toEnvironmentId);
+    const recipient = await target.environment(toEnvironmentId);
     const requestedTab = typeof args.toTabId === "string" ? args.toTabId.trim() : "";
     const joining = (await context.storage.listOpenCoordinatorDelegations()).find(
       (association) =>
@@ -455,6 +466,12 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
       toEnvironmentId,
       ...(workerTab ? { toTabId: workerTab } : {}),
       coordinatorDelegationOpened,
+      // Said plainly, as for a worker here: "pending" alone reads as delivered.
+      ...(recipient.status === "stopped"
+        ? {
+            deliveryNote: `The recipient environment on ${target.nodeName} is stopped. Call start_environment with nodeId "${target.nodeId}" to deliver this message, or ask the user.`,
+          }
+        : {}),
     };
   });
 

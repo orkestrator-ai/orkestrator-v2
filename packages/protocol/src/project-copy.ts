@@ -10,7 +10,7 @@
  * The command node runs every copy (`copy_project_to_node`), whichever two
  * machines it is between, and reports progress with
  * {@link PROJECT_COPY_CHANGED_EVENT}. See
- * `docs/development/leaf-parity-plan.md`.
+ * `docs/architecture/command-nodes.md` ("Projects on leaf nodes").
  */
 
 export const PROJECT_COPY_CHANGED_EVENT = "project-copy-changed";

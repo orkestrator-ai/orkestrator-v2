@@ -638,3 +638,41 @@ test("stopping background work leaves a released turn eligible for natural compl
     );
   });
 });
+
+test("Stop reaches a prompt the provider has not accepted yet, and marks that prompt", async () => {
+  // Pi answers a prompt only once it accepts it, after its startup. The
+  // dispatch holds the session's storage queue until then, so a Stop that
+  // waited to write its interrupt first never reached the startup it was for.
+  const stub = providerStub("codex");
+  const abort = mock(async () => undefined);
+  Object.assign(stub.provider, { abort });
+  await withService(stub.provider, async ({ service, storage }) => {
+    const input = { environmentId: "env-1", agent: "codex" as const, logicalSessionKey };
+    const first = await service.dispatchPrompt({ ...input, prompt: "fix", requestId: "fix" });
+    markIdle(service, "codex", first.providerSessionId);
+    const startup = barrier();
+    stub.send.mockImplementationOnce(async () => {
+      startup.entered();
+      await startup.gate;
+    });
+    const held = service.dispatchIntent({ ...input, prompt: "held", requestId: "held" });
+    await startup.started;
+    stub.setStatus(async () => "running");
+
+    const stopping = service.stopProjectionSession(input);
+    // Sent while the provider is still starting the prompt.
+    await waitForCondition(() => abort.mock.calls.length === 1);
+
+    stub.setStatus(async () => "idle");
+    startup.release();
+    await held;
+    await stopping;
+    // The prompt that was starting is the one stopped, not the finished turn before it.
+    expect((await storage.getNativeAgentSession(first.key))?.interruptedRequestIds).toEqual([
+      "held",
+    ]);
+    expect((await service.sessionRequestOutcome({ ...input, requestId: "held" })).outcome).toBe(
+      "interrupted",
+    );
+  });
+});

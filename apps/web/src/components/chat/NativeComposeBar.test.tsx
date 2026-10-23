@@ -48,6 +48,37 @@ describe("NativeComposeBar", () => {
     expect(document.activeElement).toBe(input);
   });
 
+  test("stop stays available while a prompt is being submitted", () => {
+    // A prompt the provider has not accepted yet (Pi's startup) is in flight
+    // with input locked; stopping it is the only way out until it is accepted.
+    const onStop = mock(() => {});
+    render(
+      <NativeComposeBar
+        attachments={[]}
+        onRemoveAttachment={() => {}}
+        inputRef={createRef<MentionableInputRef>()}
+        inputContainerRef={createRef<HTMLDivElement>()}
+        text=""
+        mentions={[]}
+        onTextAndMentionsChange={() => {}}
+        onCursorPositionChange={() => {}}
+        onKeyDown={() => {}}
+        placeholder="Ask anything"
+        primaryControls={null}
+        onSend={() => {}}
+        disabled
+        isSending
+        isLoading
+        onStop={onStop}
+      />,
+    );
+
+    const stop = screen.getByTitle("Stop current query") as HTMLButtonElement;
+    expect(stop.disabled).toBe(false);
+    fireEvent.click(stop);
+    expect(onStop).toHaveBeenCalledTimes(1);
+  });
+
   test("image attachments show a thumbnail without a filename and open a preview", () => {
     const onRemove = mock(() => {});
     renderComposeBar(

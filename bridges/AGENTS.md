@@ -109,7 +109,9 @@ When touching any of them:
   the tab that finds no other mapping performs the provider close. A resume
   that replaces a tab's session closes the replaced one under the same lock
   and rules (`provider-session-ownership.ts`): never while another tab maps it
-  or a Multi Review owns it.
+  or a Multi Review owns it. That close is journaled as a teardown intent
+  under a reserved `resume-replaced:` key, so the reconcile sweep retries one
+  that stayed pending.
 
 ## Interaction deadlines and pauses
 

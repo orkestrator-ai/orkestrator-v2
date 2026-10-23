@@ -93,7 +93,7 @@ type Platform = "cursor" | "pi" | "opencode" | "grok";
 type Vendor = {
   cursor: Array<{ id: string; prompts: string[]; statuses: string[] }>;
   cursorSdk: string[];
-  pi: { calls: string[][] };
+  pi: { calls: string[][]; startup: string[]; abortedRequests: string[] };
   grok: { sessions: Array<{ id: string; prompts: string[] }>; events: string[] };
   opencode: {
     sessions: Array<{ id: string; prompts: string[]; replies: string[] }>;
@@ -139,7 +139,7 @@ async function conversationsWith(
 /** Every request the backend sent `platform`'s bridge, from index `since`. */
 async function bridgeRequests(
   request: APIRequestContext,
-  platform: Platform,
+  platform: Platform | "claude",
   since = 0,
 ): Promise<string[]> {
   const all = (await (await request.get(`${origin}/bridge-requests`)).json()) as Record<
@@ -154,7 +154,7 @@ type Environment = { environmentId: string; worktreePath: string };
 async function openEnvironment(
   page: Page,
   request: APIRequestContext,
-  platform: Platform,
+  platform: Platform | "claude",
   beforeOpen?: (environment: Environment) => Promise<void>,
 ): Promise<Environment> {
   const environment = (await (await request.post(`${origin}/environment`)).json()) as Environment;
@@ -216,10 +216,36 @@ async function resumeInNewTab(page: Page, platform: Platform, prompt: string) {
 }
 
 /**
- * The new tab was given an empty session before the resume replaced it; that
- * session must be closed, not left running beside the resumed one (for Grok,
- * an agent process per resume). `since` is the bridge request count, and
- * `openCodeBefore` the OpenCode session ids, from before the new tab opened.
+ * A tab opened only to resume creates no session of its own: the picker opens
+ * first and the resume is the tab's first session. Before, every resume left
+ * an empty conversation in OpenCode's and Grok's stores. `since` is the bridge
+ * request count, and `openCodeBefore` the OpenCode session ids, from before
+ * the new tab opened.
+ */
+async function expectNoSessionCreatedForResume(
+  request: APIRequestContext,
+  platform: Platform,
+  since: number,
+  openCodeBefore: ReadonlySet<string>,
+) {
+  if (platform === "opencode") {
+    const state = await vendor(request);
+    expect(state.opencode.sessions.filter((session) => !openCodeBefore.has(session.id))).toEqual(
+      [],
+    );
+    return;
+  }
+  const sent = await bridgeRequests(request, platform, since);
+  expect(sent, "the resume reached the bridge").toContain("POST /session/resume");
+  expect(sent, "the new tab created no session").not.toContain("POST /session/create");
+  expect(sent.filter((line) => line.endsWith("/close"))).toEqual([]);
+}
+
+/**
+ * A tab that already had a session (its resume picker was dismissed, so it
+ * started its own) has that session replaced by a resume; it must be closed,
+ * not left running beside the resumed one (for Grok, an agent process per
+ * resume). Arguments as for `expectNoSessionCreatedForResume`.
  */
 async function expectReplacedSessionClosed(
   request: APIRequestContext,
@@ -257,6 +283,44 @@ async function expectReplacedSessionClosed(
 
 function uniqueMarker(platform: Platform): string {
   return `${platform}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+}
+
+for (const platform of ["cursor", "pi", "opencode", "grok"] as const) {
+  const label = LABELS[platform];
+  test(`a ${label} tab that started its own session closes it when a resume replaces it`, async ({
+    page,
+    request,
+  }) => {
+    const marker = uniqueMarker(platform);
+    const first = `Remember the harbour ${marker}`;
+    await openEnvironment(page, request, platform);
+    await completeTurn(page, platform, first);
+    await closeTab(page, platform);
+
+    const requestsBefore = (await bridgeRequests(request, platform)).length;
+    const openCodeBefore = new Set(
+      (await vendor(request)).opencode.sessions.map((session) => session.id),
+    );
+    // Opened to resume, then the picker is dismissed: the tab starts its own.
+    await page.getByRole("button", { name: "New agent tab" }).click();
+    await page.getByRole("button", { name: "Resume Session" }).click();
+    await page
+      .getByRole("dialog", { name: "Resume a session" })
+      .getByRole("button", { name: new RegExp(`^${label}\\b.*Choose a previous session`) })
+      .click();
+    const picker = page.getByRole("dialog", { name: "Resume Session" });
+    await expect(picker).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(picker).toHaveCount(0);
+    await expect(composer(page, platform)).toBeVisible({ timeout: 30_000 });
+
+    // Its empty transcript still offers a resume, which replaces that session.
+    await page.getByRole("button", { name: "Resume Session" }).click();
+    await picker.getByRole("button", { name: new RegExp(first) }).click();
+    await expect(picker).toHaveCount(0);
+    await expect(page.getByText(`Answer to: ${first}`)).toHaveCount(1, { timeout: 30_000 });
+    await expectReplacedSessionClosed(request, platform, requestsBefore, openCodeBefore);
+  });
 }
 
 for (const platform of ["cursor", "pi", "opencode", "grok"] as const) {
@@ -309,7 +373,7 @@ for (const platform of ["cursor", "pi", "opencode", "grok"] as const) {
     );
     await resumeInNewTab(page, platform, first);
     await expect(page.getByText(`Answer to: ${first}`)).toHaveCount(1, { timeout: 30_000 });
-    await expectReplacedSessionClosed(
+    await expectNoSessionCreatedForResume(
       request,
       platform,
       requestsBeforeResume,
@@ -572,4 +636,241 @@ test("closing a Cursor tab while its agent is still starting does no late work, 
   await expect(page.getByRole("button", { name: "New agent tab" })).toBeEnabled();
   await expect(page.getByRole("button", { name: /^Close / })).toHaveCount(0);
   expect((await vendor(request)).cursorSdk.slice(sdkBefore)).toHaveLength(2);
+});
+
+test("closing a Claude tab on a bridge from before the close route keeps the conversation and asks for a restart", async ({
+  page,
+  request,
+}) => {
+  // The host's Claude bridge answers 404 to `POST /session/:id/close`, as every
+  // Claude bridge did before the route existed. Its legacy DELETE deletes the
+  // conversation, so the backend must never fall back to it.
+  const tabId = "agent-claude-first";
+  const providerSessionId = `claude-${uniqueMarker("cursor")}`;
+  const requestsBefore = (await bridgeRequests(request, "claude")).length;
+  const { environmentId } = await openEnvironment(page, request, "claude", async (environment) => {
+    // A tab an earlier run of this backend had mapped to its Claude session.
+    await request.post(`${origin}/seed-native-session`, {
+      data: { environmentId: environment.environmentId, agent: "claude", tabId, providerSessionId },
+    });
+  });
+  const pendingCloses = async () =>
+    Object.keys(
+      (
+        await invoke<{ tabTeardownIntents?: Record<string, unknown> }>(request, "get_environment", {
+          environmentId,
+        })
+      ).tabTeardownIntents ?? {},
+    );
+
+  await page.getByRole("button", { name: /^Close / }).click();
+  await expect(page.getByText("Restart the environment to finish closing this tab")).toBeVisible({
+    timeout: 30_000,
+  });
+  await expect(page.getByText(/The conversation was kept/)).toBeVisible();
+  await expect(page.getByRole("button", { name: /^Close / })).toHaveCount(0);
+
+  const sent = await bridgeRequests(request, "claude", requestsBefore);
+  expect(sent).toContain(`POST /session/${providerSessionId}/close`);
+  expect(sent.filter((line) => line.startsWith("DELETE"))).toEqual([]);
+  // The close stays journaled for after the restart.
+  expect(await pendingCloses()).toEqual([tabId]);
+
+  // The sweep retries it against the same old bridge: still no DELETE, still
+  // pending, and the tab stays closed across a reload.
+  await invoke(request, "reconcile_tab_teardowns", {});
+  expect(
+    (await bridgeRequests(request, "claude", requestsBefore)).filter((line) =>
+      line.startsWith("DELETE"),
+    ),
+  ).toEqual([]);
+  expect(await pendingCloses()).toEqual([tabId]);
+  await page.reload();
+  await expect(page.getByRole("button", { name: "New agent tab" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: /^Close / })).toHaveCount(0);
+});
+
+test("steering a Cursor turn whose steer history is full is refused, the turn carries on and the draft survives", async ({
+  page,
+  request,
+}) => {
+  const platform = "cursor";
+  const marker = uniqueMarker(platform);
+  const held = `HOLD the harbour ${marker}`;
+  const instruction = `/steer turn left at the lighthouse ${marker}`;
+  const requestsBefore = (await bridgeRequests(request, platform)).length;
+  await openEnvironment(page, request, platform);
+  await send(page, platform, held);
+  await expect(page.getByRole("button", { name: /^Stop/ })).toBeVisible({ timeout: 30_000 });
+
+  const prompted = (await bridgeRequests(request, platform, requestsBefore)).find((line) =>
+    /^POST \/session\/[^/]+\/prompt$/.test(line),
+  );
+  expect(prompted, "the held turn reached the bridge").toBeTruthy();
+  const sessionId = decodeURIComponent(prompted!.split("/")[2]!);
+  // Fill the running turn's steer history straight at the bridge, as a long
+  // turn steered many times would have.
+  const filled = (await (
+    await request.post(`${origin}/cursor-saturate-steer`, { data: { sessionId } })
+  ).json()) as { delivered?: number; refused?: string; error?: string };
+  expect(filled.error).toBeUndefined();
+  expect(filled.refused).toBe("steer-capacity-exceeded");
+
+  // The runtime panel says steering is full and the turn keeps running.
+  await page.getByRole("button", { name: "Open agent information" }).click();
+  await expect(page.getByTestId("agent-runtime-steer-saturated")).toBeVisible({
+    timeout: 30_000,
+  });
+  await expect(page.getByText("Steering is full for this turn")).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  // A steer from the composer is refused with the bridge's reason, the
+  // instruction stays in the composer, and the turn is still running.
+  await composer(page, platform).fill(instruction);
+  await composer(page, platform).press("Enter");
+  await expect(page.getByText(/reached its steering limit/)).toBeVisible({ timeout: 30_000 });
+  await expect(composer(page, platform)).toHaveText(instruction);
+  await expect(page.getByRole("button", { name: /^Stop/ })).toBeVisible();
+  expect(
+    (await vendor(request)).cursor.find((agent) => agent.prompts.includes(held))?.statuses,
+  ).toEqual(["running"]);
+
+  // The draft survives leaving the environment and a reload.
+  await page.getByRole("button", { name: "Switch environment" }).click();
+  await page.getByRole("button", { name: "Return to environment" }).click();
+  await expect(composer(page, platform)).toHaveText(instruction, { timeout: 30_000 });
+  await page.reload();
+  await expect(composer(page, platform)).toHaveText(instruction, { timeout: 30_000 });
+  await expect(page.getByRole("button", { name: /^Stop/ })).toBeVisible();
+
+  // Stopping the turn ends it as cancelled; nothing it was steered with was lost.
+  await page.getByRole("button", { name: /^Stop/ }).click();
+  await expect
+    .poll(
+      async () =>
+        (await vendor(request)).cursor.find((agent) => agent.prompts.includes(held))?.statuses,
+    )
+    .toEqual(["cancelled"]);
+});
+
+test("a Grok card whose bridge restarted while the environment was inactive is withdrawn, and stays gone after close and reload", async ({
+  page,
+  request,
+}) => {
+  const platform = "grok";
+  const marker = uniqueMarker(platform);
+  const first = `Remember the lighthouse ${marker}`;
+  await openEnvironment(page, request, platform);
+  await completeTurn(page, platform, first);
+  const question = page.getByText("Which branch?");
+  const plan = page.getByText("Approve Grok's plan", { exact: true });
+  await send(page, platform, "ASK_ALL");
+  await expect(question).toBeVisible({ timeout: 30_000 });
+  await expect(plan).toBeVisible();
+  const eventsBefore = (await vendor(request)).grok.events.length;
+
+  // Away, the bridge restarts: the agent process holding the requests is gone,
+  // and with it the generation that could answer them.
+  await page.getByRole("button", { name: "Switch environment" }).click();
+  const restarted = await request.post(`${origin}/restart-bridge`, { data: { platform } });
+  expect(restarted.ok()).toBe(true);
+  await page.getByRole("button", { name: "Return to environment" }).click();
+  await expect(question).toHaveCount(0, { timeout: 30_000 });
+  await expect(plan).toHaveCount(0);
+
+  await closeTab(page, platform);
+  await page.reload();
+  await expect(page.getByRole("button", { name: "New agent tab" })).toBeEnabled();
+  await expect(question).toHaveCount(0);
+  await resumeInNewTab(page, platform, first);
+  await expect(page.getByText(`Answer to: ${first}`)).toHaveCount(1, { timeout: 30_000 });
+  await expect(question).toHaveCount(0);
+  await expect(plan).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Approve" })).toHaveCount(0);
+  // Nothing answered the dead requests on the new process's behalf.
+  expect(
+    (await vendor(request)).grok.events
+      .slice(eventsBefore)
+      .filter((event) => event.startsWith("reply:question:") || event.startsWith("reply:plan:")),
+  ).toEqual([]);
+});
+
+test("a Cursor transcript shed from persistence comes back truncated after a bridge restart, on the same conversation", async ({
+  page,
+  request,
+}) => {
+  const platform = "cursor";
+  const marker = uniqueMarker(platform);
+  const turns = [1, 2, 3].map((index) => `Turn ${index} of the harbour log ${marker}`);
+  const next = `Turn 4 of the harbour log ${marker}`;
+  await openEnvironment(page, request, platform);
+  for (const turn of turns) await completeTurn(page, platform, turn);
+
+  const restarted = (await (
+    await request.post(`${origin}/restart-bridge`, { data: { platform, shed: true } })
+  ).json()) as { shed?: number; error?: string };
+  expect(restarted.error).toBeUndefined();
+  expect(restarted.shed).toBeGreaterThan(0);
+
+  await page.reload();
+  // Only the newest message survived the shed: it is shown, the start of the
+  // conversation is not, and the view says so instead of passing the rest off
+  // as the whole conversation.
+  await expect(page.getByText(`Answer to: ${turns[2]}`)).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText(`Answer to: ${turns[0]}`)).toHaveCount(0);
+  await expect(
+    page.getByText("Earlier messages in this conversation are not available here."),
+  ).toBeVisible();
+
+  // Same provider conversation, working controls: the next prompt runs in the
+  // same Cursor agent, after the turns the shed copy no longer shows.
+  await completeTurn(page, platform, next);
+  await expect.poll(() => conversationsWith(request, platform, marker)).toEqual([[...turns, next]]);
+});
+
+test("stopping a Pi prompt before Pi accepts it stops the turn, across a switch away and a reload, and the next prompt runs", async ({
+  page,
+  request,
+}) => {
+  const platform = "pi";
+  const marker = uniqueMarker(platform);
+  const first = `Remember the lighthouse ${marker}`;
+  const held = `Held in preflight ${marker}`;
+  const after = `Carry on ${marker}`;
+  await openEnvironment(page, request, platform);
+  await completeTurn(page, platform, first);
+
+  const startupBefore = (await vendor(request)).pi.startup.length;
+  await request.post(`${origin}/pi-startup-gate`, { data: { held: true } });
+  try {
+    await send(page, platform, held);
+    // Pi is now in its preflight for this prompt and has not accepted it.
+    await expect
+      .poll(async () => (await vendor(request)).pi.startup.slice(startupBefore))
+      .toEqual(["held"]);
+    await page.getByRole("button", { name: /^Stop/ }).click();
+    await page.getByRole("button", { name: "Switch environment" }).click();
+    await page.getByRole("button", { name: "Return to environment" }).click();
+    await page.reload();
+    await expect(page.getByRole("button", { name: "New agent tab" })).toBeEnabled();
+  } finally {
+    await request.post(`${origin}/pi-startup-gate`, { data: { held: false } });
+  }
+
+  // The stop held: the turn settles without an answer, any request Pi made
+  // for the held prompt was already aborted (a real provider sends nothing),
+  // and nothing is left waiting on an answer.
+  await expect(page.getByRole("button", { name: /^Stop/ })).toHaveCount(0, { timeout: 30_000 });
+  await expect(composer(page, platform)).toBeEditable();
+  await expect(page.getByText(`Answer to: ${held}`)).toHaveCount(0);
+  const piState = (await vendor(request)).pi;
+  const heldRequests = piState.calls.filter((call) => call.at(-1) === held).length;
+  expect(piState.abortedRequests.filter((prompt) => prompt === held)).toHaveLength(heldRequests);
+  await expect(page.getByRole("button", { name: "Approve" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Deny" })).toHaveCount(0);
+
+  await completeTurn(page, platform, after);
+  const conversation = (await conversationsWith(request, platform, marker))[0] ?? [];
+  expect(conversation[0]).toBe(first);
+  expect(conversation.at(-1)).toBe(after);
 });

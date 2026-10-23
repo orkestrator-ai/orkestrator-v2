@@ -26,6 +26,7 @@ import {
   isTabTeardownKind,
 } from "@orkestrator/protocol/tab-teardown";
 import {
+  isReplacedSessionCloseKey,
   providerSessionHeldElsewhere,
   withProviderSessionTeardownLock,
 } from "./provider-session-ownership.js";
@@ -153,6 +154,28 @@ export function registerTeardownCommands(
     if (outcome !== "closed") throw new Error("OpenCode tab close is unavailable");
   };
 
+  /** The non-destructive provider close every native teardown ends in. */
+  const closeProviderSession = async (
+    environment: Environment,
+    agent: LocalServerKind,
+    providerSessionId: string,
+    context: CommandContext,
+  ): Promise<void> => {
+    if (agent === "opencode") {
+      await closeOpenCodeTabSession(environment.id, providerSessionId, context);
+      return;
+    }
+    const bridge = await peekTabTeardownBridge(environment, agent, context);
+    if (!bridge) {
+      throw new Error("Tab teardown bridge is unavailable or unhealthy");
+    }
+    await closeBridgeSessionRetaining(agent, providerSessionId, (method, path) =>
+      requestProviderTabSession(new URL(`http://127.0.0.1:${bridge.port}${path}`), method, {
+        Authorization: `Bearer ${bridge.authToken}`,
+      }),
+    );
+  };
+
   const executeTabTeardown = async (
     environment: Environment,
     intent: TabTeardownIntent,
@@ -231,6 +254,31 @@ export function registerTeardownCommands(
     // Intents written by this release carry the downgrade fence; older ones do
     // not. Both are replayed with the same non-destructive close.
     const { sessionId: requestedSessionId } = unfenceTabTeardownSessionId(intent.sessionId);
+    if (isReplacedSessionCloseKey(intent.tabId)) {
+      // A session a resume replaced (`replacedSessionCloseIntent`). The backend
+      // wrote its id, and no tab maps it any more, so there is no mapping to
+      // check it against or retire: only the last-owner rules apply.
+      if (!requestedSessionId) return;
+      await withProviderSessionTeardownLock(
+        context.storage,
+        environment.id,
+        agent,
+        requestedSessionId,
+        async () => {
+          // A tab that resumed it again, or a Multi Review, owns it now and
+          // closes it itself.
+          const heldElsewhere = await providerSessionHeldElsewhere(context.storage, {
+            environmentId: environment.id,
+            agent,
+            providerSessionId: requestedSessionId,
+          });
+          if (heldElsewhere) return;
+          await closeProviderSession(environment, agent, requestedSessionId, context);
+          context.nativeAgents?.releaseProviderSession?.(environment.id, agent, requestedSessionId);
+        },
+      );
+      return;
+    }
     const logicalSessionKey = `env-${environment.id}:${intent.tabId}`;
     const storageKey = nativeAgentSessionStorageKey(environment.id, agent, logicalSessionKey);
     const persistedSession = await context.storage.getNativeAgentSession(storageKey);
@@ -282,19 +330,7 @@ export function registerTeardownCommands(
           exceptLogicalSessionKey: logicalSessionKey,
         });
         if (!heldElsewhere) {
-          if (agent === "opencode") {
-            await closeOpenCodeTabSession(environment.id, providerSessionId, context);
-          } else {
-            const bridge = await peekTabTeardownBridge(environment, agent, context);
-            if (!bridge) {
-              throw new Error("Tab teardown bridge is unavailable or unhealthy");
-            }
-            await closeBridgeSessionRetaining(agent, providerSessionId, (method, path) =>
-              requestProviderTabSession(new URL(`http://127.0.0.1:${bridge.port}${path}`), method, {
-                Authorization: `Bearer ${bridge.authToken}`,
-              }),
-            );
-          }
+          await closeProviderSession(environment, agent, providerSessionId, context);
           context.nativeAgents?.releaseProviderSession?.(environment.id, agent, providerSessionId);
         }
         // The provider-side close is confirmed (or another owner keeps it), so the
@@ -310,7 +346,10 @@ export function registerTeardownCommands(
     intent: TabTeardownIntent,
     context: CommandContext,
   ): Promise<void> => {
-    context.agentTools?.revokeTab?.(environmentId, intent.tabId);
+    // A replaced-session intent names no tab, so it has no credential to revoke.
+    if (!isReplacedSessionCloseKey(intent.tabId)) {
+      context.agentTools?.revokeTab?.(environmentId, intent.tabId);
+    }
     await context.storage.clearTabTeardownIntent(environmentId, intent.tabId, intent.createdAt);
   };
 
@@ -322,6 +361,9 @@ export function registerTeardownCommands(
     );
     const environmentId = asNonBlankString(args.environmentId, "environmentId");
     const tabId = asNonBlankString(args.tabId, "tabId");
+    // Those keys carry a backend-written session id that replay trusts; a
+    // caller-supplied one is not close authority.
+    if (isReplacedSessionCloseKey(tabId)) throw new Error("tabId is reserved");
     const environment = await context.storage.getEnvironment(environmentId);
     if (!environment) throw new Error(`Environment not found: ${environmentId}`);
     if (!isTabTeardownKind(args.kind)) throw new Error("kind is not a supported tab teardown kind");

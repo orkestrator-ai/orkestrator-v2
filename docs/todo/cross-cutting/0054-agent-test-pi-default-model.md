@@ -41,6 +41,11 @@ such a host fails before the model answers.
 - Rerun `mise run test:agent:coordinator --credential-source pi` once this is
   fixed; that run is owed by
   [0024-coordinator-live-conformance.md](../coordinator-and-multi-review/0024-coordinator-live-conformance.md).
+  The live Cursor and Pi close-retention run owed by
+  [0002-session-lifecycle-consistency.md](../agent-engines/0002-session-lifecycle-consistency.md)
+  waits on it too: on 2026-10-23 its Pi case failed on Pi's default `gpt-4`,
+  and on `openai/gpt-5.5` passed as an override, with the same "not supported
+  when using Codex with a ChatGPT account" error.
 
 ## Constraints and rationale
 

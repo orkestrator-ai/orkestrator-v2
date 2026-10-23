@@ -72,3 +72,19 @@ test("a realm hydrates its node's stores before gateway initialization, apart fr
   expect(back.getState().collapsedProjects).toEqual(["same-id"]);
   expect(back.getState().zoomLevel).toBe(120);
 });
+
+test("a project opens on its coordinator, but on its home on a leaf node", () => {
+  window.orkestrator = undefined;
+  delete window.orkestratorWorkspaceTarget;
+  const command = createUIStore();
+  command.getState().setProjectBoardTab("kanban");
+  command.getState().selectProject("command-project");
+  expect(command.getState().projectBoardTab).toBe("coordinator");
+
+  window.orkestratorWorkspaceTarget = { nodeId: "leaf", nodeName: "leaf", path: "relay" } as never;
+  const leaf = createUIStore();
+  expect(leaf.getState().projectBoardTab).toBe("home");
+  leaf.getState().setProjectBoardTab("kanban");
+  leaf.getState().selectProject("leaf-project");
+  expect(leaf.getState().projectBoardTab).toBe("home");
+});

@@ -1,5 +1,9 @@
 import { portalStore } from "@/lib/portal/portal-store";
-import { isWorkspaceRealm, postToShell } from "@/lib/federation/workspace-realm";
+import {
+  isWorkspaceRealm,
+  postToShell,
+  type RealmBoardTab,
+} from "@/lib/federation/workspace-realm";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useUIStore } from "@/stores/uiStore";
 
@@ -9,6 +13,7 @@ export interface MachineWorkspaceSpec {
   /** Empty: the node's project launcher (to add a project there). */
   projectId: string;
   environmentId?: string;
+  boardTab?: RealmBoardTab;
   /** Open the New Environment dialog for `projectId` instead of selecting it. */
   createEnvironment?: boolean;
   /** For messages while it opens. */
@@ -52,6 +57,7 @@ export function openMachineWorkspace(spec: MachineWorkspaceSpec): void {
         nodeId: spec.connectionId,
         projectId: spec.projectId,
         ...(spec.environmentId ? { environmentId: spec.environmentId } : {}),
+        ...(spec.boardTab ? { boardTab: spec.boardTab } : {}),
         title: spec.title,
       });
     return;
@@ -63,7 +69,10 @@ export function openMachineWorkspace(spec: MachineWorkspaceSpec): void {
     if (!spec.projectId) return;
     if (spec.createEnvironment) requestCreateEnvironment(spec.projectId);
     else if (spec.environmentId) ui.selectProjectAndEnvironment(spec.projectId, spec.environmentId);
-    else ui.selectProject(spec.projectId);
+    else {
+      ui.selectProject(spec.projectId);
+      if (spec.boardTab) ui.setProjectBoardTab(spec.boardTab);
+    }
     return;
   }
   useRemoteWorkspaceStore.getState().open(
@@ -75,6 +84,7 @@ export function openMachineWorkspace(spec: MachineWorkspaceSpec): void {
         : {
             projectId: spec.projectId,
             ...(spec.environmentId ? { environmentId: spec.environmentId } : {}),
+            ...(spec.boardTab ? { boardTab: spec.boardTab } : {}),
           },
   );
 }

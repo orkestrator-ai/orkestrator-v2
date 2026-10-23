@@ -354,10 +354,11 @@ export function RemoteProjectGroup({
     id: project.key,
     disabled: !sortable,
   });
-  const openBoard = () =>
+  const openProject = (board = false) =>
     openMachineWorkspace({
       connectionId: machine.connectionId,
       projectId: project.ref.projectId,
+      ...(board ? { boardTab: "coordinator" as const } : {}),
       title: project.name,
     });
 
@@ -395,7 +396,7 @@ export function RemoteProjectGroup({
                   "flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm text-foreground",
                   sortable && "cursor-grab active:cursor-grabbing",
                 )}
-                onClick={openBoard}
+                onClick={() => openProject()}
                 title={`Open ${project.name} on ${machine.name}`}
               >
                 <span className="truncate font-medium">{label}</span>
@@ -410,7 +411,7 @@ export function RemoteProjectGroup({
               </button>
             </ContextMenuTrigger>
             <ContextMenuContent>
-              <ContextMenuItem onClick={openBoard}>
+              <ContextMenuItem onClick={() => openProject(true)}>
                 <LayoutGrid className="h-4 w-4 mr-2" />
                 Open Board
               </ContextMenuItem>

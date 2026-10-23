@@ -130,7 +130,7 @@ export function withErrorCode<T>(operation: () => Promise<T>): Promise<T> {
   });
 }
 
-/** What a realm opens on: only these, as IDs, ever reach its URL. */
+/** What a realm opens on: only known selection fields ever reach its URL. */
 function realmSearch(request: Record<string, unknown>): Record<string, string> {
   const search: Record<string, string> = {};
   const optionalId = (value: unknown, label: string) =>
@@ -140,6 +140,15 @@ function realmSearch(request: Record<string, unknown>): Record<string, string> {
   const createEnvironment = optionalId(request.createEnvironmentProjectId, "a project ID");
   if (projectId) search.project = projectId;
   if (projectId && environmentId) search.environment = environmentId;
+  if (
+    projectId &&
+    (request.boardTab === "coordinator" ||
+      request.boardTab === "kanban" ||
+      request.boardTab === "github" ||
+      request.boardTab === "linear" ||
+      request.boardTab === "features")
+  )
+    search.boardTab = request.boardTab;
   if (request.addProject === true) search.addProject = "1";
   if (createEnvironment) search.createEnvironment = createEnvironment;
   return search;

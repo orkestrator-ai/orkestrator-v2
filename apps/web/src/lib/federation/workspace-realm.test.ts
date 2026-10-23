@@ -41,3 +41,27 @@ test("only known messages with bounded IDs cross between a window and its realm"
   expect(parseRealmMessage({ type: "open", nodeId: "bk_a" })).toBeNull();
   expect(readFrameEnvelope({ kind: "other", workspaceId: "w", message: {} })).toBeNull();
 });
+
+test("explicit board intent survives realm URLs and messages, with only known tabs accepted", () => {
+  for (const boardTab of ["coordinator", "kanban", "github", "linear", "features"] as const) {
+    const selection = { projectId: "p", boardTab };
+    happyDOM.setURL(`https://command.test/?${realmSearchParams(selection)}`);
+    expect(realmInitialRequest()).toEqual({ type: "select", ...selection });
+    expect(parseShellMessage({ type: "select", ...selection })).toEqual({
+      type: "select",
+      ...selection,
+    });
+    const open = { type: "open" as const, nodeId: "leaf", ...selection, title: "Project" };
+    expect(parseRealmMessage(open)).toEqual(open);
+  }
+  expect(parseShellMessage({ type: "select", projectId: "p", boardTab: "unknown" })).toEqual({
+    type: "select",
+    projectId: "p",
+  });
+  expect(parseShellMessage({ type: "select", boardTab: "coordinator" })).toEqual({
+    type: "select",
+  });
+  expect(
+    parseRealmMessage({ type: "open", nodeId: "leaf", projectId: "p", boardTab: "unknown" }),
+  ).toEqual({ type: "open", nodeId: "leaf", projectId: "p", title: "" });
+});

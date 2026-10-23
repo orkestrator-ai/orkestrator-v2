@@ -3,6 +3,7 @@ import { persist, createJSONStorage } from "zustand/middleware";
 import { projectFolderKey } from "@orkestrator/protocol/project-folders";
 import { windowStorageKey } from "@/lib/desktop-storage-key";
 import { workspaceTarget } from "@/lib/portal/portal-transport";
+import { portalStore } from "@/lib/portal/portal-store";
 import { createUIStateStorage } from "@/lib/ui-state-storage";
 
 /** Zoom level constraints */
@@ -33,7 +34,9 @@ export type EnvironmentSortMode = "project" | "activity";
  * happens on the command node, so a leaf's project opens on its home.
  */
 const initialProjectBoardTab = (): ProjectBoardTab =>
-  workspaceTarget() !== null ? "home" : "coordinator";
+  workspaceTarget() !== null || portalStore.getState().status?.mode === "leaf"
+    ? "home"
+    : "coordinator";
 
 interface UIState {
   // Sidebar state

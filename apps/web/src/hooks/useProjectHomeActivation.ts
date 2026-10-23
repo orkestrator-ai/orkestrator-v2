@@ -9,6 +9,10 @@ export function useProjectHomeActivation() {
   const selectedProjectId = useUIStore((state) => state.selectedProjectId);
   const selectionRevision = useUIStore((state) => state.projectSelectionRevision);
   const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
+  const projectPending = useProjectStore(
+    (state) =>
+      !state.hasLoaded && !state.projects.some((project) => project.id === selectedProjectId),
+  );
   const checkoutPath = useProjectStore(
     (state) =>
       state.projects.find((project) => project.id === selectedProjectId)?.localPath?.trim() || null,
@@ -61,6 +65,9 @@ export function useProjectHomeActivation() {
       return;
     }
     if (!checkoutPath) {
+      // A realm selects its requested project before the first snapshot arrives.
+      // Only a known project (or a completed snapshot) can confirm no checkout.
+      if (projectPending) return;
       const ui = useUIStore.getState();
       if (selectedHomeId) ui.selectEnvironment(null);
       if (ui.projectBoardTab === "home") ui.setProjectBoardTab("coordinator");
@@ -107,6 +114,7 @@ export function useProjectHomeActivation() {
     };
   }, [
     selectedProjectId,
+    projectPending,
     selectionKey,
     selectedEnvironmentId,
     selectedHomeId,

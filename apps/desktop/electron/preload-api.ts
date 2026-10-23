@@ -435,6 +435,7 @@ export function createOrkestratorElectronApi(ipcRenderer: IpcRendererLike) {
         nodeIds?: string[];
         connectionIds: string[];
         includeSelf: boolean;
+        confirmation?: import("@orkestrator/protocol/command-nodes").CommandHandoverConfirmation;
       }): Promise<CommandHandoverResult | null> {
         return ipcRenderer.invoke("orkestrator:connections:hand-over-command", input);
       },

@@ -193,15 +193,43 @@ export interface CommandHandoverPreview {
     nodeId: BackendId;
     displayName: string;
     colorToken?: string;
-    /** This node has an HTTPS address and token the target can use to control it. */
+    /** The target already has this node, or it has an HTTPS address and token to send. */
     reachable: boolean;
   };
 }
 
+/**
+ * A record on the target that keeps the command node in charge from
+ * controlling it. The desktop reads them over its own connection to the
+ * target and clears them there when the user confirms the handover.
+ */
+export type CommandHandoverRepair =
+  /** The target lists the command node in charge among its own machines: a loop. */
+  | "forget-source-on-target"
+  /** The target's user detached the command node in charge there. */
+  | "allow-source-on-target";
+
+/** Details the desktop must recheck before applying the confirmed repairs. */
+export interface CommandHandoverConfirmation {
+  sourceNodeId: BackendId;
+  targetNodeId: BackendId;
+  repairs: CommandHandoverRepair[];
+  targetInspectionComplete: boolean;
+}
+
+/** Survives Electron's error serialization so the renderer can reload the plan. */
+export const COMMAND_HANDOVER_PREVIEW_CHANGED = "Command handover preview changed";
+
 /** The desktop's preview: nothing to do when the target already is the command node in charge. */
 export type CommandHandoverPreviewResult =
   | { kind: "already-command-node" }
-  | { kind: "preview"; preview: CommandHandoverPreview };
+  | {
+      kind: "preview";
+      preview: CommandHandoverPreview;
+      repairs?: CommandHandoverRepair[];
+      /** Both direct target reads succeeded; incomplete inspection cannot authorize repairs. */
+      targetInspectionComplete?: boolean;
+    };
 
 export interface CommandHandoverResult {
   targetNodeId: BackendId;

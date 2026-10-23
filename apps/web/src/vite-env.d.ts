@@ -116,6 +116,7 @@ interface Window {
         nodeIds?: string[];
         connectionIds: string[];
         includeSelf: boolean;
+        confirmation?: import("@orkestrator/protocol/command-nodes").CommandHandoverConfirmation;
       }): Promise<import("@orkestrator/protocol/command-nodes").CommandHandoverResult | null>;
       forget(
         connectionId: string,

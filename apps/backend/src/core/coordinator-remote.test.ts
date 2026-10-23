@@ -1,0 +1,240 @@
+/**
+ * Coordinator work on another node, on the real mail world: delegations to a
+ * leaf worker settle from that node's state, a held report is released as the
+ * wake, and a leaf's workflow reaches the coordinator as a status wake. Only
+ * the leaf is simulated (`FakeRemote`).
+ */
+import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
+import type { AgentTabState } from "@orkestrator/protocol/agent-registry";
+
+import { MailWorld } from "./agent-mail-world-test-support.js";
+import type {
+  CoordinatorRemoteAccess,
+  RemoteWorkerState,
+  RemoteWorkflowRecord,
+} from "./coordinator-remote.js";
+import { statusOnNode } from "./coordinator-status-wakes.js";
+
+class FakeRemote implements CoordinatorRemoteAccess {
+  available = true;
+  environment: Exclude<RemoteWorkerState, "unavailable">["environment"] = "running";
+  tab: AgentTabState | "unknown" = "working";
+  workflows = new Map<string, RemoteWorkflowRecord>();
+  excerpt: string | undefined;
+
+  async workerState(): Promise<RemoteWorkerState> {
+    if (!this.available) return "unavailable";
+    return { environment: this.environment, tab: this.tab, name: "remote-worker" };
+  }
+
+  async lastAssistantExcerpt(): Promise<string | undefined> {
+    return this.excerpt;
+  }
+
+  async workflow(_nodeId: string, _kind: string, id: string) {
+    if (!this.available) return "unavailable" as const;
+    return this.workflows.get(id) ?? null;
+  }
+
+  async environmentPr() {
+    return {};
+  }
+
+  async nodeName(): Promise<string> {
+    return "Build box";
+  }
+}
+
+const worlds: MailWorld[] = [];
+afterEach(async () => {
+  for (const world of worlds.splice(0)) await world.close();
+  setSystemTime();
+});
+
+async function remoteWorld() {
+  // Notices are delivered at once rather than after a coalescing window.
+  const world = await MailWorld.create({ statusWakes: { coalesceMs: 0 } });
+  worlds.push(world);
+  const remote = new FakeRemote();
+  world.coordinator.setRemoteAccess(remote);
+  const main = await world.main();
+  const association = await world.storage.saveCoordinatorWorkflowAssociation({
+    id: "remote-delegation",
+    projectId: world.projectId,
+    coordinatorId: world.coordinatorId,
+    conversationId: main.conversationId!,
+    kind: "environment",
+    resourceId: "leaf-env",
+    nodeId: "bk_leaf",
+    requestId: "launch-remote",
+    baseBranch: "main",
+    baseCommit: "a".repeat(40),
+    createdAt: new Date().toISOString(),
+  });
+  await world.storage.openCoordinatorDelegation(association.id, "startup-agent");
+  return { world, remote, main, association };
+}
+
+async function delegationState(world: MailWorld, id: string) {
+  const associations = await world.storage.listCoordinatorWorkflowAssociations(world.projectId);
+  return associations.find((entry) => entry.id === id)?.delegation;
+}
+
+describe("remote delegations", () => {
+  test("close when the remote worker's turn ends, and wake the coordinator once", async () => {
+    const { world, remote, main, association } = await remoteWorld();
+
+    await world.coordinator.settleRemoteWorker("bk_leaf", "leaf-env");
+    expect((await delegationState(world, association.id))?.state).toBe("running");
+
+    remote.tab = "idle";
+    remote.excerpt = "All green.";
+    await world.coordinator.settleRemoteWorker("bk_leaf", "leaf-env");
+    await world.deliver();
+
+    const delegation = await delegationState(world, association.id);
+    expect(delegation).toMatchObject({ state: "completed", wakeKind: "notice" });
+    expect(delegation?.wokenAt).toBeDefined();
+    const [notice] = world.received(main);
+    expect(notice).toContain("Worker environment leaf-env on Build box (nodeId bk_leaf)");
+    expect(notice).toContain('"nodeId": "bk_leaf"');
+    expect(notice).toContain("Last message: All green.");
+    expect(world.wakes(main)).toBe(1);
+  });
+
+  test("an unreachable node changes nothing, and a worker never seen working waits out the grace", async () => {
+    const { world, remote, association } = await remoteWorld();
+    remote.available = false;
+    remote.environment = "missing";
+    await world.coordinator.reconcileWorkerDelegations();
+    expect((await delegationState(world, association.id))?.state).toBe("running");
+
+    remote.available = true;
+    remote.environment = "running";
+    remote.tab = "idle";
+    await world.coordinator.settleRemoteWorker("bk_leaf", "leaf-env");
+    expect((await delegationState(world, association.id))?.state).toBe("running");
+
+    setSystemTime(new Date(Date.now() + 60_000));
+    await world.coordinator.reconcileWorkerDelegations();
+    expect((await delegationState(world, association.id))?.state).toBe("completed");
+  });
+
+  test("a deleted or failed remote environment closes the delegation", async () => {
+    const { world, remote, association } = await remoteWorld();
+    remote.environment = "error";
+    await world.coordinator.reconcileWorkerDelegations();
+    expect((await delegationState(world, association.id))?.state).toBe("failed");
+  });
+
+  test("a held report from the remote worker is released as the wake", async () => {
+    const { world, remote, main, association } = await remoteWorld();
+    const report = await world.storage.sendAgentMail(
+      {
+        kind: "node",
+        nodeId: "bk_leaf",
+        nodeName: "Build box",
+        role: "agent",
+        projectId: world.projectId,
+        environmentId: "leaf-env",
+        tabId: "startup-agent",
+        title: "remote-worker",
+      },
+      {
+        requestId: "report",
+        toEnvironmentId: main.environmentId,
+        toTabId: main.tabId,
+        body: "Finished: tests pass.",
+      },
+    );
+    expect(report.placement).toBe("inject-held");
+    await world.coordinator.settleRemoteWorker("bk_leaf", "leaf-env");
+    await world.deliver();
+    expect(world.wakes(main)).toBe(0);
+
+    remote.tab = "idle";
+    await world.coordinator.settleRemoteWorker("bk_leaf", "leaf-env");
+    await world.deliver();
+
+    expect((await delegationState(world, association.id))?.wakeKind).toBe("report");
+    expect(world.received(main)).toEqual(["Finished: tests pass."]);
+  });
+
+  test("a local turn end never settles a remote delegation with the same environment ID", async () => {
+    const { world, association } = await remoteWorld();
+    await world.coordinator.settleWorkerDelegations({
+      environmentId: "leaf-env",
+      tabId: "startup-agent",
+      state: "completed",
+    });
+    expect((await delegationState(world, association.id))?.state).toBe("running");
+  });
+});
+
+describe("remote workflow status wakes", () => {
+  test("a build pipeline on a leaf wakes the coordinator with calls that name the node", async () => {
+    const { world, remote, main } = await remoteWorld();
+    await world.storage.saveCoordinatorWorkflowAssociation({
+      id: "remote-build",
+      projectId: world.projectId,
+      coordinatorId: world.coordinatorId,
+      conversationId: main.conversationId!,
+      kind: "build-pipeline",
+      resourceId: "pipeline-9",
+      nodeId: "bk_leaf",
+      requestId: "build-remote",
+      createdAt: new Date().toISOString(),
+    });
+    remote.workflows.set("pipeline-9", {
+      snapshot: {
+        id: "pipeline-9",
+        environmentId: "leaf-env",
+        phase: "complete",
+        verificationResult: "pass",
+        taskTitle: "Fix the parser",
+      },
+      revision: 3,
+      updatedAt: new Date().toISOString(),
+    });
+
+    await world.coordinator.statusWakes.observeWorkflow("build-pipeline", "pipeline-9", "bk_leaf");
+    await world.deliver();
+
+    const [notice] = world.carriers(main).flat();
+    expect(notice?.notice).toMatchObject({ state: "completed", tone: "success" });
+    expect(notice?.body).toContain("Runs on Build box (nodeId bk_leaf).");
+    expect(notice?.body).toContain(
+      'get_build_pipeline { "nodeId": "bk_leaf", "pipelineId": "pipeline-9" }',
+    );
+    expect(notice?.subject).toContain("remote-worker on Build box");
+    // The same ID on this node is a different workflow.
+    await world.coordinator.statusWakes.observeWorkflow("build-pipeline", "pipeline-9");
+    await world.deliver();
+    expect(world.wakes(main)).toBe(1);
+  });
+
+  test("statusOnNode names the node in every suggested call", () => {
+    const status = statusOnNode(
+      {
+        key: "k",
+        state: "ready",
+        tone: "attention",
+        terminal: false,
+        headline: "is ready",
+        details: ["3 findings"],
+        tools: [
+          'get_multi_review { "workflowId": "w" }',
+          'address_multi_review { "workflowId": "w" }',
+        ],
+        mode: "settled",
+      },
+      "bk_leaf",
+      "Build box",
+    );
+    expect(status.tools).toEqual([
+      'get_multi_review { "nodeId": "bk_leaf", "workflowId": "w" }',
+      'address_multi_review { "nodeId": "bk_leaf", "workflowId": "w" }',
+    ]);
+    expect(status.details[0]).toBe("Runs on Build box (nodeId bk_leaf).");
+  });
+});

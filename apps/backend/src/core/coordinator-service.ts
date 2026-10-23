@@ -31,6 +31,7 @@ import {
   type CoordinatorStatusWakeOptions,
 } from "./coordinator-status-wakes.js";
 import { AgentMailError } from "@orkestrator/protocol/agent-mail";
+import type { CoordinatorRemoteAccess } from "./coordinator-remote.js";
 
 const MAX_STARTUP_ERROR_CHARS = 2_000;
 const DELEGATION_IDLE_RECONCILE_GRACE_MS = 15_000;
@@ -116,6 +117,17 @@ export class CoordinatorService {
   private delegationWakeDelivery: Promise<void> | null = null;
   /** Status wakes for work this coordinator started; see `coordinator-status-wakes.ts`. */
   readonly statusWakes: CoordinatorStatusWakes;
+  /** Reads of work on other nodes; absent until the node services exist. */
+  private remote: CoordinatorRemoteAccess | null = null;
+  /**
+   * Remote delegations whose worker was seen working since the coordinator
+   * last asked it something. A remote turn end has no edge here, so "idle
+   * after working" is the edge; "idle" alone only counts after a grace
+   * period, in case the worker never started. Lost on restart, which only
+   * falls back to the grace period.
+   */
+  private readonly remoteSeenWorking = new Set<string>();
+  private readonly remoteAskedAt = new Map<string, number>();
 
   constructor(
     private readonly storage: StorageService,
@@ -138,6 +150,22 @@ export class CoordinatorService {
     // Mail to "coordinator", or to a conversation that has since closed, finds
     // the current main through here, which starts one if there is none.
     this.storage.setCoordinatorMailResolver?.((projectId) => this.mainMailAddress(projectId));
+  }
+
+  /** Work on other nodes becomes readable once the node services exist. */
+  setRemoteAccess(remote: CoordinatorRemoteAccess): void {
+    this.remote = remote;
+    this.statusWakes.setRemoteAccess(remote);
+  }
+
+  /**
+   * The coordinator asked a remote worker something more (a prompt or a
+   * message joining an open delegation): the turn that settles it is one
+   * that starts after now.
+   */
+  noteRemoteRequest(associationId: string): void {
+    this.remoteSeenWorking.delete(associationId);
+    this.remoteAskedAt.set(associationId, Date.now());
   }
 
   /**
@@ -662,7 +690,8 @@ export class CoordinatorService {
     await this.storage.withAgentMailWorkerAdmission(worker.environmentId, async () => {
       const open = await this.storage.listOpenCoordinatorDelegations();
       for (const association of open) {
-        if (association.resourceId !== worker.environmentId) continue;
+        // A worker on another node is settled from its node's state.
+        if (association.nodeId || association.resourceId !== worker.environmentId) continue;
         const delegation = association.delegation;
         if (!delegation) continue;
         if (worker.tabId && delegation.workerTabId !== worker.tabId) continue;
@@ -710,6 +739,10 @@ export class CoordinatorService {
       if (main) await this.reconcileMainMail(workspace, main);
     }
     for (const association of await this.storage.listOpenCoordinatorDelegations()) {
+      if (association.nodeId) {
+        await this.reconcileRemoteDelegation(association);
+        continue;
+      }
       await this.storage.withAgentMailWorkerAdmission(association.resourceId, async () => {
         const current = (await this.storage.listOpenCoordinatorDelegations()).find(
           (item) => item.id === association.id,
@@ -765,6 +798,58 @@ export class CoordinatorService {
       ].map((association) => association.id),
     );
     await this.storage.releaseOrphanedDelegationHolds(owed);
+  }
+
+  /**
+   * A worker environment on another node changed (its node's event, or the
+   * sweep): settle the delegations it answers, and wake their coordinators.
+   */
+  async settleRemoteWorker(nodeId: string, environmentId: string): Promise<void> {
+    const open = (await this.storage.listOpenCoordinatorDelegations()).filter(
+      (association) => association.nodeId === nodeId && association.resourceId === environmentId,
+    );
+    for (const association of open) await this.reconcileRemoteDelegation(association);
+    if (open.length > 0) await this.deliverDelegationWakes();
+  }
+
+  /**
+   * Close one remote delegation when its node shows the worker can no longer
+   * be working on it: the environment is gone, failed or stopped, or the
+   * worker's turn ended. An unreachable node changes nothing.
+   */
+  private async reconcileRemoteDelegation(
+    association: CoordinatorWorkflowAssociation,
+  ): Promise<void> {
+    const delegation = association.delegation;
+    if (!this.remote || !association.nodeId || delegation?.state !== "running") return;
+    const state = await this.remote
+      .workerState(association.nodeId, association.resourceId, delegation.workerTabId)
+      .catch(() => "unavailable" as const);
+    if (state === "unavailable") return;
+    const askedAt = Math.max(
+      Date.parse(delegation.requestedAt) || 0,
+      this.remoteAskedAt.get(association.id) ?? 0,
+    );
+    const graceOver = Date.now() - askedAt >= DELEGATION_IDLE_RECONCILE_GRACE_MS;
+    if (state.tab === "working" || state.tab === "waiting") {
+      this.remoteSeenWorking.add(association.id);
+    }
+    const seenWorking = this.remoteSeenWorking.has(association.id);
+    const outcome: "completed" | "failed" | "stopped" | null =
+      state.environment === "missing" || state.environment === "deleting"
+        ? "stopped"
+        : state.environment === "error"
+          ? "failed"
+          : // A worker launched moments ago may still read as stopped.
+            state.environment === "stopped" && (seenWorking || graceOver)
+            ? "stopped"
+            : state.environment === "running" && state.tab === "idle" && (seenWorking || graceOver)
+              ? "completed"
+              : null;
+    if (!outcome) return;
+    this.remoteSeenWorking.delete(association.id);
+    this.remoteAskedAt.delete(association.id);
+    await this.storage.closeCoordinatorDelegation(association.id, outcome);
   }
 
   /**
@@ -829,8 +914,24 @@ export class CoordinatorService {
           delegation.workerTabId,
         );
       } else {
-        const environment = await this.storage.getEnvironment(association.resourceId);
-        const label = environment?.name ?? association.resourceId;
+        const remote = association.nodeId ? this.remote : null;
+        const remoteState =
+          remote && association.nodeId
+            ? await remote
+                .workerState(association.nodeId, association.resourceId, delegation.workerTabId)
+                .catch(() => "unavailable" as const)
+            : null;
+        const environment = association.nodeId
+          ? null
+          : await this.storage.getEnvironment(association.resourceId);
+        const nodeName =
+          remote && association.nodeId
+            ? await remote.nodeName(association.nodeId).catch(() => association.nodeId!)
+            : null;
+        const label =
+          (environment?.name ??
+            (remoteState && remoteState !== "unavailable" ? remoteState.name : undefined) ??
+            association.resourceId) + (nodeName ? ` on ${nodeName}` : "");
         const outcome =
           delegation.state === "completed"
             ? "finished"
@@ -840,12 +941,20 @@ export class CoordinatorService {
         // What the worker last said is the closest thing to a report it left.
         // Only a finished turn has a live session worth reading; best effort.
         const excerpt =
-          delegation.state === "completed"
-            ? await this.options
-                .lastAssistantExcerpt?.(association.resourceId, delegation.workerTabId)
-                .catch(() => undefined)
-            : undefined;
-        const tabArgs = `{ "environmentId": "${association.resourceId}", "tabId": "${delegation.workerTabId}" }`;
+          delegation.state !== "completed"
+            ? undefined
+            : remote && association.nodeId
+              ? await remote
+                  .lastAssistantExcerpt(
+                    association.nodeId,
+                    association.resourceId,
+                    delegation.workerTabId,
+                  )
+                  .catch(() => undefined)
+              : await this.options
+                  .lastAssistantExcerpt?.(association.resourceId, delegation.workerTabId)
+                  .catch(() => undefined);
+        const tabArgs = `{ ${association.nodeId ? `"nodeId": "${association.nodeId}", ` : ""}"environmentId": "${association.resourceId}", "tabId": "${delegation.workerTabId}" }`;
         await this.storage
           .sendAgentMail(
             {
@@ -860,7 +969,7 @@ export class CoordinatorService {
               toTabId: conversation.tabId,
               subject: `Worker ${label} ${outcome}`,
               body:
-                `Worker environment ${association.resourceId} (tab ${delegation.workerTabId}) ${outcome} ` +
+                `Worker environment ${association.resourceId}${nodeName ? ` on ${nodeName} (nodeId ${association.nodeId})` : ""} (tab ${delegation.workerTabId}) ${outcome} ` +
                 `without sending a report.` +
                 (association.baseBranch
                   ? ` It was started from ${association.baseBranch}${

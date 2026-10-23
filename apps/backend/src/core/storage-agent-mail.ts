@@ -413,7 +413,12 @@ function coordinatorOriginsByEnvironment(
   }
   const origins = new Map<string, string>();
   for (const association of workflows) {
-    if (association.kind !== "environment" || association.pending || !association.baseCommit) {
+    if (
+      association.kind !== "environment" ||
+      association.pending ||
+      !association.baseCommit ||
+      association.nodeId
+    ) {
       continue;
     }
     const origin = originByCoordinator.get(association.coordinatorId);
@@ -527,6 +532,7 @@ export class StorageAgentMail extends StorageDrafts {
       const delegated = (await this.listOpenCoordinatorDelegations()).find(
         (association) =>
           association.coordinatorId === sender.coordinatorId &&
+          !association.nodeId &&
           association.resourceId === input.toEnvironmentId &&
           association.delegation,
       );

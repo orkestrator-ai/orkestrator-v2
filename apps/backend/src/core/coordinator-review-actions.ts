@@ -156,7 +156,10 @@ export function registerCoordinatorReviewActions(
       );
       const activeAssociations = active
         ? associations.filter(
-            (item) => item.kind === "multi-review" && item.resourceId === active.id,
+            (item) =>
+              item.kind === "multi-review" &&
+              item.nodeId === undefined &&
+              item.resourceId === active.id,
           )
         : [];
       const reusableAssociation = activeAssociations.find(
@@ -340,7 +343,8 @@ export function registerCoordinatorReviewActions(
           caller.projectId,
         );
         const workflowAssociations = associations.filter(
-          (item) => item.kind === "multi-review" && item.resourceId === id,
+          (item) =>
+            item.kind === "multi-review" && item.nodeId === undefined && item.resourceId === id,
         );
         const ownedAssociation = workflowAssociations.some(
           (item) =>

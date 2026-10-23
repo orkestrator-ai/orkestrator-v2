@@ -641,7 +641,27 @@ export async function stopBackgroundTask(
   return { ok: true };
 }
 
+/**
+ * Per-session count of published background-task snapshots, for the no-touch
+ * activity read's content revision. A task's progress, output tail or end
+ * changes the session view without changing its activity or transcript, and
+ * the backend needs a cheap way to see that it moved. Held off `SessionState`
+ * so it is never persisted.
+ */
+const backgroundTaskRevisions = new WeakMap<SessionState, number>();
+
+/** Record a change to `session.backgroundTasks`; call where it is published. */
+export function noteBackgroundTasksChanged(session: SessionState): void {
+  backgroundTaskRevisions.set(session, (backgroundTaskRevisions.get(session) ?? 0) + 1);
+}
+
+/** How many background-task changes this session object has published. */
+export function backgroundTaskRevision(session: SessionState): number {
+  return backgroundTaskRevisions.get(session) ?? 0;
+}
+
 export function emitBackgroundTaskSnapshot(session: SessionState): void {
+  noteBackgroundTasksChanged(session);
   eventEmitter.emit({
     type: "session.updated",
     sessionId: session.id,

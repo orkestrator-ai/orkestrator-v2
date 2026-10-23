@@ -1,3 +1,4 @@
+import { projectionInternals } from "./native-agent-service-test-collaborators.js";
 import { launchSelectionReport } from "./control-shared-actions.js";
 import { describe, expect, mock, test } from "bun:test";
 
@@ -243,6 +244,7 @@ async function withService(
     interactionMonitorRetryBaseMs?: number;
     interactionMonitorMaxRetries?: number;
     onActivityTransition?: NativeAgentServiceOptions["onActivityTransition"];
+    onObservationInvalidation?: NativeAgentServiceOptions["onObservationInvalidation"];
     onAsyncQuestionAttention?: NativeAgentServiceOptions["onAsyncQuestionAttention"];
     onInteractionObservation?: NativeAgentServiceOptions["onInteractionObservation"];
     toolDetailCacheMaxEntries?: number;
@@ -283,6 +285,9 @@ async function withService(
       ? {}
       : { interactionMonitorMaxRetries: setup.interactionMonitorMaxRetries }),
     ...(setup.onActivityTransition ? { onActivityTransition: setup.onActivityTransition } : {}),
+    ...(setup.onObservationInvalidation
+      ? { onObservationInvalidation: setup.onObservationInvalidation }
+      : {}),
     ...(setup.onAsyncQuestionAttention
       ? { onAsyncQuestionAttention: setup.onAsyncQuestionAttention }
       : {}),
@@ -4635,6 +4640,11 @@ describe("NativeAgentService shared observations", () => {
       async fetch(request) {
         const url = new URL(request.url);
         paths.push(`${request.method} ${url.pathname}`);
+        if (url.pathname === "/event/subscribe") {
+          // The observer's idle wakeup: content-free observation mode only.
+          expect(url.searchParams.get("observe")).toBe("1");
+          return new Response("no stream in this test", { status: 503 });
+        }
         if (url.pathname === "/sessions/activity") {
           const { sessionIds } = (await request.json()) as { sessionIds: string[] };
           return Response.json({
@@ -4674,13 +4684,16 @@ describe("NativeAgentService shared observations", () => {
 
           expect(paths.length).toBeGreaterThanOrEqual(3);
           // Only the no-touch observation routes (the sweep batches; a single
-          // session read may use the per-session form): no `/status`, no
-          // session resource (Claude hydrates it), no transcript, no attach.
+          // session read may use the per-session form) and the observation
+          // event stream: no `/status`, no session resource (Claude hydrates
+          // it), no transcript, no attach.
           expect(paths).toContain("POST /sessions/activity");
           expect(
             paths.every(
               (path) =>
-                path === "POST /sessions/activity" || path === "GET /session/provider-1/activity",
+                path === "POST /sessions/activity" ||
+                path === "GET /session/provider-1/activity" ||
+                path === "GET /event/subscribe",
             ),
           ).toBe(true);
           // Only the read-only peek: never a start command.
@@ -5052,16 +5065,165 @@ describe("NativeAgentService shared observations", () => {
   });
 
   test("an unqualified provider's idle group is read on every sweep", async () => {
-    const { provider, activity } = createProviderStub("claude", {
+    // Cursor's bridge has no event stream, so nothing would report work
+    // started elsewhere: a stream claim from the provider cannot qualify it.
+    const { provider, activity } = createProviderStub("cursor", {
       activity: async () => "idle",
       observationStreamLive: () => true,
     });
     await withService(
       { prefix: "orkestrator-native-observation-unqualified-", provider: async () => provider },
       async ({ storage, service }) => {
-        await adopt(storage, "tab-1", "provider-1", "claude");
+        await adopt(storage, "tab-1", "provider-1", "cursor");
         for (let sweep = 0; sweep < 8; sweep += 1) await service.reconcileAgentActivity();
         expect(activity).toHaveBeenCalledTimes(8);
+      },
+    );
+  });
+
+  test("a Claude group backs off only while its bridge observation stream is live", async () => {
+    let streamLive = true;
+    const { provider, observeActivity } = createProviderStub("claude", {
+      observeActivity: async () => ({ state: "idle", readyForInput: true }),
+      observationStreamLive: () => streamLive,
+    });
+    await withService(
+      { prefix: "orkestrator-native-observation-claude-stream-", provider: async () => provider },
+      async ({ storage, service }) => {
+        await adopt(storage, "tab-1", "provider-1", "claude");
+        for (let sweep = 0; sweep < 8; sweep += 1) await service.reconcileAgentActivity();
+        // Three settled idle reads, then the group waits for its safety read.
+        expect(observeActivity).toHaveBeenCalledTimes(3);
+        // A bridge event wakes it at once.
+        service.wakeObservation("env-1", "provider-event", "claude");
+        await service.reconcileAgentActivity();
+        expect(observeActivity).toHaveBeenCalledTimes(4);
+        // A lost stream disqualifies the next scheduling decision.
+        streamLive = false;
+        service.wakeObservation("env-1", "provider-event", "claude");
+        for (let sweep = 0; sweep < 4; sweep += 1) await service.reconcileAgentActivity();
+        expect(observeActivity).toHaveBeenCalledTimes(8);
+      },
+    );
+  });
+
+  test("announces a content change of an idle session in the transition stamp sequence", async () => {
+    let observation: ProviderActivityObservation = { state: "idle", contentRevision: "g:1" };
+    const { provider } = createProviderStub("claude", {
+      observeActivity: async () => observation,
+    });
+    const announcements: Array<{ kind: string; revision: number; state: string }> = [];
+    await withService(
+      {
+        prefix: "orkestrator-native-observation-content-",
+        provider: async () => provider,
+        onActivityTransition: (event) =>
+          announcements.push({
+            kind: "transition",
+            revision: event.observation!.revision,
+            state: event.state,
+          }),
+        onObservationInvalidation: (event) =>
+          announcements.push({
+            kind: "content",
+            revision: event.observation.revision,
+            state: event.state,
+          }),
+      },
+      async ({ storage, service }) => {
+        const key = await adopt(storage, "tab-1", "provider-1", "claude");
+        const flag = async () => {
+          const session = await storage.getNativeAgentSession(key);
+          if (!session) throw new Error("Expected adopted session");
+          return projectionInternals(service).quietObservationFlag(session);
+        };
+        expect(await flag()).toEqual({});
+
+        await service.reconcileAgentActivity();
+        // A first observation is a transition, never a content change.
+        expect(announcements).toEqual([{ kind: "transition", revision: 1, state: "idle" }]);
+        expect(await flag()).toEqual({ quietObservation: true });
+
+        // Unchanged revision: nothing.
+        await service.reconcileAgentActivity();
+        expect(announcements).toHaveLength(1);
+
+        // A background task reported on an idle session.
+        observation = { state: "idle", contentRevision: "g:2" };
+        await service.reconcileAgentActivity();
+        expect(announcements.at(-1)).toEqual({ kind: "content", revision: 2, state: "idle" });
+
+        // A running turn's content changes are not announced; its transition is.
+        observation = { state: "working", contentRevision: "g:3" };
+        await service.reconcileAgentActivity();
+        observation = { state: "working", contentRevision: "g:4" };
+        await service.reconcileAgentActivity();
+        expect(announcements.slice(2)).toEqual([
+          { kind: "transition", revision: 3, state: "working" },
+        ]);
+
+        // Released composer with background work: announced.
+        observation = { state: "working", readyForInput: true, contentRevision: "g:5" };
+        await service.reconcileAgentActivity();
+        expect(announcements.at(-1)).toEqual({ kind: "content", revision: 4, state: "working" });
+
+        // A bridge that stops reporting a revision loses the flag.
+        observation = { state: "idle" };
+        await service.reconcileAgentActivity();
+        expect(await flag()).toEqual({});
+        expect(announcements.map((entry) => entry.revision)).toEqual([1, 2, 3, 4, 5]);
+      },
+    );
+  });
+
+  test.each([
+    { readyForInput: undefined, contentRevision: "g:2" },
+    { readyForInput: false, contentRevision: "g:1" },
+    { readyForInput: undefined, contentRevision: undefined },
+  ])("announces a released working turn resuming once (%j)", async (resumed) => {
+    let observation: ProviderActivityObservation = {
+      state: "working",
+      readyForInput: true,
+      contentRevision: "g:1",
+    };
+    const { provider } = createProviderStub("claude", {
+      observeActivity: async () => observation,
+    });
+    const transitions = mock();
+    const invalidations = mock();
+    await withService(
+      {
+        prefix: "orkestrator-native-observation-resume-",
+        provider: async () => provider,
+        onActivityTransition: transitions,
+        onObservationInvalidation: invalidations,
+      },
+      async ({ storage, service }) => {
+        const key = await adopt(storage, "tab-1", "provider-1", "claude");
+        await service.reconcileAgentActivity();
+        expect(transitions).toHaveBeenCalledTimes(1);
+        expect(invalidations).not.toHaveBeenCalled();
+
+        // Aggregate activity stays working when the root turn resumes. The
+        // readiness edge must wake the idle view even without a new revision.
+        observation = { state: "working", ...resumed };
+        await service.reconcileAgentActivity();
+        expect(invalidations).toHaveBeenCalledTimes(1);
+        expect(invalidations.mock.calls[0]?.[0]).toMatchObject({
+          observation: { revision: 2 },
+          sessionKey: key,
+          providerSessionId: "provider-1",
+          state: "working",
+          agent: "claude",
+        });
+
+        await service.reconcileAgentActivity();
+        observation = { state: "working", contentRevision: "g:3" };
+        await service.reconcileAgentActivity();
+        observation = { state: "working", contentRevision: "g:4" };
+        await service.reconcileAgentActivity();
+        expect(invalidations).toHaveBeenCalledTimes(1);
+        expect(transitions).toHaveBeenCalledTimes(1);
       },
     );
   });
@@ -5082,10 +5244,14 @@ describe("NativeAgentService shared observations", () => {
       async ({ storage, service }) => {
         await adopt(storage, "tab-1", "provider-1");
         await service.reconcileAgentActivity();
+        expect(await service.mailInjectPresence(TAB)).toBe("idle");
 
-        // Older than the presence lease: the gate reads the provider itself,
-        // and a turn another client started is held rather than interrupted.
+        // Older than the presence lease: presence no longer claims idle (a
+        // backed-off group between safety reads looks exactly like this)...
         clock += 5_000;
+        expect(await service.mailInjectPresence(TAB)).toBe("unknown");
+        // ...and the gate reads the provider itself, so a turn another client
+        // started is held rather than interrupted.
         providerStatus = "running";
         const readsBefore = status.mock.calls.length;
         const held = await service.dispatchMailInject({
@@ -5296,6 +5462,10 @@ describe("NativeAgentService shared observations", () => {
                 (await storage.getAgentMailMessage("env-1", "agent", message.id)).placement,
               ).toBe("pending-inject");
             }
+            // The refused dispatch made the retained idle pre-dispatch evidence,
+            // so presence is `unknown` until the next sweep reads the session.
+            expect(await service.mailInjectPresence(input)).toBe("unknown");
+            await service.reconcileAgentActivity();
             await mail.drainInjects();
             expect(await storage.getAgentMailMessage("env-1", "agent", message.id)).toMatchObject({
               placement: "injected",
@@ -5390,6 +5560,11 @@ describe("NativeAgentService shared observations", () => {
           await mail.drainInjects();
           await mail.drainInjects({ includeDeferred: false });
           expect(send).toHaveBeenCalledTimes(1);
+          // A deferred message is retried only once a post-dispatch sweep
+          // has read the session idle again.
+          await mail.drainInjects();
+          expect(send).toHaveBeenCalledTimes(1);
+          await service.reconcileAgentActivity();
           await mail.drainInjects();
           expect(send).toHaveBeenCalledTimes(2);
           await mail.drainInjects({ includeDeferred: false });
@@ -5402,13 +5577,17 @@ describe("NativeAgentService shared observations", () => {
             placementReason: "busy",
           });
           expect(Date.parse(pending[0]!.deferredUntil!)).toBeGreaterThan(Date.now());
-          expect(
-            await service.mailInjectPresence({
+          const presence = () =>
+            service.mailInjectPresence({
               environmentId: "env-1",
               agent: "claude",
               logicalSessionKey: "env-env-1:agent",
-            }),
-          ).toBe("idle");
+            });
+          // The refused dispatch outdated the retained idle; the next sweep
+          // restores it.
+          expect(await presence()).toBe("unknown");
+          await service.reconcileAgentActivity();
+          expect(await presence()).toBe("idle");
         } finally {
           await mail.shutdown();
         }

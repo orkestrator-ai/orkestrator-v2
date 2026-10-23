@@ -4,6 +4,7 @@ import {
   FLOW_VIEWPORT_MAX_HEIGHT,
   FLOW_ZOOM_MAX,
   FLOW_ZOOM_MIN,
+  centerFlowRect,
   canZoomIn,
   canZoomOut,
   clampFlowZoom,
@@ -65,7 +66,8 @@ describe("viewport and fit", () => {
   });
 
   test("fits nothing tighter than the content needs and never magnifies", () => {
-    const small = graph(2);
+    // Wide enough for the PR column as well, so nothing scrolls at 100%.
+    const small = graph(2, 2000);
     expect(fitFlowZoom(small.content, small.viewport)).toBe(1);
     const full = graph(32);
     const zoom = fitFlowZoom(full.content, full.viewport);
@@ -105,7 +107,9 @@ describe("zooming around a point", () => {
 
   test("clamps the scroll to the content and centres a canvas smaller than the viewport", () => {
     const { content, viewport } = graph(8);
-    const zoomedIn = zoomFlowView({ zoom: 1, scrollLeft: 0, scrollTop: 0 }, 2, content, viewport, {
+    // Scrolled to the far right, so the anchor is the canvas's bottom-right corner.
+    const start = { zoom: 1, scrollLeft: content.width - viewport.width, scrollTop: 0 };
+    const zoomedIn = zoomFlowView(start, 2, content, viewport, {
       x: viewport.width,
       y: viewport.height,
     });
@@ -169,5 +173,34 @@ describe("touch pinch and the stacked Fit", () => {
     expect(fitStackedFlowZoom(40_000, 800)).toBe(FLOW_ZOOM_MIN);
     expect(fitStackedFlowZoom(2_000, null)).toBe(1);
     expect(fitStackedFlowZoom(0, 800)).toBe(1);
+  });
+});
+
+describe("centering a stage", () => {
+  test.each([0.8, 1.5, 2])(
+    "centers canvas coordinates at zoom %s and reveals the vertical bounds",
+    (zoom) => {
+      const rect = { x: 700, y: 800, width: 200, height: 80 };
+      const view = centerFlowRect(
+        { zoom, scrollLeft: 10, scrollTop: 0 },
+        rect,
+        { width: 2000, height: 2000 },
+        { width: 600, height: 400 },
+      );
+      expect(view.zoom).toBe(zoom);
+      expect(view.scrollLeft).toBe(Math.round(800 * zoom - 300));
+      expect(view.scrollTop).toBe(Math.round(880 * zoom + 24 - 400));
+    },
+  );
+
+  test("clamps both axes to zero when the scaled canvas is smaller than the viewport", () => {
+    expect(
+      centerFlowRect(
+        { zoom: 0.5, scrollLeft: 300, scrollTop: 500 },
+        { x: 900, y: 600, width: 100, height: 80 },
+        { width: 1000, height: 700 },
+        { width: 1200, height: 800 },
+      ),
+    ).toEqual({ zoom: 0.5, scrollLeft: 0, scrollTop: 0 });
   });
 });

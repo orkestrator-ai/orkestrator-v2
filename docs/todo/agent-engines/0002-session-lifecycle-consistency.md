@@ -1,15 +1,18 @@
 # Session lifecycle consistency
 
-Checked against `main` at `31d0fb06` (2026-10-17).
+Checked against `main` at `06297124` (2026-10-23).
 
 The native bridges share one lifecycle contract. Acknowledgements are durable.
 State is published before any side effect. A permanent close fences late work.
 Cancellation works before a prompt is accepted. Recovery state is bounded. And
 closing a tab keeps the conversation. #853 landed the code and the
-deterministic tests for all of it. Close retention through the UI is now a
-permanent browser spec for Cursor, Pi, OpenCode and Grok. What is left is
-real-stack evidence that was never collected, plus a few divergences that the
-conformance matrix records but does not resolve.
+deterministic tests for all of it. Close retention through the UI is a
+permanent browser spec for Cursor, Pi, OpenCode and Grok, and since
+2026-10-23 so are the lifecycle faults that spec could not reach before:
+persistence shedding, steer saturation, a dead generation, an old Claude
+bridge and a stop during Pi's startup. What is left is the live Cursor and Pi
+run, the legacy close fallback (blocked on a support window) and one live
+check of Cursor's resume rows.
 
 ## Current state
 
@@ -129,87 +132,150 @@ conformance matrix records but does not resolve.
   provider's own title (Codex's brief title, Grok's generated title) is still
   kept.
 
+- **Done 2026-10-23** (this change). Each is covered by tests that fail
+  without it:
+  - **A tab opened only to resume creates no session.** While the picker of
+    a tab opened from **Resume Session** is open, the controller keeps the
+    session hook disabled (`awaitingResumeChoice`,
+    `AgentNativeTab.controller.tsx`) and shows the picker alone. Picking a
+    row resumes straight into the unmapped tab with no composer controls;
+    dismissing the picker, or a failed resume, starts the tab's own session
+    as before. `CloseRetention.spec.ts` checks for all four platforms that
+    the resume sent no `POST /session/create` and no close (OpenCode: no new
+    session), and a new case per platform checks that a tab which did start
+    its own session (picker dismissed) still has it closed by a later resume.
+    Renderer cases are in `AgentNativeTab.test.tsx` ("a tab opened only to
+    resume…", "dismissing the resume picker…", "a failed resume falls back…").
+  - **A replaced session's close is durable.** `closeReplacedSession`
+    journals `replacedSessionCloseIntent(agent, providerSessionId)` (a tab
+    teardown intent under the reserved key `resume-replaced:<agent>:<digest>`)
+    before the close and clears it on confirmation. `reconcile_tab_teardowns`
+    replays it under the same lock and last-owner rules, without the tab
+    mapping checks and without revoking a tab credential, and `teardown_tab`
+    refuses the prefix. Tests: `native-agent-service-resume-close.test.ts`,
+    `commands-registry-teardown.test.ts` ("replaying the close of a session a
+    resume replaced").
+  - **Untitled resume rows** read `Session <8 chars of the provider's own
+    id>`: the ACP token's encoded Grok id, or Pi's session id from its file
+    name, instead of `Session acp-sess` or the start of a path
+    (`shortResumeSessionId`, `NativeResumeSessionDialog.tsx`). The row's
+    detail (Pi's first message, a message count) stays beside it.
+  - **OpenCode servers start one at a time.** `opencode-host-start.ts` holds
+    every host OpenCode start (environment servers, catalogue and sign-in
+    servers) from spawn until healthy or exited. A local start whose server
+    exits saying `database is locked` is retried twice (0.5 s, 2 s) and then
+    refused with that reason (`opencode-host-start.test.ts`, which also proves
+    two environments starting together launch one server at a time). The
+    2026-10-21 "silent wait" was the live spec, not the product: the dispatch
+    had been refused with the startup error, and
+    `paused-interactions-live.spec.ts` ignored the outcome and polled for five
+    minutes. The spec now fails at once on a refused dispatch; the tab already
+    shows a refused dispatch as a send error.
+  - **Stopping a prompt before the provider accepts it works.** Three defects
+    stood between the user and Pi's startup cancel, found by the new browser
+    case with the real Pi SDK:
+    - The compose bar disabled its Stop button while a prompt was being
+      submitted, which is the whole startup window (Escape already worked).
+      Stop now follows only `onStop` (`NativeComposeBar.tsx`).
+    - The backend stop awaited its durable interrupt record before sending
+      the abort. A dispatch the provider has not acknowledged holds the
+      session's storage queue until it is, so the abort reached Pi only after
+      Pi had accepted and run the prompt. The write is now started, the abort
+      sent, and the write awaited at the end; the in-memory interrupt fence
+      covers the gap, as it already did for a failed write
+      (`native-agent-service.ts`).
+    - The interrupt was recorded against `dispatchedRequestIds.at(-1)`, the
+      finished turn before, because the starting prompt is only in
+      `pendingDispatch`. It now names the starting prompt, and storage
+      records an interrupt for a pending dispatch too, so one whose
+      acknowledgement is lost keeps its Stop across reconciliation and a
+      restart. The in-memory fence is dropped only once the marker is durable.
+    - Stop shows from the moment a dispatch starts (the controller's
+      `isTurnActive` includes `isDispatching`), not only once the projection
+      reports a running turn.
+    `native-agent-service-turn-outcome.test.ts` ("Stop reaches a prompt the
+    provider has not accepted yet…") and `NativeComposeBar.test.tsx` cover
+    the backend and renderer halves.
+  - **Browser qualification on the real stack** (`e2e/CloseRetention.spec.ts`,
+    host endpoints in
+    [agent-testing.md](../../development/agent-testing.md#live-close-retention)):
+    - *Large transcript after Cursor shedding*: three turns, then the Cursor
+      bridge restarts on a state file shed by the bridge's own budget code.
+      The reload shows the newest message only and says earlier messages are
+      not available here; the next prompt runs in the same Cursor agent,
+      after all three turns. This found a product gap: a window that is
+      truncated but cannot page said nothing (the notice for that shape was
+      dropped in #755 when the load-earlier button was always shown, and the
+      button was later retired without restoring it). The controller now
+      shows "Earlier messages in this conversation are not available here.
+      The conversation itself is kept." for a truncated window with no
+      byte-limit notice and no load-earlier control.
+    - *Steer saturation*: a held Cursor turn's steer journal is filled until
+      the bridge refuses with `steer-capacity-exceeded`. The runtime panel
+      shows "Steering is full for this turn"; a `/steer` from the composer is
+      refused with the bridge's reason, the instruction stays in the composer
+      across an inactive return and a reload, and the turn keeps running
+      until stopped. The Cursor fake engine's run gained `steer`.
+    - *Dead generation while inactive*: Grok parks a question and a plan
+      approval, the environment goes inactive and the Grok bridge restarts.
+      On return both cards are withdrawn; they stay gone after close and
+      reload, and the resumed conversation offers nothing to answer. The
+      dead requests are never answered on the new process's behalf.
+    - *Old Claude bridge*: a stale bridge answering 404 to the close route.
+      Closing the tab shows the "Restart the environment to finish closing
+      this tab" toast, the intent stays pending through the sweep, no
+      `DELETE` is ever sent, and the tab stays closed across a reload.
+    - *Pi startup interrupt*: the Pi fake engine holds `AgentSession.prompt`
+      before Pi accepts it (`FAKE_PI_STARTUP_GATE`). Stop, switch away,
+      return and reload, then release: the turn settles without an answer,
+      every model request Pi made for the stopped prompt already carried an
+      aborted signal (a real provider sends nothing then), no approval is
+      left, and the next prompt runs.
+  - **Attachment-only drafts survive a backend restart.** Storage round-trips
+    a text-less image draft across `StorageService` instances
+    (`storage-drafts.test.ts`), and hydrating one for Cursor or Grok keeps
+    the image and never deletes or blanks the record
+    (`draft-persistence.test.ts`).
+
 ## Outstanding work
 
 ### Code
 
-1. **Retire the legacy close fallback after the support window.** Remove the
-   `DELETE` fallback and `LEGACY_DELETE_RETAINS_HISTORY` from
+1. **Retire the legacy close fallback after the support window** (blocked).
+   Remove the `DELETE` fallback and `LEGACY_DELETE_RETAINS_HISTORY` from
    `closeBridgeSessionRetaining`, and the `bridge-upgrade-required` path, once
-   no supported bridge predates `POST /session/:id/close` (see
-   [0034-mixed-version-compatibility.md](../cross-cutting/0034-mixed-version-compatibility.md)). Until
-   then, a 404 or 405 keeps meaning "old bridge", never "already closed".
-2. **Create no session for a tab opened only to resume** (follow-up to the
-   resume close, low). A tab locked to a platform for resume still creates a
-   provider session as it mounts, and the resume then closes it. The close
-   keeps vendor history, so OpenCode and Grok each still store one empty
-   conversation per resume, and a signed-in Grok bridge spawns an agent
-   process for a few seconds. Creating the session only on the first prompt,
-   or when the picker is dismissed, would avoid both. It needs the composer to
-   render without a projection.
-3. **Retry a replaced-session close that failed** (follow-up, low). The
-   resume close is best effort: a 503 pending or a timeout leaves the session
-   registered on the bridge, with no mapping for any sweep to find. Only a
-   close blocked by owned work answers pending, and a replaced tab session is
-   almost always empty. If the leak shows up again, record a durable intent
-   keyed by environment, agent and provider session, and replay it in
-   `reconcile_tab_teardowns`.
-4. **Label untitled resume rows by something a person recognises.**
-   `NativeResumeSessionDialog` falls back to `Session <first 8 characters of the
-   id>`. Live Grok rows whose title Grok had not generated yet read
-   `Session acp-sess`, because the id is the `acp-session:` resume token. A Pi
-   row without a name would show the start of a file path. Fall back to the
-   row's detail, or a short form of the provider's own id.
-5. **Two OpenCode servers starting at once can lose one to "database is
-   locked".** Every local OpenCode server shares the user's
-   `opencode.db` under XDG data. On 2026-10-21, two OpenCode environments
-   whose first turns were dispatched together started their servers in the
-   same second. One exited before it became healthy (`Error: Unexpected error
-   … database is locked`, code 1), and `commands-servers.ts` stopped it as
-   "startup did not complete". The dispatch had already been accepted, and for
-   the five minutes the run waited the tab's turn neither started nor reached
-   `error`. Restoring several OpenCode tabs at app start, or a mixed panel,
-   can start servers together the same way. Retry a startup whose server
-   exits on a locked database, or serialise OpenCode server starts per host,
-   and surface a startup that fails for good as a turn error instead of a
-   silent wait. Found by `paused-interactions-live.spec.ts`, which now starts a
-   provider's cases one after the other (see
-   [0001-agent-interactions-and-permissions.md](0001-agent-interactions-and-permissions.md#live-pause-record-2026-10-21)).
+   no supported bridge predates `POST /session/:id/close`. There is no agreed
+   support window yet
+   ([0034-mixed-version-compatibility.md](../cross-cutting/0034-mixed-version-compatibility.md)
+   owns that decision), so nothing can be retired. Until then, a 404 or 405
+   keeps meaning "old bridge", never "already closed". The restart notice is
+   now proved in the browser suite, so retiring it later has a test to
+   delete with it.
 
 ### Qualification
 
-No code is needed unless a check fails. Live items need provider credentials;
-batch them with
+Live items need provider credentials; batch them with
 [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md).
 
 1. **Live close retention for Cursor and Pi.** Run
    `e2e/agent-testing/close-retention-live.spec.ts`
    ([agent-testing.md](../../development/agent-testing.md#live-close-retention))
-   with a profile where both are signed in. On 2026-10-17 both were signed
-   out in an isolated profile on the qualification host: Pi because nothing
-   imports `~/.pi/agent/auth.json` into the profile's private HOME, and Cursor
-   for a reason the launcher does not log.
-2. **Pi startup interrupt.** Interrupt before the prompt is accepted, switch
-   away, return and reload. The turn must stop, status must settle, no approval
-   may be left unanswered, and the next prompt must run. The SDK side is
-   already source-verified (Pi "Preflight" in
-   [`upgrade-agents.md`](../../development/upgrade-agents.md)). The browser
-   harness cannot hold Pi's startup: the faux model answers at once and the
-   bridge exposes no startup gate outside its in-process test hooks.
-3. **Browser: large-transcript recovery after Cursor persistence shedding.**
-   Expect an honest truncated view, the same provider identity and working
-   controls.
-4. **Browser: steer saturation.** Expect the runtime-panel notice, the 429
-   refusal, the current turn continuing, and the draft kept across an inactive
-   return and a reload.
-5. **Browser: a dead-generation card while the environment is inactive.** A
-   card whose provider generation died (bridge restart) must be withdrawn after
-   close and reload. The still-live case (Grok question and plan approval
-   cancelled by the close, nothing actionable after reload or resume) is in
-   `e2e/CloseRetention.spec.ts`. No other platform's fake parks a request yet.
-6. **Browser: the `bridge-upgrade-required` restart toast for an old Claude
-   bridge.** This needs a stale-bundle fixture. The first pass observed only
-   the pending intent, not the toast.
+   with a profile where both are signed in. Attempted 2026-10-23 on an
+   isolated `dev:test` profile with host credentials
+   (`--agent-platforms cursor,pi`), neither case reached the close:
+   - Pi is now signed in (the profile reads the host's `auth.json` through
+     `PI_BRIDGE_AUTH_FILE`), but its first turn failed: Pi's own default
+     `gpt-4` is "not supported when using Codex with a ChatGPT account". With
+     `ORKESTRATOR_AGENT_TEST_CLOSE_RETENTION_MODELS=pi=openai/gpt-5.5` the
+     same error named `gpt-5.5`, and `pi=openai-codex/gpt-5.5` never sent.
+     A usable Pi model for agent-test profiles is
+     [0054-agent-test-pi-default-model.md](../cross-cutting/0054-agent-test-pi-default-model.md);
+     rerun this after it.
+   - Cursor's case timed out waiting for its first prompt to appear: the
+     test environment it created was still starting (sidebar spinner) when
+     the 60-second wait ran out, so this is environment setup in that
+     profile, not close retention. Rerun on a profile whose environments
+     start.
 
 ## Constraints and rationale
 
@@ -296,8 +362,9 @@ batch them with
   session the tab showed (`existing.providerSessionId`, which is also the
   adoption's `expectedProviderSessionId`), so the close takes no id from the
   renderer. The close runs only after the adoption succeeds, so a failed
-  resume leaves the tab's own session usable. Lazy creation stays as Code
-  item 2, because it also avoids the empty vendor conversation.
+  resume leaves the tab's own session usable. Lazy creation (done
+  2026-10-23) also avoids the empty vendor conversation, but the backend close
+  stays for a tab that did start its own session.
 - **The resume close follows tab teardown's last-owner rules and lock.**
   `providerSessionHeldElsewhere` and `withProviderSessionTeardownLock`
   (`provider-session-ownership.ts`) are shared code, not a copy. The lock is
@@ -319,7 +386,9 @@ batch them with
   lost the session with its process. The resume answers once both the refresh
   and the close settle, so the close never outlives the request unobserved.
   On a responsive bridge an idle close is one local request, and the bridge
-  request timeout bounds the slow case. A durable retry is Code item 3.
+  request timeout bounds the slow case. Since 2026-10-23 the close is
+  journaled first, so one that stays pending or times out is retried by the
+  reconcile sweep.
 - **`provider.closeSession`, not the teardown's raw bridge request.** The
   resume has already resolved the provider and reached the bridge, so there
   is no bridge to avoid starting. `HttpBridgeProvider.closeSession` calls
@@ -333,42 +402,176 @@ batch them with
 
 ## Open questions
 
-- **Idle cancel and abort answer differently** (`BRIDGE_CONTRACT_CAPABILITIES`,
-  `cancel-idle-in-band`):
-  - Claude has no `/cancel`, and idle `/abort` answers 200
-    `{status: "not_running"}`.
-  - Codex has no `/cancel`, and `/abort` answers 202 `{status, phase}` because
-    `turn/interrupt` is asynchronous.
-  - ACP answers 202 `{accepted: true}` in every state.
-
-  Aligning them is a contract decision. The backend abort ladder polls
-  authoritative settlement and does not depend on the body.
-- Should Claude, Codex, Pi and ACP publish bounded-state occupancy in
-  `/runtime-health`? Only Cursor does today (`bounded-recovery-summary` is
-  unsupported for the rest).
+None. The two questions this file carried (idle cancel and abort bodies,
+bounded-state occupancy in `/runtime-health`) are decided below.
 
 ## Needs verification
 
 - What a real Cursor resume row shows. The bridge creates every SDK agent as
   `name: "Orkestrator"` and has no rename, so each row is probably titled
-  "Orkestrator", with the SDK's `summary` as its detail. The browser spec's fake
-  assumes the summary describes the conversation. Check on the live run in
-  Qualification item 1.
+  "Orkestrator", with the SDK's `summary` as its detail. The browser spec's
+  fake assumes the summary describes the conversation. Check on the live run
+  in Qualification item 1. If every row reads "Orkestrator", title untitled
+  Cursor rows from the summary rather than the agent name.
 
-- Whether an attachment-only Cursor or Grok draft survives a backend restart
-  without composer hydration erasing the image.
-  `apps/backend/src/core/storage-drafts.test.ts` round-trips drafts across
-  `StorageService` instances, but no case covers an attachment-only draft
-  through a restart.
+## Assumptions and decisions
+
+### Lazy session only for tabs opened from the resume flow (Code item 2)
+
+- **Options.** (a) Create the session on first prompt for every new tab.
+  (b) Defer only while a tab opened from **Resume Session** shows its picker;
+  create it when the picker is dismissed or the resume fails. (c) Keep
+  creating on mount and rely on the backend close.
+- **Choice: (b).**
+- **Why.** It removes the empty conversation for the case that produced it,
+  without touching the composer's dependence on a projection for every other
+  tab (models, modes, send lock, slash commands all read it). An unassigned
+  tab is already lazy until its first prompt.
+- **Pros.** Small, local to the controller; no protocol change; the backend
+  resume already accepts an unmapped tab.
+- **Cons.** The resume sends no composer controls, so the resumed
+  conversation keeps its own settings (the old path sent the empty session's
+  defaults, which was never a user choice). The "for resume" flag is not
+  persisted: a reload while the picker is open creates the session as before.
+  The backend close is kept for tabs that did start a session.
+
+### Durable replaced-session close reuses the tab teardown journal (Code item 3)
+
+- **Options.** (a) A new environment field and sweep. (b) The existing tab
+  teardown intents under a reserved key, with a replay branch. (c) Leave it
+  best effort.
+- **Choice: (b).** Key `resume-replaced:<agent>:<sha256(agent, id) prefix>`,
+  `kind` `<agent>-native`, the id fenced as every native intent is.
+- **Why.** The journal already has the storage lock, `createdAt`
+  generations, the 60-second sweep with per-intent backoff, startup replay and
+  deletion with its environment. The item was conditional ("if the leak shows
+  up again"); journaling it costs one write per resume.
+- **Pros.** No new storage or sweep. Downgrade-safe: an older backend sees a
+  fenced intent for a tab nobody maps and clears it without a provider call.
+  One intent per replaced session (the key is deterministic), and no session
+  content in the key or the logs.
+- **Cons.** A reserved prefix in what are otherwise tab ids, guarded in
+  `teardown_tab`. Like a tab intent, it stays pending while the bridge is down
+  (an un-restarted local bridge holds no session, a restarted Cursor bridge
+  restores it), backing off to 15 minutes.
+
+### Resume row fallback: the provider's own short id (Code item 4)
+
+- **Options.** Fall back to the row's detail, or to a short form of the
+  provider's id.
+- **Choice:** the short id, keeping the detail beside it.
+- **Why.** The detail is sometimes a message count ("3 messages"), which is no
+  title, and using it as the title would repeat it on the same row.
+- **Cons.** The label is an id fragment rather than words; Pi's first message
+  still sits right beside it.
+
+### OpenCode startup: serialise and retry; no new turn-error record (Code item 5)
+
+- **Options.** Retry a locked-database exit; serialise starts per host;
+  record a turn error for a failed start.
+- **Choice:** serialise every host start from spawn to healthy, and retry a
+  locked-database exit twice. No new turn-error record.
+- **Why.** Serialising removes the race between this backend's own servers;
+  the retry covers an `opencode` the user runs in a terminal. A failed start
+  happens before the at-most-once window, so the dispatch is refused with the
+  reason and the tab already shows it as a send error; the silent wait was the
+  live spec ignoring that outcome.
+- **Pros.** Bounded: a start holds the host turn for at most the 15-second
+  health budget. The short-lived catalogue and sign-in servers share the lock.
+- **Cons.** Several environments restoring at app start come up one after
+  another (seconds each) instead of together. A coordinator's MCP wait is
+  outside the lock, so it does not lengthen anyone else's start.
+
+### The legacy close fallback is not retired (Code item 1)
+
+- **Choice:** keep it. Retiring needs a support window that 0034 has not
+  agreed; removing it now would turn an old Claude bridge's 404 into a
+  failure with no notice, or worse, tempt a DELETE.
+
+### Pi startup interrupt is proved in the browser suite (Qualification item 2)
+
+- **Options.** Gate Pi through a user extension (`before_agent_start`);
+  through the bridge's in-process test hooks; at `AgentSession.prompt` in the
+  fake engine.
+- **Choice:** `AgentSession.prompt` in `bridges/pi-bridge/src/testing/fake-engine-server.ts`.
+- **Why.** The bridge loads no discovered extensions unless project resources
+  are enabled (`noExtensions`), so an extension never runs for an ordinary
+  tab. The hooks replace the whole SDK session. Holding the SDK's own entry
+  point keeps every layer above it real.
+- **Cons.** It holds the first stage of Pi's preflight (input handlers,
+  auth), not auto-compaction. The second stage is source-verified in
+  `prompt-cancel-preflight.test.ts`. A stop recorded before acceptance is
+  applied by the bridge after its acceptance await resumes; with the backend
+  fix, the real SDK showed that abort reaching the run before its first model
+  request (the request carried an aborted signal), so the bridge's ordering
+  was left as it is.
+
+### The backend stop no longer waits for its interrupt write before aborting
+
+- **Options.** Keep "record, then abort"; take the interrupt write out of the
+  session queue; start the write and send the abort without waiting.
+- **Choice:** start the write, abort, and await the write at the end.
+- **Why.** The session queue is the at-most-once fence of the dispatch and
+  must stay held until the provider acknowledges. The in-memory interrupt
+  fence was already how a failed write is honoured.
+- **Cons.** A backend that dies between the abort and the write loses the
+  "interrupted" classification for that request, the same exposure as a
+  failed write today. The stop request answers only once the write lands,
+  which during a startup is once the provider settles the prompt.
+
+### A truncated window that cannot page says so
+
+- **Choice:** show "Earlier messages in this conversation are not available
+  here. The conversation itself is kept." when the window is truncated, the
+  16 MiB notice does not apply and there is no load-earlier control.
+- **Why.** The persistence-shed transcript rendered as if it were the whole
+  conversation, which is exactly what the qualification forbids. #755 removed
+  the old "Earlier messages are not shown." because the button always showed
+  then; once the button was retired for unpageable windows, nothing said it.
+- **Cons.** Any provider whose source reports truncation with no paging now
+  shows the line too, which is accurate but new to users.
+
+### Idle cancel and abort answer differently (former open question)
+
+- **Options.** Align every bridge on one idle body; keep the bodies and
+  document that the backend reads settlement.
+- **Choice:** keep them.
+- **Why.** The backend abort ladder polls authoritative status and never
+  reads the body, and the conformance matrix already records each
+  difference with its reason (`cancel-idle-in-band`). Aligning would change
+  three bridges' wire contracts and the version skew between them for no
+  behaviour change.
+- **Cons.** A new caller must not read the body as a stop; the matrix and
+  `bridges/AGENTS.md` are where it learns that.
+
+### Bounded-state occupancy in `/runtime-health` stays Cursor-only (former open question)
+
+- **Choice:** do not publish occupancy for Claude, Codex, Pi or ACP.
+- **Why.** Cursor publishes its steer journal because it refuses user work
+  (429) when the journal is full and the runtime panel tells the user why. The
+  other bridges' bounds (queues, journals) do not refuse a user action the
+  panel could explain. Publishing numbers nobody acts on is cost without use.
+- **Revisit** when another bridge gains a bound that refuses user work.
+
+### Assumptions
+
+- The live failures recorded under Qualification item 1 are environment and
+  model problems of the agent-test profile on this host, not close
+  retention: neither case reached the close.
+- The faux model being asked for the stopped Pi prompt is not a request sent:
+  pi-ai's faux provider calls its response factory even for an aborted
+  request, so the evidence is the signal it was handed.
 
 ## Related
 
 - [0005-mid-turn-steer-and-interrupt.md](0005-mid-turn-steer-and-interrupt.md):
   steer and interrupt support per provider.
 - [0001-agent-interactions-and-permissions.md](0001-agent-interactions-and-permissions.md):
-  the interaction contract behind qualification item 7.
+  the interaction contract behind the dead-generation case.
 - [0050-transcript-history-efficiency.md](../transcripts-and-observation/0050-transcript-history-efficiency.md):
-  truncated history views (item 5).
+  truncated history views.
+- [0054-agent-test-pi-default-model.md](../cross-cutting/0054-agent-test-pi-default-model.md):
+  the Pi model the live run in Qualification item 1 needs.
 
 ## Replaces
 

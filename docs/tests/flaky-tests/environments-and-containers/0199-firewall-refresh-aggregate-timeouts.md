@@ -29,3 +29,10 @@ aggregate-load timeouts.
 - **Owning-file reruns:** passed alone at the default deadline before the aggregate run, and passed with `--timeout 30000` afterwards (shared run with 0192: 39 passed, 39.75 seconds).
 - **Evidence:** `/tmp/orkestrator-test-run.pQullD/root-and-agent-support-tests.log.gz`.
 - **Assessment:** same load-bound deadline; no assertion, timeout or skip changed.
+
+## Session lifecycle validation recurrence — 2026-10-23
+
+- **Original command:** `mise run test:logged -- --name full-test -- mise run test` on `todo-0002-session-lifecycle-e3d0745d06fa` after merging `origin/main`, default worker plan, while no browser suite was running.
+- **Failure:** `firewall allowlist refresh and edits > policy 3 refreshes the stored tuples and add/remove edit them` hit the five-second timeout (5003.39 ms). It was the only failure in the root group.
+- **Owning-file rerun:** `mise run test:logged -- --name firewall-owner -- bun test ./tests/unit/firewall-refresh.test.ts --parallel=1 --only-failures` passed the complete unchanged file, exit 0 in 5.0 seconds.
+- **Evidence:** `orkestrator-test-run.IoyN8C/full-test.log.gz` under the host temporary directory. No assertion, timeout or skip changed.

@@ -48,7 +48,12 @@ export function createNativeAgentProvider(
           ...openCodeEnvironmentDependencies(dependencies.environment),
           ...dependencies,
         })
-      : new HttpBridgeProvider(connection, dependencies.fetch ?? fetch, dependencies.stageImages);
+      : new HttpBridgeProvider(
+          connection,
+          dependencies.fetch ?? fetch,
+          dependencies.stageImages,
+          dependencies.onObservationHint,
+        );
   // Codex runs the model its session was created with; the other bridges carry
   // the model on each prompt and keep the configured one.
   if (connection.agent === "codex") {

@@ -728,6 +728,15 @@ export interface NativeAgentTurnState {
   error?: string;
   /** Present only while the turn is running and the provider reported one. */
   activity?: NativeAgentTurnActivity;
+  /**
+   * The backend announces every change to this session's idle view: activity
+   * transitions and, for a provider whose idle view can change without one
+   * (Claude background tasks, Codex async questions), content revisions from
+   * the provider's no-touch activity read. Set only while the provider
+   * reports those revisions, so a view of an older bridge keeps its baseline
+   * cadence. See `NATIVE_QUIET_BACKOFF_CONTENT_REVISION_PLATFORMS`.
+   */
+  quietObservation?: true;
 }
 
 /**

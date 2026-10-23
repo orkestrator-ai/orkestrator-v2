@@ -6,10 +6,15 @@
  * on `native-agent-session-activity`. Since step 07 each announcement also
  * names the session (`agent`, `logical_session_key`) and carries the
  * observer's {@link ViewRevisionStamp}: `generation` is one lifetime of the
- * observer, and `revision` increases by exactly one per announced transition,
- * so a client that sees a gap knows it missed a transition and must re-read
- * every native view it holds. All fields are additive; an announcement without
- * them comes from an older backend.
+ * observer, and `revision` increases by exactly one per announcement, so a
+ * client that sees a gap knows it missed one and must re-read every native
+ * view it holds. All fields are additive; an announcement without them comes
+ * from an older backend.
+ *
+ * A `reason: "content"` announcement is not a transition: `state` equals
+ * `previous_state`, and it says that an idle session's view changed anyway
+ * (its provider's content revision moved). Clients treat it like any other
+ * session-scoped invalidation; it shares the same stamp sequence.
  */
 import type { AgentPlatform } from "./agent-platforms.js";
 import { readViewRevisionStamp, type ViewRevisionStamp } from "./view-sync.js";
@@ -26,18 +31,34 @@ export const NATIVE_AGENT_OBSERVATION_EVENT_VERSION = 1;
  * Providers whose *idle* native views may use the renderer's quiet read
  * backoff. Qualification (step 07 completion notes): the backend observes the
  * provider at least every sweep or through a live event stream, an idle view
- * of the provider cannot change without an activity transition the backend
- * announces, and missed announcements are recovered by the stamp gap check
- * and the read coordinator's reconnect reconcile. Claude (background task
- * output behind a released composer) and Codex (async questions and
- * background terminals on an idle thread) do not qualify.
+ * of the provider cannot change without an announcement, and missed
+ * announcements are recovered by the stamp gap check and the read
+ * coordinator's reconnect reconcile.
+ *
+ * Claude (background task output behind a released composer) and Codex (async
+ * questions and late command changes on an idle thread) change an idle view
+ * without an activity transition. They qualify only through content
+ * announcements, so they are also in
+ * {@link NATIVE_QUIET_BACKOFF_CONTENT_REVISION_PLATFORMS}.
  */
 export const NATIVE_QUIET_BACKOFF_QUALIFIED_PLATFORMS: readonly AgentPlatform[] = Object.freeze([
   "cursor",
   "pi",
   "grok",
   "opencode",
+  "claude",
+  "codex",
 ]);
+
+/**
+ * Qualified providers whose idle view may back off only while the backend
+ * marks the session `turn.quietObservation`: its bridge reports a content
+ * revision on the no-touch activity read, and the backend announces each
+ * change of it (`reason: "content"`). A session on an older bridge, or before
+ * its first observation, keeps the baseline cadence.
+ */
+export const NATIVE_QUIET_BACKOFF_CONTENT_REVISION_PLATFORMS: readonly AgentPlatform[] =
+  Object.freeze(["claude", "codex"]);
 
 export interface NativeAgentActivityAnnouncement {
   environmentId: string;
@@ -45,6 +66,8 @@ export interface NativeAgentActivityAnnouncement {
   logicalSessionKey?: string;
   previousState?: string;
   state: string;
+  /** `content`: the view changed without a transition. Absent for a transition. */
+  reason?: "content";
   /** Absent for an older backend. */
   stamp?: ViewRevisionStamp;
 }
@@ -67,6 +90,8 @@ export function parseNativeAgentActivityAnnouncement(
     return null;
   }
   if (record.previous_state !== undefined && !boundedString(record.previous_state)) return null;
+  // An unknown reason is a newer backend's; the announcement still invalidates.
+  if (record.reason !== undefined && typeof record.reason !== "string") return null;
   const stamp = readViewRevisionStamp(record, "event");
   if (stamp === "invalid") return null;
   return {
@@ -79,6 +104,7 @@ export function parseNativeAgentActivityAnnouncement(
     ...(record.previous_state !== undefined
       ? { previousState: record.previous_state as string }
       : {}),
+    ...(record.reason === "content" ? { reason: "content" as const } : {}),
     ...(stamp ? { stamp } : {}),
   };
 }

@@ -138,8 +138,10 @@ export function DestinationPicker({
   };
 
   return (
-    <fieldset className="space-y-1.5">
-      <legend className="flex w-full items-center justify-between text-[11px] font-medium text-muted-foreground">
+    // `min-w-0`: a fieldset defaults to `min-inline-size: min-content`, so a
+    // long session title would otherwise push it past a narrow sidebar.
+    <fieldset className="min-w-0 space-y-1.5">
+      <legend className="flex w-full flex-wrap items-center justify-between gap-x-2 text-[11px] font-medium text-muted-foreground">
         <span>Agent session</span>
         <span className="flex gap-1">
           <Button
@@ -159,7 +161,7 @@ export function DestinationPicker({
             type="button"
             size="sm"
             variant="ghost"
-            className="h-6 gap-1 px-1.5 text-[11px]"
+            className="h-auto min-h-6 gap-1 whitespace-normal px-1.5 text-left text-[11px]"
             onClick={() => {
               const opened = openNewAgentSession(environmentId);
               setNotice(
@@ -206,11 +208,11 @@ export function DestinationPicker({
                 data-destination={option.destination.tabId}
                 onClick={() => choose(option)}
                 className={cn(
-                  "block w-full rounded border px-2 py-1.5 text-left text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                  "block w-full min-w-0 rounded border px-2 py-1.5 text-left break-words text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-ring",
                   selected ? "border-primary/60 bg-primary/10" : "border-border/60",
                 )}
               >
-                <span className="block truncate font-medium text-foreground">
+                <span className="line-clamp-2 font-medium text-foreground">
                   {option.title}
                   {option.isDefault ? " · default" : ""}
                 </span>

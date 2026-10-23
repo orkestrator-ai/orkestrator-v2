@@ -74,6 +74,7 @@ import {
 import {
   withProviderSessionTeardownLock,
   providerSessionHeldElsewhere,
+  replacedSessionCloseIntent,
 } from "./provider-session-ownership.js";
 import {
   coordinatorResearchLine,
@@ -509,6 +510,7 @@ export class NativeAgentService {
       storage,
       options,
       catalogs: this.catalogs,
+      observedActivity: (sessionKey) => this.launches.observedActivity(sessionKey),
       providerGeneration: (input) =>
         this.providerRegistry.connectionIdentity(
           providerCacheKey(input.environmentId, input.agent),
@@ -1787,7 +1789,14 @@ export class NativeAgentService {
     const providerSessionId = resolved.session.providerSessionId;
     // Mark the active turn before stopping it: a stopped turn reads as idle,
     // and an observer must never mistake it for one that finished on its own.
-    const requestId = resolved.session.dispatchedRequestIds?.at(-1);
+    // A prompt the provider has not accepted yet (Pi's startup) is the turn
+    // being stopped; it joins `dispatchedRequestIds` only once accepted.
+    const inFlight = resolved.session.pendingDispatch;
+    const requestId =
+      inFlight && !inFlight.mailRefused
+        ? inFlight.requestId
+        : resolved.session.dispatchedRequestIds?.at(-1);
+    let recordingInterrupt: Promise<void> | undefined;
     if (requestId) {
       const before = await resolved.provider
         .status(providerSessionId)
@@ -1802,18 +1811,23 @@ export class NativeAgentService {
           : false;
       if ((before === "running" || before === "blocked") && !released) {
         this.promptQueues.fenceTurnInterrupt(resolved.key, providerSessionId, requestId);
-        try {
-          await this.storage.recordNativeAgentTurnInterrupt(
-            resolved.key,
-            providerSessionId,
-            requestId,
+        // Not awaited before the abort. A dispatch the provider has not
+        // acknowledged holds this session's storage queue until it does, so
+        // the write waits out exactly the startup the stop has to reach. The
+        // in-memory fence above classifies the turn as interrupted meanwhile,
+        // as it does when the write fails.
+        recordingInterrupt = this.storage
+          .recordNativeAgentTurnInterrupt(resolved.key, providerSessionId, requestId)
+          .then(
+            (persisted) => {
+              if (persisted) this.promptQueues.releaseTurnInterrupt(resolved.key, requestId);
+            },
+            () => {
+              console.warn(
+                "[native-agent] Turn interrupt persistence failed; automatic publication remains fenced",
+              );
+            },
           );
-          this.promptQueues.releaseTurnInterrupt(resolved.key, requestId);
-        } catch {
-          console.warn(
-            "[native-agent] Turn interrupt persistence failed; automatic publication remains fenced",
-          );
-        }
       }
     }
     await resolved.provider.abort(providerSessionId);
@@ -1830,6 +1844,7 @@ export class NativeAgentService {
       hardAbortAttempted = true;
       await resolved.provider.hardAbort(providerSessionId);
     }
+    await recordingInterrupt;
     const sessionKey = nativeAgentSessionStorageKey(
       input.environmentId,
       input.agent,
@@ -1990,9 +2005,12 @@ export class NativeAgentService {
    * an `ACP_MAX_SESSIONS` slot that nothing reaps. Same last-owner rules and
    * lock as tab teardown. The close keeps the vendor conversation.
    *
-   * Best effort and never throws: the resume already succeeded. A bridge that
-   * cannot be reached has usually lost the session with its process; a close
-   * that stays pending leaves it registered (no durable retry yet).
+   * Never throws: the resume already succeeded. The close is journaled
+   * first as a teardown intent (`replacedSessionCloseIntent`) and cleared
+   * once it is confirmed, so a close that stays pending, times out or is cut
+   * short by a backend exit is replayed by `reconcile_tab_teardowns` under
+   * the same rules. An environment the journal cannot hold (a coordinator
+   * runtime) still gets the one best-effort close.
    */
   private async closeReplacedSession(
     provider: NativeAgentRuntimeProvider,
@@ -2014,7 +2032,19 @@ export class NativeAgentService {
             providerSessionId,
           });
           if (heldElsewhere) return;
+          const intent = replacedSessionCloseIntent(agent, providerSessionId);
+          const journaled = await this.storage.setTabTeardownIntent(environmentId, intent).then(
+            () => true,
+            () => false,
+          );
           await provider.closeSession(providerSessionId);
+          if (journaled) {
+            await this.storage.clearTabTeardownIntent(
+              environmentId,
+              intent.tabId,
+              intent.createdAt,
+            );
+          }
         },
       );
     } catch (error) {
@@ -2632,12 +2662,12 @@ export class NativeAgentService {
       const interrupt = this.promptQueues.pendingTurnInterrupt(key, input.requestId);
       if (interrupt?.providerSessionId === session.providerSessionId) {
         try {
-          await this.storage.recordNativeAgentTurnInterrupt(
+          const persisted = await this.storage.recordNativeAgentTurnInterrupt(
             key,
             session.providerSessionId,
             input.requestId,
           );
-          this.promptQueues.releaseTurnInterrupt(key, input.requestId);
+          if (persisted) this.promptQueues.releaseTurnInterrupt(key, input.requestId);
         } catch {
           /* Retain the fence and retry on the next observation. */
         }
@@ -2891,6 +2921,20 @@ export class NativeAgentService {
       input.agent,
       input.logicalSessionKey,
     );
+    // Idle presence is only as good as the observation behind it. A group the
+    // observer has backed off keeps its retained idle between safety reads;
+    // past the age the injection gate trusts, presence says `unknown` rather
+    // than `idle`, so a slower observation never reads as permission to
+    // inject (the gate then reads the provider itself).
+    if (
+      activity === "idle" &&
+      !observationSatisfies(this.observations.view(sessionKey, session?.providerSessionId), {
+        maxAgeMs: MAIL_INJECT_OBSERVATION_MAX_AGE_MS,
+        requirePostDispatch: true,
+      })
+    ) {
+      return "unknown";
+    }
     return activity === "idle" || activity === "working" || activity === "waiting"
       ? activity
       : "unknown";

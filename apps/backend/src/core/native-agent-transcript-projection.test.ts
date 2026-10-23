@@ -73,6 +73,7 @@ async function withProjection(
     storage,
     options: {},
     catalogs,
+    observedActivity: () => undefined,
     providerGeneration: () => "generation-1",
     now: () => Date.now(),
     isStopped: () => false,

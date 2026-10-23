@@ -449,7 +449,17 @@ the private `Host` instead. Inbound forwarding headers are always discarded.
   `https://s-….<domain>` and register its callback URL with the OAuth provider.
   Use that configured origin when generating redirect URIs on writes or
   fetches too. The desktop ingress port can change between sessions, so use
-  the published service origin for OAuth flows.
+  the published service origin for OAuth flows. Hidden-iframe silent renewal
+  that redirects through an external identity provider and back is unsupported:
+  even when this service embeds the iframe, the return can carry
+  `Sec-Fetch-Site: cross-site` and `Sec-Fetch-Dest: iframe`, so it receives
+  `403` before reaching the application and increments
+  `http.rejected{forbidden}`. Firefox and WebKit in the test run dropped the
+  Lax preview cookie on this return and received `401` before the metadata
+  check instead. Use refresh tokens (when supported by the provider), a popup,
+  or a top-level redirect flow instead. Direct same-origin
+  iframe loads still work. Allowing cross-site iframe returns would also let
+  a sibling service launder a frame through an external redirect.
 - Applications that build absolute URLs from `Host` produce `localhost` links.
   Set an explicit public origin for URL generation across all request types;
   `X-Forwarded-Host` is absent on mapped-Origin requests, and falling back to
@@ -467,10 +477,18 @@ the private `Host` instead. Inbound forwarding headers are always discarded.
 - Embedded previews in web and iOS clients are not advertised. They have not
   passed real-browser privacy tests, so those clients open the preview
   top-level.
-- Top-level private origins are verified in Chromium only
-  (`e2e/preview/private-origin.spec.ts`).
+- Same-service iframe authentication returns through an external identity
+  provider are unsupported on private origins; use refresh tokens, popup or
+  top-level redirect renewal (see **Framework configuration**). Fetch Metadata
+  describes the redirect chain, so the final same-service URL does not make
+  the request same-origin.
+- Top-level private origins are verified in Playwright Chromium, Firefox and
+  WebKit (`e2e/preview/private-origin.spec.ts`). WebKit is engine coverage;
+  shipping Safari and iOS are not qualified by it. Firefox/WebKit tests use
+  a certificate bypass scoped to throwaway contexts, so they do not prove
+  deployment certificate trust.
 - The following have not been validated:
-  - Firefox, Safari, and iOS devices;
+  - shipping Safari and iOS devices;
   - Docker Desktop;
   - a real Electron window;
   - a two-machine tailnet run.
@@ -486,13 +504,15 @@ the private `Host` instead. Inbound forwarding headers are always discarded.
   in real Chromium on 2026-10-22). The worker can also carry the code
   elsewhere and redeem it once from another browser, for that same service
   only.
-- Cross-service reads are refused by Fetch Metadata, verified in Chromium 156
-  only. A browser that sends no `Sec-Fetch-Site` (Firefox before 90, Safari
-  before 16.4) can still send a blind credentialed `no-cors` `GET` to a
+- Cross-service reads are refused by Fetch Metadata, verified in Chromium 156,
+  Firefox 157 and Playwright WebKit 27.2. A browser that sends no
+  `Sec-Fetch-Site` (Firefox before 90, Safari before 16.4) can still send a blind credentialed `no-cors` `GET` to a
   sibling, and a sibling can still navigate the top-level window to another
-  service. Whether a Tailscale Serve forwarder (`publicPort`) passes
-  `Sec-Fetch-*` through has been checked in its source, not live; if it did
-  not, reads would fall back to the `Origin` check. See
+  service. A live Tailscale Serve 1.102.4 probe preserved `Sec-Fetch-*` and
+  `Sec-Purpose`, including prefetch/prerender; wildcard private DNS,
+  certificates and browser traffic through `publicPort` still need deployment
+  qualification. If another forwarder strips metadata, reads fall back to
+  the `Origin` check. See
   [0054-preview-cross-service-reads.md](../todo/previews-and-annotations/0054-preview-cross-service-reads.md).
 - The relay needs `node` or `bun` in the image, and the `node` user.
 - Only HTTP/1.1 and WebSockets are carried. HTTP/2-only features, HTTP/3,

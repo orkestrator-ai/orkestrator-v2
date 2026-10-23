@@ -254,7 +254,7 @@ bun test --cwd apps/backend ./src/core/preview-docker.test.ts ./src/preview-rela
 """
 
 [tasks."test:preview:browser"]
-description = "Opt-in real Chromium checks against private preview origins (set ORKESTRATOR_TEST_PREVIEW_VITE_DIR for HMR)"
+description = "Opt-in Chromium, Firefox and WebKit private-origin checks (set ORKESTRATOR_TEST_PREVIEW_VITE_DIR for HMR)"
 raw_args = true
 run = "bunx playwright test --config e2e/preview/playwright.preview.config.ts"
 

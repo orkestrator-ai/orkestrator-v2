@@ -13,8 +13,10 @@ for blind reads, and the qualification's "no other service is ever reached".
 Publication is off by default and a per-deployment opt-in, so only operators
 who enabled private origins were exposed.
 
-The read policy is now implemented (2026-10-23). What remains is running it in
-other browsers and through a real Tailscale Serve forwarder.
+The read policy is implemented and browser-tested in Chromium, Firefox and
+Playwright WebKit (2026-10-23). A live Tailscale Serve probe preserves its
+metadata headers. Shipping Safari/iOS and full wildcard-DNS deployments
+through `publicPort` remain unqualified.
 
 ## Current state
 
@@ -66,20 +68,60 @@ other browsers and through a real Tailscale Serve forwarder.
 
 ### Qualification
 
-- Done 2026-10-23 in Chromium: `mise run test:preview:browser` after the
-  change. See **Evidence**.
-- Open: the same two cases ("sibling services cannot read each other in the
-  background; links between them still open" and the hostile worker) in
-  Firefox and Safari, when those runs happen
-  ([0042-service-preview-rollout.md](0042-service-preview-rollout.md),
-  "Firefox, Safari and iOS"). The spec launches Chromium only, so the run
-  needs either those browsers driven by hand or Playwright projects for
-  them (item 3 of 0042's local work). Both browsers have sent Fetch Metadata
-  since Firefox 90 and Safari 16.4, so the same result is expected; it has
-  not been observed.
+- Done 2026-10-23: Chromium, Firefox and WebKit projects in
+  `e2e/preview/playwright.preview.config.ts`, including sibling reads and the
+  hostile worker. A browser-local proxy maps only the harness's test hosts
+  to loopback without changing URLs, Fetch Metadata, system DNS or trust.
+  Chromium pins the test certificate; Firefox/WebKit bypass certificate
+  checks in throwaway contexts only.
+- Done 2026-10-23: direct same-origin iframe, external identity-provider
+  redirect back into that iframe, and top-level return through the same
+  redirect. Chromium returns `403` with cross-site/iframe metadata and the
+  session cookie; Firefox/WebKit omit the cookie and return `401` earlier.
+  Neither rejected return reaches the application; each increments
+  `http.rejected{forbidden}`. Direct frames and top-level returns work.
+- Done 2026-10-23: live Tailscale Serve metadata transport test,
+  `apps/backend/src/tailscale-serve-metadata.test.ts`. See **Evidence**.
+- Open: shipping Safari and iOS, including private-browsing behavior, and
+  full browser publication through real wildcard DNS/certificates and
+  `publicPort`. Playwright WebKit is early engine signal, not Safari/iOS
+  qualification. Follow 0042's platform and deployment gates.
 
 ## Evidence
 
+- Review follow-up, 2026-10-23, macOS 27.0, Playwright 1.64.0:
+  `mise run test:logged -- --name preview-browser-cross-engine -- mise run
+  test:preview:browser` passed (80.8 s): 24 passed, 3 skipped (Vite HMR,
+  fixture unset), eight cases each in Chromium 156.0.8078.4, Firefox 157.0
+  and Playwright WebKit 27.2. WebKit blocks the worker's HTTPS-to-HTTP
+  gateway probes before they reach the gateway; all six attempts fail and
+  zero gateway requests arrive. Chromium/Firefox reach the gateway without
+  credentials and are refused there. No sibling request is forwarded in any
+  engine. An explicit fixture data-URL icon prevents delayed browser favicon
+  loads from contaminating the "nothing forwarded" snapshots.
+- Follow-up validation: `mise run check`, focused protocol forwarding (32
+  cases), publication (13 cases), preview spec loading and the final iframe
+  regression in all three engines passed. `mise run test` exited 1 after
+  938.4 s: root/support, bridge and protocol groups passed; the backend had
+  9553 passed, 61 skipped and one recurring-baseline timeout. Its unchanged
+  owning file also timed out alone (4 passed, 1 failed). Latest observation
+  remains unresolved in existing case
+  [0177](../../tests/flaky-tests/native-agents-and-transcripts/0177-driven-observation-baseline-timeout.md),
+  with exact commands and compressed failure artifacts. No baseline timeout
+  or assertion was changed. Docker, native Electron, iOS and published-CLI
+  scenario suites were omitted because this follow-up changes preview
+  documentation and test infrastructure.
+- Live transport, Tailscale Serve 1.102.4 on the same host:
+  `ORKESTRATOR_TEST_TAILSCALE_SERVE_METADATA=1 mise run test:logged --
+  --name tailscale-metadata-live-final -- bun test --cwd apps/backend
+  ./src/tailscale-serve-metadata.test.ts --parallel=1` passed (one test,
+  eight requests, 16 assertions). All three `Sec-Fetch-*` fields and
+  `Sec-Purpose` arrived unchanged, including prefetch/prerender; the received
+  metadata produced the expected read-policy verdicts. TLS certificate
+  verification stayed enabled on the client. A temporary, tailnet-only
+  HTTPS listener on unused port 18443 forwarded to a synthetic loopback
+  receiver; teardown removed it and left existing listeners intact. No
+  production backend, credentials, wildcard DNS or trust-store edits used.
 - 2026-10-23, macOS, Playwright 1.64.0, Chromium 156.0.8078.4:
   `mise run test:logged -- --name preview-browser -- mise run
   test:preview:browser` passed. With the list reporter: 7 passed, 1 skipped
@@ -126,17 +168,19 @@ other browsers and through a real Tailscale Serve forwarder.
 
 ## Needs verification
 
-- Whether `Sec-Fetch-*` metadata reaches the backend unchanged through a
-  real Tailscale Serve forwarder (`publicPort`). The source says it does
-  (see **Evidence**). Not run live: it needs `tailscale serve` turned on for
-  the preview listener on a signed-in tailnet node, which changes that
-  node's tailnet configuration, and a real private DNS name and certificate.
-  Batch it with 0042's "Real private DNS and certificates" run. To check,
-  open a sibling's `/echo` from a service page with
-  `fetch(url, { credentials: "include", mode: "no-cors" })` and confirm a
-  `403` and a new `http.rejected{forbidden}`. If the forwarder strips the
-  headers, the read policy falls back to the `Origin` check and blind
-  `no-cors` reads reach the sibling again; links still work.
+- Shipping Safari and iOS, with their actual privacy settings and certificate
+  trust; Playwright WebKit does not close this gate.
+- Full browser traffic through a wildcard-DNS Tailscale Serve deployment
+  (`publicPort`). Header preservation itself passed the live synthetic probe
+  in **Evidence**; DNS, preview Host routing, TLS renewal and session handling across
+  that deployment are separate. Batch them with 0042's "Real private DNS and
+  certificates" run. From an authenticated service page, send a sibling
+  `fetch(url, { credentials: "include", mode: "no-cors" })`, image and frame;
+  confirm each receives `403`, adds a `http.rejected{forbidden}` and never
+  reaches the sibling. Follow with a top-level link and verify it opens.
+  Exercise speculation with `Sec-Purpose: prefetch` and `prefetch;prerender`
+  where the browser supports it. Record the browser and Serve versions;
+  do not infer support from an opaque fetch result alone.
 
 ## Assumptions and decisions
 
@@ -155,8 +199,9 @@ other browsers and through a real Tailscale Serve forwarder.
 - **Why**: it closes the reachable blind read with one header check on the
   existing refusal path and keeps every flow the product uses: links between
   services, the bootstrap redirect chain (`cross-site` navigate document),
-  the iOS handoff opened in Safari (`none`), and each service's own traffic
-  (`same-origin`).
+  the iOS handoff opened in Safari (`none`), and each service's traffic that
+  remains `same-origin`. A same-service iframe return through an external identity provider is an exception: the
+  redirect chain can make it `cross-site`, so it is refused.
 - **Pros**: no cookie, sign-in or client change; refused requests never
   reach the application; same metric as other refusals; Chromium-verified
   with a negative check.
@@ -181,8 +226,13 @@ other browsers and through a real Tailscale Serve forwarder.
 - **Why**: a hidden same-site frame is a blind credentialed `GET` the user
   never sees, which is exactly the exposure being closed.
 - **Pros**: no invisible cross-service loads at all.
-- **Cons**: one service cannot frame another. Embedded previews in the web
-  client ([0046-embedded-service-previews.md](0046-embedded-service-previews.md))
+- **Cons**: one service cannot frame another. A service's own hidden iframe
+  also cannot return through an external identity provider when the redirect
+  chain makes the request `cross-site`; this breaks iframe-based OIDC silent
+  renewal. Use refresh tokens, popup or top-level redirect renewal instead.
+  Allowing cross-site `navigate` + `iframe` would let siblings bypass the
+  frame restriction with an external redirect, so no exception is added.
+  Embedded previews in the web client ([0046-embedded-service-previews.md](0046-embedded-service-previews.md))
   will need their own rule; they are cross-site, so the `SameSite=Lax`
   cookie is not sent to them anyway.
 
@@ -207,8 +257,8 @@ other browsers and through a real Tailscale Serve forwarder.
   CORS or WebSocket request, so refusing a foreign one costs nothing
   legitimate. Fetch Metadata is checked first, so a browser that sends it is
   never judged by `Origin`.
-- **Pros**: never breaks a working flow; still refuses CORS reads from old
-  browsers.
+- **Pros**: preserves clients that send no metadata; still refuses CORS
+  reads from old browsers.
 - **Cons**: blind `no-cors` reads from browsers without Fetch Metadata still
   reach the sibling.
 
@@ -217,7 +267,7 @@ other browsers and through a real Tailscale Serve forwarder.
 - Browsers set `Sec-Fetch-*` and `Sec-Purpose` themselves; page script
   cannot set or override them (they are forbidden request headers).
 - Fetch Metadata is sent by Chromium 76+, Firefox 90+ and Safari 16.4+.
-  Observed here only in Chromium 156.
+  Observed here in Chromium 156, Firefox 157 and Playwright WebKit 27.2.
 - The bootstrap chain starts on the Orkestrator client (desktop loopback
   handoff page or web client form), so its last hop is a `cross-site`
   document navigation; the iOS handoff URL opens with `Sec-Fetch-Site: none`.

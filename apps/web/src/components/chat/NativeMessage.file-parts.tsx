@@ -324,7 +324,9 @@ export function FilePart({
         className={cn(
           "text-xs my-0 rounded-md border transition-colors",
           showThumbnailTile
-            ? "group relative block w-80 max-w-full shrink-0 overflow-hidden bg-muted/50 border-border hover:border-foreground/25 cursor-zoom-in"
+            ? // Two tiles plus the flow's gap must fit the widest user bubble
+              // (82% of max-w-3xl, less its padding), so attachments pair up.
+              "group relative block w-72 max-w-full shrink-0 overflow-hidden bg-muted/50 border-border hover:border-foreground/25 cursor-zoom-in"
             : "inline-flex items-center gap-1.5 py-1.5 px-2.5 bg-muted/50 border-border hover:bg-muted hover:border-border/80 cursor-zoom-in",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
           loading && "opacity-50",

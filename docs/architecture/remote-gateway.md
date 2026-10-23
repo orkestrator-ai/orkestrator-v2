@@ -40,7 +40,9 @@ path of its auth file (never the token). See
 [public-cli.md](public-cli.md).
 
 To keep a standalone backend running and let remote clients update it, install
-it as a user service with `orkestrator service install -- <serve args>`. That
+it as a user service with `orkestrator service install -- <serve args>`, or
+run `orkestrator service install` alone in a terminal to choose Tailscale
+Serve, the tailnet address or SSH interactively. That
 uses launchd on macOS and systemd on Linux. The service runs versioned releases
 through a launcher, which goes back to the previous release when a new one
 fails to start. See [host-updates.md](host-updates.md#standalone-service).

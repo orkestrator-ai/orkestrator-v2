@@ -51,6 +51,7 @@ export function captureIo(
     cwd,
     now: () => Date.now(),
     stdinIsTty: false,
+    stdoutIsTty: false,
   };
   return io;
 }

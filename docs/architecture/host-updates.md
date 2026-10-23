@@ -187,9 +187,21 @@ when it starts, so remote access returns with the backend.
 
 ## Standalone service
 
-`orkestrator service install [--release V] [-- <serve args>]`
+`orkestrator service install [--release V] [--yes] [-- <serve args>]`
 ([`service.ts`](../../packages/cli/src/client/commands/service.ts)) sets up
 the service:
+0. With no serve arguments, an interactive terminal, human output and no
+   `--yes`, it asks how clients will connect
+   ([`service-setup.ts`](../../packages/cli/src/client/service-setup.ts)):
+   - Tailscale Serve (`--tailscale-serve`, optionally `--allowed-origins` for
+     orkestrator.dev, and `--tailscale-bin` when the CLI cannot be found)
+   - the tailnet address over HTTP (no flags)
+   - SSH only (`--loopback-client-port 34125`); the Tailscale choices can add
+     it too
+
+   It then prints the equivalent `--yes -- <serve args>` command and asks for
+   confirmation. Passing any serve arguments, `--yes` or `--output json`
+   skips the questions.
 1. It installs the release.
 2. It points `current` at the release.
 3. It copies `bin/orkestrator-launcher.js` to `<dataDir>/backend/launcher.js`.
@@ -203,6 +215,13 @@ the service:
 
    Logs go to `<dataDir>/backend/logs/service.log`. `--dry-run` shows the
    plan; `--skip-start` writes the unit without loading it.
+6. It waits (`--timeout`, default 3m; `0` skips it) for a new backend
+   generation to publish `backend-instance.json`, then prints the browser
+   address and the gateway token. The token appears only in human output on
+   this terminal. `--output json` reports `ready`, `browserUrl` and
+   `authFile`, never the token, and the backend still logs only the token
+   file's path. A backend that is not ready in time does not fail the
+   install; the command points at the log instead.
 
 `service status` reports:
 - the unit, and whether it is running

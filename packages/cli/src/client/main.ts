@@ -20,6 +20,7 @@ import { CliError } from "./errors.js";
 import { helpFor, SERVE_HELP } from "./help.js";
 import type { ClientIo } from "./io.js";
 import { OutputWriter } from "./output.js";
+import { terminalQuestions } from "./questions.js";
 import { LocalReceiptStore } from "./receipts.js";
 import { ClientSession } from "./session.js";
 import type { CommandContext, CommandOutcome, CommandSpec, GlobalOptions } from "./spec.js";
@@ -191,6 +192,7 @@ export async function runClientProcess(argv: readonly string[], version: string)
   };
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
+  const questions = terminalQuestions(process.stdin, process.stderr, () => onSignal("SIGINT"));
   const io: ClientIo = {
     stdout: (text) => process.stdout.write(text),
     stdoutBytes: (bytes) => process.stdout.write(Buffer.from(bytes)),
@@ -207,10 +209,13 @@ export async function runClientProcess(argv: readonly string[], version: string)
     cwd: process.cwd(),
     now: () => Date.now(),
     stdinIsTty: Boolean(process.stdin.isTTY),
+    stdoutIsTty: Boolean(process.stdout.isTTY),
+    question: questions.question,
   };
   try {
     return await runClient(argv, { io, version, signal: controller.signal });
   } finally {
+    questions.close();
     process.off("SIGINT", onSignal);
     process.off("SIGTERM", onSignal);
   }

@@ -1,6 +1,8 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useFileDirtyStore } from "@/stores/fileDirtyStore";
+import { useChangeProjectionStore } from "@/stores/changeProjectionStore";
+import { resetChangeSubscriptionsForTests } from "@/lib/changes/subscriptions";
 import * as realBackend from "@/lib/backend";
 import * as realMarkdownEditorTab from "@/components/markdown/MarkdownEditorTab";
 import * as realDiffViewerTab from "./DiffViewerTab";
@@ -13,6 +15,12 @@ const realMarkdownEditorTabSnapshot = { ...realMarkdownEditorTab };
 const realDiffViewerTabSnapshot = { ...realDiffViewerTab };
 const realMonacoFileEditorSnapshot = { ...realMonacoFileEditor };
 
+// Valid 1x1 RGBA PNGs (red and blue), also suitable for browser decode checks.
+const RED_PNG =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
+const BLUE_PNG =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYPj/HwADAgH/5ncLrgAAAABJRU5ErkJggg==";
+
 const readLocalFileMock = mock(async (_worktreePath: string, _filePath: string) => ({
   content: "# Loaded Markdown",
   language: "markdown",
@@ -22,10 +30,10 @@ const readContainerFileMock = mock(async (_containerId: string, _filePath: strin
   language: "plaintext",
 }));
 const readEnvironmentFileBase64Mock = mock(
-  async (_environmentId: string, _filePath: string) => "aW1hZ2U=",
+  async (_environmentId: string, _filePath: string) => RED_PNG,
 );
 const readContainerFileBase64Mock = mock(
-  async (_containerId: string, _filePath: string) => "Y29udGFpbmVyLWltYWdl",
+  async (_containerId: string, _filePath: string) => RED_PNG,
 );
 const getFileDraftMock = mock(
   async (_draftKey: string): Promise<Awaited<ReturnType<typeof realBackend.getFileDraft>>> => null,
@@ -106,14 +114,48 @@ mock.module("./DiffViewerTab", () => ({
 
 const { FileViewerTab, getFileViewerKind, isMarkdownFile } = await import("./FileViewerTab");
 
+const RESOURCE_KEY = "environment-net/environment/env-1/live";
 const liveTarget: ChangeDiffTarget = {
   kind: "live",
-  resourceKey: "environment-net/environment/env-1/live",
+  resourceKey: RESOURCE_KEY,
   path: "README.md",
   title: "README.md",
 };
 
+const liveImageTarget: ChangeDiffTarget = {
+  kind: "live",
+  resourceKey: liveTarget.resourceKey,
+  path: "assets/logo.png",
+  title: "logo.png",
+};
+const liveImageProps = {
+  tabId: "live-image-diff-tab",
+  environmentId: "env-1",
+  filePath: "assets/logo.png",
+  worktreePath: "/repo",
+  isLocalEnvironment: true,
+  isActive: true,
+  changeDiff: liveImageTarget,
+};
+
+function invalidateImage(generation: number, ownerGeneration?: string) {
+  act(() => {
+    useChangeProjectionStore
+      .getState()
+      .applyContentInvalidation(RESOURCE_KEY, generation, null, ownerGeneration);
+  });
+}
+
 beforeEach(() => {
+  resetChangeSubscriptionsForTests();
+  useChangeProjectionStore.setState({
+    projections: new Map(),
+    retiredOwners: new Map(),
+    transportRevision: 0,
+    deleted: new Set(),
+    contentGenerations: new Map(),
+    toolPresentations: new Map(),
+  });
   useFileDirtyStore.setState({ dirtyFiles: new Map() });
   readLocalFileMock.mockClear();
   readContainerFileMock.mockClear();
@@ -130,7 +172,8 @@ beforeEach(() => {
     content: "container text",
     language: "plaintext",
   }));
-  readEnvironmentFileBase64Mock.mockImplementation(async () => "aW1hZ2U=");
+  readEnvironmentFileBase64Mock.mockImplementation(async () => RED_PNG);
+  readContainerFileBase64Mock.mockImplementation(async () => RED_PNG);
   getFileDraftMock.mockImplementation(async () => null);
   saveFileDraftMock.mockImplementation(async () => undefined);
   deleteFileDraftMock.mockImplementation(async () => undefined);
@@ -138,6 +181,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  resetChangeSubscriptionsForTests();
   useFileDirtyStore.setState({ dirtyFiles: new Map() });
 });
 
@@ -258,7 +302,7 @@ describe("FileViewerTab component", () => {
     );
 
     const image = await screen.findByRole("img", { name: "assets/logo.png" });
-    expect(image.getAttribute("src")).toBe("data:image/png;base64,aW1hZ2U=");
+    expect(image.getAttribute("src")).toBe(`data:image/png;base64,${RED_PNG}`);
     expect(readEnvironmentFileBase64Mock).toHaveBeenCalledWith("environment-1", "assets/logo.png");
   });
 
@@ -275,7 +319,7 @@ describe("FileViewerTab component", () => {
     );
 
     const image = await screen.findByRole("img", { name: "assets/app-preview.avif" });
-    expect(image.getAttribute("src")).toBe("data:image/avif;base64,aW1hZ2U=");
+    expect(image.getAttribute("src")).toBe(`data:image/avif;base64,${RED_PNG}`);
     expect(readEnvironmentFileBase64Mock).toHaveBeenCalledWith(
       "environment-1",
       "assets/app-preview.avif",
@@ -293,7 +337,7 @@ describe("FileViewerTab component", () => {
     );
 
     const image = await screen.findByRole("img", { name: "assets/logo.webp" });
-    expect(image.getAttribute("src")).toBe("data:image/webp;base64,Y29udGFpbmVyLWltYWdl");
+    expect(image.getAttribute("src")).toBe(`data:image/webp;base64,${RED_PNG}`);
     expect(readContainerFileBase64Mock).toHaveBeenCalledWith("container-1", "assets/logo.webp");
   });
 
@@ -353,27 +397,11 @@ describe("FileViewerTab component", () => {
   });
 
   test("previews a live image target instead of its binary diff", async () => {
-    const liveImageTarget: ChangeDiffTarget = {
-      kind: "live",
-      resourceKey: "environment-net/environment/env-1/live",
-      path: "assets/logo.png",
-      title: "logo.png",
-    };
-    render(
-      <FileViewerTab
-        tabId="live-image-diff-tab"
-        environmentId="env-1"
-        filePath="assets/logo.png"
-        worktreePath="/repo"
-        isLocalEnvironment
-        isActive
-        changeDiff={liveImageTarget}
-      />,
-    );
+    render(<FileViewerTab {...liveImageProps} />);
 
     const image = await screen.findByRole("img", { name: "assets/logo.png" });
-    expect(image.getAttribute("src")).toBe("data:image/png;base64,aW1hZ2U=");
-    expect(screen.queryByTestId("diff-viewer")).toBeNull();
+    expect(image.getAttribute("src")).toBe(`data:image/png;base64,${RED_PNG}`);
+    expect(screen.queryByTestId("diff-viewer") === null).toBe(true);
     expect(readEnvironmentFileBase64Mock).toHaveBeenCalledWith("env-1", "assets/logo.png");
   });
 
@@ -401,7 +429,193 @@ describe("FileViewerTab component", () => {
 
     const viewer = await screen.findByTestId("diff-viewer");
     expect(JSON.parse(viewer.dataset.target ?? "null")).toEqual(liveImageTarget);
-    expect(screen.queryByText("Failed to load file")).toBeNull();
+    expect(screen.queryByText("Failed to load file") === null).toBe(true);
+  });
+
+  test("refreshes live container images after content invalidation", async () => {
+    render(
+      <FileViewerTab {...liveImageProps} isLocalEnvironment={false} containerId="container-1" />,
+    );
+    await screen.findByRole("img", { name: "assets/logo.png" });
+    readContainerFileBase64Mock.mockResolvedValueOnce(BLUE_PNG);
+
+    invalidateImage(1);
+
+    await waitFor(() =>
+      expect(screen.getByRole("img").getAttribute("src")).toBe(`data:image/png;base64,${BLUE_PNG}`),
+    );
+    expect(readContainerFileBase64Mock).toHaveBeenCalledTimes(2);
+    expect(readContainerFileBase64Mock).toHaveBeenLastCalledWith("container-1", "assets/logo.png");
+    expect(readEnvironmentFileBase64Mock).not.toHaveBeenCalled();
+  });
+
+  test("falls back on deletion and recovers when the same live image is restored", async () => {
+    render(<FileViewerTab {...liveImageProps} />);
+    await screen.findByRole("img");
+    readEnvironmentFileBase64Mock.mockRejectedValueOnce(new Error("No such file"));
+
+    invalidateImage(1);
+    await screen.findByTestId("diff-viewer");
+    expect(screen.queryByRole("img") === null).toBe(true);
+
+    readEnvironmentFileBase64Mock.mockResolvedValueOnce(BLUE_PNG);
+    invalidateImage(2);
+    await waitFor(() =>
+      expect(screen.getByRole("img").getAttribute("src")).toBe(`data:image/png;base64,${BLUE_PNG}`),
+    );
+    expect(readEnvironmentFileBase64Mock).toHaveBeenCalledTimes(3);
+  });
+
+  test("refreshes on reconnect and retries a failed preview", async () => {
+    render(<FileViewerTab {...liveImageProps} />);
+    await screen.findByRole("img");
+    readEnvironmentFileBase64Mock.mockRejectedValueOnce(new Error("Connection lost"));
+
+    act(() => useChangeProjectionStore.getState().resync());
+    await screen.findByTestId("diff-viewer");
+    act(() => useChangeProjectionStore.getState().resync());
+
+    await screen.findByRole("img");
+    expect(readEnvironmentFileBase64Mock).toHaveBeenCalledTimes(3);
+  });
+
+  test("refreshes when the resource owner changes even if its generation does not advance", async () => {
+    invalidateImage(5, "owner-a");
+    render(<FileViewerTab {...liveImageProps} />);
+    await screen.findByRole("img");
+    readEnvironmentFileBase64Mock.mockResolvedValueOnce(BLUE_PNG);
+
+    invalidateImage(1, "owner-b");
+
+    await waitFor(() =>
+      expect(screen.getByRole("img").getAttribute("src")).toBe(`data:image/png;base64,${BLUE_PNG}`),
+    );
+    expect(readEnvironmentFileBase64Mock).toHaveBeenCalledTimes(2);
+  });
+
+  test("refreshes on reactivation after a missed event and resets failure state", async () => {
+    const view = render(<FileViewerTab {...liveImageProps} />);
+    await screen.findByRole("img");
+    view.rerender(<FileViewerTab {...liveImageProps} isActive={false} />);
+    readEnvironmentFileBase64Mock.mockRejectedValueOnce(new Error("Deleted while away"));
+    // No invalidation is delivered while the tab is away.
+    view.rerender(<FileViewerTab {...liveImageProps} />);
+    await screen.findByTestId("diff-viewer");
+
+    view.rerender(<FileViewerTab {...liveImageProps} isActive={false} />);
+    invalidateImage(1);
+    expect(readEnvironmentFileBase64Mock).toHaveBeenCalledTimes(2);
+    view.rerender(<FileViewerTab {...liveImageProps} />);
+    await screen.findByRole("img");
+    expect(readEnvironmentFileBase64Mock).toHaveBeenCalledTimes(3);
+  });
+
+  test("does not read an initially inactive preview until it becomes active", async () => {
+    const view = render(<FileViewerTab {...liveImageProps} isActive={false} />);
+    expect(readEnvironmentFileBase64Mock).not.toHaveBeenCalled();
+    view.rerender(<FileViewerTab {...liveImageProps} />);
+    await screen.findByRole("img");
+    expect(readEnvironmentFileBase64Mock).toHaveBeenCalledTimes(1);
+  });
+
+  test("falls back after image decode failure and retries on invalidation", async () => {
+    readEnvironmentFileBase64Mock.mockResolvedValueOnce("bm90IGFuIGltYWdl");
+    render(<FileViewerTab {...liveImageProps} />);
+    fireEvent.error(await screen.findByRole("img"));
+    await screen.findByTestId("diff-viewer");
+
+    invalidateImage(1);
+    const image = await screen.findByRole("img");
+    expect(image.getAttribute("src")).toBe(`data:image/png;base64,${RED_PNG}`);
+  });
+
+  test("ignores decode errors from an inactive preview while its replacement loads", async () => {
+    let resolveRead!: (value: string) => void;
+    const view = render(<FileViewerTab {...liveImageProps} />);
+    const oldImage = await screen.findByRole("img");
+    view.rerender(<FileViewerTab {...liveImageProps} isActive={false} />);
+    readEnvironmentFileBase64Mock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveRead = resolve;
+        }),
+    );
+    view.rerender(<FileViewerTab {...liveImageProps} />);
+    await waitFor(() => expect(readEnvironmentFileBase64Mock).toHaveBeenCalledTimes(2));
+    // The old node is still mounted until the reactivation read answers.
+    fireEvent.error(oldImage);
+    expect(screen.queryByTestId("diff-viewer") === null).toBe(true);
+    await act(async () => resolveRead(BLUE_PNG));
+    await waitFor(() =>
+      expect(screen.getByRole("img").getAttribute("src")).toBe(`data:image/png;base64,${BLUE_PNG}`),
+    );
+  });
+
+  test("keeps live SVG source hunks accessible through the backend diff", async () => {
+    const target: ChangeDiffTarget = { ...liveImageTarget, path: "assets/logo.svg" };
+    render(<FileViewerTab {...liveImageProps} filePath="assets/logo.svg" changeDiff={target} />);
+    const viewer = await screen.findByTestId("diff-viewer");
+    expect(JSON.parse(viewer.dataset.target ?? "null")).toEqual(target);
+    expect(readEnvironmentFileBase64Mock).not.toHaveBeenCalled();
+    // The existing file-view control still permits an explicit SVG preview.
+    fireEvent.click(screen.getByRole("button", { name: "View file" }));
+    await screen.findByRole("img", { name: "assets/logo.svg" });
+  });
+
+  test("retries when a different target owns the same image path", async () => {
+    readEnvironmentFileBase64Mock.mockRejectedValueOnce(new Error("No such file"));
+    const view = render(<FileViewerTab {...liveImageProps} />);
+    await screen.findByTestId("diff-viewer");
+    view.rerender(
+      <FileViewerTab
+        {...liveImageProps}
+        environmentId="env-2"
+        changeDiff={{ ...liveImageTarget, resourceKey: "environment-net/environment/env-2/live" }}
+      />,
+    );
+    await screen.findByRole("img");
+    expect(readEnvironmentFileBase64Mock).toHaveBeenLastCalledWith("env-2", "assets/logo.png");
+  });
+
+  test("ignores superseded image reads, rejections, and decode errors", async () => {
+    let resolveOldRead!: (value: string) => void;
+    let rejectOldRead!: (error: Error) => void;
+    const view = render(<FileViewerTab {...liveImageProps} />);
+    const oldImage = await screen.findByRole("img");
+    readEnvironmentFileBase64Mock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveOldRead = resolve;
+        }),
+    );
+    invalidateImage(1);
+    await waitFor(() => expect(readEnvironmentFileBase64Mock).toHaveBeenCalledTimes(2));
+    readEnvironmentFileBase64Mock.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectOldRead = reject;
+        }),
+    );
+    invalidateImage(2);
+    await waitFor(() => expect(readEnvironmentFileBase64Mock).toHaveBeenCalledTimes(3));
+    readEnvironmentFileBase64Mock.mockResolvedValueOnce(BLUE_PNG);
+    view.rerender(
+      <FileViewerTab
+        {...liveImageProps}
+        filePath="assets/new.png"
+        changeDiff={{ ...liveImageTarget, path: "assets/new.png" }}
+      />,
+    );
+    await screen.findByRole("img", { name: "assets/new.png" });
+
+    await act(async () => {
+      resolveOldRead(RED_PNG);
+      rejectOldRead(new Error("Old read failed"));
+      fireEvent.error(oldImage);
+      await Promise.resolve();
+    });
+    expect(screen.getByRole("img").getAttribute("src")).toBe(`data:image/png;base64,${BLUE_PNG}`);
+    expect(screen.queryByTestId("diff-viewer") === null).toBe(true);
   });
 
   test("keeps per-tab dirty state when the file tab temporarily unmounts", async () => {

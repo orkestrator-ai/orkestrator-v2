@@ -22,3 +22,17 @@ None of the failing owners imports the changed modules (checked by walking `envi
 ## Assessment
 
 Every failing owner passed unchanged when rerun alone, so these are recorded as load-sensitive flakes. No implementation, assertion, timeout or skip changed.
+
+## Final run after the main merge and review fixes — 2026-10-23
+
+- **Baseline:** this branch merged with `origin/main` at `cda435fc9`, plus the review fixes and the `content-server.engines.test.ts` sink-icon fix.
+- **Command:** `mise run test:logged -- --name full-tests-0054-final2 -- mise run test`, run shortly after a host reboot (load average about 2 at the start, 24 during the reruns).
+- **Result:** exit 1 in 398.0 s. Root and the Codex protocol lockfile check passed. Workspace: backend 10123 passed, 61 skipped, three failed; every other package passed. Bridges: Pi 571 passed, one skipped, two failed (one case plus an unnamed hook timeout); every other bridge passed.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.QVdH4t/`.
+
+| Owner | Original failure | Complete owner result |
+| --- | --- | --- |
+| `apps/backend/tests/commands-registry-environments-create.test.ts` | "backs off failed reconciliation for 30 seconds and clears the floor after success" (recurrence of [0229](../environments-and-containers/0229-reconciliation-backoff-aggregate-timeout.md)) and "does not reuse a namespaced historical PR head after an A to B to A rename" exceeded five seconds; "lets an explicit first prompt bypass rename retry backoff" failed in 11 ms after them. | `backend-registry-owner` failed the A-to-B-to-A case alone on the same five-second timeout (51 passed); `backend-registry-owner-2` and `-3` then passed all 52 in 24.6 s and 20.9 s. |
+| `bridges/pi-bridge/src/prompt-cancel-preflight.test.ts` | "cancel while Pi's preflight is held > acknowledges as pending and aborts the run the moment Pi accepts" (2004.93 ms) and an unnamed five-second hook timeout. | `pi-cancel-owner` passed in 0.4 s. |
+
+None of these owners imports the changed preview code; the branch changes no command-registry or Pi bridge source. No implementation, assertion, timeout or skip changed.

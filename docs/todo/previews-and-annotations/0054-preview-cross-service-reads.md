@@ -124,6 +124,11 @@ through `publicPort` remain unqualified.
   restricted path stayed at zero hits). It failed alone 2 of 2. The sink page
   now declares a `data:` icon, so no sink document requests one; no
   assertion changed. The owner then passed alone 3 of 3 (94 to 100 s).
+  A last `mise run test` (398.0 s) passed that owner in the suite and
+  failed only in unrelated owners: the backend command-registry rename and
+  backoff cases and a Pi preflight-cancel case. Each complete owner passed
+  alone, so they are recorded as flakes in
+  [0696](../../tests/flaky-tests/aggregate-validation-runs/0696-cross-service-reads-validation.md).
 - Live transport, Tailscale Serve 1.102.4 on the same host:
   `ORKESTRATOR_TEST_TAILSCALE_SERVE_METADATA=1 mise run test:logged --
   --name tailscale-metadata-live-final -- bun test --cwd apps/backend

@@ -13,3 +13,13 @@
 - **Hypothesis:** Firefox fetches `/favicon.ico` for a page it navigated to or a popup it began to open, depending on timing, and the sink counts that fetch as a hit. Not proven.
 - **Evidence:** `orkestrator-test-run.Gqog9k` (aggregate) and `orkestrator-test-run.fjNMnf` (owning file) below the host temporary directory.
 - **Assessment:** open intermittent failure on `main`. No source, assertion, timeout or skip changed.
+
+## Recurrence during review-fix validation, 2026-10-23
+
+- **Commit:** `c2006a52b` (`Fix container admission and stopped interaction cache races`). The fixes do not change this test or the artifact content server.
+- **Aggregate command:** `mise run test:logged -- --name repository-tests -- mise run test`; backend workspace used `--parallel=2`. Backend results: 10,138 passed, 73 skipped, 1 failed across 589 files (356.29 s); the aggregate finished in 380.6 s. Root, bridges, and Codex protocol lockfile groups passed.
+- **Failure:** the same Firefox navigation test received `["GET /favicon.ico"]` at line 924 after 3,174.11 ms. All three restricted navigation path counts remained zero.
+- **Isolated command:** `mise run test:logged -- --name artifact-engine-isolated -- bun test --cwd apps/backend ./src/core/transcript-artifacts/content-server.engines.test.ts --parallel=1 --only-failures`.
+- **Isolated result:** 38 passed, 1 failed across 39 tests in 93.07 s; the same Firefox favicon failure occurred after 2,792.43 ms. This recurrence also reproduces alone; it is not evidence of a parallel-only race.
+- **Evidence:** aggregate workspace log `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.KwiLUu/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; isolated log directory `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.P7iGsd`.
+- **Disposition:** existing case remains open; assertions, source, timeouts, and skips are unchanged. Focused lifecycle regressions, static checks, and the Docker browser fixture suite passed. The disposable `review-fixes-0019` profile was stopped and reset.

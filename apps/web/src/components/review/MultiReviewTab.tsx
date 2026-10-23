@@ -45,7 +45,7 @@ import {
   type MultiReviewFlowNodeModel,
 } from "./MultiReviewFlowGraph";
 import {
-  MultiReviewFindingsPane,
+  MultiReviewFindingsBadge,
   MultiReviewInspectorHeader,
   ReviewerTranscriptTail,
   StepTranscriptTail,
@@ -716,6 +716,10 @@ function MultiReviewOverviewTab({
   const prState = useEnvironmentStore(
     (state) => state.getEnvironmentById(data.environmentId)?.prState ?? null,
   );
+  // Tool rows in the inspector's transcript tails open files in this container.
+  const containerId =
+    useEnvironmentStore((state) => state.getEnvironmentById(data.environmentId)?.containerId) ??
+    undefined;
   const cleanReviewPr =
     workflow?.phase === "ready" &&
     workflow.consolidatedReport?.issues.length === 0 &&
@@ -985,6 +989,8 @@ function MultiReviewOverviewTab({
             }}
             live={status.state === "running"}
             isActive={isActive}
+            assistantLabel={title}
+            containerId={containerId}
             loadTranscript={loadStepTranscript}
           />
         </div>
@@ -1378,6 +1384,8 @@ function MultiReviewOverviewTab({
             hasSession={Boolean(reviewer.providerSessionId)}
             live={reviewer.status === "running" || reviewer.status === "pending"}
             isActive={isActive}
+            assistantLabel={name}
+            containerId={containerId}
             loadTranscript={loadReviewerTranscript}
           />
           {findings ? <p className="text-xs text-muted-foreground">{findings}</p> : null}
@@ -1594,24 +1602,25 @@ function MultiReviewOverviewTab({
             fullscreenContainer={tabRoot}
             isActive={isActive}
           />
-          <div className="grid min-h-80 flex-1 grid-cols-1 @min-[900px]:grid-cols-[1.3fr_1fr]">
+          <div className="flow-root min-h-80 flex-1 px-4 py-4 sm:px-6">
+            {/* Floats beside the inspector header, and stays in view while the
+                inspector scrolls. */}
+            <MultiReviewFindingsBadge
+              findings={findings}
+              reviewerCount={reviewerCount}
+              provisionalCount={provisionalCount}
+              className="sticky top-3 z-20 float-right ml-3"
+            />
             <section
               role="tabpanel"
               id={panelId}
               aria-labelledby={flowNodeElementId(panelId, selected.node.id)}
               data-testid="multi-review-inspector"
-              className="min-w-0 px-4 py-4 sm:px-6"
+              className="min-w-0"
             >
               <MultiReviewInspectorHeader node={selected.node} actions={selected.actions} />
               {selected.body}
             </section>
-            <div className="min-w-0 border-t border-divider px-4 py-4 sm:px-6 @min-[900px]:border-t-0 @min-[900px]:border-l">
-              <MultiReviewFindingsPane
-                findings={findings}
-                reviewerCount={reviewerCount}
-                provisionalCount={provisionalCount}
-              />
-            </div>
           </div>
           {workflow.consolidatedReport || workflow.fixResult ? (
             <div className="space-y-4 border-t border-divider px-4 py-4 sm:px-6">

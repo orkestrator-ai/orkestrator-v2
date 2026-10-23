@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type {
   MultiReviewReviewerTranscript,
   MultiReviewStepKind,
@@ -11,10 +11,9 @@ import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import {
-  MultiReviewFindingsPane,
+  MultiReviewFindingsBadge,
   ReviewerTranscriptTail,
   StepTranscriptTail,
-  transcriptTailLines,
 } from "./MultiReviewInspector";
 import { reviewSeverityStyles } from "./StructuredReviewReportView";
 
@@ -23,63 +22,6 @@ const CREATED_AT = "2026-08-14T00:00:00.000Z";
 function message(id: string, parts: NativeMessage["parts"]): NativeMessage {
   return { id, role: "assistant", content: "", parts, createdAt: CREATED_AT };
 }
-
-describe("transcriptTailLines", () => {
-  test("flattens grouped tool rows into one keyword line per step", () => {
-    const lines = transcriptTailLines([
-      message("a", [
-        {
-          type: "tool-group",
-          content: "",
-          parts: [
-            {
-              type: "tool-invocation",
-              content: "Read",
-              toolName: "Read",
-              toolArgs: { file_path: "src/review.ts" },
-            },
-            {
-              type: "tool-invocation",
-              content: "Grep",
-              toolName: "Grep",
-              toolArgs: { pattern: "pausedStep" },
-            },
-            { type: "thinking", content: "  The shared session\n clock moves  " },
-          ],
-        },
-      ]),
-      message("b", [
-        {
-          type: "tool-invocation",
-          content: "search",
-          toolName: "mcp__docs__search",
-          toolTitle: "Search the docs for retries",
-        },
-        { type: "text", content: "Found one issue." },
-        { type: "text", content: "   " },
-      ]),
-    ]);
-    expect(lines.map(({ kind, text }) => [kind, text])).toEqual([
-      ["read", "src/review.ts"],
-      ["grep", "pausedStep"],
-      ["think", "The shared session clock moves"],
-      ["search", "Search the docs for retries"],
-      ["say", "Found one issue."],
-    ]);
-    expect(new Set(lines.map((line) => line.key)).size).toBe(lines.length);
-  });
-
-  test("keeps only the latest lines and shortens long ones", () => {
-    const messages = Array.from({ length: 120 }, (_, index) =>
-      message(`m${index}`, [{ type: "text", content: `line ${index} ${"x".repeat(400)}` }]),
-    );
-    const lines = transcriptTailLines(messages, 10);
-    expect(lines).toHaveLength(10);
-    expect(lines[0]!.text).toStartWith("line 110 ");
-    expect(lines[0]!.text.length).toBe(240);
-    expect(lines[0]!.text).toEndWith("…");
-  });
-});
 
 function transcript(
   overrides: Partial<MultiReviewReviewerTranscript> = {},
@@ -159,8 +101,7 @@ describe("ReviewerTranscriptTail", () => {
     );
 
     const tail = screen.getByTestId("multi-review-transcript-tail");
-    expect(await within(tail).findByText("src/review.ts")).toBeTruthy();
-    expect(within(tail).getByText("read")).toBeTruthy();
+    await waitFor(() => expect(tail.textContent).toContain("review.ts"));
     expect(loadTranscript.mock.calls[0]).toEqual([
       "multi-1",
       "reviewer-1",
@@ -171,10 +112,10 @@ describe("ReviewerTranscriptTail", () => {
     act(() => useMultiReviewStore.getState().replaceWorkflow(workflowRevision(2)));
     await waitFor(() => expect(loadTranscript).toHaveBeenCalledTimes(2));
     expect(loadTranscript.mock.calls[1]?.[2]).toEqual({ knownSourceToken: "token-1" });
-    expect(within(tail).getByText("src/review.ts")).toBeTruthy();
+    expect(tail.textContent).toContain("review.ts");
   });
 
-  test("shows narrative in white without a keyword, and keeps keywords on steps", async () => {
+  test("renders narrative and tool calls as the chat transcript does", async () => {
     useMultiReviewStore.getState().replaceWorkflow(workflowRevision(1));
     const base = transcript();
     const loadTranscript = mock(async () =>
@@ -184,9 +125,9 @@ describe("ReviewerTranscriptTail", () => {
           {
             id: "row-2",
             role: "assistant",
-            content: "Found one issue.",
+            content: "Found **one** issue.",
             createdAt: CREATED_AT,
-            parts: [{ type: "text", content: "Found one issue." }],
+            parts: [{ type: "text", content: "Found **one** issue." }],
           },
         ],
       }),
@@ -203,11 +144,10 @@ describe("ReviewerTranscriptTail", () => {
     );
 
     const tail = screen.getByTestId("multi-review-transcript-tail");
-    const narrative = await within(tail).findByText("Found one issue.");
-    expect(narrative.getAttribute("data-tail-kind")).toBe("say");
-    expect(narrative.className).toContain("text-foreground");
-    expect(within(tail).queryByText("say") === null).toBe(true);
-    expect(within(tail).getByText("read")).toBeTruthy();
+    // Markdown renders, rather than one flattened line of text.
+    expect((await within(tail).findByText("one")).tagName).toBe("STRONG");
+    expect(tail.querySelector("[data-tail-kind]") === null).toBe(true);
+    expect(tail.textContent).toContain("review.ts");
   });
 
   test("does not read a reviewer that has no session yet, or while the tab is hidden", () => {
@@ -335,7 +275,7 @@ describe("StepTranscriptTail", () => {
     renderStepTail(loadTranscript);
 
     const tail = screen.getByRole("log", { name: "Latest consolidation activity" });
-    expect(await within(tail).findByText("reports/reviewer-1.json")).toBeTruthy();
+    await waitFor(() => expect(tail.textContent).toContain("reviewer-1.json"));
     // The workflow's own prompt is not the step's output.
     expect(within(tail).queryByText(/Consolidate the reviewer reports/) === null).toBe(true);
     expect(loadTranscript.mock.calls[0]).toEqual([
@@ -347,7 +287,7 @@ describe("StepTranscriptTail", () => {
     act(() => useMultiReviewStore.getState().replaceWorkflow(workflowRevision(2)));
     await waitFor(() => expect(loadTranscript).toHaveBeenCalledTimes(2));
     expect(loadTranscript.mock.calls[1]?.[2]).toEqual({ knownSourceToken: "step-token-1" });
-    expect(within(tail).getByText("reports/reviewer-1.json")).toBeTruthy();
+    expect(tail.textContent).toContain("reviewer-1.json");
   });
 
   for (const trigger of ["completion", "reactivation"] as const) {
@@ -514,10 +454,10 @@ describe("StepTranscriptTail", () => {
   });
 });
 
-describe("MultiReviewFindingsPane", () => {
+describe("MultiReviewFindingsBadge", () => {
   test("lists each finding with its severity, location and the reviewers that raised it", () => {
     render(
-      <MultiReviewFindingsPane
+      <MultiReviewFindingsBadge
         reviewerCount={2}
         findings={[
           {
@@ -559,7 +499,15 @@ describe("MultiReviewFindingsPane", () => {
       />,
     );
 
-    expect(screen.getByRole("heading", { name: "Findings so far" })).toBeTruthy();
+    // Collapsed, it is a count per severity.
+    const badge = screen.getByRole("button", { name: "Issues so far: 1 P0, 0 P1, 1 P2" });
+    expect(badge.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByRole("listitem") === null).toBe(true);
+    expect(badge.textContent).toBe("P0 1P1 0P2 1");
+
+    fireEvent.click(badge);
+    expect(badge.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByRole("heading", { name: "Issues so far" })).toBeTruthy();
     expect(screen.getByTestId("multi-review-findings-count").textContent).toBe(
       "2 · from 2 reviewers",
     );
@@ -577,7 +525,7 @@ describe("MultiReviewFindingsPane", () => {
 
   test("marks rows no accepted report confirms yet", () => {
     render(
-      <MultiReviewFindingsPane
+      <MultiReviewFindingsBadge
         reviewerCount={1}
         provisionalCount={2}
         findings={[
@@ -612,6 +560,7 @@ describe("MultiReviewFindingsPane", () => {
         ]}
       />,
     );
+    fireEvent.click(screen.getByTestId("multi-review-findings-badge"));
     expect(screen.getByTestId("multi-review-findings-count").textContent).toBe(
       "0 · from 1 reviewer · 2 provisional",
     );
@@ -627,12 +576,34 @@ describe("MultiReviewFindingsPane", () => {
   });
 
   test("explains an empty list", () => {
-    const view = render(<MultiReviewFindingsPane findings={[]} reviewerCount={0} />);
-    expect(screen.getByText("Findings appear here as reviewers report them.")).toBeTruthy();
-    view.rerender(<MultiReviewFindingsPane findings={[]} reviewerCount={1} />);
+    const view = render(<MultiReviewFindingsBadge findings={[]} reviewerCount={0} />);
+    fireEvent.click(screen.getByTestId("multi-review-findings-badge"));
+    expect(screen.getByText("Issues appear here as reviewers report them.")).toBeTruthy();
+    view.rerender(<MultiReviewFindingsBadge findings={[]} reviewerCount={1} />);
     expect(screen.getByTestId("multi-review-findings-count").textContent).toBe(
       "0 · from 1 reviewer",
     );
     expect(screen.getByText("The completed reviewers reported no issues.")).toBeTruthy();
+  });
+
+  test("closes on a click outside or Escape, but not on a click inside", () => {
+    render(
+      <div>
+        <button type="button">Elsewhere</button>
+        <MultiReviewFindingsBadge findings={[]} reviewerCount={1} />
+      </div>,
+    );
+    const badge = screen.getByTestId("multi-review-findings-badge");
+    fireEvent.click(badge);
+    fireEvent.pointerDown(screen.getByTestId("multi-review-findings"));
+    expect(screen.queryByTestId("multi-review-findings") === null).toBe(false);
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Elsewhere" }));
+    expect(screen.queryByTestId("multi-review-findings") === null).toBe(true);
+    expect(badge.getAttribute("aria-expanded")).toBe("false");
+
+    fireEvent.click(badge);
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByTestId("multi-review-findings") === null).toBe(true);
   });
 });

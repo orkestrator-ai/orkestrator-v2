@@ -535,15 +535,6 @@ function useMeasuredHeight(): [(element: HTMLDivElement | null) => void, number 
   return [setElement, height];
 }
 
-/** The scrolling ancestor that shows the stacked column, the window failing that. */
-function scrollingAncestor(element: HTMLElement | null): HTMLElement | null {
-  for (let node = element?.parentElement ?? null; node; node = node.parentElement) {
-    const overflow = getComputedStyle(node).overflowY;
-    if ((overflow === "auto" || overflow === "scroll") && node.clientHeight > 0) return node;
-  }
-  return null;
-}
-
 /**
  * Fullscreen lays the graph over its container until the button or Escape
  * leaves it. An Escape that a context menu, tooltip or dialog already handled
@@ -588,9 +579,6 @@ function useFlowFullscreen(
   }, []);
   return [fullscreen, toggle];
 }
-
-/** Room around the column when Fit sizes it: its zoom controls and a margin. */
-const STACKED_FIT_MARGIN_PX = 72;
 
 export interface MultiReviewFlowGraphProps {
   packageNode: MultiReviewFlowNodeModel;
@@ -700,13 +688,6 @@ export function MultiReviewFlowGraph({
     measuredWidth,
     content: { width: measuredWidth ?? 0, height: columnHeight ?? 0 },
     layout: "stacked",
-    fitHeight: () => {
-      const wrapper = stackedWrapperRef.current;
-      // In fullscreen the column scrolls inside its own wrapper.
-      const scroller = fullscreen ? wrapper : scrollingAncestor(wrapper);
-      const visible = scroller?.clientHeight ?? window.innerHeight;
-      return visible > STACKED_FIT_MARGIN_PX ? visible - STACKED_FIT_MARGIN_PX : null;
-    },
   });
   const attachStackedViewport = stackedViewport.attachViewport;
   const stackedViewportRef = useCallback(
@@ -715,22 +696,6 @@ export function MultiReviewFlowGraph({
     },
     [attachStackedViewport],
   );
-  const fitStacked = () => {
-    stackedViewport.fit();
-    // The column just got shorter; bring its top back into view.
-    requestAnimationFrame(() => {
-      const wrapper = stackedWrapperRef.current;
-      if (fullscreen && wrapper) {
-        wrapper.scrollTop = 0;
-        return;
-      }
-      const scroller = scrollingAncestor(wrapper);
-      if (!wrapper || !scroller) return;
-      const offset = wrapper.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
-      if (offset < 0) scroller.scrollTop += offset;
-    });
-  };
-
   const registerRef = useCallback((id: string, element: HTMLButtonElement | null) => {
     if (element) nodeRefs.current.set(id, element);
     else nodeRefs.current.delete(id);
@@ -867,7 +832,6 @@ export function MultiReviewFlowGraph({
               onZoomOut={() => stackedViewport.zoomBy(-1)}
               onZoomIn={() => stackedViewport.zoomBy(1)}
               onReset={stackedViewport.resetZoom}
-              onFit={fitStacked}
               fullscreen={fullscreen}
               onToggleFullscreen={toggleFullscreen}
             />
@@ -1095,7 +1059,6 @@ export function MultiReviewFlowGraph({
         onZoomOut={() => flowViewport.zoomBy(-1)}
         onZoomIn={() => flowViewport.zoomBy(1)}
         onReset={flowViewport.resetZoom}
-        onFit={flowViewport.fit}
         fullscreen={fullscreen}
         onToggleFullscreen={toggleFullscreen}
       />

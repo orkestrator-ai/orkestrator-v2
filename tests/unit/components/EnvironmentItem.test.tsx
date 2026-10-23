@@ -224,16 +224,17 @@ afterEach(() => {
   cleanup();
 });
 
-test("memoizes stable row props", () => {
+test("does no hover-card formatting while the card is closed", () => {
   const environment = makeEnvironment();
   const originalToLocaleDateString = Date.prototype.toLocaleDateString;
   const formatDate = mock(() => "formatted date");
   Date.prototype.toLocaleDateString = formatDate;
   try {
+    // The created date belongs to the hover card, which renders only when open.
     const view = renderItem(environment);
-    expect(formatDate).toHaveBeenCalledTimes(1);
+    expect(formatDate).toHaveBeenCalledTimes(0);
     view.rerender(itemElement(environment));
-    expect(formatDate).toHaveBeenCalledTimes(1);
+    expect(formatDate).toHaveBeenCalledTimes(0);
   } finally {
     Date.prototype.toLocaleDateString = originalToLocaleDateString;
   }

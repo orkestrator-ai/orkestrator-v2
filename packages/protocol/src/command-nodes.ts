@@ -552,9 +552,11 @@ export function deriveNodeMode(input: {
   return input.commandedNodeCount > 0 ? "command" : "standalone";
 }
 
-/** Routed reads do not invalidate the machine’s project/environment summaries. */
+/**
+ * Routed reads do not invalidate the machine’s project/environment summaries.
+ * A read verb leads the name, optionally after one namespace
+ * (`get_projects`, `changes_get_view`).
+ */
 export function isNodeReadCommand(command: string): boolean {
-  return ["get_", "list_", "read_", "search_", "check_", "describe_"].some((prefix) =>
-    command.startsWith(prefix),
-  );
+  return /^(?:[a-z0-9]+_)?(?:get|list|read|search|check|describe)_/.test(command);
 }

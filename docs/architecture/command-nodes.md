@@ -299,6 +299,27 @@ A command node attached to another command node operates in leaf mode:
   routes them to the owner.
 - Each environment shows its node's colour dot before its name. Unavailable
   nodes keep their last-known state, labelled, with writes disabled.
+- **Anything else on request.** The summaries stay small; a portal view that
+  needs more of another node's state reads it and subscribes to it:
+  - *Reads* go through `invoke_on_node` with the node's own command (for
+    example `changes_get_view`, `get_environment`, `get_agent_registry`).
+    `isNodeReadCommand` treats a read verb at the start of the name, or
+    after one namespace (`changes_get_…`), as a read: it is never recorded
+    as outcome-unknown and does not refresh the summaries.
+  - *Events* are relayed on request. A client leases a watch on a node for
+    some event prefixes (`watch_node_events`, renewed every 30 s, expiring
+    after 90 s; `unwatch_node_events`). The command node keeps one stream
+    per watched node for the union of the prefixes
+    (`nodes/node-event-relay.ts`) and re-emits each event as
+    `relayed-node-event` `{ nodeId, kind: "event", event, payload }`. A
+    `{ nodeId, kind: "resync" }` frame (every stream open, every gap) means
+    re-read what is shown from that node. Terminal output is never relayed.
+  - In the renderer, `lib/federation/node-events.ts` holds one lease per
+    node for every view and tells each view when to read (first after its
+    subscription, then after any possible gap). The sidebar's change badge
+    (`node-change-projections.ts`) and the environment hover card
+    (`node-environment-reads.ts`) are built on it; the command node's own
+    environments, shown from its self summary, subscribe directly.
 
 ## Opening an environment on another node
 

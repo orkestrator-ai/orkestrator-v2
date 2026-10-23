@@ -47,6 +47,7 @@
     "./controller-settings": "./src/controller-settings.ts",
     "./coordinator": "./src/coordinator.ts",
     "./command-nodes": "./src/command-nodes.ts",
+    "./node-events": "./src/node-events.ts",
     "./node-summaries": "./src/node-summaries.ts",
     "./portal-layout": "./src/portal-layout.ts",
     "./coordinator-web-research": "./src/coordinator-web-research.ts",

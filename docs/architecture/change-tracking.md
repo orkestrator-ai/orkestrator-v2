@@ -254,7 +254,7 @@ platform and provider imports.
 
 | Surface | Resource |
 | --- | --- |
-| Sidebar badge and hover | `environment-net` projection (`EnvironmentItem.tsx`); legacy store only for a backend without tracking |
+| Sidebar badge and hover | `environment-net` projection (`EnvironmentItem.tsx`); legacy store only for a backend without tracking. Another machine's rows read the same projection through the command node and its relayed events (`lib/federation/node-change-projections.ts`, see [command-nodes.md](command-nodes.md#portal-aggregated-interface)) |
 | Files → Changes | rows of the same measurement, paged by snapshot token (`useEnvironmentChangeRows.ts`); no 5 s change poll while a projection exists |
 | Files button dot | the environment projection's badge visibility |
 | Thread header and turn list | `thread-net`, `turn-net`, `provider-turn-diff` and `operation-volume` as separate lines (`ThreadChangesHeader.tsx`, `TurnChangesHistory.tsx`) |

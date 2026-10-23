@@ -174,6 +174,16 @@ export function registerNodeCommands(register: CommandRegistrar): void {
     return portal(context).invokeOnNode(args);
   });
 
+  register("watch_node_events", async (args, context) => {
+    assertOnlyKeys(args, ["nodeId", "prefixes", "watchId"], "arguments");
+    return portal(context).events.watch(args);
+  });
+
+  register("unwatch_node_events", async (args, context) => {
+    assertOnlyKeys(args, ["watchId"], "arguments");
+    return portal(context).events.unwatch(args.watchId);
+  });
+
   register("list_node_outcomes", async (args, context) => {
     assertOnlyKeys(args, ["nodeId"], "arguments");
     return portal(context).outcomes.list(typeof args.nodeId === "string" ? args.nodeId : undefined);

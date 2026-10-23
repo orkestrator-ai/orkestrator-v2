@@ -1,5 +1,5 @@
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   DndContext,
@@ -50,14 +50,24 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
+  EnvironmentChangeBadge,
+  EnvironmentChangeSummary,
   EnvironmentMenuItems,
   type EnvironmentMenuItem,
 } from "@/components/environments/EnvironmentItem";
+import { EnvironmentAgentSummary } from "@/components/environments/EnvironmentAgentSummary";
+import { EnvironmentTooltipBody } from "@/components/environments/EnvironmentTooltipBody";
+import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
 import { UnreadBellIcon } from "@/components/environments/UnreadBellIcon";
 import { SortableProjectFolder } from "@/components/sidebar/SortableProjectFolder";
 import { SidebarRootDropZone } from "@/components/sidebar/SidebarRootDropZone";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { isMachineWritable, type MachineView } from "@/lib/federation/aggregate";
+import { useNodeEnvironmentChangeProjection } from "@/lib/federation/node-change-projections";
+import {
+  nodeAgentSummarySource,
+  useNodeEnvironment,
+} from "@/lib/federation/node-environment-reads";
 import { useStore } from "zustand";
 import { remoteOrdersFor } from "@/lib/federation/remote-order-writes";
 import { remoteProjectsFor, withArrangement } from "@/lib/federation/remote-project-writes";
@@ -541,6 +551,14 @@ export function RemoteEnvironmentItem({
     useFederatedEnvironmentActions(machine, environment);
   const shown = useRemoteEnvironmentShown(machine.connectionId, environment.ref.environmentId);
   const isMobile = useMediaQuery(MOBILE_MEDIA_QUERY);
+  // The same `environment-net` projection the machine's own rows show, read
+  // through the command node and kept current by the machine's relayed events.
+  const changeProjection = useNodeEnvironmentChangeProjection(environment.ref);
+  // The hover card reads the full record and agent summary from the machine
+  // only while it is open; until then it shows what the summary carries.
+  const tooltipAnchorRef = useRef<HTMLDivElement>(null);
+  const tooltip = useHoverTooltip();
+  const details = useNodeEnvironment(environment.ref, tooltip.open);
 
   const live = machine.transport === "connected";
   const statusText = machineStatusText({
@@ -603,6 +621,7 @@ export function RemoteEnvironmentItem({
       <ContextMenu>
         <ContextMenuTrigger className="contents">
           <div
+            ref={tooltipAnchorRef}
             className={cn(
               "group flex w-full items-center gap-2 py-1 pr-2 text-[13px] transition-colors",
               isMobile && "select-none",
@@ -612,6 +631,10 @@ export function RemoteEnvironmentItem({
             <button
               type="button"
               onClick={open}
+              onMouseEnter={tooltip.show}
+              onMouseLeave={tooltip.hide}
+              onFocus={tooltip.show}
+              onBlur={tooltip.hide}
               aria-label={`${environment.name}, on ${machine.name}, ${activityText}`}
               aria-current={shown ? "true" : undefined}
               className={cn(
@@ -658,6 +681,12 @@ export function RemoteEnvironmentItem({
                   </span>
                 )}
               </span>
+              {changeProjection && (
+                // Last known while the machine is away.
+                <span className={cn("contents", !live && "[&>*]:opacity-60")}>
+                  <EnvironmentChangeBadge projection={changeProjection} />
+                </span>
+              )}
             </button>
             {isMobile && (
               <DropdownMenu>
@@ -682,6 +711,45 @@ export function RemoteEnvironmentItem({
             )}
           </div>
         </ContextMenuTrigger>
+        <HoverTooltipContent
+          anchorRef={tooltipAnchorRef}
+          open={tooltip.open}
+          side="bottom"
+          align="start"
+          sideOffset={4}
+          onMouseEnter={tooltip.show}
+          onMouseLeave={tooltip.hide}
+        >
+          <EnvironmentTooltipBody
+            name={environment.name}
+            machine={{
+              name: machine.name,
+              colorToken: machine.colorToken,
+              ...(live ? {} : { status: statusText }),
+            }}
+            details={
+              details ?? {
+                projectHome: environment.isProjectHome,
+                ...(environment.branch ? { branch: environment.branch } : {}),
+                ...(environment.environmentType
+                  ? { environmentType: environment.environmentType }
+                  : {}),
+              }
+            }
+            agentSummary={
+              live ? (
+                <EnvironmentAgentSummary
+                  environmentId={environment.ref.environmentId}
+                  open={tooltip.open}
+                  source={nodeAgentSummarySource(environment.ref.backendId)}
+                />
+              ) : null
+            }
+            changes={
+              changeProjection ? <EnvironmentChangeSummary projection={changeProjection} /> : null
+            }
+          />
+        </HoverTooltipContent>
         <ContextMenuContent>
           <EnvironmentMenuItems
             items={menuItems}

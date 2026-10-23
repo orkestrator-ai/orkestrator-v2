@@ -138,6 +138,14 @@ the old per-provider semantics for *new* closes (an old Claude bridge's DELETE
 deletes history), and history that pre-retention builds already deleted cannot
 be recovered.
 
+A tab opened from **Resume Session** (an unassigned tab, then a platform)
+creates no provider session while its picker is open: the backend resumes into
+a tab with no mapping, and the tab starts its own session only if the picker is
+dismissed or the resume fails. The resume then sends no composer controls, so
+the conversation keeps its own settings. Before, every such resume created an
+empty conversation (one more row in OpenCode's and Grok's stores, and briefly a
+Grok agent process) and closed it again.
+
 Claude's bridge re-adopts a closed rollout as an idle session when
 `/session/list` reconciles the SDK listing. That is history discovery, not a
 resurrected tab: the backend mapping is gone, so nothing polls or reopens it
@@ -151,7 +159,8 @@ until the user resumes it.
 | `reconcile_tab_teardowns` (startup and the 60-second sweep) | Finish an earlier tab close | Same close |
 | `reconcile_orphaned_tab_resources` (tabs no pane layout references, after a one-hour grace) | Release ownership nobody holds | Native tabs (including a startup agent session) go through `teardown_tab` |
 | `teardown_tab` for `terminal` / `claude-tmux` | Stop a terminal process | Kills the process; the tmux Claude CLI keeps its own JSONL |
-| `resume_native_agent_session` replacing a tab's session | Release the session the tab no longer shows (a new tab's empty one, in practice) | `provider.closeSession` after the resume is adopted, under tab teardown's lock and last-owner rules; skipped while another tab maps it or a Multi Review owns it. Best effort |
+| `resume_native_agent_session` replacing a tab's session | Release the session the tab no longer shows | `provider.closeSession` after the resume is adopted, under tab teardown's lock and last-owner rules; skipped while another tab maps it or a Multi Review owns it. Journaled first as a teardown intent keyed `resume-replaced:<agent>:<digest>` (`replacedSessionCloseIntent`, `provider-session-ownership.ts`) and cleared on a confirmed close, so a pending or failed close is replayed by `reconcile_tab_teardowns` under the same rules. A tab opened only to resume creates no session of its own, so this replaces a session only when the tab had started one |
+| `reconcile_tab_teardowns` on a `resume-replaced:` intent | Finish a replaced session's close | Same close, without the tab-mapping checks (the backend wrote the id) and without revoking a tab credential. `teardown_tab` refuses that key prefix |
 | `MultiReviewService` cleanup | Remove a finished workflow and its tabs | `provider.closeSession`, so reviewer and fix conversations are kept |
 | `close_coordinator_conversation` | Close a coordinator conversation | Stops the projection and that conversation's bridge, revokes its credentials, invalidates the mapping. No DELETE |
 | `delete_environment` | Remove an environment | Stops processes, removes mappings, worktree or container. No provider DELETE; history inside a removed container goes with it |
@@ -183,6 +192,30 @@ bridges keep running. Backend stores are rows in `orkestrator.sqlite`
 | Grok session state and journal | `ACP_STATE_DIR`; unfinished entries reload as `ambiguous` | Kept | Unaffected |
 | OpenCode session and history | The OpenCode server; the backend holds registration and subscriptions in memory | No bridge | Registration lost; the session persists on the server |
 | Transcript cursor | Request state; bridges answer from `droppedMessages` plus the retained window | A restart changes the window; an invalid cursor falls back to the retained window | Unaffected |
+
+## Activity observation
+
+The backend's activity sweep (every 2 s) is the one observer of whether a
+session is busy; everything else reads its shared observation. What each
+provider offers it is `NATIVE_AGENT_OBSERVATION_CAPABILITIES`
+(`apps/backend/src/core/native-agent-observation.ts`). The columns that drive
+policy:
+
+| Provider | Activity read | Idle backend wakeup | Client idle backoff | Idle view changes without a transition |
+| --- | --- | --- | --- | --- |
+| Claude | Bridge `/activity` (batched) | Bridge observation stream (`/event/subscribe?observe=1`) | Only while `turn.quietObservation` | Background tasks; announced from `contentRevision` |
+| Codex | Bridge `/activity` (batched) | Bridge observation stream (`/event/subscribe?observe=1`) | Only while `turn.quietObservation` | Async questions, late command changes; announced from `contentRevision` |
+| Cursor | Bridge `/activity` (batched) | None: every sweep | Yes | No |
+| Pi | Bridge `/activity` (batched) | None: every sweep | Yes | No |
+| Grok | Bridge `/activity` (batched) | None: every sweep | Yes | No |
+| OpenCode | Event-fed batch in the backend | SDK event stream | Yes | No |
+
+A wakeup only makes a stably idle group due; the sweep's no-touch read stays
+the source of truth, and a group without a live wakeup is read on every sweep.
+Client backoff also needs a backend that advertises stamped announcements. The
+announcements and the client side are in
+[event-snapshot-recovery.md](event-snapshot-recovery.md#native-observation-invalidations);
+cadences and budgets are in [recurring-work.md](recurring-work.md).
 
 ## Claude Code
 
@@ -374,6 +407,15 @@ the repository-context revision included before the next coordinator turn.
 OpenCode is the exception: it ships its own HTTP server, so Orkestrator does not
 interpose a bridge process. The backend starts `opencode serve --port <port>`
 for the environment and talks to it directly.
+
+Every local server, and the short-lived catalogue and sign-in servers, opens
+the user's one `opencode.db` under XDG data. Two opening it in the same moment
+can lose one to SQLite's "database is locked", which exits the server before it
+is healthy. `opencode-host-start.ts` therefore lets one host server start at a
+time, from spawn until healthy or exited, and a local start whose server exits
+reporting a locked database is retried twice (0.5 s, then 2 s) before the
+dispatch that asked for it is refused with that reason. Container servers have
+their own database and are not serialised.
 
 `apps/backend/src/core/native-agent-provider.ts` is where the split happens —
 `createNativeAgentProvider()` returns an `OpenCodeProvider` for `opencode` and

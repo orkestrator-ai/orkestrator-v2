@@ -146,13 +146,15 @@ export const NATIVE_AGENT_OBSERVATION_CAPABILITIES: Readonly<
     asyncQuestionAttention: false,
     transcriptRevision: "bridge-generation-only",
     pendingInteractions: "touches-liveness",
-    backendTurnEvents: false,
+    backendTurnEvents: true,
     backgroundChildren: "working-while-live-readiness-split",
     generationIdentity: "bridge-connection",
     noTouchActivity: true,
-    idleBackoffWakeup: null,
-    // Background task output can change an idle view while the backend keeps
-    // reporting `working` with a released composer: no transition to announce.
+    // `GET /event/subscribe?observe=1` (http-bridge-observation-stream.ts).
+    idleBackoffWakeup: "provider-event-stream",
+    // Background task output changes an idle view without a transition; the
+    // activity read's content revision lets the backend announce it, and the
+    // view backs off only while the session is marked `quietObservation`.
     quietClientBackoff: quietClientBackoff("claude"),
   },
   codex: {
@@ -162,13 +164,15 @@ export const NATIVE_AGENT_OBSERVATION_CAPABILITIES: Readonly<
     asyncQuestionAttention: true,
     transcriptRevision: "bridge-revision",
     pendingInteractions: "no-touch",
-    backendTurnEvents: false,
+    backendTurnEvents: true,
     backgroundChildren: "async-attention-only",
     generationIdentity: "bridge-connection",
     noTouchActivity: true,
-    idleBackoffWakeup: null,
-    // Async questions and background terminals surface on an idle thread
-    // without an activity transition.
+    // `GET /event/subscribe?observe=1` (http-bridge-observation-stream.ts).
+    idleBackoffWakeup: "provider-event-stream",
+    // Async questions and late command changes surface on an idle thread
+    // without a transition; announced from the activity read's content
+    // revision, gated per session on `quietObservation`.
     quietClientBackoff: quietClientBackoff("codex"),
   },
   cursor: {

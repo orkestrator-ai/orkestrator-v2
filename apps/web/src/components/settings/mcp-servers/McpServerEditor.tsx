@@ -205,9 +205,11 @@ export function McpServerEditor({
   useEffect(() => {
     onDirtyChangeRef.current?.(dirty);
   }, [dirty]);
-  // The rollout gate changed under us: re-read so the controls match it.
+  // The rollout gate changed under us, or the container's file was edited
+  // inside it: re-read so the controls (and the import/reapply choice) match.
   const refreshIfGated = (error: unknown) => {
-    if (mcpManagementErrorFromUnknown(error)?.code === "management-disabled") onReload();
+    const code = mcpManagementErrorFromUnknown(error)?.code;
+    if (code === "management-disabled" || code === "environment-diverged") onReload();
   };
   const problemFrom = (error: unknown) =>
     mcpProblemFrom(error, { redact: typedSecretValues(draftRef.current) });

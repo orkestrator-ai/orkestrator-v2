@@ -22,6 +22,17 @@ const OBSERVED_PRESENCE_TTL_MS = 4_000;
 const HOURLY_RELEASE_INTERVAL_MS = 30_000;
 
 /**
+ * Native presence reads `unknown` while a session's retained idle is older
+ * than the injection gate trusts (a backed-off observer group between safety
+ * reads), and `idle` again once it is re-read. That flip says nothing about
+ * the session, so it must not reset the inject backoff the way a real change
+ * does; the drain still resets it when it sees `idle`.
+ */
+function idleFreshnessFlip(previous: MailboxPresence, next: MailboxPresence): boolean {
+  return (previous === "idle" && next === "unknown") || (previous === "unknown" && next === "idle");
+}
+
+/**
  * How many waiting messages one injected turn may carry, and how large the
  * combined carrier may get.
  *
@@ -133,7 +144,7 @@ export class AgentMailService {
   private async recordPresence(mailboxId: string, presence: MailboxPresence): Promise<void> {
     const previous = this.presence.get(mailboxId)?.presence;
     this.presence.set(mailboxId, { presence, at: Date.now() });
-    if (previous && previous !== presence) {
+    if (previous && previous !== presence && !idleFreshnessFlip(previous, presence)) {
       await this.storage.resetAgentMailInjectBackoff(mailboxId);
     }
   }

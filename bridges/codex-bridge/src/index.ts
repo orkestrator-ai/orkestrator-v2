@@ -200,6 +200,31 @@ type SseSubscriber = (
   serializedData: string,
 ) => Promise<void> | void;
 const subscribers = new Set<SseSubscriber>();
+/**
+ * Observation subscribers (`/event/subscribe?observe=1`): the backend's
+ * activity observer, which only needs to know *that* a session changed. They
+ * receive content-free frames, never force a payload to be serialized and do
+ * not keep the replay ring alive, so they are notified even while retention
+ * has lapsed.
+ */
+const observers = new Set<SseSubscriber>();
+
+/** An observation frame's data: the session it names, never the payload. */
+function observationFrameData(sessionId: string | undefined): string {
+  return JSON.stringify(sessionId === undefined ? {} : { sessionId });
+}
+
+function notifyObservers(event: SseEvent, revision: number): void {
+  for (const observer of observers) {
+    try {
+      void Promise.resolve(observer(event, revision, "{}")).catch((error) => {
+        console.error("[codex-bridge] Failed to notify SSE observer:", error);
+      });
+    } catch (error) {
+      console.error("[codex-bridge] Failed to notify SSE observer:", error);
+    }
+  }
+}
 export const MAX_REPLAY_SSE_BYTES = 4 * 1024 * 1024;
 export const REPLAY_IDLE_RETENTION_MS = 60_000;
 /** Flat cost charged to a collapsed frame, which carries no payload. */
@@ -596,7 +621,7 @@ function emit(event: SseEvent): void {
     // Preserve the cursor gap without snapshotting, estimating, stringifying or
     // retaining a payload nobody can replay. A returning client sees the
     // advanced revision and is sent through authoritative reconciliation.
-    eventRing.advance();
+    notifyObservers(event, eventRing.advance());
     return;
   }
   const sessionId = event.sessionId;
@@ -633,6 +658,7 @@ function emit(event: SseEvent): void {
     serialize: () => eager ?? serializeSseEventData({ sessionId, data: payload }),
     bytes,
   });
+  notifyObservers(event, revision);
   for (const subscriber of subscribers) {
     try {
       void Promise.resolve(subscriber(event, revision, eager ?? "{}")).catch((error) => {
@@ -1126,7 +1152,7 @@ app.get("/global/health", (c) => {
       },
       // A rising `dropped` with clients still reconnecting means the ring is too
       // small for this workload and reconnects are falling back to full resyncs.
-      events: { ...eventRing.getStats(), subscribers: subscribers.size },
+      events: { ...eventRing.getStats(), subscribers: subscribers.size, observers: observers.size },
     },
     terminal ? 503 : 200,
   );
@@ -1899,6 +1925,7 @@ app.get("/event/subscribe", (c) => {
   const cursor =
     parseEventCursor(c.req.query("since")) ?? parseEventCursor(c.req.header("last-event-id"));
   const sessionFilter = c.req.query("sessionId")?.trim() || null;
+  const observe = c.req.query("observe") === "1";
 
   return streamSSE(c, async (stream) => {
     let open = true;
@@ -1947,7 +1974,7 @@ app.get("/event/subscribe", (c) => {
         // The `id:` is what makes replay possible at all — it is the cursor the
         // client echoes back on its next connection.
         id: String(revision),
-        data: serializeData(),
+        data: observe ? observationFrameData(event.sessionId) : serializeData(),
       };
     };
 
@@ -1961,7 +1988,7 @@ app.get("/event/subscribe", (c) => {
      */
     // Snapshot the fresh-client anchor before subscribing. These statements are
     // synchronous, so no event can land between the snapshot and registration.
-    const releaseReplayRetention = acquireReplayRetention();
+    const releaseReplayRetention = observe ? () => {} : acquireReplayRetention();
     const anchorRevision = cursor ?? eventRing.latestRevision;
     let buffered: Array<{
       event: Pick<SseEvent, "type" | "sessionId">;
@@ -1990,7 +2017,7 @@ app.get("/event/subscribe", (c) => {
       highestSent = revision;
       await writeWhileOpen(frameFor(event, revision, () => serializedData));
     };
-    subscribers.add(listener);
+    (observe ? observers : subscribers).add(listener);
 
     let keepalive: ReturnType<typeof setInterval> | undefined;
 
@@ -2020,6 +2047,8 @@ app.get("/event/subscribe", (c) => {
           // Tells the client whether the frames that follow are a replay or a
           // fresh start, so it knows if it still owes itself a reconcile.
           replayed: replay?.complete === true ? replay.events.length : 0,
+          // Confirms observation mode; an older bridge ignores the parameter.
+          ...(observe ? { observe: true } : {}),
         }),
       });
 
@@ -2082,6 +2111,8 @@ app.get("/event/subscribe", (c) => {
         writeWhileOpen,
         5_000,
         () => {
+          // An observer only needs proof the connection is alive.
+          if (observe) return false;
           if (!sessionFilter) return true;
           const activity = appServerRuntime.getActivity(sessionFilter);
           return activity === "working" || activity === "waiting";
@@ -2102,6 +2133,7 @@ app.get("/event/subscribe", (c) => {
       open = false;
       if (keepalive) clearInterval(keepalive);
       subscribers.delete(listener);
+      observers.delete(listener);
       releaseReplayRetention();
     }
   });

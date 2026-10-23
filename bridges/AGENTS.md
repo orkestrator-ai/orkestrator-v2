@@ -17,6 +17,18 @@ calls them (`apps/backend/src/core/http-bridge-provider*.ts`,
   expose `GET /session/:id/activity` for exactly this: no touch, no hydration,
   no re-attach. Anything else the backend wants to poll needs the same
   treatment.
+- The activity answer may carry an opaque `contentRevision` (Claude and Codex
+  do). It must move whenever what a session view shows changes without an
+  activity change (transcript rows, background-task snapshots, async
+  questions), stay equal otherwise, and stay O(1) and no-touch. Never let
+  computing it fail the read: omit the field instead. The backend announces a
+  change on an idle session from it, and only a session that reports one may
+  back off on the client.
+- `GET /event/subscribe?observe=1` is the backend observer's stream: frames
+  carry only the event type, the cursor `id:` and `{"sessionId"}`, the
+  `connected` frame confirms `"observe": true`, and the subscriber must not
+  keep the replay ring alive. It is a wakeup hint, never a source of activity,
+  and like `/activity` it must not touch, hydrate or re-attach anything.
 - `/session/:id/activity` answers an unknown session **in band** as
   `{"activity":"missing"}` and never 404s. The backend reads a 404 there as "this
   bridge predates the route" and fails the environment; if 404 also meant "session
@@ -109,7 +121,9 @@ When touching any of them:
   the tab that finds no other mapping performs the provider close. A resume
   that replaces a tab's session closes the replaced one under the same lock
   and rules (`provider-session-ownership.ts`): never while another tab maps it
-  or a Multi Review owns it.
+  or a Multi Review owns it. That close is journaled as a teardown intent
+  under a reserved `resume-replaced:` key, so the reconcile sweep retries one
+  that stayed pending.
 
 ## Interaction deadlines and pauses
 

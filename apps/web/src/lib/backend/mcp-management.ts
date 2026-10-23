@@ -1,9 +1,13 @@
 import type {
+  McpDefaultsRefreshPreview,
+  McpDefaultsRefreshRequest,
   McpEditableDefinition,
   McpManagementSnapshot,
   McpMutation,
   McpMutationResult,
   McpOperationSnapshot,
+  McpOverlayResolution,
+  McpOverlayResolutionResult,
   McpTargetList,
   McpValidationResult,
 } from "@orkestrator/protocol/mcp-management";
@@ -50,4 +54,28 @@ export function getMcpOperation(operationId: string): Promise<McpOperationSnapsh
 /** Cancel queued application; the saved configuration is kept. */
 export function cancelMcpApply(operationId: string): Promise<McpOperationSnapshot> {
   return invoke("cancel_mcp_apply", { operationId });
+}
+
+/**
+ * Import, reapply, resolve a conflict in, or reset a container environment's
+ * own MCP changes. `expectedRevision` is the source revision the user saw.
+ */
+export function resolveMcpEnvironmentOverlay(
+  resolution: McpOverlayResolution,
+): Promise<McpOverlayResolutionResult> {
+  return invoke("resolve_mcp_environment_overlay", { resolution });
+}
+
+/** What re-importing the backend user's servers into a container source would change. Names only. */
+export function previewMcpEnvironmentDefaults(
+  request: Omit<McpDefaultsRefreshRequest, "previewToken">,
+): Promise<McpDefaultsRefreshPreview> {
+  return invoke("preview_mcp_environment_defaults", { request });
+}
+
+/** Apply a previewed refresh; a stale `previewToken` fails with `revision-conflict`. */
+export function refreshMcpEnvironmentDefaults(
+  request: McpDefaultsRefreshRequest,
+): Promise<McpOverlayResolutionResult & { stagedCopy: "updated" | "unavailable" | "not-needed" }> {
+  return invoke("refresh_mcp_environment_defaults", { request });
 }

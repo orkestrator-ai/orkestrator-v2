@@ -37,6 +37,7 @@ import {
   type LocalServerKind,
 } from "./commands-runtime-state.js";
 import { terminateLocalServerChild } from "./commands-local-server-lifecycle.js";
+import { acquireOpenCodeHostStart } from "./opencode-host-start.js";
 import { fetchClaudeBridgeModelCatalog } from "./commands-containers.js";
 import { cursorSdkCredentialPath } from "./cursor-sdk-bridge.js";
 import { discoverHostPiModelCatalog } from "./pi-model-catalog-seeding.js";
@@ -105,23 +106,38 @@ export async function withShortLivedBridge<T>(
   const port = await allocateLocalPort();
   const key = `${probe.kind}:${purpose}:${randomUUID()}`;
   const args = typeof probe.args === "function" ? probe.args(port) : probe.args;
-  const child = spawnLocalServerCommandImpl(probe.command, args, {
-    cwd: probe.cwd,
-    env: { ...probe.env, PORT: String(port), HOSTNAME: "127.0.0.1" },
-    detached: process.platform !== "win32",
-  });
+  // OpenCode servers share the host's database; see `opencode-host-start.ts`.
+  const releaseOpenCodeHostStart =
+    probe.kind === "opencode" ? await acquireOpenCodeHostStart() : () => undefined;
+  let child: ReturnType<typeof spawnLocalServerCommandImpl>;
+  try {
+    // Shutdown may have begun while the probe waited behind an environment start.
+    assertLocalServerStartAllowed(`${purpose}:${probe.kind}`);
+    child = spawnLocalServerCommandImpl(probe.command, args, {
+      cwd: probe.cwd,
+      env: { ...probe.env, PORT: String(port), HOSTNAME: "127.0.0.1" },
+      detached: process.platform !== "win32",
+    });
+  } catch (error) {
+    releaseOpenCodeHostStart();
+    throw error;
+  }
   localServerProcesses.set(key, child);
   child.stdout.resume();
   child.stderr.resume();
   try {
-    if (isLocalServerShutdownRequested()) {
-      throw new Error(
-        purpose === "catalog-refresh"
-          ? "Backend is shutting down; model catalogues cannot be refreshed"
-          : "Backend is shutting down; sign-in cannot start",
-      );
+    try {
+      if (isLocalServerShutdownRequested()) {
+        throw new Error(
+          purpose === "catalog-refresh"
+            ? "Backend is shutting down; model catalogues cannot be refreshed"
+            : "Backend is shutting down; sign-in cannot start",
+        );
+      }
+      await waitForLocalServerStartup(child, port, probe.kind, probe.headers);
+    } finally {
+      releaseOpenCodeHostStart();
     }
-    await waitForLocalServerStartup(child, port, probe.kind, probe.headers);
     return await read(port, probe.token);
   } finally {
     await terminateLocalServerChild(key, child).catch((error: unknown) => {

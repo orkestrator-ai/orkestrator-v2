@@ -1691,8 +1691,9 @@ export abstract class StorageNative extends StorageReviews {
   }
 
   /**
-   * Record that a stop reached a dispatched request's turn while it was still
-   * active. Ignores requests this provider session never dispatched. A recorded
+   * Record that a stop reached a dispatched or pending request while it was still
+   * active. Pending dispatches may have lost their provider acknowledgement, so
+   * their interrupt must survive reconciliation and restart. A recorded
    * outcome may have raced Stop, so it must not suppress the interrupt marker.
    */
   async recordNativeAgentTurnInterrupt(
@@ -1715,11 +1716,13 @@ export abstract class StorageNative extends StorageReviews {
       if (
         !session ||
         session.providerSessionId !== providerSessionId ||
-        !session.dispatchedRequestIds?.includes(requestId) ||
-        session.interruptedRequestIds?.includes(requestId)
+        (!session.dispatchedRequestIds?.includes(requestId) &&
+          (session.pendingDispatch?.requestId !== requestId || session.pendingDispatch.mailRefused))
       ) {
         return false;
       }
+      // True means the marker is durable, including an idempotent retry.
+      if (session.interruptedRequestIds?.includes(requestId)) return true;
       sessions[key] = {
         ...session,
         interruptedRequestIds: [...(session.interruptedRequestIds ?? []).slice(-49), requestId],

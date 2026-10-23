@@ -111,6 +111,11 @@ still owed.
      the user to save a model the login runs (`/model` in `pi`; agent-testing
      pins `openai/gpt-6-sol` for this kind of login), then rerun. The host's
      settings were not changed for this run.
+- The live Cursor and Pi close-retention run owed by
+  [0002-session-lifecycle-consistency.md](../agent-engines/0002-session-lifecycle-consistency.md)
+  also waits on a usable Pi model: on 2026-10-23 its Pi case failed on the
+  default `gpt-4` and on an explicit `openai/gpt-5.5` override with the same
+  "not supported when using Codex with a ChatGPT account" error.
 
 ## Assumptions and decisions
 

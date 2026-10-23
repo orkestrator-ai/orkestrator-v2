@@ -95,6 +95,7 @@ import { FederationProvider } from "@/components/federation/FederationProvider";
 import { SshPromptDialog } from "@/components/federation/SshPromptDialog";
 import { FederationEffects } from "@/components/federation/FederationEffects";
 import { NodeActionRequestsDialog } from "@/components/federation/NodeActionRequestsDialog";
+import { CommandHandoverDialog } from "@/components/federation/CommandHandoverDialog";
 import { NodeSshPromptDialog } from "@/components/settings/machines/NodeSshPromptDialog";
 import { WorkspaceRealmHost } from "@/components/federation/WorkspaceRealmHost";
 import { isWorkspaceRealm } from "@/lib/federation/workspace-realm";
@@ -1693,6 +1694,7 @@ function ConnectedApp() {
             <SshPromptDialog />
             <FederationEffects />
             <NodeActionRequestsDialog />
+            <CommandHandoverDialog />
             {/* SSH prompts from this node's own tunnels to the nodes it commands. */}
             <NodeSshPromptDialog />
           </>

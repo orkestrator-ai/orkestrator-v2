@@ -123,7 +123,9 @@ There is no deeper hierarchy.
   they connect to a backend today, and receive the UI from it.
 - **The command node changes only when the user changes it**: with the
   switch on the "Command node" row of the sidebar's machines menu, in
-  Settings → Machines, or by opening a machine in a new window. Opening an
+  Settings → Machines, or by opening a machine in a new window. The switch
+  hands command over (see [Handing command over](#handing-command-over)),
+  so the machine chosen really becomes the command node. Opening an
   environment on another machine, or creating one there, shows that
   machine's workspace in the window's central region and never changes the
   window's command node. Saving a machine on a device
@@ -196,6 +198,60 @@ to everything it runs, on every machine it controls.
 - Attaching is refused if it would create more than two levels: a node that
   is currently subordinate cannot register subordinates, and a node cannot
   attach the command node that controls it.
+
+## Handing command over
+
+Choosing another machine as the command node makes it the command node, in
+one step:
+
+1. The command node in charge (the window's own, or, from a leaf's window,
+   the command node controlling it) previews the handover
+   (`preview_command_handover`): the machines it controls that the target
+   does not, and whether it can follow as the target's leaf (it needs an
+   HTTPS address and its gateway token).
+2. If the target lacks machines, the client asks which to bring (all are
+   chosen by default). On the desktop the list also offers machines saved
+   only on this device; Electron main adds their tokens.
+3. `hand_over_command` sends the chosen registry entries, with their
+   credentials, and itself, to the target over its own link
+   (`accept_command_handover`). The target registers them, then detaches
+   every command node that controlled it, as if by the user there, so none
+   re-attaches by itself. The old command node forgets the target and the
+   machines it moved (each is told to detach), and becomes the target's
+   leaf once the target attaches.
+4. The window switches to the target and reloads in its multi-machine view.
+
+Credentials travel only backend to backend (or from Electron main to a
+backend), over the routes the command node already uses, and are stored in
+the target's sensitive store. The commands are excluded from routing, grants
+and the relay, so only a client holding the command node's gateway token
+(the user) can start one. A target the command node does not control yet is
+registered first with the token saved on the device. Handing command back
+works the same way: the old command node clears its own record of having
+detached the target before it hands over.
+
+Before changing topology, the source checks the target's registry capacity;
+the target repeats the check atomically with adoption. A shortage rejects the
+whole handover. Machines already registered on both sides are cleaned up on
+the source even when the client selects no additional machines. Their tokens
+can fill a missing credential on the target.
+
+The source persists a pending handover with a unique ID before removing the
+target. It retains the authenticated transport until acceptance finishes,
+including an SSH tunnel opened with an interactive password or passphrase.
+The target persists adoption and an acceptance receipt together, then detaches
+its controllers. Retrying the same ID resumes unfinished detach work or returns
+the original counts. The target keeps the most recent 64 receipts. Lost
+responses do not restore the old topology: the source retries immediately and
+keeps unresolved work for its background retry loop and restart recovery.
+Edits to existing machines and overlapping handovers are refused while recovery is pending.
+Detach tombstones continue retrying even when the source becomes a leaf.
+
+SSH private-key file paths are local to the source and are omitted from
+handover entries. The target may need its own SSH configuration. Independently
+saved standalone machines with no fleet switch directly through the desktop
+connection API. Native bridges without handover capabilities also keep their
+native connection-switch flow.
 
 ## Updates from leaves
 

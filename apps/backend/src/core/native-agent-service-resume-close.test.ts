@@ -22,7 +22,10 @@ import {
   internals,
   withService,
 } from "./native-agent-service-projection-test-support.js";
-import { withProviderSessionTeardownLock } from "./provider-session-ownership.js";
+import {
+  replacedSessionCloseIntent,
+  withProviderSessionTeardownLock,
+} from "./provider-session-ownership.js";
 
 type Agent = (typeof BUILD_PIPELINE_AGENTS)[number];
 
@@ -103,6 +106,8 @@ describe("resume closes the session it replaced", () => {
           expect((await storage.getNativeAgentSession(key))?.providerSessionId).toBe(
             "provider-resumed",
           );
+          // The close was journaled for replay, and cleared once it was confirmed.
+          expect((await storage.getEnvironment("env-1"))?.tabTeardownIntents).toBeUndefined();
         },
       );
     });
@@ -387,18 +392,42 @@ describe("resume closes the session it replaced", () => {
     const warn = spyOn(console, "warn").mockImplementation(() => undefined);
     await withService(
       { prefix: "orkestrator-resume-close-failed-", provider: async () => provider },
-      async ({ service }) => {
+      async ({ service, storage }) => {
         const identity = tab("grok");
         await service.ensureSession(identity);
         await expect(
           service.resumeProjectionSession({ ...identity, providerSessionId: "vendor-old" }),
         ).resolves.toMatchObject({ sessionId: "provider-resumed" });
         expect(closeSession).toHaveBeenCalledTimes(1);
+        // Left for `reconcile_tab_teardowns` to replay.
+        const expected = replacedSessionCloseIntent("grok", "provider-session");
+        const intents = (await storage.getEnvironment("env-1"))?.tabTeardownIntents ?? {};
+        expect(Object.values(intents)).toEqual([
+          { ...expected, createdAt: expect.any(String) as unknown as string },
+        ]);
         expect(warn).toHaveBeenCalledWith(
           "[native-agent] The grok session a resume replaced was not closed:",
           "Error",
         );
         expect(JSON.stringify(warn.mock.calls)).not.toContain("secret-session-detail");
+      },
+    );
+  });
+
+  test("a replaced session in an environment the journal cannot hold is still closed once", async () => {
+    const { provider, closeSession } = resumableStub("grok");
+    await withService(
+      { prefix: "orkestrator-resume-close-unjournaled-", provider: async () => provider },
+      async ({ service, storage }) => {
+        const identity = tab("grok");
+        await service.ensureSession(identity);
+        spyOn(storage, "setTabTeardownIntent").mockImplementation(async () => {
+          throw new Error("Environment not found: env-1");
+        });
+        const clear = spyOn(storage, "clearTabTeardownIntent");
+        await service.resumeProjectionSession({ ...identity, providerSessionId: "vendor-old" });
+        expect(closeSession.mock.calls).toEqual([["provider-session"]]);
+        expect(clear).not.toHaveBeenCalled();
       },
     );
   });

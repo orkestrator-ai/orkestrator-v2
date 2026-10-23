@@ -302,12 +302,12 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
       const interrupt = this.pendingTurnInterrupts.get(interruptKey);
       if (interrupt?.providerSessionId === session.providerSessionId) {
         try {
-          await this.storage.recordNativeAgentTurnInterrupt(
+          const persisted = await this.storage.recordNativeAgentTurnInterrupt(
             key,
             session.providerSessionId,
             input.requestId,
           );
-          this.pendingTurnInterrupts.delete(interruptKey);
+          if (persisted) this.pendingTurnInterrupts.delete(interruptKey);
         } catch {
           /* Retain the fence and retry on the next observation. */
         }
@@ -610,6 +610,20 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
       input.agent,
       input.logicalSessionKey,
     );
+    // Idle presence is only as good as the observation behind it. A group the
+    // observer has backed off keeps its retained idle between safety reads;
+    // past the age the injection gate trusts, presence says `unknown` rather
+    // than `idle`, so a slower observation never reads as permission to
+    // inject (the gate then reads the provider itself).
+    if (
+      activity === "idle" &&
+      !observationSatisfies(this.observations.view(sessionKey, session?.providerSessionId), {
+        maxAgeMs: MAIL_INJECT_OBSERVATION_MAX_AGE_MS,
+        requirePostDispatch: true,
+      })
+    ) {
+      return "unknown";
+    }
     return activity === "idle" || activity === "working" || activity === "waiting"
       ? activity
       : "unknown";

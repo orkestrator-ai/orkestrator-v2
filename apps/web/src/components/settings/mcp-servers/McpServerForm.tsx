@@ -32,6 +32,11 @@ const TRANSPORT_LABEL: Record<McpTransport, string> = {
   sse: "SSE",
 };
 
+/** "Container of env-a" -> "container of env-a", keeping the environment's own name as typed. */
+function lowerFirst(text: string): string {
+  return text ? text[0]!.toLowerCase() + text.slice(1) : text;
+}
+
 function FieldError({ errors, field }: { errors: McpFieldError[]; field: string }) {
   const messages = errors.filter(
     (error) => error.field === field || error.field.startsWith(`${field}.`),
@@ -348,7 +353,7 @@ export function McpServerForm({
               />
             )}
             <p className="text-xs text-muted-foreground">
-              One program, not a shell command. It runs on {locationLabel.toLowerCase()} when a
+              One program, not a shell command. It runs on {lowerFirst(locationLabel)} when a
               session loads the server.
             </p>
             <FieldError errors={errors} field="command" />
@@ -449,8 +454,14 @@ export function McpServerForm({
             />
           )}
           <p className="text-xs text-muted-foreground">
-            Resolved from {locationLabel.toLowerCase()}, not from this browser.
+            Connects from {locationLabel}, not from this browser.
           </p>
+          {!capabilities.authentication.runtimeSignIn.supported &&
+          capabilities.authentication.runtimeSignIn.reason ? (
+            <p className="text-xs text-amber-300">
+              Sign-in: {capabilities.authentication.runtimeSignIn.reason}
+            </p>
+          ) : null}
           <FieldError errors={errors} field="url" />
         </div>
       )}

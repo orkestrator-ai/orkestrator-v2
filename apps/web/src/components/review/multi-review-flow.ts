@@ -85,6 +85,8 @@ export interface MultiReviewFlowEdges {
   /** Reviewer → consolidation, one per reviewer in panel order. */
   intoConsolidation: MultiReviewFlowEdgeState[];
   intoFix: MultiReviewFlowEdgeState;
+  intoPr: MultiReviewFlowEdgeState;
+  prSource?: "consolidation" | "fix";
 }
 
 export function multiReviewFlowEdges(states: {
@@ -92,6 +94,12 @@ export function multiReviewFlowEdges(states: {
   reviewers: readonly MultiReviewFlowState[];
   consolidation: MultiReviewFlowState;
   fix: MultiReviewFlowState;
+  pr: MultiReviewFlowState;
+  /**
+   * A clean report goes straight to the PR without a Fix, so the work flowing
+   * into the PR is consolidation's.
+   */
+  prFromConsolidation?: boolean;
 }): MultiReviewFlowEdges {
   return {
     // A queued reviewer is waiting for admission, not for more input, so the
@@ -103,6 +111,12 @@ export function multiReviewFlowEdges(states: {
       multiReviewFlowEdgeState(reviewer, states.consolidation, { waitingIsReady: true }),
     ),
     intoFix: multiReviewFlowEdgeState(states.consolidation, states.fix, { waitingIsReady: true }),
+    prSource: states.prFromConsolidation ? "consolidation" : "fix",
+    intoPr: multiReviewFlowEdgeState(
+      states.prFromConsolidation ? states.consolidation : states.fix,
+      states.pr,
+      { waitingIsReady: true },
+    ),
   };
 }
 
@@ -142,7 +156,7 @@ export function defaultFlowSelection(
   nodes: readonly {
     id: string;
     state: MultiReviewFlowState;
-    /** Pipeline column: package 0, reviewers 1, consolidation 2, fix 3. */
+    /** Pipeline column: package 0, reviewers 1, consolidation 2, fix 3, PR 4. */
     stage: number;
     activityAt?: number;
   }[],
@@ -403,12 +417,18 @@ const PAD_BOTTOM = 24;
 const REVIEWER_GAP_MAX = 36;
 const REVIEWER_GAP_MIN = 12;
 /**
- * Package, reviewer, consolidation and fix widths that fit each node's name
- * beside a typical `{elapsed} · {tokens}` without truncating.
+ * Package, reviewer, consolidation, fix and PR widths that fit each node's
+ * name beside a typical `{elapsed} · {tokens}` without truncating.
  */
-const COLUMN_NEEDS = [236, 266, 230, 160] as const;
+const COLUMN_NEEDS = [236, 266, 230, 160, 160] as const;
 /** The same columns at full width, as designed. */
-const COLUMN_FULL = [260, 270, 230, 230] as const;
+const COLUMN_FULL = [260, 270, 230, 230, 230] as const;
+/**
+ * The columns the width is shared between. The PR column follows them at the
+ * same spacing, past the right edge when there is no room for it, so the
+ * pipeline keeps its proportions and the canvas scrolls instead.
+ */
+const FITTED_COLUMNS = 4;
 const COLUMN_GAP_MIN = 40;
 const COLUMN_GAP_MAX = 140;
 
@@ -425,11 +445,12 @@ export interface MultiReviewFlowLayout {
   width: number;
   height: number;
   /** Left edge of each column, where its label starts. */
-  columns: { prepare: number; review: number; consolidate: number; fix: number };
+  columns: { prepare: number; review: number; consolidate: number; fix: number; pr: number };
   package: FlowRect;
   reviewers: FlowRect[];
   consolidation: FlowRect;
   fix: FlowRect;
+  pr: FlowRect;
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -442,10 +463,12 @@ function clamp(value: number, min: number, max: number): number {
  * Width goes to the nodes first, up to what their content needs and then to
  * their full size, and only then to the gaps that carry the edges, so a
  * narrower canvas shortens edges before it truncates names. Below the needed
- * width everything shrinks together. Reviewers stack in the second column;
- * their spacing tightens to keep up to five inside the minimum height, and past
- * that the canvas grows rather than overlapping nodes. The other three nodes
- * centre on the reviewer stack.
+ * width everything shrinks together. Package to Fix share the width; the PR
+ * column follows at the same size and spacing, and widens the canvas past the
+ * width when it does not fit beside them. Reviewers stack in the second
+ * column; their spacing tightens to keep up to five inside the minimum height,
+ * and past that the canvas grows rather than overlapping nodes. The other
+ * nodes centre on the reviewer stack.
  */
 export function multiReviewFlowLayout({
   width,
@@ -458,28 +481,33 @@ export function multiReviewFlowLayout({
 }): MultiReviewFlowLayout {
   const canvasWidth = Math.max(width, FLOW_GRAPH_STACK_BELOW);
   const span = Math.min(canvasWidth, MAX_CONTENT_WIDTH) - PAD_X * 2;
-  const fitted = sum(COLUMN_NEEDS) + COLUMN_GAP_MIN * 3;
+  const needs = COLUMN_NEEDS.slice(0, FITTED_COLUMNS);
+  const gaps = FITTED_COLUMNS - 1;
+  const fitted = sum(needs) + COLUMN_GAP_MIN * gaps;
   let widths: number[];
   let gap = COLUMN_GAP_MIN;
   if (span <= fitted) {
-    const scale = (span - COLUMN_GAP_MIN * 3) / sum(COLUMN_NEEDS);
+    const scale = (span - COLUMN_GAP_MIN * gaps) / sum(needs);
     widths = COLUMN_NEEDS.map((need) => need * scale);
   } else {
     const extra = span - fitted;
-    const growth = sum(COLUMN_FULL) - sum(COLUMN_NEEDS);
+    const growth = sum(COLUMN_FULL.slice(0, FITTED_COLUMNS)) - sum(needs);
     const share = Math.min(1, extra / growth);
     widths = COLUMN_NEEDS.map((need, index) => need + (COLUMN_FULL[index]! - need) * share);
-    gap = Math.min(COLUMN_GAP_MAX, COLUMN_GAP_MIN + Math.max(0, extra - growth) / 3);
+    gap = Math.min(COLUMN_GAP_MAX, COLUMN_GAP_MIN + Math.max(0, extra - growth) / gaps);
   }
   widths = widths.map((columnWidth) => Math.floor(columnWidth));
-  const used = sum(widths) + gap * 3;
-  const left = (canvasWidth - used) / 2;
+  const used = sum(widths) + gap * (widths.length - 1);
+  // Centred when everything fits, otherwise flush left so only the PR column
+  // runs past the right edge.
+  const left = Math.max(PAD_X, (canvasWidth - used) / 2);
   const xs: number[] = [];
   let x = left;
   for (const columnWidth of widths) {
     xs.push(Math.round(x));
     x += columnWidth + gap;
   }
+  const contentWidth = Math.max(canvasWidth, Math.ceil(xs.at(-1)! + widths.at(-1)! + PAD_X));
 
   const count = Math.max(0, Math.floor(reviewerCount));
   const fittingGap =
@@ -496,11 +524,17 @@ export function multiReviewFlowLayout({
   const centerY = NODE_TOP + (height - NODE_TOP - PAD_BOTTOM) / 2;
   const stackTop = Math.round(centerY - stackHeight / 2);
   const centred = (rectHeight: number) => Math.round(centerY - rectHeight / 2);
+  const single = (index: number): FlowRect => ({
+    x: xs[index]!,
+    y: centred(FLOW_NODE_HEIGHT),
+    width: widths[index]!,
+    height: FLOW_NODE_HEIGHT,
+  });
 
   return {
-    width: canvasWidth,
+    width: contentWidth,
     height,
-    columns: { prepare: xs[0]!, review: xs[1]!, consolidate: xs[2]!, fix: xs[3]! },
+    columns: { prepare: xs[0]!, review: xs[1]!, consolidate: xs[2]!, fix: xs[3]!, pr: xs[4]! },
     package: { x: xs[0]!, y: centred(packageHeight), width: widths[0]!, height: packageHeight },
     reviewers: Array.from({ length: count }, (_, index) => ({
       x: xs[1]!,
@@ -508,13 +542,9 @@ export function multiReviewFlowLayout({
       width: widths[1]!,
       height: FLOW_NODE_HEIGHT,
     })),
-    consolidation: {
-      x: xs[2]!,
-      y: centred(FLOW_NODE_HEIGHT),
-      width: widths[2]!,
-      height: FLOW_NODE_HEIGHT,
-    },
-    fix: { x: xs[3]!, y: centred(FLOW_NODE_HEIGHT), width: widths[3]!, height: FLOW_NODE_HEIGHT },
+    consolidation: single(2),
+    fix: single(3),
+    pr: single(4),
   };
 }
 
@@ -531,4 +561,13 @@ export function flowEdgePath(from: FlowRect, to: FlowRect): string {
   if (y1 === y2) return `M${x1} ${y1} L${x2} ${y2}`;
   const mid = (x1 + x2) / 2;
   return `M${x1} ${y1} C${mid} ${y1} ${mid} ${y2} ${x2} ${y2}`;
+}
+
+/** Route a clean report above the skipped Fix node. */
+export function cleanReviewPrEdgePath(from: FlowRect, to: FlowRect): string {
+  const start = from.x + from.width;
+  const y = from.y + from.height / 2;
+  const endY = to.y + to.height / 2;
+  const bypassY = Math.min(from.y, to.y) - 24;
+  return `M${start} ${y} C${start + 24} ${y} ${start + 24} ${bypassY} ${start + 48} ${bypassY} L${to.x - 48} ${bypassY} C${to.x - 24} ${bypassY} ${to.x - 24} ${endY} ${to.x} ${endY}`;
 }

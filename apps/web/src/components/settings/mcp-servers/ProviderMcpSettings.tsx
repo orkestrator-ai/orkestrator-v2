@@ -318,6 +318,7 @@ export function ProviderMcpSettings() {
           <McpSourceList
             snapshot={current}
             highlightName={highlight}
+            onReload={reload}
             onEdit={(definition, trigger) =>
               openDialog(trigger, () => setEditor({ kind: "edit", entryId: definition.entryId }))
             }

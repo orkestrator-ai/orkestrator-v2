@@ -48,6 +48,7 @@ coverage/
 /output/agent-testing/
 /output/benchmarks/
 /output/efficiency/
+/output/multi-review-evaluation/
 
 # TypeScript
 *.tsbuildinfo

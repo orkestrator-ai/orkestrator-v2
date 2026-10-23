@@ -70,15 +70,33 @@ still owed.
 
 ### Qualification
 
-- Rerun `mise run test:agent:coordinator --credential-source pi`; the run is
-  owed by
-  [0024-coordinator-live-conformance.md](../coordinator-and-multi-review/0024-coordinator-live-conformance.md).
-  It needs a host whose Pi login is the failing kind (a ChatGPT-backed
-  `openai-codex` login with a saved default it can run). On 2026-10-23 this
-  host's Pi state had changed: `auth.json` held only `openai` and the saved
-  default was `openai/gpt-5.5`. A run here cannot reproduce the
-  `openai-codex` failure, so it would not prove the fix. Record the result
-  in 0024's read-only, async, family and peer rows.
+- **Still owed: a passing `mise run test:agent:coordinator --credential-source pi`**
+  (owed by
+  [0024-coordinator-live-conformance.md](../coordinator-and-multi-review/0024-coordinator-live-conformance.md);
+  record it in 0024's read-only, async, family and peer rows). It needs a host
+  whose saved Pi default is a model its login actually runs. Build the bridge
+  first (`bun run --cwd bridges/pi-bridge build`); see
+  [0056-agent-test-stale-bridge-builds.md](0056-agent-test-stale-bridge-builds.md).
+- **Live runs on 2026-10-23 (this host).** The host's Pi state had changed
+  since the original report. `auth.json` held a single `openai` OAuth
+  (ChatGPT-backed) login, and `settings.json` saved `openai/gpt-5.5` as the
+  default.
+  1. First run (`qa-coordinator-2026-10-23T01-10-28-640Z`): 0 passed, 1
+     failed. All four scenarios failed at their first turn with `The 'gpt-4'
+     model is not supported when using Codex with a ChatGPT account.` The
+     profile had run a `bridges/pi-bridge/dist` built before this change
+     (no `PI_BRIDGE_DEFAULT_MODEL` in it), so this is the old behaviour:
+     the catalogue's first model.
+  2. After `bun run --cwd bridges/pi-bridge build`
+     (`qa-coordinator-2026-10-23T01-13-05-817Z`): 0 passed, 1 failed. All
+     four scenarios failed at their first turn with `The 'gpt-5.5' model is
+     not supported when using Codex with a ChatGPT account.` The profile now
+     starts on the host's saved default, which is the fix working on the
+     real stack. But this host's own saved default is a model its login
+     refuses, so the host's `pi` would fail the same way. Passing here needs
+     the user to save a model the login runs (`/model` in `pi`; agent-testing
+     pins `openai/gpt-6-sol` for this kind of login), then rerun. The host's
+     settings were not changed for this run.
 
 ## Assumptions and decisions
 
@@ -129,7 +147,17 @@ still owed.
 5. **The default travels only with the login.** No `auth.json` means no
    `PI_BRIDGE_DEFAULT_MODEL`. Without the login the default names a provider
    the profile cannot use.
-6. Assumed: Pi stores its default as two keys, `defaultProvider` and
+6. **No model override for the live coordinator suite.** A pin like the
+   pause suite's `ORKESTRATOR_AGENT_TEST_PAUSE_MODELS` would have let the
+   2026-10-23 run pass despite the host's unusable default. It was rejected
+   for this change: the suite deliberately launches with "no model or
+   reasoning fields", so it qualifies the default path users take. A pin would
+   bypass the code this file fixes. Revisit if hosts with unusable saved
+   defaults keep blocking qualification.
+7. **The host's Pi settings were not edited** to make the live run pass. They
+   are the user's, outside the profile, and changing them would change what
+   the user's own `pi` runs.
+8. Assumed: Pi stores its default as two keys, `defaultProvider` and
    `defaultModel`, in plain JSON with an optional BOM (true of Pi 1.2.0's
    `SettingsManager`). A provider id never contains `/`.
 
@@ -146,6 +174,7 @@ still owed.
 
 - [0024-coordinator-live-conformance.md](../coordinator-and-multi-review/0024-coordinator-live-conformance.md)
 - [0031-live-provider-and-platform-qualification.md](0031-live-provider-and-platform-qualification.md)
+- [0056-agent-test-stale-bridge-builds.md](0056-agent-test-stale-bridge-builds.md) (found by the first 2026-10-23 run)
 - [`bridges/pi-bridge/AGENTS.md`](../../../bridges/pi-bridge/AGENTS.md) (models as provider/model pairs, default model)
 - [credentials-and-models.md](../../development/credentials-and-models.md) § Pi
 

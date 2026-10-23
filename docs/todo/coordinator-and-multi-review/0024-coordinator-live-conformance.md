@@ -273,7 +273,10 @@ for prerequisites and how to batch them with other provider runs.
     itself defaults to `openai-codex/gpt-5.5`. Harness work is filed as
     [0054](../cross-cutting/0054-agent-test-pi-default-model.md), and its
     code fix landed on 2026-10-23: the bridge starts on Pi's saved default,
-    and a profile receives the host's.
+    and a profile receives the host's. The 2026-10-23 rerun with a rebuilt
+    bridge started on the host's saved default (`openai/gpt-5.5`), but this
+    host's ChatGPT-backed `openai` login refuses that model too, so all four
+    scenarios failed at their first turn again. Details in 0054.
   - Grok's host login was signed out again (`needs-auth`), so read-only,
     async and family skipped correctly. Peer, on the first version of the
     case, waited for a startup turn that never ran and failed instead of

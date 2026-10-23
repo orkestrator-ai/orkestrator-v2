@@ -211,7 +211,17 @@ attributes are removed, so application cookies become host-only rather than
 widened. The preview listener has no control dispatch, so control cookies are
 never valid on preview hosts. Cookie-authenticated writes and WebSocket
 upgrades must carry a same-service `Origin` (or `Sec-Fetch-Site: same-origin`)
-and are refused before forwarding otherwise. The application's own
+and are refused before forwarding otherwise. Reads (`GET`, `HEAD`, `OPTIONS`)
+are checked too, because every service host is same-site with its siblings and
+the `SameSite=Lax` cookie rides their subresource requests. With
+`Sec-Fetch-Site: same-origin` or `none` they pass. From any other site or
+service only a top-level document navigation (`Sec-Fetch-Mode: navigate`,
+`Sec-Fetch-Dest: document`, not a `Sec-Purpose: prefetch`) passes, so links,
+redirects and the sign-in chain keep working while fetches, images, scripts,
+frames and workers get `403` before forwarding. Without Fetch Metadata a
+foreign `Origin` is refused. All of these count as `http.rejected{forbidden}`
+(`crossSiteViolation` and `crossServiceReadViolation` in
+`packages/protocol/src/preview-header-policy.ts`). The application's own
 `Authorization` headers and cookies pass through unchanged.
 
 External-browser access is its own attachment with a session lease (30 minutes
@@ -272,6 +282,12 @@ to the preview path must keep these boundaries:
   (including CGNAT tailnet ranges) other than the service's own ingress, so a
   page cannot silently fall back to a service on the user's machine. This is
   enforced through `webRequest`, not assumed from the sandbox.
+- **Services cannot reach each other with the user's session.** On private
+  origins, a request carrying one service's preview cookie is forwarded only
+  if it comes from that service, from the user, or is a top-level document
+  navigation. The desktop tunnel gets the same result from per-service
+  partitions and an ingress credential injected only for the service's own
+  origin.
 
 ### Desktop credential and data path
 
@@ -440,6 +456,11 @@ the private `Host` instead. Inbound forwarding headers are always discarded.
   `Host` there produces private URLs. An application that hardcodes a different
   `localhost` API origin needs that origin configured. Both are configuration
   limitations, not transport bugs.
+- **Frontend and API as two services**: a page on one private origin cannot
+  fetch, embed or load assets from a sibling service; only links between them
+  work. Proxy the API through the frontend's development server (for example
+  Vite `server.proxy` to `http://localhost:<api port>`) so the browser sees one
+  service.
 
 ## Known limitations
 
@@ -465,11 +486,13 @@ the private `Host` instead. Inbound forwarding headers are always discarded.
   in real Chromium on 2026-10-22). The worker can also carry the code
   elsewhere and redeem it once from another browser, for that same service
   only.
-- Script on one published service can send a credentialed `GET` to a sibling
-  service's host: services are same-site, the preview cookie is
-  `SameSite=Lax`, and only writes and upgrades are checked. The request
-  reaches the sibling application; its response stays unreadable to the
-  sender. See
+- Cross-service reads are refused by Fetch Metadata, verified in Chromium 156
+  only. A browser that sends no `Sec-Fetch-Site` (Firefox before 90, Safari
+  before 16.4) can still send a blind credentialed `no-cors` `GET` to a
+  sibling, and a sibling can still navigate the top-level window to another
+  service. Whether a Tailscale Serve forwarder (`publicPort`) passes
+  `Sec-Fetch-*` through has been checked in its source, not live; if it did
+  not, reads would fall back to the `Origin` check. See
   [0054-preview-cross-service-reads.md](../todo/previews-and-annotations/0054-preview-cross-service-reads.md).
 - The relay needs `node` or `bun` in the image, and the `node` user.
 - Only HTTP/1.1 and WebSockets are carried. HTTP/2-only features, HTTP/3,

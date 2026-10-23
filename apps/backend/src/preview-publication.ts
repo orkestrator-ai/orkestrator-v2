@@ -465,7 +465,7 @@ export class PreviewPublicationManager implements PreviewPublicationPort {
         response,
         403,
         "Cross-site request refused",
-        "Writes to a preview must come from the preview itself.",
+        "Only this preview can send writes or embedded requests to itself. Links from other sites and preview services still open it.",
       );
       return;
     }

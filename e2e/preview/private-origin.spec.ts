@@ -194,6 +194,57 @@ test("sibling services have separate storage and cannot write to each other", as
   await context.close();
 });
 
+test("sibling services cannot read each other in the background; links between them still open", async () => {
+  const context = await browser.newContext();
+  const app = await context.newPage();
+  await signIn(app, "app");
+  const otherGrant = await signIn(await context.newPage(), "other");
+
+  type Counters = { counters: Record<string, number> };
+  const refused = (counters: Record<string, number>) => counters["http.rejected{forbidden}"] ?? 0;
+  const before = refused((await next<Counters>("metrics", "metrics")).counters);
+  const otherBefore = (await next<FixtureRequests>("fixture-requests", "fixture-requests other"))
+    .requests.length;
+  // A fetch, an image and a frame: each carries the sibling's session cookie.
+  const outcome = await app.evaluate(async (target) => {
+    const fetched = await fetch(`${target}/echo`, { credentials: "include", mode: "no-cors" })
+      .then((response) => response.type)
+      .catch(() => "blocked");
+    const image = await new Promise<string>((resolve) => {
+      const element = new Image();
+      element.onload = () => resolve("loaded");
+      element.onerror = () => resolve("error");
+      element.src = `${target}/assets/small.png`;
+    });
+    const framed = await new Promise<string>((resolve) => {
+      const frame = document.createElement("iframe");
+      frame.onload = () => resolve("settled");
+      frame.src = `${target}/`;
+      document.body.append(frame);
+    });
+    return { fetched, image, framed };
+  }, otherGrant.origin);
+  expect(outcome).toEqual({ fetched: "opaque", image: "error", framed: "settled" });
+  const otherAfter = (
+    await next<FixtureRequests>("fixture-requests", "fixture-requests other")
+  ).requests.slice(otherBefore);
+  expect(otherAfter).toEqual([]);
+  expect(refused((await next<Counters>("metrics", "metrics")).counters)).toBe(before + 3);
+
+  // A top-level link from one service to its sibling is a document
+  // navigation and opens it with the sibling's session.
+  await app.evaluate((target) => {
+    const link = document.createElement("a");
+    link.href = `${target}/`;
+    link.textContent = "sibling";
+    link.id = "sibling-link";
+    document.body.append(link);
+  }, otherGrant.origin);
+  await Promise.all([app.waitForURL(`${otherGrant.origin}/`), app.click("#sibling-link")]);
+  await expect(app.locator("body")).toHaveAttribute("data-loaded", "browser-other");
+  await context.close();
+});
+
 test("revocation ends the browser session", async () => {
   const context = await browser.newContext();
   const page = await context.newPage();
@@ -322,16 +373,14 @@ test("a hostile service worker blocks re-sign-in until site data is cleared and 
   expect(replayed?.status()).toBe(403);
   await replay.close();
 
-  // The sibling service: the credentialed write and the bearer request never
-  // reached it. A credentialed safe-method GET did: same-site siblings share
-  // `SameSite=Lax` cookies, and reads are forwarded without an Origin check
-  // (docs/todo/previews-and-annotations/0054-preview-cross-service-reads.md).
-  // The worker could not read the response (opaque above).
+  // The sibling service: nothing the worker sent reached it. Same-site
+  // siblings share `SameSite=Lax` cookies, so the backend refuses the
+  // credentialed `no-cors` GET by its Fetch Metadata, and the write and the
+  // bearer request as before.
   const otherAfter = (
     await next<FixtureRequests>("fixture-requests", "fixture-requests other")
   ).requests.slice(otherBefore);
-  expect(otherAfter.map((request) => `${request.method} ${request.path}`)).toEqual(["GET /echo"]);
-  expect(otherAfter.every((request) => request.authorization === null)).toBe(true);
+  expect(otherAfter).toEqual([]);
 
   // Control authority: every worker request arrived at the gateway without
   // its cookie or any credential, was refused, and no command ran.

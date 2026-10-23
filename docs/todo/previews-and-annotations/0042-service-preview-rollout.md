@@ -208,9 +208,10 @@ log below.
   2026-10-22 (see the evidence log): re-sign-in is blocked until site data is
   cleared, the worker never sees a grant, its captured session code is
   refused by other hosts, and no control authority is reached. It did reach a
-  sibling service with a credentialed read, which contradicts "no other
-  service is ever reached"; that is
-  [0054-preview-cross-service-reads.md](0054-preview-cross-service-reads.md).
+  sibling service with a credentialed read, which contradicted "no other
+  service is ever reached"; since 2026-10-23 the backend refuses that read
+  and the spec asserts nothing reaches the sibling
+  ([0054-preview-cross-service-reads.md](0054-preview-cross-service-reads.md)).
   Still open: Electron's **Reset site data** with a worker installed on a
   desktop-tunnel service, and Firefox and Safari.
 - Compatibility cases not yet run in a real browser:
@@ -831,6 +832,23 @@ transport and publication defaults remain unchanged.
   changes desktop retention and baseline tooling, with an additive backend
   handoff response. Vite HMR remains outside this run because its isolated
   fixture was not installed; the full Electron suite's own HMR journey passed.
+
+2026-10-23, cross-service read policy, branch
+`todo-0054-preview-cross-service-reads-bd9ab0d325bb` from `main` at
+`06297124`. macOS, Playwright 1.64.0, Chromium 156.0.8078.4. Single machine;
+Chromium only.
+
+- Private origins now refuse cookie-authenticated reads from other sites and
+  services unless they are top-level document navigations (details and
+  decisions in
+  [0054-preview-cross-service-reads.md](0054-preview-cross-service-reads.md)).
+- `mise run test:preview:browser`: 7 passed, 1 skipped (Vite fixture unset).
+  The hostile worker's credentialed `no-cors` `GET` no longer reaches the
+  sibling application. A new case shows a fetch, an image and a frame from
+  one service to its sibling refused before forwarding (three
+  `http.rejected{forbidden}`), and a top-level link between them opening the
+  sibling signed in. With the read check reverted, both cases failed.
+- Not run: Firefox, Safari, a real Tailscale Serve forwarder.
 
 ## Constraints and rationale
 

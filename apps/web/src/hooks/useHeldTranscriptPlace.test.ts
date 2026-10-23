@@ -155,8 +155,8 @@ describe("useRestoreHeldPlace", () => {
     expect(scrollToIndex).toHaveBeenCalledWith(2, { partId: "call52", offset: 80 });
   });
 
-  test("finds a head block that a same-minute page merged into and renamed", () => {
-    // The live tail starts mid-minute: its head block coalesces two reads.
+  test("finds a head block that a cross-minute page merged into and renamed", () => {
+    // The live tail starts inside a tool run: its head block coalesces two reads.
     const tail = [
       read("r52", "2026-10-18T01:33:20.000Z"),
       read("r53", "2026-10-18T01:33:30.000Z"),
@@ -166,15 +166,31 @@ describe("useRestoreHeldPlace", () => {
     expect(shown.map((row) => row.id)).toEqual(["r52", "answer"]);
     const { hook, scrollToIndex } = setup(shown);
     hook.result.current.hold();
-    // The page ends in the same minute, so its last reads join the head block,
-    // which now carries the id of the page's first read in that minute.
+    // Earlier reads join the head block across minute boundaries, renaming it.
     const loaded = coalesceAdjacentToolMessages([
       text("prompt"),
       read("r50", "2026-10-18T01:32:50.000Z"),
       read("r51", "2026-10-18T01:33:05.000Z"),
       ...tail,
     ]);
-    expect(loaded.map((row) => row.id)).toEqual(["prompt", "r50", "r51", "answer"]);
+    expect(loaded.map((row) => row.id)).toEqual(["prompt", "r50", "answer"]);
+    hook.rerender({ messages: loaded });
+    expect(scrollToIndex.mock.calls).toEqual([[1]]);
+  });
+
+  test("restores past a separate tool row from an earlier turn", () => {
+    const tail = [
+      { ...read("r52", "2026-10-18T01:33:20.000Z"), turnId: "current" },
+      text("answer"),
+    ];
+    const { hook, scrollToIndex } = setup(coalesceAdjacentToolMessages(tail));
+    hook.result.current.hold();
+    const loaded = coalesceAdjacentToolMessages([
+      text("prompt"),
+      { ...read("r50", "2026-10-18T01:32:50.000Z"), turnId: "earlier" },
+      ...tail,
+    ]);
+    expect(loaded.map((row) => row.id)).toEqual(["prompt", "r50", "r52", "answer"]);
     hook.rerender({ messages: loaded });
     expect(scrollToIndex.mock.calls).toEqual([[2]]);
   });

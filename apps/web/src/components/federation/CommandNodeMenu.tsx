@@ -3,6 +3,7 @@ import { ArrowLeftRight, Check, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import type { NodeListResult } from "@orkestrator/protocol/command-nodes";
 import type { ConnectionList } from "@orkestrator/protocol/connections";
+import type { BackendId } from "@orkestrator/protocol/federation";
 import {
   DropdownMenuItem,
   DropdownMenuLabel,
@@ -11,7 +12,7 @@ import {
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
 } from "@/components/ui/dropdown-menu";
-import { reloadAfterConnectionChange } from "@/lib/client-platform";
+import { requestCommandHandover } from "@/lib/command-handover";
 import { subscribeToConnections } from "@/lib/connections";
 import { portalInvoke } from "@/lib/portal/portal-transport";
 import { requestGlobalSettings } from "@/lib/settings-navigation";
@@ -24,10 +25,6 @@ function connectionsApi(): ConnectionsApi | null {
   return window.orkestrator?.connections ?? null;
 }
 
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 /** A machine this client can use as its command node instead. */
 interface SwitchTarget {
   id: string;
@@ -35,16 +32,34 @@ interface SwitchTarget {
   address: string | null;
   current: boolean;
   requiresToken: boolean;
+  nodeId?: BackendId;
 }
 
-/** The desktop's and iOS's saved targets. */
-function targetsFromConnections(list: ConnectionList): SwitchTarget[] {
-  return list.connections.map((connection) => ({
+/**
+ * The desktop's and iOS's saved targets, one per machine: a machine saved
+ * twice (say Local and its Tailscale address) is listed once, by the
+ * connection the window uses, else the first that needs no token.
+ */
+export function targetsFromConnections(list: ConnectionList): SwitchTarget[] {
+  const byMachine = new Map<string, ConnectionList["connections"][number]>();
+  for (const connection of list.connections) {
+    const key = connection.backendId ?? `connection:${connection.id}`;
+    const existing = byMachine.get(key);
+    if (
+      !existing ||
+      connection.active ||
+      (!existing.active && existing.requiresToken && !connection.requiresToken)
+    ) {
+      byMachine.set(key, connection);
+    }
+  }
+  return [...byMachine.values()].map((connection) => ({
     id: connection.id,
-    name: connection.name,
-    address: connection.address,
+    name: connection.nickname?.trim() || connection.profile?.displayName || connection.name,
+    address: connection.kind === "local" ? "This device" : connection.address,
     current: connection.active,
     requiresToken: connection.requiresToken,
+    ...(connection.backendId ? { nodeId: connection.backendId } : {}),
   }));
 }
 
@@ -66,6 +81,7 @@ function targetsFromNodes(
             address: route.origin,
             current: false,
             requiresToken: false,
+            nodeId: node.nodeId,
           },
         ]
       : [];
@@ -84,16 +100,16 @@ function targetsFromNodes(
 
 /**
  * The machines menu's command-node section: a heading, the machine this
- * client is connected to, and a switch to another. Switching is the only
- * way the command node changes from the sidebar; opening an environment on
- * another machine never does.
+ * client is connected to, and a switch to another. Switching makes the other
+ * machine the command node: it takes over this one's machines (the user
+ * chooses which in `CommandHandoverDialog`) and the window follows it.
+ * Opening an environment on another machine never changes the command node.
  */
 export function CommandNodeMenuSection() {
   const commandNode = useCommandNode();
   const api = connectionsApi();
   const [connections, setConnections] = useState<ConnectionList | null>(null);
   const [nodes, setNodes] = useState<NodeListResult["nodes"] | null>(null);
-  const [switchingId, setSwitchingId] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -127,13 +143,8 @@ export function CommandNodeMenuSection() {
     ? connections && targetsFromConnections(connections)
     : nodes && targetsFromNodes(commandNode, nodes);
 
-  const switchTo = async (target: SwitchTarget) => {
+  const switchTo = (target: SwitchTarget) => {
     if (target.current) return;
-    if (!api) {
-      // The other machine's own address; it asks for its token there.
-      if (target.address) window.location.assign(target.address);
-      return;
-    }
     if (target.requiresToken) {
       toast.info(`Enter ${target.name}'s token first`, {
         description: "Its token is not saved on this device.",
@@ -141,14 +152,15 @@ export function CommandNodeMenuSection() {
       requestGlobalSettings("machines");
       return;
     }
-    setSwitchingId(target.id);
-    try {
-      await api.use(target.id);
-      reloadAfterConnectionChange();
-    } catch (error) {
-      toast.error("Could not switch the command node", { description: errorText(error) });
-      setSwitchingId(null);
-    }
+    requestCommandHandover(
+      api
+        ? { name: target.name, connectionId: target.id }
+        : {
+            name: target.name,
+            ...(target.nodeId ? { nodeId: target.nodeId } : {}),
+            address: target.address,
+          },
+    );
   };
 
   return (
@@ -188,19 +200,11 @@ export function CommandNodeMenuSection() {
               <DropdownMenuItem
                 key={target.id}
                 className="items-start"
-                disabled={switchingId !== null}
-                onSelect={(event) => {
-                  if (!target.current) event.preventDefault();
-                  void switchTo(target);
-                }}
+                onSelect={() => switchTo(target)}
                 aria-label={`${target.name}${target.current ? ", current command node" : ""}`}
               >
                 <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center">
-                  {switchingId === target.id ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : target.current ? (
-                    <Check className="h-3.5 w-3.5" />
-                  ) : null}
+                  {target.current ? <Check className="h-3.5 w-3.5" /> : null}
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="block truncate">{target.name}</span>

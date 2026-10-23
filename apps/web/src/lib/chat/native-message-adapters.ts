@@ -684,20 +684,6 @@ function isToolOnlyAssistantMessage(message: NativeMessage): boolean {
   return message.parts.every(isMergeableToolPart);
 }
 
-function isSameMinuteStamp(a?: string, b?: string): boolean {
-  if (!a || !b) return false;
-  const first = new Date(a);
-  const second = new Date(b);
-  if (Number.isNaN(first.getTime()) || Number.isNaN(second.getTime())) return false;
-  return (
-    first.getFullYear() === second.getFullYear() &&
-    first.getMonth() === second.getMonth() &&
-    first.getDate() === second.getDate() &&
-    first.getHours() === second.getHours() &&
-    first.getMinutes() === second.getMinutes()
-  );
-}
-
 function flattenMergeableParts(parts: readonly NativeMessagePart[]): NativeMessagePart[] {
   const flat: NativeMessagePart[] = [];
   for (const part of parts) {
@@ -746,14 +732,15 @@ function mergeAdjacentToolMessages(previous: NativeMessage, message: NativeMessa
 }
 
 /**
- * Merge consecutive tool-only assistant rows in the same minute into one block.
+ * Merge consecutive tool-only assistant rows into one block.
  *
  * OpenCode (and other bridges) can emit each tool call as its own backend
  * message. Within a message tools are already grouped into a single
  * `tool-group` card, but across messages each row renders its own card — so a
  * burst of Reads shows as several one-row blocks. When there is no text in
- * between and the clocks agree to the minute, readers experience it as one
- * block, so display it as one.
+ * between, readers experience it as one block, so display it as one. Timing
+ * is deliberately ignored: a slow tool must not split a collapsed tool block
+ * just because the clock rolled over to the next minute.
  */
 export function coalesceAdjacentToolMessages(messages: readonly NativeMessage[]): NativeMessage[] {
   const merged: NativeMessage[] = [];
@@ -766,7 +753,6 @@ export function coalesceAdjacentToolMessages(messages: readonly NativeMessage[])
       previous &&
       isToolOnlyAssistantMessage(previous) &&
       isToolOnlyAssistantMessage(message) &&
-      isSameMinuteStamp(previous.createdAt, message.createdAt) &&
       previous.modelId === message.modelId &&
       previous.turnId === message.turnId &&
       /*

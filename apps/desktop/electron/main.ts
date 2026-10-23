@@ -150,6 +150,11 @@ import {
   shouldProbeMacOsPermissionsBeforeBackend,
 } from "./macos-permissions.js";
 import { createClipboardTextWriter } from "./clipboard.js";
+import {
+  handOverCommandNode,
+  previewCommandHandover,
+  type CommandHandoverDeps,
+} from "./command-handover.js";
 import { ArtifactHostManager } from "./artifact-host-manager.js";
 import { ARTIFACT_SHELL_SCHEME_PRIVILEGES } from "./artifact-host-shell.js";
 import { ARTIFACT_HOST_CHANNELS } from "@orkestrator/protocol/artifact-host-ipc";
@@ -985,6 +990,17 @@ function registerIpc(): void {
   // connection, even while its workspace is on another node.
   const controlScopeForEvent = (event?: { sender?: { id: number } }) =>
     controlScope(contextForEvent(event));
+  const commandHandoverDeps = (event?: { sender?: { id: number } }): CommandHandoverDeps => {
+    const connections = manager();
+    return {
+      currentConnectionId: connections.getConnectionId(controlScopeForEvent(event)),
+      invokeOn: (connectionId, command, args = {}) =>
+        connections.invokeOn(connectionId, command, args),
+      installationIdOf: (connectionId) => connections.installationIdOf(connectionId),
+      connectionIdOf: (nodeId) => connections.connectionIdOf(nodeId),
+      machineImportEntry: (connectionId) => connections.machineImportEntry(connectionId),
+    };
+  };
   const updateWindowTitle = (event: { sender?: { id: number } } | undefined) => {
     const senderId = event?.sender?.id;
     const context = senderId === undefined ? undefined : windowContexts.get(senderId);
@@ -1035,6 +1051,26 @@ function registerIpc(): void {
         refreshConnectionTitles();
         publishConnectionLists();
       }
+    },
+    previewCommandHandover: (targetConnectionId, event) =>
+      previewCommandHandover(commandHandoverDeps(event), targetConnectionId),
+    handOverCommandNode: async (input, event) => {
+      const deps = commandHandoverDeps(event);
+      const result = await handOverCommandNode(deps, input);
+      // The window follows the new command node.
+      if (input.targetConnectionId !== deps.currentConnectionId) {
+        const context = contextForEvent(event);
+        await editDesktopConnection(
+          context,
+          { kind: "use", connectionId: input.targetConnectionId },
+          manager(),
+          () => closeWindowRealms(context),
+        );
+        followWindowConnection(context);
+        updateWindowTitle(event);
+      }
+      publishConnectionLists();
+      return result;
     },
     useConnection: async (connectionId, event) => {
       const context = contextForEvent(event);

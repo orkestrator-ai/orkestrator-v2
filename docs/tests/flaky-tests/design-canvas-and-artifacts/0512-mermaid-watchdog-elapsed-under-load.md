@@ -46,3 +46,13 @@ The aggregate exited 1 after 822.1 s. Backend counts were 9918 passed, 80 skippe
 - `mise run test:logged -- --name merge-suite -- mise run test` against the initial `c17f1c8d5` merge reserved workspace/root/bridges/protocol workers 4/1/2/1. Backend reported 9,967 passed, 69 skipped, two failed and one error (556.4 s). This case measured 9,299 ms against the 9,000 ms bound (9,546.23 ms test duration).
 - After refreshing the pending merge to `7e051d955`, `mise run test:logged -- --name merge-mermaid-owner -- bun test --cwd apps/backend ./src/core/transcript-artifacts/mermaid-render.test.ts --parallel=1 --only-failures` passed the complete unchanged owner, exit 0 in 30.8 s.
 - Evidence: `orkestrator-test-run.9ak22c/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory. Browser, Docker and another worktree's validation overlapped the initial aggregate. No assertion, deadline or skip changed; host contention remains a hypothesis.
+
+## Tool-fold coverage validation recurrence — 2026-10-23
+
+- **Original command:** `mise run test:logged -- --name repository-tests -- mise run test` on `animate-tool-calls-9f849713d495-r1`.
+- **Worker configuration:** Workspace/root/bridges/protocol groups reserved 4/1/2/1 worker slots; the backend used two isolated Bun workers. Other worktree validation and transcript browser checks shared the host.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.5bWdNz/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Failure:** The watchdog measured 5368 ms against the current `< 5000 ms` bound (5725.34 ms test duration); the expected render-timeout result assertion passed.
+- **Owning-file rerun:** `mise run test:logged -- --name mermaid-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/transcript-artifacts/mermaid-render.test.ts --parallel=1 --only-failures` passed the complete unchanged file, exit 0 in 33.0 seconds.
+- **Assessment:** Recurrence of the existing elapsed-time flake. Browser startup or scheduling contention remains a hypothesis; no assertion, deadline or skip changed.
+- **Aggregate counts:** Backend 10,076 passed, 86 skipped and two failed across 585 files (650.46 seconds); the aggregate exited 1 after 959.6 seconds. The web suite passed 8,824 tests with 10 skips. The initial root group also caught an unsafe DOM absence assertion in the newly added unit coverage; that assertion was corrected, and its owning diagnostics guard passed separately. Bridges, protocol regeneration and all remaining workspace packages passed.

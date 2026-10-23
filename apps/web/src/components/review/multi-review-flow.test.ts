@@ -118,11 +118,14 @@ describe("node and edge states", () => {
         reviewers: ["complete", "running", "not-started", "failed", "cancelled"],
         consolidation: "not-started",
         fix: "not-started",
+        pr: "not-started",
       }),
     ).toEqual({
       intoReviewers: ["complete", "active", "pending", "failed", "pending"],
       intoConsolidation: ["ready", "pending", "pending", "pending", "pending"],
       intoFix: "pending",
+      intoPr: "pending",
+      prSource: "fix",
     });
     expect(
       multiReviewFlowEdges({
@@ -130,12 +133,31 @@ describe("node and edge states", () => {
         reviewers: ["complete", "cancelled"],
         consolidation: "complete",
         fix: "running",
+        pr: "not-started",
       }),
     ).toEqual({
       intoReviewers: ["complete", "pending"],
       intoConsolidation: ["complete", "pending"],
       intoFix: "active",
+      intoPr: "pending",
+      prSource: "fix",
     });
+  });
+
+  test("feeds the PR from the Fix, or from consolidation after a clean report", () => {
+    const states = {
+      package: "complete",
+      reviewers: ["complete"],
+      consolidation: "complete",
+      fix: "complete",
+      pr: "running",
+    } as const;
+    expect(multiReviewFlowEdges(states).intoPr).toBe("active");
+    expect(multiReviewFlowEdges({ ...states, pr: "not-started" }).intoPr).toBe("ready");
+    expect(
+      multiReviewFlowEdges({ ...states, fix: "not-started", prFromConsolidation: true }).intoPr,
+    ).toBe("active");
+    expect(multiReviewFlowEdges({ ...states, fix: "not-started" }).intoPr).toBe("pending");
   });
 
   test("summarises a group of edges for the stacked layout", () => {
@@ -400,7 +422,13 @@ describe("layout", () => {
       reviewerCount: count,
       packageHasChips: true,
     });
-    const nodes = [layout.package, ...layout.reviewers, layout.consolidation, layout.fix];
+    const nodes = [
+      layout.package,
+      ...layout.reviewers,
+      layout.consolidation,
+      layout.fix,
+      layout.pr,
+    ];
     expect(layout.reviewers).toHaveLength(count);
     for (const [index, node] of nodes.entries()) {
       expect(node.x).toBeGreaterThanOrEqual(0);
@@ -415,6 +443,7 @@ describe("layout", () => {
       layout.consolidation.x,
     );
     expect(layout.consolidation.x + layout.consolidation.width).toBeLessThan(layout.fix.x);
+    expect(layout.fix.x + layout.fix.width).toBeLessThan(layout.pr.x);
     // The single nodes centre on the reviewer stack.
     const stackTop = layout.reviewers[0]!.y;
     const stackBottom = layout.reviewers.at(-1)!.y + layout.reviewers.at(-1)!.height;
@@ -449,15 +478,36 @@ describe("layout", () => {
     const wide = multiReviewFlowLayout({ width: 2000, reviewerCount: 2, packageHasChips: false });
     // Past the designed width the graph centres instead of stretching.
     expect(wide.fix.width).toBe(230);
-    expect(Math.abs(wide.package.x - (2000 - (wide.fix.x + wide.fix.width)))).toBeLessThanOrEqual(
-      1,
-    );
+    expect(wide.width).toBe(2000);
+    expect(Math.abs(wide.package.x - (2000 - (wide.pr.x + wide.pr.width)))).toBeLessThanOrEqual(1);
+  });
+
+  test("keeps Package to Fix in the width and runs the PR column past it", () => {
+    for (const width of [960, 1024, 1440]) {
+      const layout = multiReviewFlowLayout({ width, reviewerCount: 4, packageHasChips: true });
+      const without = width - 16;
+      // The first four columns lay out as they would on their own.
+      expect(layout.fix.x + layout.fix.width).toBeLessThanOrEqual(without);
+      // Column widths round down, which can leave a pixel or two.
+      expect(layout.fix.x + layout.fix.width).toBeGreaterThanOrEqual(without - 4);
+      // The PR column follows at the same spacing and widens the canvas.
+      expect(layout.pr.x - (layout.fix.x + layout.fix.width)).toBeCloseTo(
+        layout.fix.x - (layout.consolidation.x + layout.consolidation.width),
+        0,
+      );
+      expect(layout.pr.width).toBe(layout.fix.width);
+      expect(layout.width).toBe(layout.pr.x + layout.pr.width + 16);
+      expect(layout.width).toBeGreaterThan(width);
+    }
+    const full = multiReviewFlowLayout({ width: 1440, reviewerCount: 4, packageHasChips: true });
+    expect(full.package.x).toBe(16);
   });
 
   test("never lays out the graph narrower than the stacking threshold", () => {
-    expect(
-      multiReviewFlowLayout({ width: 400, reviewerCount: 2, packageHasChips: false }).width,
-    ).toBe(FLOW_GRAPH_STACK_BELOW);
+    const layout = multiReviewFlowLayout({ width: 400, reviewerCount: 2, packageHasChips: false });
+    expect(layout.fix.x + layout.fix.width).toBeGreaterThan(FLOW_GRAPH_STACK_BELOW - 24);
+    expect(layout.fix.x + layout.fix.width).toBeLessThanOrEqual(FLOW_GRAPH_STACK_BELOW - 16);
+    expect(layout.width).toBe(layout.pr.x + layout.pr.width + 16);
   });
 
   test("draws level edges straight and the rest as horizontal-tangent béziers", () => {

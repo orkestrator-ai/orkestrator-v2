@@ -1,6 +1,7 @@
 import type { EnvironmentPaneState } from "@/stores/paneLayoutStore";
 import { isAgentPlatform, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { parseChangeResourceKey } from "@orkestrator/protocol/change-resources";
+import { isGitHubPullRequestRef } from "@orkestrator/protocol/github-pull-requests";
 import { boundBrowserHistory, sanitizeBrowserHistoryForPersistence } from "@/lib/browser-history";
 import {
   isGitFileStatus,
@@ -195,6 +196,22 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
     const canvasId = nonEmptyString(value.designCanvasData.canvasId);
     if (!canvasId || !/^[0-9a-f-]{36}$/i.test(canvasId)) return null;
     return { id, type: "design-canvas", designCanvasData: { canvasId } };
+  }
+
+  if (type === "pull-request") {
+    if (!isRecord(value.pullRequestData) || !isGitHubPullRequestRef(value.pullRequestData.ref)) {
+      return null;
+    }
+    const { ref, view, title } = value.pullRequestData;
+    return {
+      id,
+      type,
+      pullRequestData: {
+        ref: { owner: ref.owner, repo: ref.repo, number: ref.number },
+        ...(view === "summary" || view === "timeline" || view === "code" ? { view } : {}),
+        ...(typeof title === "string" && title ? { title: title.slice(0, 300) } : {}),
+      },
+    };
   }
 
   if (type === "browser") {

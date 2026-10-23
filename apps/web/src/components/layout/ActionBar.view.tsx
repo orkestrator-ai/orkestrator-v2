@@ -38,7 +38,6 @@ import {
   Columns3,
   Container,
   Copy,
-  ExternalLink,
   Eye,
   FolderGit2,
   FolderTree,
@@ -628,6 +627,12 @@ export function ActionBar({ presentation = "bar", trailing }: ActionBarProps) {
               icon: <ListChecks className="size-3.5" />,
               panelId: "project-panel-features",
             },
+            {
+              value: "pull-requests",
+              label: "Pull requests",
+              icon: <GitPullRequest className="size-3.5" />,
+              panelId: "project-panel-pull-requests",
+            },
           ] satisfies Array<{
             value: ProjectBoardTab;
             label: string;
@@ -1204,21 +1209,21 @@ export function ActionBar({ presentation = "bar", trailing }: ActionBarProps) {
                         ? "PR has been merged - click to view"
                         : isPRClosed
                           ? "PR was closed without merging - click to view"
-                          : "Open PR in browser"
+                          : "Open PR in the sidebar (⌘-click opens GitHub)"
                     }
                   >
                     <Button
                       variant={isGrid ? "ghost" : isPRFinished ? "secondary" : "outline"}
                       size="sm"
                       className="gap-2"
-                      onClick={viewPR}
+                      onClick={(event) => viewPR({ external: event.metaKey || event.ctrlKey })}
                     >
                       {isPRMerged ? (
                         <GitMerge className="h-4 w-4" />
                       ) : isPRClosed ? (
                         <GitPullRequestClosed className="h-4 w-4" />
                       ) : (
-                        <ExternalLink className="h-4 w-4" />
+                        <GitPullRequest className="h-4 w-4" />
                       )}
                       <span className={cn(isGrid && "truncate text-xs")}>
                         {isPRMerged ? "PR Merged" : isPRClosed ? "PR Closed" : "View PR"}

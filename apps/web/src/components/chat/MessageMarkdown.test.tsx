@@ -3,6 +3,9 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useEffect } from "react";
 import { TerminalProvider, useTerminalContext, type CreateFileTabOptions } from "@/contexts";
 import { invoke } from "@/lib/native/backend";
+import { PullRequestOpenerProvider } from "@/lib/pull-request-opener";
+import { useEnvironmentStore, useFilesPanelStore, useUIStore } from "@/stores";
+import type { Environment } from "@/types";
 import { mockToastInfo } from "../../../../../tests/mocks/sonner";
 
 import {
@@ -309,6 +312,80 @@ describe("MessageMarkdown links", () => {
     expect(openFile).not.toHaveBeenCalled();
     expect(invokeMock).toHaveBeenCalledWith("open_in_browser", {
       url: "https://example.com/docs",
+    });
+  });
+});
+
+describe("MessageMarkdown pull request links", () => {
+  afterEach(() => {
+    cleanup();
+    useUIStore.setState({ selectedEnvironmentId: null, selectedProjectId: null });
+    useEnvironmentStore.setState({ environments: [] });
+    useFilesPanelStore.setState({ isOpen: false, activeTab: "changes", pullRequestTabs: {} });
+  });
+
+  test("opens a pull request link with the surrounding opener on its matching view", () => {
+    invokeMock.mockClear();
+    const open = mock((_ref: unknown, _view?: unknown) => undefined);
+    render(
+      <PullRequestOpenerProvider open={open}>
+        <MessageMarkdown content="[PR](https://github.com/acme/widgets/pull/42/files)" />
+      </PullRequestOpenerProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("link", { name: "PR" }));
+
+    expect(open).toHaveBeenCalledWith(
+      { owner: "acme", repo: "widgets", number: 42, view: "code" },
+      "code",
+    );
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+
+  test("Cmd-click keeps a pull request link on the browser action", () => {
+    invokeMock.mockClear();
+    const open = mock((_ref: unknown, _view?: unknown) => undefined);
+    render(
+      <PullRequestOpenerProvider open={open}>
+        <MessageMarkdown content="[PR](https://github.com/acme/widgets/pull/42)" />
+      </PullRequestOpenerProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("link", { name: "PR" }), { metaKey: true });
+
+    expect(open).not.toHaveBeenCalled();
+    expect(invokeMock).toHaveBeenCalledWith("open_in_browser", {
+      url: "https://github.com/acme/widgets/pull/42",
+    });
+  });
+
+  test("opens a pull request link in the selected environment's files panel", () => {
+    invokeMock.mockClear();
+    useEnvironmentStore.setState({
+      environments: [{ id: "env-1", projectId: "project-1" } as Environment],
+    });
+    useUIStore.setState({ selectedEnvironmentId: "env-1", selectedProjectId: "project-1" });
+    render(<MessageMarkdown content="[PR](https://github.com/acme/widgets/pull/42)" />);
+
+    fireEvent.click(screen.getByRole("link", { name: "PR" }));
+
+    const panel = useFilesPanelStore.getState();
+    expect(panel.isOpen).toBe(true);
+    expect(panel.activeTab).toBe("pull-request:acme/widgets#42");
+    expect(panel.pullRequestTabs["env-1"]?.map((tab) => tab.ref)).toEqual([
+      { owner: "acme", repo: "widgets", number: 42 },
+    ]);
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+
+  test("falls back to the browser when nothing is selected to show the pull request", () => {
+    invokeMock.mockClear();
+    render(<MessageMarkdown content="[PR](https://github.com/acme/widgets/pull/42)" />);
+
+    fireEvent.click(screen.getByRole("link", { name: "PR" }));
+
+    expect(invokeMock).toHaveBeenCalledWith("open_in_browser", {
+      url: "https://github.com/acme/widgets/pull/42",
     });
   });
 });

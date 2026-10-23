@@ -3,8 +3,10 @@ import { toast } from "sonner";
 import { FilesPanelHeader } from "./FilesPanelHeader";
 import { ChangesView } from "./ChangesView";
 import { AllFilesView } from "./AllFilesView";
+import { FilesPanelPullRequests } from "./FilesPanelPullRequests";
 import { FileActionDialog, type PendingFileAction } from "./FileActionDialog";
 import { useFilesPanelStore, useUIStore } from "@/stores";
+import { isFilesPanelFileTab } from "@/stores/filesPanelStore";
 import { useFilesPanel, FileBatchActionError } from "@/hooks";
 import { ensureProjectHomeInStore } from "@/hooks/useFilesPanel";
 import type { CreateFileTabOptions } from "@/contexts";
@@ -125,31 +127,39 @@ export function FilesPanel() {
 
   return (
     <div className="flex h-full flex-col bg-zinc-900">
-      <FilesPanelHeader onRefresh={refresh} changeEnvironmentId={changeEnvironmentId} />
-      <ScrollArea className="min-h-0 flex-1">
-        {activeTab === "changes" ? (
-          <ChangesView
-            environmentId={changeEnvironmentId}
-            onReveal={isLocalEnvironment && worktreePath ? revealFile : undefined}
-            onRevert={(path) => requestFileAction("revert", path)}
-            onDelete={(path) => requestFileAction("delete", path)}
-            onOpenFile={onOpenFile}
-          />
-        ) : (
-          <AllFilesView
-            key={JSON.stringify([environmentId, worktreePath])}
-            onReveal={isLocalEnvironment && worktreePath ? revealFile : undefined}
-            onRevert={(path) => requestFileAction("revert", path)}
-            onDelete={(path) => requestFileAction("delete", path)}
-            onMove={moveFileInTree}
-            onCopyFiles={copyFilesIntoTree}
-            onCreateFolder={createFolder}
-            onRename={renameFile}
-            movePending={fileActionPending !== null}
-            onOpenFile={onOpenFile}
-          />
-        )}
-      </ScrollArea>
+      <FilesPanelHeader
+        onRefresh={refresh}
+        changeEnvironmentId={changeEnvironmentId}
+        targetId={environmentId}
+      />
+      {!isFilesPanelFileTab(activeTab) ? (
+        <FilesPanelPullRequests targetId={environmentId} />
+      ) : (
+        <ScrollArea className="min-h-0 flex-1">
+          {activeTab === "changes" ? (
+            <ChangesView
+              environmentId={changeEnvironmentId}
+              onReveal={isLocalEnvironment && worktreePath ? revealFile : undefined}
+              onRevert={(path) => requestFileAction("revert", path)}
+              onDelete={(path) => requestFileAction("delete", path)}
+              onOpenFile={onOpenFile}
+            />
+          ) : (
+            <AllFilesView
+              key={JSON.stringify([environmentId, worktreePath])}
+              onReveal={isLocalEnvironment && worktreePath ? revealFile : undefined}
+              onRevert={(path) => requestFileAction("revert", path)}
+              onDelete={(path) => requestFileAction("delete", path)}
+              onMove={moveFileInTree}
+              onCopyFiles={copyFilesIntoTree}
+              onCreateFolder={createFolder}
+              onRename={renameFile}
+              movePending={fileActionPending !== null}
+              onOpenFile={onOpenFile}
+            />
+          )}
+        </ScrollArea>
+      )}
       <FileActionDialog
         action={pendingAction}
         targetRef={targetBranch}

@@ -3,6 +3,10 @@ import { useEffect, useMemo, useRef, useCallback, useState, type MouseEvent } fr
 import type { BrowserPreviewOpenLinkEvent } from "@orkestrator/protocol/browser-preview";
 import { isMultiReviewTerminalPhase } from "@orkestrator/protocol/multi-review";
 import {
+  gitHubPullRequestKey,
+  isGitHubPullRequestRef,
+} from "@orkestrator/protocol/github-pull-requests";
+import {
   DndContext,
   KeyboardSensor,
   PointerSensor,
@@ -1285,6 +1289,54 @@ export function TerminalContainer({
           addTab,
           onTabLimit: () => showTabLimitReachedToast(MAX_TABS),
         });
+
+      // A pull request has one tab per environment: opening it again focuses
+      // that tab (with the requested view) rather than counting a new one.
+      if (type === "pull-request") {
+        const request = options?.pullRequest;
+        if (!request || !isGitHubPullRequestRef(request.ref)) return false;
+        const key = gitHubPullRequestKey(request.ref);
+        const openTab = allTabs.find(
+          (tab) =>
+            tab.type === "pull-request" &&
+            tab.pullRequestData &&
+            gitHubPullRequestKey(tab.pullRequestData.ref) === key,
+        );
+        const store = usePaneLayoutStore.getState();
+        if (openTab) {
+          const pane = store.findPaneWithTab(openTab.id, environmentId);
+          if (!pane) return false;
+          store.updateTabPullRequest(
+            openTab.id,
+            { view: request.view ?? "summary", reopen: true },
+            environmentId,
+          );
+          store.setActivePane(pane.id, environmentId);
+          store.setActiveTab(pane.id, openTab.id, environmentId);
+          return true;
+        }
+        if (allTabs.length >= MAX_TABS) {
+          showTabLimitReachedToast(MAX_TABS);
+          return false;
+        }
+        addTab(
+          activePaneId,
+          {
+            id: createUniqueTabId("pull-request"),
+            type: "pull-request",
+            pullRequestData: {
+              ref: {
+                owner: request.ref.owner,
+                repo: request.ref.repo,
+                number: request.ref.number,
+              },
+              view: request.view ?? "summary",
+            },
+          },
+          environmentId,
+        );
+        return true;
+      }
 
       // Selected durable workflows use caller-owned ids as idempotent focus
       // intents. Other callers retain collision reporting so they can roll back

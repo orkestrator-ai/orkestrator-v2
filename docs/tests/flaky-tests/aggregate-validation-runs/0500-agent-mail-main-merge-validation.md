@@ -178,3 +178,64 @@ one failed; 146.0 seconds). Both profiles were stopped and reset. This remains
 unresolved validation, with evidence and exact commands in case 0224; the
 native branch-picker failures above also remain unresolved. The original
 nonzero browser-suite exit statuses are retained.
+
+
+## Slash-command review fixes — 2026-10-23
+
+`mise run test:logged -- --name repository-tests -- mise run test` ran the
+Pi bridge with one Bun worker alongside the workspace/root groups. The Pi
+package reported 575 passed, one skipped and two failures (14.29 seconds):
+`cancel while Pi's preflight is held > acknowledges as pending and aborts the
+run the moment Pi accepts` timed out in its 2,000 ms `waitFor` (2001.66 ms),
+followed by its cleanup hook timing out (5002.01 ms). The owner is
+`bridges/pi-bridge/src/prompt-cancel-preflight.test.ts`; it was unchanged.
+
+`mise run test:logged -- --name pi-cancel-owner -- bun --cwd=bridges/pi-bridge test ./src/prompt-cancel-preflight.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`
+passed the complete unchanged owner in 0.5 seconds. This confirms an aggregate
+flake; timing pressure is a hypothesis, not a proven root cause. No assertion,
+timeout, or skip was changed. Original bridge evidence is in
+`orkestrator-test-run.sWO5S0/bridges.log` under the host temporary directory
+(and the outer `orkestrator-test-run.NMvd79/repository-tests.log`).
+
+The component browser command
+`mise run test:logged -- --name browser-components -- mise run test:browser`
+reported 485 passed, 85 skipped and two failures with nine workers (256.7
+seconds). Both native branch-suggestion cases in
+`e2e/AgentLaunchDialog.spec.ts:7` left `rel` instead of selecting
+`release/2.0` at the 5,000 ms deadline.
+`mise run test:logged -- --name branch-picker-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentLaunchDialog.spec.ts --workers=1`
+repeated both failures (two passed, two failed, 21.8 seconds). This remains
+the known unresolved native-popup validation failure, not a new flake.
+Evidence: `orkestrator-test-run.lpgFXI/browser-components.log.gz` and
+`orkestrator-test-run.Eyw2XY/branch-picker-owner.log.gz` under the host temporary
+directory. The separate public-site browser suite passed (17.1 seconds).
+
+
+The complete repository run finished in 542.1 seconds with failing workspace
+and bridge groups. All workspace packages except backend passed. Backend
+reported 10,161 passed, 60 skipped and one failure:
+`executable document policy in firefox > popups, new-window links and top
+navigation reach the sink zero times` in
+`apps/backend/src/core/transcript-artifacts/content-server.engines.test.ts:924`.
+The sink received `GET /favicon.ico` instead of remaining empty (7982.85 ms).
+`mise run test:logged -- --name artifact-policy-owner -- bun --cwd=apps/backend test ./src/core/transcript-artifacts/content-server.engines.test.ts --parallel=1 --only-failures`
+reproduced the same assertion in the complete unchanged owner (38 passed,
+one failed, 95.9 seconds; failing case 3035.97 ms). This is an unresolved
+validation failure, not a confirmed flake. Evidence:
+`orkestrator-test-run.sWO5S0/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+and `orkestrator-test-run.P5j4mI/artifact-policy-owner.log.gz` under the host
+temporary directory. Neither the artifact policy nor its test was changed.
+
+
+The slash-command changes' focused web and backend checks passed, including
+real Claude bridge process restart coverage. `mise run check` passed. A
+real-stack browser smoke passed in the disposable `slash-review-fixes` profile
+(9.9 seconds). After rebuilding the stale compiled Claude bridge with
+`mise run test:logged -- --name claude-bridge-build -- bun run --cwd bridges/claude-bridge build`,
+the final live local Claude scenario passed (90.4 seconds):
+`ORKESTRATOR_AGENT_TEST_PROFILE=slash-review-fixes ORKESTRATOR_AGENT_TEST_RUN_ID=slash-review-fixes ORKESTRATOR_AGENT_TEST_LIVE_SLASH=1 ORKESTRATOR_AGENT_TEST_SLASH_PROVIDERS=claude mise run test:logged -- --name live-slash-restart -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/slash-command-inactive.spec.ts`.
+It requires automatic retirement, preserved draft text, released request ID,
+visible inline feedback, no duplicate toast or Retry, and a new ID on resend.
+The profile was stopped and reset; `dev:status` confirmed it missing with no
+live processes. The unrelated original aggregate and browser failures above
+remain non-green.

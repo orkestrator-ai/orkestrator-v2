@@ -251,6 +251,11 @@ exit 0
         expect(execLog).toContain("/tmp/codex-bridge-token");
         expect(execLog).toContain("export CODEX_BRIDGE_TOKEN=");
         expect(execLog).toContain("export CODEX_MAX_CONCURRENT_THREADS_PER_SESSION=9");
+        // Skills and templates resolve against the container's workspace and
+        // the container user's own CODEX_HOME, never a host path.
+        expect(execLog).toContain("cd /workspace");
+        expect(execLog).toContain("export CWD=/workspace");
+        expect(execLog).not.toContain("CODEX_HOME=");
         expect(execLog).toContain("export ORKESTRATOR_BRIDGE_DEBUG=1");
         expect(execLog).toContain("setsid bun /opt/codex-bridge/dist/index.js");
         expect(execLog).not.toContain("unset GITHUB_TOKEN GH_TOKEN");
@@ -634,6 +639,11 @@ exit 0
         expect(execLog).toContain("export ORKESTRATOR_BRIDGE_DEBUG=0");
         expect(execLog).toContain(`export ACP_STATE_DIR=/tmp/orkestrator-acp-state/${provider}`);
         expect(execLog).toContain("export HOSTNAME=0.0.0.0");
+        // The ACP session's cwd, and so Grok's project skills and folder trust,
+        // is the container's workspace; GROK_HOME stays the container user's.
+        expect(execLog).toContain("cd /workspace");
+        expect(execLog).toContain("export CWD=/workspace");
+        expect(execLog).not.toContain("GROK_HOME=");
         expect(execLog).toContain(
           `setsid bun /opt/acp-bridge/dist/index.js --provider=${provider}`,
         );
@@ -792,6 +802,8 @@ exit 0
         const execLog = await fs.readFile(logs.exec, "utf8");
         expect(execLog.split("\n").filter((line) => line.startsWith("exec -d "))).toHaveLength(1);
         expect(execLog).toContain("export PI_AGENT_DIR=/home/node/.pi/agent");
+        // Templates, skills and extensions resolve in the container's workspace.
+        expect(execLog).toContain("export CWD=/workspace");
         expect(execLog).toContain("export ORKESTRATOR_BRIDGE_DEBUG=0");
         expect(execLog).toContain("export PI_SESSION_DIR=/home/node/.pi/agent/sessions");
         expect(execLog).toContain("export PI_BRIDGE_STATE_DIR=/tmp/orkestrator-pi-state");
@@ -1242,6 +1254,10 @@ exit 0
           const execLog = await fs.readFile(logs.exec, "utf8");
           expect(execLog).toContain("setsid bun /opt/claude-bridge/dist/index.js");
           expect(execLog).not.toContain("setsid node");
+          // No CWD: discovery uses the process's own working directory, the
+          // container's workspace (claudeWorkspaceCwd).
+          expect(execLog).toContain("cd /workspace");
+          expect(execLog).not.toContain("export CWD=");
           expect(execLog).toContain("/tmp/claude-bridge-token");
           expect(execLog).toContain("export CLAUDE_BRIDGE_TOKEN=");
           expect(execLog).toContain("export ORKESTRATOR_BRIDGE_DEBUG=0");
@@ -1413,6 +1429,9 @@ exit 0
         const execLog = await fs.readFile(logs.exec, "utf8");
         expect(execLog.split("\n").filter((line) => line.startsWith("exec -d "))).toHaveLength(4);
         expect(execLog).toContain("pkill -f '[o]pencode serve'");
+        // A container connection names no directory, so the server's own cwd,
+        // the container's workspace, scopes `command.list`.
+        expect(execLog).toMatch(/cd \/workspace\n[\s\S]*opencode serve --port/);
         expect(execLog).toContain("/home/node/.config/opencode/plugins/orkestrator-github-env.js");
         expect(execLog).not.toContain("OPENCODE_CONFIG_CONTENT");
         expect(execLog).toContain("unset GITHUB_TOKEN GH_TOKEN GITHUB_PERSONAL_ACCESS_TOKEN");

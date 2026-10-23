@@ -53,7 +53,7 @@ import type { ProvisionalFindingSink } from "./review-provisional-findings.js";
 import {
   createMcpRuntimeProbe,
   mcpRolloutLoader,
-  readContainerMcpFile,
+  mcpContainerOptions,
 } from "./commands-registry-mcp.js";
 import { McpManagementService } from "./mcp-management/service.js";
 import {
@@ -738,7 +738,7 @@ export class OrkestratorBackend {
       storage,
       emit: options.emit,
       probe: createMcpRuntimeProbe(context),
-      readContainerFile: readContainerMcpFile,
+      ...mcpContainerOptions(context),
       loadRollout: mcpRolloutLoader(context),
     });
     // Web annotations: backend-owned threads and requests. Execution goes

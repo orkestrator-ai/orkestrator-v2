@@ -107,3 +107,26 @@ Failure logs are bounded compressed files below the host temporary directory:
 - Separate environment and artifact engine failures: `orkestrator-test-run.TOnIri/`, `orkestrator-test-run.9HeG0n/`.
 
 The aggregate exits remain failed; passing owner reruns do not turn them green. Docker, iOS and credentialed live-provider qualification were not enabled. The merge resolutions and relevant native-agent regressions passed, while the broader limitations above remain explicit.
+
+## Follow-up main merge through 9da8131c8 — 2026-10-23
+
+Parents: `2bee5ac0b5fd732c13a23fdc1342b0f74b7b2a83` and `9da8131c8dd35328fadfa654379533c3cbcd6767`. The complete original list of four conflicts was retained in local Git metadata before staging. The obsolete dispatch/prompt inheritance files stay deleted; main's confirmed-versus-retired dispatch semantics were ported into `NativeAgentService` and the prompt-queue collaborator, projection notices were merged, and both sides' validation index rows were retained. The queue regression covers refreshing after both confirmed and retired settlements.
+
+The whole combined delta was checked against the parents' common ancestor, including clean auto-merges. All of the following passed on the final source tree:
+
+- `mise run test:logged -- --name merge2-check-fixed -- mise run check` (7.3 s).
+- `mise run test:logged -- --name merge2-native-dispatch-fixed -- bun test --cwd apps/backend ./src/core/native-agent-service-dispatch.test.ts ./src/core/native-agent-service-turn-outcome.test.ts ./src/core/native-agent-prompt-queue-dispatcher.test.ts ./src/core/native-agent-transcript-projection.test.ts ./src/core/native-agent-retired-dispatch.test.ts ./src/core/native-agent-service-progressive.test.ts --parallel=1 --only-failures` (12.7 s).
+- `mise run test:logged -- --name merge2-stack -- mise run test:agent:browser:isolated`: 29 passed, 52 opt-in skips, zero failures (517.3 s). Profile `qa-browser-22c101ff-eae` was stopped/reset by the runner.
+- `mise run test:logged -- --name merge2-preview-browser -- mise run test:preview:browser`: Chromium, Firefox and WebKit private-origin checks passed (43.1 s); the optional external Vite HMR fixture was not supplied.
+- `mise run test:logged -- --name merge2-container-image -- mise run docker:build:dev --profile qa-native-merge-9da813`: built the current checkout's `orkestrator-v2:dev-457ff89402d6` image (44.3 s).
+- `RUN_LIVE_DOCKER_TESTS=1 ORKESTRATOR_QUALIFICATION_IMAGE=orkestrator-v2:dev-457ff89402d6 mise run test:logged -- --name merge2-mcp-docker -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/mcp-overlay-live.test.ts --parallel=1 --only-failures`: live Docker MCP overlay checks passed (52.3 s).
+- `ORKESTRATOR_AGENT_TEST_PROFILE=qa-native-merge-9da813 ORKESTRATOR_AGENT_TEST_RUN_ID=qa-native-merge-9da813 mise run test:logged -- --name merge2-docker-agent -- mise run test:agent:docker`: Docker browser fixtures passed (111.4 s).
+- `ORKESTRATOR_AGENT_TEST_PROFILE=qa-native-merge-9da813 ORKESTRATOR_AGENT_TEST_RUN_ID=qa-native-merge-9da813 ORKESTRATOR_AGENT_TEST_MCP_CONTAINER=1 mise run test:logged -- --name merge2-mcp-recovery-ui -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/mcp-overlay-recovery.spec.ts --workers=1`: container MCP corrupt-record recovery through the real renderer/backend passed (24.7 s).
+
+The Docker profile was created with `mise run dev:test --profile qa-native-merge-9da813 --fixture --fixture-environments local,container --no-agent-credentials --agent-platforms codex`. After testing, `dev:stop` and `dev:reset` confirmed removal of its two exact-owner containers, four volumes, one network and disposable state. The workspace-specific development image remains available as a build cache. No production image was used or retagged.
+
+Full suite command: `ORKESTRATOR_TEST_AREA_BASE=$(git merge-base HEAD MERGE_HEAD) mise run test:logged -- --name merge2-tests -- mise run test`. Both transcript-artifact and tmux area suites ran because `mise.toml` changed. Workspace/root/bridges/protocol reservations were 4/1/2/1. The suite completed in 627.0 s: workspace, root/support and protocol lockfile passed. Backend had 10398 passed, 64 skipped and zero failed; web had 8912 passed, 10 skipped and zero failed; root had 3381 passed and zero failed. Other workspace packages passed as well.
+
+The sole aggregate failure was the registered Codex runtime-environment timeout, reproduced at 15005.86 ms. Its complete unchanged owner passed separately in 0.1 s (see case 0093 for the exact command, counts and evidence). This confirms intermittence, but the original full-suite exit remains 1. Full evidence is `orkestrator-test-run.Dm83Kv/`; wrapper evidence is `orkestrator-test-run.jIdcYh/merge2-tests.log.gz`, below the host temporary directory.
+
+This follow-up used the real-stack browser suite for renderer validation. No Electron main/preload/IPC or iOS changes were introduced by this merge delta; no separate Electron/iOS suite was added. Credentialed live-provider and live Tailscale transport qualification remained opt-in and were not enabled.

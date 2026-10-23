@@ -59,7 +59,7 @@ function harness(overrides: Partial<NativeAgentPromptQueueDispatcherHost> = {}) 
       throw new Error("unexpected steer");
     },
     recordObservedTurnOutcome: async () => undefined,
-    settleAmbiguousDispatch: mock(async () => true),
+    settleAmbiguousDispatch: mock(async () => "confirmed" as const),
     settleAmbiguousSteer: mock(async () => "dispatched" as const),
     ...overrides,
   };
@@ -153,22 +153,25 @@ describe("NativeAgentPromptQueueDispatcher interrupt fences", () => {
 });
 
 describe("NativeAgentPromptQueueDispatcher parked-dispatch settles", () => {
-  test("concurrent settles of one request coalesce and refresh after settling", async () => {
-    const settled = deferred<boolean>();
-    const settleAmbiguousDispatch = mock(() => settled.promise);
-    const { dispatcher, host, tracked } = harness({ settleAmbiguousDispatch });
-    const provider = {} as NativeAgentRuntimeProvider;
+  test.each(["confirmed", "retired"] as const)(
+    "concurrent settles coalesce and refresh after %s",
+    async (outcome) => {
+      const settled = deferred<"confirmed" | "retired" | undefined>();
+      const settleAmbiguousDispatch = mock(() => settled.promise);
+      const { dispatcher, host, tracked } = harness({ settleAmbiguousDispatch });
+      const provider = {} as NativeAgentRuntimeProvider;
 
-    dispatcher.scheduleAmbiguousDispatchSettle(identity, sessionKey, "request-1", provider);
-    dispatcher.scheduleAmbiguousDispatchSettle(identity, sessionKey, "request-1", provider);
-    expect(settleAmbiguousDispatch).toHaveBeenCalledTimes(1);
-    expect(dispatcher.forTesting().settlingDispatches.size).toBe(1);
+      dispatcher.scheduleAmbiguousDispatchSettle(identity, sessionKey, "request-1", provider);
+      dispatcher.scheduleAmbiguousDispatchSettle(identity, sessionKey, "request-1", provider);
+      expect(settleAmbiguousDispatch).toHaveBeenCalledTimes(1);
+      expect(dispatcher.forTesting().settlingDispatches.size).toBe(1);
 
-    settled.resolve(true);
-    await Promise.all(tracked);
-    expect(host.refreshProjection).toHaveBeenCalledWith(identity);
-    expect(dispatcher.forTesting().settlingDispatches.size).toBe(0);
-  });
+      settled.resolve(outcome);
+      await Promise.all(tracked);
+      expect(host.refreshProjection).toHaveBeenCalledWith(identity);
+      expect(dispatcher.forTesting().settlingDispatches.size).toBe(0);
+    },
+  );
 });
 
 describe("NativeAgentPromptQueueDispatcher scheduling", () => {

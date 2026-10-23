@@ -1310,6 +1310,19 @@ switch to another environment while it runs or waits for input, return after it
 finishes, and confirm that messages, status, questions/approvals, and controls
 rehydrate from authoritative backend state.
 
+Re-qualify slash commands for every provider whose pin moved, before the
+upgrade merges: the qualified rows in
+[`native-agent-commands.md`](../architecture/native-agent-commands.md#provider-support)
+name the versions they were proved on, and a pin they no longer match is an
+unproven claim. The scripted probes in `scripts/slash-probes/` need no
+Orkestrator profile and cost seconds (`codex-disabled-skills-probe.mjs` needs no
+sign-in; `pi-commands-probe.mjs` uses the host's Pi login by path and runs a few
+short model turns). For a Codex or Claude upgrade also run
+`e2e/agent-testing/slash-command-inactive.spec.ts` (see
+[`agent-testing.md`](agent-testing.md#live-slash-commands-in-an-inactive-environment)).
+Then update the pins in that section, or list what changed as unavailable with
+a reason.
+
 Before committing, search for both the old SDK and CLI version literals:
 
 ```bash

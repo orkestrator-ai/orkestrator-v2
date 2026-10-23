@@ -193,13 +193,11 @@ describe("previews", () => {
         definition: { name: "c", transport: "http", url: "https://c.example/mcp" },
       }),
     );
-    expect(cursor.preview?.warnings).toContain(
-      "Container environments do not receive Cursor's MCP configuration.",
-    );
+    expect(cursor.preview?.warnings.join(" ")).toContain("predate Cursor delivery");
     expect(cursor.preview?.warnings.join(" ")).not.toContain("keep the copy");
     const claude = await fixture.service.validate(await claudeAdd("c"));
-    expect(claude.preview?.warnings).toContain(
-      "Existing container environments keep the copy they were created with.",
+    expect(claude.preview?.warnings.join(" ")).toContain(
+      "Existing containers pick this up the next time they start",
     );
   });
 });

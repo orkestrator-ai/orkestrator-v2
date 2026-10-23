@@ -699,6 +699,16 @@ export interface PersistedNativeAgentSession {
   /** Retained until an ambiguous steer is authoritatively reconciled or discarded. */
   pendingSteer?: PersistedNativeAgentPendingSteer;
   /**
+   * The last parked dispatch the backend retired because the provider reported
+   * its outcome lost. Content-free; renderers rehydrate it to release the
+   * draft's request id. Replaced by the next retirement, cleared by the next
+   * accepted dispatch, and ignored by readers once
+   * `NATIVE_AGENT_RETIRED_DISPATCH_TTL_MS` has passed. Deliberately not
+   * validated with the session record: a malformed value reads as absent
+   * rather than making the session unreadable.
+   */
+  retiredDispatch?: PersistedNativeAgentRetiredDispatch;
+  /**
    * Content-free authoritative recovery outcome rehydrated by every tab.
    *
    * The field keeps the name it was first persisted under, when OpenCode was
@@ -721,6 +731,11 @@ export interface PersistedNativeAgentSession {
   interruptedRequestIds?: string[];
   createdAt: string;
   updatedAt: string;
+}
+
+export interface PersistedNativeAgentRetiredDispatch {
+  requestId: string;
+  retiredAt: string;
 }
 
 /** A session's incomplete-turn notice, independent of its persisted field name. */

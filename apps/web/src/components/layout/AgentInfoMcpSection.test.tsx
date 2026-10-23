@@ -9,6 +9,8 @@ import { McpServersSettingsLink } from "@/components/settings/mcp-servers/McpSer
 import { onMcpSettingsIntent, type McpSettingsIntent } from "@/lib/mcp-settings-navigation";
 import { listen as nativeListen } from "@/lib/native/events";
 import { onResourceChanged } from "@/lib/resource-sync";
+import { useEnvironmentStore } from "@/stores/environmentStore";
+import type { Environment } from "@/types";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 
 import { AgentInfoMcpSection } from "./AgentInfoMcpSection";
@@ -102,6 +104,36 @@ describe("AgentInfoMcpSection links into saved configuration", () => {
     render(<McpServersSettingsLink platform="pi" />);
     fireEvent.click(screen.getByRole("button", { name: "Manage Pi MCP servers" }));
     expect(intents).toEqual([{ provider: "pi" }]);
+  });
+});
+
+describe("AgentInfoMcpSection says where servers connect from", () => {
+  function withEnvironment(environmentType: "local" | "container") {
+    const previous = useEnvironmentStore.getState().environments;
+    useEnvironmentStore.setState({
+      environments: [{ id: "env-1", name: "env-a", environmentType } as Environment],
+    });
+    cleanups.push(() => useEnvironmentStore.setState({ environments: previous }));
+  }
+
+  test("a failing server in a container names the container", () => {
+    withEnvironment("container");
+    renderSection(servers);
+    expect(
+      screen.getByText("Connects from Container of env-a, not from this browser."),
+    ).toBeTruthy();
+  });
+
+  test("a failing server in a worktree names the worktree", () => {
+    withEnvironment("local");
+    renderSection(servers);
+    expect(screen.getByText(/Connects from Worktree of env-a on this backend/)).toBeTruthy();
+  });
+
+  test("healthy servers need no location hint", () => {
+    withEnvironment("container");
+    renderSection(servers.filter((server) => server.status === "connected"));
+    expectDomAbsent(screen.queryByText(/Connects from/), "location hint");
   });
 });
 

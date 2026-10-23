@@ -84,6 +84,13 @@ export function nonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+/** A bridge snapshot's `commandRevision`, as the projection's catalogue revision. */
+export function commandCatalogueRevisionField(revision: unknown): {
+  commandCatalogueRevision?: number;
+} {
+  return Number.isSafeInteger(revision) ? { commandCatalogueRevision: revision as number } : {};
+}
+
 /**
  * Reject an SDK envelope that carries an error instead of data.
  *

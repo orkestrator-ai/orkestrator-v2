@@ -13,9 +13,10 @@
  */
 import { execFileSync } from "node:child_process";
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer, request as httpRequest } from "node:http";
 import { createServer, type AddressInfo } from "node:net";
+import { createServer as createHttpsServer } from "node:https";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -50,7 +51,7 @@ function spkiPin(leaf: string): string {
 }
 
 const pki = await mkdtemp(join(tmpdir(), "ork-preview-browser-"));
-certificates(pki);
+certificates(pki, [`*.${TEST_PREVIEW_DOMAIN}`, "idp.identity.test"]);
 const fixture = await startPreviewFixture({ marker: "browser-app" });
 const other = await startPreviewFixture({ marker: "browser-other" });
 const harness = await createPreviewHarness({ env: { ORKESTRATOR_PREVIEW_TRANSPORT: "1" } });
@@ -214,11 +215,31 @@ async function grant(name: string) {
   };
 }
 
+// External-site redirect fixture for same-service iframe authentication returns.
+// No real identity provider, DNS changes or credentials are involved.
+const redirector = createHttpsServer(
+  { cert: await readFile(join(pki, "leaf.pem")), key: await readFile(join(pki, "leaf.key")) },
+  (request, response) => {
+    const target = new URL(request.url ?? "/", "https://idp.identity.test").searchParams.get(
+      "return",
+    );
+    const appOrigin = manager.originFor(services.app!);
+    if (!target || !appOrigin || !target.startsWith(`${appOrigin}/`)) {
+      response.writeHead(400).end();
+      return;
+    }
+    response.writeHead(302, { location: target, "cache-control": "no-store" }).end();
+  },
+);
+await new Promise<void>((resolve) => redirector.listen(0, "127.0.0.1", resolve));
+
 let closing = false;
 async function shutdown(): Promise<void> {
   if (closing) return;
   closing = true;
   vite?.kill("SIGTERM");
+  redirector.closeAllConnections();
+  await new Promise<void>((resolve) => redirector.close(() => resolve()));
   recorder.closeAllConnections();
   await new Promise<void>((resolve) => recorder.close(() => resolve()));
   await gateway.stop();
@@ -238,6 +259,7 @@ process.stdout.write(
     spki: spkiPin(join(pki, "leaf.pem")),
     services: Object.keys(services),
     gateway: gatewayUrl,
+    redirectPort: (redirector.address() as AddressInfo).port,
   })}\n`,
 );
 

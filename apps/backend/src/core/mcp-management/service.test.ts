@@ -171,16 +171,16 @@ describe("McpManagementService — catalog", () => {
     expect(row.actions.remove.supported).toBe(true);
   });
 
-  test("container environments are read-only with a specific reason", async () => {
+  test("a container environment without a container yet is read-only with a specific reason", async () => {
     fixture.environment.environmentType = "containerized";
     const targetId = await targetIdFor(fixture, "claude", "environment");
     const snapshot = await fixture.service.snapshot({ targetId });
-    expect(snapshot.target.readOnlyReason).toContain("durable environment overlay");
+    expect(snapshot.target.readOnlyReason).toContain("no container yet");
     expect(snapshot.target.capabilities.operations.add.supported).toBe(false);
     expect(snapshot.sources.map((source) => source.sourceId)).toEqual(["claude:injected"]);
   });
 
-  test("a running container shows its own configuration read-only; a stopped one is offline", async () => {
+  test("a running container's home is this environment's; its ephemeral project is read-only; a stopped one is offline", async () => {
     fixture.environment.environmentType = "containerized";
     fixture.environment.containerId = "container-1";
     fixture.containerFiles.set(
@@ -196,18 +196,23 @@ describe("McpManagementService — catalog", () => {
     const home = snapshot.sources.find((source) => source.sourceId === "claude:user")!;
     expect(home).toMatchObject({
       state: "ok",
-      writable: false,
+      writable: true,
+      scope: "environment-private",
+      owner: "environment-overlay",
       displayPath: "container:/home/node/.claude.json",
     });
-    expect(entry(snapshot, "claude:user", "inside").actions.edit.supported).toBe(false);
+    expect(snapshot.target.defaultSourceId).toBe("claude:user");
+    expect(entry(snapshot, "claude:user", "inside").actions.edit.supported).toBe(true);
     expect(entry(snapshot, "claude:project", "proj").status).toBe("effective");
     expect(JSON.stringify(snapshot)).not.toContain(SENTINEL);
+    const project = snapshot.sources.find((source) => source.sourceId === "claude:project")!;
+    expect(project.writable).toBe(false);
     await expect(
       fixture.service.mutate(
         mutation(targetId, {
           kind: "remove",
-          entryId: entry(snapshot, "claude:user", "inside").entryId,
-          expectedRevision: home.revision!,
+          entryId: entry(snapshot, "claude:project", "proj").entryId,
+          expectedRevision: project.revision!,
         }),
       ),
     ).rejects.toThrow("read-only-source");

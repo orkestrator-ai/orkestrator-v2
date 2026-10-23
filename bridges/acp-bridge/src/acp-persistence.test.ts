@@ -163,7 +163,8 @@ describe("ACP bridge", () => {
         { dispatch: "dispatched", turn: { state: "failed", error: "provider failed" } },
       ],
       ["completed-ok", { dispatch: "dispatched", turn: { state: "completed" } }],
-      ["accepted", { dispatch: "unknown" }],
+      // Restored without an outcome: retired, like the prompt route's 410.
+      ["accepted", { dispatch: "lost" }],
     ] as const) {
       const response = await nativeFetch(
         `${second.base}/session/${created.id}/dispatch?requestId=${requestId}`,
@@ -707,12 +708,13 @@ describe("ACP bridge", () => {
     });
     // The record survived, but it records the ambiguity rather than resolving
     // it. Answering "dispatched" here would let a caller drop a prompt that
-    // this process will never run.
+    // this process will never run; `lost` says the id is retired instead, the
+    // same answer the prompt route gives with its 410.
     expect(
       await nativeFetch(`${second.base}/session/${created.id}/dispatch?requestId=in-flight-1`, {
         headers: second.headers,
       }).then((response) => response.json()),
-    ).toEqual({ dispatch: "unknown" });
+    ).toEqual({ dispatch: "lost" });
   });
 
   test("quarantines an unusable state file instead of refusing to start", async () => {

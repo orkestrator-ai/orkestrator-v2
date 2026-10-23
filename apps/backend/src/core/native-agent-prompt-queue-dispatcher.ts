@@ -74,13 +74,13 @@ export interface NativeAgentPromptQueueDispatcherHost {
     detail: string | undefined,
     provider?: Pick<NativeAgentRuntimeProvider, "turnTerminalError">,
   ): Promise<void>;
-  /** Resolve a parked prompt dispatch against its provider; true once settled. */
+  /** Resolve a parked prompt dispatch as confirmed or permanently retired. */
   settleAmbiguousDispatch(
     input: NativeAgentProjectionInput,
     key: string,
     requestId: string,
     provider?: NativeAgentRuntimeProvider,
-  ): Promise<boolean>;
+  ): Promise<"confirmed" | "retired" | undefined>;
   /** Resolve a parked steer against its provider. */
   settleAmbiguousSteer(
     input: NativeAgentProjectionInput,

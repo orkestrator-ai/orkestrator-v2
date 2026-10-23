@@ -56,11 +56,13 @@ partitions, and the evidence log where run results are now recorded.
   [browser-previews.md](../../architecture/browser-previews.md). The shared
   legacy partitions of live connections are never cleared. Legacy URL tabs are
   never converted to service tabs.
-- Tests: the only real browser is Chromium. `e2e/preview/private-origin.spec.ts`
-  has six tests on an isolated stack (`apps/backend/src/preview-browser-harness.ts`,
-  throwaway CA). Its config has no `projects`, and sibling isolation checks
-  only localStorage and cookies. The opt-in Docker, relay, Vite and benchmark
-  suites are listed in [`testing-guide.md`](../../development/testing-guide.md)
+- Tests: `e2e/preview/private-origin.spec.ts` has Chromium, Firefox and WebKit
+  projects on an isolated stack (`apps/backend/src/preview-browser-harness.ts`,
+  throwaway CA and browser-local loopback proxy). Since 2026-10-23, each runs
+  eight cases plus opt-in Vite HMR, including sibling reads, hostile workers
+  and external redirects into same-service frames. WebKit is engine signal,
+  not shipping Safari/iOS qualification. The opt-in Docker, relay, Vite and
+  benchmark suites are listed in [`testing-guide.md`](../../development/testing-guide.md)
   §"Opt-in preview checks"; since 2026-10-22 they are `mise run
   test:preview:docker`, `test:preview:browser` and `test:preview:bench`. None
   runs in `mise run test` or CI. All
@@ -83,9 +85,9 @@ partitions, and the evidence log where run results are now recorded.
 2. Done 2026-10-22: relay fault tests for an oversized frame and a
    protocol-version mismatch, which found and fixed an unbounded stdout buffer
    after a relay shut down (see the evidence log).
-3. Optional: Playwright `firefox` and `webkit` projects in
+3. Done 2026-10-23: Playwright `firefox` and `webkit` projects in
    `playwright.preview.config.ts`, as early signal only (not Safari or iOS
-   evidence). The mise tasks for the opt-in suites were added on 2026-10-22.
+   evidence). See the cross-service read follow-up in the evidence log.
 4. Partition retention. Removed services, deleted environments and forgotten
    connections are done (2026-10-22, `PreviewPartitionRetention`). It diffs
    against the full, unfiltered definition list rather than tombstones:
@@ -189,8 +191,11 @@ log below.
   deployment type. Use split DNS or a private zone with a wildcard
   certificate, with and without a Tailscale Serve forwarder (`publicPort`).
   Cover renewal, expiry, hostname mismatch and unknown Host (421).
-- Firefox, Safari and iOS, top-level. In Firefox and Safari, cover bootstrap,
-  sibling isolation, the `fixture.v1` subprotocol and revocation. Run the iOS
+- Firefox, Safari and iOS, top-level. Firefox passed bootstrap, sibling
+  isolation, the `fixture.v1` subprotocol, revocation and hostile-worker
+  checks on 2026-10-23 (throwaway certificate bypass; deployment trust remains
+  open). WebKit passed the same engine checks. Shipping Safari remains open;
+  cover those cases there with real certificate trust. Run the iOS
   handoff (`create_preview_handoff_url`, contract-tested only in
   `tests/unit/ios-mobile-contracts.test.ts`) on a device or simulator:
   opening in Safari, background and foreground, and private browsing.
@@ -208,17 +213,20 @@ log below.
   2026-10-22 (see the evidence log): re-sign-in is blocked until site data is
   cleared, the worker never sees a grant, its captured session code is
   refused by other hosts, and no control authority is reached. It did reach a
-  sibling service with a credentialed read, which contradicts "no other
-  service is ever reached"; that is
-  [0054-preview-cross-service-reads.md](0054-preview-cross-service-reads.md).
-  Still open: Electron's **Reset site data** with a worker installed on a
-  desktop-tunnel service, and Firefox and Safari.
+  sibling service with a credentialed read, which contradicted "no other
+  service is ever reached"; since 2026-10-23 the backend refuses that read
+  and the spec asserts nothing reaches the sibling
+  ([0054-preview-cross-service-reads.md](0054-preview-cross-service-reads.md)).
+  The same worker checks passed in Firefox and Playwright WebKit on
+  2026-10-23. Still open: Electron's **Reset site data** with a worker installed
+  on a desktop-tunnel service, and shipping Safari.
 - Compatibility cases not yet run in a real browser:
   - a streaming or router framework fixture alongside the pinned Vite 7.3.6;
   - SPA deep links and history;
   - the `srcset` route (served, never asserted);
   - source maps;
-  - OAuth-style external redirects;
+  - real-provider OAuth compatibility (synthetic external redirects into a
+    same-service frame and top-level return are covered since 2026-10-23);
   - IndexedDB, BroadcastChannel, service-worker and Cache isolation;
   - popup and frame denial (unit tests only);
   - an IPv6-only target (resolver level only).
@@ -831,6 +839,59 @@ transport and publication defaults remain unchanged.
   changes desktop retention and baseline tooling, with an additive backend
   handoff response. Vite HMR remains outside this run because its isolated
   fixture was not installed; the full Electron suite's own HMR journey passed.
+
+2026-10-23, cross-service read policy, branch
+`todo-0054-preview-cross-service-reads-bd9ab0d325bb` from `main` at
+`06297124`. macOS, Playwright 1.64.0, Chromium 156.0.8078.4. Single machine;
+Chromium only.
+
+- Private origins now refuse cookie-authenticated reads from other sites and
+  services unless they are top-level document navigations (details and
+  decisions in
+  [0054-preview-cross-service-reads.md](0054-preview-cross-service-reads.md)).
+- `mise run test:preview:browser`: 7 passed, 1 skipped (Vite fixture unset).
+  The hostile worker's credentialed `no-cors` `GET` no longer reaches the
+  sibling application. A new case shows a fetch, an image and a frame from
+  one service to its sibling refused before forwarding (three
+  `http.rejected{forbidden}`), and a top-level link between them opening the
+  sibling signed in. With the read check reverted, both cases failed.
+- Not run: Firefox, Safari, a real Tailscale Serve forwarder.
+
+2026-10-23, cross-service read review follow-up, same branch; macOS 27.0,
+Playwright 1.64.0, Chromium 156.0.8078.4, Firefox 157.0, WebKit 27.2 and
+Tailscale Serve 1.102.4. Single machine.
+
+- `mise run test:logged -- --name preview-browser-cross-engine -- mise run
+  test:preview:browser`: 24 passed, 3 skipped (Vite fixture unset), 80.8 s.
+  All engines refuse sibling fetch/image/frame traffic before forwarding;
+  top-level links work. The hostile worker reaches no sibling. WebKit blocks
+  all six HTTP-loopback gateway probes in-browser; Chromium/Firefox reach
+  the gateway without credentials and are refused.
+- A synthetic external identity provider redirects a service's own iframe
+  back to that service: Chromium sends cross-site/iframe metadata and is
+  refused with `403`; Firefox/WebKit omit the Lax preview cookie and receive
+  `401`. Each adds one `http.rejected{forbidden}`; nothing reaches the app.
+  Direct same-origin frames and top-level returns through that redirect work.
+  Hidden-iframe silent renewal is now an explicit framework limitation;
+  refresh tokens, popup and top-level redirect flows are the documented path.
+- `ORKESTRATOR_TEST_TAILSCALE_SERVE_METADATA=1 mise run test:logged --
+  --name tailscale-metadata-live-final -- bun test --cwd apps/backend
+  ./src/tailscale-serve-metadata.test.ts --parallel=1`: passed, one test,
+  eight requests and 16 assertions. A live, temporary Serve HTTPS listener
+  preserved `Sec-Fetch-Site`, `Sec-Fetch-Mode`, `Sec-Fetch-Dest` and
+  `Sec-Purpose`, including prefetch/prerender. The received headers produce
+  the expected policy verdicts. The client verified TLS; cleanup removed only
+  the test listener, preserving existing configuration.
+- Static checks, focused protocol/publication tests, spec loading and final
+  iframe regressions passed. Full validation exited 1 (938.4 s), solely on
+  the existing recurring-baseline 5000 ms timeout; its owner also failed
+  alone (4 passed, 1 failed). Recorded as an unresolved observation in
+  [0177](../../tests/flaky-tests/native-agents-and-transcripts/0177-driven-observation-baseline-timeout.md).
+  All other workspace tasks and aggregate groups passed.
+- This closes the Firefox engine and live header-preservation gaps in
+  [0054](0054-preview-cross-service-reads.md). Shipping Safari/iOS, private
+  browsing and real wildcard-DNS browser publication through `publicPort`
+  remain open. No system DNS, trust-store or production-profile edits.
 
 ## Constraints and rationale
 

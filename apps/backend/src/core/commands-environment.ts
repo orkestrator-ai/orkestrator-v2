@@ -1442,6 +1442,10 @@ async function startContainerRuntimeAdmitted(
     if (capabilities?.["network-refresh"]) {
       await applyEnvironmentAllowedDomains(environment.id, context).catch(() => undefined);
     }
+    // The entrypoint has just copied the inherited provider configuration;
+    // this environment's own MCP changes go back on top before any bridge or
+    // terminal starts. A failure shows in the MCP editor, not as a failed start.
+    await context.mcpManagement?.materialiseEnvironment(environment.id).catch(() => undefined);
     await completeContainerOperation(context, environment.id, operationId, "succeeded");
     return { containerId, replayed: false };
   } catch (error) {

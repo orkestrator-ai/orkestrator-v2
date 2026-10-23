@@ -24,6 +24,7 @@ import { canvasSchema } from "./schemas.js";
 import {
   createDesignHarness,
   trackUnhandledRejections,
+  withDesignLimit,
   type DesignHarness,
 } from "./test-support.js";
 
@@ -126,6 +127,187 @@ describe("design private records, legacy migration and recovery states", () => {
       x: 10,
       revision: 5,
     });
+  });
+
+  test("restart reports a never-migrated canvas's admitted edits as interrupted without migrating it", async () => {
+    const canvas = legacyCanvas();
+    await writeLegacy(canvas);
+    const frameId = canvas.frames[0]!.id;
+    const move = (x: number, correlationId: string): DesignOperationDescriptor => ({
+      canvasId: canvas.id,
+      input: { kind: "update_frame", frameId, patch: { x } },
+      preconditions: { frameRevision: 3 },
+      correlationId,
+    });
+    const lost = await service().prepare("env-1", "user", move(40, "lost"));
+    const records = async () => (await files()).filter((file) => file.endsWith(".orkrec"));
+    let restarted = await harness.restart();
+    const interrupted = await restarted.status("env-1", canvas.id, lost.token);
+    expect(interrupted).toMatchObject({
+      state: "interrupted",
+      correlationId: "lost",
+      failure: { code: "unknown-outcome" },
+    });
+    // Executing, canceling and retrying it answer the same and never run it.
+    expect(await restarted.execute("env-1", canvas.id, lost.token)).toMatchObject({
+      state: "interrupted",
+    });
+    expect(await restarted.cancel("env-1", canvas.id, lost.token)).toMatchObject({
+      state: "interrupted",
+    });
+    await expect(restarted.prepare("env-1", "user", move(40, "lost"))).rejects.toThrow(
+      "already has a settled operation",
+    );
+    await expect(restarted.prepare("env-1", "user", move(41, "lost"))).rejects.toThrow(
+      "already used for a different edit",
+    );
+    // submit_operation replays it for the same edit only.
+    expect(await restarted.settledCorrelation("env-1", canvas.id, move(40, "lost"))).toMatchObject({
+      status: { token: lost.token, state: "interrupted" },
+      matches: true,
+    });
+    expect(await restarted.settledCorrelation("env-1", canvas.id, move(41, "lost"))).toMatchObject({
+      matches: false,
+    });
+    expect(harness.renderer.jobs.filter((job) => job.op !== "validate")).toEqual([]);
+    expect((await restarted.get(canvas.id, "env-1")).frames[0]!.x).toBe(10);
+    // Recovery, status and these answers did not migrate the canvas.
+    expect(await records()).toEqual([]);
+    // Another restart keeps the outcome, and the first real edit migrates the
+    // canvas with it as a receipt.
+    restarted = await harness.restart();
+    const edit = await restarted.prepare("env-1", "user", move(70, "edit"));
+    expect(await restarted.execute("env-1", canvas.id, edit.token)).toMatchObject({
+      state: "committed",
+    });
+    expect(await records()).toEqual([`${canvas.id}.orkrec`]);
+    const record = JSON.parse(
+      await readFile(restarted.store.recordFile(canvas.id), "utf8"),
+    ) as DesignPrivateRecord;
+    expect(record.receipts.map((receipt) => [receipt.token, receipt.state])).toEqual([
+      [edit.token, "committed"],
+      [lost.token, "interrupted"],
+    ]);
+    expect(receiptDigest(record, lost.token)).toBe(intentDigest(move(40, "lost")));
+    restarted = await harness.restart();
+    expect(await restarted.status("env-1", canvas.id, lost.token)).toMatchObject({
+      state: "interrupted",
+    });
+    // Its receipt settles it; recovery compacts the entry away.
+    expect(await restarted.store.readPending(canvas.id)).toEqual([]);
+  });
+
+  test("a never-migrated canvas keeps restart outcomes within the pending bounds", async () => {
+    const canvas = legacyCanvas();
+    await writeLegacy(canvas);
+    const frameId = canvas.frames[0]!.id;
+    const move = (x: number): DesignOperationDescriptor => ({
+      canvasId: canvas.id,
+      input: { kind: "update_frame", frameId, patch: { x } },
+      preconditions: { frameRevision: 3 },
+    });
+    await withDesignLimit("preparedPerCanvas", 2, async () => {
+      const first = await service().prepare("env-1", "user", move(1));
+      const second = await service().prepare("env-1", "user", move(2));
+      const restarted = await harness.restart();
+      // Kept outcomes never block new edits: the oldest gives way.
+      const next = await restarted.prepare("env-1", "user", move(3));
+      expect((await restarted.store.readPending(canvas.id)).map((entry) => entry.token)).toEqual([
+        second.token,
+        next.token,
+      ]);
+      expect((await restarted.status("env-1", canvas.id, first.token)).state).toBe("unknown");
+      expect((await restarted.status("env-1", canvas.id, second.token)).state).toBe("interrupted");
+      expect((await restarted.status("env-1", canvas.id, next.token)).state).toBe("prepared");
+    });
+  });
+
+  test("retained outcomes give way oldest first at the pending byte limit", async () => {
+    const canvas = legacyCanvas();
+    await writeLegacy(canvas);
+    const descriptor: DesignOperationDescriptor = {
+      canvasId: canvas.id,
+      input: { kind: "update_frame", frameId: canvas.frames[0]!.id, patch: { x: 40 } },
+      preconditions: { frameRevision: 3 },
+    };
+    const bytes = Buffer.byteLength(JSON.stringify(descriptor));
+    const first = await service().prepare("env-1", "user", descriptor);
+    const second = await service().prepare("env-1", "user", descriptor);
+    const restarted = await harness.restart();
+    // The count bound has ample room; only bytes force out the oldest entry.
+    await withDesignLimit("admittedPayloadBytes", 2 * bytes, async () => {
+      const third = await restarted.prepare("env-1", "user", descriptor);
+      let pending = await restarted.store.readPending(canvas.id);
+      expect(pending.map((entry) => entry.token)).toEqual([second.token, third.token]);
+      expect(pending.reduce((total, entry) => total + entry.bytes, 0)).toBe(2 * bytes);
+      expect((await restarted.status("env-1", canvas.id, first.token)).state).toBe("unknown");
+      expect((await restarted.status("env-1", canvas.id, second.token)).state).toBe("interrupted");
+      const fourth = await restarted.prepare("env-1", "user", descriptor);
+      pending = await restarted.store.readPending(canvas.id);
+      expect(pending.map((entry) => entry.token)).toEqual([third.token, fourth.token]);
+      expect((await restarted.status("env-1", canvas.id, second.token)).state).toBe("unknown");
+      expect((await restarted.status("env-1", canvas.id, third.token)).state).toBe("prepared");
+      await expect(restarted.prepare("env-1", "user", descriptor)).rejects.toThrow(
+        "Too much pending edit data",
+      );
+      expect(await restarted.store.readPending(canvas.id)).toEqual(pending);
+    });
+  });
+
+  test("legacy migration retains a dead owner's duplicate as committed when its copy exists", async () => {
+    const canvas = legacyCanvas();
+    const original = await writeLegacy(canvas);
+    await harness.restart({
+      faults: {
+        beforeRename: (file) => {
+          if (file.endsWith(`${canvas.id}.orkrec`)) throw new Error("source receipt unavailable");
+        },
+      },
+    });
+    const descriptor: DesignOperationDescriptor = {
+      canvasId: canvas.id,
+      input: { kind: "duplicate_canvas", name: "Legacy copy" },
+      preconditions: { canvasRevision: 5 },
+      correlationId: "legacy-duplicate",
+    };
+    const prepared = await service().prepare("env-1", "user", descriptor);
+    const committed = await service().execute("env-1", canvas.id, prepared.token);
+    expect(committed.state).toBe("committed");
+    const copyId = committed.result!.createdCanvasId!;
+    expect(copyId).toBeDefined();
+    expect(await files()).not.toContain(`${canvas.id}.orkrec`);
+    const restarted = await harness.restart();
+    expect(restarted.ownerDead((await restarted.store.readPending(canvas.id))[0]!)).toBe(true);
+    expect(await restarted.status("env-1", canvas.id, prepared.token)).toMatchObject({
+      state: "committed",
+      result: { createdCanvasId: copyId, canvasRevision: 5 },
+    });
+    expect(await restarted.settledCorrelation("env-1", canvas.id, descriptor)).toMatchObject({
+      matches: true,
+      status: { token: prepared.token, state: "committed", result: { createdCanvasId: copyId } },
+    });
+    expect(await files()).not.toContain(`${canvas.id}.orkrec`);
+    // A different edit migrates the source and records the duplicate's outcome.
+    await restarted.mutate(canvas.id, "env-1", canvas.frames[0]!.id, 3, { x: 99 }, "user");
+    const record = JSON.parse(
+      await readFile(restarted.store.recordFile(canvas.id), "utf8"),
+    ) as DesignPrivateRecord;
+    expect(record.receipts.find((receipt) => receipt.token === prepared.token)).toMatchObject({
+      state: "committed",
+      result: { createdCanvasId: copyId, canvasRevision: 5 },
+    });
+    expect(receiptDigest(record, prepared.token)).toBe(intentDigest(descriptor));
+    expect(await readFile(restarted.store.legacyBackupFile(canvas.id), "utf8")).toBe(original);
+    expect(await restarted.execute("env-1", canvas.id, prepared.token)).toMatchObject({
+      state: "committed",
+      result: { createdCanvasId: copyId },
+    });
+    await harness.restart();
+    await service().initialize();
+    expect(await service().store.readPending(canvas.id)).toEqual([]);
+    expect((await service().list("env-1")).map((entry) => entry.id).sort()).toEqual(
+      [canvas.id, copyId].sort(),
+    );
   });
 
   test("deleting the environment also removes a migrated canvas's legacy backup", async () => {

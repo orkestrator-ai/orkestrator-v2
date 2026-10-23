@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test, mock, beforeEach, spyOn } from "bun:test";
+import { afterAll, afterEach, describe, expect, test, mock, beforeEach, spyOn } from "bun:test";
 import { Hono } from "hono";
 import { gunzipSync } from "node:zlib";
 import { TaskRegistry } from "@orkestrator/protocol/task-list";
@@ -15,6 +15,10 @@ import * as realSessionManager from "../services/session-manager.js";
 const realSessionManagerSnapshot = { ...realSessionManager };
 import * as realClaudeSignIn from "../services/claude-sign-in.js";
 const realClaudeSignInSnapshot = { ...realClaudeSignIn };
+// The real session map (not mocked): the mixed-version suite places a session
+// here so the real catalogue functions serve real rows through the route.
+import { sessions as coreSessions } from "../services/session-manager-core.js";
+import type { SessionState } from "../types/index.js";
 
 // --- Mock session-manager before importing the route ---
 
@@ -153,6 +157,9 @@ const mockClaimPromptDispatch = mock<typeof realSessionManager.claimPromptDispat
     return "claimed";
   },
 );
+const mockPersistedDispatchClaimLost = mock<typeof realSessionManager.persistedDispatchClaimLost>(
+  async () => false,
+);
 const mockReconcilePersistedSessions = mock(async () => {});
 const mockEnsurePersistedSession = mock(async (id: string) => mockGetSession(id));
 const mockHydratePersistedSessionMessages = mock(async () => mockGetSessionMessages());
@@ -216,6 +223,9 @@ mock.module("../services/session-manager.js", () => ({
   clearPromptSuggestion: mockClearPromptSuggestion,
   claimPromptDispatch: mockClaimPromptDispatch,
   getPromptDispatchState: mockGetPromptDispatchState,
+  // Real: the route test drives it through the peeked session record.
+  restoredDispatchClaimLost: realSessionManagerSnapshot.restoredDispatchClaimLost,
+  persistedDispatchClaimLost: mockPersistedDispatchClaimLost,
   gracefulInterruptClaudeSession: mockGracefulInterruptClaudeSession,
   readClaudeCommandCatalogue: mockReadClaudeCommandCatalogue,
   refreshClaudeCommandCatalogue: mockRefreshClaudeCommandCatalogue,
@@ -371,6 +381,8 @@ describe("session routes", () => {
     mockClearPromptSuggestion.mockImplementation((id: string) => id === "s-1");
     mockGetPromptDispatchState.mockReset();
     mockGetPromptDispatchState.mockImplementation(() => "new");
+    mockPersistedDispatchClaimLost.mockReset();
+    mockPersistedDispatchClaimLost.mockImplementation(async () => false);
     resetPersistenceMocks();
   });
 
@@ -2017,6 +2029,272 @@ describe("session routes", () => {
     });
   });
 
+  /*
+   * A backend from before the version-1 catalogue (ff4026b4e^, #827) talking to
+   * this bridge. Its `HttpBridgeCatalogAdapter.slashCommands` read
+   * `GET /session/:id/commands` first and fell back to `/plugins/commands` only
+   * on a 404; its snapshot reader took `GET /session/:id`; its prompt body never
+   * carried `allowProviderCommands` or `command`. The catalogue and the typed
+   * command check below are the real session-manager functions, run against a
+   * session placed in the real session map, so the rows are the ones this bridge
+   * actually serves.
+   */
+  describe("mixed-version: old backend, current bridge", () => {
+    const MIXED_SESSION_ID = "s-mixed-version";
+
+    /** The pre-#827 backend's row reader, verbatim in behaviour. */
+    function legacyReadSlashCommands(payload: unknown) {
+      const record =
+        payload && typeof payload === "object" ? (payload as Record<string, unknown>) : undefined;
+      if (!record || !Array.isArray(record.commands)) return [];
+      const allowed = new Set([
+        "builtin",
+        "project",
+        "user",
+        "plugin",
+        "skill",
+        "template",
+        "extension",
+        "orkestrator",
+      ]);
+      return record.commands.flatMap((candidate: unknown) => {
+        const row = (typeof candidate === "string" ? { name: candidate } : candidate) as Record<
+          string,
+          unknown
+        > | null;
+        if (!row || typeof row.name !== "string" || !row.name) return [];
+        const name = row.name.startsWith("/") ? row.name : `/${row.name}`;
+        return [
+          {
+            name,
+            source:
+              typeof row.source === "string" && allowed.has(row.source) ? row.source : "unknown",
+            ...(typeof row.description === "string" ? { description: row.description } : {}),
+            ...(typeof row.argumentHint === "string" ? { argumentHint: row.argumentHint } : {}),
+            ...(Array.isArray(row.aliases)
+              ? {
+                  aliases: row.aliases.filter(
+                    (alias): alias is string => typeof alias === "string",
+                  ),
+                }
+              : {}),
+            ...(row.scope === "global" || row.scope === "session" ? { scope: row.scope } : {}),
+          },
+        ];
+      });
+    }
+
+    function mixedSession(): SessionState {
+      return {
+        id: MIXED_SESSION_ID,
+        title: "Mixed",
+        status: "idle",
+        messages: [],
+        createdAt: new Date("2026-01-01"),
+        lastActivity: new Date("2026-01-01"),
+        initData: {
+          mcpServers: [],
+          plugins: [{ name: "acme", path: "/plugins/acme" }],
+          slashCommands: [],
+          skills: ["deploy"],
+        },
+      } as unknown as SessionState;
+    }
+
+    let placed: SessionState | undefined;
+
+    function place(session: SessionState, commands: unknown[]): SessionState {
+      placed = session;
+      coreSessions.set(session.id, session);
+      realSessionManagerSnapshot.recordCommandsChanged(session, { commands });
+      return session;
+    }
+
+    const sdkCommands = [
+      {
+        name: "review",
+        description: "Review the current diff",
+        argumentHint: "[path]",
+        aliases: ["rv"],
+      },
+      { name: "deploy", description: "Ship it", argumentHint: "" },
+      { name: "acme:lint", description: "Plugin lint", argumentHint: "" },
+      { name: "clear", description: "Clear conversation history", argumentHint: "" },
+    ];
+
+    beforeEach(() => {
+      mockReadClaudeCommandCatalogue.mockReset();
+      mockReadClaudeCommandCatalogue.mockImplementation(
+        realSessionManagerSnapshot.readClaudeCommandCatalogue,
+      );
+      mockTypedCommandUnavailableMessage.mockReset();
+      mockTypedCommandUnavailableMessage.mockImplementation(
+        realSessionManagerSnapshot.typedCommandUnavailableMessage,
+      );
+      mockResolveClaudeCommandInvocation.mockReset();
+      mockClaimPromptDispatch.mockClear();
+    });
+
+    afterEach(() => {
+      if (placed) coreSessions.delete(placed.id);
+      placed = undefined;
+      // Restore the route-level defaults the other suites rely on.
+      mockReadClaudeCommandCatalogue.mockReset();
+      mockReadClaudeCommandCatalogue.mockImplementation(async () => ({
+        catalogueVersion: 1,
+        status: "missing",
+        commands: [],
+      }));
+      mockTypedCommandUnavailableMessage.mockReset();
+      mockTypedCommandUnavailableMessage.mockImplementation((_session, prompt) =>
+        prompt.startsWith("/clear") ? "/clear starts a new Claude conversation." : undefined,
+      );
+    });
+
+    test("the session catalogue an old backend reads first still satisfies its row reader", async () => {
+      place(mixedSession(), sdkCommands);
+      const response = await app.request(`/session/${MIXED_SESSION_ID}/commands`);
+      // A 200: the old backend keeps this answer and never reaches /plugins/commands.
+      expect(response.status).toBe(200);
+      const body = await jsonBody(response);
+
+      // The envelope fields are top-level additions; `commands` is still the array.
+      expect(body).toMatchObject({ catalogueVersion: 1, status: "ready", freshness: "ttl" });
+      expect(Number.isSafeInteger(body.revision)).toBe(true);
+      expect(Array.isArray(body.commands)).toBe(true);
+      for (const row of body.commands) {
+        expect(typeof row.name).toBe("string");
+        expect(row.name.length).toBeGreaterThan(0);
+        if ("description" in row) expect(typeof row.description).toBe("string");
+        if ("argumentHint" in row) expect(typeof row.argumentHint).toBe("string");
+        if ("aliases" in row) {
+          expect(Array.isArray(row.aliases)).toBe(true);
+          for (const alias of row.aliases) expect(typeof alias).toBe("string");
+        }
+      }
+
+      // What the old backend would render. Every name already has its slash, so
+      // nothing is re-spelled. Differences from the pre-#827 bridge it was
+      // written against: rows it cannot attribute are `unknown` (the old bridge
+      // guessed `user`), every row is `session`-scoped (the old bridge used
+      // `global` for non-project rows), and a skill is listed under its own
+      // `/deploy` name instead of the old `/skill:deploy` spelling. Empty
+      // argument hints are omitted, as the old bridge also did.
+      expect(legacyReadSlashCommands(body)).toEqual([
+        {
+          name: "/review",
+          source: "unknown",
+          description: "Review the current diff",
+          argumentHint: "[path]",
+          aliases: ["/rv"],
+          scope: "session",
+        },
+        {
+          name: "/deploy",
+          source: "skill",
+          description: "Ship it",
+          scope: "session",
+        },
+        {
+          name: "/acme:lint",
+          source: "plugin",
+          description: "Plugin lint",
+          scope: "session",
+        },
+        // The old reader drops `availability`, so an old backend lists /clear
+        // as an ordinary command. Sending it is refused (see the prompt test).
+        {
+          name: "/clear",
+          source: "unknown",
+          description: "Clear conversation history",
+          scope: "session",
+        },
+      ]);
+      expect(body.commands.find((row: { name: string }) => row.name === "/clear")).toMatchObject({
+        availability: { state: "unavailable", reason: "session-changing" },
+      });
+    });
+
+    test("an unknown session reads as an empty list, so the old backend never falls back", async () => {
+      const response = await app.request("/session/never-seen-mixed/commands");
+      // The pre-#827 bridge spawned a probe here and returned the bridge-wide
+      // list; this bridge answers in band with no rows. An old backend shows only
+      // its own Claude built-ins until the session exists.
+      expect(response.status).toBe(200);
+      const body = await jsonBody(response);
+      expect(body).toEqual({ catalogueVersion: 1, status: "missing", commands: [] });
+      expect(legacyReadSlashCommands(body)).toEqual([]);
+    });
+
+    test("the snapshot adds commandRevision without touching the fields the old reader takes", async () => {
+      const session = place(mixedSession(), sdkCommands);
+      const held = session as unknown as ReturnType<typeof defaultGetSession>;
+      mockGetSession.mockImplementation((id: string) =>
+        id === MIXED_SESSION_ID ? held : defaultGetSession(id),
+      );
+      const before = await jsonBody(await app.request(`/session/${MIXED_SESSION_ID}`));
+      const catalogue = await jsonBody(await app.request(`/session/${MIXED_SESSION_ID}/commands`));
+      expect(Number.isSafeInteger(before.commandRevision)).toBe(true);
+      expect(before.commandRevision).toBe(catalogue.revision);
+      expect(before.status).toBe("idle");
+      expect(before.id).toBe(MIXED_SESSION_ID);
+      expect(before.title).toBe("Mixed");
+      // The old reader took a top-level `revision` as the provider transcript
+      // revision when `messageRevision` was absent; the command revision must
+      // never appear under either name.
+      expect(Object.hasOwn(before, "revision")).toBe(false);
+      expect(Object.hasOwn(before, "messageRevision")).toBe(false);
+
+      realSessionManagerSnapshot.recordCommandsChanged(session, {
+        commands: [{ name: "fresh", description: "", argumentHint: "" }],
+      });
+      const after = await jsonBody(await app.request(`/session/${MIXED_SESSION_ID}`));
+      expect(after.commandRevision).toBe(before.commandRevision + 1);
+      expect(after.status).toBe("idle");
+      expect(Object.hasOwn(after, "revision")).toBe(false);
+      expect(Object.hasOwn(after, "messageRevision")).toBe(false);
+      // Apart from the additive key, the snapshot an old backend reads is unchanged.
+      const { commandRevision: _beforeRevision, ...beforeLegacy } = before;
+      const { commandRevision: _afterRevision, ...afterLegacy } = after;
+      expect(afterLegacy).toEqual(beforeLegacy);
+    });
+
+    test("an old prompt body is interpreted: typed /clear is refused, other commands pass", async () => {
+      // The pre-#827 Claude prompt body: no `allowProviderCommands`, no `command`.
+      const oldBody = (prompt: string, requestId: string) => ({
+        prompt,
+        requestId,
+        attachments: [],
+        fastMode: false,
+        permissionMode: "bypassPermissions",
+      });
+
+      const refused = await jsonRequest("POST", "/session/s-1/prompt", oldBody("/clear", "old-1"));
+      // A 422 is a terminal rejection to the old sender (only 404/409/5xx were
+      // retried), and it surfaced `error` to the user. The pre-#827 bridge sent
+      // /clear to the CLI, which moved to a conversation this tab cannot follow.
+      expect(refused.status).toBe(422);
+      expect(await refused.json()).toEqual({
+        error:
+          "/clear starts a new Claude conversation this tab cannot follow. Start a new session instead.",
+        kind: "command-unavailable",
+      });
+      expect(mockClaimPromptDispatch).not.toHaveBeenCalled();
+      expect(mockSendPrompt).not.toHaveBeenCalled();
+
+      const passed = await jsonRequest(
+        "POST",
+        "/session/s-1/prompt",
+        oldBody("/review src/a.ts", "old-2"),
+      );
+      expect(passed.status).toBe(202);
+      const [, prompt, options] = mockSendPrompt.mock.calls[0]!;
+      expect(prompt).toBe("/review src/a.ts");
+      expect(options?.providerPrompt).toBeUndefined();
+      expect(mockResolveClaudeCommandInvocation).not.toHaveBeenCalled();
+    });
+  });
+
   describe("POST /session/:id/steer", () => {
     test("steers the active SDK input stream and records the dispatch identity", async () => {
       const res = await jsonRequest("POST", "/session/s-1/steer", {
@@ -2158,6 +2436,65 @@ describe("session routes", () => {
         expect(res.status).toBe(200);
         expect(await jsonBody(res)).toEqual({ dispatch: "unknown" });
       }
+    });
+
+    test("answers lost for an id an earlier process claimed, exactly where the prompt route answers 410", async () => {
+      const restored = {
+        id: "s-1",
+        dispatchedRequestIds: new Set(["before-restart", "idle-steer", "claimed-here"]),
+        restoredDispatchedRequestIds: new Set(["before-restart", "idle-steer"]),
+        // An idle `/steer` answered locally keeps its reply row, so it never
+        // ran a turn a restart could have lost.
+        localTranscript: [{ id: "idle-steer:idle-steer" }],
+      };
+      mockPeekSession.mockImplementation((id: string) =>
+        id === "s-1" ? (restored as never) : undefined,
+      );
+      try {
+        const read = async (requestId: string) =>
+          jsonBody(await app.request(`/session/s-1/dispatch?requestId=${requestId}`));
+        expect(await read("before-restart")).toEqual({ dispatch: "lost" });
+        expect(await read("idle-steer")).toEqual({ dispatch: "unknown" });
+        // Claimed by this process and still persisting: not lost.
+        expect(await read("claimed-here")).toEqual({ dispatch: "unknown" });
+        expect(await read("never-seen")).toEqual({ dispatch: "unknown" });
+
+        // A turn this process is running or finished under a restored id still
+        // reports dispatched: an explicit positive wins.
+        for (const state of ["processing", "already-processed"] as const) {
+          mockGetPromptDispatchState.mockReturnValueOnce(state);
+          expect(await read("before-restart")).toEqual({ dispatch: "dispatched" });
+        }
+        expect(mockPersistedDispatchClaimLost).not.toHaveBeenCalled();
+        // Read-only: never the touching or hydrating lookups.
+        expect(mockGetSession).not.toHaveBeenCalled();
+        expect(mockEnsurePersistedSession).not.toHaveBeenCalled();
+      } finally {
+        mockPeekSession.mockImplementation((id: string) =>
+          id === "s-health"
+            ? ({ id, lastAccessedAt: 123, health: runtimeHealth } as never)
+            : undefined,
+        );
+      }
+    });
+
+    test("answers a session this process has not registered from its durable journal", async () => {
+      mockGetPromptDispatchState.mockImplementation(() => "not-found");
+      mockPersistedDispatchClaimLost.mockImplementation(
+        async (_id, requestId) => requestId === "before-restart",
+      );
+      const lost = await app.request("/session/s-cold/dispatch?requestId=before-restart");
+      expect(await jsonBody(lost)).toEqual({ dispatch: "lost" });
+      expect(mockPersistedDispatchClaimLost).toHaveBeenCalledWith("s-cold", "before-restart");
+      const unknown = await app.request("/session/s-cold/dispatch?requestId=other");
+      expect(await jsonBody(unknown)).toEqual({ dispatch: "unknown" });
+      // A failed read is not evidence either way.
+      mockPersistedDispatchClaimLost.mockImplementation(async () => {
+        throw new Error("unreadable");
+      });
+      const failed = await app.request("/session/s-cold/dispatch?requestId=before-restart");
+      expect(await jsonBody(failed)).toEqual({ dispatch: "unknown" });
+      expect(mockEnsurePersistedSession).not.toHaveBeenCalled();
     });
 
     test("answers a blank request id without consulting dispatch state", async () => {

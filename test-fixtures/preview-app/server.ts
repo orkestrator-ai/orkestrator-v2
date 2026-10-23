@@ -53,6 +53,7 @@ const WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
 function html(marker: string, body: string): string {
   return `<!doctype html><html><head><meta charset="utf-8"><title>${marker}</title>
+<link rel="icon" href="data:,">
 <link rel="stylesheet" href="/assets/app.css"></head>
 <body data-service-marker="${marker}"><main>${body}</main>
 <script type="module" src="/assets/app.js"></script></body></html>`;

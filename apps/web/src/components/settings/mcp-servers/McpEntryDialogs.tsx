@@ -114,8 +114,10 @@ export function McpEntryDialog({
   const writeBlocked = writeBlockedReason(snapshot.target.capabilities);
   const applyBlocked = applyBlockedReason(snapshot.target.capabilities);
   const gated = (error: unknown) => {
-    // The rollout gate changed under us: re-read so the list matches it.
-    if (mcpManagementErrorFromUnknown(error)?.code === "management-disabled") onReload?.();
+    // The rollout gate changed under us, or the container's file was edited
+    // inside it: re-read so the list (and the import/reapply choice) matches.
+    const code = mcpManagementErrorFromUnknown(error)?.code;
+    if (code === "management-disabled" || code === "environment-diverged") onReload?.();
   };
 
   const dirty = action.kind === "rename" && newName.trim() !== entry.name;

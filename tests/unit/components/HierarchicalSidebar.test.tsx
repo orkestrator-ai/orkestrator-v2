@@ -242,7 +242,11 @@ describe("HierarchicalSidebar", () => {
           <HierarchicalSidebar />
         </FederationProvider>,
       );
-      await screen.findByTestId("federated-project-list");
+      const list = await screen.findByTestId("federated-project-list");
+      const boundHeading = within(list).getByRole("button", { name: /^Project One/i });
+      const home = within(boundHeading).getByTestId("machine-home-icon");
+      await waitFor(() => expect(home.getAttribute("data-machine-color")).toBe("violet"));
+      expect(boundHeading.firstElementChild === home).toBe(true);
       const boundId = "bk_self";
       // The project is rooted on its owner, but filed in a shared folder.
       await act(async () => {

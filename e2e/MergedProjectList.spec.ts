@@ -112,6 +112,30 @@ test("the chevron collapses without navigating and the heading reorders with Spa
   await expect(page.getByTestId("selected")).toBeEmpty();
 });
 
+for (const fallback of [false, true]) {
+  test(`pointer repository reorder leaves navigation empty (${fallback ? "remote" : "bound"} target)`, async ({
+    page,
+  }) => {
+    await page.goto(`/merged-project-list${fallback ? "?fallback=1" : ""}`);
+    const source = heading(page, "team-a/shared/app", fallback ? "Remote" : "Command");
+    await expect(source).toBeVisible();
+    await hoverDrag(page, source, heading(page, "team-b/shared/app", "Remote"));
+    await page.mouse.up();
+    await expect(page.locator("[data-project-folder]").first()).toHaveAttribute(
+      "data-project-folder",
+      hintB,
+    );
+    await expect(page.getByTestId("updates")).toContainText('"repositoryOrder"');
+    const updates = JSON.parse((await page.getByTestId("updates").textContent())!);
+    expect(updates.at(-1).repositoryOrder[0]).toBe(key("r"));
+    await expect(page.getByTestId("opened")).toBeEmpty();
+    await expect(page.getByTestId("selected")).toBeEmpty();
+    // A subsequent intentional click must still open the workspace.
+    await source.click();
+    await expect(page.getByTestId(fallback ? "opened" : "selected")).not.toBeEmpty();
+  });
+}
+
 test("a project over a repository header has no join highlight and its drop is rejected", async ({
   page,
 }) => {
@@ -156,6 +180,8 @@ for (const mode of ["project", "repository"] as const) {
       nextFolder,
     );
     await expect(page.getByTestId("reorders")).toHaveText("[]");
+    await expect(page.getByTestId("opened")).toBeEmpty();
+    await expect(page.getByTestId("selected")).toBeEmpty();
   });
 
   test(`${mode} preserves environment reordering`, async ({ page }) => {

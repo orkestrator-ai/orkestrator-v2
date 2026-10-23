@@ -46,6 +46,7 @@ import {
   FederatedActivityList,
   MergedProjectList,
   MachineSectionList,
+  MachineSectionHeader,
   RemoteMachineSection,
 } from "./FederatedSidebarSections";
 import { EnvironmentItem } from "@/components/environments/EnvironmentItem";
@@ -265,15 +266,22 @@ test("a machine heading is dragged by its name and puts the chevron where its st
       expect(header.lastElementChild!.getAttribute("aria-label")).toBe(`Collapse ${name}`);
       // The name carries the machine's colour; there is no dot beside it.
       expect(within(handle).getByText(name).className).toContain("text-teal-500");
-      expect(within(header).queryByTestId("machine-dot")).toBeNull();
+      expect(within(header).queryByTestId("machine-dot") === null).toBe(true);
     }
     // A live machine shows no connection text; an unreachable one still warns.
-    expect(within(headers[0]!).queryByText("This window")).toBeNull();
-    expect(within(headers[1]!).queryByText("Connected")).toBeNull();
+    expect(within(headers[0]!).queryByText("This window") === null).toBe(true);
+    expect(within(headers[1]!).queryByText("Connected") === null).toBe(true);
     expect(within(headers[2]!).getByText("Not connected")).toBeTruthy();
   } finally {
     cleanup();
   }
+});
+
+test("a connected machine still shows catching-up freshness without an offline icon", () => {
+  render(<MachineSectionHeader machine={machineView({ freshness: "catching-up" })} />);
+  const header = screen.getByTestId("machine-section-header");
+  expect(within(header).getByText("Catching up")).toBeTruthy();
+  expect(header.querySelector(".lucide-wifi-off") === null).toBe(true);
 });
 
 let reload = mock(() => undefined);
@@ -384,7 +392,7 @@ test("a repository group names each member by its machine and shows a machine do
   }
   // The heading itself is the drag handle; there is no separate grip.
   expect(heading.getAttribute("aria-roledescription")).toBe("sortable");
-  expect(screen.queryByRole("button", { name: /^Move repository/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: /^Move repository/ }) === null).toBe(true);
 });
 
 describe("CL-05: machine identity visual rules", () => {
@@ -479,7 +487,7 @@ describe("CL-05: machine identity visual rules", () => {
         <RemoteEnvironmentItem machine={machine} environment={environment} />,
       );
       const row = screen.getByRole("button", { name: /^feature, on Machine A,/ });
-      expect(row.querySelector("svg.animate-spin")).not.toBeNull();
+      expect(row.querySelector("svg.animate-spin") !== null).toBe(true);
       expect(within(row).queryByTestId("environment-status-marker") === null).toBe(true);
       expect(within(row).getAllByTestId("machine-dot")).toHaveLength(1);
       expect(within(row).getByTestId("machine-dot").getAttribute("data-machine-color")).toBe(
@@ -513,7 +521,7 @@ describe("CL-05: machine identity visual rules", () => {
     const menu = await openRowActions("Machine A");
     fireEvent.click(within(menu).getByRole("menuitem", { name: "Stop" }));
     const row = screen.getByRole("button", { name: /^feature, on Machine A,/ });
-    await waitFor(() => expect(row.querySelector("svg.animate-spin")).not.toBeNull());
+    await waitFor(() => expect(row.querySelector("svg.animate-spin") !== null).toBe(true));
     expect(within(row).getAllByTestId("machine-dot")).toHaveLength(1);
     expect(within(row).getByTestId("machine-dot").getAttribute("data-machine-color")).toBe("teal");
     await waitFor(() => expect(finish).toBeDefined());
@@ -563,7 +571,7 @@ describe("CL-05: machine identity visual rules", () => {
         expect(within(row).getAllByTestId("machine-dot")).toHaveLength(1);
         expect(within(row).queryByTestId("environment-status-marker") === null).toBe(true);
         if (state === "selecting") expect(screen.getByRole("checkbox")).toBeTruthy();
-        else expect(row.querySelector("svg.animate-spin")).not.toBeNull();
+        else expect(row.querySelector("svg.animate-spin") !== null).toBe(true);
       } finally {
         useEnvironmentStore.getState().setDeleting(environment.id, false);
       }

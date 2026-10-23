@@ -88,3 +88,84 @@ for (const repository of [false, true]) {
     ).toBeVisible();
   });
 }
+
+for (const input of ["pointer", "keyboard"] as const) {
+  test(`machine name ${input} reorder persists and restores focus`, async ({ page }) => {
+    await page.goto("/sidebar-drag?machines=1");
+    const source = page.getByRole("button", { name: "Move Self", exact: true });
+    const target = page.getByRole("button", { name: "Move Remote", exact: true });
+    await expect(source).toBeVisible();
+    // The trailing chevron collapses independently and cannot start dragging.
+    await page.getByRole("button", { name: "Collapse Self", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Expand Self", exact: true })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    await expect(page.getByText("p-env-1", { exact: true })).toHaveCount(0);
+    await expect(page.locator('[aria-pressed="true"]')).toHaveCount(0);
+    await expect(page.getByTestId("sidebar-writes")).toHaveText("[]");
+    await page.getByRole("button", { name: "Collapse Remote", exact: true }).press("Space");
+    await expect(page.getByRole("button", { name: "Expand Remote", exact: true })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    await expect(page.locator('[aria-pressed="true"]')).toHaveCount(0);
+    await expect(page.getByTestId("sidebar-writes")).toHaveText("[]");
+    if (input === "pointer") {
+      await drag(page, source, target);
+    } else {
+      await source.focus();
+      await source.press("Space");
+      await expect(source).toHaveAttribute("aria-pressed", "true");
+      await page.evaluate(
+        () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+      );
+      await page.keyboard.press("ArrowDown");
+      await expect(page.getByTestId("bound-machine-section")).toHaveAttribute(
+        "style",
+        /translate3d\(0px, [1-9]/,
+      );
+      await expect(
+        page.locator('[id^="DndLiveRegion"]').filter({ hasText: "machine:bk_self" }),
+      ).toContainText("over droppable area machine:bk_remote");
+      await page.keyboard.press("Space");
+    }
+    await expect(page.getByTestId("sidebar-writes")).toContainText('"machineOrder"');
+    const writes = JSON.parse((await page.getByTestId("sidebar-writes").textContent())!);
+    expect(writes.at(-1).args.machineOrder).toEqual(["bk_remote", "bk_self"]);
+    await expect(page.getByTestId("machine-section-header").first()).toHaveAttribute(
+      "data-machine",
+      "bk_remote",
+    );
+    await expect(source).toBeFocused();
+    await expect(page.locator('[aria-pressed="true"]')).toHaveCount(0);
+    await page.reload();
+    await expect(page.getByTestId("machine-section-header").first()).toHaveAttribute(
+      "data-machine",
+      "bk_remote",
+    );
+    await expect(page.getByText("p-env-1", { exact: true })).toBeVisible();
+  });
+}
+
+test("project grouping leads bound project headings with the machine home icon", async ({
+  page,
+}) => {
+  await page.goto("/sidebar-drag?merged=1");
+  const heading = project(page, "p");
+  await expect(heading.getByTestId("machine-home-icon")).toHaveAttribute(
+    "data-machine-color",
+    "teal",
+  );
+  await expect(heading.locator(":scope > :first-child")).toHaveAttribute(
+    "data-testid",
+    "machine-home-icon",
+  );
+});
+
+test("a connected machine exposes catching-up status in its header", async ({ page }) => {
+  await page.goto("/sidebar-drag?machines=1&catching-up=1");
+  const header = page.getByTestId("machine-section-header").filter({ hasText: "Remote" });
+  await expect(header.getByText("Catching up", { exact: true })).toBeVisible();
+  await expect(header.locator(".lucide-wifi-off")).toHaveCount(0);
+});

@@ -1286,8 +1286,8 @@ export function HierarchicalSidebar() {
   ) => {
     const project = projectsById.get(projectId);
     if (!project) return null;
-    // Drawn even before this window's machine is identified, as it also
-    // decides where the row's chevron sits.
+    // Show that this is the bound project even before this window's machine
+    // is identified; its colour and name become available once identified.
     return renderProjectGroup(project, {
       sortableId,
       label,

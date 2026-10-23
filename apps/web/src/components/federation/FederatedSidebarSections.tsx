@@ -83,7 +83,7 @@ function useDragSensors() {
 
 /**
  * A machine heading: its name in the machine's colour and, while it is
- * unreachable, its connection state, never activity. The name moves the whole
+ * unreachable or catching up, its status, never activity. The name moves the whole
  * section; the chevron last collapses it.
  */
 export function MachineSectionHeader({
@@ -106,6 +106,7 @@ export function MachineSectionHeader({
         loadedAt: machine.loadedAt,
       });
   const live = machine.bound || machine.transport === "connected";
+  const catchingUp = !machine.bound && live && machine.freshness === "catching-up";
   const Chevron = collapsed ? ChevronRight : ChevronDown;
   return (
     <div
@@ -132,12 +133,12 @@ export function MachineSectionHeader({
           {machine.name}
         </span>
       </div>
-      {!live ? (
+      {!live || catchingUp ? (
         <span
           className="flex shrink-0 items-center gap-1 text-[11px] text-amber-400"
           title={machine.transportDetail}
         >
-          <WifiOff className="h-3 w-3" aria-hidden="true" />
+          {!live ? <WifiOff className="h-3 w-3" aria-hidden="true" /> : null}
           {status}
         </span>
       ) : null}
@@ -219,7 +220,15 @@ function MachineSection({
     state.collapsedMachines.includes(machine.connectionId),
   );
   const setMachineCollapsed = useMachineViewStore((state) => state.setMachineCollapsed);
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    setActivatorNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({
     id: `${MACHINE_DRAG_PREFIX}${machine.connectionId}`,
     disabled: !sortable,
   });
@@ -235,7 +244,9 @@ function MachineSection({
         machine={machine}
         collapsed={collapsed}
         onToggle={() => setMachineCollapsed(machine.connectionId)}
-        dragHandle={sortable ? { ...attributes, ...listeners } : undefined}
+        dragHandle={
+          sortable ? { ...attributes, ...listeners, ref: setActivatorNodeRef } : undefined
+        }
       />
       {!collapsed ? children : null}
     </section>

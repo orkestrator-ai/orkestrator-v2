@@ -1,4 +1,4 @@
-import { useId, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useDndContext } from "@dnd-kit/core";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -82,6 +82,7 @@ export function SortableProjectFolder({
   const [isRenaming, setIsRenaming] = useState(false);
   const [draftName, setDraftName] = useState(name);
   const renameInputId = useId();
+  const suppressClick = useRef(false);
 
   const { active } = useDndContext();
   const {
@@ -97,6 +98,20 @@ export function SortableProjectFolder({
     id: sortableId ?? projectFolderDragId(name),
     data: { sidebarGroup: true },
   });
+  useEffect(() => {
+    if (isDragging) {
+      suppressClick.current = true;
+      return;
+    }
+    if (!suppressClick.current) return;
+    // Keep the guard through the mouseup click, including when the heading
+    // moves with the pointer and remains under it at the drop destination.
+    const timer = setTimeout(() => {
+      suppressClick.current = false;
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [isDragging]);
+
   const canHighlightDrop =
     !repository || (active && parseProjectFolderDragId(String(active.id)) !== null);
   const destination = openMachineName ? ` on ${openMachineName}` : "";
@@ -150,6 +165,7 @@ export function SortableProjectFolder({
       className="flex min-w-0 flex-1 cursor-grab items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm text-foreground active:cursor-grabbing"
       onClick={(event) => {
         event.stopPropagation();
+        if (suppressClick.current) return;
         if (onOpen) onOpen();
         else onToggleCollapse();
       }}

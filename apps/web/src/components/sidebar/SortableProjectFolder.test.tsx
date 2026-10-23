@@ -1,4 +1,6 @@
-import { afterEach, expect, mock, test } from "bun:test";
+import { afterEach, expect, mock, spyOn, test } from "bun:test";
+import * as sortable from "@dnd-kit/sortable";
+import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout";
 import { DndContext, KeyboardSensor, useSensor, useSensors } from "@dnd-kit/core";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
@@ -69,7 +71,7 @@ test("Space starts dragging the repository from its heading", () => {
   expect(heading.getAttribute("aria-pressed")).toBe("true");
   expect(onOpen).not.toHaveBeenCalled();
   expect(onToggleCollapse).not.toHaveBeenCalled();
-  expect(screen.queryByRole("button", { name: /^Move repository/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: /^Move repository/ }) === null).toBe(true);
 });
 
 test.each([false, true])(
@@ -97,3 +99,53 @@ test.each([false, true])(
     if (hasActions) expect(screen.getByRole("menuitem", { name: "Sort" })).toBeTruthy();
   },
 );
+
+test("a completed drag suppresses its click until the next task and then permits opening", () => {
+  let dragging = true;
+  const useSortable = sortable.useSortable;
+  const sortableSpy = spyOn(sortable, "useSortable").mockImplementation((options) => ({
+    ...useSortable(options),
+    isDragging: dragging,
+  }));
+  const timer = installControlledTimeout(0, { label: "post-drag click guard" });
+  const onOpen = mock(() => {});
+  const onToggleCollapse = mock(() => {});
+  const content = () => (
+    <DndContext>
+      <SortableProjectFolder
+        name="acme/app"
+        repository
+        onOpen={onOpen}
+        projectCount={1}
+        isCollapsed={false}
+        onToggleCollapse={onToggleCollapse}
+      >
+        <span>Member</span>
+      </SortableProjectFolder>
+    </DndContext>
+  );
+  try {
+    const view = render(content());
+    const heading = screen.getByRole("button", { name: "Open acme/app" });
+    fireEvent.click(heading);
+    expect(onOpen).not.toHaveBeenCalled();
+    dragging = false;
+    view.rerender(content());
+    expect(timer.pendingCount()).toBe(1);
+    // Deliver a click directly so this checks the local guard independently
+    // of any click suppression performed by the drag sensor itself.
+    fireEvent.click(heading);
+    expect(onOpen).not.toHaveBeenCalled();
+    expect(onToggleCollapse).not.toHaveBeenCalled();
+    act(() => {
+      timer.advance();
+    });
+    fireEvent.click(heading);
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    timer.assertDrained();
+  } finally {
+    cleanup();
+    timer.restore();
+    sortableSpy.mockRestore();
+  }
+});

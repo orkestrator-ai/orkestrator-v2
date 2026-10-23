@@ -42,6 +42,8 @@ export const MAX_GATEWAY_EVENT_FRAME_BYTES = 8 * 1024 * 1024;
 export interface SseFrame {
   data: string | null;
   id: string | null;
+  /** The frame's `event:` field, present only when the block names one. */
+  event?: string;
 }
 
 export type GatewayStreamMessage =
@@ -70,17 +72,23 @@ export function isGatewayTransportEvent(event: string): boolean {
   );
 }
 
-/** Parses one SSE block. The last `id:` line wins; `data:` lines join with `\n`. */
+/**
+ * Parses one SSE block. The last `id:` and `event:` lines win; `data:` lines
+ * join with `\n`.
+ */
 export function parseSseBlock(block: string): SseFrame {
   const lines = block.split(/\r?\n/);
   const idLine = lines.findLast((line) => line.startsWith("id:"));
+  const eventLine = lines.findLast((line) => line.startsWith("event:"));
   const data = lines
     .filter((line) => line.startsWith("data:"))
     .map((line) => line.slice(5).trimStart())
     .join("\n");
+  const event = eventLine?.slice(6).trimStart();
   return {
     data: data || null,
     id: idLine ? idLine.slice(3).trimStart() : null,
+    ...(event ? { event } : {}),
   };
 }
 

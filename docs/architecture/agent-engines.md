@@ -193,6 +193,30 @@ bridges keep running. Backend stores are rows in `orkestrator.sqlite`
 | OpenCode session and history | The OpenCode server; the backend holds registration and subscriptions in memory | No bridge | Registration lost; the session persists on the server |
 | Transcript cursor | Request state; bridges answer from `droppedMessages` plus the retained window | A restart changes the window; an invalid cursor falls back to the retained window | Unaffected |
 
+## Activity observation
+
+The backend's activity sweep (every 2 s) is the one observer of whether a
+session is busy; everything else reads its shared observation. What each
+provider offers it is `NATIVE_AGENT_OBSERVATION_CAPABILITIES`
+(`apps/backend/src/core/native-agent-observation.ts`). The columns that drive
+policy:
+
+| Provider | Activity read | Idle backend wakeup | Client idle backoff | Idle view changes without a transition |
+| --- | --- | --- | --- | --- |
+| Claude | Bridge `/activity` (batched) | Bridge observation stream (`/event/subscribe?observe=1`) | Only while `turn.quietObservation` | Background tasks; announced from `contentRevision` |
+| Codex | Bridge `/activity` (batched) | Bridge observation stream (`/event/subscribe?observe=1`) | Only while `turn.quietObservation` | Async questions, late command changes; announced from `contentRevision` |
+| Cursor | Bridge `/activity` (batched) | None: every sweep | Yes | No |
+| Pi | Bridge `/activity` (batched) | None: every sweep | Yes | No |
+| Grok | Bridge `/activity` (batched) | None: every sweep | Yes | No |
+| OpenCode | Event-fed batch in the backend | SDK event stream | Yes | No |
+
+A wakeup only makes a stably idle group due; the sweep's no-touch read stays
+the source of truth, and a group without a live wakeup is read on every sweep.
+Client backoff also needs a backend that advertises stamped announcements. The
+announcements and the client side are in
+[event-snapshot-recovery.md](event-snapshot-recovery.md#native-observation-invalidations);
+cadences and budgets are in [recurring-work.md](recurring-work.md).
+
 ## Claude Code
 
 **Bridge:** `bridges/claude-bridge/` · **Transport:** HTTP + SSE (Hono)

@@ -701,6 +701,52 @@ type ProgressiveHydrationEntry = {
   holdPreview: boolean;
 };
 
+/**
+ * What a discovery section's value means to a view, for deciding whether a
+ * change is worth announcing (see `storeProgressiveDiscovery`). Drops the
+ * runtime drift counter and orders its unknown kinds; everything else is the
+ * value itself.
+ */
+function discoveryAnnouncementKey(value: unknown): string {
+  return JSON.stringify(value, (key, inner: unknown) => {
+    if (key !== "drift" || !inner || typeof inner !== "object" || Array.isArray(inner)) {
+      return inner;
+    }
+    const {
+      unknownEvents: _count,
+      unknownKinds,
+      ...rest
+    } = inner as {
+      unknownEvents?: unknown;
+      unknownKinds?: unknown;
+    };
+    return {
+      ...rest,
+      ...(Array.isArray(unknownKinds) ? { unknownKinds: [...unknownKinds].sort() } : {}),
+    };
+  });
+}
+
+/**
+ * A model catalogue as a view shows it, independent of the order the
+ * discovery fan-out happened to answer in.
+ */
+function modelCatalogKey(models: readonly AgentModel[]): string {
+  return JSON.stringify(
+    [...models].sort((a, b) =>
+      a.platform === b.platform
+        ? a.id < b.id
+          ? -1
+          : a.id > b.id
+            ? 1
+            : 0
+        : a.platform < b.platform
+          ? -1
+          : 1,
+    ),
+  );
+}
+
 export abstract class NativeAgentServiceProjection extends NativeAgentServiceDispatch {
   private readonly progressiveInstanceId = randomUUID();
   private readonly progressiveTranscriptCache = new Map<string, ProgressiveTranscriptEntry>();
@@ -3172,6 +3218,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         ...(stateSnapshot.turnActivity && stateSnapshot.status === "running"
           ? { activity: stateSnapshot.turnActivity }
           : {}),
+        ...this.quietObservationFlag(resolved.session),
       },
       interactions: interactionSnapshot.requests,
       // The progressive read feeds the same rendered projection as the full
@@ -3322,7 +3369,21 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     }
   }
 
-  /** Store one discovery section; true when what a view would show changed. */
+  /**
+   * Store one discovery section. Returns `changed` when the stored section
+   * differs at all (its revision moves), and `announce` when a view would
+   * show something different enough to be told now:
+   *
+   * - A retained value that only flips between `ready` and `stale` is not
+   *   announced. A renewal that misses its 2 s deadline and then succeeds
+   *   with the same value announced twice per 30 s expiry and reset an idle
+   *   view's quiet backoff each time (0049 code item 5); the view still sees
+   *   the stored availability on its next read.
+   * - Diagnostic drift counters in the runtime section are not announced:
+   *   `unknownEvents` only ever grows while the provider streams events this
+   *   backend has no branch for, so every renewal of an idle session would
+   *   otherwise announce. The set of unknown kinds still is.
+   */
   private storeProgressiveDiscovery(
     key: string,
     entry: {
@@ -3331,7 +3392,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       expiresAt: number;
       error?: string;
     },
-  ): boolean {
+  ): { changed: boolean; announce: boolean } {
     const previous = this.progressiveDiscoveryCache.get(key);
     const semantic = JSON.stringify({
       value: entry.value,
@@ -3346,6 +3407,16 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         })
       : undefined;
     const changed = previousSemantic !== semantic;
+    const retainedValue =
+      previous !== undefined &&
+      previous.value !== undefined &&
+      entry.value !== undefined &&
+      previous.availability !== "unavailable" &&
+      entry.availability !== "unavailable";
+    const announce =
+      changed &&
+      (!retainedValue ||
+        discoveryAnnouncementKey(previous.value) !== discoveryAnnouncementKey(entry.value));
     const bytes = Buffer.byteLength(semantic);
     if (previous) this.progressiveDiscoveryBytes -= previous.bytes;
     this.progressiveDiscoveryCache.delete(key);
@@ -3365,7 +3436,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       if (removed) this.progressiveDiscoveryBytes -= removed.bytes;
       this.progressiveDiscoveryCache.delete(oldest);
     }
-    return changed;
+    return { changed, announce };
   }
 
   private scheduleProgressiveDiscovery(
@@ -3424,13 +3495,13 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     const deadline = setTimeout(() => {
       if (settled || this.stopped || (this.projectionEpochs.get(sessionKey) ?? 0) !== epoch) return;
       const previous = this.progressiveDiscoveryCache.get(cacheKey);
-      const changed = this.storeProgressiveDiscovery(cacheKey, {
+      const { announce } = this.storeProgressiveDiscovery(cacheKey, {
         value: previous?.value,
         availability: previous?.value === undefined ? "unavailable" : "stale",
         expiresAt: this.now() + 5_000,
         error: "Discovery timed out",
       });
-      if (!changed) return;
+      if (!announce) return;
       this.storage.announceNativeAgentSessionProjection(input.environmentId, {
         agent: input.agent,
         logicalSessionKey: input.logicalSessionKey,
@@ -3441,7 +3512,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         settled = true;
         clearTimeout(deadline);
         if (this.stopped || (this.projectionEpochs.get(sessionKey) ?? 0) !== epoch) return;
-        const changed = this.storeProgressiveDiscovery(cacheKey, {
+        const { announce } = this.storeProgressiveDiscovery(cacheKey, {
           value,
           availability: "ready",
           expiresAt: this.now() + 30_000,
@@ -3450,7 +3521,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         // it. Announcing an unchanged renewal would wake that view (and reset
         // its quiet backoff) four times per expiry for nothing: a view reads
         // only values, and they did not change.
-        if (!changed) return;
+        if (!announce) return;
         this.storage.announceNativeAgentSessionProjection(input.environmentId, {
           agent: input.agent,
           logicalSessionKey: input.logicalSessionKey,
@@ -4050,6 +4121,22 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     return Math.min(candidate, NATIVE_PROJECTION_MAX_WINDOW_MESSAGES);
   }
 
+  /**
+   * `turn.quietObservation`: the activity observer holds a content revision
+   * for this provider session, so every change to its idle view is announced
+   * (`onObservationInvalidation`) and the view may read less often. Absent
+   * before the first observation and for a bridge that reports none.
+   */
+  protected quietObservationFlag(session: PersistedNativeAgentSession): {
+    quietObservation?: true;
+  } {
+    const observed = this.observedSessionActivity.get(session.key);
+    return observed?.providerSessionId === session.providerSessionId &&
+      observed.contentRevision !== undefined
+      ? { quietObservation: true }
+      : {};
+  }
+
   protected async projectionComposer(
     input: NativeAgentProjectionInput,
     session: PersistedNativeAgentSession,
@@ -4079,7 +4166,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
             .then((refreshed) => {
               // The same catalogue changes no view; announcing it would wake
               // every idle view of the environment once per TTL.
-              if (!this.stopped && JSON.stringify(refreshed) !== JSON.stringify(cached.models)) {
+              if (!this.stopped && modelCatalogKey(refreshed) !== modelCatalogKey(cached.models)) {
                 this.storage.announceNativeAgentSessionProjection(input.environmentId);
               }
             })
@@ -4977,6 +5064,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           ...(snapshot.turnActivity && snapshot.status === "running"
             ? { activity: snapshot.turnActivity }
             : {}),
+          ...this.quietObservationFlag(resolved.session),
         },
         messages: renderedTranscript.messages,
         interactions: interactionSnapshot.requests,

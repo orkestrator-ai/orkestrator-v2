@@ -335,6 +335,8 @@ export abstract class NativeAgentServiceBase {
       state: AgentActivityState;
       readyForInput?: boolean;
       completionPending?: boolean;
+      /** The provider's content revision at this observation, when it reports one. */
+      contentRevision?: string;
     }
   >();
   /**

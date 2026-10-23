@@ -7,6 +7,7 @@ import type {
   ProviderActivityObservation,
   ProviderActivityState,
   ProviderActiveSteerRun,
+  ProviderCommonDependencies,
   ProviderCreateSessionOptions,
   ProviderDispatchStatus,
   ProviderExecutionMode,
@@ -90,6 +91,8 @@ import { HttpBridgeTranscriptReader } from "./http-bridge-transcript-reader.js";
 import { HttpBridgeActivityBatchReader } from "./http-bridge-activity-batch.js";
 import { bridgeChangeEvidenceSource } from "./http-bridge-change-evidence.js";
 import { readAcpTurnTerminalError } from "./http-bridge-turn-outcome.js";
+import { HttpBridgeObservationWakeup } from "./http-bridge-observation-stream.js";
+import { readBridgeResumableSessions } from "./http-bridge-resumable-sessions.js";
 
 export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   readonly agent: HttpBridgeAgent;
@@ -119,13 +122,21 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   readonly changeEvidenceSource: ReturnType<typeof bridgeChangeEvidenceSource>;
   /** Grok only: see {@link readAcpTurnTerminalError}. */
   readonly turnTerminalError?: (sessionId: string, requestId: string) => Promise<string | null>;
+  /** Claude and Codex: the bridge event stream as the idle wakeup. */
+  private readonly observationWakeup: HttpBridgeObservationWakeup;
 
   constructor(
     private readonly connection: BridgeConnection,
     private readonly fetchImpl: typeof fetch,
     stageImages?: HttpBridgeProviderDependencies["stageImages"],
+    observationHint?: ProviderCommonDependencies["onObservationHint"],
   ) {
     this.agent = connection.agent as HttpBridgeAgent;
+    this.observationWakeup = new HttpBridgeObservationWakeup(
+      connection,
+      fetchImpl,
+      observationHint,
+    );
     this.transcripts = new HttpBridgeTranscriptReader(this.agent, connection, fetchImpl);
     this.stageImages = stageImages;
     this.interactionAdapter = new HttpBridgeInteractionAdapter(this.agent, connection, fetchImpl);
@@ -141,6 +152,15 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
 
   private contextUsage(value: unknown) {
     return contextUsageWithPlanUsage(this.agent, value, this.connection.accountId ?? "unknown");
+  }
+
+  /** See `AgentSessionProvider.observationStreamLive` and `HttpBridgeObservationWakeup`. */
+  observationStreamLive(): boolean {
+    return this.observationWakeup.live();
+  }
+
+  dispose(): void {
+    this.observationWakeup.close();
   }
 
   registerSession(sessionId: string, interaction?: ProviderSessionRegistration): void {
@@ -1085,53 +1105,8 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     }
   }
 
-  async listResumableSessions(): Promise<NativeAgentResumeEntry[]> {
-    const response = await bridgeFetch(this.connection, "/session/list", {}, this.fetchImpl);
-    // The ACP bridge answers 410 with the reason the agent cannot list its own
-    // history. Dropping that body would reduce a specific, actionable message
-    // to a bare status code in front of the user.
-    await assertOkWithErrorDetail(response, `${this.agent} resumable session list`);
-    const payload = asRecord(
-      await boundedJson(response, `${this.agent} resumable session list`, {
-        remaining: 2 * 1024 * 1024,
-      }),
-    );
-    if (!payload || !Array.isArray(payload.sessions)) {
-      throw new ProviderUnavailableError(`${this.agent} returned a malformed session list`);
-    }
-    return payload.sessions.slice(0, 512).flatMap((candidate) => {
-      const session = asRecord(candidate);
-      const id = nonEmptyString(session?.id);
-      if (!id) return [];
-      const createdAt = nonEmptyString(session?.createdAt);
-      const updatedAt = nonEmptyString(session?.updatedAt) ?? nonEmptyString(session?.lastActivity);
-      const status =
-        session?.status === "running" || session?.status === "error" || session?.status === "idle"
-          ? session.status
-          : undefined;
-      const messageCount = Number.isSafeInteger(session?.messageCount)
-        ? (session!.messageCount as number)
-        : undefined;
-      const providerDetail = nonEmptyString(session?.detail);
-      const parentId = nonEmptyString(session?.parentId);
-      const branchLabel = nonEmptyString(session?.branchLabel);
-      return [
-        {
-          sessionId: id,
-          ...(typeof session?.title === "string" ? { title: session.title } : {}),
-          ...(createdAt && Number.isFinite(Date.parse(createdAt)) ? { createdAt } : {}),
-          ...(updatedAt && Number.isFinite(Date.parse(updatedAt)) ? { updatedAt } : {}),
-          ...(status ? { status } : {}),
-          ...(messageCount !== undefined
-            ? { detail: `${messageCount} message${messageCount === 1 ? "" : "s"}` }
-            : providerDetail
-              ? { detail: providerDetail.slice(0, 256) }
-              : {}),
-          ...(parentId ? { parentId: parentId.slice(0, 512) } : {}),
-          ...(branchLabel ? { branchLabel: branchLabel.slice(0, 256) } : {}),
-        },
-      ];
-    });
+  listResumableSessions(): Promise<NativeAgentResumeEntry[]> {
+    return readBridgeResumableSessions(this.agent, this.connection, this.fetchImpl);
   }
 
   slashCommands(sessionId?: string) {

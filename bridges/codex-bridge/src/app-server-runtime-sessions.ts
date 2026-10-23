@@ -12,7 +12,7 @@ import type { NativeAgentReadiness } from "@orkestrator/protocol/native-agent";
 import type { CodexRuntimeContext } from "./app-server-runtime-context.js";
 import type { CodexRuntimeLifecycle } from "./app-server-runtime-lifecycle.js";
 import { openAssistantRow } from "./app-server-runtime-rows.js";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   CODEX_SIGN_IN_REQUIRED_MESSAGE,
   type AppServerEngine,
@@ -43,6 +43,9 @@ import { type StructuredOutputResult } from "@orkestrator/protocol/structured-ou
 
 /** Fixed, content-free refusal for work arriving while a tab close is retiring the session. */
 export const SESSION_CLOSING_ERROR = "Session is closing";
+
+/** One bridge process; see `getActivitySnapshot`'s content revision. */
+const ACTIVITY_PROCESS = randomUUID();
 
 export class CodexRuntimeSessions {
   /**
@@ -1381,6 +1384,7 @@ export class CodexRuntimeSessions {
   getActivitySnapshot(sessionId: string): {
     activity: "idle" | "working" | "waiting" | "missing";
     asyncQuestionItemIds?: string[];
+    contentRevision?: string;
   } {
     const activity = this.getActivity(sessionId);
     if (activity === "missing") return { activity };
@@ -1391,6 +1395,16 @@ export class CodexRuntimeSessions {
       ...(session.asyncQuestionItemIds.length > 0
         ? { asyncQuestionItemIds: [...session.asyncQuestionItemIds] }
         : {}),
+      /*
+       * Opaque revision of what the session view shows beyond its activity:
+       * the transcript revision the transcript routes key their token on, and
+       * the async-question index. A late change on an idle thread (an async
+       * question, a settled command's measured lines) moves it without an
+       * activity transition, and the backend announces it so an idle view can
+       * read less often. Process-scoped, so a restarted bridge never repeats
+       * a revision an older read saw.
+       */
+      contentRevision: `${ACTIVITY_PROCESS}:${session.contentEpoch}.${session.messageRevision}:${session.asyncQuestionItemIds.length}`,
     };
   }
 

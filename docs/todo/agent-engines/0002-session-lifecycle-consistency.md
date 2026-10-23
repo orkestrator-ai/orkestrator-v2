@@ -573,9 +573,11 @@ bounded-state occupancy in `/runtime-health`) are decided below.
 
 ### Assumptions
 
-- The live failures recorded under Qualification item 1 are environment and
-  model problems of the agent-test profile on this host, not close
-  retention: neither case reached the close.
+- The first attempt recorded under Qualification item 1 failed on environment
+  and model problems of the agent-test profile on this host: neither case
+  reached the close. In the later run Pi passed; Cursor reached close, reload
+  and resume, but its resumed transcript omitted the first prompt. That
+  Cursor close-retention issue remains open.
 - The faux model being asked for the stopped Pi prompt is not a request sent:
   pi-ai's faux provider calls its response factory even for an aborted
   request, so the evidence is the signal it was handed.

@@ -196,9 +196,13 @@ live Pi coordinator rerun passed on 2026-10-23. Nothing is left in this file.
    reasoning fields", so it qualifies the default path users take. A pin would
    bypass the code this file fixes. Revisit if hosts with unusable saved
    defaults keep blocking qualification.
-7. **The host's Pi settings were not edited** to make the live run pass. They
-   are the user's, outside the profile, and changing them would change what
-   the user's own `pi` runs.
+7. **Runs 1–2 used unchanged host Pi settings and failed.** Run 3 passed after
+   the user saved the ChatGPT-runnable default `openai/gpt-6.1-sol` in the
+   host's `settings.json`. These settings are the user's, outside the profile,
+   and also choose what the user's own `pi` runs. Hosts with no saved default
+   or a saved default their login refuses still need a runnable selection;
+   see [0062](../agent-engines/0062-pi-chatgpt-login-without-saved-default.md)
+   for the remaining fallback issue.
 8. **Isolate the Pi bridge suite with a package preload** (Multi Review
    finding). Options: (a) set `PI_CODING_AGENT_DIR` in the shared
    `tests/setup-node.ts`; (b) isolate each test file that creates a session;

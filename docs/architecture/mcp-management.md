@@ -538,7 +538,19 @@ intent in a private backend record and writes the container's file:
   inherited copy matches exactly is dropped as redundant; anything else is a
   **conflict**: the change is kept, the name shows the inherited value, and the
   user keeps this environment's version or takes the inherited one. A failure
-  never fails the start.
+  never fails the start. Materialisation runs under the same per-source lock
+  as saves, resolutions and refreshes. It is never rebased on a file that
+  already holds the last verified or the expected output. This covers a
+  staged input that is absent, where the entrypoint leaves the previous
+  output in place, and a write that landed before its record. Each boot is
+  three steps, each safe to stop after:
+  1. persist the rebased baseline, keeping the old boot stamp;
+  2. write the container;
+  3. stamp success.
+
+  A failed write therefore stays `pending` and is retried in the same boot.
+  Recorded OpenCode source ids stay discoverable even when a rebuild inherits
+  a different supported filename, limited to the fixed filename allowlist.
 - Only the server map is rewritten (`rewriteServerMap`, through the same
   verified single-entry edits a save uses); every other setting in the file is
   the container's.
@@ -548,9 +560,13 @@ intent in a private backend record and writes the container's file:
   a draft of the bare copy stale); `diverged` (edited inside the container
   since Orkestrator last wrote it — edits are refused with
   `environment-diverged` until the user imports the edits or reapplies); or
-  `conflict`. `resolve_mcp_environment_overlay` runs `import`, `reapply`,
-  `keep-environment`, `take-inherited` or `reset`, guarded by the file's
-  revision.
+  `conflict`; or `corrupt` (the record cannot be read). In the `corrupt`
+  state edits are blocked and reset rewrites the backend user's current
+  servers, then deletes the record. `resolve_mcp_environment_overlay` runs
+  `import`, `reapply`, `keep-environment`, `take-inherited` or `reset`,
+  guarded by the file's revision. While `pending`, every resolution first
+  rebases on the fresh inherited copy. All record lookups use own-property
+  checks, so server names such as `toString` are ordinary names.
 
 **Refreshing defaults.** `preview_mcp_environment_defaults` compares the
 backend user's current file for the same source with the container's inherited
@@ -560,7 +576,8 @@ overwritten. `refresh_mcp_environment_defaults` applies exactly that preview
 (a changed file on either side refuses the token), keeps this environment's
 changes on top, and rewrites the server map of the container's staged input so
 the next boot inherits the same servers. Claude's staged `.claude.json` is
-already re-staged before every start, so it needs no staged rewrite.
+already re-staged before every start, so its refresh reports `stagedCopy:
+"not-needed"` rather than a failure.
 
 **Rebuilds.** A real rebuild creates its candidate through
 `createDockerContainer`, which stages a fresh input revision from the backend

@@ -38,3 +38,16 @@ The two desktop shutdown cases have no earlier case.
 
 These owner passes show the aggregate failures are intermittent in this run.
 They do not make the original aggregate exit green.
+
+## Post-review validation — 2026-10-23
+
+After the Multi Review fixes and a merge of `origin/main`, a second
+`mise run test` failed only in the workspace group (412.0 s). The bridges,
+root and agent-support, and Codex protocol lockfile groups passed.
+
+| Owner | Original failure | Complete owner result |
+| --- | --- | --- |
+| `apps/desktop/scripts/dev/coordinator-live.test.ts` | `fixture tree digest > names every class of change a coordinator could make` hit the five-second deadline (5,040 ms). | `mise run test:logged -- --name coordinator-live-owner -- bun test --cwd apps/desktop ./scripts/dev/coordinator-live.test.ts --parallel=1 --only-failures` passed (1.6 s). Existing case [0258](../coordinator-and-multi-review/0258-coordinator-fixture-digest-aggregate-timeout.md). |
+| `apps/backend/src/core/transcript-artifacts/content-server.engines.test.ts` | `executable document policy in firefox > popups, new-window links and top navigation reach the sink zero times`: Firefox fetched `GET /favicon.ico` from the sink. | **Not a flake.** It fails alone every time (38 pass, 1 fail), and fails the same way on a clean checkout of `origin/main` (`cda435fc9`). This branch does not touch `transcript-artifacts`. It is recorded here only so the aggregate exit is explained. |
+
+The original aggregate exit remains failed.

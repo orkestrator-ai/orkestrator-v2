@@ -129,11 +129,19 @@ remote runs with
   launch. What is still missing is a run with real provider sessions in a
   container: save an environment-private server during a running turn, then
   check the turn continues and the next turn loads it (Claude, Codex reload,
-  Cursor and Pi reattach).
+  Cursor and Pi reattach). The harness exists:
+  `ORKESTRATOR_AGENT_TEST_LIVE_MCP=1 ORKESTRATOR_AGENT_TEST_MCP_CONTAINER=1`
+  runs `e2e/agent-testing/mcp-apply-live.spec.ts` against container
+  environment-private sources. It needs provider credentials and has not been
+  run for this change.
 - **Real-browser pass of the overlay UI: open.** The overlay states, the
   conflict and divergence actions, and the refresh dialog need a check in a
   real browser on a `dev:test` profile with a container fixture. See the UI note
   in Evidence for what the unit tests cover.
+  `e2e/agent-testing/mcp-overlay-recovery.spec.ts` (opt-in,
+  `ORKESTRATOR_AGENT_TEST_DOCKER=1`) drives the corrupt-record reset through
+  the real renderer and a disposable container, including a reload. No run of
+  it is recorded for this change.
 
 ### Evidence
 
@@ -186,6 +194,11 @@ remote runs with
   and drops edits made only inside the old container.
   The existing `container-live-replacement.test.ts` C14 rebuild case also
   passed on the same image.
+
+  After the Multi Review fixes and a merge of `origin/main`, the same suite
+  was rerun against a fresh image built from the merged tree
+  (`orkestrator-v2:mcp0040-qual2`). All 3 cases passed (46 assertions, none
+  skipped), and no containers were left behind.
 - Observation, not investigated here: my first version of the rebuild test
   went through a legacy-to-volume **migration** of a container that had
   staged Codex inputs, and the migration refused with `root-symlink` twice.
@@ -214,6 +227,38 @@ remote runs with
     aggregate run. MonacoRuntime passed on rerun. AgentLaunchDialog `:7` also
     fails on an untouched checkout of the base commit `062971245`, so it is
     pre-existing and not caused by this change.
+
+### Multi Review outcome
+
+Review `action-3c17fc0ed92229805417a24b4140af95` (head `8dbb9b6d5`) found
+8 issues and 10 test-coverage gaps (verdict: with fixes). A Fix session
+committed `a8392601d`. I checked each fix against its finding and test, and
+hardened one of them in `58f784b8b`.
+
+| # | Finding | Outcome |
+| --- | --- | --- |
+| 1 (P0) | When the backend user has no staged file, the entrypoint leaves the previous output in place. Rebase then treated the overlay's own output as inherited and dropped the changes. | Fixed. Materialisation does not rebase when the file matches the last verified output. Covered by a service test (retained output, then an empty rebuild). |
+| 2 | A corrupt record could not be reset. | Fixed. Snapshots report a `corrupt` overlay state. Reset restores the backend user's current servers and removes the record. The UI offers it. Covered by service, web and e2e (opt-in) tests. |
+| 3 | A failed boot write was stamped as successful, then misread as divergence. | Fixed. The success stamp is written only after the container write. Hardened further in `58f784b8b`: the rebased baseline is persisted before the write, and observation treats a file that already holds the expected servers as in sync. A record write failing after the container write therefore cannot make the next retry rebase on the overlay's own output. The test fails without the change. |
+| 4 | Boot materialisation did not take the per-source lock. | Fixed. It runs under the same lock as saves, resolutions and refresh. Barrier tests cover interleaving with each. |
+| 5 | Resolutions while pending used the stale baseline. | Fixed. Every resolution first rebases on the fresh inherited copy. Covered by tests for reset, keep and take. |
+| 6 | Server names such as `toString` collided with `Object.prototype`. | Fixed. All map lookups check own properties. Covered by round-trip tests. |
+| 7 | An OpenCode overlay vanished when a rebuild inherited a different filename. | Fixed. Recorded OpenCode source ids stay discoverable, limited to the fixed filename allowlist. |
+| 8 (P2) | A Claude defaults refresh reported a false staged-copy warning. | Fixed. A new `not-needed` outcome; Claude is re-staged before every start. |
+
+Gaps 1–8 and 10 have tests now. Gap 10, the writer program, runs the exact
+production script against remapped scratch roots, with no Docker. Gap 9 (real
+provider sessions in a container) remains open; the harness is listed under
+Qualification. No finding was rejected.
+
+Other changes in the fix commit:
+
+- an opt-in container mode in `mcp-apply-live.spec.ts`;
+- the new opt-in `mcp-overlay-recovery.spec.ts`;
+- recurrence notes in flake cases 0197, 0518, 0627 and 0382, from its own
+  validation runs.
+
+All of these are additive and in scope.
 
 ## Constraints and rationale
 
@@ -338,6 +383,22 @@ remote runs with
       any external change: Claude at the next message, Cursor and Pi at the
       next turn, Codex, OpenCode and Grok at their next process start.
     - Cons: Codex does not reload immediately after a resolution.
+
+15. **Recovering an unreadable record** (from review finding 2).
+    - Chosen: reset rewrites the server map to the backend user's current
+      servers, then deletes the record.
+    - Why: a corrupt record cannot supply a trusted baseline, and the backend
+      user's file is the only verified source.
+    - Pros: the source becomes writable again.
+    - Cons: the environment's changes are lost, which is unavoidable since
+      they cannot be read.
+    - Rejected: leaving the environment blocked until it is deleted.
+16. **Ordering a boot's writes** (from review finding 3 and my hardening).
+    - Chosen: persist the rebase, then write the container, then stamp
+      success. Each step is safe to stop after.
+    - Rejected: a single record write either before the container write
+      (which could misreport divergence) or after it (which could lose the
+      new baseline).
 
 ## Open questions
 

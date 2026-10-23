@@ -64,6 +64,24 @@ function boardTab(value: unknown): RealmBoardTab | undefined {
     : undefined;
 }
 
+/** How the window's sidebar groups machines' projects. */
+export type RealmGrouping = "machine" | "project" | "repository";
+
+function isRealmGrouping(value: unknown): value is RealmGrouping {
+  return value === "machine" || value === "project" || value === "repository";
+}
+
+/**
+ * Whether a realm's coordinator defers to the command node's. Grouped by
+ * repository, the window links each repository's projects across machines,
+ * so coordination for it runs on the command node where it can. Grouped by
+ * machine or project the machines are not linked, and a node's own
+ * coordinator opens directly.
+ */
+export function realmCoordinatorDefers(grouping: RealmGrouping | null): boolean {
+  return grouping === null || grouping === "repository";
+}
+
 /** What the window asks its realm to show. */
 export interface RealmSelectRequest {
   type: "select";
@@ -80,6 +98,8 @@ export type ShellToRealmMessage =
   | RealmSelectRequest
   /** The window's sidebar was shown or hidden (the realm's toolbar toggles it). */
   | { type: "sidebar"; open: boolean }
+  /** How the window's sidebar groups machines' projects; see `realmCoordinatorDefers`. */
+  | { type: "grouping"; grouping: RealmGrouping }
   /** The window's title bar opened or closed one of the realm's popovers. */
   | {
       type: "panel";
@@ -212,6 +232,11 @@ export function parseShellMessage(value: unknown): ShellToRealmMessage | null {
   const message = value as Record<string, unknown>;
   if (message.type === "sidebar") {
     return typeof message.open === "boolean" ? { type: "sidebar", open: message.open } : null;
+  }
+  if (message.type === "grouping") {
+    return isRealmGrouping(message.grouping)
+      ? { type: "grouping", grouping: message.grouping }
+      : null;
   }
   if (message.type === "panel") {
     if (!isRealmPanel(message.panel) || typeof message.open !== "boolean") return null;

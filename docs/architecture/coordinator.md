@@ -80,6 +80,12 @@ the controlling node, its node tools refuse, and it handles any message as
 an agent on that node would. Its conversations are kept but hidden behind a
 warning in the project's Coordinator tab.
 
+A command node's window reaching a leaf's project shows the leaf's
+coordinator directly when the sidebar is grouped by machine or project.
+Grouped by repository it leads to the command node's coordinator for that
+repository instead, when the command node has one
+([command-nodes.md](command-nodes.md#leaf-mode)).
+
 ## One main coordinator, and side agents
 
 A project has exactly one **main** coordinator conversation

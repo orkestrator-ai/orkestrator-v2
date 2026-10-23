@@ -10,6 +10,7 @@ import {
 import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout";
 import { frameEnvelope } from "@/lib/federation/workspace-realm";
 import { portalStore } from "@/lib/portal/portal-store";
+import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useUIStore } from "@/stores/uiStore";
 import { FederationProvider } from "./FederationProvider";
@@ -142,6 +143,16 @@ describe("desktop: another machine's workspace in the central region", () => {
     );
     const open = useUIStore.getState().sidebarOpen;
     expect(fake.workspaceViews.send).toHaveBeenCalledWith("view-1", { type: "sidebar", open });
+    const grouping = useMachineViewStore.getState().grouping;
+    expect(fake.workspaceViews.send).toHaveBeenCalledWith("view-1", { type: "grouping", grouping });
+    // A grouping change reaches the open realm.
+    const next = grouping === "repository" ? "machine" : "repository";
+    act(() => useMachineViewStore.getState().setGrouping(next));
+    expect(fake.workspaceViews.send).toHaveBeenLastCalledWith("view-1", {
+      type: "grouping",
+      grouping: next,
+    });
+    act(() => useMachineViewStore.getState().setGrouping(grouping));
     act(() =>
       fake.emitViewEvent({
         viewId: "view-1",

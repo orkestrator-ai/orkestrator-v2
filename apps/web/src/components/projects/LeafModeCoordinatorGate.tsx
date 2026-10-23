@@ -4,17 +4,24 @@ import { useStore } from "zustand";
 import { Button } from "@/components/ui/button";
 import { repositoryHint } from "@/lib/federation/summaries";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
+import { realmCoordinatorDefers } from "@/lib/federation/workspace-realm";
 import { portalStore } from "@/lib/portal/portal-store";
 import { workspaceTarget } from "@/lib/portal/portal-transport";
 import { useProjectStore } from "@/stores";
+import { useRealmShellStore } from "@/stores/realmShellStore";
 
 /**
- * Coordinators belong to the command node. A node the user reaches through
- * a command node (this window's workspace is on a leaf), or a node attached
- * to another command node (leaf mode), keeps its own coordinator
- * conversations, since they may hold important information, but they stay
- * behind this notice, which leads to the command node's coordinator for the
- * same repository, until the user chooses to open them for this session.
+ * Coordinators belong to the command node. A node attached to another
+ * command node (leaf mode) keeps its own coordinator conversations, since
+ * they may hold important information, but they stay behind this notice
+ * until the user chooses to open them for this session.
+ *
+ * A node the user reaches through a command node (this workspace is a realm
+ * on a leaf) follows the window's sidebar grouping. Grouped by repository,
+ * the notice leads to the command node's coordinator for the same
+ * repository when the command node has one, and the leaf's opens directly
+ * when it has not. Grouped by machine or project, the machines are not
+ * linked, so the leaf's coordinator opens directly.
  */
 export function LeafModeCoordinatorGate({
   projectId,
@@ -26,9 +33,12 @@ export function LeafModeCoordinatorGate({
   const status = useStore(portalStore.store, (state) => state.status);
   const self = useStore(portalStore.store, (state) => state.self);
   const selfId = useStore(portalStore.store, (state) => state.selfId);
+  const portalLoaded = useStore(portalStore.store, (state) => state.loaded);
+  const projectsLoaded = useProjectStore((state) => state.hasLoaded);
   const gitUrl = useProjectStore(
     (state) => state.projects.find((project) => project.id === projectId)?.gitUrl,
   );
+  const grouping = useRealmShellStore((state) => state.grouping);
   const [opened, setOpened] = useState(false);
   const onLeaf = workspaceTarget() !== null;
   useEffect(() => {
@@ -38,6 +48,7 @@ export function LeafModeCoordinatorGate({
   // The portal status is the command node's: on a leaf window it is not this node's mode.
   const leafMode = !onLeaf && status?.mode === "leaf";
   if (opened || (!onLeaf && !leafMode)) return <>{children}</>;
+  if (onLeaf && !realmCoordinatorDefers(grouping)) return <>{children}</>;
 
   const controllers = onLeaf
     ? (self?.displayName ?? "the command node")
@@ -45,6 +56,23 @@ export function LeafModeCoordinatorGate({
   const hint = repositoryHint(gitUrl);
   const commandProject =
     onLeaf && hint ? self?.projects.find((project) => project.repositoryHint === hint) : undefined;
+
+  if (onLeaf) {
+    // Until the window's grouping and the command node's projects are known,
+    // show neither the notice nor the conversations.
+    if (grouping === null || !portalLoaded || !projectsLoaded) {
+      return (
+        <div
+          id="project-panel-coordinator"
+          role="tabpanel"
+          className="h-full"
+          data-testid="leaf-mode-coordinator-pending"
+        />
+      );
+    }
+    // The command node has no copy of this repository to coordinate it.
+    if (!commandProject) return <>{children}</>;
+  }
 
   return (
     <div
@@ -62,6 +90,9 @@ export function LeafModeCoordinatorGate({
           It is controlled by {controllers}. Coordination for this project happens there, not here.
           This node&apos;s own coordinator conversations are kept, but its coordinator does not act
           across nodes while this node is controlled.
+          {onLeaf
+            ? " The sidebar is grouped by repository; group it by machine or project to open this node's coordinator directly."
+            : null}
         </p>
         <div className="flex flex-wrap gap-2">
           {commandProject && selfId ? (

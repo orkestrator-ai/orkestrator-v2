@@ -99,8 +99,13 @@ export class NativeAgentInteractionTracker {
   /** Short-lived cache of on-demand pending-interaction reads, per session. */
   private readonly pendingInteractionReads = new Map<
     string,
-    { at: number; requests: AgentInteractionRequest[] }
+    { at: number; environmentId: string; requests: AgentInteractionRequest[] }
   >();
+  /** Reads in flight; a stop marks its environment's results inadmissible. */
+  private readonly activePendingInteractionReads = new Set<{
+    environmentId: string;
+    withdrawn: boolean;
+  }>();
 
   private readonly storage: StorageService;
   private readonly options: NativeAgentServiceOptions;
@@ -175,6 +180,20 @@ export class NativeAgentInteractionTracker {
     this.pendingInteractionReads.delete(key);
   }
 
+  /**
+   * A committed stop: drop the environment's cached reads, and make reads
+   * still in flight answer from the (withdrawn) projection instead of the
+   * provider's last list, so a dead request cannot be cached back.
+   */
+  withdrawEnvironment(environmentId: string): void {
+    for (const [key, entry] of Array.from(this.pendingInteractionReads)) {
+      if (entry.environmentId === environmentId) this.pendingInteractionReads.delete(key);
+    }
+    for (const read of this.activePendingInteractionReads) {
+      if (read.environmentId === environmentId) read.withdrawn = true;
+    }
+  }
+
   async sessionPendingInteractions(
     input: NativeAgentProjectionInput,
   ): Promise<AgentInteractionRequest[] | null> {
@@ -195,6 +214,8 @@ export class NativeAgentInteractionTracker {
       );
       return projection?.interactions ? live(projection.interactions) : null;
     };
+    const read = { environmentId: input.environmentId, withdrawn: false };
+    this.activePendingInteractionReads.add(read);
     try {
       const session = await this.storage.getNativeAgentSession(key);
       if (!session) return null;
@@ -203,14 +224,21 @@ export class NativeAgentInteractionTracker {
       const snapshot = await provider.interactions.listPendingInteractions(
         session.providerSessionId,
       );
+      if (read.withdrawn) return fallback();
       if (!cached && this.pendingInteractionReads.size >= 128) {
         const oldest = this.pendingInteractionReads.keys().next().value;
         if (oldest !== undefined) this.pendingInteractionReads.delete(oldest);
       }
-      this.pendingInteractionReads.set(key, { at: this.host.now(), requests: snapshot.requests });
+      this.pendingInteractionReads.set(key, {
+        at: this.host.now(),
+        environmentId: input.environmentId,
+        requests: snapshot.requests,
+      });
       return live(snapshot.requests);
     } catch {
       return fallback();
+    } finally {
+      this.activePendingInteractionReads.delete(read);
     }
   }
 

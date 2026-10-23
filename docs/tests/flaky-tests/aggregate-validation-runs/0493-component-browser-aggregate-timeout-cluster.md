@@ -189,3 +189,11 @@ Exact original failed cases:
 
 - **Paging owner:** `ORKESTRATOR_E2E_PORT=19429 mise run test:logged -- --name transcript-paging-owner -- bunx playwright test e2e/TranscriptPaging.spec.ts --config=e2e/playwright.config.ts --workers=1 --output=output/agent-testing/session-lifecycle-paging-owner` passed the complete unchanged owner (exit 0, 47.2 s).
 - **Public-site smoke:** `ORKESTRATOR_PUBLIC_E2E_PORT=19430 mise run test:logged -- --name public-browser -- bunx playwright test --config=e2e/public-site/playwright.config.ts --workers=1` passed (exit 0, 17.5 s).
+
+## Container qualification main-merge validation — 2026-10-23
+
+- **Merged result:** `4eb7b2c80` (parents `3be188aa8` and `459d29441`), macOS arm64, Bun 1.4.3.
+- **Aggregate command:** `mise run test:logged -- --name merge-component-browser -- mise run test:browser`, nine workers alongside repository and isolated-profile validation: 507 passed, 95 skipped, two failed in 302.6 s. Both failures were `e2e/AgentLaunchDialog.spec.ts:7`, `selects a native branch suggestion with the keyboard and confirms`, at desktop and mobile widths. The expected branch was `release/2.0`; the input remained `rel` after five seconds.
+- **Complete unchanged owner:** `ORKESTRATOR_E2E_PORT=19431 mise run test:logged -- --name merge-native-browser-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentLaunchDialog.spec.ts --workers=1 --output=output/agent-testing/merge-native-browser-owner` reported two passed and the same two failed in 22.2 s. This matches the previously recorded non-green native-dropdown cases; this rerun does not establish a flake. No source, assertion, timeout or skip changed.
+- **Evidence:** host temporary directories `orkestrator-test-run.e52ASg/merge-component-browser.log.gz` and `orkestrator-test-run.k1qDoe/merge-native-browser-owner.log.gz`; isolated traces are under `output/agent-testing/merge-native-browser-owner/`.
+- **Public-site checks:** the failed aggregate did not reach them. `mise run test:logged -- --name merge-public-browser -- bunx playwright test --config e2e/public-site/playwright.config.ts` passed separately (11.5 s).

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const read = (relativePath: string) =>
@@ -14,7 +14,7 @@ const workflow = (name: string) =>
   Bun.YAML.parse(read(`.github/workflows/${name}.yml`)) as Workflow;
 
 describe("CI workflow contracts", () => {
-  for (const name of ["ci", "validate-bun-runtime"]) {
+  for (const name of ["ci", "validate-bun-runtime", "container-live-qualification"]) {
     test(`${name} only coalesces pull request runs`, () => {
       const { concurrency } = workflow(name);
       // A branch-wide group loses pending main runs even with cancellation off.
@@ -38,5 +38,17 @@ describe("CI workflow contracts", () => {
     expect(contexts.length).toBeGreaterThan(0);
     const jobNames = Object.values(workflow("ci").jobs).map((job) => job.name);
     for (const context of contexts) expect(jobNames).toContain(context);
+  });
+
+  test("the scheduled live job runs every opt-in live container suite", () => {
+    const source = read(".github/workflows/container-live-qualification.yml");
+    const suites = readdirSync(join(import.meta.dir, "..", "..", "apps/backend/tests")).filter(
+      (name) => /^container-live-.*\.test\.ts$/.test(name),
+    );
+    expect(suites.length).toBeGreaterThan(0);
+    for (const suite of suites) expect(source).toContain(`./tests/${suite} --parallel=1`);
+    // Without the gate every live test skips and the job passes vacuously.
+    expect(source).toContain('RUN_LIVE_DOCKER_TESTS: "1"');
+    expect(source).not.toContain("orkestrator-v2:latest");
   });
 });

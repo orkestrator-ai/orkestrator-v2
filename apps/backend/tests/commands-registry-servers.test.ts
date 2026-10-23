@@ -1104,6 +1104,149 @@ exit 0
     }
   });
 
+  test("a changed Cursor key waits for a busy container bridge to go idle", async () => {
+    // Rotating the key used to restart the bridge on the next start request,
+    // which ended a running turn (seen live, 2026-10-23). A busy bridge now
+    // keeps its key, and the first start after it goes idle applies the new one.
+    const hostPort = await reserveFreePort();
+    const pidFile = path.join(await createTempDir("ork-cursor-rotation-pid-"), "pid");
+    const environment = createEnvironment({
+      id: "env-container-cursor-rotation",
+      environmentType: "containerized",
+      containerId: "container-cursor-rotation",
+      status: "running",
+    });
+    const globalConfig: Record<string, unknown> = { cursorApiKey: "first-cursor-key" };
+    const { context } = createContext(environment, { globalConfig });
+    let busy = false;
+    const liveWorkChecks: Array<[string, string]> = [];
+    (context as { nativeAgents?: unknown }).nativeAgents = {
+      hasObservedLiveWork: async (environmentId: string, agent: string) => {
+        liveWorkChecks.push([environmentId, agent]);
+        return busy;
+      },
+    };
+    const commands = createCommandRegistry();
+
+    const names = [
+      "FAKE_BRIDGE_HOST_PORT",
+      "FAKE_BRIDGE_PID_FILE",
+      "FAKE_BRIDGE_TOKEN_FILE",
+      "FAKE_CURSOR_FINGERPRINT_FILE",
+      "FAKE_CURSOR_KEY_CAPTURE",
+      "FAKE_CURSOR_DIR_MARKER",
+    ] as const;
+    const previous = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+    const scratch = path.dirname(pidFile);
+    process.env.FAKE_BRIDGE_HOST_PORT = String(hostPort);
+    process.env.FAKE_BRIDGE_PID_FILE = pidFile;
+    process.env.FAKE_BRIDGE_TOKEN_FILE = path.join(scratch, "token");
+    process.env.FAKE_CURSOR_FINGERPRINT_FILE = path.join(scratch, "cursor-fingerprint");
+    process.env.FAKE_CURSOR_KEY_CAPTURE = path.join(scratch, "cursor-key");
+    process.env.FAKE_CURSOR_DIR_MARKER = path.join(scratch, "cursor-credential-dir");
+
+    const dockerScript = `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  inspect) printf 'running\\n'; exit 0 ;;
+  port) printf '127.0.0.1:%s\\n' "$FAKE_BRIDGE_HOST_PORT"; exit 0 ;;
+  exec)
+    printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+    case "$*" in
+      *"mkdir -p '/tmp/orkestrator-ai'"*|*'mkdir -p "$credential_dir"'*)
+        : > "$FAKE_CURSOR_DIR_MARKER" ;;
+    esac
+    case "$*" in
+      *setsid*) ;;
+      *"cat /tmp/cursor-bridge-token"*)
+        cat "$FAKE_BRIDGE_TOKEN_FILE" 2>/dev/null || true
+        exit 0 ;;
+      *"cat /tmp/orkestrator-ai/cursor-api-key-fingerprint"*)
+        cat "$FAKE_CURSOR_FINGERPRINT_FILE" 2>/dev/null || true
+        exit 0 ;;
+      *pkill*)
+        rm -f "$FAKE_BRIDGE_TOKEN_FILE"
+        pid=$(cat "$FAKE_BRIDGE_PID_FILE" 2>/dev/null || true)
+        if [ -n "$pid" ]; then kill "$pid" 2>/dev/null || true; fi
+        exit 0 ;;
+      *".cursor-api-key.XXXXXX"*)
+        cat > "$FAKE_CURSOR_KEY_CAPTURE"
+        exit 0 ;;
+      *"rm -f /tmp/orkestrator-ai/cursor-sdk-auth.json"*)
+        exit 0 ;;
+    esac
+    token=$(printf '%s' "$*" | sed -n "s/.*CURSOR_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p")
+    printf '%s' "$token" > "$FAKE_BRIDGE_TOKEN_FILE"
+    fingerprint=$(printf '%s' "$*" | sed -n "s#.*printf '%s' '\\([a-z][a-z]*:[0-9a-f]*\\)' > /tmp/orkestrator-ai/cursor-api-key-fingerprint.*#\\1#p")
+    if [ -n "$fingerprint" ] && [ -e "$FAKE_CURSOR_DIR_MARKER" ]; then
+      printf '%s' "$fingerprint" > "$FAKE_CURSOR_FINGERPRINT_FILE"
+    fi
+    bun -e 'require("node:http").createServer((q,s)=>{s.writeHead(q.url==="/global/health"?200:404,{"content-type":"application/json"});s.end("{}")}).listen(Number(process.env.FAKE_BRIDGE_HOST_PORT),"127.0.0.1")' >/dev/null 2>&1 &
+    printf '%s' "$!" > "$FAKE_BRIDGE_PID_FILE"
+    exit 0 ;;
+esac
+exit 0
+`;
+    const fingerprint = (key: string) => `sdk:${createHash("sha256").update(key).digest("hex")}`;
+    const start = () =>
+      commands.get("start_cursor_server")?.(
+        { containerId: "container-cursor-rotation" },
+        context,
+      ) as Promise<ServerStart>;
+
+    try {
+      await withFakeDocker(dockerScript, async (logs) => {
+        const launches = async () =>
+          (await fs.readFile(logs.exec, "utf8"))
+            .split("\n")
+            .filter((line) => line.startsWith("exec -d ")).length;
+        const first = await start();
+        expect(first).toMatchObject({ hostPort, wasRunning: false });
+        expect(await fs.readFile(process.env.FAKE_CURSOR_FINGERPRINT_FILE!, "utf8")).toBe(
+          fingerprint("first-cursor-key"),
+        );
+
+        // Rotated while a turn runs: the key file is updated for the next
+        // launch, but the busy bridge and its token stay.
+        globalConfig.cursorApiKey = "rotated-cursor-key";
+        busy = true;
+        const whileBusy = await start();
+        expect(whileBusy).toMatchObject({ hostPort, wasRunning: true });
+        expect(whileBusy.authToken).toBe(first.authToken);
+        expect(await launches()).toBe(1);
+        expect(await fs.readFile(logs.exec, "utf8")).not.toContain("pkill");
+        expect(await fs.readFile(process.env.FAKE_CURSOR_KEY_CAPTURE!, "utf8")).toBe(
+          "rotated-cursor-key",
+        );
+        expect(liveWorkChecks).toContainEqual(["env-container-cursor-rotation", "cursor"]);
+
+        // Idle: the next start replaces the bridge with the rotated key.
+        busy = false;
+        const idle = await start();
+        expect(idle).toMatchObject({ hostPort, wasRunning: false });
+        expect(idle.authToken).not.toBe(first.authToken);
+        expect(await launches()).toBe(2);
+        expect(await fs.readFile(process.env.FAKE_CURSOR_FINGERPRINT_FILE!, "utf8")).toBe(
+          fingerprint("rotated-cursor-key"),
+        );
+      });
+    } finally {
+      const pid = await fs.readFile(pidFile, "utf8").catch(() => "");
+      if (pid) {
+        try {
+          process.kill(Number(pid));
+        } catch {
+          // already gone
+        }
+      }
+      for (const name of names) {
+        const value = previous[name];
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  });
+
   test("Claude bridge start uses the persisted queue key, reconciles first, then restricts an unusable login before launch", async () => {
     const hostPort = await reserveFreePort();
     const dir = await createTempDir("ork-claude-login-start-");
@@ -1339,11 +1482,13 @@ exit 0
     process.env.XDG_DATA_HOME = path.join(stateDir, "xdg-data");
     process.env.FAKE_OPENCODE_IMPORTED_AUTH = importedAuth;
 
+    const statusReads: Array<{ url: string; authorized: boolean }> = [];
     const bridge = await startAuthenticatedContainerServer(hostPort, {
       isHealthy: () => existsSync(healthyFile),
       isAuthorized: (request) =>
         request.headers.authorization ===
         `Basic ${Buffer.from(`opencode:${readTestCredential(liveTokenFile)}`).toString("base64")}`,
+      statusReads,
     });
     const dockerScript = `#!/bin/sh
 case "$1" in
@@ -1425,6 +1570,17 @@ exit 0
           wasRunning: true,
           authToken: replacement.authToken,
         });
+
+        // Each fresh server loads /workspace with its own credential before
+        // the start returns, so a prompt's first status read does not pay for
+        // OpenCode's plugin install in a new container layer. The reused
+        // server is not warmed again.
+        expect(statusReads).toEqual(
+          Array.from({ length: 4 }, () => ({
+            url: "/session/status?directory=%2Fworkspace",
+            authorized: true,
+          })),
+        );
 
         const execLog = await fs.readFile(logs.exec, "utf8");
         expect(execLog.split("\n").filter((line) => line.startsWith("exec -d "))).toHaveLength(4);

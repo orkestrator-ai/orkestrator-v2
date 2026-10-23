@@ -16,6 +16,10 @@ import {
 } from "../src/core/container-network";
 import { dockerOwnerNamespace } from "../src/core/docker-ownership";
 import { resetImageManifestCache } from "../src/core/docker-image";
+import {
+  BlockedRegistryWriter,
+  RegistrySchemaBlockedError,
+} from "../src/core/registry-writer-lease";
 import { environmentSnapshot } from "../src/core/public-api/actions-settings";
 import { defaultConfig } from "../src/core/storage-shared";
 import {
@@ -403,6 +407,26 @@ describe("allowlist edits in place", () => {
       async (log) => {
         const result = await applyEnvironmentAllowedDomains("env-lifecycle", context);
         expect(result.kind).toBe("not-running");
+        expect(await log.read()).not.toContain("--set-domains");
+      },
+    );
+  });
+
+  test("a backend without the registry writer saves the list but does not push it", async () => {
+    const { context, dir } = await allowlistContext(["one.example", "two.example"]);
+    context.registryWriterLease = new BlockedRegistryWriter(new RegistrySchemaBlockedError());
+    const tarPath = await manifestTar({ "network-policy": 2, "network-refresh": 1 });
+    await withDockerScript(
+      allowlistDocker({
+        tarPath,
+        before: allowedDomainsRevision(["one.example"]),
+        after: allowedDomainsRevision(["one.example", "two.example"]),
+        marker: path.join(dir, "applied-blocked"),
+      }),
+      async (log) => {
+        await expect(applyEnvironmentAllowedDomains("env-lifecycle", context)).rejects.toThrow(
+          "ContainerLifecycleError:unsupported-format",
+        );
         expect(await log.read()).not.toContain("--set-domains");
       },
     );

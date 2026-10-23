@@ -761,6 +761,8 @@ export async function createCommandFixtures() {
     options: {
       isHealthy: () => boolean;
       isAuthorized: (request: http.IncomingMessage) => boolean;
+      /** Records OpenCode's directory-scoped status reads (instance warm-up). */
+      statusReads?: Array<{ url: string; authorized: boolean }>;
     },
   ): Promise<{ close: () => Promise<void> }> {
     const server = http.createServer((request, response) => {
@@ -768,6 +770,13 @@ export async function createCommandFixtures() {
         // A stopped container process refuses the connection. This lets the
         // production reachability check distinguish it from a live 401.
         request.socket.destroy();
+        return;
+      }
+      if (options.statusReads && request.url?.startsWith("/session/status")) {
+        const authorized = options.isAuthorized(request);
+        options.statusReads.push({ url: request.url, authorized });
+        response.writeHead(authorized ? 200 : 401);
+        response.end("{}");
         return;
       }
       if (request.url === "/global/health") {

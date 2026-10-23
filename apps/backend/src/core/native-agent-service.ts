@@ -427,6 +427,16 @@ export class NativeAgentService {
   }
 
   /**
+   * A committed stop: the environment's bridges and their parked requests are
+   * gone, so nothing may keep reporting them as pending (see
+   * `NativeAgentTranscriptProjection.withdrawEnvironmentInteractions`).
+   */
+  withdrawEnvironmentInteractions(environmentId: string): void {
+    this.interactions.withdrawEnvironment(environmentId);
+    this.projections.withdrawEnvironmentInteractions(environmentId);
+  }
+
+  /**
    * Operational kill switch. Existing adopted sessions keep reconciling so a
    * request already observed is not stranded; no new session is adopted.
    */

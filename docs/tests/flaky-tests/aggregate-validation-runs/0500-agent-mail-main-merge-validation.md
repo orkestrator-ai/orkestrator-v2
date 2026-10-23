@@ -257,3 +257,31 @@ visible inline feedback, no duplicate toast or Retry, and a new ID on resend.
 The profile was stopped and reset; `dev:status` confirmed it missing with no
 live processes. The unrelated original aggregate and browser failures above
 remain non-green.
+
+## Usage-tab main merge, second pass — 2026-10-23
+
+Merged `origin/main` at `459d29441` into `t3/settings-usage-tab`, resolving six
+conflicts from main's settings-menu, native-agent collaborator and flaky-registry
+restructurings. `mise run test:logged -- --name merge-full-suite -- mise run test`
+passed, exit 0 in 408.1 seconds, with no failure in any group: bridges (Pi 598,
+Cursor 780, Claude 1,623, Codex 2,299, ACP 664), workspace (web 8,945, protocol
+1,788, desktop 1,224, CLI 227, toolchain 91, web-public 41, backend), root and
+agent support 3,381, and the codex protocol lockfile.
+
+`mise run test:logged -- --name merge-browser -- mise run test:browser` reported
+507 passed, 95 skipped and two failed with nine workers (3.8 minutes): both
+viewport cases of the native branch-suggestion spec
+`e2e/AgentLaunchDialog.spec.ts:7`, with the branch input holding `rel` instead of
+`release/2.0` at the 5,000 ms deadline.
+`ORKESTRATOR_E2E_PORT=21917 mise run test:logged -- --name merge2-branch-picker-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentLaunchDialog.spec.ts --workers=1`
+repeated both cases in the complete unchanged owning spec (two passed, two
+failed, 20.1 seconds). The merge touches neither that spec — last changed by
+#997 — nor the native branch input, and main's own container-qualification merge
+recorded the same 507/95/2 result in case 0493 on the same day. This remains the
+known unresolved native-popup validation failure, not a new flake, and not a
+consequence of this merge.
+
+A forced `@orkestrator/desktop` production build passed (21.6 seconds), as did
+`mise run format:check`, `mise run lint` and the backend, web and desktop
+typechecks. Both tracked lockfiles were verified current with
+`bun install --frozen-lockfile`.

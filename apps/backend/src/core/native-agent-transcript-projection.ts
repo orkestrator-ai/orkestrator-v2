@@ -792,7 +792,7 @@ export class NativeAgentTranscriptProjection {
   >();
   private readonly projectionRefreshDescriptors = new Map<
     string,
-    { epoch: number; signature: string }
+    { epoch: number; signature: string; environmentId: string }
   >();
   /** Invalidates an in-flight read when a logical tab changes provider identity. */
   private readonly projectionEpochs = new Map<string, number>();
@@ -4515,6 +4515,43 @@ export class NativeAgentTranscriptProjection {
     };
   }
 
+  /**
+   * A committed stop withdraws the environment's outstanding agent requests.
+   * Parked requests die with their bridge and never survive a restart, but a
+   * failed read keeps the last projection, so the dead request stayed
+   * `pending` while stopped; the public CLI and the coordinator's
+   * `get_tab_state` read that cache. It is withdrawn the way a live snapshot
+   * withdraws one: dropped from the list, which only ever holds outstanding
+   * requests, in a new announced revision. Every key with a cached projection
+   * or a refresh in flight has its epoch bumped, so a read that saw the
+   * request before the stop cannot commit it back.
+   */
+  withdrawEnvironmentInteractions(environmentId: string): void {
+    const keys = new Set<string>();
+    for (const [key, entry] of this.projectionCache) {
+      if (entry.input.environmentId === environmentId) keys.add(key);
+    }
+    for (const [key, descriptor] of this.projectionRefreshDescriptors) {
+      if (descriptor.environmentId === environmentId) keys.add(key);
+    }
+    for (const key of keys) {
+      const epoch = (this.projectionEpochs.get(key) ?? 0) + 1;
+      this.projectionEpochs.set(key, epoch);
+      const entry = this.projectionCache.get(key);
+      if (!entry) continue;
+      const interactions = entry.projection.interactions.filter(
+        (interaction) => interaction.state !== "pending" && interaction.state !== "answering",
+      );
+      this.commitProjection(
+        key,
+        entry.input,
+        { ...entry.projection, interactions },
+        entry.generation,
+        epoch,
+      );
+    }
+  }
+
   invalidateProjection(key: string): void {
     this.stopNotices.delete(key);
     const keys = [key, `${key}\0sync-v1`];
@@ -4647,7 +4684,11 @@ export class NativeAgentTranscriptProjection {
       return this.refreshProjectionOnce(input, force, key, coveredEpoch, resolvedSession);
     })();
     this.projectionRefreshes.set(key, operation);
-    this.projectionRefreshDescriptors.set(key, { epoch, signature });
+    this.projectionRefreshDescriptors.set(key, {
+      epoch,
+      signature,
+      environmentId: input.environmentId,
+    });
     return operation.finally(() => {
       if (this.projectionRefreshes.get(key) === operation) {
         this.projectionRefreshes.delete(key);

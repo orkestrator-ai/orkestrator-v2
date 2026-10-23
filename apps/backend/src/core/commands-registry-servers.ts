@@ -95,6 +95,23 @@ function containerBridgeControl(
   };
 }
 
+/** Whether the environment that owns `containerId` has a turn of `agent` in flight. */
+async function containerAgentHasLiveWork(
+  context: CommandContext,
+  containerId: string,
+  agent: "cursor",
+): Promise<boolean> {
+  if (!context.nativeAgents) return false;
+  const id = containerId.trim();
+  const environment = (await context.storage.loadEnvironments()).find((candidate) => {
+    const known = candidate.containerId?.trim();
+    return Boolean(known && id && (known === id || known.startsWith(id) || id.startsWith(known)));
+  });
+  return environment
+    ? (await context.nativeAgents.hasObservedLiveWork(environment.id, agent)) === true
+    : false;
+}
+
 export function registerServerCommands(
   register: CommandRegistrar,
   dependencies: RegistryDependencies,
@@ -518,7 +535,13 @@ export function registerServerCommands(
           ).trim();
           if (
             BRIDGE_TOKEN_PATTERN.test(existingToken) &&
-            (provider !== "cursor" || credentialFingerprint === expectedCredentialFingerprint)
+            (provider !== "cursor" ||
+              credentialFingerprint === expectedCredentialFingerprint ||
+              // A changed key restarts the bridge, which would end a running
+              // turn. A busy bridge keeps the key it started with, as a busy
+              // Claude or Codex bridge keeps its account; the first start
+              // after it goes idle applies the new one.
+              (await containerAgentHasLiveWork(context, id, "cursor")))
           ) {
             return { hostPort, wasRunning: true, authToken: existingToken };
           }

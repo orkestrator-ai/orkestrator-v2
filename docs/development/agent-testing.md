@@ -293,6 +293,22 @@ mise run dev:test --profile codex-qa --fixture --fixture-environments local
 mise run dev:test --profile container-qa --fixture --fixture-environments local,container
 ```
 
+`fixture-container` is created in restricted network mode. A network mode is
+fixed when an environment is created, so to run the real-stack Docker set
+against a full-network container start the profile with
+`--fixture-network full` (it needs `--fixture-environments` with
+`container`). `container-root-terminal.spec.ts` checks whichever mode the
+fixture has: uid 0 through **New root terminal**, and a host outside the
+allowlist refused (restricted) or reached (full). A credential-free Docker
+profile (`--no-agent-credentials`) should leave Claude out of
+`--agent-platforms`; otherwise the blocking "Claude Code Is Not Logged In"
+dialog stops the UI specs.
+
+```bash
+mise run dev:test --profile container-full-qa --fixture --fixture-environments local,container \
+  --fixture-network full --no-agent-credentials --agent-platforms codex,grok,opencode
+```
+
 The container fixture path builds the workspace-specific development image when
 it is missing. Rebuild it explicitly without touching `orkestrator-v2:latest`:
 

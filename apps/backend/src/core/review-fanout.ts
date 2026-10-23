@@ -1530,12 +1530,13 @@ export class ReviewFanoutRunner {
           ? provider.usageFromMessages(await messages)
           : undefined);
       const reported = usageCount(usage?.sessionTokens);
-      if (reported === undefined) return false;
+      const cacheReads = usageCount(usage?.cacheReadTokens);
+      if (reported === undefined && cacheReads === undefined) return false;
       await this.host.assertFence();
-      const tokenCount = Math.max(reviewer.tokenCount ?? 0, reported);
+      const tokenCount =
+        reported === undefined ? reviewer.tokenCount : Math.max(reviewer.tokenCount ?? 0, reported);
       // Pi and Cursor report cache reads for their latest turn only, so the
       // largest value seen is kept rather than the latest.
-      const cacheReads = usageCount(usage?.cacheReadTokens);
       const cacheReadTokens =
         cacheReads === undefined
           ? reviewer.cacheReadTokens
@@ -1543,7 +1544,7 @@ export class ReviewFanoutRunner {
       if (reviewer.tokenCount === tokenCount && reviewer.cacheReadTokens === cacheReadTokens) {
         return false;
       }
-      reviewer.tokenCount = tokenCount;
+      if (tokenCount !== undefined) reviewer.tokenCount = tokenCount;
       if (cacheReadTokens !== undefined) reviewer.cacheReadTokens = cacheReadTokens;
       return true;
     } catch (error) {

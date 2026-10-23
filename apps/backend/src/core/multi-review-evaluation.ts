@@ -291,7 +291,9 @@ function shareDelta(reviewers: readonly PanelValueReviewer[]): number | undefine
 export function summarizePanelValue(
   record: MultiReviewWorkflow | BuildPipeline,
 ): PanelValueSummary[] {
-  if ("reviewers" in record && Array.isArray(record.reviewers)) {
+  // Pipelines persist reviewer launch configs too; their sessions distinguish
+  // them from Multi Review workflows with durable reviewer records.
+  if (!("sessions" in record && Array.isArray(record.sessions))) {
     const workflow = record as MultiReviewWorkflow;
     const reviewers = workflow.reviewers.map((reviewer, index) =>
       panelReviewer(index + 1, reviewer),

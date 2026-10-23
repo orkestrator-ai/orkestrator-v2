@@ -350,6 +350,10 @@ describe("panel value summaries", () => {
       ...fields,
     });
     const summaries = summarizePanelValue({
+      reviewers: [
+        { agent: "claude", model: "opus" },
+        { agent: "claude", model: "opus" },
+      ],
       sessions: [
         session({ iteration: 1, label: "Review 1", tokenCount: 10, cacheReadTokens: 1 }),
         session({ iteration: 1, label: "Review 2", tokenCount: 10, cacheReadTokens: 2 }),

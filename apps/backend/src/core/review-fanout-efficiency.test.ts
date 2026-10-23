@@ -324,6 +324,50 @@ describe("lazy reviewer transcript observation", () => {
     expect(reviewers[0]).not.toHaveProperty("cacheReadTokens");
   });
 
+  test("cache reads persist without a session total and survive a later total", async () => {
+    const reviewers = [sentReviewer(0)];
+    const h = harness(reviewers);
+    const provider = h.providers.claude!;
+    // Establish the progress baseline so the next save can only be usage.
+    provider.contextUsage = undefined;
+    await h.runner().advanceReviewers(reviewers);
+    const savesBeforeUsage = h.saves.length;
+
+    provider.contextUsage = { usedTokens: 1, cacheReadTokens: 600 };
+    await h.runner().advanceReviewers(reviewers);
+    expect(h.saves).toHaveLength(savesBeforeUsage + 1);
+    expect(h.saves.at(-1)![0]!.cacheReadTokens).toBe(600);
+    expect(h.saves.at(-1)![0]).not.toHaveProperty("tokenCount");
+
+    provider.contextUsage = { usedTokens: 1, sessionTokens: 900 };
+    await h.runner().advanceReviewers(reviewers);
+    expect(h.saves.at(-1)![0]).toMatchObject({ tokenCount: 900, cacheReadTokens: 600 });
+
+    // Each counter is validated independently, even if the other is malformed.
+    provider.contextUsage = { usedTokens: 1, sessionTokens: Number.NaN, cacheReadTokens: 700 };
+    await h.runner().advanceReviewers(reviewers);
+    expect(h.saves.at(-1)![0]).toMatchObject({ tokenCount: 900, cacheReadTokens: 700 });
+    provider.contextUsage = { usedTokens: 1, sessionTokens: 1_000, cacheReadTokens: -1 };
+    await h.runner().advanceReviewers(reviewers);
+    expect(h.saves.at(-1)![0]).toMatchObject({ tokenCount: 1_000, cacheReadTokens: 700 });
+  });
+
+  test("a restarted reviewer session discards inherited usage before dispatch", async () => {
+    const reviewers = [{ ...pendingReviewer(0), tokenCount: 900, cacheReadTokens: 600 }];
+    const h = harness(reviewers);
+    h.providers.claude!.contextUsage = undefined;
+
+    await h.runner().advanceReviewers(reviewers);
+
+    expect(reviewers[0]!.providerSessionId).toBeDefined();
+    expect(h.providers.claude!.sends).toHaveLength(1);
+    for (const saved of h.saves) {
+      expect(saved[0]).not.toHaveProperty("tokenCount");
+      expect(saved[0]).not.toHaveProperty("cacheReadTokens");
+    }
+    expect(reviewers[0]).not.toHaveProperty("cacheReadTokens");
+  });
+
   test("a replaced session starts a fresh probe clock", async () => {
     const reviewers = [sentReviewer(0)];
     const h = harness(reviewers);

@@ -28,4 +28,21 @@ The backend owners were rerun together with
 
 Existing related cases: [environment move 0621](../environments-and-containers/0621-environment-move-nested-submodules-aggregate-timeout.md), [disk report 0259](../environments-and-containers/0259-disk-report-aggregate-timeout.md), [agent mail backlog 0661](../coordinator-and-multi-review/0661-agent-mail-backlog-aggregate-timeout.md), [terminal history 0213](../backend-services-and-tooling/0213-terminal-history-aggregate-timeout.md), [backend deadline cluster 0442](../backend-services-and-tooling/0442-backend-aggregate-probe-and-deadline-cluster.md) and [sidebar validation 0692](0692-sidebar-collision-validation.md).
 
-These owner passes confirm intermittent aggregate failures for this observation. They do not make the original aggregate exit green.
+## Second observation: after the Multi Review fixes
+
+- **Date observed:** 2026-10-23.
+- **Baseline:** `369be1653` (the branch after the Multi Review fixes, clean tree).
+- **Original command:** `mise run test:logged -- --name full-tests-3 -- mise run test`.
+- **Aggregate result:** exit 1 in 988.7 s. Only the workspace group failed, and within it only backend (four failures). Root, bridges and the Codex protocol lockfile passed; web, desktop, protocol, toolchain, web-public and CLI had no failures.
+- **Original evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.bxLcow/`, outer `orkestrator-test-run.GlEiqX`.
+
+| Owner | Original failure | Complete owner result |
+| --- | --- | --- |
+| `apps/backend/src/core/terminal-history.test.ts` | `normalizes lines, CRLF, Unicode, and ANSI across transport chunks and pages` timed out (5,009.71 ms). | Passed. |
+| `apps/backend/src/core/transcript-artifacts/content-server.engines.test.ts` | `executable document policy in firefox > popups, new-window links and top navigation reach the sink zero times` timed out (11,396.84 ms). | Passed. |
+| `apps/backend/src/core/transcript-artifacts/mermaid-render.test.ts` | `the external watchdog ends a blocked render within the deadline and the browser is gone` timed out (5,621.97 ms). | Passed. |
+| `apps/backend/src/core/environment-move.test.ts` | `moves a worktree with nested submodules (same disk)` timed out (5,057.24 ms). | Passed. |
+
+The four owners were rerun together from `apps/backend` with `bun test --preload ../../tests/setup-node.ts <four files> --parallel=1`: 114 passed, 0 failed (195.8 s). Related cases: [terminal history 0213](../backend-services-and-tooling/0213-terminal-history-aggregate-timeout.md), [environment move 0621](../environments-and-containers/0621-environment-move-nested-submodules-aggregate-timeout.md), [Mermaid watchdog 0518](../design-canvas-and-artifacts/0518-mermaid-watchdog-aggregate-deadline.md) and [artifact engine 0507](../design-canvas-and-artifacts/0507-artifact-engine-chromium-hook-timeout.md).
+
+These owner passes confirm intermittent aggregate failures for both observations. They do not make either original aggregate exit green.

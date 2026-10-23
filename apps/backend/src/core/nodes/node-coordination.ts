@@ -169,10 +169,17 @@ export class NodeCoordination {
       },
     });
     portal.afterRouted = async (nodeId, command, args, result) => {
-      if (command !== "create_environment" || typeof args.projectId !== "string") return;
+      // A coordinator's launch creates through `create_controller_environment`.
+      const input =
+        command === "create_controller_environment" && args.input && typeof args.input === "object"
+          ? (args.input as Record<string, unknown>)
+          : command === "create_environment"
+            ? args
+            : null;
+      if (!input || typeof input.projectId !== "string") return;
       const environmentId = (result as { id?: unknown } | null)?.id;
       if (typeof environmentId !== "string") return;
-      await this.projectFiles.seedEnvironment(nodeId, args.projectId, environmentId);
+      await this.projectFiles.seedEnvironment(nodeId, input.projectId, environmentId);
     };
     this.actions = new NodeActionRequests({
       load: () => storage.loadNodeActionRequests(),
@@ -193,7 +200,9 @@ export class NodeCoordination {
    */
 
   /** Mail from a command node's coordinator to an agent on this node. */
-  async deliverIncoming(args: Record<string, unknown>): Promise<{ messageId: string }> {
+  async deliverIncoming(
+    args: Record<string, unknown>,
+  ): Promise<{ messageId: string; toTabId: string }> {
     const controllerId = args.controllerId;
     if (!isBackendId(controllerId)) throw new Error("Expected controllerId.");
     const controller = this.options.nodes
@@ -240,7 +249,7 @@ export class NodeCoordination {
     if (!parseMailState(state).origins[toEnvironmentId]) {
       await this.leafMail.recordOrigin(toEnvironmentId, mailbox);
     }
-    return { messageId: message.id };
+    return { messageId: message.id, toTabId: message.toTabId };
   }
 
   async recordOrigin(args: Record<string, unknown>): Promise<{ recorded: true }> {

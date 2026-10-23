@@ -1703,6 +1703,206 @@ describe("Orkestrator control MCP server", () => {
     });
   });
 
+  test("a coordinator's tools act on another node's copy of the project when given its nodeId", async () => {
+    const layout = {
+      activePaneId: "pane-1",
+      root: {
+        kind: "leaf",
+        id: "pane-1",
+        activeTabId: "startup-agent",
+        tabs: [
+          { id: "startup-agent", type: "agent-native", nativeAgentData: { platform: "codex" } },
+        ],
+      },
+    };
+    const routed: Array<{ command: string; args: Record<string, unknown>; requestKey?: unknown }> =
+      [];
+    overrides.set("get_project_coordinator", () => ({
+      workspace: {
+        id: "coordinator-1",
+        lifecycleState: "ready",
+        conversations: [
+          { id: "conversation-1", tabId: "coord-tab", mailboxIncarnationId: "incarnation-1" },
+        ],
+      },
+    }));
+    overrides.set("get_node_status", () => ({
+      nodeId: "bk_self",
+      mode: "command",
+      controllers: [],
+    }));
+    overrides.set("get_node_summaries", () => ({
+      selfId: "bk_self",
+      nodes: [
+        {
+          nodeId: "bk_leaf",
+          available: true,
+          view: { displayName: "Build box", connection: { state: "connected" } },
+          projects: [
+            {
+              ref: { backendId: "bk_leaf", projectId: "p-leaf" },
+              repositoryHint: "example.invalid/secret/repo",
+            },
+          ],
+          environments: [],
+        },
+      ],
+    }));
+    overrides.set("invoke_on_node", (args) => {
+      const inner = {
+        command: String(args.command),
+        args: args.args as Record<string, unknown>,
+        requestKey: args.requestKey,
+      };
+      routed.push(inner);
+      const answers: Record<string, unknown> = {
+        get_environment: { id: inner.args.environmentId, projectId: "p-leaf", status: "running" },
+        get_pane_layout: layout,
+        get_native_agent_projection: {
+          messages: [{ id: "m1", role: "assistant", content: "Done on the leaf." }],
+        },
+        dispatch_native_agent_intent: { outcome: "accepted" },
+        verify_project_launch_base: { contained: true },
+        // The node's own launch options.
+        get_project: { id: "p-leaf", name: "Orkestrator" },
+        get_config: {
+          global: { enabledAgentPlatforms: ["codex"], agentMessaging: { enabled: true } },
+        },
+        get_native_agent_model_catalog: [
+          {
+            id: "gpt-5.6-codex",
+            name: "GPT-5.6 Codex",
+            platform: "codex",
+            reasoning: [{ id: "high", name: "High" }],
+          },
+        ],
+        get_agent_model_catalog_cache: { schemaVersion: 1 },
+        get_repository_config: {},
+        get_environment_snapshots: [],
+      };
+      return { outcome: "ok", result: answers[inner.command] ?? null };
+    });
+    overrides.set("assert_coordinator_node_delegation_available", () => ({ available: true }));
+    overrides.set("open_coordinator_node_delegation", () => ({ opened: true }));
+    overrides.set("launch_coordinator_node_environment", () => ({
+      environment: { id: "leaf-new", status: "creating" },
+      coordinatorDelegationOpened: true,
+    }));
+    overrides.set("send_coordinator_node_mail", (args) => ({
+      nodeId: args.nodeId,
+      toEnvironmentId: args.toEnvironmentId,
+      coordinatorDelegationOpened: true,
+    }));
+    overrides.set("get_agent_mail_message", () => ({
+      id: "msg-1",
+      from: {
+        kind: "node",
+        nodeId: "bk_leaf",
+        nodeName: "Build box",
+        role: "agent",
+        projectId: "project-1",
+        environmentId: "leaf-env",
+        tabId: "startup-agent",
+        title: null,
+      },
+    }));
+    const credential = server.issueCoordinatorCredential({
+      role: "coordinator",
+      projectId: "project-1",
+      coordinatorId: "coordinator-1",
+      conversationId: "conversation-1",
+      mailboxIncarnationId: "incarnation-1",
+      capabilities: ["environments", "jobs", "mail", "discovery"],
+    });
+    const call = async (name: string, args: Record<string, unknown>) => {
+      const result = await rpc(credential.url, credential.token, "tools/call", {
+        name,
+        arguments: args,
+      });
+      if (result.body.result?.isError) throw new Error(JSON.stringify(result.body.result));
+      return result.body.result!.structuredContent!;
+    };
+
+    const transcript = await call("get_tab_transcript", {
+      environmentId: "leaf-env",
+      tabId: "startup-agent",
+      nodeId: "bk_leaf",
+    });
+    expect(transcript).toMatchObject({ nodeId: "bk_leaf", node: "Build box", agent: "codex" });
+    expect(JSON.stringify(transcript.messages)).toContain("Done on the leaf.");
+
+    const prompted = await call("send_prompt_to_tab", {
+      requestId: "prompt-remote",
+      environmentId: "leaf-env",
+      tabId: "startup-agent",
+      prompt: "Run the tests.",
+      nodeId: "bk_leaf",
+    });
+    expect(prompted).toMatchObject({ nodeId: "bk_leaf", delivery: "async" });
+    expect(routed.find((entry) => entry.command === "dispatch_native_agent_intent")).toMatchObject({
+      args: { environmentId: "leaf-env", logicalSessionKey: "env-leaf-env:startup-agent" },
+      requestKey: "prompt:prompt-remote",
+    });
+    expect(
+      invocations.find(({ command }) => command === "open_coordinator_node_delegation")?.args,
+    ).toMatchObject({ nodeId: "bk_leaf", environmentId: "leaf-env", tabId: "startup-agent" });
+    // The node's own dispatch never ran here.
+    expect(invocations.some(({ command }) => command === "dispatch_native_agent_intent")).toBe(
+      false,
+    );
+
+    const launched = await call("launch_environment", {
+      requestId: "launch-remote",
+      projectId: "project-1",
+      agent: "codex",
+      prompt: "Fix it.",
+      baseBranch: "main",
+      baseCommit: "a".repeat(40),
+      nodeId: "bk_leaf",
+    });
+    expect(launched).toMatchObject({ environmentId: "leaf-new", nodeId: "bk_leaf" });
+    expect(routed.find((entry) => entry.command === "verify_project_launch_base")?.args).toEqual({
+      projectId: "p-leaf",
+      branch: "main",
+      commit: "a".repeat(40),
+    });
+    expect(
+      invocations.find(({ command }) => command === "launch_coordinator_node_environment")?.args,
+    ).toMatchObject({ nodeId: "bk_leaf", requestId: "launch-remote" });
+
+    // A reply to an agent on another node goes back across the node link.
+    await call("send_message", {
+      requestId: "reply-remote",
+      toEnvironmentId: "coordinator",
+      replyToMessageId: "msg-1",
+      body: "Thanks; now lint.",
+    });
+    expect(
+      invocations.find(({ command }) => command === "send_coordinator_node_mail")?.args,
+    ).toMatchObject({
+      nodeId: "bk_leaf",
+      toEnvironmentId: "leaf-env",
+      toTabId: "startup-agent",
+      body: "Thanks; now lint.",
+    });
+
+    // This node's own ID is this node.
+    overrides.set("get_pane_layout", () => layout);
+    routed.length = 0;
+    await call("list_tabs", { environmentId: "env-1", nodeId: "bk_self" });
+    expect(routed).toEqual([]);
+  });
+
+  test("only a coordinator may name a node", async () => {
+    const descriptor = await readControlMcpDescriptor(server.getInfo()!.descriptorFile);
+    const result = await rpc(descriptor.url, descriptor.token, "tools/call", {
+      name: "list_tabs",
+      arguments: { environmentId: "env-1", nodeId: "bk_leaf" },
+    });
+    expect(result.body.result?.isError).toBe(true);
+    expect(invocations.some(({ command }) => command === "invoke_on_node")).toBe(false);
+  });
+
   test("routes prompts only to native tabs with their durable logical session key", async () => {
     overrides.set("get_pane_layout", () => ({
       activePaneId: "pane-1",

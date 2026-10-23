@@ -37,6 +37,8 @@ import { registerNodeCommands } from "./commands-registry-nodes.js";
 import { registerBuildPipelineCommands } from "./commands-registry-build.js";
 import { registerControlCommands } from "./commands-registry-control.js";
 import { registerCoordinatorCommands } from "./commands-registry-coordinator.js";
+import { registerControllerWorkflowCommands } from "./commands-registry-controller-workflows.js";
+import { registerCoordinatorNodeCommands } from "./commands-registry-coordinator-nodes.js";
 import { registerDockerCommands } from "./commands-registry-docker.js";
 import { registerEnvironmentCommands } from "./commands-registry-environments.js";
 import { registerGitHubCommands } from "./commands-registry-github.js";
@@ -293,6 +295,8 @@ export function createCommandRegistry(
   registerProjectCopyCommands(register, dependencies);
   registerControlCommands(register, dependencies);
   registerCoordinatorCommands(register, dependencies);
+  registerControllerWorkflowCommands(register, dependencies);
+  registerCoordinatorNodeCommands(register);
   registerLinearCommands(register, dependencies);
   registerGitHubCommands(register, dependencies);
   registerGitHubPullRequestCommands(register, dependencies);

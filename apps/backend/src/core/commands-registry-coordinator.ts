@@ -97,7 +97,7 @@ async function assertWorkerDelegationAvailable(
   }
 }
 
-async function assertContainerDelegationCommitPublished(
+export async function assertContainerDelegationCommitPublished(
   context: CommandContext,
   projectId: string,
   commit: string,

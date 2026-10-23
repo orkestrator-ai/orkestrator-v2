@@ -3,10 +3,12 @@ import {
   isLaunchMultiReviewActionInput,
   isMultiReviewTerminalPhase,
   isMultiReviewWorkflow,
+  type LaunchMultiReviewActionInput,
   type MultiReviewWorkflow,
   type MultiReviewActionResult,
   type StartMultiReviewInput,
 } from "@orkestrator/protocol/multi-review";
+import type { Environment, PersistedMultiReviewWorkflow } from "./models.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import type { CommandContext } from "./commands-context.js";
 import { conciseError } from "./commands-error-text.js";
@@ -62,6 +64,178 @@ function result(
   };
 }
 
+/**
+ * The start request the Multi Review button would send for this environment:
+ * the caller's rows and auto-actions, and saved defaults for what it left out.
+ */
+export async function multiReviewButtonStart(
+  context: CommandContext,
+  dependencies: Pick<RegistryDependencies, "commands"> | undefined,
+  projectId: string,
+  environment: Environment,
+  input: Omit<LaunchMultiReviewActionInput, "requestId">,
+): Promise<StartMultiReviewInput> {
+  const config = await context.storage.loadConfig();
+  // Omitted model rows take the saved defaults the Multi Review button uses.
+  const defaults =
+    input.reviewers && input.reviewModel && input.fixModel
+      ? undefined
+      : multiReviewDefaultRows(
+          savedLaunchSettings(config, projectId, environment),
+          await readLaunchModelCatalog(
+            dependencies?.commands.get("get_native_agent_model_catalog"),
+            environment.id,
+            context,
+          ),
+        );
+  const instructionWasProvided = Object.hasOwn(input, "reviewInstruction");
+  return {
+    environmentId: input.environmentId,
+    projectId,
+    targetBranch: input.targetBranch ?? (config.repositories[projectId]?.prBaseBranch || "main"),
+    reviewInstruction: instructionWasProvided
+      ? input.reviewInstruction?.trim()
+        ? input.reviewInstruction
+        : undefined
+      : config.global.reviewInstruction,
+    reviewers: input.reviewers ?? defaults!.reviewers,
+    reviewModel: input.reviewModel ?? defaults!.reviewModel,
+    fixModel: input.fixModel ?? defaults!.fixModel,
+    ...multiReviewAutomation(input, config.global.agentSettings?.multiReview),
+  };
+}
+
+/**
+ * Start a review under a reserved ID, or recover the one a failed start saved,
+ * or reattach to the active review another caller started meanwhile. Never
+ * starts a second review for one reservation.
+ */
+export async function startMultiReviewAt(
+  context: CommandContext,
+  service: NonNullable<CommandContext["multiReviews"]>,
+  start: StartMultiReviewInput,
+  reservedId: string,
+): Promise<{ saved: PersistedMultiReviewWorkflow | null; reused: boolean }> {
+  // Preflight before any provider work. The second check at publication
+  // catches a tab added, an environment stopped, or a generation changed
+  // while review preparation was running.
+  await openMultiReviewTab(context.storage, { ...start, id: reservedId }, "root", true);
+  let saved: PersistedMultiReviewWorkflow | null = null;
+  let reused = false;
+  try {
+    await service.start(start, reservedId);
+  } catch (error) {
+    // A save may have succeeded before a later launch stage failed. Only
+    // positive durable evidence permits recovery; never start another ID.
+    saved = await context.storage.getMultiReviewWorkflow(reservedId);
+    if (!saved) {
+      // The renderer or another coordinator may have won admission while
+      // preparation awaited Git. Reattach to that winner, never restart.
+      saved =
+        (await context.storage.listMultiReviewWorkflows(start.environmentId)).find(
+          (entry) =>
+            isMultiReviewWorkflow(entry.snapshot) &&
+            !isMultiReviewTerminalPhase(entry.snapshot.phase),
+        ) ?? null;
+      if (!saved) throw error;
+      reused = true;
+    }
+  }
+  saved ??= await context.storage.getMultiReviewWorkflow(reservedId);
+  return { saved, reused };
+}
+
+/**
+ * Open a saved review's root or Fix tab, or address its findings: the
+ * durable UI actions behind `open_multi_review`, `open_multi_review_fix` and
+ * `address_multi_review`. `beforeAddress` runs once the root tab is open and
+ * before the fix handoff is armed (a coordinator adopts the workflow there).
+ */
+export async function runMultiReviewSurface(
+  context: CommandContext,
+  saved: { snapshot: MultiReviewWorkflow; revision: number },
+  surface: "root" | "fix" | "address",
+  beforeAddress?: () => Promise<void>,
+): Promise<MultiReviewActionResult> {
+  const id = saved.snapshot.id;
+  let workflow = { ...saved.snapshot, backendRevision: saved.revision };
+  if (surface === "address") {
+    if (!context.multiReviews) throw new Error("Multi Review supervisor is unavailable");
+    let rootUi: MultiReviewActionResult["ui"];
+    try {
+      // Make the supervisor's pending/error state reachable before arming
+      // the handoff. The supervisor publishes and selects Fix on delivery.
+      rootUi = await openMultiReviewTab(context.storage, workflow);
+    } catch (error) {
+      return result(
+        workflow,
+        true,
+        { status: "unavailable" },
+        `The review tab could not be opened: ${conciseError(error)} Close a tab if needed, ensure the environment is ready, then retry address_multi_review. No fix handoff was queued.`,
+      );
+    }
+    await beforeAddress?.();
+    try {
+      workflow = await context.multiReviews.address(id);
+    } catch (error) {
+      const latest = await context.storage.getMultiReviewWorkflow(id).catch(() => null);
+      if (latest && isMultiReviewWorkflow(latest.snapshot))
+        workflow = { ...latest.snapshot, backendRevision: latest.revision };
+      const handoffArmed =
+        workflow.phase === "interactive" && workflow.addressPromptPending === true;
+      return {
+        ...result(
+          workflow,
+          true,
+          rootUi,
+          handoffArmed
+            ? `The review tab opened, but the address action reported: ${conciseError(error)} The durable fix handoff remains queued; inspect get_multi_review before retrying.`
+            : `The review tab opened, but the fix handoff could not be queued: ${conciseError(error)} Resolve the reported state and retry address_multi_review.`,
+        ),
+        outcome: "partial",
+      };
+    }
+    if (workflow.addressPromptPending)
+      return {
+        ...result(workflow, true, rootUi),
+        outcome: "pending",
+        recovery:
+          "The fix handoff is durably queued. Inspect get_multi_review until addressPromptPending clears; presentationError reports any Fix tab failure. Do not send a separate fix prompt.",
+      } satisfies MultiReviewActionResult;
+    try {
+      return result(workflow, true, await openMultiReviewTab(context.storage, workflow, "fix"));
+    } catch (error) {
+      const latest = await context.storage.getMultiReviewWorkflow(id).catch(() => null);
+      if (latest && isMultiReviewWorkflow(latest.snapshot))
+        workflow = { ...latest.snapshot, backendRevision: latest.revision };
+      return {
+        ...result(
+          workflow,
+          true,
+          rootUi,
+          `The fix handoff completed, but its tab could not be opened: ${conciseError(error)} Use open_multi_review_fix after ensuring the environment is ready and has a free tab.`,
+        ),
+        outcome: "partial",
+      };
+    }
+  }
+  try {
+    return result(workflow, true, await openMultiReviewTab(context.storage, workflow, surface));
+  } catch (error) {
+    const latest = await context.storage.getMultiReviewWorkflow(id).catch(() => null);
+    if (latest && isMultiReviewWorkflow(latest.snapshot))
+      workflow = { ...latest.snapshot, backendRevision: latest.revision };
+    return result(
+      workflow,
+      true,
+      { status: "unavailable" },
+      surface === "fix"
+        ? `The fix session tab could not be opened: ${conciseError(error)} Wait for any pending handoff, ensure the environment is ready and has a free tab, then retry open_multi_review_fix. No turn was dispatched.`
+        : `The review tab could not be opened: ${conciseError(error)} Ensure the environment is ready and has a free tab, then retry open_multi_review. No workflow was started or cancelled.`,
+    );
+  }
+}
+
 export function registerCoordinatorReviewActions(
   register: CommandRegistrar,
   dependencies?: Pick<RegistryDependencies, "commands">,
@@ -96,37 +270,15 @@ export function registerCoordinatorReviewActions(
         throw new Error("Environment not found in this project");
       if (isProjectHomeEnvironment(environment))
         throw new Error("Coordinator credential cannot act on the project checkout");
-      const config = await context.storage.loadConfig();
-      // Omitted model rows take the saved defaults the Multi Review button
-      // uses. The request hash below covers the caller's payload, not these
+      // The request hash below covers the caller's payload, not the default
       // rows, so a retry still replays after the user edits their defaults.
-      const defaults =
-        input.reviewers && input.reviewModel && input.fixModel
-          ? undefined
-          : multiReviewDefaultRows(
-              savedLaunchSettings(config, caller.projectId, environment),
-              await readLaunchModelCatalog(
-                dependencies?.commands.get("get_native_agent_model_catalog"),
-                environment.id,
-                context,
-              ),
-            );
-      const instructionWasProvided = Object.hasOwn(input, "reviewInstruction");
-      const start: StartMultiReviewInput = {
-        environmentId: input.environmentId,
-        projectId: caller.projectId,
-        targetBranch:
-          input.targetBranch ?? (config.repositories[caller.projectId]?.prBaseBranch || "main"),
-        reviewInstruction: instructionWasProvided
-          ? input.reviewInstruction?.trim()
-            ? input.reviewInstruction
-            : undefined
-          : config.global.reviewInstruction,
-        reviewers: input.reviewers ?? defaults!.reviewers,
-        reviewModel: input.reviewModel ?? defaults!.reviewModel,
-        fixModel: input.fixModel ?? defaults!.fixModel,
-        ...multiReviewAutomation(input, config.global.agentSettings?.multiReview),
-      };
+      const start = await multiReviewButtonStart(
+        context,
+        dependencies,
+        caller.projectId,
+        environment,
+        input,
+      );
       const reservedId = `action-${createHash("sha256").update(`${caller.coordinatorId}\0${input.requestId}`).digest("hex").slice(0, 32)}`;
       const payloadHash = actionHash({ action: "launch-multi-review", input });
       const associations = await context.storage.listCoordinatorWorkflowAssociations(
@@ -236,30 +388,9 @@ export function registerCoordinatorReviewActions(
         );
       let reused = Boolean(saved);
       if (!saved) {
-        // Preflight before any provider work. The second check at publication
-        // catches a tab added, an environment stopped, or a generation changed
-        // while review preparation was running.
-        await openMultiReviewTab(context.storage, { ...start, id: reservedId }, "root", true);
-        try {
-          await service.start(start, reservedId);
-        } catch (error) {
-          // A save may have succeeded before a later launch stage failed. Only
-          // positive durable evidence permits recovery; never start another ID.
-          saved = await context.storage.getMultiReviewWorkflow(reservedId);
-          if (!saved) {
-            // The renderer or another coordinator may have won admission while
-            // preparation awaited Git. Reattach to that winner, never restart.
-            saved =
-              (await context.storage.listMultiReviewWorkflows(environment.id)).find(
-                (entry) =>
-                  isMultiReviewWorkflow(entry.snapshot) &&
-                  !isMultiReviewTerminalPhase(entry.snapshot.phase),
-              ) ?? null;
-            if (!saved) throw error;
-            reused = true;
-          }
-        }
-        saved ??= await context.storage.getMultiReviewWorkflow(reservedId);
+        const started = await startMultiReviewAt(context, service, start, reservedId);
+        saved = started.saved;
+        reused = started.reused;
       }
       if (!saved || !isMultiReviewWorkflow(saved.snapshot))
         throw new Error(
@@ -366,106 +497,25 @@ export function registerCoordinatorReviewActions(
           throw new Error(
             "Adopt this workflow into the current coordinator conversation before opening it",
           );
-        let workflow = { ...saved.snapshot, backendRevision: saved.revision };
-        if (surface === "address") {
-          if (!context.multiReviews) throw new Error("Multi Review supervisor is unavailable");
-          let rootUi: MultiReviewActionResult["ui"];
-          try {
-            // Make the supervisor's pending/error state reachable before arming
-            // the handoff. The supervisor publishes and selects Fix on delivery.
-            rootUi = await openMultiReviewTab(context.storage, workflow);
-          } catch (error) {
-            return result(
-              workflow,
-              true,
-              { status: "unavailable" },
-              `The review tab could not be opened: ${conciseError(error)} Close a tab if needed, ensure the environment is ready, then retry address_multi_review. No fix handoff was queued.`,
-            );
-          }
+        const review = { snapshot: saved.snapshot, revision: saved.revision };
+        return runMultiReviewSurface(context, review, surface, async () => {
           // Address adopts renderer-started work before dispatch so the observer
           // can deliver the fix outcome even while this conversation is inactive.
-          if (!ownedAssociation) {
-            const association = await context.storage.saveCoordinatorWorkflowAssociation({
-              id: randomUUID(),
-              ...caller,
-              kind: "multi-review",
-              resourceId: id,
-              requestId: `address:${id}`,
-              createdAt: new Date().toISOString(),
-            });
-            if (association.conversationId !== caller.conversationId) {
-              throw new Error(
-                "Adopt this workflow into the current coordinator conversation before addressing it",
-              );
-            }
-          }
-          try {
-            workflow = await context.multiReviews.address(id);
-          } catch (error) {
-            const latest = await context.storage.getMultiReviewWorkflow(id).catch(() => null);
-            if (latest && isMultiReviewWorkflow(latest.snapshot))
-              workflow = { ...latest.snapshot, backendRevision: latest.revision };
-            const handoffArmed =
-              workflow.phase === "interactive" && workflow.addressPromptPending === true;
-            return {
-              ...result(
-                workflow,
-                true,
-                rootUi,
-                handoffArmed
-                  ? `The review tab opened, but the address action reported: ${conciseError(error)} The durable fix handoff remains queued; inspect get_multi_review before retrying.`
-                  : `The review tab opened, but the fix handoff could not be queued: ${conciseError(error)} Resolve the reported state and retry address_multi_review.`,
-              ),
-              outcome: "partial",
-            };
-          }
-          if (workflow.addressPromptPending)
-            return {
-              ...result(workflow, true, rootUi),
-              outcome: "pending",
-              recovery:
-                "The fix handoff is durably queued. Inspect get_multi_review until addressPromptPending clears; presentationError reports any Fix tab failure. Do not send a separate fix prompt.",
-            } satisfies MultiReviewActionResult;
-          try {
-            return result(
-              workflow,
-              true,
-              await openMultiReviewTab(context.storage, workflow, "fix"),
+          if (ownedAssociation) return;
+          const association = await context.storage.saveCoordinatorWorkflowAssociation({
+            id: randomUUID(),
+            ...caller,
+            kind: "multi-review",
+            resourceId: id,
+            requestId: `address:${id}`,
+            createdAt: new Date().toISOString(),
+          });
+          if (association.conversationId !== caller.conversationId) {
+            throw new Error(
+              "Adopt this workflow into the current coordinator conversation before addressing it",
             );
-          } catch (error) {
-            const latest = await context.storage.getMultiReviewWorkflow(id).catch(() => null);
-            if (latest && isMultiReviewWorkflow(latest.snapshot))
-              workflow = { ...latest.snapshot, backendRevision: latest.revision };
-            return {
-              ...result(
-                workflow,
-                true,
-                rootUi,
-                `The fix handoff completed, but its tab could not be opened: ${conciseError(error)} Use open_multi_review_fix after ensuring the environment is ready and has a free tab.`,
-              ),
-              outcome: "partial",
-            };
           }
-        }
-        try {
-          return result(
-            workflow,
-            true,
-            await openMultiReviewTab(context.storage, workflow, surface),
-          );
-        } catch (error) {
-          const latest = await context.storage.getMultiReviewWorkflow(id).catch(() => null);
-          if (latest && isMultiReviewWorkflow(latest.snapshot))
-            workflow = { ...latest.snapshot, backendRevision: latest.revision };
-          return result(
-            workflow,
-            true,
-            { status: "unavailable" },
-            surface === "fix"
-              ? `The fix session tab could not be opened: ${conciseError(error)} Wait for any pending handoff, ensure the environment is ready and has a free tab, then retry open_multi_review_fix. No turn was dispatched.`
-              : `The review tab could not be opened: ${conciseError(error)} Ensure the environment is ready and has a free tab, then retry open_multi_review. No workflow was started or cancelled.`,
-          );
-        }
+        });
       },
     );
   }

@@ -95,11 +95,14 @@ async function response(
   options: {
     startsWork?: boolean;
     launchInput?: ReviewLaunchInput;
+    /** The review runs on another node. */
+    nodeId?: string;
   } = {},
 ) {
   const summary = {
     ...value,
     workflow: workflowSummary(value.workflow as unknown as Record<string, unknown>),
+    ...(options.nodeId ? { nodeId: options.nodeId } : {}),
     // Launching or addressing starts work the coordinator will hear back about.
     ...(options.startsWork && value.outcome !== "partial"
       ? await workflowStatusWakeResult(invoke)
@@ -115,11 +118,28 @@ async function response(
   };
 }
 
+const nodeId = z
+  .string()
+  .trim()
+  .min(1)
+  .max(200)
+  .optional()
+  .describe(
+    "Optional: a nodeId from list_nodes, for a review on that node's copy of this project. Omit for this node.",
+  );
+
 export function registerControlReviewActions(
   server: McpServer,
   invoke: ControlMcpInvoker,
   scope: CoordinatorControlScope,
 ) {
+  /** `nodeId` when it names another node; this node's own ID acts locally. */
+  const otherNode = async (value: string | undefined): Promise<string | null> => {
+    if (!value) return null;
+    const status = await invoke<{ nodeId?: unknown }>("get_node_status");
+    return status?.nodeId === value ? null : value;
+  };
+
   server.registerTool(
     "launch_multi_review",
     {
@@ -155,6 +175,7 @@ export function registerControlReviewActions(
           autoPr: z.boolean().optional().describe(AUTO_PR_FIELD_DESCRIPTION),
           targetBranch: z.string().trim().min(1).max(500).optional(),
           reviewInstruction: z.string().max(100_000).optional(),
+          nodeId,
         })
         .strict(),
       annotations: {
@@ -164,15 +185,23 @@ export function registerControlReviewActions(
         openWorldHint: true,
       },
     },
-    async (input) =>
-      response(
-        await invoke<MultiReviewActionResult>("launch_coordinator_multi_review_action", {
-          scope,
-          input,
-        }),
+    async ({ nodeId: requestedNode, ...input }) => {
+      const node = await otherNode(requestedNode);
+      return response(
+        node
+          ? await invoke<MultiReviewActionResult>("launch_coordinator_node_multi_review", {
+              scope,
+              nodeId: node,
+              input,
+            })
+          : await invoke<MultiReviewActionResult>("launch_coordinator_multi_review_action", {
+              scope,
+              input,
+            }),
         invoke,
-        { startsWork: true, launchInput: input },
-      ),
+        { startsWork: true, launchInput: input, ...(node ? { nodeId: node } : {}) },
+      );
+    },
   );
 
   for (const [name, command, title] of [
@@ -200,7 +229,7 @@ export function registerControlReviewActions(
           name === "address_multi_review"
             ? "Complete Address findings action: open the root review, persist an idempotent fix handoff, then publish Fix after dispatch. The foreground action selects Fix, while background retry or restart recovery preserves current focus. A pending result means queued, not delivered; inspect get_multi_review for addressPromptPending/presentationError and use open_multi_review_fix for presentation recovery. Adopt another conversation's associated workflow first; unassociated workflows in this project remain addressable."
             : `${title}. Complete durable UI action; no workflow or turn is launched. Works in inactive environments and survives reload. Adopt workflows owned by another conversation first. Inspect outcome/ui/recovery for presentation failure.`,
-        inputSchema: z.object({ workflowId: z.string().trim().min(1).max(200) }).strict(),
+        inputSchema: z.object({ workflowId: z.string().trim().min(1).max(200), nodeId }).strict(),
         annotations: {
           readOnlyHint: false,
           destructiveHint: name === "address_multi_review",
@@ -208,10 +237,27 @@ export function registerControlReviewActions(
           openWorldHint: false,
         },
       },
-      async ({ workflowId }) =>
-        response(await invoke<MultiReviewActionResult>(command, { scope, workflowId }), invoke, {
-          startsWork: name === "address_multi_review",
-        }),
+      async ({ workflowId, nodeId: requestedNode }) => {
+        const node = await otherNode(requestedNode);
+        const surface =
+          name === "open_multi_review"
+            ? "root"
+            : name === "open_multi_review_fix"
+              ? "fix"
+              : "address";
+        return response(
+          node
+            ? await invoke<MultiReviewActionResult>("coordinator_node_multi_review_surface", {
+                scope,
+                nodeId: node,
+                workflowId,
+                surface,
+              })
+            : await invoke<MultiReviewActionResult>(command, { scope, workflowId }),
+          invoke,
+          { startsWork: name === "address_multi_review", ...(node ? { nodeId: node } : {}) },
+        );
+      },
     );
   }
 }

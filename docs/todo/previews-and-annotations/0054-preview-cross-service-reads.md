@@ -137,7 +137,7 @@ through `publicPort` remain unqualified.
   `mise run test` (803 s, host load 42 to 75) failed only in owners that do
   not import the changed code (environment move, coordinator fixture digest,
   Codex delayed retry); each passed when rerun alone. Recorded as
-  [0694](../../tests/flaky-tests/aggregate-validation-runs/0694-cross-service-reads-validation.md).
+  [0696](../../tests/flaky-tests/aggregate-validation-runs/0696-cross-service-reads-validation.md).
 - Tailscale Serve, source only (not a live run): in `tailscale/tailscale`
   `main` at `f8ad538a`, `ipn/ipnlocal/serve.go` proxies through
   `httputil.ReverseProxy` with a `Rewrite` that sets `X-Forwarded-Host`,

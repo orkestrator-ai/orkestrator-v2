@@ -1,6 +1,6 @@
 # Cross-service read policy (0054) validation under aggregate load
 
-- **ID:** 0694
+- **ID:** 0696
 - **Status:** open
 - **Date observed:** 2026-10-23.
 - **Baseline:** `062971245` with the 0054 read-policy change (`packages/protocol/src/preview-header-policy.ts`, `apps/backend/src/preview-publication.ts` and their tests) in the working tree.

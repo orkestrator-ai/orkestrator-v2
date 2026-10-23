@@ -15,4 +15,4 @@
 
 ## Cross-service read policy validation recurrence — 2026-10-23
 
-`mise run test` with the 0054 change (no bridge source changes) failed this case and three neighbouring `at-most-once dispatch` cases at host load about 43. The unchanged owning file passed alone in 10.6 s (`codex-runtime-prompt-alone`). Details in [0694](../aggregate-validation-runs/0694-cross-service-reads-validation.md). No assertion, timeout or skip changed.
+`mise run test` with the 0054 change (no bridge source changes) failed this case and three neighbouring `at-most-once dispatch` cases at host load about 43. The unchanged owning file passed alone in 10.6 s (`codex-runtime-prompt-alone`). Details in [0696](../aggregate-validation-runs/0696-cross-service-reads-validation.md). No assertion, timeout or skip changed.

@@ -142,4 +142,4 @@ The unchanged owning file passed alone (48 pass, 2.3 s, after failing twice more
 
 ## Cross-service read policy validation recurrence — 2026-10-23
 
-`mise run test` with the 0054 change (no desktop source changes) timed out at 5022.15 ms with `git rev-parse exited -1` between tests, at host load about 43. The owning file failed alone once more (5022.78 ms, `git rev-parse` exited 128: "Unable to read current working directory") and then passed alone in 5.6 s (`coordinator-live-alone-2`). Details in [0694](../aggregate-validation-runs/0694-cross-service-reads-validation.md). No assertion, timeout or skip changed.
+`mise run test` with the 0054 change (no desktop source changes) timed out at 5022.15 ms with `git rev-parse exited -1` between tests, at host load about 43. The owning file failed alone once more (5022.78 ms, `git rev-parse` exited 128: "Unable to read current working directory") and then passed alone in 5.6 s (`coordinator-live-alone-2`). Details in [0696](../aggregate-validation-runs/0696-cross-service-reads-validation.md). No assertion, timeout or skip changed.

@@ -209,8 +209,22 @@ export class NodeCoordination {
       throw new Error("Expected a body of at most 32 KiB.");
     const requestId =
       typeof args.requestId === "string" ? args.requestId.slice(0, 200) : randomUUID();
+    const environment = await this.options.storage.getEnvironment(toEnvironmentId);
+    if (!environment) throw new Error("That environment does not exist on this node.");
+    // The attached command node's coordinator, authenticated by the node link:
+    // its mail is a delegation in this environment's project and wakes the
+    // agent, as a coordinator's on this node would.
     const message = await this.options.storage.sendAgentMail(
-      { kind: "external" },
+      {
+        kind: "node",
+        nodeId: controllerId,
+        nodeName: controller.displayName,
+        role: "coordinator",
+        projectId: environment.projectId,
+        environmentId: mailbox.coordinatorEnvironmentId,
+        tabId: mailbox.coordinatorTabId,
+        title: "Project coordinator",
+      },
       {
         requestId: `node:${controllerId}:${requestId}`.slice(0, 256),
         toEnvironmentId,
@@ -218,6 +232,7 @@ export class NodeCoordination {
         ...(typeof args.subject === "string" ? { subject: args.subject.slice(0, 200) } : {}),
         body: describeCoordinatorMail(body, controller.displayName),
       },
+      { newDelegation: true },
     );
     await this.leafMail.recordThread(message.id, mailbox);
     // An environment the coordinator talks to reports back to it.
@@ -273,22 +288,32 @@ export class NodeCoordination {
     subject?: string;
     body: string;
     requestId: string;
+    /** A leaf agent; absent for this node's own notices. */
+    from?: {
+      nodeId: string;
+      nodeName: string;
+      environmentId: string;
+      tabId: string;
+      environmentName?: string;
+    };
   }): Promise<void> {
     const storage = this.options.storage;
     let address = input.toCoordinator;
+    let projectId: string | undefined;
     if (address) {
       const workspaces = await storage.listCoordinatorWorkspaces();
-      const valid = workspaces.some((workspace) =>
+      const owner = workspaces.find((workspace) =>
         workspace.conversations.some(
           (conversation) =>
             coordinatorRuntimeId(workspace.id, conversation.id) === address!.environmentId &&
             conversation.tabId === address!.tabId,
         ),
       );
-      if (!valid)
+      if (!owner)
         throw Object.assign(new Error("That destination is not a coordinator conversation."), {
           code: "no-coordinator",
         });
+      projectId = owner.projectId;
     }
     if (!address) {
       const projects = await storage.loadProjects();
@@ -308,9 +333,24 @@ export class NodeCoordination {
         });
       }
       address = { environmentId: coordinatorRuntimeId(workspace.id, main.id), tabId: main.tabId };
+      projectId = workspace.projectId;
     }
+    // A worker on a node this one controls reports like a worker here: the
+    // node link authenticates it, it wakes the coordinator, and while the
+    // coordinator waits on that worker its report is held for the turn's end.
     await storage.sendAgentMail(
-      { kind: "external" },
+      input.from && projectId
+        ? {
+            kind: "node",
+            nodeId: input.from.nodeId,
+            nodeName: input.from.nodeName,
+            role: "agent",
+            projectId,
+            environmentId: input.from.environmentId,
+            tabId: input.from.tabId,
+            title: input.from.environmentName ?? null,
+          }
+        : { kind: "external" },
       {
         requestId: input.requestId,
         toEnvironmentId: address.environmentId,

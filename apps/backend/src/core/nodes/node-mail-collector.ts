@@ -31,6 +31,14 @@ export interface CollectorDeps {
     subject?: string;
     body: string;
     requestId: string;
+    /** The agent that sent it, on its node: node mail is authenticated by the link. */
+    from: {
+      nodeId: string;
+      nodeName: string;
+      environmentId: string;
+      tabId: string;
+      environmentName?: string;
+    };
   }): Promise<void>;
 }
 
@@ -130,6 +138,13 @@ export class NodeMailCollector {
             body: describeLeafMail(item, { nodeId, name }),
             // Stable per item, so a redelivery after a lost ack is deduplicated.
             requestId: `node:${nodeId}:${item.seq}`,
+            from: {
+              nodeId,
+              nodeName: name,
+              environmentId: item.fromEnvironmentId,
+              tabId: item.fromTabId,
+              ...(item.fromEnvironmentName ? { environmentName: item.fromEnvironmentName } : {}),
+            },
           });
           delivered.push(item.seq);
           if (!failed) deliveredPrefix = item.seq;

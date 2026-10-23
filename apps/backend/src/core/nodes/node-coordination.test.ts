@@ -65,6 +65,16 @@ describe("CO-05/UP-02 coordinator mail to and from a leaf agent", () => {
     );
     expect(incoming.body).toContain("From the coordinator on Office desktop");
     expect(incoming.body).toContain("Please report your status.");
+    // The node link authenticates it: same-project coordinator mail that wakes the agent.
+    expect(incoming.from).toMatchObject({
+      kind: "node",
+      role: "coordinator",
+      nodeId: "bk_cmd",
+      nodeName: "Office desktop",
+    });
+    expect(incoming.trust).toBe("same-project");
+    expect(incoming.route).toBe("coordinator");
+    expect(incoming.placement).toBe("pending-inject");
 
     // The agent answers "coordinator": it goes to the command node that asked.
     const router = world.storage.nodeMailRouter!;
@@ -186,6 +196,102 @@ describe("UP-02/CO-05 collected leaf mail reaches the coordinator on the command
     );
     expect(message.body).toContain('Reply with send_message and nodeId "bk_leaf"');
     expect(message.body).toContain("All tests pass.");
+    // Authenticated by the node link: it wakes the coordinator like a local worker's report.
+    expect(message.from).toMatchObject({
+      kind: "node",
+      role: "agent",
+      nodeId: "bk_leaf",
+      environmentId: "leaf-env",
+      tabId: "startup-agent",
+    });
+    expect(message.trust).toBe("same-project");
+    expect(message.placement).toBe("pending-inject");
+  });
+
+  test("a report from a leaf worker the coordinator is waiting on is held until the delegation settles", async () => {
+    const world = await MailWorld.create();
+    worlds.push(world);
+    const main = await world.main();
+    const association = await world.storage.saveCoordinatorWorkflowAssociation({
+      id: "remote-launch",
+      projectId: world.projectId,
+      coordinatorId: world.coordinatorId,
+      conversationId: main.conversationId!,
+      kind: "environment",
+      resourceId: "leaf-env",
+      nodeId: "bk_leaf",
+      requestId: "launch-remote",
+      createdAt: new Date().toISOString(),
+    });
+    await world.storage.openCoordinatorDelegation(association.id, "startup-agent");
+    let collected = false;
+    const link = {
+      connected: true,
+      invoke: async <T>(command: string): Promise<T> => {
+        if (command === "collect_node_outbox") {
+          const items = collected
+            ? []
+            : [
+                {
+                  seq: 1,
+                  requestId: "report-1",
+                  createdAt: "",
+                  fromEnvironmentId: "leaf-env",
+                  fromTabId: "startup-agent",
+                  toCoordinator: { environmentId: main.environmentId, tabId: main.tabId },
+                  body: "Done.",
+                  bytes: 5,
+                },
+              ];
+          collected = true;
+          return { items, more: false } as T;
+        }
+        return {} as T;
+      },
+    };
+    const instance = new NodeCoordination({
+      storage: world.storage,
+      nodes: {
+        listControllers: () => [],
+        mostRecentControllerId: () => undefined,
+        selfIdentity: async () => "bk_cmd",
+        link: () => link,
+        getNode: async () => ({ displayName: "Build box" }),
+        subscribe: () => () => undefined,
+        listNodes: async () => ({ nodes: [] }),
+      } as never,
+      portal: { readModel: { onNodeEvent: () => () => undefined } } as never,
+      invoke: async () => undefined as never,
+      emit: () => undefined,
+    });
+
+    await instance.collector.collect("bk_leaf" as never);
+
+    const inbox = await world.storage.getAgentMailMailbox(main.environmentId, main.tabId, {
+      limit: 10,
+    });
+    const report = inbox.messages.at(-1)!;
+    expect(report.placement).toBe("inject-held");
+    expect(report.placementReason).toBe("delegation-running");
+    expect(
+      await world.storage.hasDelegationHeldAgentMail(
+        association.id,
+        main.environmentId,
+        main.tabId,
+        "leaf-env",
+        "startup-agent",
+      ),
+    ).toBe(true);
+    // The turn end releases it as the wake.
+    expect(
+      await world.storage.releaseDelegationHeldAgentMail(
+        association.id,
+        main.environmentId,
+        main.tabId,
+        "leaf-env",
+        "startup-agent",
+      ),
+    ).toBe(1);
   });
 });
 

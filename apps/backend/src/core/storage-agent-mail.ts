@@ -38,6 +38,8 @@ import {
   type MailActor,
   type MailboxDescriptor,
   type MailboxKind,
+  type NodeMailActor,
+  nodeMailSenderKey,
 } from "@orkestrator/protocol/agent-mail";
 import { isAgentPlatform, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
@@ -145,7 +147,9 @@ export type AgentMailSender =
     }
   | { kind: "user" }
   | { kind: "system"; projectId: string; source: "workflow"; resourceId: string }
-  | { kind: "external" };
+  | { kind: "external" }
+  /** Mail across the node link; see `NodeMailActor`. */
+  | NodeMailActor;
 
 export type PendingAgentMailInject = {
   mailbox: MailboxDescriptor;
@@ -260,6 +264,7 @@ function budgetSenderOf(message: AgentMailMessage): string | null {
   if (message.from.kind === "tab" || message.from.kind === "coordinator") {
     return agentMailboxId(message.from.environmentId, message.from.tabId);
   }
+  if (message.from.kind === "node") return nodeMailSenderKey(message.from);
   return message.from.kind === "system" && message.statusBudgetKey ? message.statusBudgetKey : null;
 }
 
@@ -1304,6 +1309,9 @@ export class StorageAgentMail extends StorageDrafts {
               title: senderMailbox.title,
             };
       senderScope = `${sender.kind}:${senderMailbox.mailboxId}`;
+    } else if (sender.kind === "node") {
+      actor = { ...sender, title: sender.title ?? null };
+      senderScope = nodeMailSenderKey(sender);
     } else {
       actor = sender;
       senderScope =
@@ -1530,7 +1538,7 @@ export class StorageAgentMail extends StorageDrafts {
       const trust: AgentMailTrust =
         sender.kind === "user"
           ? "user"
-          : sender.kind === "system"
+          : sender.kind === "system" || sender.kind === "node"
             ? sender.projectId === recipient.projectId
               ? "same-project"
               : "cross-project"
@@ -1576,9 +1584,11 @@ export class StorageAgentMail extends StorageDrafts {
       // the default inject policy is. Only an explicit per-tab Off or a mute
       // stops them; the pair hop budget below bounds an unattended exchange.
       const routeWakes = agentMailRouteWakes(route, recipient.injectOverride, settings);
-      // The pair a routed budget counts: the sending tab, or for a workflow
-      // status notice the resource it reports on.
-      const budgetSenderId = senderMailbox?.mailboxId ?? statusBudgetKey;
+      // The pair a routed budget counts: the sending tab, the remote sender of
+      // node mail, or for a workflow status notice the resource it reports on.
+      const budgetSenderId =
+        senderMailbox?.mailboxId ??
+        (sender.kind === "node" ? nodeMailSenderKey(sender) : statusBudgetKey);
       const pairDepth =
         routeWakes && budgetSenderId
           ? latestMailboxPairDepth(store, budgetSenderId, destinationId, lineageCutoff)
@@ -1587,7 +1597,8 @@ export class StorageAgentMail extends StorageDrafts {
       // the pair budget. Follow-ups and main/side mail consume the same lineage.
       const startsBudget =
         options.newDelegation === true &&
-        sender.kind === "coordinator" &&
+        (sender.kind === "coordinator" ||
+          (sender.kind === "node" && sender.role === "coordinator")) &&
         recipient.ownerKind !== "coordinator";
       const pairEpoch = startsBudget
         ? store.revision
@@ -1628,9 +1639,15 @@ export class StorageAgentMail extends StorageDrafts {
        * through the mail tools and delivered in full on completion.
        */
       const holdingDelegation =
-        sender.kind === "tab" && recipient.ownerKind === "coordinator" && trust === "same-project"
+        (sender.kind === "tab" || (sender.kind === "node" && sender.role === "agent")) &&
+        recipient.ownerKind === "coordinator" &&
+        trust === "same-project"
           ? (await this.listOpenCoordinatorDelegations()).find(
               (association) =>
+                // A worker on another node is the same worker only on that node.
+                (sender.kind === "node"
+                  ? association.nodeId === sender.nodeId
+                  : association.nodeId === undefined) &&
                 association.resourceId === sender.environmentId &&
                 association.delegation?.workerTabId === sender.tabId &&
                 // The delegation has to belong to *this* conversation. A second
@@ -2130,7 +2147,7 @@ export class StorageAgentMail extends StorageDrafts {
           message.placementReason === COORDINATOR_DELEGATION_HOLD_REASON &&
           (message.coordinatorDelegationId === associationId ||
             message.coordinatorDelegationId === undefined) &&
-          message.from.kind === "tab" &&
+          (message.from.kind === "tab" || message.from.kind === "node") &&
           message.from.environmentId === workerEnvironmentId &&
           message.from.tabId === workerTabId &&
           !message.ackedAt &&
@@ -2315,7 +2332,7 @@ export class StorageAgentMail extends StorageDrafts {
             message.placementReason === COORDINATOR_DELEGATION_HOLD_REASON &&
             (message.coordinatorDelegationId === associationId ||
               message.coordinatorDelegationId === undefined) &&
-            message.from.kind === "tab" &&
+            (message.from.kind === "tab" || message.from.kind === "node") &&
             message.from.environmentId === workerEnvironmentId &&
             message.from.tabId === workerTabId &&
             !message.ackedAt &&
@@ -2931,7 +2948,8 @@ export class StorageAgentMail extends StorageDrafts {
           if (
             (message.from.kind !== "tab" &&
               message.from.kind !== "coordinator" &&
-              message.from.kind !== "system") ||
+              message.from.kind !== "system" &&
+              message.from.kind !== "node") ||
             message.from.projectId !== projectId
           ) {
             continue;
@@ -2972,7 +2990,8 @@ export class StorageAgentMail extends StorageDrafts {
               if (
                 (message.from.kind === "tab" ||
                   message.from.kind === "coordinator" ||
-                  message.from.kind === "system") &&
+                  message.from.kind === "system" ||
+                  message.from.kind === "node") &&
                 message.from.projectId === projectId
               ) {
                 message.body = "";

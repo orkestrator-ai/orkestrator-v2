@@ -235,6 +235,7 @@ export class StorageService extends StoragePublicOperations {
         if (
           duplicate.kind !== association.kind ||
           duplicate.resourceId !== association.resourceId ||
+          duplicate.nodeId !== association.nodeId ||
           duplicate.projectId !== association.projectId ||
           (duplicate.payloadHash &&
             association.payloadHash &&
@@ -268,6 +269,7 @@ export class StorageService extends StoragePublicOperations {
         if (
           existing.kind !== association.kind ||
           existing.projectId !== association.projectId ||
+          existing.nodeId !== association.nodeId ||
           existing.payloadHash !== association.payloadHash
         ) {
           throw new Error("Coordinator request id was reused with a different payload");
@@ -410,6 +412,7 @@ export class StorageService extends StoragePublicOperations {
           item.conversationId === association.conversationId &&
           item.kind === "environment" &&
           item.resourceId === association.resourceId &&
+          item.nodeId === association.nodeId &&
           item.delegation?.workerTabId === workerTabId &&
           item.delegation.state === "running",
       );

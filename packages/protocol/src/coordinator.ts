@@ -249,6 +249,12 @@ export interface CoordinatorWorkflowAssociation {
   conversationId?: string;
   kind: "environment" | "build-pipeline" | "multi-review";
   resourceId: string;
+  /**
+   * The node that holds the resource, when it is not this one: a worker
+   * environment or workflow a command node's coordinator started on a node
+   * it controls. Its ID is that node's, and it is read through the node link.
+   */
+  nodeId?: string;
   requestId: string;
   payloadHash?: string;
   /** Additional idempotency keys that reattached to this same resource. */

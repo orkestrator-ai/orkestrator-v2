@@ -485,9 +485,19 @@ export function SharedNativeAgentController({
   );
   const dismissNotice = useNativeNoticeDismissalStore((state) => state.dismiss);
   const reconcileNoticeDismissals = useNativeNoticeDismissalStore((state) => state.reconcile);
+  const [releasedDispatchNotices, setReleasedDispatchNotices] = useState<
+    Array<{ sessionIdentity: string; noticeId: string }>
+  >([]);
   const activeNoticeIds = useMemo(
-    () => (projection?.notices ?? []).map(nativeNoticeDismissalId),
-    [projection?.notices],
+    () => [
+      ...(projection?.notices ?? []).map(nativeNoticeDismissalId),
+      // A response can arrive before its notice. Keep these dismissals through
+      // intervening projections so a delayed notice cannot toast the same error.
+      ...releasedDispatchNotices
+        .filter((notice) => notice.sessionIdentity === noticeSessionIdentity)
+        .map((notice) => notice.noticeId),
+    ],
+    [noticeSessionIdentity, projection?.notices, releasedDispatchNotices],
   );
   const noticeToastRecordsRef = useRef(new Map<string, string>());
   const programmaticNoticeDismissalsRef = useRef(new Set<string>());
@@ -1255,6 +1265,23 @@ export function SharedNativeAgentController({
 
   const releaseRetiredRequestId = useCallback(
     (requestId: string, error: string) => {
+      // A synchronous response can release ownership before its projection
+      // arrives. Dismiss now so the notice cannot repeat the inline error.
+      const noticeId = nativeNoticeDismissalId({
+        kind: "warning",
+        message: error,
+        occurrenceId: dispatchOutcomeLostOccurrenceId(requestId),
+      });
+      setReleasedDispatchNotices((current) => [
+        ...current
+          .filter(
+            (notice) =>
+              notice.sessionIdentity !== noticeSessionIdentity || notice.noticeId !== noticeId,
+          )
+          .slice(-19),
+        { sessionIdentity: noticeSessionIdentity, noticeId },
+      ]);
+      dismissNotice(noticeSessionIdentity, noticeId);
       const current = useNativeComposeStore.getState().drafts.get(sessionKey);
       if (current?.requestId !== requestId) return;
       updateDraft(sessionKey, {
@@ -1263,7 +1290,7 @@ export function SharedNativeAgentController({
         submissionError: error,
       });
     },
-    [sessionKey, updateDraft],
+    [dismissNotice, noticeSessionIdentity, sessionKey, updateDraft],
   );
 
   /*
@@ -1763,6 +1790,9 @@ export function SharedNativeAgentController({
         }
         if (outcome.outcome === "rejected") setOptimisticPrompt(null);
         requestIdRetired = outcome.outcome === "rejected" && outcome.requestIdRetired === true;
+        if (outcome.outcome === "rejected" && requestIdRetired && dispatchRequestId) {
+          releaseRetiredRequestId(dispatchRequestId, outcome.error);
+        }
         keepTranscriptConfirmation = outcome.outcome === "unknown";
         /*
          * A backend-reported unknown is a parked dispatch: the
@@ -1842,6 +1872,7 @@ export function SharedNativeAgentController({
       projection?.slashCommands,
       recoverableDispatch,
       actionableDispatch,
+      releaseRetiredRequestId,
       selectedModel?.supportsImageInput,
       send,
       sendLocked,

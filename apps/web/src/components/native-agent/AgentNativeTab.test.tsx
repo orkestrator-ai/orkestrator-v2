@@ -4245,7 +4245,25 @@ describe("AgentNativeTab", () => {
               status: "action-required" as const,
             },
           }
-        : {}),
+        : {
+            retiredDispatch: {
+              requestId: "lost-1",
+              retiredAt: new Date().toISOString(),
+              message: lost,
+            },
+            notices: [
+              {
+                kind: "warning" as const,
+                message: lost,
+                occurrenceId: "dispatch-outcome-lost:lost-1",
+              },
+              {
+                kind: "warning" as const,
+                message: "Another retry notice",
+                occurrenceId: "unrelated-retry",
+              },
+            ],
+          }),
     }));
     let releaseRetry!: () => void;
     const retryGate = new Promise<void>((resolve) => {
@@ -4270,6 +4288,12 @@ describe("AgentNativeTab", () => {
     // Told plainly, never shown as delivered, and the text is kept to resend.
     expect(await screen.findByText(lost)).toBeTruthy();
     await waitFor(() =>
+      expect(
+        mockToastWarning.mock.calls.some(([message]) => message === "Another retry notice"),
+      ).toBe(true),
+    );
+    expect(mockToastWarning.mock.calls.some(([message]) => message === lost)).toBe(false);
+    await waitFor(() =>
       expect(screen.queryByRole("button", { name: "Retry send" }) === null).toBe(true),
     );
     const draft = useNativeComposeStore.getState().drafts.get(sessionKey);
@@ -4293,11 +4317,35 @@ describe("AgentNativeTab", () => {
       text: "Deploy the preview",
       requestId: "retired-direct",
     });
-    dispatchNativeAgentIntentMock.mockImplementationOnce(async () => ({
-      outcome: "rejected",
-      error: warning,
-      requestIdRetired: true,
+    let retired = false;
+    getNativeAgentProjectionMock.mockImplementation(async (projectionInput) => ({
+      ...(await defaultProjection(projectionInput)),
+      ...(retired
+        ? {
+            retiredDispatch: {
+              requestId: "retired-direct",
+              retiredAt: new Date().toISOString(),
+              message: warning,
+            },
+            notices: [
+              {
+                kind: "warning" as const,
+                message: warning,
+                occurrenceId: "dispatch-outcome-lost:retired-direct",
+              },
+              {
+                kind: "warning" as const,
+                message: "Another direct notice",
+                occurrenceId: "unrelated-direct",
+              },
+            ],
+          }
+        : {}),
     }));
+    dispatchNativeAgentIntentMock.mockImplementationOnce(async () => {
+      retired = true;
+      return { outcome: "rejected", error: warning, requestIdRetired: true };
+    });
     const mounted = render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
     fireEvent.keyDown(await screen.findByRole("textbox"), { key: "Enter" });
     await screen.findByText(warning);
@@ -4313,6 +4361,12 @@ describe("AgentNativeTab", () => {
     mounted.unmount();
     render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
     expect(await screen.findByText(warning)).toBeTruthy();
+    await waitFor(() =>
+      expect(
+        mockToastWarning.mock.calls.some(([message]) => message === "Another direct notice"),
+      ).toBe(true),
+    );
+    expect(mockToastWarning.mock.calls.some(([message]) => message === warning)).toBe(false);
     expect(screen.queryByRole("button", { name: "Retry send" }) === null).toBe(true);
     fireEvent.keyDown(await screen.findByRole("textbox"), { key: "Enter" });
     await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(2));

@@ -169,13 +169,51 @@ describe("command catalogue under load", () => {
     expect(cache.peek(KEY)?.commands).toHaveLength(100);
   });
 
-  test("a refresh requested after the queued one started gets a refresh of its own", async () => {
+  test("a third refresh arriving while the queued refresh runs gets its own inventory", async () => {
     const bridge = fakeCatalogueBridge(PAYLOAD_100);
     const { provider, counts } = counted(bridge);
     const { cache } = harness();
-    expect((await cache.refresh(KEY, "env-1", provider, "s1")).outcome).toBe("reloaded");
-    expect((await cache.refresh(KEY, "env-1", provider, "s1")).outcome).toBe("reloaded");
-    expect(counts.refreshes).toBe(2);
+    const gates = [deferred(), deferred(), deferred()];
+    const started = [deferred(), deferred(), deferred()];
+    const originalRefresh = provider.refreshCommands!;
+    let reloads = 0;
+    let active = 0;
+    let peak = 0;
+    provider.refreshCommands = async (sessionId) => {
+      const index = reloads++;
+      active += 1;
+      peak = Math.max(peak, active);
+      started[index]!.resolve();
+      await gates[index]!.promise;
+      try {
+        bridge.setPayload(bridgeCataloguePayload(syntheticCommandRows(index + 1)));
+        return await originalRefresh(sessionId);
+      } finally {
+        active -= 1;
+      }
+    };
+    const first = cache.refresh(KEY, "env-1", provider, "s1");
+    await started[0]!.promise;
+    const second = cache.refresh(KEY, "env-1", provider, "s1");
+    gates[0]!.resolve();
+    await started[1]!.promise;
+    const third = cache.refresh(KEY, "env-1", provider, "s1").then((outcome) => ({
+      outcome,
+      commands: cache.peek(KEY)?.commands,
+    }));
+    expect(reloads).toBe(2);
+    gates[1]!.resolve();
+    await started[2]!.promise;
+    expect((await first).outcome).toBe("reloaded");
+    expect((await second).outcome).toBe("reloaded");
+    gates[2]!.resolve();
+    const result = await third;
+    expect(result.outcome.outcome).toBe("reloaded");
+    expect(result.commands).toHaveLength(3);
+    expect(counts.refreshes).toBe(3);
+    expect(counts.reads).toBe(3);
+    expect(peak).toBe(1);
+    await cache.settle();
   });
 
   test("bridge requests per operation", async () => {

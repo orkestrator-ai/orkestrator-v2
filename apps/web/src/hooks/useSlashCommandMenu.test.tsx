@@ -209,6 +209,25 @@ describe("useSlashCommandMenu", () => {
     expect(result.current.isOpen).toBe(false);
   });
 
+  test.each(["escape", "close"])(
+    "reopens the same token after clearing a %s dismissal",
+    (dismiss) => {
+      const { result, rerender } = renderHook(
+        ({ text }) => useSlashCommandMenu({ commands: COMMANDS, text, setText: () => {} }),
+        { initialProps: { text: "/review" } },
+      );
+      act(() => {
+        if (dismiss === "escape") result.current.handleKeyDown(keyEvent("Escape"));
+        else result.current.closeMenu();
+      });
+      expect(result.current.isOpen).toBe(false);
+      rerender({ text: "" });
+      expect(result.current.isOpen).toBe(false);
+      rerender({ text: "/review" });
+      expect(result.current.isOpen).toBe(true);
+    },
+  );
+
   test("searches aliases and descriptions and ranks exact, prefix, alias, then substring", () => {
     const commands: SlashCommandOption[] = [
       { id: "d", name: "/deploy", description: "Ship a review build" },

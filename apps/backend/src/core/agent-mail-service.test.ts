@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -15,6 +15,10 @@ import { openBackendDatabase } from "./storage-stores.js";
 import { exportStoresAsLegacyJson, readStoredValue, seedStore } from "./storage-test-support.js";
 import { StorageService } from "./storage.js";
 import { NativeAgentService, nativeAgentSessionStorageKey } from "./native-agent-service.js";
+import {
+  AmbiguousPromptDispatchError,
+  type NativeAgentRuntimeProvider,
+} from "./agent-provider-contract.js";
 import type { PersistedNativeAgentSession } from "./models.js";
 
 /** Committed revision of the agent-mail store: any rewrite of the mail bumps it. */
@@ -1377,6 +1381,90 @@ describe("AgentMailService", () => {
         placementReason: "ambiguous",
       });
     } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("mail whose native dispatch is retired stays unknown and eventually fails closed", async () => {
+    const { storage, dataDir } = await fixture();
+    let journal: "unknown" | "lost" = "unknown";
+    const send = mock(async () => {
+      throw new AmbiguousPromptDispatchError("Acknowledgement lost");
+    });
+    const provider = {
+      agent: "claude",
+      createSession: async () => "mail-session",
+      registerSession: () => {},
+      send,
+      status: async () => "idle",
+      messages: async () => [],
+      abort: async () => {},
+      structured: async () => null,
+      dispatchStatus: async () => journal,
+    } as unknown as NativeAgentRuntimeProvider;
+    const native = new NativeAgentService(
+      storage,
+      async () => {
+        throw new Error("Unexpected invoke");
+      },
+      {
+        provider: async () => provider,
+      },
+    );
+    const reconciled: string[] = [];
+    const service = new AgentMailService(
+      storage,
+      {
+        sessionActivitySnapshot: () => "idle",
+        mailInjectPresence: async () => "idle",
+        dispatchMailInject: (input) => native.dispatchMailInject(input),
+        reconcileMailInject: async (input) => {
+          const outcome = await native.reconcileMailInject(input);
+          reconciled.push(outcome);
+          return outcome;
+        },
+      },
+      { dispatchMailInject: async () => ({ outcome: "accepted" }) },
+    );
+    try {
+      const message = await storage.sendAgentMail(
+        { kind: "tab", environmentId: "sender", projectId: "project", tabId: "agent" },
+        {
+          requestId: "retired-mail",
+          toEnvironmentId: "recipient",
+          toTabId: "agent",
+          body: "Fixture mail",
+        },
+      );
+      await service.init();
+      await service.drainInjects();
+      const sessions = await storage.listNativeAgentSessions();
+      const parked = sessions.find((session) => session.environmentId === "recipient")!;
+      expect(parked.pendingDispatch).toBeDefined();
+      const requestId = parked.pendingDispatch!.requestId;
+      journal = "lost";
+      await storage.retryAgentMailInject("recipient", "agent", message.id);
+      await service.drainInjects();
+      const retired = await storage.getNativeAgentSession(parked.key);
+      expect(retired?.pendingDispatch).toBeUndefined();
+      expect(retired?.retiredDispatch?.requestId).toBe(requestId);
+      expect(retired?.dispatchedRequestIds ?? []).not.toContain(requestId);
+      expect(reconciled).toEqual(["unknown"]);
+      for (let attempt = 0; attempt < AGENT_MAIL_MAX_VERIFY_ATTEMPTS - 1; attempt += 1) {
+        await storage.retryAgentMailInject("recipient", "agent", message.id);
+        await service.drainInjects();
+      }
+      expect(reconciled.length).toBeGreaterThan(1);
+      expect(reconciled.every((outcome) => outcome === "unknown")).toBe(true);
+      expect(await storage.getAgentMailMessage("recipient", "agent", message.id)).toMatchObject({
+        placement: "inject_failed",
+        placementReason: "ambiguous",
+      });
+      expect(send).toHaveBeenCalledTimes(1);
+    } finally {
+      await service.shutdown();
+      await native.shutdown();
+      storage.close();
       await fs.rm(dataDir, { recursive: true, force: true });
     }
   });

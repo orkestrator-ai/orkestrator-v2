@@ -61,6 +61,38 @@ describe("SlashCommandMenu", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  test("clicking the owning composer keeps the menu open, while another input dismisses it", () => {
+    const onClose = mock(() => {});
+    render(
+      <>
+        <div
+          role="textbox"
+          aria-label="Composer"
+          contentEditable
+          suppressContentEditableWarning
+          aria-controls="commands"
+        >
+          <span>/plan</span>
+        </div>
+        <input aria-label="Other composer" aria-controls="other-commands" />
+        <SlashCommandMenu
+          commands={[{ name: "/plan" }]}
+          selectedIndex={0}
+          onSelect={() => {}}
+          onClose={onClose}
+          listboxId="commands"
+        />
+      </>,
+    );
+    fireEvent.mouseDown(screen.getByRole("textbox", { name: "Composer" }));
+    fireEvent.mouseDown(
+      within(screen.getByRole("textbox", { name: "Composer" })).getByText("/plan"),
+    );
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.mouseDown(screen.getByRole("textbox", { name: "Other composer" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   test("stays open, and keeps focus in the composer, when the click lands inside", () => {
     const onClose = mock(() => {});
     render(

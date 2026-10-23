@@ -72,6 +72,7 @@ type Status = {
   flavor?: string;
   browserUrl?: string;
   testProject?: string;
+  dataDir?: string;
 };
 type Project = { id: string; name: string; localPath: string | null };
 type Environment = {
@@ -527,6 +528,19 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provide
           .poll(() => hasRow("/slashq-run"), { timeout: 120_000, message: "cold discovery" })
           .toBe(true);
 
+        await test.step("composer clicks keep the picker open and clearing resets dismissal", async () => {
+          await typeIntoComposer("/slashq-run");
+          await expect(picker).toBeVisible();
+          await input.click();
+          await expect(picker).toBeVisible();
+          await input.press("Escape");
+          await expect(picker).toBeHidden();
+          await typeIntoComposer("/slashq-run");
+          await expect(picker).toBeVisible();
+          await input.press("Escape");
+          await input.fill("");
+        });
+
         await test.step("a command sent just before switching away completes while inactive", async () => {
           await selectCommand("/slashq-run", "alpha");
           await sendDraft();
@@ -822,6 +836,107 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provide
           });
           return replies;
         };
+
+        await test.step("a lost acknowledgement retires automatically after restart and preserves the draft", async () => {
+          // Claude's durable claim has no recoverable outcome after restart.
+          // Codex keeps a dispatched outcome, so it cannot exercise retirement.
+          if (provider !== "claude") return;
+          const typed = "/slashq-added lost-ack";
+          await selectCommand("/slashq-added", "lost-ack");
+          const submission = await sendRestartDraft(typed);
+          await expect.poll(() => settled(), { timeout: 180_000 }).toBe(true);
+          await expect.poll(() => executions("lost-ack"), { timeout: 90_000 }).toBe(1);
+          await openEnvironment(other.name);
+          // Hold the browser away from this session. Model the lost backend
+          // acknowledgement at the persistence boundary, while retaining the
+          // real bridge's durable claim and performing a real process restart.
+          await restartBridge();
+          expect(status.dataDir).toBeTruthy();
+          const staged = spawnSync(
+            "bun",
+            [
+              path.join(import.meta.dirname, "slash-command-lost-ack.ts"),
+              status.dataDir!,
+              target.id,
+              provider,
+              sessionKey,
+              String(submission.requestId),
+              typed,
+            ],
+            { cwd: repositoryRoot, encoding: "utf8" },
+          );
+          expect(staged.status, staged.stderr).toBe(0);
+          const draftKey = `${provider}:${target.id}:${encodeURIComponent(sessionKey)}`;
+          await invoke("save_compose_draft", {
+            draftKey,
+            ownerType: "environment",
+            ownerId: target.id,
+            value: {
+              text: typed,
+              mentions: [],
+              attachments: [],
+              annotations: [],
+              metadata: { platform: provider, requestId: submission.requestId },
+            },
+          });
+          const readSession = () =>
+            invoke<{
+              pendingDispatch?: { requestId: string };
+              retiredDispatch?: { requestId: string };
+              dispatchedRequestIds?: string[];
+            }>("get_native_agent_session", identity);
+          expect((await readSession()).pendingDispatch?.requestId).toBe(submission.requestId);
+          await expect
+            .poll(
+              async () => {
+                const current = await projection();
+                if (current?.retiredDispatch?.requestId === submission.requestId) return "retired";
+                const stored = await readSession();
+                return JSON.stringify({
+                  phase: current?.turn.phase,
+                  hasError: Boolean(current?.turn.error),
+                  pending: stored.pendingDispatch?.requestId === submission.requestId,
+                  retired: stored.retiredDispatch?.requestId === submission.requestId,
+                  acknowledged: stored.dispatchedRequestIds?.includes(String(submission.requestId)),
+                });
+              },
+              { timeout: 90_000 },
+            )
+            .toBe("retired");
+          const retired = (await projection())!;
+          expect(retired.recoverableDispatch).toBeUndefined();
+          expect(retired.retiredDispatch!.message).toMatch(/could not confirm this message/);
+          await page.reload();
+          await openEnvironment(target.name);
+          await expect(input).toHaveText(typed, { timeout: 90_000 });
+          const warning = page.getByText(retired.retiredDispatch!.message, { exact: true });
+          await expect(warning).toBeVisible({ timeout: 30_000 });
+          await expect(page.getByRole("button", { name: "Retry send" })).toHaveCount(0);
+          await expect(
+            page
+              .locator("[data-sonner-toast]")
+              .filter({ hasText: retired.retiredDispatch!.message }),
+          ).toHaveCount(0);
+          const readDraft = () =>
+            invoke<{
+              value: {
+                text: string;
+                metadata?: { requestId?: string; pendingTranscriptConfirmation?: unknown };
+              };
+            } | null>("get_compose_draft", { draftKey });
+          await expect
+            .poll(async () => (await readDraft())?.value.metadata?.requestId, {
+              timeout: 30_000,
+            })
+            .toBeUndefined();
+          const draft = await readDraft();
+          expect(draft?.value.text).toBe(typed);
+          expect(draft?.value.metadata?.pendingTranscriptConfirmation).toBeUndefined();
+          const resent = await sendRestartDraft(typed);
+          expect(resent.requestId).not.toBe(submission.requestId);
+          await expect.poll(() => executions("lost-ack"), { timeout: 180_000 }).toBe(2);
+          await expect.poll(() => settled(), { timeout: 180_000 }).toBe(true);
+        });
 
         await test.step("a bridge restart right after Send never runs the command twice", async () => {
           await selectCommand("/slashq-added", "gamma");

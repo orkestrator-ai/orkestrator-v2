@@ -615,7 +615,6 @@ export function CreateEnvironmentDialog({
   }, [agentType, config, fastMode, model, modelCatalog, projectId, reasoningEffort]);
   const [buildIntent, setBuildIntent] = useState<BuildIntent>("prompt");
   const [featureName, setFeatureName] = useState("");
-  const [featureDescription, setFeatureDescription] = useState("");
   const [featureAcceptanceCriteria, setFeatureAcceptanceCriteria] = useState("");
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [customizeModels, setCustomizeModels] = useState(false);
@@ -652,6 +651,11 @@ export function CreateEnvironmentDialog({
   // or a catalogue arriving late, re-resolves the defaults instead of pinning
   // whatever was known on first render.
   const effectiveFeatureModels = featureModels ?? defaultFeatureModels;
+  /**
+   * The task text, shared by both intents: it is the prompt's "Initial Prompt"
+   * and the feature's "Description". Switching intent keeps what was typed, so
+   * the two fields always show the same text.
+   */
   const [initialPrompt, setInitialPrompt] = useState("");
   const [initialPromptAttachments, setInitialPromptAttachments] = useState<
     InitialPromptImageAttachment[]
@@ -792,7 +796,6 @@ export function CreateEnvironmentDialog({
     buildIntentRef.current = "prompt";
     setBuildIntent("prompt");
     setFeatureName("");
-    setFeatureDescription("");
     setFeatureAcceptanceCriteria("");
     setAdvancedOpen(false);
     setCustomizeModels(false);
@@ -1400,7 +1403,7 @@ export function CreateEnvironmentDialog({
           if (
             !projectId ||
             !onCreateFeatureBuild ||
-            (!featureName.trim() && !featureDescription.trim())
+            (!featureName.trim() && !initialPrompt.trim())
           ) {
             return;
           }
@@ -1409,7 +1412,7 @@ export function CreateEnvironmentDialog({
             featureBuildRequest({
               projectId,
               title: featureName,
-              description: featureDescription,
+              description: initialPrompt,
               acceptanceCriteria: featureAcceptanceCriteria,
               environmentType,
               environmentName,
@@ -1445,6 +1448,8 @@ export function CreateEnvironmentDialog({
           featureRequestIdRef.current = createUuid();
           featureAttemptIdentityRef.current = null;
           featureAttemptModelsRef.current = null;
+          // The description is the shared prompt text, so its draft is spent too.
+          draftPrompts.delete(projectId);
           resetForm();
           onOpenChange(false);
           return;
@@ -1496,7 +1501,6 @@ export function CreateEnvironmentDialog({
       buildIntent,
       effectiveFeatureModels,
       featureAcceptanceCriteria,
-      featureDescription,
       featureName,
       onCreateFeatureBuild,
       claudeMode,
@@ -2050,8 +2054,8 @@ export function CreateEnvironmentDialog({
                 onIntentChange={handleBuildIntentChange}
                 name={featureName}
                 onNameChange={setFeatureName}
-                description={featureDescription}
-                onDescriptionChange={setFeatureDescription}
+                description={initialPrompt}
+                onDescriptionChange={setInitialPrompt}
                 acceptanceCriteria={featureAcceptanceCriteria}
                 onAcceptanceCriteriaChange={setFeatureAcceptanceCriteria}
                 advancedOpen={advancedOpen}
@@ -2154,7 +2158,7 @@ export function CreateEnvironmentDialog({
               // A blank name is generated from the description by the backend.
               // At least one must be present so the ticket is identifiable.
               (buildIntent === "feature" &&
-                (!onCreateFeatureBuild || (!featureName.trim() && !featureDescription.trim())))
+                (!onCreateFeatureBuild || (!featureName.trim() && !initialPrompt.trim())))
             }
             className="h-9 px-5 font-bold shadow-[0_8px_24px_rgba(59,130,246,0.22)]"
           >

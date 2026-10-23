@@ -3696,6 +3696,58 @@ describe("CreateEnvironmentDialog feature builds", () => {
     expect(screen.queryByLabelText(/Initial Prompt/i) === null).toBe(true);
   });
 
+  test("shares the initial prompt text with the feature description in both directions", () => {
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+        onCreateFeatureBuild={mock(async () => {})}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText(/Initial Prompt/i), {
+      target: { value: "Add a dark mode toggle." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /A feature/ }));
+    const description = screen.getByLabelText(/^Description$/i) as HTMLTextAreaElement;
+    expect(description.value).toBe("Add a dark mode toggle.");
+
+    fireEvent.change(description, {
+      target: { value: "Add a dark mode toggle to the header." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /With a prompt/ }));
+    expect((screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement).value).toBe(
+      "Add a dark mode toggle to the header.",
+    );
+  });
+
+  test("submits the prompt text as the feature description", async () => {
+    const onCreate = mock(async () => {});
+    const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => true);
+    render(
+      <CreateEnvironmentDialog
+        open
+        projectId="project-1"
+        onOpenChange={() => {}}
+        onCreate={onCreate}
+        onCreateFeatureBuild={onCreateFeatureBuild}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText(/Initial Prompt/i), {
+      target: { value: "Add sign in with passkeys." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /A feature/ }));
+    const createButton = screen.getByRole("button", { name: "Create Environment" });
+    expect((createButton as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(createButton);
+
+    await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalledTimes(1));
+    expect(onCreate).not.toHaveBeenCalled();
+    expect(onCreateFeatureBuild.mock.calls[0]![0].description).toBe("Add sign in with passkeys.");
+  });
+
   test("submits the ticket to the feature build handler instead of creating an environment", async () => {
     const onCreate = mock(async () => {});
     const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => {});

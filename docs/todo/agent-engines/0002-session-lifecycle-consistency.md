@@ -186,7 +186,13 @@ check of Cursor's resume rows.
       (`native-agent-service-dispatch.ts`).
     - The interrupt was recorded against `dispatchedRequestIds.at(-1)`, the
       finished turn before, because the starting prompt is only in
-      `pendingDispatch`. It now names the starting prompt.
+      `pendingDispatch`. It now names the starting prompt, and storage
+      records an interrupt for a pending dispatch too, so one whose
+      acknowledgement is lost keeps its Stop across reconciliation and a
+      restart. The in-memory fence is dropped only once the marker is durable.
+    - Stop shows from the moment a dispatch starts (the controller's
+      `isTurnActive` includes `isDispatching`), not only once the projection
+      reports a running turn.
     `native-agent-service-turn-outcome.test.ts` ("Stop reaches a prompt the
     provider has not accepted yet…") and `NativeComposeBar.test.tsx` cover
     the backend and renderer halves.

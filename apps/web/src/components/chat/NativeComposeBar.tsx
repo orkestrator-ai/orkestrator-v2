@@ -349,7 +349,10 @@ export function NativeComposeBar({
               <button
                 type="button"
                 onClick={() => void onStop?.()}
-                disabled={disabled || !onStop}
+                // Not `disabled`: that locks input while a prompt is being
+                // submitted, and a prompt the provider has not accepted yet is
+                // one a user may need to stop. Escape stops it too.
+                disabled={!onStop}
                 className="flex h-7 w-7 items-center justify-center rounded-lg bg-destructive text-white transition-colors hover:bg-destructive/85 disabled:cursor-not-allowed disabled:opacity-50"
                 title="Stop current query"
               >

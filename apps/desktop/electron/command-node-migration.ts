@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import type { NodeImportEntry } from "@orkestrator/protocol/command-nodes";
 import { isProvisionalBackendId } from "@orkestrator/protocol/federation";
 
 import type { SavedMachineExport } from "./connection-manager.js";
@@ -40,34 +41,7 @@ export async function importSavedMachinesOnce(options: {
     return "already-imported";
   }
   const machines = await options.machines();
-  const entries = machines.map(({ backend, token }) => {
-    const verified =
-      backend.verifiedInstallationId && !isProvisionalBackendId(backend.verifiedInstallationId)
-        ? backend.verifiedInstallationId
-        : undefined;
-    return {
-      importedFrom: backend.id,
-      fallbackName: (backend.localAlias ?? backend.fallbackName).slice(0, 64) || "Machine",
-      ...(verified ? { verifiedNodeId: verified } : {}),
-      routes: backend.routes.map((route) =>
-        route.kind === "https"
-          ? { id: route.id, kind: "https", enabled: route.enabled, origin: route.origin }
-          : {
-              id: route.id,
-              kind: "ssh",
-              enabled: route.enabled,
-              destination: route.destination,
-              ...(route.sshPort ? { sshPort: route.sshPort } : {}),
-              ...(route.identityFile ? { identityFile: route.identityFile } : {}),
-              remoteGatewayPort: route.remoteGatewayPort,
-            },
-      ),
-      routeOrder: backend.routeOrder,
-      token,
-      enabled: backend.autoConnect,
-      ...(backend.profileCache ? { profileCache: backend.profileCache } : {}),
-    };
-  });
+  const entries = machines.map(savedMachineImportEntry);
   const result =
     entries.length === 0
       ? { imported: 0, skipped: 0, needsCredential: 0 }
@@ -83,4 +57,34 @@ export async function importSavedMachinesOnce(options: {
   );
   await rename(temporary, marker);
   return result;
+}
+
+/** A saved machine as a command node's registry receives it, token included. */
+export function savedMachineImportEntry({ backend, token }: SavedMachineExport): NodeImportEntry {
+  const verified =
+    backend.verifiedInstallationId && !isProvisionalBackendId(backend.verifiedInstallationId)
+      ? backend.verifiedInstallationId
+      : undefined;
+  return {
+    importedFrom: backend.id,
+    fallbackName: (backend.localAlias ?? backend.fallbackName).slice(0, 64) || "Machine",
+    ...(verified ? { verifiedNodeId: verified } : {}),
+    routes: backend.routes.map((route) =>
+      route.kind === "https"
+        ? { id: route.id, kind: "https" as const, enabled: route.enabled, origin: route.origin }
+        : {
+            id: route.id,
+            kind: "ssh" as const,
+            enabled: route.enabled,
+            destination: route.destination,
+            ...(route.sshPort ? { sshPort: route.sshPort } : {}),
+            ...(route.identityFile ? { identityFile: route.identityFile } : {}),
+            remoteGatewayPort: route.remoteGatewayPort,
+          },
+    ),
+    routeOrder: backend.routeOrder,
+    token,
+    enabled: backend.autoConnect,
+    ...(backend.profileCache ? { profileCache: backend.profileCache } : {}),
+  };
 }

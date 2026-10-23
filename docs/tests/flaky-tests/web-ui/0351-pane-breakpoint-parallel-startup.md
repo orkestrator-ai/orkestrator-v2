@@ -56,3 +56,8 @@ No assertion, timeout or skip changed.
 ## Agent-mail main merge recurrence — 2026-10-19
 
 The aggregate failed this owner and its unchanged owning file passed with one worker. Exact commands, symptoms, counts, timings and bounded evidence are recorded in [0500](../aggregate-validation-runs/0500-agent-mail-main-merge-validation.md). No implementation, assertion, timeout or skip changed.
+
+
+## Session lifecycle review recurrence — 2026-10-23
+
+Both mobile pane-tree variants again found zero `.xterm` elements at their five-second startup deadline in the nine-worker component suite. The complete unchanged owner passed with one worker on a separate fixture port. Exact aggregate counts, owner command, duration, and evidence are recorded in [0493](../aggregate-validation-runs/0493-component-browser-aggregate-timeout-cluster.md#session-lifecycle-review-validation--2026-10-23). No assertion, timeout, or skip changed.

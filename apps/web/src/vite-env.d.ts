@@ -106,6 +106,17 @@ interface Window {
       use(
         connectionId: string,
       ): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
+      /** Electron only: what making a machine the command node would hand over. */
+      previewCommandHandover?(
+        targetConnectionId: string,
+      ): Promise<import("@orkestrator/protocol/command-nodes").CommandHandoverPreviewResult>;
+      /** Electron only: make a machine the command node and switch this window to it. */
+      handOverCommand?(input: {
+        targetConnectionId: string;
+        nodeIds?: string[];
+        connectionIds: string[];
+        includeSelf: boolean;
+      }): Promise<import("@orkestrator/protocol/command-nodes").CommandHandoverResult | null>;
       forget(
         connectionId: string,
       ): Promise<import("@orkestrator/protocol/connections").ConnectionList>;

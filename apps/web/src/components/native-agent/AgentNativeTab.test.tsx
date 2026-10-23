@@ -3125,6 +3125,121 @@ describe("AgentNativeTab", () => {
     await waitFor(() => expect(flushPaneLayoutNowMock).toHaveBeenCalledTimes(1));
   });
 
+  function seedUnassignedResumeTab(tabId: string) {
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: [...AGENT_PLATFORMS],
+    });
+    usePaneLayoutStore.setState({
+      environments: new Map([
+        [
+          "env-1",
+          {
+            root: {
+              kind: "leaf",
+              id: "default",
+              tabs: [
+                { id: tabId, type: "agent-native", nativeAgentData: { environmentId: "env-1" } },
+              ],
+              activeTabId: tabId,
+            },
+            activePaneId: "default",
+            containerId: null,
+          },
+        ],
+      ]),
+      hydration: new Map([["env-1", "done"]]),
+      activeEnvironmentId: "env-1",
+    });
+  }
+
+  async function openGrokResumePicker(tabId: string) {
+    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    fireEvent.click(screen.getByRole("button", { name: "Resume Session" }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /Grok Build/ }));
+    return await screen.findByRole("dialog", { name: "Resume Session" });
+  }
+
+  test("a tab opened only to resume creates no session before the choice", async () => {
+    const calls: string[] = [];
+    ensureNativeAgentSessionMock.mockImplementation(async (input) => {
+      calls.push("ensure");
+      return defaultEnsureNativeAgentSession(input);
+    });
+    resumeNativeAgentSessionMock.mockImplementationOnce(async (input) => {
+      calls.push(`resume ${input.providerSessionId}`);
+      return {
+        ...(await defaultProjection({ agent: input.agent!, environmentId: input.environmentId })),
+        sessionId: input.providerSessionId,
+        generation: `resumed:${input.providerSessionId}`,
+      };
+    });
+    listNativeAgentResumableSessionsMock.mockImplementation(
+      async () =>
+        [
+          {
+            sessionId: "grok-earlier",
+            title: "Earlier work",
+            updatedAt: "2026-10-01T00:00:00.000Z",
+          },
+        ] as never,
+    );
+    seedUnassignedResumeTab("tab-resume-only");
+
+    const picker = await openGrokResumePicker("tab-resume-only");
+    expect(screen.getByText("Choose a Grok Build session to resume.")).toBeTruthy();
+    // The list is read without a session of the tab's own.
+    await waitFor(() => expect(listNativeAgentResumableSessionsMock).toHaveBeenCalled());
+    expect(calls).toEqual([]);
+
+    fireEvent.click(await within(picker).findByRole("button", { name: /Earlier work/ }));
+
+    await waitFor(() =>
+      expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.nativeAgentData?.sessionId).toBe(
+        "grok-earlier",
+      ),
+    );
+    await waitFor(() => expect(adoptNativeAgentSessionMock).toHaveBeenCalled());
+    expect(calls).toEqual(["resume grok-earlier"]);
+    // No composer exists yet, so no controls: an all-empty update is refused.
+    const resumed = resumeNativeAgentSessionMock.mock.calls[0]?.[0] as
+      | { controls?: unknown }
+      | undefined;
+    expect(resumed).toBeDefined();
+    expect(resumed?.controls).toBeUndefined();
+  });
+
+  test("dismissing the resume picker starts the tab's own session", async () => {
+    seedUnassignedResumeTab("tab-resume-dismissed");
+
+    const picker = await openGrokResumePicker("tab-resume-dismissed");
+    expect(ensureNativeAgentSessionMock).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(picker, { key: "Escape" });
+
+    await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalledTimes(1));
+    expect(ensureNativeAgentSessionMock.mock.calls[0]?.[0]).toMatchObject({
+      agent: "grok",
+      environmentId: "env-1",
+    });
+    expect(resumeNativeAgentSessionMock).not.toHaveBeenCalled();
+  });
+
+  test("a failed resume falls back to the tab's own session", async () => {
+    listNativeAgentResumableSessionsMock.mockImplementation(
+      async () => [{ sessionId: "grok-gone", title: "Gone" }] as never,
+    );
+    resumeNativeAgentSessionMock.mockImplementationOnce(async () => {
+      throw new Error("Grok session is gone");
+    });
+    seedUnassignedResumeTab("tab-resume-failed");
+
+    const picker = await openGrokResumePicker("tab-resume-failed");
+    fireEvent.click(await within(picker).findByRole("button", { name: /Gone/ }));
+
+    await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalledTimes(1));
+    expect(resumeNativeAgentSessionMock).toHaveBeenCalledTimes(1);
+  });
+
   test("renders the backend-normalized OpenCode catalogue in a new tab", async () => {
     useEnvironmentStore.setState({
       environments: [
@@ -10416,6 +10531,11 @@ describe("AgentNativeTab", () => {
         ) === null,
       ).toBe(true);
       expect(screen.queryByText("Earlier messages are not shown.") === null).toBe(true);
+      expect(
+        screen.queryByText(
+          "Earlier messages in this conversation are not available here. The conversation itself is kept.",
+        ) === null,
+      ).toBe(true);
       fireEvent.click(loadEarlierButton);
       await waitFor(() =>
         expect(
@@ -10502,7 +10622,13 @@ describe("AgentNativeTab", () => {
       });
       render(<AgentNativeTab tabId="tab-count-capped" data={identity("cursor")} isActive />);
 
-      expect(screen.queryByText("Earlier messages are not shown.") === null).toBe(true);
+      // No page can bring the start back, so the cut is said out loud rather
+      // than the remainder reading as the whole conversation.
+      expect(
+        await screen.findByText(
+          "Earlier messages in this conversation are not available here. The conversation itself is kept.",
+        ),
+      ).toBeTruthy();
       expect(
         screen.queryByText(
           "Earlier messages or tool activity were omitted to stay within the 16 MiB transcript limit.",
@@ -10521,7 +10647,13 @@ describe("AgentNativeTab", () => {
       });
       render(<AgentNativeTab tabId="tab-reasonless-cap" data={identity("cursor")} isActive />);
 
-      expect(screen.queryByText("Earlier messages are not shown.") === null).toBe(true);
+      // No page can bring the start back, so the cut is said out loud rather
+      // than the remainder reading as the whole conversation.
+      expect(
+        await screen.findByText(
+          "Earlier messages in this conversation are not available here. The conversation itself is kept.",
+        ),
+      ).toBeTruthy();
       expect(
         screen.queryByText(
           "Earlier messages or tool activity were omitted to stay within the 16 MiB transcript limit.",

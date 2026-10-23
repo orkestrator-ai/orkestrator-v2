@@ -19,6 +19,7 @@ import {
   Circle,
   Clock3,
   GitMerge,
+  GitPullRequest,
   Loader2,
   Pause,
   Square,
@@ -36,15 +37,17 @@ import {
   MULTI_REVIEW_SEVERITIES,
   flowEdgePath,
   multiReviewFlowLayout,
+  cleanReviewPrEdgePath,
   summarizeFlowEdges,
   type FlowRect,
   type MultiReviewFlowEdgeState,
   type MultiReviewFlowEdges,
   type MultiReviewFlowState,
 } from "./multi-review-flow";
+import { useMultiReviewFlowViewStore } from "@/stores/multiReviewFlowViewStore";
 import { FlowZoomControls, useFlowViewport } from "./MultiReviewFlowViewport";
 
-export type MultiReviewFlowNodeKind = "package" | "reviewer" | "consolidation" | "fix";
+export type MultiReviewFlowNodeKind = "package" | "reviewer" | "consolidation" | "fix" | "pr";
 
 /** Everything one node shows, plus how it opens and what its context menu holds. */
 export interface MultiReviewFlowNodeModel {
@@ -125,7 +128,9 @@ export function MultiReviewFlowStateIcon({
             ? GitMerge
             : kind === "fix"
               ? Wrench
-              : Circle;
+              : kind === "pr"
+                ? GitPullRequest
+                : Circle;
       return <Idle className={cn(iconClass, "text-muted-foreground/70")} />;
     }
   }
@@ -420,12 +425,23 @@ function isDashed(state: MultiReviewFlowEdgeState): boolean {
   return state === "pending" || state === "ready";
 }
 
-function FlowEdge({ id, d, state }: { id: string; d: string; state: MultiReviewFlowEdgeState }) {
+function FlowEdge({
+  id,
+  d,
+  state,
+  source,
+}: {
+  id: string;
+  d: string;
+  state: MultiReviewFlowEdgeState;
+  source?: string;
+}) {
   return (
     <>
       <path
         d={d}
         data-flow-edge={id}
+        data-flow-source={source}
         data-edge-state={state}
         className={EDGE_CLASS[state]}
         strokeWidth={2}
@@ -581,6 +597,7 @@ export interface MultiReviewFlowGraphProps {
   reviewerNodes: MultiReviewFlowNodeModel[];
   consolidationNode: MultiReviewFlowNodeModel;
   fixNode: MultiReviewFlowNodeModel;
+  prNode: MultiReviewFlowNodeModel;
   edges: MultiReviewFlowEdges;
   reviewLabel: string;
   /** The reviewer progress in full, for the review column's tooltip. */
@@ -605,19 +622,22 @@ export interface MultiReviewFlowGraphProps {
 
 /**
  * The pipeline as a left-to-right graph: package, the reviewer panel stacked
- * in one column, consolidation, then Fix. Below {@link FLOW_GRAPH_STACK_BELOW}
- * pixels it becomes a single column with straight connectors.
+ * in one column, consolidation, Fix, then the pull request. Below
+ * {@link FLOW_GRAPH_STACK_BELOW} pixels it becomes a single column with
+ * straight connectors.
  *
  * Nodes are tabs controlling the inspector: one tab stop for the graph, arrow
  * keys walk the pipeline in order, and Enter opens the node's session. The
  * graph zooms and pans inside its viewport (see `useFlowViewport`), and a node
- * reached from the keyboard is scrolled into view first.
+ * reached from the keyboard is scrolled into view first. When the selection
+ * moves to another stage, that stage is centred as far as the canvas scrolls.
  */
 export function MultiReviewFlowGraph({
   packageNode,
   reviewerNodes,
   consolidationNode,
   fixNode,
+  prNode,
   edges,
   reviewLabel,
   reviewTitle,
@@ -639,7 +659,7 @@ export function MultiReviewFlowGraph({
   // In fullscreen the viewport takes the overlay's height rather than its own.
   const [measureViewportHeight, viewportHeight] = useMeasuredHeight();
   const nodeRefs = useRef(new Map<string, HTMLButtonElement>());
-  const order = [packageNode, ...reviewerNodes, consolidationNode, fixNode];
+  const order = [packageNode, ...reviewerNodes, consolidationNode, fixNode, prNode];
   const stacked =
     layout === "stacked" ||
     (layout === undefined && measuredWidth !== null && measuredWidth < FLOW_GRAPH_STACK_BELOW);
@@ -720,9 +740,36 @@ export function MultiReviewFlowGraph({
     if (id === packageNode.id) return geometry.package;
     if (id === consolidationNode.id) return geometry.consolidation;
     if (id === fixNode.id) return geometry.fix;
+    if (id === prNode.id) return geometry.pr;
     const index = reviewerNodes.findIndex((node) => node.id === id);
     return index >= 0 ? geometry.reviewers[index] : undefined;
   };
+
+  // A new stage is centred once the viewport is measured, and again when the
+  // width changes, since that resets the scroll. On the first measurement a
+  // remembered view wins, so returning to the review keeps where it was left.
+  const selectedStage = order.find((node) => node.id === selectedId)?.kind;
+  const centredRef = useRef<{ key: string; stage: string | undefined; width: number } | null>(null);
+  const centerRef = useRef(() => {});
+  useLayoutEffect(() => {
+    centerRef.current = () => {
+      const previous = centredRef.current;
+      const last = previous?.key === viewKey ? previous : null;
+      if (stacked || viewportWidth === null) return;
+      centredRef.current = { key: viewKey, stage: selectedStage, width: viewportWidth };
+      if (last && last.stage === selectedStage && last.width === viewportWidth) return;
+      if (
+        !last &&
+        useMultiReviewFlowViewStore.getState().views.get(viewKey)?.width === viewportWidth
+      )
+        return;
+      const rect = nodeRect(selectedId);
+      if (rect) flowViewport.center(rect, { smooth: last?.width === viewportWidth });
+    };
+  });
+  useEffect(() => {
+    centerRef.current();
+  }, [selectedStage, viewportWidth, stacked, viewKey]);
 
   const handleKeyDown = (
     event: KeyboardEvent<HTMLButtonElement>,
@@ -861,9 +908,30 @@ export function MultiReviewFlowGraph({
               {connector(summarizeFlowEdges(edges.intoConsolidation), "into-consolidation")}
               <ColumnLabel>Consolidate</ColumnLabel>
               {renderNode(consolidationNode, undefined, "w-full")}
-              {connector(edges.intoFix, "into-fix")}
-              <ColumnLabel>Fix</ColumnLabel>
-              {renderNode(fixNode, undefined, "w-full")}
+              <div className="relative flex flex-col gap-1.5">
+                {connector(edges.intoFix, "into-fix")}
+                <ColumnLabel>Fix</ColumnLabel>
+                {renderNode(fixNode, undefined, "w-full")}
+                {edges.prSource === "consolidation" ? (
+                  <>
+                    <div
+                      aria-hidden="true"
+                      data-flow-edge="into-pr"
+                      data-flow-source="consolidation"
+                      data-edge-state={edges.intoPr}
+                      className={cn(
+                        "pointer-events-none absolute inset-y-0 left-1/2 w-[calc(50%+8px)] rounded-r-xl border-y-2 border-r-2",
+                        CONNECTOR_CLASS[edges.intoPr],
+                      )}
+                    />
+                    <div aria-hidden="true" className="h-5" />
+                  </>
+                ) : (
+                  connector(edges.intoPr, "into-pr")
+                )}
+              </div>
+              <ColumnLabel>PR</ColumnLabel>
+              {renderNode(prNode, undefined, "w-full")}
             </div>
           </div>
         </div>
@@ -953,9 +1021,20 @@ export function MultiReviewFlowGraph({
                 d={flowEdgePath(geometry.consolidation, geometry.fix)}
                 state={edges.intoFix}
               />
+              <FlowEdge
+                id="into-pr"
+                source={edges.prSource ?? "fix"}
+                d={
+                  edges.prSource === "consolidation"
+                    ? cleanReviewPrEdgePath(geometry.consolidation, geometry.pr)
+                    : flowEdgePath(geometry.fix, geometry.pr)
+                }
+                state={edges.intoPr}
+              />
               <Port rect={geometry.package} side="out" state={packageNode.state} />
               <Port rect={geometry.consolidation} side="in" state={consolidationNode.state} />
               <Port rect={geometry.fix} side="in" state={fixNode.state} />
+              <Port rect={geometry.pr} side="in" state={prNode.state} />
             </svg>
             <ColumnLabel style={{ position: "absolute", left: geometry.columns.prepare, top: 16 }}>
               Prepare
@@ -974,12 +1053,16 @@ export function MultiReviewFlowGraph({
             <ColumnLabel style={{ position: "absolute", left: geometry.columns.fix, top: 16 }}>
               Fix
             </ColumnLabel>
+            <ColumnLabel style={{ position: "absolute", left: geometry.columns.pr, top: 16 }}>
+              PR
+            </ColumnLabel>
             {renderNode(packageNode, place(geometry.package))}
             {reviewerNodes.map((node, index) =>
               renderNode(node, place(geometry.reviewers[index]!)),
             )}
             {renderNode(consolidationNode, place(geometry.consolidation))}
             {renderNode(fixNode, place(geometry.fix))}
+            {renderNode(prNode, place(geometry.pr))}
           </div>
         </div>
       </div>

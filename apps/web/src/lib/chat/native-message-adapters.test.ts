@@ -3940,7 +3940,7 @@ describe("coalesceAdjacentToolMessages", () => {
     ...extra,
   });
 
-  test("merges consecutive tool-only messages in the same minute into one tool group", () => {
+  test("merges consecutive tool-only messages into one tool group", () => {
     const rows = normalizeNativeMessages([
       toolMessage("m1", "2026-09-03T10:43:01.000Z", ["Read", "Read"]),
       toolMessage("m2", "2026-09-03T10:43:20.000Z", ["Todo Write"]),
@@ -3976,13 +3976,21 @@ describe("coalesceAdjacentToolMessages", () => {
     expect(rows.map((row) => row.id)).toEqual(["m1", "text", "m2"]);
   });
 
-  test("does not merge tool messages in different minutes", () => {
+  test("merges tool messages regardless of how far apart they are", () => {
     const rows = normalizeNativeMessages([
       toolMessage("m1", "2026-09-03T10:43:50.000Z", ["Grep"]),
       toolMessage("m2", "2026-09-03T10:44:05.000Z", ["Read"]),
+      toolMessage("m3", "2026-09-03T10:52:00.000Z", ["Bash"]),
     ]);
 
-    expect(rows.map((row) => row.id)).toEqual(["m1", "m2"]);
+    expect(rows.map((row) => row.id)).toEqual(["m1"]);
+    expect(rows[0]?.createdAt).toBe("2026-09-03T10:52:00.000Z");
+    expect(rows[0]?.latestSourceMessageId).toBe("m3");
+    const group = rows[0]?.parts[0];
+    expect(group?.type).toBe("tool-group");
+    if (group?.type === "tool-group") {
+      expect(group.parts).toHaveLength(3);
+    }
   });
 
   test("does not merge when models differ", () => {

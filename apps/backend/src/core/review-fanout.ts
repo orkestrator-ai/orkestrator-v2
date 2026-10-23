@@ -61,7 +61,10 @@ import {
   type ArtifactTurnDispatch,
   type WorkflowArtifactTurnOptions,
 } from "./workflow-artifact-turns.js";
-import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
+import type {
+  NativeAgentContextUsage,
+  NativeAgentExecutionPolicy,
+} from "@orkestrator/protocol/native-agent";
 import {
   AmbiguousPromptDispatchError,
   ProviderDispatchPreparationError,
@@ -306,6 +309,7 @@ export function promptWorktreeSnapshot(
 // Report provenance lives in review-fanout-provenance.ts; re-exported for owners.
 export {
   attributeReportFindings,
+  consolidationOverlap,
   consolidationReports,
   consolidationResultContext,
   deriveConsolidatedProvenance,
@@ -313,6 +317,13 @@ export {
 } from "./review-fanout-provenance.js";
 
 const NO_VALID_REPORT_ERROR = "No reviewer produced a valid report";
+
+/** The usage counters a reviewer record keeps from a provider observation. */
+type ReviewerObservedUsage = Pick<NativeAgentContextUsage, "sessionTokens" | "cacheReadTokens">;
+
+function usageCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
 
 /** Summarises why every reviewer failed, deduplicating a shared root cause. */
 export function reviewerFailureSummary(reviewers: readonly ReviewerRecord[]): string {
@@ -1079,6 +1090,7 @@ export class ReviewFanoutRunner {
       reviewer.startedAt = nowIso();
       clearReviewerAdmission(reviewer);
       delete reviewer.tokenCount;
+      delete reviewer.cacheReadTokens;
       delete reviewer.usageFinalizationPolls;
       host.pollGate?.clear(`${host.workflowId}\0${reviewer.id}\0usage`);
       delete reviewer.progressAt;
@@ -1490,7 +1502,7 @@ export class ReviewFanoutRunner {
    */
   private usageNeedsTranscript(
     provider: BuildPipelineProvider,
-    observedUsage: { sessionTokens?: number } | undefined,
+    observedUsage: ReviewerObservedUsage | undefined,
   ): boolean {
     return (
       this.host.captureReviewerUsage === true &&
@@ -1507,7 +1519,7 @@ export class ReviewFanoutRunner {
   private async refreshReviewerUsage(
     reviewer: ReviewerRecord,
     provider: BuildPipelineProvider,
-    observedUsage: { sessionTokens?: number } | undefined,
+    observedUsage: ReviewerObservedUsage | undefined,
     messages: Promise<unknown[]> | undefined,
   ): Promise<boolean> {
     if (!this.host.captureReviewerUsage || !reviewer.providerSessionId) return false;
@@ -1517,14 +1529,23 @@ export class ReviewFanoutRunner {
         (provider.usageFromMessages && messages
           ? provider.usageFromMessages(await messages)
           : undefined);
-      const reported = usage?.sessionTokens;
-      if (typeof reported !== "number" || !Number.isSafeInteger(reported) || reported < 0) {
+      const reported = usageCount(usage?.sessionTokens);
+      const cacheReads = usageCount(usage?.cacheReadTokens);
+      if (reported === undefined && cacheReads === undefined) return false;
+      await this.host.assertFence();
+      const tokenCount =
+        reported === undefined ? reviewer.tokenCount : Math.max(reviewer.tokenCount ?? 0, reported);
+      // Pi and Cursor report cache reads for their latest turn only, so the
+      // largest value seen is kept rather than the latest.
+      const cacheReadTokens =
+        cacheReads === undefined
+          ? reviewer.cacheReadTokens
+          : Math.max(reviewer.cacheReadTokens ?? 0, cacheReads);
+      if (reviewer.tokenCount === tokenCount && reviewer.cacheReadTokens === cacheReadTokens) {
         return false;
       }
-      await this.host.assertFence();
-      const tokenCount = Math.max(reviewer.tokenCount ?? 0, reported);
-      if (reviewer.tokenCount === tokenCount) return false;
-      reviewer.tokenCount = tokenCount;
+      if (tokenCount !== undefined) reviewer.tokenCount = tokenCount;
+      if (cacheReadTokens !== undefined) reviewer.cacheReadTokens = cacheReadTokens;
       return true;
     } catch (error) {
       if (this.isFatal(error)) throw error;
@@ -1566,7 +1587,7 @@ export class ReviewFanoutRunner {
     provider: BuildPipelineProvider,
     reviewer: ReviewerRecord,
     transcript: PassTranscriptReader,
-    observedUsage: { sessionTokens?: number } | undefined,
+    observedUsage: ReviewerObservedUsage | undefined,
   ): Promise<"continue"> {
     const providerSessionId = reviewer.providerSessionId;
     if (!providerSessionId) return "continue";

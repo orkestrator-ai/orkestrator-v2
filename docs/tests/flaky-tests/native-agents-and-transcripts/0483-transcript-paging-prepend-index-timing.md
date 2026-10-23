@@ -28,3 +28,8 @@
 - **Complete unchanged owner:** `mise run test:logged -- --name merge-transcript-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/TranscriptPaging.spec.ts --workers=1` passed all eight cases, exit 0 (43.7 s logged).
 - **Evidence:** `orkestrator-test-run.S5weqt/merge-browser.log.gz` below the host temporary directory.
 - **Assessment:** confirmed intermittent offset-preservation failure. The owner and implementation were unchanged by this merge; no assertion, deadline or skip was changed.
+
+
+## Session lifecycle review recurrence — 2026-10-23
+
+The desktop native paging case saw prepend index 1 instead of an index greater than 1 during the nine-worker component suite. The complete unchanged owner passed separately with one worker in 47.2 seconds. Exact aggregate counts, owner command, and evidence are recorded in [0493](../aggregate-validation-runs/0493-component-browser-aggregate-timeout-cluster.md#session-lifecycle-review-validation--2026-10-23). No assertion, timeout, or skip changed.

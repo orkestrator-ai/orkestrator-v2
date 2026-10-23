@@ -1,7 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { DndContext, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { AgentInfoButton } from "../../apps/web/src/components/layout/AgentInfoButton";
 import { PaneTree } from "../../apps/web/src/components/pane-layout/PaneTree";
+import { Toaster } from "../../apps/web/src/components/ui/sonner";
 import { TooltipProvider } from "../../apps/web/src/components/ui/tooltip";
 import { createAgentNativeTab } from "../../apps/web/src/components/terminal/TerminalContainer.helpers";
 import { getPaneLayout } from "../../apps/web/src/lib/backend";
@@ -14,6 +16,7 @@ import { reconcilePersistedLayout } from "../../apps/web/src/lib/pane-layout-res
 import { useConfigStore } from "../../apps/web/src/stores/configStore";
 import { useEnvironmentStore } from "../../apps/web/src/stores/environmentStore";
 import {
+  getAllLeaves,
   usePaneLayoutStore,
   type EnvironmentPaneState,
 } from "../../apps/web/src/stores/paneLayoutStore";
@@ -129,7 +132,8 @@ let opened = 0;
  * An environment's real pane tree with native agent tabs, backed end to end by
  * the close-retention host. `New agent tab` adds an unassigned agent tab as
  * the app's new-tab action does; `Switch environment` unmounts the panes as
- * leaving for another environment does.
+ * leaving for another environment does. The agent information button and the
+ * toaster are the app shell's own, for the runtime panel and its notices.
  */
 export function CloseRetentionFixture() {
   const query = new URLSearchParams(window.location.search);
@@ -157,6 +161,15 @@ export function CloseRetentionFixture() {
     };
   }, [environmentId, worktreePath, platform]);
   const node = usePaneLayoutStore((state) => state.environments.get(environmentId)?.root);
+  const activePaneId = usePaneLayoutStore(
+    (state) => state.environments.get(environmentId)?.activePaneId,
+  );
+  // As the app shell resolves it: the active pane's active tab.
+  const activeTab = useMemo(() => {
+    if (!node) return null;
+    const pane = getAllLeaves(node).find((leaf) => leaf.id === activePaneId);
+    return pane?.tabs.find((tab) => tab.id === pane.activeTabId) ?? null;
+  }, [activePaneId, node]);
   const newTab = () => {
     opened += 1;
     const store = usePaneLayoutStore.getState();
@@ -182,6 +195,7 @@ export function CloseRetentionFixture() {
           <button type="button" onClick={() => setAway(!away)}>
             {away ? "Return to environment" : "Switch environment"}
           </button>
+          {ready && !away ? <AgentInfoButton activeTab={activeTab} /> : null}
         </nav>
         <div className="relative min-h-0 flex-1 overflow-hidden">
           {away ? (
@@ -193,6 +207,7 @@ export function CloseRetentionFixture() {
           ) : null}
         </div>
       </main>
+      <Toaster />
     </TooltipProvider>
   );
 }

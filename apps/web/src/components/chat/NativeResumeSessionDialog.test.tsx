@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { NativeResumeSessionDialog, type ResumableSession } from "./NativeResumeSessionDialog";
+import {
+  NativeResumeSessionDialog,
+  shortResumeSessionId,
+  type ResumableSession,
+} from "./NativeResumeSessionDialog";
 
 /**
  * The three per-agent wrappers stub this dialog out in their tab suites, so
@@ -98,6 +102,27 @@ describe("NativeResumeSessionDialog", () => {
     renderDialog([{ id: "0123456789abcdef" }]);
 
     await waitFor(() => expect(screen.getByText("Session 01234567")).toBeTruthy());
+  });
+
+  test("labels an untitled ACP row by the agent's own id, not the token prefix", async () => {
+    // Live Grok rows read "Session acp-sess" before Grok had generated a title.
+    const encoded = btoa("019a3b2c-7d4e-4f00-9a1b-2c3d4e5f6a7b").replace(/=+$/, "");
+    renderDialog([{ id: `acp-session:${encoded}.c2lnbmF0dXJl`, detail: "3 messages" }]);
+
+    await waitFor(() => expect(screen.getByText("Session 019a3b2c")).toBeTruthy());
+    expect(screen.getByText("3 messages")).toBeTruthy();
+  });
+
+  test("labels an untitled Pi row by its session id, not the start of its path", async () => {
+    renderDialog([
+      {
+        id: "/home/me/.pi/agent/sessions/--work--/2026-10-17T10-11-12-123Z_5d6e7f80-1111-4222-8333-944455556666.jsonl",
+        detail: "Fix the flaky test",
+      },
+    ]);
+
+    await waitFor(() => expect(screen.getByText("Session 5d6e7f80")).toBeTruthy());
+    expect(screen.getByText("Fix the flaky test")).toBeTruthy();
   });
 
   test("shows the empty state when nothing is resumable", async () => {
@@ -369,5 +394,19 @@ describe("NativeResumeSessionDialog", () => {
     } finally {
       console.error = consoleError;
     }
+  });
+});
+
+describe("shortResumeSessionId", () => {
+  test("keeps a plain provider id's first eight characters", () => {
+    expect(shortResumeSessionId("0123456789abcdef")).toBe("01234567");
+  });
+
+  test("falls back to the raw id when an ACP token does not decode", () => {
+    expect(shortResumeSessionId("acp-session:!!!.sig")).toBe("acp-sess");
+  });
+
+  test("never answers an empty label", () => {
+    expect(shortResumeSessionId("/sessions/_.jsonl")).toBe("_");
   });
 });

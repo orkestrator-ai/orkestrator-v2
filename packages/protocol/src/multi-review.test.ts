@@ -45,6 +45,54 @@ const report: StructuredReviewReport = {
 };
 
 describe("multi review protocol", () => {
+  test("validates persisted consolidation overlap and accepts older workflows without it", () => {
+    const workflow = {
+      version: MULTI_REVIEW_WORKFLOW_VERSION,
+      controller: "backend",
+      id: "workflow-overlap",
+      environmentId: "env-1",
+      projectId: "project-1",
+      targetBranch: "main",
+      reviewers: [{ id: "reviewer-1", agent: "claude", model: "opus", status: "pending" }],
+      fixModel: { agent: "codex", model: "gpt-5.6" },
+      phase: "reviewing",
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+      backendRevision: 1,
+    };
+    const overlap = {
+      version: 1,
+      reviewers: 1,
+      sourceFindings: 1,
+      citedSourceFindings: 1,
+      consolidatedFindings: 1,
+      singleSourceFindings: 1,
+      positions: [
+        {
+          position: 1,
+          sourceFindings: 1,
+          citedSourceFindings: 1,
+          consolidatedFindings: 1,
+          singleSourceFindings: 1,
+          novelFindings: 1,
+        },
+      ],
+    };
+    expect(isMultiReviewWorkflow(workflow)).toBe(true);
+    expect(isMultiReviewWorkflow({ ...workflow, consolidationOverlap: overlap })).toBe(true);
+    for (const consolidationOverlap of [
+      null,
+      {},
+      { ...overlap, version: 2 },
+      { ...overlap, sourceFindings: -1 },
+      { ...overlap, reviewers: 2 },
+      { ...overlap, title: "finding text" },
+      { ...overlap, positions: [{ ...overlap.positions[0], novelFindings: 0.5 }] },
+    ]) {
+      expect(isMultiReviewWorkflow({ ...workflow, consolidationOverlap })).toBe(false);
+    }
+  });
+
   test("validates step restarts with an optional model override", () => {
     const restart = {
       workflowId: "multi-1",

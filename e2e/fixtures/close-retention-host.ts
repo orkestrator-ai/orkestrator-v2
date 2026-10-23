@@ -16,13 +16,32 @@
  * The page reaches it through `/__close-retention/*`, which the spec proxies
  * here. Besides `/invoke`, the host answers `/environment` (a fresh
  * environment per case), `/vendor` (what each engine actually holds),
- * `/bridge-requests` (every request the backend sent each bridge) and
- * `/cursor-create-gate` (hold or release Cursor's `Agent.create`).
+ * `/bridge-requests` (every request the backend sent each bridge),
+ * `/cursor-create-gate` (hold or release Cursor's `Agent.create`),
+ * `/restart-bridge` (stop a bridge and start it again on the same port,
+ * optionally shedding Cursor's persisted transcripts first),
+ * `/cursor-saturate-steer` (fill a running Cursor turn's steer history),
+ * `/pi-startup-gate` (hold Pi prompts in preflight, before acceptance) and
+ * `/seed-native-session` (map a tab to a provider session, as an earlier
+ * backend run would have).
+ *
+ * Claude has no real bridge here: `peekBridge` answers a stale Claude bridge
+ * that predates `POST /session/:id/close` (it answers 404, as every Claude
+ * bridge before the route did) and records any `DELETE`, which must never
+ * come.
  *
  * Nothing here reads provider credentials or reaches the network.
  */
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -31,9 +50,16 @@ import { OpenCodeMessageIdCoordinator } from "@orkestrator/protocol/opencode-mes
 import { BackendRuntime } from "../../apps/backend/src/core/backend-runtime";
 import { createCommandRegistry } from "../../apps/backend/src/core/commands";
 import type { CommandContext } from "../../apps/backend/src/core/commands-context";
+import { INTERACTIVE_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import { createNativeAgentProvider } from "../../apps/backend/src/core/native-agent-provider";
+import { nativeAgentSessionStorageKey } from "../../apps/backend/src/core/native-agent-service";
 import { NativeAgentService } from "../../apps/backend/src/core/native-agent-service";
 import { StorageService } from "../../apps/backend/src/core/storage";
+import {
+  serializeWithinBudget,
+  type BudgetedSession,
+} from "../../bridges/cursor-bridge/src/persistence-budget";
+import type { PersistedState } from "../../bridges/cursor-bridge/src/state";
 import { createOpenCodeEngine } from "./close-retention-opencode";
 
 installFatalRejectionGuard({ label: "[close-retention-host]" });
@@ -60,13 +86,18 @@ const files = {
   cursorLog: path.join(root, "cursor", "sdk.log"),
   cursorCreateGate: path.join(root, "cursor", "create-gate"),
   piCalls: path.join(root, "pi", "calls.jsonl"),
+  piStartupGate: path.join(root, "pi", "startup-gate"),
+  piStartupLog: path.join(root, "pi", "startup.log"),
   piSessions: path.join(root, "pi", "sessions"),
   grokStore: path.join(root, "grok", "store.jsonl"),
   grokLog: path.join(root, "grok", "events.log"),
 };
 
-async function startBridge(platform: BridgePlatform): Promise<Bridge> {
-  const port = await freePort();
+async function startBridge(platform: BridgePlatform, fixedPort?: number): Promise<Bridge> {
+  // A restart reuses the port, and so the token: the backend's provider for
+  // the platform keeps its connection, as it does for a local bridge that
+  // came back.
+  const port = fixedPort ?? (await freePort());
   const token = `close-retention-${platform}-${port}`;
   const directory = path.join(root, platform);
   mkdirSync(path.join(directory, "home"), { recursive: true });
@@ -106,6 +137,8 @@ async function startBridge(platform: BridgePlatform): Promise<Bridge> {
       PI_SESSION_DIR: files.piSessions,
       PI_AGENT_DIR: path.join(directory, "agent"),
       FAKE_PI_CALLS: files.piCalls,
+      FAKE_PI_STARTUP_GATE: files.piStartupGate,
+      FAKE_PI_STARTUP_LOG: files.piStartupLog,
     };
   } else {
     const grokHome = path.join(directory, "grok-home");
@@ -167,11 +200,113 @@ const bridges = Object.fromEntries(
   ),
 ) as Record<BridgePlatform, Bridge>;
 
+/**
+ * A Claude bridge from before `POST /session/:id/close`: health answers, the
+ * close route is a 404, and a legacy `DELETE` (which deletes a Claude
+ * conversation) is recorded and refused.
+ */
+const staleClaudeBridge = Bun.serve({
+  hostname: "127.0.0.1",
+  port: 0,
+  fetch(request) {
+    const { pathname } = new URL(request.url);
+    if (pathname === "/global/health") return Response.json({ healthy: true });
+    return new Response("Not found", { status: 404 });
+  },
+});
+
+const staleClaudePort = staleClaudeBridge.port!;
+
+type RecordedPlatform = BridgePlatform | "claude";
 /** Every request the backend sent each bridge, in order: `METHOD /path`. */
-const bridgeRequests: Record<BridgePlatform, string[]> = { cursor: [], pi: [], grok: [] };
-const portPlatform = new Map(
-  Object.entries(bridges).map(([platform, bridge]) => [bridge.port, platform as BridgePlatform]),
-);
+const bridgeRequests: Record<RecordedPlatform, string[]> = {
+  cursor: [],
+  pi: [],
+  grok: [],
+  claude: [],
+};
+const portPlatform = new Map<number, RecordedPlatform>([
+  ...Object.entries(bridges).map(
+    ([platform, bridge]) => [bridge.port, platform as BridgePlatform] as const,
+  ),
+  [staleClaudePort, "claude"],
+]);
+
+async function stopBridge(bridge: Bridge): Promise<void> {
+  if (bridge.child.exitCode !== null || bridge.child.signalCode !== null) return;
+  const exited = new Promise<void>((resolve) => bridge.child.once("exit", () => resolve()));
+  bridge.child.kill("SIGTERM");
+  await exited;
+}
+
+/**
+ * Rewrite Cursor's persisted state as the bridge's own budget pass would have
+ * written it under a smaller budget: every transcript keeps only its newest
+ * message, with the shed counts and the truncation flag set by the same
+ * production code. Run while the bridge is stopped.
+ */
+function shedCursorTranscripts(): number {
+  const stateFile = path.join(root, "cursor", "state", "state.json");
+  const state = JSON.parse(readFileSync(stateFile, "utf8")) as PersistedState;
+  const { sessions, ...envelope } = state;
+  const budgeted: BudgetedSession[] = sessions.map((session, index) => {
+    const { messages, ...essential } = session;
+    return { id: session.id, lastAccessed: index, essential, messages };
+  });
+  const essentials = serializeWithinBudget(
+    envelope,
+    budgeted.map((session) => ({ ...session, messages: [] })),
+    Number.MAX_SAFE_INTEGER,
+  ).bytes;
+  // Each session's newest message, plus room for the truncation fields; an
+  // older message (a whole turn row) does not fit in what is left over.
+  const newest = budgeted.reduce(
+    (total, session) =>
+      total + Buffer.byteLength(JSON.stringify(session.messages.at(-1) ?? null)) + 96,
+    0,
+  );
+  const snapshot = serializeWithinBudget(envelope, budgeted, essentials + newest);
+  writeFileSync(stateFile, snapshot.serialized);
+  return snapshot.shed.length;
+}
+
+async function restartBridge(platform: BridgePlatform, shed: boolean): Promise<number> {
+  const previous = bridges[platform];
+  await stopBridge(previous);
+  const shedSessions = shed && platform === "cursor" ? shedCursorTranscripts() : 0;
+  bridges[platform] = await startBridge(platform, previous.port);
+  return shedSessions;
+}
+
+/** Fill the running turn's steer history until the bridge refuses one. */
+async function saturateCursorSteer(sessionId: string) {
+  const bridge = bridges.cursor;
+  const base = `http://127.0.0.1:${bridge.port}/session/${encodeURIComponent(sessionId)}`;
+  const headers = { Authorization: `Bearer ${bridge.token}`, "Content-Type": "application/json" };
+  const status = (await (await fetch(`${base}/status`, { headers })).json()) as {
+    turnId?: string;
+  };
+  if (!status.turnId) throw new Error("The Cursor session has no running turn to steer");
+  let delivered = 0;
+  for (let index = 0; index < 1_024; index += 1) {
+    const response = await fetch(`${base}/steer`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        input: `filler steer ${index}`,
+        requestId: `fill-${index}`,
+        expectedRunId: status.turnId,
+      }),
+    });
+    const body = (await response.json()) as { outcome?: string; reason?: string };
+    if (response.status === 429) return { delivered, refused: body.reason };
+    if (body.outcome !== "applied") {
+      throw new Error(`Filler steer ${index} answered ${response.status} ${body.outcome}`);
+    }
+    delivered += 1;
+  }
+  throw new Error("The Cursor steer history never filled");
+}
 const recordingFetch = (async (input: string | URL | Request, init?: RequestInit) => {
   const url = new URL(input instanceof Request ? input.url : String(input));
   const platform = portPlatform.get(Number(url.port));
@@ -223,6 +358,7 @@ await nativeAgents.init();
 const commands = createCommandRegistry({
   tabTeardown: {
     peekBridge: async (_environment, agent) => {
+      if (agent === "claude") return { port: staleClaudePort, authToken: "stale-claude" };
       if (agent !== "cursor" && agent !== "pi" && agent !== "grok") return null;
       return { port: bridges[agent].port, authToken: bridges[agent].token };
     },
@@ -302,6 +438,10 @@ function vendorView() {
       ? readFileSync(files.cursorLog, "utf8").split("\n").filter(Boolean)
       : [],
     pi: {
+      // `held` when the startup gate caught a prompt, `released` when it let go.
+      startup: existsSync(files.piStartupLog)
+        ? readFileSync(files.piStartupLog, "utf8").split("\n").filter(Boolean)
+        : [],
       sessionFiles: existsSync(files.piSessions)
         ? readdirSync(files.piSessions, { recursive: true }).filter((file) =>
             String(file).endsWith(".jsonl"),
@@ -311,6 +451,13 @@ function vendorView() {
       calls: (readJsonLines(files.piCalls) as Array<{ prompts: string[] }>).map(
         (call) => call.prompts,
       ),
+      // The newest prompt of each call whose request was already aborted when
+      // the provider was asked: a real provider sends nothing for it.
+      abortedRequests: (
+        readJsonLines(files.piCalls) as Array<{ prompts: string[]; aborted?: boolean }>
+      )
+        .filter((call) => call.aborted === true)
+        .map((call) => call.prompts.at(-1) ?? ""),
     },
     grok: {
       sessions: [...grokSessions].map(([id, prompts]) => ({ id, prompts })),
@@ -363,6 +510,51 @@ const server = Bun.serve({
       return Response.json({ held });
     }
     if (pathname === "/bridge-requests") return Response.json(bridgeRequests);
+    if (pathname === "/pi-startup-gate" && request.method === "POST") {
+      // Held: the next Pi prompt waits in preflight until released.
+      const { held } = (await request.json()) as { held: boolean };
+      if (held) await Bun.write(files.piStartupGate, "held");
+      else rmSync(files.piStartupGate, { force: true });
+      return Response.json({ held });
+    }
+    if (pathname === "/restart-bridge" && request.method === "POST") {
+      const { platform, shed } = (await request.json()) as {
+        platform: BridgePlatform;
+        shed?: boolean;
+      };
+      try {
+        return Response.json({ shed: await restartBridge(platform, shed === true) });
+      } catch (error) {
+        return Response.json({ error: errorMessage(error) }, { status: 500 });
+      }
+    }
+    if (pathname === "/cursor-saturate-steer" && request.method === "POST") {
+      const { sessionId } = (await request.json()) as { sessionId: string };
+      try {
+        return Response.json(await saturateCursorSteer(sessionId));
+      } catch (error) {
+        return Response.json({ error: errorMessage(error) }, { status: 500 });
+      }
+    }
+    if (pathname === "/seed-native-session" && request.method === "POST") {
+      const { environmentId, agent, tabId, providerSessionId } = (await request.json()) as {
+        environmentId: string;
+        agent: "claude";
+        tabId: string;
+        providerSessionId: string;
+      };
+      const logicalSessionKey = `env-${environmentId}:${tabId}`;
+      await storage.adoptNativeAgentSession({
+        key: nativeAgentSessionStorageKey(environmentId, agent, logicalSessionKey),
+        environmentId,
+        agent,
+        logicalSessionKey,
+        providerSessionId,
+        origin: "interactive-native",
+        interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+      });
+      return Response.json({ logicalSessionKey });
+    }
     return new Response("Not found", { status: 404 });
   },
 });
@@ -370,6 +562,7 @@ const server = Bun.serve({
 async function shutdown() {
   await nativeAgents.shutdown().catch(() => undefined);
   server.stop(true);
+  staleClaudeBridge.stop(true);
   for (const bridge of Object.values(bridges)) bridge.child.kill("SIGTERM");
   rmSync(root, { recursive: true, force: true });
   process.exit(0);

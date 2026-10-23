@@ -499,6 +499,45 @@ describe("GET /subscribe (SSE)", () => {
     }
   });
 
+  test("an observation subscriber gets content-free frames, replayed ones included", async () => {
+    const subscribersBefore = eventEmitter.subscriberCount;
+    const before = eventEmitter.currentRevision;
+    eventEmitter.emit({
+      type: "message.updated",
+      sessionId: "observed-replay",
+      data: { message: { id: "m-1", text: "secret transcript text" } },
+    });
+    const controller = new AbortController();
+    const cursor = encodeURIComponent(`${eventEmitter.generation}:${before}`);
+    const response = await app.request(`/subscribe?observe=1&since=${cursor}`, {
+      signal: controller.signal,
+    });
+    const reader = response.body?.getReader();
+    expect(reader).toBeDefined();
+    try {
+      const replayed = await readUntil(reader!, (buffer) => buffer.includes("observed-replay"));
+      expect(replayed).toContain('"observe":true');
+      expect(replayed).toContain("event: message.updated");
+      expect(replayed).toContain('data: {"sessionId":"observed-replay"}');
+      expect(replayed).not.toContain("secret transcript text");
+
+      await waitFor(() => eventEmitter.subscriberCount > subscribersBefore);
+      eventEmitter.emit({
+        type: "session.updated",
+        sessionId: "observed-live",
+        data: { backgroundTasks: { t: { id: "t", outputTail: "private output" } } },
+      });
+      const live = await readUntil(reader!, (buffer) => buffer.includes("observed-live"));
+      expect(live).toContain(`id: ${eventEmitter.generation}:`);
+      expect(live).toContain('data: {"sessionId":"observed-live"}');
+      expect(live).not.toContain("private output");
+    } finally {
+      controller.abort();
+      await reader?.cancel().catch(() => {});
+      await waitFor(() => eventEmitter.subscriberCount === subscribersBefore);
+    }
+  });
+
   test("replays retained frames from a query cursor", async () => {
     const subscribersBefore = eventEmitter.subscriberCount;
     const before = eventEmitter.currentRevision;

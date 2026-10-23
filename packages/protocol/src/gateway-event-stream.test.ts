@@ -40,6 +40,14 @@ describe("SSE framing", () => {
     expect(parseSseBlock("id: a:3")).toEqual({ id: "a:3", data: null });
   });
 
+  test("keeps a named event, last line winning", () => {
+    expect(parseSseBlock("event: one\nevent: session.idle\nid: 4\ndata: {}")).toEqual({
+      id: "4",
+      data: "{}",
+      event: "session.idle",
+    });
+  });
+
   test("reassembles frames split across chunks, including CRLF boundaries", () => {
     const decoder = new SseFrameDecoder();
     expect(decoder.push('data: {"event":"a"')).toEqual([]);

@@ -20,6 +20,7 @@ import {
 } from "./native-agent-service-shared.js";
 import {
   providerSessionHeldElsewhere,
+  replacedSessionCloseIntent,
   withProviderSessionTeardownLock,
 } from "./provider-session-ownership.js";
 type BuildPipelineAgent = shared.BuildPipelineAgent;
@@ -547,7 +548,14 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
     const providerSessionId = resolved.session.providerSessionId;
     // Mark the active turn before stopping it: a stopped turn reads as idle,
     // and an observer must never mistake it for one that finished on its own.
-    const requestId = resolved.session.dispatchedRequestIds?.at(-1);
+    // A prompt the provider has not accepted yet (Pi's startup) is the turn
+    // being stopped; it joins `dispatchedRequestIds` only once accepted.
+    const inFlight = resolved.session.pendingDispatch;
+    const requestId =
+      inFlight && !inFlight.mailRefused
+        ? inFlight.requestId
+        : resolved.session.dispatchedRequestIds?.at(-1);
+    let recordingInterrupt: Promise<void> | undefined;
     if (requestId) {
       const before = await resolved.provider
         .status(providerSessionId)
@@ -568,18 +576,23 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
           // Never evict an unpersisted Stop to make room for another one.
           this.interruptFenceOverflow = true;
         }
-        try {
-          await this.storage.recordNativeAgentTurnInterrupt(
-            resolved.key,
-            providerSessionId,
-            requestId,
+        // Not awaited before the abort. A dispatch the provider has not
+        // acknowledged holds this session's storage queue until it does, so
+        // the write waits out exactly the startup the stop has to reach. The
+        // in-memory fence above classifies the turn as interrupted meanwhile,
+        // as it does when the write fails.
+        recordingInterrupt = this.storage
+          .recordNativeAgentTurnInterrupt(resolved.key, providerSessionId, requestId)
+          .then(
+            (persisted) => {
+              if (persisted) this.pendingTurnInterrupts.delete(interruptKey);
+            },
+            () => {
+              console.warn(
+                "[native-agent] Turn interrupt persistence failed; automatic publication remains fenced",
+              );
+            },
           );
-          this.pendingTurnInterrupts.delete(interruptKey);
-        } catch {
-          console.warn(
-            "[native-agent] Turn interrupt persistence failed; automatic publication remains fenced",
-          );
-        }
       }
     }
     await resolved.provider.abort(providerSessionId);
@@ -596,6 +609,7 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
       hardAbortAttempted = true;
       await resolved.provider.hardAbort(providerSessionId);
     }
+    await recordingInterrupt;
     const sessionKey = nativeAgentSessionStorageKey(
       input.environmentId,
       input.agent,
@@ -761,9 +775,12 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
    * an `ACP_MAX_SESSIONS` slot that nothing reaps. Same last-owner rules and
    * lock as tab teardown. The close keeps the vendor conversation.
    *
-   * Best effort and never throws: the resume already succeeded. A bridge that
-   * cannot be reached has usually lost the session with its process; a close
-   * that stays pending leaves it registered (no durable retry yet).
+   * Never throws: the resume already succeeded. The close is journaled
+   * first as a teardown intent (`replacedSessionCloseIntent`) and cleared
+   * once it is confirmed, so a close that stays pending, times out or is cut
+   * short by a backend exit is replayed by `reconcile_tab_teardowns` under
+   * the same rules. An environment the journal cannot hold (a coordinator
+   * runtime) still gets the one best-effort close.
    */
   private async closeReplacedSession(
     provider: NativeAgentRuntimeProvider,
@@ -785,7 +802,19 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
             providerSessionId,
           });
           if (heldElsewhere) return;
+          const intent = replacedSessionCloseIntent(agent, providerSessionId);
+          const journaled = await this.storage.setTabTeardownIntent(environmentId, intent).then(
+            () => true,
+            () => false,
+          );
           await provider.closeSession(providerSessionId);
+          if (journaled) {
+            await this.storage.clearTabTeardownIntent(
+              environmentId,
+              intent.tabId,
+              intent.createdAt,
+            );
+          }
         },
       );
     } catch (error) {

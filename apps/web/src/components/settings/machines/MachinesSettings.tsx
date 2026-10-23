@@ -11,6 +11,7 @@ import {
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { discardNodeDetach, nodeErrorText } from "@/lib/backend/command-nodes";
+import { requestCommandHandover } from "@/lib/command-handover";
 import { onMachineUpdatesRequest, takeMachineUpdatesRequest } from "@/lib/settings-navigation";
 import { cn } from "@/lib/utils";
 import { AddMachineDialog } from "./AddMachineDialog";
@@ -55,6 +56,7 @@ export function MachinesSettings() {
   const settingsMachine = entries.find((entry) => entry.key === settingsKey) ?? null;
   const updatesMachine = entries.find((entry) => entry.key === openUpdatesKey) ?? null;
   const leaf = status?.mode === "leaf";
+  const selfEntry = entries.find((entry) => entry.role === "self") ?? null;
   const knownAddresses = [
     ...(nodes?.nodes ?? []).flatMap((node) =>
       node.routes.flatMap((route) => (route.kind === "https" ? [route.origin] : [])),
@@ -98,7 +100,7 @@ export function MachinesSettings() {
           className="flex gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100"
         >
           <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
-          <p>
+          <p className="flex-1">
             This machine is controlled by{" "}
             {status.controllers.map((controller) => controller.displayName).join(", ")}, so its own
             control of other machines is paused
@@ -107,6 +109,22 @@ export function MachinesSettings() {
               : ""}
             . Coordination happens there.
           </p>
+          {api?.handOverCommand && connections && selfEntry ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="shrink-0"
+              onClick={() =>
+                requestCommandHandover({
+                  name: selfEntry.name,
+                  connectionId: connections.activeConnectionId,
+                })
+              }
+            >
+              Make it the command node
+            </Button>
+          ) : null}
         </div>
       ) : null}
 
@@ -170,6 +188,7 @@ export function MachinesSettings() {
                   onSettings={() => setSettingsKey(entry.key)}
                   onUpdates={() => setUpdatesKey(entry.key)}
                   onOpenWindow={() => void openWindow(entry)}
+                  leaf={leaf}
                 />
               ))}
               {entries.length === 0 ? (
@@ -236,6 +255,7 @@ function MachineRow({
   onSettings,
   onUpdates,
   onOpenWindow,
+  leaf,
 }: {
   entry: MachineEntry;
   api: ConnectionsApi | null;
@@ -244,6 +264,8 @@ function MachineRow({
   onSettings: () => void;
   onUpdates: () => void;
   onOpenWindow: () => void;
+  /** The connected machine is controlled by another, so it is not the command node. */
+  leaf: boolean;
 }) {
   const snapshot = summary?.snapshot ?? null;
   const issues = snapshot ? maintenanceIssues(snapshot) : [];
@@ -289,7 +311,15 @@ function MachineRow({
                 </Badge>
               ) : null}
               {entry.role === "self" ? (
-                <Badge className="border-sky-500/25 bg-sky-500/10 text-sky-300">Command node</Badge>
+                leaf ? (
+                  <Badge className="border-amber-500/25 bg-amber-500/10 text-amber-300">
+                    Controlled by another machine
+                  </Badge>
+                ) : (
+                  <Badge className="border-sky-500/25 bg-sky-500/10 text-sky-300">
+                    Command node
+                  </Badge>
+                )
               ) : null}
               {entry.role === "device" ? <Badge>This device only</Badge> : null}
             </div>

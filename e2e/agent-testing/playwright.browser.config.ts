@@ -31,6 +31,7 @@ export default defineConfig({
     "cold-restart-live.spec.ts",
     "claude-revision-tokens-live.spec.ts",
     "mcp-apply-live.spec.ts",
+    "mcp-overlay-recovery.spec.ts",
     "rich-transcripts-live.spec.ts",
     "idle-observation-live.spec.ts",
   ],

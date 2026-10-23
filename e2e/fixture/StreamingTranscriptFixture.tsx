@@ -68,8 +68,8 @@ function appendedToolMessage(index: number): Message {
     id: `appended-tool-turn-${index}`,
     role: "assistant",
     content: "",
-    // Keep standalone tool messages in separate minute buckets so the display
-    // normalizer cannot coalesce them into the preceding tool-only row.
+    // Separate turns preserve the append-row virtualization scenario.
+    turnId: `appended-turn-${index}`,
     createdAt: new Date(Date.UTC(2026, 8, 21, 10, index)).toISOString(),
     parts: [command(1_000 + index)],
   };
@@ -106,7 +106,21 @@ function TrackedNativeMessage({
 
 export function StreamingTranscriptFixture() {
   const longTranscript = new URLSearchParams(window.location.search).has("long");
-  const [messages, setMessages] = useState(() => initialMessages(longTranscript));
+  const folding = new URLSearchParams(window.location.search).has("fold");
+  const [messages, setMessages] = useState(() =>
+    folding
+      ? [
+          ...initialMessages(longTranscript),
+          {
+            id: "live-fold",
+            role: "assistant" as const,
+            content: "",
+            createdAt: "2026-09-21T11:00:00Z",
+            parts: [command(3_000), command(3_001)],
+          },
+        ]
+      : initialMessages(longTranscript),
+  );
   const [listGeneration, setListGeneration] = useState(0);
   const [restoreStateFrom, setRestoreStateFrom] = useState<StateSnapshot>();
   const { scrollProps, virtuosoRef } = useVirtuosoScrollState();
@@ -181,6 +195,25 @@ export function StreamingTranscriptFixture() {
 
   return (
     <main>
+      <button
+        type="button"
+        onClick={() =>
+          setMessages((current) => {
+            return [
+              ...current,
+              {
+                id: `live-fold-update-${current.length}`,
+                role: "assistant",
+                content: "",
+                createdAt: "2026-09-21T11:02:00Z",
+                parts: [command(3_002)],
+              },
+            ];
+          })
+        }
+      >
+        Grow tool group
+      </button>
       <button type="button" onClick={appendTool}>
         Append tool
       </button>

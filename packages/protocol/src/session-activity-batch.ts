@@ -42,6 +42,8 @@ export const SESSION_ACTIVITY_BATCH_LIMITS = {
   /** Mirrors the single route's attention-metadata bound. */
   maxAsyncQuestionItemIds: 64,
   maxAsyncQuestionItemIdLength: 2_048,
+  /** Characters in an opaque content revision. */
+  maxContentRevisionLength: 256,
   /** Per-bridge read fan-out while answering one request. */
   readConcurrency: 4,
 } as const;
@@ -59,6 +61,13 @@ export interface SessionActivityObservation {
   asyncQuestionItemIds?: string[];
   /** Cursor: the session is being permanently closed. */
   closing?: boolean;
+  /**
+   * Opaque, content-free revision of what the session view shows beyond its
+   * activity (transcript, background tasks). Equal values mean nothing a view
+   * renders changed; the backend announces a change on an idle session.
+   * Absent from bridges that do not report one.
+   */
+  contentRevision?: string;
 }
 
 /**
@@ -107,10 +116,12 @@ export function parseSessionActivityObservation(
 ): SessionActivityObservation | undefined {
   if (!isRecord(value)) return undefined;
   const { activity, readyForInput, completionPending, asyncQuestionItemIds, closing } = value;
+  const { contentRevision } = value;
   if (typeof activity !== "string" || !SESSION_ACTIVITY_STATES.has(activity)) return undefined;
   if (readyForInput !== undefined && typeof readyForInput !== "boolean") return undefined;
   if (completionPending !== undefined && typeof completionPending !== "boolean") return undefined;
   if (closing !== undefined && typeof closing !== "boolean") return undefined;
+  if (contentRevision !== undefined && !isContentRevision(contentRevision)) return undefined;
   let itemIds: string[] | undefined;
   if (asyncQuestionItemIds !== undefined) {
     if (
@@ -133,7 +144,17 @@ export function parseSessionActivityObservation(
     ...(completionPending !== undefined ? { completionPending } : {}),
     ...(itemIds !== undefined ? { asyncQuestionItemIds: itemIds } : {}),
     ...(closing !== undefined ? { closing } : {}),
+    ...(contentRevision !== undefined ? { contentRevision: contentRevision as string } : {}),
   };
+}
+
+/** A well-formed {@link SessionActivityObservation.contentRevision}. */
+export function isContentRevision(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= SESSION_ACTIVITY_BATCH_LIMITS.maxContentRevisionLength
+  );
 }
 
 /** Bridge side: validate a request body. Duplicate ids are refused, not merged. */

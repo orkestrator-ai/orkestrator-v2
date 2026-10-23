@@ -51,6 +51,17 @@ interface SseFrame {
 interface ReplayFrame extends SseFrame {
   revision: number;
   bytes: number;
+  sessionId?: string;
+}
+
+/**
+ * The frame an observation subscriber (`?observe=1`) gets: the event type,
+ * its cursor and the session it names, never the payload. The backend's
+ * activity observer subscribes this way only to learn *that* a session
+ * changed, then reads it through the no-touch activity route.
+ */
+export function observationFrameData(sessionId: string | undefined): string {
+  return JSON.stringify(sessionId === undefined ? {} : { sessionId });
 }
 
 interface ReplayCursor {
@@ -99,6 +110,7 @@ export function createReplayBuffer(limits: { maxFrames?: number; maxBytes?: numb
         event: event.type,
         data,
         bytes: Buffer.byteLength(data) + Buffer.byteLength(event.type),
+        ...(event.sessionId === undefined ? {} : { sessionId: event.sessionId }),
       };
       frames.push(frame);
       bytes += frame.bytes;
@@ -350,6 +362,10 @@ export function createEventsRouter(
         { maxPendingFrames, maxPendingBytes },
       );
 
+      // An observation subscriber gets content-free frames and does not keep
+      // the replay ring alive: on its own it costs the bridge one tiny frame
+      // per event, and a reconnect the ring cannot cover is `replay.required`.
+      const observe = c.req.query("observe") === "1";
       const requestedCursorValue = c.req.header("last-event-id") ?? c.req.query("since");
       const requestedCursor = parseReplayCursor(requestedCursorValue);
       const cursorWasSupplied = requestedCursorValue !== undefined;
@@ -360,7 +376,7 @@ export function createEventsRouter(
       let unsubscribe = () => {};
       // Arm ring retention for as long as this connection exists, and for one
       // reconnect window after it goes away.
-      const releaseReplayRetention = replayRetention.acquire();
+      const releaseReplayRetention = observe ? () => {} : replayRetention.acquire();
 
       try {
         // Subscribe before choosing the replay ceiling. Anything emitted during
@@ -368,7 +384,7 @@ export function createEventsRouter(
         // closing the otherwise unavoidable replay/subscribe race.
         unsubscribe = eventEmitter.subscribe((event, revision) => {
           if (!isOpen) return;
-          const data = serializeEventData(event);
+          const data = observe ? observationFrameData(event.sessionId) : serializeEventData(event);
           const frame: ReplayFrame = {
             revision,
             id: formatReplayCursor(revision),
@@ -414,6 +430,8 @@ export function createEventsRouter(
             timestamp: connectedAt,
             replayed: replay.frames.length,
             resetRequired: replay.resetRequired,
+            // Confirms observation mode; an older bridge ignores the parameter.
+            ...(observe ? { observe: true } : {}),
           }),
         });
         if (replay.resetRequired) {
@@ -423,7 +441,11 @@ export function createEventsRouter(
             data: JSON.stringify({ through: formatReplayCursor(replayCeiling) }),
           });
         } else {
-          for (const frame of replay.frames) await writeFrame(frame);
+          for (const frame of replay.frames) {
+            await writeFrame(
+              observe ? { ...frame, data: observationFrameData(frame.sessionId) } : frame,
+            );
+          }
         }
         // Queue the whole drain in one synchronous turn. The bounded writer
         // chains strictly FIFO, so enqueue order *is* wire order: awaiting each

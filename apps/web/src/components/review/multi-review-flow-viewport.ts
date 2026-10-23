@@ -186,6 +186,39 @@ export function revealFlowRect(
 }
 
 /**
+ * The scroll that centres `rect` (canvas coordinates) across the viewport, as
+ * far as the scroll range allows: at either end of the canvas the node sits
+ * off centre rather than the canvas scrolling past its edge. Vertically it
+ * only comes into view, as {@link revealFlowRect} brings it.
+ */
+export function centerFlowRect(
+  view: FlowView,
+  rect: FlowRect,
+  content: FlowSize,
+  viewport: FlowSize,
+  margin = KEEP_IN_VIEW_MARGIN,
+): FlowView {
+  const offset = flowContentOffset(view.zoom, content, viewport);
+  const left = rect.x * view.zoom + offset.x;
+  const top = rect.y * view.zoom + offset.y;
+  return clampScroll(
+    {
+      zoom: view.zoom,
+      scrollLeft: left + (rect.width * view.zoom) / 2 - viewport.width / 2,
+      scrollTop: revealAxis(
+        view.scrollTop,
+        top,
+        top + rect.height * view.zoom,
+        viewport.height,
+        margin,
+      ),
+    },
+    content,
+    viewport,
+  );
+}
+
+/**
  * The zoom factor for one wheel or pinch event. Chromium reports a trackpad
  * pinch as a wheel event with `ctrlKey` and small deltas; a mouse wheel notch
  * is much larger, so each event is capped to keep a notch to one gentle step.

@@ -95,6 +95,41 @@ describe("buildMachineList", () => {
     expect(entries[0]!.via).toBe("Local backend on this device");
   });
 
+  test("a machine is listed once however many ways it is saved or reached", () => {
+    // The window is on mini, a remote command node; mbp3 is this device (Local) and
+    // also saved at its Tailscale address without a proved identity.
+    const entries = buildMachineList({
+      status: { ...status, nodeId: "bk_mini" as never },
+      nodes: nodes(node("mbp3", "mbp3"), node("gram", "omarchy-gram")),
+      connections: {
+        activeConnectionId: "mini",
+        connections: [
+          { ...local, active: false, backendId: "bk_mbp3" as never },
+          remote("mini", {
+            active: true,
+            backendId: "bk_mini" as never,
+            address: "https://mini.tailnet.ts.net",
+          }),
+          remote("mini-again", { address: "https://mini.tailnet.ts.net" }),
+          remote("mbp3-tailnet", { address: "https://mbp3.tailnet.ts.net" }),
+          remote("gram", { address: "https://gram.tailnet.ts.net" }),
+          remote("hp", { address: "https://hp.tailnet.ts.net", backendId: "bk_hp" as never }),
+          remote("hp-ssh", { address: null, backendId: "bk_hp" as never }),
+        ],
+      },
+      selfProfile: { revision: 1, displayName: "mini", colorToken: "violet", updatedAt: "t" },
+      workspaceNodeId: null,
+    });
+    expect(entries.map((entry) => [entry.name, entry.role])).toEqual([
+      ["mini", "self"],
+      ["hp.example", "device"],
+      ["mbp3", "node"],
+      ["omarchy-gram", "node"],
+    ]);
+    // The node keeps the saved connection with its proved identity.
+    expect(entries.find((entry) => entry.name === "mbp3")?.connection?.id).toBe("local");
+  });
+
   test("the node the window's workspace is on is the current machine and comes first", () => {
     const entries = buildMachineList({
       status,
@@ -272,4 +307,22 @@ test("nonempty saved nicknames take precedence for self, registered and device-o
     });
     expect(entries.map((e) => e.name)).toEqual(Array(3).fill(nickname?.trim() || "Canonical"));
   }
+});
+
+test("device-only aliases prefer the saved connection with credentials", () => {
+  const entries = buildMachineList({
+    status,
+    nodes: nodes(),
+    workspaceNodeId: null,
+    connections: list(
+      local,
+      remote("missing", { backendId: "bk_same" as never, requiresToken: true }),
+      remote("usable", { backendId: "bk_same" as never, requiresToken: false }),
+    ),
+    selfProfile: { revision: 1, displayName: "Desk", colorToken: "violet", updatedAt: "t" },
+  });
+  const devices = entries.filter((entry) => entry.role === "device");
+  expect(devices).toHaveLength(1);
+  expect(devices[0]?.connection?.id).toBe("usable");
+  expect(devices[0]?.connection?.requiresToken).toBe(false);
 });

@@ -1,8 +1,14 @@
+import { createHash } from "node:crypto";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
   isMultiReviewWorkflow,
   multiReviewOwnsProviderSession,
 } from "@orkestrator/protocol/multi-review";
+import {
+  fenceRetainingCloseSessionId,
+  type TabTeardownKind,
+} from "@orkestrator/protocol/tab-teardown";
+import type { Environment } from "./models.js";
 import type { StorageService } from "./storage.js";
 
 /**
@@ -94,4 +100,42 @@ export async function providerSessionHeldElsewhere(
       multiReviewOwnsProviderSession(snapshot, agent, providerSessionId),
   );
   return ownedByWorkflow ? "workflow" : null;
+}
+
+/**
+ * Teardown intents for a session a resume replaced are keyed under this
+ * prefix, never under a tab id. They share the tab teardown journal and its
+ * reconcile sweep, but not its tab rules: there is no tab mapping to check
+ * the session against, the backend wrote the session id itself, and there is
+ * no tab whose agent-tool credential to revoke. `teardown_tab` refuses a tab
+ * id with this prefix, so no renderer can name a session here.
+ */
+export const REPLACED_SESSION_CLOSE_KEY_PREFIX = "resume-replaced:";
+
+export function isReplacedSessionCloseKey(tabId: string): boolean {
+  return tabId.startsWith(REPLACED_SESSION_CLOSE_KEY_PREFIX);
+}
+
+/**
+ * The durable intent to close a session a resume replaced. One key per
+ * (agent, provider session), so a second failed close of the same session
+ * replaces the first intent rather than adding one. The key is a digest:
+ * provider ids can be long file paths (Pi), and the id itself is carried,
+ * fenced like every native intent, in `sessionId`.
+ */
+export function replacedSessionCloseIntent(
+  agent: AgentPlatform,
+  providerSessionId: string,
+  createdAt = new Date().toISOString(),
+): NonNullable<Environment["tabTeardownIntents"]>[string] {
+  const digest = createHash("sha256")
+    .update(`${agent}\0${providerSessionId}`)
+    .digest("hex")
+    .slice(0, 32);
+  return {
+    tabId: `${REPLACED_SESSION_CLOSE_KEY_PREFIX}${agent}:${digest}`,
+    kind: `${agent}-native` as const satisfies TabTeardownKind,
+    sessionId: fenceRetainingCloseSessionId(providerSessionId),
+    createdAt,
+  };
 }

@@ -28,6 +28,8 @@ interface TestMessage {
 const realBackendSnapshot = { ...realBackend };
 let platform: AgentPlatform = "pi";
 let observationEventVersions: number[] | undefined = [1];
+let quietObservation = false;
+let runningObservation = false;
 
 const identity = (): NativeAgentViewIdentity => ({
   backendInstanceId: "backend-1",
@@ -42,11 +44,14 @@ const getNativeAgentSessionStateUpdateMock = mock(
   async (): Promise<NativeAgentSessionStateUpdate> => ({
     viewVersion: 1,
     status: "snapshot",
-    token: "state-idle",
+    token: runningObservation ? "state-running" : "state-idle",
     value: {
       identity: identity(),
       connection: "connected",
-      turn: { phase: "idle" },
+      turn: {
+        phase: runningObservation ? "running" : "idle",
+        ...(quietObservation ? { quietObservation: true as const } : {}),
+      },
       interactions: [],
       composerControls: [],
       capabilities: nativeAgentCapabilities(platform),
@@ -137,6 +142,8 @@ async function settledSession() {
 beforeEach(() => {
   platform = "pi";
   observationEventVersions = [1];
+  quietObservation = false;
+  runningObservation = false;
   handlers.clear();
   listenMock.mockImplementation((event, handler) => {
     handlers.set(event, handler);
@@ -293,10 +300,93 @@ describe("useNativeAgentSession observation invalidations", () => {
     for (let read = 0; read < 4; read += 1) await readsExactlyAfter(clock, 1_500);
   });
 
-  test("an unqualified provider keeps the baseline idle cadence", async () => {
+  test("Claude keeps the baseline idle cadence until the session is marked quietObservation", async () => {
     platform = "claude";
     const { clock } = installFakeReadCoordinator();
     await settledSession();
     for (let read = 0; read < 4; read += 1) await readsExactlyAfter(clock, 1_500);
+  });
+
+  test("a quietObservation Claude view backs off and a content announcement reads at once", async () => {
+    platform = "claude";
+    quietObservation = true;
+    const { clock } = installFakeReadCoordinator();
+    await settledSession();
+    await readsExactlyAfter(clock, 1_500);
+    await readsExactlyAfter(clock, 3_000);
+
+    // A background task reported on the idle session: no transition, but the
+    // backend announces the content change and the view reads now.
+    const quiet = stateReads();
+    await act(async () => {
+      announce({
+        environment_id: "env-1",
+        agent: "claude",
+        logical_session_key: "env-env-1:tab-1",
+        previous_state: "idle",
+        state: "idle",
+        reason: "content",
+        generation: "observer-1",
+        revision: 1,
+      });
+    });
+    await waitFor(() => expect(stateReads()).toBe(quiet + 1));
+    await readsExactlyAfter(clock, 1_500);
+  });
+
+  test("a released Claude view at maximum backoff reads a resumed working turn immediately", async () => {
+    platform = "claude";
+    quietObservation = true;
+    const { clock } = installFakeReadCoordinator();
+    const view = await settledSession();
+    await readsExactlyAfter(clock, 1_500);
+    await readsExactlyAfter(clock, 3_000);
+    await readsExactlyAfter(clock, 5_000);
+    await readsExactlyAfter(clock, 10_000);
+    await readsExactlyAfter(clock, 15_000);
+
+    const quiet = stateReads();
+    runningObservation = true;
+    await act(async () => {
+      // Background work kept aggregate activity working throughout the
+      // release. Resumption arrives as an invalidation, not a transition.
+      announce({
+        environment_id: "env-1",
+        agent: "claude",
+        logical_session_key: "env-env-1:tab-1",
+        state: "working",
+        reason: "content",
+        generation: "observer-1",
+        revision: 1,
+      });
+    });
+    await waitFor(() => expect(stateReads()).toBe(quiet + 1));
+    await waitFor(() => expect(view.result.current.runtimeProjection?.turn.phase).toBe("running"));
+
+    // Running reads keep the 500 ms cadence without further announcements.
+    await readsExactlyAfter(clock, 500);
+    await readsExactlyAfter(clock, 500);
+    await readsExactlyAfter(clock, 500);
+  });
+
+  test("two mounted views of one session share one read per coordinated round", async () => {
+    const { clock } = installFakeReadCoordinator();
+    const first = await settledSession();
+    const second = await settledSession();
+    // Each view's own connect read is direct. From here on the session has
+    // one schedule, and the views' identical conditional reads are sent once.
+    const before = stateReads();
+    await act(() => clock.advance(1_500));
+    await waitFor(() => expect(stateReads()).toBe(before + 1));
+    await act(() => clock.advance(100));
+    expect(stateReads()).toBe(before + 1);
+    expect(second.result.current.sessionStateAvailability).toBe("current");
+
+    // Either view may leave; the other keeps its cadence alone.
+    first.unmount();
+    const alone = stateReads();
+    await act(() => clock.advance(3_000));
+    await waitFor(() => expect(stateReads()).toBeGreaterThan(alone));
+    second.unmount();
   });
 });

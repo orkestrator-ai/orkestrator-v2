@@ -13,6 +13,10 @@ import {
   type ConnectionList,
 } from "@orkestrator/protocol/connections";
 import type {
+  CommandHandoverPreviewResult,
+  CommandHandoverResult,
+} from "@orkestrator/protocol/command-nodes";
+import type {
   MacOsPermissionsStatus,
   MacOsPrivacySettingsPane,
 } from "@orkestrator/protocol/macos-permissions";
@@ -419,6 +423,20 @@ export function createOrkestratorElectronApi(ipcRenderer: IpcRendererLike) {
       },
       use(connectionId: string): Promise<ConnectionList> {
         return ipcRenderer.invoke("orkestrator:connections:use", connectionId);
+      },
+      previewCommandHandover(targetConnectionId: string): Promise<CommandHandoverPreviewResult> {
+        return ipcRenderer.invoke(
+          "orkestrator:connections:preview-command-handover",
+          targetConnectionId,
+        );
+      },
+      handOverCommand(input: {
+        targetConnectionId: string;
+        nodeIds?: string[];
+        connectionIds: string[];
+        includeSelf: boolean;
+      }): Promise<CommandHandoverResult | null> {
+        return ipcRenderer.invoke("orkestrator:connections:hand-over-command", input);
       },
       forget(connectionId: string): Promise<ConnectionList> {
         return ipcRenderer.invoke("orkestrator:connections:forget", connectionId);

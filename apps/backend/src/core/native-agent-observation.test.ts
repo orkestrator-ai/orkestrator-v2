@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { NATIVE_QUIET_BACKOFF_QUALIFIED_PLATFORMS } from "@orkestrator/protocol/native-agent-observation";
+import {
+  NATIVE_QUIET_BACKOFF_CONTENT_REVISION_PLATFORMS,
+  NATIVE_QUIET_BACKOFF_QUALIFIED_PLATFORMS,
+} from "@orkestrator/protocol/native-agent-observation";
 import { BUILD_PIPELINE_AGENTS } from "@orkestrator/protocol/build-pipeline";
 import {
   MAX_OBSERVATION_RECORDS,
@@ -229,14 +232,22 @@ describe("observation capability matrix", () => {
         (NATIVE_QUIET_BACKOFF_QUALIFIED_PLATFORMS as readonly string[]).includes(agent),
       );
     }
-    // Only OpenCode's backend-held event stream qualifies idle backoff today.
+    // A backend-held event stream qualifies idle backoff: OpenCode's SDK
+    // stream, and the Claude and Codex bridges' observation streams. Cursor,
+    // Pi and Grok bridges publish none.
     expect(
       Object.entries(NATIVE_AGENT_OBSERVATION_CAPABILITIES)
         .filter(([, capabilities]) => capabilities.idleBackoffWakeup !== null)
-        .map(([agent]) => agent),
-    ).toEqual(["opencode"]);
-    // Providers whose idle views change without a transition stay unqualified.
-    expect(NATIVE_AGENT_OBSERVATION_CAPABILITIES.claude.quietClientBackoff).toBe(false);
-    expect(NATIVE_AGENT_OBSERVATION_CAPABILITIES.codex.quietClientBackoff).toBe(false);
+        .map(([agent]) => agent)
+        .sort(),
+    ).toEqual(["claude", "codex", "opencode"]);
+    // Providers whose idle views change without a transition qualify only
+    // through content announcements, gated per session.
+    expect(NATIVE_AGENT_OBSERVATION_CAPABILITIES.claude.quietClientBackoff).toBe(true);
+    expect(NATIVE_AGENT_OBSERVATION_CAPABILITIES.codex.quietClientBackoff).toBe(true);
+    expect([...NATIVE_QUIET_BACKOFF_CONTENT_REVISION_PLATFORMS].sort()).toEqual([
+      "claude",
+      "codex",
+    ]);
   });
 });

@@ -5720,6 +5720,22 @@ test("MultiReviewService derives all provenance labels from cited source IDs", a
         "codex/default",
       ]);
       expect(ready?.consolidatedReport?.issues[0]).not.toHaveProperty("reviewSourceIds");
+      // The source IDs are gone from the stored report, so overlap is counted
+      // at certification: both reviewers substantiated every finding.
+      const findings =
+        consolidatedReport.issues.length + consolidatedReport.testCoverageGaps.length;
+      expect(ready?.consolidationOverlap).toMatchObject({
+        version: 1,
+        reviewers: 2,
+        sourceFindings: findings * 2,
+        citedSourceFindings: findings * 2,
+        consolidatedFindings: findings,
+        singleSourceFindings: 0,
+      });
+      expect(ready?.consolidationOverlap?.positions.map((entry) => entry.novelFindings)).toEqual([
+        findings,
+        0,
+      ]);
       const consolidation = [...provider.sends.values()].find((sent) =>
         sent.prompt.includes("<multi-review-reports-json>"),
       );
@@ -8299,6 +8315,7 @@ test.each(["reviewer", "prepare", "retry", "stale-retry"] as const)(
       reviewer.resultReminderSent = true;
       reviewer.restartContinuationSent = true;
       reviewer.schemaRepairAttempts = 1;
+      reviewer.cacheReadTokens = 600;
       reviewer.status = "failed";
       reviewer.error = "The reviewer finished without submitting its report";
       if (kind === "retry" || kind === "stale-retry") workflow.phase = "failed";
@@ -8328,6 +8345,8 @@ test.each(["reviewer", "prepare", "retry", "stale-retry"] as const)(
       expect(reset.reviewers[0]?.restartContinuationSent).toBeUndefined();
       expect(reset.reviewers[0]?.schemaRepairAttempts).toBeUndefined();
       expect(reset.reviewers[0]?.status).toBe("pending");
+      expect(reset.reviewers[0]).not.toHaveProperty("cacheReadTokens");
+      expect((await snapshot(started.id))?.reviewers[0]).not.toHaveProperty("cacheReadTokens");
       expect(reset.reviewers[0]?.providerSessionId).toBeUndefined();
       expect(provider.aborted).toContain(oldSession);
       expect((await snapshot(started.id))?.reviewers[0]?.resultReminderSent).toBeUndefined();
@@ -8342,6 +8361,7 @@ test.each(["reviewer", "prepare", "retry", "stale-retry"] as const)(
         expect(fresh.requestId).not.toBe(oldRequest);
         expect(fresh.resultReminderSent).toBeUndefined();
         expect(fresh.restartContinuationSent).toBeUndefined();
+        expect(fresh).not.toHaveProperty("cacheReadTokens");
         expect(provider.sends.get(fresh.requestId!)?.prompt).toContain(
           "You are independent reviewer",
         );
@@ -8423,6 +8443,7 @@ test("MultiReviewService rewinds consolidation when a completed reviewer is rest
         };
       });
       const ready = (await snapshot(started.id))!;
+      expect(ready.consolidationOverlap).toBeDefined();
       const reviewerSessionId = ready.reviewers[0]!.providerSessionId!;
       const fixSessionId = ready.fixSession!.providerSessionId;
       const reviewerSessionKey = ready.reviewers[0]!.sessionKey!;
@@ -8434,6 +8455,8 @@ test("MultiReviewService rewinds consolidation when a completed reviewer is rest
       expect(restarted.reviewers[0]?.report).toBeUndefined();
       expect(restarted.reviewers[0]?.tokenCount).toBeUndefined();
       expect(restarted.consolidatedReport).toBeUndefined();
+      expect(restarted.consolidationOverlap).toBeUndefined();
+      expect((await snapshot(started.id))?.consolidationOverlap).toBeUndefined();
       expect(restarted.fixSession).toBeUndefined();
       expect(restarted.activeRequest).toBeUndefined();
       expect(restarted.stepRuntimes?.prepare).toBeDefined();
@@ -8449,6 +8472,7 @@ test("MultiReviewService rewinds consolidation when a completed reviewer is rest
         return workflow?.phase === "interactive" && workflow.addressPromptPending !== true;
       });
       const reconsolidated = (await snapshot(started.id))!;
+      expect(reconsolidated.consolidationOverlap).toBeDefined();
       expect(reconsolidated.reviewers[0]?.providerSessionId).not.toBe(reviewerSessionId);
       expect(reconsolidated.fixSession?.providerSessionId).not.toBe(fixSessionId);
       expect(reconsolidated.fixSession?.sessionKey).toStartWith(
@@ -8584,6 +8608,7 @@ test("MultiReviewService restarts preparation and reruns reviewers and consolida
         return (await snapshot(started.id))?.phase === "ready";
       });
       const ready = (await snapshot(started.id))!;
+      expect(ready.consolidationOverlap).toBeDefined();
       const reviewerSessionId = ready.reviewers[0]!.providerSessionId!;
 
       const restarted = await service.restartStep(started.id, "prepare", {
@@ -8599,6 +8624,8 @@ test("MultiReviewService restarts preparation and reruns reviewers and consolida
       });
       expect(restarted.reviewPackage).toBeUndefined();
       expect(restarted.consolidatedReport).toBeUndefined();
+      expect(restarted.consolidationOverlap).toBeUndefined();
+      expect((await snapshot(started.id))?.consolidationOverlap).toBeUndefined();
       expect(restarted.reviewers[0]).toMatchObject({ status: "pending" });
       expect(restarted.reviewers[0]?.providerSessionId).toBeUndefined();
 
@@ -8610,6 +8637,7 @@ test("MultiReviewService restarts preparation and reruns reviewers and consolida
       expect(rerun.reviewers[0]?.providerSessionId).not.toBe(reviewerSessionId);
       expect(rerun.reviewers[0]?.status).toBe("completed");
       expect(rerun.consolidatedReport).toBeDefined();
+      expect(rerun.consolidationOverlap).toBeDefined();
     },
     { packageFlow: true },
   );
@@ -9008,6 +9036,7 @@ test("MultiReviewService restarts consolidation without rerunning completed revi
       return (await snapshot(started.id))?.phase === "ready";
     });
     const ready = (await snapshot(started.id))!;
+    expect(ready.consolidationOverlap).toBeDefined();
     const reviewerSessionId = ready.reviewers[0]!.providerSessionId!;
     const consolidationSessionId = ready.reviewSession!.providerSessionId;
 
@@ -9028,6 +9057,8 @@ test("MultiReviewService restarts consolidation without rerunning completed revi
       providerSessionId: reviewerSessionId,
     });
     expect(restarted.consolidatedReport).toBeUndefined();
+    expect(restarted.consolidationOverlap).toBeUndefined();
+    expect((await snapshot(started.id))?.consolidationOverlap).toBeUndefined();
 
     await waitUntil(async () => {
       await service.advanceNow(started.id);
@@ -9037,6 +9068,7 @@ test("MultiReviewService restarts consolidation without rerunning completed revi
     expect(rerun.reviewers[0]?.providerSessionId).toBe(reviewerSessionId);
     expect(rerun.reviewSession?.providerSessionId).not.toBe(consolidationSessionId);
     expect(rerun.consolidatedReport).toBeDefined();
+    expect(rerun.consolidationOverlap).toBeDefined();
 
     const preparationRestart = await service.restartStep(started.id, "prepare");
     expect(preparationRestart.reviewModel).toEqual(preparationModel);
@@ -11204,6 +11236,7 @@ test("stale-snapshot retry abandons both separate review and fix sessions", asyn
         return (await snapshot(started.id))?.phase === "ready";
       });
       const ready = (await snapshot(started.id))!;
+      expect(ready.consolidationOverlap).toBeDefined();
       const oldFixSessionKey = ready.fixSessionKey;
 
       await mutateStoredWorkflow(storage, started.id, (workflow) => {
@@ -11228,6 +11261,8 @@ test("stale-snapshot retry abandons both separate review and fix sessions", asyn
       expect(retried.reviewers.every((reviewer) => reviewer.status === "pending")).toBe(true);
       expect(retried.reviewers.every((reviewer) => reviewer.report === undefined)).toBe(true);
       expect(retried.consolidatedReport).toBeUndefined();
+      expect(retried.consolidationOverlap).toBeUndefined();
+      expect((await snapshot(started.id))?.consolidationOverlap).toBeUndefined();
       expect(retried.fixSessionKey).not.toBe(oldFixSessionKey);
       expect(provider.aborted).toContain(ready.reviewSession!.providerSessionId);
       expect(provider.aborted).toContain("provider-stale-fix");

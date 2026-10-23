@@ -32,3 +32,7 @@ The long fixture exceeded 120 seconds (120,789.83 ms) in the aggregate; the comp
 - **Complete unchanged owner on the refreshed merge (`7e051d955`):** `mise run test:logged -- --name merge-long-owner -- bun test --cwd apps/web ./src/components/chat/rich-transcript.long-fixture.test.tsx --parallel=1 --only-failures` passed all three cases, exit 0 in 19.9 s.
 - **Evidence:** `orkestrator-test-run.x69ru0/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and outer `orkestrator-test-run.zXH9t0/merge-tests.log.gz` below the host temporary directory.
 - **Assessment:** confirmed intermittent deadline recurrence; contention remains a hypothesis. No implementation, assertion, timeout or skip changed.
+
+## MCP overlay review validation — 2026-10-23
+
+`mise run test:logged -- --name repository-tests -- mise run test` exceeded this owner's existing 120-second deadline at 120475.64 ms, followed by a missing `Details 58` assertion from the timed-out work. Web reported 8836 passed, ten skipped, one failed and one error. The complete unchanged three-case owner passed with `mise run test:logged -- --name transcript-owner -- bun test --cwd apps/web ./src/components/chat/rich-transcript.long-fixture.test.tsx --parallel=1 --only-failures` (exit 0, 9.0 s). No assertion, timeout or skip changed. Evidence: host temporary directory `orkestrator-test-run.ZHucAO/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer `orkestrator-test-run.MYw34M/repository-tests.log.gz`. Contention remains a hypothesis; the aggregate remains failed.

@@ -2057,8 +2057,67 @@ describe("native agent progressive remainder", () => {
     );
   });
 
+  test("does not announce a renewal whose only change is the runtime drift counter", async () => {
+    // An idle OpenCode server can keep streaming event kinds the backend has no
+    // branch for. `unknownEvents` then grows on every 30 s renewal; announcing
+    // it re-read every idle view and reset its quiet backoff (0049 item 5).
+    let now = 1_000;
+    let drift = { unknownEvents: 1, unknownKinds: ["a"] };
+    const runtimeHealth = mock(async () => ({
+      summary: { state: "ready", drift },
+      notices: [],
+      authoritative: true,
+    }));
+    const stub = createProviderStub("cursor");
+    Object.assign(stub.provider, { runtimeHealth });
+    await withService(
+      {
+        prefix: "orkestrator-progressive-discovery-drift-",
+        provider: async () => stub.provider,
+        now: () => now,
+      },
+      async ({ service, storage }) => {
+        const input = {
+          environmentId: "env-1",
+          agent: "cursor" as const,
+          logicalSessionKey: "env-env-1:discovery-drift",
+          viewVersion: 1 as const,
+          sections: ["runtime" as const],
+        };
+        await service.ensureSession(input);
+        const announced = spyOn(storage, "announceNativeAgentSessionProjection");
+        const runtime = async () => {
+          const update = await service.getDiscoveryUpdate(input);
+          if (update.status !== "snapshot") throw new Error("expected discovery snapshot");
+          return update.value.sections.runtime;
+        };
+        await runtime();
+        await waitForCondition(async () => (await runtime())?.availability === "ready");
+        expect(announced).toHaveBeenCalledTimes(1);
+
+        // The counter grows and a kind is seen again: stored, not announced.
+        drift = { unknownEvents: 7, unknownKinds: ["a"] };
+        now += 31_000;
+        await runtime();
+        await waitForCondition(() => runtimeHealth.mock.calls.length === 2);
+        await waitForCondition(
+          async () =>
+            ((await runtime())?.value as { summary: { drift: typeof drift } } | undefined)?.summary
+              .drift.unknownEvents === 7,
+        );
+        expect(announced).toHaveBeenCalledTimes(1);
+
+        // A new kind is something to show: announced.
+        drift = { unknownEvents: 8, unknownKinds: ["a", "b"] };
+        now += 31_000;
+        await runtime();
+        await waitForCondition(async () => announced.mock.calls.length === 2);
+      },
+    );
+  });
+
   test.each([false, true])(
-    "announces discovery timeout semantics once and announces recovery (cached: %s)",
+    "announces discovery timeout semantics once (unless a value is retained) and announces recovery (cached: %s)",
     async (cached) => {
       let now = 1_000;
       let held = false;
@@ -2111,7 +2170,9 @@ describe("native agent progressive remainder", () => {
             expect(first?.value).toEqual(
               cached ? { summary: health.summary, notices: [] } : undefined,
             );
-            expect(announced).toHaveBeenCalledTimes(1);
+            // A retained value that only went stale shows the same content, so
+            // it is stored for the next read but not announced (0049 item 5).
+            expect(announced).toHaveBeenCalledTimes(cached ? 0 : 1);
 
             // Finish the timed-out read with the same error, then expire its
             // fallback so a second actual read reaches the deadline too.
@@ -2124,7 +2185,7 @@ describe("native agent progressive remainder", () => {
             await Bun.sleep(2_100);
             const repeated = await section();
             expect(repeated).toEqual(first);
-            expect(announced).toHaveBeenCalledTimes(1);
+            expect(announced).toHaveBeenCalledTimes(cached ? 0 : 1);
 
             // A late successful result changes availability and contents and
             // must wake readers even after its own deadline has fired.
@@ -2134,7 +2195,7 @@ describe("native agent progressive remainder", () => {
             expect(recovered?.value?.summary.state).toBe("detached");
             expect(recovered?.revision).toBe((first?.revision ?? 0) + 1);
             expect(recovered?.error).toBeUndefined();
-            expect(announced).toHaveBeenCalledTimes(2);
+            expect(announced).toHaveBeenCalledTimes(cached ? 1 : 2);
             expect(announced).toHaveBeenLastCalledWith("env-1", {
               agent: "cursor",
               logicalSessionKey: input.logicalSessionKey,

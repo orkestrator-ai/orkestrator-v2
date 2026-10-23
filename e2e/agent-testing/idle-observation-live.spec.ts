@@ -1378,6 +1378,24 @@ test.describe("live idle observation", () => {
         await runCase("detach", async (record) => {
           const before = await projection();
           record.notes.push(`runtime before: ${before?.runtime?.state ?? "unknown"}`);
+          /*
+           * Backend side of the idle cost (0049 code item 1): a provider group
+           * the activity sweep skips counts as a `native-activity-sweep` cache
+           * hit, a group it reads as a miss. Profile-wide counters, so only an
+           * otherwise idle profile isolates one provider.
+           */
+          const sweepCounters = async () => {
+            const diagnostics = (await client
+              .invoke("get_recurring_work_diagnostics", {})
+              .catch(() => null)) as {
+              metrics?: {
+                kinds?: Record<string, { cacheHits?: number; cacheMisses?: number }>;
+              };
+            } | null;
+            const sweep = diagnostics?.metrics?.kinds?.["native-activity-sweep"];
+            return { skipped: sweep?.cacheHits ?? 0, read: sweep?.cacheMisses ?? 0 };
+          };
+          const sweepsBefore = await sweepCounters();
           const idleStart = Date.now();
           const commandsBefore = { ...client.readCommands };
           let sawStop = false;
@@ -1403,6 +1421,10 @@ test.describe("live idle observation", () => {
               .filter(([, count]) => count > 0),
           );
           record.notes.push(`idle reads by command: ${JSON.stringify(commandsDuring)}`);
+          // Sampled after the read counts so it is not one of them.
+          const sweepsAfter = await sweepCounters();
+          record.timings.backendGroupReads = sweepsAfter.read - sweepsBefore.read;
+          record.timings.backendGroupSkips = sweepsAfter.skipped - sweepsBefore.skipped;
           await expect
             .poll(runtimeState, { timeout: 40_000, intervals: [500] })
             .not.toBeUndefined();

@@ -341,9 +341,12 @@ Found on the way, none of them in the pause path:
 
 1. Codex refuses `request_user_input` in every Orkestrator turn (item 13).
 2. Two OpenCode servers starting in the same second can lose one to `database
-   is locked`, and that turn then waits silently
-   ([0002-session-lifecycle-consistency.md](0002-session-lifecycle-consistency.md) item
-   5). The spec starts a provider's cases one after the other.
+   is locked`. Fixed 2026-10-23 in
+   [0002-session-lifecycle-consistency.md](0002-session-lifecycle-consistency.md):
+   host OpenCode starts are serialised and a locked start is retried. The
+   "silent wait" was this spec ignoring a refused dispatch, which it now
+   fails on at once. The spec still starts a provider's cases one after the
+   other.
 3. A harness bug selected the Codex card's optional "Approve with command
    policy", which wrote a durable rule into the host's
    `~/.codex/rules/default.rules`, because a profile shares the host Codex

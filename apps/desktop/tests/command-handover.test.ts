@@ -1,11 +1,15 @@
 import { describe, expect, mock, test } from "bun:test";
 
-import type { NodeImportEntry } from "@orkestrator/protocol/command-nodes";
+import type {
+  CommandHandoverConfirmation,
+  NodeImportEntry,
+} from "@orkestrator/protocol/command-nodes";
 import type { BackendId, RouteId } from "@orkestrator/protocol/federation";
 
 import {
   handOverCommandNode,
   previewCommandHandover,
+  parseCommandHandoverInput,
   type CommandHandoverDeps,
 } from "../electron/command-handover.js";
 
@@ -14,6 +18,13 @@ const ids: Record<string, BackendId> = {
   mini: "bk_mini" as BackendId,
   gram: "bk_gram" as BackendId,
 };
+
+function confirmation(
+  repairs: CommandHandoverConfirmation["repairs"] = [],
+  targetInspectionComplete = true,
+): CommandHandoverConfirmation {
+  return { sourceNodeId: ids.local!, targetNodeId: ids.mini!, repairs, targetInspectionComplete };
+}
 
 function entry(name: string): NodeImportEntry {
   return {
@@ -61,7 +72,8 @@ function deps(options: { current: string; leafOf?: BackendId; registered?: Backe
       installationIdOf: (connectionId: string) => ids[connectionId] ?? null,
       connectionIdOf: (nodeId: BackendId) =>
         Object.entries(ids).find(([, id]) => id === nodeId)?.[0] ?? null,
-      machineImportEntry: async (connectionId: string) => entry(connectionId),
+      machineImportEntry: async (connectionId: string): Promise<NodeImportEntry | null> =>
+        entry(connectionId),
     },
   };
 }
@@ -71,6 +83,7 @@ describe("making another machine the command node", () => {
     const { calls, deps: handover } = deps({ current: "local", registered: [ids.mini!] });
     await handOverCommandNode(handover, {
       targetConnectionId: "mini",
+      confirmation: confirmation(),
       connectionIds: ["gram", "mini", "local"],
       includeSelf: true,
     });
@@ -88,6 +101,7 @@ describe("making another machine the command node", () => {
     const { calls, deps: handover } = deps({ current: "local", registered: [] });
     await handOverCommandNode(handover, {
       targetConnectionId: "mini",
+      confirmation: confirmation(),
       connectionIds: [],
       includeSelf: true,
     });
@@ -116,6 +130,7 @@ describe("making another machine the command node", () => {
     expect(preview.kind).toBe("preview");
     await handOverCommandNode(handover, {
       targetConnectionId: "mini",
+      confirmation: confirmation(),
       connectionIds: [],
       includeSelf: true,
     });
@@ -145,7 +160,7 @@ describe("a target that refuses the command node in charge", () => {
    * mbp3 controls mini, but mini lists mbp3 among its own machines and its
    * user detached mbp3 there, so each refuses the other.
    */
-  function looped() {
+  function looped(options: { registered?: boolean; standalone?: boolean } = {}) {
     const calls: Array<{ connectionId: string; command: string; args: unknown }> = [];
     const mini = { registered: [ids.local!, ids.gram!], detached: [ids.local!] };
     let link: "refused" | "connected" = "refused";
@@ -175,13 +190,22 @@ describe("a target that refuses the command node in charge", () => {
       }
       if (connectionId === "local") {
         if (command === "get_node_status") {
-          return { mode: "command", controllers: [], detachedControllers: [] };
+          return {
+            mode: options.standalone ? "standalone" : "command",
+            controllers: [],
+            detachedControllers: [],
+          };
         }
         if (command === "list_nodes") {
-          return { nodes: [{ nodeId: ids.mini, connection: { state: link } }] };
+          return {
+            nodes:
+              options.registered === false
+                ? []
+                : [{ nodeId: ids.mini, connection: { state: link } }],
+          };
         }
         if (command === "preview_command_handover") return { targetNodeId: nodeId };
-        if (command === "reconnect_node") {
+        if (command === "add_node" || command === "reconnect_node") {
           link =
             mini.registered.includes(ids.local!) || mini.detached.includes(ids.local!)
               ? "refused"
@@ -219,6 +243,7 @@ describe("a target that refuses the command node in charge", () => {
     const { calls, mini, deps: handover } = looped();
     await handOverCommandNode(handover, {
       targetConnectionId: "mini",
+      confirmation: confirmation(["forget-source-on-target", "allow-source-on-target"]),
       connectionIds: [],
       includeSelf: true,
     });
@@ -234,6 +259,141 @@ describe("a target that refuses the command node in charge", () => {
     ]);
   });
 
+  test("a standalone source with only a refused target still previews repairs", async () => {
+    const { deps: handover } = looped({ standalone: true });
+    expect(await previewCommandHandover(handover, "mini")).toMatchObject({
+      kind: "preview",
+      repairs: ["forget-source-on-target", "allow-source-on-target"],
+    });
+  });
+
+  test("repairs also precede registering a target the source does not control", async () => {
+    const { deps: handover, calls } = looped({ registered: false });
+    await handOverCommandNode(handover, {
+      targetConnectionId: "mini",
+      connectionIds: [],
+      includeSelf: true,
+      confirmation: confirmation(["forget-source-on-target", "allow-source-on-target"]),
+    });
+    expect(
+      calls
+        .filter((call) =>
+          ["forget_node", "allow_controller", "add_node", "hand_over_command"].includes(
+            call.command,
+          ),
+        )
+        .map((call) => call.command),
+    ).toEqual(["forget_node", "allow_controller", "add_node", "hand_over_command"]);
+  });
+
+  test("missing target credentials fails before any repair writes", async () => {
+    const { deps: handover, calls, mini } = looped({ registered: false });
+    handover.machineImportEntry = async () => null;
+    await expect(
+      handOverCommandNode(handover, {
+        targetConnectionId: "mini",
+        connectionIds: [],
+        includeSelf: true,
+        confirmation: confirmation(["forget-source-on-target", "allow-source-on-target"]),
+      }),
+    ).rejects.toThrow("no address and token");
+    expect(mini.detached).toEqual([ids.local!]);
+    expect(mini.registered).toContain(ids.local!);
+    expect(
+      calls.some((call) => ["forget_node", "allow_controller", "add_node"].includes(call.command)),
+    ).toBe(false);
+  });
+
+  for (const failure of ["add_node", "reconnect_node", "hand_over_command"] as const) {
+    test(`discloses persistent repairs after ${failure} rejects`, async () => {
+      const { deps: handover, mini } = looped({ registered: failure !== "add_node" });
+      const invoke = handover.invokeOn;
+      handover.invokeOn = (async (connection, command, args) => {
+        if (connection === "local" && command === failure) throw new Error(`${failure} rejected`);
+        return invoke(connection, command, args);
+      }) as CommandHandoverDeps["invokeOn"];
+      await expect(
+        handOverCommandNode(handover, {
+          targetConnectionId: "mini",
+          connectionIds: [],
+          includeSelf: true,
+          confirmation: confirmation(["forget-source-on-target", "allow-source-on-target"]),
+        }),
+      ).rejects.toThrow("Target-side repair changes remain in place");
+      expect(mini).toEqual({ registered: [ids.gram!], detached: [] });
+    });
+  }
+
+  test("a reconnect that remains refused reports the failure and retained repairs", async () => {
+    const { deps: handover } = looped();
+    const invoke = handover.invokeOn;
+    handover.invokeOn = (async (connection, command, args) => {
+      if (connection === "local" && command === "reconnect_node")
+        return { connection: { state: "refused" } };
+      return invoke(connection, command, args);
+    }) as CommandHandoverDeps["invokeOn"];
+    await expect(
+      handOverCommandNode(handover, {
+        targetConnectionId: "mini",
+        connectionIds: [],
+        includeSelf: true,
+        confirmation: confirmation(["forget-source-on-target", "allow-source-on-target"]),
+      }),
+    ).rejects.toThrow("Target-side repair changes remain in place");
+  });
+
+  for (const failedRead of ["get_node_status", "list_nodes"] as const) {
+    test(`a failed target ${failedRead} never authorizes unseen repairs`, async () => {
+      const { deps: handover, calls } = looped();
+      const invoke = handover.invokeOn;
+      let fail = true;
+      handover.invokeOn = (async (connection, command, args) => {
+        if (fail && connection === "mini" && command === failedRead) throw new Error("offline");
+        return invoke(connection, command, args);
+      }) as CommandHandoverDeps["invokeOn"];
+      expect(await previewCommandHandover(handover, "mini")).toMatchObject({
+        targetInspectionComplete: false,
+      });
+      fail = false;
+      await expect(
+        handOverCommandNode(handover, {
+          targetConnectionId: "mini",
+          connectionIds: [],
+          includeSelf: true,
+          confirmation: confirmation([], false),
+        }),
+      ).rejects.toThrow("preview changed");
+      expect(
+        calls.some((call) =>
+          ["forget_node", "allow_controller", "reconnect_node"].includes(call.command),
+        ),
+      ).toBe(false);
+    });
+  }
+
+  test("new repairs require a fresh confirmation", async () => {
+    const { deps: handover, calls, mini } = looped();
+    mini.registered = [];
+    mini.detached = [];
+    expect(await previewCommandHandover(handover, "mini")).toMatchObject({
+      kind: "preview",
+      targetInspectionComplete: true,
+    });
+    // The target's user detaches the source after the preview was shown.
+    mini.detached.push(ids.local!);
+    await expect(
+      handOverCommandNode(handover, {
+        targetConnectionId: "mini",
+        connectionIds: [],
+        includeSelf: true,
+        confirmation: confirmation([]),
+      }),
+    ).rejects.toThrow("preview changed");
+    expect(calls.some((call) => ["forget_node", "allow_controller"].includes(call.command))).toBe(
+      false,
+    );
+  });
+
   test("without its own connection to the target, the device leaves the refusal to the backend", async () => {
     const { calls, deps: handover } = looped();
     const invoke = handover.invokeOn;
@@ -242,10 +402,25 @@ describe("a target that refuses the command node in charge", () => {
         ? Promise.reject(new Error("mini is not connected. Connect to it first."))
         : invoke(connectionId, command, args)) as CommandHandoverDeps["invokeOn"];
     const result = await previewCommandHandover(handover, "mini");
-    expect(result).toEqual({ kind: "preview", preview: { targetNodeId: ids.mini } as never });
+    expect(result).toEqual({
+      kind: "preview",
+      preview: { targetNodeId: ids.mini } as never,
+      targetInspectionComplete: false,
+    });
     expect(calls.find((entry) => entry.command === "preview_command_handover")?.args).toEqual({
       nodeId: ids.mini,
     });
+    await expect(
+      handOverCommandNode(handover, {
+        targetConnectionId: "mini",
+        connectionIds: [],
+        includeSelf: true,
+        confirmation: confirmation([], false),
+      }),
+    ).rejects.toThrow("mini is not connected");
+    expect(calls.some((call) => ["forget_node", "allow_controller"].includes(call.command))).toBe(
+      false,
+    );
   });
 });
 
@@ -274,6 +449,7 @@ describe("handover client failure paths", () => {
     await expect(
       handOverCommandNode(handover, {
         targetConnectionId: "mini",
+        confirmation: confirmation(),
         connectionIds: [],
         includeSelf: true,
       }),
@@ -296,6 +472,7 @@ describe("handover client failure paths", () => {
     await expect(
       handOverCommandNode(handover, {
         targetConnectionId: "mini",
+        confirmation: confirmation(),
         connectionIds: [],
         includeSelf: true,
       }),
@@ -342,4 +519,41 @@ describe("handover client failure paths", () => {
     }) as never;
     await expect(previewCommandHandover(handover, "mini")).rejects.toThrow("Connect to it first");
   });
+});
+
+test("handover confirmation is parsed and malformed repairs are rejected", () => {
+  const input = {
+    targetConnectionId: "mini",
+    connectionIds: [],
+    includeSelf: true,
+    confirmation: confirmation(),
+  };
+  expect(parseCommandHandoverInput(input)).toEqual(input);
+  for (const invalid of [
+    null,
+    {},
+    { ...confirmation(), repairs: ["unexpected"] },
+    { ...confirmation(), sourceNodeId: "" },
+  ]) {
+    expect(() => parseCommandHandoverInput({ ...input, confirmation: invalid })).toThrow(
+      "confirmation details",
+    );
+  }
+});
+
+test("a different source identity cannot execute the confirmed plan", async () => {
+  const { deps: handover, calls } = deps({ current: "local", registered: [ids.mini!] });
+  await expect(
+    handOverCommandNode(handover, {
+      targetConnectionId: "mini",
+      connectionIds: [],
+      includeSelf: true,
+      confirmation: { ...confirmation(), sourceNodeId: ids.gram! },
+    }),
+  ).rejects.toThrow("preview changed");
+  expect(
+    calls.some((call) =>
+      ["forget_node", "allow_controller", "hand_over_command"].includes(call.command),
+    ),
+  ).toBe(false);
 });

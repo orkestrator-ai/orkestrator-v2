@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { COMMAND_HANDOVER_PREVIEW_CHANGED } from "@orkestrator/protocol/command-nodes";
 import { Loader2, ShieldAlert } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -73,6 +74,23 @@ export function CommandHandoverDialog() {
       finish(current);
     } catch (error) {
       toast.error("Could not change the command node", { description: errorText(error) });
+      if (
+        errorText(error).includes(COMMAND_HANDOVER_PREVIEW_CHANGED) ||
+        errorText(error).includes("Target-side repair changes remain in place")
+      ) {
+        try {
+          const updated = await loadHandoverPlan(current);
+          if (updated.kind === "plan") {
+            setPlan(updated);
+            setChosen(new Set(updated.machines.map((machine) => machine.key)));
+            setIncludeSelf(updated.preview.self.reachable);
+          }
+        } catch (refreshError) {
+          toast.error("Could not refresh the handover", { description: errorText(refreshError) });
+          setPlan(null);
+          setTarget(null);
+        }
+      }
       setBusy(false);
     }
   };
@@ -96,7 +114,12 @@ export function CommandHandoverDialog() {
         setChosen(keys);
         setIncludeSelf(selfChoice);
         // Nothing to choose or clear: go ahead. A failure leaves the dialog open to retry.
-        if (loaded.machines.length === 0 && selfChoice && loaded.repairs.length === 0) {
+        if (
+          loaded.machines.length === 0 &&
+          selfChoice &&
+          loaded.repairs.length === 0 &&
+          loaded.targetInspectionComplete
+        ) {
           await execute(target, loaded, keys, true);
           return;
         }
@@ -205,6 +228,9 @@ export function CommandHandoverDialog() {
           >
             <ShieldAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             <div className="space-y-1">
+              <p>
+                These repair changes remain on {preview.targetName} if a later handover step fails.
+              </p>
               {plan.repairs.includes("forget-source-on-target") ? (
                 <p>
                   {preview.targetName} lists {preview.self.displayName} as one of its own machines,
@@ -220,6 +246,12 @@ export function CommandHandoverDialog() {
               ) : null}
             </div>
           </div>
+        ) : null}
+        {!plan.targetInspectionComplete ? (
+          <p role="status" className="text-xs text-muted-foreground">
+            This device could not fully inspect {preview.targetName}. If repairs are discovered, you
+            will review them before continuing.
+          </p>
         ) : null}
         {!preview.self.reachable ? (
           <p className="flex gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-2 text-xs text-amber-100">

@@ -672,7 +672,10 @@ export class NodeService {
             NODE_REFUSAL_CODES.tooManyNodes,
             "Too many nodes are registered.",
           );
-        if (current.nodes.some((node) => node.nodeId === record.nodeId)) {
+        if (
+          current.pendingHandover?.target.nodeId === record.nodeId ||
+          current.nodes.some((node) => node.nodeId === record.nodeId)
+        ) {
           throw new NodeRefusalError(
             NODE_REFUSAL_CODES.duplicateNode,
             "That node is already registered.",
@@ -854,8 +857,9 @@ export class NodeService {
         if (
           (once && importedSources.includes(entry.importedFrom)) ||
           nodeId === selfId ||
+          nodeId === registry.pendingHandover?.target.nodeId ||
           existing >= 0 ||
-          nodes.length >= MAX_REGISTERED_NODES
+          nodes.length + (registry.pendingHandover ? 1 : 0) >= MAX_REGISTERED_NODES
         ) {
           skipped += 1;
           if (once && !importedSources.includes(entry.importedFrom))
@@ -1102,7 +1106,11 @@ export class NodeService {
       } catch (error) {
         // Only these refusals prove adoption never committed. Other failures can
         // occur after persistence or during controller detach; keep the journal.
-        if (error instanceof NodeRefusalError && error.code === NODE_REFUSAL_CODES.tooManyNodes) {
+        if (
+          error instanceof NodeRefusalError &&
+          (error.code === NODE_REFUSAL_CODES.tooManyNodes ||
+            error.code === NODE_REFUSAL_CODES.notController)
+        ) {
           await this.mutateRegistry((current) => ({
             next: {
               ...current,
@@ -1111,13 +1119,6 @@ export class NodeService {
                 ? current.nodes
                 : [...current.nodes, target],
             },
-            result: undefined,
-          }));
-          throw error;
-        }
-        if (error instanceof NodeRefusalError && error.code === NODE_REFUSAL_CODES.notController) {
-          await this.mutateRegistry((current) => ({
-            next: { ...current, pendingHandover: undefined },
             result: undefined,
           }));
           throw error;

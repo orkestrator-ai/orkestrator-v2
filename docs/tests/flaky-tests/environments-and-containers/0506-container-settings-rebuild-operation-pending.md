@@ -29,3 +29,13 @@
 - **Assessment:** confirmed intermittent recurrence. The exact cause remains unproven; no timeout or skip changed.
 
 - **Cleanup (2026-10-21 merge):** `dev:stop` and `dev:reset` completed for `merge-main-20261021-dab5ea29`, removing two exact-owner containers, four volumes, one network and disposable profile state. The one-shot browser runner stopped/reset its own `qa-browser-c5dc6bca-3dd` profile. No manual profile state was retained.
+
+## Full-network fixture recurrence — 2026-10-23 (todo 0019)
+
+- **Original command:** `ORKESTRATOR_AGENT_TEST_PROFILE=q0019-residuals mise run test:logged -- --name docker-full -- mise run test:agent:docker` (01:29Z), on a profile started with `--fixture-network full --no-agent-credentials --agent-platforms codex,grok,opencode`, image `orkestrator-v2:dev-0e7293c379f3` (source `06297124`).
+- **Configuration:** one Playwright worker; host load average 60–69 from other environments' runs.
+- **Failure:** the desktop case did not find Resources within five seconds; the section was still showing "Checking recovery copies…". The rebuild-cycle case before it failed in the same run ([0518](../aggregate-validation-runs/0518-design-rerun-main-merge-docker-preview.md)).
+- **Original result:** eight passed, two skipped, three failed (one was a bug in the new root-terminal spec, since fixed).
+- **Rerun:** the same command, unchanged, at 01:45Z passed all eleven cases with two opt-in skips in 4.9 minutes. That rerun was the whole Docker set rather than the owning file alone.
+- **Evidence:** lost; the run artifacts were under `/tmp` and the host rebooted afterwards.
+- **Assessment:** recurrence under load. No timeout, assertion or skip changed. The profile was stopped and reset.

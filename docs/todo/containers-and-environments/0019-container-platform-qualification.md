@@ -1,65 +1,321 @@
 # Container platform qualification
 
-Checked against `main` at `31d0fb06` (2026-10-17).
+Checked against `main` at `06297124` (2026-10-23).
 
 The container lifecycle (durable operations, persistent storage, staged
 inputs, per-environment networks, resource budgets, bounded logs) shipped in
-#877 with live evidence from Linux Docker Engine 29.7.2 on amd64. On
-2026-10-17 the full live set also passed on Docker Desktop for Apple Silicon
-(see [Results, 2026-10-17](#results-2026-10-17)). This file lists the
-real-platform and real-provider evidence that is still missing, and how to
-reproduce the suites that produce it. Until it exists, rootless Engine and
-five of the six providers' session resume are claims the product gates rather
-than behaviour it has shown.
+#877 with live evidence from Linux Docker Engine 29.7.2 on amd64. The full
+live set has since passed on Docker Desktop for Apple Silicon three times
+(2026-10-17, and twice on 2026-10-23 with two new fault suites). Provider
+session resume after a rebuild is now qualified for every provider except
+Grok. What is still missing needs hardware, accounts or a host this pass did
+not have: a real Linux rootless Engine, a live Grok login, a daemon-wide
+restart, and Linux Engine evidence from the new scheduled CI job.
 
 ## Current state
 
-- Four opt-in live suites run against a real daemon when
+- Six opt-in live suites run against a real daemon when
   `RUN_LIVE_DOCKER_TESTS=1` and `ORKESTRATOR_QUALIFICATION_IMAGE=<image>` are
-  set: `apps/backend/tests/container-live-qualification.test.ts`,
-  `container-live-replacement.test.ts`, `container-live-network.test.ts` and
-  `container-live-firewall.test.ts`. Between them they cover C09, C11, C12,
-  C14–C20, C22–C24 and C26. Every resource carries a per-run label and an
-  owner label derived from a private temporary data directory, and `afterAll`
-  removes exactly those resources. Their shared fixture
-  (`memoryLifecycleContext`) supplies an empty account store, which container
-  creation has needed since account switching (#889).
+  set, all under `apps/backend/tests/`:
+  - `container-live-qualification.test.ts`: C09, C11, C12, C20;
+  - `container-live-replacement.test.ts`: C14–C19;
+  - `container-live-network.test.ts`: C22, C24, C26;
+  - `container-live-firewall.test.ts`: C23;
+  - `container-live-readiness.test.ts` (new): readiness fault injection,
+    C10, the C22 host-service reply and a C23 firewall re-run;
+  - `container-live-rebuild-faults.test.ts` (new): a daemon disconnect
+    mid-copy, and a kill just before and after the rebuild commit write (C15).
+
+  Every resource carries a per-run label and an owner label derived from a
+  private temporary data directory, and `afterAll` removes exactly those
+  resources.
+- `.github/workflows/container-live-qualification.yml` (new) runs all six on
+  `ubuntu-24.04` and `ubuntu-24.04-arm` (a real Linux Engine on both
+  architectures): weekly, on demand, and on pull requests that change the
+  suites. `tests/unit/ci-workflows.test.ts` fails if a live suite is missing
+  from it.
 - The benchmark harness is `apps/backend/tests/container-benchmarks.test.ts`
-  (`RUN_CONTAINER_BENCHMARKS=1`). It writes JSON under `output/benchmarks/`
-  and covers C28.
-- `docker/tests/final-image-smoke.sh <image>` runs in
-  `.github/workflows/validate-bun-runtime.yml` on the native amd64 and arm64
-  builds (manifest versions against the installed CLIs, every bridge's
-  `/global/health`, Codex's code-mode host, Chromium). That is the smoke half
-  of C27. The live C-scenarios ran natively on arm64 on 2026-10-17.
-- Real-stack specs: `e2e/agent-testing/container-rebuild-cycle.spec.ts` (C29)
-  and `e2e/agent-testing/container-settings.spec.ts` both match the
-  "Docker fixture" grep of `test:agent:docker`.
-  `e2e/agent-testing/container-approval-stop.spec.ts` (C11 approval half)
-  matches it too, but runs only with
-  `ORKESTRATOR_AGENT_TEST_LIVE_CONTAINER_APPROVAL=1`, because it sends a real
-  Claude turn. `test:agent:browser:isolated` covers the local-worktree
-  regression (C30).
-- Provider session resume after a rebuild is gated by
-  `RESUME_QUALIFIED_PROVIDERS` in `apps/backend/src/core/container-replacement.ts`,
-  which holds only `claude`. `rebuildPreview` marks every other provider's
-  resume as unverified. `scripts/qualify-session-resume.sh <profile> <agent>
-  [environment-name]` is the C13 driver: it plants a codeword, rebuilds onto a
-  new runtime generation and checks the resumed session repeats it (exit 0
-  pass, 1 fail, 2 setup error).
-- `detectDockerTopology` (`apps/backend/src/core/docker-image.ts`) reports
-  `desktop` and `rootless`. Desktop is qualified; rootless is not. The living
-  doc says "Qualified locally: Docker Engine 29.7.2 on Linux amd64 and Docker
-  Desktop 4.93.0 (Engine 29.8.1) on Apple Silicon".
-- Unit-only today: readiness failure typing (`apps/backend/tests/container-readiness.test.ts`),
-  C10 (setup interrupted after a side effect), the fixture half of C21
-  (interrupted revoke, staging interrupted by a restart), and kill-at-every-phase
-  reconciliation of a rebuild. The live half of C21 ran for Codex on
-  2026-10-21 (results below).
+  (`RUN_CONTAINER_BENCHMARKS=1`, C28). `docker/tests/final-image-smoke.sh`
+  runs in CI on both architectures (C27).
+- Real-stack specs (`test:agent:docker`): `container-rebuild-cycle.spec.ts`
+  (C29), `container-settings.spec.ts`, `container-root-terminal.spec.ts`
+  (new: **New root terminal**, uid 0, outbound access by network mode) and the
+  opt-in live `container-approval-stop.spec.ts` (C11 approval half). `dev:test
+  --fixture-network full` (new) creates the fixture container in full network
+  mode. `test:agent:browser:isolated` covers the local-worktree regression
+  (C30).
+- `RESUME_QUALIFIED_PROVIDERS` (`container-replacement.ts`) holds `claude`,
+  `codex`, `opencode`, `cursor` and `pi`. Only Grok's resume is still shown as
+  unverified. `scripts/qualify-session-resume.sh` is the C13 driver; it now
+  takes `QUALIFY_MODEL`, `QUALIFY_REASONING`, `QUALIFY_REQUEST_TIMEOUT` and an
+  ambiguous-dispatch phase (`QUALIFY_AMBIGUOUS=1`).
+- Rootless daemons are supported with gated features. Every create,
+  `update_environment_resources` and the rebuild preflight refuse a budget
+  axis the daemon reports it cannot enforce (`refuseUnenforceableLimits` in
+  `container-resources.ts`). A restricted firewall that cannot apply fails the
+  boot closed. Rootless has been exercised only in a nested `docker:dind-rootless`.
+- New scripts: `scripts/measure-registry-image.sh` (compressed sizes,
+  blob transfer and a cold pull in a throwaway dind) and
+  `scripts/qualify-backend-upgrade-rollback.ts` (real releases over a shared
+  data directory).
+- A committed stop withdraws the environment's outstanding agent requests
+  from the session projection (`withdrawEnvironmentInteractions`).
 
 The commands that reproduce the evidence, the C01–C30 scenario matrix, the
 platform dimensions and the benchmark targets are in
 [container-qualification.md](../../development/container-qualification.md).
+Gaps this pass found but did not fix are in
+[0056-container-qualification-follow-ups.md](0056-container-qualification-follow-ups.md).
+
+## Results, 2026-10-23
+
+Source `06297124` (`main`) plus this change. Host: macOS 27.0, Apple M5 Pro,
+18 CPUs, Docker Desktop 4.95.0 (Engine 29.8.2, API 1.56, linuxkit 7.0.14,
+`linux/arm64`, VM 8.3 GB). Image `orkestrator-v2:dev-0e7293c379f3`
+(`sha256:18aae7894d756cee1a5e6af1d29b33035c9644bddc2726fc1e48fec5d35572d6`),
+manifest source revision `06297124`, app version 2.26.3-beta, built with
+`mise run docker:build:dev`. Everything was native arm64. Other environments
+shared the host and daemon: load averages were 20–93 for the first session
+(00:48–03:10 BST). The host then rebooted, which deleted the `/tmp` evidence
+of that session; the C13, registry, upgrade/rollback and benchmark figures
+below were re-run afterwards (09:54–10:40 BST, load 5–124). Every product
+fix below has a unit test that fails without it.
+
+### Live suites (first session)
+
+| Suite | Result |
+| --- | --- |
+| `final-image-smoke.sh` | Pass (CLI versions, five bridges' `/global/health`, Codex code-mode host, Chromium) |
+| Lifecycle | 6/6. The first baseline was 5/6: the C20 fixture still used a Codex `auth.json` of `{"fixture":true}`, which staging now withholds as holding no login (#1114). Fixture fixed |
+| Replacement | 10/10, three times (baseline, final, and after the shared fixture moved to `container-live-workspace.ts`) |
+| Network | 4/4 |
+| Firewall | 2/2. One run leaked two networks: Bun's 5 s default `afterAll` timeout cut cleanup short under load. The lifecycle, network and firewall suites now give `afterAll` 180 s; rerun clean |
+| Readiness (new) | 8/8, twice. Both restart branches were seen |
+| Rebuild faults (new) | 5/5, twice (after the two fixes below) |
+| `test:agent:docker`, full-network fixture | 11 passed, 2 opt-in skips (second run; the first had two load timeouts, flakes 0506 and 0518) |
+| Root terminal, restricted fixture | 1/1 |
+
+Readiness faults, each injected through a test fixture (a derived image, an
+adopted `--internal` network, a held boot) and each refused as a typed,
+retryable `not-ready` with no setup, no agent launch and the launch intent
+cleared: missing firewall script, DNS and bootstrap failure, an unwritable
+status directory, a torn status write plus a stray temporary record (timed
+out, never `ready`), and a `docker restart` of the container during launch
+(the earlier boot is never accepted). A firewall re-run that loses DNS fails
+closed: 10–12 samples during the re-run were all blocked and the policy
+reports `failed`. C10: with setup killed after its side effect, the
+environment is marked failed, nothing launches, and the side effect happened
+exactly once after a wait and after a restart. C22: the real agent-tools
+server answers from inside the restricted container (HTTP 405 to a GET, 200 to
+an authenticated `tools/list`) and another host port is refused.
+
+Rebuild faults: a Docker API proxy on a unix socket, pointed to by
+`DOCKER_HOST` in the test process only, cut an archive stream after 8 MiB, cut
+a copy helper as it started, and spanned the whole copy phase. Each time the
+original stayed authoritative and byte-identical, the candidate set was kept
+as one `failed-candidate` copy, reconciliation found nothing unresolved, and
+exactly one authoritative set existed. A child process parked just before and
+just after the commit write and was killed with SIGKILL: before commit,
+reconciliation settled the operation as interrupted and removed the
+candidate; after commit, the candidate was authoritative and the source kept
+as a recovery copy. Workspace bytes, Git state, provider state and SQLite rows
+matched throughout.
+
+### Problems found and fixed
+
+1. **A daemon outage could commit an empty rebuild candidate** (data
+   integrity). `pipeContainerPath` treated any "no such file" as an absent
+   source path, and the CLI's own error for a missing daemon socket says
+   exactly that. Reproduced live: a migration committed with `files: 0`. Only
+   the daemon's `Could not find the file` now means absent.
+2. **A rebuild could hang forever** when `docker cp` and its helper lost the
+   daemon together: the producer's paused output never reached EOF. Reproduced
+   live and with fakes (3 of 5 hung). The producer's output is now drained once
+   the consumer is gone.
+3. **A fail-closed boot surfaced as an untyped error.** A root `docker exec`
+   that repairs `/project-files` access ran before the readiness wait, so a
+   boot that exited at once reported "container is not running" and failure
+   code `unknown`. It now runs after readiness.
+4. **Rootless budgets were silently weakened.** A rootless daemon without
+   cgroups accepts `--cpus/--memory/--pids-limit` with no warning, records
+   them, and enforces nothing; the read-back then showed them as applied. Such
+   budgets are now refused before anything is created or stopped.
+5. **A stopped environment's dead approval was still reported as pending** by
+   the public CLI (`session get`, `session interactions list/resolve`) and the
+   coordinator's `get_tab_state`. A committed stop now withdraws it.
+6. **Cursor could not run in restricted containers**: the allowlist lacked
+   `api.cursor.com`. Added to Cursor's required hosts.
+7. **Changing the Cursor key during a turn killed the container bridge**,
+   losing the turn and wedging the session. A busy bridge now keeps its key
+   until idle, as Claude and Codex already did.
+8. **OpenCode's first prompt after a rebuild was refused** ("OpenCode status
+   is unavailable"): a new container reinstalls OpenCode's plugin
+   dependencies on its first request, which outran the 30 s status timeout.
+   A fresh container's OpenCode server now loads `/workspace` (best effort, up
+   to 120 s) before the start returns.
+9. **A read-only backend still deleted containers and pushed allowlists.**
+   Under a data-directory marker that requires a newer writer, every
+   lifecycle operation was refused, but `delete_environment` removed the
+   container, its volumes and its network, and the allowlist commands changed
+   a running container's firewall. Found by the upgrade/rollback harness on
+   both `main` and the v2.21.0 floor. Both now need the registry writer;
+   the saved allowlist still stands and reports as not yet enforced.
+
+### Rootless (nested, not a Linux host)
+
+`docker:dind-rootless` (Engine 29.9.2) ran privileged inside Desktop,
+Unix-socket only, with no systemd. `docker info` reported `name=rootless`,
+cgroup v2, cgroup driver `none` and CPU, memory and PID limits unsupported;
+`parseDockerInfo` read all of that. A container created there with `--cpus 1
+--memory 512m --pids-limit 256` exited 0 with no warning and ran 457
+processes against `pids.max = max`; `docker update` failed with a raw runc
+error. The product, driven against that daemon through a `docker` shim,
+reported the topology as rootless and refused the budget with zero `docker
+create` calls. The real image in restricted mode (policy 3) reached `ready`
+with egress, allowed hosts answered and `example.com`, `www.google.com` and
+port 80 of an allowed host were refused; `node` could not change the rules.
+With no egress, or without `NET_ADMIN`, it exited `firewall-failed`. What does
+not transfer to a Linux host is listed under the rootless item below.
+
+### C13 provider resume (09:54–10:15 BST)
+
+Profile `q0019-resume` (all five credential sources), image above. Each
+provider ran the driver twice through `test:logged`, each pass a rebuild onto
+a new runtime generation followed by the codeword recall:
+
+| Provider | Result | Generations | Ambiguous dispatch |
+| --- | --- | --- | --- |
+| Codex | Pass, twice | 1→2, 3→4 | Pass (2→3) |
+| OpenCode | Pass, twice | 4→5, 5→6 | Not run |
+| Cursor | Pass, twice | 1→2, 3→4 | Pass (2→3) |
+| Pi | Pass, twice | 4→5, 6→7 | Pass (5→6) |
+| Grok | Skipped: the host login expired about 64 h earlier and the launcher withheld it | | |
+
+- Codex needed `QUALIFY_MODEL=gpt-6-luna`, and Pi `openai/gpt-6-luna`: their
+  defaults are refused for a ChatGPT-account login, and that refusal never
+  reaches the transcript. That is what the first attempt saw as "turns
+  finished with no assistant message".
+- Codex's relocated `CODEX_SQLITE_HOME` databases: the session's thread row
+  survived each rebuild, its turn count went from 1 to 2 after the follow-up,
+  and `quick_check` was ok throughout.
+- OpenCode needed `opencode.ai` in that environment's allowlist for its
+  default providers (follow-up in 0056), and the first-prompt fix above.
+- Ambiguous dispatch: inside the container, a rule dropped only prompt
+  requests to the agent's bridge; a prompt was sent and the environment
+  rebuilt while it was in flight. Right after and 60 s later the CLI answered
+  `dispatch-unknown` (exit 7), `recoverableDispatch` stayed `action-required`
+  with the same request id, no reply or saved provider state held the
+  prompt's codeword, and a new prompt was refused `dispatch-parked`.
+- Host Codex, OpenCode, Pi, Grok and Cursor credentials had the same SHA-256
+  prefix and mtime before and after.
+
+### C21 rotation (first session)
+
+Profile `q0019-rotation` with Claude, Cursor and Grok sources. Host
+credential files were unchanged before and after, and the Keychain was never
+read.
+
+- **Claude.** On macOS the host login comes from the Keychain, so it cannot be
+  redirected to a disposable copy. Instead two disposable added accounts held
+  copies of the container's own access-only login (no `refreshToken` key
+  anywhere). Every step passed: the start sync wrote mode 600 with no refresh
+  token; a login rewrite during a 2,500-number turn was pushed without
+  disturbing the turn; the keeper delivered a rewrite within its 5-minute pass
+  with no command; a durable `loginGeneration` replaced the idle bridge;
+  switching to account B under a running turn left the busy bridge on A, then
+  pushed B once idle and the session recalled its codeword; a restart
+  restaged B's rotated login with no `.partial` or `.tmp`; switching back to
+  the host login worked.
+- **Cursor.** The key file was mode 600, matched the profile's copy, was
+  re-synced on every bridge start and after a restart. The two Cursor fixes
+  above were found here and re-run live.
+- **Grok.** Skipped: host login expired.
+
+### Benchmarks (09:54–09:58 BST)
+
+Run `bmvkqhqp7`, same image, load average 18 at start (other agents running).
+Every target was met:
+
+| Measure (median) | Target | Result |
+| --- | --- | --- |
+| Fresh restricted to ready | ≤ 3 s | 2.31 s |
+| Incomplete fresh boots | none | none |
+| Docker calls per fresh environment | ≤ 21 | 15 |
+| Three concurrent, against the sequential median | ≤ 1.5× | 1.11× |
+| Warm stop | ≤ 1 s | 0.58 s |
+| Warm start to ready | ≤ 2 s | 1.53 s |
+| Rebuild copy and verify, 5,000 files (100 MB) | ≤ 20 s | 11.2 s |
+| Docker calls per minute, Docker view open | ≤ 36 | 24 |
+| Log followers after the idle grace | 0 | 0 |
+
+The 200-file rebuild took a median of 5.0 s in total; the usage sampler took
+2.0 s for 8 running environments with 3 Docker calls.
+
+### Registry (09:54–10:00 BST)
+
+`scripts/measure-registry-image.sh`, anonymous pulls from
+`ghcr.io/orkestrator-ai/orkestrator-v2`, this host's home network:
+
+| Tag | Index digest | arm64 compressed | amd64 compressed | Blob transfer (arm64) | Cold `docker pull` (arm64, fresh dind) |
+| --- | --- | --- | --- | --- | --- |
+| 2.23.0 (stable) | `sha256:262fff6c…b194` | 1,782,722,541 B, 64 layers | 1,794,129,157 B | 32.3 s (55.1 MB/s) | 43.0 s |
+| 2.26.3-beta | `sha256:118dc797…569f` | 1,783,255,709 B, 65 layers | 1,794,635,846 B | 40.4 s (44.2 MB/s) | 39.8 s |
+
+Uncompressed the image is 5.97 GB (about 3.35× the compressed size). The
+largest layers are 451, 319 and 232 MB. Under load up to 72, before the
+reboot, the 2.23.0 cold pull took 95.7 s. The `image-release.json` artifacts
+of 2.23.0 and 2.26.3-beta match the registry and the tag commits. The
+2.21.0–2.22.3 publish runs failed at "Create and verify multi-architecture
+manifest", so those tags were pushed without a recorded digest.
+
+### Upgrade and rollback with real releases
+
+`scripts/qualify-backend-upgrade-rollback.ts` runs each release's own
+headless backend from a detached worktree over one private data directory,
+drives it through `/__orkestrator/invoke`, and snapshots every file, store
+row, lifecycle record, owned container, volume and network, workspace hash
+and firewall policy.
+
+- **Rollback floor:** v2.21.0. The schema marker arrived in `1cdba8e0c`,
+  but no 2.19.x or 2.20.x was ever tagged or published, so the floor is also
+  the oldest real release. A pre-floor upgrade cannot be run from real
+  artifacts; the harness uses v2.21.0's own `legacy-layer` storage instead.
+- **Upgrade (current backend over v2.21.0's directory):** environment and
+  lifecycle records, every container, volume and network, running workspace
+  contents, network policy and the marker were unchanged; the legacy
+  environment is reported as `legacy-layer` and not migrated. The SQLite store
+  itself is migrated from v3 to v4 on first start, with a pre-migration
+  backup, as `docs/architecture/storage.md` documents.
+- **Rollback (v2.21.0 over a directory the current backend wrote):** v2.21.0
+  refuses to start (`Storage database schema version 4 is newer than this
+  build supports (3)`), and nothing changed. Store v4 first shipped in
+  2.24.0-alpha, so every release up to the stable 2.23.0 is locked out after
+  any later release opens a directory. The marker's read-only mode is not
+  reachable between real releases today: the writer version is still 1.
+- **Read-only mode, with a planted marker requiring writer 2:** v2.21.0 and
+  the current backend refused start, provision, stop, every rebuild, applied
+  resource changes, raw start and stop, and operation resolution. Delete and
+  the allowlist commands went through: problem 9 above.
+- **After the fix (10:16–10:23 BST, load 46–143, `--main-ref` at this
+  change):** in read-only mode the current backend refused both deletes, and
+  its owned containers, volumes, networks, running workspaces and firewall
+  policy were unchanged. What it still accepted were writes to records and
+  configuration only: the saved allowlist (reported as not enforced), a port
+  edit, the global resource limits, a background start that recorded its own
+  failure, and a reviewed cleanup that answered `conflict` for all 18
+  resources. The harness counts those as mutations, so it still exits 1
+  (39/47); none touches Docker. v2.21.0 keeps the gap, as it predates the
+  fix. Evidence: `/tmp/q0019/upgrade-fixed.log` and the report JSON beside it.
+
+### Repository checks
+
+`mise run format:check`, `mise run lint` and `mise run typecheck` passed.
+`mise run test` (1,199 s, load 12–60) passed the root, bridge and codex
+protocol groups. The workspace group failed two tests this change does not
+touch: `move_environment > moves a worktree with nested submodules (copy)`
+(five-second timeout, passed alone; flake 0621) and the Firefox executable
+document policy test, which also fails intermittently on unchanged `main`
+(new flake 0694). Every new suite skips cleanly without its opt-in variables.
 
 ## Results, 2026-10-17
 
@@ -437,67 +693,201 @@ live-work guard saw them.
 
 ### Qualification
 
-- Desktop residuals. The 2026-10-17 real-stack run used the restricted
-  fixture container, and its terminals were ordinary ones. Run the real-stack
-  Docker set once more with a full-network environment and through a root
-  terminal (**New root terminal**). Both container users were already shown
-  to work through `docker exec`, by the Playwright launch check.
-- Rootless Engine. Show that cgroup or firewall enforcement the daemon cannot
-  provide is reported as unsupported (the resource policy's unsupported axes,
-  the `rootless` topology flag) and refused precisely, never silently
-  weakened.
-- arm64 live suites. Run the C-scenarios on native arm64 hardware (Desktop on
-  Apple Silicon covers this) and mark any evidence that came only from
-  emulation. The 2026-10-17 run is native arm64 evidence for the four live
-  suites, the benchmarks, the final-image smoke and `test:agent:docker`, and
-  none of it came from emulation.
-- Registry measurements: compressed manifest and layer bytes, and cold pull
-  time, against a pushed GHCR image. `publish-container.yml` records the
-  digest in `image-release.json`.
-- Provider session resume after a rebuild (C13) for Codex, OpenCode, Pi,
-  Cursor and Grok. Add each provider that passes to
-  `RESUME_QUALIFIED_PROVIDERS`, and update its `PROVIDER_PRESERVATION` text in
-  `container-state-layout.ts`. This includes the relocated Codex runtime
-  databases (`CODEX_SQLITE_HOME`) and the Grok session index, both "pending
-  qualification" today. The earlier attempt failed before any rebuild:
-  Codex app-server turns finished with no assistant message, the OpenCode
-  model was not connected, Pi's first turn did not finish, and Cursor and
-  Grok sessions did not start. The proof also requires that an ambiguous
-  dispatch stays unresolved rather than being resent.
-- Live credential rotation (C21 live half) for Claude, Cursor and Grok while
-  a provider process runs. Codex rotation and Codex account switching passed
-  on 2026-10-21 (results above). Still to run: the Claude start sync and
-  login-renewal push (`syncContainerAgentAccountsOnStart`,
-  `markContainersForClaudeLoginRefresh`) once the access-only Claude change
-  in [0018-container-network-and-credential-isolation.md](0018-container-network-and-credential-isolation.md)
-  lands, a Claude account switch under a running turn, the Cursor key file
-  sync, and the Grok push before each bridge start with a live host login.
-- A stopped environment's pending interactions in the backend projection.
-  After a stop the projection still lists the dead request as `pending` until
-  the session reattaches on the next start (C11, 2026-10-17). The stopped view
-  renders no agent tab, so nobody can answer it there. Check whether any other
-  surface reads that state for a stopped environment (the agent inbox,
-  environment notifications, coordinator status). If one does, mark the
-  request `withdrawn` when the stop commits.
-- Readiness failure injection on a real daemon: missing firewall script,
-  DNS/bootstrap failure, permission failure, an interrupted status write and
-  a Docker restart during launch, plus C10. Inject faults through fixtures at
-  the lifecycle-service boundary only.
-- Daemon disconnect mid-copy and a live process kill just before and after the
-  rebuild commit write. Both are covered by unit reconciliation and the
-  capacity preflight, not by a live run.
-- Backend upgrade and rollback with real releases. Start current `main` over
-  a data directory and containers left by an older release (legacy images and
-  records) and show nothing is migrated or mutated implicitly. Then open a
-  directory current `main` has written with a release at the rollback floor
-  (the first to ship `container-lifecycle.schema.json`) and show it stays
-  read-only and refuses every container mutation. Only
-  `apps/backend/tests/container-lifecycle-service.test.ts` covers the schema
-  floor today, with in-process writers.
-- Live host-service reply (C22). The original host's ufw dropped
-  container-to-host traffic, so the agent-tools port was only shown to leave
-  the container. On a host where `container-host-reachability.ts` reports the
-  path open, check the port is actually answered.
+Done on 2026-10-23 (evidence in [Results, 2026-10-23](#results-2026-10-23)):
+the Desktop residuals (full-network fixture and a root terminal), native arm64
+evidence, the registry measurements, C13 for Codex, OpenCode, Cursor and Pi,
+the stopped environment's pending interactions, readiness fault injection and
+C10, a daemon disconnect mid-copy and a kill around the rebuild commit, the
+upgrade and rollback with real releases, and the live host-service reply on
+Desktop. What remains of those items:
+
+- Rootless Engine on a real Linux host. Gated features are implemented and
+  were exercised in a nested `docker:dind-rootless`; what that cannot show
+  needs a Linux host running rootless Docker as a systemd user service: cgroup
+  v2 with only some controllers delegated (often `memory pids` without `cpu`),
+  and whether the read-back is then truthful; the `ip_set`, `xt_set` and
+  `nf_tables` modules on a stock kernel (rootless cannot load them; missing
+  ones fail the firewall closed); `host.docker.internal` through slirp4netns
+  or pasta and `container-host-reachability`; UID mapping on bind mounts
+  (seed files, the agent-test fixture remote, staged inputs) and `docker cp`
+  ownership; and the six live suites with `DOCKER_HOST` at the rootless
+  socket. They cannot run against the nested daemon because the backend
+  bind-mounts macOS paths it cannot see.
+- C13 and the C21 live half for Grok. Both need a current host Grok login
+  (the host's expired on 2026-10-20 and was still expired on 2026-10-23), and
+  the rotation half needs a profile that can be pointed at a disposable Grok
+  copy (0056, item 7).
+- The Claude half of C21 that a disposable Claude account would unlock: a real
+  re-authentication through `markContainersForClaudeLoginRefresh` (only its
+  durable `loginGeneration` half ran), and an Anthropic refresh-token
+  rotation through the keeper (`claude-container-login-live.test.ts`,
+  `ORKESTRATOR_LIVE_CLAUDE_LOGIN=1`). Neither can use the host's own login.
+- A daemon-wide Docker restart or Desktop quit during launch and during a
+  rebuild copy. The shared daemon here could not be restarted. The proxy
+  reproduces what the CLI sees, not daemon-side effects (containers stopped by
+  the restart, `--rm` helpers killed mid-write). Run it on a dedicated host or
+  VM.
+
+## Assumptions and decisions
+
+Made on 2026-10-23 during the qualification pass. Each gives the options
+considered, the choice, why, and its pros and cons.
+
+### Assumptions
+
+- The host's Docker Desktop is shared with other environments, so it must not
+  be restarted, pruned or reconfigured. Fault injection that would need that
+  was modelled through fixtures, and the gap recorded.
+- The `dev:test --credential-source` flags are the authorized way to use host
+  provider logins. Nothing may spend or rotate a host refresh token; host
+  credential files were checked by SHA-256 prefix and mtime before and after
+  every provider run.
+- A nested `docker:dind-rootless` shows the daemon's own behaviour (Moby's
+  cgroup driver `none`, the rootless security option, firewall primitives in a
+  user namespace) but not a Linux host's systemd delegation, kernel modules,
+  networking or UID mapping.
+- Results from runs the reboot interrupted were kept only where the finished
+  agent's report recorded them in full; the C13, registry, upgrade/rollback and
+  benchmark figures were all re-run after it.
+
+### Decisions
+
+1. **One qualification image for every run.** Options: per-suite images, a
+   `docker/build.sh` tag, or the workspace's development image built once from
+   `06297124`. Chose the development image: one id serves the live suites,
+   benchmarks, real-stack profiles and the nested rootless run, and its
+   manifest proves the source. Con: it carries the workspace's tag, not a
+   release tag.
+2. **Rootless: supported with gated features** (answers the open question).
+   Options: refuse rootless outright; support it with each unenforceable
+   feature refused precisely; claim full support. Chose gated support. The
+   only enforcement a rootless daemon silently dropped was cgroup budgets,
+   which are now refused before Docker sees them, and the firewall either
+   works or fails closed. Pros: nothing is silently weakened; a setup the app
+   itself recommends keeps working without a budget. Cons: host reachability,
+   UID mapping and partial delegation are unproven, so a rootless user may hit
+   typed failures the docs do not yet describe. Refusing outright would have
+   discarded protection shown to work; full support is not justified.
+3. **Unknown budget support.** Options: refuse whenever `docker info` did not
+   answer, refuse only on a rootless daemon, or never. Chose rootless only
+   (`daemon-unavailable`): there the read-back cannot reveal non-enforcement.
+   Con: a rootful daemon with no answer still takes the budget on trust, as
+   before.
+4. **Stale pending interactions after a stop.** Options: drop them from the
+   projection in a new announced revision when the stop commits; write a
+   `withdrawn` state; invalidate the projection cache; filter at each reader;
+   react to every environment change. Chose the first. Interaction snapshots
+   carry only `pending` and `answering`, and the web tab renders every listed
+   request, so a `withdrawn` entry would show a card; invalidation loses the
+   transcript the coordinator reads; per-reader filters leave the projection
+   wrong. Con: stops outside `stopEnvironmentOnce` are not covered (0056, item
+   2), and the withdrawal is visible only as a disappearance.
+5. **How to hold a boot before `ready`.** Options: SIGSTOP the entrypoint, or a
+   derived image whose firewall wrapper waits once for a release file. Chose
+   the derived image: SIGSTOP lost the race twice on this host. Con: those two
+   tests do not run the real firewall step (the others do).
+6. **DNS fault at boot.** Options: a `--dns` knob (there is none), a TEST-NET
+   resolver (Docker Desktop answers it itself), or a pre-created `--internal`
+   network the backend adopts by its labels. Chose the adopted network, plus a
+   silent loopback resolver for the C23 re-run. Con: at boot it is "no outside
+   DNS and no route", not DNS alone.
+7. **C22 when the path is reported closed.** Options: skip, or fail with an
+   explicit `INCOMPLETE:`. Chose failing: Bun cannot skip at run time and a
+   skip would read as a pass. Con: a Linux host whose firewall blocks Docker
+   traffic fails this test by design.
+8. **Daemon disconnect.** Options: a PATH shim `docker`, a `DOCKER_HOST`
+   unix-socket proxy, or a production setting (forbidden). Chose the proxy: the
+   backend only uses the CLI, so the CLI's real error text is exercised, which
+   is exactly what exposed problem 1. Con: it cannot model daemon-side effects
+   of a real restart.
+9. **Kill seam around the commit write.** Options: a gated hook in
+   `container-replacement.ts`, pausing on `emit`, or wrapping
+   `storage.updateEnvironment` in a child driver. Chose the wrapper: no
+   production change, and it parks exactly at the durable write. Con: it
+   recognises the commit write by content; the test asserts the durable record
+   at the pause to prove the boundary.
+10. **What counts as an absent source path.** Options: keep `no such file` and
+    exclude connection errors, or accept only the daemon's own `Could not find
+    the file`. Chose the strict rule: an unknown wording now fails the rebuild
+    with the original kept, instead of silently skipping a path.
+11. **Where the `/project-files` repair runs.** Options: keep it before
+    readiness and map its failure, or move it after readiness. Chose after:
+    only setup reads those files, and only once the boot is ready.
+12. **Claude rotation source.** Options: rotate the host login (forbidden),
+    point `CLAUDE_CONFIG_DIR` at a copy (no effect on macOS, where the Keychain
+    is read first), or seed disposable added accounts with access-only copies.
+    Chose the added accounts: the real switch, staging, keeper and start-sync
+    paths run and no refresh token exists anywhere. Con: a "rotation" is a
+    rewrite of the file, not Anthropic's refresh exchange, and both accounts
+    are one identity.
+13. **Cursor key change during a turn.** Options: refuse with a retryable
+    error while busy, keep the busy bridge and apply the key when idle, or
+    leave it. Chose keep-until-idle, matching Claude and Codex account
+    switching. Con: a revoked old key stays in use until the turn ends. The
+    local path still has the gap (0056, item 6).
+14. **Cursor allowlist.** Added the exact host `api.cursor.com`; policy 3 has no
+    wildcards, and a wildcard would be broader.
+15. **Full-network fixture.** Options: a launcher flag, changing an existing
+    environment's mode (impossible after creation), or having one spec create
+    its own environment. Chose the opt-in `--fixture-network full`, so the
+    whole Docker set runs unchanged on full network. Con: one more launcher
+    flag to document.
+16. **OpenCode egress for C13.** Options: add `opencode.ai` to OpenCode's
+    required hosts, or allow it on the qualification environment only. Chose
+    the environment only: the product default widens egress for every OpenCode
+    install and is a product decision (0056, item 9).
+17. **Ambiguous dispatch injection.** Options: pause the bridge or provider
+    process, or drop only prompt requests to the bridge from inside the
+    environment's container. Pausing either rejected or accepted the prompt;
+    dropping made the outcome genuinely unknown. Con: only Codex, Cursor and Pi
+    ran it; OpenCode and Claude did not.
+18. **Cold pull without touching the user's cache.** Options: remove the local
+    image first (forbidden), time a blob transfer through the registry API, or
+    pull into a throwaway labelled `docker:dind`. Did both of the last two:
+    the transfer gives the network-only figure, the dind gives download plus
+    extraction. Con: the dind adds a privileged container and its own storage
+    overhead.
+19. **Upgrade starting point.** Options: build a pre-floor commit plus a
+    manifest-less image, or start from the oldest published release. Chose
+    v2.21.0, which is also the floor: a self-built "release" would not be a
+    real one. Con: records without lifecycle data and unlabelled containers
+    were never upgraded live.
+20. **Read-only mode test.** No release writes a marker requiring writer 2, so
+    the harness plants one, labelled as synthetic, on both the floor and the
+    current backend. It is the only way to exercise read-only mode with real
+    binaries today.
+21. **Fixing the read-only gap.** Options: gate each command, or route delete
+    and the allowlist apply through the lifecycle service. Chose a direct
+    `registryWriterLease.assertHeld()` in the delete path for container
+    environments and before the allowlist `docker exec`, matching how the
+    lifecycle service gates itself. The saved allowlist still stands and is
+    reported as not enforced. The host-service port refresh
+    (`ensureContainerHostServicePorts`) was left ungated: it keeps a running
+    container able to reach this backend's agent tools and changes no user
+    setting. Con: the fix reaches only releases that contain it; v2.21.0, the
+    floor today, keeps the gap.
+22. **Published minimum versions** (answers the open question). Options:
+    publish the code's own floor (Engine 26, below which volume sub-path mounts
+    and persistent storage are unavailable), publish only qualified versions,
+    or publish none. Chose to state the qualified versions (Engine 29.7.2 on
+    Linux, Desktop 4.93–4.95 with Engine 29.8.x) as the supported minimum, with
+    Engine 26 to 29.6 "expected to work, not qualified" and older engines on
+    legacy storage only. Pros: the claim matches the evidence. Con: users on an
+    older Engine are told "not qualified" rather than refused.
+23. **Scheduled CI job** (answers the open question). Options: none, a manual
+    workflow, or a scheduled one. Chose weekly plus on demand plus pull
+    requests that touch the suites, on `ubuntu-24.04` and `ubuntu-24.04-arm`,
+    with a unit test that fails if a live suite is missing. Pros: Linux Engine
+    evidence on both architectures without a dedicated host. Cons: CI minutes
+    (a full image build per architecture), and a rootless job is not included:
+    setting rootless up on a hosted runner could not be tried locally.
+24. **Benchmarks.** Re-run after the reboot rather than waiting for an idle
+    host; load was 18 at the start and every target was met. Con: still not an
+    idle-host reference.
+25. **New work goes to a new file.** Gaps found but not fixed went into
+    [0056](0056-container-qualification-follow-ups.md), since an existing todo
+    file never takes new items. Two flake recurrences were added to their
+    existing cases (0506, 0518).
 
 ## Constraints and rationale
 
@@ -520,19 +910,27 @@ live-work guard saw them.
 
 ## Open questions
 
-- Which Engine and Desktop versions become the published minimum once Desktop
-  is qualified, and is rootless supported with gated features or refused?
+- Which Engine and Desktop versions become the published minimum, and is
+  rootless supported with gated features or refused? Answered 2026-10-23:
+  the qualified versions are the supported minimum, and rootless is
+  supported with gated features (decisions 2 and 22).
 - Should the live suites get a scheduled CI job on a Docker-capable runner
-  (Linux amd64 and arm64)?
+  (Linux amd64 and arm64)? Answered 2026-10-23: yes,
+  `container-live-qualification.yml` (decision 23). Its first results arrive
+  on the pull request for this change; record them in this file then,
+  including the C22 host-level reachability verdict, which macOS reports as
+  not applicable.
 
 ## Needs verification
 
 - Whether anyone has run the live suites since #877. Answered: the
   replacement suite ran on 2026-10-16 (provider-state review) and the full set
-  on 2026-10-17 ([Results, 2026-10-17](#results-2026-10-17)).
+  on 2026-10-17 and 2026-10-23.
 
 ## Related
 
+- [0056-container-qualification-follow-ups.md](0056-container-qualification-follow-ups.md):
+  gaps the 2026-10-23 pass found and did not fix.
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md):
   shared prerequisites and batching. The Docker Desktop rows of
   [0042-service-preview-rollout.md](../previews-and-annotations/0042-service-preview-rollout.md) and

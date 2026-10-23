@@ -1406,7 +1406,6 @@ async function startContainerRuntimeAdmitted(
       boot: { phase: "starting" },
     });
     await startContainerWithAgentAccounts(context, environment, containerId);
-    await ensureContainerProjectFilesAccess(containerId);
     // Readiness belongs to this boot: nothing is prepared or launched until
     // the entrypoint reports ready for the current PID 1. Legacy images have
     // no boot status and keep their previous behavior.
@@ -1436,6 +1435,10 @@ async function startContainerRuntimeAdmitted(
         throw error;
       }
     }
+    // Only setup reads the project files, and only once the boot is ready. An
+    // exec before readiness would turn a boot that failed closed (and exited)
+    // into an untyped "container is not running" error.
+    await ensureContainerProjectFilesAccess(containerId);
     // A container boots with the allowlist it stored last; an edit saved
     // while it was stopped (or one an interrupted apply never reached) is
     // applied now. Failure leaves it reported as pending, not the start.
@@ -1808,6 +1811,8 @@ export async function stopEnvironmentOnce(
       { source: currentRuntimeIdentity(environment, context) },
     );
     if ("replayed" in outcome) return;
+    // The bridges died with the container, and their parked requests with them.
+    context.nativeAgents?.withdrawEnvironmentInteractions(environment.id);
     shutdownClaudeStatePolling(containerId);
     context.runtime.diffStats.invalidatePendingSync();
     context.runtime.diffStats.service.pause(environment.id);
@@ -1833,7 +1838,9 @@ export async function stopEnvironmentOnce(
     ...(stopError ? {} : { lifecycleError: null }),
     ...clearPendingAgentLaunchUpdates(),
   });
+  // A bridge that refused to terminate may still hold a live request.
   if (stopError) throw stopError;
+  context.nativeAgents?.withdrawEnvironmentInteractions(environment.id);
 }
 
 export function stopEnvironmentTask(

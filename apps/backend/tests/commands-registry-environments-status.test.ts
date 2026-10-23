@@ -555,6 +555,46 @@ exit 0
     ).resolves.toBeUndefined();
   });
 
+  test("a committed stop withdraws the environment's outstanding agent requests", async () => {
+    const local = createEnvironment({
+      id: "env-local",
+      environmentType: "local",
+      containerId: null,
+    });
+    const container = createEnvironment({
+      id: "env-container",
+      environmentType: "containerized",
+      containerId: "container-1",
+    });
+    const { context } = createContext([local, container]);
+    const withdrawn: Array<{ id: string; status: string }> = [];
+    context.nativeAgents = {
+      withdrawEnvironmentInteractions: (environmentId: string) => {
+        const environment = environmentId === local.id ? local : container;
+        withdrawn.push({ id: environmentId, status: environment.status });
+      },
+    } as unknown as typeof context.nativeAgents;
+    const commands = createCommandRegistry();
+
+    await commands.get("stop_environment")?.({ environmentId: local.id }, context);
+    await withFakeDocker(
+      `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
+exit 0
+`,
+      async () => {
+        await commands.get("stop_environment")?.({ environmentId: container.id }, context);
+      },
+    );
+
+    // Only once the stop has committed: the bridges are gone by then.
+    expect(withdrawn).toEqual([
+      { id: local.id, status: "stopped" },
+      { id: container.id, status: "stopped" },
+    ]);
+  });
+
   test("strict lifecycle commands never stop, recreate, or delete a foreign container", async () => {
     const environment = createEnvironment({
       id: "env-foreign-container",

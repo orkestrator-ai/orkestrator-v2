@@ -21,3 +21,11 @@
   aggregate load, as in 0291. Not confirmed. No timeout was raised and no test
   was skipped.
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.txKi1Z/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+## Recurrence, 2026-10-23 (copy variant)
+
+- **Test:** `move_environment > moves a worktree with nested submodules (copy)`, the cross-disk sibling of the original case.
+- **Original command:** `mise run test:logged -- --name full-suite -- mise run test` on the todo 0019 branch (base `06297124`, no change to environment moves), host load average 12–60.
+- **Failure:** timed out after 5000 ms (5084.32 ms).
+- **Owning-file rerun:** `mise run test:logged -- --name move-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts --parallel=1` passed in 20.1 s at load 13.
+- **Evidence:** `orkestrator-test-run.Gqog9k` below the host temporary directory. No timeout was raised and no test was skipped.

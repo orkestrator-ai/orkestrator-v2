@@ -483,6 +483,64 @@ function unsupportedAxes(
   return out;
 }
 
+const AXIS_NAMES: Record<keyof ContainerResourceLimits, string> = {
+  cpus: "CPU",
+  memoryMiB: "memory",
+  pids: "process (PID)",
+};
+
+/**
+ * Refuses a budget the daemon says it cannot enforce, before Docker sees it.
+ * A rootless daemon without delegated cgroups (cgroup driver `none`) accepts
+ * `--cpus`, `--memory` and `--pids-limit` without a warning and records them
+ * in `HostConfig`, so the inspect read-back shows them as applied, yet it
+ * enforces none of them; with partial delegation Docker drops an axis with
+ * only a warning. Support Docker did not report (`null`) is refused only on a
+ * rootless daemon, the one case where the read-back cannot reveal it.
+ */
+export function refuseUnenforceableLimits(
+  limits: ContainerResourceLimits,
+  capacity: Pick<DockerCapacity, "support" | "rootless">,
+  outcome: string,
+): void {
+  if (
+    capacity.rootless &&
+    ((limits.cpus !== null && capacity.support.cpuQuota === null) ||
+      (limits.memoryMiB !== null && capacity.support.memoryLimit === null) ||
+      (limits.pids !== null && capacity.support.pidsLimit === null))
+  ) {
+    throw new ContainerLifecycleError(
+      "daemon-unavailable",
+      `Docker runs rootless and did not report whether it can enforce the environment's budget. ${outcome} Retry once Docker responds.`,
+    );
+  }
+  const axes = unsupportedAxes(limits, capacity);
+  if (axes.length === 0) return;
+  const names = axes.map((axis) => AXIS_NAMES[axis]).join(", ");
+  const [limit, them] = axes.length > 1 ? ["limits", "them"] : ["limit", "it"];
+  const remedy = capacity.rootless
+    ? "run rootless Docker on cgroup v2 with the systemd cgroup driver and the cpu, memory and pids controllers delegated to its user."
+    : `use a Docker engine whose cgroups support ${them}.`;
+  throw new ContainerLifecycleError(
+    "unsupported-topology",
+    `This Docker engine${capacity.rootless ? " (rootless)" : ""} cannot enforce the ${names} ${limit} in the environment's budget. ${outcome} Remove ${them} from the budget (Settings → Container, or the environment's resources), or ${remedy}`,
+  );
+}
+
+/** {@link refuseUnenforceableLimits} for the budget a new runtime of `environment` would get. */
+export async function assertEnvironmentBudgetEnforceable(
+  environment: Pick<Environment, "containerResourceLimits">,
+  context: Pick<CommandContext, "storage">,
+  outcome: string,
+): Promise<void> {
+  const config = await context.storage.loadConfig();
+  refuseUnenforceableLimits(
+    resolveResourceLimits(environment, config.global).limits,
+    await dockerCapacity(),
+    outcome,
+  );
+}
+
 export async function environmentResourcePolicy(
   environmentId: string,
   context: Pick<CommandContext, "storage">,
@@ -492,15 +550,22 @@ export async function environmentResourcePolicy(
   const config = await context.storage.loadConfig();
   const { limits, source } = resolveResourceLimits(environment, config.global);
   const capacity = await dockerCapacity();
+  const applied =
+    environment.containerId && environment.environmentType === "containerized"
+      ? await inspectAppliedLimits(environment.containerId)
+      : null;
+  // A runtime can carry a limit the daemon records but does not enforce (one
+  // created before this check, or under another daemon); flag it too.
+  const unsupported = new Set([
+    ...unsupportedAxes(limits, capacity),
+    ...(applied ? unsupportedAxes(applied, capacity) : []),
+  ]);
   return {
     environmentId,
     requested: limits,
     source,
-    applied:
-      environment.containerId && environment.environmentType === "containerized"
-        ? await inspectAppliedLimits(environment.containerId)
-        : null,
-    unsupported: unsupportedAxes(limits, capacity),
+    applied,
+    unsupported: (["cpus", "memoryMiB", "pids"] as const).filter((axis) => unsupported.has(axis)),
     daemonRootless: capacity.rootless,
   };
 }
@@ -534,6 +599,8 @@ export async function updateEnvironmentResources(
     config.global,
   ).limits;
   const capacity = await dockerCapacity();
+  // Refused even when only stored: the next runtime could not be created with it.
+  refuseUnenforceableLimits(next, capacity, "Nothing was changed.");
   if (next.cpus !== null && capacity.cpus !== null && next.cpus > capacity.cpus) {
     throw new ContainerLifecycleError(
       "resource-exhausted",

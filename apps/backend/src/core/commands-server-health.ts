@@ -204,6 +204,35 @@ export async function waitForUnhealthy(port: number, attempts = 50): Promise<voi
   throw new Error(`Server on port ${port} did not stop`);
 }
 
+/** How long a fresh OpenCode server may take to load a directory's instance. */
+export const OPENCODE_INSTANCE_WARM_TIMEOUT_MS = 120_000;
+
+/**
+ * Let a just-started OpenCode server load `directory` before callers read it.
+ *
+ * `/global/health` answers before any directory is loaded. The first request
+ * that names one loads its configuration and installs the plugin
+ * dependencies, which in a container live in the container layer and so are
+ * installed again after every rebuild. On a loaded host that outlasted the
+ * backend's 30 s status read, and the first prompt after a rebuild was refused
+ * as "OpenCode status is unavailable". Best-effort: false leaves the caller's
+ * own reads to report a server that never finishes loading.
+ */
+export function warmOpenCodeInstance(
+  port: number,
+  directory: string,
+  headers: Record<string, string>,
+  dependencies: { checkHealth?: typeof checkHttpHealth; timeoutMs?: number } = {},
+): Promise<boolean> {
+  const checkHealth = dependencies.checkHealth ?? checkHttpHealth;
+  return checkHealth(
+    port,
+    `/session/status?directory=${encodeURIComponent(directory)}`,
+    headers,
+    dependencies.timeoutMs ?? OPENCODE_INSTANCE_WARM_TIMEOUT_MS,
+  );
+}
+
 export function openCodeHealthHeaders(password: string): Record<string, string> {
   return {
     Authorization: `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`,

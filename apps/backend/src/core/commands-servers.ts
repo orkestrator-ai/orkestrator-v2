@@ -1629,6 +1629,12 @@ export async function deleteEnvironment(
           ),
         );
       }
+      // Deleting removes the container, its volumes and its network, so it
+      // needs the registry writer like every other container mutation. A
+      // backend opened over a newer writer's data directory is read-only.
+      if (environment?.environmentType === "containerized") {
+        context.registryWriterLease?.assertHeld();
+      }
       if (environment?.containerId) {
         await assertDockerContainerOwned(environment.containerId, context);
       }

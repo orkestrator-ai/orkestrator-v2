@@ -68,6 +68,12 @@ describe("default allowlists", () => {
     }
   });
 
+  test("Cursor's restricted list includes the SDK's agent API host", () => {
+    // `cursor.com` is an exact entry: it does not open `api.cursor.com`.
+    expect(AGENT_NETWORK_DOMAINS_BY_PLATFORM.cursor).toContain("api.cursor.com");
+    expect(AGENT_NETWORK_DOMAINS_BY_PLATFORM.cursor).toContain("api2.cursor.sh");
+  });
+
   test("the image fallback is the defaults first, then each platform's hosts once", () => {
     const image = imageDefaultAllowedDomains();
     expect(image.slice(0, DEFAULT_ALLOWED_DOMAINS.length)).toEqual([...DEFAULT_ALLOWED_DOMAINS]);

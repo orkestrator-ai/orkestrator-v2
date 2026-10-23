@@ -42,13 +42,26 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | Live replacement | same command, `./tests/container-live-replacement.test.ts` | C14–C19 |
 | Live network | same command, `./tests/container-live-network.test.ts` | C22, C24, C26 |
 | Live firewall | same command, `./tests/container-live-firewall.test.ts` | C23 |
+| Live readiness faults | same command, `./tests/container-live-readiness.test.ts` | C09 faults (missing firewall, DNS, permissions, torn status write, restart during launch), C10, C22 host-service reply, C23 re-run |
+| Live rebuild faults | same command, `./tests/container-live-rebuild-faults.test.ts` | C15: daemon disconnect mid-copy (a `DOCKER_HOST` proxy in the test process), kill just before and after the commit write |
 | Benchmarks | `RUN_CONTAINER_BENCHMARKS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-benchmarks.test.ts` | C28 |
 | Final image | `bash docker/tests/final-image-smoke.sh <image>` (CI runs it on the native amd64 and arm64 builds in `validate-bun-runtime.yml`) | C27 |
 | Real stack, Docker | `mise run dev:test --profile <p> --fixture --fixture-environments local,container`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> mise run test:agent:docker` | C29 (`container-rebuild-cycle.spec.ts`), container settings (`container-settings.spec.ts`), deletion through the ledger (`browser-gateway.spec.ts`) |
 | Real stack, live approval | The Docker profile above started with `--credential-source claude`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> ORKESTRATOR_AGENT_TEST_LIVE_CONTAINER_APPROVAL=1 mise run test:agent:docker` | C11 approval half (`container-approval-stop.spec.ts`, a real Claude turn) |
+| Real stack, root terminal | Included in `test:agent:docker`; start the profile with `--fixture-network full` for the full-network half | **New root terminal**: uid 0, outbound access by network mode (`container-root-terminal.spec.ts`) |
 | Real stack, local | `mise run test:agent:browser:isolated` | C30 |
 | Provider resume | `scripts/qualify-session-resume.sh <profile> <agent> [environment-name]` | C13 |
+| Registry | `scripts/measure-registry-image.sh [--transfer <platform>] [--dind <platform>] [--json <file>] <image-ref>` | Compressed manifest and layer bytes, blob transfer time, cold pull |
+| Upgrade and rollback | `bun scripts/qualify-backend-upgrade-rollback.ts [--old-ref <ref>] [--floor-ref <ref>] [--main-ref <ref>] [--report <file>]` | Backend upgrade over an older release's data and containers; the floor's refusal of a newer directory |
+| Linux Engine, CI | `.github/workflows/container-live-qualification.yml` (weekly, on demand, and on pull requests that change the suites) | Every live suite on `ubuntu-24.04` and `ubuntu-24.04-arm` |
 | Egress gateway prototype | `scripts/qualify-egress-gateway.sh [image]` | None yet: the external egress design in [0018](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md), item 3 |
+
+`test:logged` kills a command that prints nothing for 300 s, and Bun prints
+a test's output only when the test finishes, so run the readiness and
+rebuild-fault suites with `ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS=2400000`.
+Set `ORKESTRATOR_QUALIFICATION_EVIDENCE=<file>` to keep the rebuild-fault
+suite's per-scenario observations as JSON lines (no contents), since a
+passing logged run deletes its output.
 
 The image must carry a manifest (`mise run docker:build` or
 `docker/build.sh <tag>`). The network and firewall suites need outbound
@@ -63,7 +76,21 @@ the profile's exact-owner volumes and networks. Profile handling is in
 environment onto a new runtime generation and checks the resumed session
 repeats it: exit 0 pass, 1 fail, 2 setup error. A provider that passes is
 added to `RESUME_QUALIFIED_PROVIDERS` (`container-replacement.ts`); until then
-the rebuild preview marks its resume unverified.
+the rebuild preview marks its resume unverified. `QUALIFY_MODEL` and
+`QUALIFY_REASONING` pick a model the login accepts (Codex and Pi defaults are
+refused for a ChatGPT-account login), `QUALIFY_REQUEST_TIMEOUT` (default
+`5m`) covers a slow provider start, and `QUALIFY_AMBIGUOUS=1` adds a pass in
+which a prompt whose outcome is unknown must stay parked and unsent across
+the rebuild.
+
+`measure-registry-image.sh` reads sizes from the manifests alone, and
+optionally times every layer blob through the registry API or a cold `docker
+pull` into a throwaway, labelled `docker:dind` with its own empty volume; it
+never touches the local Docker cache. `qualify-backend-upgrade-rollback.ts`
+runs each release's own headless backend from a detached worktree over one
+private data directory (agent-test flavour, no credentials), snapshots files,
+store rows, lifecycle records and owned Docker resources, and removes exactly
+what it created.
 
 `qualify-egress-gateway.sh` starts a gateway container that owns a network
 namespace and runs the working tree's `init-firewall.sh` with `NET_ADMIN`,
@@ -71,6 +98,21 @@ joins a workload to it with no added capability, and checks policy 3
 egress, root tampering, live edits, published and host-service ports, and
 restarts of either side: exit 0 pass, 1 fail, 2 setup error. The backend does
 not create this topology yet.
+
+## Docker Desktop on Apple Silicon (2026-10-23)
+
+The full live set, now six suites, ran on Docker Desktop 4.95.0 (Engine
+29.8.2) on the same Apple M5 Pro host, native arm64, with the development
+image built from `06297124` (`sha256:18aae789…72d6`). Every suite passed;
+the two new fault suites passed twice each. The pass found and fixed nine
+product problems, two of them in the rebuild copy (an outage could commit an
+empty candidate; a lost daemon could hang a rebuild forever) and one in
+read-only mode (delete and allowlist edits ignored a newer writer's marker).
+C13 now passes for Codex, OpenCode, Cursor and Pi; the full-network fixture
+and root terminal passed `test:agent:docker`; and every benchmark target was
+met at load 18. Rootless was exercised in a nested `docker:dind-rootless`
+only. Evidence, decisions and what remains are in
+[0019-container-platform-qualification.md](../todo/containers-and-environments/0019-container-platform-qualification.md#results-2026-10-23).
 
 ## Docker Desktop on Apple Silicon (2026-10-17)
 

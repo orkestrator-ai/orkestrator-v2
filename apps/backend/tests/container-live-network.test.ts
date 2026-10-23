@@ -59,7 +59,9 @@ afterAll(async () => {
     .filter(Boolean);
   if (networks.length > 0) await docker(["network", "rm", ...networks]).catch(() => undefined);
   if (dataDir) await fs.rm(dataDir, { recursive: true, force: true });
-});
+  // Removing containers takes several seconds on a loaded host; the default
+  // hook timeout would abandon the cleanup part-way and leak the networks.
+}, 180_000);
 
 function hostListener(): number {
   const server = Bun.serve({ hostname: "0.0.0.0", port: 0, fetch: () => new Response("host-ok") });

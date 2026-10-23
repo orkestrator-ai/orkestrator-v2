@@ -255,6 +255,44 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
     );
   }
 
+  /**
+   * Withdraw every outstanding interaction a stopped environment's cached
+   * projections still list. Called once the stop has committed.
+   *
+   * Parked requests die with their bridge and never survive a restart, but a
+   * failed read keeps the last projection, so the dead request stayed
+   * `pending` while stopped. The public CLI and coordinator `get_tab_state`
+   * read that cache. It is withdrawn the way a live snapshot withdraws one:
+   * dropped from the list, which only ever holds outstanding requests, in a
+   * new announced revision. The epoch bump fences a refresh that read the
+   * request before the stop, so it cannot commit it back.
+   */
+  withdrawEnvironmentInteractions(environmentId: string): void {
+    for (const [key, entry] of Array.from(this.projectionCache)) {
+      if (entry.input.environmentId !== environmentId) continue;
+      this.forgetPendingInteractions(
+        nativeAgentSessionStorageKey(
+          environmentId,
+          entry.input.agent,
+          entry.input.logicalSessionKey,
+        ),
+      );
+      const interactions = entry.projection.interactions.filter(
+        (interaction) => interaction.state !== "pending" && interaction.state !== "answering",
+      );
+      if (interactions.length === entry.projection.interactions.length) continue;
+      const epoch = (this.projectionEpochs.get(key) ?? 0) + 1;
+      this.projectionEpochs.set(key, epoch);
+      this.commitProjection(
+        key,
+        entry.input,
+        { ...entry.projection, interactions },
+        entry.generation,
+        epoch,
+      );
+    }
+  }
+
   /** Bounded retry bookkeeping for on-demand turn-outcome reads. */
   protected readonly turnOutcomeAttempts = new Map<string, { attempts: number; retryAt: number }>();
   /** Short-lived cache of on-demand pending-interaction reads, per session. */

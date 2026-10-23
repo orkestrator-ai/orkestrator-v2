@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
+import path from "node:path";
 import { parseContainerLifecycle } from "@orkestrator/protocol/container-lifecycle";
 import {
   capacityVerdict,
@@ -16,6 +18,7 @@ import { reconcileContainerOperation } from "../src/core/container-lifecycle-ser
 import { planStorageSet } from "../src/core/container-storage";
 import { PROVIDER_STATE_LAYOUT } from "../src/core/container-state-layout";
 import { dockerOwnerNamespace } from "../src/core/docker-ownership";
+import { resetResourceCaches } from "../src/core/container-resources";
 import { resetDockerTopologyCache, resetImageManifestCache } from "../src/core/docker-image";
 import {
   lifecycleEnvironment,
@@ -44,6 +47,61 @@ describe("copy plan", () => {
         expect(Date.now() - started).toBeLessThan(5_000);
       },
     );
+  });
+  test("settles when the daemon is lost by producer and helper at once", async () => {
+    // Live C15: a cut daemon connection ends `docker cp` mid-stream while the
+    // helper reading it dies too. The producer exits on its own with output
+    // still unread; it must still be seen to close.
+    await withDockerScript(
+      `#!/bin/sh
+if [ "$1" = cp ]; then
+  head -c 8000000 /dev/zero &
+  sleep 1
+  kill $! 2>/dev/null
+  echo "error during connect: unexpected EOF" >&2
+  exit 1
+fi
+head -c 100000 >/dev/null
+sleep 1
+exit 125
+`,
+      async () => {
+        for (let attempt = 0; attempt < 4; attempt += 1) {
+          const settled = await Promise.race([
+            pipeContainerPath("source", "/workspace", ["run", "helper"]),
+            new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), 15_000)),
+          ]);
+          expect(settled).toMatchObject({ absent: false, producerFailed: true });
+        }
+      },
+    );
+  }, 90_000);
+  test("only the daemon's answer that a path is missing counts as nothing to copy", async () => {
+    // Reaching no daemon (its socket gone) also says "no such file"; that
+    // step was not copied and must fail, never be skipped as absent.
+    for (const [stderr, expected] of [
+      [
+        "failed to connect to the docker API at unix:///var/run/docker.sock; check if the path is correct and if the daemon is running: dial unix /var/run/docker.sock: connect: no such file or directory",
+        { absent: false, producerFailed: true },
+      ],
+      [
+        "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?",
+        { absent: false, producerFailed: true },
+      ],
+      [
+        "Error response from daemon: Could not find the file /home/node/.pi in container source",
+        { absent: true },
+      ],
+    ] as const) {
+      await withDockerScript(
+        `#!/bin/sh\nif [ "$1" = cp ]; then printf '%s\\n' '${stderr}' >&2; exit 1; fi\ncat >/dev/null\nexit 1\n`,
+        async () => {
+          expect(await pipeContainerPath("source", "/workspace", ["run", "helper"])).toMatchObject(
+            expected,
+          );
+        },
+      );
+    }
   });
   test("a legacy source copies the workspace and every provider path, relocating databases", () => {
     const plan = replacementCopyPlan("legacy-layer");
@@ -162,8 +220,16 @@ describe("replacement admission", () => {
       expect(providers.get("grok")).toMatchObject({ level: "partial", resumeQualified: false });
       expect(providers.get("grok")?.limitations).toContain("worktrees.db");
       expect(providers.get("grok")?.limitations).toContain("memory-v2");
-      expect(providers.get("codex")).toMatchObject({ level: "partial", resumeQualified: false });
-      expect(providers.get("codex")?.limitations).toContain("pending qualification");
+      // C13 (scripts/qualify-session-resume.sh): Claude, then Codex, OpenCode,
+      // Cursor and Pi on 2026-10-23. Grok stays unverified until it passes.
+      expect(providers.get("claude")).toMatchObject({ level: "full", resumeQualified: true });
+      expect(providers.get("codex")).toMatchObject({ level: "partial", resumeQualified: true });
+      expect(providers.get("opencode")).toMatchObject({ level: "partial", resumeQualified: true });
+      expect(providers.get("cursor")).toMatchObject({ level: "full", resumeQualified: true });
+      expect(providers.get("pi")).toMatchObject({ level: "full", resumeQualified: true });
+      expect(providers.get("grok")?.limitations).toContain("pending qualification");
+      // Codex's relocated runtime databases were verified in that run.
+      expect(providers.get("codex")?.limitations).not.toContain("pending qualification");
       expect(providers.get("codex")?.limitations).toContain("thread-name index");
       expect(providers.get("opencode")?.limitations).toContain("earlier turns cannot be reverted");
       expect(preview.preservedPaths).toContainEqual(
@@ -263,6 +329,90 @@ exit 0
     const lifecycle = record(stored?.containerLifecycle);
     expect(lifecycle.storage.format).toBe("legacy-layer");
     expect(lifecycle.outcomes.at(-1)).toMatchObject({ kind: "migrate", status: "failed" });
+  });
+
+  test("a budget a rootless daemon cannot enforce is refused before the source stops", async () => {
+    const { context, environments, owner } = await fixture({
+      containerResourceLimits: { cpus: null, memoryMiB: 2048, pids: 512 },
+    });
+    Object.assign(context.storage, {
+      loadConfig: async () => ({ version: "1.0.0", global: {}, repositories: {} }),
+    });
+    const manifestDir = await tempDir("ork-rootless-manifest-");
+    cleanup.push(manifestDir);
+    await fs.writeFile(
+      path.join(manifestDir, "image-manifest.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        appVersion: "2.26.0",
+        sourceRevision: "b27421dcfa8de61b9c20a08e79efd7dfbd0c7fc2",
+        architecture: "amd64",
+        runtimes: { bun: "1.4.3", node: "24.21.0" },
+        agents: {},
+        bridges: [],
+        capabilities: { "persistent-workspace": 1 },
+        stateFormats: {},
+      }),
+    );
+    const tar = path.join(manifestDir, "manifest.tar");
+    const archived = spawnSync(
+      "tar",
+      ["--format=ustar", "-cf", tar, "-C", manifestDir, "image-manifest.json"],
+      { env: { ...process.env, COPYFILE_DISABLE: "1" } },
+    );
+    expect(archived.status).toBe(0);
+    // A rootless daemon without delegated cgroups (driver `none`).
+    const info = JSON.stringify({
+      OSType: "linux",
+      OperatingSystem: "Ubuntu 24.04",
+      Architecture: "x86_64",
+      ServerVersion: "29.9.2",
+      SecurityOptions: ["name=seccomp,profile=builtin", "name=rootless", "name=cgroupns"],
+      CgroupVersion: "2",
+      CgroupDriver: "none",
+      CpuCfsQuota: false,
+      MemoryLimit: false,
+      PidsLimit: false,
+    });
+    resetResourceCaches();
+    try {
+      await withDockerScript(
+        `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  inspect) printf '${owner}\\trunning\\torkestrator-v2\\tsource-container\\n' ;;
+  image) printf 'sha256:${"b".repeat(64)}\\t[]\\tamd64\\n' ;;
+  context) printf 'unix:///run/user/1000/docker.sock\\n' ;;
+  info) printf '%s\\n' '${info}' ;;
+  create) printf 'probe\\n' ;;
+  cp) cat '${tar}' ;;
+esac
+exit 0
+`,
+        async (log) => {
+          await expect(
+            replaceRuntimePreservingState(
+              { environmentId: "env-lifecycle", expectedContainerId: "source-container" },
+              context,
+            ),
+          ).rejects.toThrow(
+            "ContainerLifecycleError:unsupported-topology: This Docker engine (rootless) cannot enforce the memory, process (PID) limits in the environment's budget. The original container was not changed.",
+          );
+          const calls = await log.read();
+          expect(calls).not.toMatch(/^stop /m);
+          expect(calls).not.toMatch(/^volume create/m);
+        },
+      );
+    } finally {
+      resetResourceCaches();
+    }
+    const stored = environments.get("env-lifecycle");
+    expect(stored?.containerId).toBe("source-container");
+    expect(stored?.status).toBe("running");
+    expect(record(stored?.containerLifecycle).outcomes.at(-1)).toMatchObject({
+      kind: "migrate",
+      status: "failed",
+    });
   });
 });
 

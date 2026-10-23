@@ -19,6 +19,7 @@ export default defineConfig({
     "container-settings.spec.ts",
     "grok-container-login.spec.ts",
     "container-rebuild-cycle.spec.ts",
+    "container-root-terminal.spec.ts",
     "container-approval-stop.spec.ts",
     "terminal-input-resume.spec.ts",
     "terminal-mobile-panes.spec.ts",

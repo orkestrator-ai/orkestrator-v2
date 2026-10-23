@@ -58,6 +58,7 @@ import {
   resolveDockerImage,
 } from "./docker-image.js";
 import { createDockerContainer } from "./commands-containers.js";
+import { assertEnvironmentBudgetEnforceable } from "./container-resources.js";
 import { stopEnvironmentReviewValidation } from "./review-validation-service.js";
 import { stopEnvironmentExecWorkers } from "./public-api/exec-control.js";
 import { parseDockerPsSize } from "./docker-cleanup-inventory.js";
@@ -246,8 +247,16 @@ function helperArguments(
 }
 
 /**
+ * Only the daemon's own answer that the path does not exist means there is
+ * nothing to preserve. A CLI that reached no daemon (its socket gone) also
+ * says "no such file or directory"; that step copied nothing and must fail,
+ * or a rebuild during a daemon outage would commit an empty candidate.
+ */
+const MISSING_SOURCE_PATH = /error response from daemon: could not find the file/i;
+
+/**
  * Streams `docker cp <container>:<path> -` into a helper's stdin. Bounded by a
- * deadline; the producer's "could not find" is reported as an absent path
+ * deadline; the daemon's "could not find" is reported as an absent path
  * (nothing to preserve), not a failure.
  */
 export async function pipeContainerPath(
@@ -267,7 +276,15 @@ export async function pipeContainerPath(
       consumer.kill("SIGKILL");
     }, COPY_TIMEOUT_MS);
     producer.stdout.pipe(consumer.stdin);
-    consumer.stdin.on("error", () => undefined);
+    // Once nothing reads the stream (the helper died, or its stdin broke),
+    // `pipe` leaves the producer's stdout paused with data unread. Discard the
+    // rest so it reaches EOF: a child "closes" only when its output has ended,
+    // and both sides losing the daemon at once would otherwise never settle.
+    const discardProducerOutput = () => {
+      producer.stdout.unpipe(consumer.stdin);
+      producer.stdout.resume();
+    };
+    consumer.stdin.on("error", discardProducerOutput);
     producer.stderr.on("data", (chunk: Buffer) => {
       if (producerErr.length < 4096) producerErr += chunk.toString();
     });
@@ -278,7 +295,7 @@ export async function pipeContainerPath(
     const finish = () => {
       if (producerCode === null || consumerCode === null) return;
       clearTimeout(timer);
-      if (producerCode !== 0 && /could not find the file|no such file/i.test(producerErr)) {
+      if (producerCode !== 0 && MISSING_SOURCE_PATH.test(producerErr)) {
         resolve({ absent: true });
         return;
       }
@@ -290,6 +307,7 @@ export async function pipeContainerPath(
     });
     consumer.on("close", (code) => {
       consumerCode = code ?? 1;
+      discardProducerOutput();
       if (producerCode === null) producer.kill("SIGKILL");
       finish();
     });
@@ -299,6 +317,7 @@ export async function pipeContainerPath(
     });
     consumer.on("error", () => {
       consumerCode = 1;
+      discardProducerOutput();
       if (producerCode === null) producer.kill("SIGKILL");
       finish();
     });
@@ -689,6 +708,13 @@ async function replaceRuntimePreservingStateUnfenced(
         `A preserving rebuild needs an image and Docker Engine that support persistent storage (${decision.reason}). The original container was not changed.`,
       );
     }
+    // The candidate is created with the environment's budget; refuse here,
+    // before the source is stopped, rather than after the copy.
+    await assertEnvironmentBudgetEnforceable(
+      environment,
+      context,
+      "The original container was not changed.",
+    );
     const sum = (values: Array<number | null>) =>
       values.some((value) => value === null)
         ? null
@@ -910,11 +936,20 @@ const NOT_PRESERVED = [
  */
 /**
  * Providers qualified for resuming a conversation after a preserving rebuild
- * (C13): Claude, 2026-09-27, native session recalled its pre-rebuild context
- * on a new runtime generation, twice. The others are unqualified until the
- * same script passes for them against authorized credentials.
+ * (C13): the native session recalled its pre-rebuild context on a new runtime
+ * generation, at least twice each. Claude on 2026-09-27; Codex (including its
+ * relocated runtime databases), OpenCode, Cursor and Pi on 2026-10-23, where
+ * a prompt whose dispatch was unknown when the runtime was replaced also
+ * stayed unresolved and unsent (Codex, Cursor, Pi). Grok is unqualified until
+ * the same script passes for it against an authorized, unexpired login.
  */
-export const RESUME_QUALIFIED_PROVIDERS: ReadonlySet<string> = new Set(["claude"]);
+export const RESUME_QUALIFIED_PROVIDERS: ReadonlySet<string> = new Set([
+  "claude",
+  "codex",
+  "opencode",
+  "cursor",
+  "pi",
+]);
 
 export async function rebuildPreview(
   environmentId: string,

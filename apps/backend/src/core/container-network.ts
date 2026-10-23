@@ -442,7 +442,7 @@ export type AllowedDomainsApplyResult =
  */
 export function applyEnvironmentAllowedDomains(
   environmentId: string,
-  context: Pick<CommandContext, "storage">,
+  context: Pick<CommandContext, "storage" | "registryWriterLease">,
 ): Promise<AllowedDomainsApplyResult> {
   // One apply per environment at a time, each reading the list saved when it
   // starts: two quick edits cannot land in the container in the wrong order.
@@ -465,7 +465,7 @@ const applyQueue = new Map<string, Promise<void>>();
 
 async function applyAllowedDomainsNow(
   environmentId: string,
-  context: Pick<CommandContext, "storage">,
+  context: Pick<CommandContext, "storage" | "registryWriterLease">,
 ): Promise<AllowedDomainsApplyResult> {
   const before = await environmentNetworkPolicy(environmentId, context);
   if (before.domains === "applied") return { kind: "applied", policy: before };
@@ -480,6 +480,11 @@ async function applyAllowedDomainsNow(
   if (before.configured.mode !== "restricted") return { kind: "rebuild-required", policy: before };
   const config = await context.storage.loadConfig();
   const domains = containerAllowedDomains(environment, config, facts.policyVersion);
+  // Changing a running container's firewall is a container mutation: a
+  // backend that does not hold the registry writer (a newer writer's data
+  // directory, or another backend's lease) keeps the save but refuses to
+  // apply it.
+  context.registryWriterLease?.assertHeld();
   try {
     await runCommand(
       "docker",

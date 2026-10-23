@@ -1,0 +1,113 @@
+name: Container live qualification
+
+# The opt-in live Docker suites (docs/development/container-qualification.md)
+# against a real Linux Engine on both published architectures. A fake
+# `docker` cannot prove filesystem retention, packet rules, mount
+# permissions, name conflicts or signal delivery, so these run weekly, on
+# demand, and on pull requests that change the suites or this workflow.
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/container-live-qualification.yml"
+      - "apps/backend/tests/container-live-*.test.ts"
+      - "apps/backend/tests/container-lifecycle-fixtures.ts"
+      - "apps/backend/tests/container-live-rebuild-*.ts"
+      - "apps/backend/tests/container-live-workspace.ts"
+
+# Only pull request runs supersede each other. Scheduled and manual runs need
+# unique groups so a newer pending run cannot replace an older one.
+concurrency:
+  group: container-live-qualification-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  engine:
+    name: Live suites (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x64
+            runner: ubuntu-24.04
+            platform: linux/amd64
+          - name: linux-arm64
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
+
+    env:
+      RUN_LIVE_DOCKER_TESTS: "1"
+      ORKESTRATOR_QUALIFICATION_IMAGE: orkestrator-v2:qualification-${{ matrix.name }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Set up mise toolchain
+        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+
+      - name: Verify active Bun matches mise
+        run: test "$(bun --version)" = "$(mise current bun)"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Compute image contract build arguments
+        id: contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          capabilities="$(bun docker/image-manifest.ts capabilities --repo .)"
+          echo "capabilities=${capabilities}" >> "$GITHUB_OUTPUT"
+
+      # The image must carry a manifest, and is never the `latest` tag.
+      - name: Build the qualification image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: ${{ matrix.platform }}
+          push: false
+          load: true
+          tags: ${{ env.ORKESTRATOR_QUALIFICATION_IMAGE }}
+          build-args: |
+            ORKESTRATOR_IMAGE_CAPABILITIES=${{ steps.contract.outputs.capabilities }}
+            ORKESTRATOR_SOURCE_REVISION=${{ github.sha }}
+          cache-from: type=gha,scope=orkestrator-container-validation-${{ matrix.name }}
+
+      - name: Record the daemon
+        run: docker info --format '{{.ServerVersion}} {{.OperatingSystem}} {{.Architecture}} cgroup={{.CgroupVersion}} {{.SecurityOptions}}'
+
+      # One step per suite so each result maps to one check; every step runs
+      # even when an earlier one fails.
+      - name: Live lifecycle (C09, C11, C12, C20)
+        run: bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-qualification.test.ts --parallel=1
+
+      - name: Live replacement (C14-C19)
+        if: ${{ !cancelled() }}
+        run: bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-replacement.test.ts --parallel=1
+
+      - name: Live network (C22, C24, C26)
+        if: ${{ !cancelled() }}
+        run: bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-network.test.ts --parallel=1
+
+      - name: Live firewall (C23)
+        if: ${{ !cancelled() }}
+        run: bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-firewall.test.ts --parallel=1
+
+      - name: Live readiness faults (C09, C10, C22, C23)
+        if: ${{ !cancelled() }}
+        run: bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-readiness.test.ts --parallel=1
+
+      - name: Live rebuild faults (C15)
+        if: ${{ !cancelled() }}
+        run: bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-rebuild-faults.test.ts --parallel=1

@@ -74,7 +74,7 @@ test("Docker fixture rebuild keeps running while another environment is open and
   await expect(grokPreservation).toContainText("worktrees.db");
   await expect(grokPreservation).toContainText("memory-v2");
   await expect(page.getByRole("listitem").filter({ hasText: /^codex sessions/ })).toContainText(
-    "pending qualification",
+    "thread-name index",
   );
   await expect(page.getByRole("listitem").filter({ hasText: /^opencode sessions/ })).toContainText(
     "earlier turns cannot be reverted",

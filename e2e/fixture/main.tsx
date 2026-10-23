@@ -3,6 +3,7 @@ import { RemoteMachineTreeFixture } from "../../apps/web/src/test/RemoteMachineT
 import { NativeAttachmentsFixture } from "./NativeAttachmentsFixture";
 import { ChangeTrackingFixture, installChangeTrackingFixture } from "./changeTracking";
 import { StructuredReviewLayoutFixture } from "./StructuredReviewLayoutFixture";
+import { AnnotationDestinationLayoutFixture } from "./AnnotationDestinationLayoutFixture";
 import { ClaudeInteractionsFixture } from "./ClaudeInteractionsFixture";
 import {
   AgentLaunchDialog,
@@ -1677,6 +1678,8 @@ function PullRequestCheckStatusFixture() {
 }
 
 function fixtureForPath() {
+  if (window.location.pathname === "/annotation-destination-layout")
+    return <AnnotationDestinationLayoutFixture />;
   if (window.location.pathname === "/structured-review-layout")
     return <StructuredReviewLayoutFixture />;
   if (window.location.pathname === "/setup-recovery") {

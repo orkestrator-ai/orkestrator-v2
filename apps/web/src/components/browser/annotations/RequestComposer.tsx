@@ -249,8 +249,10 @@ export function RequestComposer({
           disabled={!features.dispatch || preparing || !destination}
           onClick={() => void prepare("discuss")}
         >
-          Discuss with {destinationLabel}
-          {advisory ? " (advisory)" : ""}
+          <span className="min-w-0 break-words">
+            Discuss with {destinationLabel}
+            {advisory ? " (advisory)" : ""}
+          </span>
         </Button>
         <Button
           type="button"
@@ -260,7 +262,7 @@ export function RequestComposer({
           disabled={!features.dispatch || preparing || !destination}
           onClick={() => void prepare("implement")}
         >
-          Request changes from {destinationLabel}
+          <span className="min-w-0 break-words">Request changes from {destinationLabel}</span>
         </Button>
         <Button
           type="button"

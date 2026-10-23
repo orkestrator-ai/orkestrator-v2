@@ -5,6 +5,7 @@ import { nativeTabLogicalSessionKey } from "@orkestrator/protocol/public-api-res
 import type { CommandContext } from "../commands-context.js";
 import type { NativeAgentRuntimeProvider } from "../native-agent-provider.js";
 import { NativeAgentService, nativeAgentSessionStorageKey } from "../native-agent-service.js";
+import { launchInternals } from "../native-agent-service-test-collaborators.js";
 import { createProject } from "../storage.js";
 import { createPublicApiHarness, type PublicApiHarness } from "./test-support.js";
 
@@ -123,11 +124,7 @@ export function setActivity(
   state: "idle" | "working" | "waiting",
   environmentId = "env-1",
 ) {
-  (
-    service as unknown as {
-      observedSessionActivity: Map<string, { providerSessionId: string; state: string }>;
-    }
-  ).observedSessionActivity.set(
+  launchInternals(service).observedSessionActivity.set(
     nativeAgentSessionStorageKey(
       environmentId,
       agent,

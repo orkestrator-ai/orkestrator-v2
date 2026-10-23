@@ -1,5 +1,4 @@
 import { describe, expect, mock, test } from "bun:test";
-import type { ProviderRegistry } from "./native-agent-provider-registry.js";
 
 import { promises as fs } from "node:fs";
 
@@ -18,15 +17,12 @@ import {
   ProviderUnreachableError,
   type AgentInteractionProviderCapability,
   type AgentSessionProvider,
-  type BridgeConnection,
   type NativeAgentRuntimeProvider,
   type ProviderActivityState,
   type ProviderInteractiveSnapshot,
   type ProviderSendOptions,
   type ProviderStatus,
 } from "./native-agent-provider.js";
-
-import type { Environment } from "./models.js";
 
 import {
   expectedOpenCodeMessageId,
@@ -39,12 +35,11 @@ import { openCodeIncompleteTurnRequestId } from "./opencode-turn-recovery.js";
 import {
   NativeAgentService,
   nativeAgentSessionStorageKey,
-  type AgentInteractionObservation,
-  type EnsureNativeAgentSessionInput,
   type NativeAgentServiceOptions,
 } from "./native-agent-service.js";
 
 import { StorageService } from "./storage.js";
+import { collaborators, queueInternals } from "./native-agent-service-test-collaborators.js";
 
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -183,55 +178,6 @@ function createProviderStub(
     slashCommands,
     refreshCatalog,
     dispose,
-  };
-}
-
-/** Reach the timer-driven scans and backoff bookkeeping the service keeps private. */
-function internals(service: NativeAgentService) {
-  return service as unknown as {
-    drainPromptQueues(): Promise<void>;
-    drainPromptQueueOnce(queueKey: string): Promise<void>;
-    reconcilePendingLaunches(): Promise<void>;
-    provider(input: EnsureNativeAgentSessionInput): Promise<AgentSessionProvider>;
-    bridgeConnection(
-      agent: BuildPipelineAgent,
-      environment: Environment,
-      model?: string,
-      effort?: string,
-    ): Promise<BridgeConnection>;
-    providerRegistry: ProviderRegistry;
-    activityRetryAt: Map<string, number>;
-    activityAttempts: Map<string, number>;
-    observedSessionActivity: Map<
-      string,
-      { providerSessionId: string; state: ProviderActivityState }
-    >;
-    pendingPrRefreshEnvironmentIds: Set<string>;
-    launchTasks: Map<string, Promise<void>>;
-    queueRetryAt: Map<string, number>;
-    queueAttempts: Map<string, number>;
-    launchRetryAt: Map<string, number>;
-    trackedInteractions: Map<string, unknown>;
-    providerReportedInteractions: Map<
-      string,
-      {
-        observationKey: string;
-        providerSessionKey: string;
-        missingSince?: number;
-      }
-    >;
-    interactionObservations: Map<string, AgentInteractionObservation>;
-    interactionRetryAt: Map<string, number>;
-    interactionAttempts: Map<string, number>;
-    monitoredInteractionSessionKeys: Set<string>;
-    observedInteractionRevisions: Map<string, number>;
-    interactionSelectionCursors: Map<string, number>;
-    interactionRevisionReconciliations: number;
-    projectionCache: Map<string, unknown>;
-    projectionEpochs: Map<string, number>;
-    projectionRefreshes: Map<string, Promise<unknown>>;
-    launchTimer: ReturnType<typeof setInterval> | null;
-    interactionTimer: ReturnType<typeof setInterval> | null;
   };
 }
 
@@ -1669,14 +1615,17 @@ describe("NativeAgentService", () => {
         keyedQueueScheduling: false,
       },
       async ({ service }) => {
-        const internal = service as unknown as {
+        // Replace the scans on the collaborators that own them.
+        const launchScans = collaborators(service).launches as unknown as {
           reconcilePendingLaunches(): Promise<void>;
+        };
+        const queueScans = collaborators(service).promptQueues as unknown as {
           drainPromptQueues(): Promise<void>;
         };
         const launches = mock(async () => undefined);
         const drains = mock(async () => undefined);
-        internal.reconcilePendingLaunches = launches;
-        internal.drainPromptQueues = drains;
+        launchScans.reconcilePendingLaunches = launches;
+        queueScans.drainPromptQueues = drains;
         await service.init();
         await Bun.sleep(120);
         expect(launches.mock.calls.length).toBeGreaterThanOrEqual(2);
@@ -1878,8 +1827,7 @@ describe("NativeAgentService", () => {
       },
       { provider: async () => provider },
     );
-    const drain = () =>
-      (service as unknown as { drainPromptQueues(): Promise<void> }).drainPromptQueues();
+    const drain = () => queueInternals(service).drainPromptQueues();
     try {
       await drain();
       expect(send).not.toHaveBeenCalled();
@@ -1938,8 +1886,7 @@ describe("NativeAgentService", () => {
       },
       { provider: async () => provider },
     );
-    const drain = () =>
-      (service as unknown as { drainPromptQueues(): Promise<void> }).drainPromptQueues();
+    const drain = () => queueInternals(service).drainPromptQueues();
     try {
       await drain();
       expect(send).not.toHaveBeenCalled();
@@ -1984,7 +1931,7 @@ describe("NativeAgentService", () => {
       { provider: async () => provider },
     );
     try {
-      await (service as unknown as { drainPromptQueues(): Promise<void> }).drainPromptQueues();
+      await queueInternals(service).drainPromptQueues();
       expect(send).toHaveBeenCalledWith(
         "provider-session",
         "Inspect only",
@@ -2030,7 +1977,7 @@ describe("NativeAgentService", () => {
         { provider: async () => provider },
       );
       try {
-        await (service as unknown as { drainPromptQueues(): Promise<void> }).drainPromptQueues();
+        await queueInternals(service).drainPromptQueues();
         expect(send).toHaveBeenCalledWith(
           "provider-session",
           "Use the selected speed",
@@ -2092,7 +2039,7 @@ describe("NativeAgentService", () => {
       { provider: async () => provider },
     );
     try {
-      await (service as unknown as { drainPromptQueues(): Promise<void> }).drainPromptQueues();
+      await queueInternals(service).drainPromptQueues();
       expect(send).toHaveBeenCalledWith(
         "provider-session",
         "Use the selected speed",
@@ -2134,13 +2081,13 @@ describe("NativeAgentService", () => {
       { provider: async () => provider },
     );
     try {
-      await (service as unknown as { drainPromptQueues(): Promise<void> }).drainPromptQueues();
+      await queueInternals(service).drainPromptQueues();
       expect(await storage.getPromptQueue(queueKey)).toMatchObject({
         inFlight: { requestId: "row-1" },
       });
 
-      (service as unknown as { queueRetryAt: Map<string, number> }).queueRetryAt.delete(queueKey);
-      await (service as unknown as { drainPromptQueues(): Promise<void> }).drainPromptQueues();
+      queueInternals(service).queueRetryAt.delete(queueKey);
+      await queueInternals(service).drainPromptQueues();
 
       expect(requests).toEqual(["row-1", "row-1"]);
       expect(await storage.getPromptQueue(queueKey)).toMatchObject({
@@ -2183,7 +2130,7 @@ describe("NativeAgentService", () => {
             { id: requestId, text: "Answers to your questions:\n\n- Target: Staging" },
           ]);
 
-          await internals(service).drainPromptQueues();
+          await queueInternals(service).drainPromptQueues();
 
           expect(stub.performSessionAction).toHaveBeenCalledWith(
             "provider-session",
@@ -2239,7 +2186,7 @@ describe("NativeAgentService", () => {
             { id: requestId, text: "Answers to your questions:\n\n- Target: Production" },
           ]);
 
-          await internals(service).drainPromptQueues();
+          await queueInternals(service).drainPromptQueues();
           expect(await storage.getPromptQueue(queueKey)).toMatchObject({
             inFlight: { requestId },
           });
@@ -2278,14 +2225,14 @@ describe("NativeAgentService", () => {
             { id: requestId, text: "Answers to your questions:\n\n- Target: Staging" },
           ]);
 
-          await internals(service).drainPromptQueues();
+          await queueInternals(service).drainPromptQueues();
           expect(stub.send).not.toHaveBeenCalled();
           expect(await storage.getPromptQueue(queueKey)).toMatchObject({
             inFlight: { requestId },
           });
 
           status = "idle";
-          await internals(service).drainPromptQueues();
+          await queueInternals(service).drainPromptQueues();
           expect(stub.send).toHaveBeenCalledTimes(1);
           expect(await storage.getPromptQueue(queueKey)).toMatchObject({ messages: [] });
         },
@@ -2351,8 +2298,8 @@ describe("NativeAgentService", () => {
             { id: "row-2", requestId: "request-2", text: "Second prompt" },
           ]);
 
-          await internals(service).drainPromptQueues();
-          await internals(service).drainPromptQueues();
+          await queueInternals(service).drainPromptQueues();
+          await queueInternals(service).drainPromptQueues();
 
           expect(dispatched).toEqual([
             { prompt: "First prompt", requestId: "request-1" },
@@ -2461,7 +2408,7 @@ describe("NativeAgentService", () => {
             { id: "row-1", text: "Do it", model: "queued-model", ...effortField },
           ]);
 
-          await internals(service).drainPromptQueues();
+          await queueInternals(service).drainPromptQueues();
 
           expect(createSession).toHaveBeenCalledWith(
             "build",
@@ -2495,7 +2442,7 @@ describe("NativeAgentService", () => {
             },
           ]);
 
-          await internals(service).drainPromptQueues();
+          await queueInternals(service).drainPromptQueues();
 
           expect(send).toHaveBeenCalledWith(
             "provider-session",
@@ -2525,7 +2472,7 @@ describe("NativeAgentService", () => {
             },
           ]);
 
-          await internals(service).drainPromptQueues();
+          await queueInternals(service).drainPromptQueues();
 
           // These were selected in the composer before the prompt was queued;
           // dropping them silently runs a different agent than the user chose.
@@ -2565,7 +2512,7 @@ describe("NativeAgentService", () => {
             },
           ]);
 
-          await internals(service).drainPromptQueues();
+          await queueInternals(service).drainPromptQueues();
 
           // Flattening these into an "Attached workspace files:" list degraded an
           // image to a filename the model had to guess at.
@@ -2604,7 +2551,7 @@ describe("NativeAgentService", () => {
             },
           ]);
 
-          await internals(service).drainPromptQueues();
+          await queueInternals(service).drainPromptQueues();
 
           expect(send).not.toHaveBeenCalled();
           expect(await storage.getPromptQueue(queueKey)).toMatchObject({
@@ -2616,8 +2563,8 @@ describe("NativeAgentService", () => {
           });
           // A validation failure is permanent, so the retry budget resets rather
           // than counting toward the transient-failure latch.
-          expect(internals(service).queueAttempts.has(queueKey)).toBe(false);
-          expect(internals(service).queueRetryAt.has(queueKey)).toBe(false);
+          expect(queueInternals(service).queueAttempts.has(queueKey)).toBe(false);
+          expect(queueInternals(service).queueRetryAt.has(queueKey)).toBe(false);
         },
       );
     });
@@ -2636,7 +2583,7 @@ describe("NativeAgentService", () => {
             { id: "row-2", text: "Real work" },
           ]);
 
-          await internals(service).drainPromptQueues();
+          await queueInternals(service).drainPromptQueues();
 
           expect(send).not.toHaveBeenCalled();
           const queue = await storage.getPromptQueue(queueKey);
@@ -2646,7 +2593,7 @@ describe("NativeAgentService", () => {
           expect(queue?.inFlight).toBeUndefined();
           expect(queue?.dispatchError).toBeUndefined();
 
-          await internals(service).drainPromptQueues();
+          await queueInternals(service).drainPromptQueues();
           expect(send).toHaveBeenCalledWith("provider-session", "Real work", expect.anything());
         },
       );
@@ -2664,7 +2611,7 @@ describe("NativeAgentService", () => {
           // No `id`, so the reservation cannot produce a durable request id.
           await storage.savePromptQueue(queueKey, "env-1", [{ text: "No identity" }]);
 
-          await internals(service).drainPromptQueues();
+          await queueInternals(service).drainPromptQueues();
 
           expect(send).not.toHaveBeenCalled();
           const queue = await storage.getPromptQueue(queueKey);
@@ -2689,7 +2636,7 @@ describe("NativeAgentService", () => {
         async ({ storage, service }) => {
           await storage.savePromptQueue(queueKey, "env-1", [{ id: "row-1", text: "Do it" }]);
 
-          await internals(service).drainPromptQueueOnce(queueKey);
+          await queueInternals(service).drainPromptQueueOnce(queueKey);
 
           expect(createSession).not.toHaveBeenCalled();
           expect(send).not.toHaveBeenCalled();
@@ -2715,7 +2662,7 @@ describe("NativeAgentService", () => {
           const queueKey = "codex\u0000env-env-1:tab-1";
           await storage.savePromptQueue(queueKey, "env-1", [{ id: "row-1", text: "Do it" }]);
 
-          await internals(service).drainPromptQueues();
+          await queueInternals(service).drainPromptQueues();
 
           // Without this gate a leftover queued prompt spawns bridge servers and
           // attempts dispatch every two seconds against a dead environment.
@@ -2724,7 +2671,7 @@ describe("NativeAgentService", () => {
           expect(await storage.getPromptQueue(queueKey)).toMatchObject({
             messages: [{ id: "row-1" }],
           });
-          expect(internals(service).queueRetryAt.get(queueKey)).toBeGreaterThan(Date.now());
+          expect(queueInternals(service).queueRetryAt.get(queueKey)).toBeGreaterThan(Date.now());
         },
       );
     });
@@ -2745,8 +2692,8 @@ describe("NativeAgentService", () => {
           await storage.savePromptQueue(queueKey, "env-1", [{ id: "row-1", text: "Do it" }]);
 
           for (let attempt = 1; attempt < 5; attempt += 1) {
-            await internals(service).drainPromptQueues();
-            expect(internals(service).queueAttempts.get(queueKey)).toBe(attempt);
+            await queueInternals(service).drainPromptQueues();
+            expect(queueInternals(service).queueAttempts.get(queueKey)).toBe(attempt);
             // The prompt is held, not burned: an at-capacity model would fail
             // every queued prompt in turn if the drain sent them anyway.
             expect(stub.send).not.toHaveBeenCalled();
@@ -2754,9 +2701,9 @@ describe("NativeAgentService", () => {
               messages: [{ id: "row-1" }],
             });
             expect((await storage.getPromptQueue(queueKey))?.dispatchError).toBeUndefined();
-            internals(service).queueRetryAt.delete(queueKey);
+            queueInternals(service).queueRetryAt.delete(queueKey);
           }
-          const warnings = await captureWarnings(() => internals(service).drainPromptQueues());
+          const warnings = await captureWarnings(() => queueInternals(service).drainPromptQueues());
 
           expect(warnings.join(" ")).toContain("provider session is error");
           expect(warnings.join(" ")).not.toContain("ProviderSessionFailedError");
@@ -2776,13 +2723,13 @@ describe("NativeAgentService", () => {
             messageId: "row-1",
             message: "The codex session failed before this prompt was sent: usage limit reached",
           });
-          expect(internals(service).queueAttempts.has(queueKey)).toBe(false);
-          expect(internals(service).queueRetryAt.has(queueKey)).toBe(false);
+          expect(queueInternals(service).queueAttempts.has(queueKey)).toBe(false);
+          expect(queueInternals(service).queueRetryAt.has(queueKey)).toBe(false);
 
           // The park is a latch, not a loop: a further sweep must not re-read the
           // provider or park a second time, and the retry control clears it.
           stub.status.mockClear();
-          await internals(service).drainPromptQueues();
+          await queueInternals(service).drainPromptQueues();
           expect(stub.status).not.toHaveBeenCalled();
 
           await storage.retryPromptQueueDispatch(queueKey);
@@ -2809,10 +2756,10 @@ describe("NativeAgentService", () => {
           await storage.savePromptQueue(queueKey, "env-1", [{ id: "row-1", text: "Do it" }]);
 
           for (let attempt = 1; attempt < 5; attempt += 1) {
-            await internals(service).drainPromptQueues();
-            internals(service).queueRetryAt.delete(queueKey);
+            await queueInternals(service).drainPromptQueues();
+            queueInternals(service).queueRetryAt.delete(queueKey);
           }
-          await captureWarnings(() => internals(service).drainPromptQueues());
+          await captureWarnings(() => queueInternals(service).drainPromptQueues());
 
           expect(stub.send).not.toHaveBeenCalled();
           expect((await storage.getPromptQueue(queueKey))?.dispatchError).toMatchObject({
@@ -2841,16 +2788,16 @@ describe("NativeAgentService", () => {
           const observed: number[] = [];
           for (let attempt = 1; attempt <= 4; attempt += 1) {
             const before = Date.now();
-            await internals(service).drainPromptQueues();
-            observed.push(internals(service).queueRetryAt.get(queueKey)! - before);
-            expect(internals(service).queueAttempts.get(queueKey)).toBe(attempt);
+            await queueInternals(service).drainPromptQueues();
+            observed.push(queueInternals(service).queueRetryAt.get(queueKey)! - before);
+            expect(queueInternals(service).queueAttempts.get(queueKey)).toBe(attempt);
             // Only the backoff should hold the queue back, so clear it to reach
             // the next attempt without waiting.
-            internals(service).queueRetryAt.delete(queueKey);
+            queueInternals(service).queueRetryAt.delete(queueKey);
           }
           expect(observed.map((delay) => Math.round(delay / 1_000))).toEqual([2, 4, 8, 16]);
 
-          await internals(service).drainPromptQueues();
+          await queueInternals(service).drainPromptQueues();
 
           expect(send).toHaveBeenCalledTimes(5);
           // An unbounded 2s retry is invisible: nothing is latched and the user
@@ -2862,8 +2809,8 @@ describe("NativeAgentService", () => {
               message: "ProviderUnavailableError",
             },
           });
-          expect(internals(service).queueAttempts.has(queueKey)).toBe(false);
-          expect(internals(service).queueRetryAt.has(queueKey)).toBe(false);
+          expect(queueInternals(service).queueAttempts.has(queueKey)).toBe(false);
+          expect(queueInternals(service).queueRetryAt.has(queueKey)).toBe(false);
         },
       );
     });
@@ -2885,16 +2832,16 @@ describe("NativeAgentService", () => {
           const queueKey = "codex\u0000env-env-1:tab-1";
           await storage.savePromptQueue(queueKey, "env-1", [{ id: "row-1", text: "Do it" }]);
 
-          await internals(service).drainPromptQueues();
-          expect(internals(service).queueAttempts.get(queueKey)).toBe(1);
+          await queueInternals(service).drainPromptQueues();
+          expect(queueInternals(service).queueAttempts.get(queueKey)).toBe(1);
 
-          internals(service).queueRetryAt.delete(queueKey);
-          await internals(service).drainPromptQueues();
+          queueInternals(service).queueRetryAt.delete(queueKey);
+          await queueInternals(service).drainPromptQueues();
 
           // A recovered queue must start from a clean budget, or five failures
           // spread over a week would eventually park a healthy queue.
-          expect(internals(service).queueAttempts.has(queueKey)).toBe(false);
-          expect(internals(service).queueRetryAt.has(queueKey)).toBe(false);
+          expect(queueInternals(service).queueAttempts.has(queueKey)).toBe(false);
+          expect(queueInternals(service).queueRetryAt.has(queueKey)).toBe(false);
           expect((await storage.getPromptQueue(queueKey))?.dispatchError).toBeUndefined();
         },
       );
@@ -2924,7 +2871,7 @@ describe("NativeAgentService", () => {
           };
 
           try {
-            await internals(service).drainPromptQueues();
+            await queueInternals(service).drainPromptQueues();
           } finally {
             storage.getPromptQueue = readQueue;
           }
@@ -2936,9 +2883,9 @@ describe("NativeAgentService", () => {
           // A storage fault bypasses every inner handler, so without an outer
           // guard the scan retried this queue every two seconds forever with no
           // attempt counter and nothing logged.
-          expect(internals(service).queueRetryAt.has(brokenKey)).toBe(true);
-          expect(internals(service).queueAttempts.get(brokenKey)).toBe(1);
-          expect(internals(service).queueRetryAt.has(healthyKey)).toBe(false);
+          expect(queueInternals(service).queueRetryAt.has(brokenKey)).toBe(true);
+          expect(queueInternals(service).queueAttempts.get(brokenKey)).toBe(1);
+          expect(queueInternals(service).queueRetryAt.has(healthyKey)).toBe(false);
         },
       );
     });
@@ -2969,7 +2916,7 @@ describe("NativeAgentService", () => {
           };
 
           try {
-            await internals(service).drainPromptQueues();
+            await queueInternals(service).drainPromptQueues();
           } finally {
             storage.reservePromptQueueHeadForDispatch = reserve;
           }
@@ -2982,8 +2929,8 @@ describe("NativeAgentService", () => {
           expect(broken?.inFlight).toBeUndefined();
           // And the failure is counted, so the queue backs off instead of being
           // retried on every two-second scan indefinitely.
-          expect(internals(service).queueRetryAt.has(brokenKey)).toBe(true);
-          expect(internals(service).queueAttempts.get(brokenKey)).toBe(1);
+          expect(queueInternals(service).queueRetryAt.has(brokenKey)).toBe(true);
+          expect(queueInternals(service).queueAttempts.get(brokenKey)).toBe(1);
         },
       );
     });
@@ -3010,11 +2957,11 @@ describe("NativeAgentService", () => {
             // rather than stay pinned at the two-second scan interval.
             const delays: number[] = [];
             for (let attempt = 0; attempt < 4; attempt += 1) {
-              internals(service).queueRetryAt.delete(queueKey);
-              await internals(service).drainPromptQueues();
-              delays.push((internals(service).queueRetryAt.get(queueKey) ?? 0) - Date.now());
+              queueInternals(service).queueRetryAt.delete(queueKey);
+              await queueInternals(service).drainPromptQueues();
+              delays.push((queueInternals(service).queueRetryAt.get(queueKey) ?? 0) - Date.now());
             }
-            expect(internals(service).queueAttempts.get(queueKey)).toBe(4);
+            expect(queueInternals(service).queueAttempts.get(queueKey)).toBe(4);
             expect(delays[3]!).toBeGreaterThan(delays[0]!);
           } finally {
             storage.getPromptQueue = readQueue;
@@ -3202,7 +3149,7 @@ describe("NativeAgentService", () => {
             { id: "row-1", text: "Add a login page" },
           ]);
 
-          await internals(service).drainPromptQueues();
+          await queueInternals(service).drainPromptQueues();
 
           expect(invoked).toEqual([
             {
@@ -3232,7 +3179,7 @@ describe("NativeAgentService", () => {
           await storage.savePromptQueue("codex\u0000env-env-1:tab-1", "env-1", [
             { id: "row-1", text: "Add a login page" },
           ]);
-          await internals(service).drainPromptQueues();
+          await queueInternals(service).drainPromptQueues();
           expect(invoked).toEqual([]);
           expect(send).toHaveBeenCalledTimes(1);
         },
@@ -3252,8 +3199,8 @@ describe("NativeAgentService", () => {
             { id: "row-1", text: "First prompt" },
             { id: "row-2", text: "Second prompt" },
           ]);
-          await internals(service).drainPromptQueues();
-          await internals(service).drainPromptQueues();
+          await queueInternals(service).drainPromptQueues();
+          await queueInternals(service).drainPromptQueues();
           // Only the first prompt of a session names the environment; the second
           // would overwrite a name derived from the work that is already running.
           expect(invoked).toEqual(["prepare_environment_first_prompt"]);
@@ -3278,7 +3225,7 @@ describe("NativeAgentService", () => {
             { id: "row-1", text: "Add a login page" },
           ]);
 
-          await internals(service).drainPromptQueues();
+          await queueInternals(service).drainPromptQueues();
 
           // The name is cosmetic; the dispatch is not.
           expect(send).toHaveBeenCalledWith(

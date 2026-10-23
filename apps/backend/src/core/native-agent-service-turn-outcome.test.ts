@@ -12,6 +12,7 @@ import {
 } from "./native-agent-provider.js";
 import { NativeAgentService, nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import { StorageService } from "./storage.js";
+import { launchInternals } from "./native-agent-service-test-collaborators.js";
 
 /**
  * Turn-outcome bookkeeping and mode preservation on the native queue path:
@@ -99,14 +100,13 @@ function markIdle(
   agent: BuildPipelineAgent,
   providerSessionId: string,
 ) {
-  (
-    service as unknown as {
-      observedSessionActivity: Map<string, { providerSessionId: string; state: string }>;
-    }
-  ).observedSessionActivity.set(nativeAgentSessionStorageKey("env-1", agent, logicalSessionKey), {
-    providerSessionId,
-    state: "idle",
-  });
+  launchInternals(service).observedSessionActivity.set(
+    nativeAgentSessionStorageKey("env-1", agent, logicalSessionKey),
+    {
+      providerSessionId,
+      state: "idle",
+    },
+  );
 }
 
 describe("native queue mode preservation", () => {

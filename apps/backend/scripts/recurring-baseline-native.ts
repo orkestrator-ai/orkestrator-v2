@@ -11,6 +11,7 @@ import {
   NativeAgentService,
   nativeAgentSessionStorageKey,
 } from "../src/core/native-agent-service.js";
+import { queueInternals } from "../src/core/native-agent-service-test-collaborators.js";
 import { StorageService } from "../src/core/storage.js";
 
 /**
@@ -169,10 +170,7 @@ async function runMode(
       },
     },
   );
-  const internals = service as unknown as {
-    drainPromptQueues(): Promise<void>;
-    observations: { status(): { backedOffGroups: number } };
-  };
+  const queues = queueInternals(service);
 
   try {
     let externalEnvironment: number | null = null;
@@ -234,8 +232,8 @@ async function runMode(
       }
       await service.reconcileAgentActivity();
       sweeps += 1;
-      retainedGroupPasses += internals.observations.status().backedOffGroups;
-      await internals.drainPromptQueues();
+      retainedGroupPasses += service.observationStatus().backedOffGroups;
+      await queues.drainPromptQueues();
       queuePasses += 1;
       // Let the OpenCode first-idle transcript check settle between ticks.
       await new Promise((resolve) => setTimeout(resolve, 0));

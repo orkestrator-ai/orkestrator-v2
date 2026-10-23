@@ -42,10 +42,10 @@ const SKIPPED_DIRECTORIES = new Set([
  * new; a chain that loses one fails as stale, so whoever shortens it updates the
  * entry in the same change.
  *
- * Coordination: plans 01 (storage) and 02 (native agent service) are being done
- * in parallel, and each removes its own entry below. Whichever merges second
- * rebases onto the first and updates this list (drop the merged entry, keep the
- * other) rather than restoring it. Plan 03 (claude-bridge `sendPrompt`) splits
+ * Coordination: plan 01 (storage) removes its own entry below when its chain is
+ * gone. Plan 02 (native agent service) already removed its chain and entry; a
+ * branch that still carries that entry drops it on rebase rather than restoring
+ * it. Plan 03 (claude-bridge `sendPrompt`) splits
  * one function, not a class chain, so it has no entry. Plan 04 removed the
  * gateway, Codex runtime, build pipeline and web annotation chains.
  */
@@ -71,19 +71,6 @@ const PINNED_CHAINS: ReadonlyArray<{ classes: readonly string[]; plan: string; r
     plan: "docs/todo/backend-structure/0009-storage-service-repositories.md",
     reason:
       "StorageService split by size into 15 layers; the todo replaces it with per-store repositories over a shared StorageContext.",
-  },
-  {
-    classes: [
-      "NativeAgentServiceBase",
-      "NativeAgentServiceDispatch",
-      "NativeAgentServiceProjection",
-      "NativeAgentServicePrompt",
-      "NativeAgentServiceReconciliation",
-      "NativeAgentServiceProvider",
-    ],
-    plan: "docs/todo/backend-structure/0010-native-agent-service-collaborators.md",
-    reason:
-      "NativeAgentService (exported as NativeAgentServiceProvider) split into six layers; the todo turns them into collaborators.",
   },
 ];
 

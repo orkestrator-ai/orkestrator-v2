@@ -144,7 +144,7 @@ export function migrateGlobalAgentSettings(global: JsonRecord): AgentSettingsTie
  *
  * That pairing is the fix for the defect where the same stored value meant two
  * things: `build-pipeline-service-helpers.ts` already applied it only to the
- * repository's own agent, while `native-agent-service-reconciliation.ts`
+ * repository's own agent, while `native-agent-launch-activity-reconciler.ts`
  * applied it to whatever agent launched. Pinning it to one platform column
  * makes the build pipeline's reading the only reading.
  */

@@ -203,3 +203,11 @@ Second full suite on the same branch (2026-10-22): `mise run test:logged -- --na
 - **After the aggregate finished:** `mise run test:logged -- --name firewall-policy-after-suite -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` passed all 24 unchanged cases (exit 0, 27.3 seconds logged).
 - **Aggregate evidence:** `orkestrator-test-run.Aiu72Z/root-and-agent-support-tests.log.gz`, with outer summary in `orkestrator-test-run.4usC0x/full-suite.log.gz`, below the host temporary directory.
 - **Assessment:** the final isolated pass confirms intermittence. Host contention remains a hypothesis; no firewall implementation, assertion, timeout or skip changed.
+
+## Native-agent collaborator merge recurrence — 2026-10-23
+
+- Initial merge validation: `ORKESTRATOR_TEST_AREA_BASE=$(git merge-base HEAD MERGE_HEAD) mise run test:logged -- --name merge-tests -- mise run test`, workspace/root/bridges/protocol reservations 4/1/2/1, one isolated root worker.
+- `container firewall policy > GitHub ranges come from a fresh backend seed, else live, else this container's cache` in `tests/unit/firewall-policy.test.ts` timed out after 5068.08 ms at its unchanged five-second deadline. The aggregate was subsequently interrupted to include newly arrived main commits, so it has no complete root-suite counts; workspace, bridges and protocol passed before interruption.
+- Complete unchanged owner rerun: `mise run test:logged -- --name merge-firewall-isolated -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` passed (exit 0, 13.8 s).
+- Aggregate evidence: `orkestrator-test-run.JCIgd6/root-and-agent-support-tests.log.gz` below the host temporary directory; wrapper evidence: `orkestrator-test-run.JxjaBc/merge-tests.log.gz`.
+- The isolated pass confirms an intermittent shell-fixture deadline. Host contention remains a hypothesis; no firewall implementation, assertion, timeout or skip changed.

@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { NativeAgentService, nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import { StorageService } from "./storage.js";
+import { launchInternals } from "./native-agent-service-test-collaborators.js";
 
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 type Answer = Record<string, unknown> | "unavailable";
@@ -132,11 +133,7 @@ async function adoptSessions(storage: StorageService, count: number): Promise<st
 }
 
 function observed(service: NativeAgentService) {
-  return (
-    service as unknown as {
-      observedSessionActivity: Map<string, { providerSessionId: string; state: string }>;
-    }
-  ).observedSessionActivity;
+  return launchInternals(service).observedSessionActivity;
 }
 
 async function environmentActivity(storage: StorageService): Promise<string | undefined> {

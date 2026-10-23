@@ -121,6 +121,16 @@ passed alone twice; root/support, bridges and the protocol lockfile passed.
 Both recurrences are recorded in their case files. The public surface was
 checked mechanically: the same 69 public methods before and after.
 
+Multi Review (`action-2623428a34b9d86c20fdd1e78cfe0ae5`, four reviewers on
+`786d3c5e1`) reported no issues and no coverage gaps; three reviewers said
+ready, one said "with-fixes" only because the review's own `mise run test`
+failed two tests in unchanged files. Of those, `terminal-history.test.ts`
+passed alone twice (6.6 s). `content-server.engines.test.ts` (`executable
+document policy in firefox > popups, new-window links and top navigation reach
+the sink zero times`, an unexpected `GET /favicon.ico` sink hit) also fails
+alone, and fails the same way on the base commit `06297124`, so it predates
+this work and is not caused by it.
+
 ## Assumptions and decisions
 
 1. **Merge first, then extract.** Options: extract each collaborator out of the
@@ -189,7 +199,7 @@ checked mechanically: the same 69 public methods before and after.
     outcomes (3,880 lines), and `NativeAgentTranscriptProjection` is 5,303
     lines. The plan's target table and done criteria are met; further
     splitting is size work with no ordering risk, so it is a new low-rated
-    file, [0056-native-agent-service-size.md](0056-native-agent-service-size.md),
+    file, [0057-native-agent-service-size.md](0057-native-agent-service-size.md),
     rather than an addition to this one.
 12. **This file is kept, marked Finished, until the branch merges.** The plan
     said to delete it in the same change as the last layer; the delegation
@@ -227,7 +237,7 @@ Assumptions:
   matching plan for `StorageService`.
 - [0012-backend-core-domain-folders.md](0012-backend-core-domain-folders.md): the
   `native-agent` folder slice, now unblocked by this work.
-- [0056-native-agent-service-size.md](0056-native-agent-service-size.md): the
+- [0057-native-agent-service-size.md](0057-native-agent-service-size.md): the
   size follow-up from decision 11.
 - [`native-agent-service.md`](../../architecture/native-agent-service.md) and
   [`agent-engines.md`](../../architecture/agent-engines.md).

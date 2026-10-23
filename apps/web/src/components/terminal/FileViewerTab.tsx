@@ -1,4 +1,4 @@
-import { lazy, useCallback, useEffect, useRef, useState } from "react";
+import { lazy, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import * as backend from "@/lib/backend";
@@ -6,6 +6,8 @@ import { Loader2, AlertCircle, FileCode, Image as ImageIcon } from "lucide-react
 import { useConfigStore, useFileDirtyStore } from "@/stores";
 import { DEFAULT_TERMINAL_APPEARANCE } from "@/constants/terminal";
 import { useFileSave } from "@/hooks/useFileSave";
+import { useChangeContentGeneration, useChangeProjection } from "@/hooks/useChangeProjection";
+import { useChangeProjectionStore } from "@/stores/changeProjectionStore";
 import {
   discardFileDraft,
   getFileDraftRevisionState,
@@ -72,8 +74,8 @@ export function getFileViewerKind(
   filePath: string,
   options: { showDiff: boolean; hasDiffData: boolean },
 ): FileViewerKind {
-  // A diff target names backend hunks (binary files included); it never falls
-  // through to today's file, so an image diff is still a diff.
+  // A diff target names backend hunks (binary files included). The diff route
+  // may explicitly preview a live image, but never reads a historical file.
   if (options.showDiff && options.hasDiffData) return "diff";
   if (isImageFile(filePath)) return "image";
   if (isMarkdownFile(filePath)) return "markdown";
@@ -117,6 +119,115 @@ interface FileViewerTabProps {
   changeDiff?: ChangeDiffTarget;
 }
 
+type LiveImageState =
+  | { key: string; kind: "image"; dataUrl: string; request: number; signal: AbortSignal }
+  | { key: string; kind: "failed" };
+
+/** Keep subscribing after fallback so a replaced or restored image can recover. */
+function LiveImageDiffPreview({
+  target,
+  filePath,
+  environmentId,
+  containerId,
+  worktreePath,
+  isLocalEnvironment,
+  isActive,
+  backgroundColor,
+  loadingFallback,
+  diffFallback,
+}: Pick<
+  FileViewerTabProps,
+  "filePath" | "environmentId" | "containerId" | "worktreePath" | "isLocalEnvironment" | "isActive"
+> & {
+  target: Extract<ChangeDiffTarget, { kind: "live" }>;
+  backgroundColor: string;
+  loadingFallback: ReactNode;
+  diffFallback: ReactNode;
+}) {
+  const projection = useChangeProjection(target.resourceKey);
+  const contentGeneration = useChangeContentGeneration(target.resourceKey);
+  const transportRevision = useChangeProjectionStore((state) => state.transportRevision);
+  // Path-only targets cannot filter opaque path ids safely. Refresh on every
+  // content generation for this resource, including when counts stay the same.
+  const key = JSON.stringify([
+    target.resourceKey,
+    target.pathId,
+    target.path,
+    target.rowId,
+    target.revision,
+    filePath,
+    environmentId,
+    containerId,
+    worktreePath,
+    isLocalEnvironment,
+    contentGeneration?.generation,
+    contentGeneration?.ownerGeneration ?? projection?.ownerGeneration,
+    transportRevision,
+  ]);
+  const [image, setImage] = useState<LiveImageState | null>(null);
+  const requestRef = useRef(0);
+
+  useEffect(() => {
+    if (!isActive) return;
+    const request = ++requestRef.current;
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const mimeType = getImageMimeType(filePath);
+        if (!mimeType) throw new Error("Unsupported image format");
+        let base64: string;
+        if (isLocalEnvironment && worktreePath && environmentId) {
+          base64 = await backend.readEnvironmentFileBase64(environmentId, filePath);
+        } else if (!isLocalEnvironment && containerId) {
+          base64 = await backend.readContainerFileBase64(containerId, filePath);
+        } else {
+          throw new Error("The image has no owning environment");
+        }
+        if (!controller.signal.aborted) {
+          setImage({
+            key,
+            kind: "image",
+            dataUrl: `data:${mimeType};base64,${base64}`,
+            request,
+            signal: controller.signal,
+          });
+        }
+      } catch {
+        if (!controller.signal.aborted) setImage({ key, kind: "failed" });
+      }
+    })();
+    return () => {
+      // Fence decode errors from the old DOM node as well as pending reads.
+      controller.abort();
+    };
+  }, [key, isActive, filePath, environmentId, containerId, worktreePath, isLocalEnvironment]);
+
+  if (image?.key !== key) return loadingFallback;
+  if (image.kind === "failed") return diffFallback;
+  return (
+    <div
+      className={cn("absolute inset-0 flex flex-col", !isActive && "pointer-events-none opacity-0")}
+      style={{ backgroundColor }}
+    >
+      <div className="flex items-center gap-2 border-b border-border bg-background px-4 py-2 text-xs text-muted-foreground">
+        <ImageIcon className="h-3 w-3" />
+        <span className="font-mono truncate">{filePath}</span>
+      </div>
+      <div className="min-h-0 flex-1 flex items-center justify-center overflow-auto p-4">
+        <img
+          key={image.request}
+          src={image.dataUrl}
+          alt={filePath}
+          className="max-w-full max-h-full object-contain"
+          onError={() => {
+            if (!image.signal.aborted) setImage({ key, kind: "failed" });
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
 export function FileViewerTab({
   tabId,
   environmentId,
@@ -150,6 +261,11 @@ export function FileViewerTab({
     setShowDiff(hasDiffTarget);
   }
 
+  // SVG can have textual hunks, so keep its source diff accessible by default.
+  // Historical targets always render their recorded diff, never today's image.
+  const isImage = isImageFile(filePath);
+  const prefersImagePreview = isImage && getFileExtension(filePath) !== "svg";
+
   // File content state
   const [content, setContent] = useState<string | null>(null);
   const [imageDataUrl, setImageDataUrl] = useState<string | null>(null);
@@ -171,7 +287,6 @@ export function FileViewerTab({
   const dirtyEntry = useFileDirtyStore((state) => state.dirtyFiles.get(tabId));
   const dirtyContent = useFileDirtyStore((state) => state.dirtyFiles.get(tabId)?.content);
 
-  const isImage = isImageFile(filePath);
   const isMarkdown = isMarkdownFile(filePath);
   const viewerKind = getFileViewerKind(filePath, {
     showDiff,
@@ -185,51 +300,48 @@ export function FileViewerTab({
     isLocalEnvironment,
   });
 
-  const reportFileDraftError = useCallback(
-    (
-      draftError: unknown,
-      context: {
-        environmentId: string;
-        filePath: string;
-        tabId: string;
-      },
-    ): void => {
-      if (!(draftError instanceof DraftRevisionConflictError)) {
-        console.warn("[FileViewerTab] Failed to persist file draft:", draftError);
-        return;
-      }
-      const currentEntry = useFileDirtyStore.getState().dirtyFiles.get(context.tabId);
-      const discarding = !currentEntry || currentEntry.content === currentEntry.originalContent;
-      toast.error("File draft changed in another window", {
-        id: `file-draft-conflict:${context.tabId}`,
-        description: discarding
-          ? "A newer saved draft was preserved. Discard it explicitly to finish clearing this editor."
-          : "Your editor buffer is unchanged. Choose Save mine to replace the other saved draft.",
-        action: {
-          label: discarding ? "Discard saved draft" : "Save mine",
-          onClick: () => {
-            const entry = useFileDirtyStore.getState().dirtyFiles.get(context.tabId);
-            const state = getFileDraftRevisionState(context.tabId);
-            const hasLocalEdit = Boolean(entry && entry.content !== entry.originalContent);
-            const operation =
-              entry && hasLocalEdit
-                ? resolveFileDraftSaveConflict(
-                    context.environmentId,
-                    context.filePath,
-                    entry.content,
-                    entry.originalContent,
-                    state,
-                  )
-                : resolveFileDraftDiscardConflict(context.environmentId, context.filePath, state);
-            void operation.catch((retryError) => {
-              reportFileDraftError(retryError, context);
-            });
-          },
-        },
-      });
+  const reportFileDraftError = useCallback(function reportFileDraftError(
+    draftError: unknown,
+    context: {
+      environmentId: string;
+      filePath: string;
+      tabId: string;
     },
-    [],
-  );
+  ): void {
+    if (!(draftError instanceof DraftRevisionConflictError)) {
+      console.warn("[FileViewerTab] Failed to persist file draft:", draftError);
+      return;
+    }
+    const currentEntry = useFileDirtyStore.getState().dirtyFiles.get(context.tabId);
+    const discarding = !currentEntry || currentEntry.content === currentEntry.originalContent;
+    toast.error("File draft changed in another window", {
+      id: `file-draft-conflict:${context.tabId}`,
+      description: discarding
+        ? "A newer saved draft was preserved. Discard it explicitly to finish clearing this editor."
+        : "Your editor buffer is unchanged. Choose Save mine to replace the other saved draft.",
+      action: {
+        label: discarding ? "Discard saved draft" : "Save mine",
+        onClick: () => {
+          const entry = useFileDirtyStore.getState().dirtyFiles.get(context.tabId);
+          const state = getFileDraftRevisionState(context.tabId);
+          const hasLocalEdit = Boolean(entry && entry.content !== entry.originalContent);
+          const operation =
+            entry && hasLocalEdit
+              ? resolveFileDraftSaveConflict(
+                  context.environmentId,
+                  context.filePath,
+                  entry.content,
+                  entry.originalContent,
+                  state,
+                )
+              : resolveFileDraftDiscardConflict(context.environmentId, context.filePath, state);
+          void operation.catch((retryError) => {
+            reportFileDraftError(retryError, context);
+          });
+        },
+      },
+    });
+  }, []);
 
   const flushFileDraft = useCallback(() => {
     const context = draftFlushContextRef.current;
@@ -386,9 +498,8 @@ export function FileViewerTab({
           }
         }
       } catch (err) {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : String(err));
-        }
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : String(err));
       } finally {
         if (!cancelled) {
           setIsLoading(false);
@@ -463,7 +574,7 @@ export function FileViewerTab({
   // A diff tab renders the backend's hunks for its target. Only a live
   // (current workspace file) target offers switching to the editor.
   if (viewerKind === "diff" && changeDiff) {
-    return (
+    const diff = (
       <LazyLoadBoundary
         loadingFallback={renderEditorFallback("Loading diff viewer...")}
         renderError={renderEditorError}
@@ -476,6 +587,23 @@ export function FileViewerTab({
         />
       </LazyLoadBoundary>
     );
+    if (prefersImagePreview && changeDiff.kind === "live") {
+      return (
+        <LiveImageDiffPreview
+          target={changeDiff}
+          filePath={filePath}
+          environmentId={environmentId}
+          containerId={containerId}
+          worktreePath={worktreePath}
+          isLocalEnvironment={isLocalEnvironment}
+          isActive={isActive}
+          backgroundColor={terminalAppearance.backgroundColor}
+          loadingFallback={renderEditorFallback("Loading file...")}
+          diffFallback={diff}
+        />
+      );
+    }
+    return diff;
   }
 
   if (isLoading) {

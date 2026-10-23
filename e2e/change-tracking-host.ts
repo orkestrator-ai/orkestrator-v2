@@ -1,6 +1,6 @@
 /** Real change commands in a disposable worktree; launched only by the browser spec. */
 import { createServer } from "node:http";
-import { writeFileSync, readFileSync } from "node:fs";
+import { writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
 import { unknownCapabilities } from "@orkestrator/protocol/change-evidence";
@@ -22,7 +22,7 @@ registerChangeCommands((name, handler) => handlers.set(name, handler));
 const context = {
   runtime: { changeTracking: service, diffStats: { service: { isTracked: () => true } } },
 } as unknown as CommandContext;
-const scan = async () => {
+const scan = async (path = "a.txt", status = "M") => {
   const at = new Date().toISOString();
   service.onDiffScanEvent({
     kind: "scanned",
@@ -32,10 +32,10 @@ const scan = async () => {
       stats: { additions: 1, deletions: 1, filesChanged: 1, truncated: false },
       changes: [
         {
-          path: "a.txt",
-          filename: "a.txt",
+          path,
+          filename: path,
           directory: "",
-          status: "M",
+          status,
           additions: 1,
           deletions: 1,
         },
@@ -94,7 +94,18 @@ const server = createServer(async (request, response) => {
     }
     const { command, args = {} } = JSON.parse(Buffer.concat(chunks).toString());
     let result: unknown;
-    if (command === "fixture_edit") {
+    if (command === "fixture_image") {
+      const path = args.svg ? "image.svg" : "image.png";
+      if (args.deleted) rmSync(join(h.repo, path));
+      else writeFileSync(join(h.repo, path), Buffer.from(args.base64, "base64"));
+      await scan(path, args.deleted ? "D" : "A");
+      result = null;
+    } else if (command === "read_environment_file_base64") {
+      if (args.environmentId !== "env-1" || !["image.png", "image.svg"].includes(args.filePath)) {
+        throw new Error("unsupported-image-path");
+      }
+      result = readFileSync(join(h.repo, args.filePath)).toString("base64");
+    } else if (command === "fixture_edit") {
       writeFileSync(
         join(h.repo, "a.txt"),
         args.version === "second" ? "one\nSECOND\n" : "one\nFIRST\n",

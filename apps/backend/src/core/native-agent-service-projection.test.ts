@@ -39,12 +39,12 @@ import {
   NATIVE_PROJECTION_CACHE_LIMIT,
   nativeAgentSessionStorageKey,
 } from "./native-agent-service.js";
-import { collaborators } from "./native-agent-service-test-collaborators.js";
+import { collaborators, projectionInternals } from "./native-agent-service-test-collaborators.js";
 import {
   mergeContextUsageTurns,
   mergeNativeAgentQueueItems,
   withProviderContextWindow,
-} from "./native-agent-service.js";
+} from "./native-agent-transcript-projection.js";
 
 describe("usage projection history", () => {
   test("merges sparse turn updates by id and retains only the newest twenty", () => {
@@ -559,14 +559,7 @@ describe("NativeAgentService", () => {
     await withService(
       { prefix: "orkestrator-recoverable-status-", now: () => now },
       async ({ service }) => {
-        const status = (
-          service as unknown as {
-            recoverableDispatchStatus(
-              createdAt: string,
-              kind?: "prompt" | "steer",
-            ): "reconciling" | "action-required";
-          }
-        ).recoverableDispatchStatus.bind(service);
+        const status = projectionInternals(service).recoverableDispatchStatus;
 
         // Inside the grace window a prompt is still reconciling.
         expect(status(new Date(now - 5_000).toISOString(), "prompt")).toBe("reconciling");
@@ -1276,8 +1269,8 @@ describe("NativeAgentService", () => {
           identity.agent,
           identity.logicalSessionKey,
         );
-        await internals(service).flushDisplayTailPersist(sessionKey);
-        internals(service).progressiveTranscriptCache.clear();
+        await collaborators(service).projections.flushDisplayTailPersist(sessionKey);
+        projectionInternals(service).progressiveTranscriptCache.clear();
 
         const cold = await service.getTranscriptUpdate({
           ...identity,
@@ -3189,7 +3182,7 @@ describe("NativeAgentService", () => {
         // Cached first, so it is the oldest key the capacity sweep will drop.
         expect(await service.getProjection(evicted)).not.toBeNull();
 
-        const cache = internals(service).projectionCache;
+        const cache = projectionInternals(service).projectionCache;
         const evictedKey = nativeAgentSessionStorageKey(
           evicted.environmentId,
           evicted.agent,
@@ -3335,16 +3328,17 @@ describe("NativeAgentService", () => {
           .performProjectionAction({ ...identity, action: { kind: "compact" } })
           .catch(() => undefined);
         await service.getProjection(identity);
-        const epochs = internals(service).projectionEpochs;
+        const epochs = projectionInternals(service).projectionEpochs;
         expect(epochs.size).toBeLessThanOrEqual(
-          internals(service).projectionCache.size + internals(service).projectionRefreshes.size,
+          projectionInternals(service).projectionCache.size +
+            projectionInternals(service).projectionRefreshes.size,
         );
 
         // Once the session is gone the projection resolves to nothing, the cache
         // entry goes with it, and the epoch must not outlive either.
         await storage.invalidateNativeAgentSession(key, session.providerSessionId);
         await expect(service.getProjection(identity)).resolves.toBeNull();
-        expect(internals(service).projectionCache.has(key)).toBe(false);
+        expect(projectionInternals(service).projectionCache.has(key)).toBe(false);
         expect(epochs.has(key)).toBe(false);
       },
     );

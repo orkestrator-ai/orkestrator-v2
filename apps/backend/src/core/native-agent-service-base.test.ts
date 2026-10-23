@@ -240,9 +240,6 @@ function internals(service: NativeAgentService) {
     observedInteractionRevisions: Map<string, number>;
     interactionSelectionCursors: Map<string, number>;
     interactionRevisionReconciliations: number;
-    projectionCache: Map<string, unknown>;
-    projectionEpochs: Map<string, number>;
-    projectionRefreshes: Map<string, Promise<unknown>>;
     launchTimer: ReturnType<typeof setInterval> | null;
     interactionTimer: ReturnType<typeof setInterval> | null;
   };

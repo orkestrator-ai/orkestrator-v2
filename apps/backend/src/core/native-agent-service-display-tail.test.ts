@@ -5,6 +5,7 @@ import {
   internals,
   withService,
 } from "./native-agent-service-projection-test-support.js";
+import { collaborators } from "./native-agent-service-test-collaborators.js";
 
 /**
  * Restart-preview checkpoints through the real projection path (plan step
@@ -58,7 +59,7 @@ describe("native agent display-tail checkpoints", () => {
         expect(
           await storage.invalidateNativeAgentSession(sessionKey, session!.providerSessionId),
         ).toBe(true);
-        await internals(service).flushDisplayTailPersist(sessionKey);
+        await collaborators(service).projections.flushDisplayTailPersist(sessionKey);
         expect(await storage.getNativeAgentDisplayTail(sessionKey)).toBeNull();
       },
     );
@@ -73,7 +74,7 @@ describe("native agent display-tail checkpoints", () => {
         await service.getTranscriptUpdate({ ...identity, viewVersion: 1, liveWindow });
         const fence = storage.captureNativeAgentDisplayTailFence();
         await storage.deleteNativeAgentSessionsByEnvironment(identity.environmentId);
-        await internals(service).flushDisplayTailPersist(sessionKey);
+        await collaborators(service).projections.flushDisplayTailPersist(sessionKey);
         expect(await storage.getNativeAgentDisplayTail(sessionKey)).toBeNull();
         expect(storage.captureNativeAgentDisplayTailFence()).toBeGreaterThan(fence);
       },

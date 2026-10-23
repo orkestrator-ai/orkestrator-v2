@@ -36,6 +36,7 @@ import {
 import { createProviderStub, withService } from "./native-agent-service-projection-test-support.js";
 import type { ProjectedMessageCache } from "./native-agent-projection-entries.js";
 import type { NativeAgentService } from "./native-agent-service.js";
+import { projectionInternals } from "./native-agent-service-test-collaborators.js";
 
 const liveWindow = { messages: 100, targetBytes: 512 * 1024 } as const;
 
@@ -578,8 +579,7 @@ describe("artifact publications in the transcript projection", () => {
         };
         const overlaid = rowById(await read(), "m1");
         expect(artifactParts(overlaid)).toHaveLength(1);
-        const cache = (service as unknown as { projectedMessages: ProjectedMessageCache })
-          .projectedMessages;
+        const cache = projectionInternals(service).projectedMessages;
         expect(cache.size).toBeGreaterThan(0);
         const cachedRows = Array.from(
           (

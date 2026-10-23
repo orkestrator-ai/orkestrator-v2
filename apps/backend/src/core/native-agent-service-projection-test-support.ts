@@ -245,21 +245,6 @@ export function internals(service: NativeAgentService) {
     observedInteractionRevisions: Map<string, number>;
     interactionSelectionCursors: Map<string, number>;
     interactionRevisionReconciliations: number;
-    projectionCache: Map<string, unknown>;
-    projectionEpochs: Map<string, number>;
-    projectionRefreshes: Map<string, Promise<unknown>>;
-    progressiveTranscriptCache: Map<string, { token: string; value: unknown }>;
-    progressiveReads: Map<string, Promise<unknown>>;
-    progressiveDirtyFollowUps: Map<string, number>;
-    progressiveTrailing: Map<string, Promise<unknown>>;
-    progressiveMetrics: { list(): readonly unknown[]; clear(): void };
-    invalidateProjection(key: string): void;
-    pruneProjectionEpoch(key: string): void;
-    flushDisplayTailPersist(sessionKey: string): Promise<void>;
-    progressiveHydrations: Map<
-      string,
-      { sourceToken: string; snapshot?: unknown; promise?: Promise<void> }
-    >;
     launchTimer: ReturnType<typeof setInterval> | null;
     interactionTimer: ReturnType<typeof setInterval> | null;
   };

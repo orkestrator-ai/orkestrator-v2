@@ -16,6 +16,7 @@ import type {
 import { openCodeHistoryServer } from "./opencode-history-test-support.js";
 import { openCodeTranscriptPage, openCodeTranscriptSnapshot } from "./opencode-snapshots.js";
 import { createProviderStub, withService } from "./native-agent-service-projection-test-support.js";
+import { projectionInternals } from "./native-agent-service-test-collaborators.js";
 
 const liveWindow = { messages: 100, targetBytes: 512 * 1024 } as const;
 
@@ -371,14 +372,10 @@ describe("OpenCode history through the native projection", () => {
           historyEpoch: "epoch",
           historyComplete: false,
         });
-        const delta = (
-          service as unknown as {
-            transcriptDelta(
-              previous: NativeAgentTranscriptView,
-              current: NativeAgentTranscriptView,
-            ): NativeAgentTranscriptDelta;
-          }
-        ).transcriptDelta(view(["a", "b"]), view(["c", "d"]));
+        const delta = projectionInternals(service).transcriptDelta(
+          view(["a", "b"]),
+          view(["c", "d"]),
+        );
         expect(delta.deletedMessageIds).toEqual([]);
       },
     );

@@ -51,11 +51,25 @@ export interface RealmPanelControl {
   onDismiss?: () => void;
 }
 
+/** Explicit board navigation overrides a node's default project landing tab. */
+export type RealmBoardTab = "coordinator" | "kanban" | "github" | "linear" | "features";
+
+function boardTab(value: unknown): RealmBoardTab | undefined {
+  return value === "coordinator" ||
+    value === "kanban" ||
+    value === "github" ||
+    value === "linear" ||
+    value === "features"
+    ? value
+    : undefined;
+}
+
 /** What the window asks its realm to show. */
 export interface RealmSelectRequest {
   type: "select";
   projectId?: string;
   environmentId?: string;
+  boardTab?: RealmBoardTab;
   /** Open the node's Add Project dialog. */
   addProject?: true;
   /** Open the node's New Environment dialog for this project. */
@@ -85,7 +99,14 @@ export type RealmToShellMessage =
   /** The realm's own selection changed (a new environment, a deleted one, a shortcut). */
   | { type: "selection"; projectId: string | null; environmentId: string | null }
   /** Open a project or environment of any node, as the window's sidebar would. */
-  | { type: "open"; nodeId: string; projectId: string; environmentId?: string; title: string }
+  | {
+      type: "open";
+      nodeId: string;
+      projectId: string;
+      environmentId?: string;
+      boardTab?: RealmBoardTab;
+      title: string;
+    }
   /** Show or hide the window's sidebar. */
   | { type: "sidebar"; open: boolean }
   /** Open the window's settings: they belong to the command node. */
@@ -164,6 +185,7 @@ export function realmSearchParams(request: Omit<RealmSelectRequest, "type">): UR
   search.set(REALM_PARAM, REALM_VALUE);
   if (request.projectId) search.set("project", request.projectId);
   if (request.environmentId) search.set("environment", request.environmentId);
+  if (request.boardTab) search.set("boardTab", request.boardTab);
   if (request.addProject) search.set("addProject", "1");
   if (request.createEnvironmentProjectId)
     search.set("createEnvironment", request.createEnvironmentProjectId);
@@ -178,6 +200,7 @@ export function realmInitialRequest(): RealmSelectRequest | null {
     type: "select",
     projectId: search.get("project") ?? undefined,
     environmentId: search.get("environment") ?? undefined,
+    boardTab: search.get("boardTab") ?? undefined,
     addProject: search.get("addProject") === "1" ? true : undefined,
     createEnvironmentProjectId: search.get("createEnvironment") ?? undefined,
   });
@@ -205,11 +228,13 @@ export function parseShellMessage(value: unknown): ShellToRealmMessage | null {
   if (message.type !== "select") return null;
   const projectId = boundedId(message.projectId);
   const environmentId = boundedId(message.environmentId);
+  const tab = boardTab(message.boardTab);
   const createEnvironmentProjectId = boundedId(message.createEnvironmentProjectId);
   return {
     type: "select",
     ...(projectId ? { projectId } : {}),
     ...(projectId && environmentId ? { environmentId } : {}),
+    ...(projectId && tab ? { boardTab: tab } : {}),
     ...(message.addProject === true ? { addProject: true as const } : {}),
     ...(createEnvironmentProjectId ? { createEnvironmentProjectId } : {}),
   };
@@ -223,8 +248,16 @@ export function parseRealmMessage(value: unknown): RealmToShellMessage | null {
     const projectId = boundedId(message.projectId);
     if (!nodeId || !projectId) return null;
     const environmentId = boundedId(message.environmentId);
+    const tab = boardTab(message.boardTab);
     const title = typeof message.title === "string" ? message.title.slice(0, 200) : "";
-    return { type: "open", nodeId, projectId, ...(environmentId ? { environmentId } : {}), title };
+    return {
+      type: "open",
+      nodeId,
+      projectId,
+      ...(environmentId ? { environmentId } : {}),
+      ...(tab ? { boardTab: tab } : {}),
+      title,
+    };
   }
   if (message.type === "ready") return { type: "ready" };
   if (message.type === "sidebar") {

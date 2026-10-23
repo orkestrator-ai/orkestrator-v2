@@ -51,6 +51,20 @@ function harness() {
 }
 
 describe("federation IPC", () => {
+  test("explicit board intent survives initial realm creation and rejects unknown tabs", async () => {
+    const { call, deps } = harness();
+    for (const boardTab of ["coordinator", "kanban", "github", "linear", "features", "invalid"]) {
+      await call("orkestrator:workspace-views:open", {
+        nodeId: "bk_leaf",
+        request: { projectId: "p", boardTab },
+      });
+      expect(deps.openWorkspaceView).toHaveBeenLastCalledWith(expect.anything(), {
+        nodeId: "bk_leaf",
+        search: { project: "p", ...(boardTab === "invalid" ? {} : { boardTab }) },
+      });
+    }
+  });
+
   test("rejects untrusted senders on every channel", () => {
     const { handlers, deps } = harness();
     const untrusted = { senderFrame: { url: "https://evil.example/" }, sender: { id: 9 } };

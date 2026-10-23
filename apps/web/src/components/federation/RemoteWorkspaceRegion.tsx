@@ -268,6 +268,7 @@ function useRealmRequests(nodeId: string, send: ((message: ShellToRealmMessage) 
           connectionId: message.nodeId,
           projectId: message.projectId,
           ...(message.environmentId ? { environmentId: message.environmentId } : {}),
+          ...(message.boardTab ? { boardTab: message.boardTab } : {}),
           title: message.title,
         });
       }

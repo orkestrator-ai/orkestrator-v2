@@ -276,8 +276,8 @@ test("a leaf's workspace opens in the window's central region without moving or 
       ).toBeNull();
     };
 
-    await leafRow.getByRole("button", { name: /^leaf-env, on / }).click();
-    await expect(leafRow).toHaveAttribute("data-selected", "true");
+    const leafProject = window.getByRole("button", { name: /^leaf-app\s*\d*$/ });
+    await leafProject.click();
 
     // The main process opened one realm, bound to the leaf, over the central region.
     const realmState = () =>
@@ -295,8 +295,18 @@ test("a leaf's workspace opens in the window's central region without moving or 
             target: window.orkestratorWorkspaceTarget ?? null,
             toolbar: Boolean(document.querySelector("[data-mobile-toolbar]")),
             sidebar: Boolean(document.querySelector('[data-testid="project-search-bar"]')),
+            homeSelected: Boolean(document.querySelector('[role="tab"][aria-controls="project-panel-home"][aria-selected="true"]')),
+            coordinatorSelected: Boolean(document.querySelector('[role="tab"][aria-controls="project-panel-coordinator"][aria-selected="true"]')),
+            coordinatorGate: Boolean(document.querySelector('[data-testid="leaf-mode-coordinator-gate"]')),
           })`,
-        )) as { target: { nodeId: string } | null; toolbar: boolean; sidebar: boolean };
+        )) as {
+          target: { nodeId: string } | null;
+          toolbar: boolean;
+          sidebar: boolean;
+          homeSelected: boolean;
+          coordinatorSelected: boolean;
+          coordinatorGate: boolean;
+        };
         return {
           count: webContents
             .getAllWebContents()
@@ -310,6 +320,7 @@ test("a leaf's workspace opens in the window's central region without moving or 
     await expect
       .poll(async () => (await realmState())?.toolbar ?? false, { timeout: 60_000 })
       .toBe(true);
+    await expect.poll(async () => (await realmState())?.visible).toBe(true);
     const opened = (await realmState())!;
     expect(opened.count).toBe(1);
     expect(opened.target?.nodeId).toBe(leaf.nodeId);
@@ -329,6 +340,18 @@ test("a leaf's workspace opens in the window's central region without moving or 
     });
     await expect(window).toHaveTitle(/leaf-app/);
     await sameWindow();
+
+    // Project-name navigation defaults to Home, including on a fresh realm.
+    await expect.poll(async () => (await realmState())?.homeSelected).toBe(true);
+    // Explicit board navigation overrides that default in the same realm.
+    await leafProject.click({ button: "right" });
+    await window.getByRole("menuitem", { name: "Open Board", exact: true }).click();
+    await expect.poll(async () => (await realmState())?.coordinatorSelected).toBe(true);
+    await expect.poll(async () => (await realmState())?.coordinatorGate).toBe(true);
+    await leafProject.click();
+    await expect.poll(async () => (await realmState())?.homeSelected).toBe(true);
+    await leafRow.getByRole("button", { name: /^leaf-env, on / }).click();
+    await expect(leafRow).toHaveAttribute("data-selected", "true");
 
     // Native keyboard input requires the containing window to be focused.
     const windowFocused = await electronApp.evaluate(async ({ app, BrowserWindow }) => {

@@ -46,3 +46,12 @@ The aggregate exited 1 after 822.1 s. Backend counts were 9918 passed, 80 skippe
 - `mise run test:logged -- --name merge-suite -- mise run test` against the initial `c17f1c8d5` merge reserved workspace/root/bridges/protocol workers 4/1/2/1. Backend reported 9,967 passed, 69 skipped, two failed and one error (556.4 s). This case measured 9,299 ms against the 9,000 ms bound (9,546.23 ms test duration).
 - After refreshing the pending merge to `7e051d955`, `mise run test:logged -- --name merge-mermaid-owner -- bun test --cwd apps/backend ./src/core/transcript-artifacts/mermaid-render.test.ts --parallel=1 --only-failures` passed the complete unchanged owner, exit 0 in 30.8 s.
 - Evidence: `orkestrator-test-run.9ak22c/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory. Browser, Docker and another worktree's validation overlapped the initial aggregate. No assertion, deadline or skip changed; host contention remains a hypothesis.
+
+
+## Session lifecycle review validation — 2026-10-23
+
+- `mise run test:logged -- --name repository-tests -- mise run test` used two backend workers while other worktree and browser validation ran. The unchanged watchdog owner measured 7144 ms against `< 5000 ms` (7609.90 ms test duration).
+- `mise run test:logged -- --name mermaid-owner -- bun test --cwd apps/backend ./src/core/transcript-artifacts/mermaid-render.test.ts --parallel=1 --only-failures` also failed: 12 passed, one failed, 13 tests in 78.56 s (78.6 s logged). It measured 7344 ms against `< 5000 ms` (7577.86 ms test duration). This run does not establish a passing isolated rerun; the timing failure remains unresolved.
+- Evidence: `orkestrator-test-run.NMPAwO/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and `orkestrator-test-run.gKgVC2/mermaid-owner.log.gz` under the host temporary directory. No implementation, assertion, deadline, or skip in this owner changed.
+
+- Aggregate backend totals: 9909 passed, 60 skipped, three failed across 9972 tests in 576 files (968.42 s). The two other backend failures were reconciliation-backoff tests, tracked in 0229. The complete repository command exited 1 after 1022.1 s. Its initial web composer-layout and root bounded-diagnostics failures were corrected during this implementation; both complete controller owners and the diagnostics owner passed afterward.

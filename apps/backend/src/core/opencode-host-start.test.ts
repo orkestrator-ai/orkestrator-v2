@@ -1,10 +1,12 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { BackendRuntime } from "./backend-runtime.js";
 import type { CommandContext } from "./commands-context.js";
 import { stopLocalServerUnlocked } from "./commands-local-server-lifecycle.js";
+import { setLocalServerShutdownRequested } from "./commands-runtime-state.js";
+import { withShortLivedBridge } from "./host-model-catalog-refresh.js";
 import { startLocalServerUnlocked } from "./commands-servers.js";
 import { __testing as commandTesting } from "./commands-testing.js";
 import {
@@ -140,6 +142,88 @@ process.on("SIGTERM", () => process.exit(0));
     expect(isOpenCodeDatabaseLockedError(failure)).toBe(false);
     expect((failure as Error).message).toContain("exited before becoming healthy");
     expect((await events()).filter((event) => event.startsWith("launch"))).toHaveLength(1);
+  });
+
+  test.each(["catalog-refresh", "provider-sign-in"] as const)(
+    "%s probes serialize with environment starts through readiness",
+    async (purpose) => {
+      const environmentId = await localEnvironment(purpose);
+      const probe = () =>
+        withShortLivedBridge(
+          {
+            kind: "opencode",
+            purpose,
+            command: path.join(root, "managed-bin", "opencode"),
+            args: (port) => ["serve", "--port", String(port)],
+            cwd: root,
+            env: {},
+            token: "fixture-token",
+            headers: {},
+          },
+          async () => "read",
+        );
+      const [server, result] = await Promise.all([
+        startLocalServerUnlocked(environmentId, context, "opencode"),
+        probe(),
+      ]);
+      expect(server.wasRunning).toBe(false);
+      expect(result).toBe("read");
+      expect((await events()).map((event) => event.split(" ")[0])).toEqual([
+        "launch",
+        "healthy",
+        "launch",
+        "healthy",
+      ]);
+      expect(commandTesting.getLocalServerProcessCount()).toBe(1);
+    },
+  );
+
+  test("a queued environment start rechecks shutdown after acquiring the host turn", async () => {
+    const environmentId = await localEnvironment("queued-shutdown");
+    const release = await acquireOpenCodeHostStart();
+    const starting = startLocalServerUnlocked(environmentId, context, "opencode");
+    const outcome = starting.catch((error: unknown) => error);
+    try {
+      // Tokens are allocated immediately before joining the host-start queue.
+      for (
+        let attempt = 0;
+        !commandTesting.getLocalOpenCodeServerPassword(environmentId);
+        attempt += 1
+      ) {
+        if (attempt === 100) throw new Error("Start did not reach the host queue");
+        await Bun.sleep(5);
+      }
+      setLocalServerShutdownRequested(true);
+    } finally {
+      release();
+    }
+    expect(((await outcome) as Error).message).toContain("shutting down");
+    expect(await events()).toEqual([]);
+    expect(commandTesting.getLocalOpenCodeServerPassword(environmentId)).toBeUndefined();
+    const releaseNext = await acquireOpenCodeHostStart();
+    releaseNext();
+  });
+
+  test("shutdown between database-lock attempts prevents a retry spawn", async () => {
+    const environmentId = await localEnvironment("retry-shutdown");
+    await fs.writeFile(path.join(root, "locked-runs"), "-1");
+    const warn = spyOn(console, "warn").mockImplementation((message) => {
+      if (String(message).includes("retrying in")) {
+        // Runs after the retry delay has started, before its next attempt.
+        queueMicrotask(() => setLocalServerShutdownRequested(true));
+      }
+    });
+    try {
+      await expect(startLocalServerUnlocked(environmentId, context, "opencode")).rejects.toThrow(
+        "shutting down",
+      );
+      expect(warn).toHaveBeenCalled();
+      expect((await events()).filter((event) => event.startsWith("launch"))).toHaveLength(1);
+      expect(commandTesting.getLocalServerProcessCount()).toBe(0);
+      expect(commandTesting.getLocalOpenCodeServerPassword(environmentId)).toBeUndefined();
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   test("two environments starting together launch one server at a time", async () => {

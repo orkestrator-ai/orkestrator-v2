@@ -302,12 +302,12 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
       const interrupt = this.pendingTurnInterrupts.get(interruptKey);
       if (interrupt?.providerSessionId === session.providerSessionId) {
         try {
-          await this.storage.recordNativeAgentTurnInterrupt(
+          const persisted = await this.storage.recordNativeAgentTurnInterrupt(
             key,
             session.providerSessionId,
             input.requestId,
           );
-          this.pendingTurnInterrupts.delete(interruptKey);
+          if (persisted) this.pendingTurnInterrupts.delete(interruptKey);
         } catch {
           /* Retain the fence and retry on the next observation. */
         }

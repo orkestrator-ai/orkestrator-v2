@@ -1110,7 +1110,9 @@ export function SharedNativeAgentController({
   const phase = projection?.turn.phase;
   const settingsLocked = isSubmitting || (phase !== "idle" && phase !== "error");
   const isRunning = phase === "running";
-  const isTurnActive = phase === "running" || phase === "recovering" || phase === "cancelling";
+  const isProviderTurnActive =
+    phase === "running" || phase === "recovering" || phase === "cancelling";
+  const isTurnActive = isDispatching || isProviderTurnActive;
   const turnActivity = phase === "running" ? projection?.turn.activity : undefined;
   /*
    * "Stopping" and "reconnecting" are still loading, but they mean something
@@ -2421,7 +2423,7 @@ export function SharedNativeAgentController({
     messages.length === 1 && messages[0]?.id === `optimistic-native:${sessionKey}`;
   const composerCentered =
     (messages.length === 0 || onlyOptimisticFirstPrompt) &&
-    !isTurnActive &&
+    !isProviderTurnActive &&
     transcriptInteractions.length === 0;
 
   /**

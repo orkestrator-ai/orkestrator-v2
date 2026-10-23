@@ -111,6 +111,8 @@ export async function withShortLivedBridge<T>(
     probe.kind === "opencode" ? await acquireOpenCodeHostStart() : () => undefined;
   let child: ReturnType<typeof spawnLocalServerCommandImpl>;
   try {
+    // Shutdown may have begun while the probe waited behind an environment start.
+    assertLocalServerStartAllowed(`${purpose}:${probe.kind}`);
     child = spawnLocalServerCommandImpl(probe.command, args, {
       cwd: probe.cwd,
       env: { ...probe.env, PORT: String(port), HOSTNAME: "127.0.0.1" },

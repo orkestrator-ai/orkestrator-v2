@@ -584,8 +584,8 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
         recordingInterrupt = this.storage
           .recordNativeAgentTurnInterrupt(resolved.key, providerSessionId, requestId)
           .then(
-            () => {
-              this.pendingTurnInterrupts.delete(interruptKey);
+            (persisted) => {
+              if (persisted) this.pendingTurnInterrupts.delete(interruptKey);
             },
             () => {
               console.warn(

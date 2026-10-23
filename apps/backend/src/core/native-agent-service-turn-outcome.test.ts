@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { BuildPipelineAgent } from "@orkestrator/protocol/build-pipeline";
 import {
+  AmbiguousPromptDispatchError,
   ProviderSessionFailedError,
   type NativeAgentRuntimeProvider,
   type ProviderSendOptions,
@@ -458,45 +459,49 @@ test.each(["blocked", "unreadable"] as const)(
   },
 );
 
-test("failed interrupt persistence honors Stop and retains publication denial until durable reconciliation", async () => {
-  const stub = providerStub("codex");
-  const abort = mock(async () => stub.setStatus(async () => "idle"));
-  Object.assign(stub.provider, { abort });
-  await withService(stub.provider, async ({ service, storage }) => {
-    const input = { environmentId: "env-1", agent: "codex" as const, logicalSessionKey };
-    const session = await service.dispatchPrompt({ ...input, prompt: "fix", requestId: "fix" });
-    const persist = storage.recordNativeAgentTurnInterrupt.bind(storage);
-    storage.recordNativeAgentTurnInterrupt = async () => {
-      throw new Error("disk unavailable");
-    };
-    stub.setStatus(async () => "running");
-    await service.stopProjectionSession(input);
-    expect(abort).toHaveBeenCalledTimes(1);
-    markIdle(service, "codex", session.providerSessionId);
-    expect((await service.sessionRequestOutcome({ ...input, requestId: "fix" })).outcome).toBe(
-      "interrupted",
-    );
-    // Even a concurrent historical read cannot erase the retained Stop intent.
-    await service.sessionTurnOutcome({ ...input, requestId: "fix" });
-    storage.recordNativeAgentTurnInterrupt = persist;
-    expect((await service.sessionRequestOutcome({ ...input, requestId: "fix" })).outcome).toBe(
-      "interrupted",
-    );
-    expect((await storage.getNativeAgentSession(session.key))?.interruptedRequestIds).toEqual([
-      "fix",
-    ]);
-    const restarted = new NativeAgentService(storage, async <T>() => undefined as T, {
-      provider: async () => stub.provider,
-    });
-    try {
-      expect((await restarted.sessionRequestOutcome({ ...input, requestId: "fix" })).outcome).toBe(
+test.each(["throws", "false"])(
+  "interrupt persistence that returns %s retains the fence until durable reconciliation",
+  async (failure) => {
+    const stub = providerStub("codex");
+    const abort = mock(async () => stub.setStatus(async () => "idle"));
+    Object.assign(stub.provider, { abort });
+    await withService(stub.provider, async ({ service, storage }) => {
+      const input = { environmentId: "env-1", agent: "codex" as const, logicalSessionKey };
+      const session = await service.dispatchPrompt({ ...input, prompt: "fix", requestId: "fix" });
+      const persist = storage.recordNativeAgentTurnInterrupt.bind(storage);
+      storage.recordNativeAgentTurnInterrupt = async () => {
+        if (failure === "false") return false;
+        throw new Error("disk unavailable");
+      };
+      stub.setStatus(async () => "running");
+      await service.stopProjectionSession(input);
+      expect(abort).toHaveBeenCalledTimes(1);
+      markIdle(service, "codex", session.providerSessionId);
+      expect((await service.sessionRequestOutcome({ ...input, requestId: "fix" })).outcome).toBe(
         "interrupted",
       );
-    } finally {
-      await restarted.shutdown();
-    }
-  });
-});
+      // Even a concurrent historical read cannot erase the retained Stop intent.
+      await service.sessionTurnOutcome({ ...input, requestId: "fix" });
+      storage.recordNativeAgentTurnInterrupt = persist;
+      expect((await service.sessionRequestOutcome({ ...input, requestId: "fix" })).outcome).toBe(
+        "interrupted",
+      );
+      expect((await storage.getNativeAgentSession(session.key))?.interruptedRequestIds).toEqual([
+        "fix",
+      ]);
+      const restarted = new NativeAgentService(storage, async <T>() => undefined as T, {
+        provider: async () => stub.provider,
+      });
+      try {
+        expect(
+          (await restarted.sessionRequestOutcome({ ...input, requestId: "fix" })).outcome,
+        ).toBe("interrupted");
+      } finally {
+        await restarted.shutdown();
+      }
+    });
+  },
+);
 
 test("publication fence orders a later dispatch without blocking other sessions", async () => {
   const stub = providerStub("codex");
@@ -676,3 +681,71 @@ test("Stop reaches a prompt the provider has not accepted yet, and marks that pr
     );
   });
 });
+
+test.each([false, true])(
+  "Stop survives a lost dispatch acknowledgement (restart before confirmation: %s)",
+  async (restart) => {
+    const stub = providerStub("codex");
+    let journalAvailable = false;
+    const dispatchStatus = mock(async () => {
+      if (!journalAvailable) throw new Error("journal unavailable");
+      return "dispatched" as const;
+    });
+    stub.send.mockImplementationOnce(async () => {
+      stub.setStatus(async () => "running");
+      throw new AmbiguousPromptDispatchError("acknowledgement lost after acceptance");
+    });
+    Object.assign(stub.provider, {
+      dispatchStatus,
+      abort: async () => stub.setStatus(async () => "idle"),
+    });
+    await withService(stub.provider, async ({ service, storage }) => {
+      const input = { environmentId: "env-1", agent: "codex" as const, logicalSessionKey };
+      const key = nativeAgentSessionStorageKey("env-1", "codex", logicalSessionKey);
+      expect(
+        (await service.dispatchIntent({ ...input, prompt: "fix", requestId: "lost" })).outcome,
+      ).toBe("unknown");
+      await service.stopProjectionSession(input);
+      const stopped = await storage.getNativeAgentSession(key);
+      expect(stopped?.pendingDispatch?.requestId).toBe("lost");
+      expect(stopped?.dispatchedRequestIds ?? []).not.toContain("lost");
+      expect(stopped?.interruptedRequestIds).toEqual(["lost"]);
+      // A repeated write also confirms that the existing marker is durable.
+      expect(
+        await storage.recordNativeAgentTurnInterrupt(key, stopped!.providerSessionId, "lost"),
+      ).toBe(true);
+      expect(
+        await storage.recordNativeAgentTurnInterrupt(key, stopped!.providerSessionId, "unrelated"),
+      ).toBe(false);
+      expect(await storage.recordNativeAgentTurnInterrupt(key, "replacement", "lost")).toBe(false);
+
+      let observer = service;
+      if (restart) {
+        await service.shutdown();
+        const reloaded = new StorageService(storage.getDataDir());
+        await reloaded.init();
+        observer = new NativeAgentService(reloaded, async <T>() => undefined as T, {
+          provider: async () => stub.provider,
+        });
+      }
+      try {
+        expect(
+          (await observer.sessionRequestOutcome({ ...input, requestId: "lost" })).outcome,
+        ).toBe("interrupted");
+        journalAvailable = true;
+        await observer.getProjection(input);
+        await waitForCondition(
+          async () => !(await storage.getNativeAgentSession(key))?.pendingDispatch,
+        );
+        expect((await storage.getNativeAgentSession(key))?.dispatchedRequestIds).toContain("lost");
+        markIdle(observer, "codex", stopped!.providerSessionId);
+        expect(
+          (await observer.sessionRequestOutcome({ ...input, requestId: "lost" })).outcome,
+        ).toBe("interrupted");
+        expect(stub.send).toHaveBeenCalledTimes(1);
+      } finally {
+        if (restart) await observer.shutdown();
+      }
+    });
+  },
+);

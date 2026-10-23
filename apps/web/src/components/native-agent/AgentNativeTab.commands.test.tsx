@@ -596,3 +596,33 @@ describe("AgentNativeTab commands", () => {
     expect(screen.getByRole("group", { name: "Orkestrator" })).toBeTruthy();
   });
 });
+
+test("an unaccepted prompt keeps the controller loading and Stop available", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  dispatchNativeAgentIntentMock.mockImplementationOnce(async (input) => {
+    await gate;
+    return { outcome: "accepted", requestId: input.requestId };
+  });
+  const tabId = "tab-unaccepted";
+  const { input } = await renderTab(tabId);
+  await type(input, tabId, "Start a slow prompt");
+  fireEvent.keyDown(input, { key: "Enter" });
+  try {
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+    // The provider projection is still idle: only the pending dispatch can
+    // make isTurnActive/isLoading true and expose the compose bar's Stop.
+    expect(projectionFor("codex").turn.phase).toBe("idle");
+    expect(await screen.findByTitle("Stop current query")).toBeTruthy();
+    expect(screen.getByTestId("compose-dock").className).toContain("top-1/2");
+    expect(screen.queryByTitle("Send") === null).toBe(true);
+  } finally {
+    await act(async () => {
+      release();
+      await gate;
+    });
+  }
+  await waitFor(() => expect(screen.queryByTitle("Stop current query") === null).toBe(true));
+});

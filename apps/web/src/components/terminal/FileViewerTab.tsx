@@ -73,7 +73,8 @@ export function getFileViewerKind(
   options: { showDiff: boolean; hasDiffData: boolean },
 ): FileViewerKind {
   // A diff target names backend hunks (binary files included); it never falls
-  // through to today's file, so an image diff is still a diff.
+  // through to today's file. Callers that preview a live image instead pass
+  // showDiff: false.
   if (options.showDiff && options.hasDiffData) return "diff";
   if (isImageFile(filePath)) return "image";
   if (isMarkdownFile(filePath)) return "markdown";
@@ -150,6 +151,21 @@ export function FileViewerTab({
     setShowDiff(hasDiffTarget);
   }
 
+  // A live image target is the current workspace file, and its diff is only
+  // "binary", so preview the image instead. Historical targets never read
+  // today's file; a live image that cannot be read (e.g. deleted) falls back
+  // to the diff.
+  const isImage = isImageFile(filePath);
+  const prefersImagePreview = isImage && changeDiff?.kind === "live";
+  const [imagePreviewFailed, setImagePreviewFailed] = useState(false);
+  const [imagePreviewPath, setImagePreviewPath] = useState(filePath);
+  if (imagePreviewPath !== filePath) {
+    setImagePreviewPath(filePath);
+    setImagePreviewFailed(false);
+  }
+  const previewingImageDiff = showDiff && prefersImagePreview && !imagePreviewFailed;
+  const effectiveShowDiff = showDiff && !previewingImageDiff;
+
   // File content state
   const [content, setContent] = useState<string | null>(null);
   const [imageDataUrl, setImageDataUrl] = useState<string | null>(null);
@@ -171,10 +187,9 @@ export function FileViewerTab({
   const dirtyEntry = useFileDirtyStore((state) => state.dirtyFiles.get(tabId));
   const dirtyContent = useFileDirtyStore((state) => state.dirtyFiles.get(tabId)?.content);
 
-  const isImage = isImageFile(filePath);
   const isMarkdown = isMarkdownFile(filePath);
   const viewerKind = getFileViewerKind(filePath, {
-    showDiff,
+    showDiff: effectiveShowDiff,
     hasDiffData: hasDiffTarget,
   });
   const { saveFile, isSaving } = useFileSave({
@@ -304,7 +319,7 @@ export function FileViewerTab({
   // Fetch file content only for the file view; the diff view renders backend
   // hunks and never reads the current file.
   useEffect(() => {
-    if (showDiff && hasDiffTarget) {
+    if (effectiveShowDiff && hasDiffTarget) {
       return;
     }
 
@@ -386,7 +401,10 @@ export function FileViewerTab({
           }
         }
       } catch (err) {
-        if (!cancelled) {
+        if (cancelled) return;
+        if (previewingImageDiff) {
+          setImagePreviewFailed(true);
+        } else {
           setError(err instanceof Error ? err.message : String(err));
         }
       } finally {
@@ -407,7 +425,8 @@ export function FileViewerTab({
     filePath,
     isImage,
     language,
-    showDiff,
+    effectiveShowDiff,
+    previewingImageDiff,
     hasDiffTarget,
     tabId,
     environmentId,

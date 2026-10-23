@@ -352,6 +352,58 @@ describe("FileViewerTab component", () => {
     expect(readLocalFileMock).not.toHaveBeenCalled();
   });
 
+  test("previews a live image target instead of its binary diff", async () => {
+    const liveImageTarget: ChangeDiffTarget = {
+      kind: "live",
+      resourceKey: "environment-net/environment/env-1/live",
+      path: "assets/logo.png",
+      title: "logo.png",
+    };
+    render(
+      <FileViewerTab
+        tabId="live-image-diff-tab"
+        environmentId="env-1"
+        filePath="assets/logo.png"
+        worktreePath="/repo"
+        isLocalEnvironment
+        isActive
+        changeDiff={liveImageTarget}
+      />,
+    );
+
+    const image = await screen.findByRole("img", { name: "assets/logo.png" });
+    expect(image.getAttribute("src")).toBe("data:image/png;base64,aW1hZ2U=");
+    expect(screen.queryByTestId("diff-viewer")).toBeNull();
+    expect(readEnvironmentFileBase64Mock).toHaveBeenCalledWith("env-1", "assets/logo.png");
+  });
+
+  test("falls back to the diff when a live image cannot be read", async () => {
+    readEnvironmentFileBase64Mock.mockImplementationOnce(async () => {
+      throw new Error("No such file");
+    });
+    const liveImageTarget: ChangeDiffTarget = {
+      kind: "live",
+      resourceKey: "environment-net/environment/env-1/live",
+      path: "assets/deleted.png",
+      title: "deleted.png",
+    };
+    render(
+      <FileViewerTab
+        tabId="deleted-image-diff-tab"
+        environmentId="env-1"
+        filePath="assets/deleted.png"
+        worktreePath="/repo"
+        isLocalEnvironment
+        isActive
+        changeDiff={liveImageTarget}
+      />,
+    );
+
+    const viewer = await screen.findByTestId("diff-viewer");
+    expect(JSON.parse(viewer.dataset.target ?? "null")).toEqual(liveImageTarget);
+    expect(screen.queryByText("Failed to load file")).toBeNull();
+  });
+
   test("keeps per-tab dirty state when the file tab temporarily unmounts", async () => {
     const view = render(
       <FileViewerTab

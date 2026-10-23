@@ -1,4 +1,5 @@
 import type { NativeAgentCatalogCache } from "./native-agent-catalog-cache.js";
+import type { NativeAgentInteractionTracker } from "./native-agent-interaction-tracker.js";
 import type { NativeAgentService } from "./native-agent-service.js";
 import type { NativeAgentTranscriptProjection } from "./native-agent-transcript-projection.js";
 
@@ -11,6 +12,7 @@ import type { NativeAgentTranscriptProjection } from "./native-agent-transcript-
 export interface NativeAgentServiceCollaborators {
   catalogs: NativeAgentCatalogCache;
   projections: NativeAgentTranscriptProjection;
+  interactions: NativeAgentInteractionTracker;
 }
 
 export function collaborators(service: NativeAgentService): NativeAgentServiceCollaborators {
@@ -20,4 +22,9 @@ export function collaborators(service: NativeAgentService): NativeAgentServiceCo
 /** Projection caches and internal steps, through the projection's test accessor. */
 export function projectionInternals(service: NativeAgentService) {
   return collaborators(service).projections.forTesting();
+}
+
+/** Interaction-tracker state, through the tracker's test accessor. */
+export function interactionInternals(service: NativeAgentService) {
+  return collaborators(service).interactions.forTesting();
 }

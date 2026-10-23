@@ -1,10 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
-import {
-  createProviderStub,
-  internals,
-  withService,
-} from "./native-agent-service-projection-test-support.js";
+import { createProviderStub, withService } from "./native-agent-service-projection-test-support.js";
 import { collaborators } from "./native-agent-service-test-collaborators.js";
 
 /**

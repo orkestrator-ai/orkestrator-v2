@@ -272,7 +272,6 @@ describe("usage projection history", () => {
 
 import {
   createProviderStub,
-  internals,
   waitForCondition,
   withService,
   type Invoke,

@@ -34,7 +34,6 @@ import {
   type ArtifactLedgerReader,
 } from "./native-agent-service-projection-artifacts.js";
 import { createProviderStub, withService } from "./native-agent-service-projection-test-support.js";
-import type { ProjectedMessageCache } from "./native-agent-projection-entries.js";
 import type { NativeAgentService } from "./native-agent-service.js";
 import { projectionInternals } from "./native-agent-service-test-collaborators.js";
 

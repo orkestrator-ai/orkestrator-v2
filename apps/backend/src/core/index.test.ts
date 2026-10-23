@@ -13,6 +13,8 @@ import type { AgentToolConnection } from "./agent-tools.js";
 import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
 import { createEnvironment, StorageService } from "./storage.js";
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
+import { interactionInternals } from "./native-agent-service-test-collaborators.js";
+import type { NativeAgentService } from "./native-agent-service.js";
 
 function fakeAgentTools(
   overrides: {
@@ -218,20 +220,16 @@ test("wires observe-only monitoring and its adoption kill switch from the enviro
     },
   };
   const monitorOptions = (backend: OrkestratorBackend) => {
-    const nativeAgents = (
-      backend as unknown as {
-        nativeAgents: {
-          options: {
-            interactionMonitorMode?: "disabled" | "observe-only";
-            interactionMonitorAdoptionEnabled?: boolean;
-          };
-          interactionMonitorAdoptionEnabled: boolean;
-        };
-      }
-    ).nativeAgents;
+    const nativeAgents = (backend as unknown as { nativeAgents: NativeAgentService }).nativeAgents;
+    const { options } = nativeAgents as unknown as {
+      options: {
+        interactionMonitorMode?: "disabled" | "observe-only";
+        interactionMonitorAdoptionEnabled?: boolean;
+      };
+    };
     return {
-      ...nativeAgents.options,
-      effectiveAdoption: nativeAgents.interactionMonitorAdoptionEnabled,
+      ...options,
+      effectiveAdoption: interactionInternals(nativeAgents).interactionMonitorAdoptionEnabled(),
     };
   };
 

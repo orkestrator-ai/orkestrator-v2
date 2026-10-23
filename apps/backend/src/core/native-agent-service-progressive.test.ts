@@ -1926,7 +1926,7 @@ describe("native agent progressive remainder", () => {
         };
         await service.ensureSession(identity);
         await service.getTranscriptUpdate({ ...identity, viewVersion: 1, liveWindow });
-        const samples = projectionInternals(service).progressiveMetrics.list() as Array<{
+        const samples = projectionInternals(service).progressiveMetrics.list() as ReadonlyArray<{
           domain: string;
           outcome: string;
         }>;

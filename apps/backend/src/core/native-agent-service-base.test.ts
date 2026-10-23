@@ -40,7 +40,6 @@ import {
   NativeAgentService,
   NativeAgentProviderSessionMissingError,
   nativeAgentSessionStorageKey,
-  type AgentInteractionObservation,
   type EnsureNativeAgentSessionInput,
   type NativeAgentServiceOptions,
 } from "./native-agent-service.js";
@@ -56,6 +55,7 @@ import {
 } from "@orkestrator/protocol/coordinator";
 import { upgradeNativeAgentSessionRecords } from "./storage-record-upgrades.js";
 import { readStoredValue, seedStore } from "./storage-test-support.js";
+import { interactionInternals } from "./native-agent-service-test-collaborators.js";
 
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -224,24 +224,7 @@ function internals(service: NativeAgentService) {
     queueRetryAt: Map<string, number>;
     queueAttempts: Map<string, number>;
     launchRetryAt: Map<string, number>;
-    trackedInteractions: Map<string, unknown>;
-    providerReportedInteractions: Map<
-      string,
-      {
-        observationKey: string;
-        providerSessionKey: string;
-        missingSince?: number;
-      }
-    >;
-    interactionObservations: Map<string, AgentInteractionObservation>;
-    interactionRetryAt: Map<string, number>;
-    interactionAttempts: Map<string, number>;
-    monitoredInteractionSessionKeys: Set<string>;
-    observedInteractionRevisions: Map<string, number>;
-    interactionSelectionCursors: Map<string, number>;
-    interactionRevisionReconciliations: number;
     launchTimer: ReturnType<typeof setInterval> | null;
-    interactionTimer: ReturnType<typeof setInterval> | null;
   };
 }
 
@@ -1117,11 +1100,11 @@ describe("NativeAgentService", () => {
         }
         await service.reconcileAgentInteractions();
         await service.reconcileAgentInteractions();
-        expect(internals(service).trackedInteractions.size).toBe(2);
+        expect(interactionInternals(service).trackedInteractions.size).toBe(2);
 
         await storage.updateEnvironment("env-1", { status: "stopped" });
         await service.reconcileAgentInteractions();
-        expect(internals(service).trackedInteractions.size).toBe(0);
+        expect(interactionInternals(service).trackedInteractions.size).toBe(0);
         expect(service.getInteractionObservations()[0]).toMatchObject({
           providerState: "missing",
           eventualOutcome: "expired",
@@ -1185,7 +1168,7 @@ describe("NativeAgentService", () => {
         await captureWarnings(() => service.reconcileAgentInteractions());
         expect(failingCalls).toBe(1);
         expect(healthyCalls).toBe(1);
-        expect(internals(service).interactionRetryAt.size).toBe(1);
+        expect(interactionInternals(service).interactionRetryAt.size).toBe(1);
 
         await service.reconcileAgentInteractions();
         expect(failingCalls).toBe(1);
@@ -1199,8 +1182,8 @@ describe("NativeAgentService", () => {
         await service.reconcileAgentInteractions();
         expect(failingCalls).toBe(2);
         expect(healthyCalls).toBe(4);
-        expect(internals(service).interactionRetryAt.size).toBe(0);
-        expect(internals(service).interactionAttempts.size).toBe(0);
+        expect(interactionInternals(service).interactionRetryAt.size).toBe(0);
+        expect(interactionInternals(service).interactionAttempts.size).toBe(0);
         expect(providerFactory.mock.calls.length).toBeGreaterThan(1);
       },
     );
@@ -1245,13 +1228,13 @@ describe("NativeAgentService", () => {
         }
         await captureWarnings(() => service.reconcileAgentInteractions());
         await captureWarnings(() => service.reconcileAgentInteractions());
-        expect([...internals(service).interactionAttempts.values()]).toEqual([1, 1]);
+        expect([...interactionInternals(service).interactionAttempts.values()]).toEqual([1, 1]);
         await service.reconcileAgentInteractions();
         expect(calls.get("provider-a")).toBe(1);
         now += 10;
         await captureWarnings(() => service.reconcileAgentInteractions());
         await captureWarnings(() => service.reconcileAgentInteractions());
-        expect([...internals(service).interactionAttempts.values()]).toEqual([2, 2]);
+        expect([...interactionInternals(service).interactionAttempts.values()]).toEqual([2, 2]);
       },
     );
   });
@@ -1329,15 +1312,17 @@ describe("NativeAgentService", () => {
           interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
         });
         await service.reconcileAgentInteractions();
-        expect(internals(service).monitoredInteractionSessionKeys.has(session.key)).toBe(true);
-        expect(internals(service).trackedInteractions.size).toBe(1);
+        expect(interactionInternals(service).monitoredInteractionSessionKeys.has(session.key)).toBe(
+          true,
+        );
+        expect(interactionInternals(service).trackedInteractions.size).toBe(1);
 
         await storage.updateEnvironment("env-1", { status: "stopped" });
         now += 1;
         await service.reconcileAgentInteractions();
-        expect(internals(service).monitoredInteractionSessionKeys.size).toBe(0);
-        expect(internals(service).trackedInteractions.size).toBe(0);
-        expect(internals(service).observedInteractionRevisions.size).toBe(0);
+        expect(interactionInternals(service).monitoredInteractionSessionKeys.size).toBe(0);
+        expect(interactionInternals(service).trackedInteractions.size).toBe(0);
+        expect(interactionInternals(service).observedInteractionRevisions.size).toBe(0);
         expect(service.getInteractionObservations()[0]).toMatchObject({
           providerState: "missing",
           eventualOutcome: "withdrawn",
@@ -1349,14 +1334,16 @@ describe("NativeAgentService", () => {
         });
         await service.reconcileAgentInteractions();
         expect(listPendingInteractions).toHaveBeenCalledTimes(2);
-        expect(internals(service).monitoredInteractionSessionKeys.has(session.key)).toBe(true);
+        expect(interactionInternals(service).monitoredInteractionSessionKeys.has(session.key)).toBe(
+          true,
+        );
 
         await storage.updateEnvironment("env-1", {
           setupScriptsComplete: false,
           setupPhase: "pending",
         });
         await service.reconcileAgentInteractions();
-        expect(internals(service).monitoredInteractionSessionKeys.size).toBe(0);
+        expect(interactionInternals(service).monitoredInteractionSessionKeys.size).toBe(0);
         await storage.updateEnvironment("env-1", {
           setupScriptsComplete: true,
           setupPhase: "ready",
@@ -1380,15 +1367,19 @@ describe("NativeAgentService", () => {
           interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
         });
         await service.reconcileAgentInteractions();
-        expect(internals(service).monitoredInteractionSessionKeys.has(session.key)).toBe(true);
-        expect(internals(service).monitoredInteractionSessionKeys.has(secondKey)).toBe(false);
+        expect(interactionInternals(service).monitoredInteractionSessionKeys.has(session.key)).toBe(
+          true,
+        );
+        expect(interactionInternals(service).monitoredInteractionSessionKeys.has(secondKey)).toBe(
+          false,
+        );
 
         await storage.updateEnvironment("env-1", {
           deletionRequestedAt: new Date(now).toISOString(),
         });
         await service.reconcileAgentInteractions();
-        expect(internals(service).monitoredInteractionSessionKeys.size).toBe(0);
-        expect(internals(service).trackedInteractions.size).toBe(0);
+        expect(interactionInternals(service).monitoredInteractionSessionKeys.size).toBe(0);
+        expect(interactionInternals(service).trackedInteractions.size).toBe(0);
       },
     );
   });
@@ -1423,7 +1414,7 @@ describe("NativeAgentService", () => {
           origin: "looped-review",
           interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
         });
-        const state = internals(service);
+        const state = interactionInternals(service);
         for (let index = 0; index < 1_024; index += 1) {
           state.monitoredInteractionSessionKeys.add(`stale-${index}`);
         }
@@ -1479,9 +1470,9 @@ describe("NativeAgentService", () => {
           providerState: "error",
           eventualOutcome: "withdrawn",
         });
-        expect(internals(service).trackedInteractions.size).toBe(0);
-        expect(internals(service).interactionAttempts.has(key)).toBe(false);
-        expect(internals(service).interactionRetryAt.has(key)).toBe(false);
+        expect(interactionInternals(service).trackedInteractions.size).toBe(0);
+        expect(interactionInternals(service).interactionAttempts.has(key)).toBe(false);
+        expect(interactionInternals(service).interactionRetryAt.has(key)).toBe(false);
       },
     );
   });
@@ -1602,7 +1593,7 @@ describe("NativeAgentService", () => {
           providerState: "error",
           eventualOutcome: "withdrawn",
         });
-        expect(internals(service).providerReportedInteractions.size).toBe(0);
+        expect(interactionInternals(service).providerReportedInteractions.size).toBe(0);
       },
     );
   });
@@ -1651,32 +1642,25 @@ describe("NativeAgentService", () => {
             state: "detected",
           });
         }
-        expect(internals(service).providerReportedInteractions.size).toBe(512);
+        expect(interactionInternals(service).providerReportedInteractions.size).toBe(512);
         expect(
           service.getInteractionObservations().find(({ kind }) => kind === "permission")!.phase,
         ).toHaveLength(256);
-        const internal = service as unknown as {
-          recordInteractionDetection(
-            session: Record<string, unknown>,
-            interactionId: string,
-            kind: "question",
-            expiresAt: undefined,
-            scan: number,
-          ): void;
-        };
-        internal.recordInteractionDetection(
+        interactionInternals(service).recordInteractionDetection(
           {
             key: "session-key",
             agent: "opencode",
             origin: "looped-review",
             logicalSessionKey: "looped-review:workflow:phase:Review",
-          },
+          } as unknown as Parameters<
+            ReturnType<typeof interactionInternals>["recordInteractionDetection"]
+          >[0],
           "polled-question",
           "question",
           undefined,
           1,
         );
-        expect(internals(service).trackedInteractions.size).toBe(0);
+        expect(interactionInternals(service).trackedInteractions.size).toBe(0);
         service.recordProviderInteractionObservation({
           ...base,
           interactionId: "permission-0",
@@ -1783,7 +1767,7 @@ describe("NativeAgentService", () => {
         });
         now += 60_000;
         await service.reconcileAgentInteractions();
-        expect(internals(service).providerReportedInteractions.size).toBe(0);
+        expect(interactionInternals(service).providerReportedInteractions.size).toBe(0);
         expect(service.getInteractionObservations()[0]).toMatchObject({
           providerState: "missing",
           eventualOutcome: "withdrawn",
@@ -1826,10 +1810,10 @@ describe("NativeAgentService", () => {
         expect(visited.has("provider-1024")).toBe(false);
         await service.reconcileAgentInteractions();
         expect(visited.has("provider-1024")).toBe(true);
-        expect(internals(service).monitoredInteractionSessionKeys.size).toBe(1_024);
-        expect(internals(service).observedInteractionRevisions.size).toBe(1_024);
-        expect(internals(service).interactionRetryAt.size).toBe(0);
-        expect(internals(service).interactionAttempts.size).toBe(0);
+        expect(interactionInternals(service).monitoredInteractionSessionKeys.size).toBe(1_024);
+        expect(interactionInternals(service).observedInteractionRevisions.size).toBe(1_024);
+        expect(interactionInternals(service).interactionRetryAt.size).toBe(0);
+        expect(interactionInternals(service).interactionAttempts.size).toBe(0);
       },
     );
   });
@@ -1852,8 +1836,8 @@ describe("NativeAgentService", () => {
         });
         const warnings = await captureWarnings(() => service.reconcileAgentInteractions());
         expect(warnings).toEqual([]);
-        expect(internals(service).interactionAttempts.size).toBe(0);
-        expect(internals(service).interactionRetryAt.size).toBe(0);
+        expect(interactionInternals(service).interactionAttempts.size).toBe(0);
+        expect(interactionInternals(service).interactionRetryAt.size).toBe(0);
       },
     );
   });

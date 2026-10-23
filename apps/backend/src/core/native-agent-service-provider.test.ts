@@ -44,7 +44,6 @@ import type { Environment } from "./models.js";
 import {
   NativeAgentService,
   nativeAgentSessionStorageKey,
-  type AgentInteractionObservation,
   type EnsureNativeAgentSessionInput,
   type NativeAgentServiceOptions,
 } from "./native-agent-service.js";
@@ -56,6 +55,7 @@ import {
   COORDINATOR_WORKSPACE_VERSION,
   coordinatorRuntimeId,
 } from "@orkestrator/protocol/coordinator";
+import { interactionInternals } from "./native-agent-service-test-collaborators.js";
 
 /** The model earlier releases shipped as the OpenCode default. */
 const LEGACY_OPENCODE_DEFAULT_MODEL_ID = "opencode/claude-sonnet-5";
@@ -192,24 +192,7 @@ function internals(service: NativeAgentService) {
     queueRetryAt: Map<string, number>;
     queueAttempts: Map<string, number>;
     launchRetryAt: Map<string, number>;
-    trackedInteractions: Map<string, unknown>;
-    providerReportedInteractions: Map<
-      string,
-      {
-        observationKey: string;
-        providerSessionKey: string;
-        missingSince?: number;
-      }
-    >;
-    interactionObservations: Map<string, AgentInteractionObservation>;
-    interactionRetryAt: Map<string, number>;
-    interactionAttempts: Map<string, number>;
-    monitoredInteractionSessionKeys: Set<string>;
-    observedInteractionRevisions: Map<string, number>;
-    interactionSelectionCursors: Map<string, number>;
-    interactionRevisionReconciliations: number;
     launchTimer: ReturnType<typeof setInterval> | null;
-    interactionTimer: ReturnType<typeof setInterval> | null;
   };
 }
 
@@ -1101,7 +1084,7 @@ describe("NativeAgentService", () => {
           providerState: "error",
           eventualOutcome: "expired",
         });
-        expect(internals(service).trackedInteractions.size).toBe(0);
+        expect(interactionInternals(service).trackedInteractions.size).toBe(0);
       },
     );
   });

@@ -79,7 +79,6 @@ import {
   nativeAgentApprovalModes,
   resolveNativeAgentApprovalMode,
 } from "@orkestrator/protocol/native-agent";
-import { ProviderRegistry, providerCacheKey } from "./native-agent-provider-registry.js";
 import { sessionIncompleteTurnNotice } from "./models.js";
 import { NativeAgentCatalogCache } from "./native-agent-catalog-cache.js";
 import { randomUUID } from "node:crypto";
@@ -633,7 +632,10 @@ export interface NativeAgentTranscriptProjectionHost {
   storage: StorageService;
   options: NativeAgentServiceOptions;
   catalogs: NativeAgentCatalogCache;
-  providerRegistry: ProviderRegistry;
+  /** The bridge generation serving this environment and agent, if a provider is cached. */
+  providerGeneration(
+    input: Pick<NativeAgentProjectionInput, "environmentId" | "agent">,
+  ): string | undefined;
   now(): number;
   isStopped(): boolean;
   assertProjectionInput(input: NativeAgentProjectionInput): void;
@@ -804,13 +806,11 @@ export class NativeAgentTranscriptProjection {
   private readonly storage: StorageService;
   private readonly options: NativeAgentServiceOptions;
   private readonly catalogs: NativeAgentCatalogCache;
-  private readonly providerRegistry: ProviderRegistry;
 
   constructor(private readonly host: NativeAgentTranscriptProjectionHost) {
     this.storage = host.storage;
     this.options = host.options;
     this.catalogs = host.catalogs;
-    this.providerRegistry = host.providerRegistry;
     this.displayTailScheduler = new NativeAgentDisplayTailScheduler({
       write: (key, tail, fence) => this.storage.putNativeAgentDisplayTail(key, tail, { fence }),
       // Optional because narrow test doubles of the storage omit them.
@@ -866,6 +866,7 @@ export class NativeAgentTranscriptProjection {
       projectionCache: this.projectionCache,
       projectionEpochs: this.projectionEpochs,
       projectionRefreshes: this.projectionRefreshes,
+      stopNotices: this.stopNotices,
       progressiveTranscriptCache: this.progressiveTranscriptCache,
       progressiveReads: this.progressiveReads,
       progressiveDirtyFollowUps: this.progressiveDirtyFollowUps,
@@ -885,7 +886,7 @@ export class NativeAgentTranscriptProjection {
       invalidateProjection: (key: string) => this.invalidateProjection(key),
       pruneProjectionEpoch: (key: string) => this.pruneProjectionEpoch(key),
       projectionPart: (sessionKey: string, messageId: string, raw: unknown, partPath: string) =>
-        this.projectionPart(sessionKey, messageId, raw, partPath),
+        this.projectionPart(sessionKey, messageId, raw, partPath) as Record<string, unknown>,
       transcriptDelta: (previous: NativeAgentTranscriptView, current: NativeAgentTranscriptView) =>
         this.transcriptDelta(previous, current),
       recoverableDispatchStatus: (createdAt: string, kind?: "prompt" | "steer") =>
@@ -2215,10 +2216,7 @@ export class NativeAgentTranscriptProjection {
   ): ProjectedProgressiveTranscript {
     const previous = this.progressiveTranscriptCache.get(key);
     const overlay = this.artifactOverlay(input);
-    const sourceGeneration =
-      this.providerRegistry.connectionIdentity(
-        providerCacheKey(input.environmentId, input.agent),
-      ) ?? `in-process:${input.agent}`;
+    const sourceGeneration = this.host.providerGeneration(input) ?? `in-process:${input.agent}`;
     const identity = this.progressiveIdentity(input, providerSessionId, sourceGeneration);
     const previewHead = snapshot.messages[0];
     const displayedHead = previous?.value.messages.find(
@@ -2946,9 +2944,7 @@ export class NativeAgentTranscriptProjection {
           identity: this.progressiveIdentity(
             input,
             persisted.providerSessionId,
-            this.providerRegistry.connectionIdentity(
-              providerCacheKey(input.environmentId, input.agent),
-            ) ?? `in-process:${input.agent}`,
+            this.host.providerGeneration(input) ?? `in-process:${input.agent}`,
           ),
           freshness: persisted.messages.length === 0 ? "empty" : "cached",
           // Tails are written from the already-stripped progressive projection.
@@ -3176,10 +3172,7 @@ export class NativeAgentTranscriptProjection {
       storedContextUsage,
     );
     const blocked = interactionSnapshot.requests.some((request) => request.blocking !== false);
-    const providerGeneration =
-      this.providerRegistry.connectionIdentity(
-        providerCacheKey(input.environmentId, input.agent),
-      ) ?? `in-process:${input.agent}`;
+    const providerGeneration = this.host.providerGeneration(input) ?? `in-process:${input.agent}`;
     const sourceGeneration = providerGeneration;
     const sessionKey = nativeAgentSessionStorageKey(
       input.environmentId,
@@ -3482,9 +3475,7 @@ export class NativeAgentTranscriptProjection {
       key.includes("\0progressive-v1\0discovery:"),
     ).length;
     const providerKey = `${input.environmentId}\0${input.agent}\0${String(
-      this.providerRegistry.connectionIdentity(
-        providerCacheKey(input.environmentId, input.agent),
-      ) ?? "in-process",
+      this.host.providerGeneration(input) ?? "in-process",
     )}`;
     if (
       activeDiscoveryJobs >= 4 ||
@@ -3588,10 +3579,7 @@ export class NativeAgentTranscriptProjection {
     }
     const resolved = await this.host.resolveProjectionSession(input);
     if (!resolved) return { viewVersion: 1, status: "missing" };
-    const providerGeneration =
-      this.providerRegistry.connectionIdentity(
-        providerCacheKey(input.environmentId, input.agent),
-      ) ?? `in-process:${input.agent}`;
+    const providerGeneration = this.host.providerGeneration(input) ?? `in-process:${input.agent}`;
     const identity = this.progressiveIdentity(
       input,
       resolved.session.providerSessionId,
@@ -4586,10 +4574,7 @@ export class NativeAgentTranscriptProjection {
         return null;
       }
       transient = resolved.transient;
-      generation =
-        this.providerRegistry.connectionIdentity(
-          providerCacheKey(input.environmentId, input.agent),
-        ) ?? `in-process:${input.agent}`;
+      generation = this.host.providerGeneration(input) ?? `in-process:${input.agent}`;
       const advertisedCapabilities = nativeCapabilities(input.agent);
       // User-triggered supplementary metadata. A billing endpoint failure
       // must not make an otherwise healthy transcript unavailable. Merge the

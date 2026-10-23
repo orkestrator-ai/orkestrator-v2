@@ -9,10 +9,7 @@
  * a legacy full read, which only ever see OpenCode's newest messages.
  */
 import { describe, expect, mock, test } from "bun:test";
-import type {
-  NativeAgentTranscriptDelta,
-  NativeAgentTranscriptView,
-} from "@orkestrator/protocol/native-agent";
+import type { NativeAgentTranscriptView } from "@orkestrator/protocol/native-agent";
 import { openCodeHistoryServer } from "./opencode-history-test-support.js";
 import { openCodeTranscriptPage, openCodeTranscriptSnapshot } from "./opencode-snapshots.js";
 import { createProviderStub, withService } from "./native-agent-service-projection-test-support.js";

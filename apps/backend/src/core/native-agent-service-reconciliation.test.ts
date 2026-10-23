@@ -36,7 +36,6 @@ import type { Environment } from "./models.js";
 import {
   NativeAgentService,
   nativeAgentSessionStorageKey,
-  type AgentInteractionObservation,
   type EnsureNativeAgentSessionInput,
   type NativeAgentServiceOptions,
 } from "./native-agent-service.js";
@@ -62,6 +61,7 @@ import {
   openCodeIncompleteTurnRequestId,
 } from "./opencode-turn-recovery.js";
 import { seedStore } from "./storage-test-support.js";
+import { interactionInternals } from "./native-agent-service-test-collaborators.js";
 
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -235,24 +235,7 @@ function internals(service: NativeAgentService) {
     queueRetryAt: Map<string, number>;
     queueAttempts: Map<string, number>;
     launchRetryAt: Map<string, number>;
-    trackedInteractions: Map<string, unknown>;
-    providerReportedInteractions: Map<
-      string,
-      {
-        observationKey: string;
-        providerSessionKey: string;
-        missingSince?: number;
-      }
-    >;
-    interactionObservations: Map<string, AgentInteractionObservation>;
-    interactionRetryAt: Map<string, number>;
-    interactionAttempts: Map<string, number>;
-    monitoredInteractionSessionKeys: Set<string>;
-    observedInteractionRevisions: Map<string, number>;
-    interactionSelectionCursors: Map<string, number>;
-    interactionRevisionReconciliations: number;
     launchTimer: ReturnType<typeof setInterval> | null;
-    interactionTimer: ReturnType<typeof setInterval> | null;
   };
 }
 
@@ -870,7 +853,7 @@ describe("NativeAgentService", () => {
         });
         await service.reconcileAgentInteractions();
         await service.reconcileAgentInteractions();
-        expect(internals(service).interactionRevisionReconciliations).toBe(2);
+        expect(interactionInternals(service).interactionRevisionReconciliations()).toBe(2);
         expect(service.getInteractionObservations()[0]).toMatchObject({
           count: 2,
           eventualOutcome: "withdrawn",
@@ -916,16 +899,16 @@ describe("NativeAgentService", () => {
           (index) => `looped-review:workflow:phase-${index}:Review`,
         );
         await service.reconcileAgentInteractions();
-        expect(internals(service).trackedInteractions.size).toBe(64);
+        expect(interactionInternals(service).trackedInteractions.size).toBe(64);
         expect(service.getInteractionObservations()).toHaveLength(64);
         expect(hookCalls).toBe(520);
-        const state = internals(service);
+        const state = interactionInternals(service);
         for (const tracked of state.trackedInteractions.values()) {
           const observationKey = (tracked as { observationKey: string }).observationKey;
           expect(state.interactionObservations.has(observationKey)).toBe(true);
         }
         await service.reconcileAgentInteractions();
-        expect(internals(service).trackedInteractions.size).toBe(64);
+        expect(interactionInternals(service).trackedInteractions.size).toBe(64);
         expect(hookCalls).toBe(1_040);
       },
     );
@@ -971,7 +954,7 @@ describe("NativeAgentService", () => {
           providerState: "error",
           eventualOutcome: "expired",
         });
-        expect(internals(service).trackedInteractions.size).toBe(0);
+        expect(interactionInternals(service).trackedInteractions.size).toBe(0);
       },
     );
   });
@@ -1019,14 +1002,14 @@ describe("NativeAgentService", () => {
           record!.revision,
         );
         await service.reconcileAgentInteractions();
-        expect(internals(service).providerReportedInteractions.size).toBe(1);
+        expect(interactionInternals(service).providerReportedInteractions.size).toBe(1);
         expect(service.getInteractionObservations()[0]).toMatchObject({
           providerState: "blocked",
         });
 
         now += 30_000;
         await service.reconcileAgentInteractions();
-        expect(internals(service).providerReportedInteractions.size).toBe(1);
+        expect(interactionInternals(service).providerReportedInteractions.size).toBe(1);
         service.recordProviderInteractionObservation({
           ...event,
           state: "withdrawn",
@@ -1073,9 +1056,9 @@ describe("NativeAgentService", () => {
           interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
         });
         await service.init();
-        const timer = internals(service).interactionTimer;
+        const timer = interactionInternals(service).interactionTimer();
         await service.init();
-        expect(internals(service).interactionTimer).toBe(timer);
+        expect(interactionInternals(service).interactionTimer()).toBe(timer);
         const afterInit = listPendingInteractions.mock.calls.length;
         expect(afterInit).toBeGreaterThan(0);
         await waitForCondition(() => listPendingInteractions.mock.calls.length > afterInit);
@@ -1157,7 +1140,7 @@ describe("NativeAgentService", () => {
         await service.init();
         // The keyed launch/queue driver replaces the launch timer (step 08).
         expect((service as unknown as { queueScheduling: unknown }).queueScheduling).not.toBeNull();
-        expect(internals(service).interactionTimer).toBeNull();
+        expect(interactionInternals(service).interactionTimer()).toBeNull();
       },
     );
   });

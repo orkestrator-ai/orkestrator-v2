@@ -729,15 +729,19 @@ export function CreateEnvironmentDialog({
     };
   }, [open, projectId]);
 
-  // Restore draft prompt when dialog opens, focus the textarea
+  // Restore drafts only for a new dialog/project, never for navigation changes.
+  useEffect(() => {
+    if (open && projectId) {
+      const draft = draftPrompts.get(projectId);
+      if (draft) {
+        setInitialPrompt(draft);
+      }
+    }
+  }, [open, projectId]);
+
+  // Focus the prompt when its section becomes active.
   useEffect(() => {
     if (open) {
-      if (projectId) {
-        const draft = draftPrompts.get(projectId);
-        if (draft) {
-          setInitialPrompt(draft);
-        }
-      }
       if (launchAgent && mobileSection === "prompt") {
         // Small delay to ensure the dialog is fully rendered
         const timer = setTimeout(() => {
@@ -746,7 +750,7 @@ export function CreateEnvironmentDialog({
         return () => clearTimeout(timer);
       }
     }
-  }, [open, launchAgent, mobileSection, projectId]);
+  }, [open, launchAgent, mobileSection]);
 
   const handleChooseWorktreeLocation = useCallback(async () => {
     let defaultPath = worktreeBaseDir ?? undefined;

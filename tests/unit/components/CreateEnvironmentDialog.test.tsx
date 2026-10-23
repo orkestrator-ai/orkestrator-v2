@@ -3722,6 +3722,127 @@ describe("CreateEnvironmentDialog feature builds", () => {
     );
   });
 
+  test("saves a feature description on cancel and restores it for either intent", () => {
+    const props = {
+      projectId: "feature-description-draft",
+      onOpenChange: mock(() => {}),
+      onCreate: mock(async () => {}),
+      onCreateFeatureBuild: mock(async () => true),
+    };
+    const { rerender } = render(<CreateEnvironmentDialog open {...props} />);
+    chooseFeature({ description: "  Keep this feature description.  " });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(props.onOpenChange).toHaveBeenCalledWith(false);
+
+    rerender(<CreateEnvironmentDialog open={false} {...props} />);
+    rerender(<CreateEnvironmentDialog open {...props} />);
+    expect((screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement).value).toBe(
+      "Keep this feature description.",
+    );
+    chooseFeature({});
+    expect((screen.getByLabelText(/^Description$/i) as HTMLTextAreaElement).value).toBe(
+      "Keep this feature description.",
+    );
+  });
+
+  test("preserves edited feature drafts through mobile navigation and Launch Agent changes", async () => {
+    const props = {
+      projectId: "feature-draft-navigation",
+      onOpenChange: mock(() => {}),
+      onCreate: mock(async () => {}),
+      onCreateFeatureBuild: mock(async (_input: CreateFeatureBuildInput) => true),
+    };
+    const { rerender } = render(<CreateEnvironmentDialog open {...props} />);
+    fireEvent.change(screen.getByLabelText(/Initial Prompt/i), {
+      target: { value: "Saved draft A" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    rerender(<CreateEnvironmentDialog open={false} {...props} />);
+    rerender(<CreateEnvironmentDialog open {...props} />);
+    chooseFeature({});
+    props.onOpenChange.mockClear();
+    const description = screen.getByLabelText(/^Description$/i) as HTMLTextAreaElement;
+    expect(description.value).toBe("Saved draft A");
+    fireEvent.change(description, { target: { value: "Edited description B" } });
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Agent" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    expect(screen.getByRole("tab", { name: "Agent" }).getAttribute("aria-selected")).toBe("true");
+    expect(description.value).toBe("Edited description B");
+    const launchAgent = screen.getByRole("checkbox", { name: "Launch Agent" });
+    fireEvent.click(launchAgent);
+    expect(launchAgent.getAttribute("aria-checked")).toBe("false");
+    expect(description.value).toBe("Edited description B");
+    fireEvent.click(launchAgent);
+    expect(description.value).toBe("Edited description B");
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Prompt" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    expect(description.value).toBe("Edited description B");
+
+    submitFeature();
+    await waitFor(() => expect(props.onOpenChange).toHaveBeenLastCalledWith(false));
+    expect(props.onCreateFeatureBuild).toHaveBeenCalledWith(
+      expect.objectContaining({ description: "Edited description B" }),
+    );
+    expect(props.onCreate).not.toHaveBeenCalled();
+  });
+
+  for (const outcome of ["successful", "deferred", "rejected"] as const) {
+    test(`${outcome} feature creation ${outcome === "successful" ? "clears" : "preserves"} the saved draft`, async () => {
+      const props = {
+        projectId: `feature-draft-${outcome}`,
+        onOpenChange: mock(() => {}),
+        onCreate: mock(async () => {}),
+        onCreateFeatureBuild: mock(async (_input: CreateFeatureBuildInput) => {
+          if (outcome === "rejected") throw new Error("Feature creation failed");
+          return outcome === "successful";
+        }),
+      };
+      const view = render(<CreateEnvironmentDialog open {...props} />);
+      chooseFeature({ description: "Saved feature draft" });
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      view.rerender(<CreateEnvironmentDialog open={false} {...props} />);
+      view.rerender(<CreateEnvironmentDialog open {...props} />);
+      expect((screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement).value).toBe(
+        "Saved feature draft",
+      );
+      props.onOpenChange.mockClear();
+      chooseFeature({ description: "Edited feature submission" });
+
+      await act(async () => {
+        submitFeature();
+      });
+      expect(props.onCreateFeatureBuild).toHaveBeenCalledWith(
+        expect.objectContaining({ description: "Edited feature submission" }),
+      );
+      if (outcome === "successful") {
+        expect(props.onOpenChange).toHaveBeenCalledWith(false);
+      } else {
+        expect(props.onOpenChange).not.toHaveBeenCalled();
+        expect((screen.getByLabelText(/^Description$/i) as HTMLTextAreaElement).value).toBe(
+          "Edited feature submission",
+        );
+        if (outcome === "rejected") {
+          expect(toastErrorMock).toHaveBeenCalledWith("Could not create environment", {
+            description: "Feature creation failed",
+          });
+        }
+      }
+
+      // Remount without cancelling: cancellation would write a new draft and
+      // hide whether submission preserved or deleted the previously saved one.
+      view.unmount();
+      render(<CreateEnvironmentDialog open {...props} />);
+      expect((screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement).value).toBe(
+        outcome === "successful" ? "" : "Saved feature draft",
+      );
+    });
+  }
+
   test("submits the prompt text as the feature description", async () => {
     const onCreate = mock(async () => {});
     const onCreateFeatureBuild = mock(async (_input: CreateFeatureBuildInput) => true);

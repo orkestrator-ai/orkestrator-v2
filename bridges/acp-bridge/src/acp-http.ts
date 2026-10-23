@@ -16,6 +16,7 @@ import {
 import {
   commandCatalogue,
   refreshCommandCatalogue,
+  compactCommandSelection,
   resolveSelectedCommand,
 } from "./acp-commands.js";
 import { acpReportedPolicy, effectiveExecutionPolicy } from "./acp-policy.js";
@@ -249,7 +250,7 @@ export async function route(
     return json(response, answer.status, answer.body);
   }
   const match =
-    /^\/session\/([^/]+)(?:\/(close|messages|transcript(?:\/(?:detail|page))?|status|activity|prompt|attach|dispatch|cancel|abort|structured-output|interactions(?:\/[^/]+(?:\/hold)?)?|config|commands(?:\/refresh)?|mcp|approvals(?:\/[^/]+(?:\/hold)?)?|runtime-health))?$/.exec(
+    /^\/session\/([^/]+)(?:\/(close|messages|transcript(?:\/(?:detail|page))?|status|activity|prompt|compact|attach|dispatch|cancel|abort|structured-output|interactions(?:\/[^/]+(?:\/hold)?)?|config|commands(?:\/refresh)?|mcp|approvals(?:\/[^/]+(?:\/hold)?)?|runtime-health))?$/.exec(
       url.pathname,
     );
   if (!match) return json(response, 404, { error: "Not found" });
@@ -303,6 +304,7 @@ export async function route(
     state.closing &&
     request.method === "POST" &&
     (action === "prompt" ||
+      action === "compact" ||
       action === "attach" ||
       action === "config" ||
       action?.startsWith("approvals/") ||
@@ -349,6 +351,8 @@ export async function route(
       status: state.status,
       error: state.error,
       revision: state.revision,
+      // The backend's interactive snapshot reads the title from this route.
+      ...(state.title ? { title: state.title } : {}),
       composer: state.sessionConfig.composer,
       ...(state.acpSessionId
         ? { resumableSessionId: externalSessionToken(state.acpSessionId) }
@@ -555,8 +559,21 @@ export async function route(
     const requestId = url.searchParams.get("requestId") || "";
     return json(response, 200, { structuredOutput: state.structured.get(requestId) ?? null });
   }
-  if (action === "prompt" && request.method === "POST") {
-    const body = await readJson(request);
+  if ((action === "prompt" || action === "compact") && request.method === "POST") {
+    let body = await readJson(request);
+    if (action === "compact") {
+      // The shared `compact` session action. ACP has no compaction request, so
+      // it runs the agent's own `/compact` as a selected command: everything
+      // below — the journal, the busy check, revalidation after an attach —
+      // applies to it unchanged. Only an optional `requestId` is read.
+      const compact = compactCommandSelection(state);
+      if (!compact.ok) return json(response, 422, commandUnavailableResponse(compact.message));
+      body = {
+        prompt: compact.command.name,
+        ...(typeof body.requestId === "string" ? { requestId: body.requestId } : {}),
+        command: compact.command,
+      };
+    }
     const requestId = typeof body.requestId === "string" ? body.requestId.trim() : "";
     const schema = isObject(body.outputSchema) ? body.outputSchema : undefined;
     const readOnly = body.readOnly;

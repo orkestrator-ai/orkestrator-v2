@@ -14,6 +14,8 @@ import {
   MAX_NATIVE_AGENT_DRIFT_KIND_LENGTH,
   NATIVE_AGENT_NOTICE_SEVERITIES,
   NATIVE_AGENT_NOTICE_SOURCES,
+  isNativeAgentContextCategoryId,
+  isNativeAgentPricingTier,
   normalizeNativeAgentRuntimeSteerJournal,
   type NativeAgentContextUsage,
   type NativeAgentNotice,
@@ -198,6 +200,7 @@ export function normalizeProviderContextUsage(value: unknown): NativeAgentContex
         return [];
       return [
         {
+          ...(isNativeAgentContextCategoryId(category.id) ? { id: category.id } : {}),
           name: category.name.slice(0, 128),
           tokens: category.tokens,
           ...(typeof category.color === "string" ? { color: category.color.slice(0, 64) } : {}),
@@ -234,6 +237,7 @@ export function normalizeProviderContextUsage(value: unknown): NativeAgentContex
       }
       if (typeof turn.requestId === "string") normalized.requestId = turn.requestId.slice(0, 256);
       if (typeof turn.modelId === "string") normalized.modelId = turn.modelId.slice(0, 256);
+      if (isNativeAgentPricingTier(turn.pricingTier)) normalized.pricingTier = turn.pricingTier;
       return [normalized];
     });
     if (turns.length > 0) usage.turns = turns;

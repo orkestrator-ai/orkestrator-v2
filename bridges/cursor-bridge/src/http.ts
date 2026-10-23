@@ -23,7 +23,7 @@ import {
   CURSOR_AUTHENTICATION_REQUIRED_MESSAGE,
   logout,
 } from "./credentials.js";
-import { listModels, refreshModels } from "./models.js";
+import { listModels, publishedComposer, refreshModels } from "./models.js";
 import { parseAgentMcpConnection, publicCursorMcpServers } from "./mcp.js";
 import {
   identityPublished,
@@ -591,7 +591,7 @@ async function routeSession(
     return json(response, 200, { servers: publicCursorMcpServers(state) });
   }
   if (action === "config" && request.method === "GET") {
-    return json(response, 200, state.composer);
+    return json(response, 200, publishedComposer(state.composer));
   }
   if (action === "config" && request.method === "POST") {
     return await handleConfig(request, response, state);
@@ -900,7 +900,7 @@ async function handleConfig(
   }
   assertSessionOpen(state);
   const patch = parseComposerPatch(body);
-  if (!patch) return json(response, 200, state.composer);
+  if (!patch) return json(response, 200, publishedComposer(state.composer));
   state.dispatching = true;
   try {
     // Recorded on the composer only. Every turn sends its model and mode
@@ -926,7 +926,7 @@ async function handleConfig(
   // A close that won while the selection was being published: the session is
   // going away, so the change is not acknowledged as if it will apply.
   assertSessionOpen(state);
-  return json(response, 200, state.composer);
+  return json(response, 200, publishedComposer(state.composer));
 }
 
 async function handleCancel(response: ServerResponse, state: SessionState): Promise<void> {
@@ -952,9 +952,9 @@ async function handleCancel(response: ServerResponse, state: SessionState): Prom
 }
 
 /**
- * Cursor's SDK (`@cursor/sdk` 1.0.37, re-checked live 2026-10-17) has no
- * command discovery or invocation API: `SDKAgent` offers `send`, `reload`,
- * artifacts and usage only. Editor
+ * Cursor's SDK (`@cursor/sdk` 1.0.37, re-checked live 2026-10-17; type surface
+ * re-checked on 1.0.40) has no command discovery or invocation API: `SDKAgent`
+ * offers `send`, `reload`, artifacts and usage only. Editor
  * commands under `.cursor/commands` are not read, so the enhanced catalogue
  * says `unsupported` — never an empty `ready`, which would claim the provider
  * has been asked and has none. `commands: []` keeps older backends working.

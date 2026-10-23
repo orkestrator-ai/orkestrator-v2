@@ -395,6 +395,15 @@ export async function itemToParts(
       return [];
     case "image":
       return [
+        // A generation's inputs are images Codex read for it, so each shows
+        // as a read image before the result, through the same path reference.
+        ...(item.input_paths ?? []).map((path): NormalizedPart => ({
+          type: "image",
+          content: path.split(/[\\/]/).pop() || "Image",
+          fileUrl: `file://${path}`,
+          filename: path,
+          imageSource: "viewed",
+        })),
         {
           type: "image",
           content: item.text,

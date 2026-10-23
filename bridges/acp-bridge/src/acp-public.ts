@@ -22,6 +22,7 @@ export function publicSession(state: SessionState): JsonObject {
     provider,
     status: state.status,
     error: state.error,
+    ...(state.title ? { title: state.title } : {}),
     messages: state.messages,
     // Absolute index of `messages[0]`. Clients anchor their incremental reads
     // to this so evictions from the front of the transcript cannot silently

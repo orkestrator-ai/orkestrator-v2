@@ -2,8 +2,8 @@ import { describe, expect, mock, test } from "bun:test";
 import type { HookCallback, HookInput, McpServerStatus } from "@anthropic-ai/claude-agent-sdk";
 import type { ClaudeQueryControl } from "../types/index.js";
 import type { SdkMcpServersConfig } from "./mcp-config.js";
+import { claudeMcpToolPrefix } from "./mcp-tool-prefix.js";
 import {
-  claudeMcpToolPrefix,
   createClaudeRuntimeMcp,
   createStaleMcpServerHook,
   type McpSyncRuntime,
@@ -252,6 +252,7 @@ describe("refusing a stale server's tools", () => {
   test("the prefix follows the CLI's own tool naming", () => {
     expect(claudeMcpToolPrefix("my.server x")).toBe("mcp__my_server_x__");
     expect(claudeMcpToolPrefix("a-b_c")).toBe("mcp__a-b_c__");
+    expect(claudeMcpToolPrefix("claude.ai Google Drive")).toBe("mcp__claude_ai_Google_Drive__");
   });
 
   test("overlapping declared prefixes and normalization collisions cannot bypass refusal", () => {

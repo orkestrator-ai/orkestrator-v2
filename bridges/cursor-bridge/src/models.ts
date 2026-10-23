@@ -17,8 +17,12 @@
  * pre-combined variants stay off the input bar — they are only used to read
  * vendor defaults such as the starting effort.
  */
-import { Cursor, type ModelListItem, type ModelSelection } from "@cursor/sdk";
-import type { AgentModel, NativeAgentComposerState } from "@orkestrator/protocol/native-agent";
+import { Cursor, type ModelListItem, type ModelSelection, type ModelVariant } from "@cursor/sdk";
+import type {
+  AgentModel,
+  NativeAgentComposerState,
+  NativeAgentSelectionPricing,
+} from "@orkestrator/protocol/native-agent";
 import { CATALOG_TIMEOUT_MS, MAX_MODEL_ID_BYTES } from "./config.js";
 import { resolveCredential } from "./credentials.js";
 
@@ -29,6 +33,13 @@ let catalogCache: AgentModel[] | null = null;
 let catalogProbe: Promise<AgentModel[]> | null = null;
 let catalogGeneration = 0;
 let cursorModels = Cursor.models;
+/**
+ * The raw variants of every model that has at least one Max-mode variant,
+ * keyed by id and by alias. The shared catalogue drops variants, but the SDK's
+ * Max-mode rule is a property of them, so this is kept beside it. A model with
+ * no Max-mode variant can never be sent in Max mode and is left out.
+ */
+let maxModeCatalog: ReadonlyMap<string, readonly ModelVariant[]> = new Map();
 
 export function useCursorModelsForTests(models: typeof Cursor.models): () => void {
   const previous = cursorModels;
@@ -36,11 +47,13 @@ export function useCursorModelsForTests(models: typeof Cursor.models): () => voi
   catalogCache = null;
   catalogProbe = null;
   catalogGeneration += 1;
+  maxModeCatalog = new Map();
   return () => {
     cursorModels = previous;
     catalogCache = null;
     catalogProbe = null;
     catalogGeneration += 1;
+    maxModeCatalog = new Map();
   };
 }
 
@@ -82,7 +95,10 @@ export async function listModels(): Promise<AgentModel[]> {
       if (!apiKey) return [];
       const items = await withTimeout(modelsClient.list({ apiKey }), CATALOG_TIMEOUT_MS);
       const models = items.map(normalizeModel).filter((model) => model.id.length > 0);
-      if (generation === catalogGeneration && models.length > 0) catalogCache = models;
+      if (generation === catalogGeneration && models.length > 0) {
+        catalogCache = models;
+        maxModeCatalog = maxModeVariants(items);
+      }
       return models;
     })();
     catalogProbe = probe;
@@ -272,6 +288,61 @@ export function modelSelection(composer: NativeAgentComposerState): ModelSelecti
     }
   }
   return params.length > 0 ? { id, params } : { id };
+}
+
+/**
+ * The SDK's own Max-mode rule (1.0.40, `resolveLocalModelSelection`): a send
+ * goes out in Max mode when it carries parameters and every catalogue variant
+ * consistent with them is Max mode. Ids and values are compared trimmed, and a
+ * model is found by id or alias, exactly as the SDK does. Mirrored rather than
+ * imported because the SDK does not export it.
+ */
+export function selectionIsMaxMode(selection: ModelSelection): boolean {
+  if (selection.maxMode === true) return true;
+  const params = selection.params ?? [];
+  if (params.length === 0) return false;
+  const consistent = (maxModeCatalog.get(selection.id) ?? []).filter((variant) =>
+    params.every((param) =>
+      variant.params.some(
+        (candidate) =>
+          candidate.id.trim() === param.id.trim() && candidate.value.trim() === param.value.trim(),
+      ),
+    ),
+  );
+  return consistent.length > 0 && consistent.every((variant) => variant.isMaxMode === true);
+}
+
+/** What the composer shows while the current selection would run in Max mode. */
+export const MAX_MODE_PRICING: NativeAgentSelectionPricing = Object.freeze({
+  tier: "premium",
+  label: "Max mode",
+  description: "This combination runs in Cursor Max mode, which bills at premium usage rates.",
+});
+
+/**
+ * The composer as it is published: with `selectionPricing` derived from the
+ * current selection, never stored. Every selection change goes through
+ * `applyComposerPatch`, so deriving it on the way out is what keeps it from
+ * describing a selection the user has already left.
+ */
+export function publishedComposer(composer: NativeAgentComposerState): NativeAgentComposerState {
+  const { selectionPricing: _stale, ...rest } = composer;
+  return selectionIsMaxMode(modelSelection(rest))
+    ? { ...rest, selectionPricing: MAX_MODE_PRICING }
+    : rest;
+}
+
+function maxModeVariants(items: readonly ModelListItem[]): Map<string, readonly ModelVariant[]> {
+  const catalog = new Map<string, readonly ModelVariant[]>();
+  for (const item of items) {
+    const variants = item.variants ?? [];
+    if (!variants.some((variant) => variant.isMaxMode === true)) continue;
+    for (const key of [item.id, ...(item.aliases ?? [])]) {
+      const id = key?.trim();
+      if (id && !catalog.has(id)) catalog.set(id, variants);
+    }
+  }
+  return catalog;
 }
 
 /**

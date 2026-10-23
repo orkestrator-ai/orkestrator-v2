@@ -16,8 +16,9 @@
  * under `dist/node_modules`, where both mechanisms find it without depending
  * on a workspace `node_modules` the packaged app does not ship.
  *
- * The closure is walked rather than hard-coded: the SDK's dependency list is
- * its own to change, and a missed transitive dependency would surface as the
+ * The closure is walked rather than hard-coded — dependencies, optional
+ * dependencies and required peers alike: the SDK's dependency list is its own
+ * to change, and a missed transitive dependency would surface as the
  * same class of runtime failure this exists to prevent.
  */
 import { cp, mkdir, readFile, readdir, realpath, rm, stat } from "node:fs/promises";
@@ -49,12 +50,33 @@ async function readManifest(directory: string): Promise<Record<string, unknown>>
   >;
 }
 
+/**
+ * Every package a manifest can import at runtime.
+ *
+ * Required peer dependencies count: the SDK declares `zod` as a peer (since
+ * 1.0.40) yet its flat build imports `zod` and its `zod/v3`, `zod/v4` and
+ * `zod/v4-mini` subpaths by bare specifier. A peer the manifest marks optional
+ * in `peerDependenciesMeta` is the consumer's choice and stays out.
+ */
 function dependencyNames(manifest: Record<string, unknown>): string[] {
   const names = new Set<string>();
   for (const field of ["dependencies", "optionalDependencies"] as const) {
     const record = manifest[field];
     if (record && typeof record === "object") {
       for (const name of Object.keys(record)) names.add(name);
+    }
+  }
+  const peers = manifest.peerDependencies;
+  if (peers && typeof peers === "object") {
+    const meta = manifest.peerDependenciesMeta;
+    for (const name of Object.keys(peers)) {
+      const entry =
+        meta && typeof meta === "object" ? (meta as Record<string, unknown>)[name] : undefined;
+      const optional =
+        entry !== null &&
+        typeof entry === "object" &&
+        (entry as { optional?: unknown }).optional === true;
+      if (!optional) names.add(name);
     }
   }
   return [...names];

@@ -7,7 +7,8 @@ OpenCode 2.x. The decision is still: do not bump the OpenCode binary or SDK to
 2.x. A 2.x server has no legacy HTTP API, so the move is a rewrite of the
 backend OpenCode provider rather than a version bump. Upstream evidence was
 last refreshed on 2026-09-27 against OpenCode `v2.0.18`. The 1.x line was
-rechecked at `1.19.0` on 2026-10-11/13 (#964).
+rechecked at `1.19.0` on 2026-10-11/13 (#964) and moved to `1.19.4` on
+2026-10-23.
 
 Three different things are called "v2" around OpenCode. The file name is kept
 for existing links, but the text says "2.x" and never a bare "v2":
@@ -26,11 +27,11 @@ for existing links, but the text says "2.x" and never a bare "v2":
 
 ## Current state
 
-- Pin: `1.19.0` for `@opencode-ai/sdk` (`apps/backend/package.json`) and the
+- Pin: `1.19.4` for `@opencode-ai/sdk` (`apps/backend/package.json`) and the
   CLI (`PINNED_TOOLCHAIN_VERSIONS.opencode` in
   `packages/toolchain/src/manifest.ts`, `OPENCODE_CLI_VERSION` in
   `docker/Dockerfile`). `tests/unit/version-drift.test.ts` keeps them in step.
-  The SDK carries a patch (`patches/@opencode-ai%2Fsdk@1.19.0.patch`, the
+  The SDK carries a patch (`patches/@opencode-ai%2Fsdk@1.19.4.patch`, the
   generated SSE client's unhandled `reader.cancel()` rejection).
 - No `@opencode/*` dependency. `session.next.*` events are listed in
   `KNOWN_OPENCODE_EVENTS` (`apps/backend/src/core/opencode-events.ts`) as
@@ -190,7 +191,7 @@ Measured against the current OpenCode usage, which is all legacy
 2. Structured output. 2.x prompts have no structured-output format, so the
    workflow result broker and `opencode-structured-output.ts` need a new
    mechanism.
-3. Share and unshare. No endpoint, so capability-gate them off.
+3. Share and unshare. Already off: 1.x discontinued sharing in 1.19.1.
 4. Todos. `session.todo` and `todo.updated` are gone, so the runtime summary
    loses OpenCode todos.
 5. LSP and formatter status. Not available.
@@ -235,7 +236,7 @@ Upstream conditions still open:
 
 - A documented compatibility and migration policy for 2.x storage across 2.x
   releases.
-- Share implemented, or Orkestrator accepts dropping it.
+- ~~Share implemented, or Orkestrator accepts dropping it.~~ Dropped with 1.19.1.
 - 2.x equivalents for per-prompt model, agent and tools and for structured
   output, or accepted replacements.
 - Runtime-context gaps (LSP, `CLAUDE.md` fallback, compaction tuning) closed or
@@ -286,7 +287,7 @@ Before any 2.x pin reaches production:
 
 ## Constraints and rationale
 
-- Stay on the 1.x line (pin `1.19.0`) for production while 1.x keeps shipping.
+- Stay on the 1.x line (pin `1.19.4`) for production while 1.x keeps shipping.
   Keep `OPENCODE_DISABLE_AUTOUPDATE=1` on every OpenCode process so a pinned
   binary is never offered the in-place upgrade.
 - Never open a 1.x session through 2.x implicitly.

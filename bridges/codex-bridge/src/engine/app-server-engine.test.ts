@@ -25,7 +25,10 @@ const PLAN: EngineTurnConfig = { mode: "plan", cwd: "/tmp/workspace" };
 
 /** What app-server's `config/read` reports once `-c web_search="disabled"` is applied. */
 const HOSTED_NETWORK_LOCKED = () => ({
-  config: { web_search: "disabled", features: { standalone_web_search: false } },
+  config: {
+    web_search: "disabled",
+    features: { standalone_web_search: false, incremental_tools: false },
+  },
   origins: {},
   layers: null,
 });
@@ -158,6 +161,7 @@ function harness(
   const merged = {
     initialize: INITIALIZE,
     "skills/list": () => ({ data: [{ errors: [], skills: [] }] }),
+    "config/read": () => ({ config: { features: { incremental_tools: false } } }),
     ...handlers,
   };
   let index = 0;
@@ -168,6 +172,7 @@ function harness(
     codexHome: "/tmp/codex-home",
     clientInfo: { name: "orkestrator", title: "Orkestrator", version: "2.4.9" },
     interruptTimeoutMs: 30,
+    toolHistoryVerdict: async () => "clean",
     // The engine always owns its own supervisor wiring; only the process spawn
     // and timings are overridden here.
     supervisorOverrides: {
@@ -368,6 +373,29 @@ describe("thread lifecycle", () => {
     await h.engine.start();
 
     expect((await h.engine.resumeThread("t1", { config: BUILD })).model).toBeUndefined();
+  });
+
+  test("a resume names the session's model, or adopts the one the thread kept", async () => {
+    // Codex 0.164 resumes a thread on its own saved model, not the global
+    // default. A configured model is still stated on every resume; an unset
+    // one is left to the thread, and the model app-server reports is bound so
+    // the transcript labels what the next turn will run.
+    const h = harness({
+      "thread/resume": (params) => ({
+        thread: thread("t1"),
+        model: (params as { model?: string }).model ?? "gpt-6-astra",
+      }),
+    });
+    await h.engine.start();
+
+    const named = await h.engine.resumeThread("t1", { config: BUILD });
+    const unset = await h.engine.resumeThread("t1", { config: PLAN });
+
+    const resumes = h.child().requests.filter((r) => r.method === "thread/resume");
+    expect(resumes[0]!.params).toMatchObject({ threadId: "t1", model: "gpt-5.6-sol" });
+    expect(resumes[1]!.params).not.toHaveProperty("model");
+    expect(named.model).toBe("gpt-5.6-sol");
+    expect(unset.model).toBe("gpt-6-astra");
   });
 
   test("thread/start passes explicit policy and clears the service tier", async () => {
@@ -772,6 +800,57 @@ describe("thread lifecycle", () => {
     expect(turn.config).toBeUndefined();
   });
 
+  test("a search-denied resume or fork is refused while the history still declares tools", async () => {
+    const denied: EngineTurnConfig = {
+      ...BUILD,
+      sandbox: "read-only",
+      networkAccessEnabled: false,
+      policy: {
+        id: "pipeline",
+        sandbox: "provider",
+        approvals: "auto-approve",
+        projectResources: true,
+        capabilityPolicy: { deny: ["network"] },
+        networkAccess: "restricted",
+      },
+    };
+    const checked: string[] = [];
+    for (const verdict of ["declares", "unknown"] as const) {
+      const h = harness(
+        {
+          "thread/resume": () => ({ thread: thread("t1") }),
+          "thread/fork": () => ({ thread: thread("t2") }),
+          "thread/unsubscribe": () => ({ status: "unsubscribed" }),
+        },
+        {
+          toolHistoryVerdict: async (threadId) => {
+            checked.push(threadId);
+            return verdict;
+          },
+        },
+      );
+      await h.engine.start();
+      await expect(h.engine.resumeThread("t1", { config: denied })).rejects.toThrow(
+        "a turn with web search off was refused",
+      );
+      // The resumed thread is let go, so no turn can reach it.
+      const methods = h.child().requests.map((request) => request.method);
+      expect(methods.at(-1)).toBe("thread/unsubscribe");
+      // A fork is refused before it exists, and its source is left loaded.
+      await expect(h.engine.forkThread("t1", denied)).rejects.toThrow("web search off");
+      expect(h.child().requests.some((request) => request.method === "thread/fork")).toBe(false);
+      expect(
+        h
+          .child()
+          .requests.map((request) => request.method)
+          .at(-1),
+      ).toBe(methods.at(-1));
+      // Search is allowed on a build turn, so its history is not consulted.
+      await h.engine.resumeThread("t1", { config: BUILD });
+    }
+    expect(checked).toEqual(["t1", "t1", "t1", "t1"]);
+  });
+
   test("a network-denied policy turns hosted web search off on the thread", async () => {
     const h = harness({ "thread/start": () => ({ thread: thread("t1") }) });
     const config: EngineTurnConfig = {
@@ -799,8 +878,11 @@ describe("thread lifecycle", () => {
       // Project resources are off, so the checkout's own `.codex` stays out.
       projects: { "/tmp/workspace": { trust_level: "untrusted" } },
     });
-    // Not a coordinator process, so there is no process setting to read back.
-    expect(h.child().requests.some((request) => request.method === "config/read")).toBe(false);
+    // Not a coordinator process: the search mode is the thread's own, so only
+    // the process's tool-history setting is read back (codex 0.164).
+    expect(h.child().requests.filter((request) => request.method === "config/read")).toHaveLength(
+      1,
+    );
   });
 
   test("keeps hosted web search off alongside a scoped MCP connection", async () => {
@@ -884,6 +966,7 @@ describe("thread lifecycle", () => {
 
     // An app-server that cannot answer at all is refused the same way.
     const unanswered = harness({
+      "config/read": undefined as unknown as () => unknown,
       "thread/start": () => ({
         thread: thread("t1"),
         activePermissionProfile: { id: "coordinator-conversation-1" },
@@ -912,7 +995,11 @@ describe("thread lifecycle", () => {
     };
     const started = (webSearch: string) =>
       harness({
-        "config/read": () => ({ config: { web_search: webSearch }, origins: {}, layers: null }),
+        "config/read": () => ({
+          config: { web_search: webSearch, features: { incremental_tools: false } },
+          origins: {},
+          layers: null,
+        }),
         "thread/start": () => ({
           thread: thread("t1"),
           activePermissionProfile: { id: "coordinator-conversation-1" },

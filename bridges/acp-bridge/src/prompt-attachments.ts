@@ -8,9 +8,9 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
  * Both `cursor-agent` and `grok` accept ACP `image` content blocks carrying
  * inline base64, so an attached image reaches the model natively instead of
  * depending on the agent choosing to open the path named in the prompt text.
- * (Grok advertises `promptCapabilities.image: false` but reads the block
- * correctly; the declaration is conservative, not accurate, so capability is
- * decided by what the agents do, not by what they claim.)
+ * Both declare `promptCapabilities.image: true` (Grok since 1.0.67; 1.0.52
+ * understated it, see `UNDECLARED_PROMPT_CAPABILITIES`), and the prompt route
+ * refuses an image an agent does not declare.
  *
  * ACP has no local-path image block, which is why this reads the bytes itself.
  * That read is a trust boundary: the path arrives over HTTP, so it is confined

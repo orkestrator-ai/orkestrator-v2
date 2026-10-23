@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { adaptAppServerItem, planUpdateToTodoList, userMessageClientId } from "./item-adapter.js";
+import {
+  MAX_IMAGE_GENERATION_INPUTS,
+  adaptAppServerItem,
+  planUpdateToTodoList,
+  userMessageClientId,
+} from "./item-adapter.js";
 
 describe("item adapter edge cases", () => {
   test("preserves supported agent-message phases and drops unknown phases", () => {
@@ -421,6 +426,59 @@ describe("item adapter edge cases", () => {
         source: "generated",
       },
     });
+  });
+
+  test("renders an attachment-backed generation (codex 0.164) as a caption, never by id or bytes", () => {
+    // `fileId` names Codex's attachment store, not a file; `result` is base64.
+    for (const backing of [{ fileId: "file_abc123" }, { result: "iVBORw0KGgo=" }]) {
+      expect(
+        adaptAppServerItem({
+          id: "img-3",
+          type: "imageGeneration",
+          status: "completed",
+          revisedPrompt: "a lighthouse at dusk",
+          failure: null,
+          ...backing,
+        }),
+      ).toEqual({
+        item: { id: "img-3", type: "image", text: "a lighthouse at dusk", source: "generated" },
+      });
+    }
+  });
+
+  test("keeps a generation's input images as distinct absolute paths, bounded", () => {
+    const inputImages = [
+      { path: "/workspace/in/a.png", sha256: "aa" },
+      { path: "/workspace/in/a.png", sha256: "aa" },
+      { path: "relative/b.png", sha256: "bb" },
+      { sha256: "cc" },
+      "not-a-record",
+      ...Array.from({ length: MAX_IMAGE_GENERATION_INPUTS + 2 }, (_, index) => ({
+        path: `/workspace/in/${index}.png`,
+        sha256: String(index),
+      })),
+    ];
+    const adapted = adaptAppServerItem({
+      id: "img-4",
+      type: "imageGeneration",
+      status: "completed",
+      revisedPrompt: null,
+      failure: null,
+      fileId: "file_def456",
+      savedPath: "/workspace/out/edit.png",
+      inputImages,
+    });
+
+    expect(adapted.item).toMatchObject({
+      type: "image",
+      text: "Generated image",
+      path: "/workspace/out/edit.png",
+      source: "generated",
+    });
+    const paths = (adapted.item as { input_paths?: string[] }).input_paths!;
+    expect(paths).toHaveLength(MAX_IMAGE_GENERATION_INPUTS);
+    expect(paths.slice(0, 2)).toEqual(["/workspace/in/a.png", "/workspace/in/0.png"]);
+    expect(JSON.stringify(adapted)).not.toContain("sha256");
   });
 
   test("renders a viewed image titled by its file name", () => {

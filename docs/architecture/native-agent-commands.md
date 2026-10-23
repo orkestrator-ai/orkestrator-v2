@@ -199,7 +199,7 @@ These are listed with a reason and never executed:
 | Claude | Init `terminal_slash_commands` (before a session's first turn, the list the same CLI version reported on an earlier turn), `/login`, `/logout` | `requires-interactive-ui` |
 | Claude | `/config`, `/doctor`, `/exit`, `/ide`, `/quit`, `/statusline`, `/terminal-setup`, `/theme`, `/vim` | `unqualified` |
 | Codex | Duplicate skill names | `ambiguous` |
-| Codex | Disabled skills (`[[skills.config]] enabled = false` in the user `config.toml`; 0.162.1 ignores the same entry in a project `.codex/config.toml`, trusted or not) | `disabled` |
+| Codex | Disabled skills (`[[skills.config]] enabled = false` in the user `config.toml`; 0.164.0, like 0.162.1, ignores the same entry in a project `.codex/config.toml`, trusted or not) | `disabled` |
 | Codex | Templates named after a reserved command | `reserved-name` |
 | Codex | Templates containing `` !`…` `` | `requires-shell-execution` |
 | Codex | Templates with malformed frontmatter | `unsupported` |

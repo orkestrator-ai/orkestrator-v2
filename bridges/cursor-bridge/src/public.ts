@@ -14,7 +14,7 @@ import type {
 } from "@orkestrator/protocol/native-agent";
 import { transcriptTailStart } from "@orkestrator/protocol/node/transcript-window";
 import { PROVIDER } from "./config.js";
-import { contextWindowForModelId } from "./models.js";
+import { contextWindowForModelId, publishedComposer } from "./models.js";
 import { mergeAccountWindows, peekPlanAccountWindows } from "./plan-usage.js";
 import {
   ownedWork,
@@ -47,7 +47,7 @@ export function publicSession(state: SessionState): JsonObject {
     baseIndex: state.droppedMessages,
     revision: state.revision,
     sessionId: state.id,
-    composer: state.composer,
+    composer: publishedComposer(state.composer),
     ...(state.policy ? { policy: state.policy } : {}),
     ...(contextUsage ? { contextUsage } : {}),
     runtime: publicRuntime(state),
@@ -68,7 +68,7 @@ export function publicStatus(state: SessionState, readiness?: NativeAgentReadine
     error: state.error,
     revision: state.revision,
     ...(state.agentId ? { resumableSessionId: state.agentId } : {}),
-    composer: state.composer,
+    composer: publishedComposer(state.composer),
     ...(state.policy ? { policy: state.policy } : {}),
     ...(readiness ? { readiness } : {}),
     ...(contextUsage ? { contextUsage } : {}),

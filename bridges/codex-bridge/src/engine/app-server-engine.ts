@@ -77,7 +77,13 @@ import {
   codexNetworkDeniedSearchMode,
   codexProjectSkillsConfig,
   codexProjectTrustConfig,
+  codexToolHistoryGaps,
 } from "../codex-config.js";
+import { findTranscriptPath, listTranscriptPaths } from "../history/rollout.js";
+import {
+  threadToolHistoryVerdict,
+  type ToolHistoryVerdict,
+} from "../sessions/tool-history-guard.js";
 import { type McpToolAvailability, waitForMcpToolAvailability } from "./mcp-tool-availability.js";
 import {
   APP_SERVER_CAPABILITIES,
@@ -428,6 +434,12 @@ export interface AppServerEngineOptions {
   approvalTimeoutMs?: number;
   now?: () => number;
   /**
+   * Whether a thread's inherited history still declares tools
+   * (`sessions/tool-history-guard.ts`). Defaults to reading its rollout and
+   * fork ancestors; scripted-child tests replace it.
+   */
+  toolHistoryVerdict?: (threadId: string) => Promise<ToolHistoryVerdict>;
+  /**
    * Supervisor overrides forwarded verbatim.
    *
    * Deliberately *not* an injectable supervisor instance: the engine must always
@@ -761,6 +773,14 @@ const MAX_UNKNOWN_METHOD_LENGTH = 128;
 const MAX_ACCOUNT_PROOF_TURNS = 1024;
 const MAX_ACCOUNT_PROOF_ID_LENGTH = 256;
 
+/** Whether a thread's turns run with hosted web search off (`disabled`, not `cached`). */
+function deniesHostedSearch(config: EngineTurnConfig): boolean {
+  return (
+    Object.keys(codexNetworkDeniedConfig(config.policy)).length > 0 &&
+    codexNetworkDeniedSearchMode(config.policy) === "disabled"
+  );
+}
+
 export class AppServerEngine implements CodexEngine {
   readonly kind = "app-server" as const;
   readonly capabilities: EngineCapabilities = APP_SERVER_CAPABILITIES;
@@ -815,6 +835,8 @@ export class AppServerEngine implements CodexEngine {
    * swap the binary underneath the same overrides.
    */
   private hostedNetworkLockVerifiedGeneration: EngineGeneration | null = null;
+  /** The generation whose `config/read` confirmed tool declarations stay out of history. */
+  private toolHistoryLockVerifiedGeneration: EngineGeneration | null = null;
   /**
    * The stored login successfully loaded by a replacement child. A confirmed sign-out
    * that persists after the reload must not trigger another one, so a login that
@@ -877,6 +899,7 @@ export class AppServerEngine implements CodexEngine {
         this.clearPendingSignIn();
         this.loginSequence++;
         this.hostedNetworkLockVerifiedGeneration = null;
+        this.toolHistoryLockVerifiedGeneration = null;
         this.rejectAllWaiters();
         this.router.abandonGeneration(generation);
       },
@@ -1619,6 +1642,10 @@ export class AppServerEngine implements CodexEngine {
             sandbox:
               config.sandbox ?? (config.mode === "plan" ? "read-only" : "danger-full-access"),
           }),
+      // A configured model is stated on every call. An unset one is left to
+      // Codex: since 0.164.0 a resume keeps the thread's saved model rather
+      // than the global default, and `bindThread` adopts the model app-server
+      // reports, so the transcript labels what the next turn runs.
       ...(config.model ? { model: config.model } : {}),
       ...(config.personality ? { personality: config.personality } : {}),
       // `null` clears a previously set tier; `undefined` would leave it in place.
@@ -1664,8 +1691,83 @@ export class AppServerEngine implements CodexEngine {
     return generation;
   }
 
+  /**
+   * Refuse a turn that denies hosted search unless its request can declare
+   * only the current turn's tools.
+   *
+   * A thread that was offered `web__run` keeps that declaration in its
+   * history while `features.incremental_tools` is on, so dropping the tool
+   * from a later turn's configuration would not take it away. The process
+   * runs with the feature off (`codexAppServerConfigOverrides`); this reads
+   * that back once per generation, and for a resumed or forked thread
+   * `assertNoToolHistory` checks the history it inherits.
+   */
+  private async assertToolHistoryLock(
+    generation: EngineGeneration,
+    config: EngineTurnConfig,
+  ): Promise<void> {
+    // A coordinator's hosted network lock already read this back.
+    if (!deniesHostedSearch(config) || config.permissionProfile) return;
+    if (this.toolHistoryLockVerifiedGeneration === generation) return;
+    const result = await this.supervisor.requestOnGeneration<{ config?: unknown }>(
+      generation,
+      "config/read",
+      { cwd: config.cwd ?? this.options.cwd },
+    );
+    const gaps = codexToolHistoryGaps(result?.config);
+    if (gaps.length > 0) {
+      throw new Error(
+        `Codex did not confirm that tool declarations stay out of thread history (${gaps.join("; ")}), so this session, which has web search off, was refused`,
+      );
+    }
+    if (!this.supervisor.isReady() || this.supervisor.getGeneration() !== generation) {
+      throw new Error("Codex exited during tool history verification");
+    }
+    this.toolHistoryLockVerifiedGeneration = generation;
+  }
+
+  /**
+   * Refuse a search-denied turn on a thread whose history, or a fork
+   * ancestor's, still declares tools: a thread written while
+   * `incremental_tools` was on. A history that cannot be read is refused too.
+   * `release` lets go of a thread this call just resumed; a fork's source is
+   * checked before the fork and left as it was.
+   */
+  private async assertNoToolHistory(
+    threadId: string,
+    config: EngineTurnConfig,
+    release: boolean,
+  ): Promise<void> {
+    if (!deniesHostedSearch(config)) return;
+    const verdict = await (this.options.toolHistoryVerdict ?? ((id) => this.readToolHistory(id)))(
+      threadId,
+    ).catch((): ToolHistoryVerdict => "unknown");
+    if (verdict === "clean") return;
+    if (release) {
+      for (const [handle, binding] of this.bindings) {
+        if (binding.threadId === threadId) this.bindings.delete(handle);
+      }
+      await this.supervisor.request("thread/unsubscribe", { threadId }).catch(() => undefined);
+    }
+    throw new Error(
+      verdict === "declares"
+        ? "This Codex thread was offered web search in an earlier turn and still declares it in its history, so a turn with web search off was refused. Start a new session for it."
+        : "Could not confirm that this Codex thread's history declares no web search, so a turn with web search off was refused.",
+    );
+  }
+
+  private async readToolHistory(threadId: string): Promise<ToolHistoryVerdict> {
+    const codexHome = this.options.codexHome;
+    const resolve = async (id: string) =>
+      this.rolloutPaths.get(id) ??
+      findTranscriptPath(id, () => listTranscriptPaths(codexHome), { allowNegativeCache: false });
+    const path = await resolve(threadId);
+    return path ? threadToolHistoryVerdict(path, resolve) : "unknown";
+  }
+
   async startThread(options: StartThreadOptions): Promise<EngineThread> {
     const generation = await this.assertHostedNetworkLock(options.config);
+    await this.assertToolHistoryLock(generation, options.config);
     const extra = await this.projectResourceThreadConfig(generation, options.config);
     const response = await this.supervisor.requestOnGeneration<{
       thread: Record<string, unknown>;
@@ -1678,6 +1780,7 @@ export class AppServerEngine implements CodexEngine {
 
   async resumeThread(threadId: string, options: ResumeThreadOptions): Promise<EngineThread> {
     const generation = await this.assertHostedNetworkLock(options.config);
+    await this.assertToolHistoryLock(generation, options.config);
     const extra = await this.projectResourceThreadConfig(generation, options.config);
     const response = await this.supervisor.requestOnGeneration<{
       thread: Record<string, unknown>;
@@ -1686,6 +1789,7 @@ export class AppServerEngine implements CodexEngine {
     }>(generation, "thread/resume", { threadId, ...this.toThreadParams(options.config, extra) });
     this.assertPermissionProfile(response.activePermissionProfile, options.config);
     const thread = this.bindThread(response.thread, options.config, response.model);
+    await this.assertNoToolHistory(thread.id ?? threadId, options.config, true);
     // app-server reconstructs turn history on resume by default.
     thread.turns = this.extractTurns(response.thread);
     return thread;
@@ -1736,6 +1840,10 @@ export class AppServerEngine implements CodexEngine {
     lastTurnId?: string,
   ): Promise<EngineThread> {
     const generation = await this.assertHostedNetworkLock(config);
+    await this.assertToolHistoryLock(generation, config);
+    // The whole source, not just the forked prefix: stricter, and it needs no
+    // rollout the fork may not have written yet.
+    await this.assertNoToolHistory(threadId, config, false);
     const extra = await this.projectResourceThreadConfig(generation, config);
     const response = await this.supervisor.requestOnGeneration<{
       thread: Record<string, unknown>;

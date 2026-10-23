@@ -19,6 +19,7 @@ import {
   codexAppServerConfigOverrides,
   codexCoordinatorPolicy,
   codexHostedNetworkLockGaps,
+  codexToolHistoryGaps,
   codexNetworkDeniedConfig,
   codexNetworkDeniedSearchMode,
   codexProjectSkillsConfig,
@@ -63,6 +64,8 @@ describe("Codex app-server configuration", () => {
     expect(codexAppServerConfigOverrides({})).toEqual({
       "agents.max_concurrent_threads_per_session": "5",
       "features.multi_agent_v2.max_concurrent_threads_per_session": "6",
+      // Tools stay out of thread history, on every bridge (codex 0.164).
+      "features.incremental_tools": "false",
     });
     // Native sessions must inherit Codex's default (flag off) so 2025-era
     // HTTP MCP servers such as Paper.design can complete initialize.
@@ -77,6 +80,7 @@ describe("Codex app-server configuration", () => {
     ).toEqual({
       "agents.max_concurrent_threads_per_session": "8",
       "features.multi_agent_v2.max_concurrent_threads_per_session": "9",
+      "features.incremental_tools": "false",
     });
   });
 
@@ -392,31 +396,42 @@ describe("Codex app-server configuration", () => {
   });
 
   test("reads the hosted web search mode back from an effective configuration", () => {
+    const off = { incremental_tools: false };
     expect(
       codexHostedNetworkLockGaps({
         web_search: "disabled",
-        features: { standalone_web_search: false },
+        features: { standalone_web_search: false, ...off },
       }),
     ).toEqual([]);
-    expect(codexHostedNetworkLockGaps({ web_search: "disabled" })).toEqual([]);
-    expect(codexHostedNetworkLockGaps({ web_search: "cached" }, "cached")).toEqual([]);
+    expect(codexHostedNetworkLockGaps({ web_search: "disabled", features: off })).toEqual([]);
+    expect(codexHostedNetworkLockGaps({ web_search: "cached", features: off }, "cached")).toEqual(
+      [],
+    );
     // No setting leaves the mode to Codex, which is not a confirmation.
-    expect(codexHostedNetworkLockGaps({ web_search: null })).toEqual([
+    expect(codexHostedNetworkLockGaps({ web_search: null, features: off })).toEqual([
       'web_search is null, not "disabled"',
     ]);
-    expect(codexHostedNetworkLockGaps({ web_search: "cached" })).toEqual([
+    expect(codexHostedNetworkLockGaps({ web_search: "cached", features: off })).toEqual([
       'web_search is "cached", not "disabled"',
     ]);
     // `live` opens any URL the model names; it never passes.
-    expect(codexHostedNetworkLockGaps({ web_search: "live" }, "cached")).toEqual([
+    expect(codexHostedNetworkLockGaps({ web_search: "live", features: off }, "cached")).toEqual([
       'web_search is "live", not "cached"',
     ]);
     expect(
       codexHostedNetworkLockGaps({
         web_search: "disabled",
-        features: { standalone_web_search: true },
+        features: { standalone_web_search: true, ...off },
       }),
     ).toEqual(["features.standalone_web_search is on"]);
+    // Tools declared into history would outlive the mode (codex 0.164).
+    expect(codexHostedNetworkLockGaps({ web_search: "disabled" })).toEqual([
+      "features.incremental_tools is null, not false",
+    ]);
+    expect(codexToolHistoryGaps({ features: { incremental_tools: true } })).toEqual([
+      "features.incremental_tools is true, not false",
+    ]);
+    expect(codexToolHistoryGaps({ features: off })).toEqual([]);
     for (const malformed of [undefined, null, "disabled", ["disabled"]]) {
       expect(codexHostedNetworkLockGaps(malformed)).toEqual([
         "config/read returned no configuration",

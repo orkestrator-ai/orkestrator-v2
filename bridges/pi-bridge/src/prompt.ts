@@ -126,7 +126,7 @@ export function setStartupTimeoutForTests(timeoutMs?: number): void {
 /**
  * Apply a cancel to a prompt Pi has not accepted yet.
  *
- * Pinned SDK 1.2.0 (`dist/core/agent-session.js`): preflight has two stages.
+ * Pinned SDK 1.4.0 (`dist/core/agent-session.js`): preflight has two stages.
  * Before `_startRun` (input handlers, auth) no run is active, so `abort()`
  * reaches nothing and returns at once. `_startRun` then marks the run active
  * and resets `_agentRunAbortRequested` *before* `_prepareRun` (auto-compaction,

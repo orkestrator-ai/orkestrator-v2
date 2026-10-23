@@ -48,6 +48,27 @@ after a login exists, and `applyComposerPatch` only records a selection until
 then. Code that reads `acpSessionId` must treat the empty string as "not
 created yet", never as a session to load.
 
+## Standard ACP first
+
+Implement standard ACP generically, so every ACP agent benefits; only a
+provider quirk goes in `acp-provider-config.ts`, keyed by provider id (the
+backend's serialized launcher record replaces the built-in one, so a quirk on
+the record would be dropped).
+
+- **`session_info_update` names the session.** `title` is folded to one line
+  of at most `MAX_SESSION_TITLE_BYTES`, kept on the session, persisted, and
+  reported on `/status`, `/session/:id` and the transcript source; `null`
+  clears it, an absent or malformed `title` changes nothing. It is metadata,
+  so a replay applies it too.
+- **The `compact` action runs the agent's own `/compact`.** ACP has no
+  compaction request. `POST /session/:id/compact` becomes a selected
+  `/compact` on the prompt route, so it is journaled (optional `requestId`),
+  busy-checked and revalidated after an attach like any selection. A live
+  inventory without it answers 422 `command-unavailable` before journaling.
+- **Every Grok child runs with `GROK_WORKTREE_INHERITS_MAIN_APPROVALS=false`**
+  (`POLICY_ENV`), so a TUI "always allow" in the user's main checkout cannot
+  skip the permission request the bridge answers from the policy.
+
 ## Parked request deadlines
 
 - **A pause only moves the deadline.** `POST .../approvals/:id/hold` and

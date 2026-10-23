@@ -826,6 +826,19 @@ describe("unknown and ignored notifications", () => {
     expect(result.unknownMethod).toBeUndefined();
   });
 
+  test("thread/readState/changed (codex 0.164) is ignored rather than counted as drift", () => {
+    const result = reduceNotification(
+      notify("thread/readState/changed", {
+        threadId: "t1",
+        readState: { firstUnread: { type: "turn", turnId: "turn-1" }, revision: "r1" },
+      }),
+      1,
+    );
+    expect(result.events).toEqual([]);
+    expect(result.unknownMethod).toBeUndefined();
+    expect(isIgnoredNotification("thread/readState/changed")).toBe(true);
+  });
+
   test("every realtime notification is ignored, so voice cannot inflate the drift counter", () => {
     // All eleven `thread/realtime/*` methods the generated protocol defines.
     // Three of them (`item/started`, `item/completed`, `item/transcript/delta`)

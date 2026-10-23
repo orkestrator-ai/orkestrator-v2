@@ -67,9 +67,12 @@ interface FakeResponses {
 /**
  * A Responses endpoint that records the request and fails it.
  *
- * Codex 0.162.1 opens the Responses API as a WebSocket and sends the whole
- * request, tools included, as one `response.create` frame. Closing the socket
- * afterwards makes the turn fail, which is all these tests need.
+ * Codex opens the Responses API as a WebSocket and sends each request as one
+ * `response.create` frame, its tools in an `additional_tools` input item.
+ * Since 0.164.0 a turn starts with a prewarm frame (`generate: false`, no
+ * input, no tools). A prewarm is never the request these tests read; closing
+ * its socket makes Codex reconnect and send the real one, and closing that one
+ * makes the turn fail, which is all these tests need.
  */
 function startFakeResponses(): FakeResponses {
   let capture!: (frame: Record<string, unknown>) => void;
@@ -89,7 +92,7 @@ function startFakeResponses(): FakeResponses {
       message(socket, message) {
         try {
           const frame = JSON.parse(String(message)) as Record<string, unknown>;
-          if (frame.type === "response.create") capture(frame);
+          if (isModelRequest(frame)) capture(frame);
         } catch {
           // Only the request frame matters.
         }
@@ -106,11 +109,25 @@ function startFakeResponses(): FakeResponses {
   };
 }
 
-/** Whether a model request offers hosted web search in either of its shapes. */
+/** A `response.create` frame that samples, as opposed to a `generate: false` prewarm. */
+function isModelRequest(frame: Record<string, unknown>): boolean {
+  return frame.type === "response.create" && frame.generate !== false;
+}
+
+/**
+ * Whether a model request declares hosted web search anywhere: in a top-level
+ * `tools` array or in any `additional_tools` input item, history included.
+ *
+ * With `incremental_tools` on (the 0.164.0 default) each turn's tools are
+ * appended to the history, so a resumed thread's request kept an earlier
+ * turn's `web__run` after a later turn dropped it. The bridge turns the
+ * feature off, and these tests require that no declaration survives at all.
+ */
 function offersWebSearch(frame: Record<string, unknown>): boolean {
   const text = JSON.stringify(frame);
-  // Code mode (every model the 0.162.1 catalog serves) nests it in the `exec`
-  // declaration as `web__run`; outside code mode it is a `web_search` tool.
+  // Code mode (the default model and most of the 0.164.0 catalog) nests it in
+  // the `exec` declaration as `web__run`; outside code mode it is a
+  // `web_search` tool.
   return text.includes("web__run") || /"type":"web_search/.test(text);
 }
 
@@ -341,7 +358,10 @@ describeLive("live hosted network lock", () => {
       codexPath: await resolveCodexBinary(),
       codexHome,
       workspace,
-      configOverrides: { openai_base_url: JSON.stringify(responses.baseUrl) },
+      configOverrides: {
+        ...codexAppServerConfigOverrides({}),
+        openai_base_url: JSON.stringify(responses.baseUrl),
+      },
     });
     try {
       const frame = await firstModelRequest(engine, responses, {
@@ -369,7 +389,8 @@ describeLive("live hosted network lock", () => {
 });
 
 /**
- * Every `response.create` frame Codex sends, in order. Codex retries a closed
+ * Every sampling `response.create` frame Codex sends, in order (prewarms are
+ * skipped, see `startFakeResponses`). Codex retries a closed
  * socket, so one turn can send several; a caller reads the first after a mark.
  */
 function startRecordingResponses(): {
@@ -393,7 +414,7 @@ function startRecordingResponses(): {
       message(socket, message) {
         try {
           const frame = JSON.parse(String(message)) as Record<string, unknown>;
-          if (frame.type === "response.create") {
+          if (isModelRequest(frame)) {
             frames.push(frame);
             const ready = waiters;
             waiters = [];
@@ -426,11 +447,15 @@ describeLive("live read-only turn network lock", () => {
   test("a read-only turn's reload takes web search away, and a build turn's gives it back", async () => {
     const { codexHome, workspace } = await sandbox();
     const responses = startRecordingResponses();
+    // An ordinary bridge's own process overrides, `incremental_tools` off.
     const engine = engineFor({
       codexPath: await resolveCodexBinary(),
       codexHome,
       workspace,
-      configOverrides: { openai_base_url: JSON.stringify(responses.baseUrl) },
+      configOverrides: {
+        ...codexAppServerConfigOverrides({}),
+        openai_base_url: JSON.stringify(responses.baseUrl),
+      },
     });
     // An ordinary worker session: no coordinator overrides, network allowed.
     const policy = {
@@ -506,7 +531,11 @@ describeLive("live read-only turn network lock", () => {
       // The runtime reloads the thread when a read-only turn changes the mode.
       const reviewing = await engine.reloadThread(thread.handle, { config: readOnly });
       const review = await turnOn(reviewing.handle, readOnly);
+      // The resumed request carries the build turn's history (its prompt)...
+      expect(JSON.stringify(review).split(PROMPT).length - 1).toBeGreaterThanOrEqual(2);
       expect(offersTools(review)).toBe(true);
+      // ...but declares no web search anywhere: not this turn's tools, and not
+      // the build turn's, which were never written into the history.
       expect(offersWebSearch(review)).toBe(false);
       expect((await shellRequest(readOnly)).exitCode).not.toBe(0);
       expect(commandRequests).toBe(1);
@@ -521,6 +550,78 @@ describeLive("live read-only turn network lock", () => {
       expect(commandRequests).toBe(2);
     } finally {
       await loopback.stop(true);
+      await engine.stop();
+      await responses.stop();
+    }
+  }, 240_000);
+
+  test("a thread whose history declares web search is refused a read-only turn", async () => {
+    const { codexHome, workspace } = await sandbox();
+    const responses = startRecordingResponses();
+    const baseUrl = { openai_base_url: JSON.stringify(responses.baseUrl) };
+    const policy = {
+      id: "interactive-host",
+      sandbox: "none",
+      approvals: "auto-approve",
+      projectResources: true,
+      networkAccess: "full",
+    } as const;
+    const build: EngineTurnConfig = { mode: "build", cwd: workspace, policy };
+    const readOnly: EngineTurnConfig = {
+      ...build,
+      networkAccessEnabled: false,
+      sandbox: "read-only",
+      approvalPolicy: "never",
+      approvalsReviewer: "user",
+      policy: codexReadOnlyTurnPolicy(policy),
+    };
+    // A thread written with `incremental_tools` on, as a bridge without the
+    // override would: its build turn declares `web__run` into the history.
+    const legacy = engineFor({
+      codexPath: await resolveCodexBinary(),
+      codexHome,
+      workspace,
+      configOverrides: baseUrl,
+    });
+    let threadId: string;
+    try {
+      await legacy.start();
+      const thread = await legacy.startThread({ config: build });
+      threadId = thread.id!;
+      const turn = await legacy.startTurn({
+        handle: thread.handle,
+        input: [{ type: "text", text: PROMPT }],
+        config: build,
+      });
+      expect(offersWebSearch(await withTimeout(responses.frameAfter(0), 60_000, "a request"))).toBe(
+        true,
+      );
+      await legacy.interruptTurn(thread.handle, turn.turnId).catch(() => undefined);
+      await legacy.waitForTurnTerminal(thread.handle, turn.turnId, { timeoutMs: 30_000 });
+    } finally {
+      await legacy.stop();
+    }
+    const rollout = legacy.rolloutPath(threadId) ?? "";
+    expect(await readFile(rollout, "utf8")).toContain('"type":"additional_tools"');
+
+    // The same thread on a bridge with the override: a build turn may resume
+    // it, but a read-only one is refused before any request is made.
+    const engine = engineFor({
+      codexPath: await resolveCodexBinary(),
+      codexHome,
+      workspace,
+      configOverrides: { ...codexAppServerConfigOverrides({}), ...baseUrl },
+    });
+    try {
+      await engine.start();
+      const sent = responses.frames.length;
+      await expect(engine.resumeThread(threadId, { config: readOnly })).rejects.toThrow(
+        "a turn with web search off was refused",
+      );
+      expect(responses.frames.length).toBe(sent);
+      await expect(engine.forkThread(threadId, readOnly)).rejects.toThrow("web search off");
+      expect((await engine.resumeThread(threadId, { config: build })).id).toBe(threadId);
+    } finally {
       await engine.stop();
       await responses.stop();
     }

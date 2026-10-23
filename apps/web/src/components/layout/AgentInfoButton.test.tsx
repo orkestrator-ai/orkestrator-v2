@@ -3541,7 +3541,7 @@ describe("AgentInfoButton session actions", () => {
     await waitFor(() =>
       expect(mockNativeAction).toHaveBeenCalledWith({ kind: "undo", messageId: "m1" }),
     );
-    expect(mockToastSuccess).toHaveBeenCalledWith("OpenCode session reverted");
+    expect(mockToastSuccess).toHaveBeenCalledWith("Session reverted");
 
     reopen();
     fireEvent.click(screen.getByRole("button", { name: /Redo turn/ }));
@@ -3575,12 +3575,12 @@ describe("AgentInfoButton session actions", () => {
     await waitFor(() =>
       expect(mockNativeAction).toHaveBeenCalledWith({ kind: "undo", messageId: undefined }),
     );
-    expect(mockToastSuccess).toHaveBeenCalledWith("OpenCode session reverted");
+    expect(mockToastSuccess).toHaveBeenCalledWith("Session reverted");
   });
 
   test.each([
-    ["undo", /Undo turn/, "OpenCode session reverted"],
-    ["redo", /Redo turn/, "OpenCode revert undone"],
+    ["undo", /Undo turn/, "Session reverted"],
+    ["redo", /Redo turn/, "Revert undone"],
   ] as const)(
     "reports an OpenCode %s rejection and re-enables actions",
     async (kind, button, success) => {
@@ -3614,7 +3614,7 @@ describe("AgentInfoButton session actions", () => {
     fireEvent.click(screen.getByRole("button", { name: /Undo turn/ }));
 
     await waitFor(() => expect(mockToastError).toHaveBeenCalledWith("undo failed"));
-    expect(mockToastSuccess).not.toHaveBeenCalledWith("OpenCode session reverted");
+    expect(mockToastSuccess).not.toHaveBeenCalledWith("Session reverted");
   });
 
   test("forks and compacts OpenCode through the backend session actions", async () => {
@@ -3907,9 +3907,30 @@ describe("AgentInfoButton rewind confirmation", () => {
   });
 });
 
-describe("AgentInfoButton OpenCode sharing", () => {
+describe("AgentInfoButton session sharing", () => {
+  // No platform advertises `share` since OpenCode 1.19.1 discontinued it; the
+  // control follows the capability, so a projection that advertises it shows it.
+  function shareCapabilities() {
+    const capabilities = nativeAgentCapabilities("opencode");
+    return { ...capabilities, actions: { ...capabilities.actions, share: true } };
+  }
+
+  function shareCapableProjection(
+    sessionId = "opencode-session-1",
+    overrides: Partial<NativeAgentSessionProjection> = {},
+  ) {
+    return openCodeProjection(sessionId, { capabilities: shareCapabilities(), ...overrides });
+  }
+
+  function seedShareCapableProjection(
+    sessionId = "opencode-session-1",
+    overrides: Partial<NativeAgentSessionProjection> = {},
+  ) {
+    seedOpenCodeProjection(sessionId, { capabilities: shareCapabilities(), ...overrides });
+  }
+
   function seedShareableSession(sessionId = "opencode-session-1") {
-    seedOpenCodeProjection(sessionId);
+    seedShareCapableProjection(sessionId);
   }
 
   /** Holds the next share open until the test releases it with a URL. */
@@ -3930,8 +3951,17 @@ describe("AgentInfoButton OpenCode sharing", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: /Stop sharing/ })).toBeTruthy());
   }
 
+  test("OpenCode itself no longer offers sharing", () => {
+    seedOpenCodeProjection("opencode-session-1");
+    render(<AgentInfoButton activeTab={openCodeTab()} />);
+    open();
+
+    expect(screen.getByRole("button", { name: /Undo turn/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Share…/ }) === null).toBe(true);
+  });
+
   test("rehydrates sharing from the provider-neutral projection", () => {
-    seedOpenCodeProjection("opencode-session-1", {
+    seedShareCapableProjection("opencode-session-1", {
       shareUrl: "https://share.opencode.test/projected",
     });
 
@@ -4022,7 +4052,9 @@ describe("AgentInfoButton OpenCode sharing", () => {
      */
     seedShareableSession();
     mockNativeProjectionRead.mockImplementation(async () =>
-      openCodeProjection("opencode-session-1", { shareUrl: "https://share.opencode.test/live" }),
+      shareCapableProjection("opencode-session-1", {
+        shareUrl: "https://share.opencode.test/live",
+      }),
     );
     render(<AgentInfoButton activeTab={openCodeTab()} />);
     open();
@@ -4056,7 +4088,7 @@ describe("AgentInfoButton OpenCode sharing", () => {
     // A share can be revoked from another client. A projection that reports
     // no share URL is authoritative and must remove the stale local action.
     mockNativeProjectionRead.mockImplementation(async () =>
-      openCodeProjection("opencode-session-1", { shareUrl: null }),
+      shareCapableProjection("opencode-session-1", { shareUrl: null }),
     );
     reopen();
 
@@ -4072,9 +4104,7 @@ describe("AgentInfoButton OpenCode sharing", () => {
     await shareAndWaitForRevocation();
 
     fireEvent.click(screen.getByRole("button", { name: /Stop sharing/ }));
-    await waitFor(() =>
-      expect(mockToastSuccess).toHaveBeenCalledWith("OpenCode share link disabled"),
-    );
+    await waitFor(() => expect(mockToastSuccess).toHaveBeenCalledWith("Share link disabled"));
     expect(nativeActionKinds()).toEqual(["share", "unshare"]);
     expect(screen.queryByRole("button", { name: /Stop sharing/ }) === null).toBe(true);
   });
@@ -4093,7 +4123,7 @@ describe("AgentInfoButton OpenCode sharing", () => {
     await waitFor(() =>
       expect(mockToastError).toHaveBeenCalledWith("OpenCode unshare endpoint unavailable"),
     );
-    expect(mockToastSuccess).not.toHaveBeenCalledWith("OpenCode share link disabled");
+    expect(mockToastSuccess).not.toHaveBeenCalledWith("Share link disabled");
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /Stop sharing/ }).hasAttribute("disabled")).toBe(
         false,
@@ -4102,9 +4132,7 @@ describe("AgentInfoButton OpenCode sharing", () => {
 
     mockNativeAction.mockImplementation(async () => ({ outcome: "applied" }));
     fireEvent.click(screen.getByRole("button", { name: /Stop sharing/ }));
-    await waitFor(() =>
-      expect(mockToastSuccess).toHaveBeenCalledWith("OpenCode share link disabled"),
-    );
+    await waitFor(() => expect(mockToastSuccess).toHaveBeenCalledWith("Share link disabled"));
     expect(nativeActionKinds()).toEqual(["share", "unshare", "unshare"]);
     expect(screen.queryByRole("button", { name: /Stop sharing/ }) === null).toBe(true);
   });

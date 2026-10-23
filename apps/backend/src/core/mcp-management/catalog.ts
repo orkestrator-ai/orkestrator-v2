@@ -154,6 +154,8 @@ async function loadContainerSource(
   }
   let text: string;
   try {
+    // Decoding drops one leading BOM (`ignoreBOM` is off), as Pi's own
+    // `mcp.json` loader does; a save then writes the file without it.
     text = new TextDecoder("utf-8", { fatal: true }).decode(result.bytes);
   } catch {
     return { spec, file: null, parsed: null, state: "invalid", error: "Not valid UTF-8." };

@@ -47,6 +47,40 @@ describe("normalizeProviderContextUsage", () => {
       { window: "invalid" },
     ]);
   });
+
+  test("keeps a shared context-category id and drops one outside the vocabulary", () => {
+    expect(
+      normalizeProviderContextUsage({
+        usedTokens: 1,
+        contextCategories: [
+          { id: "system-prompt", name: "System prompt", tokens: 10 },
+          { id: "system_prompt", name: "Raw provider id", tokens: 5 },
+          { name: "Messages", tokens: 20 },
+        ],
+      })?.contextCategories,
+    ).toEqual([
+      { id: "system-prompt", name: "System prompt", tokens: 10 },
+      { name: "Raw provider id", tokens: 5 },
+      { name: "Messages", tokens: 20 },
+    ]);
+  });
+
+  test("keeps a turn's shared pricing tier and drops one outside the vocabulary", () => {
+    expect(
+      normalizeProviderContextUsage({
+        usedTokens: 1,
+        turns: [
+          { turnId: "a", pricingTier: "premium" },
+          { turnId: "b", pricingTier: "standard" },
+          { turnId: "c", pricingTier: "max" },
+        ],
+      })?.turns,
+    ).toEqual([
+      { turnId: "a", pricingTier: "premium" },
+      { turnId: "b", pricingTier: "standard" },
+      { turnId: "c" },
+    ]);
+  });
 });
 
 describe("normalizeProviderDrift", () => {

@@ -2215,6 +2215,70 @@ describe("NativeAgentService", () => {
     );
   });
 
+  test("carries the bridge's premium indicator only for the selection it describes", async () => {
+    const pricing = { tier: "premium" as const, label: "Max mode", description: "Premium rates." };
+    const stub = createProviderStub("cursor", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        messages: [],
+        composer: {
+          models: [
+            { platform: "cursor", id: "cursor/model-a", label: "Model A" },
+            {
+              platform: "cursor",
+              id: "cursor/model-b",
+              label: "Model B",
+              parameters: [
+                {
+                  id: "context",
+                  label: "Context",
+                  kind: "select",
+                  options: [
+                    { id: "200k", label: "200K" },
+                    { id: "1m", label: "1M" },
+                  ],
+                  scope: "turn",
+                },
+              ],
+            },
+          ],
+          selectedModelId: "cursor/model-b",
+          parameterValues: { context: "1m" },
+          fastModeEnabled: null,
+          fastModeAvailable: false,
+          modes: [],
+          // Untrusted bridge text: the projection bounds and re-shapes it.
+          selectionPricing: { ...pricing, extra: "dropped" } as typeof pricing,
+        },
+      }),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-cursor-selection-pricing-",
+        provider: async () => stub.provider,
+      },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "cursor" as const,
+          logicalSessionKey: "env-env-1:tab-cursor-pricing",
+        };
+        await service.ensureSession(identity);
+        expect((await service.getProjection(identity))?.composer?.selectionPricing).toEqual(
+          pricing,
+        );
+
+        // A stored selection the bridge has not echoed yet is a different
+        // combination, so the bridge's verdict no longer describes it.
+        await service.updateProjectionControls({
+          ...identity,
+          update: { parameterValues: { context: "200k" } },
+        });
+        expect((await service.getProjection(identity))?.composer?.selectionPricing).toBeUndefined();
+      },
+    );
+  });
+
   test("follows a later OpenCode session model after inferring the previous one", async () => {
     let sessionModelId = "opencode-go/deepseek-v4-flash";
     const stub = createProviderStub("opencode", {

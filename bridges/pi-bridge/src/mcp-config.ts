@@ -155,7 +155,10 @@ export async function loadMcpConfigFile(
   try {
     const stat = await fs.stat(path);
     if (stat.size > MAX_MCP_CONFIG_BYTES) return [];
-    const parsed: unknown = JSON.parse(await fs.readFile(path, "utf8"));
+    // Pi strips one leading UTF-8 BOM before parsing (since 1.4.0); without it
+    // a Notepad-saved file would drop every server here and none in Pi.
+    const text = await fs.readFile(path, "utf8");
+    const parsed: unknown = JSON.parse(text.startsWith("﻿") ? text.slice(1) : text);
     if (!isObject(parsed)) return [];
     const record = isObject(parsed.mcpServers) ? parsed.mcpServers : parsed;
     if (!isObject(record)) return [];

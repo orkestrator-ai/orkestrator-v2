@@ -1096,7 +1096,8 @@ describe("OpenCode provider dispatch", () => {
       try {
         // Known terminal controls are explained and refused; nothing reaches
         // either endpoint, so the model is never handed "/exit" as a question.
-        for (const [index, text] of ["/exit", "/themes", "/editor"].entries()) {
+        // Sharing was discontinued upstream, but "/share" is still refused.
+        for (const [index, text] of ["/exit", "/themes", "/editor", "/share"].entries()) {
           await expect(
             provider.send("owned-session", text, {
               requestId: `tui-${index}`,

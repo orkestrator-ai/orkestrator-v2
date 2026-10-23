@@ -24,7 +24,7 @@ import {
   expectNothingSecretLogged,
 } from "../../../../tests/helpers/auth-secret-canaries.js";
 
-// What `accountInfo()` answers with an empty config directory (Claude 0.3.296).
+// What `accountInfo()` answers with an empty config directory (Claude 0.3.309).
 const SIGNED_OUT = { tokenSource: "none", apiProvider: "firstParty" } as const;
 const NOT_LOGGED_IN = "Not logged in · Please run /login";
 

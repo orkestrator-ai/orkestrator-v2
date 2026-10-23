@@ -119,7 +119,7 @@ describe("bridges older than the MCP configuration report", () => {
     },
   );
 
-  test("Claude: the change still loads, but the runtime says it cannot be confirmed", async () => {
+  test("Claude: the change still loads, and the bridge's first report confirms it", async () => {
     session("claude");
     const operation = await saveAndApply("claude");
     answer("claude", { state: "unsupported" });
@@ -127,7 +127,17 @@ describe("bridges older than the MCP configuration report", () => {
     const older = await runtimeOf(operation);
     expect(older.state).toBe("pending-next-turn");
     expect(older.reason).toBe(olderBridgeOutcome("claude").reason);
-    expect(older.reason).toContain("cannot be confirmed");
+    expect(older.reason).toContain("confirmed once the bridge reports");
+    expect(older.reason).not.toContain("until the environment restarts");
+
+    // A bridge from #838 on reports its first query's files: no restart.
+    fixture.now.value += EVIDENCE_RECHECK_MS;
+    prove("claude");
+    await fixture.service.tick();
+    expect(await runtimeOf(operation)).toMatchObject({
+      state: "applied",
+      reason: appliedReason("claude"),
+    });
   });
 
   test("Grok: a restart onto an older bridge says so rather than staying generic", async () => {

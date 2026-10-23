@@ -77,7 +77,9 @@ journal's own time and size pruning.
 Bridges write session and checkpoint state under the data directory, one
 child per environment in each of `ENVIRONMENT_STATE_ROOTS`:
 `pi-bridge-sessions`, `pi-bridge-state`, `cursor-bridge-state`,
-`acp-bridge-state` and `portable-inputs`. The child is named by
+`acp-bridge-state`, `portable-inputs` and `mcp-environment-overlays` (a
+container environment's own MCP changes, see
+[`mcp-management.md`](mcp-management.md#containers)). The child is named by
 `environmentStateKey`: the first 32 hex characters of
 `sha256(environmentId)`, which keeps environment ids out of paths that bridges
 may log. The spawn path and every cleanup path use

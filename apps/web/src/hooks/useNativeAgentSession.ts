@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { INTERACTIVE_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import type {
@@ -18,6 +18,7 @@ import type {
   NativeAgentSessionActionOutcome,
   NativeAgentToolDetails,
   NativeAgentViewIdentity,
+  NativeAgentDiscoverySection,
   NativeAgentDiscoveryView,
   NativeAgentSessionStateView,
   NativeAgentTranscriptUpdate,
@@ -65,6 +66,11 @@ import {
 } from "@/lib/backend";
 import { encodedValueBytes, retainedHistoryBytes } from "@/lib/native-history-accounting";
 import { nativeSessionReadDemand } from "@/lib/native-session-read-policy";
+import {
+  registerNativeSessionView,
+  runNativeSessionReadRound,
+  type NativeSessionReadRound,
+} from "@/lib/native-session-shared-reads";
 import {
   nativeObservationInvalidationMatches,
   subscribeNativeObservationInvalidations,
@@ -1047,6 +1053,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       (options?: {
         manual?: boolean;
         reconcileAfterInFlight?: boolean;
+        round?: NativeSessionReadRound;
       }) => Promise<NativeAgentSessionProjection<TMessage> | null>
     >(null);
   /** Background-read invalidation, owned by the read coordinator below. */
@@ -1768,6 +1775,9 @@ export function useNativeAgentSession<TMessage = unknown>({
         ...(hasAuthoritativeState && current.recoverableDispatch
           ? { recoverableDispatch: current.recoverableDispatch }
           : {}),
+        ...(hasAuthoritativeState && current.retiredDispatch
+          ? { retiredDispatch: current.retiredDispatch }
+          : {}),
         // Task cards are cached presentation, like the transcript itself. A
         // failed state read or remount revokes action authority, not knowledge
         // of the children: removing these makes pinned agents disappear (or
@@ -1914,6 +1924,7 @@ export function useNativeAgentSession<TMessage = unknown>({
           : { runtimeHealthAuthoritative: value.runtimeHealthAuthoritative }),
         notices: value.notices,
         ...(value.recoverableDispatch ? { recoverableDispatch: value.recoverableDispatch } : {}),
+        ...(value.retiredDispatch ? { retiredDispatch: value.retiredDispatch } : {}),
         ...(value.backgroundTasks ? { backgroundTasks: value.backgroundTasks } : {}),
         ...(value.suggestedPrompt ? { suggestedPrompt: value.suggestedPrompt } : {}),
         ...(value.completionBlockedByBackgroundTasks === undefined
@@ -2094,9 +2105,17 @@ export function useNativeAgentSession<TMessage = unknown>({
   }, []);
 
   const refresh = useCallback(
-    async (options?: { manual?: boolean; reconcileAfterInFlight?: boolean }) => {
+    async (options?: {
+      manual?: boolean;
+      reconcileAfterInFlight?: boolean;
+      /** A shared background round: identical requests of sibling views join. */
+      round?: NativeSessionReadRound;
+    }) => {
       if (!enabled) return null;
       const background = options?.manual === false;
+      const round = background ? options.round : undefined;
+      const send = <T>(command: string, input: object, run: () => Promise<T>): Promise<T> =>
+        round ? round.request(command, input, run) : run();
       // A background read is never worth issuing while the session is still
       // being established: it cannot resolve to anything but `null`, and the
       // per-environment invalidation that triggers most of them fires for every
@@ -2135,10 +2154,10 @@ export function useNativeAgentSession<TMessage = unknown>({
             operationEpoch === projectionOperationEpochRef.current;
           let transcriptMissing = false;
           let stateMissing = false;
-          const requestTranscript = (forceSnapshot: boolean) =>
-            getNativeAgentTranscriptUpdate<TMessage>({
+          const requestTranscript = (forceSnapshot: boolean) => {
+            const input = {
               ...identity,
-              viewVersion: 1,
+              viewVersion: 1 as const,
               liveWindow: DEFAULT_NATIVE_AGENT_LIVE_WINDOW,
               ...(nativeTranscriptPatchesSupported()
                 ? { patchVersion: NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION }
@@ -2149,7 +2168,9 @@ export function useNativeAgentSession<TMessage = unknown>({
                   ? { knownToken: progressiveTranscriptTokenRef.current }
                   : {}),
               ...(options?.manual === true ? { forceSnapshot: true } : {}),
-            });
+            };
+            return send("transcript", input, () => getNativeAgentTranscriptUpdate<TMessage>(input));
+          };
           const applyTranscriptUpdate = (
             update: NativeAgentTranscriptUpdate<TMessage>,
             requestedWithToken: boolean,
@@ -2279,14 +2300,17 @@ export function useNativeAgentSession<TMessage = unknown>({
               updateProgressiveCache({ transcriptRefreshing: false, transcriptError: message });
             });
 
-          const stateRead = getNativeAgentSessionStateUpdate({
+          const stateInput = {
             ...identity,
-            viewVersion: 1,
+            viewVersion: 1 as const,
             ...(progressiveStateTokenRef.current
               ? { knownToken: progressiveStateTokenRef.current }
               : {}),
             ...(options?.manual === true ? { forceSnapshot: true } : {}),
-          })
+          };
+          const stateRead = send("session-state", stateInput, () =>
+            getNativeAgentSessionStateUpdate(stateInput),
+          )
             .then((update) => {
               if (!stillCurrent()) return;
               if (update.status === "snapshot") {
@@ -2334,15 +2358,23 @@ export function useNativeAgentSession<TMessage = unknown>({
               });
             });
 
-          void getNativeAgentDiscoveryUpdate({
+          const discoveryInput = {
             ...identity,
-            viewVersion: 1,
-            sections: ["models", "commands", "mcp", "runtime"],
+            viewVersion: 1 as const,
+            sections: [
+              "models",
+              "commands",
+              "mcp",
+              "runtime",
+            ] satisfies NativeAgentDiscoverySection[],
             ...(progressiveDiscoveryTokenRef.current
               ? { knownToken: progressiveDiscoveryTokenRef.current }
               : {}),
             ...(options?.manual === true ? { forceSnapshot: true } : {}),
-          })
+          };
+          void send("discovery", discoveryInput, () =>
+            getNativeAgentDiscoveryUpdate(discoveryInput),
+          )
             .then((update) => {
               if (!stillCurrent()) return;
               if (update.status === "snapshot") {
@@ -2392,13 +2424,16 @@ export function useNativeAgentSession<TMessage = unknown>({
          */
         let commit: (() => void) | null = null;
         if (await nativeAgentSyncSupported()) {
-          let update = await getNativeAgentProjectionUpdate<TMessage>({
+          const projectionInput = {
             ...identity,
-            syncVersion: 1,
+            syncVersion: 1 as const,
             liveWindow: DEFAULT_NATIVE_AGENT_LIVE_WINDOW,
             ...(syncTokenRef.current ? { knownToken: syncTokenRef.current } : {}),
             ...(options?.manual === true ? { forceSnapshot: true } : {}),
-          });
+          };
+          let update = await send("projection", projectionInput, () =>
+            getNativeAgentProjectionUpdate<TMessage>(projectionInput),
+          );
           if (update.status === "unchanged") {
             next = projectionRef.current;
           } else if (update.status === "missing") {
@@ -2816,16 +2851,32 @@ export function useNativeAgentSession<TMessage = unknown>({
    * and trailing reconciles — are scheduled by the shared read coordinator:
    * one timer, joined reads with a single dirty flag, paused while the
    * document is hidden, and reconciled first (critical) on return.
-   * Reads apply into this instance's fenced state (sequence/epoch, conditional
-   * tokens), so the key's view is this instance. Explicit and post-mutation
-   * reads stay direct `refresh()` calls, as do connect/adopt reads.
+   * The key is the session, so every mounted view of it shares that schedule:
+   * one coordinated read refreshes each view that wants background reads,
+   * and identical requests within it are sent once
+   * (`native-session-shared-reads.ts`). Each view still applies answers into
+   * its own fenced state (sequence/epoch, conditional tokens). Explicit and
+   * post-mutation reads stay direct `refresh()` calls, as do connect/adopt
+   * reads, and are never joined.
    */
-  const readInstanceId = useId();
+  const sharedReadTarget = `${environmentId}\u0000${platform}\u0000${sessionKey}`;
+  useEffect(() => {
+    if (!enabled) return;
+    return registerNativeSessionView(sharedReadTarget, {
+      wantsBackgroundRead: () => backgroundRefreshEnabledRef.current,
+      refresh: async (context, round) =>
+        refreshRef.current?.(
+          context.reason === "interval"
+            ? { manual: false, round }
+            : { manual: false, reconcileAfterInFlight: true, round },
+        ) ?? null,
+    });
+  }, [enabled, sharedReadTarget]);
   const { invalidate: coordinatedInvalidate } = useCoordinatedRead({
     key: {
       resource: "native-agent-session",
-      target: `${environmentId}\u0000${platform}\u0000${sessionKey}`,
-      view: readInstanceId,
+      target: sharedReadTarget,
+      view: "session",
     },
     enabled,
     readOnSubscribe: false,
@@ -2833,13 +2884,10 @@ export function useNativeAgentSession<TMessage = unknown>({
     demand: nativeSessionReadDemand(platform, runtimeProjection?.turn.phase, {
       active: enabled && isActive,
       observationEvents: nativeObservationEventsSupported(),
+      quietObservation: runtimeProjection?.turn.quietObservation === true,
     }),
     read: async (context) => {
-      await (refreshRef.current?.(
-        context.reason === "interval"
-          ? { manual: false }
-          : { manual: false, reconcileAfterInFlight: true },
-      ) ?? Promise.resolve(null));
+      await runNativeSessionReadRound(sharedReadTarget, context);
     },
   });
   coordinatedInvalidateRef.current = coordinatedInvalidate;

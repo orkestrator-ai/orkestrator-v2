@@ -4,6 +4,7 @@ import type { AppConfig, EnvironmentType, GlobalConfig, RepositoryConfig } from 
 import { DEFAULT_TERMINAL_SCROLLBACK, TERMINAL_BACKGROUND_COLOR } from "@/constants/terminal";
 import { LEGACY_ENABLED_AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 import { DEFAULT_CLAUDE_MODE } from "@orkestrator/protocol/startup-launch";
+import { DEFAULT_ALLOWED_DOMAINS } from "@orkestrator/protocol/network-allowlist";
 import { DEFAULT_DEBUG_LOG_RETENTION_DAYS } from "@orkestrator/protocol/debug-logging";
 import { COORDINATOR_PROVIDER_TIER_DEFAULT_VERSION } from "@orkestrator/protocol/coordinator";
 import {
@@ -36,62 +37,8 @@ const DEFAULT_CONFIG: AppConfig = {
       retentionDays: 14,
       paused: false,
     },
-    allowedDomains: [
-      // Package registries and runtimes
-      "registry.npmjs.org",
-      "npmjs.org",
-      "nodejs.org",
-      "bun.sh",
-      "mise.jdx.dev",
-      "mise-versions.jdx.dev",
-      "aube.jdx.dev",
-
-      // AI providers
-      "opencode.ai",
-      "api.anthropic.com",
-      "anthropic.com",
-      "openai.com",
-      "googleapis.com",
-      "api.openrouter.ai",
-      "openrouter.ai",
-      "huggingface.co",
-      "groq.com",
-      "deepseek.com",
-      "moonshot.ai",
-      "ollama.com",
-      "api.ollama.com",
-      "together.ai",
-      "x.ai",
-      "bedrock.amazonaws.com",
-
-      // Cloud providers
-      "vercel.com",
-      "cloudflare.com",
-      "microsoft.com",
-      "azure.com",
-      "sap.com",
-      "account.hana.ondemand.com",
-
-      // Analytics and monitoring
-      "sentry.io",
-      "statsig.anthropic.com",
-      "statsig.com",
-      "helicone.ai",
-
-      // VS Code and extensions
-      "marketplace.visualstudio.com",
-      "vscode.blob.core.windows.net",
-      "update.code.visualstudio.com",
-
-      // Other services
-      "github.com",
-      "api.github.com",
-      "mcp.context7.com",
-      "cdn.jsdelivr.net",
-      // Playwright browser downloads. The image ships its own pinned Chromium,
-      // so this only matters when a project pins a different Playwright version.
-      "cdn.playwright.dev",
-    ],
+    // The list a new install persists; replaced when the backend config loads.
+    allowedDomains: [...DEFAULT_ALLOWED_DOMAINS],
     enabledAgentPlatforms: [...LEGACY_ENABLED_AGENT_PLATFORMS],
     coordinatorProviderTierDefaultVersion: COORDINATOR_PROVIDER_TIER_DEFAULT_VERSION,
     favoriteModels: [],
@@ -132,6 +79,8 @@ const DEFAULT_CONFIG: AppConfig = {
 interface ConfigState {
   // State
   config: AppConfig;
+  /** Whether the backend's config has arrived; `config` holds defaults until then. */
+  hasLoaded: boolean;
   isLoading: boolean;
   error: string | null;
 
@@ -151,6 +100,7 @@ interface ConfigState {
 export const useConfigStore = create<ConfigState>()((set, get) => ({
   // Initial state
   config: DEFAULT_CONFIG,
+  hasLoaded: false,
   isLoading: false,
   error: null,
 
@@ -159,7 +109,14 @@ export const useConfigStore = create<ConfigState>()((set, get) => ({
   // reordered but identical config would republish and rerender every
   // subscriber) and erases undefined-valued fields, which this store treats as
   // distinct from absent ones (see updateGlobalConfig's reviewInstruction).
-  setConfig: (config) => set((state) => (deepEqualJson(state.config, config) ? state : { config })),
+  setConfig: (config) =>
+    set((state) =>
+      deepEqualJson(state.config, config)
+        ? state.hasLoaded
+          ? state
+          : { hasLoaded: true }
+        : { config, hasLoaded: true },
+    ),
 
   updateGlobalConfig: (updates) =>
     set((state) => {

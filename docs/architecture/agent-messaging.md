@@ -37,7 +37,7 @@ MCP token.
 | Idle inject | When policy allows, the store drains pending mail into a new user turn as a tagged carrier |
 | Presence gate | Inject only when the recipient is idle (or an unprompted “cold” native tab) |
 | User inbox | Messages panel (conversations, compose), per-tab banner, mute and inject-policy overrides |
-| Routed wake | Coordinator ↔ the workers it created, and peer ↔ peer, wake the recipient even when the default inject policy is off (see [Routes](#routes)) |
+| Routed wake | Coordinator ↔ the workers it created, and peer ↔ peer while **Wake peers** is on, wake the recipient even when the default inject policy is off (see [Routes](#routes)) |
 
 A carrier the recipient cannot acknowledge is not a usable delivery channel:
 it never becomes retention-eligible and eventually wedges the mailbox
@@ -156,7 +156,7 @@ Every same-project message from a tab, a coordinator, or a workflow is given a
 | Route | Between | Wakes the recipient? |
 | --- | --- | --- |
 | `coordinator` | The main coordinator and a worker it (or a former main) launched; a coordinator and a tab no coordinator created; main ↔ side agent; workflow (`system`) notices | Yes |
-| `peer` | Two tabs, neither in an environment a coordinator created (including sibling tabs in one environment) | Yes, while **Wake peers** is on (default) |
+| `peer` | Two tabs, neither in an environment a coordinator created (including sibling tabs in one environment) | Yes, while **Wake peers** is on (off by default) |
 | `isolated` | A tab in a coordinator-created environment and anyone other than its own coordinator: sibling workers, a worker and a peer, a worker and another conversation | Only if the recipient's policy is `idle` and inject depth is 0, like unrouted mail |
 
 User, external and cross-project mail has no route.
@@ -402,8 +402,10 @@ its name from the messages it sent.
 Default inject policy is **off**. Idle delivery can start a billable turn,
 including on a tab that has never been prompted, so it is opt-in per
 install or per mailbox for unrouted mail (from the user, and `isolated`
-mail). Routed mail wakes regardless; turn **Wake peers** off to make
-peer mail pull-only again.
+mail). Coordinator-route mail wakes regardless. Peer mail wakes only after
+**Wake peers** is turned on: it is off by default for the same reason, since
+two peers answering each other start billable turns nobody asked for, and a
+missing setting normalizes to off.
 
 The user sender bypasses the sender `canSend` check. The compose UI still
 only lists pull-capable destinations, so native Cursor and Grok tabs appear
@@ -523,7 +525,7 @@ Defaults (`DEFAULT_AGENT_MESSAGING_SETTINGS`):
 - `paused: false`
 - `allowCrossProject: false`
 - `defaultInjectPolicy: "off"`
-- `wakePeers: true`
+- `wakePeers: false`
 - `autonomousWakeBudget: 16`
 - `hourlyWakeLimit: 40`
 - `coordinatorStatusWakes: "settled"`
@@ -608,7 +610,7 @@ capability row says so.
 | Protocol, flags, carrier | `packages/protocol/src/agent-mail.ts` |
 | Persist, send, inject policy | `apps/backend/src/core/storage-agent-mail.ts` |
 | Drain, batch, presence cache | `apps/backend/src/core/agent-mail-service.ts` |
-| Native inject / presence | `apps/backend/src/core/native-agent-service-prompt.ts` |
+| Native inject / presence | `apps/backend/src/core/native-agent-service.ts` |
 | Tmux inject | `apps/backend/src/core/prompt-queue-drainer.ts` |
 | Agent Tools mail | `apps/backend/src/core/agent-tools-messaging.ts` |
 | Control MCP mail | `apps/backend/src/core/control-mcp-server.ts` |

@@ -106,6 +106,17 @@ interface Window {
       use(
         connectionId: string,
       ): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
+      /** Electron only: what making a machine the command node would hand over. */
+      previewCommandHandover?(
+        targetConnectionId: string,
+      ): Promise<import("@orkestrator/protocol/command-nodes").CommandHandoverPreviewResult>;
+      /** Electron only: make a machine the command node and switch this window to it. */
+      handOverCommand?(input: {
+        targetConnectionId: string;
+        nodeIds?: string[];
+        connectionIds: string[];
+        includeSelf: boolean;
+      }): Promise<import("@orkestrator/protocol/command-nodes").CommandHandoverResult | null>;
       forget(
         connectionId: string,
       ): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
@@ -149,9 +160,40 @@ interface Window {
       }): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
       answerSshPrompt?(promptId: string, answer: string | null): void;
     };
-    /** Electron only: which node the window's workspace is on; reload after a change. */
-    workspaceTarget?: {
-      set(nodeId: string | null): Promise<void>;
+    /**
+     * Electron only: workspace realms of other nodes in this window's central
+     * region (see `lib/federation/workspace-realm.ts`). The main process binds
+     * each to its node; the window only places it and passes messages.
+     */
+    workspaceViews?: {
+      open(input: {
+        nodeId: string;
+        request: Omit<import("@/lib/federation/workspace-realm").RealmSelectRequest, "type">;
+      }): Promise<{ viewId: string }>;
+      setBounds(
+        viewId: string,
+        bounds: { x: number; y: number; width: number; height: number },
+      ): Promise<void>;
+      setVisible(viewId: string, visible: boolean): Promise<void>;
+      /** A still of the realm (a data URL), shown while one of the window's overlays covers it. */
+      capture(viewId: string): Promise<string | null>;
+      send(
+        viewId: string,
+        message: import("@/lib/federation/workspace-realm").ShellToRealmMessage,
+      ): Promise<void>;
+      close(viewId: string): Promise<void>;
+      onEvent(
+        callback: (
+          event:
+            | { viewId: string; type: "message"; message: unknown }
+            | { viewId: string; type: "closed" | "crashed" | "load-failed" },
+        ) => void,
+      ): () => void;
+    };
+    /** Electron only, in a workspace realm: messages to and from its window. */
+    workspaceRealm?: {
+      post(message: import("@/lib/federation/workspace-realm").RealmToShellMessage): void;
+      onMessage(callback: (message: unknown) => void): () => void;
     };
     process: {
       exit(code?: number): Promise<void>;
@@ -203,7 +245,7 @@ interface Window {
       resetServiceSiteData?(
         target: import("@orkestrator/protocol/browser-preview").BrowserPreviewServiceTarget,
       ): Promise<void>;
-      /** Present on desktop builds with private preview publication (step 11). */
+      /** Present on desktop builds with private preview publication. */
       openServiceExternally?(
         target: import("@orkestrator/protocol/browser-preview").BrowserPreviewServiceTarget,
       ): Promise<void>;

@@ -1,4 +1,4 @@
-import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk/v2/client";
+import { createOpenCodeSdkClient, type OpencodeClient } from "./opencode-sdk-client.js";
 import type { Event as OpenCodeEvent } from "@opencode-ai/sdk/v2/types";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import type { ReconnectBackoff } from "@orkestrator/protocol/reconnect-backoff";
@@ -230,7 +230,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     dependencies: OpenCodeProviderDependencies,
   ) {
     const basic = Buffer.from(`opencode:${connection.authToken}`).toString("base64");
-    const createClient = dependencies.openCodeClientFactory ?? createOpencodeClient;
+    const createClient = dependencies.openCodeClientFactory ?? createOpenCodeSdkClient;
     this.client =
       dependencies.openCodeClient ??
       createClient({

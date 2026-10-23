@@ -2,6 +2,7 @@ import { coordinatorNodeContext } from "./nodes/node-context.js";
 import { NodeCoordination } from "./nodes/node-coordination.js";
 import { NodePortal } from "./nodes/node-portal.js";
 import type { GatewayNodeHooks } from "../gateway-support-core.js";
+import { pickInheritedGlobalSettings } from "@orkestrator/protocol/controller-settings";
 import { NodeService, errorCode, type NodeServiceOptions } from "./nodes/node-service.js";
 import { createNodeSshFactory } from "./nodes/node-ssh.js";
 import type { NodeMode } from "@orkestrator/protocol/command-nodes";
@@ -29,6 +30,9 @@ import {
 } from "./workflow-supervisor.js";
 import { BackendActivityJobs, type BackendActivityJob } from "./backend-activity-jobs.js";
 import { HostSuspendDetector } from "./host-suspend-detector.js";
+import { ContainerClaudeLoginKeeper } from "./container-claude-login-keeper.js";
+import { refreshHostClaudeLogin } from "./claude-host-login-refresh.js";
+import { setHostClaudeLoginRefresher } from "./agent-accounts-containers.js";
 import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
 
 /** Former activity-bundle cadence, per named job. */
@@ -49,7 +53,7 @@ import type { ProvisionalFindingSink } from "./review-provisional-findings.js";
 import {
   createMcpRuntimeProbe,
   mcpRolloutLoader,
-  readContainerMcpFile,
+  mcpContainerOptions,
 } from "./commands-registry-mcp.js";
 import { McpManagementService } from "./mcp-management/service.js";
 import {
@@ -164,6 +168,9 @@ export class OrkestratorBackend {
   readonly nodeCoordination: NodeCoordination;
   /** Origins clients load this node's UI from; registered on attached leaves. */
   private portalOriginsSource: () => string[] = () => [];
+  /** How another node reaches this one, for handing it to a new command node. */
+  private selfAccessSource: () => Promise<{ token: string | null; origins: string[] }> =
+    async () => ({ token: null, origins: [] });
   private readonly projectGit: ProjectGitService;
   private readonly promptQueues: PromptQueueDrainer;
   private readonly agentMail: AgentMailService;
@@ -192,6 +199,7 @@ export class OrkestratorBackend {
   private shutdownPromise: Promise<void> | null = null;
   private activityLeaseSweep: ReturnType<typeof setInterval> | null = null;
   private hostSuspendDetector: HostSuspendDetector | null = null;
+  private claudeLoginKeeper: ContainerClaudeLoginKeeper | null = null;
   private nativeActivitySweep: ReturnType<typeof setInterval> | null = null;
   private tabResourceSweep: ReturnType<typeof setInterval> | null = null;
   /** Step 08 named due jobs; `null` on the rollback bundle. Never both. */
@@ -466,14 +474,20 @@ export class OrkestratorBackend {
       emit: (event, payload) => options.emit(event, payload),
       forceRegistration: options.commandNode === true,
       portalOrigins: () => normalizePortalOrigins(this.portalOriginsSource()),
+      selfAccess: () => this.selfAccessSource(),
       ...(options.nodeLinks?.fetchImpl ? { fetchImpl: options.nodeLinks.fetchImpl } : {}),
       ...(options.nodeLinks?.timers ? { timers: options.nodeLinks.timers } : {}),
       ...(options.nodeLinks?.heartbeatMs ? { heartbeatMs: options.nodeLinks.heartbeatMs } : {}),
       ...((options.nodeLinks?.createSsh ?? createNodeSshFactory(options.dataDir))
         ? { createSsh: options.nodeLinks?.createSsh ?? createNodeSshFactory(options.dataDir)! }
         : {}),
+      inheritableSettings: async () =>
+        pickInheritedGlobalSettings((await storage.loadConfig()).global),
+      onInheritedSettingsChanged: () => storage.announceInheritedSettingsChanged(),
     });
     context.nodes = this.nodes;
+    // While a leaf, this node works with its command node's settings.
+    storage.inheritedGlobalSettings = () => this.nodes.inheritedSettings.current();
     this.nodePortal = new NodePortal({
       nodes: this.nodes,
       emit: (event, payload) => options.emit(event, payload),
@@ -543,6 +557,22 @@ export class OrkestratorBackend {
         observationSharing: process.env.ORKESTRATOR_NATIVE_OBSERVATION_SHARING !== "0",
         interactionMonitorAdoptionEnabled:
           process.env.ORKESTRATOR_AGENT_INTERACTION_MONITOR_KILL_SWITCH !== "1",
+        // A view-only invalidation for an idle session whose content changed:
+        // same channel and stamp sequence as transitions, so a client re-reads
+        // that view (or every view after a gap). Deliberately nothing else
+        // hangs off it; it is not a turn edge.
+        onObservationInvalidation: (event) => {
+          options.emit("native-agent-session-activity", {
+            environment_id: event.environmentId,
+            previous_state: event.state,
+            state: event.state,
+            reason: "content",
+            agent: event.agent,
+            logical_session_key: event.logicalSessionKey,
+            generation: event.observation.generation,
+            revision: event.observation.revision,
+          });
+        },
         onActivityTransition: (event) => {
           options.emit("native-agent-session-activity", {
             environment_id: event.environmentId,
@@ -708,7 +738,7 @@ export class OrkestratorBackend {
       storage,
       emit: options.emit,
       probe: createMcpRuntimeProbe(context),
-      readContainerFile: readContainerMcpFile,
+      ...mcpContainerOptions(context),
       loadRollout: mcpRolloutLoader(context),
     });
     // Web annotations: backend-owned threads and requests. Execution goes
@@ -939,6 +969,8 @@ export class OrkestratorBackend {
         this.activityJobs?.wake("pending-renames");
       }
       if (change.resource === "prompt-queue") this.activityJobs?.wake("tmux-queues");
+      // Leaves follow this node's settings.
+      if (change.resource === "config") this.nodes.syncSettingsToLeaves();
     });
     this.reapPidServers = options.startupReapers?.localServers ?? reapOrphanedLocalServers;
     this.reapTmuxRuntimes =
@@ -1189,6 +1221,14 @@ export class OrkestratorBackend {
       onSuspend: (suspendedMs) => recurringDiagnosticsRegistry.notifySuspension(suspendedMs),
     });
     this.hostSuspendDetector.start();
+    // Containers hold Claude logins access-only; this hands them each host
+    // renewal and renews the host login before it lapses.
+    this.claudeLoginKeeper ??= new ContainerClaudeLoginKeeper(this.context, {
+      refreshHostLogin: (account) => refreshHostClaudeLogin(this.context, account),
+    });
+    const keeper = this.claudeLoginKeeper;
+    setHostClaudeLoginRefresher(() => keeper.refreshHostIfDue());
+    keeper.start();
     // Before the gateway can accept a start command: bridges left behind by a
     // backend that died without draining must be reaped first, or the codex
     // pidfile they still hold blocks this instance's app-server ownership.
@@ -1522,7 +1562,7 @@ export class OrkestratorBackend {
         {
           name: "coordinator-repair",
           kind: "coordinator-repair",
-          priority: "maintenance",
+          priority: "recovery",
           intervalMs: MAINTENANCE_JOB_MS,
           run: async () => {
             reconcileCoordinatorWorkflows();
@@ -1575,7 +1615,7 @@ export class OrkestratorBackend {
         jobs.push({
           name: "claude-state",
           kind: "claude-state-reconcile",
-          priority: "progress",
+          priority: "recovery",
           intervalMs: ACTIVITY_JOB_MS,
           fixedRate: true,
           run: async () => {
@@ -1590,7 +1630,7 @@ export class OrkestratorBackend {
         jobs.push({
           name: "pending-renames",
           kind: "pending-rename-reconcile",
-          priority: "progress",
+          priority: "recovery",
           intervalMs: ACTIVITY_JOB_MS,
           fixedRate: true,
           // Rename intent (task 9): every 2 s while an environment carries
@@ -1765,6 +1805,14 @@ export class OrkestratorBackend {
     this.portalOriginsSource = source;
   }
 
+  /**
+   * Set once the gateway has bound: its durable token and the origins that
+   * serve this backend, read only on a command handover.
+   */
+  setSelfAccessSource(source: () => Promise<{ token: string | null; origins: string[] }>): void {
+    this.selfAccessSource = source;
+  }
+
   /** Backend-owned preview services, for gateway transport adapters. */
   get previews(): PreviewRuntime | undefined {
     return this.context.previews;
@@ -1815,6 +1863,9 @@ export class OrkestratorBackend {
     }
     this.hostSuspendDetector?.stop();
     this.hostSuspendDetector = null;
+    this.claudeLoginKeeper?.stop();
+    this.claudeLoginKeeper = null;
+    setHostClaudeLoginRefresher(undefined);
     // Log followers are observers; stopping them never touches containers.
     shutdownContainerLogService();
     shutdownOomEventWatcher();

@@ -13,13 +13,16 @@ import {
 import { ALL_MACHINES, connectivitySummary, type MachineView } from "@/lib/federation/aggregate";
 import { requestGlobalSettings } from "@/lib/settings-navigation";
 import { useMachineViewStore } from "@/stores/machineViewStore";
+import { CommandNodeMenuSection } from "./CommandNodeMenu";
+import { useFederation } from "./FederationProvider";
 import { MachineDot, machineStatusText } from "./MachineDot";
 
 /**
  * The sidebar's machine filter. "All machines" is the default. Changing the
  * filter changes what the sidebar shows — never which machines are
  * connected, and never which machine the window works on or a running action
- * belongs to.
+ * belongs to. Below the filters, the command node this client is connected
+ * to, with the switch to another.
  */
 export function MachinesFilter({ machines }: { machines: readonly MachineView[] }) {
   const filter = useMachineViewStore((state) => state.machineFilter);
@@ -27,6 +30,7 @@ export function MachinesFilter({ machines }: { machines: readonly MachineView[] 
   const selected = machines.find((machine) => machine.connectionId === filter) ?? null;
   const effectiveFilter = selected ? filter : ALL_MACHINES;
   const summary = connectivitySummary(machines);
+  const commandNodeId = useFederation().portalState.selfId;
 
   return (
     <DropdownMenu>
@@ -64,11 +68,13 @@ export function MachinesFilter({ machines }: { machines: readonly MachineView[] 
           {machines.map((machine) => {
             const status = machine.bound
               ? "This window"
-              : machineStatusText({
-                  transport: machine.transport,
-                  freshness: machine.freshness,
-                  loadedAt: machine.loadedAt,
-                });
+              : machine.connectionId === commandNodeId
+                ? "Command node"
+                : machineStatusText({
+                    transport: machine.transport,
+                    freshness: machine.freshness,
+                    loadedAt: machine.loadedAt,
+                  });
             return (
               <DropdownMenuRadioItem
                 key={machine.connectionId}
@@ -87,9 +93,10 @@ export function MachinesFilter({ machines }: { machines: readonly MachineView[] 
           })}
         </DropdownMenuRadioGroup>
         <DropdownMenuSeparator />
-        <DropdownMenuItem onSelect={() => requestGlobalSettings("connections")}>
+        <CommandNodeMenuSection />
+        <DropdownMenuItem onSelect={() => requestGlobalSettings("machines")}>
           <Settings2 className="h-3.5 w-3.5" aria-hidden="true" />
-          Manage connections…
+          Manage machines…
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

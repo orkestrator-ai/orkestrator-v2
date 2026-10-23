@@ -24,6 +24,7 @@
 ORK_SET=allowed-domains
 ORK_NEXT_SET=allowed-domains-next
 ORK_POLICY_DIR=/etc/orkestrator
+ORK_DEFAULT_DOMAINS_FILE=/usr/local/lib/orkestrator/default-allowed-domains
 # Root-only: /run/orkestrator belongs to node, which must not be able to plant
 # a lock, a schedule or a status report here. node cannot create entries in
 # /run, so this directory can only have been made by root.
@@ -96,12 +97,20 @@ ork_revision_list() {
     if [ "$1" = "none" ]; then printf ''; else printf '%s' "$1"; fi
 }
 
+# The image defaults, comma-separated: the list generated from the backend's
+# canonical defaults (scripts/generate-default-allowed-domains.ts). A missing
+# file is an empty list, which allows nothing beyond GitHub.
+ork_default_domains() {
+    [ -r "$ORK_DEFAULT_DOMAINS_FILE" ] || return 0
+    awk '{ gsub(/[ \t\r]/, "") } $0 != "" && $0 !~ /^#/' "$ORK_DEFAULT_DOMAINS_FILE" | paste -sd, -
+}
+
 # The domains a stored value applies: `none` is nothing beyond GitHub, empty
 # is the image defaults.
 ork_effective_domains() {
     case "$1" in
         none) printf '' ;;
-        '') default_domains_csv ;;
+        '') ork_default_domains ;;
         *) printf '%s' "$1" ;;
     esac
 }

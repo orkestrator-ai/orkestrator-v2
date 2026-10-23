@@ -29,7 +29,17 @@ import {
 } from "./app-constants.js";
 import { registerMainIpc } from "./ipc.js";
 import { resolveRuntimeRoots } from "./paths.js";
-import { createMainWindow, trustedRendererUrlFor } from "./window.js";
+import {
+  createMainWindow,
+  installRendererNavigationGuards,
+  trustedRendererUrlFor,
+} from "./window.js";
+import { installDefaultContextMenu } from "./context-menu.js";
+import {
+  realmChildViewClass,
+  WorkspaceViews,
+  type WorkspaceViewRecord,
+} from "./workspace-views.js";
 import { NodeWorkspaceScopes } from "./node-workspaces.js";
 import { editDesktopConnection, setDesktopWorkspaceTarget } from "./window-workspace-target.js";
 import { importSavedMachinesOnce } from "./command-node-migration.js";
@@ -42,7 +52,11 @@ import { PORTAL_EVENT_CHANNEL, registerFederationIpc } from "./federation-ipc.js
 import { SshPromptBroker } from "./ssh-prompt-broker.js";
 import { createSshAdapterContext, SshTunnelSupervisor } from "./ssh/index.js";
 import { createUnavailableLocalBackend } from "./unavailable-local-backend.js";
-import { installRemoteGatewayRequestAuth } from "./remote-gateway-request-auth.js";
+import {
+  createRealmRequestAuthInstaller,
+  installRemoteGatewayRequestAuth,
+} from "./remote-gateway-request-auth.js";
+import { RealmContexts } from "./realm-contexts.js";
 import { ensurePinnedToolchains } from "@orkestrator/toolchain/manager";
 import { pinnedArtifactsForPlatforms } from "@orkestrator/toolchain/manifest";
 import {
@@ -64,6 +78,10 @@ import type {
 import { connectionPreviewBackend, rebindWindowPreviews } from "./preview-connection-backend.js";
 import { PreviewTransportManager } from "./preview-transport-manager.js";
 import { createPreviewPortHints } from "./preview-port-hints.js";
+import {
+  PreviewPartitionRetention,
+  previewPartitionsInUse,
+} from "./preview-partition-retention.js";
 import { PreviewExternalHandoff } from "./preview-external-handoff.js";
 import type { PreviewAttachmentDescriptor } from "@orkestrator/protocol/preview-access";
 import {
@@ -118,9 +136,11 @@ import {
   browserPreviewPartitionForWindow,
   browserPreviewServicePartition,
   cleanupFailedDesktopWindow,
+  connectionPartitionKey,
   DesktopWindowRequestGate,
   DesktopWindowSlotAllocator,
   releaseBoundWindowIfQuitting,
+  rendererPartitionForRealm,
   rendererPartitionForWindow,
 } from "./desktop-window-lifecycle.js";
 import {
@@ -130,6 +150,11 @@ import {
   shouldProbeMacOsPermissionsBeforeBackend,
 } from "./macos-permissions.js";
 import { createClipboardTextWriter } from "./clipboard.js";
+import {
+  handOverCommandNode,
+  previewCommandHandover,
+  type CommandHandoverDeps,
+} from "./command-handover.js";
 import { ArtifactHostManager } from "./artifact-host-manager.js";
 import { ARTIFACT_SHELL_SCHEME_PRIVILEGES } from "./artifact-host-shell.js";
 import { ARTIFACT_HOST_CHANNELS } from "@orkestrator/protocol/artifact-host-ipc";
@@ -172,8 +197,11 @@ let nodeWorkspaceScopes: NodeWorkspaceScopes | null = null;
 let connectionManager: ConnectionManager | null = null;
 let sshPrompts: SshPromptBroker | null = null;
 let connectionListPublish: ReturnType<typeof setTimeout> | null = null;
+let workspaceViews: WorkspaceViews | null = null;
 type DesktopWindowContext = {
   window: BrowserWindow;
+  /** The renderer: the window's own, or a workspace realm inside it. */
+  contents: Electron.WebContents;
   scope: string;
   slot: number;
   /** The connection the window's current previews were created for. */
@@ -187,6 +215,8 @@ type DesktopWindowContext = {
    */
   portalScope: string | null;
   target: WindowWorkspaceTarget | null;
+  /** A workspace realm: another node's workspace in a window's central region. */
+  realm: { parentWebContentsId: number; viewId: string } | null;
 };
 type WindowWorkspaceTarget = {
   nodeId: string;
@@ -197,9 +227,34 @@ type WindowWorkspaceTarget = {
 };
 
 let previewPortHints: ReturnType<typeof createPreviewPortHints> | null = null;
+let previewPartitionRetention: PreviewPartitionRetention | null = null;
 let browserPreviewCaptures: BrowserPreviewCaptureStore | null = null;
 const previewExternalHandoff = new PreviewExternalHandoff((url) => shell.openExternal(url));
 const windowContexts = new Map<number, DesktopWindowContext>();
+/** Workspace realms, by their own renderer's ID. */
+const realmContexts = new RealmContexts<DesktopWindowContext>(
+  (id) => sshPrompts?.cancelFor(id),
+  (error) => console.warn("[Previews] Failed to close preview transport:", error),
+);
+const installRealmRequestAuth = createRealmRequestAuthInstaller(
+  (id) => realmContexts.get(id)?.scope,
+  (url, scope) => connectionManager?.getRendererRequestAuthorization(url, scope) ?? null,
+);
+/** A realm's node binding, from its scope's bind until its context exists. */
+const realmBindings = new Map<
+  string,
+  {
+    scope: string;
+    portalScope: string | null;
+    target: WindowWorkspaceTarget | null;
+    window: { isDestroyed(): boolean };
+  }
+>();
+
+/** Every renderer: main windows and the realms inside them. */
+function rendererContexts(): DesktopWindowContext[] {
+  return [...windowContexts.values(), ...realmContexts.values()];
+}
 const MAX_DESKTOP_WINDOWS = 32;
 const windowSlots = new DesktopWindowSlotAllocator(MAX_DESKTOP_WINDOWS);
 const windowRequestGate = new DesktopWindowRequestGate();
@@ -241,6 +296,10 @@ function emitToWindow(window: BrowserWindow, event: string, payload: unknown): v
   if (!window.isDestroyed()) window.webContents.send("orkestrator:event", event, payload);
 }
 
+function emitToContents(contents: Electron.WebContents, event: string, payload: unknown): void {
+  if (!contents.isDestroyed()) contents.send("orkestrator:event", event, payload);
+}
+
 function focusedContext(): DesktopWindowContext | null {
   return resolveFocusedWindowContext(
     windowContexts,
@@ -266,7 +325,9 @@ function followWindowConnection(context: DesktopWindowContext): void {
 }
 
 function contextForEvent(event?: { sender?: { id: number } }): DesktopWindowContext {
-  const context = event?.sender ? windowContexts.get(event.sender.id) : null;
+  const context = event?.sender
+    ? (windowContexts.get(event.sender.id) ?? realmContexts.get(event.sender.id))
+    : null;
   if (!context) throw new Error("The requesting window is no longer available");
   return context;
 }
@@ -290,17 +351,17 @@ function controlScope(context: DesktopWindowContext): string {
 
 function emitToConnection(connectionId: string, event: string, payload: unknown): void {
   if (!connectionManager) return;
-  for (const context of windowContexts.values()) {
+  for (const context of rendererContexts()) {
     if (connectionManager.getConnectionId(context.scope) === connectionId) {
-      emitToWindow(context.window, event, payload);
+      emitToContents(context.contents, event, payload);
     }
-    // The portal channel of a window whose workspace is on another node.
+    // The portal channel of a realm: its window's command node.
     if (
       context.portalScope &&
       connectionManager.getConnectionId(context.portalScope) === connectionId &&
-      !context.window.isDestroyed()
+      !context.contents.isDestroyed()
     ) {
-      context.window.webContents.send(PORTAL_EVENT_CHANNEL, event, payload);
+      context.contents.send(PORTAL_EVENT_CHANNEL, event, payload);
     }
   }
 }
@@ -318,6 +379,14 @@ function scheduleConnectionListPublish(): void {
 function emitToFocusedWindow(event: string, payload: unknown): void {
   const context = focusedContext();
   if (context) emitToWindow(context.window, event, payload);
+}
+
+/** The focused renderer of the focused window: one of its realms, or the window's own. */
+function emitToFocusedRenderer(event: string, payload: unknown): void {
+  const context = focusedContext();
+  if (!context) return;
+  const realm = realmContexts.focused(context.contents.id);
+  emitToContents((realm ?? context).contents, event, payload);
 }
 
 function setConnectionTitle(window: BrowserWindow, scope: string): void {
@@ -363,8 +432,8 @@ function browserPreviewCaptureStore(): BrowserPreviewCaptureStore {
         reason: change.reason,
         ...(change.notice ? { expired: change.notice } : {}),
       };
-      for (const context of windowContexts.values()) {
-        emitToWindow(context.window, BROWSER_PREVIEW_CAPTURE_EVENT, event);
+      for (const context of rendererContexts()) {
+        emitToContents(context.contents, BROWSER_PREVIEW_CAPTURE_EVENT, event);
       }
     },
   });
@@ -376,12 +445,37 @@ function browserPreviewCaptureStore(): BrowserPreviewCaptureStore {
   return store;
 }
 
+/** Clears preview partitions of removed services and forgotten connections. */
+function previewRetention(): PreviewPartitionRetention {
+  previewPartitionRetention ??= new PreviewPartitionRetention({
+    partitionsDir: path.join(app.getPath("userData"), "Partitions"),
+    pendingFile: path.join(app.getPath("userData"), "preview-partitions-pending.json"),
+    sessionFor: (partitionName) => session.fromPartition(partitionName),
+    inUse: () =>
+      previewPartitionsInUse(
+        rendererContexts().map((context) => ({
+          sharedPartition: browserPreviewPartitionForWindow(
+            context.slot,
+            context.target ? `node:${context.target.nodeId}` : context.previewConnectionId,
+          ),
+          transport: context.previewTransport,
+        })),
+      ),
+    logger: console,
+  });
+  return previewPartitionRetention;
+}
+
+/** A realm's native views follow it in its window; see `realmChildViewClass`. */
+type RealmViewOwner = { contents: Electron.WebContents; ViewCtor: typeof WebContentsView };
+
 function createWindowBrowserPreviews(
   createdWindow: BrowserWindow,
   scope: string,
   slot: number,
   connectionId: string,
   partitionKey = connectionId,
+  realm?: RealmViewOwner,
 ) {
   const partition = browserPreviewPartitionForWindow(slot, partitionKey);
   let manager: BrowserPreviewManager | null = null;
@@ -406,6 +500,10 @@ function createWindowBrowserPreviews(
     onStateChange: (serviceKey) => manager?.refreshService(serviceKey),
     logger: console,
   });
+  previewRetention().schedule(connectionPartitionKey(partitionKey), previewTransport, {
+    delayMs: 60_000,
+    intervalMs: 30 * 60_000,
+  });
   const transport: BrowserPreviewServiceTransport = {
     acquire: (target, holderId) => previewTransport.acquire(target, holderId),
     release: (serviceKey, holderId) => previewTransport.release(serviceKey, holderId),
@@ -418,7 +516,7 @@ function createWindowBrowserPreviews(
       configurePreviewServiceSession(session.fromPartition(partitionName), () => manager),
   };
   const emitToOwner = (event: string, payload: unknown) =>
-    emitToWindow(createdWindow, event, payload);
+    emitToContents(realm?.contents ?? createdWindow.webContents, event, payload);
   const browserPreviewMainAdapters = createBrowserPreviewMainAdapters({
     emitToRenderers: emitToOwner,
     openExternal: (url) => shell.openExternal(url),
@@ -428,7 +526,7 @@ function createWindowBrowserPreviews(
   const runtime = initializeBrowserPreviews({
     fromPartition: (partitionName) => session.fromPartition(partitionName),
     partition,
-    WebContentsViewCtor: WebContentsView,
+    WebContentsViewCtor: realm?.ViewCtor ?? WebContentsView,
     menu: Menu,
     getWindow: () => createdWindow,
     ...browserPreviewMainAdapters,
@@ -469,20 +567,24 @@ function createWindowBrowserPreviews(
  * and fresh nonpersistent session. Events go to this window's renderer only.
  * A renderer reload leaves the host without an owner, so it is closed.
  */
-function createWindowArtifactHosts(createdWindow: BrowserWindow): ArtifactHostManager {
+function createWindowArtifactHosts(
+  createdWindow: BrowserWindow,
+  realm?: RealmViewOwner,
+): ArtifactHostManager {
+  const owner = realm?.contents ?? createdWindow.webContents;
   const artifactHosts = new ArtifactHostManager({
     getWindow: () => createdWindow,
-    WebContentsViewCtor: WebContentsView,
+    WebContentsViewCtor: realm?.ViewCtor ?? WebContentsView,
     fromPartition: (partition) => session.fromPartition(partition, { cache: false }),
     emit: (event) => {
-      if (!createdWindow.isDestroyed()) {
-        createdWindow.webContents.send(ARTIFACT_HOST_CHANNELS.event, event);
+      if (!createdWindow.isDestroyed() && !owner.isDestroyed()) {
+        owner.send(ARTIFACT_HOST_CHANNELS.event, event);
       }
     },
     // Content-free reason counters only; never URLs or page data.
     reportDiagnostics: (diagnostics) => console.info("[ArtifactHost] host ended", diagnostics),
   });
-  createdWindow.webContents.on("did-navigate", () => artifactHosts.closeAll("window-closed"));
+  owner.on("did-navigate", () => artifactHosts.closeAll("window-closed"));
   return artifactHosts;
 }
 
@@ -571,7 +673,8 @@ function createMenu(): void {
         console.error("[Desktop] Failed to create a new window:", error),
       );
     },
-    closeTab: () => emitToFocusedWindow("menu-close-tab", undefined),
+    // A tab belongs to the workspace that has focus, which may be a realm.
+    closeTab: () => emitToFocusedRenderer("menu-close-tab", undefined),
     selectWindow: (id) => focusDesktopWindow(id),
     zoom: (direction) => emitToFocusedWindow("menu-zoom", direction),
     checkForUpdates: autoUpdate ? () => void autoUpdate?.checkNow() : undefined,
@@ -645,6 +748,7 @@ async function createWindow(connectionId?: string): Promise<void> {
         const webContentsId = createdWindow.webContents.id;
         windowContexts.set(webContentsId, {
           window: createdWindow,
+          contents: createdWindow.webContents,
           scope,
           slot,
           previewConnectionId: activeConnectionId,
@@ -653,6 +757,7 @@ async function createWindow(connectionId?: string): Promise<void> {
           artifactHosts,
           portalScope: null,
           target: null,
+          realm: null,
         });
         lastFocusedWindowId = webContentsId;
         registered = true;
@@ -661,9 +766,10 @@ async function createWindow(connectionId?: string): Promise<void> {
           event.preventDefault();
           setConnectionTitle(createdWindow, scope);
         });
-        // A reloaded window no longer knows about its prompts.
+        // A reloaded window no longer knows about its prompts or realms.
         createdWindow.webContents.on("did-navigate", () => {
           sshPrompts?.cancelFor(webContentsId);
+          workspaceViews?.closeAllFor(webContentsId);
         });
         createdWindow.webContents.on("did-finish-load", () => {
           // A new window can join an already-open pooled event stream and
@@ -677,6 +783,7 @@ async function createWindow(connectionId?: string): Promise<void> {
         });
         createdWindow.once("closed", () => {
           const closing = windowContexts.get(webContentsId);
+          workspaceViews?.closeAllFor(webContentsId);
           closing?.browserPreviewManager.destroyAll();
           closing?.artifactHosts.dispose();
           // Owned local listeners and tunnel connections end with the window;
@@ -737,38 +844,135 @@ function publishConnectionLists(): void {
 }
 
 /**
- * Point a window's workspace at another node (or back at its command node).
- * The window then is that node's client, exactly as if it had connected to
- * it directly: its invoke, events, request credentials and previews follow
- * the node, and the renderer reloads into it. The window's own connection
- * stays bound to a portal scope for the multi-node views. The node is
- * reached with a short-lived workspace grant the command node obtains —
- * directly when one of its HTTPS routes answers, otherwise over the command
- * node's own route — renewed while the window shows it, revoked after.
+ * Workspace realms: another node's workspace in a window's central region,
+ * while the window itself stays on its command node. Each realm's scope is
+ * bound to the node's workspace — a short-lived grant the window's command
+ * node obtains, directly when one of the node's HTTPS routes answers,
+ * otherwise over the command node's own route — renewed while the realm is
+ * open and revoked after. Its portal scope keeps the command node, so its
+ * invoke, events, request credentials and previews follow the node exactly
+ * as for a direct connection, and its multi-node views stay where they are.
  */
-async function setWindowWorkspaceTarget(
-  context: DesktopWindowContext,
-  input: { nodeId: string | null },
-): Promise<void> {
-  if (!connectionManager) throw new Error("Connections are not initialized");
-  nodeWorkspaceScopes ??= new NodeWorkspaceScopes((command, args) =>
-    connectionManager!.invoke(command, args, context.scope),
-  );
-  await setDesktopWorkspaceTarget(context, input, {
-    manager: connectionManager,
-    scopes: nodeWorkspaceScopes,
-    committed: (current) => {
-      followWindowConnection(current);
-      setConnectionTitle(current.window, current.scope);
-      publishConnectionLists();
+function createWorkspaceViews(): WorkspaceViews {
+  return new WorkspaceViews({
+    WebContentsViewCtor: WebContentsView as never,
+    preloadPath: path.join(__dirname, "preload.js"),
+    rendererUrl: rendererUrl(),
+    partitionFor: (nodeId, parentWebContentsId) =>
+      rendererPartitionForRealm(windowContexts.get(parentWebContentsId)?.slot ?? 0, nodeId),
+    bindScope: async (scope, nodeId, parentWebContentsId) => {
+      const manager = connectionManager;
+      if (!manager) throw new Error("Connections are not initialized");
+      const parent = windowContexts.get(parentWebContentsId);
+      if (!parent) throw new Error("The window is not available");
+      const commandScope = controlScope(parent);
+      await manager.bind(scope, manager.getConnectionId(commandScope));
+      // Each realm renews through its own portal scope; this is only the default.
+      nodeWorkspaceScopes ??= new NodeWorkspaceScopes((command, args) =>
+        manager.invoke(command, args, commandScope),
+      );
+      const binding = {
+        scope,
+        portalScope: null as string | null,
+        target: null as WindowWorkspaceTarget | null,
+        window: parent.window,
+      };
+      try {
+        await setDesktopWorkspaceTarget(
+          binding,
+          { nodeId },
+          {
+            manager,
+            scopes: nodeWorkspaceScopes,
+            committed: () => undefined,
+          },
+        );
+      } catch (error) {
+        manager.release(scope);
+        throw error;
+      }
+      realmBindings.set(scope, binding);
     },
+    releaseScope: (scope) => {
+      const binding = realmBindings.get(scope);
+      realmBindings.delete(scope);
+      nodeWorkspaceScopes?.release(scope);
+      if (binding?.portalScope) connectionManager?.release(binding.portalScope);
+      connectionManager?.release(scope);
+    },
+    installRequestAuth: (webContents) =>
+      installRealmRequestAuth(webContents as unknown as Electron.WebContents),
+    installNavigationGuards: (webContents) =>
+      installRendererNavigationGuards(webContents as never, rendererUrl()),
+    register: (record, parentWindow) => registerRealm(record, parentWindow.webContents.id),
+    unregister: (record) => unregisterRealm(record),
   });
+}
+
+function registerRealm(record: WorkspaceViewRecord, parentWebContentsId: number): void {
+  const parent = windowContexts.get(parentWebContentsId);
+  const binding = realmBindings.get(record.scope);
+  if (!parent || !binding?.target || !connectionManager) {
+    throw new Error("The window is not available");
+  }
+  const contents = record.webContents as unknown as Electron.WebContents;
+  const owner: RealmViewOwner = {
+    contents,
+    ViewCtor: realmChildViewClass(WebContentsView, record.layout),
+  };
+  const connectionId = connectionManager.getConnectionId(record.scope);
+  // Preview site data stays with the node, as it would for a direct connection.
+  const previews = createWindowBrowserPreviews(
+    parent.window,
+    record.scope,
+    parent.slot,
+    connectionId,
+    `node:${binding.target.nodeId}`,
+    owner,
+  );
+  realmContexts.register({
+    window: parent.window,
+    contents,
+    scope: record.scope,
+    slot: parent.slot,
+    previewConnectionId: connectionId,
+    browserPreviewManager: previews.manager,
+    previewTransport: previews.previewTransport,
+    artifactHosts: createWindowArtifactHosts(parent.window, owner),
+    portalScope: binding.portalScope,
+    target: binding.target,
+    realm: { parentWebContentsId, viewId: record.viewId },
+  });
+  installDefaultContextMenu(parent.window, Menu, writeClipboardText, contents);
+  contents.on("did-finish-load", () => {
+    // As for a window: reconcile after every document load.
+    emitToContents(contents, "native-event-stream-connected", undefined);
+  });
+}
+
+function unregisterRealm(record: WorkspaceViewRecord): void {
+  realmContexts.unregister(record.webContents.id);
+}
+
+/** A window's command node changed: its realms belonged to the previous one. */
+async function closeWindowRealms(context: DesktopWindowContext): Promise<void> {
+  workspaceViews?.closeAllFor(context.contents.id);
 }
 
 function registerIpc(): void {
   const manager = () => {
     if (!connectionManager) throw new Error("Connections are not initialized");
     return connectionManager;
+  };
+  const views = () => {
+    workspaceViews ??= createWorkspaceViews();
+    return workspaceViews;
+  };
+  // Only a window places and messages realms; a realm never opens another.
+  const mainWindowContext = (event: { sender?: { id: number } }) => {
+    const context = event.sender ? windowContexts.get(event.sender.id) : undefined;
+    if (!context) throw new Error("Only a window can show other machines' workspaces.");
+    return context;
   };
   const scopeForEvent = (event?: { sender?: { id: number } }) => ipcContextForEvent(event).scope;
   // A workspace grant cannot administer its node; say where that is done
@@ -777,7 +981,7 @@ function registerIpc(): void {
     const context = contextForEvent(event);
     if (context.target) {
       throw new Error(
-        `${context.target.nodeName}'s web access and gateway token are managed from Settings → Connections → Nodes on the command node.`,
+        `${context.target.nodeName}'s web access and gateway token are managed from Settings → Machines on the command node.`,
       );
     }
     return context.scope;
@@ -786,6 +990,17 @@ function registerIpc(): void {
   // connection, even while its workspace is on another node.
   const controlScopeForEvent = (event?: { sender?: { id: number } }) =>
     controlScope(contextForEvent(event));
+  const commandHandoverDeps = (event?: { sender?: { id: number } }): CommandHandoverDeps => {
+    const connections = manager();
+    return {
+      currentConnectionId: connections.getConnectionId(controlScopeForEvent(event)),
+      invokeOn: (connectionId, command, args = {}) =>
+        connections.invokeOn(connectionId, command, args),
+      installationIdOf: (connectionId) => connections.installationIdOf(connectionId),
+      connectionIdOf: (nodeId) => connections.connectionIdOf(nodeId),
+      machineImportEntry: (connectionId) => connections.machineImportEntry(connectionId),
+    };
+  };
   const updateWindowTitle = (event: { sender?: { id: number } } | undefined) => {
     const senderId = event?.sender?.id;
     const context = senderId === undefined ? undefined : windowContexts.get(senderId);
@@ -816,7 +1031,7 @@ function registerIpc(): void {
     connectToRemote: async (input, event) => {
       const context = contextForEvent(event);
       const list = await editDesktopConnection(context, { kind: "connect", input }, manager(), () =>
-        setWindowWorkspaceTarget(context, { nodeId: null }),
+        closeWindowRealms(context),
       );
       followWindowConnection(context);
       refreshConnectionTitles();
@@ -837,13 +1052,33 @@ function registerIpc(): void {
         publishConnectionLists();
       }
     },
+    previewCommandHandover: (targetConnectionId, event) =>
+      previewCommandHandover(commandHandoverDeps(event), targetConnectionId),
+    handOverCommandNode: async (input, event) => {
+      const deps = commandHandoverDeps(event);
+      const result = await handOverCommandNode(deps, input);
+      // The window follows the new command node.
+      if (input.targetConnectionId !== deps.currentConnectionId) {
+        const context = contextForEvent(event);
+        await editDesktopConnection(
+          context,
+          { kind: "use", connectionId: input.targetConnectionId },
+          manager(),
+          () => closeWindowRealms(context),
+        );
+        followWindowConnection(context);
+        updateWindowTitle(event);
+      }
+      publishConnectionLists();
+      return result;
+    },
     useConnection: async (connectionId, event) => {
       const context = contextForEvent(event);
       const list = await editDesktopConnection(
         context,
         { kind: "use", connectionId },
         manager(),
-        () => setWindowWorkspaceTarget(context, { nodeId: null }),
+        () => closeWindowRealms(context),
       );
       followWindowConnection(context);
       updateWindowTitle(event);
@@ -856,9 +1091,17 @@ function registerIpc(): void {
         context,
         { kind: "forget", connectionId },
         manager(),
-        () => setWindowWorkspaceTarget(context, { nodeId: null }),
+        () => closeWindowRealms(context),
       );
       followWindowConnection(context);
+      // Every window has left the connection; its preview site data is unreachable.
+      await previewRetention()
+        .forgetConnection(connectionPartitionKey(connectionId), {
+          includeShared: !Array.from(windowContexts.values()).some(
+            (other) => other.previewConnectionId === connectionId,
+          ),
+        })
+        .catch(() => console.warn("[Previews] Failed to record forgotten connection cleanup."));
       updateWindowTitle(event);
       publishConnectionLists();
       return list;
@@ -933,8 +1176,23 @@ function registerIpc(): void {
       ),
     setFeatures: async (event, features) =>
       afterCatalogueChange(await manager().setFeatures(features, controlScopeForEvent(event))),
-    setWorkspaceTarget: async (event, input) => {
-      await setWindowWorkspaceTarget(contextForEvent(event), input);
+    openWorkspaceView: (event, input) => {
+      const context = mainWindowContext(event);
+      return views().open(context.window, input);
+    },
+    setWorkspaceViewBounds: (event, viewId, bounds) =>
+      views().setBounds(mainWindowContext(event).contents.id, viewId, bounds),
+    setWorkspaceViewVisible: (event, viewId, visible) =>
+      views().setVisible(mainWindowContext(event).contents.id, viewId, visible),
+    captureWorkspaceView: (event, viewId) =>
+      views().capture(mainWindowContext(event).contents.id, viewId),
+    sendToWorkspaceView: (event, viewId, message) =>
+      views().send(mainWindowContext(event).contents.id, viewId, message),
+    closeWorkspaceView: (event, viewId) =>
+      views().close(mainWindowContext(event).contents.id, viewId),
+    postFromWorkspaceRealm: (event, message) => {
+      if (!event.sender) throw new Error("Only a workspace realm can message its window.");
+      views().post(event.sender.id, message);
     },
     portalInvoke: (event, command, args) =>
       manager().invoke(command, args, controlScopeForEvent(event)),
@@ -1137,8 +1395,15 @@ async function startApplication(): Promise<void> {
         );
       });
   }
-  app.on("will-quit", () => connectionManager?.dispose());
+  app.on("will-quit", () => {
+    previewPartitionRetention?.dispose();
+    connectionManager?.dispose();
+  });
 
+  // Before any window exists, so no session holds a partition being removed.
+  await previewRetention()
+    .sweepPending()
+    .catch(() => undefined);
   createMenu();
   registerIpc();
   const queuedNewWindows = windowRequestGate.markReady();

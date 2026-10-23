@@ -230,6 +230,38 @@ describe("DesignExportDialog", () => {
     expect(screen.getByText("Exports committed revision 9.")).toBeTruthy();
   });
 
+  test("closing returns focus to the control that opened it (there is no DialogTrigger)", async () => {
+    exportPreview.mockResolvedValue(preview());
+    const opener = document.createElement("button");
+    document.body.append(opener);
+    try {
+      opener.focus();
+      const props = { onOpenChange: () => {}, controller, api, projection: projection() };
+      const view = render(<DesignExportDialog {...props} open />);
+      await screen.findByText("Exports committed revision 7.");
+      expect(document.activeElement).not.toBe(opener);
+      view.rerender(<DesignExportDialog {...props} open={false} />);
+      await waitFor(() => expect(document.activeElement).toBe(opener));
+    } finally {
+      opener.remove();
+    }
+  });
+
+  test("pressing Export moves keyboard focus to Cancel, which becomes Done", async () => {
+    exportPreview.mockResolvedValue(preview());
+    let finish: (value: DesignExportReceipt) => void = () => {};
+    exportSave.mockImplementation(() => new Promise((resolve) => (finish = resolve)));
+    renderDialog(projection());
+    await screen.findByText("Exports committed revision 7.");
+    const exportButton = button("Export revision 7");
+    exportButton.focus();
+    fireEvent.click(exportButton);
+    expect(document.activeElement).toBe(button("Cancel"));
+    await act(async () => finish(receipt(suggested, 7)));
+    expect(await screen.findByText(`Exported revision 7 to ${suggested}`)).toBeTruthy();
+    expect(document.activeElement).toBe(button("Done"));
+  });
+
   test("updating your previous export passes its fingerprint without extra confirmation", async () => {
     exportPreview.mockResolvedValue({
       ...preview(suggested, {

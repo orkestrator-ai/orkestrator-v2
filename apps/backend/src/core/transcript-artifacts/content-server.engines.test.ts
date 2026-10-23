@@ -113,7 +113,9 @@ class Sink {
       return;
     }
     response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-    response.end("<!doctype html><title>sink</title>");
+    // A data-URL icon: Firefox otherwise requests a control page's
+    // /favicon.ico after its context closes, landing in the next observation.
+    response.end('<!doctype html><title>sink</title><link rel="icon" href="data:,">');
   });
 
   async start(): Promise<void> {
@@ -660,6 +662,40 @@ function sinkHits(prefix?: string): string[] {
   return sink.hits.filter((hit) => !prefix || hit.includes(prefix));
 }
 
+/**
+ * Sink hits on exactly these paths. Attempts observed at the same time each
+ * target their own sink paths, so every hit stays attributable to one.
+ */
+function pathHits(paths: readonly string[]): number {
+  return sink.hits.filter((hit) => paths.includes(hit.split(" ")[1] ?? "")).length;
+}
+
+function pause(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** The sink paths each navigation attempt reaches when it is not stopped. */
+const NAVIGATION_PATHS = {
+  popup: ["/popup"],
+  blank: ["/anchor-blank"],
+  top: ["/top"],
+  self: ["/self"],
+  refresh: ["/meta-refresh"],
+} as const satisfies Record<string, readonly string[]>;
+
+/** The sink paths of each shell attack (the decoy is counted at its capability instead). */
+const SHELL_ATTACK_PATHS: Record<(typeof SHELL_ATTACKS)[number], readonly string[]> = {
+  refresh: ["/meta-refresh"],
+  self: ["/self"],
+  replace: ["/replace"],
+  data: ["/data-refresh"],
+  blob: ["/blob-refresh"],
+  redirect: ["/redirect", "/redirected"],
+  decoy: [],
+  popup: ["/popup"],
+  form: ["/form"],
+};
+
 for (const engine of ENGINES) {
   const engineTest = engine.executablePath ? test : test.skip;
 
@@ -677,7 +713,10 @@ for (const engine of ENGINES) {
       results.version = browser.version();
       report[engine.name] = results;
     });
+    /** Contexts opened by `openIsolated`, closed by `closeIsolated`. */
+    const isolated: BrowserContext[] = [];
     afterAll(async () => {
+      await closeIsolated();
       await context?.close();
       await browser?.close();
     });
@@ -688,6 +727,34 @@ for (const engine of ENGINES) {
       const page = await context.newPage();
       await page.goto(url);
       return page;
+    }
+
+    /**
+     * Closes the shared context and empties the sink (and decoy count), in
+     * that order, so a late request from an earlier page (a control's
+     * favicon) cannot be counted against the next observation.
+     */
+    async function resetObservations(): Promise<void> {
+      await context?.close();
+      context = undefined;
+      sink.reset();
+      decoyRequests = 0;
+    }
+
+    /**
+     * A page in a context of its own, so several attempts can be observed at
+     * once: each has its own windows (popups) and activation.
+     */
+    async function openIsolated(url: string): Promise<{ context: BrowserContext; page: Page }> {
+      const own = await browser!.newContext();
+      isolated.push(own);
+      const page = await own.newPage();
+      await page.goto(url);
+      return { context: own, page };
+    }
+
+    async function closeIsolated(): Promise<void> {
+      await Promise.all(isolated.splice(0).map((own) => own.close().catch(() => undefined)));
     }
 
     engineTest(
@@ -745,13 +812,19 @@ for (const engine of ENGINES) {
       async () => {
         const target = fixture("network");
         sink.reset();
-        const control = await open(
+        await open(
           allowed.page(allowed.control(`network-${engine.name}`, target.bytes), null, UNRESTRICTED),
         );
-        await settle(control, 2_500);
-        const reached = NETWORK_PATHS.filter((sinkPath) =>
-          sink.hits.some((hit) => hit.split(" ")[1] === sinkPath),
+        const reachedPaths = () =>
+          NETWORK_PATHS.filter((sinkPath) =>
+            sink.hits.some((hit) => hit.split(" ")[1] === sinkPath),
+          );
+        // A positive observation: stop as soon as every channel has arrived,
+        // else after the full window (a channel the engine never attempts).
+        await waitUntil(() => reachedPaths().length === NETWORK_PATHS.length, 2_500).catch(
+          () => undefined,
         );
+        const reached = reachedPaths();
         results.networkControlReached = reached;
         // The unrestricted control proves the sink observes every channel the
         // engine implements (a channel the engine never attempts is noted).
@@ -809,33 +882,51 @@ for (const engine of ENGINES) {
           );
           await page.waitForLoadState("load");
           await childFrame(page).click(`#${attempt}`);
-          await settle(page, 1_500);
-          control[attempt] = sink.hits.length;
+          // A positive observation: done once this attempt's own path arrived.
+          await waitUntil(() => pathHits(NAVIGATION_PATHS[attempt]) > 0, 10_000).catch(
+            () => undefined,
+          );
+          control[attempt] = pathHits(NAVIGATION_PATHS[attempt]);
         }
         results.navigationControl = control;
         for (const attempt of attempts) expect(control[attempt]).toBeGreaterThan(0);
 
-        const restricted: Record<string, number> = {};
-        for (const attempt of attempts) {
-          sink.reset();
-          const page = await open(allowed.page(target.url, target, SANDBOX));
-          await waitForMessages(page, `m.verdict === "ready"`);
-          // The handler ran on a real click (activation where the engine reports it).
-          const clicked = await realClick(childFrame(page), `#${attempt}`, async () =>
-            (await messages(page)).some(
-              (message) =>
-                (message.data as { probe?: string; id?: string })?.probe === "clicked" &&
-                (message.data as { id?: string }).id === attempt,
-            ),
+        // Every attempt at once, each in its own context and on its own sink path.
+        try {
+          await resetObservations();
+          const opened = await Promise.all(
+            attempts.map(async (attempt) => {
+              const { context: own, page } = await openIsolated(
+                allowed.page(target.url, target, SANDBOX),
+              );
+              await waitForMessages(page, `m.verdict === "ready"`);
+              // The handler ran on a real click (activation where the engine reports it).
+              const clicked = await realClick(childFrame(page), `#${attempt}`, async () =>
+                (await messages(page)).some(
+                  (message) =>
+                    (message.data as { probe?: string; id?: string })?.probe === "clicked" &&
+                    (message.data as { id?: string }).id === attempt,
+                ),
+              );
+              expect(clicked).toBe(true);
+              return { attempt, context: own, page };
+            }),
           );
-          expect(clicked).toBe(true);
-          await settle(page, 1_500);
-          restricted[attempt] = sink.hits.length;
-          expect(page.url().startsWith(allowed.origin)).toBe(true);
-          expect(context!.pages()).toHaveLength(1);
+          // One no-hit window after the last click: every attempt gets at least its full window.
+          await pause(1_500);
+          const restricted: Record<string, number> = {};
+          for (const { attempt, context: own, page } of opened) {
+            restricted[attempt] = pathHits(NAVIGATION_PATHS[attempt]);
+            expect(page.url().startsWith(allowed.origin)).toBe(true);
+            expect(own.pages()).toHaveLength(1);
+          }
+          results.navigationRestricted = restricted;
+          for (const attempt of attempts) expect(restricted[attempt]).toBe(0);
+          // Nothing reached the sink on any path.
+          expect(sink.hits).toEqual([]);
+        } finally {
+          await closeIsolated();
         }
-        results.navigationRestricted = restricted;
-        for (const attempt of attempts) expect(restricted[attempt]).toBe(0);
       },
       90_000,
     );
@@ -844,41 +935,60 @@ for (const engine of ENGINES) {
       "self-navigation of the frame: not prevented by the document's policy; the application's frame-src stops it",
       async () => {
         const target = fixture("navigation");
+        // Both attempts at once, each in its own context and on its own sink path.
         const observe = async (frameSrc?: string) => {
-          const observed: Record<string, number> = {};
-          for (const attempt of ["self", "refresh"] as const) {
-            sink.reset();
-            const page = await open(
-              allowed.page(target.url, target, SANDBOX, frameSrc ? { frameSrc } : {}),
+          try {
+            await resetObservations();
+            const opened = await Promise.all(
+              (["self", "refresh"] as const).map(async (attempt) => {
+                const { context: own, page } = await openIsolated(
+                  allowed.page(target.url, target, SANDBOX, frameSrc ? { frameSrc } : {}),
+                );
+                await waitForMessages(page, `m.verdict === "ready"`);
+                // Self-navigation needs no user activation; a DOM click does not
+                // depend on routing real input into the out-of-process frame.
+                await childFrame(page).evaluate(
+                  (id) => document.getElementById(id)?.click(),
+                  attempt,
+                );
+                await waitForMessages(
+                  page,
+                  `m.data && m.data.probe === "clicked" && m.data.id === "${attempt}"`,
+                );
+                return { attempt, context: own, page };
+              }),
             );
-            await waitForMessages(page, `m.verdict === "ready"`);
-            // Self-navigation needs no user activation; a DOM click does not
-            // depend on routing real input into the out-of-process frame.
-            await childFrame(page).evaluate((id) => document.getElementById(id)?.click(), attempt);
-            await waitForMessages(
-              page,
-              `m.data && m.data.probe === "clicked" && m.data.id === "${attempt}"`,
-            );
-            if (frameSrc) await settle(page, 2_500);
-            else await waitUntil(() => sink.hits.length > 0, 5_000).catch(() => undefined);
-            observed[attempt] = sink.hits.length;
-            // Whatever the frame loads stays inside the sandboxed frame.
-            expect(page.url().startsWith(allowed.origin)).toBe(true);
-            expect(context!.pages()).toHaveLength(1);
+            // One window after the last click: each attempt gets at least its full window.
+            if (frameSrc) await pause(2_500);
+            else
+              await waitUntil(
+                () => opened.every(({ attempt }) => pathHits(NAVIGATION_PATHS[attempt]) > 0),
+                5_000,
+              ).catch(() => undefined);
+            const observed: Record<string, number> = {};
+            for (const { attempt, context: own, page } of opened) {
+              observed[attempt] = pathHits(NAVIGATION_PATHS[attempt]);
+              // Whatever the frame loads stays inside the sandboxed frame.
+              expect(page.url().startsWith(allowed.origin)).toBe(true);
+              expect(own.pages()).toHaveLength(1);
+            }
+            return { observed, total: sink.hits.length };
+          } finally {
+            await closeIsolated();
           }
-          return observed;
         };
         // The document's own CSP has no navigation directive (navigate-to was
         // never shipped) and the sandbox allows a frame to navigate itself, so
         // this is recorded rather than asserted: at least the meta refresh
         // reaches the sink in every engine.
         const unrestricted = await observe();
-        results.selfNavigationReachedSink = unrestricted;
-        expect(unrestricted.refresh).toBeGreaterThan(0);
+        results.selfNavigationReachedSink = unrestricted.observed;
+        expect(unrestricted.observed.refresh).toBeGreaterThan(0);
         // The embedding page's `frame-src` governs what its frames may load.
         const contained = await observe(new URL(target.url).origin);
-        results.selfNavigationWithParentFrameSrc = contained;
-        expect(contained).toEqual({ self: 0, refresh: 0 });
+        results.selfNavigationWithParentFrameSrc = contained.observed;
+        expect(contained.observed).toEqual({ self: 0, refresh: 0 });
+        expect(contained.total).toBe(0);
       },
       90_000,
     );
@@ -1039,39 +1149,66 @@ for (const engine of ENGINES) {
       async () => {
         const target = fixture("shellNavigation");
         const reach = () => sink.hits.length + decoyRequests;
+        /** Reach of one attack: its own sink paths (and the decoy capability for the decoy). */
+        const reachOf = (attack: (typeof SHELL_ATTACKS)[number]) =>
+          pathHits(SHELL_ATTACK_PATHS[attack]) + (attack === "decoy" ? decoyRequests : 0);
         const run = async (mode: "control" | "direct" | "shell") => {
           const observed: Record<string, number> = {};
           const disposed: Record<string, string[]> = {};
-          for (const attack of SHELL_ATTACKS) {
-            sink.reset();
-            decoyRequests = 0;
-            const url =
-              mode === "control"
-                ? allowed.page(
-                    allowed.control(`shell-navigation-${engine.name}`, target.bytes),
-                    null,
-                    CONTROL_SANDBOX,
-                  )
-                : mode === "direct"
-                  ? allowed.page(target.url, target, SANDBOX)
-                  : allowed.page(target.shellUrl, target, SHELL_SANDBOX, {
-                      generation: target.generation,
-                    });
-            const page = await open(url);
-            await waitForMessages(page, `m.verdict === "ready"`);
-            // The handler ran (on a real click for the popup).
-            expect(await trigger(page, attack)).toBe(attack);
-            if (mode === "control") await waitUntil(() => reach() > 0, 5_000).catch(() => {});
-            else await settle(page, 2_000);
-            observed[attack] = reach();
-            if (mode === "shell") {
-              disposed[attack] = disposals(await messages(page));
-              // Whatever happened stayed inside the frame: same page, no new window.
-              expect(page.url().startsWith(allowed.origin)).toBe(true);
-              expect(context!.pages()).toHaveLength(1);
+          if (mode === "control") {
+            // Positive observations, one at a time: each stops once it reached a sink.
+            for (const attack of SHELL_ATTACKS) {
+              sink.reset();
+              decoyRequests = 0;
+              const page = await open(
+                allowed.page(
+                  allowed.control(`shell-navigation-${engine.name}`, target.bytes),
+                  null,
+                  CONTROL_SANDBOX,
+                ),
+              );
+              await waitForMessages(page, `m.verdict === "ready"`);
+              // The handler ran (on a real click for the popup).
+              expect(await trigger(page, attack)).toBe(attack);
+              await waitUntil(() => reach() > 0, 5_000).catch(() => {});
+              observed[attack] = reach();
             }
+            return { observed, disposed, total: 0 };
           }
-          return { observed, disposed };
+          // Every attack at once, each in its own context and on its own sink
+          // path (or the decoy capability), so each hit names its attack.
+          try {
+            await resetObservations();
+            const url =
+              mode === "direct"
+                ? allowed.page(target.url, target, SANDBOX)
+                : allowed.page(target.shellUrl, target, SHELL_SANDBOX, {
+                    generation: target.generation,
+                  });
+            const opened = await Promise.all(
+              SHELL_ATTACKS.map(async (attack) => {
+                const { context: own, page } = await openIsolated(url);
+                await waitForMessages(page, `m.verdict === "ready"`);
+                // The handler ran (on a real click for the popup).
+                expect(await trigger(page, attack)).toBe(attack);
+                return { attack, context: own, page };
+              }),
+            );
+            // One no-hit window after the last trigger: every attack gets at least its full window.
+            await pause(2_000);
+            for (const { attack, context: own, page } of opened) {
+              observed[attack] = reachOf(attack);
+              if (mode === "shell") {
+                disposed[attack] = disposals(await messages(page));
+                // Whatever happened stayed inside the frame: same page, no new window.
+                expect(page.url().startsWith(allowed.origin)).toBe(true);
+                expect(own.pages()).toHaveLength(1);
+              }
+            }
+            return { observed, disposed, total: reach() };
+          } finally {
+            await closeIsolated();
+          }
         };
         // Control: same bytes, no policy, same origin as the page, with the
         // withheld sandbox privileges: every attack reaches its sink.
@@ -1088,6 +1225,8 @@ for (const engine of ENGINES) {
         results.shellAttackThroughShell = shell.observed;
         results.shellAttackDisposals = shell.disposed;
         for (const attack of SHELL_ATTACKS) expect(shell.observed[attack]).toBe(0);
+        // Nor did anything reach the sink or the decoy on any other path.
+        expect(shell.total).toBe(0);
         // Every attempted frame navigation also disposed the frame (the reason
         // depends on whether the engine reports the violation or loads an
         // error page); the popup and the form never navigated the frame.

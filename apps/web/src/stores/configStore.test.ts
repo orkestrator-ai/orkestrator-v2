@@ -33,6 +33,10 @@ describe("configStore DEFAULT_CONFIG defaults", () => {
     }
   });
 
+  test("seeds the backend's new-install allowlist, not a renderer copy", () => {
+    expect(initialGlobal.allowedDomains).toEqual(defaultConfig().global.allowedDomains);
+  });
+
   // Guards the drift the settings UI depends on: GlobalSettings falls back to
   // these renderer defaults, while the backend persists defaultConfig(). If the
   // two disagree, a user's first-run defaults differ from what gets saved.

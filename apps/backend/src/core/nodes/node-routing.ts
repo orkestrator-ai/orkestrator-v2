@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isNodeReadCommand } from "@orkestrator/protocol/command-nodes";
 
 import type { BackendId } from "@orkestrator/protocol/federation";
 
@@ -24,6 +25,7 @@ export const NODE_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
   "detach_controller_here",
   "allow_controller",
   "list_controllers",
+  "sync_controller_settings",
   "set_command_node_enabled",
   "create_client_grant",
   "renew_client_grant",
@@ -36,6 +38,9 @@ export const NODE_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
   "discard_node_detach",
   "reconnect_node",
   "import_desktop_connections",
+  "preview_command_handover",
+  "hand_over_command",
+  "accept_command_handover",
   "list_node_ssh_prompts",
   "answer_node_ssh_prompt",
   "probe_node_host_key",
@@ -52,6 +57,8 @@ export const NODE_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
   "list_node_transfers",
   "compare_project_files",
   "get_node_summaries",
+  "get_portal_layout",
+  "update_portal_layout",
   "open_node_workspace",
   "renew_node_workspace",
   "close_node_workspace",
@@ -86,12 +93,8 @@ export function isNodeExcludedCommand(command: string): boolean {
   return NODE_EXCLUDED_COMMANDS.has(command);
 }
 
-/** Reads that are safe to issue (and to repeat) while a node is reconnecting. */
-const READ_PREFIXES = ["get_", "list_", "read_", "search_", "check_", "describe_"];
-
-export function isReadCommand(command: string): boolean {
-  return READ_PREFIXES.some((prefix) => command.startsWith(prefix));
-}
+/** Reads safe to repeat while reconnecting, shared with summary invalidation. */
+export { isNodeReadCommand as isReadCommand } from "@orkestrator/protocol/command-nodes";
 
 export interface NodeOutcomeRecord {
   outcomeId: string;
@@ -185,7 +188,7 @@ export async function routeToNode<T>(input: {
   }
   if (!input.link || !input.link.connected) {
     throw new NodeUnavailableError(
-      isReadCommand(input.command)
+      isNodeReadCommand(input.command)
         ? "That node is not connected; its last-known state is shown."
         : "That node is not connected, so changes to it are disabled.",
     );
@@ -193,7 +196,7 @@ export async function routeToNode<T>(input: {
   try {
     return { outcome: "ok", result: await input.link.invoke<T>(input.command, input.args) };
   } catch (error) {
-    if (error instanceof NodeOutcomeUnknownError && !isReadCommand(input.command)) {
+    if (error instanceof NodeOutcomeUnknownError && !isNodeReadCommand(input.command)) {
       const requestKey = input.requestKey ?? randomUUID();
       const record = await input.outcomes.record({
         nodeId: input.nodeId,

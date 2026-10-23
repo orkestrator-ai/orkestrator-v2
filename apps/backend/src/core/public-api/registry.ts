@@ -7,7 +7,7 @@ import { EXEC_HANDLERS } from "./actions-exec.js";
 import { HOST_HANDLERS } from "./actions-host.js";
 import { LAUNCH_HANDLERS } from "./actions-launch.js";
 import { PROJECT_HANDLERS } from "./actions-projects.js";
-import { RUN_READ_HANDLERS, RUN_RECOVERY_HANDLERS } from "./actions-runs.js";
+import { createRunReadHandlers, RUN_RECOVERY_HANDLERS } from "./actions-runs.js";
 import { SESSION_CONTROL_HANDLERS } from "./actions-session-controls.js";
 import { SESSION_HANDLERS } from "./actions-sessions.js";
 import { SETTINGS_HANDLERS } from "./actions-settings.js";
@@ -25,7 +25,7 @@ import type { PublicActionHandler } from "./types.js";
  * already-accepted operations keep working through `run.*`.
  */
 export function publicActionHandlers(): PublicActionHandler[] {
-  return [
+  const handlers: PublicActionHandler[] = [
     ...DISCOVERY_HANDLERS,
     ...PROJECT_HANDLERS,
     ...ENVIRONMENT_HANDLERS,
@@ -35,11 +35,14 @@ export function publicActionHandlers(): PublicActionHandler[] {
     ...SESSION_CONTROL_HANDLERS,
     ...TRANSCRIPT_HANDLERS,
     ...CHANGE_HANDLERS,
-    ...RUN_READ_HANDLERS,
     ...RUN_RECOVERY_HANDLERS,
     ...EXEC_HANDLERS,
     ...HOST_HANDLERS,
   ];
+  handlers.push(
+    ...createRunReadHandlers((action) => handlers.find((handler) => handler.action === action)),
+  );
+  return handlers;
 }
 
 export function publicFeatures(): PublicCapabilities["features"] {

@@ -3,8 +3,8 @@
 Living guide to how the backend owns environment containers. Qualifying a
 change against a real daemon is in
 [container-qualification.md](../development/container-qualification.md);
-outstanding work is in the `docs/todo/container-*.md` files, starting with
-[container-platform-qualification.md](../todo/container-platform-qualification.md).
+outstanding work is in `docs/todo/containers-and-environments/`, starting with
+[0019-container-platform-qualification.md](../todo/containers-and-environments/0019-container-platform-qualification.md).
 
 ## Authority
 
@@ -322,8 +322,17 @@ re-traced ([upgrading agents](../development/upgrade-agents.md#re-trace-preserve
 | Codex | `codex/sessions`, `codex/archived_sessions` (rollouts, fork lineage); `codex/orkestrator-bridge` (session map, dispatch journal, the title index that keeps names set in Orkestrator); `codex/sqlite` at `CODEX_SQLITE_HOME` (every `*_N.sqlite` runtime database: state, thread history, goals, queue, memories, logs) | `session_index.jsonl` (Codex's own thread names, at the home root; only a name set in the Codex CLI itself is lost), `history.jsonl` (prompt recall), `shell_snapshots`, `auth.json`, `config.toml`, caches |
 | OpenCode | `opencode/db` via `OPENCODE_DB` (session database: sessions, messages, parts, todos, permissions) | `snapshot/` (revert and diff git directory, recreated on demand), `tool-output/` (full copies of truncated tool output), legacy `storage/`, the TUI state under `~/.local/state/opencode`, `auth.json`, configuration, plugins, mise installs under `~/.local/share` |
 | Pi | `pi/sessions` → `~/.pi/agent/sessions` (`PI_SESSION_DIR`); `pi/bridge-state` → `/tmp/orkestrator-pi-state` | `auth.json`, `models.json`, settings, extensions, themes |
-| Cursor | `cursor/bridge-state` → `/tmp/orkestrator-cursor-sdk-state` (SDK agent store and bridge journals) | `/tmp/orkestrator-ai/cursor-sdk-auth.json`, API-key files, `~/.cursor` auxiliaries |
+| Cursor | `cursor/bridge-state` → `/tmp/orkestrator-cursor-sdk-state` (SDK agent store and bridge journals) | `/tmp/orkestrator-ai/cursor-sdk-auth.json`, API-key files, `~/.cursor/mcp.json` (a staged input: snapshotted at creation, re-imported on every start), other `~/.cursor` auxiliaries |
 | Grok | `grok/sessions` → `~/.grok/sessions` (per-cwd session directories, which hold everything `session/load` reads, and the rebuildable search index); `grok/bridge-state` → `/tmp/orkestrator-acp-state` | `active_sessions.json` (live-process registry), `worktrees.db` (registry of Grok's own worktrees, which live outside the preserved set), opt-in `memory-v2/`, `auth.json`, configuration |
+
+Provider MCP configuration is never preserved in the container: the
+entrypoint copies it from the staged inputs on every boot. A container
+environment's own MCP changes live in the backend's environment overlay
+(`mcp-environment-overlays` state root, keyed by environment id), which the
+backend writes back over the fresh copies after every boot, so they survive
+stop and start, a preserving rebuild and a backend restart without being part
+of any volume or recovery copy
+([`mcp-management.md`](mcp-management.md#containers)).
 
 SQLite stores (Codex runtime databases, OpenCode's database, Grok's search
 index) keep their `-wal` and `-shm` files beside them on the volume, and are
@@ -467,6 +476,23 @@ subtree read-only at the mount point the entrypoint already reads. The two
 allowlists must stay in step; a unit test checks every staged target and file
 name appears in `entrypoint.sh`.
 
+Staged per provider (`portableInputSpec`):
+
+| Provider | Mount | Staged |
+| --- | --- | --- |
+| Claude | `/claude-config`, `/claude-config.json` | `CLAUDE.md`, `settings.local.json`, `.credentials.json` (access-only), `commands`, `agents`, `ide`, `plugins`; `~/.claude.json` |
+| OpenCode | `/opencode-config`, `/opencode-data`, `/opencode-state/model.json` | configuration (except `node_modules`); `auth.json` (access-only), `account.json`, `storage`, `snapshot`; `model.json` |
+| Codex | `/codex-home` | `auth.json` (access-only), `config.toml`, `AGENTS.md`, `hooks.json`, `.codex-global-state.json`, model and cloud caches, `rules`, `skills`, `prompts`, `vendor_imports`, `plugins/cache` |
+| Grok | `/grok-home`, `/grok-config` | `xai-api-key`, `auth.json` (access-only), `config.toml`, `trusted_folders.toml`, `agent_id`, `models_cache.json`, `hooks`, `skills`; `~/.config/grok` |
+| Pi | `/pi-config` | `agent/auth.json` (access-only), `models.json`, `settings.json`, `mcp.json`, `SYSTEM.md`, `APPEND_SYSTEM.md`, `skills`, `prompts`, `extensions`, `themes` |
+| Cursor (`staged-inputs=2`) | `/cursor-config` | `mcp.json` only, copied to `~/.cursor/mcp.json` mode `0600`; never account or login state, IDE state, hooks, plugins, extensions, `sdk/` or `cli-config.json` (the login arrives through the key sync) |
+| Git | `/tmp/gitconfig` | `~/.gitconfig` (not in agent-test profiles) |
+
+An image at `staged-inputs=1` has no `/cursor-config` copy, so its Cursor
+sessions get no user MCP servers until the environment is rebuilt on a newer
+image. Backend code that needs to know checks
+`imageCopiesCursorMcpConfig` (`packages/protocol/src/image-manifest.ts`).
+
 - Reading: the host home entry itself is resolved (a dotfiles manager may link
   it, and the bind mount it replaces followed that link); nothing below it is
   followed. Every file is opened `O_NOFOLLOW` and re-checked against the
@@ -481,15 +507,48 @@ name appears in `entrypoint.sh`.
   `orkestrator-inputs-revision`; after a successful create, revisions no
   container of the environment still binds are removed (recovery copies keep
   theirs), and the whole root goes with the environment's state directories.
-- Logins whose refresh tokens are single-use are staged access-only: Codex
-  and Grok `auth.json` keep the access token, the refresh token is blanked and
-  an expired login is withheld (counted as `login-withheld`). A copy that
-  refreshed would spend the token the host still holds and sign the host and
-  every other container out. Both are re-read from the host before every
-  start, Grok's also before every Grok bridge start, and the entrypoint blanks
-  the refresh token again in the container's own copy. Claude, OpenCode and
-  Pi logins are still copied whole (follow-ups in
-  [container-network-and-credential-isolation.md](../todo/container-network-and-credential-isolation.md)).
+- Logins whose refresh tokens are single-use or rotating are staged
+  access-only: Codex and Grok `auth.json` keep the access token, the refresh
+  token is blanked and an expired login is withheld (counted as
+  `login-withheld`). A copy that refreshed would spend the token the host
+  still holds and sign the host and every other container out. OpenCode's
+  `auth.json` and Pi's `agent/auth.json` hold one login per model provider and
+  are restricted per entry: API keys are kept, OAuth logins keep their access
+  token with `refresh` blanked, and an expired one is dropped (also counted as
+  `login-withheld`). GitHub Copilot (both) and Meta (Pi) reuse their refresh
+  token rather than rotate it and are kept whole. All four are re-read from
+  the host before every start. Grok's, OpenCode's and Pi's are also pushed
+  before every bridge start, including a reused bridge; OpenCode and Pi merge
+  the host's providers into the container's file, keeping a login made inside
+  the container, and a host file of expired logins still blanks any refresh
+  token the container holds for those providers. The entrypoint blanks the
+  refresh tokens again in the container's own copy; for OpenCode and Pi only
+  for providers the mounted host file holds as rotating OAuth, so a login
+  made inside the container survives a restart.
+- Claude's `.credentials.json` is access-only the same way
+  (`restrictClaudeCredentialsSnapshot`): `claudeAiOauth` and every `mcpOAuth`
+  entry lose `refreshToken` (the key is removed, because Claude Code treats an
+  empty one as a dead login), and an expired subscription login is withheld
+  (not reported as `login-withheld`: on macOS the on-disk file is often stale
+  beside the Keychain login the stdin sync delivers).
+  That applies to staging, the restage before every start, the stdin sync on
+  every start and account switch, and a new push before every Claude bridge
+  start. With nothing usable to push, the container's own copy has its refresh
+  tokens stripped in place. The entrypoint strips a copy it takes from the
+  `/claude-config` mount. The access token lasts about eight hours, so the
+  backend's `ContainerClaudeLoginKeeper` re-reads the active login every five
+  minutes and pushes it into each running container whose copy differs; the
+  container CLI notices the new file by its mtime. Just before the token
+  expires the keeper has the host's own CLI refresh it
+  (`refreshHostClaudeLogin`: a `-p` request for a model no catalogue knows,
+  with settings, tools, MCP and session persistence off), so the refresh runs
+  through Claude Code's own lock and compare-and-swap save. A start or bridge
+  start that finds the host token expired asks for that refresh at once
+  rather than waiting for the next pass. An agent-test profile never
+  refreshes the host. A switch also rewrites `oauthAccount` in
+  the running container's `~/.claude.json`. Remaining qualification and renewal
+  work is tracked in
+  [0018-container-network-and-credential-isolation.md](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md).
 - The Cursor key is no longer in a staged-inputs container's creation
   environment; the bridge reads the synced owner-only file. The Anthropic API
   key (when used instead of OAuth) still is, because Claude Code in terminals

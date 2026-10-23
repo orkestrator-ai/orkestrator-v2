@@ -34,6 +34,7 @@ import {
   AsyncMutex,
   TmuxSession,
   TmuxSessionManager,
+  type TmuxSessionTimingOptions,
   getLastTmuxOrphanSweepAt,
   getOrCreateSession,
   killEnvironmentTmuxSessions,
@@ -201,6 +202,8 @@ export function registerTmuxBackendCommands(
       prompt: string,
       context: CommandContext,
     ) => Promise<void>;
+    /** Tests step poll ticks and elapse command deadlines; production waits in real time. */
+    sessionTiming?: TmuxSessionTimingOptions;
   } = {},
 ): void {
   const workCommands = new Set([
@@ -280,7 +283,13 @@ export function registerTmuxBackendCommands(
           else await killOrphanSession(context, envId, tab);
         }
 
-        const session = await getOrCreateSession(context, envId, tab, resumeId);
+        const session = await getOrCreateSession(
+          context,
+          envId,
+          tab,
+          resumeId,
+          options.sessionTiming,
+        );
         if (firstPrompt) session.claimFirstPromptForNaming();
         await installWorkspaceHooks(session.backend, session.workspaceHookPaths);
         await session.startAfterHooksInstalled(

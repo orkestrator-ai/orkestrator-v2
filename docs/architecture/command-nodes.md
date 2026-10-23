@@ -121,6 +121,50 @@ There is no deeper hierarchy.
   to; they never keep a registry of a command node's leaves.
 - Web and iOS connect to a command node (or directly to a leaf) exactly as
   they connect to a backend today, and receive the UI from it.
+- **The command node changes only when the user changes it**: with the
+  switch on the "Command node" row of the sidebar's machines menu, in
+  Settings → Machines, or by opening a machine in a new window. The switch
+  hands command over (see [Handing command over](#handing-command-over)),
+  so the machine chosen really becomes the command node. Opening an
+  environment on another machine, or creating one there, shows that
+  machine's workspace in the window's central region and never changes the
+  window's command node. Saving a machine on a device
+  (`connect` with `select: false`) does not switch to it on any client.
+
+## Settings
+
+Settings belong to the command node the client is connected to, and apply
+to everything it runs, on every machine it controls.
+
+- **In the client.** A leaf window keeps the leaf's per-project repository
+  settings and machine-specific globals. Only inherited preferences are
+  overlaid from the command node over the portal channel
+  (`lib/portal/command-node-config.ts`). Whole-global saves send preference
+  changes to the command node and machine-specific changes to the workspace
+  backend, preserving the other node's values. Each settings section names
+  the owner of its preferences and machine-specific controls.
+- **Handed down to leaves.** The command node sends the inherited subset
+  of its settings (`@orkestrator/protocol/controller-settings`: agent
+  defaults and models, review instruction, terminal, messaging and similar
+  preferences) to each leaf when the link connects and whenever its config
+  changes (`sync_controller_settings`, never routable through a workspace
+  grant or `invoke_on_node`). The leaf lays them over its own config
+  (`StorageConfig.loadConfig`), so a launch on the leaf that falls back to
+  defaults — a coordinator's `launch_node_environment` without a model, a
+  build or review step — uses the command node's.
+- **The leaf's own settings are kept underneath** (`loadOwnConfig`) and come
+  back when the command node detaches. A whole-config save on the leaf that
+  echoes an inherited value keeps the leaf's own; a changed value is stored
+  as the leaf's own but stays overridden while the command node is attached.
+  `get_node_status` reports which command node's settings are in use
+  (`inheritedSettingsFrom`).
+- With several command nodes attached, the leaf follows the one whose
+  settings changed most recently; equal timestamps prefer the later receipt.
+  Each snapshot is complete: omitted inherited keys use product defaults,
+  while the leaf's persisted own values remain underneath.
+- Machine-specific settings never travel: credentials and API keys, paths,
+  installed or enabled platforms, container budgets, network policy,
+  previews, MCP servers and logs.
 
 ## Node registry (on the command node)
 
@@ -136,7 +180,7 @@ There is no deeper hierarchy.
   (owned loopback forwards, host-key trust, no remote install). Interactive
   SSH prompts are relayed to the user through the portal; unattended
   reconnects use key/agent authentication only.
-- The registry is managed from the portal's Connections settings. Removing a
+- The registry is managed from the portal's Machines settings. Removing a
   node from a registry only forgets it on that command node; it never stops
   or deletes anything on the node.
 
@@ -154,6 +198,60 @@ There is no deeper hierarchy.
 - Attaching is refused if it would create more than two levels: a node that
   is currently subordinate cannot register subordinates, and a node cannot
   attach the command node that controls it.
+
+## Handing command over
+
+Choosing another machine as the command node makes it the command node, in
+one step:
+
+1. The command node in charge (the window's own, or, from a leaf's window,
+   the command node controlling it) previews the handover
+   (`preview_command_handover`): the machines it controls that the target
+   does not, and whether it can follow as the target's leaf (it needs an
+   HTTPS address and its gateway token).
+2. If the target lacks machines, the client asks which to bring (all are
+   chosen by default). On the desktop the list also offers machines saved
+   only on this device; Electron main adds their tokens.
+3. `hand_over_command` sends the chosen registry entries, with their
+   credentials, and itself, to the target over its own link
+   (`accept_command_handover`). The target registers them, then detaches
+   every command node that controlled it, as if by the user there, so none
+   re-attaches by itself. The old command node forgets the target and the
+   machines it moved (each is told to detach), and becomes the target's
+   leaf once the target attaches.
+4. The window switches to the target and reloads in its multi-machine view.
+
+Credentials travel only backend to backend (or from Electron main to a
+backend), over the routes the command node already uses, and are stored in
+the target's sensitive store. The commands are excluded from routing, grants
+and the relay, so only a client holding the command node's gateway token
+(the user) can start one. A target the command node does not control yet is
+registered first with the token saved on the device. Handing command back
+works the same way: the old command node clears its own record of having
+detached the target before it hands over.
+
+Before changing topology, the source checks the target's registry capacity;
+the target repeats the check atomically with adoption. A shortage rejects the
+whole handover. Machines already registered on both sides are cleaned up on
+the source even when the client selects no additional machines. Their tokens
+can fill a missing credential on the target.
+
+The source persists a pending handover with a unique ID before removing the
+target. It retains the authenticated transport until acceptance finishes,
+including an SSH tunnel opened with an interactive password or passphrase.
+The target persists adoption and an acceptance receipt together, then detaches
+its controllers. Retrying the same ID resumes unfinished detach work or returns
+the original counts. The target keeps the most recent 64 receipts. Lost
+responses do not restore the old topology: the source retries immediately and
+keeps unresolved work for its background retry loop and restart recovery.
+Edits to existing machines and overlapping handovers are refused while recovery is pending.
+Detach tombstones continue retrying even when the source becomes a leaf.
+
+SSH private-key file paths are local to the source and are omitted from
+handover entries. The target may need its own SSH configuration. Independently
+saved standalone machines with no fleet switch directly through the desktop
+connection API. Native bridges without handover capabilities also keep their
+native connection-switch flow.
 
 ## Updates from leaves
 
@@ -184,7 +282,9 @@ A command node attached to another command node operates in leaf mode:
   information, but they are mostly hidden: the portal and the node's own UI
   do not show them by default. They can be opened behind a warning that the
   node is in leaf mode and that coordination happens on the named command
-  node.
+  node. A window whose workspace is on a leaf shows the same warning in
+  place of the leaf's coordinator, with a link to the command node's
+  coordinator for the same repository.
 - When the node is no longer attached anywhere, it returns to being a
   command node and its coordinators regain their cross-node tools.
 
@@ -202,35 +302,83 @@ A command node attached to another command node operates in leaf mode:
 
 ## Opening an environment on another node
 
-Clicking an environment of another node in the portal makes the window that
-node's client, exactly as if it had connected to the node directly. There
-is no second copy of the app and no side panel: the main pane, toolbar,
-title bar (agent info, mail, system usage), files panel, shortcuts,
-previews, settings and background services all work against that node,
-because they are the same code running against a different workspace
-backend.
+The window always stays on its command node. Its title bar, toolbar row,
+sidebar, settings and background services are the command node's and never
+reload. Clicking an environment (or a project) of another node shows that
+node's workspace in the window's **central region**: the toolbar for the
+environment, its tabs and panes, and the files panel. Only that region gets
+its data from the other node; it runs this client's own code, served by the
+command node.
 
-- **Two channels per window.** The *workspace* transport
-  (`window.orkestrator`) is bound to the node the window works on. The
-  *portal* channel (`window.orkestratorPortal`, used through
-  `lib/portal/portal-transport.ts`) stays on the command node and carries
-  everything multi-node: summaries, cross-node actions, workspaces, the
-  node registry, SSH prompts and action requests. A lint boundary keeps
-  multi-machine views off the workspace transport.
-- **Switching** opens a workspace grant on the command node, re-binds the
-  workspace and reloads the renderer into the node; the environment the
-  user clicked is selected once after the reload. Another environment on
-  the same node is an ordinary, instant selection. The desktop re-binds the
-  window's scope in its main process (its own connection stays on a portal
-  scope); a browser or iOS tab keeps the grant in its session storage and
-  boots its gateway against the node.
-- **The sidebar is symmetric.** The node the window works on is listed from
-  its full stores with the ordinary rows; every other node — including the
-  command node itself, from its self summary (`get_node_summaries` with
-  `includeSelf`) — is listed from the portal's summaries.
-- **Presentation.** Per-node state (layouts, collapsed projects) is
-  namespaced by node identity; window-level state (sidebar, zoom) stays with
-  the window's own machine.
+- **Workspace realms.** The central region of another node is a *realm*: a
+  separate renderer of this client bound to that node's workspace and to
+  nothing else (`lib/federation/workspace-realm.ts`). On the desktop it is a
+  child view of the window with its own connection scope
+  (`apps/desktop/electron/workspace-views.ts`); in a browser or the iOS app it
+  is a same-origin frame of the page the command node served. Its stores,
+  events and credentials therefore reach only that node, by construction.
+  The realm shows no title bar or sidebar of its own.
+- **Two channels per realm.** The realm's *workspace* transport
+  (`window.orkestrator`) is bound to its node. Its *portal* channel
+  (`window.orkestratorPortal`, used through `lib/portal/portal-transport.ts`)
+  stays on the window's command node, for what a workspace needs from it
+  (the command node's inherited settings, coordinator links). A lint
+  boundary keeps multi-machine views off the workspace transport.
+- **Opening** asks the command node for a workspace grant. The desktop binds
+  the realm's scope in its main process (direct first, then the command
+  node's own route); a browser or iOS window keeps the grant in its tab's
+  session storage under the workspace's ID, which is all the frame's URL
+  carries, and the frame boots its gateway against the node (direct first,
+  then the relay). The window renews the grant while the realm is open and
+  revokes it when the realm closes.
+- **Switching** never reloads the window. Another environment of a node whose
+  realm is open is a message to that realm and an instant selection there.
+  The window keeps a few realms open, hidden (`MAX_OPEN_REALMS`), so going
+  back to a node is instant too. Selecting one of the command node's own
+  environments returns the central region to the window's own workspace,
+  whose selection was cleared while another node's was shown.
+- **What crosses between a window and its realm** is a handful of bounded
+  messages: what to show (a project, an environment, the node's Add Project
+  or New Environment dialog), the realm's own selection (for the sidebar's
+  highlight), the sidebar's open state (the realm's toolbar toggles it),
+  requests to open settings (they belong to the command node), and a ready
+  handshake so nothing asked while a realm loads is lost.
+- **Creating on another node** opens that node's New Environment dialog in
+  its realm, so the node's defaults — the command node's inherited settings
+  laid over its own — and start apply as they would there.
+- **The title bar** shows the shown environment's name. The agent info and
+  system usage, which describe the environment's agent and the machine it
+  runs on, are shown at the end of the realm's toolbar.
+- **Native views** a realm opens (browser previews, live artifacts) are
+  children of the window placed in the realm's coordinates, and shown only
+  while the realm is (`realmChildViewClass`). The window hides a realm while
+  one of its own dialogs or menus is open, as it does for previews.
+- **The sidebar is symmetric.** The command node is listed from the window's
+  full stores with the ordinary rows; every other node is listed from the
+  portal's summaries. Both are drawn with the same row layout, so a row lines
+  up the same whichever node owns it, and the row whose workspace the central
+  region shows is the selected one, whichever node owns it.
+- **The sidebar order is the command node's.** The command node keeps the
+  cross-machine order every client shows (`get_portal_layout`,
+  `update_portal_layout`, `portal-layout-changed`;
+  `@orkestrator/protocol/portal-layout`): the machine order ("by machine"),
+  the merged project order and the folders projects sit in there ("by
+  project"), and the repository order ("by repository"). Which node the
+  central region shows never moves anything. Until the user drags something, the
+  command node comes first, then the other nodes in registry order; in the
+  merged lists the command node's projects (with its folders) come first and
+  every other node's follow. Anything new goes after whatever precedes it in
+  that default. A node that is not connected is hidden from the merged lists
+  but keeps its entries, so its projects return to their place. Within a
+  node's own section, project, folder and environment order belong to that
+  node: a drag there is written to the owner (`arrange_projects`,
+  `reorder_environments`), and moving a project into a folder of the merged
+  list is recorded on the command node only.
+- **Presentation.** Per-node state (layouts) is namespaced by node identity;
+  window-level state (sidebar, zoom, and what is collapsed in the
+  multi-machine sidebar, by machine-qualified key) stays with the window's own
+  machine. A realm's presentation state (layouts, drafts) is namespaced by its
+  node.
 - **One intentional difference.** A workspace grant cannot perform a
   node's administrative commands (gateway token, web-client access, control
   MCP token, node registry); those stay in the command node's
@@ -353,13 +501,14 @@ command node:
   supervisor (today in Electron main), and the per-node read model (today
   renderer `BackendRuntime`s).
 - **Reworked:** machine panels (a workspace bound to one leaf, talking to it
-  directly) became the window's workspace target: opening a leaf
-  environment moves the window itself to the leaf (see
+  directly) became workspace realms in the window's central region: opening
+  a leaf environment shows the leaf's workspace there while the window stays
+  on its command node (see
   [Opening an environment on another node](#opening-an-environment-on-another-node)).
-  It is authorised by scoped grants from the command node instead of
-  credentials the client holds, and falls back to a relay through the
-  command node when the leaf is unreachable. The separate panel realms,
-  frames and child views were removed.
+  They are authorised by scoped grants from the command node instead of
+  credentials the client holds, and fall back to a relay through the command
+  node when the leaf is unreachable. (For a while the whole window moved to
+  the leaf and reloaded; that was replaced by realms.)
 - **Removed:** renderer-side multi-backend runtimes and registry, the
   client-owned machine catalogue (clients keep only their list of targets),
   and clients holding other nodes' gateway tokens.

@@ -1,5 +1,5 @@
 import "./design.css";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { MousePointer2, X } from "lucide-react";
 import type { DesignElement, DesignFrame } from "@orkestrator/protocol/design-canvas";
 import type {
@@ -733,11 +733,6 @@ export function DesignCanvasTab({
           restoreHistory(undo ? "undo" : "redo");
           return;
         }
-        if (key === "0") {
-          event.preventDefault();
-          zoom100();
-          return;
-        }
       }
       if (!inside || editing || modifier) return;
       if (event.key === "Escape") {
@@ -804,9 +799,46 @@ export function DesignCanvasTab({
     propertiesFrame,
     restoreHistory,
     submitDeleteFrame,
-    zoom100,
     zoomBy,
   ]);
+
+  // Ctrl/⌘+0 resets the canvas to 100%, not the app. The app-wide zoom
+  // shortcut (App.tsx) listens on window and is registered before any canvas
+  // mounts, so the canvas claims the key in the capture phase.
+  useEffect(() => {
+    if (!isActive || !ownsGlobalShortcuts) return;
+    const onZoomReset = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.altKey || !(event.metaKey || event.ctrlKey)) return;
+      if (event.key !== "0" || isTextEditingTarget(event.target)) return;
+      event.preventDefault();
+      zoom100();
+    };
+    window.addEventListener("keydown", onZoomReset, { capture: true });
+    return () => window.removeEventListener("keydown", onZoomReset, { capture: true });
+  }, [isActive, ownsGlobalShortcuts, zoom100]);
+
+  // Keyboard focus never falls to <body> when the control holding it unmounts
+  // (closing the inspector, the narrow inspector drawer replacing Layers, a
+  // re-keyed inspector, a deleted frame): it moves to the inspector, else the
+  // Layers row, else the Layers toggle. Focus the user moved elsewhere, or
+  // dropped by clicking a non-focusable surface, is left alone.
+  const lastFocus = useRef<Element | null>(null);
+  useLayoutEffect(() => {
+    const root = workspace.current;
+    const previous = lastFocus.current;
+    if (!root || !previous || previous.isConnected) return;
+    lastFocus.current = null;
+    const active = document.activeElement;
+    if (active && active !== document.body) return;
+    const target =
+      root.querySelector<HTMLElement>(
+        '[aria-label="Element inspector"] [data-inspector-fields] :is(input, button):not(:disabled)',
+      ) ??
+      root.querySelector<HTMLElement>('[aria-label="Frame properties"] input:not(:disabled)') ??
+      root.querySelector<HTMLElement>('[role="tree"] [role="treeitem"][tabindex="0"]') ??
+      layersToggle.current;
+    target?.focus();
+  });
 
   // Leaving preview refreshes element bounds so hit testing and overlays agree.
   useEffect(() => {
@@ -843,6 +875,14 @@ export function DesignCanvasTab({
         className="design-workspace absolute inset-0 flex min-h-0 flex-col bg-background"
         aria-label="Design canvas"
         data-narrow={narrow || undefined}
+        onFocus={(event) => {
+          // Portalled dialogs bubble here too; they restore their own focus.
+          if (event.currentTarget.contains(event.target)) lastFocus.current = event.target;
+        }}
+        onBlur={(event) => {
+          const next = event.relatedTarget;
+          if (next instanceof Node && !event.currentTarget.contains(next)) lastFocus.current = null;
+        }}
       >
         <DesignToolbar
           layersButtonRef={layersToggle}
@@ -1108,10 +1148,13 @@ export function DesignCanvasTab({
               >
                 {frames.map((frame) => {
                   const committed = committedById.get(frame.id) ?? frame;
+                  // The focused frame keeps its chrome (title, resize handle) mounted
+                  // offscreen so keyboard focus on it survives culling.
                   if (
                     !plan.visible.has(frame.id) &&
                     !pinned.has(frame.id) &&
-                    selection?.frameId !== frame.id
+                    selection?.frameId !== frame.id &&
+                    focusedFrame !== frame.id
                   )
                     return (
                       <section

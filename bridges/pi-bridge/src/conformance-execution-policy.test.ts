@@ -22,8 +22,6 @@ import {
 const ENV_KEYS = [
   "PI_BRIDGE_LIBRARY_ONLY",
   "PI_BRIDGE_STATE_DIR",
-  "PI_BRIDGE_REQUIRE_APPROVAL",
-  "PI_BRIDGE_PROJECT_RESOURCES",
   "ORKESTRATOR_BRIDGE_EXECUTION_POLICY",
 ] as const;
 const originalEnv = new Map(ENV_KEYS.map((key) => [key, process.env[key]]));

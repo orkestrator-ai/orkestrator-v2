@@ -40,8 +40,8 @@ const PROVIDERS = new Set(
 /** Past the old five-minute default and Claude's 600 s hook limit. */
 const WAIT_MS = Number(process.env.ORKESTRATOR_AGENT_TEST_PAUSE_WAIT_MS ?? 10.5 * 60_000);
 /**
- * A profile shares only Pi's `auth.json`, not the host's default model, and
- * Pi's own fallback (`gpt-4`) is refused by a ChatGPT-backed OpenAI login.
+ * A profile receives Pi's host `auth.json` and saved default model. Pinning the
+ * model here keeps this run independent of that host setting.
  */
 const MODELS: Partial<Record<string, string>> = Object.fromEntries(
   (process.env.ORKESTRATOR_AGENT_TEST_PAUSE_MODELS ?? "pi=openai/gpt-6-sol")
@@ -279,14 +279,22 @@ test("a paused question and approval wait past ten minutes on every provider, th
           // shared database ("database is locked"), which is not what this
           // qualifies.
           const raise = async (run: Running) => {
-            await invoke("dispatch_native_agent_intent", {
-              ...run.identity,
-              requestId: `pause-${run.testCase.id}-${suffix}`,
-              mode: "build",
-              ...(run.testCase.approvalMode ? { approvalMode: run.testCase.approvalMode } : {}),
-              ...(MODELS[run.testCase.agent] ? { model: MODELS[run.testCase.agent] } : {}),
-              prompt: promptFor(run.testCase, run.marker, run.done),
-            });
+            // A refused dispatch never starts a turn, so polling for one would
+            // wait out the whole timeout; the outcome already says why.
+            const dispatched = await invoke<{ outcome: string; error?: string }>(
+              "dispatch_native_agent_intent",
+              {
+                ...run.identity,
+                requestId: `pause-${run.testCase.id}-${suffix}`,
+                mode: "build",
+                ...(run.testCase.approvalMode ? { approvalMode: run.testCase.approvalMode } : {}),
+                ...(MODELS[run.testCase.agent] ? { model: MODELS[run.testCase.agent] } : {}),
+                prompt: promptFor(run.testCase, run.marker, run.done),
+              },
+            );
+            if (dispatched.outcome === "rejected") {
+              throw new Error(`${run.testCase.id}: dispatch refused: ${dispatched.error ?? ""}`);
+            }
             let last = null as Projection;
             await expect
               .poll(

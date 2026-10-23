@@ -6,11 +6,15 @@ import os from "node:os";
 import path from "node:path";
 import { __testing as commandTesting } from "./commands.js";
 import { OrkestratorBackend } from "./index.js";
+import { RECURRING_JOB_CATALOGUE } from "@orkestrator/protocol/recurring-work";
+import type { BackendActivityJob } from "./backend-activity-jobs.js";
 import { ManualTime } from "./recurring-test-support.js";
 import type { AgentToolConnection } from "./agent-tools.js";
 import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
 import { createEnvironment, StorageService } from "./storage.js";
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
+import { interactionInternals } from "./native-agent-service-test-collaborators.js";
+import type { NativeAgentService } from "./native-agent-service.js";
 
 function fakeAgentTools(
   overrides: {
@@ -216,20 +220,16 @@ test("wires observe-only monitoring and its adoption kill switch from the enviro
     },
   };
   const monitorOptions = (backend: OrkestratorBackend) => {
-    const nativeAgents = (
-      backend as unknown as {
-        nativeAgents: {
-          options: {
-            interactionMonitorMode?: "disabled" | "observe-only";
-            interactionMonitorAdoptionEnabled?: boolean;
-          };
-          interactionMonitorAdoptionEnabled: boolean;
-        };
-      }
-    ).nativeAgents;
+    const nativeAgents = (backend as unknown as { nativeAgents: NativeAgentService }).nativeAgents;
+    const { options } = nativeAgents as unknown as {
+      options: {
+        interactionMonitorMode?: "disabled" | "observe-only";
+        interactionMonitorAdoptionEnabled?: boolean;
+      };
+    };
     return {
-      ...nativeAgents.options,
-      effectiveAdoption: nativeAgents.interactionMonitorAdoptionEnabled,
+      ...options,
+      effectiveAdoption: interactionInternals(nativeAgents).interactionMonitorAdoptionEnabled(),
     };
   };
 
@@ -1366,6 +1366,14 @@ describe("native-agent activity reconciliation lifecycle", () => {
     try {
       await backend.init();
       await backend.init();
+      const jobs = (backend as unknown as { activityJobs: { jobs: BackendActivityJob[] } })
+        .activityJobs.jobs;
+      for (const name of ["coordinator-repair", "claude-state", "pending-renames"]) {
+        const job = jobs.find((entry) => entry.name === name);
+        expect(job).toBeDefined();
+        expect(job!.priority).toBe("recovery");
+        expect(RECURRING_JOB_CATALOGUE[job!.kind].priority).toBe(job!.priority);
+      }
       // No 2 s bundle and no 60 s tab timer: the jobs own those cadences.
       expect(intervals.filter((interval) => interval.delay === 2_000)).toHaveLength(0);
       expect(intervals.filter((interval) => interval.delay === 60_000)).toHaveLength(0);

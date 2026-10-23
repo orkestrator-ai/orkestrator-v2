@@ -32,6 +32,7 @@ import {
 } from "./native-agent-service.js";
 
 import { StorageService } from "./storage.js";
+import { launchInternals } from "./native-agent-service-test-collaborators.js";
 
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -961,10 +962,7 @@ describe("NativeAgentService", () => {
       await otherProcess.updateEnvironment("env-1", {
         deletionRequestedAt: new Date().toISOString(),
       });
-      const reconcilePendingLaunches = () =>
-        (
-          service as unknown as { reconcilePendingLaunches(): Promise<void> }
-        ).reconcilePendingLaunches();
+      const reconcilePendingLaunches = () => launchInternals(service).reconcilePendingLaunches();
       await reconcilePendingLaunches();
       expect(dispose).not.toHaveBeenCalled();
 

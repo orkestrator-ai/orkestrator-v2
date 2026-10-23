@@ -4,10 +4,10 @@ import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
 import { openCodeContextUsage } from "./opencode-usage.js";
 import {
   createProviderStub,
-  internals,
   waitForCondition,
   withService,
 } from "./native-agent-service-projection-test-support.js";
+import { collaborators, projectionInternals } from "./native-agent-service-test-collaborators.js";
 
 const liveWindow = { messages: 100, targetBytes: 512 * 1024 } as const;
 
@@ -461,12 +461,12 @@ describe("native agent progressive remainder", () => {
           const input = { ...identity, viewVersion: 1 as const, liveWindow, forceSnapshot: true };
           await service.getTranscriptUpdate(input);
           if (change === "provider session") {
-            for (const entry of internals(service).progressiveTranscriptCache.values()) {
+            for (const entry of projectionInternals(service).progressiveTranscriptCache.values()) {
               const value = entry.value as { identity?: { providerSessionId: string } };
               if (value.identity) value.identity.providerSessionId = "provider-session-before";
             }
           } else {
-            internals(service)
+            collaborators(service)
               .providerRegistry.stateForTesting()
               .connections.set("env-1\0codex", "generation-2");
           }
@@ -1160,9 +1160,9 @@ describe("native agent progressive remainder", () => {
           identity.agent,
           identity.logicalSessionKey,
         );
-        const before = internals(service).projectionEpochs.get(sessionKey) ?? 0;
-        internals(service).invalidateProjection(sessionKey);
-        const after = internals(service).projectionEpochs.get(sessionKey) ?? 0;
+        const before = projectionInternals(service).projectionEpochs.get(sessionKey) ?? 0;
+        collaborators(service).projections.invalidateProjection(sessionKey);
+        const after = projectionInternals(service).projectionEpochs.get(sessionKey) ?? 0;
         expect(after).toBeGreaterThan(before);
         releaseFirst();
         const update = await first;
@@ -1212,10 +1212,10 @@ describe("native agent progressive remainder", () => {
           identity.agent,
           identity.logicalSessionKey,
         );
-        await internals(service).flushDisplayTailPersist(sessionKey);
+        await collaborators(service).projections.flushDisplayTailPersist(sessionKey);
         const persisted = await storage.getNativeAgentDisplayTail(sessionKey);
         expect(persisted?.messages).toHaveLength(1);
-        internals(service).progressiveTranscriptCache.clear();
+        projectionInternals(service).progressiveTranscriptCache.clear();
         const cached = await service.getTranscriptUpdate({
           ...identity,
           viewVersion: 1,
@@ -1276,8 +1276,8 @@ describe("native agent progressive remainder", () => {
           identity.agent,
           identity.logicalSessionKey,
         );
-        await internals(service).flushDisplayTailPersist(sessionKey);
-        internals(service).progressiveTranscriptCache.clear();
+        await collaborators(service).projections.flushDisplayTailPersist(sessionKey);
+        projectionInternals(service).progressiveTranscriptCache.clear();
         coldPreview = true;
 
         const restored = await service.getTranscriptUpdate({
@@ -1307,7 +1307,7 @@ describe("native agent progressive remainder", () => {
         expect(whileHydrating.value.messages).toMatchObject([
           { id: "m1", content: "persisted conversation" },
         ]);
-        await internals(service).flushDisplayTailPersist(sessionKey);
+        await collaborators(service).projections.flushDisplayTailPersist(sessionKey);
         expect((await storage.getNativeAgentDisplayTail(sessionKey))?.messages).toMatchObject([
           { id: "m1", content: "persisted conversation" },
         ]);
@@ -1334,7 +1334,7 @@ describe("native agent progressive remainder", () => {
           { id: "m1", content: "persisted conversation" },
         ]);
         expect(settled.value.freshness).toBe("current");
-        await internals(service).flushDisplayTailPersist(sessionKey);
+        await collaborators(service).projections.flushDisplayTailPersist(sessionKey);
         expect((await storage.getNativeAgentDisplayTail(sessionKey))?.messages).toMatchObject([
           { id: "m1", content: "persisted conversation" },
         ]);
@@ -1386,8 +1386,8 @@ describe("native agent progressive remainder", () => {
             identity.agent,
             identity.logicalSessionKey,
           );
-          await internals(service).flushDisplayTailPersist(sessionKey);
-          internals(service).progressiveTranscriptCache.clear();
+          await collaborators(service).projections.flushDisplayTailPersist(sessionKey);
+          projectionInternals(service).progressiveTranscriptCache.clear();
           coldPreview = true;
 
           const restored = await service.getTranscriptUpdate({
@@ -1408,7 +1408,7 @@ describe("native agent progressive remainder", () => {
             });
             return hydrated.status === "snapshot" && hydrated.value.messages.length === 2;
           });
-          await internals(service).flushDisplayTailPersist(sessionKey);
+          await collaborators(service).projections.flushDisplayTailPersist(sessionKey);
           expect((await storage.getNativeAgentDisplayTail(sessionKey))?.messages).toMatchObject([
             { id: "m1", content: "persisted conversation" },
             { id: "m2", content: "hydrated later turn" },
@@ -1458,8 +1458,8 @@ describe("native agent progressive remainder", () => {
           identity.agent,
           identity.logicalSessionKey,
         );
-        await internals(service).flushDisplayTailPersist(sessionKey);
-        internals(service).progressiveTranscriptCache.clear();
+        await collaborators(service).projections.flushDisplayTailPersist(sessionKey);
+        projectionInternals(service).progressiveTranscriptCache.clear();
         emptied = true;
 
         const update = await service.getTranscriptUpdate({
@@ -1472,7 +1472,7 @@ describe("native agent progressive remainder", () => {
         if (update.status !== "snapshot") throw new Error("expected snapshot");
         expect(update.value.messages).toEqual([]);
         expect(update.value.freshness).toBe("empty");
-        await internals(service).flushDisplayTailPersist(sessionKey);
+        await collaborators(service).projections.flushDisplayTailPersist(sessionKey);
         expect((await storage.getNativeAgentDisplayTail(sessionKey))?.messages).toEqual([]);
       },
     );
@@ -1513,7 +1513,7 @@ describe("native agent progressive remainder", () => {
           viewVersion: 1,
           liveWindow,
         });
-        for (const entry of internals(service).progressiveTranscriptCache.values()) {
+        for (const entry of projectionInternals(service).progressiveTranscriptCache.values()) {
           const value = entry.value as { identity?: { providerSessionId?: string } };
           if (value.identity) value.identity.providerSessionId = "other-provider-session";
         }
@@ -1678,7 +1678,8 @@ describe("native agent progressive remainder", () => {
             });
           await read();
           await waitForCondition(() => release !== undefined);
-          const pending = Array.from(internals(service).progressiveHydrations.values())[0]?.promise;
+          const pending = Array.from(projectionInternals(service).progressiveHydrations.values())[0]
+            ?.promise;
           if (!pending) throw new Error("expected pending hydration");
           try {
             state = "new";
@@ -1707,7 +1708,7 @@ describe("native agent progressive remainder", () => {
               identity.agent,
               identity.logicalSessionKey,
             );
-            await internals(service).flushDisplayTailPersist(sessionKey);
+            await collaborators(service).projections.flushDisplayTailPersist(sessionKey);
             expect((await storage.getNativeAgentDisplayTail(sessionKey))?.messages).toEqual(newer);
             expect(messages).toHaveBeenCalledTimes(1);
           } finally {
@@ -1757,7 +1758,7 @@ describe("native agent progressive remainder", () => {
             liveWindow: window,
           });
           expect(update.status).toBe("snapshot");
-          expect(internals(service).progressiveHydrations.size).toBe(0);
+          expect(projectionInternals(service).progressiveHydrations.size).toBe(0);
           await new Promise((resolve) => setTimeout(resolve, 50));
           expect(messages).not.toHaveBeenCalled();
           expect(announced).not.toHaveBeenCalled();
@@ -1806,7 +1807,7 @@ describe("native agent progressive remainder", () => {
             });
           await read();
           await waitForCondition(() => messages.mock.calls.length === 3);
-          await Array.from(internals(service).progressiveHydrations.values())[0]?.promise;
+          await Array.from(projectionInternals(service).progressiveHydrations.values())[0]?.promise;
           const retained = await read();
           expect(retained.status).toBe("snapshot");
           if (retained.status !== "snapshot") throw new Error("expected snapshot");
@@ -1924,7 +1925,7 @@ describe("native agent progressive remainder", () => {
         };
         await service.ensureSession(identity);
         await service.getTranscriptUpdate({ ...identity, viewVersion: 1, liveWindow });
-        const samples = internals(service).progressiveMetrics.list() as Array<{
+        const samples = projectionInternals(service).progressiveMetrics.list() as ReadonlyArray<{
           domain: string;
           outcome: string;
         }>;
@@ -1994,6 +1995,266 @@ describe("native agent progressive remainder", () => {
         } finally {
           release();
         }
+      },
+    );
+  });
+
+  test("announces an expired discovery renewal only when its value changed", async () => {
+    // Every section expires after 30 s and the idle view's own read renews it.
+    // An announcement for an unchanged renewal re-read the view and reset its
+    // quiet backoff (live qualification, 2026-10-21).
+    let now = 1_000;
+    let health = { summary: { state: "ready" }, notices: [], authoritative: true };
+    const runtimeHealth = mock(async () => health);
+    const stub = createProviderStub("cursor");
+    Object.assign(stub.provider, { runtimeHealth });
+    await withService(
+      {
+        prefix: "orkestrator-progressive-discovery-renewal-",
+        provider: async () => stub.provider,
+        now: () => now,
+      },
+      async ({ service, storage }) => {
+        const input = {
+          environmentId: "env-1",
+          agent: "cursor" as const,
+          logicalSessionKey: "env-env-1:discovery-renewal",
+          viewVersion: 1 as const,
+          sections: ["runtime" as const],
+        };
+        await service.ensureSession(input);
+        const announced = spyOn(storage, "announceNativeAgentSessionProjection");
+        const readyRevision = async () => {
+          let revision = -1;
+          await waitForCondition(async () => {
+            const update = await service.getDiscoveryUpdate(input);
+            if (update.status !== "snapshot") return false;
+            const runtime = update.value.sections.runtime;
+            revision = runtime?.revision ?? -1;
+            return runtime?.availability === "ready";
+          });
+          return revision;
+        };
+
+        const first = await readyRevision();
+        expect(runtimeHealth).toHaveBeenCalledTimes(1);
+        expect(announced).toHaveBeenCalledTimes(1);
+
+        now += 31_000;
+        expect(await readyRevision()).toBe(first);
+        expect(runtimeHealth).toHaveBeenCalledTimes(2);
+        expect(announced).toHaveBeenCalledTimes(1);
+
+        health = { summary: { state: "detached" }, notices: [], authoritative: true };
+        now += 31_000;
+        await service.getDiscoveryUpdate(input);
+        await waitForCondition(async () => announced.mock.calls.length === 2);
+        expect(await readyRevision()).toBe(first + 1);
+        expect(announced).toHaveBeenLastCalledWith("env-1", {
+          agent: "cursor",
+          logicalSessionKey: "env-env-1:discovery-renewal",
+        });
+      },
+    );
+  });
+
+  test("does not announce a renewal whose only change is the runtime drift counter", async () => {
+    // An idle OpenCode server can keep streaming event kinds the backend has no
+    // branch for. `unknownEvents` then grows on every 30 s renewal; announcing
+    // it re-read every idle view and reset its quiet backoff (0049 item 5).
+    let now = 1_000;
+    let drift = { unknownEvents: 1, unknownKinds: ["a"] };
+    const runtimeHealth = mock(async () => ({
+      summary: { state: "ready", drift },
+      notices: [],
+      authoritative: true,
+    }));
+    const stub = createProviderStub("cursor");
+    Object.assign(stub.provider, { runtimeHealth });
+    await withService(
+      {
+        prefix: "orkestrator-progressive-discovery-drift-",
+        provider: async () => stub.provider,
+        now: () => now,
+      },
+      async ({ service, storage }) => {
+        const input = {
+          environmentId: "env-1",
+          agent: "cursor" as const,
+          logicalSessionKey: "env-env-1:discovery-drift",
+          viewVersion: 1 as const,
+          sections: ["runtime" as const],
+        };
+        await service.ensureSession(input);
+        const announced = spyOn(storage, "announceNativeAgentSessionProjection");
+        const runtime = async () => {
+          const update = await service.getDiscoveryUpdate(input);
+          if (update.status !== "snapshot") throw new Error("expected discovery snapshot");
+          return update.value.sections.runtime;
+        };
+        await runtime();
+        await waitForCondition(async () => (await runtime())?.availability === "ready");
+        expect(announced).toHaveBeenCalledTimes(1);
+
+        // The counter grows and a kind is seen again: stored, not announced.
+        drift = { unknownEvents: 7, unknownKinds: ["a"] };
+        now += 31_000;
+        await runtime();
+        await waitForCondition(() => runtimeHealth.mock.calls.length === 2);
+        await waitForCondition(
+          async () =>
+            ((await runtime())?.value as { summary: { drift: typeof drift } } | undefined)?.summary
+              .drift.unknownEvents === 7,
+        );
+        expect(announced).toHaveBeenCalledTimes(1);
+
+        // A new kind is something to show: announced.
+        drift = { unknownEvents: 8, unknownKinds: ["a", "b"] };
+        now += 31_000;
+        await runtime();
+        await waitForCondition(async () => announced.mock.calls.length === 2);
+      },
+    );
+  });
+
+  test.each([false, true])(
+    "announces discovery timeout semantics once (unless a value is retained) and announces recovery (cached: %s)",
+    async (cached) => {
+      let now = 1_000;
+      let held = false;
+      const health = { summary: { state: "attached" }, notices: [], authoritative: true };
+      let release: (value: typeof health) => void = () => {};
+      let reject: (error: Error) => void = () => {};
+      const runtimeHealth = mock(() =>
+        held
+          ? new Promise<typeof health>((resolve, fail) => {
+              release = resolve;
+              reject = fail;
+            })
+          : Promise.resolve(health),
+      );
+      const stub = createProviderStub("cursor");
+      Object.assign(stub.provider, { runtimeHealth });
+      await withService(
+        {
+          prefix: "orkestrator-discovery-timeout-",
+          provider: async () => stub.provider,
+          now: () => now,
+        },
+        async ({ service, storage }) => {
+          const input = {
+            environmentId: "env-1",
+            agent: "cursor" as const,
+            logicalSessionKey: "env-env-1:discovery-timeout",
+            viewVersion: 1 as const,
+            sections: ["runtime" as const],
+          };
+          await service.ensureSession(input);
+          const section = async () => {
+            const update = await service.getDiscoveryUpdate(input);
+            if (update.status !== "snapshot") throw new Error("expected discovery snapshot");
+            return update.value.sections.runtime;
+          };
+          if (cached) {
+            await section();
+            await waitForCondition(async () => (await section())?.availability === "ready");
+            now += 31_000;
+          }
+          const announced = spyOn(storage, "announceNativeAgentSessionProjection");
+          held = true;
+          try {
+            await section();
+            await Bun.sleep(2_100);
+            const first = await section();
+            expect(first?.availability).toBe(cached ? "stale" : "unavailable");
+            expect(first?.error).toBe("Discovery timed out");
+            expect(first?.value).toEqual(
+              cached ? { summary: health.summary, notices: [] } : undefined,
+            );
+            // A retained value that only went stale shows the same content, so
+            // it is stored for the next read but not announced (0049 item 5).
+            expect(announced).toHaveBeenCalledTimes(cached ? 0 : 1);
+
+            // Finish the timed-out read with the same error, then expire its
+            // fallback so a second actual read reaches the deadline too.
+            reject(new Error("Discovery timed out"));
+            await Bun.sleep(20);
+            now += 5_001;
+            const reads = runtimeHealth.mock.calls.length;
+            await section();
+            await waitForCondition(() => runtimeHealth.mock.calls.length === reads + 1);
+            await Bun.sleep(2_100);
+            const repeated = await section();
+            expect(repeated).toEqual(first);
+            expect(announced).toHaveBeenCalledTimes(cached ? 0 : 1);
+
+            // A late successful result changes availability and contents and
+            // must wake readers even after its own deadline has fired.
+            release({ ...health, summary: { state: "detached" } });
+            await waitForCondition(async () => (await section())?.availability === "ready");
+            const recovered = await section();
+            expect(recovered?.value?.summary.state).toBe("detached");
+            expect(recovered?.revision).toBe((first?.revision ?? 0) + 1);
+            expect(recovered?.error).toBeUndefined();
+            expect(announced).toHaveBeenCalledTimes(cached ? 1 : 2);
+            expect(announced).toHaveBeenLastCalledWith("env-1", {
+              agent: "cursor",
+              logicalSessionKey: input.logicalSessionKey,
+            });
+          } finally {
+            release(health);
+            announced.mockRestore();
+          }
+        },
+      );
+    },
+    15_000,
+  );
+
+  test("announces an expired model catalogue renewal only when the catalogue changed", async () => {
+    let now = 1_000;
+    let catalog = [{ platform: "codex", id: "gpt-6.1-sol", label: "GPT-6.1-Sol" }];
+    const invoke = async <T>(command: string): Promise<T> => {
+      if (command !== "get_native_agent_model_catalog") {
+        throw new Error(`Unexpected backend command: ${command}`);
+      }
+      return catalog as T;
+    };
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-progressive-catalog-renewal-",
+        provider: async () => stub.provider,
+        invoke,
+        now: () => now,
+      },
+      async ({ service, storage }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:catalog-renewal",
+        };
+        await service.ensureSession(identity);
+        await service.getProjection(identity);
+        const announced = spyOn(storage, "announceNativeAgentSessionProjection");
+        // The environment-wide hint is the catalogue renewal's own.
+        const catalogueAnnouncements = () =>
+          announced.mock.calls.filter((call) => call.length === 1 || call[1] === undefined);
+
+        now += 31_000;
+        await service.getProjection(identity);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(catalogueAnnouncements()).toHaveLength(0);
+
+        catalog = [...catalog, { platform: "codex", id: "gpt-6-luna", label: "GPT-6-Luna" }];
+        now += 31_000;
+        await service.getProjection(identity);
+        await waitForCondition(async () => catalogueAnnouncements().length === 1);
+        expect(
+          (await service.getProjection(identity))?.composer?.models.map((model) => model.id),
+        ).toEqual(["gpt-6.1-sol", "gpt-6-luna"]);
       },
     );
   });
@@ -2699,11 +2960,11 @@ describe("native agent progressive remainder recovery", () => {
           identity.agent,
           identity.logicalSessionKey,
         );
-        await internals(service).flushDisplayTailPersist(sessionKey);
+        await collaborators(service).projections.flushDisplayTailPersist(sessionKey);
         const persisted = await storage.getNativeAgentDisplayTail(sessionKey);
         expect(persisted?.historyComplete).toBe(false);
         expect(persisted?.messageWindow?.canLoadEarlier).toBe(true);
-        internals(service).progressiveTranscriptCache.clear();
+        projectionInternals(service).progressiveTranscriptCache.clear();
         failing = true;
         const cached = await service.getTranscriptUpdate({
           ...identity,
@@ -2852,7 +3113,7 @@ describe("native agent progressive failure and lifecycle", () => {
           viewVersion: 1,
           sections: ["commands"],
         });
-        const view = internals(service);
+        const view = projectionInternals(service);
         await waitForCondition(() =>
           Array.from(view.progressiveReads.keys()).some((key) => key.includes("discovery:")),
         );
@@ -2922,7 +3183,7 @@ describe("native agent progressive failure and lifecycle", () => {
           identity.agent,
           identity.logicalSessionKey,
         );
-        const view = internals(service);
+        const view = projectionInternals(service);
         const inFlight = service.getTranscriptUpdate({ ...identity, viewVersion: 1, liveWindow });
         await waitForCondition(() => calls === 1);
         view.invalidateProjection(sessionKey);

@@ -76,6 +76,7 @@ type LoadedNativeAgentSessions = shared.LoadedNativeAgentSessions;
 type PersistedOpenCodeModelCatalogStore = shared.PersistedOpenCodeModelCatalogStore;
 type ResourceChangeListener = shared.ResourceChangeListener;
 
+import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { StorageBuildPipelines } from "./storage-build-pipelines.ts";
 
 export type StorageLayerTypes = [
@@ -741,7 +742,11 @@ export abstract class StorageDrafts extends StorageBuildPipelines {
   async loadSessionBuffer(sessionId: string): Promise<string | null> {
     const filePath = this.bufferFile(sessionId);
     if (!(await exists(filePath))) return null;
-    return fs.readFile(filePath, "utf8");
+    // A blob file, not a store: a file read, so storage budgets count stores only.
+    const buffer = await fs.readFile(filePath, "utf8");
+    recurringWorkMetrics.work("file-read");
+    recurringWorkMetrics.bytes(buffer.length);
+    return buffer;
   }
 
   async deleteSessionBuffer(sessionId: string): Promise<void> {

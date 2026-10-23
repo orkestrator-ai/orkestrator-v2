@@ -380,9 +380,34 @@ Update the traced version only after doing the steps below.
 
    Never mount a whole provider home, and never symlink a state path; see the
    constraints in
-   [container-rebuild-state-preservation.md](../todo/container-rebuild-state-preservation.md).
+   [0021-container-rebuild-state-preservation.md](../todo/containers-and-environments/0021-container-rebuild-state-preservation.md).
 4. Set the provider's entry in `PROVIDER_STATE_TRACED_VERSIONS` to the new
    version and update the "Traced against" line under "Provider state".
+
+## Re-check OAuth refresh-token rotation
+
+Containers get Claude, Codex, Grok, OpenCode and Pi logins access-only, because a copy
+that refreshed with the host's refresh token would spend it and sign the host
+out (`packages/protocol/src/login-snapshots.ts`). OpenCode and Pi hold one
+login per model provider, and `NON_ROTATING_OAUTH_PROVIDERS` there lists the
+OAuth providers whose refresh token is reused rather than rotated, so a
+container may keep it whole. `restrict_imported_login` in
+`docker/entrypoint.sh` repeats the same list (a unit test keeps them equal).
+On every OpenCode or Pi bump, re-read each OAuth provider's refresh function:
+
+- Pi: `dist/auth/oauth/*.js` in `@earendil-works/pi-ai`. A provider whose
+  refresh returns the token it was given (`refresh: refreshToken`) is
+  non-rotating; one that stores the response's `refresh_token` rotates.
+- OpenCode: the built-in auth plugins under `packages/opencode/src/plugin/` at
+  the release tag (`openai/codex.ts`, `github-copilot/copilot.ts`, `xai.ts`),
+  and any new plugin `internalPlugins` loads.
+
+A new rotating provider needs no change (anything unlisted is access-only). A
+new non-rotating one, such as a token exchange like Copilot's, needs adding to
+both lists, or its container copy signs out when its short access token
+expires. Also check that `expires` is still in milliseconds and the refresh
+window (Pi refreshes five minutes early, OpenCode's xAI two) still fits inside
+`PROVIDER_AUTH_MIN_VALIDITY_MS`.
 
 ## Claude
 
@@ -852,7 +877,7 @@ through the backend workspace.
    command and the local `opencode serve` spawn, and by an `ENV` in
    `docker/Dockerfile`. It suppresses the check and the notice; `/update`
    stays reachable from the command palette as a deliberate user action.
-   1.x now ships from upstream's `v1` branch; see `docs/todo/opencode-v2.md`.
+   1.x now ships from upstream's `v1` branch; see `docs/todo/agent-engines/0008-opencode-v2.md`.
 
 Upstream references: [OpenCode releases](https://github.com/anomalyco/opencode/releases)
 and [OpenCode SDK documentation](https://opencode.ai/docs/sdk/).
@@ -1285,6 +1310,19 @@ switch to another environment while it runs or waits for input, return after it
 finishes, and confirm that messages, status, questions/approvals, and controls
 rehydrate from authoritative backend state.
 
+Re-qualify slash commands for every provider whose pin moved, before the
+upgrade merges: the qualified rows in
+[`native-agent-commands.md`](../architecture/native-agent-commands.md#provider-support)
+name the versions they were proved on, and a pin they no longer match is an
+unproven claim. The scripted probes in `scripts/slash-probes/` need no
+Orkestrator profile and cost seconds (`codex-disabled-skills-probe.mjs` needs no
+sign-in; `pi-commands-probe.mjs` uses the host's Pi login by path and runs a few
+short model turns). For a Codex or Claude upgrade also run
+`e2e/agent-testing/slash-command-inactive.spec.ts` (see
+[`agent-testing.md`](agent-testing.md#live-slash-commands-in-an-inactive-environment)).
+Then update the pins in that section, or list what changed as unavailable with
+a reason.
+
 Before committing, search for both the old SDK and CLI version literals:
 
 ```bash
@@ -1310,7 +1348,7 @@ downgrade compatibility matters.
 Everything that is not an agent SDK or CLI (renderer and backend libraries,
 Electron, Bun, Docker image tools, CI actions) follows the same lockfile rules
 (AGENTS.md, *Updating Bun and lockfiles*) plus these. Outstanding upgrades are
-tracked in [`docs/todo/dependency-upgrades.md`](../todo/dependency-upgrades.md).
+tracked in [`docs/todo/cross-cutting/0032-dependency-upgrades.md`](../todo/cross-cutting/0032-dependency-upgrades.md).
 
 Finding what is outdated: `mise exec -- bun outdated --filter='*'` and
 `mise exec -- bun audit` (both read-only), then `npm view <pkg> dist-tags`.

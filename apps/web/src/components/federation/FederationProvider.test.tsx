@@ -1,12 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { FederationProvider, useFederation } from "./FederationProvider";
 import { portalStore } from "@/lib/portal/portal-store";
 import { invoke } from "@/lib/native/backend";
 import { mock } from "bun:test";
-import { switchWorkspace } from "@/lib/portal/workspace-switch";
-import { writeStoredWorkspace } from "@/lib/portal/workspace-target-storage";
-import { fireEvent } from "@testing-library/react";
 
 const original = window.orkestrator;
 afterEach(() => {
@@ -17,48 +14,22 @@ afterEach(() => {
   (invoke as ReturnType<typeof mock>).mockReset();
 });
 
-function ReturnControl() {
-  const { enabled, portalState } = useFederation();
-  return enabled && portalState.self ? (
-    <button
-      onClick={() => {
-        void switchWorkspace(null);
-      }}
-    >
-      Return to {portalState.self.displayName}
-    </button>
-  ) : null;
+function BoundMachine() {
+  const { enabled, bound } = useFederation();
+  return enabled && bound ? <p>Bound to {bound.backendId}</p> : null;
 }
 
-test("removing the final leaf leaves the self-summary return route enabled", async () => {
+test("a workspace realm stays bound to its node with no other node listed", async () => {
   window.orkestrator = undefined;
   window.orkestratorWorkspaceTarget = { nodeId: "bk_leaf", nodeName: "Leaf", path: "relay" };
-  writeStoredWorkspace({
-    workspaceId: "w",
-    nodeId: "bk_leaf" as never,
-    nodeName: "Leaf",
-    path: "relay",
-    baseUrl: "https://command.test/relay",
-    expiresAt: Date.now() + 900000,
-  });
-  const self = {
-    nodeId: "bk_command",
-    displayName: "Desk",
-    loadedAt: 1,
-    truncated: false,
-    projects: [],
-    environments: [],
-  };
   (invoke as ReturnType<typeof mock>).mockImplementation(async (command) =>
-    command === "get_node_summaries" ? { selfId: "bk_command", nodes: [], self } : {},
+    command === "get_node_summaries" ? { selfId: "bk_command", nodes: [] } : {},
   );
-  portalStore.store.setState({ self: self as never, nodes: [], selfId: "bk_command" as never });
-  // Happy DOM reload stays in this document; target storage proves the return.
+  portalStore.store.setState({ nodes: [], selfId: "bk_command" as never });
   render(
     <FederationProvider>
-      <ReturnControl />
+      <BoundMachine />
     </FederationProvider>,
   );
-  fireEvent.click(await screen.findByRole("button", { name: "Return to Desk" }));
-  await waitFor(() => expect(sessionStorage.getItem("orkestrator.workspace-target")).toBeNull());
+  expect(await screen.findByText("Bound to bk_leaf")).toBeTruthy();
 });

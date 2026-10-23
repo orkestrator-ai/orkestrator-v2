@@ -20,6 +20,7 @@ import { asRecord, nonEmptyString } from "./agent-provider-runtime.js";
 import { markLocalBridgesForLoginRefresh } from "./agent-accounts-active.js";
 import type { CommandContext } from "./commands-context.js";
 import { withHostOpenCodeServer, type HostOpenCodeServer } from "./host-model-catalog-refresh.js";
+import { openCodeSdkFetch } from "./http-bridge-transport.js";
 
 /**
  * Signs OpenCode model providers in from the app.
@@ -100,12 +101,6 @@ function assertResponse(response: { error?: unknown }, operation: string): void 
   if (response.error) throw sdkFailure(operation, response.error);
 }
 
-/** Bun's fetch without its idle timeout (`timeout` is a Bun extension). */
-const untimedFetch: typeof fetch = Object.assign(
-  (input: RequestInfo | URL, init?: RequestInit) => fetch(input, { ...init, timeout: false }),
-  { preconnect: fetch.preconnect },
-);
-
 function signInClient(
   dependencies: OpenCodeProviderLoginDependencies,
   server: HostOpenCodeServer,
@@ -117,7 +112,7 @@ function signInClient(
     // OpenCode answers an OAuth callback only once the user approves, which
     // can take longer than Bun's five-minute idle default. The sign-in's own
     // deadline and cancellation abort it instead.
-    fetch: untimedFetch,
+    fetch: openCodeSdkFetch,
   });
 }
 

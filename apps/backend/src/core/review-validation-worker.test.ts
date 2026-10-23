@@ -571,16 +571,21 @@ clearInterval(heartbeat);`,
 });
 
 test("a covered command can be stopped while its covering command runs", async () => {
+  // The covering command runs until the test releases it after the stop, so
+  // the stop always lands while it is running. The wait is bounded, and an
+  // unreleased gate fails the command.
+  const release = ".orkestrator/covering-release";
+  const covering = `i=0; while [ ! -e ${release} ] && [ $i -lt 600 ]; do sleep 0.05; i=$((i+1)); done; test -e ${release}`;
   const { root, run } = await fixture([
     command("covered", "touch .orkestrator/covered-ran"),
-    command("covering", "sleep 3"),
+    command("covering", covering),
   ]);
   await writeFile(
     path.join(root, ".orkestrator-test-scheduler.json"),
     JSON.stringify({
       version: 1,
       cooperativeCommands: [],
-      commandProfiles: { "sleep 3": { covers: ["touch .orkestrator/covered-ran"] } },
+      commandProfiles: { [covering]: { covers: ["touch .orkestrator/covered-ran"] } },
     }),
   );
   await control(root, run);
@@ -590,6 +595,8 @@ test("a covered command can be stopped while its covering command runs", async (
     status: "incomplete",
     limitation: "Stopped by the user before it started; validation is incomplete",
   });
+  await mkdir(path.join(root, ".orkestrator"), { recursive: true });
+  await writeFile(path.join(root, release), "");
   const done = await completed(root, run);
   expect(done.results.map((result) => result.status)).toEqual(["incomplete", "passed"]);
   expect(existsSync(path.join(root, ".orkestrator/covered-ran"))).toBe(false);
@@ -957,6 +964,42 @@ test("repository profiles avoid redundant suites and preserve dependent checks a
   expect(existsSync(path.join(root, ".orkestrator/full-ran"))).toBe(false);
   expect(existsSync(path.join(root, ".orkestrator/all-ran"))).toBe(true);
   expect(existsSync(path.join(root, ".orkestrator/after-ran"))).toBe(true);
+});
+
+test("an identical repeated command runs once and its copy is recorded as covered", async () => {
+  const { root, run } = await fixture([
+    command("cold", "echo run >> .orkestrator/runs"),
+    command("warm", "echo run >> .orkestrator/runs", { dependsOn: ["cold"] }),
+    command("after", "touch .orkestrator/after-ran", { dependsOn: ["warm"] }),
+  ]);
+  const done = await completed(root, run);
+  expect(done.plan).toEqual(run.plan);
+  expect(done.results.map((result) => result.status)).toEqual(["passed", "skipped", "passed"]);
+  expect(done.results[1]!.limitation).toBe("Covered by cold (identical command)");
+  expect(await readFile(path.join(root, ".orkestrator/runs"), "utf8")).toBe("run\n");
+  expect(existsSync(path.join(root, ".orkestrator/after-ran"))).toBe(true);
+});
+
+test("an identical command still reruns after setup its first copy did not wait for", async () => {
+  const { root, run } = await fixture([
+    command("before", "echo run >> .orkestrator/runs"),
+    command("migrate", "touch .orkestrator/migrated", { dependsOn: ["before"] }),
+    command("again", "echo run >> .orkestrator/runs", { dependsOn: ["migrate"] }),
+  ]);
+  const done = await completed(root, run);
+  expect(done.results.map((result) => result.status)).toEqual(["passed", "passed", "passed"]);
+  expect(await readFile(path.join(root, ".orkestrator/runs"), "utf8")).toBe("run\nrun\n");
+});
+
+test("a repeat of a failed command is incomplete rather than skipped as passing", async () => {
+  const { root, run } = await fixture([
+    command("first", "echo run >> .orkestrator/runs; exit 1"),
+    command("repeat", "echo run >> .orkestrator/runs; exit 1"),
+  ]);
+  const done = await completed(root, run);
+  expect(done.results.map((result) => result.status)).toEqual(["failed", "incomplete"]);
+  expect(done.results[1]!.limitation).toBe("Covering validation first did not pass");
+  expect(await readFile(path.join(root, ".orkestrator/runs"), "utf8")).toBe("run\n");
 });
 
 test("coverage does not remove prerequisites or turn a failed covering suite into success", async () => {
@@ -1399,14 +1442,17 @@ admission.close(); process.exitCode = result.status ?? 1;
 
 test("a measured command reserves its observed CPU use on the next run", async () => {
   // The same command twice: the first run is sized by weight, the second by
-  // the first run's measured parallelism. Sleeping uses almost no CPU.
+  // the first run's measured parallelism. Sleeping uses almost no CPU. The
+  // step between them makes the rerun meaningful, so it is not skipped as an
+  // identical repeat.
   const { root, run } = await fixture([
     command("first", "sleep 1.2"),
-    command("second", "sleep 1.2", { dependsOn: ["first"] }),
+    command("between", "touch .orkestrator/between", { dependsOn: ["first"] }),
+    command("second", "sleep 1.2", { dependsOn: ["between"] }),
   ]);
   const done = await waitFor(root, run, 15000, { ORKESTRATOR_TEST_HOST_WORKERS: "4" });
-  expect(done.results.map((result) => result.status)).toEqual(["passed", "passed"]);
+  expect(done.results.map((result) => result.status)).toEqual(["passed", "passed", "passed"]);
   expect(done.results[0]).toMatchObject({ reservedWorkers: 4 });
   expect(done.results[0]!.cpuMs).toBeLessThan(done.results[0]!.durationMs);
-  expect(done.results[1]).toMatchObject({ reservedWorkers: 1 });
+  expect(done.results[2]).toMatchObject({ reservedWorkers: 1 });
 }, 30000);

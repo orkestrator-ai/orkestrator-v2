@@ -15,7 +15,7 @@
  * AGENTS.md mandates: each test file gets a fresh module registry, so this
  * module is evaluated once per file exactly as the duplicated preambles were.
  */
-import { afterEach, beforeEach, describe, test, expect } from "bun:test";
+import { afterEach, beforeEach } from "bun:test";
 
 import { EventEmitter } from "node:events";
 
@@ -25,18 +25,7 @@ import { tmpdir } from "node:os";
 
 import { join } from "node:path";
 
-import {
-  AppServerRuntime,
-  DEFAULT_THREAD_IDLE_MS,
-  estimateOrderedEventBytes,
-  MAX_PENDING_EVENTS_PER_TURN,
-  MAX_PENDING_TURNS,
-  MAX_RECOVERED_CONTEXT_CHARS,
-  mergeRateLimitWindows,
-  messageSnapshotIntervalMs,
-  normalizedMessageSnapshotChars,
-  type RuntimeSseEvent,
-} from "./app-server-runtime.js";
+import { AppServerRuntime, type RuntimeSseEvent } from "./app-server-runtime.js";
 
 import type { WatchRolloutFile } from "./sessions/refused-cell-tail.js";
 import { AppServerEngine } from "./engine/app-server-engine.js";
@@ -45,33 +34,10 @@ import type { AppServerSupervisorOptions } from "./app-server/process-supervisor
 
 import { FakeReadable, FakeWritable } from "./app-server/testing/fake-app-server.js";
 
-import { MAX_LOCAL_MESSAGES, phaseToExternalStatus } from "./sessions/thread-registry.js";
-
-import {
-  BRIDGE_SESSION_REGISTRY_VERSION,
-  BridgeSessionStore,
-  hashCwd,
-} from "./sessions/persistence.js";
-
-import { DispatchJournal } from "./sessions/dispatch-journal.js";
-
 import type { CommandChangeProbe } from "./sessions/command-changes.js";
 import type { CodexChangeEvidence } from "./change-evidence.js";
 
-import { persistSessionTitle } from "./session-titles.js";
-
-import {
-  getTranscriptCatalogInvalidationCountForTesting,
-  setHydrateMessagesFromPersistedSessionGateForTesting,
-} from "./history/rollout.js";
-
-import { AppServerProcessExitError, AppServerTimeoutError } from "./app-server/errors.js";
-
-import type {
-  EngineEvent,
-  EngineRateLimitWindow,
-  EngineRateLimitWindowUpdate,
-} from "./engine/types.js";
+import { setHydrateMessagesFromPersistedSessionGateForTesting } from "./history/rollout.js";
 
 /**
  * Returned by a handler to model a request app-server never answers — the exact
@@ -240,6 +206,7 @@ export function threadPayload(
 }
 
 export const BASE_HANDLERS: Record<string, (params: Record<string, unknown>) => unknown> = {
+  "skills/list": () => ({ data: [{ errors: [], skills: [] }] }),
   initialize: () => ({
     userAgent: "orkestrator/0.145.0 (test)",
     codexHome: "/tmp/codex-home",

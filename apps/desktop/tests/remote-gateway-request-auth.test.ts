@@ -1,5 +1,8 @@
 import { describe, expect, mock, test } from "bun:test";
-import { installRemoteGatewayRequestAuth } from "../electron/remote-gateway-request-auth";
+import {
+  createRealmRequestAuthInstaller,
+  installRemoteGatewayRequestAuth,
+} from "../electron/remote-gateway-request-auth";
 
 function installHarness(options: { browserPreviewOnly?: boolean } = {}) {
   let beforeHeaders: ((details: any, callback: (response: any) => void) => void) | null = null;
@@ -382,4 +385,38 @@ describe("remote gateway renderer request authentication", () => {
       },
     });
   });
+});
+
+test("reopened realms share one session auth listener and use only live renderer scopes", () => {
+  type BeforeListener = Parameters<import("electron").WebRequest["onBeforeSendHeaders"]>[0];
+  const webRequest = {
+    onBeforeSendHeaders: mock((_filter: unknown, _listener: BeforeListener) => undefined),
+    onHeadersReceived: mock((_filter: unknown, _listener: unknown) => undefined),
+  };
+  const scopes = new Map<number, string>([[10, "first"]]);
+  const authorization = mock((_url: string, scope: string) => `Bearer ${scope}`);
+  const install = createRealmRequestAuthInstaller((id) => scopes.get(id), authorization);
+  install({ session: { webRequest: webRequest as never } });
+  scopes.delete(10);
+  scopes.set(11, "second");
+  install({ session: { webRequest: webRequest as never } });
+  expect(webRequest.onBeforeSendHeaders).toHaveBeenCalledTimes(1);
+  expect(webRequest.onHeadersReceived).toHaveBeenCalledTimes(1);
+  const listener = webRequest.onBeforeSendHeaders.mock.calls[0]![1]!;
+  const callback = mock((_response: unknown) => undefined);
+  const details = { url: "https://desk.example/api", resourceType: "xhr", requestHeaders: {} };
+  listener({ ...details, webContentsId: 10 } as never, callback);
+  listener(details as never, callback);
+  expect(authorization).not.toHaveBeenCalled();
+  listener({ ...details, webContentsId: 11 } as never, callback);
+  expect(authorization).toHaveBeenCalledWith(details.url, "second");
+  expect(callback).toHaveBeenLastCalledWith({
+    requestHeaders: {
+      Authorization: "Bearer second",
+      Origin: "https://orkestrator.dev",
+    },
+  });
+  scopes.delete(11);
+  listener({ ...details, webContentsId: 11 } as never, callback);
+  expect(callback).toHaveBeenLastCalledWith({ requestHeaders: {} });
 });

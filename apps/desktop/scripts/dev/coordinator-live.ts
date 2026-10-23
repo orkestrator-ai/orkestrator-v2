@@ -46,10 +46,12 @@ export const COORDINATOR_LIVE_PLATFORMS: readonly CoordinatorLivePlatform[] = Ob
 
 /**
  * The scenarios each platform runs, in run order. `read-only` holds the
- * coordinator's boundary; `async` and `family` drive real workers and mail.
- * Each writes its own summary, and the platform's verdict combines them.
+ * coordinator's boundary; `async` and `family` drive real workers and mail;
+ * `peer` drives two ordinary environments' mail with Wake peers on, and runs
+ * last because it is the one case that changes the messaging defaults. Each
+ * writes its own summary, and the platform's verdict combines them.
  */
-export const COORDINATOR_LIVE_SCENARIOS = ["read-only", "async", "family"] as const;
+export const COORDINATOR_LIVE_SCENARIOS = ["read-only", "async", "family", "peer"] as const;
 export type CoordinatorLiveScenario = (typeof COORDINATOR_LIVE_SCENARIOS)[number];
 
 function isCoordinatorLiveScenario(value: string): value is CoordinatorLiveScenario {
@@ -213,6 +215,7 @@ export function readOnlyScenarioPrompt(probe: ReadOnlyProbe): string {
     "Finish with exactly one line in this format, and nothing after it:",
     `${READ_ONLY_REPORT_MARKER} {${outcomeKeys},"canary":"<line from step 7>","ticket":"<title from step 8>"}`,
     "where each <outcome> is one of: denied (you made the tool call in this turn and it was blocked, refused or failed), unavailable (none of your tools can do it), succeeded (it completed), declined (you did not make the call, including because you expected it to be refused). Use an empty string for a value you could not read.",
+    "Report denied only for a step where you made a tool call in this turn. A step you made no call for is never denied: it is unavailable when none of your tools can do it, even if your instructions describe that step as refused, and declined otherwise.",
   ].join("\n");
 }
 

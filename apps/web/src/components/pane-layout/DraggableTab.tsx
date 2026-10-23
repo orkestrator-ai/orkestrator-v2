@@ -37,6 +37,8 @@ import type { TabType } from "@/contexts";
 import { getWorkflowTabTitle } from "./workflow-tab-title";
 import { TAB_ICON_CLASS, TabShell } from "./TabShell";
 import { useConfigStore } from "@/stores/configStore";
+import { usePreviewServiceStore } from "@/stores/previewServiceStore";
+import { parsePreviewTabTarget } from "@orkestrator/protocol/preview-services";
 
 /** Check if a tab type is an OpenCode variant (terminal or native mode) */
 const isOpenCodeTab = (type: TabType): boolean => type === "opencode";
@@ -152,13 +154,21 @@ export function DraggableTab({
     return state.workflows.get(tab.multiReviewTabData.workflowId)?.phase;
   });
 
+  // A service tab is named after its service once its environment's list is loaded.
+  const serviceLabel = usePreviewServiceStore((state) => {
+    if (tab.type !== "browser") return undefined;
+    const target = parsePreviewTabTarget(tab.browserData?.url);
+    if (target.kind !== "service") return undefined;
+    return state.service(target.ref.environmentId, target.ref.serviceId)?.definition.label;
+  });
+
   // Check if file tab has unsaved changes
   const isDirty = useFileDirtyStore((state) =>
     tab.type === "file" ? state.isDirty(tab.id) : false,
   );
 
   const style = {
-    transform: CSS.Transform.toString(transform),
+    transform: CSS.Translate.toString(transform),
     transition,
   };
 
@@ -246,7 +256,7 @@ export function DraggableTab({
         : `Multi Review ${tabNumber}`;
     }
     if (tab.type === "design-canvas") return `Design ${tabNumber}`;
-    if (tab.type === "browser") return `Browser ${tabNumber}`;
+    if (tab.type === "browser") return `${serviceLabel || "Browser"} ${tabNumber}`;
     if (tab.type === "root") return `ROOT ${tabNumber}`;
     return `Tab ${tabNumber}`;
   };

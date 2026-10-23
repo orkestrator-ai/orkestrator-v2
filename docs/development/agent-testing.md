@@ -373,7 +373,7 @@ model, written as `<provider>/<model>`, from a provider your OpenCode login has
 connected. The build-pipeline case also needs a model that emits reasoning.
 The spec still requires the pin even though no fixed default model ships any
 more; making it optional is tracked in
-[live-provider-and-platform-qualification.md](../todo/live-provider-and-platform-qualification.md).
+[0031-live-provider-and-platform-qualification.md](../todo/cross-cutting/0031-live-provider-and-platform-qualification.md).
 
 ```bash
 mise run dev:test --profile qa-opencode-live --fixture --credential-source opencode --agent-platforms opencode
@@ -405,10 +405,30 @@ server's log whether each model call really reached it. It refuses to write a
 source outside the test worktree or the profile's data directory. Authorizing
 the Codex or OpenCode credential source points those providers at the host's
 own homes, so their user scopes are then skipped; the
-[live record](../todo/mcp-management.md#live-apply-record-2026-10-18) shows
+[live record](../todo/mcp/0039-mcp-management.md#live-apply-record-2026-10-18) shows
 how those scopes were covered with an access-only credential seeded into the
 profile. Run one provider at a time (flake 0420). Each provider writes
 `output/agent-testing/<run>/mcp-apply-live/<provider>.json`.
+
+The live idle-observation spec (`e2e/agent-testing/idle-observation-live.spec.ts`)
+has its own opt-in, `ORKESTRATOR_AGENT_TEST_LIVE_IDLE_OBSERVATION=1`. For each
+provider in `ORKESTRATOR_AGENT_TEST_IDLE_PLATFORMS` (default all six) it runs
+one native tab through a missed final event, a parked approval, a sub-agent, a
+background shell, a cut event stream with the browser offline, a hidden
+document, a turn that completes with no renderer connected, and an idle wait
+past the 10 min idle detach. Each case must settle with no stuck Stop button
+or sidebar "working", inside the latency budgets. The faults are injected in
+the page (an `EventSource` and `document.visibilityState` wrapper), not in the
+product. `ORKESTRATOR_AGENT_TEST_IDLE_CASES` narrows the cases,
+`ORKESTRATOR_AGENT_TEST_IDLE_DETACH_WAIT_MS` shortens the idle wait for a
+cadence-only check, and `ORKESTRATOR_AGENT_TEST_IDLE_MODELS` takes
+`<platform>=<model>` pairs. Providers run in parallel with `--workers=4
+--fully-parallel`; run one provider alone to measure a lost announcement,
+because another environment's announcement also recovers a view (stamp gap).
+Each provider writes
+`output/agent-testing/<run>/idle-observation-live/<platform>.json`. The
+recorded run and its credential setup are in
+[0049-native-agent-idle-observation.md](../todo/transcripts-and-observation/0049-native-agent-idle-observation.md#live-qualification-record-2026-10-21).
 
 The live Multi Review cycle (`e2e/agent-testing/multi-review-live.spec.ts`)
 has its own opt-in, `ORKESTRATOR_AGENT_TEST_LIVE_MULTI_REVIEW=1`, and uses the
@@ -664,6 +684,34 @@ records the MCP files a query was built from when the query starts, so the
 apply half still runs when the provider refuses requests (a rate limit, say).
 A full-mode pass is still needed for the tool-call checks.
 
+### Live slash commands in an inactive environment
+
+`e2e/agent-testing/slash-command-inactive.spec.ts` sends a selected project
+command, switches environments, and checks that it completes while inactive
+and runs exactly once. Meanwhile it changes the inventory, refreshes the
+catalogue and drops the event stream for 10 s. It then checks the result after a
+reload, a narrow viewport and two bridge restarts. It needs
+`ORKESTRATOR_AGENT_TEST_LIVE_SLASH=1` and the providers' credentials.
+`ORKESTRATOR_AGENT_TEST_SLASH_PROVIDERS` picks `codex` (default) and/or
+`claude`. `ORKESTRATOR_AGENT_TEST_SLASH_ENVIRONMENT` is `local` (default, a
+host worktree with the `projectResources: true` override) or `container`. The
+container variant needs a profile started with
+`--fixture-environments local,container`. It writes the command files and the
+execution marker inside the container's `/workspace` through `docker exec`,
+sets no policy override (containers load project resources by default) and
+restarts the container's bridge. Neither variant writes a user-scope command
+file.
+
+```bash
+mise run dev:test --profile qa-slash --fixture --fixture-environments local,container \
+  --credential-source codex --credential-source claude --agent-platforms codex,claude
+# In a second terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-slash ORKESTRATOR_AGENT_TEST_LIVE_SLASH=1 \
+  ORKESTRATOR_AGENT_TEST_SLASH_PROVIDERS=codex,claude ORKESTRATOR_AGENT_TEST_SLASH_ENVIRONMENT=container \
+  mise run test:logged -- --name slash-inactive -- mise run test:agent:browser -- \
+  e2e/agent-testing/slash-command-inactive.spec.ts
+```
+
 ### Live close retention
 
 `e2e/agent-testing/close-retention-live.spec.ts` checks, with real providers
@@ -702,6 +750,22 @@ engines (`bridges/cursor-bridge/src/testing/fake-engine-server.ts`,
 `bridges/acp-bridge/src/testing/fake-agent-close.ts` and
 `e2e/fixtures/close-retention-opencode.ts`). Its assertions read each engine's
 own store, so a duplicated or lost prompt fails there.
+
+The same host also carries the lifecycle cases that need a fault on the real
+stack. Its fixture page mounts the app shell's agent information button and
+toaster, and the host adds endpoints for the faults:
+
+- `/restart-bridge` stops a bridge and starts it again on the same port and
+  token. With `shed: true` for Cursor it first rewrites the state file as the
+  bridge's own budget pass would under a smaller budget, so a reload shows a
+  transcript that persistence shed.
+- `/cursor-saturate-steer` fills a held Cursor turn's steer journal straight at
+  the bridge until it refuses with `steer-capacity-exceeded`.
+- `/pi-startup-gate` holds Pi prompts at `AgentSession.prompt`, before Pi
+  accepts them.
+- `/seed-native-session` maps a tab to a provider session, as an earlier
+  backend run would have. Claude has no real bridge here: `peekBridge` answers
+  a stale Claude bridge whose close route is a 404.
 
 ### Live paused interactions
 
@@ -744,15 +808,16 @@ token. The whole run takes about 20 minutes.
 - `ORKESTRATOR_AGENT_TEST_PAUSE_WAIT_MS` shortens the wait for a shakedown.
   Only the default proves the ten-minute claim.
 - `ORKESTRATOR_AGENT_TEST_PAUSE_MODELS` takes `<platform>=<model>` pairs. It
-  defaults to `pi=openai/gpt-6-sol`, because a profile shares only Pi's
-  `auth.json` and Pi's own fallback, `gpt-4`, is refused by a ChatGPT-backed
-  OpenAI login.
+  defaults to `pi=openai/gpt-6-sol`. A profile now also receives the host's
+  saved Pi default model, but the pin keeps the run independent of whatever
+  the host saved; without either, the bridge would start on the catalogue's
+  first model (once `gpt-4`), which a ChatGPT-backed OpenAI login refuses.
 
 The approval card is answered with **Approve** alone. The spec never picks an
 optional or amendment option. Codex's "Approve with command policy" writes a
 rule into the profile's isolated Codex home. Earlier profiles shared the host
 home, as recorded in
-[live-provider-and-platform-qualification.md](../todo/live-provider-and-platform-qualification.md).
+[0031-live-provider-and-platform-qualification.md](../todo/cross-cutting/0031-live-provider-and-platform-qualification.md).
 The task remains explicitly opt-in (the environment flag above is required);
 it is not part of the default suite or CI because it spends real provider tokens.
 Two additional cases inject setup failures immediately after creation and
@@ -764,7 +829,7 @@ can check it against a shorter watchdog. Environments are registered for stop/de
 immediately after creation, so setup failures also clean up; cleanup failures fail
 the qualification. Credential-free regression tests for cleanup, immediate holds
 and approval choices run in `mise run test`. The evidence is in
-[agent-interactions-and-permissions.md](../todo/agent-interactions-and-permissions.md#live-pause-record-2026-10-21).
+[0001-agent-interactions-and-permissions.md](../todo/agent-engines/0001-agent-interactions-and-permissions.md#live-pause-record-2026-10-21).
 
 ### Live design-tool cycle
 
@@ -818,14 +883,15 @@ state stay there. The launching shell's `CLAUDE_CONFIG_DIR` is recorded only
 as a host credential source, so a scratch configuration directory is no longer
 needed to isolate session writes. Selecting the matching Keychain login when
 the shell names an added account remains tracked in
-[agent-accounts-and-sign-in.md](../todo/agent-accounts-and-sign-in.md).
+[0003-agent-accounts-and-sign-in.md](../todo/agent-engines/0003-agent-accounts-and-sign-in.md).
 
 ### Live coordinator suite
 
 The live coordinator suite checks that a real provider keeps the coordinator's
 read-only boundary (`read-only`), that delegation never waits inside a turn
-(`async`), and that worker mail flows with nobody's help (`family`). It runs as
-one command and owns its profiles:
+(`async`), that worker mail flows with nobody's help (`family`), and that peer
+mail between two ordinary environments wakes each side with **Wake peers** on
+(`peer`). It runs as one command and owns its profiles:
 
 ```bash
 mise run test:agent:coordinator                              # every platform and scenario
@@ -988,6 +1054,27 @@ reply), each ping has a distinct delivered request and reply, ordered by
 persisted creation timestamps with each reply before the next request, no family
 message is `stored` or `inject_failed`, and nothing reached the harness.
 
+The `peer` case needs no coordinator. It turns **Settings → Messaging → Wake
+peers** on for its run (off by default) and restores it afterwards, then
+creates two ordinary local environments on the fixture project, each with a
+startup agent on the platform in build mode, the way `launch_environment`
+does but with no coordinator behind them, so their mail takes the `peer`
+route. The responder's startup prompt asks it to say ready and end its turn;
+once it is idle, the opener's startup prompt sends it the first message by
+environment id. Each side answers message *n* with message *n + 1*
+(`reply_message`) until the tenth, and the opener then writes a done line.
+The harness sends nothing after the two startup prompts and answers nothing,
+waiting at most `ORKESTRATOR_AGENT_TEST_COORDINATOR_PEER_TIMEOUT_MS` (default
+1800000) for the exchange. It passes when Wake peers was the only messaging
+setting changed, all ten messages exist exactly once with the right sender and
+recipient, each routed `peer` and `injected`, each created no earlier than the
+previous one was delivered (the delivery is what woke its recipient), no other
+message passed between the peers, the opener wrote its done line, no
+interaction reached the harness, and neither transcript holds a user row
+other than its startup prompt and mail carriers. A peer turn failing on a
+recognised sign-in error skips the case. Both environments are stopped and
+deleted when it ends.
+
 Each scenario step waits at most
 `ORKESTRATOR_AGENT_TEST_COORDINATOR_STEP_TIMEOUT_MS` (default 600000). Workers
 the coordinator launched are stopped and deleted when the case ends. The
@@ -998,7 +1085,7 @@ to the coordinator (a carrier count of -1 means unverified), and its `sleep`,
 Playwright timeouts cover the sum of each scenario's wait budgets plus four
 minutes for setup and cleanup. The profile runner uses those same timeouts and
 adds two minutes per selected scenario for process overhead. Both honor the
-step, turn and family timeout environment overrides.
+step, turn, family and peer timeout environment overrides.
 
 Credential-free tests in `coordinator-live-observer.test.ts` exercise the same
 observer and gate/queue orchestration as the live spec, including completion
@@ -1008,7 +1095,7 @@ negative evidence and deadline relationships.
 
 To run the spec against a profile you started yourself, set the opt-in and
 optionally narrow the platforms and scenarios
-(`ORKESTRATOR_AGENT_TEST_COORDINATOR_SCENARIOS=async,family`). Each case closes the main conversation an
+(`ORKESTRATOR_AGENT_TEST_COORDINATOR_SCENARIOS=async,family,peer`). Each case closes the main conversation an
 earlier case assigned and leaves the project home environment in place:
 
 ```bash
@@ -1121,7 +1208,9 @@ Two traps when scripting this path:
   requests but leaves the open event stream connected, so events still arrive
   and nothing reconnects. To drop the stream, also call `window.stop()` in the
   page while offline; the gateway client then reconnects and replays from its
-  cursor once back online.
+  cursor once back online. `watchEventStream`
+  (`e2e/agent-testing/event-stream-outage.ts`) does both and asserts the
+  reconnection.
 
 For each failure record profile and commit, automated commands, route used,
 reproduction steps, expected and actual results, severity, and evidence paths.
@@ -1228,3 +1317,39 @@ go; `--older-than <days>` also removes stopped profiles idle for that long.
   processes; it never kills by executable name or port.
 - If reset refuses the target, do not bypass the sentinel or path check. Inspect
   `profile.json` and choose the intended named profile.
+
+## Claude container login renewal qualification
+
+The deterministic tests cover startup refresh with surviving MCP logins, account
+switch fencing, sanitization publication races, and bridge-start ordering. The
+Docker fixture also boots and restarts with a legacy Claude refresh token on a
+read-only mount and verifies that the working credential is access-only.
+
+`apps/backend/tests/claude-container-login-live.test.ts` qualifies the real
+refresh exchange separately. It runs the pinned host CLI, then pushes its
+renewal into a running container while a Claude background task waits past the
+old token's **actual** expiry. The same session must produce a model response
+after expiry; the container is never restarted, and no renderer is mounted.
+Credentials and responses stay out of test output.
+
+Provision an **exclusive disposable account** at
+`<private-root>/agent-accounts/claude/<uuid>` with an on-disk `.credentials.json`.
+Do not borrow a personal login or an agent-test profile's copied refresh token:
+this qualification intentionally rotates the dedicated account's refresh token.
+Wait until the real login has 90–240 seconds remaining; do not edit expiry
+metadata. Build a development image and supply the pinned host toolchain's bin
+directory. Then run:
+
+```bash
+ORKESTRATOR_LIVE_CLAUDE_LOGIN=1 \
+ORKESTRATOR_LIVE_CLAUDE_ACCOUNT_HOME=<private-root>/agent-accounts/claude/<uuid> \
+ORKESTRATOR_LIVE_CLAUDE_IMAGE=orkestrator-v2:dev-<workspace-hash> \
+ORKESTRATOR_LIVE_CLAUDE_TOOLCHAIN_BIN=<pinned-toolchain-bin> \
+  mise run test:logged -- --name claude-login-live -- bun test --cwd apps/backend ./tests/claude-container-login-live.test.ts --parallel=1 --only-failures
+```
+
+The test is skipped without the opt-in. With the opt-in, missing prerequisites,
+provider failures, ineffective refreshes, and failed continuations fail the
+qualification. It removes only its own container and scratch directory; the
+renewed dedicated login remains in its home. A synthetic Docker pass does not
+prove that the provider refresh exchange succeeded.

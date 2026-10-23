@@ -27,7 +27,12 @@ import {
   isMacOsPrivacySettingsPane,
   type MacOsPermissionsStatus,
 } from "@orkestrator/protocol/macos-permissions";
+import type {
+  CommandHandoverPreviewResult,
+  CommandHandoverResult,
+} from "@orkestrator/protocol/command-nodes";
 import { isTrustedRendererUrl } from "./window.js";
+import { parseCommandHandoverInput, type CommandHandoverInput } from "./command-handover.js";
 import { macOsPrivacySettingsUrl } from "./macos-permissions.js";
 import {
   readClipboardImage,
@@ -148,6 +153,14 @@ export type MainIpcDependencies = {
     event?: IpcEventLike,
   ) => Promise<ConnectionList>;
   useConnection: (connectionId: string, event?: IpcEventLike) => Promise<ConnectionList>;
+  previewCommandHandover: (
+    targetConnectionId: string,
+    event?: IpcEventLike,
+  ) => Promise<CommandHandoverPreviewResult>;
+  handOverCommandNode: (
+    input: CommandHandoverInput,
+    event?: IpcEventLike,
+  ) => Promise<CommandHandoverResult | null>;
   forgetConnection: (connectionId: string, event?: IpcEventLike) => Promise<ConnectionList>;
   openConnectionWindow: (connectionId: string, event?: IpcEventLike) => Promise<void>;
   browserPreviews?: BrowserPreviewController;
@@ -237,6 +250,8 @@ export function registerMainIpc({
   updateConnectionToken,
   renameConnection,
   useConnection,
+  previewCommandHandover,
+  handOverCommandNode,
   forgetConnection,
   openConnectionWindow,
   browserPreviews,
@@ -359,6 +374,13 @@ export function registerMainIpc({
     if (typeof connectionId !== "string") throw new Error("Expected a connection ID");
     return useConnection(connectionId, event);
   });
+  handle("orkestrator:connections:preview-command-handover", (event, connectionId: unknown) => {
+    if (typeof connectionId !== "string") throw new Error("Expected a connection ID");
+    return previewCommandHandover(connectionId, event);
+  });
+  handle("orkestrator:connections:hand-over-command", (event, input: unknown) =>
+    handOverCommandNode(parseCommandHandoverInput(input), event),
+  );
   handle("orkestrator:connections:update-token", (event, connectionId: unknown, token: unknown) => {
     if (typeof connectionId !== "string" || typeof token !== "string") {
       throw new Error("Expected a connection ID and gateway token");

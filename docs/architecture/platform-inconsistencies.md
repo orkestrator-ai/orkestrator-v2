@@ -256,7 +256,7 @@ The capability table treats them as identical. Runtime is not.
 | Binary | `cursor-agent` (never `cursor`) | `grok` |
 | Subcommand | `acp` | `agent … stdio` |
 | Command auto-approve | `--force` | `--always-approve` |
-| MCP auto-approve | `--approve-mcps` only if `ACP_APPROVE_PROJECT_MCPS === "1"` | **no equivalent flag** |
+| Project MCP servers | `.cursor/mcp.json` only when the session policy turns `projectResources` on (`cursorMcpServers`) | loaded by Grok's own folder trust; `GROK_FOLDER_TRUST=0` only when `projectResources` is on |
 | Spawn `--model` | yes | yes |
 | Spawn `--reasoning-effort` | **no** | yes |
 | Composer wire | `session/set_config_option` (`model`, `thought_level`, fast) | `session/set_model` + `_meta.reasoningEffort` |
@@ -401,11 +401,30 @@ restart: HTTP 410 with `kind: "dispatch-outcome-lost"` (Claude, Cursor, Pi and
 ACP). The bridge cannot tell whether the turn ran, and must never run it twice.
 The backend raises `PromptRejectedError` with `requestIdRetired`
 (`assertPromptOutcomeKnown`), clears the parked record even on a
-retry, and answers `rejected` with `requestIdRetired: true` and "… restarted
-before it confirmed this message, so it may not have run". The tab keeps the
-text but drops the id, so sending it again mints a new one. Claude used to
-answer such an id with `already-processed`, which cleared the card as if the
-command had run.
+retry, and answers `rejected` with `requestIdRetired: true` and "… could not
+confirm this message, so it may not have run" (`dispatchOutcomeLostMessage`).
+The tab keeps the text but drops the id, so sending it again mints a new one.
+Claude used to answer such an id with `already-processed`, which cleared the
+card as if the command had run.
+
+The same four bridges answer `/dispatch?requestId=` for such an id with
+`{ dispatch: "lost" }`, the read-only twin of that 410 (Claude from
+`restoredDispatchedRequestIds`, or from the durable journal of a session the
+process has not registered yet; ACP, Cursor and Pi from an `ambiguous` journal
+entry). `dispatched` still wins, and a local reply or Cursor's same-process
+`sendFailed` retry is not lost. The backend (`settleAmbiguousDispatch`) then
+retires the parked record without a click: it is cleared, never recorded as
+dispatched, and a content-free `retiredDispatch` (`requestId`, `retiredAt`) is
+kept on the native session until the next one, the next accepted dispatch, or
+24 hours. Projections and session state carry it as `retiredDispatch` with the
+message, plus a `warning` notice keyed `dispatch-outcome-lost:<requestId>` for
+renderers that predate the field. A tab whose draft still holds that id releases
+it, keeps the text and shows the message, also when it mounts later. A dispatch
+whose own acknowledgement was lost to the restart is answered `rejected` with
+`requestIdRetired` straight away. A queued prompt never parks a dispatch (the
+queue retries its own in-flight id, which the bridge then refuses), so it keeps
+the 410 path. OpenCode has no `lost`; older bridges answer `unknown` and keep
+the Retry card.
 
 ### 3.7 Product workflows
 

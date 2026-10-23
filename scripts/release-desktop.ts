@@ -230,6 +230,8 @@ export type ReleaseRuntime = {
   writeToolchainPins(version: string): string;
   /** Whether `orkestrator@version` is already on npm. */
   npmHasVersion(version: string): boolean;
+  /** Blocks for `ms`; used to back off from a failed GitHub listing. */
+  sleep(ms: number): void;
 };
 
 function writeToolchainPins(version: string): string {
@@ -263,6 +265,7 @@ const defaultRuntime: ReleaseRuntime = {
   prepareMacUpdateFeeds: () => prepareMacUpdateFeeds(path.join(root, "release")),
   writeToolchainPins,
   npmHasVersion,
+  sleep: Bun.sleepSync,
 };
 
 function githubToken(runtime: ReleaseRuntime): string {
@@ -273,25 +276,61 @@ function githubToken(runtime: ReleaseRuntime): string {
 }
 
 type TagRelease = { id: number; draft: boolean; assets: string[] };
+type ListedRelease = TagRelease & { tag: string };
+
+/** Waits between listings that came back empty; about half a minute in all. */
+const EMPTY_LISTING_RETRY_DELAYS_MS = [2_000, 4_000, 8_000, 16_000];
+
+/**
+ * Every release in the repository, draft or public.
+ *
+ * GitHub's list endpoint intermittently answers with no releases at all
+ * (v2.26.2-beta hit it on every machine). This repository always has
+ * releases, so an empty listing is a failed read, never an answer: taken at
+ * face value it made a build create a second draft, a finished build report
+ * its draft missing, and `publish` refuse. Filtering by tag here rather than
+ * in `--jq` is what lets an empty read be told apart from "no release for this
+ * tag".
+ */
+function listReleases(runtime: Pick<ReleaseRuntime, "capture" | "sleep">): ListedRelease[] {
+  for (let attempt = 0; ; attempt++) {
+    const output = runtime.capture([
+      "gh",
+      "api",
+      "--paginate",
+      `repos/${REPOSITORY}/releases?per_page=100`,
+      "--jq",
+      ".[] | {id, tag: .tag_name, draft, assets: [.assets[].name]}",
+    ]);
+    const releases = output
+      .split("\n")
+      .filter((line) => line.trim())
+      .map((line) => JSON.parse(line) as ListedRelease);
+    if (releases.length > 0) return releases;
+    const delay = EMPTY_LISTING_RETRY_DELAYS_MS[attempt];
+    if (delay === undefined) {
+      fail(
+        `GitHub listed no releases at all for ${REPOSITORY} after ${attempt + 1} attempts. ` +
+          "Its releases API is returning empty pages; try again shortly.",
+      );
+    }
+    console.warn(`\nGitHub listed no releases at all; retrying in ${delay / 1000}s.`);
+    runtime.sleep(delay);
+  }
+}
 
 /**
  * Every release, draft or public, for `tag`. GitHub allows several drafts for
  * one tag, and `gh release view <tag>` silently picks one of them, so anything
  * that has to see all of them lists them here.
  */
-function releasesForTag(tag: string, captureOutput: ReleaseRuntime["capture"]): TagRelease[] {
-  const output = captureOutput([
-    "gh",
-    "api",
-    "--paginate",
-    `repos/${REPOSITORY}/releases?per_page=100`,
-    "--jq",
-    `.[] | select(.tag_name == "${tag}") | {id, draft, assets: [.assets[].name]}`,
-  ]);
-  return output
-    .split("\n")
-    .filter((line) => line.trim())
-    .map((line) => JSON.parse(line) as TagRelease);
+function releasesForTag(
+  tag: string,
+  runtime: Pick<ReleaseRuntime, "capture" | "sleep">,
+): TagRelease[] {
+  return listReleases(runtime)
+    .filter((release) => release.tag === tag)
+    .map(({ id, draft, assets }) => ({ id, draft, assets }));
 }
 
 function splitReleaseMessage(tag: string, releases: TagRelease[]): string {
@@ -319,7 +358,7 @@ function soleRelease(tag: string, releases: TagRelease[]): TagRelease {
  * across several drafts. With the draft already there, every upload finds it.
  */
 function claimDraftRelease(tag: string, runtime: ReleaseRuntime, env: NodeJS.ProcessEnv): void {
-  const existing = releasesForTag(tag, runtime.capture);
+  const existing = releasesForTag(tag, runtime);
   if (existing.some((release) => !release.draft)) fail(`release ${tag} is already published.`);
   if (existing.length === 1) return;
   if (existing.length > 1) fail(splitReleaseMessage(tag, existing));
@@ -350,7 +389,7 @@ function claimDraftRelease(tag: string, runtime: ReleaseRuntime, env: NodeJS.Pro
   // The list can lag a fresh write and omit the draft just created. Only a
   // listing that shows our draft and an older one is evidence we lost; anything
   // else keeps the draft, and the check before packaging catches a real pair.
-  const ids = releasesForTag(tag, runtime.capture).map((release) => release.id);
+  const ids = releasesForTag(tag, runtime).map((release) => release.id);
   const lostRace = ids.includes(created) && ids.some((id) => id < created);
   if (lostRace) {
     runtime.run(
@@ -394,7 +433,7 @@ function build(publish: boolean, runtime: ReleaseRuntime): void {
   run(["bun", "install", "--frozen-lockfile"]);
   run(["mise", "run", "download:bun"]);
   run(["mise", "run", "build:all"], { ...env, NODE_OPTIONS: "--max-old-space-size=4096" });
-  if (publish) soleRelease(tag, releasesForTag(tag, runtime.capture));
+  if (publish) soleRelease(tag, releasesForTag(tag, runtime));
   run(
     [
       "bunx",
@@ -409,7 +448,7 @@ function build(publish: boolean, runtime: ReleaseRuntime): void {
   );
   // The `gh release upload <tag>` calls below go to whichever release gh picks,
   // so confirm electron-builder left exactly one.
-  if (publish) soleRelease(tag, releasesForTag(tag, runtime.capture));
+  if (publish) soleRelease(tag, releasesForTag(tag, runtime));
 
   if (platform === "darwin") {
     // Builder 26 omits mac.minimumSystemVersion from updater metadata. Its
@@ -436,7 +475,7 @@ function publish(runtime: ReleaseRuntime, options: { npm: boolean }): void {
   const tag = releaseTag();
   const channel = releaseChannel(tag);
   console.log(`\nPublishing ${tag} to the ${CHANNEL_AUDIENCE[channel]}.`);
-  const release = soleRelease(tag, releasesForTag(tag, capture));
+  const release = soleRelease(tag, releasesForTag(tag, runtime));
   if (!release.draft) fail(`release ${tag} is already published.`);
 
   const names = release.assets;
@@ -511,20 +550,9 @@ function publish(runtime: ReleaseRuntime, options: { npm: boolean }): void {
  * is already public, so a failure here only warns.
  */
 function hideOlderAlphas(tag: string, runtime: ReleaseRuntime): void {
-  let published: Array<{ id: number; tag: string }>;
+  let published: ListedRelease[];
   try {
-    published = runtime
-      .capture([
-        "gh",
-        "api",
-        "--paginate",
-        `repos/${REPOSITORY}/releases?per_page=100`,
-        "--jq",
-        ".[] | select(.draft == false) | {id, tag: .tag_name}",
-      ])
-      .split("\n")
-      .filter((line) => line.trim())
-      .map((line) => JSON.parse(line) as { id: number; tag: string });
+    published = listReleases(runtime).filter((release) => !release.draft);
   } catch (error) {
     console.warn(`\nCould not list releases to hide older alphas: ${String(error)}`);
     return;

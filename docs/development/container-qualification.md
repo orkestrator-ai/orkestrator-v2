@@ -9,7 +9,7 @@ permissions, name conflicts or signal delivery, so lifecycle, storage, network
 and image changes are also qualified against a real daemon. How the lifecycle
 works is in [container-lifecycle.md](../architecture/container-lifecycle.md);
 the platforms and providers still waiting for evidence are in
-[container-platform-qualification.md](../todo/container-platform-qualification.md).
+[0019-container-platform-qualification.md](../todo/containers-and-environments/0019-container-platform-qualification.md).
 
 ## Rules
 
@@ -42,12 +42,14 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | Live replacement | same command, `./tests/container-live-replacement.test.ts` | C14–C19 |
 | Live network | same command, `./tests/container-live-network.test.ts` | C22, C24, C26 |
 | Live firewall | same command, `./tests/container-live-firewall.test.ts` | C23 |
+| Live MCP delivery | same command, `./tests/mcp-overlay-live.test.ts` | Cursor `mcp.json` copy, container writer, environment overlay across stop/start and replacement, real rebuild re-staging (todo 0040) |
 | Benchmarks | `RUN_CONTAINER_BENCHMARKS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-benchmarks.test.ts` | C28 |
 | Final image | `bash docker/tests/final-image-smoke.sh <image>` (CI runs it on the native amd64 and arm64 builds in `validate-bun-runtime.yml`) | C27 |
 | Real stack, Docker | `mise run dev:test --profile <p> --fixture --fixture-environments local,container`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> mise run test:agent:docker` | C29 (`container-rebuild-cycle.spec.ts`), container settings (`container-settings.spec.ts`), deletion through the ledger (`browser-gateway.spec.ts`) |
 | Real stack, live approval | The Docker profile above started with `--credential-source claude`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> ORKESTRATOR_AGENT_TEST_LIVE_CONTAINER_APPROVAL=1 mise run test:agent:docker` | C11 approval half (`container-approval-stop.spec.ts`, a real Claude turn) |
 | Real stack, local | `mise run test:agent:browser:isolated` | C30 |
 | Provider resume | `scripts/qualify-session-resume.sh <profile> <agent> [environment-name]` | C13 |
+| Egress gateway prototype | `scripts/qualify-egress-gateway.sh [image]` | None yet: the external egress design in [0018](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md), item 3 |
 
 The image must carry a manifest (`mise run docker:build` or
 `docker/build.sh <tag>`). The network and firewall suites need outbound
@@ -63,6 +65,13 @@ environment onto a new runtime generation and checks the resumed session
 repeats it: exit 0 pass, 1 fail, 2 setup error. A provider that passes is
 added to `RESUME_QUALIFIED_PROVIDERS` (`container-replacement.ts`); until then
 the rebuild preview marks its resume unverified.
+
+`qualify-egress-gateway.sh` starts a gateway container that owns a network
+namespace and runs the working tree's `init-firewall.sh` with `NET_ADMIN`,
+joins a workload to it with no added capability, and checks policy 3
+egress, root tampering, live edits, published and host-service ports, and
+restarts of either side: exit 0 pass, 1 fail, 2 setup error. The backend does
+not create this topology yet.
 
 ## Docker Desktop on Apple Silicon (2026-10-17)
 
@@ -101,7 +110,7 @@ This run caught two problems. Three of the opt-in Docker suites (lifecycle,
 network and the benchmark harness) had not kept up with account switching
 (#889). And a stopped container lost its agent tabs
 from view when it was started again. Both are fixed. Detail and decisions are
-in [container-platform-qualification.md](../todo/container-platform-qualification.md).
+in [0019-container-platform-qualification.md](../todo/containers-and-environments/0019-container-platform-qualification.md).
 
 ## Provider-state review evidence (2026-10-16)
 

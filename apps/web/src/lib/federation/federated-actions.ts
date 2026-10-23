@@ -52,22 +52,6 @@ export async function deleteFederatedEnvironment(
   });
 }
 
-/**
- * Creating an environment inside a project instance targets that project's
- * node. There is no placement or load balancing.
- */
-export async function createFederatedEnvironment(
-  portal: PortalStore,
-  ref: ProjectRef,
-  input: { name?: string; environmentType?: "local" | "containerized" } = {},
-): Promise<{ id: string }> {
-  return portal.invokeOnNode<{ id: string }>(ref.backendId, "create_environment", {
-    projectId: ref.projectId,
-    ...(input.name ? { name: input.name } : {}),
-    ...(input.environmentType ? { environmentType: input.environmentType } : {}),
-  });
-}
-
 export async function updateFederatedMachineProfile(
   portal: PortalStore,
   backendRef: { backendId: ProjectRef["backendId"] },

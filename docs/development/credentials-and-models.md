@@ -45,7 +45,7 @@ but it cannot make a signed-out provider capable of running a request.
 | OpenCode | XDG config/data state; optional `OPENCODE_API_KEY` | Read-only XDG imports copied into the container | Project-scoped cache | Provider state and `model.json` preferences | Enabled |
 | Cursor | Stored or ambient `CURSOR_API_KEY`, else the in-app SDK login in Orkestrator's data directory | Effective key or stored SDK login over stdin | Shared cache | No separate portable model catalogue found or used | Enabled via an owner-only key snapshot |
 | Grok | `~/.grok` and `~/.config/grok` | Bounded import of Grok auth/config | Shared cache | `~/.grok/models_cache.json` | Enabled via an isolated auth snapshot |
-| Pi | `~/.pi/agent/auth.json` (or `PI_CODING_AGENT_DIR`); provider API-key variables | Bounded import of `~/.pi` | Shared cache | Pi's own `models-store.json` | Enabled: the host `auth.json` only |
+| Pi | `~/.pi/agent/auth.json` (or `PI_CODING_AGENT_DIR`); provider API-key variables | Bounded import of `~/.pi` | Shared cache | Pi's own `models-store.json` | Enabled: the host `auth.json` and its saved default model only |
 
 Credential authorization and UI platform selection are separate. Agent-test
 profiles authorize all six credential sources by default, while the initial
@@ -238,11 +238,31 @@ Pi fronts other vendors' models, so its login is one credential per provider
 in `~/.pi/agent/auth.json`, written by `/login` in a Pi terminal, plus any
 provider API-key variable. A local Pi bridge leaves `PI_AGENT_DIR` unset and
 reads that directory as `pi` does. Containers mount `~/.pi` as a portable
-input and the entrypoint copies a bounded allowlist. The bridge never serves
+input and the entrypoint copies a bounded allowlist. A container's
+`auth.json` is access-only: OAuth logins other than GitHub Copilot and Meta
+have their refresh token blanked (Anthropic, OpenAI and xAI rotate theirs),
+expired ones are left out, and the host's current copy is pushed again before
+every Pi bridge start (`restrictPiAuthSnapshot` in
+`packages/protocol/src/login-snapshots.ts`). OpenCode's `auth.json` is handled
+the same way. Run `pi` (or `opencode`) on the host to refresh a login a
+container needs. The bridge never serves
 sign-in itself; see [agent-engines.md](../architecture/agent-engines.md) § Pi.
 
 `PI_BRIDGE_AUTH_FILE` moves the credential file alone out of the agent
-directory. Only agent-test uses it (see below).
+directory. Only agent-test uses it (see below), together with
+`PI_BRIDGE_DEFAULT_MODEL`.
+
+#### Default model
+
+A Pi tab that names no model starts where `pi` itself would: on the saved
+default in `settings.json` (`defaultProvider`/`defaultModel`, what `/model`
+writes), as long as a signed-in provider serves it. A project's
+`.pi/settings.json` counts only when the session trusts the project. With no
+usable default, the bridge falls back to `PI_BRIDGE_DEFAULT_MODEL`, then to the
+catalogue's first model. Pi's own fallback table of per-provider defaults is
+not exported by the SDK, so the bridge does not reproduce it. The first model
+can be one the login refuses: a ChatGPT-backed `openai-codex` login lists
+`gpt-5.3-codex-spark` first and rejects it.
 
 ### Grok Build
 
@@ -346,10 +366,13 @@ place, as described below, and writes nothing else there.
 For a container test environment, the same provider homes (the profile's
 snapshots for Codex and OpenCode, the host's `~/.claude` read-only for Claude)
 are mounted read-only and copied into writable container state using the
-normal production allowlists. Claude's Keychain credential is synchronized separately over stdin.
-Codex and Grok logins reach any container (test or not) access-only, with the
-refresh token blanked and expired logins withheld, because their refresh
-tokens are single-use and a container refresh would sign the host out
+normal production allowlists. Claude's Keychain credential is synchronized
+separately over stdin. Claude, Codex and Grok logins reach any container
+(test or not) access-only, with the refresh token removed or blanked and
+expired logins withheld, because their refresh tokens are single-use and a
+container refresh would sign the host out. An agent-test profile never
+refreshes the host's Claude login for its containers; they sign out when the
+host's access token expires
 ([Container lifecycle](../architecture/container-lifecycle.md), "Portable
 inputs").
 
@@ -376,6 +399,16 @@ when it already exists, because Pi creates a missing one. A login made after
 startup applies from the next bridge start. The host side sees only what the
 host's own `pi` does: Pi's transient `auth.json.lock` directory beside the file
 on each read or write, and a refreshed login when a token expires.
+
+The host's saved default model goes with its login, because the profile's own
+settings name none and the catalogue's first model may be one the login
+refuses. When the backend names the host `auth.json`, it also reads
+`defaultProvider` and `defaultModel` from the host's `settings.json`, and
+nothing else from that file, and passes them as `PI_BRIDGE_DEFAULT_MODEL`
+(`readPiDefaultModel` in `host-agent-credentials.ts`). The bridge uses it only
+when the profile's own settings name no default, or name one that no
+signed-in provider serves. It is read again on
+every bridge start, so a changed host default applies from the next one.
 
 Cursor's login is Orkestrator's own rather than a provider home: the stored key
 in production `config.json`, else the in-app SDK login's minted key in

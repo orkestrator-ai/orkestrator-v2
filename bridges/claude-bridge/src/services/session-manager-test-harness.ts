@@ -48,7 +48,7 @@ import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { expect, afterAll, afterEach, mock } from "bun:test";
 import { EventEmitter } from "node:events";
 import { mkdtempSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { QueryCall, SdkSessionInfo, SdkSessionMessage } from "./session-manager-test-mocks.js";
@@ -75,6 +75,30 @@ export { claudeSessionPreferencesDir, setClaudeHomeForTesting };
 
 import { readSessionPreferences, updateSessionPreferences } from "./session-preferences.js";
 export { readSessionPreferences, updateSessionPreferences };
+
+/**
+ * Replace a temporary Claude home's `.claude` with a file, so every later
+ * preference write fails.
+ *
+ * A prompt records its turn-in-flight mark without waiting, and a queued
+ * preference write resolves the home when it runs rather than when it was
+ * queued, so `mkdir -p .claude/orkestrator/...` can land here first. Discard
+ * whatever it made and write the file again until the file wins. Once it is in
+ * place no writer can create the directory, which is the state under test.
+ */
+export async function blockClaudeConfigDir(home: string): Promise<void> {
+  const target = join(home, ".claude");
+  for (let attempt = 0; ; attempt += 1) {
+    await rm(target, { recursive: true, force: true });
+    try {
+      await writeFile(target, "not a directory", { encoding: "utf-8", flag: "wx" });
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (attempt >= 10 || (code !== "EEXIST" && code !== "EISDIR")) throw error;
+    }
+  }
+}
 
 import { resetClaudeSignInForTesting } from "./claude-sign-in.js";
 import {
@@ -155,6 +179,8 @@ export const {
   setSessionPreferences,
   clearPromptSuggestion,
   getPromptDispatchState,
+  restoredDispatchClaimLost,
+  persistedDispatchClaimLost,
   getPromptDispatchRecordCountForTesting,
   seedSettledPromptDispatchForTesting,
   persistSessionMetadata,

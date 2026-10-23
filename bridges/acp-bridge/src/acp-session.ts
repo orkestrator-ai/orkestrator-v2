@@ -89,7 +89,9 @@ import {
   isTranscriptUpdateKind,
   isTrimNotice,
   rememberHistoryMessage,
+  toolArgumentPath,
   trimPartsTo,
+  truncateUtf8,
   turnRequiresCompleteOutput,
 } from "./acp-transcript.js";
 import {
@@ -876,6 +878,7 @@ const PERMISSION_KIND_BY_TOOL: Readonly<Record<string, string>> = {
   run_terminal_cmd: "execute",
   run_terminal_command: "execute",
   execute_command: "execute",
+  write: "edit",
   write_file: "edit",
   search_replace: "edit",
   delete_file: "delete",
@@ -1370,6 +1373,103 @@ export function parkGrokInteraction(
   schedulePersist();
 }
 
+/** What a parked permission request asks to run: the card's kind and its detail. */
+export type AcpApprovalDetail =
+  | { kind: "command"; command: string; commandTruncated?: true }
+  | { kind: "file-change"; paths: string[]; pathsOmitted?: number }
+  | { kind: "permission" };
+
+const MAX_APPROVAL_COMMAND_BYTES = 4_096;
+const MAX_APPROVAL_PATHS = 20;
+const FILE_CHANGE_TOOL_KINDS = new Set(["edit", "delete", "move"]);
+
+/** The tool call as the bridge already recorded it, for a request that names only its id. */
+export interface RecordedApprovalTool {
+  name?: string | null;
+  kind?: string;
+  input?: unknown;
+  locationPath?: string;
+}
+
+/**
+ * The approval kind of an ACP permission request, from its ACP `toolCall.kind`
+ * (or the kind recorded for the same call, or one inferred from a known tool
+ * name): `execute` is a command, `edit`, `delete` and `move` a file change,
+ * anything else a generic permission. A command or file change without the
+ * command or paths a person needs to judge it stays a permission, so the card
+ * never claims detail it does not have. Grok's `use_tool` wrapper is read
+ * through to the tool it runs.
+ */
+export function permissionDetail(
+  params: JsonObject,
+  recorded: RecordedApprovalTool = {},
+): AcpApprovalDetail {
+  const call = isObject(params.toolCall) ? params.toolCall : {};
+  const rawInput = call.rawInput === undefined ? recorded.input : call.rawInput;
+  const wrapped =
+    isObject(rawInput) && wrappedToolName(rawInput) ? unwrappedToolInput(rawInput) : undefined;
+  const input = wrapped ?? (isObject(rawInput) ? rawInput : undefined);
+  const declaredKind = [call.kind, recorded.kind].find(
+    (candidate): candidate is string =>
+      typeof candidate === "string" && candidate !== "other" && candidate !== "unknown",
+  );
+  const kind =
+    declaredKind ??
+    permissionToolNames(params, recorded)
+      .map((name) => PERMISSION_KIND_BY_TOOL[name.toLowerCase()])
+      .find((value) => value !== undefined);
+  if (kind === "execute") {
+    const raw = input?.command ?? input?.cmd;
+    const command = Array.isArray(raw)
+      ? raw.filter((part): part is string => typeof part === "string").join(" ")
+      : typeof raw === "string"
+        ? raw
+        : "";
+    return command.trim()
+      ? {
+          kind: "command",
+          command: truncateUtf8(command.trim(), MAX_APPROVAL_COMMAND_BYTES),
+          ...(Buffer.byteLength(command.trim(), "utf8") > MAX_APPROVAL_COMMAND_BYTES
+            ? { commandTruncated: true as const }
+            : {}),
+        }
+      : { kind: "permission" };
+  }
+  if (kind && FILE_CHANGE_TOOL_KINDS.has(kind)) {
+    const located = Array.isArray(call.locations)
+      ? call.locations.flatMap((location) =>
+          isObject(location) ? [boundedString(location.path, MAX_TOOL_PATH_BYTES)] : [],
+        )
+      : [recorded.locationPath];
+    const paths = [...new Set([...located, toolArgumentPath(input)])].filter(
+      (path): path is string => typeof path === "string" && path.trim().length > 0,
+    );
+    return paths.length > 0
+      ? {
+          kind: "file-change",
+          paths: paths.slice(0, MAX_APPROVAL_PATHS),
+          ...(paths.length > MAX_APPROVAL_PATHS
+            ? { pathsOmitted: paths.length - MAX_APPROVAL_PATHS }
+            : {}),
+        }
+      : { kind: "permission" };
+  }
+  return { kind: "permission" };
+}
+
+/** A `use_tool` wrapper's `tool_input`, an object or a JSON string. */
+function unwrappedToolInput(input: JsonObject): JsonObject | undefined {
+  let value: unknown = input.tool_input;
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value) as unknown;
+    } catch {
+      return undefined;
+    }
+  }
+  return isObject(value) ? value : undefined;
+}
+
 export function parkPermission(
   state: SessionState,
   child: AcpProcess,
@@ -1410,9 +1510,17 @@ export function parkPermission(
     if (!approval) return;
     approval.deadline.settle();
     state.approvals.delete(id);
-    const selected = optionId
+    let selected = optionId
       ? approval.options.find((option) => option.optionId === optionId)
       : undefined;
+    // An older backend may ignore truncation metadata. Never let a response
+    // approve an operation whose command or complete file set was not shown.
+    const incomplete =
+      (approval.detail?.kind === "command" && approval.detail.commandTruncated) ||
+      (approval.detail?.kind === "file-change" && (approval.detail.pathsOmitted ?? 0) > 0);
+    if (incomplete && selected?.kind !== "reject_once") {
+      selected = approval.options.find((option) => option.kind === "reject_once");
+    }
     // An unanswered or cancelled request, and a `reject_*` choice, refuse the
     // call; any other selected option lets it run.
     recordAcpToolApproval(
@@ -1436,9 +1544,20 @@ export function parkPermission(
     }
     finish();
   };
+  const recorded =
+    typeof toolCallId === "string"
+      ? findToolPart(state, toolCallId, turnStartIndex(state))?.part
+      : undefined;
+  const source = recorded ? acpToolSourceStates.get(recorded) : undefined;
   state.approvals.set(id, {
     id,
     title: permissionTitle(params),
+    detail: permissionDetail(params, {
+      name: recorded?.toolName,
+      kind: source?.kind,
+      input: source?.toolArgs ?? recorded?.toolArgs,
+      locationPath: source?.locationPath,
+    }),
     options,
     requestedAt,
     respond: finish,

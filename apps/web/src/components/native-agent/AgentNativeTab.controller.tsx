@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { ChevronDown, Loader2, LogIn, X } from "lucide-react";
 import { claudeNativeParameterValues } from "@orkestrator/protocol/agent-settings";
 import {
+  dispatchOutcomeLostOccurrenceId,
   nativeAgentSteerRejectionMessage,
   normalizePendingSignIn,
   NATIVE_AGENT_PENDING_SIGN_IN_TTL_MS,
@@ -21,6 +22,7 @@ import {
   resolveSessionActionCommand,
 } from "@orkestrator/protocol/agent-slash-commands";
 import { Button } from "@/components/ui/button";
+import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
 import { AgentThinkingIndicator } from "@/components/chat/AgentThinkingIndicator";
 import {
@@ -355,6 +357,16 @@ export function SharedNativeAgentController({
   const [sendError, setSendError] = useState<string | null>(null);
   const [queueDialogOpen, setQueueDialogOpen] = useState(false);
   const [resumeDialogOpen, setResumeDialogOpen] = useState(initialResumeOpen === true);
+  /**
+   * A tab opened only to resume creates no provider session of its own. The
+   * backend resumes into a tab with no mapping, so the session is created only
+   * if the picker is dismissed, as it would have been on mount. Creating it
+   * first and closing it after the resume left an empty conversation behind
+   * on OpenCode and Grok, and briefly a Grok agent process.
+   */
+  const [awaitingResumeChoice, setAwaitingResumeChoice] = useState(
+    initialResumeOpen === true && !data.sessionId,
+  );
   const [forkInFlight, setForkInFlight] = useState(false);
   const [planTransitionPending, setPlanTransitionPending] = useState(false);
   const [suggestionDismissPending, setSuggestionDismissPending] = useState(false);
@@ -473,7 +485,7 @@ export function SharedNativeAgentController({
     defaultFastMode: configuredFastMode,
     defaultParameterValues: configuredParameterValues,
     isActive,
-    enabled: !setupPending && !draft.submissionPending,
+    enabled: !setupPending && !draft.submissionPending && !awaitingResumeChoice,
   });
   const isDispatching = runtimeIsDispatching || draft.submissionPending === true;
   const noticeSessionIdentity = `${platform}\u0000${data.environmentId}\u0000${projection?.sessionId ?? data.sessionId ?? sessionKey}`;
@@ -484,9 +496,19 @@ export function SharedNativeAgentController({
   );
   const dismissNotice = useNativeNoticeDismissalStore((state) => state.dismiss);
   const reconcileNoticeDismissals = useNativeNoticeDismissalStore((state) => state.reconcile);
+  const [releasedDispatchNotices, setReleasedDispatchNotices] = useState<
+    Array<{ sessionIdentity: string; noticeId: string }>
+  >([]);
   const activeNoticeIds = useMemo(
-    () => (projection?.notices ?? []).map(nativeNoticeDismissalId),
-    [projection?.notices],
+    () => [
+      ...(projection?.notices ?? []).map(nativeNoticeDismissalId),
+      // A response can arrive before its notice. Keep these dismissals through
+      // intervening projections so a delayed notice cannot toast the same error.
+      ...releasedDispatchNotices
+        .filter((notice) => notice.sessionIdentity === noticeSessionIdentity)
+        .map((notice) => notice.noticeId),
+    ],
+    [noticeSessionIdentity, projection?.notices, releasedDispatchNotices],
   );
   const noticeToastRecordsRef = useRef(new Map<string, string>());
   const programmaticNoticeDismissalsRef = useRef(new Set<string>());
@@ -1099,7 +1121,9 @@ export function SharedNativeAgentController({
   const phase = projection?.turn.phase;
   const settingsLocked = isSubmitting || (phase !== "idle" && phase !== "error");
   const isRunning = phase === "running";
-  const isTurnActive = phase === "running" || phase === "recovering" || phase === "cancelling";
+  const isProviderTurnActive =
+    phase === "running" || phase === "recovering" || phase === "cancelling";
+  const isTurnActive = isDispatching || isProviderTurnActive;
   const turnActivity = phase === "running" ? projection?.turn.activity : undefined;
   /*
    * "Stopping" and "reconnecting" are still loading, but they mean something
@@ -1254,6 +1278,23 @@ export function SharedNativeAgentController({
 
   const releaseRetiredRequestId = useCallback(
     (requestId: string, error: string) => {
+      // A synchronous response can release ownership before its projection
+      // arrives. Dismiss now so the notice cannot repeat the inline error.
+      const noticeId = nativeNoticeDismissalId({
+        kind: "warning",
+        message: error,
+        occurrenceId: dispatchOutcomeLostOccurrenceId(requestId),
+      });
+      setReleasedDispatchNotices((current) => [
+        ...current
+          .filter(
+            (notice) =>
+              notice.sessionIdentity !== noticeSessionIdentity || notice.noticeId !== noticeId,
+          )
+          .slice(-19),
+        { sessionIdentity: noticeSessionIdentity, noticeId },
+      ]);
+      dismissNotice(noticeSessionIdentity, noticeId);
       const current = useNativeComposeStore.getState().drafts.get(sessionKey);
       if (current?.requestId !== requestId) return;
       updateDraft(sessionKey, {
@@ -1262,8 +1303,50 @@ export function SharedNativeAgentController({
         submissionError: error,
       });
     },
-    [sessionKey, updateDraft],
+    [dismissNotice, noticeSessionIdentity, sessionKey, updateDraft],
   );
+
+  /*
+   * The backend retires a parked dispatch on its own when the provider reports
+   * the outcome lost (a bridge restarted under it), which is the answer a
+   * Retry could only have reported. Do what that Retry does, from the
+   * authoritative projection so it also happens when the tab mounts later:
+   * keep the text under a new id and say what happened. Only for the draft
+   * that still owns the id, and only once — releasing the id ends ownership.
+   * A renderer that handles it this way dismisses the matching notice, which
+   * exists for renderers that predate the field.
+   */
+  const retiredDispatch = projection?.retiredDispatch;
+  const retiredDispatchOwnedByDraft =
+    retiredDispatch !== undefined && draft.requestId === retiredDispatch.requestId;
+  const retiredDispatchNoticeId = retiredDispatch
+    ? nativeNoticeDismissalId({
+        kind: "warning",
+        message: retiredDispatch.message,
+        occurrenceId: dispatchOutcomeLostOccurrenceId(retiredDispatch.requestId),
+      })
+    : undefined;
+  useEffect(() => {
+    if (!retiredDispatch || !retiredDispatchOwnedByDraft || !retiredDispatchNoticeId) return;
+    // A submission or recovery action in flight settles the draft itself;
+    // this runs again once it has.
+    if (submitInFlightRef.current || isSubmitting || isResolvingDispatch) return;
+    releaseRetiredRequestId(retiredDispatch.requestId, retiredDispatch.message);
+    setOptimisticPrompt((current) =>
+      current?.requestId === retiredDispatch.requestId ? null : current,
+    );
+    setSendError(retiredDispatch.message);
+    dismissNotice(noticeSessionIdentity, retiredDispatchNoticeId);
+  }, [
+    dismissNotice,
+    isResolvingDispatch,
+    isSubmitting,
+    noticeSessionIdentity,
+    releaseRetiredRequestId,
+    retiredDispatch,
+    retiredDispatchNoticeId,
+    retiredDispatchOwnedByDraft,
+  ]);
 
   const clearConfirmedDraft = useCallback(
     (requestId: string | undefined): boolean => {
@@ -1720,6 +1803,9 @@ export function SharedNativeAgentController({
         }
         if (outcome.outcome === "rejected") setOptimisticPrompt(null);
         requestIdRetired = outcome.outcome === "rejected" && outcome.requestIdRetired === true;
+        if (outcome.outcome === "rejected" && requestIdRetired && dispatchRequestId) {
+          releaseRetiredRequestId(dispatchRequestId, outcome.error);
+        }
         keepTranscriptConfirmation = outcome.outcome === "unknown";
         /*
          * A backend-reported unknown is a parked dispatch: the
@@ -1799,6 +1885,7 @@ export function SharedNativeAgentController({
       projection?.slashCommands,
       recoverableDispatch,
       actionableDispatch,
+      releaseRetiredRequestId,
       selectedModel?.supportsImageInput,
       send,
       sendLocked,
@@ -2291,6 +2378,10 @@ export function SharedNativeAgentController({
     const notices = (isActive ? (projection?.notices ?? []) : []).filter(
       (notice) =>
         !dismissedNoticeIds.includes(nativeNoticeDismissalId(notice)) &&
+        // Shown in the composer instead, by the release above.
+        !(
+          retiredDispatchOwnedByDraft && nativeNoticeDismissalId(notice) === retiredDispatchNoticeId
+        ) &&
         // A recovered state is authoritative even if an older renderer cache
         // briefly carries the recovery notice into the same projection.
         !(notice.kind === "recovery" && connectionState === "connected"),
@@ -2336,6 +2427,8 @@ export function SharedNativeAgentController({
     isActive,
     noticeSessionIdentity,
     projection?.notices,
+    retiredDispatchNoticeId,
+    retiredDispatchOwnedByDraft,
   ]);
   useEffect(() => {
     const mounted = noticeToastsMountedRef;
@@ -2410,7 +2503,7 @@ export function SharedNativeAgentController({
     messages.length === 1 && messages[0]?.id === `optimistic-native:${sessionKey}`;
   const composerCentered =
     (messages.length === 0 || onlyOptimisticFirstPrompt) &&
-    !isTurnActive &&
+    !isProviderTurnActive &&
     transcriptInteractions.length === 0;
 
   /**
@@ -2661,7 +2754,62 @@ export function SharedNativeAgentController({
   const showBytesNotice =
     messageWindow?.truncated === true && messageWindow.truncationReason === "bytes";
   const showLoadEarlier = messageWindow?.canLoadEarlier === true;
+  // The source itself lost its start (a bridge that kept only the newest
+  // messages of a transcript too large to save) and no page can bring it
+  // back. Showing the remainder as if it were the whole conversation would
+  // read as data loss.
+  const showOmittedNotice =
+    messageWindow?.truncated === true && !showBytesNotice && !showLoadEarlier;
 
+  const resumeDialog =
+    adapter.capabilities.resume && !isReadOnlyCoordinator ? (
+      <NativeResumeSessionDialog
+        open={resumeDialogOpen}
+        onOpenChange={(open) => {
+          setResumeDialogOpen(open);
+          // Dismissed without a choice: this tab starts its own session.
+          if (!open) setAwaitingResumeChoice(false);
+        }}
+        agentLabel={label}
+        currentSessionId={projection?.sessionId}
+        fetchSessions={fetchResumableSessions}
+        onResume={(providerSessionId) => {
+          setResumeDialogOpen(false);
+          const sourceSessionId = projection?.sessionId;
+          if (heldSubmit && providerSessionId !== heldSessionId) {
+            settleHeldSubmit(HELD_SUBMIT_CONVERSATION_CHANGED);
+          }
+          // A tab still waiting on its resume choice has no composer of its
+          // own; the resumed conversation keeps its settings.
+          void resume(
+            providerSessionId,
+            composer
+              ? {
+                  modelId: composer.selectedModelId,
+                  reasoningId: composer.selectedReasoningId,
+                  fastMode: composer.fastModeEnabled ?? undefined,
+                  mode: composer.selectedModeId,
+                  executionProfileId: effectiveComposeProfileId,
+                  includeLocalSettings: composer.includeLocalSettings,
+                  promptSuggestions: composer.promptSuggestionsEnabled,
+                }
+              : undefined,
+          )
+            .then(() => {
+              setAwaitingResumeChoice(false);
+              if (agentHandoffId && sourceSessionId && providerSessionId !== sourceSessionId) {
+                clearTabAgentHandoff(tabId, data.environmentId);
+              }
+              clearPersistedVirtuosoState(sessionKey);
+              scrollToBottom();
+            })
+            .catch((error) => {
+              setAwaitingResumeChoice(false);
+              toast.error(error instanceof Error ? error.message : `Failed to resume ${label}`);
+            });
+        }}
+      />
+    ) : null;
   const chatShell = (
     <NativeChatShell
       agentExpansionScope={data.environmentId}
@@ -2705,12 +2853,18 @@ export function SharedNativeAgentController({
       centerCompose={composerCentered}
       emptyStateMessage={`Ask ${label} to work on this repository.`}
       transcriptHeader={
-        showBytesNotice || showLoadEarlier ? (
+        showBytesNotice || showLoadEarlier || showOmittedNotice ? (
           <div className="mx-auto flex max-w-3xl flex-col items-center justify-center gap-2 px-2 py-3 text-xs text-muted-foreground">
             {showBytesNotice ? (
               <span>
                 Earlier messages or tool activity were omitted to stay within the 16 MiB transcript
                 limit.
+              </span>
+            ) : null}
+            {showOmittedNotice ? (
+              <span>
+                Earlier messages in this conversation are not available here. The conversation
+                itself is kept.
               </span>
             ) : null}
             {showLoadEarlier ? (
@@ -2821,43 +2975,7 @@ export function SharedNativeAgentController({
           ? () => setResumeDialogOpen(true)
           : undefined
       }
-      resumeDialog={
-        adapter.capabilities.resume && !isReadOnlyCoordinator ? (
-          <NativeResumeSessionDialog
-            open={resumeDialogOpen}
-            onOpenChange={setResumeDialogOpen}
-            agentLabel={label}
-            currentSessionId={projection?.sessionId}
-            fetchSessions={fetchResumableSessions}
-            onResume={(providerSessionId) => {
-              setResumeDialogOpen(false);
-              const sourceSessionId = projection?.sessionId;
-              if (heldSubmit && providerSessionId !== heldSessionId) {
-                settleHeldSubmit(HELD_SUBMIT_CONVERSATION_CHANGED);
-              }
-              void resume(providerSessionId, {
-                modelId: composer?.selectedModelId,
-                reasoningId: composer?.selectedReasoningId,
-                fastMode: composer?.fastModeEnabled ?? undefined,
-                mode: composer?.selectedModeId,
-                executionProfileId: effectiveComposeProfileId,
-                includeLocalSettings: composer?.includeLocalSettings,
-                promptSuggestions: composer?.promptSuggestionsEnabled,
-              })
-                .then(() => {
-                  if (agentHandoffId && sourceSessionId && providerSessionId !== sourceSessionId) {
-                    clearTabAgentHandoff(tabId, data.environmentId);
-                  }
-                  clearPersistedVirtuosoState(sessionKey);
-                  scrollToBottom();
-                })
-                .catch((error) =>
-                  toast.error(error instanceof Error ? error.message : `Failed to resume ${label}`),
-                );
-            }}
-          />
-        ) : null
-      }
+      resumeDialog={resumeDialog}
       composer={
         <NativeComposeBar
           testId="shared-native-compose-bar"
@@ -3367,6 +3485,24 @@ export function SharedNativeAgentController({
       }
     />
   );
+  if (awaitingResumeChoice) {
+    return (
+      <div
+        role="status"
+        className="flex h-full flex-col items-center justify-center gap-4 p-4 text-muted-foreground"
+      >
+        <span aria-hidden="true">
+          <AgentPlatformIcon platform={platform} className="h-16 w-16" />
+        </span>
+        <p className="text-sm">
+          {resumeDialogOpen
+            ? `Choose a ${label} session to resume.`
+            : `Resuming the ${label} session...`}
+        </p>
+        {resumeDialog}
+      </div>
+    );
+  }
   return (
     <BackgroundTaskChildrenContext.Provider value={childBackgroundTasks}>
       <NativeChangeScopeContext.Provider value={nativeChangeScope}>

@@ -157,7 +157,7 @@ commands. Never use npm or yarn.
 ```bash
 bun install              # NOT npm install
 mise run <task>          # Repository-level task; NOT npm run
-mise run test            # Complete suite; NOT bare root-level `bun test`
+mise run test            # Default suite; NOT bare root-level `bun test`
 bun test <explicit-path> # Focused Bun test-runner invocation only
 bunx <package>           # NOT npx
 bun <file>               # NOT node <file>
@@ -181,12 +181,16 @@ Review preparation (the Build pipeline's package preparation and Multi Review)
 reads this file to decide which checks a change needs. Scale the plan to what
 the changed paths can affect instead of always running every suite:
 
-- Documentation-only changes (`*.md`, `docs/**`, `plans/**`) need no test
-  suite: `mise run format:check` is enough.
+- Documentation-only changes (prose in files such as `*.md`, `docs/**`, or
+  `plans/**`, not content consumed by tests, builds, or tooling) need no test
+  suite: `mise run format:check` is enough. File role takes precedence over
+  location or extension; source under `docs/` still counts as code.
 - Every change to code or configuration runs `mise run format:check`,
   `mise run lint`, and `mise run typecheck`.
 - Code changes under `apps/`, `bridges/`, `packages/`, `scripts/`, or `tests/`
-  run `mise run test` (the complete non-iOS suite).
+  run `mise run test` (the non-iOS suite). It selects the slow area suites
+  itself from the change's import graph; do not add `mise run test:full` to
+  force them.
 - Treat dependency, lockfile, `mise.toml`, Turbo, test-runner, or
   `packages/protocol` changes as wide-reaching even when the diff is small;
   they always need `mise run test`.
@@ -198,6 +202,30 @@ the changed paths can affect instead of always running every suite:
   (`mise run test:agent:docker`), the published CLI
   (`mise run test:cli:scenarios`), and iOS (`mise run test:all`, macOS only).
   Omit them otherwise and say so in one limitation.
+
+#### Documentation-only merge-conflict resolution
+
+When the complete original conflicted-path list establishes that every conflict
+was in prose documentation, and the manual resolution changes only that prose,
+use documentation-only validation: confirm no conflict markers remain and run
+`mise run format:check`. Do not rerun tests, lint, typechecking, builds, or
+scenario suites solely for that merge-resolution step, even when code,
+configuration, or tests merge automatically. This exception takes precedence
+over the normal changed-path requirements above and generic merge-validation
+prompts that require checks for auto-merged code.
+
+Capture the complete original unmerged path list before staging any resolution
+and retain it with the merge's parent commit IDs in local Git metadata for
+resume. A conflict remains in scope even when resolved exactly to one parent's
+version. If the original list is unavailable or incomplete, do not infer a
+documentation-only scope from remaining unmerged paths, staged diffs, or a merge
+commit's combined diff; run relevant validation on the merged result, including
+the full suite when impact cannot be scoped.
+
+The exception does not waive outstanding validation required for the feature
+work or apply to new code/configuration changes, non-documentation conflict
+resolutions, or documentation consumed by tests, builds, or tooling. Those
+changes follow the normal validation requirements.
 
 ### Running tests
 
@@ -224,9 +252,10 @@ reusable mock functions in `tests/mocks/*`, mock narrow dependencies rather than
 shared app modules, and never add a competing global mock for a module another
 suite imports for real.
 
-Flakes are tracked only in
-[`docs/tests/flaky-tests/0000-index.md`](docs/tests/flaky-tests/0000-index.md).
-Search the index by test name or owning file; do not read every case file. A
+Flakes are tracked only in the group folders of
+[`docs/tests/flaky-tests/`](docs/tests/flaky-tests/0000-index.md); the top-level
+index only lists the groups. Search the group indexes by test name or owning
+file; do not read every case file. A
 failure is a flake only if the owning file passes when rerun alone; record it in
 the same change, and never hide one by skipping or loosening the test.
 
@@ -398,7 +427,7 @@ session surface. When touching the session catalogue
 - **The no-control fallback costs a process.** `createProbe()` spawns a whole
   Claude CLI, so `commandInventory` caches the catalogue the way `mcpInventory`
   already did. The backend re-reads both on every session projection
-  (`native-agent-service-projection.ts`), so an uncached fallback is one spawn
+  (`native-agent-transcript-projection.ts`), so an uncached fallback is one spawn
   per turn boundary rather than a one-off.
 - **Every SDK frame has a declared fate.** `HANDLED_SDK_MESSAGE_TYPES` and
   `SYSTEM_SUBTYPE_DISPOSITIONS` (`src/types/index.ts`) are `Record`s over the
@@ -575,6 +604,18 @@ rather than a name, and "signed in" is one answer per provider.
   model picker and a Pi terminal tab. `thinking_level_changed` is echoed back
   into the composer so the picker shows the level actually in force after Pi
   clamps it.
+- A session with no explicit model starts on Pi's saved default
+  (`defaultProvider`/`defaultModel`, what `/model` writes) when a signed-in
+  provider serves it, then on `PI_BRIDGE_DEFAULT_MODEL`, then on the
+  catalogue's first model (`defaultModelIds` in `agent-session.ts`). Never fall
+  straight to the first model: a login can refuse models its provider lists,
+  and a ChatGPT-backed `openai-codex` login refuses the first one. Project
+  settings count only when the session trusts the project.
+- Tests run with `src/testing/test-isolation.ts` preloaded (`test:bridge`). It points
+  `PI_CODING_AGENT_DIR` at a temporary directory, so no test reads the
+  developer's saved default or writes `auth.json`/`models-store.json` into
+  their `~/.pi/agent`. A focused `bun test` outside `test:bridge` should add
+  `--preload ./src/testing/test-isolation.ts` or isolate its own directory.
 - `credentials.ts` reports per-provider status and deliberately implements no
   sign-in. Pi's login is an interactive multi-step prompt flow with no
   counterpart in Orkestrator's session surface, and the credential it writes is
@@ -596,8 +637,9 @@ When touching the Pi bridge:
   Losing the bridge's state costs a rendered transcript; it never costs the
   conversation. That is why `detachSession` keeps `sessionFile` and why a
   restart re-attaches to the same session rather than starting a new one.
-- Approvals are off unless `PI_BRIDGE_REQUIRE_APPROVAL=1`, matching the
-  permissive default every other bridge here uses. When on, every timeout,
+- Approvals follow the session's execution policy: `ask` parks a call, `deny`
+  refuses it, and a session with no policy runs as the host default,
+  `auto-approve`. When the gate asks, every timeout,
   disconnect, closing session and unparseable answer **denies**. A turn that
   ends with a call still parked denies it too — leaving it unanswered wedges the
   turn and, with it, the environment's activity state.
@@ -625,10 +667,9 @@ When touching the Pi bridge:
   await: new prompts get 409, one still preparing settles as cancelled, and
   `/close` keeps the session registered until its removal is published (503
   pending otherwise).
-- Project-local `.pi/` resources are opt-in through
-  `PI_BRIDGE_PROJECT_RESOURCES`, set from the resolved environment execution
-  policy on both host and container runs. Host project resources are off by
-  default. Enabling them permits repository MCP processes and Pi extensions
+- Project-local `.pi/` resources load only when the session's execution
+  policy turns `projectResources` on, on both host and container runs. Host
+  project resources are off by default. Enabling them permits repository MCP processes and Pi extensions
   (arbitrary TypeScript) to run on the host.
 - Pi's SDK sessions load no MCP client (only its CLI loads the built-in `mcp`
   extension) and have no plan/build mode. The bridge owns an MCP client (`src/mcp.ts`) and registers tools through the inline
@@ -1035,14 +1076,16 @@ else is rejected outright. `full` mode skips the firewall entirely.
   providers, so a self-hosted endpoint or a regional mirror is a host only the
   user knows and belongs in `allowedDomains` rather than being guessed at.
 - A new install persists `DEFAULT_ALLOWED_DOMAINS`
-  (`apps/backend/src/core/storage-shared-core.ts`): GitHub, npm, Bun, the
+  (`packages/protocol/src/network-allowlist.ts`): GitHub, npm, Bun, the
   Anthropic API, Sentry/Statsig, the VS Code marketplace, Context7, and
-  Playwright's CDN. `docker/init-firewall.sh` and `configStore.ts` carry their
-  own, broader default lists as fallbacks; the three are not identical, so read
-  the one that applies before assuming a host is reachable. They are not required
-  to match, but `tests/unit/version-drift.test.ts` does require the hosts the
-  image itself depends on to appear in all three, so a new one cannot be added to
-  only one list.
+  Playwright's CDN. It is the only default list. The renderer seeds its
+  unloaded config from the same constant, and the firewall's fallback for a
+  container with no `ALLOWED_DOMAINS`, `docker/default-allowed-domains`, is
+  generated from it plus every platform's required hosts
+  (`bun scripts/generate-default-allowed-domains.ts`).
+  `tests/unit/version-drift.test.ts` fails when the committed file is stale or
+  a copy of the list reappears elsewhere. A stored user list is never widened
+  to match the defaults.
 - DNS (to Docker's resolvers and the upstreams its embedded resolver names)
   and localhost are always allowed. There is no general outbound SSH
   exception: SSH reaches GitHub's published ranges and, under policy 3, only
@@ -1458,15 +1501,20 @@ report whether its state was reset or deliberately retained.
 
 ### Flaky Test Tracking
 
-Keep [`docs/tests/flaky-tests/0000-index.md`](docs/tests/flaky-tests/0000-index.md)
+Keep the flake registry in [`docs/tests/flaky-tests/`](docs/tests/flaky-tests/0000-index.md)
 current whenever test behavior shows a credible flake. That directory is the
-only flake registry — do not start a second one. Search the index by test name
-or owning file; read the **Status** column before opening a case file. Do not
-read every `NNNN-*.md` file.
+only flake registry — do not start a second one. Cases live in ten group
+folders, each with its own `0000-index.md` table; the top-level index only
+names the groups and what they cover, and never holds case rows. Search the
+group indexes by test name or owning file
+(`rg '<name>' docs/tests/flaky-tests/*/0000-index.md`); read the **Status**
+column before opening a case file. Do not read every `NNNN-*.md` file.
 
 If a test fails in the normal aggregate or parallel suite but passes when its
-owning file is rerun alone, add or update the matching numbered case file and
-its index row in the same change. Record the exact test name and file, the
+owning file is rerun alone, add or update the matching numbered case file in
+its group folder and that group's index row in the same change. Append new
+rows at the end of the group table and change status in place, so parallel
+branches touch different lines. Record the exact test name and file, the
 original command and worker configuration, the failure message and duration when
 available, suite counts, the isolated rerun command and result, the observation
 date, and any evidence-backed hypothesis or reproduction notes.

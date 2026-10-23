@@ -2,15 +2,17 @@
 
 Status: Living — HTML/CSS design workspace with recoverable operations
 (protocol v2). Outstanding work:
-[design-canvas-qualification.md](../todo/design-canvas-qualification.md),
-[design-operation-recovery-edges.md](../todo/design-operation-recovery-edges.md)
-and [design-agent-conversation-links.md](../todo/design-agent-conversation-links.md).
+[0036-design-canvas-qualification.md](../todo/design-canvas/0036-design-canvas-qualification.md),
+[0037-design-operation-recovery-edges.md](../todo/design-canvas/0037-design-operation-recovery-edges.md)
+and [0038-design-agent-conversation-links.md](../todo/design-canvas/0038-design-agent-conversation-links.md).
 
 Use **New design workspace** (the paintbrush in the environment toolbar). The
-dialog has two modes: **New design** (optionally with Claude or Codex, or a
-blank canvas with no agent) and **Import** (`.orkdes`). There is no library
-or status panel: a saved design is an `.orkdes` file in the repository, and
-clicking one anywhere a file opens (file tree, quick open, chat links) opens it
+dialog has three tabs: **New design** (optionally with Claude or Codex, or a
+blank canvas with no agent), **Open design** (a host `.orkdes` picker,
+`design_import_host_file`, with an upload fallback) and **Saved designs**
+(`DesignLibrary.tsx`: search, rename, duplicate, trash, restore and purge of
+this environment's private canvases). A design saved to the repository is an
+`.orkdes` file, and clicking one anywhere a file opens (file tree, quick open, chat links) opens it
 in the design canvas instead of a text tab. A canvas this environment already
 made from that exact file content is reused; any other file is imported as a new
 canvas that remembers the file as its save location (`design_open_file`,
@@ -101,7 +103,27 @@ Edits are **recoverable operations** (`design/service.ts`,
 
 Outcomes: `committed`, `no-op` (equal values: no revision, history or content
 hint), `rejected` (typed failure), `canceled`, `interrupted` (the backend
-restarted before commit — never replayed), `expired`, `unknown`. Failures carry
+restarted before commit — never replayed), `expired`, `unknown`.
+
+A dead owner's unsettled entry is `interrupted`, with one exception: a
+duplicate commits its copy under an id derived from its token
+(`tokenUuid`) before it writes the source receipt, so when that copy exists
+the operation is `committed` with `createdCanvasId`, also when the source
+write failed in-process (`committedDuplicate` in
+`design/service-lifecycle.ts`). Restart recovery, `status`, `execute`,
+`cancel` and a running peer all answer this way (`deadOutcome` in
+`design/service.ts`). The copy also wins on the live owner: when the source
+receipt cannot be saved, execute still answers `committed` and keeps the
+pending entry; `status` and every later execute (also after the entry's TTL)
+answer from the copy, and the next duplicate prepared on that canvas first
+records the missing receipt, refusing with `unknown-outcome` only while that
+write still fails. A never-migrated legacy canvas has nowhere to keep a
+receipt and is never migrated by recovery, so its dead owners' pending entries
+stay in the pending file as their outcomes (`retainedOutcomes`): status,
+execute, cancel and a correlated retry answer `interrupted` from them, prepare
+keeps them while they fit the per-canvas pending bounds (the oldest give way
+to new edits and then answer `unknown`), and the commit that migrates the
+canvas turns them into receipts. Failures carry
 a code (`conflict`, `invalid-input`, `invalid-content`,
 `renderer-unavailable`, `capacity`, `deadline`, `deleted`, `not-found`,
 `expired-operation`, `unknown-outcome`, `export-collision`,
@@ -167,8 +189,15 @@ generation fails its jobs exactly once. Health distinguishes missing
 executable, launch failure, saturation, recovery and ready, and is probed on
 demand (cached 60 s).
 
-Playwright exposes no browser process handle, so a hung `close()` is bounded
-by the cleanup deadline rather than a process kill.
+Each generation's browser is a Playwright browser server on loopback
+(`launchDesignBrowser`: `chromium.launchServer({ host: "127.0.0.1" })` and
+`chromium.connect`), because a browser from `chromium.launch()` exposes no
+process. Retiring a generation, including one whose connection dropped while
+its server may still run, closes the server within the cleanup deadline;
+a close that hangs or fails is followed by `BrowserServer.kill()`, also
+bounded. The endpoint's path is a random GUID that the renderer never logs. The fault
+test in `renderer.test.ts` stops a real browser with `SIGSTOP` and checks that
+shutdown kills it.
 
 ## Validation
 
@@ -326,7 +355,8 @@ credentials or prompts.
 ## Tests
 
 Backend: the `core/design/` `service`, `operations`, `history`, `lifecycle`,
-`sync`, `records`, `exports`, `export-writer`, `renderer` and `mcp` tests, and
+`sync`, `records`, `exports`, `export-writer`, `renderer`, `mcp`,
+`cross-process` and `host-file` tests, and
 `commands-registry-design` (a happy-dom runtime renderer from `design/test-support.ts`
 plus one real-Chromium renderer test). Backend tests reach a storage bound
 (change log, history entries) by lowering it with `withDesignLimit`, not with
@@ -340,4 +370,11 @@ command registry at desktop and phone widths;
 `e2e/agent-testing/design-live.spec.ts` (opt-in, `ORKESTRATOR_AGENT_TEST_LIVE_DESIGN=1`)
 runs the full tool cycle, Ask agent, an approval and the handoff with real
 Claude and Codex.
-`scripts/benchmark-design.ts` measures transfer, commit and latency fixtures.
+`e2e/DesignCanvasAccessibility.spec.ts` runs a keyboard-only journey with focus
+survival, accessibility-tree, reduced-motion, zoom and narrow-pane checks, and
+`e2e/agent-testing/design-canvas-electron.spec.ts` (`mise run test:agent:electron`)
+drives the canvas in the real Electron window. The opt-in
+`core/design/export-container.test.ts` (`ORKESTRATOR_TEST_DOCKER_DESIGN_IMAGE`)
+exports from a running container and interrupts it.
+`scripts/benchmark-design.ts` measures transfer, commit and latency fixtures,
+and `e2e/perf/design-canvas-perf.ts` measures the client in a real browser.

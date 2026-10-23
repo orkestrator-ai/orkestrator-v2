@@ -3,8 +3,10 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { itemToParts, stringifyUnknown } from "./index.js";
-import type { FileChangeDiffContext } from "./index.js";
+// The pure renderer, not `./index.js`: importing the composition root starts
+// the bridge's HTTP server on `env.PORT` and its engine.
+import { itemToParts, stringifyUnknown } from "./messages/normalization.js";
+import type { FileChangeDiffContext } from "./messages/types.js";
 
 jest.setTimeout(30_000);
 import type { ThreadItem } from "./codex-item-types.js";

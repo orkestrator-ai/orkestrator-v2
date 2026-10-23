@@ -68,6 +68,7 @@ import {
   mockToastLoading,
   mockToastWarning,
 } from "../../../../../tests/mocks/sonner";
+import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout";
 
 // Snapshot before installing the stubs so the real modules are restored for
 // any suite that runs after this file in the same module registry.
@@ -451,8 +452,20 @@ beforeEach(() => {
   });
 });
 
+let readCoordinatorFaked = false;
+
+/** A fake-clock shared read coordinator; afterEach restores the default after unmount. */
+function fakeReadCoordinator() {
+  readCoordinatorFaked = true;
+  return installFakeReadCoordinator();
+}
+
 afterEach(() => {
   cleanup();
+  if (readCoordinatorFaked) {
+    resetReadCoordinatorForTests();
+    readCoordinatorFaked = false;
+  }
   renderVirtualizedMessages = false;
   latestTranscriptAnnotationProps = undefined;
   useConfigStore.getState().setConfig(configSnapshot);
@@ -1355,13 +1368,29 @@ describe("AgentNativeTab", () => {
         ...(await defaultProjection(input as never)),
         readiness: { state: "authentication-required" as const, message: "Account needs sign-in" },
       }));
-      render(<AgentNativeTab tabId="tab-auth-retry" data={identity("codex")} isActive />);
-      await screen.findByRole("button", { name: "Retry sign-in options" });
-      expect(screen.queryByRole("button", { name: "Open Codex settings" }) === null).toBe(true);
-      expect(
-        await screen.findByRole("button", { name: "Sign in to Codex" }, { timeout: 2_000 }),
-      ).toBeTruthy();
-      expect(reads).toBe(2);
+      // The automatic re-read waits 1 s; control that delay instead of sleeping
+      // through it. The fake coordinator keeps background reads off the real
+      // clock, and every async query below names a timeout other than Testing
+      // Library's 1 s default, so the auth retry is the only timer at 1 s.
+      installFakeReadCoordinator();
+      const authRetry = installControlledTimeout(1_000, { label: "native auth re-read" });
+      const query = { timeout: 2_000 };
+      try {
+        render(<AgentNativeTab tabId="tab-auth-retry" data={identity("codex")} isActive />);
+        await screen.findByRole("button", { name: "Retry sign-in options" }, query);
+        expect(screen.queryByRole("button", { name: "Open Codex settings" }) === null).toBe(true);
+        expect(reads).toBe(1);
+        await waitFor(() => expect(authRetry.pendingCount()).toBe(1), query);
+        await act(async () => {
+          authRetry.advance();
+        });
+        expect(await screen.findByRole("button", { name: "Sign in to Codex" }, query)).toBeTruthy();
+        expect(reads).toBe(2);
+      } finally {
+        cleanup();
+        authRetry.restore();
+        resetReadCoordinatorForTests();
+      }
     },
   );
 
@@ -1960,21 +1989,36 @@ describe("AgentNativeTab", () => {
       revision: 1,
     });
 
-    const first = render(<AgentNativeTab tabId={tabId} data={identity("grok")} isActive />);
-    expect(await screen.findByRole("button", { name: "Remove layout.png" })).toBeTruthy();
-    await waitFor(() => expect(composeDraftRecords.get(draftKey)?.revision).toBeGreaterThan(1));
-    const savedRevision = composeDraftRecords.get(draftKey)!.revision;
-    first.unmount();
-    useNativeComposeStore.setState({ drafts: new Map() });
+    // Each save waits out the 400 ms draft debounce; control it instead.
+    const saveDebounce = installControlledTimeout(400, { label: "native compose draft save" });
+    const flushSave = async () => {
+      await waitFor(() => expect(saveDebounce.pendingCount()).toBe(1));
+      await act(async () => {
+        saveDebounce.advance();
+      });
+    };
+    try {
+      const first = render(<AgentNativeTab tabId={tabId} data={identity("grok")} isActive />);
+      expect(await screen.findByRole("button", { name: "Remove layout.png" })).toBeTruthy();
+      await flushSave();
+      await waitFor(() => expect(composeDraftRecords.get(draftKey)?.revision).toBeGreaterThan(1));
+      const savedRevision = composeDraftRecords.get(draftKey)!.revision;
+      first.unmount();
+      useNativeComposeStore.setState({ drafts: new Map() });
 
-    const remounted = render(<AgentNativeTab tabId={tabId} data={identity("grok")} isActive />);
-    expect(await screen.findByRole("button", { name: "Remove layout.png" })).toBeTruthy();
-    expect((await screen.findByRole("textbox")).textContent).toBe("Review the layout");
-    await waitFor(() =>
-      expect(composeDraftRecords.get(draftKey)?.revision).toBeGreaterThan(savedRevision),
-    );
-    expect(composeDraftRecords.get(draftKey)?.value).toMatchObject({ attachments: [image] });
-    remounted.unmount();
+      const remounted = render(<AgentNativeTab tabId={tabId} data={identity("grok")} isActive />);
+      expect(await screen.findByRole("button", { name: "Remove layout.png" })).toBeTruthy();
+      expect((await screen.findByRole("textbox")).textContent).toBe("Review the layout");
+      await flushSave();
+      await waitFor(() =>
+        expect(composeDraftRecords.get(draftKey)?.revision).toBeGreaterThan(savedRevision),
+      );
+      expect(composeDraftRecords.get(draftKey)?.value).toMatchObject({ attachments: [image] });
+      remounted.unmount();
+    } finally {
+      cleanup();
+      saveDebounce.restore();
+    }
   });
 
   test("unlocks a preserved draft when authoritative readiness recovers", async () => {
@@ -3081,6 +3125,121 @@ describe("AgentNativeTab", () => {
     await waitFor(() => expect(flushPaneLayoutNowMock).toHaveBeenCalledTimes(1));
   });
 
+  function seedUnassignedResumeTab(tabId: string) {
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: [...AGENT_PLATFORMS],
+    });
+    usePaneLayoutStore.setState({
+      environments: new Map([
+        [
+          "env-1",
+          {
+            root: {
+              kind: "leaf",
+              id: "default",
+              tabs: [
+                { id: tabId, type: "agent-native", nativeAgentData: { environmentId: "env-1" } },
+              ],
+              activeTabId: tabId,
+            },
+            activePaneId: "default",
+            containerId: null,
+          },
+        ],
+      ]),
+      hydration: new Map([["env-1", "done"]]),
+      activeEnvironmentId: "env-1",
+    });
+  }
+
+  async function openGrokResumePicker(tabId: string) {
+    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    fireEvent.click(screen.getByRole("button", { name: "Resume Session" }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /Grok Build/ }));
+    return await screen.findByRole("dialog", { name: "Resume Session" });
+  }
+
+  test("a tab opened only to resume creates no session before the choice", async () => {
+    const calls: string[] = [];
+    ensureNativeAgentSessionMock.mockImplementation(async (input) => {
+      calls.push("ensure");
+      return defaultEnsureNativeAgentSession(input);
+    });
+    resumeNativeAgentSessionMock.mockImplementationOnce(async (input) => {
+      calls.push(`resume ${input.providerSessionId}`);
+      return {
+        ...(await defaultProjection({ agent: input.agent!, environmentId: input.environmentId })),
+        sessionId: input.providerSessionId,
+        generation: `resumed:${input.providerSessionId}`,
+      };
+    });
+    listNativeAgentResumableSessionsMock.mockImplementation(
+      async () =>
+        [
+          {
+            sessionId: "grok-earlier",
+            title: "Earlier work",
+            updatedAt: "2026-10-01T00:00:00.000Z",
+          },
+        ] as never,
+    );
+    seedUnassignedResumeTab("tab-resume-only");
+
+    const picker = await openGrokResumePicker("tab-resume-only");
+    expect(screen.getByText("Choose a Grok Build session to resume.")).toBeTruthy();
+    // The list is read without a session of the tab's own.
+    await waitFor(() => expect(listNativeAgentResumableSessionsMock).toHaveBeenCalled());
+    expect(calls).toEqual([]);
+
+    fireEvent.click(await within(picker).findByRole("button", { name: /Earlier work/ }));
+
+    await waitFor(() =>
+      expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.nativeAgentData?.sessionId).toBe(
+        "grok-earlier",
+      ),
+    );
+    await waitFor(() => expect(adoptNativeAgentSessionMock).toHaveBeenCalled());
+    expect(calls).toEqual(["resume grok-earlier"]);
+    // No composer exists yet, so no controls: an all-empty update is refused.
+    const resumed = resumeNativeAgentSessionMock.mock.calls[0]?.[0] as
+      | { controls?: unknown }
+      | undefined;
+    expect(resumed).toBeDefined();
+    expect(resumed?.controls).toBeUndefined();
+  });
+
+  test("dismissing the resume picker starts the tab's own session", async () => {
+    seedUnassignedResumeTab("tab-resume-dismissed");
+
+    const picker = await openGrokResumePicker("tab-resume-dismissed");
+    expect(ensureNativeAgentSessionMock).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(picker, { key: "Escape" });
+
+    await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalledTimes(1));
+    expect(ensureNativeAgentSessionMock.mock.calls[0]?.[0]).toMatchObject({
+      agent: "grok",
+      environmentId: "env-1",
+    });
+    expect(resumeNativeAgentSessionMock).not.toHaveBeenCalled();
+  });
+
+  test("a failed resume falls back to the tab's own session", async () => {
+    listNativeAgentResumableSessionsMock.mockImplementation(
+      async () => [{ sessionId: "grok-gone", title: "Gone" }] as never,
+    );
+    resumeNativeAgentSessionMock.mockImplementationOnce(async () => {
+      throw new Error("Grok session is gone");
+    });
+    seedUnassignedResumeTab("tab-resume-failed");
+
+    const picker = await openGrokResumePicker("tab-resume-failed");
+    fireEvent.click(await within(picker).findByRole("button", { name: /Gone/ }));
+
+    await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalledTimes(1));
+    expect(resumeNativeAgentSessionMock).toHaveBeenCalledTimes(1);
+  });
+
   test("renders the backend-normalized OpenCode catalogue in a new tab", async () => {
     useEnvironmentStore.setState({
       environments: [
@@ -4085,6 +4244,9 @@ describe("AgentNativeTab", () => {
       return { outcome: "unknown", requestId: input.requestId, error: "The transport failed" };
     });
 
+    // The projection poll is scheduled by the read coordinator; a fake clock
+    // drives one tick of the active (500 ms) cadence instead of waiting for it.
+    const { clock } = fakeReadCoordinator();
     render(<AgentNativeTab tabId={tabId} data={identity("cursor")} isActive />);
     const input = await screen.findByRole("textbox");
     fireEvent.input(input, { target: { textContent: "Move the dashboard pages" } });
@@ -4110,9 +4272,8 @@ describe("AgentNativeTab", () => {
     // Once the backend's own projection poll says the window elapsed, the
     // retry/discard card arrives without any client-side store write.
     status = "action-required";
-    expect(
-      await screen.findByRole("button", { name: "Retry send" }, { timeout: 4_000 }),
-    ).toBeTruthy();
+    await act(() => clock.advance(500));
+    expect(await screen.findByRole("button", { name: "Retry send" })).toBeTruthy();
     expect(screen.getByText(/could not confirm delivery of your last message/i)).toBeTruthy();
   });
 
@@ -4155,6 +4316,9 @@ describe("AgentNativeTab", () => {
       },
     }));
 
+    // The projection poll is scheduled by the read coordinator; a fake clock
+    // drives one tick of the active (500 ms) cadence instead of waiting for it.
+    const { clock } = fakeReadCoordinator();
     render(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
 
     // The record exists and locks the composer the moment it is persisted, but
@@ -4169,9 +4333,8 @@ describe("AgentNativeTab", () => {
     // runs, not a client-side store write, so this exercises the wiring the UI
     // actually depends on.
     status = "action-required";
-    expect(
-      await screen.findByRole("button", { name: "Retry send" }, { timeout: 4_000 }),
-    ).toBeTruthy();
+    await act(() => clock.advance(500));
+    expect(await screen.findByRole("button", { name: "Retry send" })).toBeTruthy();
     expect(screen.getByText(/could not confirm delivery of your last message/i)).toBeTruthy();
     expect(screen.queryByText(/Confirming delivery with Codex/i) === null).toBe(true);
   });
@@ -4197,7 +4360,25 @@ describe("AgentNativeTab", () => {
               status: "action-required" as const,
             },
           }
-        : {}),
+        : {
+            retiredDispatch: {
+              requestId: "lost-1",
+              retiredAt: new Date().toISOString(),
+              message: lost,
+            },
+            notices: [
+              {
+                kind: "warning" as const,
+                message: lost,
+                occurrenceId: "dispatch-outcome-lost:lost-1",
+              },
+              {
+                kind: "warning" as const,
+                message: "Another retry notice",
+                occurrenceId: "unrelated-retry",
+              },
+            ],
+          }),
     }));
     let releaseRetry!: () => void;
     const retryGate = new Promise<void>((resolve) => {
@@ -4222,6 +4403,12 @@ describe("AgentNativeTab", () => {
     // Told plainly, never shown as delivered, and the text is kept to resend.
     expect(await screen.findByText(lost)).toBeTruthy();
     await waitFor(() =>
+      expect(
+        mockToastWarning.mock.calls.some(([message]) => message === "Another retry notice"),
+      ).toBe(true),
+    );
+    expect(mockToastWarning.mock.calls.some(([message]) => message === lost)).toBe(false);
+    await waitFor(() =>
       expect(screen.queryByRole("button", { name: "Retry send" }) === null).toBe(true),
     );
     const draft = useNativeComposeStore.getState().drafts.get(sessionKey);
@@ -4245,11 +4432,35 @@ describe("AgentNativeTab", () => {
       text: "Deploy the preview",
       requestId: "retired-direct",
     });
-    dispatchNativeAgentIntentMock.mockImplementationOnce(async () => ({
-      outcome: "rejected",
-      error: warning,
-      requestIdRetired: true,
+    let retired = false;
+    getNativeAgentProjectionMock.mockImplementation(async (projectionInput) => ({
+      ...(await defaultProjection(projectionInput)),
+      ...(retired
+        ? {
+            retiredDispatch: {
+              requestId: "retired-direct",
+              retiredAt: new Date().toISOString(),
+              message: warning,
+            },
+            notices: [
+              {
+                kind: "warning" as const,
+                message: warning,
+                occurrenceId: "dispatch-outcome-lost:retired-direct",
+              },
+              {
+                kind: "warning" as const,
+                message: "Another direct notice",
+                occurrenceId: "unrelated-direct",
+              },
+            ],
+          }
+        : {}),
     }));
+    dispatchNativeAgentIntentMock.mockImplementationOnce(async () => {
+      retired = true;
+      return { outcome: "rejected", error: warning, requestIdRetired: true };
+    });
     const mounted = render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
     fireEvent.keyDown(await screen.findByRole("textbox"), { key: "Enter" });
     await screen.findByText(warning);
@@ -4265,12 +4476,114 @@ describe("AgentNativeTab", () => {
     mounted.unmount();
     render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
     expect(await screen.findByText(warning)).toBeTruthy();
+    await waitFor(() =>
+      expect(
+        mockToastWarning.mock.calls.some(([message]) => message === "Another direct notice"),
+      ).toBe(true),
+    );
+    expect(mockToastWarning.mock.calls.some(([message]) => message === warning)).toBe(false);
     expect(screen.queryByRole("button", { name: "Retry send" }) === null).toBe(true);
     fireEvent.keyDown(await screen.findByRole("textbox"), { key: "Enter" });
     await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(2));
     const resent = dispatchNativeAgentIntentMock.mock.calls[1]![0];
     expect(resent.requestId).toBeString();
     expect(resent.requestId).not.toBe("retired-direct");
+  });
+
+  test("settles a dispatch the backend retired on its own, without a click and on a later mount", async () => {
+    const tabId = "tab-auto-retired";
+    const sessionKey = createSessionKey("env-1", tabId);
+    const lost =
+      "Claude Code could not confirm this message, so it may not have run. Check the conversation and send it again if it did not.";
+    useNativeComposeStore.getState().updateDraft(sessionKey, {
+      text: "Deploy the preview",
+      requestId: "lost-auto",
+      pendingTranscriptConfirmation: {
+        requestId: "lost-auto",
+        sessionId: "s-1",
+        priorMessageIds: [],
+      },
+    });
+    // What the backend projects once it has retired the parked dispatch: no
+    // card, the content-free marker, and the notice older renderers show.
+    getNativeAgentProjectionMock.mockImplementation(async (projectionInput) => ({
+      ...(await defaultProjection(projectionInput)),
+      notices: [
+        {
+          kind: "warning" as const,
+          message: lost,
+          occurrenceId: "dispatch-outcome-lost:lost-auto",
+        },
+      ],
+      retiredDispatch: {
+        requestId: "lost-auto",
+        retiredAt: "2026-10-23T10:00:00.000Z",
+        message: lost,
+      },
+    }));
+
+    // The tab was not mounted when it happened; it learns from the snapshot.
+    const mounted = render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+    expect(await screen.findByText(lost)).toBeTruthy();
+    await waitFor(() =>
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.requestId).toBeUndefined(),
+    );
+    const draft = useNativeComposeStore.getState().drafts.get(sessionKey);
+    expect(draft?.text).toBe("Deploy the preview");
+    expect(draft?.pendingTranscriptConfirmation).toBeUndefined();
+    expect(draft?.submissionError).toBe(lost);
+    expect(screen.queryByRole("button", { name: "Retry send" }) === null).toBe(true);
+    expect(retryNativeAgentDispatchMock).not.toHaveBeenCalled();
+    // Shown once, in the composer: the duplicate notice is not toasted.
+    expect(mockToastWarning.mock.calls.some(([message]) => message === lost)).toBe(false);
+
+    // Idempotent across a remount: still shown, still no toast, still no id.
+    mounted.unmount();
+    render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+    expect(await screen.findByText(lost)).toBeTruthy();
+    expect(mockToastWarning.mock.calls.some(([message]) => message === lost)).toBe(false);
+
+    // The bridge refuses the old id for good, so a resend needs a new one.
+    fireEvent.keyDown(await screen.findByRole("textbox"), { key: "Enter" });
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+    const resent = dispatchNativeAgentIntentMock.mock.calls[0]![0] as { requestId?: string };
+    expect(resent.requestId).toBeString();
+    expect(resent.requestId).not.toBe("lost-auto");
+  });
+
+  test("leaves a draft that no longer owns a retired dispatch alone", async () => {
+    const tabId = "tab-auto-retired-other";
+    const sessionKey = createSessionKey("env-1", tabId);
+    const lost =
+      "Claude Code could not confirm this message, so it may not have run. Check the conversation and send it again if it did not.";
+    useNativeComposeStore.getState().updateDraft(sessionKey, {
+      text: "Something newer",
+      requestId: "newer",
+    });
+    getNativeAgentProjectionMock.mockImplementation(async (projectionInput) => ({
+      ...(await defaultProjection(projectionInput)),
+      notices: [
+        {
+          kind: "warning" as const,
+          message: lost,
+          occurrenceId: "dispatch-outcome-lost:lost-auto",
+        },
+      ],
+      retiredDispatch: {
+        requestId: "lost-auto",
+        retiredAt: "2026-10-23T10:00:00.000Z",
+        message: lost,
+      },
+    }));
+
+    render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+    // The notice still tells the user; the unrelated draft keeps its id.
+    await waitFor(() =>
+      expect(mockToastWarning.mock.calls.some(([message]) => message === lost)).toBe(true),
+    );
+    const draft = useNativeComposeStore.getState().drafts.get(sessionKey);
+    expect(draft?.requestId).toBe("newer");
+    expect(draft?.submissionError).toBeUndefined();
   });
 
   test("keeps the recovery card mounted and disabled while a retry is running", async () => {
@@ -6204,11 +6517,14 @@ describe("AgentNativeTab", () => {
           };
     });
 
+    // The projection poll is scheduled by the read coordinator; a fake clock
+    // drives one tick of the active (500 ms) cadence instead of waiting for it.
+    const { clock } = fakeReadCoordinator();
     render(<AgentNativeTab tabId="tab-pi-given-up" data={identity("pi")} isActive />);
 
-    await waitFor(() => expect(screen.getByText("Connection Failed")).toBeTruthy(), {
-      timeout: 5_000,
-    });
+    await waitFor(() => expect(reads).toBe(1));
+    await act(() => clock.advance(500));
+    await waitFor(() => expect(screen.getByText("Connection Failed")).toBeTruthy());
     expect(
       screen.getByText(
         "The native agent runtime no longer holds this session. Retry to start a new one.",
@@ -6231,11 +6547,14 @@ describe("AgentNativeTab", () => {
         : base;
     });
 
+    // The projection poll is scheduled by the read coordinator; a fake clock
+    // drives one tick of the active (500 ms) cadence instead of waiting for it.
+    const { clock } = fakeReadCoordinator();
     render(<AgentNativeTab tabId="tab-pi-recovered" data={identity("pi")} isActive />);
 
-    await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalledTimes(2), {
-      timeout: 5_000,
-    });
+    await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalledTimes(1));
+    await act(() => clock.advance(500));
+    await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalledTimes(2));
     expect(screen.queryByText("Refreshing Pi session…") === null).toBe(true);
     expect(screen.queryByTestId("session-refresh-shimmer-pinned") === null).toBe(true);
     expect(screen.queryByText("Connection Failed") === null).toBe(true);
@@ -6676,24 +6995,35 @@ describe("AgentNativeTab", () => {
     });
     getNativeAgentProjectionMock.mockImplementation(async () => null as never);
 
-    render(<NativeSessionIdentityHarness platform="cursor" />);
-    await waitFor(() =>
-      expect(screen.getByTestId("runtime-error").textContent).toBe("bridge refused the session"),
-    );
+    // The reads that follow are the registered production poll; a fake clock
+    // drives it instead of waiting out its 500/1,500 ms cadence.
+    const { clock } = installFakeReadCoordinator();
+    try {
+      render(<NativeSessionIdentityHarness platform="cursor" />);
+      await waitFor(() =>
+        expect(screen.getByTestId("runtime-error").textContent).toBe("bridge refused the session"),
+      );
 
-    // Suppression is scoped to "the session still is not there". A read that
-    // does find one supersedes the failure — otherwise the message outlives what
-    // it described, and the next genuine absence reports a stale cause.
-    getNativeAgentProjectionMock.mockImplementation(defaultProjection);
-    await waitFor(() => expect(screen.getByTestId("runtime-error").textContent).toBe(""), {
-      timeout: 4_000,
-    });
+      // Suppression is scoped to "the session still is not there". A read that
+      // does find one supersedes the failure — otherwise the message outlives what
+      // it described, and the next genuine absence reports a stale cause.
+      getNativeAgentProjectionMock.mockImplementation(defaultProjection);
+      const readsBeforePoll = getNativeAgentProjectionMock.mock.calls.length;
+      await act(() => clock.advance(1_500));
+      await waitFor(() => expect(screen.getByTestId("runtime-error").textContent).toBe(""));
+      expect(getNativeAgentProjectionMock.mock.calls.length).toBeGreaterThan(readsBeforePoll);
 
-    getNativeAgentProjectionMock.mockImplementation(async () => null as never);
-    await waitFor(() => expect(screen.getByTestId("has-completed-read").textContent).toBe("true"), {
-      timeout: 4_000,
-    });
-    expect(screen.getByTestId("runtime-error").textContent).toBe("");
+      getNativeAgentProjectionMock.mockImplementation(async () => null as never);
+      const readsBeforeEmptyPoll = getNativeAgentProjectionMock.mock.calls.length;
+      await act(() => clock.advance(1_500));
+      await waitFor(() =>
+        expect(screen.getByTestId("has-completed-read").textContent).toBe("true"),
+      );
+      expect(getNativeAgentProjectionMock.mock.calls.length).toBeGreaterThan(readsBeforeEmptyPoll);
+      expect(screen.getByTestId("runtime-error").textContent).toBe("");
+    } finally {
+      resetReadCoordinatorForTests();
+    }
   }, 10_000);
 
   test("runs the reconcile an invalidation asked for once creation completes", async () => {
@@ -10201,6 +10531,11 @@ describe("AgentNativeTab", () => {
         ) === null,
       ).toBe(true);
       expect(screen.queryByText("Earlier messages are not shown.") === null).toBe(true);
+      expect(
+        screen.queryByText(
+          "Earlier messages in this conversation are not available here. The conversation itself is kept.",
+        ) === null,
+      ).toBe(true);
       fireEvent.click(loadEarlierButton);
       await waitFor(() =>
         expect(
@@ -10287,7 +10622,13 @@ describe("AgentNativeTab", () => {
       });
       render(<AgentNativeTab tabId="tab-count-capped" data={identity("cursor")} isActive />);
 
-      expect(screen.queryByText("Earlier messages are not shown.") === null).toBe(true);
+      // No page can bring the start back, so the cut is said out loud rather
+      // than the remainder reading as the whole conversation.
+      expect(
+        await screen.findByText(
+          "Earlier messages in this conversation are not available here. The conversation itself is kept.",
+        ),
+      ).toBeTruthy();
       expect(
         screen.queryByText(
           "Earlier messages or tool activity were omitted to stay within the 16 MiB transcript limit.",
@@ -10306,7 +10647,13 @@ describe("AgentNativeTab", () => {
       });
       render(<AgentNativeTab tabId="tab-reasonless-cap" data={identity("cursor")} isActive />);
 
-      expect(screen.queryByText("Earlier messages are not shown.") === null).toBe(true);
+      // No page can bring the start back, so the cut is said out loud rather
+      // than the remainder reading as the whole conversation.
+      expect(
+        await screen.findByText(
+          "Earlier messages in this conversation are not available here. The conversation itself is kept.",
+        ),
+      ).toBeTruthy();
       expect(
         screen.queryByText(
           "Earlier messages or tool activity were omitted to stay within the 16 MiB transcript limit.",

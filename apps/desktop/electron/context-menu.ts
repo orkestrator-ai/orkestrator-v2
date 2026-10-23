@@ -116,21 +116,23 @@ export function createContextMenuTemplate(
   return [];
 }
 
+/** `contents`: the window's own renderer, or a workspace realm inside it. */
 export function installDefaultContextMenu(
   window: BrowserWindow & { webContents: ContextMenuWebContents },
   menu: MenuLike,
   writeClipboardText: (text: string) => void,
+  contents: ContextMenuWebContents = window.webContents,
 ): void {
-  window.webContents.on("context-menu", (_event, params) => {
+  contents.on("context-menu", (_event, params) => {
     const template = createContextMenuTemplate(params, {
       replaceMisspelling: (suggestion) => {
-        window.webContents.replaceMisspelling(suggestion);
+        contents.replaceMisspelling(suggestion);
       },
       addToDictionary: (word) => {
-        window.webContents.session.addWordToSpellCheckerDictionary(word);
+        contents.session.addWordToSpellCheckerDictionary(word);
       },
       copyImageAt: (x, y) => {
-        window.webContents.copyImageAt(x, y);
+        contents.copyImageAt(x, y);
       },
       writeClipboardText,
     });

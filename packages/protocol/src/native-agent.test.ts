@@ -38,6 +38,8 @@ import {
   applyNativeAgentProjectionDelta,
   applyNativeAgentTranscriptDelta,
   isNativeAgentProjectionUpdate,
+  dispatchOutcomeLostMessage,
+  dispatchOutcomeLostOccurrenceId,
   isNativeAgentSessionStateUpdate,
   isNativeAgentTranscriptUpdate,
   nativeAsyncQuestionItemId,
@@ -110,6 +112,23 @@ describe("native agent capability table", () => {
       "permission",
       "mcp-form",
       "mcp-url",
+    ]);
+  });
+
+  test("pins Codex and Grok interaction capabilities", () => {
+    expect(nativeAgentCapabilities("codex").interactions?.kinds).toEqual([
+      "command-approval",
+      "file-approval",
+      "permission",
+      "mcp-form",
+      "mcp-url",
+    ]);
+    expect(nativeAgentCapabilities("grok").interactions?.kinds).toEqual([
+      "question",
+      "plan-approval",
+      "command-approval",
+      "file-approval",
+      "permission",
     ]);
   });
 
@@ -411,6 +430,43 @@ describe("native agent projection synchronization", () => {
         },
       }),
     ).toBe(false);
+  });
+
+  test("accepts setting and unsetting a retired dispatch in projection deltas", () => {
+    const delta = (setFields: Record<string, unknown>, unsetFields: string[]) =>
+      isNativeAgentProjectionUpdate({
+        syncVersion: 1,
+        status: "delta",
+        baseToken: "base",
+        token: "next",
+        historyEpoch: "epoch",
+        historyComplete: true,
+        delta: {
+          messageUpserts: [],
+          deletedMessageIds: [],
+          setFields,
+          unsetFields,
+          revision: 2,
+          generation: "generation-1",
+        },
+      });
+    expect(
+      delta(
+        {
+          retiredDispatch: {
+            requestId: "r-1",
+            retiredAt: "2026-10-23T10:00:00.000Z",
+            message: dispatchOutcomeLostMessage("claude"),
+          },
+        },
+        [],
+      ),
+    ).toBe(true);
+    expect(delta({}, ["retiredDispatch"])).toBe(true);
+    expect(dispatchOutcomeLostMessage("claude")).toBe(
+      "Claude Code could not confirm this message, so it may not have run. Check the conversation and send it again if it did not.",
+    );
+    expect(dispatchOutcomeLostOccurrenceId("r-1")).toBe("dispatch-outcome-lost:r-1");
   });
 
   test("accepts async-question response state in projection deltas", () => {

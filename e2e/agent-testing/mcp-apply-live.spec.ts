@@ -5,6 +5,9 @@
  * Opt-in (`ORKESTRATOR_AGENT_TEST_LIVE_MCP=1`) against a running agent-test
  * profile. For each platform in `ORKESTRATOR_AGENT_TEST_MCP_PROVIDERS`
  * (default all six) it creates a local environment with project resources on,
+ * or a container when `ORKESTRATOR_AGENT_TEST_MCP_CONTAINER=1` (requires the
+ * checkout's development image). Container mode qualifies environment-private
+ * sources, including save/apply during a real running turn and stop/start,
  * opens two agent tabs, and for every writable scope the editor offers on
  * that environment's target:
  *
@@ -45,7 +48,7 @@
  * one run fills the whole matrix.
  */
 import { expect, test, type Page } from "@playwright/test";
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import {
   existsSync,
@@ -62,6 +65,7 @@ import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import {
   dispatchProbeTurn,
   hasRunningSleep,
+  invokeCommand,
   judgeProbe,
   parseProbeLog,
   PROBE_SERVER_NAME,
@@ -84,7 +88,12 @@ type Status = {
   testProject?: string;
 };
 type Project = { id: string; localPath: string | null };
-type Environment = { id: string; name: string; worktreePath?: string | null };
+type Environment = {
+  id: string;
+  name: string;
+  worktreePath?: string | null;
+  containerId?: string | null;
+};
 type Message = { id: string; role: string; content?: unknown; parts?: unknown };
 type Interaction = { id: string; sessionId: string; kind: string; state: string };
 type Projection = {
@@ -128,6 +137,8 @@ type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "codex-qa";
 const runId = process.env.ORKESTRATOR_AGENT_TEST_RUN_ID ?? profile;
+/** Run the same real-provider busy-turn matrix against private container sources. */
+const CONTAINER = process.env.ORKESTRATOR_AGENT_TEST_MCP_CONTAINER === "1";
 const LIVE = process.env.ORKESTRATOR_AGENT_TEST_LIVE_MCP === "1";
 const LABELS: Record<Platform, string> = {
   claude: "Claude",
@@ -163,7 +174,9 @@ const TURN_TIMEOUT_MS = Number(process.env.ORKESTRATOR_AGENT_TEST_MCP_TURN_TIMEO
 const APPLY_SETTLE_MS = 180_000;
 const EVIDENCE_WAIT_MS = 45_000;
 const PROBE_SERVER = path.join(import.meta.dirname, "mcp-probe-server.mjs");
-const WRITABLE_SCOPES = new Set(["backend-user", "claude-local", "project"]);
+const WRITABLE_SCOPES = new Set(
+  CONTAINER ? ["environment-private"] : ["backend-user", "claude-local", "project"],
+);
 
 function profileStatus(): Status {
   const command = spawnSync("mise", ["run", "dev:status", "--profile", profile, "--json"], {
@@ -188,9 +201,14 @@ async function signIn(page: Page, status: Status): Promise<Invoke> {
   const response = await page.goto(login.loginUrl, { waitUntil: "domcontentloaded" });
   expect(response?.ok() ?? false).toBe(true);
   return async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
-    const invokeResponse = await page.request.post(
-      new URL("/__orkestrator/invoke", status.browserUrl!).href,
-      { data: { command, args }, timeout: Math.max(240_000, TURN_TIMEOUT_MS) },
+    const invokeResponse = await invokeCommand(
+      command,
+      () =>
+        page.request.post(new URL("/__orkestrator/invoke", status.browserUrl!).href, {
+          data: { command, args },
+          timeout: Math.max(240_000, TURN_TIMEOUT_MS),
+        }),
+      () => new Promise((resolve) => setTimeout(resolve, 1_000)),
     );
     if (!invokeResponse.ok()) {
       throw new Error(`${command}: ${(await invokeResponse.text()).slice(0, 1_000)}`);
@@ -371,16 +389,38 @@ test.describe("live MCP apply", () => {
           projectId: fixture!.id,
           name: `mcpq-${platform}-${Date.now()}`,
           networkAccessMode: "restricted",
-          environmentType: "local",
+          environmentType: CONTAINER ? "containerized" : "local",
           agentSettings: { executionPolicy: { projectResources: true } },
         });
         const environmentId = environment.id;
         await call("start_environment", { environmentId });
-        const worktree = (await call<Environment>("get_environment", { environmentId }))
-          .worktreePath;
-        expect(worktree, "the environment has a worktree").toBeTruthy();
-
-        const boundary = { dataDir, worktree: worktree!, flavor: status.flavor };
+        environment = await call<Environment>("get_environment", { environmentId });
+        const worktree = environment.worktreePath;
+        if (!CONTAINER) expect(worktree, "the environment has a worktree").toBeTruthy();
+        if (CONTAINER)
+          expect(environment.containerId, "the environment has a container").toBeTruthy();
+        const containerId = environment.containerId!;
+        const docker = (args: string[]) =>
+          execFileSync("docker", args, {
+            encoding: "utf8",
+            timeout: 30_000,
+            maxBuffer: 1 << 20,
+          }).trim();
+        const runtimeScratch = CONTAINER ? `/tmp/${path.basename(scratch)}` : scratch;
+        const runtimeProbe = CONTAINER ? `${runtimeScratch}/mcp-probe-server.mjs` : PROBE_SERVER;
+        if (CONTAINER) {
+          docker(["exec", "--user", "node", containerId, "mkdir", "-p", runtimeScratch]);
+          docker(["cp", PROBE_SERVER, `${containerId}:${runtimeProbe}`]);
+        }
+        const boundary = { dataDir, worktree: worktree ?? scratch, flavor: status.flavor };
+        // Container edits use only the backend's fixed specs on this disposable
+        // target. No host pathname from a source is opened or written here.
+        const sourceRefusal = (source: Source) =>
+          CONTAINER
+            ? source.scope === "environment-private"
+              ? null
+              : "not a private container source"
+            : writeRefusal(source, boundary);
 
         const tabs = ["A", "B"].map((name) => `mcpq-${platform}-${name.toLowerCase()}`);
         const model = MODELS.get(platform);
@@ -393,7 +433,7 @@ test.describe("live MCP apply", () => {
           expectedRevision: layout?.revision ?? 0,
           layout: {
             version: PANE_LAYOUT_VERSION,
-            containerId: null,
+            containerId: CONTAINER ? containerId : null,
             activePaneId: "pane-mcpq",
             root: {
               kind: "leaf",
@@ -403,7 +443,7 @@ test.describe("live MCP apply", () => {
                 id,
                 type: "agent-native",
                 displayTitle: `${label} MCP ${index === 0 ? "A" : "B"}`,
-                nativeAgentData: { environmentId, platform, isLocal: true },
+                nativeAgentData: { environmentId, platform, isLocal: !CONTAINER },
                 ...(model ? { initialAgentModel: model } : {}),
               })),
             },
@@ -423,7 +463,7 @@ test.describe("live MCP apply", () => {
         // Codex reads a project's `.codex/config.toml` only for a trusted
         // project, and trust lives in the user config. Grant it only where
         // that config is the profile's own.
-        if (platform === "codex") {
+        if (platform === "codex" && !CONTAINER) {
           const targets = await call<{ targets: Target[] }>("list_mcp_management_targets", {
             environmentId,
           });
@@ -439,7 +479,12 @@ test.describe("live MCP apply", () => {
 
         for (const tab of tabs) {
           try {
-            await call("ensure_native_agent_session", identity(tab));
+            // Without a model the session is created on the provider's first
+            // available one, and Pi keeps it when a later model has no login.
+            await call("ensure_native_agent_session", {
+              ...identity(tab),
+              ...(model ? { model } : {}),
+            });
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             if (signedOut(message)) skip(`${label} is not signed in: ${message.slice(0, 300)}`);
@@ -470,6 +515,12 @@ test.describe("live MCP apply", () => {
                 prompt,
                 requestId,
                 mode: "build",
+                // The tab's `initialAgentModel` seeds only the UI composer; a
+                // dispatch without a model takes the provider's first available
+                // one (for Pi, a model a ChatGPT login refuses). Pi ids are
+                // `provider/modelId`: a ChatGPT login is `openai-codex/…`;
+                // `openai/…` needs an API key and silently keeps the fallback.
+                ...(model ? { model } : {}),
               }),
             randomUUID,
             () => new Promise((resolve) => setTimeout(resolve, 5_000)),
@@ -572,9 +623,15 @@ test.describe("live MCP apply", () => {
           }
         }
 
-        const logFile = path.join(scratch, "probe-log.jsonl");
-        writeFileSync(logFile, "");
-        const events = () => parseProbeLog(readFileSync(logFile, "utf8"));
+        const logFile = path.join(runtimeScratch, "probe-log.jsonl");
+        if (CONTAINER) docker(["exec", "--user", "node", containerId, "touch", logFile]);
+        else writeFileSync(logFile, "");
+        const events = () =>
+          parseProbeLog(
+            CONTAINER
+              ? docker(["exec", "--user", "node", containerId, "cat", logFile])
+              : readFileSync(logFile, "utf8"),
+          );
 
         const probe = async (
           tab: string,
@@ -582,6 +639,7 @@ test.describe("live MCP apply", () => {
           expectation: ProbeExpectation,
           note?: string,
         ) => {
+          console.log(`[mcp-qualification] ${platform}: probing ${server}`);
           const value = nonce();
           const outcome = (await runTurn(tab, probePrompt(server, value))).result!;
           // Give a slow server a moment to flush its log line.
@@ -596,6 +654,9 @@ test.describe("live MCP apply", () => {
             toolRows: rows,
             turnError: outcome.error,
           });
+          console.log(
+            `[mcp-qualification] ${platform}: probe ${verdict.passed ? "passed" : "failed"}`,
+          );
           const record = {
             tab: tab.endsWith("-a") ? "A" : "B",
             server,
@@ -617,8 +678,13 @@ test.describe("live MCP apply", () => {
         };
 
         const restartBridge = async () => {
-          await call(`stop_local_${platform}_server_cmd`, { environmentId });
-          await call(`start_local_${platform}_server_cmd`, { environmentId });
+          if (CONTAINER) {
+            await call("stop_environment", { environmentId });
+            await call("start_environment", { environmentId });
+          } else {
+            await call(`stop_local_${platform}_server_cmd`, { environmentId });
+            await call(`start_local_${platform}_server_cmd`, { environmentId });
+          }
           await call("await_bridge_ready", { environmentId, agent: platform, timeoutMs: 90_000 });
         };
 
@@ -713,7 +779,7 @@ test.describe("live MCP apply", () => {
           return { source, definition };
         };
         const args = (server: string, tag: string) => [
-          PROBE_SERVER,
+          runtimeProbe,
           "--label",
           server,
           "--tag",
@@ -737,11 +803,32 @@ test.describe("live MCP apply", () => {
             keepWarm?: boolean;
           } = {},
         ) => {
+          console.log(`[mcp-qualification] ${platform}: ${scope.scope} ${name}`);
           const record: StepRecord = { step: name, probes: [] };
           scope.steps.push(record);
           let busy: Awaited<ReturnType<typeof runTurn>> | null = null;
           if (options.busyTab) {
-            const marker = path.join(scratch, `busy-${randomUUID()}`);
+            const marker = path.join(runtimeScratch, `busy-${randomUUID()}`);
+            const markerIsFresh = () => {
+              if (!CONTAINER)
+                return existsSync(marker) && Date.now() - statSync(marker).mtimeMs < 15_000;
+              try {
+                return (
+                  docker([
+                    "exec",
+                    "--user",
+                    "node",
+                    containerId,
+                    "node",
+                    "-e",
+                    "const fs=require('fs');try{console.log(Date.now()-fs.statSync(process.argv[1]).mtimeMs<15000)}catch{console.log(false)}",
+                    marker,
+                  ]) === "true"
+                );
+              } catch {
+                return false;
+              }
+            };
             busy = await runTurn(
               options.busyTab,
               `Use your shell tool to run the command \`printf started > '${marker}'; sleep 45\` once, in the foreground (not as a background task), and wait for it to finish. Then reply with exactly BUSY-DONE. Do not use any other tool.`,
@@ -752,8 +839,7 @@ test.describe("live MCP apply", () => {
             while (Date.now() < deadline) {
               const current = await projection(options.busyTab);
               if (
-                existsSync(marker) &&
-                Date.now() - statSync(marker).mtimeMs < 15_000 &&
+                markerIsFresh() &&
                 current &&
                 !["idle", "error"].includes(current.turn.phase) &&
                 hasRunningSleep(current.messages, marker)
@@ -875,7 +961,7 @@ test.describe("live MCP apply", () => {
           if (
             !source?.writable ||
             !PROBE_SERVER_NAME.test(definition.name) ||
-            writeRefusal(source, boundary)
+            sourceRefusal(source)
           ) {
             continue;
           }
@@ -914,7 +1000,7 @@ test.describe("live MCP apply", () => {
             scope.skipped = `not writable: ${source.readOnlyReason ?? "no reason given"}`;
             continue;
           }
-          const refusal = writeRefusal(source, boundary);
+          const refusal = sourceRefusal(source);
           if (refusal) {
             scope.skipped = refusal;
             continue;
@@ -934,7 +1020,7 @@ test.describe("live MCP apply", () => {
               definition: {
                 name: alpha,
                 transport: "stdio",
-                command: process.execPath,
+                command: CONTAINER ? "node" : process.execPath,
                 args: args(alpha, "v1"),
               },
             },
@@ -1012,7 +1098,11 @@ test.describe("live MCP apply", () => {
         // which the bridge drops from its inline set) cannot be unloaded in
         // place. Removing it must leave the runtime restart-required and the
         // bridge's hook must refuse the call while the CLI stays warm.
-        if (platform === "claude" && (SCOPES.size === 0 || SCOPES.has("claude-sse"))) {
+        if (
+          !CONTAINER &&
+          platform === "claude" &&
+          (SCOPES.size === 0 || SCOPES.has("claude-sse"))
+        ) {
           const project = first.sources.find((source) => source.scope === "project");
           const scope: ScopeRecord = {
             scope: "claude-sse",
@@ -1097,6 +1187,11 @@ test.describe("live MCP apply", () => {
           }
         }
 
+        if (CONTAINER)
+          expect(
+            summary.scopes.filter((scope) => !scope.skipped).length,
+            "qualified private container scopes",
+          ).toBeGreaterThan(0);
         summary.verdict = summary.failures.length === 0 ? "passed" : "failed";
         if (summary.failures.length > 0) summary.reason = summary.failures.join("; ");
         expect(summary.failures).toEqual([]);

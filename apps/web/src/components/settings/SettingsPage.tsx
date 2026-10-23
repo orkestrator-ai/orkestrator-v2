@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useFederation } from "@/components/federation/FederationProvider";
 import { MachineDot } from "@/components/federation/MachineDot";
+import { useCommandNode } from "@/components/federation/useCommandNode";
 import { useConfigStore } from "@/stores";
 import * as backend from "@/lib/backend";
 import {
@@ -18,12 +19,11 @@ import {
   SlidersHorizontal,
   Cable,
   MessagesSquare,
-  RadioTower,
+  Network,
   MonitorPlay,
   Volume2,
   Server,
   HardDrive,
-  Download,
   ChartArea,
 } from "lucide-react";
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
@@ -31,23 +31,21 @@ import { GlobalSettings } from "./GlobalSettings";
 import { SkillsSettings } from "./SkillsSettings";
 import { DiskUsageSettings } from "./DiskUsageSettings";
 import { UsageSettings } from "./usage/UsageSettings";
-import { UpdatesSettings } from "./UpdatesSettings";
 import { McpSettings } from "./McpSettings";
 import { ProviderMcpSettings } from "./mcp-servers/ProviderMcpSettings";
 import { PreviewSettings } from "./PreviewSettings";
 import { WebAnnotationSettings } from "./WebAnnotationSettings";
 import { FullscreenSettingsLayout, type SettingsMenuItem } from "./FullscreenSettingsLayout";
 import { MessagingSettings } from "./MessagingSettings";
-import { ConnectionsSettings } from "./ConnectionsSettings";
+import { MachinesSettings } from "./machines/MachinesSettings";
 import { SoundsSettings } from "./SoundsSettings";
 import type { GlobalSettingsSection } from "@/lib/settings-navigation";
 
 const MENU_ITEMS: SettingsMenuItem<GlobalSettingsSection>[] = [
   { id: "general", label: "General", icon: <Settings2 className="h-4 w-4" /> },
-  { id: "updates", label: "Updates", icon: <Download className="h-4 w-4" /> },
+  { id: "machines", label: "Machines", icon: <Network className="h-4 w-4" /> },
   { id: "disk-usage", label: "Disk usage", icon: <HardDrive className="h-4 w-4" /> },
   { id: "usage", label: "Usage", icon: <ChartArea className="h-4 w-4" /> },
-  { id: "connections", label: "Connections", icon: <RadioTower className="h-4 w-4" /> },
   { id: "defaults", label: "Defaults", icon: <SlidersHorizontal className="h-4 w-4" /> },
   { id: "platforms", label: "Platforms", icon: <Boxes className="h-4 w-4" /> },
   { id: "review", label: "Review", icon: <Eye className="h-4 w-4" /> },
@@ -103,40 +101,57 @@ interface SettingsPageProps {
   sectionRequest?: number;
 }
 
-/** Sections that configure this client rather than a backend. */
-const CLIENT_SECTIONS: ReadonlySet<GlobalSettingsSection> = new Set(["connections"]);
-
-/**
- * With several machines in view, every settings page says whose settings it
- * edits: this client, or the machine this window is bound to. Provider
- * credentials, defaults, toolchains, containers and maintenance always
- * target one specific backend.
- */
-function SettingsScopeBanner({ section }: { section: GlobalSettingsSection | "" }) {
+/** Names the owner of the settings and machine tools shown in this section. */
+export function SettingsScopeBanner({ section }: { section: GlobalSettingsSection | "" }) {
   const { enabled, boundMachine } = useFederation();
-  if (!enabled || !boundMachine) return null;
-  if (!section) return null;
-  const client = CLIENT_SECTIONS.has(section);
+  const commandNode = useCommandNode();
+  if (!commandNode || !section || (!enabled && section !== "machines")) return null;
+  const workspaceName =
+    boundMachine?.name ?? (commandNode.workspaceHere ? commandNode.name : "this machine");
+  const inherited = section === "review" || section === "messaging";
+  const mixed = ["defaults", "terminal", "claude", "codex", "opencode"].includes(section);
+  const ownerName = section === "machines" || inherited ? commandNode.name : workspaceName;
   return (
     <div
-      className="mb-5 flex max-w-4xl items-center gap-2 rounded-md border border-zinc-800 bg-zinc-950/40 px-3 py-2 text-xs text-zinc-400"
+      className="mb-5 flex max-w-4xl items-start gap-2 rounded-md border border-zinc-800 bg-zinc-950/40 px-3 py-2 text-xs text-zinc-400"
       data-testid="settings-scope"
     >
-      {client ? (
-        <span>
-          <span className="font-medium text-zinc-200">This client</span> — saved on this device
-          only.
-        </span>
-      ) : (
-        <>
-          <MachineDot colorToken={boundMachine.colorToken} machineName={boundMachine.name} />
-          <span>
-            <span className="font-medium text-zinc-200">Backend: {boundMachine.name}</span> — these
-            settings belong to that machine. Other machines keep their own; open a machine&apos;s
-            panel to change its settings.
-          </span>
-        </>
-      )}
+      <MachineDot
+        colorToken={
+          section === "machines" || inherited
+            ? commandNode.colorToken
+            : (boundMachine?.colorToken ?? commandNode.colorToken)
+        }
+        machineName={ownerName}
+        className="mt-1"
+      />
+      <span>
+        {section === "machines" ? (
+          enabled ? (
+            <>
+              Command node: <strong>{commandNode.name}</strong>. These are the machines it controls.
+            </>
+          ) : (
+            <>
+              This window is on <strong>{commandNode.name}</strong>.
+            </>
+          )
+        ) : inherited ? (
+          <>
+            Preferences for <strong>{commandNode.name}</strong>, inherited by work on every machine
+            it controls.
+          </>
+        ) : mixed ? (
+          <>
+            Preferences come from <strong>{commandNode.name}</strong>. Machine-specific settings,
+            accounts and tools belong to <strong>{workspaceName}</strong>.
+          </>
+        ) : (
+          <>
+            Machine settings for <strong>{workspaceName}</strong>. Changes apply to this machine.
+          </>
+        )}
+      </span>
     </div>
   );
 }
@@ -186,16 +201,14 @@ export function SettingsPage({
           {
             // Skills is a read-only browser of the host's skill directories, not a
             // config form, so it bypasses the auto-saving settings form.
-            activeSection === "updates" ? (
-              <UpdatesSettings />
+            activeSection === "machines" ? (
+              <MachinesSettings />
             ) : activeSection === "disk-usage" ? (
               <DiskUsageSettings />
             ) : activeSection === "usage" ? (
               <UsageSettings />
             ) : activeSection === "skills" ? (
               <SkillsSettings />
-            ) : activeSection === "connections" ? (
-              <ConnectionsSettings />
             ) : activeSection === "mcp" ? (
               <McpSettings />
             ) : activeSection === "mcp-servers" ? (

@@ -17,6 +17,14 @@ import {
 import { stopEnvironmentReviewValidation } from "./review-validation-service.js";
 import { removeOpenCodeCommandChangeJournals } from "./opencode-command-changes.js";
 import {
+  OPENCODE_STARTUP_STDERR_TAIL_BYTES,
+  acquireOpenCodeHostStart,
+  isOpenCodeDatabaseLockedError,
+  openCodeDatabaseLockedError,
+  openCodeLockedStartRetryDelayMs,
+  openCodeStderrReportsLockedDatabase,
+} from "./opencode-host-start.js";
+import {
   CLAUDE_PINNED_RUNTIME_ENV,
   OPENCODE_PINNED_RUNTIME_ENV,
 } from "@orkestrator/protocol/terminal-agent-launch";
@@ -296,11 +304,18 @@ export async function waitForLocalServerStartup(
   headers?: Record<string, string>,
 ): Promise<void> {
   let settled = false;
+  // Only OpenCode's is read: its servers share one database on the host, and
+  // the one failure worth retrying names itself only on stderr.
+  let stderrTail = "";
+  const onStderr = (data: Buffer | string) => {
+    stderrTail = (stderrTail + data.toString()).slice(-OPENCODE_STARTUP_STDERR_TAIL_BYTES);
+  };
 
   await new Promise<void>((resolve, reject) => {
     const cleanup = () => {
       child.off("error", onError);
       child.off("exit", onExit);
+      if (kind === "opencode") child.stderr.off("data", onStderr);
     };
     const complete = (error?: Error) => {
       if (settled) return;
@@ -311,15 +326,19 @@ export async function waitForLocalServerStartup(
     };
     const onError = (error: Error) => complete(error);
     const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+      const message = `${kind} server exited before becoming healthy (code ${code ?? "null"}, signal ${signal ?? "null"})`;
       complete(
-        new Error(
-          `${kind} server exited before becoming healthy (code ${code ?? "null"}, signal ${signal ?? "null"})`,
-        ),
+        kind === "opencode" && openCodeStderrReportsLockedDatabase(stderrTail)
+          ? openCodeDatabaseLockedError(
+              `${message}: another OpenCode process held its database (database is locked)`,
+            )
+          : new Error(message),
       );
     };
 
     child.once("error", onError);
     child.once("exit", onExit);
+    if (kind === "opencode") child.stderr.on("data", onStderr);
     waitForLocalServerHealth(port, kind, headers).then(
       () => complete(),
       (error: unknown) => {
@@ -959,6 +978,29 @@ export async function startLocalServerUnlocked(
   context: CommandContext,
   kind: LocalServerKind,
 ): Promise<{ port: number; pid: number; wasRunning: boolean; authToken?: string }> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await startLocalServerAttempt(environmentId, context, kind);
+    } catch (error) {
+      // A failed attempt has already stopped its server and cleared its
+      // fields, so the next one starts clean.
+      const delayMs = isOpenCodeDatabaseLockedError(error)
+        ? openCodeLockedStartRetryDelayMs(attempt)
+        : undefined;
+      if (delayMs === undefined || isLocalServerShutdownRequested()) throw error;
+      console.warn(
+        `[local-server] opencode:${environmentId} lost the shared OpenCode database at startup; retrying in ${delayMs}ms`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+}
+
+async function startLocalServerAttempt(
+  environmentId: string,
+  context: CommandContext,
+  kind: LocalServerKind,
+): Promise<{ port: number; pid: number; wasRunning: boolean; authToken?: string }> {
   assertEnvironmentNotMoving(environmentId);
   const key = `${kind}:${environmentId}`;
   const coordinatorId = coordinatorIdFromRuntimeId(environmentId);
@@ -1154,10 +1196,6 @@ export async function startLocalServerUnlocked(
     // to run any session under a weaker policy, whatever a request body or a
     // persisted record says, so a permissive record cannot survive a restart.
     env[ORKESTRATOR_BRIDGE_EXECUTION_POLICY_ENV] = COORDINATOR_EXECUTION_POLICY;
-    // Inherited from the backend process, this opt-in would otherwise load
-    // `.cursor/mcp.json` into every Cursor attach. A coordinator is already
-    // read-only; close the deprecated override the same way Pi closes its own.
-    env.CURSOR_BRIDGE_PROJECT_SETTINGS = "0";
     // Created here rather than on first paste: a bridge canonicalizes this root
     // before it reads through it, and a directory that does not exist yet is
     // indistinguishable from one that is not allowed.
@@ -1269,13 +1307,6 @@ export async function startLocalServerUnlocked(
     // account. Containers are handed an explicit path instead, and an
     // agent-test profile the host's `auth.json` alone when Pi is authorized.
     await applyPiHostCredentialEnvironment(context, env);
-    if (coordinatorId) {
-      // Pi's project resources are arbitrary TypeScript from the checkout, and
-      // a coordinator points at the user's own repository rather than a
-      // disposable clone. The bridge already reads the policy for this; the
-      // explicit `0` also closes the deprecated env override.
-      env.PI_BRIDGE_PROJECT_RESOURCES = "0";
-    }
     env.PI_SESSION_DIR = environmentStateDirectory(
       context.storage.getDataDir(),
       "pi-bridge-sessions",
@@ -1417,8 +1448,13 @@ export async function startLocalServerUnlocked(
     kind === "opencode"
       ? ["serve", "--port", String(port), "--hostname", "127.0.0.1"]
       : [bridgeEntrypoint];
+  // Held from spawn until healthy or failed; see `opencode-host-start.ts`.
+  const releaseOpenCodeHostStart =
+    kind === "opencode" ? await acquireOpenCodeHostStart() : () => undefined;
   let child: ChildProcessWithoutNullStreams;
   try {
+    // Shutdown may have begun while this start waited for the host's turn.
+    assertLocalServerStartAllowed(environmentId);
     child = spawnLocalServerCommandImpl(command, args, {
       cwd,
       env,
@@ -1427,6 +1463,7 @@ export async function startLocalServerUnlocked(
       detached: process.platform !== "win32",
     });
   } catch (error) {
+    releaseOpenCodeHostStart();
     tokens?.delete(environmentId);
     if (coordinatorId && selectedConversation) {
       context.controlMcp?.revokeCoordinatorCredentials(coordinatorId, selectedConversation.id);
@@ -1478,18 +1515,22 @@ export async function startLocalServerUnlocked(
   const { port: field, pid: pidField } = localServerFields(kind);
   try {
     const authToken = tokens?.get(environmentId);
-    await waitForLocalServerStartup(
-      child,
-      port,
-      kind,
-      authToken
-        ? kind === "opencode"
-          ? openCodeHealthHeaders(authToken)
-          : kind === "cursor" || kind === "grok" || kind === "pi"
-            ? bearerBridgeHeaders(authToken)
-            : undefined
-        : undefined,
-    );
+    try {
+      await waitForLocalServerStartup(
+        child,
+        port,
+        kind,
+        authToken
+          ? kind === "opencode"
+            ? openCodeHealthHeaders(authToken)
+            : kind === "cursor" || kind === "grok" || kind === "pi"
+              ? bearerBridgeHeaders(authToken)
+              : undefined
+          : undefined,
+      );
+    } finally {
+      releaseOpenCodeHostStart();
+    }
     if (kind === "opencode" && authToken && agentToolConnection) {
       openCodeLaunchAgentToolConnections.set(`local:${environmentId}`, agentToolConnection);
       const configured = scheduleOpenCodeAgentToolsConfiguration(

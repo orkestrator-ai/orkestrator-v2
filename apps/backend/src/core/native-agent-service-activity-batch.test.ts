@@ -8,23 +8,31 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { NativeAgentService, nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import { StorageService } from "./storage.js";
+import { launchInternals } from "./native-agent-service-test-collaborators.js";
 
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 type Answer = Record<string, unknown> | "unavailable";
 
 /**
  * A bridge that records every request and answers the two no-touch activity
- * routes from `states`. Any other route is a liveness side effect and fails.
+ * routes from `states`. The observer's content-free event stream
+ * (`/event/subscribe?observe=1`) is counted apart and refused, so the group
+ * keeps every sweep. Any other route is a liveness side effect and fails.
  */
 function fakeBridge(options: {
   states: Map<string, Answer>;
   batch: "supported" | "absent" | "error";
 }) {
   const requests: Array<{ method: string; path: string; ids?: string[] }> = [];
+  const streams: string[] = [];
   const server = Bun.serve({
     port: 0,
     async fetch(request) {
       const url = new URL(request.url);
+      if (request.method === "GET" && url.pathname === "/event/subscribe") {
+        streams.push(url.search);
+        return new Response("no stream in this test", { status: 503 });
+      }
       if (request.method === "POST" && url.pathname === "/sessions/activity") {
         const { sessionIds } = (await request.json()) as { sessionIds: string[] };
         requests.push({ method: "POST", path: url.pathname, ids: sessionIds });
@@ -52,7 +60,7 @@ function fakeBridge(options: {
       return new Response("unexpected route", { status: 500 });
     },
   });
-  return { server, requests };
+  return { server, requests, streams };
 }
 
 async function withSweep(
@@ -125,11 +133,7 @@ async function adoptSessions(storage: StorageService, count: number): Promise<st
 }
 
 function observed(service: NativeAgentService) {
-  return (
-    service as unknown as {
-      observedSessionActivity: Map<string, { providerSessionId: string; state: string }>;
-    }
-  ).observedSessionActivity;
+  return launchInternals(service).observedSessionActivity;
 }
 
 async function environmentActivity(storage: StorageService): Promise<string | undefined> {

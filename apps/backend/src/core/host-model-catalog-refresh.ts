@@ -37,11 +37,13 @@ import {
   type LocalServerKind,
 } from "./commands-runtime-state.js";
 import { terminateLocalServerChild } from "./commands-local-server-lifecycle.js";
+import { acquireOpenCodeHostStart } from "./opencode-host-start.js";
 import { fetchClaudeBridgeModelCatalog } from "./commands-containers.js";
 import { cursorSdkCredentialPath } from "./cursor-sdk-bridge.js";
 import { discoverHostPiModelCatalog } from "./pi-model-catalog-seeding.js";
 import { normalizeOpenCodeComposerCatalog } from "./opencode-model-catalog.js";
 import { runCommand } from "./shell.js";
+import { openCodeSdkFetch } from "./http-bridge-transport.js";
 import {
   applyClaudeHostCredentialEnvironment,
   resolveCursorHostCredentialMaterial,
@@ -104,23 +106,38 @@ export async function withShortLivedBridge<T>(
   const port = await allocateLocalPort();
   const key = `${probe.kind}:${purpose}:${randomUUID()}`;
   const args = typeof probe.args === "function" ? probe.args(port) : probe.args;
-  const child = spawnLocalServerCommandImpl(probe.command, args, {
-    cwd: probe.cwd,
-    env: { ...probe.env, PORT: String(port), HOSTNAME: "127.0.0.1" },
-    detached: process.platform !== "win32",
-  });
+  // OpenCode servers share the host's database; see `opencode-host-start.ts`.
+  const releaseOpenCodeHostStart =
+    probe.kind === "opencode" ? await acquireOpenCodeHostStart() : () => undefined;
+  let child: ReturnType<typeof spawnLocalServerCommandImpl>;
+  try {
+    // Shutdown may have begun while the probe waited behind an environment start.
+    assertLocalServerStartAllowed(`${purpose}:${probe.kind}`);
+    child = spawnLocalServerCommandImpl(probe.command, args, {
+      cwd: probe.cwd,
+      env: { ...probe.env, PORT: String(port), HOSTNAME: "127.0.0.1" },
+      detached: process.platform !== "win32",
+    });
+  } catch (error) {
+    releaseOpenCodeHostStart();
+    throw error;
+  }
   localServerProcesses.set(key, child);
   child.stdout.resume();
   child.stderr.resume();
   try {
-    if (isLocalServerShutdownRequested()) {
-      throw new Error(
-        purpose === "catalog-refresh"
-          ? "Backend is shutting down; model catalogues cannot be refreshed"
-          : "Backend is shutting down; sign-in cannot start",
-      );
+    try {
+      if (isLocalServerShutdownRequested()) {
+        throw new Error(
+          purpose === "catalog-refresh"
+            ? "Backend is shutting down; model catalogues cannot be refreshed"
+            : "Backend is shutting down; sign-in cannot start",
+        );
+      }
+      await waitForLocalServerStartup(child, port, probe.kind, probe.headers);
+    } finally {
+      releaseOpenCodeHostStart();
     }
-    await waitForLocalServerStartup(child, port, probe.kind, probe.headers);
     return await read(port, probe.token);
   } finally {
     await terminateLocalServerChild(key, child).catch((error: unknown) => {
@@ -255,7 +272,6 @@ async function refreshAcp(
   if (useCursorSdk) {
     env.CURSOR_BRIDGE_TOKEN = token;
     env.CURSOR_BRIDGE_AUTH_FILE = cursorSdkCredentialPath(context);
-    env.CURSOR_BRIDGE_PROJECT_SETTINGS = "0";
     if (cursorApiKey) env.CURSOR_API_KEY = cursorApiKey;
     else delete env.CURSOR_API_KEY;
   } else {
@@ -280,7 +296,6 @@ async function refreshAcp(
       modelUpdateMethods: ["x.ai/models/update", "_x.ai/models/update"],
       sessionUpdateMethods: ["x.ai/session/update", "_x.ai/session/update"],
     });
-    env.ACP_APPROVE_PROJECT_MCPS = "0";
   }
   const models = await withShortLivedBridge(
     {
@@ -361,7 +376,12 @@ async function refreshOpenCode(
     (await context.storage.loadConfig()).global.openCodeModelProviders,
   );
   const models = await withHostOpenCodeServer(context, async ({ baseUrl, directory, headers }) => {
-    const client = dependencies.createOpenCodeClient({ baseUrl, directory, headers });
+    const client = dependencies.createOpenCodeClient({
+      baseUrl,
+      directory,
+      headers,
+      fetch: openCodeSdkFetch,
+    });
     const response = await client.provider.list(
       {},
       { signal: AbortSignal.timeout(dependencies.openCodeProviderListTimeoutMs) },

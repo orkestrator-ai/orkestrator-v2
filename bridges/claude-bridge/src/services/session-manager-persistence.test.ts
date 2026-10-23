@@ -65,6 +65,7 @@ import {
   waitFor,
   withTemporaryClaudeHome,
   withWorkspaceCwd,
+  blockClaudeConfigDir,
 } from "./session-manager-test-harness.js";
 import type { SdkSessionInfo, SdkSessionMessage } from "./session-manager-test-harness.js";
 
@@ -317,7 +318,7 @@ describe("reconcilePersistedSessions", () => {
 
       // The alias is written exactly once, on the first turn's init. Break that
       // one write: the preference directory cannot be created underneath a file.
-      await writeFile(join(directory, ".claude"), "not a directory", "utf-8");
+      await blockClaudeConfigDir(directory);
       const failing = sendPrompt(first.id, "Inspect the workspace");
       const call = await nextQueryCall();
       call.push({

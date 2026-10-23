@@ -108,3 +108,21 @@ test("overlapping drops survive unmount and finish with the latest owner and dis
   await expect(page.getByTestId("overlay")).toHaveText("0");
   await expectRows(page, ["c", "b", "a", "d"]);
 });
+
+test("dragging a project writes the new project order to its own machine", async ({ page }) => {
+  const projects = page.getByTestId("federated-project");
+  await expect(projects).toHaveCount(2);
+  // Aim at the expanded project's header, above its environment rows.
+  const handle = (await page.getByTitle("Open q on Remote").boundingBox())!;
+  const target = (await page.getByTitle("Open p on Remote").boundingBox())!;
+  await page.mouse.move(handle.x + 10, handle.y + handle.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(handle.x + 20, handle.y + handle.height / 2, { steps: 3 });
+  await page.mouse.move(target.x + 10, target.y + target.height / 2, { steps: 10 });
+  await page.mouse.up();
+  await expect(page.getByTestId("arrangements")).toHaveText(
+    '[{"projectIds":["q","p"],"folders":{}}]',
+  );
+  await expect(projects.first()).toContainText("q");
+  await expect(page.getByTestId("calls")).toHaveText("[]");
+});

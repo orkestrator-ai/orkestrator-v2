@@ -1,4 +1,5 @@
 import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
+import { isContentRevision } from "@orkestrator/protocol/session-activity-batch";
 import {
   NATIVE_AGENT_SIGN_IN_KINDS,
   type NativeAgentReadiness,
@@ -137,6 +138,7 @@ export async function readProviderActivityObservation(
     asyncQuestionItemIds?: unknown;
     readyForInput?: unknown;
     completionPending?: unknown;
+    contentRevision?: unknown;
   };
   // Pi bridges before recurring-processes step 07 answer a parked approval
   // as `blocked`, which is not an activity state. Rejecting it failed the
@@ -155,6 +157,9 @@ export async function readProviderActivityObservation(
     throw new ProviderUnavailableError(
       `${connection.agent} returned malformed completion metadata`,
     );
+  }
+  if (body.contentRevision !== undefined && !isContentRevision(body.contentRevision)) {
+    throw new ProviderUnavailableError(`${connection.agent} returned a malformed content revision`);
   }
   let asyncQuestionItemIds: string[] = [];
   if (body.asyncQuestionItemIds !== undefined) {
@@ -178,6 +183,7 @@ export async function readProviderActivityObservation(
     ...(typeof body.completionPending === "boolean"
       ? { completionPending: body.completionPending }
       : {}),
+    ...(typeof body.contentRevision === "string" ? { contentRevision: body.contentRevision } : {}),
   };
 }
 
@@ -331,6 +337,21 @@ function bridgeRequestTimeoutMs(
   return DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS;
 }
 
+/**
+ * `fetch` for OpenCode SDK clients, which reach the OpenCode server directly
+ * rather than through {@link bridgeFetch}: one `provider-request` per HTTP
+ * request (event-stream connects and reconnects included), charged the same
+ * way. Bun's idle timeout is off, as in the SDK's own default fetch; the
+ * caller's signal and deadline still abort.
+ */
+export const openCodeSdkFetch: typeof fetch = Object.assign(
+  (input: RequestInfo | URL, init?: RequestInit) => {
+    recurringWorkMetrics.work("provider-request");
+    return fetch(input, { ...init, timeout: false });
+  },
+  { preconnect: fetch.preconnect },
+);
+
 export async function bridgeFetch(
   connection: BridgeConnection,
   path: string,
@@ -363,6 +384,44 @@ export async function bridgeFetch(
     throw new ProviderUnavailableError(`${connection.agent} bridge is unavailable`, {
       cause: error,
     });
+  }
+}
+
+/**
+ * Open a bridge's long-lived event stream. Unlike {@link bridgeFetch} there is
+ * no whole-request deadline, only one until the response headers arrive: the
+ * body stays open for the life of the subscription. Bun's idle timeout is off
+ * for the same reason; the caller's signal still aborts it.
+ */
+export async function bridgeEventStreamFetch(
+  connection: BridgeConnection,
+  path: string,
+  signal: AbortSignal,
+  fetchImpl: typeof fetch = fetch,
+): Promise<Response> {
+  const headers = authHeaders(connection);
+  headers.delete("Content-Type");
+  headers.delete("Accept-Encoding");
+  headers.set("Accept", "text/event-stream");
+  const connect = new AbortController();
+  const timer = setTimeout(
+    () => connect.abort(new Error("bridge event stream connect timed out")),
+    bridgeRequestTimeoutMs(connection),
+  );
+  (timer as { unref?: () => void }).unref?.();
+  const onAbort = () => connect.abort(signal.reason);
+  if (signal.aborted) onAbort();
+  else signal.addEventListener("abort", onAbort, { once: true });
+  recurringWorkMetrics.work("provider-request");
+  try {
+    return await fetchImpl(`${connection.baseUrl}${path}`, {
+      headers,
+      signal: connect.signal,
+      // Bun extension: no idle timeout on a stream that is quiet by design.
+      timeout: false,
+    } as RequestInit);
+  } finally {
+    clearTimeout(timer);
   }
 }
 

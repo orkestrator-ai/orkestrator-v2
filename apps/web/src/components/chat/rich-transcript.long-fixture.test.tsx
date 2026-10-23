@@ -328,10 +328,14 @@ describe("long transcript fixture", () => {
           const r = cluster * CLUSTER_SIZE + 8;
           for (const label of ["A", "B"]) {
             const section = document.querySelector<HTMLElement>(`section[aria-label="${label}"]`)!;
-            const toggle = within(section).getByRole("button", {
-              name: new RegExp(`Details ${r}$`),
-            });
+            // Found by its summary text rather than `getByRole({ name })`:
+            // computing accessible names across the whole section dominated
+            // this test's runtime. The summary renders inside the toggle.
+            const toggle = within(section).getByText(`Details ${r}`).closest("button");
+            expect(toggle?.getAttribute("aria-expanded")).toBe("false");
+            if (!toggle) throw new Error(`no disclosure toggle for Details ${r}`);
             fireEvent.click(toggle);
+            expect(toggle.getAttribute("aria-expanded")).toBe("true");
             sample();
             fireEvent.click(toggle);
           }

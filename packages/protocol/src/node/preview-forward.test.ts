@@ -19,6 +19,7 @@ import {
   forwardPreviewRequest,
   forwardPreviewUpgrade,
   type PreviewForwardLimits,
+  type PreviewForwardResult,
 } from "./preview-forward.js";
 import {
   crossSiteViolation,
@@ -215,7 +216,6 @@ describe("preview header policy", () => {
 
   test("cross-site writes and upgrades are refused", () => {
     const origin = "https://s-abc.preview.test";
-    expect(crossSiteViolation("GET", [["origin", "https://evil.test"]], origin, false)).toBe(false);
     expect(crossSiteViolation("POST", [["origin", "https://evil.test"]], origin, false)).toBe(true);
     expect(crossSiteViolation("POST", [["origin", "null"]], origin, false)).toBe(true);
     expect(crossSiteViolation("POST", [["origin", origin]], origin, false)).toBe(false);
@@ -224,6 +224,59 @@ describe("preview header policy", () => {
       true,
     );
     expect(crossSiteViolation("POST", [], origin, false)).toBe(false);
+    // Reads from the service itself never change what writes may do.
+    expect(crossSiteViolation("POST", [["sec-fetch-site", "same-site"]], origin, false)).toBe(true);
+  });
+
+  test("cross-service reads pass only as top-level document navigations", () => {
+    const origin = "https://s-abc.preview.test";
+    const sibling = "https://s-def.preview.test";
+    const read = (headers: Array<[string, string]>, method = "GET") =>
+      crossSiteViolation(method, headers, origin, false);
+    const metadata = (site: string, mode: string, dest: string): Array<[string, string]> => [
+      ["Sec-Fetch-Site", site],
+      ["Sec-Fetch-Mode", mode],
+      ["Sec-Fetch-Dest", dest],
+    ];
+    // The service's own page, worker and assets, and anything the user typed.
+    expect(read(metadata("same-origin", "no-cors", "script"))).toBe(false);
+    expect(read(metadata("same-origin", "cors", "empty"))).toBe(false);
+    expect(read(metadata("none", "navigate", "document"))).toBe(false);
+    // Links, form GETs and redirects from a sibling or another site.
+    expect(read(metadata("same-site", "navigate", "document"))).toBe(false);
+    expect(read(metadata("cross-site", "navigate", "document"))).toBe(false);
+    // Everything a sibling could send without the user seeing a new page.
+    expect(read(metadata("same-site", "no-cors", "empty"))).toBe(true);
+    expect(read(metadata("same-site", "cors", "empty"))).toBe(true);
+    expect(read(metadata("same-site", "no-cors", "image"))).toBe(true);
+    expect(read(metadata("same-site", "no-cors", "script"))).toBe(true);
+    expect(read(metadata("same-site", "navigate", "iframe"))).toBe(true);
+    expect(read(metadata("same-site", "navigate", "object"))).toBe(true);
+    expect(read(metadata("cross-site", "no-cors", "empty"))).toBe(true);
+    expect(read(metadata("cross-site", "no-cors", "empty"), "HEAD")).toBe(true);
+    expect(read(metadata("cross-site", "cors", "empty"), "OPTIONS")).toBe(true);
+    expect(read([["sec-fetch-site", "same-site"]])).toBe(true);
+    expect(read([["sec-fetch-site", "unexpected"]])).toBe(true);
+    expect(
+      read([...metadata("same-site", "navigate", "document"), ["sec-purpose", "prefetch"]]),
+    ).toBe(true);
+    expect(
+      read([
+        ...metadata("cross-site", "navigate", "document"),
+        ["sec-purpose", "prefetch;prerender"],
+      ]),
+    ).toBe(true);
+    // Without Fetch Metadata only a foreign Origin (CORS) is distinguishable.
+    expect(read([])).toBe(false);
+    expect(read([["origin", origin]])).toBe(false);
+    expect(read([["origin", sibling]])).toBe(true);
+    expect(read([["origin", "null"]])).toBe(true);
+    expect(
+      read([
+        ["origin", origin],
+        ["origin", origin],
+      ]),
+    ).toBe(true);
   });
 });
 
@@ -233,17 +286,22 @@ describe("forwardPreviewRequest and forwardPreviewUpgrade", () => {
   let ingressPort: number;
   let limits: PreviewForwardLimits;
   let connectFailure: Error | null;
+  let connectDelayMs: number;
   let connects: number;
+  const results: PreviewForwardResult[] = [];
   const openUpstreams = new Set<Socket>();
 
   beforeEach(async () => {
     fixture = await startPreviewFixture({ marker: "fixture-a" });
     limits = { ...DEFAULT_PREVIEW_FORWARD_LIMITS };
     connectFailure = null;
+    connectDelayMs = 0;
     connects = 0;
+    results.length = 0;
     const hooks = {
       connect: async () => {
         connects += 1;
+        if (connectDelayMs) await Bun.sleep(connectDelayMs);
         if (connectFailure) throw connectFailure;
         const socket = connect(fixture.port, "127.0.0.1");
         openUpstreams.add(socket);
@@ -254,7 +312,13 @@ describe("forwardPreviewRequest and forwardPreviewUpgrade", () => {
     };
     ingress = createServer((request, response) => {
       const origin = `http://127.0.0.1:${ingressPort}`;
-      void forwardPreviewRequest(request, response, policyFor(fixture.port, origin), limits, hooks);
+      void forwardPreviewRequest(
+        request,
+        response,
+        policyFor(fixture.port, origin),
+        limits,
+        hooks,
+      ).then((result) => results.push(result));
     });
     ingress.on("upgrade", (request: IncomingMessage, socket: Socket, head: Buffer) => {
       const origin = `http://127.0.0.1:${ingressPort}`;
@@ -276,6 +340,21 @@ describe("forwardPreviewRequest and forwardPreviewUpgrade", () => {
     await new Promise<void>((resolve) => ingress.close(() => resolve()));
     for (const socket of openUpstreams) socket.destroy();
     await fixture.close();
+  });
+
+  test("reports the time from upstream connect to the response head", async () => {
+    connectDelayMs = 40;
+    expect((await get("/health")).status).toBe(200);
+    await Bun.sleep(10);
+    const completed = results.at(-1)!;
+    expect(completed.outcome).toBe("completed");
+    expect(completed.firstByteMs).toBeGreaterThanOrEqual(35);
+
+    connectFailure = previewFailure("connection-refused");
+    expect((await get("/health")).status).toBeGreaterThanOrEqual(500);
+    await Bun.sleep(10);
+    expect(results.at(-1)!.outcome).toBe("failed");
+    expect(results.at(-1)!.firstByteMs).toBeUndefined();
   });
 
   function get(

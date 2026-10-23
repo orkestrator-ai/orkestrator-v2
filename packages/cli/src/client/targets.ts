@@ -79,7 +79,7 @@ export function normalizeBaseUrl(value: string): string {
   return `${url.protocol}//${url.host}`;
 }
 
-function isLoopbackHost(hostname: string): boolean {
+export function isLoopbackHost(hostname: string): boolean {
   return (
     hostname === "localhost" ||
     hostname === "::1" ||
@@ -141,7 +141,7 @@ export async function readDescriptor(file: string): Promise<BackendInstanceDescr
   }
 }
 
-function processIsAlive(pid: number): boolean {
+export function processIsAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;

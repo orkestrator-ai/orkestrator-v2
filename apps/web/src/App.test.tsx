@@ -16,6 +16,10 @@ import type { AppConfig, Environment } from "@/types";
 import type { DockerAvailability } from "@orkestrator/protocol/docker-availability";
 import { PANE_LAYOUT_VERSION } from "@/types/paneLayout";
 import { mockToastError } from "../../../tests/mocks/sonner";
+import {
+  useDockerAvailability,
+  useDockerAvailabilityReady,
+} from "@/contexts/DockerAvailabilityContext";
 
 import * as realLayout from "@/components/layout";
 import * as realTooltip from "@/components/ui/tooltip";
@@ -99,7 +103,13 @@ const mockConfig: AppConfig = {
 
 mock.module("@/components/layout", () => ({
   AppShell: ({ children }: { children: React.ReactNode }) => (
-    <div data-testid="app-shell">{children}</div>
+    <div
+      data-testid="app-shell"
+      data-docker-available={String(useDockerAvailability())}
+      data-docker-ready={String(useDockerAvailabilityReady())}
+    >
+      {children}
+    </div>
   ),
 }));
 
@@ -1448,6 +1458,32 @@ describe("App Docker availability", () => {
     mock.restore();
   });
 
+  test.each([true, false])(
+    "publishes initial Docker readiness separately from availability=%s",
+    async (available) => {
+      let resolveProbe: (value: DockerAvailability) => void = () => undefined;
+      mockCheckDocker.mockImplementationOnce(
+        () => new Promise<DockerAvailability>((resolve) => (resolveProbe = resolve)),
+      );
+      resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+      render(<App />);
+      await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(1));
+      const shell = screen.getByTestId("app-shell");
+      expect(shell.getAttribute("data-docker-ready")).toBe("false");
+      expect(shell.getAttribute("data-docker-available")).toBe("false");
+
+      await act(async () => {
+        resolveProbe(
+          available
+            ? { available: true, reason: null }
+            : { available: false, reason: "permission-denied" },
+        );
+      });
+      await waitFor(() => expect(shell.getAttribute("data-docker-ready")).toBe("true"));
+      expect(shell.getAttribute("data-docker-available")).toBe(String(available));
+    },
+  );
+
   test("resolves macOS filesystem permissions before checking Docker", async () => {
     const originalOrkestrator = window.orkestrator;
     const getMacOsStatus = mock()
@@ -2322,11 +2358,14 @@ describe("App Docker availability", () => {
       const first = render(<App />);
 
       await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(1));
+      expect(screen.getByTestId("app-shell").getAttribute("data-docker-ready")).toBe("false");
       await deferredConfirmation.releaseNext();
       await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(2));
       expect(screen.queryByText("Docker Is Not Running") === null).toBe(true);
       expect(screen.queryByText("Checking Docker availability...") === null).toBe(true);
       expect(screen.getByText(/could not check Docker availability/i)).toBeTruthy();
+      expect(screen.getByTestId("app-shell").getAttribute("data-docker-ready")).toBe("true");
+      expect(screen.getByTestId("app-shell").getAttribute("data-docker-available")).toBe("false");
 
       act(() => screen.getByRole("button", { name: "Check Docker Again" }).click());
       await waitFor(() => {
@@ -3423,6 +3462,33 @@ describe("App startup checks and global events", () => {
       expect(keydown("=", { metaKey: true, ctrlKey: true }).defaultPrevented).toBe(false);
       expect(keydown("=", { ctrlKey: true, altKey: true }).defaultPrevented).toBe(false);
       expect(keydown("=", {}).defaultPrevented).toBe(false);
+    });
+    expect(useUIStore.getState().zoomLevel).toBe(100);
+
+    // A key a focused surface already claimed (the design canvas's Ctrl/⌘+0)
+    // is left to it.
+    const claim = (event: KeyboardEvent) => {
+      if (event.key === "0") event.preventDefault();
+    };
+    window.addEventListener("keydown", claim, { capture: true });
+    try {
+      act(() => {
+        keydown("=", { metaKey: true });
+        document.body.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "0",
+            metaKey: true,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      });
+      expect(useUIStore.getState().zoomLevel).toBe(110);
+    } finally {
+      window.removeEventListener("keydown", claim, { capture: true });
+    }
+    act(() => {
+      keydown("0", { metaKey: true });
     });
     expect(useUIStore.getState().zoomLevel).toBe(100);
 

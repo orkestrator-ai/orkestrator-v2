@@ -1,16 +1,15 @@
-import {
-  parseGatewayCredential,
-  parseNodeRoutes,
-  normalizeNodeDisplayName,
-  normalizeRouteOrder,
-  type NodeRecord,
-} from "@orkestrator/protocol/command-nodes";
+import { parseNodeImportEntries } from "@orkestrator/protocol/command-nodes";
 import { isBackendId } from "@orkestrator/protocol/federation";
+import { SYNC_CONTROLLER_SETTINGS_COMMAND } from "@orkestrator/protocol/controller-settings";
+import {
+  PORTAL_LAYOUT_CHANGED_EVENT,
+  parsePortalLayoutUpdate,
+} from "@orkestrator/protocol/portal-layout";
 
 import type { CommandContext } from "./commands-context.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 import { assertOnlyKeys } from "./commands-validation.js";
-import type { DesktopConnectionImport, NodeService } from "./nodes/node-service.js";
+import type { NodeService } from "./nodes/node-service.js";
 import type { NodePortal } from "./nodes/node-portal.js";
 import type { NodeCoordination } from "./nodes/node-coordination.js";
 import { parseNodeFileScope } from "./nodes/node-files.js";
@@ -25,16 +24,17 @@ function safeInteger(value: unknown, label: string): number {
 /**
  * Command-node and leaf commands. See docs/development/command-nodes-plan.md.
  *
- * Leaf side: `attach_controller`, `detach_controller`, `list_controllers`.
+ * Leaf side: `attach_controller`, `detach_controller`, `list_controllers`,
+ * `sync_controller_settings`.
  * Command side: the registry (`list_nodes`, `add_node`, `update_node`,
  * `forget_node`, `reconnect_node`, …), SSH prompts and host-key trust, and
- * the one-time import of the desktop's saved machines.
+ * the one-time import of the desktop's saved machines, and handing command
+ * over to another node (`preview_command_handover`, `hand_over_command`, and
+ * `accept_command_handover` on the receiving side).
  * Both: `get_node_status`, `set_command_node_enabled`.
  *
  * No command returns a node's gateway credential.
  */
-
-const MAX_IMPORT_ENTRIES = 64;
 
 function portal(context: CommandContext): NodePortal {
   if (!context.nodePortal)
@@ -60,6 +60,18 @@ export function registerNodeCommands(register: CommandRegistrar): void {
     return nodes(context).status();
   });
 
+  // The portal sidebar's cross-machine order, shared by every client of this node.
+  register("get_portal_layout", async (args, context) => {
+    assertOnlyKeys(args, [], "arguments");
+    return context.storage.getPortalLayout();
+  });
+
+  register("update_portal_layout", async (args, context) => {
+    const layout = await context.storage.updatePortalLayout(parsePortalLayoutUpdate(args));
+    context.emit(PORTAL_LAYOUT_CHANGED_EVENT, layout);
+    return layout;
+  });
+
   register("set_command_node_enabled", async (args, context) => {
     assertOnlyKeys(args, ["enabled"], "arguments");
     if (typeof args.enabled !== "boolean") throw new Error("Expected enabled to be a boolean.");
@@ -82,6 +94,12 @@ export function registerNodeCommands(register: CommandRegistrar): void {
   register("detach_controller_here", async (args, context) => {
     assertOnlyKeys(args, ["controllerId"], "arguments");
     return nodes(context).detachController(args.controllerId, { byUser: true });
+  });
+
+  // An attached command node handing down its settings (see `controller-settings.ts`).
+  register(SYNC_CONTROLLER_SETTINGS_COMMAND, async (args, context) => {
+    assertOnlyKeys(args, ["controllerId", "settings"], "arguments");
+    return nodes(context).inheritedSettings.receive(args);
   });
 
   register("allow_controller", async (args, context) => {
@@ -411,57 +429,33 @@ export function registerNodeCommands(register: CommandRegistrar): void {
 
   register("import_desktop_connections", async (args, context) => {
     assertOnlyKeys(args, ["entries"], "arguments");
-    return nodes(context).importDesktopConnections(parseImportEntries(args.entries));
+    return nodes(context).importDesktopConnections(parseNodeImportEntries(args.entries));
   });
-}
 
-function parseImportEntries(value: unknown): DesktopConnectionImport[] {
-  if (!Array.isArray(value) || value.length > MAX_IMPORT_ENTRIES) {
-    throw new Error("Expected entries to be a bounded array.");
-  }
-  return value.map((raw, index) => {
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-      throw new Error(`Expected entries[${index}] to be an object.`);
-    }
-    const entry = raw as Record<string, unknown>;
-    if (
-      typeof entry.importedFrom !== "string" ||
-      !entry.importedFrom ||
-      entry.importedFrom.length > 200
-    ) {
-      throw new Error(`Expected entries[${index}].importedFrom.`);
-    }
-    const routes = parseNodeRoutes(entry.routes);
-    const parsed: DesktopConnectionImport = {
-      importedFrom: entry.importedFrom,
-      fallbackName: normalizeNodeDisplayName(entry.fallbackName, "fallbackName"),
-      routes,
-      routeOrder: normalizeRouteOrder(routes, entry.routeOrder),
-      token:
-        entry.token === null || entry.token === undefined
-          ? null
-          : parseGatewayCredential(entry.token),
-      enabled: entry.enabled !== false,
-    };
-    if (entry.verifiedNodeId !== undefined) {
-      if (!isBackendId(entry.verifiedNodeId) || entry.verifiedNodeId.startsWith("provisional:")) {
-        throw new Error(`Expected entries[${index}].verifiedNodeId to be a node identity.`);
-      }
-      parsed.verifiedNodeId = entry.verifiedNodeId;
-    }
-    const cache = entry.profileCache as NodeRecord["profileCache"] | undefined;
-    if (
-      cache &&
-      typeof cache.displayName === "string" &&
-      typeof cache.colorToken === "string" &&
-      Number.isSafeInteger(cache.revision)
-    ) {
-      parsed.profileCache = {
-        displayName: cache.displayName.slice(0, 64),
-        colorToken: cache.colorToken.slice(0, 32),
-        revision: cache.revision,
-      };
-    }
-    return parsed;
+  // Making another node the command node, from the current one: it hands over its
+  // machines (credentials included) over its link and follows as the new one's leaf.
+  register("preview_command_handover", async (args, context) => {
+    assertOnlyKeys(args, ["nodeId"], "arguments");
+    return nodes(context).previewHandover(args.nodeId);
+  });
+
+  register("hand_over_command", async (args, context) => {
+    assertOnlyKeys(args, ["nodeId", "nodeIds", "includeSelf", "entries"], "arguments");
+    return nodes(context).handOverCommand({
+      nodeId: args.nodeId,
+      nodeIds: args.nodeIds,
+      includeSelf: args.includeSelf !== false,
+      entries: args.entries === undefined ? [] : parseNodeImportEntries(args.entries),
+    });
+  });
+
+  // Leaf side: an attached command node making this node the command node.
+  register("accept_command_handover", async (args, context) => {
+    assertOnlyKeys(args, ["controllerId", "entries", "handoverId"], "arguments");
+    return nodes(context).acceptHandover(
+      args.controllerId,
+      parseNodeImportEntries(args.entries),
+      args.handoverId,
+    );
   });
 }

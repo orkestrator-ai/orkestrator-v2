@@ -3497,6 +3497,11 @@ describe("NativeMessage task list rendering", () => {
     );
 
     const singleLineTask = screen.getByRole("button", { name: /Task Install dependencies/ });
+    expect(
+      singleLineTask
+        .closest('[data-background-task-id="task-1"]')
+        ?.getAttribute("data-background-task-status"),
+    ).toBe("completed");
     expect(getClassTokens(singleLineTask)).toContain("items-center");
     expect(getClassTokens(singleLineTask)).not.toContain("items-start");
 
@@ -3859,12 +3864,14 @@ describe("NativeMessage task list rendering", () => {
       const updates = screen.getByText("3 updates");
       // Both counts sit side by side on the rail's single usage line.
       expect(tools.parentElement?.parentElement?.contains(updates)).toBe(true);
-      expect(tools.closest("button") === null).toBe(true);
+      const trigger = screen.getByRole("button", { name: /Agent Review validation/ });
+      // The chevron trails the rail so it lines up with every other card's.
+      const chevron = trigger.querySelector(".lucide-chevron-right");
+      expect(chevron?.parentElement?.lastElementChild).toBe(chevron);
       expect(
-        screen
-          .getByRole("button", { name: /Agent Review validation/ })
-          .getAttribute("aria-expanded"),
-      ).toBe("false");
+        tools.compareDocumentPosition(chevron!) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      expect(trigger.getAttribute("aria-expanded")).toBe("false");
       expect(
         screen
           .getByRole("button", { name: /Agent Review validation/ })

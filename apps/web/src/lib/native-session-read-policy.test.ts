@@ -3,6 +3,7 @@ import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 import {
   ACTIVE_PROJECTION_REFRESH_MS,
   IDLE_PROJECTION_REFRESH_MS,
+  NATIVE_QUIET_BACKOFF_CONTENT_REVISION_PROVIDERS,
   NATIVE_QUIET_BACKOFF_QUALIFIED_PROVIDERS,
   NATIVE_QUIET_BACKOFF_TRIAL_MS,
   nativeSessionReadDemand,
@@ -32,6 +33,8 @@ describe("native session read policy", () => {
   test("quiet backoff needs a qualified provider and a backend that announces transitions", () => {
     // The single qualification switch, shared with the backend capability matrix.
     expect([...NATIVE_QUIET_BACKOFF_QUALIFIED_PROVIDERS].sort() as string[]).toEqual([
+      "claude",
+      "codex",
       "cursor",
       "grok",
       "opencode",
@@ -41,28 +44,54 @@ describe("native session read policy", () => {
       // An older backend (no stamped activity announcements) keeps the baseline.
       expect(nativeSessionReadDemand(platform, "idle", { active: true }).quietBackoffMs).toBeNull();
       expect(
-        nativeSessionReadDemand(platform, "idle", { active: true, observationEvents: true })
-          .quietBackoffMs,
+        nativeSessionReadDemand(platform, "idle", {
+          active: true,
+          observationEvents: true,
+          quietObservation: true,
+        }).quietBackoffMs,
       ).toEqual(
         NATIVE_QUIET_BACKOFF_QUALIFIED_PROVIDERS.has(platform)
           ? NATIVE_QUIET_BACKOFF_TRIAL_MS
           : null,
       );
     }
-    // Claude and Codex idle views change without a transition to announce.
-    expect(NATIVE_QUIET_BACKOFF_QUALIFIED_PROVIDERS.has("claude")).toBe(false);
-    expect(NATIVE_QUIET_BACKOFF_QUALIFIED_PROVIDERS.has("codex")).toBe(false);
+  });
+
+  test("Claude and Codex back off only while the session is marked quietObservation", () => {
+    expect([...NATIVE_QUIET_BACKOFF_CONTENT_REVISION_PROVIDERS].sort() as string[]).toEqual([
+      "claude",
+      "codex",
+    ]);
+    for (const platform of ["claude", "codex"] as const) {
+      // An older bridge, or a session before its first observation: baseline.
+      expect(
+        nativeSessionReadDemand(platform, "idle", { active: true, observationEvents: true })
+          .quietBackoffMs,
+      ).toBeNull();
+      expect(
+        nativeSessionReadDemand(platform, "idle", {
+          active: true,
+          observationEvents: true,
+          quietObservation: true,
+        }).quietBackoffMs,
+      ).toEqual(NATIVE_QUIET_BACKOFF_TRIAL_MS);
+    }
+    // The other qualified providers never needed the flag.
+    expect(
+      nativeSessionReadDemand("cursor", "idle", { active: true, observationEvents: true })
+        .quietBackoffMs,
+    ).toEqual(NATIVE_QUIET_BACKOFF_TRIAL_MS);
   });
 
   test("a qualified provider backs off only while idle", () => {
-    const qualifiedProviders = new Set(["codex"] as const);
+    const qualifiedProviders = new Set(["pi"] as const);
     const options = { active: true, qualifiedProviders, observationEvents: true };
-    expect(nativeSessionReadDemand("codex", "idle", options).quietBackoffMs).toEqual(
+    expect(nativeSessionReadDemand("pi", "idle", options).quietBackoffMs).toEqual(
       NATIVE_QUIET_BACKOFF_TRIAL_MS,
     );
     for (const phase of ["running", "blocked", "cancelling", "recovering"]) {
-      expect(nativeSessionReadDemand("codex", phase, options).quietBackoffMs).toBeNull();
+      expect(nativeSessionReadDemand("pi", phase, options).quietBackoffMs).toBeNull();
     }
-    expect(nativeSessionReadDemand("claude", "idle", options).quietBackoffMs).toBeNull();
+    expect(nativeSessionReadDemand("cursor", "idle", options).quietBackoffMs).toBeNull();
   });
 });

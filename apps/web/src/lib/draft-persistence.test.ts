@@ -1241,6 +1241,46 @@ describe("useNativeComposeDraftPersistence", () => {
     hook.unmount();
   });
 
+  for (const namespace of ["cursor", "grok"] as const) {
+    test(`${namespace} restores an attachment-only image draft without erasing it`, async () => {
+      // What a backend restart hands back: the record the store saved, with no
+      // text. Hydration must not read the empty text as an empty draft and
+      // delete or overwrite the image.
+      const sessionKey = `env-${namespace}:tab-image-only`;
+      const image = {
+        id: "shot",
+        type: "image" as const,
+        path: "/workspace/shot.png",
+        name: "shot.png",
+      };
+      getComposeDraft.mockResolvedValueOnce({
+        draftKey: compose.composeDraftKey(namespace, `env-${namespace}`, sessionKey),
+        ownerType: "environment",
+        ownerId: `env-${namespace}`,
+        value: { text: "", mentions: [], attachments: [image] },
+        updatedAt: "2026-10-23T00:00:00.000Z",
+        revision: 3,
+      });
+      const store = createNativeStore();
+      const hook = renderHook(() =>
+        useNativeComposeDraftPersistence(namespace, `env-${namespace}`, sessionKey, store),
+      );
+
+      await waitFor(() => expect(store.getState().attachments.get(sessionKey)).toEqual([image]));
+      // Past the save debounce: hydration may write the record back, but only
+      // as it read it, never without the image and never as a delete.
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      expect(deleteComposeDraft).not.toHaveBeenCalled();
+      for (const call of saveComposeDraft.mock.calls) {
+        expect(call[3]).toEqual({ text: "", mentions: [], attachments: [image] });
+      }
+      expect(store.getState().attachments.get(sessionKey)).toEqual([image]);
+
+      hook.unmount();
+      expect(deleteComposeDraft).not.toHaveBeenCalled();
+    });
+  }
+
   test("does not delete an unread backend draft when hydration is cancelled", async () => {
     const snapshot = deferred<Awaited<ReturnType<typeof realBackend.getComposeDraft>>>();
     getComposeDraft.mockImplementationOnce(() => snapshot.promise);

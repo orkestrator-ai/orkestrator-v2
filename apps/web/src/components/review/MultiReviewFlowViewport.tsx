@@ -16,6 +16,7 @@ import {
   FLOW_ZOOM_MAX,
   canZoomIn,
   canZoomOut,
+  centerFlowRect,
   fitFlowView,
   fitStackedFlowZoom,
   flowContentOffset,
@@ -229,23 +230,43 @@ export function useFlowViewport({
     );
   }, [apply]);
 
-  /** Bring a node (canvas coordinates) into view before it takes focus. */
-  const reveal = useCallback(
-    (rect: FlowRect) => {
+  const scrollTo = useCallback(
+    (next: FlowView, smooth: boolean) => {
       const element = viewportRef.current;
       if (!element) return;
-      const { content: size, viewport: box } = sizesRef.current;
       const view = currentView();
-      const next = revealFlowRect(view, rect, size, box);
       if (next.scrollLeft === view.scrollLeft && next.scrollTop === view.scrollTop) return;
       if (pendingRef.current) pendingRef.current = next;
-      else {
+      else if (smooth && typeof element.scrollTo === "function" && !prefersReducedMotion()) {
+        element.scrollTo({ left: next.scrollLeft, top: next.scrollTop, behavior: "smooth" });
+      } else {
         element.scrollLeft = next.scrollLeft;
         element.scrollTop = next.scrollTop;
       }
       save(next);
     },
     [currentView, save],
+  );
+
+  /** Bring a node (canvas coordinates) into view before it takes focus. */
+  const reveal = useCallback(
+    (rect: FlowRect) => {
+      const { content: size, viewport: box } = sizesRef.current;
+      scrollTo(revealFlowRect(currentView(), rect, size, box), false);
+    },
+    [currentView, scrollTo],
+  );
+
+  /**
+   * Centre a node (canvas coordinates) across the viewport, within the scroll
+   * range. `smooth` glides there, unless the user prefers reduced motion.
+   */
+  const center = useCallback(
+    (rect: FlowRect, { smooth = false }: { smooth?: boolean } = {}) => {
+      const { content: size, viewport: box } = sizesRef.current;
+      scrollTo(centerFlowRect(currentView(), rect, size, box), smooth);
+    },
+    [currentView, scrollTo],
   );
 
   const zoomToRef = useRef(zoomTo);
@@ -383,7 +404,15 @@ export function useFlowViewport({
     resetZoom,
     fit,
     reveal,
+    center,
   };
+}
+
+function prefersReducedMotion(): boolean {
+  return (
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
 }
 
 /**

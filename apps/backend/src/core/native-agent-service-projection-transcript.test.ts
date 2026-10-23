@@ -24,6 +24,7 @@ import { createProviderStub, withService } from "./native-agent-service-projecti
 import { normalizeOpenCodeInteractiveMessage } from "./opencode-messages.js";
 import { adaptAppServerItem } from "../../../../bridges/codex-bridge/src/app-server/item-adapter.js";
 import { itemToParts } from "../../../../bridges/codex-bridge/src/messages/normalization.js";
+import { projectionInternals } from "./native-agent-service-test-collaborators.js";
 
 describe("NativeAgentService transcript projection", () => {
   test("turns provider-reported temp images into exact session-scoped lazy reads", async () => {
@@ -941,13 +942,7 @@ describe("NativeAgentService transcript projection", () => {
         expect(detailRef).toBeString();
 
         // Simulate capacity eviction of exactly this entry.
-        (
-          service as unknown as {
-            toolDetailCache: Map<string, unknown>;
-            toolDetailCacheBytes: number;
-          }
-        ).toolDetailCache.clear();
-        (service as unknown as { toolDetailCacheBytes: number }).toolDetailCacheBytes = 0;
+        projectionInternals(service).evictToolDetails();
         const snapshotsBefore = snapshots;
 
         expect(
@@ -1005,13 +1000,7 @@ describe("NativeAgentService transcript projection", () => {
         expect(detailRef).toBeString();
 
         // Simulate capacity eviction of exactly this entry.
-        (
-          service as unknown as {
-            toolDetailCache: Map<string, unknown>;
-            toolDetailCacheBytes: number;
-          }
-        ).toolDetailCache.clear();
-        (service as unknown as { toolDetailCacheBytes: number }).toolDetailCacheBytes = 0;
+        projectionInternals(service).evictToolDetails();
         const snapshotsBefore = snapshots;
 
         expect(
@@ -1035,16 +1024,7 @@ describe("NativeAgentService transcript projection", () => {
       },
       async ({ service }) => {
         const inlineFileUrl = `data:image/png;base64,${"c".repeat(NATIVE_FILE_DETAIL_MAX_BYTES)}`;
-        const projected = (
-          service as unknown as {
-            projectionPart(
-              sessionKey: string,
-              messageId: string,
-              raw: unknown,
-              partPath: string,
-            ): Record<string, unknown>;
-          }
-        ).projectionPart(
+        const projected = projectionInternals(service).projectionPart(
           "session",
           "message",
           { type: "image", content: "enormous.png", fileUrl: inlineFileUrl },
@@ -1094,11 +1074,7 @@ describe("NativeAgentService transcript projection", () => {
             parts: Array<{ detailRef?: string }>;
           }
         ).parts.map((part) => part.detailRef!);
-        const cache = (
-          service as unknown as {
-            toolDetailCache: Map<string, unknown>;
-          }
-        ).toolDetailCache;
+        const cache = projectionInternals(service).toolDetailCache;
         expect(cache.has(refs[0]!)).toBe(false);
 
         await expect(

@@ -19,6 +19,11 @@ import {
 } from "../src/core/portable-input-status";
 import { environmentStateDirectory } from "../src/core/environment-state-paths";
 import {
+  CURSOR_MCP_STAGED_INPUTS_VERSION,
+  IMAGE_CAPABILITIES,
+  imageCopiesCursorMcpConfig,
+} from "@orkestrator/protocol/image-manifest";
+import {
   lifecycleEnvironment,
   memoryLifecycleContext,
   tempDir,
@@ -44,7 +49,10 @@ async function fixtureHome() {
   await fs.mkdir(dataDir, { recursive: true });
   // Claude: allowlisted files and extensions, plus state that must never be staged.
   await write(path.join(home, ".claude", "CLAUDE.md"), "memory");
-  await write(path.join(home, ".claude", ".credentials.json"), '{"token":"fixture"}');
+  await write(
+    path.join(home, ".claude", ".credentials.json"),
+    '{"claudeAiOauth":{"accessToken":"fixture","refreshToken":"fixture-refresh"}}',
+  );
   await write(path.join(home, ".claude", "history.jsonl"), "SENTINEL-HISTORY");
   await write(path.join(home, ".claude", "projects", "p", "s.jsonl"), "SENTINEL-TRANSCRIPT");
   await write(path.join(home, ".claude", "commands", "review.md"), "command");
@@ -255,6 +263,138 @@ describe("portable input staging", () => {
       provider: "codex",
       files: 0,
       bytes: 0,
+      skipped: { "login-withheld": 1 },
+    });
+  });
+
+  test("stages Claude's login access-only and withholds an expired one without a warning", async () => {
+    const { dataDir, roots, home } = await fixtureHome();
+    const now = new Date("2026-10-21T12:00:00Z");
+    await write(
+      path.join(home, ".claude", ".credentials.json"),
+      JSON.stringify({
+        claudeAiOauth: {
+          accessToken: "access",
+          refreshToken: "SENTINEL",
+          expiresAt: now.getTime() + 60 * 60_000,
+        },
+        mcpOAuth: { server: { accessToken: "mcp", refreshToken: "SENTINEL" } },
+      }),
+    );
+    const live = await stagePortableInputs(dataDir, "env-claude", new Set(["claude"]), roots, now);
+    const text = await fs.readFile(
+      path.join(live.directory, "claude-config", ".credentials.json"),
+      "utf8",
+    );
+    expect(JSON.parse(text)).toEqual({
+      claudeAiOauth: { accessToken: "access", expiresAt: now.getTime() + 60 * 60_000 },
+      mcpOAuth: { server: { accessToken: "mcp" } },
+    });
+    // A stale on-disk file beside a Keychain login is normal on macOS; the
+    // stdin sync delivers Claude's login, so withholding it is not reported.
+    await write(
+      path.join(home, ".claude", ".credentials.json"),
+      JSON.stringify({
+        claudeAiOauth: { accessToken: "a", refreshToken: "SENTINEL", expiresAt: 1 },
+      }),
+    );
+    const expired = await stagePortableInputs(
+      dataDir,
+      "env-claude-expired",
+      new Set(["claude"]),
+      roots,
+      now,
+    );
+    expect(await listFiles(expired.directory)).not.toContain("claude-config/.credentials.json");
+    expect(expired.providers[0]?.skipped["login-withheld"]).toBeUndefined();
+  });
+
+  test("stages OpenCode and Pi OAuth logins access-only and keeps their API keys", async () => {
+    const { dataDir, roots, home } = await fixtureHome();
+    const now = new Date("2026-10-21T12:00:00Z");
+    const live = now.getTime() + 8 * 3600_000;
+    await write(
+      path.join(home, ".local", "share", "opencode", "auth.json"),
+      JSON.stringify({
+        "opencode-go": { type: "api", key: "go-key" },
+        openai: { type: "oauth", access: "oc", refresh: "SENTINEL-OC", expires: live },
+        "github-copilot": { type: "oauth", access: "gho", refresh: "gho", expires: 0 },
+      }),
+    );
+    await write(
+      path.join(home, ".pi", "agent", "auth.json"),
+      JSON.stringify({
+        anthropic: { type: "oauth", access: "pi", refresh: "SENTINEL-PI", expires: live },
+        openai: { type: "oauth", access: "old", refresh: "SENTINEL-OLD", expires: 1 },
+        openrouter: { type: "api_key", key: "or-key" },
+      }),
+    );
+    await write(path.join(home, ".pi", "agent", "settings.json"), "{}");
+    const staged = await stagePortableInputs(
+      dataDir,
+      "env-provider-logins",
+      new Set(["opencode", "pi"] as const),
+      roots,
+      now,
+    );
+    expect(
+      JSON.parse(
+        await fs.readFile(path.join(staged.directory, "opencode-data", "auth.json"), "utf8"),
+      ),
+    ).toEqual({
+      "opencode-go": { type: "api", key: "go-key" },
+      openai: { type: "oauth", access: "oc", refresh: "", expires: live },
+      "github-copilot": { type: "oauth", access: "gho", refresh: "gho", expires: 0 },
+    });
+    expect(
+      JSON.parse(
+        await fs.readFile(path.join(staged.directory, "pi-config", "agent", "auth.json"), "utf8"),
+      ),
+    ).toEqual({
+      anthropic: { type: "oauth", access: "pi", refresh: "", expires: live },
+      openrouter: { type: "api_key", key: "or-key" },
+    });
+    for (const [provider, stage] of [
+      ["opencode", "opencode-data"],
+      ["pi", "pi-config"],
+    ] as const) {
+      const files = await listFiles(path.join(staged.directory, stage));
+      const bytes = (
+        await Promise.all(files.map((file) => fs.stat(path.join(staged.directory, stage, file))))
+      ).reduce((sum, stat) => sum + stat.size, 0);
+      expect(staged.providers.find((entry) => entry.provider === provider)).toEqual({
+        provider,
+        files: files.length,
+        bytes,
+        // The expired Pi OpenAI login is reported; the file itself is still staged.
+        skipped: provider === "pi" ? { "login-withheld": 1 } : {},
+      });
+    }
+    for (const file of await listFiles(staged.directory)) {
+      expect(await fs.readFile(path.join(staged.directory, file), "utf8")).not.toContain(
+        "SENTINEL",
+      );
+    }
+
+    // Expired OAuth logins only: nothing is staged for them.
+    await write(
+      path.join(home, ".pi", "agent", "auth.json"),
+      JSON.stringify({ anthropic: { type: "oauth", access: "a", refresh: "r", expires: 1 } }),
+    );
+    const expired = await stagePortableInputs(
+      dataDir,
+      "env-provider-expired",
+      new Set(["pi"] as const),
+      roots,
+      now,
+    );
+    expect(await listFiles(expired.directory)).toEqual([
+      "manifest.json",
+      "pi-config/agent/settings.json",
+    ]);
+    expect(expired.providers[0]).toMatchObject({
+      provider: "pi",
+      files: 1,
       skipped: { "login-withheld": 1 },
     });
   });
@@ -550,6 +690,200 @@ esac
       }
       for (const file of provider.files) expect(entrypoint).toContain(file.target);
     }
-    expect(entrypoint).toContain("ORKESTRATOR_CAPABILITY staged-inputs=1");
+    expect(entrypoint).toContain(
+      `ORKESTRATOR_CAPABILITY staged-inputs=${IMAGE_CAPABILITIES["staged-inputs"]}`,
+    );
+    expect(IMAGE_CAPABILITIES["staged-inputs"]).toBeGreaterThanOrEqual(
+      CURSOR_MCP_STAGED_INPUTS_VERSION,
+    );
+    expect(imageCopiesCursorMcpConfig({ "staged-inputs": 1 })).toBe(false);
+    expect(imageCopiesCursorMcpConfig({ "staged-inputs": 2 })).toBe(true);
+    expect(imageCopiesCursorMcpConfig(null)).toBe(false);
+  });
+});
+
+/** A host ~/.cursor holding MCP servers beside state that must never be staged. */
+async function cursorFixture() {
+  const fixture = await fixtureHome();
+  const cursor = path.join(fixture.home, ".cursor");
+  await write(
+    path.join(cursor, "mcp.json"),
+    '{"mcpServers":{"docs":{"url":"https://example.test/mcp"}}}',
+  );
+  await write(path.join(cursor, "auth.json"), "SENTINEL-CURSOR-AUTH");
+  await write(path.join(cursor, "cli-config.json"), "SENTINEL-CURSOR-CLI");
+  await write(path.join(cursor, "sdk", "state.json"), "SENTINEL-CURSOR-SDK");
+  await write(path.join(cursor, "hooks.json"), "SENTINEL-CURSOR-HOOKS");
+  await write(path.join(cursor, "extensions", "e", "package.json"), "SENTINEL-CURSOR-EXT");
+  return { ...fixture, cursor };
+}
+
+describe("Cursor MCP configuration", () => {
+  test("stages only mcp.json from the host's ~/.cursor", async () => {
+    const { dataDir, roots } = await cursorFixture();
+    const staged = await stagePortableInputs(dataDir, "env-cursor", new Set(["cursor"]), roots);
+    expect(await listFiles(staged.directory)).toEqual(["cursor-config/mcp.json", "manifest.json"]);
+    expect(staged.mounts).toEqual([
+      { source: path.join(staged.directory, "cursor-config"), target: "/cursor-config" },
+    ]);
+    const stagedMcp = path.join(staged.directory, "cursor-config", "mcp.json");
+    expect(JSON.parse(await fs.readFile(stagedMcp, "utf8"))).toEqual({
+      mcpServers: { docs: { url: "https://example.test/mcp" } },
+    });
+    expect((await fs.stat(stagedMcp)).mode & 0o077).toBe(0);
+    expect(staged.providers).toEqual([
+      {
+        provider: "cursor",
+        files: 1,
+        bytes: (await fs.stat(stagedMcp)).size,
+        skipped: {},
+      },
+    ]);
+  });
+
+  test("agent-test profiles read the isolated host home", async () => {
+    const { dataDir, root, home } = await cursorFixture();
+    const isolated = path.join(root, "isolated-home");
+    await write(path.join(isolated, ".cursor", "mcp.json"), '{"mcpServers":{}}');
+    const staged = await stagePortableInputs(dataDir, "env-cursor-test", new Set(["cursor"]), {
+      home,
+      agentTest: true,
+      agentTestHostHome: isolated,
+    });
+    expect(
+      await fs.readFile(path.join(staged.directory, "cursor-config", "mcp.json"), "utf8"),
+    ).toBe('{"mcpServers":{}}');
+  });
+
+  test("refuses a symlinked mcp.json and one over the size bound", async () => {
+    const { dataDir, roots, root, cursor } = await cursorFixture();
+    await write(path.join(root, "elsewhere", "mcp.json"), "SENTINEL-LINKED");
+    await fs.rm(path.join(cursor, "mcp.json"));
+    await fs.symlink(path.join(root, "elsewhere", "mcp.json"), path.join(cursor, "mcp.json"));
+    const linked = await stagePortableInputs(
+      dataDir,
+      "env-cursor-link",
+      new Set(["cursor"]),
+      roots,
+    );
+    expect(await listFiles(linked.directory)).toEqual(["manifest.json"]);
+    expect(linked.mounts).toEqual([]);
+    expect(linked.providers[0]).toEqual({
+      provider: "cursor",
+      files: 0,
+      bytes: 0,
+      skipped: { symlink: 1 },
+    });
+
+    await fs.rm(path.join(cursor, "mcp.json"));
+    await write(path.join(cursor, "mcp.json"), Buffer.alloc(2048, 0x20));
+    const large = await stagePortableInputs(
+      dataDir,
+      "env-cursor-large",
+      new Set(["cursor"]),
+      roots,
+      new Date(),
+      { ...INPUT_LIMITS, fileBytes: 1024 },
+    );
+    expect(await listFiles(large.directory)).toEqual(["manifest.json"]);
+    expect(large.providers[0]?.skipped).toEqual({ "too-large": 1 });
+  });
+
+  test("nothing of Cursor's is staged when Cursor is not selected", async () => {
+    const { dataDir, roots } = await cursorFixture();
+    const staged = await stagePortableInputs(
+      dataDir,
+      "env-no-cursor",
+      new Set(["claude", "git"] as const),
+      roots,
+    );
+    expect((await listFiles(staged.directory)).some((file) => file.startsWith("cursor"))).toBe(
+      false,
+    );
+    expect(staged.mounts.some((mount) => mount.target === "/cursor-config")).toBe(false);
+    expect(staged.providers.some((entry) => entry.provider === "cursor")).toBe(false);
+    // Disabled, revoked, or unauthorized in an agent-test profile: never selected.
+    expect(selectedInputProviders({}, ["claude"]).has("cursor")).toBe(false);
+    expect(selectedInputProviders({}, ["claude", "cursor"], ["cursor"]).has("cursor")).toBe(false);
+    expect(
+      selectedInputProviders({ runtimeFlavor: "agent-test", credentialSources: new Set() }, [
+        "cursor",
+      ]).has("cursor"),
+    ).toBe(false);
+    expect(selectedInputProviders({}, ["cursor"]).has("cursor")).toBe(true);
+  });
+
+  test("revocation scrubs the staged mcp.json", async () => {
+    const { dataDir, roots } = await cursorFixture();
+    const staged = await stagePortableInputs(dataDir, "env-cursor", new Set(["cursor"]), roots);
+    expect(await scrubStagedProvider(dataDir, "env-cursor", staged.revision, "cursor")).toBe(true);
+    expect(await fs.readdir(path.join(staged.directory, "cursor-config"))).toEqual([]);
+  });
+
+  test("the entrypoint copies the staged mcp.json owner-only and refuses a symlinked one", async () => {
+    const { dataDir, roots, root, cursor } = await cursorFixture();
+    const staged = await stagePortableInputs(dataDir, "env-cursor", new Set(["cursor"]), roots);
+    const mount = staged.mounts.find((entry) => entry.target === "/cursor-config")!;
+    const entrypoint = await fs.readFile(
+      path.join(import.meta.dir, "../../../docker/entrypoint.sh"),
+      "utf8",
+    );
+    const helpers = [
+      "log_progress",
+      "agent_copy_warn",
+      "report_agent_copy_skips",
+      "agent_source_path_has_symlink",
+      "agent_destination_path_has_symlink",
+      "copy_agent_file",
+    ]
+      .map((name) => {
+        const body = entrypoint.match(new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?^\\}`, "m"))?.[0];
+        if (!body) throw new Error(`Missing entrypoint helper: ${name}`);
+        return body;
+      })
+      .join("\n");
+    const block = entrypoint.match(
+      /^# Set up Cursor configuration\.[\s\S]*?^log_progress "Cursor configuration ready"$/m,
+    )?.[0];
+    if (!block) throw new Error("Missing Cursor entrypoint setup");
+    const run = async (source: string, home: string) => {
+      const progress = path.join(root, `progress-${path.basename(home)}`);
+      const result = Bun.spawnSync({
+        cmd: [
+          "bash",
+          "-c",
+          `set -e\nAGENT_COPY_SKIPPED=""\n${helpers}\n${block.replaceAll("/cursor-config", '"$TEST_SOURCE"')}`,
+        ],
+        env: {
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          HOME: home,
+          PROGRESS_FILE: progress,
+          TEST_SOURCE: source,
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(result.exitCode).toBe(0);
+      return fs.readFile(progress, "utf8");
+    };
+
+    const home = path.join(root, "container-home");
+    await run(mount.source, home);
+    expect((await fs.readdir(path.join(home, ".cursor"))).sort()).toEqual(["mcp.json"]);
+    const copied = path.join(home, ".cursor", "mcp.json");
+    expect(await fs.readFile(copied, "utf8")).toBe(
+      await fs.readFile(path.join(cursor, "mcp.json"), "utf8"),
+    );
+    expect((await fs.stat(copied)).mode & 0o777).toBe(0o600);
+
+    // A source swapped for a link (the mount is read-only in production, but
+    // the helper never trusts it) is reported and not followed.
+    const linkedSource = path.join(root, "linked-source");
+    await fs.mkdir(linkedSource);
+    await fs.symlink(path.join(cursor, "auth.json"), path.join(linkedSource, "mcp.json"));
+    const linkedHome = path.join(root, "linked-home");
+    const progress = await run(linkedSource, linkedHome);
+    expect(await fs.readdir(path.join(linkedHome, ".cursor"))).toEqual([]);
+    expect(progress).toContain("Cursor host config NOT copied into this container: mcp.json");
   });
 });

@@ -9,6 +9,7 @@ import type {
 } from "@orkestrator/protocol/native-agent";
 import { claudePlanWindowFromLabel } from "@orkestrator/protocol/plan-usage";
 import { idleSteerPromptReply } from "@orkestrator/protocol/agent-slash-commands";
+import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
 import {
   claudeExecutableOptions,
   generateMessageId,
@@ -25,7 +26,7 @@ import { claudePermissionMode, claudeTurnPolicy } from "./claude-query-config.js
 import { eventEmitter } from "./event-emitter.js";
 import { markTranscriptChanged } from "./transcript-revision.js";
 import { MAX_STEER_JOURNAL_ENTRIES, updateSessionPreferences } from "./session-preferences.js";
-import { recordPromptDispatch } from "./session-manager-lifecycle.js";
+import { idleSteerUserMessageId, recordPromptDispatch } from "./session-manager-lifecycle.js";
 import { ultracodeFlagSetting } from "./ultracode.js";
 import type {
   ClaudeSteerJournalEntry,
@@ -160,7 +161,10 @@ function idleSteerMessageIds(requestId?: string): { userId: string; assistantId:
   if (!requestId) {
     return { userId: generateMessageId(), assistantId: generateMessageId() };
   }
-  return { userId: `idle-steer:${requestId}`, assistantId: `idle-steer-reply:${requestId}` };
+  return {
+    userId: idleSteerUserMessageId(requestId),
+    assistantId: `idle-steer-reply:${requestId}`,
+  };
 }
 
 export async function answerIdleSteerPrompt(
@@ -237,6 +241,15 @@ function mcpTransport(status: McpServerStatus): NativeAgentMcpServer["transport"
   return undefined;
 }
 
+/**
+ * A server's error as served to the live panel: credential-shaped text (a
+ * token in a URL or header an MCP server echoed) redacted, then bounded.
+ * Redacted first so a cut never leaves part of a token behind.
+ */
+function mcpError(error: string): string {
+  return redactSecrets(error).slice(0, 2_000);
+}
+
 function normalizeMcp(status: McpServerStatus): NativeAgentMcpServer {
   const mappedStatus = status.status === "pending" ? "connecting" : status.status;
   const tools = (status.tools ?? [])
@@ -258,7 +271,7 @@ function normalizeMcp(status: McpServerStatus): NativeAgentMcpServer {
     ...(transport ? { transport } : {}),
     toolCount: tools.length,
     ...(tools.length ? { tools } : {}),
-    ...(status.error ? { error: status.error.slice(0, 2_000) } : {}),
+    ...(status.error ? { error: mcpError(status.error) } : {}),
     actions,
   };
 }
@@ -291,7 +304,7 @@ export async function readSessionMcpServers(sessionId: string): Promise<NativeAg
       ...(server.tools
         ? { tools: server.tools.slice(0, 256), toolCount: server.tools.length }
         : {}),
-      ...(server.error ? { error: server.error.slice(0, 2_000) } : {}),
+      ...(server.error ? { error: mcpError(server.error) } : {}),
     }));
   }
   return session.mcpInventory ?? [];

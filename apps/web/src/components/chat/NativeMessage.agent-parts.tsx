@@ -1110,6 +1110,8 @@ export function BackgroundTaskCard({
       open={open && hasBody}
       onOpenChange={onOpenChange}
       className={cn(STOPPABLE_CARD_GROUP, !embedded && agentCardClassName)}
+      data-background-task-id={task.id}
+      data-background-task-status={task.status}
     >
       <div className="flex items-start gap-3 px-3 py-2.5">
         <BackgroundTaskActivitySlot
@@ -1163,6 +1165,8 @@ export function BackgroundTaskCard({
               </div>
             ) : null}
           </div>
+          {/* The rail sits before the chevron so every card's chevron lines up at the edge. */}
+          <BackgroundTaskRail usage={usage} durationLabel={durationLabel} />
           <ChevronRight
             className={cn(
               "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
@@ -1172,7 +1176,6 @@ export function BackgroundTaskCard({
             )}
           />
         </CollapsibleTrigger>
-        <BackgroundTaskRail usage={usage} durationLabel={durationLabel} />
       </div>
 
       {stopError ? (
@@ -1389,6 +1392,12 @@ export function ToolGroupPart({
   containerId?: string;
   partKey: string;
 }) {
+  const folds = shouldFoldToolGroup(part.parts);
+  // A group that was on screen unfolded animates into its folded line; one that
+  // arrives already long (history, paging) just renders folded.
+  const [shownUnfolded, setShownUnfolded] = useState(!folds);
+  if (!folds && !shownUnfolded) setShownUnfolded(true);
+
   // An empty group would still paint its border and padding.
   if (part.parts.length === 0) {
     return null;
@@ -1404,8 +1413,10 @@ export function ToolGroupPart({
     </div>
   ));
 
-  if (shouldFoldToolGroup(part.parts)) {
-    return <FoldedToolGroup part={part} partKey={partKey} rows={rows} />;
+  if (folds) {
+    return (
+      <FoldedToolGroup part={part} partKey={partKey} rows={rows} animateFold={shownUnfolded} />
+    );
   }
 
   return (
@@ -1430,15 +1441,21 @@ export function ToolGroupPart({
  * the agent is doing now, and carries the group's size and how long it took
  * from the first call's start to the last call's end. Opened, the same line
  * heads the full list and folds it again.
+ *
+ * With `animateFold`, the group mounts open and folds on the next frame, so a
+ * live group crossing the fold threshold visibly collapses its rows instead of
+ * snapping to one line.
  */
 function FoldedToolGroup({
   part,
   partKey,
   rows,
+  animateFold = false,
 }: {
   part: NativeToolGroupPart;
   partKey: string;
   rows: ReactNode[];
+  animateFold?: boolean;
 }) {
   const messageScope = useContext(MessageExpansionScopeContext);
   const transcriptScope = useContext(AgentExpansionScopeContext);
@@ -1458,6 +1475,19 @@ function FoldedToolGroup({
    * ids. All aliases are cleared together when the reader folds the group.
    */
   const [isOpen, setIsOpen] = useMessagePartExpansion([groupKey(), ...toolKeys.map(groupKey)]);
+  const [holdingOpenToFold, setHoldingOpenToFold] = useState(animateFold);
+  useEffect(() => {
+    if (!holdingOpenToFold) return;
+    const frame = requestAnimationFrame(() => setHoldingOpenToFold(false));
+    return () => cancelAnimationFrame(frame);
+  }, [holdingOpenToFold]);
+  const handleOpenChange = useCallback(
+    (open: boolean) => {
+      setHoldingOpenToFold(false);
+      setIsOpen(open);
+    },
+    [setIsOpen],
+  );
   const summary = summarizeToolGroup(part.parts);
   if (!summary) return null;
 
@@ -1475,8 +1505,8 @@ function FoldedToolGroup({
 
   return (
     <Collapsible
-      open={isOpen}
-      onOpenChange={setIsOpen}
+      open={isOpen || holdingOpenToFold}
+      onOpenChange={handleOpenChange}
       className="my-0 divide-y divide-divider overflow-hidden rounded-lg border border-divider bg-sidebar"
     >
       {/*
@@ -1527,7 +1557,9 @@ function FoldedToolGroup({
           ) : null}
         </CollapsibleTrigger>
       </div>
-      <CollapsibleContent className="divide-y divide-divider">{rows}</CollapsibleContent>
+      <CollapsibleContent className="tool-group-fold-content divide-y divide-divider">
+        {rows}
+      </CollapsibleContent>
     </Collapsible>
   );
 }
@@ -1699,7 +1731,9 @@ export function TaskGroupPart({
                 </div>
               ) : null}
             </div>
-            {backgroundUsage ? null : (
+            {backgroundUsage ? (
+              <BackgroundTaskRail usage={backgroundUsage} durationLabel={durationLabel} />
+            ) : (
               <AgentUsageStats
                 hasExternalUsage={hasExternalUsage}
                 tokenOnlyUsage={tokenOnlyUsage}
@@ -1718,9 +1752,6 @@ export function TaskGroupPart({
             />
           </div>
         </CollapsibleTrigger>
-        {backgroundUsage ? (
-          <BackgroundTaskRail usage={backgroundUsage} durationLabel={durationLabel} />
-        ) : null}
       </div>
       {stopError ? (
         <div role="alert" className="px-3 pb-2 text-xs text-destructive">

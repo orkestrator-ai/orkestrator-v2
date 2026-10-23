@@ -4,8 +4,9 @@ import os from "node:os";
 import path from "node:path";
 
 import type { NodeRecord } from "@orkestrator/protocol/command-nodes";
-import type { RouteId } from "@orkestrator/protocol/federation";
+import type { BackendId, RouteId } from "@orkestrator/protocol/federation";
 
+import { LeafControllerSettings } from "./nodes/node-controller-settings.js";
 import { StorageService } from "./storage.js";
 
 const record: NodeRecord = {
@@ -91,4 +92,72 @@ describe("RG-01/RG-02 command-node stores", () => {
       await rm(dataDir, { recursive: true, force: true });
     }
   });
+});
+
+describe("portal sidebar layout", () => {
+  test("updates replace only the fields they name and the revision advances", async () => {
+    const dataDir = await mkdtemp(path.join(os.tmpdir(), "ork-nodes-"));
+    try {
+      const storage = new StorageService(dataDir);
+      expect(await storage.getPortalLayout()).toEqual({
+        revision: 0,
+        machineOrder: [],
+        projectOrder: [],
+        projectFolders: {},
+        repositoryOrder: [],
+      });
+      await storage.updatePortalLayout({ machineOrder: ["bk_b", "bk_a"] });
+      const layout = await storage.updatePortalLayout({
+        projectOrder: ['["bk_a","project","p"]'],
+        projectFolders: { '["bk_a","project","p"]': "Work" },
+      });
+      expect(layout).toEqual({
+        revision: 2,
+        machineOrder: ["bk_b", "bk_a"],
+        projectOrder: ['["bk_a","project","p"]'],
+        projectFolders: { '["bk_a","project","p"]': "Work" },
+        repositoryOrder: [],
+      });
+      expect(await new StorageService(dataDir).getPortalLayout()).toEqual(layout);
+    } finally {
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+});
+
+test("controller settings round-trip, filter corruption and ignore detached controllers", async () => {
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), "ork-controller-store-"));
+  try {
+    const storage = new StorageService(dataDir);
+    const entry = {
+      controllerId: "bk_command" as BackendId,
+      changedAt: "2026-10-22T00:00:00.000Z",
+      settings: { reviewInstruction: "Controller review" },
+    };
+    await storage.mutateControllerSettings(() => ({
+      next: { version: 1, entries: [entry] },
+      result: undefined,
+    }));
+    const reopened = new StorageService(dataDir);
+    expect((await reopened.getControllerSettings()).entries).toEqual([entry]);
+    await storage.mutateControllerSettings(() => ({
+      next: {
+        version: 1,
+        entries: [entry, { ...entry, controllerId: "bad id" }, { ...entry, settings: [] }],
+      } as never,
+      result: undefined,
+    }));
+    expect((await reopened.getControllerSettings()).entries).toEqual([entry]);
+    const leaf = new LeafControllerSettings({
+      storage: reopened,
+      attachedName: () => null,
+      onChange: () => undefined,
+      now: Date.now,
+    });
+    await leaf.start();
+    expect(leaf.current()).toBeNull();
+    expect(leaf.source()).toBeUndefined();
+  } finally {
+    await rm(dataDir, { recursive: true, force: true });
+  }
 });

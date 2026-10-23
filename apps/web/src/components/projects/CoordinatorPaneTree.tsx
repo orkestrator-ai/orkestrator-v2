@@ -343,7 +343,7 @@ export function SortableCoordinatorTab({
   return (
     <TabShell
       ref={setNodeRef}
-      style={{ ...style, transform: CSS.Transform.toString(transform), transition }}
+      style={{ ...style, transform: CSS.Translate.toString(transform), transition }}
       {...attributes}
       {...listeners}
       className={cn(

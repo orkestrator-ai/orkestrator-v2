@@ -194,8 +194,10 @@ export function DesignSaveIndicator({ projection }: { projection: DesignProjecti
     ) : (
       <AlertTriangle className="size-3 text-amber-500" />
     );
+  // A polite live region: screen readers hear "Saving…" then the
+  // acknowledgement ("Saved in workspace", "Needs review", "Offline…").
   return (
-    <span className="flex items-center gap-1" data-save-state={state}>
+    <span role="status" className="flex items-center gap-1" data-save-state={state}>
       {icon}
       {labels[state]}
     </span>

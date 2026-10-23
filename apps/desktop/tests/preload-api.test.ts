@@ -223,6 +223,20 @@ describe("preload API factory", () => {
       channel: "orkestrator:connections:use",
       args: ["remote-1"],
     });
+    await expect(api.connections.previewCommandHandover("remote-1")).resolves.toEqual<IpcEcho>({
+      channel: "orkestrator:connections:preview-command-handover",
+      args: ["remote-1"],
+    } as never);
+    await expect(
+      api.connections.handOverCommand({
+        targetConnectionId: "remote-1",
+        connectionIds: ["remote-2"],
+        includeSelf: true,
+      }),
+    ).resolves.toEqual<IpcEcho>({
+      channel: "orkestrator:connections:hand-over-command",
+      args: [{ targetConnectionId: "remote-1", connectionIds: ["remote-2"], includeSelf: true }],
+    } as never);
     await expect(api.connections.forget("remote-1")).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:connections:forget",
       args: ["remote-1"],
@@ -409,7 +423,7 @@ test("workspace-only snapshots publish trusted gateway and stable machine metada
   });
 });
 
-test("the portal channel is exposed only while the workspace is on another node", async () => {
+test("the portal channel is exposed only in a workspace realm", async () => {
   const exposed = new Map<string, unknown>();
   const ipc = createIpcMock();
   const onLeaf = {

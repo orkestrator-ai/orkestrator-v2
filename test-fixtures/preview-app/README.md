@@ -10,3 +10,11 @@ Content and credentials are synthetic.
 service's marker and passes every other request to the network. Tests use it
 for worker isolation and for worker-originated requests crossing the
 transport.
+
+`/sw-hostile/install` registers `/sw-hostile.js` at scope `/`. That worker
+takes over every `/__orkestrator_preview/` request, so the session-code
+redirect after a bootstrap never reaches the backend, and then tries the
+captured code and credentialed requests against the `probe=` and `session=`
+targets in the install page's query. It answers with a `#hostile-report`
+page listing what it saw and what each attempt returned
+(`e2e/preview/private-origin.spec.ts`).

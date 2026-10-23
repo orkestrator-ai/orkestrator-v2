@@ -88,7 +88,7 @@ function nominated(headers: HeaderList): Set<string> {
   return names;
 }
 
-/** Bounds from step 02: header count and total bytes on each hop. */
+/** Header count and total byte bounds (`PREVIEW_LIMITS`) on each hop. */
 export function requestHeaderViolation(
   rawHeaders: readonly string[],
   limits: { headerMaxBytes: number; headerMaxFields: number } = PREVIEW_LIMITS,
@@ -269,11 +269,45 @@ export function downstreamResponseHeaders(
   return { headers: out, droppedCookies };
 }
 
+function headerValue(headers: HeaderList, name: string): string | undefined {
+  return headers.find(([header]) => header.toLowerCase() === name)?.[1];
+}
+
+/**
+ * Cross-service defense for cookie-authenticated safe-method requests. Every
+ * published service is same-site with its siblings, so their `SameSite=Lax`
+ * preview cookies ride each other's subresource requests. Browsers that send
+ * Fetch Metadata decide it: requests from the service itself
+ * (`same-origin`) or from the user (`none`) pass, and from any other site or
+ * service only a top-level document navigation that is not a prefetch does.
+ * Frames, fetches, workers and other subresources are refused.
+ *
+ * Without `Sec-Fetch-Site` (non-browser clients, browsers predating Fetch
+ * Metadata) a foreign `Origin` is refused: browsers send one on a `GET` only
+ * for CORS and WebSocket requests. Blind `no-cors` reads from such browsers
+ * cannot be told apart and still pass.
+ */
+function crossServiceReadViolation(headers: HeaderList, publicOrigin: string): boolean {
+  const fetchSite = headerValue(headers, "sec-fetch-site")?.toLowerCase();
+  if (fetchSite === undefined) {
+    const origins = headers.filter(([name]) => name.toLowerCase() === "origin");
+    return origins.length > 1 || (origins.length === 1 && origins[0]![1] !== publicOrigin);
+  }
+  if (fetchSite === "same-origin" || fetchSite === "none") return false;
+  const mode = headerValue(headers, "sec-fetch-mode")?.toLowerCase();
+  const destination = headerValue(headers, "sec-fetch-dest")?.toLowerCase();
+  // Speculation-rules prefetch and prerender are navigations nobody sees; a
+  // refused one makes the browser fall back to an ordinary navigation.
+  const prefetch = /\bprefetch\b/i.test(headerValue(headers, "sec-purpose") ?? "");
+  return mode !== "navigate" || destination !== "document" || prefetch;
+}
+
 /**
  * Cross-site defense for cookie-authenticated preview traffic. Unsafe methods
  * and upgrades must come from the service's own origin. A request without an
  * `Origin` from a non-browser client is allowed; `Sec-Fetch-Site: cross-site`
- * is not. `Origin: null` is never accepted for writes.
+ * is not. `Origin: null` is never accepted for writes. Safe methods follow
+ * `crossServiceReadViolation`.
  */
 export function crossSiteViolation(
   method: string,
@@ -282,12 +316,12 @@ export function crossSiteViolation(
   upgrade: boolean,
 ): boolean {
   const safe = !upgrade && (method === "GET" || method === "HEAD" || method === "OPTIONS");
-  if (safe) return false;
+  if (safe) return crossServiceReadViolation(headers, publicOrigin);
   const origins = headers
     .filter(([name]) => name.toLowerCase() === "origin")
     .map(([, value]) => value);
   if (origins.length > 1) return true;
   if (origins.length === 1) return origins[0] !== publicOrigin;
-  const fetchSite = headers.find(([name]) => name.toLowerCase() === "sec-fetch-site")?.[1];
+  const fetchSite = headerValue(headers, "sec-fetch-site");
   return fetchSite === "cross-site" || fetchSite === "same-site";
 }

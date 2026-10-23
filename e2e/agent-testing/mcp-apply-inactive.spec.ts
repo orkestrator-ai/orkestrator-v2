@@ -16,7 +16,7 @@
  * arguments, so a reply carrying it proves the saved server really ran, and a
  * marker file records every call.
  *
- * What it checks (docs/todo/mcp-management.md, "Inactive environment"):
+ * What it checks (docs/todo/mcp/0039-mcp-management.md, "Inactive environment"):
  *
  * - Save and apply while A's turn runs: the turn is not interrupted, and the
  *   runtime stays `pending-next-turn` after it ends, because that query
@@ -52,6 +52,7 @@ import type {
   McpRuntimeApplyEntry,
 } from "@orkestrator/protocol/mcp-management";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
+import { watchEventStream } from "./event-stream-outage";
 import { dismissSidebarTooltip } from "./sidebar-tooltip";
 
 type Status = {
@@ -466,22 +467,7 @@ test.describe("live MCP apply in an inactive environment (claude)", () => {
             (identity ? `: ${await turnState(identity)}` : ""),
         );
       // The page's own event stream, to place a dropped or resumed stream in time.
-      const stream = { drops: 0, opens: 0 };
-      page.on("console", (message) => {
-        if (!message.text().includes("[RemoteGateway]")) return;
-        if (message.text().includes("Event stream disconnected")) stream.drops += 1;
-        void trace(`console: ${message.text()}`);
-      });
-      page.on("request", (request) => {
-        const url = new URL(request.url());
-        if (!url.pathname.endsWith("/events") || url.searchParams.has("includeEvents")) return;
-        stream.opens += 1;
-        void trace(`event stream request ${url.search}`);
-      });
-      page.on("requestfailed", (request) => {
-        if (new URL(request.url()).pathname.endsWith("/events"))
-          void trace(`event stream request failed: ${request.failure()?.errorText}`);
-      });
+      const stream = watchEventStream(page, (line) => void trace(line));
       const waitForReply = async (identity: Record<string, string>, needle: string) => {
         try {
           await expect
@@ -617,17 +603,8 @@ test.describe("live MCP apply in an inactive environment (claude)", () => {
         await expect(card).toContainText("Saved; not loaded until the session's next message");
         // Offline emulation alone leaves an open stream connected, so cut it
         // too: the page must notice, miss the change, and catch up on reconnect.
-        const opensBefore = stream.opens;
-        const dropsBefore = stream.drops;
-        await context.setOffline(true);
-        await page.evaluate(() => window.stop());
+        await stream.cut(context);
         await trace("offline, stream cut");
-        await expect
-          .poll(() => stream.drops, {
-            timeout: 15_000,
-            message: "the page never saw its stream drop",
-          })
-          .toBeGreaterThan(dropsBefore);
         const offlineAt = Date.now();
         await dispatchWhileAway(identityA, toolPrompt("mcpqa"));
         const applied = await waitForRuntime(
@@ -649,7 +626,7 @@ test.describe("live MCP apply in an inactive environment (claude)", () => {
         // No Refresh click: the section re-reads when its stream reconnects.
         await expect(card).toContainText("Saved and loaded", { timeout: 60_000 });
         await expect(card).toContainText(APPLIED_REASON);
-        expect(stream.opens, "the event stream never reconnected").toBeGreaterThan(opensBefore);
+        await stream.expectReconnected();
         await closeSettings();
       });
 

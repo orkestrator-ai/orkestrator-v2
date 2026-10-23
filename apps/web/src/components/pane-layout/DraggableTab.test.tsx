@@ -2,7 +2,6 @@ import { createSessionKey } from "@/lib/utils";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as realSortable from "@dnd-kit/sortable";
-import * as realUtilities from "@dnd-kit/utilities";
 import type { TabInfo } from "@/types/paneLayout";
 import { createDraggableTabId } from "@/types/paneLayout";
 import { useSessionStore } from "@/stores/sessionStore";
@@ -13,6 +12,11 @@ import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useAgentMailStore } from "@/stores/agentMailStore";
+import { usePreviewServiceStore } from "@/stores/previewServiceStore";
+import {
+  formatPreviewServiceUri,
+  type PreviewRegistrySnapshot,
+} from "@orkestrator/protocol/preview-services";
 import { loopedReviewFixture } from "@/test/looped-review-fixture";
 import {
   MULTI_REVIEW_FIX_TAB_TITLE,
@@ -21,7 +25,6 @@ import {
 } from "@orkestrator/protocol/multi-review";
 
 const realSortableSnapshot = { ...realSortable };
-const realUtilitiesSnapshot = { ...realUtilities };
 
 // Mutable so a test can exercise the isDragging styling branch. The factory
 // result is cached by Bun, but the hook body re-reads this on every render.
@@ -31,8 +34,6 @@ let sortableListeners: Record<string, unknown> = {};
 let sortableTransform: unknown = null;
 let sortableTransition: string | null = null;
 let sortableHookId: unknown;
-let sortableTransformInput: unknown;
-let sortableTransformString = "";
 const sortableSetNodeRefMock = mock((_node: HTMLElement | null) => {});
 const sortablePointerDownMock = mock((_event: unknown) => {});
 
@@ -43,8 +44,6 @@ function resetSortableMock() {
   sortableTransform = null;
   sortableTransition = null;
   sortableHookId = undefined;
-  sortableTransformInput = undefined;
-  sortableTransformString = "";
   sortableSetNodeRefMock.mockReset();
   sortablePointerDownMock.mockReset();
 }
@@ -63,22 +62,10 @@ mock.module("@dnd-kit/sortable", () => ({
   },
 }));
 
-mock.module("@dnd-kit/utilities", () => ({
-  CSS: {
-    Transform: {
-      toString: (transform: unknown) => {
-        sortableTransformInput = transform;
-        return sortableTransformString;
-      },
-    },
-  },
-}));
-
 const { DraggableTab } = await import("./DraggableTab");
 
 afterAll(() => {
   mock.module("@dnd-kit/sortable", () => realSortableSnapshot);
-  mock.module("@dnd-kit/utilities", () => realUtilitiesSnapshot);
 });
 
 function renderTab(tab: TabInfo, index = 0) {
@@ -459,6 +446,48 @@ describe("DraggableTab title precedence", () => {
   test("browser tabs use the browser label", () => {
     renderTab({ id: "browser-a", type: "browser", browserData: { url: "" } }, 1);
     expect(screen.getByText("Browser 2")).toBeDefined();
+  });
+
+  test("service tabs are named after their service once it is known", () => {
+    const ref = {
+      backendInstanceId: "backend-instance-1",
+      environmentId: "env-1",
+      serviceId: "service-web-1",
+      path: "/app",
+    };
+    const url = formatPreviewServiceUri(ref);
+    try {
+      // Not loaded yet, or another service: the generic label.
+      renderTab({ id: "svc-a", type: "browser", browserData: { url } }, 0);
+      expect(screen.getByText("Browser 1")).toBeDefined();
+      cleanup();
+
+      usePreviewServiceStore.setState({
+        environments: {
+          "env-1": {
+            loading: false,
+            error: null,
+            snapshot: {
+              services: [{ definition: { serviceId: ref.serviceId, label: "storybook" } }],
+            } as unknown as PreviewRegistrySnapshot,
+          },
+        },
+      });
+      renderTab({ id: "svc-a", type: "browser", browserData: { url } }, 0);
+      expect(screen.getByText("storybook 1")).toBeDefined();
+      cleanup();
+      renderTab(
+        {
+          id: "svc-b",
+          type: "browser",
+          browserData: { url: formatPreviewServiceUri({ ...ref, serviceId: "service-api-22" }) },
+        },
+        1,
+      );
+      expect(screen.getByText("Browser 2")).toBeDefined();
+    } finally {
+      usePreviewServiceStore.getState().reset();
+    }
   });
 
   test("looped-review tabs show their default title and workflow icon", () => {
@@ -1034,19 +1063,17 @@ describe("DraggableTab tooltip and context menu structure", () => {
     expect(tab.className).toContain("z-50");
   });
 
-  test("wires the pane-scoped sortable identity, ref, styles, attributes, and listeners", () => {
+  test("wires pane-scoped dragging and omits non-unit scales from unequal-width tabs", () => {
     sortableAttributes = { "data-sortable-attribute": "attached" };
     sortableListeners = { onPointerDown: sortablePointerDownMock };
-    sortableTransform = { x: 12, y: 6, scaleX: 1, scaleY: 1 };
+    sortableTransform = { x: 12, y: 6, scaleX: 2.5, scaleY: 0.75 };
     sortableTransition = "transform 200ms ease";
-    sortableTransformString = "translate3d(12px, 6px, 0)";
 
     renderTab({ id: "tab-terminal", type: "plain" });
 
     const tab = screen.getByText("Terminal 1").closest("div")!;
     expect(sortableHookId).toBe(createDraggableTabId("tab-terminal", "pane-1"));
     expect(sortableSetNodeRefMock).toHaveBeenCalledWith(tab);
-    expect(sortableTransformInput).toEqual(sortableTransform);
     expect(tab.style.transform).toBe("translate3d(12px, 6px, 0)");
     expect(tab.style.transition).toBe("transform 200ms ease");
     expect(tab.getAttribute("data-sortable-attribute")).toBe("attached");

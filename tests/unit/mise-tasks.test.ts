@@ -71,6 +71,7 @@ const ROOT_COMMAND_SURFACE = [
   "publish:cli",
   "preview",
   "test",
+  "test:full",
   "test:all",
   "test:logged",
   "test:browser",
@@ -168,6 +169,10 @@ function workflowFiles(): string[] {
 }
 
 describe("mise task surface", () => {
+  test.each(["test:full", "test:all"])("%s explicitly runs every test area", (task) => {
+    expect(miseTasks()[task]?.env?.ORKESTRATOR_TEST_AREAS).toBe("all");
+  });
+
   test("every command the repository used to expose as a root script is a mise task", () => {
     const tasks = miseTasks();
 
@@ -344,4 +349,25 @@ test("paused interaction qualification has an opt-in task and its helper regress
   expect(read("e2e/agent-testing/playwright.browser.config.ts")).not.toContain(
     "paused-interactions-live.spec.ts",
   );
+});
+
+test("opt-in service preview checks have tasks that never run by default", () => {
+  const tasks = miseTasks();
+  const docker = String(tasks["test:preview:docker"]!.run);
+  // Docker journeys need an explicit image; nothing picks one silently.
+  expect(docker).toContain(":?Set ORKESTRATOR_TEST_DOCKER_PREVIEW_IMAGE");
+  expect(docker).toContain("./src/core/preview-docker.test.ts");
+  expect(tasks["test:preview:browser"]!.run).toBe(
+    "bunx playwright test --config e2e/preview/playwright.preview.config.ts",
+  );
+  expect(tasks["test:preview:bench"]!.env).toEqual({
+    ORKESTRATOR_PREVIEW_BENCH: "1",
+    ORKESTRATOR_TEST_VERBOSE_CONSOLE: "1",
+  });
+  const policy = JSON.stringify(JSON.parse(read(".orkestrator-test-scheduler.json")));
+  for (const name of ["test:preview:docker", "test:preview:browser", "test:preview:bench"]) {
+    expect(policy).not.toContain(name);
+    expect(read("scripts/test-all.ts")).not.toContain(name);
+    for (const workflow of workflowFiles()) expect(read(workflow)).not.toContain(name);
+  }
 });

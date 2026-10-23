@@ -1,5 +1,4 @@
 import { describe, expect, mock, test } from "bun:test";
-import type { ProviderRegistry } from "./native-agent-provider-registry.js";
 
 import { promises as fs } from "node:fs";
 
@@ -44,7 +43,6 @@ import type { Environment } from "./models.js";
 import {
   NativeAgentService,
   nativeAgentSessionStorageKey,
-  type AgentInteractionObservation,
   type EnsureNativeAgentSessionInput,
   type NativeAgentServiceOptions,
 } from "./native-agent-service.js";
@@ -56,6 +54,7 @@ import {
   COORDINATOR_WORKSPACE_VERSION,
   coordinatorRuntimeId,
 } from "@orkestrator/protocol/coordinator";
+import { collaborators, interactionInternals } from "./native-agent-service-test-collaborators.js";
 
 /** The model earlier releases shipped as the OpenCode default. */
 const LEGACY_OPENCODE_DEFAULT_MODEL_ID = "opencode/claude-sonnet-5";
@@ -166,9 +165,6 @@ function createProviderStub(
 /** Reach the timer-driven scans and backoff bookkeeping the service keeps private. */
 function internals(service: NativeAgentService) {
   return service as unknown as {
-    drainPromptQueues(): Promise<void>;
-    drainPromptQueueOnce(queueKey: string): Promise<void>;
-    reconcilePendingLaunches(): Promise<void>;
     provider(input: EnsureNativeAgentSessionInput): Promise<AgentSessionProvider>;
     createProviderSession(
       provider: NativeAgentRuntimeProvider,
@@ -180,39 +176,6 @@ function internals(service: NativeAgentService) {
       model?: string,
       effort?: string,
     ): Promise<BridgeConnection>;
-    providerRegistry: ProviderRegistry;
-    activityRetryAt: Map<string, number>;
-    activityAttempts: Map<string, number>;
-    observedSessionActivity: Map<
-      string,
-      { providerSessionId: string; state: ProviderActivityState }
-    >;
-    pendingPrRefreshEnvironmentIds: Set<string>;
-    launchTasks: Map<string, Promise<void>>;
-    queueRetryAt: Map<string, number>;
-    queueAttempts: Map<string, number>;
-    launchRetryAt: Map<string, number>;
-    trackedInteractions: Map<string, unknown>;
-    providerReportedInteractions: Map<
-      string,
-      {
-        observationKey: string;
-        providerSessionKey: string;
-        missingSince?: number;
-      }
-    >;
-    interactionObservations: Map<string, AgentInteractionObservation>;
-    interactionRetryAt: Map<string, number>;
-    interactionAttempts: Map<string, number>;
-    monitoredInteractionSessionKeys: Set<string>;
-    observedInteractionRevisions: Map<string, number>;
-    interactionSelectionCursors: Map<string, number>;
-    interactionRevisionReconciliations: number;
-    projectionCache: Map<string, unknown>;
-    projectionEpochs: Map<string, number>;
-    projectionRefreshes: Map<string, Promise<unknown>>;
-    launchTimer: ReturnType<typeof setInterval> | null;
-    interactionTimer: ReturnType<typeof setInterval> | null;
   };
 }
 
@@ -1098,13 +1061,13 @@ describe("NativeAgentService", () => {
         });
         await service.reconcileAgentInteractions();
         current = unsupported.provider;
-        internals(service).providerRegistry.stateForTesting().providers.clear();
+        collaborators(service).providerRegistry.stateForTesting().providers.clear();
         await service.reconcileAgentInteractions();
         expect(service.getInteractionObservations()[0]).toMatchObject({
           providerState: "error",
           eventualOutcome: "expired",
         });
-        expect(internals(service).trackedInteractions.size).toBe(0);
+        expect(interactionInternals(service).trackedInteractions.size).toBe(0);
       },
     );
   });
@@ -1344,7 +1307,7 @@ describe("NativeAgentService", () => {
           expect(opencode.agent).toBe("opencode");
           expect(invoke).toHaveBeenCalledTimes(3);
           expect(
-            [...internals(service).providerRegistry.stateForTesting().providers.keys()].sort(),
+            [...collaborators(service).providerRegistry.stateForTesting().providers.keys()].sort(),
           ).toEqual(["env-1\u0000codex", "env-1\u0000opencode"]);
         },
       );
@@ -1372,7 +1335,7 @@ describe("NativeAgentService", () => {
           expect(replacement).not.toBe(first);
           expect(replacement.agent).toBe("cursor");
           expect(invoke).toHaveBeenCalledTimes(2);
-          expect(internals(service).providerRegistry.cached("env-1\0cursor")).toBe(replacement);
+          expect(collaborators(service).providerRegistry.cached("env-1\0cursor")).toBe(replacement);
         },
       );
     });

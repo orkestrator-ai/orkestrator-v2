@@ -112,7 +112,13 @@ describe("Dialog primitives", () => {
   test("keeps every dialog opened from a fullscreen surface on the raised layer", () => {
     // Ordinary dialogs need the same explicit content and overlay layers as
     // alert dialogs when they are portalled out of a fullscreen surface.
-    const sources = ["apps/web/src/components/settings/ConnectionsSettings.tsx"];
+    const sources = [
+      "apps/web/src/components/settings/machines/AddMachineDialog.tsx",
+      "apps/web/src/components/settings/machines/DeviceConnectionSection.tsx",
+      "apps/web/src/components/settings/machines/MachineSettingsDialog.tsx",
+      "apps/web/src/components/settings/machines/MachineUpdatesDialog.tsx",
+      "apps/web/src/components/settings/machines/SshRouteDialog.tsx",
+    ];
 
     for (const source of sources) {
       const text = readFileSync(path.join(repositoryRoot, source), "utf8");

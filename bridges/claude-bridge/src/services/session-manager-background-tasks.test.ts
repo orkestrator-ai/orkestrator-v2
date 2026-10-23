@@ -566,6 +566,7 @@ describe("background task reducer", () => {
         activity: "working",
         readyForInput: true,
         completionPending: true,
+        contentRevision: expect.any(String),
       });
 
       call.push({
@@ -589,6 +590,7 @@ describe("background task reducer", () => {
           activity: "working",
           readyForInput: true,
           completionPending: true,
+          contentRevision: expect.any(String),
         });
       }
       // Claude Code injects the notification into the root loop. The first
@@ -639,6 +641,7 @@ describe("background task reducer", () => {
         activity: "idle",
         readyForInput: true,
         completionPending: false,
+        contentRevision: expect.any(String),
       });
       call.finish();
       await promptPromise;
@@ -1617,6 +1620,7 @@ describe("background task reducer", () => {
       activity: "working",
       readyForInput: true,
       completionPending: true,
+      contentRevision: expect.any(String),
     });
 
     // Nothing further arrives. The idle window must close the held input
@@ -1627,6 +1631,7 @@ describe("background task reducer", () => {
       activity: "idle",
       readyForInput: true,
       completionPending: false,
+      contentRevision: expect.any(String),
     });
     call.finish();
     await promptPromise;

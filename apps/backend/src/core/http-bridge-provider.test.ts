@@ -817,12 +817,15 @@ describe("HTTP bridge provider", () => {
     });
   });
 
-  test("reads dispatch status and treats every non-positive answer as unknown", async () => {
+  test("reads dispatch status and treats every other answer as unknown", async () => {
     const dispatched = httpProvider(() => Response.json({ dispatch: "dispatched" }));
     await expect(dispatched.provider.dispatchStatus?.("s/1", "r/1")).resolves.toBe("dispatched");
     expect(dispatched.requests[0]!.url).toBe(
       "http://claude.test/session/s%2F1/dispatch?requestId=r%2F1",
     );
+    // The bridge retired the id after a restart: the read-only twin of a 410.
+    const lost = httpProvider(() => Response.json({ dispatch: "lost" }));
+    await expect(lost.provider.dispatchStatus?.("s", "r")).resolves.toBe("lost");
 
     // A bridge with no such route, an unknown session, an unparseable body and
     // an explicit `unknown` are all the same fact: no evidence it ran.
@@ -831,6 +834,8 @@ describe("HTTP bridge provider", () => {
       () => new Response(null, { status: 404 }),
       () => new Response("not json", { status: 200 }),
       () => Response.json({}),
+      () => Response.json({ dispatch: "absent" }),
+      () => new Response(JSON.stringify({ dispatch: "lost" }), { status: 500 }),
     ];
     for (const handler of unknown) {
       const { provider } = httpProvider(handler);

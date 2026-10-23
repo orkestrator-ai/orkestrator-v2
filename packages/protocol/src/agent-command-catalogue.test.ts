@@ -180,6 +180,70 @@ describe("normalizeCommandCataloguePayload", () => {
   });
 });
 
+describe("mixed-version: catalogue values a newer bridge may send", () => {
+  test("an availability state this version does not know reads as unavailable", () => {
+    const result = enhanced([
+      {
+        name: "/a",
+        id: "a",
+        executionKind: "provider-prompt",
+        availability: { state: "requires-confirmation", reason: "made-up", message: "Confirm" },
+      },
+      // A record with no state at all says nothing, as before.
+      { name: "/b", id: "b", executionKind: "provider-prompt", availability: {} },
+    ]);
+    expect(result.commands[0]!.availability).toEqual({
+      state: "unavailable",
+      reason: "unsupported",
+      message: "Confirm",
+    });
+    expect(result.commands[1]!.availability).toBeUndefined();
+  });
+
+  test("unknown enum values never widen what a row may do", () => {
+    const result = enhanced([
+      // An execution kind this version cannot run drops the row.
+      { name: "/a", id: "a", executionKind: "workflow" },
+      {
+        name: "/b",
+        id: "b",
+        executionKind: "provider-prompt",
+        source: "marketplace",
+        origin: "marketplace",
+        inputPolicy: { arguments: "many", attachments: "video", busy: "always" },
+        futureField: { anything: true },
+      },
+    ]);
+    expect(result.commands).toEqual([
+      {
+        name: "/b",
+        source: "unknown",
+        id: "b",
+        executionKind: "provider-prompt",
+        bindingRevision: commandBindingRevision(["b"]),
+      },
+    ]);
+    expect(result).toMatchObject({ enhanced: true, truncated: true, rejected: 1 });
+  });
+
+  test("a catalogue version other than 1 is read as legacy display rows", () => {
+    const result = normalizeCommandCataloguePayload({
+      catalogueVersion: 2,
+      commands: [{ name: "/a", id: "a", executionKind: "structured-skill" }],
+    });
+    expect(result.enhanced).toBe(false);
+    expect(result.commands).toEqual([
+      {
+        name: "/a",
+        source: "unknown",
+        id: legacyCommandId("/a"),
+        executionKind: "provider-prompt",
+        bindingRevision: "legacy",
+      },
+    ]);
+  });
+});
+
 describe("byte helpers", () => {
   test("measures UTF-8 bytes and truncates without splitting a code point", () => {
     expect(utf8ByteLength("abc")).toBe(3);

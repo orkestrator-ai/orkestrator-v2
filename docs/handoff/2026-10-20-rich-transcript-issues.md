@@ -7,7 +7,7 @@ blocks the specification's definition of done. Each entry says what was
 observed, how sure we are, where to look and a suggested next step.
 
 The remaining tracked work items are in
-[todo/rich-transcripts.md](../todo/rich-transcripts.md). Artifact cards in
+[todo/transcripts-and-observation/0053-rich-transcripts.md](../todo/transcripts-and-observation/0053-rich-transcripts.md). Artifact cards in
 Multi Review, build-pipeline and feature-planning transcripts are covered in
 [rich-transcripts.md](../architecture/rich-transcripts.md#workflow-transcripts).
 
@@ -72,7 +72,7 @@ Multi Review, build-pipeline and feature-planning transcripts are covered in
   full suites and 1 of 5 isolated reruns.
 - **Confidence:** pre-existing; the test and agent-mail modules are unchanged
   on this branch. Recorded in
-  [0504](../tests/flaky-tests/0504-agent-mail-conversation-same-millisecond-order.md).
+  [0504](../tests/flaky-tests/coordinator-and-multi-review/0504-agent-mail-conversation-same-millisecond-order.md).
 - **Next step:** a deterministic tie-break (insertion sequence) or a test
   clock; two messages sent in one millisecond currently order by a random id
   suffix.
@@ -106,7 +106,7 @@ Multi Review, build-pipeline and feature-planning transcripts are covered in
 - Under a 4× CPU throttle the composer median regresses 13–20% against the
   base while a highlighted code fence streams (p95 and scroll frames stay
   within 10%; the unthrottled gate passes). Tracked as a Medium item in
-  [todo/rich-transcripts.md](../todo/rich-transcripts.md); evidence in
+  [todo/transcripts-and-observation/0053-rich-transcripts.md](../todo/transcripts-and-observation/0053-rich-transcripts.md); evidence in
   [rich-transcripts.md](../architecture/rich-transcripts.md#performance-gate).
 
 ### 8. Publication placement

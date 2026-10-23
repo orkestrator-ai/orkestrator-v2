@@ -117,12 +117,6 @@ set_domains() {
     echo -e "${GREEN}Applied $ORK_RESOLVED_DOMAINS domains ($ORK_UNRESOLVED_DOMAINS unresolved, $ORK_REVOKED_ENTRIES entries revoked)${NC}"
 }
 
-# An empty stored list means the image defaults, which live in init-firewall.sh.
-default_domains_csv() {
-    awk '/^    DOMAIN_ARRAY=\($/ { list = 1; next } list && /^    \)$/ { exit } list { gsub(/[" ]/, ""); if ($0 != "" && $0 !~ /^#/) print }' \
-        /usr/local/bin/init-firewall.sh | paste -sd, -
-}
-
 edit_domains() {
     local operation="$1" csv="$2" current entry
     local -a next=()

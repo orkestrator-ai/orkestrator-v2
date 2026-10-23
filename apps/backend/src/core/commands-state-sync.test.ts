@@ -35,6 +35,7 @@ import { ClaudeStatePollManager } from "./tmux.js";
 import { NativeAgentService, nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import { createProviderStub } from "./native-agent-service-projection-test-support.js";
 import { BackendRuntime } from "./backend-runtime.js";
+import { launchInternals } from "./native-agent-service-test-collaborators.js";
 
 /**
  * Registry-level coverage for the commands that back the backend-owned state
@@ -5279,9 +5280,7 @@ describe("build pipeline commands", () => {
           await expect(storage.listNativeAgentSessions()).resolves.toEqual([]);
           expect(projectionChanges).toEqual([]);
 
-          await (
-            service as unknown as { reconcileAgentActivityOnce(): Promise<void> }
-          ).reconcileAgentActivityOnce();
+          await launchInternals(service!).reconcileAgentActivityOnce();
           expect(stub.activity).not.toHaveBeenCalled();
 
           await invoke("delete_build_pipeline", { pipelineId: "pipeline-1" });

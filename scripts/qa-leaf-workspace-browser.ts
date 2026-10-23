@@ -9,10 +9,12 @@
  *   - Leaf: a standalone node Desk attaches.
  *
  * A headless Chromium session signs in to Desk and checks, asserting each
- * step, that clicking a Leaf environment moves the tab itself to Leaf, as if
- * it had connected to Leaf directly (no panel, frame or second app), that the
- * sidebar then lists Desk from its self summary, and that clicking a Desk
- * environment moves the tab back.
+ * step, that clicking a Leaf environment shows Leaf's workspace in the
+ * central region (a realm frame on a grant the tab keeps, never in a URL)
+ * while the page itself stays on Desk and never reloads; that the realm
+ * starts the environment as Leaf's own sidebar would; that clicking a Desk
+ * environment brings the central region back without closing Leaf's realm;
+ * and that Leaf's work, transcript and pending input survive all of it.
  *
  * Screenshots go to output/agent-testing/leaf-workspace-qa/<run>/ (gitignored).
  * Only processes this script started are stopped; nothing else is touched.
@@ -196,7 +198,7 @@ async function until<T>(label: string, read: () => Promise<T>, ok: (value: T) =>
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
-  fail(`timed out waiting for ${label}`);
+  fail(`timed out waiting for ${label}; last: ${JSON.stringify(last)?.slice(-600)}`);
 }
 
 async function dismissStartupPrompts(page: Page): Promise<void> {
@@ -285,44 +287,84 @@ async function main(): Promise<void> {
       await page.waitForSelector(leafRow, { timeout: 30_000 });
       await page.screenshot({ path: path.join(out, "01-desk-portal.png") });
 
-      // Opening Leaf's environment moves the tab itself to Leaf.
+      // A reload of the page would drop this marker.
+      await page.evaluate(() => {
+        (window as unknown as { __qaPage?: number }).__qaPage = 1;
+      });
+      const samePage = async (step: string) => {
+        const marker = await page.evaluate(
+          () => (window as unknown as { __qaPage?: number }).__qaPage ?? null,
+        );
+        if (marker !== 1) fail(`the page reloaded (${step})`);
+        const target = await page.evaluate(() => window.orkestratorWorkspaceTarget ?? null);
+        if (target) fail(`the page moved to ${JSON.stringify(target)} (${step})`);
+      };
+      const realmFrame = 'iframe[title^="Workspace on "]';
+
+      // Opening Leaf's environment shows Leaf's workspace in the central region.
       requests.length = 0;
-      await Promise.all([
-        page.waitForNavigation({ timeout: 30_000, waitUntil: "domcontentloaded" }),
-        page.click(`${leafRow} button >> nth=0`),
-      ]);
-      await page.waitForSelector('[data-testid="project-search-bar"]', { timeout: 30_000 });
-      await dismissStartupPrompts(page);
-      const target = await page.evaluate(() => window.orkestratorWorkspaceTarget ?? null);
-      if (target?.nodeId !== leafId) fail(`workspace target ${JSON.stringify(target)}`);
-      log(`tab moved to Leaf (${target.path})`);
-      if ((await page.locator("iframe").count()) !== 0) fail("a frame was opened");
+      await page
+        .locator(leafRow)
+        .getByRole("button", { name: /^leaf-env, on / })
+        .click();
+      const frameHandle = await page.waitForSelector(realmFrame, { timeout: 30_000 });
+      await samePage("opening Leaf");
+      const frameUrl = new URL((await frameHandle.getAttribute("src")) ?? "");
+      if (frameUrl.origin !== origin(desk)) fail(`realm served from ${frameUrl.origin}`);
+      if (frameUrl.searchParams.get("realm") !== "workspace") fail(`realm URL ${frameUrl}`);
+      if (/okg_|token/i.test(frameUrl.toString())) fail("a grant reached the realm's URL");
+      const frame = await frameHandle.contentFrame();
+      if (!frame) fail("no realm frame");
+      await frame.waitForSelector("[data-mobile-toolbar]", { timeout: 30_000 });
+      const realmTarget = await frame.evaluate(() => window.orkestratorWorkspaceTarget ?? null);
+      if (realmTarget?.nodeId !== leafId) fail(`realm target ${JSON.stringify(realmTarget)}`);
+      log(`Leaf's workspace in the central region (${realmTarget.path})`);
+      if ((await frame.locator('[data-testid="project-search-bar"]').count()) !== 0) {
+        fail("the realm shows a sidebar of its own");
+      }
       await page.waitForFunction(() => document.title.includes("leaf-app"), null, {
         timeout: 30_000,
       });
       log(`title: ${await page.title()}`);
-      const deskRow = `[data-testid="federated-environment-row"][data-machine="${deskId}"]`;
-      await page.waitForSelector(deskRow, { timeout: 30_000 });
-      if ((await page.locator(leafRow).count()) !== 0) {
-        fail("Leaf is still listed as another machine");
-      }
-      await page.screenshot({ path: path.join(out, "02-tab-on-leaf.png") });
+      await page.waitForSelector(`${leafRow}[data-selected="true"]`, { timeout: 30_000 });
+      await page.screenshot({ path: path.join(out, "02-leaf-in-central-region.png") });
 
-      // Workspace traffic goes to Leaf (directly or through Desk's relay);
-      // only the portal stays on Desk.
+      // The machines menu still names Desk as the command node.
+      await page.click('[data-testid="machines-filter"]');
+      const commandNodeName = await page
+        .locator('[data-testid="command-node-name"]')
+        .textContent({ timeout: 10_000 });
+      if (commandNodeName?.trim() !== "Desk") fail(`command node shown as ${commandNodeName}`);
+      await page.keyboard.press("Escape");
+      log("machines menu names Desk as the command node");
+
+      // Settings changed on Desk apply on Leaf.
+      const deskConfig = await invoke<{ global: Record<string, unknown> }>(desk, "get_config");
+      await invoke(desk, "update_global_config", {
+        global: { ...deskConfig.global, terminalScrollback: 4321 },
+      });
+      await until(
+        "Leaf to use Desk's settings",
+        () => invoke<{ global: { terminalScrollback?: number } }>(leaf, "get_config"),
+        (value) => value.global.terminalScrollback === 4321,
+      );
+      const leafStatus = await invoke<{ inheritedSettingsFrom?: { controllerId: string } }>(
+        leaf,
+        "get_node_status",
+      );
+      if (leafStatus.inheritedSettingsFrom?.controllerId !== deskId) {
+        fail(`Leaf follows ${JSON.stringify(leafStatus.inheritedSettingsFrom)}`);
+      }
+      log("Leaf uses Desk's settings");
+
+      // The realm's traffic goes to Leaf (directly or through Desk's relay).
       const leafTraffic = requests.filter(
         (url) => url.startsWith(origin(leaf)) || url.includes(`/__orkestrator/nodes/${leafId}/`),
       );
       if (leafTraffic.length === 0) fail("no request reached Leaf");
       log(`${leafTraffic.length} requests reached Leaf; ${requests.length} in total`);
 
-      // The clicked environment is visible and selected in Leaf's own tree,
-      // and a local environment starts on selection as it does on Desk.
-      await page.waitForFunction(
-        () => document.querySelector("aside, nav, body")?.textContent?.includes("leaf-env"),
-        null,
-        { timeout: 30_000 },
-      );
+      // A local environment starts on selection, as from Leaf's own sidebar.
       const started = await until(
         "Leaf's environment to start",
         () =>
@@ -340,8 +382,16 @@ async function main(): Promise<void> {
       log(
         `Leaf environment: ${JSON.stringify(started.find((entry) => entry.id === leafEnvironment)?.status)}`,
       );
+      await frame.waitForFunction(
+        () => !document.body.textContent?.includes("Connecting to"),
+        null,
+        {
+          timeout: 30_000,
+        },
+      );
+      await page.screenshot({ path: path.join(out, "02c-leaf-workspace-loaded.png") });
 
-      // Work and a pending input remain owned by Leaf while the tab is on Desk.
+      // Work and a pending input remain owned by Leaf while Desk's is shown.
       const terminal = await invoke<{ sessionId: string }>(leaf, "create_local_terminal_session", {
         environmentId: leafEnvironment,
         terminalKey: "leaf-background-check",
@@ -357,25 +407,24 @@ async function main(): Promise<void> {
         data: `while [ ! -f ${quotedGate} ]; do sleep 0.1; done; printf 'leaf-background-finished\\n'; read -r qa_reply; printf 'leaf-input-%s\\n' "$qa_reply"\n`,
       });
 
-      // Opening Desk's environment moves the tab back.
-      await Promise.all([
-        page.waitForNavigation({ timeout: 30_000, waitUntil: "domcontentloaded" }),
-        page.click(`${deskRow} button >> nth=0`),
-      ]);
-      await page.waitForSelector('[data-testid="project-search-bar"]', { timeout: 30_000 });
-      const back = await page.evaluate(() => window.orkestratorWorkspaceTarget ?? null);
-      if (back) fail(`still on ${JSON.stringify(back)}`);
+      // Opening Desk's environment brings the central region back; Leaf's
+      // realm stays open behind it. Desk's own rows are the window's
+      // ordinary sidebar rows.
+      await page
+        .getByRole("button", { name: /desk-env/ })
+        .first()
+        .click();
       await page.waitForFunction(() => document.title.includes("desk-app"), null, {
         timeout: 30_000,
       });
-      await page.waitForSelector(leafRow, { timeout: 30_000 });
-      await page.screenshot({ path: path.join(out, "03-tab-back-on-desk.png") });
-      // The same start-on-selection happened for Desk's environment, so both
-      // nodes treat a click the same way.
+      await samePage("back to Desk");
+      if (!(await page.locator(realmFrame).isHidden())) fail("Leaf's realm still shown");
+      if ((await page.locator(realmFrame).count()) !== 1) fail("Leaf's realm was closed");
+      await page.screenshot({ path: path.join(out, "03-desk-in-central-region.png") });
       const deskStarted = await until(
         "Desk's environment to start",
         () =>
-          invoke<Array<{ id: string; status: string; worktreePath?: string; setupError?: string }>>(
+          invoke<Array<{ id: string; status: string; worktreePath?: string }>>(
             desk,
             "get_environment_snapshots",
             { projectId: deskSeed.projectId },
@@ -391,10 +440,16 @@ async function main(): Promise<void> {
       log(
         `back on Desk; its environment: ${JSON.stringify(deskStarted.find((entry) => entry.id === deskSeed.environmentId)?.status)}`,
       );
-      await dismissStartupPrompts(page);
       await writeFile(gate, "finish");
+      // A shell may set the window title on the same line (OSC/CSI sequences).
+      const plain = (line: string) =>
+        line
+          .replace(/\u001b\][^\u0007]*\u0007/g, "")
+          .replace(/\u001b\[[0-9;?]*[A-Za-z]/g, "")
+          .replace(/\u0007/g, "")
+          .trim();
       const finishedLine = (output: string, text: string) =>
-        output.split(/\r?\n/).some((line) => line.trim() === text);
+        output.split(/\r?\n/).some((line) => plain(line) === text);
       await until(
         "Leaf finishes in background and waits for input",
         () =>
@@ -403,24 +458,17 @@ async function main(): Promise<void> {
           }),
         (snapshot) => finishedLine(snapshot.output, "leaf-background-finished"),
       );
-      await invoke(leaf, "set_environment_unread", {
-        environmentId: leafEnvironment,
-        unread: true,
-      });
-      await Promise.all([
-        page.waitForNavigation({ waitUntil: "domcontentloaded" }),
-        page.click(`${leafRow} button >> nth=0`),
-      ]).catch(async (error) => {
-        await page.screenshot({ path: path.join(out, "return-leaf-failure.png") });
-        log("return notices:", await page.locator("[data-sonner-toast]").allTextContents());
-        throw error;
-      });
-      await page.waitForSelector('[data-testid="project-search-bar"]');
-      await dismissStartupPrompts(page);
-      await page.reload();
-      await page.waitForSelector('[data-testid="project-search-bar"]');
-      await dismissStartupPrompts(page);
-      const rehydrated = await page.evaluate(async (sessionId) => {
+
+      // Back to Leaf: the same realm, no new grant, no reload.
+      await page
+        .locator(leafRow)
+        .getByRole("button", { name: /^leaf-env, on / })
+        .click();
+      await page.waitForSelector(`${realmFrame}:visible`, { timeout: 30_000 });
+      await samePage("returning to Leaf");
+      if ((await page.locator(realmFrame).count()) !== 1) fail("a second realm was opened");
+      // The realm's own client still reaches the rehydrated terminal.
+      const rehydrated = await frame.evaluate(async (sessionId) => {
         return window.orkestrator!.invoke<{ output: string; mode: string }>(
           "get_terminal_state_snapshot",
           { sessionId },
@@ -428,41 +476,31 @@ async function main(): Promise<void> {
       }, terminal.sessionId);
       if (!rehydrated || !rehydrated.output.includes("leaf-background-finished"))
         fail("background transcript did not rehydrate");
-      // Pending terminal input is still actionable after returning and reloading.
-      await page.evaluate(async (sessionId) => {
+      await frame.evaluate(async (sessionId) => {
         await window.orkestrator!.invoke("local_terminal_write", { sessionId, data: "resumed\n" });
       }, terminal.sessionId);
       await until(
-        "rehydrated input control works",
+        "the pending input is still actionable",
         () =>
           invoke<{ output: string }>(leaf, "get_terminal_output_snapshot", {
             sessionId: terminal.sessionId,
           }),
         (snapshot) => finishedLine(snapshot.output, "leaf-input-resumed"),
       );
-      const returnedEnvironment = await page.evaluate(
-        async (environmentId) =>
-          window.orkestrator!.invoke<{ status: string }>("get_environment", { environmentId }),
-        leafEnvironment,
-      );
-      if (returnedEnvironment.status === "stopped") fail("Leaf work stopped while inactive");
+      const leafNow = await invoke<{ status: string }>(leaf, "get_environment", {
+        environmentId: leafEnvironment,
+      });
+      if (leafNow.status === "stopped") fail("Leaf work stopped while not shown");
       await invoke(leaf, "close_local_terminal_session", { sessionId: terminal.sessionId });
-      log("background status, transcript and pending input survived switch and reload");
+      log("background status, transcript and pending input survived switching away and back");
 
-      // Removing the only registered leaf must leave Desk's return path usable.
-      await invoke(desk, "forget_node", { nodeId: leafId });
-      await page.waitForSelector(deskRow, { timeout: 30_000 });
+      // A reloaded page is Desk's, and never boots onto a leaf.
       await page.reload();
-      await page.waitForSelector(deskRow, { timeout: 30_000 });
+      await page.waitForSelector('[data-testid="project-search-bar"]', { timeout: 30_000 });
       await dismissStartupPrompts(page);
-      await Promise.all([
-        page.waitForNavigation({ waitUntil: "domcontentloaded" }),
-        page.click(`${deskRow} button >> nth=0`),
-      ]);
-      await page.waitForSelector('[data-testid="project-search-bar"]');
       if (await page.evaluate(() => Boolean(window.orkestratorWorkspaceTarget)))
-        fail("return after final leaf removal failed");
-      log("final leaf removal kept a working command-node return route");
+        fail("the reloaded page booted onto a leaf");
+      log("a reloaded page stays on Desk");
       log(`PASS — screenshots in ${path.relative(repo, out)}`);
     } finally {
       await browser.close();

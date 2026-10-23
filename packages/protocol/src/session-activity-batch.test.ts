@@ -63,6 +63,7 @@ describe("session activity observation", () => {
         completionPending: true,
         asyncQuestionItemIds: ["q-1"],
         closing: false,
+        contentRevision: "process:3.7:0",
       }),
     ).toEqual({
       activity: "waiting",
@@ -70,6 +71,7 @@ describe("session activity observation", () => {
       completionPending: true,
       asyncQuestionItemIds: ["q-1"],
       closing: false,
+      contentRevision: "process:3.7:0",
     });
   });
 
@@ -83,6 +85,12 @@ describe("session activity observation", () => {
       { activity: "idle", readyForInput: "yes" },
       { activity: "idle", completionPending: "yes" },
       { activity: "idle", closing: 1 },
+      { activity: "idle", contentRevision: "" },
+      { activity: "idle", contentRevision: 7 },
+      {
+        activity: "idle",
+        contentRevision: "r".repeat(SESSION_ACTIVITY_BATCH_LIMITS.maxContentRevisionLength + 1),
+      },
       { activity: "idle", asyncQuestionItemIds: [""] },
       { activity: "idle", asyncQuestionItemIds: "q" },
       {

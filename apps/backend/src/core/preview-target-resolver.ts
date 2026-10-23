@@ -39,7 +39,7 @@ export interface PreviewTargetResolverOptions {
   /** Loopback family probe used by `addressFamily: "auto"`. */
   probeFamily?: (host: "127.0.0.1" | "::1", port: number, timeoutMs: number) => Promise<boolean>;
   now?: () => number;
-  /** Optional relay adapter (step 13). */
+  /** Optional container relay adapter (`preview-relay-supervisor.ts`). */
   relay?: {
     available(environment: Environment): boolean;
   };

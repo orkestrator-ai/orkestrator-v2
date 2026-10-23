@@ -25,6 +25,7 @@ describe("environment state paths", () => {
       "cursor-bridge-state",
       "acp-bridge-state",
       "portable-inputs",
+      "mcp-environment-overlays",
     ]);
     const dataDir = path.join(path.sep, "data");
     expect(environmentStateDirectory(dataDir, "cursor-bridge-state", "e1")).toBe(

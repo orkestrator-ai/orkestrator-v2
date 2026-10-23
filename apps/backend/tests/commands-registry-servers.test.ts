@@ -1,6 +1,9 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
 import os from "node:os";
 
+import { enqueueContainerBridgeOperation } from "../src/core/container-bridge-operations.js";
+
+import { DOCKER_LABEL_APP_VALUE } from "../src/core/constants";
 import { createCommandFixtures } from "./command-fixtures";
 
 const {
@@ -20,6 +23,7 @@ const {
   reserveFreePort,
   startAuthenticatedContainerServer,
   startControllableHealthServer,
+  waitForCondition,
   withFakeDocker,
 } = await createCommandFixtures();
 
@@ -247,6 +251,11 @@ exit 0
         expect(execLog).toContain("/tmp/codex-bridge-token");
         expect(execLog).toContain("export CODEX_BRIDGE_TOKEN=");
         expect(execLog).toContain("export CODEX_MAX_CONCURRENT_THREADS_PER_SESSION=9");
+        // Skills and templates resolve against the container's workspace and
+        // the container user's own CODEX_HOME, never a host path.
+        expect(execLog).toContain("cd /workspace");
+        expect(execLog).toContain("export CWD=/workspace");
+        expect(execLog).not.toContain("CODEX_HOME=");
         expect(execLog).toContain("export ORKESTRATOR_BRIDGE_DEBUG=1");
         expect(execLog).toContain("setsid bun /opt/codex-bridge/dist/index.js");
         expect(execLog).not.toContain("unset GITHUB_TOKEN GH_TOKEN");
@@ -630,6 +639,11 @@ exit 0
         expect(execLog).toContain("export ORKESTRATOR_BRIDGE_DEBUG=0");
         expect(execLog).toContain(`export ACP_STATE_DIR=/tmp/orkestrator-acp-state/${provider}`);
         expect(execLog).toContain("export HOSTNAME=0.0.0.0");
+        // The ACP session's cwd, and so Grok's project skills and folder trust,
+        // is the container's workspace; GROK_HOME stays the container user's.
+        expect(execLog).toContain("cd /workspace");
+        expect(execLog).toContain("export CWD=/workspace");
+        expect(execLog).not.toContain("GROK_HOME=");
         expect(execLog).toContain(
           `setsid bun /opt/acp-bridge/dist/index.js --provider=${provider}`,
         );
@@ -698,15 +712,38 @@ exit 0
       containerId: "container-pi",
       status: "running",
     });
-    const { context } = createContext(environment);
+    const { context } = createContext(environment, {
+      globalConfig: { enabledAgentPlatforms: ["pi"] },
+    });
+    context.runtimeFlavor = "agent-test";
+    context.credentialSources = new Set(["pi"]);
+    const hostHome = path.join(path.dirname(pidFile), "host");
+    const hostAuth = path.join(hostHome, ".pi", "agent", "auth.json");
+    const importedAuth = path.join(path.dirname(pidFile), "imported-auth.jsonl");
+    await fs.mkdir(path.dirname(hostAuth), { recursive: true });
+    await fs.writeFile(
+      hostAuth,
+      JSON.stringify({
+        anthropic: {
+          type: "oauth",
+          access: "pi-access",
+          refresh: "SENTINEL-HOST-REFRESH",
+          expires: Date.now() + 8 * 3600_000,
+        },
+      }),
+    );
     const commands = createCommandRegistry();
     const previousHostPort = process.env.FAKE_BRIDGE_HOST_PORT;
     const previousPidFile = process.env.FAKE_BRIDGE_PID_FILE;
     const previousTokenFile = process.env.FAKE_BRIDGE_TOKEN_FILE;
+    const previousHostHome = process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME;
+    const previousImportedAuth = process.env.FAKE_PI_IMPORTED_AUTH;
     const tokenFile = path.join(path.dirname(pidFile), "token");
     process.env.FAKE_BRIDGE_HOST_PORT = String(hostPort);
     process.env.FAKE_BRIDGE_PID_FILE = pidFile;
     process.env.FAKE_BRIDGE_TOKEN_FILE = tokenFile;
+    process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = hostHome;
+    process.env.FAKE_PI_IMPORTED_AUTH = importedAuth;
 
     const dockerScript = `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
@@ -716,6 +753,10 @@ case "$1" in
   exec)
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
+      *"/home/node/.pi/agent/auth.json"*)
+        cat >> "$FAKE_PI_IMPORTED_AUTH"
+        printf '\n' >> "$FAKE_PI_IMPORTED_AUTH"
+        exit 0 ;;
       *"cat /tmp/pi-bridge-token"*)
         cat "$FAKE_BRIDGE_TOKEN_FILE" 2>/dev/null || true
         exit 0 ;;
@@ -728,6 +769,8 @@ case "$1" in
         if [ -n "$pid" ]; then kill "$pid" 2>/dev/null || true; fi
         exit 0 ;;
     esac
+    # A cold launch must see sync's access-only login first.
+    test -s "$FAKE_PI_IMPORTED_AUTH" || exit 91
     token=$(printf '%s' "$*" | sed -n "s/.*PI_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p")
     printf '%s' "$token" > "$FAKE_BRIDGE_TOKEN_FILE"
     bun -e 'require("node:http").createServer((q,s)=>{s.writeHead(q.url==="/global/health"?200:404,{"content-type":"application/json"});s.end("{}")}).listen(Number(process.env.FAKE_BRIDGE_HOST_PORT),"127.0.0.1")' >/dev/null 2>&1 &
@@ -739,6 +782,7 @@ exit 0
 
     try {
       await withFakeDocker(dockerScript, async (logs) => {
+        process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = hostHome;
         const [first, second] = (await Promise.all([
           commands.get("start_pi_server")?.({ containerId: "container-pi" }, context),
           commands.get("start_pi_server")?.({ containerId: "container-pi" }, context),
@@ -758,12 +802,26 @@ exit 0
         const execLog = await fs.readFile(logs.exec, "utf8");
         expect(execLog.split("\n").filter((line) => line.startsWith("exec -d "))).toHaveLength(1);
         expect(execLog).toContain("export PI_AGENT_DIR=/home/node/.pi/agent");
+        // Templates, skills and extensions resolve in the container's workspace.
+        expect(execLog).toContain("export CWD=/workspace");
         expect(execLog).toContain("export ORKESTRATOR_BRIDGE_DEBUG=0");
         expect(execLog).toContain("export PI_SESSION_DIR=/home/node/.pi/agent/sessions");
         expect(execLog).toContain("export PI_BRIDGE_STATE_DIR=/tmp/orkestrator-pi-state");
         expect(execLog).not.toContain("PI_BRIDGE_PROJECT_RESOURCES");
         expect(execLog).toContain("setsid bun /opt/pi-bridge/dist/index.js");
         expect(execLog).toContain("umask 077");
+        // Both starts, the reused one too, hand over the host login access-only.
+        const pushes = (await fs.readFile(importedAuth, "utf8")).trim().split("\n");
+        expect(pushes).toHaveLength(2);
+        for (const push of pushes) {
+          expect(JSON.parse(push)).toEqual({
+            logins: {
+              anthropic: expect.objectContaining({ access: "pi-access", refresh: "" }),
+            },
+            accessOnly: ["anthropic"],
+          });
+        }
+        expect(execLog).not.toContain("SENTINEL");
 
         await commands.get("stop_pi_server")?.({ containerId: "container-pi" }, context);
         const afterStop = await fs.readFile(logs.exec, "utf8");
@@ -785,6 +843,133 @@ exit 0
       else process.env.FAKE_BRIDGE_PID_FILE = previousPidFile;
       if (previousTokenFile === undefined) delete process.env.FAKE_BRIDGE_TOKEN_FILE;
       else process.env.FAKE_BRIDGE_TOKEN_FILE = previousTokenFile;
+      if (previousHostHome === undefined) delete process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME;
+      else process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = previousHostHome;
+      if (previousImportedAuth === undefined) delete process.env.FAKE_PI_IMPORTED_AUTH;
+      else process.env.FAKE_PI_IMPORTED_AUTH = previousImportedAuth;
+    }
+  });
+
+  test("a Pi stop by full container ID waits for a start issued by an abbreviated one", async () => {
+    const hostPort = await reserveFreePort();
+    const dir = await createTempDir("ork-pi-bridge-queue-");
+    const fullId = "container-pi-queue-0123456789abcdef";
+    const environment = createEnvironment({
+      id: "env-container-pi-queue",
+      environmentType: "containerized",
+      containerId: fullId,
+      status: "running",
+    });
+    const { context } = createContext(environment, {
+      globalConfig: { enabledAgentPlatforms: ["pi"] },
+    });
+    context.runtimeFlavor = "agent-test";
+    context.credentialSources = new Set(["pi"]);
+    const hostHome = path.join(dir, "host");
+    const hostAuth = path.join(hostHome, ".pi", "agent", "auth.json");
+    await fs.mkdir(path.dirname(hostAuth), { recursive: true });
+    await fs.writeFile(
+      hostAuth,
+      JSON.stringify({
+        anthropic: {
+          type: "oauth",
+          access: "pi-access",
+          refresh: "SENTINEL-HOST-REFRESH",
+          expires: Date.now() + 8 * 3600_000,
+        },
+      }),
+    );
+    const files = {
+      FAKE_BRIDGE_HOST_PORT: String(hostPort),
+      FAKE_BRIDGE_PID_FILE: path.join(dir, "pid"),
+      FAKE_BRIDGE_TOKEN_FILE: path.join(dir, "token"),
+      FAKE_PI_SYNC_STARTED: path.join(dir, "sync-started"),
+      FAKE_PI_SYNC_RELEASE: path.join(dir, "sync-release"),
+      FAKE_PI_ORDER: path.join(dir, "order"),
+      FAKE_APP_LABEL: DOCKER_LABEL_APP_VALUE,
+      FAKE_FULL_ID: fullId,
+      ORKESTRATOR_AGENT_TEST_HOST_HOME: hostHome,
+    };
+    const previous = Object.fromEntries(Object.keys(files).map((key) => [key, process.env[key]]));
+    Object.assign(process.env, files);
+    const commands = createCommandRegistry();
+
+    // The abbreviated ID passes the registry's ownership probe as an unlabelled
+    // container whose full ID an environment references. The login push blocks
+    // until released, holding the start inside the queue.
+    const dockerScript = `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  inspect)
+    case "$*" in
+      *".Id"*) printf '<no value>\\trunning\\t%s\\t%s\\n' "$FAKE_APP_LABEL" "$FAKE_FULL_ID" ;;
+      *) printf 'running\\n' ;;
+    esac
+    exit 0 ;;
+  port) printf '127.0.0.1:%s\\n' "$FAKE_BRIDGE_HOST_PORT"; exit 0 ;;
+  exec)
+    printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+    case "$*" in
+      *"/home/node/.pi/agent/auth.json"*)
+        cat > /dev/null
+        : > "$FAKE_PI_SYNC_STARTED"
+        while [ ! -f "$FAKE_PI_SYNC_RELEASE" ]; do sleep 0.02; done
+        printf 'sync\\n' >> "$FAKE_PI_ORDER"
+        exit 0 ;;
+      *"cat /tmp/pi-bridge-token"*)
+        cat "$FAKE_BRIDGE_TOKEN_FILE" 2>/dev/null || true
+        exit 0 ;;
+      *pkill*)
+        printf 'stop\\n' >> "$FAKE_PI_ORDER"
+        rm -f "$FAKE_BRIDGE_TOKEN_FILE"
+        pid=$(cat "$FAKE_BRIDGE_PID_FILE" 2>/dev/null || true)
+        if [ -n "$pid" ]; then kill "$pid" 2>/dev/null || true; fi
+        exit 0 ;;
+    esac
+    printf 'launch\\n' >> "$FAKE_PI_ORDER"
+    token=$(printf '%s' "$*" | sed -n "s/.*PI_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p")
+    printf '%s' "$token" > "$FAKE_BRIDGE_TOKEN_FILE"
+    bun -e 'require("node:http").createServer((q,s)=>{s.writeHead(q.url==="/global/health"?200:404,{"content-type":"application/json"});s.end("{}")}).listen(Number(process.env.FAKE_BRIDGE_HOST_PORT),"127.0.0.1")' >/dev/null 2>&1 &
+    printf '%s' "$!" > "$FAKE_BRIDGE_PID_FILE"
+    exit 0 ;;
+esac
+exit 0
+`;
+
+    try {
+      await withFakeDocker(dockerScript, async () => {
+        process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = hostHome;
+        const start = commands.get("start_pi_server")?.(
+          { containerId: "container-pi-queue" },
+          context,
+        );
+        await waitForCondition(() => existsSync(files.FAKE_PI_SYNC_STARTED), "the login push");
+        const stop = commands.get("stop_pi_server")?.({ containerId: fullId }, context);
+        // Both resolve to the persisted ID, so the stop queues behind the start.
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        expect(await fs.readFile(files.FAKE_PI_ORDER, "utf8").catch(() => "")).toBe("");
+        await fs.writeFile(files.FAKE_PI_SYNC_RELEASE, "");
+        await expect(start).resolves.toMatchObject({ hostPort, wasRunning: false });
+        await stop;
+        expect((await fs.readFile(files.FAKE_PI_ORDER, "utf8")).trim().split("\n")).toEqual([
+          "sync",
+          "launch",
+          "stop",
+        ]);
+      });
+    } finally {
+      const pid = await fs.readFile(files.FAKE_BRIDGE_PID_FILE, "utf8").catch(() => "");
+      if (pid) {
+        try {
+          process.kill(Number(pid));
+        } catch {
+          // already gone
+        }
+      }
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
     }
   });
 
@@ -919,6 +1104,105 @@ exit 0
     }
   });
 
+  test("Claude bridge start uses the persisted queue key, reconciles first, then restricts an unusable login before launch", async () => {
+    const hostPort = await reserveFreePort();
+    const dir = await createTempDir("ork-claude-login-start-");
+    const marker = path.join(dir, "account-marker");
+    const healthy = path.join(dir, "healthy");
+    const token = path.join(dir, "bridge-token");
+    const accountId = "11111111-2222-4333-8444-555555555555";
+    const accountHome = path.join(dir, "agent-accounts", "claude", accountId);
+    await fs.mkdir(accountHome, { recursive: true });
+    await fs.writeFile(
+      path.join(accountHome, ".credentials.json"),
+      JSON.stringify({
+        claudeAiOauth: { accessToken: "expired", refreshToken: "NEVER-DELIVER", expiresAt: 1 },
+      }),
+    );
+    await fs.writeFile(path.join(accountHome, ".claude.json"), "{}");
+    const environment = createEnvironment({
+      id: "env-login-start",
+      environmentType: "containerized",
+      containerId: "container-claude-login-start-full",
+      status: "running",
+    });
+    const { context } = createContext(environment, {
+      dataDir: dir,
+      globalConfig: { enabledAgentPlatforms: ["claude"] },
+    });
+    context.storage.loadAgentAccounts = (async () => ({
+      version: 1,
+      accounts: [],
+      active: { claude: accountId },
+    })) as never;
+    const bridge = await startAuthenticatedContainerServer(hostPort, {
+      isHealthy: () => existsSync(healthy),
+      isAuthorized: (request) =>
+        request.headers["x-orkestrator-claude-token"] === readTestCredential(token),
+    });
+    const commands = createCommandRegistry();
+    const released = Promise.withResolvers<void>();
+    const locked = Promise.withResolvers<void>();
+    const held = enqueueContainerBridgeOperation("claude", environment.containerId!, async () => {
+      locked.resolve();
+      await released.promise;
+    });
+    // Paths are private generated fixture paths; no credentials are in argv/logs.
+    const dockerScript = `#!/bin/sh
+case "$1" in
+  inspect)
+    case "$*" in *'{{.Id}}'*) printf '<no value>\\trunning\\torkestrator-v2\\tcontainer-claude-login-start-full\\n'; exit 0 ;; esac
+    printf 'running\\n'; exit 0 ;;
+  port) printf '127.0.0.1:${hostPort}\\n'; exit 0 ;;
+  exec)
+    printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+    case "$*" in
+      *"cat /tmp/orkestrator-claude-account"*) cat '${marker}' 2>/dev/null || true; exit 0 ;;
+      *"printf '%s' '${accountId}'"*) printf '%s' '${accountId}' > '${marker}'; exit 0 ;;
+      *"cat /tmp/claude-bridge-token"*) cat '${token}' 2>/dev/null || true; exit 0 ;;
+      *"cat /tmp/orkestrator-ai/claude-github-env-fingerprint"*) printf '%s' '${commandTesting.CLAUDE_GITHUB_ENV_FINGERPRINT}'; exit 0 ;;
+    esac
+    if [ "$2" = "-d" ]; then
+      value=$(printf '%s' "$*" | sed -n "s/.*CLAUDE_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p")
+      printf '%s' "$value" > '${token}'
+      : > '${healthy}'
+    fi
+    exit 0 ;;
+esac
+exit 0
+`;
+    try {
+      await locked.promise;
+      await withFakeDocker(dockerScript, async (logs) => {
+        const start = commands.get("start_claude_server")!(
+          { containerId: "container-claude-login-start" },
+          context,
+        ) as Promise<ServerStart>;
+        // The shortened ID must wait behind the full persisted ID's queue.
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(await fs.readFile(logs.exec, "utf8").catch(() => "")).toBe("");
+        released.resolve();
+        const result = await start;
+        expect(result).toMatchObject({ hostPort, wasRunning: false });
+        const log = await fs.readFile(logs.exec, "utf8");
+        const reconcile = log.indexOf("rm -f /home/node/.claude/.credentials.json");
+        const stamp = log.indexOf(`printf '%s' '${accountId}'`);
+        const restrict = log.indexOf("let changed = false");
+        const launch = log.indexOf("setsid bun /opt/claude-bridge/dist/index.js");
+        expect(reconcile).toBeGreaterThanOrEqual(0);
+        expect(stamp).toBeGreaterThan(reconcile);
+        expect(restrict).toBeGreaterThan(stamp);
+        expect(launch).toBeGreaterThan(restrict);
+        expect(log).not.toContain("NEVER-DELIVER");
+        expect(log).not.toContain("exec -i container-claude-login-start bash");
+      });
+    } finally {
+      released.resolve();
+      await held;
+      await bridge.close();
+    }
+  });
+
   test.each([
     ["the CLI default", undefined, undefined],
     ["a configured", 8, "export BASH_MAX_TIMEOUT_MS='28800000'"],
@@ -949,6 +1233,8 @@ case "$1" in
   port) printf '127.0.0.1:%s\\n' "$FAKE_BRIDGE_HOST_PORT"; exit 0 ;;
   exec)
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+    # Only the bridge launch starts a server; credential syncs run first.
+    case "$*" in *setsid*) ;; *) exit 0 ;; esac
     bun -e 'require("node:http").createServer((q,s)=>{s.writeHead(q.url==="/global/health"||q.url==="/global/auth-check"?200:404,{"content-type":"application/json"});s.end("{}")}).listen(Number(process.env.FAKE_BRIDGE_HOST_PORT),"127.0.0.1")' >/dev/null 2>&1 &
     printf '%s' "$!" > "$FAKE_BRIDGE_PID_FILE"
     exit 0 ;;
@@ -968,6 +1254,10 @@ exit 0
           const execLog = await fs.readFile(logs.exec, "utf8");
           expect(execLog).toContain("setsid bun /opt/claude-bridge/dist/index.js");
           expect(execLog).not.toContain("setsid node");
+          // No CWD: discovery uses the process's own working directory, the
+          // container's workspace (claudeWorkspaceCwd).
+          expect(execLog).toContain("cd /workspace");
+          expect(execLog).not.toContain("export CWD=");
           expect(execLog).toContain("/tmp/claude-bridge-token");
           expect(execLog).toContain("export CLAUDE_BRIDGE_TOKEN=");
           expect(execLog).toContain("export ORKESTRATOR_BRIDGE_DEBUG=0");
@@ -1008,9 +1298,30 @@ exit 0
       containerId: "container-opencode-auth",
       status: "running",
     });
-    const { context } = createContext(environment);
+    const { context } = createContext(environment, {
+      globalConfig: { enabledAgentPlatforms: ["opencode"] },
+    });
+    context.runtimeFlavor = "agent-test";
+    context.credentialSources = new Set(["opencode"]);
+    const importedAuth = path.join(stateDir, "imported-auth.jsonl");
+    const hostAuth = path.join(stateDir, "xdg-data", "opencode", "auth.json");
+    await fs.mkdir(path.dirname(hostAuth), { recursive: true });
+    await fs.writeFile(
+      hostAuth,
+      JSON.stringify({
+        "opencode-go": { type: "api", key: "go-key" },
+        openai: {
+          type: "oauth",
+          access: "oc-access",
+          refresh: "SENTINEL-HOST-REFRESH",
+          expires: Date.now() + 3600_000,
+        },
+      }),
+    );
     const commands = createCommandRegistry();
     const previous = {
+      xdgDataHome: process.env.XDG_DATA_HOME,
+      importedAuth: process.env.FAKE_OPENCODE_IMPORTED_AUTH,
       hostPort: process.env.FAKE_BRIDGE_HOST_PORT,
       tokenFile: process.env.FAKE_BRIDGE_TOKEN_FILE,
       liveTokenFile: process.env.FAKE_BRIDGE_LIVE_TOKEN_FILE,
@@ -1025,6 +1336,8 @@ exit 0
     process.env.FAKE_OPENCODE_PLUGIN_FINGERPRINT_FILE = pluginFingerprintFile;
     process.env.FAKE_OPENCODE_PLUGIN_FINGERPRINT =
       commandTesting.OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT;
+    process.env.XDG_DATA_HOME = path.join(stateDir, "xdg-data");
+    process.env.FAKE_OPENCODE_IMPORTED_AUTH = importedAuth;
 
     const bridge = await startAuthenticatedContainerServer(hostPort, {
       isHealthy: () => existsSync(healthyFile),
@@ -1039,6 +1352,10 @@ case "$1" in
   exec)
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
+      *"/home/node/.local/share/opencode/auth.json"*)
+        cat >> "$FAKE_OPENCODE_IMPORTED_AUTH"
+        printf '\n' >> "$FAKE_OPENCODE_IMPORTED_AUTH"
+        exit 0 ;;
       *"cat /tmp/opencode-server-password"*)
         cat "$FAKE_BRIDGE_TOKEN_FILE" 2>/dev/null || true
         exit 0 ;;
@@ -1112,14 +1429,30 @@ exit 0
         const execLog = await fs.readFile(logs.exec, "utf8");
         expect(execLog.split("\n").filter((line) => line.startsWith("exec -d "))).toHaveLength(4);
         expect(execLog).toContain("pkill -f '[o]pencode serve'");
+        // A container connection names no directory, so the server's own cwd,
+        // the container's workspace, scopes `command.list`.
+        expect(execLog).toMatch(/cd \/workspace\n[\s\S]*opencode serve --port/);
         expect(execLog).toContain("/home/node/.config/opencode/plugins/orkestrator-github-env.js");
         expect(execLog).not.toContain("OPENCODE_CONFIG_CONTENT");
         expect(execLog).toContain("unset GITHUB_TOKEN GH_TOKEN GITHUB_PERSONAL_ACCESS_TOKEN");
+        // Every start, the reused one too, hands over the host login access-only.
+        const pushes = (await fs.readFile(importedAuth, "utf8")).trim().split("\n");
+        expect(pushes).toHaveLength(5);
+        expect(JSON.parse(pushes[4]!)).toEqual({
+          logins: {
+            "opencode-go": { type: "api", key: "go-key" },
+            openai: expect.objectContaining({ access: "oc-access", refresh: "" }),
+          },
+          accessOnly: ["openai"],
+        });
+        expect(execLog).not.toContain("SENTINEL");
       });
     } finally {
       await bridge.close();
       for (const [key, value] of Object.entries(previous)) {
         const envName = {
+          xdgDataHome: "XDG_DATA_HOME",
+          importedAuth: "FAKE_OPENCODE_IMPORTED_AUTH",
           hostPort: "FAKE_BRIDGE_HOST_PORT",
           tokenFile: "FAKE_BRIDGE_TOKEN_FILE",
           liveTokenFile: "FAKE_BRIDGE_LIVE_TOKEN_FILE",

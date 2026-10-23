@@ -1,6 +1,6 @@
 {
   "name": "@orkestrator/protocol",
-  "version": "2.26.0-alpha",
+  "version": "2.26.3-beta",
   "private": true,
   "type": "module",
   "exports": {
@@ -44,9 +44,11 @@
     "./container-recovery": "./src/container-recovery.ts",
     "./login-snapshots": "./src/login-snapshots.ts",
     "./container-resources": "./src/container-resources.ts",
+    "./controller-settings": "./src/controller-settings.ts",
     "./coordinator": "./src/coordinator.ts",
     "./command-nodes": "./src/command-nodes.ts",
     "./node-summaries": "./src/node-summaries.ts",
+    "./portal-layout": "./src/portal-layout.ts",
     "./coordinator-web-research": "./src/coordinator-web-research.ts",
     "./codex-background-task": "./src/codex-background-task.ts",
     "./node/cursor-plan-usage": "./src/node/cursor-plan-usage.ts",
@@ -119,6 +121,7 @@
     "./review-workflow": "./src/review-workflow.ts",
     "./runtime-health": "./src/runtime-health.ts",
     "./node/runtime-profile-status": "./src/node/runtime-profile-status.ts",
+    "./secret-redaction": "./src/secret-redaction.ts",
     "./session-activity-batch": "./src/session-activity-batch.ts",
     "./startup-launch": "./src/startup-launch.ts",
     "./ssh-agent-socket": "./src/ssh-agent-socket.ts",

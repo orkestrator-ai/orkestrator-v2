@@ -1,7 +1,9 @@
+import { MergedProjectListFixture } from "../../apps/web/src/test/MergedProjectListFixture";
 import { RemoteMachineTreeFixture } from "../../apps/web/src/test/RemoteMachineTreeFixture";
 import { NativeAttachmentsFixture } from "./NativeAttachmentsFixture";
 import { ChangeTrackingFixture, installChangeTrackingFixture } from "./changeTracking";
 import { StructuredReviewLayoutFixture } from "./StructuredReviewLayoutFixture";
+import { AnnotationDestinationLayoutFixture } from "./AnnotationDestinationLayoutFixture";
 import { ClaudeInteractionsFixture } from "./ClaudeInteractionsFixture";
 import {
   AgentLaunchDialog,
@@ -13,7 +15,7 @@ import { AgentUsageFixture } from "./AgentUsageFixture";
 import { AddProjectDialogFixture } from "./AddProjectDialogFixture";
 import { BackgroundTaskOutcomeFixture } from "./BackgroundTaskOutcomeFixture";
 import { CodexSubagentCardsFixture } from "./CodexSubagentCardsFixture";
-import { ConnectionsSettingsFixture } from "./ConnectionsSettingsFixture";
+import { MachinesSettingsFixture } from "./MachinesSettingsFixture";
 import { DesignCanvasFixture } from "./DesignCanvasFixture";
 import { MenuPlacementFixture } from "./MenuPlacementFixture";
 import { ComposerIconPickersFixture } from "./ComposerIconPickersFixture";
@@ -102,8 +104,16 @@ import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { ReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 import { useVirtuosoScrollState } from "../../apps/web/src/hooks/useVirtuosoScrollState";
 
+const SidebarDragFixture = lazy(async () => ({
+  default: (await import("../../apps/web/src/test/SidebarDragFixture")).SidebarDragFixture,
+}));
+
 const RichTranscriptPerfFixture = lazy(async () => ({
   default: (await import("./RichTranscriptPerfFixture")).RichTranscriptPerfFixture,
+}));
+
+const DesignLibraryPerfFixture = lazy(async () => ({
+  default: (await import("./DesignLibraryPerfFixture")).DesignLibraryPerfFixture,
 }));
 
 const TranscriptPagingFixture = lazy(async () => ({
@@ -379,7 +389,19 @@ function NativeComposeFixture() {
     <main className="min-h-screen bg-background pt-4 text-foreground">
       <section data-testid="native-compose-fixture" className="w-full">
         <NativeComposeBar
-          attachments={[]}
+          attachments={
+            new URLSearchParams(window.location.search).has("images")
+              ? ["first", "second"].map((name) => ({
+                  id: name,
+                  type: "image" as const,
+                  name: `${name}.svg`,
+                  path: `/${name}.svg`,
+                  previewUrl: `data:image/svg+xml,${encodeURIComponent(
+                    `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" fill="${name === "first" ? "blue" : "red"}"/></svg>`,
+                  )}`,
+                }))
+              : []
+          }
           onRemoveAttachment={() => {}}
           inputRef={inputRef}
           inputContainerRef={inputContainerRef}
@@ -1656,6 +1678,8 @@ function PullRequestCheckStatusFixture() {
 }
 
 function fixtureForPath() {
+  if (window.location.pathname === "/annotation-destination-layout")
+    return <AnnotationDestinationLayoutFixture />;
   if (window.location.pathname === "/structured-review-layout")
     return <StructuredReviewLayoutFixture />;
   if (window.location.pathname === "/setup-recovery") {
@@ -1710,8 +1734,16 @@ function fixtureForPath() {
       </Suspense>
     );
   }
+  if (window.location.pathname === "/sidebar-drag") {
+    return (
+      <Suspense fallback={null}>
+        <SidebarDragFixture />
+      </Suspense>
+    );
+  }
+  if (window.location.pathname === "/merged-project-list") return <MergedProjectListFixture />;
   if (window.location.pathname === "/remote-machine-tree") return <RemoteMachineTreeFixture />;
-  if (window.location.pathname === "/connections-settings") return <ConnectionsSettingsFixture />;
+  if (window.location.pathname === "/machines-settings") return <MachinesSettingsFixture />;
   if (window.location.pathname === "/fullscreen-settings") return <FullscreenSettingsFixture />;
   if (window.location.pathname === "/global-settings") return <GlobalSettingsFixture />;
   if (window.location.pathname === "/github-cli-setup") return <GitHubCliSetupFixture />;
@@ -1792,6 +1824,12 @@ function fixtureForPath() {
     return (
       <Suspense fallback={null}>
         <RichTranscriptPerfFixture />
+      </Suspense>
+    );
+  if (window.location.pathname === "/design-library-perf")
+    return (
+      <Suspense fallback={null}>
+        <DesignLibraryPerfFixture />
       </Suspense>
     );
   if (window.location.pathname === "/virtuoso-follow") return <VirtuosoFollowFixture />;

@@ -7,7 +7,6 @@
  * split from duplicating the stub provider and service fixture four times.
  */
 import { mock } from "bun:test";
-import type { ProviderRegistry } from "./native-agent-provider-registry.js";
 
 import { promises as fs } from "node:fs";
 
@@ -39,7 +38,6 @@ import type { Environment } from "./models.js";
 
 import {
   NativeAgentService,
-  type AgentInteractionObservation,
   type EnsureNativeAgentSessionInput,
   type NativeAgentServiceOptions,
 } from "./native-agent-service.js";
@@ -207,9 +205,6 @@ export function createProviderStub(
 /** Reach the timer-driven scans and backoff bookkeeping the service keeps private. */
 export function internals(service: NativeAgentService) {
   return service as unknown as {
-    drainPromptQueues(): Promise<void>;
-    drainPromptQueueOnce(queueKey: string): Promise<void>;
-    reconcilePendingLaunches(): Promise<number>;
     provider(input: EnsureNativeAgentSessionInput): Promise<AgentSessionProvider>;
     bridgeConnection(
       agent: BuildPipelineAgent,
@@ -217,51 +212,6 @@ export function internals(service: NativeAgentService) {
       model?: string,
       effort?: string,
     ): Promise<BridgeConnection>;
-    providerRegistry: ProviderRegistry;
-    activityRetryAt: Map<string, number>;
-    activityAttempts: Map<string, number>;
-    observedSessionActivity: Map<
-      string,
-      { providerSessionId: string; state: ProviderActivityState }
-    >;
-    pendingPrRefreshEnvironmentIds: Set<string>;
-    launchTasks: Map<string, Promise<void>>;
-    queueRetryAt: Map<string, number>;
-    queueAttempts: Map<string, number>;
-    launchRetryAt: Map<string, number>;
-    trackedInteractions: Map<string, unknown>;
-    providerReportedInteractions: Map<
-      string,
-      {
-        observationKey: string;
-        providerSessionKey: string;
-        missingSince?: number;
-      }
-    >;
-    interactionObservations: Map<string, AgentInteractionObservation>;
-    interactionRetryAt: Map<string, number>;
-    interactionAttempts: Map<string, number>;
-    monitoredInteractionSessionKeys: Set<string>;
-    observedInteractionRevisions: Map<string, number>;
-    interactionSelectionCursors: Map<string, number>;
-    interactionRevisionReconciliations: number;
-    projectionCache: Map<string, unknown>;
-    projectionEpochs: Map<string, number>;
-    projectionRefreshes: Map<string, Promise<unknown>>;
-    progressiveTranscriptCache: Map<string, { token: string; value: unknown }>;
-    progressiveReads: Map<string, Promise<unknown>>;
-    progressiveDirtyFollowUps: Map<string, number>;
-    progressiveTrailing: Map<string, Promise<unknown>>;
-    progressiveMetrics: { list(): readonly unknown[]; clear(): void };
-    invalidateProjection(key: string): void;
-    pruneProjectionEpoch(key: string): void;
-    flushDisplayTailPersist(sessionKey: string): Promise<void>;
-    progressiveHydrations: Map<
-      string,
-      { sourceToken: string; snapshot?: unknown; promise?: Promise<void> }
-    >;
-    launchTimer: ReturnType<typeof setInterval> | null;
-    interactionTimer: ReturnType<typeof setInterval> | null;
   };
 }
 

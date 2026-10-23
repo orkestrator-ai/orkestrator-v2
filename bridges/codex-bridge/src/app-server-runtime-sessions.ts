@@ -12,7 +12,7 @@ import type { NativeAgentReadiness } from "@orkestrator/protocol/native-agent";
 import type { CodexRuntimeContext } from "./app-server-runtime-context.js";
 import type { CodexRuntimeLifecycle } from "./app-server-runtime-lifecycle.js";
 import { openAssistantRow } from "./app-server-runtime-rows.js";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   CODEX_SIGN_IN_REQUIRED_MESSAGE,
   type AppServerEngine,
@@ -38,12 +38,14 @@ import {
 import { normalizeExplicitSessionTitle, persistSessionTitle } from "./session-titles.js";
 
 import { AppServerRpcError, isMissingRolloutError } from "./app-server/errors.js";
-import { codexReportedPolicy } from "./codex-reported-policy.js";
 
 import { type StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 
 /** Fixed, content-free refusal for work arriving while a tab close is retiring the session. */
 export const SESSION_CLOSING_ERROR = "Session is closing";
+
+/** One bridge process; see `getActivitySnapshot`'s content revision. */
+const ACTIVITY_PROCESS = randomUUID();
 
 export class CodexRuntimeSessions {
   /**
@@ -1087,8 +1089,21 @@ export class CodexRuntimeSessions {
         // engine update must leave both memory and the durable session record on
         // the last configuration the engine actually accepted.
         await this.ctx.options.engine.configureThread(attached.engineHandle, nextConfig);
+        if (
+          session.config.policy?.projectResources !== nextConfig.policy?.projectResources ||
+          (session.config.cwd ?? this.ctx.options.cwd) !== (nextConfig.cwd ?? this.ctx.options.cwd)
+        ) {
+          // A loaded resume ignores trust and skill overrides. Confirm the old
+          // thread is unsubscribed before publishing the new resource policy.
+          await this.lifecycle.detachThread(attached, true);
+        }
       }
     } catch (error) {
+      if (attached) {
+        await this.ctx.options.engine
+          .configureThread(attached.engineHandle, session.config)
+          .catch(() => undefined);
+      }
       if (attached && requestedModelChanged) {
         attached.modelId = previousConfirmedModel;
       }
@@ -1102,6 +1117,9 @@ export class CodexRuntimeSessions {
       return "unavailable";
     }
 
+    if (session.config.policy?.projectResources !== nextConfig.policy?.projectResources) {
+      this.ctx.commandCatalogue.markPolicyChanged();
+    }
     session.config = nextConfig;
     session.configurationRevision += 1;
     this.ctx.registry.touch(sessionId);
@@ -1281,7 +1299,7 @@ export class CodexRuntimeSessions {
     return {
       // Keeps the pre-migration contract; `phase` carries the new detail.
       status: phaseToExternalStatus(phase),
-      ...(session.config.policy ? { policy: codexReportedPolicy(session.config.policy) } : {}),
+      ...(session.config.policy ? { policy: session.config.policy } : {}),
       phase,
       title: session.title,
       error,
@@ -1366,6 +1384,7 @@ export class CodexRuntimeSessions {
   getActivitySnapshot(sessionId: string): {
     activity: "idle" | "working" | "waiting" | "missing";
     asyncQuestionItemIds?: string[];
+    contentRevision?: string;
   } {
     const activity = this.getActivity(sessionId);
     if (activity === "missing") return { activity };
@@ -1376,6 +1395,16 @@ export class CodexRuntimeSessions {
       ...(session.asyncQuestionItemIds.length > 0
         ? { asyncQuestionItemIds: [...session.asyncQuestionItemIds] }
         : {}),
+      /*
+       * Opaque revision of what the session view shows beyond its activity:
+       * the transcript revision the transcript routes key their token on, and
+       * the async-question index. A late change on an idle thread (an async
+       * question, a settled command's measured lines) moves it without an
+       * activity transition, and the backend announces it so an idle view can
+       * read less often. Process-scoped, so a restarted bridge never repeats
+       * a revision an older read saw.
+       */
+      contentRevision: `${ACTIVITY_PROCESS}:${session.contentEpoch}.${session.messageRevision}:${session.asyncQuestionItemIds.length}`,
     };
   }
 
@@ -1583,7 +1612,7 @@ export class CodexRuntimeSessions {
         : {}),
       mode: session.config.mode,
       fastMode: session.config.serviceTier === "fast",
-      ...(session.config.policy ? { policy: codexReportedPolicy(session.config.policy) } : {}),
+      ...(session.config.policy ? { policy: session.config.policy } : {}),
       durable: await this.isSessionConfigPersisted(session),
     };
   }

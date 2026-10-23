@@ -5,7 +5,8 @@ import path from "node:path";
 
 import { loadCatalog, summarizeEntries } from "./catalog.js";
 import {
-  CONTAINER_OWN_FILE_REASON,
+  CONTAINER_CLAUDE_LOCAL_REASON,
+  CONTAINER_PROJECT_EPHEMERAL_REASON,
   containerSources,
   providerCapabilities,
   providerSources,
@@ -68,6 +69,13 @@ async function catalogFor(provider: "codex" | "grok" | "opencode") {
   const catalog = await loadCatalog(store, specs);
   return { specs, ...summarizeEntries(catalog, providerCapabilities(provider)) };
 }
+
+const WRITABLE = { writable: true, persistentWorkspace: false, unavailableReason: "Unavailable." };
+const READ_ONLY = {
+  writable: false,
+  persistentWorkspace: false,
+  unavailableReason: "Unavailable.",
+};
 
 describe("read-only system and managed layers", () => {
   test("Codex shows /etc/codex config.toml below the user file and managed_config.toml above it", async () => {
@@ -145,23 +153,56 @@ describe("container sources", () => {
     };
   }
 
-  test("Cursor's container home file is labelled as the container's own, not a copy", async () => {
-    const specs = await containerSources("cursor", "c1", "Container reason.");
-    const user = specs.find((spec) => spec.sourceId === "cursor:user")!;
-    expect(user.label).toBe("Container home (container's own file)");
-    expect(user.readOnlyReason).toContain(CONTAINER_OWN_FILE_REASON);
-    const codex = (await containerSources("codex", "c1", "Container reason.")).find(
-      (spec) => spec.sourceId === "codex:user",
+  test("copied homes are environment-private overlay sources; other files stay read-only", async () => {
+    for (const provider of ["claude", "codex", "cursor", "grok", "pi"] as const) {
+      const user = (await containerSources(provider, "c1", WRITABLE)).find(
+        (spec) => spec.sourceId === `${provider}:user`,
+      )!;
+      expect(user).toMatchObject({
+        scope: "environment-private",
+        owner: "environment-overlay",
+        writable: true,
+        label: "This environment (container home)",
+        createMode: 0o600,
+      });
+      expect(user.readOnlyReason).toBeUndefined();
+    }
+    const claude = await containerSources("claude", "c1", WRITABLE);
+    const local = claude.find((spec) => spec.scope === "claude-local")!;
+    expect(local.writable).toBe(false);
+    expect(local.readOnlyReason).toBe(CONTAINER_CLAUDE_LOCAL_REASON);
+  });
+
+  test("project files are writable only on a persistent workspace", async () => {
+    const ephemeral = (await containerSources("codex", "c1", WRITABLE)).find(
+      (spec) => spec.scope === "project",
     )!;
-    expect(codex.label).toBe("Container home (copied from backend user)");
-    expect(codex.readOnlyReason).toBe("Container reason.");
+    expect(ephemeral.writable).toBe(false);
+    expect(ephemeral.readOnlyReason).toBe(CONTAINER_PROJECT_EPHEMERAL_REASON);
+    const persistent = (
+      await containerSources("codex", "c1", { ...WRITABLE, persistentWorkspace: true })
+    ).find((spec) => spec.scope === "project")!;
+    expect(persistent.writable).toBe(true);
+    expect(persistent.trust).toBe("allowed");
+  });
+
+  test("without a writer nothing in the container is writable", async () => {
+    const specs = await containerSources("codex", "c1", {
+      writable: false,
+      persistentWorkspace: true,
+      unavailableReason: "No writer.",
+    });
+    expect(specs.filter((spec) => spec.format !== "runtime").every((spec) => !spec.writable)).toBe(
+      true,
+    );
+    expect(specs.find((spec) => spec.sourceId === "codex:user")!.readOnlyReason).toBe("No writer.");
   });
 
   test("OpenCode's alternate file names are found inside the container", async () => {
     const specs = await containerSources(
       "opencode",
       "c1",
-      "Container reason.",
+      READ_ONLY,
       reader({
         "/home/node/.config/opencode/opencode.jsonc": "{}",
         "/workspace/opencode.jsonc": "{}",
@@ -176,11 +217,37 @@ describe("container sources", () => {
     expect(specs.every((spec) => spec.format === "runtime" || spec.writable === false)).toBe(true);
   });
 
+  test("persisted OpenCode source ids retain only fixed supported user filenames", async () => {
+    const specs = await containerSources(
+      "opencode",
+      "c1",
+      {
+        ...WRITABLE,
+        overlaySourceIds: [
+          "opencode:user-config.json",
+          "opencode:user-../../escape.json",
+          "opencode:user-arbitrary.json",
+          "opencode:project-config.json",
+        ],
+      },
+      reader({ "/home/node/.config/opencode/opencode.jsonc": "{}" }),
+    );
+    const own = specs.filter((spec) => spec.scope === "environment-private");
+    expect(own.map((spec) => spec.sourceId)).toEqual([
+      "opencode:user-config.json",
+      "opencode:user-opencode.jsonc",
+    ]);
+    expect(own.map((spec) => spec.path)).toEqual([
+      "/home/node/.config/opencode/config.json",
+      "/home/node/.config/opencode/opencode.jsonc",
+    ]);
+  });
+
   test("Grok's compat switches are read from the container's own config", async () => {
     const specs = await containerSources(
       "grok",
       "c1",
-      "Container reason.",
+      READ_ONLY,
       reader({ "/home/node/.grok/config.toml": `[compat.cursor]\nmcps = false\n` }),
     );
     const cursor = specs.find((spec) => spec.sourceId === "grok:compat-cursor-user")!;
@@ -190,7 +257,7 @@ describe("container sources", () => {
   });
 
   test("without a reader only the default files are listed", async () => {
-    const specs = await containerSources("opencode", "c1", "Container reason.");
+    const specs = await containerSources("opencode", "c1", READ_ONLY);
     expect(specs.map((spec) => spec.sourceId)).toEqual([
       "opencode:user-opencode.json",
       "opencode:project-opencode.json",

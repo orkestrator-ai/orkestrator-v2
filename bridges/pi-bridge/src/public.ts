@@ -8,13 +8,14 @@
  */
 import {
   withoutProviderSandbox,
+  type BridgePromptDispatchStatus,
   type NativeAgentContextUsage,
   type NativeAgentExecutionPolicy,
   type NativeAgentReadiness,
   type NativeAgentRuntimeSummary,
 } from "@orkestrator/protocol/native-agent";
 import { transcriptTailStart } from "@orkestrator/protocol/node/transcript-window";
-import { approvalsEnabled, PROVIDER } from "./config.js";
+import { PROVIDER } from "./config.js";
 import { publicPiMcpServers } from "./mcp.js";
 import {
   piRunId,
@@ -198,14 +199,22 @@ export function publicActivity(state: SessionState): JsonObject {
  *
  * `dispatched` is only ever an explicit positive from this process's own
  * journal. A record that predates a restart is persisted as `ambiguous` and
- * answers `unknown`, so a lost record can never be mistaken for a prompt that
- * was never sent — the caller would run the same turn twice.
+ * answers `lost`, exactly where the prompt route refuses the id with 410
+ * `DISPATCH_OUTCOME_LOST_KIND`: never `dispatched`, and never "not sent" —
+ * the caller would run the same turn twice. A local reply is not lost.
+ * Everything else is `unknown`.
  */
 export function publicDispatch(state: SessionState, requestId: string): JsonObject {
   const entry = requestId ? state.promptJournal.get(requestId) : undefined;
   const dispatched =
     entry?.state === "accepted" || entry?.state === "completed" || entry?.state === "failed";
-  return { dispatch: dispatched ? "dispatched" : "unknown" };
+  const lost = entry?.state === "ambiguous" && !entry.local;
+  const dispatch: BridgePromptDispatchStatus = dispatched
+    ? "dispatched"
+    : lost
+      ? "lost"
+      : "unknown";
+  return { dispatch };
 }
 
 export function publicSteerDispatch(state: SessionState, requestId: string): JsonObject {
@@ -270,15 +279,14 @@ export function publicContextUsage(state: SessionState): NativeAgentContextUsage
 /**
  * The interaction kinds this session can actually raise.
  *
- * Read from the live gate rather than from the platform table: Pi's approval
- * surface is off unless `PI_BRIDGE_REQUIRE_APPROVAL=1`, so a session with the
- * gate off never asks. Reporting the empty set is what lets the tab say so
- * instead of showing a pending list that looks like it is still loading.
+ * Read from the live gate rather than from the platform table: Pi asks only
+ * when the session's execution policy says `ask`, so a session under any
+ * other policy, or with none, never asks. Reporting the empty set is what lets
+ * the tab say so instead of showing a pending list that looks like it is still
+ * loading.
  */
 export function publicInteractionKinds(state?: SessionState): string[] {
-  return (state?.policy ? state.policy.approvals === "ask" : approvalsEnabled())
-    ? ["command-approval", "file-approval"]
-    : [];
+  return state?.policy?.approvals === "ask" ? ["command-approval", "file-approval"] : [];
 }
 
 export function publicRuntime(state: SessionState): NativeAgentRuntimeSummary {

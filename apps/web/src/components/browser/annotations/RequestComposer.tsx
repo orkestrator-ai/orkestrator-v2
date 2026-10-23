@@ -204,7 +204,7 @@ export function RequestComposer({
   return (
     <section
       aria-label="Ask an agent"
-      className="space-y-2 rounded-md border border-border/70 p-2"
+      className="min-w-0 space-y-2 rounded-md border border-border/70 p-2"
       onKeyDown={(event) => {
         if (event.key === "Escape") {
           event.stopPropagation();
@@ -245,22 +245,24 @@ export function RequestComposer({
           type="button"
           size="sm"
           variant={operation === "discuss" ? "secondary" : "outline"}
-          className="h-7 px-2 text-xs"
+          className="h-auto min-h-7 max-w-full whitespace-normal break-words px-2 py-1 text-left text-xs"
           disabled={!features.dispatch || preparing || !destination}
           onClick={() => void prepare("discuss")}
         >
-          Discuss with {destinationLabel}
-          {advisory ? " (advisory)" : ""}
+          <span className="min-w-0 break-words">
+            Discuss with {destinationLabel}
+            {advisory ? " (advisory)" : ""}
+          </span>
         </Button>
         <Button
           type="button"
           size="sm"
           variant={operation === "implement" ? "secondary" : "outline"}
-          className="h-7 px-2 text-xs"
+          className="h-auto min-h-7 max-w-full whitespace-normal break-words px-2 py-1 text-left text-xs"
           disabled={!features.dispatch || preparing || !destination}
           onClick={() => void prepare("implement")}
         >
-          Request changes from {destinationLabel}
+          <span className="min-w-0 break-words">Request changes from {destinationLabel}</span>
         </Button>
         <Button
           type="button"

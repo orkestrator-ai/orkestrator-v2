@@ -21,10 +21,10 @@ import {
   captureWarnings,
   createProviderStub,
   createStorage,
-  internals,
   pendingInteractionSnapshot,
   withService,
 } from "./native-agent-service-projection-test-support.js";
+import { collaborators } from "./native-agent-service-test-collaborators.js";
 
 describe("NativeAgentService projection lifecycle", () => {
   test("keeps non-blocking questions visible without blocking the active turn", async () => {
@@ -247,7 +247,7 @@ describe("NativeAgentService projection lifecycle", () => {
           // carrying a prompt the user is waiting on, and disposing it aborts
           // every request it has in flight.
           expect(stale.dispose).not.toHaveBeenCalled();
-          expect(internals(service).providerRegistry.stateForTesting().providers.size).toBe(0);
+          expect(collaborators(service).providerRegistry.stateForTesting().providers.size).toBe(0);
 
           clock += 2_000;
           await service.reconcileAgentActivity();
@@ -322,7 +322,7 @@ describe("NativeAgentService projection lifecycle", () => {
       activity: async () => {
         // Stand in for a tab that resolved a fresh provider while this
         // read-only sweep was in flight.
-        internals(serviceRef!)
+        collaborators(serviceRef!)
           .providerRegistry.stateForTesting()
           .providers.set("env-1\u0000codex", replacement.provider);
         throw new ProviderUnavailableError("bridge stopped");
@@ -348,7 +348,7 @@ describe("NativeAgentService projection lifecycle", () => {
           await service.reconcileAgentActivity();
         });
 
-        expect(internals(service).providerRegistry.cached("env-1\u0000codex")).toBe(
+        expect(collaborators(service).providerRegistry.cached("env-1\u0000codex")).toBe(
           replacement.provider,
         );
         expect(replacement.dispose).not.toHaveBeenCalled();

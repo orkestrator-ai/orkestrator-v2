@@ -1,4 +1,5 @@
 import { invoke } from "@/lib/native/backend";
+import { invokeCommandNodeSetting } from "@/lib/portal/command-node-config";
 import { AGENT_MAIL_MAX_MESSAGES_PER_MAILBOX } from "@orkestrator/protocol/agent-mail";
 import type { AgentRegistrySnapshot } from "@orkestrator/protocol/agent-registry";
 import type {
@@ -145,12 +146,13 @@ export function discardAgentMailInject(
   return invoke("discard_agent_mail_inject", { environmentId, tabId, messageId });
 }
 
+/** Messaging settings are the command node's, which its leaves inherit. */
 export function getAgentMessagingSettings(): Promise<AgentMessagingSettings> {
-  return invoke("get_agent_messaging_settings");
+  return invokeCommandNodeSetting("get_agent_messaging_settings");
 }
 
 export function updateAgentMessagingSettings(settings: AgentMessagingSettings): Promise<unknown> {
-  return invoke("update_agent_messaging_settings", { settings });
+  return invokeCommandNodeSetting("update_agent_messaging_settings", { settings });
 }
 
 export function setAgentMessagingPaused(paused: boolean): Promise<{ paused: boolean }> {

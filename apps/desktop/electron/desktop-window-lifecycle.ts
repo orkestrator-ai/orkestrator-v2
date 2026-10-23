@@ -53,7 +53,8 @@ export function releaseBoundWindowIfQuitting(options: {
   return true;
 }
 
-function connectionPartitionKey(connectionId: string): string {
+/** Non-sensitive key of a connection (or node) in partition names. */
+export function connectionPartitionKey(connectionId: string): string {
   return createHash("sha256").update(connectionId).digest("hex").slice(0, 16);
 }
 
@@ -64,6 +65,15 @@ export function rendererPartitionForWindow(
 ): string | undefined {
   if (useLegacyDefaultSession) return undefined;
   return `persist:orkestrator-renderer-${slot}-${connectionPartitionKey(connectionId)}`;
+}
+
+/**
+ * A workspace realm's renderer storage: per window slot and node, so the
+ * node's presentation state (drafts, layouts) stays with it, as it would for
+ * a window connected to that node directly.
+ */
+export function rendererPartitionForRealm(slot: number, nodeId: string): string {
+  return `persist:orkestrator-realm-${slot}-${connectionPartitionKey(nodeId)}`;
 }
 
 export function browserPreviewPartitionForWindow(slot: number, connectionId: string): string {

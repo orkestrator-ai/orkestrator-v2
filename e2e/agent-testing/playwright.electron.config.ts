@@ -13,6 +13,8 @@ export default defineConfig({
     "terminal-input-resume-electron.spec.ts",
     "service-preview-electron.spec.ts",
     "artifact-host-electron.spec.ts",
+    "design-canvas-electron.spec.ts",
+    "workspace-realm-electron.spec.ts",
   ],
   workers: 1,
   timeout: 120_000,

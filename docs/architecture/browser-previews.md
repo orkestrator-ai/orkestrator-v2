@@ -2,7 +2,7 @@
 
 Status: Living. Shipped in #831 (`4f02156b`). Rollout gates, the evidence log
 and remaining work are in
-[service-preview-rollout.md](../todo/service-preview-rollout.md).
+[0042-service-preview-rollout.md](../todo/previews-and-annotations/0042-service-preview-rollout.md).
 
 A browser tab previews a **service**: a backend-owned identity for one
 application port in one environment. It does not preview a host port. The tab
@@ -110,6 +110,32 @@ The client never names a host, port, or container.
   the partition and the listener; different windows or connections never
   share. **Reset site data** clears only that partition, and never runs on a
   tab switch.
+- Partitions nothing can use again are ended by Electron
+  (`PreviewPartitionRetention`, `preview-partition-retention.ts`), because the
+  backend knows nothing about client partitions. A minute after a window's
+  preview transport starts, and every 30 minutes while it lives, Electron
+  fetches its backend's full, unfiltered `get_preview_services` list and
+  clears that connection's service partitions (in every window slot) whose
+  service is gone. Forgetting a connection clears all its service partitions,
+  and its shared legacy partitions once no window uses it. Clearing goes
+  through the Electron session (storage, cookies, service workers, caches);
+  the emptied directory is removed on the next start, before any session
+  exists (`preview-partitions-pending.json`). A partition a live transport
+  or window holds is never touched; a filtered, not-modified or failed list
+  clears nothing. Partitions are listed before the list is fetched, and service ids
+  are never reused, so a service created meanwhile is never a candidate.
+  Forgotten connection keys are recorded durably in
+  `preview-partitions-pending.json.forgotten` before clearing starts. An
+  independent retry owner attempts at most 64 clears per pass, including
+  failures, even after every transport closes. Failed clears and held
+  partitions remain eligible; retries rotate candidates so failures cannot
+  starve the rest. At startup, the whole-connection journal also identifies
+  directories whose clear never completed. They can be removed before any
+  preview session exists. A failed removal retains the connection intent;
+  it never counts as evidence of a successful native clear. The per-directory
+  journal admits at most 1,024 entries until startup removes them, and the
+  forgotten-key journal refuses admission at 1,024 keys without evicting
+  earlier cleanup intent.
 - The listener first binds the port it used last for that service (bind, never
   probe-then-close), so origin-keyed storage such as localStorage usually
   survives a restart. If the port is taken, a fresh one is used and that
@@ -185,7 +211,17 @@ attributes are removed, so application cookies become host-only rather than
 widened. The preview listener has no control dispatch, so control cookies are
 never valid on preview hosts. Cookie-authenticated writes and WebSocket
 upgrades must carry a same-service `Origin` (or `Sec-Fetch-Site: same-origin`)
-and are refused before forwarding otherwise. The application's own
+and are refused before forwarding otherwise. Reads (`GET`, `HEAD`, `OPTIONS`)
+are checked too, because every service host is same-site with its siblings and
+the `SameSite=Lax` cookie rides their subresource requests. With
+`Sec-Fetch-Site: same-origin` or `none` they pass. From any other site or
+service only a top-level document navigation (`Sec-Fetch-Mode: navigate`,
+`Sec-Fetch-Dest: document`, not a `Sec-Purpose: prefetch`) passes, so links,
+redirects and the sign-in chain keep working while fetches, images, scripts,
+frames and workers get `403` before forwarding. Without Fetch Metadata a
+foreign `Origin` is refused. All of these count as `http.rejected{forbidden}`
+(`crossSiteViolation` and `crossServiceReadViolation` in
+`packages/protocol/src/preview-header-policy.ts`). The application's own
 `Authorization` headers and cookies pass through unchanged.
 
 External-browser access is its own attachment with a session lease (30 minutes
@@ -246,6 +282,12 @@ to the preview path must keep these boundaries:
   (including CGNAT tailnet ranges) other than the service's own ingress, so a
   page cannot silently fall back to a service on the user's machine. This is
   enforced through `webRequest`, not assumed from the sandbox.
+- **Services cannot reach each other with the user's session.** On private
+  origins, a request carrying one service's preview cookie is forwarded only
+  if it comes from that service, from the user, or is a top-level document
+  navigation. The desktop tunnel gets the same result from per-service
+  partitions and an ingress credential injected only for the service's own
+  origin.
 
 ### Desktop credential and data path
 
@@ -285,7 +327,7 @@ pooled per service; nothing is replayed after a reconnect.
 | Attachment and credential hash | Backend `PreviewAccessService` | Release (by the client, on the issuing backend, including after a connection change or window close), lease expiry, generation change, service removal, credential rotation, kill switch, shutdown |
 | Tunnel sockets and upstream TCP | Backend `PreviewTunnelServer` | Closing either leg closes both; revocation closes everything tracked for the attachment |
 | Local ingress listener and ingress secret | Electron `PreviewTransportManager` | Last attachment release plus a short retirement lease, connection change, window close, app quit |
-| Service partition cookies and storage | Electron session | **Reset site data** for that service only (see [service-preview-rollout.md](../todo/service-preview-rollout.md) for retention) |
+| Service partition cookies and storage | Electron session | **Reset site data** for that service only; cleared once its service is gone from the backend's list or its connection is forgotten, directory removed on the next start (shared legacy partitions of live connections: see [0042-service-preview-rollout.md](../todo/previews-and-annotations/0042-service-preview-rollout.md)) |
 | Browser preview session cookie | Browser holds the value; backend owns validity | Server-side idle and absolute expiry, revocation |
 
 ## Operator controls
@@ -407,35 +449,71 @@ the private `Host` instead. Inbound forwarding headers are always discarded.
   `https://s-….<domain>` and register its callback URL with the OAuth provider.
   Use that configured origin when generating redirect URIs on writes or
   fetches too. The desktop ingress port can change between sessions, so use
-  the published service origin for OAuth flows.
+  the published service origin for OAuth flows. Hidden-iframe silent renewal
+  that redirects through an external identity provider and back is unsupported:
+  even when this service embeds the iframe, the return can carry
+  `Sec-Fetch-Site: cross-site` and `Sec-Fetch-Dest: iframe`, so it receives
+  `403` before reaching the application and increments
+  `http.rejected{forbidden}`. Firefox and WebKit in the test run dropped the
+  Lax preview cookie on this return and received `401` before the metadata
+  check instead. Use refresh tokens (when supported by the provider), a popup,
+  or a top-level redirect flow instead. Direct same-origin
+  iframe loads still work. Allowing cross-site iframe returns would also let
+  a sibling service launder a frame through an external redirect.
 - Applications that build absolute URLs from `Host` produce `localhost` links.
   Set an explicit public origin for URL generation across all request types;
   `X-Forwarded-Host` is absent on mapped-Origin requests, and falling back to
   `Host` there produces private URLs. An application that hardcodes a different
   `localhost` API origin needs that origin configured. Both are configuration
   limitations, not transport bugs.
+- **Frontend and API as two services**: a page on one private origin cannot
+  fetch, embed or load assets from a sibling service; only links between them
+  work. Proxy the API through the frontend's development server (for example
+  Vite `server.proxy` to `http://localhost:<api port>`) so the browser sees one
+  service.
 
 ## Known limitations
 
 - Embedded previews in web and iOS clients are not advertised. They have not
   passed real-browser privacy tests, so those clients open the preview
   top-level.
-- Top-level private origins are verified in Chromium only
-  (`e2e/preview/private-origin.spec.ts`).
+- Same-service iframe authentication returns through an external identity
+  provider are unsupported on private origins; use refresh tokens, popup or
+  top-level redirect renewal (see **Framework configuration**). Fetch Metadata
+  describes the redirect chain, so the final same-service URL does not make
+  the request same-origin.
+- Top-level private origins are verified in Playwright Chromium, Firefox and
+  WebKit (`e2e/preview/private-origin.spec.ts`). WebKit is engine coverage;
+  shipping Safari and iOS are not qualified by it. Firefox/WebKit tests use
+  a certificate bypass scoped to throwaway contexts, so they do not prove
+  deployment certificate trust.
 - The following have not been validated:
-  - Firefox, Safari, and iOS devices;
+  - shipping Safari and iOS devices;
   - Docker Desktop;
   - a real Electron window;
   - a two-machine tailnet run.
 
   See the evidence log in
-  [service-preview-rollout.md](../todo/service-preview-rollout.md).
+  [0042-service-preview-rollout.md](../todo/previews-and-annotations/0042-service-preview-rollout.md).
 - Application script on one service host can set a parent-domain cookie for
   its own application cookie names (never the reserved ones). Mutually
   untrusted services need separate preview domains.
 - An application service worker can intercept the service host's sign-in path
   and block re-sign-in. The sign-in code only authorizes that same service, so
-  nothing leaks, but the user must clear the site's data to recover.
+  nothing leaks, but the user must clear the site's data to recover (observed
+  in real Chromium on 2026-10-22). The worker can also carry the code
+  elsewhere and redeem it once from another browser, for that same service
+  only.
+- Cross-service reads are refused by Fetch Metadata, verified in Chromium 156,
+  Firefox 157 and Playwright WebKit 27.2. A browser that sends no
+  `Sec-Fetch-Site` (Firefox before 90, Safari before 16.4) can still send a blind credentialed `no-cors` `GET` to a
+  sibling, and a sibling can still navigate the top-level window to another
+  service. A live Tailscale Serve 1.102.4 probe preserved `Sec-Fetch-*` and
+  `Sec-Purpose`, including prefetch/prerender; wildcard private DNS,
+  certificates and browser traffic through `publicPort` still need deployment
+  qualification. If another forwarder strips metadata, reads fall back to
+  the `Origin` check. See
+  [0054-preview-cross-service-reads.md](../todo/previews-and-annotations/0054-preview-cross-service-reads.md).
 - The relay needs `node` or `bun` in the image, and the `node` user.
 - Only HTTP/1.1 and WebSockets are carried. HTTP/2-only features, HTTP/3,
   WebTransport, and UDP are not.

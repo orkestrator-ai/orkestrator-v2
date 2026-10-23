@@ -913,6 +913,227 @@ describe("ACP provider commands", () => {
       commands: { outcome: "unsupported" },
     });
   });
+
+  // A backend from before the version-1 catalogue (ff4026b4e^, before #827)
+  // talking to this bridge. Nested so it reuses `commandBridge`.
+  describe("mixed-version: old backend, current bridge", () => {
+    const LEGACY_SOURCES = new Set([
+      "builtin",
+      "project",
+      "user",
+      "plugin",
+      "skill",
+      "template",
+      "extension",
+      "orkestrator",
+    ]);
+
+    /**
+     * The row reader of `HttpBridgeCatalogAdapter.slashCommands` at
+     * `ff4026b4e^:apps/backend/src/core/http-bridge-catalog.ts:72-110`, minus
+     * its byte truncation. It read `payload.commands` only, ignored unknown
+     * fields, and prefixed a missing leading `/`.
+     */
+    function legacyReadCommands(payload: unknown) {
+      const record = (value: unknown) =>
+        value && typeof value === "object" && !Array.isArray(value)
+          ? (value as Record<string, unknown>)
+          : undefined;
+      const commands = record(payload)?.commands;
+      if (!Array.isArray(commands)) return [];
+      const read = new Map<string, Record<string, unknown>>();
+      for (const candidate of commands.slice(0, 512)) {
+        const command = typeof candidate === "string" ? { name: candidate } : record(candidate);
+        const rawName = typeof command?.name === "string" ? command.name : "";
+        if (!rawName) continue;
+        const name = rawName.startsWith("/") ? rawName : `/${rawName}`;
+        read.set(name, {
+          name,
+          source: LEGACY_SOURCES.has(command?.source as string) ? command!.source : "unknown",
+          ...(typeof command?.description === "string" ? { description: command.description } : {}),
+          ...(typeof command?.argumentHint === "string"
+            ? { argumentHint: command.argumentHint }
+            : {}),
+          ...(Array.isArray(command?.aliases)
+            ? { aliases: command.aliases.filter((alias) => typeof alias === "string") }
+            : {}),
+          ...(command?.scope === "global" || command?.scope === "session"
+            ? { scope: command.scope }
+            : {}),
+        });
+      }
+      return [...read.values()];
+    }
+
+    test("an unknown session answers in band where the old fallback would have thrown", async () => {
+      const bridge = await commandBridge();
+      const read = (path: string) =>
+        nativeFetch(`${bridge.base}${path}`, { headers: bridge.headers }).then(
+          async (response) => ({
+            status: response.status,
+            body: (await response.json()) as unknown,
+          }),
+        );
+      // Neither global route ever existed on ACP: pre-#827 they fell through
+      // to the same `Not found` answer (ff4026b4e^:bridges/acp-bridge/src/acp-http.ts:184).
+      expect(await read("/plugins/commands")).toEqual({
+        status: 404,
+        body: { error: "Not found" },
+      });
+      expect(await read("/global/slash-commands")).toEqual({
+        status: 404,
+        body: { error: "Not found" },
+      });
+
+      // Pre-#827 an unknown session's `/commands` was 404 `Session not found`
+      // (acp-http.ts:192 there); the old reader then fell back to
+      // `/plugins/commands`, got 404 again and `assertOk` threw. In band, the
+      // same reader now gets an empty list instead of an error.
+      const missing = await read("/session/missing/commands");
+      expect(missing.status).toBe(200);
+      expect(missing.body).toMatchObject({ status: "missing", commands: [] });
+      expect(legacyReadCommands(missing.body)).toEqual([]);
+
+      // The snapshot keeps its 404, which the old reader maps to `missing`.
+      expect((await read("/session/missing/status")).status).toBe(404);
+    });
+
+    test("the enhanced session catalogue still reads as the old command list", async () => {
+      const bridge = await commandBridge({
+        commands: [
+          review,
+          { name: "/commit", description: "Commit" },
+          { name: "plan" },
+          { name: "legacy", description: "Old spelling", inputHint: "<legacy>" },
+        ],
+      });
+      const response = await bridge.request("/commands");
+      expect(response.status).toBe(200);
+      const payload = (await response.json()) as Catalogue;
+      expect(payload.status).toBe("ready");
+
+      // The envelope is additive: the rows alone read exactly the same.
+      expect(Array.isArray(payload.commands)).toBe(true);
+      expect(Object.keys(payload).sort()).toEqual([
+        "catalogueVersion",
+        "commands",
+        "freshness",
+        "generation",
+        "revision",
+        "status",
+        "truncated",
+      ]);
+      expect(legacyReadCommands({ commands: payload.commands })).toEqual(
+        legacyReadCommands(payload),
+      );
+
+      for (const row of payload.commands) {
+        // Already `/`-prefixed, so the old reader's prefixing is a no-op and
+        // the name it keys on is the one this bridge sends.
+        expect(row.name).toEqual(expect.stringMatching(/^\/\S+$/));
+        expect(LEGACY_SOURCES.has(row.source as string) || row.source === "unknown").toBe(true);
+        for (const field of ["description", "argumentHint"] as const) {
+          if (field in row) expect(typeof row[field]).toBe("string");
+        }
+        if ("aliases" in row) {
+          expect((row.aliases as unknown[]).every((alias) => typeof alias === "string")).toBe(true);
+        }
+        expect(["global", "session", undefined]).toContain(row.scope as string | undefined);
+      }
+
+      // What the old backend now shows. Differences from the pre-#827 bridge
+      // (ff4026b4e^:bridges/acp-bridge/src/acp-session.ts:959-980): source was
+      // `builtin` and is `unknown`; a missing description no longer defaults
+      // to the name; the hint now prefers standard ACP `input.hint` over
+      // `inputHint`, so `/review` shows `<path>` where it showed `legacy hint`.
+      expect(legacyReadCommands(payload)).toEqual([
+        {
+          name: "/review",
+          source: "unknown",
+          description: "Review changes",
+          argumentHint: "<path>",
+          scope: "session",
+        },
+        { name: "/commit", source: "unknown", description: "Commit", scope: "session" },
+        { name: "/plan", source: "unknown", scope: "session" },
+        {
+          name: "/legacy",
+          source: "unknown",
+          description: "Old spelling",
+          argumentHint: "<legacy>",
+          scope: "session",
+        },
+      ]);
+    });
+
+    test("the session snapshot keeps the legacy keys and revision the old reader used", async () => {
+      const bridge = await commandBridge({ commands: [review] });
+      await waitFor(bridge.catalogue, (value) => value.status === "ready");
+      type Snapshot = Record<string, unknown> & {
+        revision: number;
+        commandRevision: number;
+        composer: Record<string, unknown>;
+      };
+      const snapshot = async () => {
+        const status = (await bridge
+          .request("/status")
+          .then((response) => response.json())) as Snapshot;
+        const session = (await bridge.request("").then((response) => response.json())) as {
+          revision: number;
+        };
+        return { status, sessionRevision: session.revision };
+      };
+      // The checks the old Grok/ACP snapshot readers made
+      // (ff4026b4e^:apps/backend/src/core/http-bridge-provider.ts:705-715 and
+      // http-bridge-progressive.ts, which prefers `messageRevision` over
+      // `revision` as the provider revision).
+      const expectLegacyShape = (status: Snapshot) => {
+        expect(["idle", "running", "error"]).toContain(status.status as string);
+        expect(Number.isSafeInteger(status.revision)).toBe(true);
+        expect(Array.isArray(status.composer.models)).toBe(true);
+        expect(Array.isArray(status.composer.modes)).toBe(true);
+        expect(typeof status.runtime).toBe("object");
+        if ("error" in status) expect(typeof status.error).toBe("string");
+        expect(status).not.toHaveProperty("messageRevision");
+        expect(Number.isSafeInteger(status.commandRevision)).toBe(true);
+      };
+
+      const before = await snapshot();
+      expectLegacyShape(before.status);
+      // `revision` is still the session revision, not the command counter.
+      expect(before.status.revision).toBe(before.sessionRevision);
+
+      await fs.writeFile(bridge.commandsFile, "[]");
+      expect((await bridge.prompt({ prompt: "COMMANDS_UPDATE" })).status).toBe(202);
+      await bridge.idle();
+      const after = await snapshot();
+      expectLegacyShape(after.status);
+      expect(after.status.commandRevision).toBe(before.status.commandRevision + 1);
+      expect(after.status.revision).toBe(after.sessionRevision);
+      // A push advanced `revision` before #827 too (acp-session.ts:977 there).
+      expect(after.status.revision).toBeGreaterThan(before.status.revision);
+    });
+
+    test("an old backend's prompt body is sent to the agent as typed", async () => {
+      const bridge = await commandBridge({ commands: [review] });
+      await waitFor(bridge.catalogue, (value) => value.status === "ready");
+      // No `allowProviderCommands`, no `command`: the old sender's body. It
+      // means "interpret", and the bridge forwards the text unchanged — no
+      // canonicalization, and no 422 for a name the inventory lacks (the old
+      // sender would surface a 422 as a rejected prompt).
+      for (const [requestId, prompt] of [
+        ["legacy-command-1", "/REVIEW  src/a.ts"],
+        ["legacy-command-2", "/unlisted do it"],
+      ] as const) {
+        expect((await bridge.prompt({ prompt, requestId })).status).toBe(202);
+        await bridge.idle();
+      }
+      expect(await bridge.blocks()).toEqual([
+        [{ type: "text", text: "/REVIEW  src/a.ts" }],
+        [{ type: "text", text: "/unlisted do it" }],
+      ]);
+    });
+  });
 });
 
 describe("Grok sign-in routes carry no credential", () => {

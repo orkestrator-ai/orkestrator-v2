@@ -1,5 +1,8 @@
 import { describe, expect, mock, test } from "bun:test";
 
+import { installControlledTimeout } from "../../../tests/helpers/controlled-timeout";
+import { TERMINAL_ACTIVITY_SETTLE_MS } from "../src/core/commands-runtime-state";
+import { TERMINAL_ACTIVITY_PERSIST_RETRY_DELAYS_MS } from "../src/core/commands-terminal";
 import { createCommandFixtures } from "./command-fixtures";
 
 const {
@@ -4035,29 +4038,46 @@ exec env PORT_ARG="$PORT" HOST_ARG="$HOST" node -e 'const http = require("node:h
       const notifyAgentTurnCompleted = mock(async () => undefined);
       context.notifyAgentTurnCompleted = notifyAgentTurnCompleted;
       const commands = createCommandRegistry();
+      // Fire the output settle debounce and the first persistence retry on
+      // demand instead of sleeping past them.
+      const settle = installControlledTimeout(TERMINAL_ACTIVITY_SETTLE_MS, {
+        label: "terminal activity settle",
+      });
+      const retry = installControlledTimeout(TERMINAL_ACTIVITY_PERSIST_RETRY_DELAYS_MS[0], {
+        label: "terminal completion persistence retry",
+      });
+      try {
+        const sessionId = terminalSessionResult(
+          await commands.get("create_local_terminal_session")?.(
+            {
+              environmentId: environment.id,
+              terminalKey: "agent-tab",
+              cols: 80,
+              rows: 24,
+              trackEnvironmentActivity: true,
+            },
+            context,
+          ),
+        ).sessionId;
+        await commands.get("start_local_terminal_session")?.({ sessionId }, context);
+        await commands.get("local_terminal_write")?.({ sessionId, data: "codex\r" }, context);
+        ptyProcesses[0]?.emitData("done\r\n");
+        expect(settle.advance()).toBe(1);
+        await waitForCondition(
+          () => recordCompletion.mock.calls.length === 1,
+          "first failed completion write",
+        );
+        await waitForCondition(() => retry.pendingCount() === 1, "the completion retry to arm");
 
-      const sessionId = terminalSessionResult(
-        await commands.get("create_local_terminal_session")?.(
-          {
-            environmentId: environment.id,
-            terminalKey: "agent-tab",
-            cols: 80,
-            rows: 24,
-            trackEnvironmentActivity: true,
-          },
-          context,
-        ),
-      ).sessionId;
-      await commands.get("start_local_terminal_session")?.({ sessionId }, context);
-      await commands.get("local_terminal_write")?.({ sessionId, data: "codex\r" }, context);
-      ptyProcesses[0]?.emitData("done\r\n");
-      await waitForCondition(
-        () => recordCompletion.mock.calls.length === 1,
-        "first failed completion write",
-      );
-
-      await commands.get("delete_environment")?.({ environmentId: environment.id }, context);
-      await Bun.sleep(900);
+        await commands.get("delete_environment")?.({ environmentId: environment.id }, context);
+        // Fire the retry if deletion left it armed: it must neither persist
+        // nor notify for a deleted environment.
+        retry.advance();
+        await new Promise((resolve) => setImmediate(resolve));
+      } finally {
+        retry.restore();
+        settle.restore();
+      }
 
       expect(recordCompletion).toHaveBeenCalledTimes(1);
       expect(notifyAgentTurnCompleted).not.toHaveBeenCalled();

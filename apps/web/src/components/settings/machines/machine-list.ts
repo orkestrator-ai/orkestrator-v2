@@ -22,8 +22,9 @@ import type { HostMaintenanceSnapshot } from "@orkestrator/protocol/host-mainten
  * - this device's own saved connections (desktop only), which open windows
  *   and switch this window directly.
  *
- * Entries are merged by installation identity, so a machine that is both a
- * registered node and a saved connection is listed once.
+ * Entries are merged by installation identity or by a shared address, so a
+ * machine that is both a registered node and a saved connection, or is
+ * saved more than once (Local and its Tailscale address), is listed once.
  */
 
 /**
@@ -149,6 +150,38 @@ function connectionStatus(connection: ConnectionSummary): string {
   return CONNECTION_STATE_TEXT[connection.transport ?? "disabled"] ?? "Not connected";
 }
 
+/** The HTTPS hosts a saved connection reaches its machine at. */
+function connectionHosts(connection: ConnectionSummary): Set<string> {
+  const hosts = new Set<string>();
+  if (connection.address) hosts.add(hostOf(connection.address).toLowerCase());
+  for (const route of connection.routes ?? []) {
+    if (route.kind !== "https" || !route.label) continue;
+    hosts.add(
+      hostOf(route.label.includes("://") ? route.label : `https://${route.label}`).toLowerCase(),
+    );
+  }
+  return hosts;
+}
+
+function nodeHosts(node: NodeView): Set<string> {
+  return new Set(
+    node.routes.flatMap((route) =>
+      route.kind === "https" ? [hostOf(route.origin).toLowerCase()] : [],
+    ),
+  );
+}
+
+/** The same machine: one proved identity, or (identity unknown or not) a shared address. */
+function sameMachine(
+  connection: ConnectionSummary,
+  nodeId: string | null,
+  hosts: Set<string>,
+): boolean {
+  if (nodeId && connection.backendId === nodeId) return true;
+  for (const host of connectionHosts(connection)) if (hosts.has(host)) return true;
+  return false;
+}
+
 function nodeConnected(node: NodeView): boolean {
   return node.connection.state === "connected" || node.connection.state === "degraded";
 }
@@ -177,9 +210,17 @@ export function buildMachineList(input: MachineListInput): MachineEntry[] {
   const selfConnection =
     saved.find((connection) => connection.active) ??
     (selfId ? saved.find((connection) => connection.backendId === selfId) : undefined);
+  const selfHosts = new Set([
+    ...(selfConnection ? connectionHosts(selfConnection) : []),
+    ...(input.selfAddress ? [hostOf(input.selfAddress).toLowerCase()] : []),
+  ]);
   // Node discovery is optional; this window still has a backend to maintain.
   {
     if (selfConnection) used.add(selfConnection.id);
+    // Other saved routes to this same machine are not machines of their own.
+    for (const connection of saved) {
+      if (sameMachine(connection, selfId, selfHosts)) used.add(connection.id);
+    }
     entries.push({
       key: `self:${selfId ?? selfConnection?.id ?? "self"}`,
       role: "self",
@@ -213,10 +254,18 @@ export function buildMachineList(input: MachineListInput): MachineEntry[] {
 
   for (const node of nodes?.nodes ?? []) {
     if (node.nodeId === selfId) continue;
-    const connection = saved.find(
-      (candidate) => !used.has(candidate.id) && candidate.backendId === node.nodeId,
+    const hosts = nodeHosts(node);
+    const matching = saved.filter(
+      (candidate) => !used.has(candidate.id) && sameMachine(candidate, node.nodeId, hosts),
     );
-    if (connection) used.add(connection.id);
+    for (const candidate of matching) used.add(candidate.id);
+    // Prefer the saved connection with the node's proved identity, then one with a token.
+    const connection =
+      matching.find(
+        (candidate) => candidate.backendId === node.nodeId && !candidate.requiresToken,
+      ) ??
+      matching.find((candidate) => !candidate.requiresToken) ??
+      matching[0];
     const route = primaryNodeRoute(node);
     const connected = nodeConnected(node);
     entries.push({
@@ -237,8 +286,17 @@ export function buildMachineList(input: MachineListInput): MachineEntry[] {
     });
   }
 
-  for (const connection of saved) {
-    if (used.has(connection.id)) continue;
+  for (const candidate of saved) {
+    if (used.has(candidate.id)) continue;
+    // Prefer a usable credential among duplicate device entries.
+    const hosts = connectionHosts(candidate);
+    const matching = saved.filter(
+      (other) =>
+        !used.has(other.id) &&
+        (other === candidate || sameMachine(other, candidate.backendId ?? null, hosts)),
+    );
+    const connection = matching.find((other) => !other.requiresToken) ?? candidate;
+    for (const other of matching) used.add(other.id);
     entries.push({
       key: `device:${connection.id}`,
       role: "device",

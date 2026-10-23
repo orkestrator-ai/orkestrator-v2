@@ -1,6 +1,16 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ConnectionList, ConnectionSummary } from "@orkestrator/protocol/connections";
-import { Check, ChevronDown, Eye, EyeOff, Link2, Loader2, RadioTower } from "lucide-react";
+import type { NodeStatus } from "@orkestrator/protocol/command-nodes";
+import {
+  ArrowLeftRight,
+  Check,
+  ChevronDown,
+  Eye,
+  EyeOff,
+  Link2,
+  Loader2,
+  RadioTower,
+} from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -21,7 +31,9 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { getNodeStatus } from "@/lib/backend/command-nodes";
 import { reloadAfterConnectionChange } from "@/lib/client-platform";
+import { requestCommandHandover } from "@/lib/command-handover";
 import { subscribeToConnections } from "@/lib/connections";
 
 type ConnectionsApi = NonNullable<NonNullable<Window["orkestrator"]>["connections"]>;
@@ -57,6 +69,8 @@ export function ServerConnectionSwitcher() {
   const [switchingId, setSwitchingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [readiness, setReadiness] = useState<Record<string, Readiness>>({});
+  /** Set when the connected machine is controlled by a command node elsewhere. */
+  const [leafStatus, setLeafStatus] = useState<NodeStatus | null>(null);
   const probeGenerations = useRef<Record<string, number>>({});
   const lastProbeAt = useRef<Record<string, number>>({});
   const inFlightProbes = useRef(new Set<string>());
@@ -134,6 +148,11 @@ export function ServerConnectionSwitcher() {
   const handleMenuOpenChange = (open: boolean) => {
     skipNextMenuFocus.current = open;
     if (!open) return;
+    void getNodeStatus()
+      .then((status) => {
+        if (mounted.current) setLeafStatus(status.mode === "leaf" ? status : null);
+      })
+      .catch(() => undefined);
     if (connections) {
       const activeConnection = connections.connections.find((connection) => connection.active);
       if (activeConnection) probeConnection(activeConnection, { supersede: true });
@@ -332,6 +351,23 @@ export function ServerConnectionSwitcher() {
             </DropdownMenuItem>
           ))}
           <DropdownMenuSeparator />
+          {active && leafStatus && getConnectionsApi()?.handOverCommand ? (
+            <DropdownMenuItem
+              className="items-start py-2 text-zinc-100"
+              onSelect={() =>
+                requestCommandHandover({ name: active.name, connectionId: active.id })
+              }
+            >
+              <ArrowLeftRight className="mt-0.5 h-4 w-4 text-sky-400" />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate">Make {active.name} the command node</span>
+                <span className="block truncate text-xs text-zinc-500">
+                  Controlled by{" "}
+                  {leafStatus.controllers.map((controller) => controller.displayName).join(", ")}
+                </span>
+              </span>
+            </DropdownMenuItem>
+          ) : null}
           <DropdownMenuItem className="py-2 text-zinc-100" onSelect={() => openConnectionDialog()}>
             <Link2 className="h-4 w-4 text-orange-400" />
             New connection

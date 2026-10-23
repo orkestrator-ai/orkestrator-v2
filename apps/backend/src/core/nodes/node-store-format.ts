@@ -6,6 +6,9 @@ import {
   normalizeRouteOrder,
   parseGatewayCredential,
   parseNodeRoutes,
+  parseNodeImportEntries,
+  type PendingCommandHandover,
+  type CommandHandoverReceipt,
   parsePortalOrigins,
   type ControllerAttachment,
   type DetachedController,
@@ -78,7 +81,10 @@ function nodeRecord(value: unknown): NodeRecord | null {
       fallbackName: shortText(entry.fallbackName, 255) ?? entry.nodeId,
       attachment: attachmentState(entry.attachment),
       addedAt: timestamp(entry.addedAt) ?? new Date(0).toISOString(),
-      source: entry.source === "desktop-migration" ? "desktop-migration" : "portal",
+      source:
+        entry.source === "desktop-migration" || entry.source === "handover"
+          ? entry.source
+          : "portal",
     };
     const lastConnectedAt = timestamp(entry.lastConnectedAt);
     if (lastConnectedAt) node.lastConnectedAt = lastConnectedAt;
@@ -120,6 +126,75 @@ function tombstone(value: unknown): NodeDetachTombstone | null {
   }
 }
 
+function pendingHandover(value: unknown): PendingCommandHandover | undefined {
+  const entry = record(value);
+  if (!entry || typeof entry.id !== "string" || !/^[a-zA-Z0-9-]{1,64}$/.test(entry.id)) return;
+  const target = nodeRecord(entry.target);
+  if (
+    !target ||
+    !Array.isArray(entry.movingIds) ||
+    entry.movingIds.length > MAX_REGISTERED_NODES ||
+    !entry.movingIds.every(isBackendId)
+  )
+    return;
+  try {
+    return {
+      id: entry.id,
+      target,
+      entries: parseNodeImportEntries(entry.entries),
+      movingIds: entry.movingIds,
+      selfIncluded: entry.selfIncluded === true,
+    };
+  } catch {
+    return;
+  }
+}
+
+function handoverReceipts(value: unknown): CommandHandoverReceipt[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(-64).flatMap((raw) => {
+    const entry = record(raw);
+    if (
+      !entry ||
+      typeof entry.id !== "string" ||
+      !/^[a-zA-Z0-9-]{1,64}$/.test(entry.id) ||
+      !isBackendId(entry.controllerId) ||
+      !Array.isArray(entry.controllers) ||
+      entry.controllers.length > MAX_ATTACHED_CONTROLLERS ||
+      !entry.controllers.every(isBackendId)
+    )
+      return [];
+    const counts = [
+      entry.imported,
+      entry.skipped,
+      entry.needsCredential,
+      entry.detachedControllers,
+    ];
+    if (
+      !counts.every(
+        (count) =>
+          typeof count === "number" &&
+          Number.isSafeInteger(count) &&
+          count >= 0 &&
+          count <= MAX_REGISTERED_NODES,
+      )
+    )
+      return [];
+    return [
+      {
+        completed: entry.completed === true,
+        id: entry.id,
+        controllerId: entry.controllerId,
+        controllers: entry.controllers,
+        imported: entry.imported as number,
+        skipped: entry.skipped as number,
+        needsCredential: entry.needsCredential as number,
+        detachedControllers: entry.detachedControllers as number,
+      },
+    ];
+  });
+}
+
 export function readStoredNodeRegistry(value: unknown): {
   registry: NodeRegistry;
   dropped: number;
@@ -152,6 +227,8 @@ export function readStoredNodeRegistry(value: unknown): {
     seen.add(entry.nodeId);
     tombstones.push(entry);
   }
+  const pending = pendingHandover(root.pendingHandover);
+  const receipts = handoverReceipts(root.handoverReceipts);
   return {
     registry: {
       version: 1,
@@ -159,6 +236,8 @@ export function readStoredNodeRegistry(value: unknown): {
       registrationEnabled: root.registrationEnabled === true,
       nodes,
       tombstones,
+      ...(pending ? { pendingHandover: pending } : {}),
+      ...(receipts.length ? { handoverReceipts: receipts } : {}),
       importedSources: Array.isArray(root.importedSources)
         ? root.importedSources
             .filter((entry): entry is string => typeof entry === "string" && entry.length <= 200)

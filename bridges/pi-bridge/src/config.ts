@@ -97,6 +97,23 @@ export function runtimeStorePaths(): { authPath?: string; modelsPath?: string } 
 }
 
 /**
+ * A `provider/modelId` to start on when Pi's own settings name no default, or
+ * undefined.
+ *
+ * An agent-test profile that shares the host's `auth.json` keeps its own
+ * settings, so nothing in them says which model that login can use. The
+ * backend passes the host's saved `defaultProvider` and `defaultModel` here,
+ * and nothing else from the host's settings. A value that names no provider is
+ * ignored rather than guessed at.
+ */
+export function fallbackDefaultModelId(): string | undefined {
+  const value = process.env.PI_BRIDGE_DEFAULT_MODEL?.trim();
+  if (!value || Buffer.byteLength(value) > MAX_MODEL_ID_BYTES) return undefined;
+  const separator = value.indexOf("/");
+  return separator > 0 && separator < value.length - 1 ? value : undefined;
+}
+
+/**
  * Where Pi writes its own session transcripts.
  *
  * Pi owns this file format and resumes a conversation from it, so it is the

@@ -304,10 +304,14 @@ export interface ThinkingLevelDefaults {
  *
  * Returns undefined rather than throwing when the id names nothing: a stale
  * selection is a routine state (a provider signed out, a catalogue moved on),
- * and callers fall back to the first available model rather than failing the
- * session that was merely opened.
+ * and callers fall back rather than failing the session that was merely
+ * opened. The fallback is the first of `preferredModelIds` a signed-in
+ * provider serves, then the first available model.
  */
-export async function resolveModel(modelId: string | undefined): Promise<Model<Api> | undefined> {
+export async function resolveModel(
+  modelId: string | undefined,
+  preferredModelIds: readonly string[] = [],
+): Promise<Model<Api> | undefined> {
   const runtime = await modelRuntime();
   const trimmed = modelId?.trim();
   if (trimmed) {
@@ -323,7 +327,29 @@ export async function resolveModel(modelId: string | undefined): Promise<Model<A
     CATALOG_TIMEOUT_MS,
     "Pi model availability read timed out",
   ).catch(() => []);
-  return available[0] as Model<Api> | undefined;
+  const preferred = firstPreferred(
+    preferredModelIds,
+    available.map((model) => composeModelId(model.provider, model.id)),
+  );
+  const match =
+    preferred === undefined
+      ? undefined
+      : available.find((model) => composeModelId(model.provider, model.id) === preferred);
+  return (match ?? available[0]) as Model<Api> | undefined;
+}
+
+/**
+ * The first preferred id the catalogue offers.
+ *
+ * The catalogue lists only models whose provider has configured auth, which
+ * is the same condition Pi applies to its saved default before starting on
+ * it: a default whose provider is signed out is skipped, not tried.
+ */
+function firstPreferred(
+  preferredModelIds: readonly string[],
+  availableIds: readonly string[],
+): string | undefined {
+  return preferredModelIds.find((id) => availableIds.includes(id));
 }
 
 /**
@@ -363,14 +389,23 @@ function isThinkingLevel(value: string | undefined): value is ModelThinkingLevel
  *
  * A selection the catalogue does not contain is kept rather than corrected:
  * the user chose it, the catalogue read may have been partial, and the runtime
- * is the authority on whether the pair is valid.
+ * is the authority on whether the pair is valid. With no selection, the
+ * composer opens on the first of `preferredModelIds` the catalogue offers,
+ * else on its first model.
  */
 export async function hydrateComposer(
   composer: NativeAgentComposerState,
   defaults?: ThinkingLevelDefaults,
+  preferredModelIds: readonly string[] = [],
 ): Promise<NativeAgentComposerState> {
   const models = await listModels(defaults);
-  const selectedModelId = composer.selectedModelId ?? models[0]?.id;
+  const selectedModelId =
+    composer.selectedModelId ??
+    firstPreferred(
+      preferredModelIds,
+      models.map((model) => model.id),
+    ) ??
+    models[0]?.id;
   const selected = models.find((model) => model.id === selectedModelId);
   return {
     ...composer,

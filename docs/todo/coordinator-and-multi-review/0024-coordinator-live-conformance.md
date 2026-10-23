@@ -271,7 +271,9 @@ for prerequisites and how to batch them with other provider runs.
     `auth.json`, so Pi chose its own default model (`gpt-5.3-codex-spark`),
     which the host's ChatGPT-backed `openai-codex` login cannot use. The host
     itself defaults to `openai-codex/gpt-5.5`. Harness work is filed as
-    [0054](../cross-cutting/0054-agent-test-pi-default-model.md).
+    [0054](../cross-cutting/0054-agent-test-pi-default-model.md), and its
+    code fix landed on 2026-10-23: the bridge starts on Pi's saved default,
+    and a profile receives the host's.
   - Grok's host login was signed out again (`needs-auth`), so read-only,
     async and family skipped correctly. Peer, on the first version of the
     case, waited for a startup turn that never ran and failed instead of
@@ -285,8 +287,9 @@ for prerequisites and how to batch them with other provider runs.
     stalled for about 15 minutes. Run live profiles one at a time on a quiet
     host.
 - **Worker-mail family scenario**: covered by the `family` columns above.
-- **Re-runs still owed** (medium): Pi once
-  [0054](../cross-cutting/0054-agent-test-pi-default-model.md) is fixed;
+- **Re-runs still owed** (medium): Pi, now that
+  [0054](../cross-cutting/0054-agent-test-pi-default-model.md)'s code fix is
+  in;
   Grok, all four scenarios, once the host Grok is signed in; Claude on Linux,
   which has never run; and Cursor read-only until its `network` label is
   steady (see Verify). One command each:

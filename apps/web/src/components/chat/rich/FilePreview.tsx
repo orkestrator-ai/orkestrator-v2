@@ -132,6 +132,7 @@ function decodeText(
 type LoadFailure =
   | "no-bytes"
   | "unavailable"
+  | "outside-workspace"
   | "denied"
   | "too-large"
   | "decode-failed"
@@ -167,6 +168,8 @@ const FAILURE_TEXT: Record<LoadFailure, string> = {
   "no-bytes": "This transcript does not carry the file's bytes.",
   unavailable:
     "The file is unavailable. It may have been moved or deleted, or its environment is not running.",
+  "outside-workspace":
+    "The file is outside of the workspace. Orkestrator only previews files inside the environment's workspace.",
   denied: "Access to this file was denied. Orkestrator is not permitted to read it.",
   "too-large": "The file is larger than the backend's read limit, so it cannot be previewed.",
   "decode-failed": "The file's bytes could not be decoded.",

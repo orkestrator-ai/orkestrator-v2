@@ -386,6 +386,9 @@ export function claudeQueryOptions(
         // into remote docs that only an Artifact tool can open, and
         // Orkestrator has none, so the report never shows up here.
         "When the user asks for a document (a report, design doc, plan, analysis, guide, or other writing to keep), prefer writing it as a Markdown file in a `docs/` folder at the root of the working directory over creating a Claude Doc or claude.ai artifact, and tell the user the file's path. Project instructions (such as CLAUDE.md or AGENTS.md), local skills, and the user's own request take priority over this default when they say where or how to write documents.",
+        // Orkestrator only reads transcript images from the environment's
+        // workspace, so a screenshot saved to /tmp shows as a placeholder.
+        "When you show the user an image in your reply (a screenshot, rendered preview, or chart) using Markdown image syntax, save the file inside the working directory and reference it by its absolute path. Orkestrator only displays images from inside the environment's workspace; an image saved elsewhere, such as /tmp, shows as outside of the workspace instead. Prefer a git-ignored folder so preview files stay out of the change set.",
       ].join("\n\n"),
     },
     // Load user settings (from ~/.claude.json including MCP servers) and project settings (CLAUDE.md files)

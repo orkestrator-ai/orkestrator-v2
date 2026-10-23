@@ -5,7 +5,7 @@ import { clearImagePreviewCache } from "@/lib/chat/image-preview-cache";
 import { INLINE_MEDIA_PLAYBACK_MAX_BYTES } from "@/lib/chat/media-presentation";
 import { clearMediaResolverInflight } from "@/lib/chat/rich-markdown/media-resolver";
 import { FilePreview } from "./FilePreview";
-import { MarkdownImage } from "./MediaBlock";
+import { MarkdownImage, MediaScopeContext } from "./MediaBlock";
 
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
 
@@ -119,9 +119,27 @@ describe("Markdown image placeholders", () => {
     expect(button.style.aspectRatio).toBe("");
   });
 
-  test("access denied by the backend is its own state with no file actions", async () => {
+  test("a path outside the workspace is its own state with no file actions", async () => {
     readRejects("Invalid file path: file is outside Orkestrator workspace storage");
-    render(<MarkdownImage src="/private/secret.png" alt="Secret" />);
+    render(<MarkdownImage src="/tmp/shot.png" alt="Shot" />);
+    const image = await screen.findByRole("img", { name: "Shot (image outside of the workspace)" });
+    expect(image.textContent).toContain("Shot · image outside of the workspace");
+    expect(screen.queryAllByRole("button")).toHaveLength(0);
+  });
+
+  test("a container path outside /workspace is reported without a read", () => {
+    render(
+      <MediaScopeContext.Provider value={{ containerId: "container-1" }}>
+        <MarkdownImage src="/tmp/shot.png" alt="Shot" />
+      </MediaScopeContext.Provider>,
+    );
+    expect(screen.getByRole("img", { name: "Shot (image outside of the workspace)" })).toBeTruthy();
+    expect(readCalls()).toHaveLength(0);
+  });
+
+  test("access denied by the backend is its own state with no file actions", async () => {
+    readRejects("EACCES: permission denied, open '/workspace-storage/secret.png'");
+    render(<MarkdownImage src="/workspace-storage/secret.png" alt="Secret" />);
     const image = await screen.findByRole("img", { name: "Secret (image access denied)" });
     expect(image.textContent).toContain("Secret · access to this image was denied");
     expect(screen.queryAllByRole("button")).toHaveLength(0);
@@ -185,7 +203,12 @@ describe("Markdown image placeholders", () => {
   test("each state has distinct visible text", async () => {
     const texts = new Set<string>();
     const cases: Array<[string, () => void, string]> = [
-      ["/private/a.png", () => readRejects("outside Orkestrator workspace storage"), "denied"],
+      [
+        "/private/a.png",
+        () => readRejects("outside Orkestrator workspace storage"),
+        "outside-workspace",
+      ],
+      ["/workspace-storage/e.png", () => readRejects("EACCES"), "denied"],
       ["/workspace-storage/b.png", () => readRejects("ENOENT"), "unavailable"],
       ["/workspace-storage/c.png", () => readRejects("File exceeds 1 bytes"), "too-large"],
       ["/workspace-storage/d.png", () => readResolves(btoa("plain text")), "unsupported"],
@@ -202,7 +225,7 @@ describe("Markdown image placeholders", () => {
     }
     const blocked = render(<MarkdownImage src="" alt="X" />);
     texts.add(blocked.container.textContent ?? "");
-    expect(texts.size).toBe(5);
+    expect(texts.size).toBe(6);
   });
 });
 
@@ -254,9 +277,10 @@ describe("file preview states", () => {
   test.each([
     [
       "Invalid file path: file is outside Orkestrator workspace storage",
-      /Access to this file was denied/,
-      "denied",
+      /The file is outside of the workspace/,
+      "outside-workspace",
     ],
+    ["EACCES: permission denied", /Access to this file was denied/, "denied"],
     ["ENOENT: no such file or directory", /The file is unavailable/, "unavailable"],
     ["File exceeds 10485760 bytes", /larger than the backend's read limit/, "too-large"],
   ])("a read failure %p is shown as %s", async (message, text, state) => {

@@ -114,7 +114,12 @@ Evidence on macOS arm64, Bun 1.4.2: the 52 native-agent files pass under
 projects, `oxlint` and `oxfmt --check` pass. One parallel run hit the open
 flake 0247 (`activity sweep over the batch route`, no bridge requests); the
 recurrence is recorded in its case file and the owning file passed alone three
-times. The final `mise run test` result is in the handoff report.
+times. `mise run test` on the finished branch: web 8,818 passed; backend
+10,120 passed, 86 skipped and 3 failed (592 files), the three being the open
+environment-move submodule timeouts 0248 and 0621, whose owning file then
+passed alone twice; root/support, bridges and the protocol lockfile passed.
+Both recurrences are recorded in their case files. The public surface was
+checked mechanically: the same 69 public methods before and after.
 
 ## Assumptions and decisions
 

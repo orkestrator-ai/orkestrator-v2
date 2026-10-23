@@ -1,6 +1,6 @@
 # Artifact engine qualification: Firefox favicon request reaches the sink
 
-- **ID:** 0694
+- **ID:** 0697
 - **Status:** open
 - **Date observed:** 2026-10-23
 - **Test:** `executable document policy in firefox > popups, new-window links and top navigation reach the sink zero times`

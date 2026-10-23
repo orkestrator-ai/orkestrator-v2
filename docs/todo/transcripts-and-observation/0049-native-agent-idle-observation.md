@@ -139,10 +139,12 @@ open qualification cases from the 2026-10-21 run.
    `bridges/claude-bridge/src/routes/events.test.ts` and
    `bridges/codex-bridge/src/sse-replay.test.ts` (content-free frames,
    replayed ones included; Codex observers are notified while replay
-   retention has lapsed). Still owed: the "done when" evidence on the real
-   stack, that a stably idle Claude or Codex group skips sweeps while an
-   externally started turn, a lost event and a bridge restart are still
-   discovered within the activity budget. The wakeup lives in
+   retention has lapsed). Live, 2026-10-23 (see "Live check (2026-10-23)"):
+   a stably idle Claude group skipped 38 of 75 sweeps and a Codex group 33 of
+   75, and a turn started from outside the view with every frame naming the
+   environment dropped was still seen within 53 ms (Claude) and 6 ms (Codex).
+   Still owed: a bridge restart while the group is backed off, and the
+   container case (an older bridge image must keep every sweep). The wakeup lives in
    `HttpBridgeObservationWakeup`; `listResumableSessions` moved to
    `http-bridge-resumable-sessions.ts` to keep `http-bridge-provider.ts` under
    the 1,500-line provider module limit. The live spec now records
@@ -168,9 +170,19 @@ open qualification cases from the 2026-10-21 run.
    reads at once). Background terminal output on an idle Codex thread is not
    rendered by the bridge at all (its handlers return without an active turn),
    so there is nothing to announce for it; a settled command's late measured
-   lines bump `messageRevision` and are covered. Still owed: a live run that
-   shows a backed-off Claude view picking up background-task output, and a
-   Codex view picking up an async question, within the 4 s background budget.
+   lines bump `messageRevision` and are covered. Multi Review (2026-10-23)
+   found that a Claude turn resuming from a released composer stayed
+   `working` throughout, so neither a transition nor a content announcement
+   woke a backed-off view; it now announces that readiness edge once
+   ("announces a released working turn resuming once", and "a released Claude
+   view at maximum backoff reads a resumed working turn immediately"; the
+   backend test fails without the fix). Live, 2026-10-23: idle Claude views
+   reached the 15 s step (12 reads a minute, against 120.5 on 2026-10-21) and
+   Codex views 27 a minute (against 126.8). Still owed: the Claude background
+   case still fails its fresh-output assertion, exactly as it did before this
+   change on 2026-10-21 (the task card appeared in 298 ms, but the marker
+   never reached a fresh tool result); Codex ran the background command in the
+   foreground; no live async question was exercised.
 3. ~~Share native reads across hook instances.~~ **Done (2026-10-23), by a
    different route than written.** The coordinated read is keyed by session
    and identical requests are joined per round; each view keeps its own fenced
@@ -217,15 +229,15 @@ open qualification cases from the 2026-10-21 run.
 The live run of 2026-10-21 is recorded below. What it left open, plus what the
 2026-10-23 code changes need:
 
-- Claude and Codex: rerun `e2e/agent-testing/idle-observation-live.spec.ts`
-  for both. The 2026-10-21 rows record them unqualified at about 120 reads a
-  minute; with this change an idle view whose session is `quietObservation`
-  should reach the 15 s step. Record `backendGroupReads`/`backendGroupSkips`
-  per provider, the missed-final lag against `LOST_ANNOUNCEMENT_BOUND_MS`,
-  and the background case (task card and fresh output within 4 s on a
-  backed-off view). Also stop and restart a bridge while its group is backed
-  off, and check the next turn is still seen within the 3 s completion
-  budget.
+- Claude and Codex, after the 2026-10-23 live check below: the background
+  case (Claude's fresh tool-result output assertion fails, as before this
+  change; Codex never backgrounded), a live async question on Codex, a bridge
+  restart while the group is backed off (the next turn must be seen within the
+  3 s completion budget), the remaining cases (approval, sub-agents,
+  reconnect, hidden, no-renderer) at the new cadence, and Codex's idle gaps
+  under 12 s (27 reads a minute against Claude's 12: something still
+  invalidates an idle Codex view, the same symptom as OpenCode in code item
+  5).
 - Grok and Pi: re-run `e2e/agent-testing/idle-observation-live.spec.ts`
   once their host logins are current. Both were signed out (expired host
   logins) and were skipped.
@@ -253,6 +265,43 @@ The live run of 2026-10-21 is recorded below. What it left open, plus what the
   are also `not-exercised`, pending an observable lifecycle. The observation
   stream must not keep a Claude or Codex session attached: it touches no
   session, but the full detach wait is the evidence.
+
+## Live check (2026-10-23)
+
+A bounded run after the code changes and the Multi Review fix, at
+`92dc36b6` plus the flake renumbering, on macOS 27.0 (Apple Silicon), Bun
+1.4.3. Bridges rebuilt first (`mise run build:claude-bridge`,
+`mise run build:codex-bridge`). Disposable profile `idleqa-0049`:
+`mise run dev:test --profile idleqa-0049 --fixture --credential-source claude
+--credential-source codex --agent-platforms claude,codex` (Codex gets an
+`auth.json` snapshot without a refresh token, so the host login cannot
+rotate). Run `idleqa-0049-live`, one provider at a time:
+
+```bash
+ORKESTRATOR_AGENT_TEST_PROFILE=idleqa-0049 ORKESTRATOR_AGENT_TEST_RUN_ID=idleqa-0049-live \
+  ORKESTRATOR_AGENT_TEST_LIVE_IDLE_OBSERVATION=1 ORKESTRATOR_AGENT_TEST_IDLE_PLATFORMS=claude,codex \
+  ORKESTRATOR_AGENT_TEST_IDLE_CASES=missed-final,background,detach \
+  ORKESTRATOR_AGENT_TEST_IDLE_DETACH_WAIT_MS=150000 \
+  bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts \
+  e2e/agent-testing/idle-observation-live.spec.ts --workers=1
+```
+
+8.8 min; exit 1 (Claude's background case failed; the global teardown also
+refused a trace over the 16 MiB sanitizer bound, as on 2026-10-21, so no trace
+was kept).
+
+| Case | Claude | Codex |
+| --- | --- | --- |
+| Missed final event (every frame naming the environment dropped) | passed: idle max gap 15.0 s before the turn, page 53 ms behind backend truth, sidebar 60 ms | passed: idle max gap 15.0 s, page 6 ms, sidebar 8 ms |
+| Background shell | failed: task card 298 ms after the reply, but fresh tool-result output never contained the marker (same failure as `qa-browser-88278b44-d08` before this change); sidebar 5.1 s behind on the follow-up | not exercised: no running background task appeared |
+| Idle 150 s (cadence only) | 12 reads a minute, gaps 16 under 250 ms (joined request bursts) and 7 at 12 s or more; backend group 37 reads, 38 skipped sweeps | 27 reads a minute, gaps 36 under 250 ms, 5 of 0.25 to 2 s, 6 of 2 to 6 s, 2 of 6 to 12 s, 4 at 12 s or more; backend group 42 reads, 33 skipped |
+
+Reads per minute count each coordinated read once (its transcript, state and
+discovery requests arrive together, hence the sub-250 ms gaps). Backend
+counters are profile-wide deltas of `native-activity-sweep` cache hits and
+misses; only one environment existed at a time. The profile was stopped and
+reset (`mise run dev:stop --profile idleqa-0049`,
+`mise run dev:reset --profile idleqa-0049`).
 
 ## Live qualification record (2026-10-21)
 
@@ -527,6 +576,16 @@ changed) and the hydration announcement (once per new source token, and only
 for incomplete transcripts). Assumption: no live run was possible here, so
 which source dominated the 2026-10-21 OpenCode measurement is inferred from
 the code, not observed.
+
+**D11. The released-turn wakeup (Multi Review P1).** Options: announce the
+readiness edge when a released composer is taken back, or let a released
+Claude session never back off. Chosen: announce the edge once, as a content
+invalidation. Why: background work keeps aggregate activity `working` while
+the composer is free, so the root turn resuming is neither a transition nor
+(without a revision change) a content change, and a view at the 15 s step
+would miss a running turn. Pros: the view returns to 500 ms immediately; one
+announcement per resume. Cons: one more announcement kind riding the content
+channel. Applied by the Fix session (`690377e2`) and verified here.
 
 **Assumptions.**
 

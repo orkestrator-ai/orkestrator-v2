@@ -1,6 +1,6 @@
 # Codex event-byte estimator timing under aggregate load
 
-- **ID:** 0695
+- **ID:** 0698
 - **Status:** open
 - **Observed:** 2026-10-23
 - **Test:** `estimateOrderedEventBytes > stops descending at the depth cap instead of walking forever`

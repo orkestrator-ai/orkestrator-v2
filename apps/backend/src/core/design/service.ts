@@ -709,9 +709,9 @@ export class DesignService {
       });
       const now = this.now();
       const stored = await this.store.readPending(canvasId);
-      const retained = legacy ? this.retainedOutcomes(record, stored) : [];
+      let retained = legacy ? this.retainedOutcomes(record, stored) : [];
       // Settled and expired entries are compacted away here, lazily.
-      const pending = this.livePending(record, stored).filter((entry) => !retained.includes(entry));
+      let pending = this.livePending(record, stored).filter((entry) => !retained.includes(entry));
       const digest = descriptorDigest({ environmentId, canvasId, descriptor });
       if (descriptor.correlationId) {
         const existing = pending.find(
@@ -739,15 +739,32 @@ export class DesignService {
           );
         }
       }
+      // An earlier duplicate whose copy committed but whose source receipt
+      // was not saved is recorded first. While that still cannot be saved, a
+      // new duplicate is refused so its outcome stays provable.
       if (descriptor.input.kind === "duplicate_canvas") {
+        const copied: Array<[DesignPendingOperation, DesignOperationStatus]> = [];
         for (const candidate of stored) {
           if (record.receipts.some((receipt) => receipt.token === candidate.token)) continue;
-          if (await lifecycle.committedDuplicate(this, candidate))
+          const committed = await lifecycle.committedDuplicate(this, candidate);
+          if (committed) copied.push([candidate, committed]);
+        }
+        if (copied.length) {
+          const next = cloneRecord(record);
+          for (const [candidate, receipt] of copied)
+            addReceipt(next, receipt, candidate.descriptor);
+          try {
+            await this.commit(next, legacy);
+          } catch {
             throw new DesignError(
               "unknown-outcome",
               "An earlier duplicate already committed. Reconcile its token before duplicating again.",
-              { retry: "review", details: { token: candidate.token } },
+              { retry: "review", details: { token: copied[0]![0].token } },
             );
+          }
+          const recorded = new Set(copied.map(([candidate]) => candidate.token));
+          pending = pending.filter((entry) => !recorded.has(entry.token));
+          retained = retained.filter((entry) => !recorded.has(entry.token));
         }
       }
       if (
@@ -1008,6 +1025,16 @@ export class DesignService {
       if (!entry || entry.environmentId !== environmentId || entry.canvasId !== canvasId)
         return { done: await this.status(environmentId, canvasId, token) } as const;
       if (entry.state === "executing") return { done: this.receipt(entry, "executing") } as const;
+      // A duplicate whose copy exists committed, whoever owns it and however
+      // old its entry is; only its source receipt is missing.
+      const copied = await lifecycle.committedDuplicate(this, entry);
+      if (copied) {
+        // The copy proves the outcome even while the source cannot be saved.
+        const done = await this.settleWith(record, legacy, pending, entry, copied).catch(
+          () => copied,
+        );
+        return { done } as const;
+      }
       // Work admitted by a process that died never runs (as after a restart).
       if (this.ownerDead(entry))
         return { done: await this.settleDead(record, legacy, pending, entry) } as const;

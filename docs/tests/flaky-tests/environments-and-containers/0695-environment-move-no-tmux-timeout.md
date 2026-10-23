@@ -1,6 +1,6 @@
 # Environment move without tmux exceeds the test deadline
 
-- **ID:** 0694
+- **ID:** 0695
 - **Status:** open
 - **Date observed:** 2026-10-23
 - **Test:** `move_environment > moves with no tmux sessions or hook backups and preserves workspace settings`

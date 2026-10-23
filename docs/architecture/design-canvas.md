@@ -112,7 +112,12 @@ the operation is `committed` with `createdCanvasId`, also when the source
 write failed in-process (`committedDuplicate` in
 `design/service-lifecycle.ts`). Restart recovery, `status`, `execute`,
 `cancel` and a running peer all answer this way (`deadOutcome` in
-`design/service.ts`). A never-migrated legacy canvas has nowhere to keep a
+`design/service.ts`). The copy also wins on the live owner: when the source
+receipt cannot be saved, execute still answers `committed` and keeps the
+pending entry; `status` and every later execute (also after the entry's TTL)
+answer from the copy, and the next duplicate prepared on that canvas first
+records the missing receipt, refusing with `unknown-outcome` only while that
+write still fails. A never-migrated legacy canvas has nowhere to keep a
 receipt and is never migrated by recovery, so its dead owners' pending entries
 stay in the pending file as their outcomes (`retainedOutcomes`): status,
 execute, cancel and a correlated retry answer `interrupted` from them, prepare
@@ -187,7 +192,8 @@ demand (cached 60 s).
 Each generation's browser is a Playwright browser server on loopback
 (`launchDesignBrowser`: `chromium.launchServer({ host: "127.0.0.1" })` and
 `chromium.connect`), because a browser from `chromium.launch()` exposes no
-process. Retiring a generation closes the server within the cleanup deadline;
+process. Retiring a generation, including one whose connection dropped while
+its server may still run, closes the server within the cleanup deadline;
 a close that hangs or fails is followed by `BrowserServer.kill()`, also
 bounded. The endpoint's path is a random GUID that the renderer never logs. The fault
 test in `renderer.test.ts` stops a real browser with `SIGSTOP` and checks that

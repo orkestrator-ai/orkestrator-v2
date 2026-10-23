@@ -365,6 +365,49 @@ describe("design lifecycle: tombstones, restore, purge, duplicate and fencing", 
       expect(await copies(canvasId)).toEqual([copyId!]);
     });
 
+    test("a later duplicate records an unsaved one's receipt once saving works", async () => {
+      const { canvasId, token } = await prepareDuplicate();
+      failSource = { canvasId, times: Number.POSITIVE_INFINITY };
+      const status = await service().execute("env-1", canvasId, token);
+      const [copyId] = await copies(canvasId);
+      failSource = undefined;
+      // Without a further execute of the first token, a new duplicate settles it.
+      const next = await service().prepare("env-1", "user", {
+        canvasId,
+        input: { kind: "duplicate_canvas", name: "Second copy" },
+        preconditions: { canvasRevision: 2 },
+        correlationId: "another-duplicate",
+      });
+      expect((await service().store.readPending(canvasId)).map((entry) => entry.token)).toEqual([
+        next.token,
+      ]);
+      const record = await service().loadFor(canvasId, "env-1");
+      expect(record.record.receipts.find((receipt) => receipt.token === token)).toEqual(status);
+      expect(await service().execute("env-1", canvasId, next.token)).toMatchObject({
+        state: "committed",
+      });
+      const all = await copies(canvasId);
+      expect(all).toHaveLength(2);
+      expect(all).toContain(copyId!);
+    });
+
+    test("an unsaved duplicate executed after its entry expired still reports its copy", async () => {
+      const { canvasId, token } = await prepareDuplicate();
+      failSource = { canvasId, times: Number.POSITIVE_INFINITY };
+      const status = await service().execute("env-1", canvasId, token);
+      failSource = undefined;
+      clock += DESIGN_LIMITS.preparedTtlMs + 1;
+      expect(await service().execute("env-1", canvasId, token)).toMatchObject({
+        state: "committed",
+        result: status.result,
+      });
+      expect(await service().status("env-1", canvasId, token)).toMatchObject({
+        state: "committed",
+      });
+      expect(await service().store.readPending(canvasId)).toEqual([]);
+      expect(await copies(canvasId)).toHaveLength(1);
+    });
+
     test("status prefers a committed copy over an unrecorded live-owner failure", async () => {
       const { canvasId, token } = await prepareDuplicate();
       const store = service().store;

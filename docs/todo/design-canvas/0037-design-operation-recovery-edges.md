@@ -99,7 +99,16 @@ fallback once older receipts and backends are out of the support window.
    `createdCanvasId` and the copied revision, and a correlated retry is
    refused as settled. The live duplicate's receipt also reports the copied
    revision (the precondition), so a receipt rebuilt from the copy is
-   identical.
+   identical. After Multi Review the live owner is covered too: while the
+   source receipt keeps failing to save, execute answers `committed` and keeps
+   the entry; status and later executes (also past the entry's TTL) answer
+   from the copy; and the next duplicate on that canvas records the missing
+   receipt first, refusing with `unknown-outcome` only while that write still
+   fails (`lifecycle.test.ts`: "reconciles a committed copy on its live owner
+   while source writes keep failing", "a later duplicate records an unsaved
+   one's receipt once saving works", "an unsaved duplicate executed after its
+   entry expired still reports its copy", "status prefers a committed copy
+   over an unrecorded live-owner failure").
 3. **Renderer termination proved and fixed** (2026-10-23). Fault probe on
    macOS (arm64, Bun 1.4.2, `playwright-core` 1.64.0, Playwright's Chromium
    build 1248): with `chromium.launch()`, a browser stopped with `SIGSTOP` did
@@ -112,7 +121,10 @@ fallback once older receipts and backends are out of the support window.
    deadline and kills it, also bounded, when the close hangs or fails.
    Evidence: `renderer.test.ts` ("kills a browser whose close hangs instead
    of leaving it running", real Chromium, skipped where Chromium is missing
-   and on Windows). With the kill replaced by a no-op the test fails ("condition
+   and on Windows). After Multi Review, a generation whose connection drops is
+   retired the same way, because the server process can outlive its
+   connection ("terminates an owned server after its browser connection
+   disconnects and renders with a replacement"). With the kill replaced by a no-op the test fails ("condition
    not met": the process survived), so it detects the leak. The fake-browser
    cases now cover the kill through the launch handle.
 

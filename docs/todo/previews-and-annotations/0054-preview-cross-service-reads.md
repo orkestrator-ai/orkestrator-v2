@@ -111,6 +111,19 @@ through `publicPort` remain unqualified.
   or assertion was changed. Docker, native Electron, iOS and published-CLI
   scenario suites were omitted because this follow-up changes preview
   documentation and test infrastructure.
+- Final verification after merging `origin/main` (`cda435fc9`), 2026-10-23:
+  `mise run test:preview:browser` 24 passed, 3 skipped (Vite) in Chromium,
+  Firefox and WebKit; focused protocol, publication, spec-loading, flake
+  index and mise-task tests, `format:check`, `lint` and `typecheck` passed.
+  `mise run test` (511.5 s) failed only in
+  `content-server.engines.test.ts` ("executable document policy in firefox >
+  popups, new-window links and top navigation reach the sink zero times"):
+  installing Playwright Firefox for this suite enabled that previously
+  skipped engine, and Firefox's late `GET /favicon.ico` from a control page
+  that really navigates to the sink reached the next observation (every
+  restricted path stayed at zero hits). It failed alone 2 of 2. The sink page
+  now declares a `data:` icon, so no sink document requests one; no
+  assertion changed. The owner then passed alone 3 of 3 (94 to 100 s).
 - Live transport, Tailscale Serve 1.102.4 on the same host:
   `ORKESTRATOR_TEST_TAILSCALE_SERVE_METADATA=1 mise run test:logged --
   --name tailscale-metadata-live-final -- bun test --cwd apps/backend

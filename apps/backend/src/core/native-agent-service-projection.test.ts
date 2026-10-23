@@ -43,7 +43,7 @@ import {
   mergeContextUsageTurns,
   mergeNativeAgentQueueItems,
   withProviderContextWindow,
-} from "./native-agent-service-projection.js";
+} from "./native-agent-service.js";
 
 describe("usage projection history", () => {
   test("merges sparse turn updates by id and retains only the newest twenty", () => {

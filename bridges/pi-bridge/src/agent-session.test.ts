@@ -45,11 +45,24 @@ import { clientSessionKeys, sessionCreations, sessions, type SessionState } from
 
 let sessionDirectory: string;
 let previousSessionDirectory: string | undefined;
+const isolatedPiVariables = [
+  "PI_AGENT_DIR",
+  "PI_CODING_AGENT_DIR",
+  "PI_BRIDGE_DEFAULT_MODEL",
+] as const;
+let previousPiEnvironment: Partial<Record<(typeof isolatedPiVariables)[number], string>>;
 
 beforeEach(async () => {
   sessionDirectory = await mkdtemp(join(tmpdir(), "pi-bridge-agent-session-"));
   previousSessionDirectory = process.env.PI_SESSION_DIR;
   process.env.PI_SESSION_DIR = sessionDirectory;
+  previousPiEnvironment = {};
+  for (const name of isolatedPiVariables) previousPiEnvironment[name] = process.env[name];
+  const agentDir = join(sessionDirectory, "agent");
+  await mkdir(agentDir);
+  process.env.PI_AGENT_DIR = agentDir;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  delete process.env.PI_BRIDGE_DEFAULT_MODEL;
   sessions.clear();
   clientSessionKeys.clear();
   sessionCreations.clear();
@@ -59,6 +72,10 @@ beforeEach(async () => {
 afterEach(async () => {
   if (previousSessionDirectory === undefined) delete process.env.PI_SESSION_DIR;
   else process.env.PI_SESSION_DIR = previousSessionDirectory;
+  for (const name of isolatedPiVariables) {
+    if (previousPiEnvironment[name] === undefined) delete process.env[name];
+    else process.env[name] = previousPiEnvironment[name];
+  }
   setAgentSessionTestHooks(undefined);
   // Restores the real SDK factory and drops both the catalogue memo and the
   // failed-read verdict derived from whatever fake a test installed.

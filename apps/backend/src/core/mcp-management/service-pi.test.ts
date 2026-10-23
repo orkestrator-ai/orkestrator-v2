@@ -181,7 +181,7 @@ describe("Pi catalog mirrors the bridge's loading rules", () => {
     snapshot = await fixture.service.snapshot({ targetId });
     expect(entry(snapshot, "pi:project", "foo_bar").status).toBe("invalid");
     expect(entry(snapshot, "pi:project", "foo_bar").statusReason).toContain(
-      '"foo-bar" in Container home',
+      '"foo-bar" in This environment',
     );
   });
 

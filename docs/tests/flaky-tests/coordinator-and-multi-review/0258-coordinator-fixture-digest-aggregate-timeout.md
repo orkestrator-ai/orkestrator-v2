@@ -139,3 +139,7 @@ The unchanged owning file passed alone (48 pass, 2.3 s, after failing twice more
 - **Complete unchanged owner:** `mise run test:logged -- --name merge-coordinator-fixture-owner -- bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./scripts/dev/coordinator-live.test.ts --parallel=1 --only-failures` passed the complete unchanged owner, exit 0 in 1.5 seconds logged.
 - **Evidence:** `orkestrator-test-run.jPvcE5/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory after aggregate completion.
 - **Assessment:** confirmed intermittent recurrence; contention remains a hypothesis. No owning implementation, assertion, timeout or skip changed.
+
+## Cross-service read policy validation recurrence — 2026-10-23
+
+`mise run test` with the 0054 change (no desktop source changes) timed out at 5022.15 ms with `git rev-parse exited -1` between tests, at host load about 43. The owning file failed alone once more (5022.78 ms, `git rev-parse` exited 128: "Unable to read current working directory") and then passed alone in 5.6 s (`coordinator-live-alone-2`). Details in [0696](../aggregate-validation-runs/0696-cross-service-reads-validation.md). No assertion, timeout or skip changed.

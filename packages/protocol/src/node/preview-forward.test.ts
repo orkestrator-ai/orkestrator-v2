@@ -216,7 +216,6 @@ describe("preview header policy", () => {
 
   test("cross-site writes and upgrades are refused", () => {
     const origin = "https://s-abc.preview.test";
-    expect(crossSiteViolation("GET", [["origin", "https://evil.test"]], origin, false)).toBe(false);
     expect(crossSiteViolation("POST", [["origin", "https://evil.test"]], origin, false)).toBe(true);
     expect(crossSiteViolation("POST", [["origin", "null"]], origin, false)).toBe(true);
     expect(crossSiteViolation("POST", [["origin", origin]], origin, false)).toBe(false);
@@ -225,6 +224,59 @@ describe("preview header policy", () => {
       true,
     );
     expect(crossSiteViolation("POST", [], origin, false)).toBe(false);
+    // Reads from the service itself never change what writes may do.
+    expect(crossSiteViolation("POST", [["sec-fetch-site", "same-site"]], origin, false)).toBe(true);
+  });
+
+  test("cross-service reads pass only as top-level document navigations", () => {
+    const origin = "https://s-abc.preview.test";
+    const sibling = "https://s-def.preview.test";
+    const read = (headers: Array<[string, string]>, method = "GET") =>
+      crossSiteViolation(method, headers, origin, false);
+    const metadata = (site: string, mode: string, dest: string): Array<[string, string]> => [
+      ["Sec-Fetch-Site", site],
+      ["Sec-Fetch-Mode", mode],
+      ["Sec-Fetch-Dest", dest],
+    ];
+    // The service's own page, worker and assets, and anything the user typed.
+    expect(read(metadata("same-origin", "no-cors", "script"))).toBe(false);
+    expect(read(metadata("same-origin", "cors", "empty"))).toBe(false);
+    expect(read(metadata("none", "navigate", "document"))).toBe(false);
+    // Links, form GETs and redirects from a sibling or another site.
+    expect(read(metadata("same-site", "navigate", "document"))).toBe(false);
+    expect(read(metadata("cross-site", "navigate", "document"))).toBe(false);
+    // Everything a sibling could send without the user seeing a new page.
+    expect(read(metadata("same-site", "no-cors", "empty"))).toBe(true);
+    expect(read(metadata("same-site", "cors", "empty"))).toBe(true);
+    expect(read(metadata("same-site", "no-cors", "image"))).toBe(true);
+    expect(read(metadata("same-site", "no-cors", "script"))).toBe(true);
+    expect(read(metadata("same-site", "navigate", "iframe"))).toBe(true);
+    expect(read(metadata("same-site", "navigate", "object"))).toBe(true);
+    expect(read(metadata("cross-site", "no-cors", "empty"))).toBe(true);
+    expect(read(metadata("cross-site", "no-cors", "empty"), "HEAD")).toBe(true);
+    expect(read(metadata("cross-site", "cors", "empty"), "OPTIONS")).toBe(true);
+    expect(read([["sec-fetch-site", "same-site"]])).toBe(true);
+    expect(read([["sec-fetch-site", "unexpected"]])).toBe(true);
+    expect(
+      read([...metadata("same-site", "navigate", "document"), ["sec-purpose", "prefetch"]]),
+    ).toBe(true);
+    expect(
+      read([
+        ...metadata("cross-site", "navigate", "document"),
+        ["sec-purpose", "prefetch;prerender"],
+      ]),
+    ).toBe(true);
+    // Without Fetch Metadata only a foreign Origin (CORS) is distinguishable.
+    expect(read([])).toBe(false);
+    expect(read([["origin", origin]])).toBe(false);
+    expect(read([["origin", sibling]])).toBe(true);
+    expect(read([["origin", "null"]])).toBe(true);
+    expect(
+      read([
+        ["origin", origin],
+        ["origin", origin],
+      ]),
+    ).toBe(true);
   });
 });
 

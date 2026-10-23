@@ -141,6 +141,8 @@ const refreshNativeAgentCommandsMock = mock(async (input: { agent: AgentPlatform
   outcome: "reread" as const,
   projection: projectionFor(input.agent),
 }));
+const getFileTreeMock = mock(async () => []);
+const getLocalFileTreeMock = mock(async () => []);
 
 mock.module("@/hooks/useNativeComposeBarPaste", () => ({
   useNativeComposeBarPaste: () => {},
@@ -165,8 +167,8 @@ mock.module("@/lib/backend", () => ({
   deleteAgentHandoff: async () => true,
   dispatchNativeAgentIntent: dispatchNativeAgentIntentMock,
   renameEnvironmentFromPrompt: async () => {},
-  getFileTree: async () => [],
-  getLocalFileTree: async () => [],
+  getFileTree: getFileTreeMock,
+  getLocalFileTree: getLocalFileTreeMock,
   getNativeAgentSyncCapabilities: async () => ({ projectionSyncVersions: [] }),
   getNativeAgentProjection: getNativeAgentProjectionMock,
   getComposeDraft: async () => null,
@@ -262,6 +264,8 @@ afterEach(() => {
     outcome: "applied" as const,
   }));
   refreshNativeAgentCommandsMock.mockClear();
+  getFileTreeMock.mockClear();
+  getLocalFileTreeMock.mockClear();
   useEnvironmentStore.setState({ environments: [] });
   usePaneLayoutStore.setState({
     environments: new Map(),
@@ -573,6 +577,40 @@ describe("AgentNativeTab commands", () => {
     });
   });
 
+  test("typing after the sigil filters a maximal list without fetching, refreshing or scanning", async () => {
+    // A wire-maximum inventory: the menu filters it in memory on every key.
+    const rows: NativeAgentSlashCommand[] = Array.from({ length: 512 }, (_, index) => ({
+      name: `/team-tools:review-pr-${index}`,
+      id: `codex:team-tools:review-pr-${index}`,
+      source: index % 2 ? "plugin" : "project",
+      description: `Review pull request batch ${index} against the project conventions.`,
+      argumentHint: "<path>",
+      executionKind: "provider-prompt",
+      bindingRevision: `rev-${index}`,
+    }));
+    projectionOptions = { commands: [...rows, COMPACT] };
+    const tabId = "tab-keystrokes";
+    const { input } = await renderTab(tabId);
+    await type(input, tabId, "/");
+    await screen.findByRole("listbox", { name: "Slash commands" });
+    const projectionReads = getNativeAgentProjectionMock.mock.calls.length;
+    const fileTreeReads =
+      getFileTreeMock.mock.calls.length + getLocalFileTreeMock.mock.calls.length;
+
+    const typed = "team-tools:review-pr";
+    expect(typed).toHaveLength(20);
+    for (let length = 1; length <= typed.length; length += 1) {
+      await type(input, tabId, `/${typed.slice(0, length)}`);
+    }
+    // Still filtering the projection's rows: the search caps what it renders.
+    expect(screen.getAllByRole("option").length).toBeGreaterThan(0);
+    expect(getNativeAgentProjectionMock.mock.calls.length).toBe(projectionReads);
+    expect(refreshNativeAgentCommandsMock).not.toHaveBeenCalled();
+    expect(getFileTreeMock.mock.calls.length + getLocalFileTreeMock.mock.calls.length).toBe(
+      fileTreeReads,
+    );
+  });
+
   test("loading and unsupported lists keep the menu open with an explanation", async () => {
     projectionOptions = {
       commands: [],
@@ -595,4 +633,34 @@ describe("AgentNativeTab commands", () => {
     expect(await screen.findByText("This agent doesn't expose provider commands.")).toBeTruthy();
     expect(screen.getByRole("group", { name: "Orkestrator" })).toBeTruthy();
   });
+});
+
+test("an unaccepted prompt keeps the controller loading and Stop available", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  dispatchNativeAgentIntentMock.mockImplementationOnce(async (input) => {
+    await gate;
+    return { outcome: "accepted", requestId: input.requestId };
+  });
+  const tabId = "tab-unaccepted";
+  const { input } = await renderTab(tabId);
+  await type(input, tabId, "Start a slow prompt");
+  fireEvent.keyDown(input, { key: "Enter" });
+  try {
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+    // The provider projection is still idle: only the pending dispatch can
+    // make isTurnActive/isLoading true and expose the compose bar's Stop.
+    expect(projectionFor("codex").turn.phase).toBe("idle");
+    expect(await screen.findByTitle("Stop current query")).toBeTruthy();
+    expect(screen.getByTestId("compose-dock").className).toContain("top-1/2");
+    expect(screen.queryByTitle("Send") === null).toBe(true);
+  } finally {
+    await act(async () => {
+      release();
+      await gate;
+    });
+  }
+  await waitFor(() => expect(screen.queryByTitle("Stop current query") === null).toBe(true));
 });

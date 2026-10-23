@@ -38,3 +38,15 @@
 - **Hypothesis:** Same scroll-settlement failure under load; no changes to the
   transcript scroller or its owning spec in this commit. The isolated pass
   establishes intermittence, not a root cause or a fix.
+
+
+## Recurrence — 2026-10-23
+
+- **Branch:** `animate-tool-calls-9f849713d495-r1`.
+- **Original command:** `ORKESTRATOR_E2E_PORT=1457 mise run test:logged -- --name transcript-browser -- bunx playwright test --config e2e/playwright.config.ts StreamingTranscript.spec.ts ToolGroupFold.spec.ts --workers=2`.
+- **Worker configuration:** Two Playwright workers, with the repository suite and static checks running on a host shared with other worktrees.
+- **Failure:** Desktop Chromium timed out after 5000 ms in `releaseStickyScroll` (line 46); distance from the bottom remained 1 instead of exceeding 100. The history-anchor assertions did not run.
+- **Suite counts:** 20 total, 17 passed, 3 failed; the other two failures were in the new folding fixture's scroll setup and were corrected separately.
+- **Isolated rerun:** `ORKESTRATOR_E2E_PORT=1458 mise run test:logged -- --name streaming-isolated -- bunx playwright test --config e2e/playwright.config.ts StreamingTranscript.spec.ts --workers=1 --output output/playwright/streaming-results` passed all 14 cases (39.4 seconds including fixture startup).
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.e3CStO/transcript-browser.log.gz`.
+- **Observation:** The same existing scroll-release setup failed intermittently; the isolated owning-file pass does not establish a root cause or a fix.

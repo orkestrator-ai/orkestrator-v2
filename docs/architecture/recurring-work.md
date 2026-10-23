@@ -128,9 +128,14 @@ Observation uses the no-touch `/activity` route; it never starts a bridge,
 attaches, hydrates or refreshes liveness. Dispatch and generation fences make
 a pre-dispatch idle inert. A provider group whose sessions are all stably
 idle backs off to a 4 s safety read (`STABLE_IDLE_BACKOFF_MS`) only when the
-provider has a qualified wakeup for work started elsewhere. See
+provider has a qualified wakeup for work started elsewhere: OpenCode's SDK
+event stream, and the Claude and Codex bridges' content-free observation
+stream (`/event/subscribe?observe=1`, `http-bridge-observation-stream.ts`).
+Cursor, Pi and Grok groups are read on every sweep. Mail presence reports a
+retained idle the injection gate would not trust (older than 4 s, or read
+before the latest dispatch) as `unknown`. See
 [event-snapshot-recovery.md](event-snapshot-recovery.md) for the stamped
-session-activity announcements.
+session-activity and content announcements.
 
 **Client read coordinator** (`apps/web/src/lib/read-coordinator.ts`, used via
 `useCoordinatedRead`) owns renderer presentation reads: one timer per read
@@ -174,11 +179,11 @@ the running attempt.
 | B04 | `file-list-read`, `file-tree-read` | `DiffStatsService.readFileList` / `readTree` | Read-driven; joins the owner's scan. Watched worktrees answer from watched state until a hint. Unwatched file lists are reused for up to 3 s (`FILE_LIST_MAX_AGE_MS`). Container trees are reused for up to 10 s while a recent complete file list covers them, and re-walked at once when list membership changes. Revisions are described in [event-snapshot-recovery.md](event-snapshot-recovery.md). |
 | B05 | `git-fetch-local` | `git-fetch-scheduler.ts` | Read-driven 5 min TTL per common Git directory and ref; concurrent fetches join; failures also stamp the cooldown. |
 | F02 | `git-fetch-container` | `container-git-fetch.ts` | Separate from the status scan, which reads local refs only. 5 min attempt cooldown per container generation, clone and ref; failures back off 5, 10, 20 then 30 min; explicit refreshes at least 15 s apart; immutable local baselines never fetch; a missing ref gets one recovery fetch per window. A fetch that moves `origin/<ref>` triggers a rescan. |
-| B06 | `native-activity-sweep` | `core/index.ts`, `native-agent-service-reconciliation.ts` | Every 2 s, fixed rate; due provider groups only (see the observation broker). Eight workers, retry backoff, no-touch reads. |
+| B06 | `native-activity-sweep` | `core/index.ts`, `native-agent-launch-activity-reconciler.ts` | Every 2 s, fixed rate; due provider groups only (see the observation broker). Eight workers, retry backoff, no-touch reads. A skipped (backed-off) group counts as a cache hit, a read group as a miss. |
 | B07 | `native-launch-scan`, `native-queue-scan` | `native-agent-queue-scheduling.ts` | Keyed: 2 s while a launch intent or queued dispatch is pending (drain backoff 2 s to 60 s honoured), else a 30 s safety pass; enqueue, turn end and environment changes wake it. |
-| B08 | `native-interaction-observe` | `native-agent-service-base.ts` | Every 2 s, only when the interaction monitor is `observe-only`. |
+| B08 | `native-interaction-observe` | `native-agent-interaction-tracker.ts` | Every 2 s, only when the interaction monitor is `observe-only`. |
 | B09 | `claude-state-reconcile`, `tmux-queue-drain`, `pending-rename-reconcile` | `core/index.ts` (`BackendActivityJobs`) | Each its own named job at 2 s fixed rate, never overlapping. Pending renames drop to a 30 s safety pass when none are pending. |
-| B10 | `mail-presence`, `mail-injection` | `agent-mail-service.ts` | Resource changes coalesce for 250 ms; 2 s safety jobs. Observed presence lives 4 s, so the 2 s refresh must not be slowed on its own. |
+| B10 | `mail-presence`, `mail-injection` | `agent-mail-service.ts` | Resource changes coalesce for 250 ms; 2 s safety jobs. Observed presence lives 4 s, so the 2 s refresh must not be slowed on its own. A stale retained idle reads `unknown`; an `idle`/`unknown` flip does not reset the inject backoff. |
 | B11 | `coordinator-repair`, `mail-retention` | `core/index.ts` | Own elapsed 60 s deadlines. Retention prunes mail older than `agentMessaging.retentionDays` (default 14). |
 | B12 | `activity-lease-expiry` | `core/index.ts`, `protocol/agent-activity.ts` | Every 15 s for a 30 s frontend activity lease. Critical. |
 | B13 | `tab-cleanup` | `core/index.ts` | 60 s plus startup; teardown and orphan reaping each guarded in flight; orphans get a one-hour grace. |
@@ -190,6 +195,7 @@ the running attempt.
 | B20 | `validation-heartbeat` | `review-validation-worker.ts` | 500 ms persistence and cancel heartbeat; 100 ms cooperative clock. Cross-process liveness, so partly correctness-related. |
 | B21 | `storage-lock-heartbeat` | `storage-context.ts`, `storage-database.ts` | Lease holders heartbeat at least every third of the stale threshold. Critical. |
 | B22 | `opencode-reconnect` | `opencode-observation-stream.ts` | Event stream; reconnect backs off from 1 s to 30 s and resets after a healthy stream. Gaps are marked and reconciled. |
+| B23 | `bridge-observation-stream` | `http-bridge-observation-stream.ts` | One content-free `/event/subscribe?observe=1` connection per observed Claude or Codex bridge, opened by the sweep. Reconnect backs off from 1 s to 30 s with jitter and resumes from its cursor; a connection silent for 75 s is torn down. Connects, gaps and disconnects wake the whole group. An older bridge that does not confirm the mode is not reconnected. |
 | C08 | `system-usage-sample`, `process-usage` | `commands-registry-system.ts` | Demand-driven by clients; concurrent reads join. |
 | L01 | `gateway-heartbeat` | `gateway-handlers.ts` | Shared 25 s keepalive. It also advances the scoped stream cursor and checks client buffers, so it is replay convergence, not a cosmetic ping. |
 
@@ -204,7 +210,7 @@ None of these is recorded; the IDs are the only names.
 
 | ID | Source | Cadence |
 | --- | --- | --- |
-| C01 | `useNativeAgentSession.ts`, `native-session-read-policy.ts` | Active tab: 500 ms while running, blocked, cancelling or recovering; 1.5 s idle. A qualified provider's quiet idle view backs off through 3, 5, 10 and 15 s (`NATIVE_QUIET_BACKOFF_TRIAL_MS`); qualified today: Cursor, Pi, Grok and OpenCode, and only when the backend advertises observation events. Any invalidation returns it to 1.5 s. |
+| C01 | `useNativeAgentSession.ts`, `native-session-read-policy.ts` | Active tab: 500 ms while running, blocked, cancelling or recovering; 1.5 s idle. A qualified provider's quiet idle view backs off through 3, 5, 10 and 15 s (`NATIVE_QUIET_BACKOFF_TRIAL_MS`); qualified today: Cursor, Pi, Grok and OpenCode, plus Claude and Codex while the session is `turn.quietObservation`, and only when the backend advertises observation events. Any invalidation returns it to 1.5 s. Several views of one session share one coordinated read. |
 | C02 | `useFilesPanel.ts` | 5 s while the panel is open and the environment available; immediate on open, tab, target or action. |
 | C03 | `resource-sync.ts` | Resource events coalesce for 50 ms; revision gaps and reconnects trigger a manifest check; 5 min safety manifest check. |
 | C05 | `MultiReviewReviewerTab.tsx` | 4 s while active and running or pending; conditional on a source token. |

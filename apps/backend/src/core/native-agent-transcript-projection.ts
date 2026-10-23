@@ -1,49 +1,44 @@
-import { legacyCompatibilityCounts } from "./change-tracking/legacy-payload.js";
-import { revisedRowsReconciliationToken } from "@orkestrator/protocol/node/revised-rows";
-import path from "node:path";
-import { claudeReasoningSelection } from "@orkestrator/protocol/claude-model-catalog";
-import { fileURLToPath } from "node:url";
 import * as shared from "./native-agent-service-shared.js";
-import { AGENT_INTERACTION_KINDS } from "@orkestrator/protocol/agent-interactions";
-import { redactArtifactGrantArgs } from "@orkestrator/protocol/transcript-artifacts";
+import type {
+  BuildPipelineAgent,
+  AgentModel,
+  AgentInteractionKind,
+  NativeAgentComposerState,
+  NativeAgentControlUpdate,
+  NativeAgentMessageWindow,
+  NativeAgentSessionProjection,
+  NativeAgentToolDetails,
+  IncompleteTurnNotice,
+  PersistedNativeAgentSession,
+  StorageService,
+  NativeAgentRuntimeProvider,
+  ProviderInteractiveSnapshot,
+  EnsureNativeAgentSessionInput,
+  NativeAgentProjectionInput,
+  NativeAgentProjectionCacheEntry,
+  NativeAgentSyncState,
+  NativeAgentHistoryState,
+  NativeAgentServiceOptions,
+  ProviderSessionStateSnapshot,
+  ProviderTranscriptSnapshot,
+  NativeAgentProjectionUpdateInput,
+  NativeAgentMessagePageInput,
+  NativeAgentProjectionUpdate,
+  NativeAgentTranscriptUpdateInput,
+  NativeAgentProgressiveInput,
+  NativeAgentDiscoveryUpdateInput,
+  NativeAgentProjectionDelta,
+  NativeAgentMessagePage,
+} from "./native-agent-service-shared.js";
+import path from "node:path";
 import {
-  NATIVE_AGENT_PROGRESSIVE_VIEW_VERSION,
-  NATIVE_AGENT_REVISED_MESSAGES_MAX,
-  nativeAsyncQuestionItemId,
-  recoverBackgroundTaskLaunchId,
-  resolveNativeComposerModelId,
-  withResolvedNativeComposerModel,
-  withoutSuppressedComposerControls,
-  type NativeAgentDiscoverySection,
-  type NativeAgentDiscoverySectionState,
-  type NativeAgentDiscoveryUpdate,
-  type NativeAgentDiscoveryView,
-  type NativeAgentSessionStateUpdate,
-  type NativeAgentSessionStateView,
-  type NativeAgentTranscriptDelta,
-  type NativeAgentTranscriptUpdate,
-  type NativeAgentTranscriptView,
-  type NativeAgentViewIdentity,
-  type NativeAgentAsyncQuestionResponse,
-  type NativeAgentContextUsage,
-  type NativeAgentNotice,
-  isNativeInlineErrorMessageId,
-  nativeAgentApprovalModes,
-  resolveNativeAgentApprovalMode,
-} from "@orkestrator/protocol/native-agent";
-import {
-  parseCoordinatorDelegatedPrompt,
-  stripSystemInstructions,
-} from "@orkestrator/protocol/review-evidence-frames";
-import {
-  coordinatorIdFromRuntimeId,
-  stripCoordinatorContext,
-} from "@orkestrator/protocol/coordinator";
-import {
+  nativeAgentSessionStorageKey,
+  nativeCapabilities,
+  nonBlank,
+  readProviderStatus,
+  createHash,
   NATIVE_DISCOVERY_RETRY_MS,
   NATIVE_MISSING_SESSION_GRACE_MS,
-  NATIVE_MODEL_CATALOG_CACHE_LIMIT,
-  NATIVE_MODEL_CATALOG_TTL_MS,
   NATIVE_PROJECTION_CACHE_LIMIT,
   NATIVE_PROJECTION_MAX_BYTES,
   NATIVE_PROJECTION_MAX_MESSAGES,
@@ -82,25 +77,64 @@ import {
   NATIVE_TOOL_DETAIL_MAX_BYTES,
   ProviderUnavailableError,
   boundTranscriptResponse,
-  createHash,
-  randomUUID,
-  nativeAgentSessionStorageKey,
-  nativeCapabilities,
   nativeComposerControls,
-  nonBlank,
-  readProviderStatus,
   resolveReasoningId,
-  withSessionActionSlashCommands,
 } from "./native-agent-service-shared.js";
+import {
+  coordinatorIdFromRuntimeId,
+  stripCoordinatorContext,
+} from "@orkestrator/protocol/coordinator";
+import { type CommandCatalogueSnapshot } from "./native-agent-command-catalogue.js";
+import {
+  nativeAsyncQuestionItemId,
+  NATIVE_AGENT_PROGRESSIVE_VIEW_VERSION,
+  NATIVE_AGENT_REVISED_MESSAGES_MAX,
+  recoverBackgroundTaskLaunchId,
+  resolveNativeComposerModelId,
+  withResolvedNativeComposerModel,
+  withoutSuppressedComposerControls,
+  type NativeAgentDiscoverySection,
+  type NativeAgentDiscoverySectionState,
+  type NativeAgentDiscoveryUpdate,
+  type NativeAgentDiscoveryView,
+  type NativeAgentSessionStateUpdate,
+  type NativeAgentSessionStateView,
+  type NativeAgentTranscriptDelta,
+  type NativeAgentTranscriptUpdate,
+  type NativeAgentTranscriptView,
+  type NativeAgentViewIdentity,
+  type NativeAgentAsyncQuestionResponse,
+  type NativeAgentContextUsage,
+  type NativeAgentNotice,
+  type NativeAgentRetiredDispatch,
+  isNativeInlineErrorMessageId,
+  nativeAgentApprovalModes,
+  resolveNativeAgentApprovalMode,
+} from "@orkestrator/protocol/native-agent";
+import { sessionIncompleteTurnNotice } from "./models.js";
+import { NativeAgentCatalogCache } from "./native-agent-catalog-cache.js";
+import { randomUUID } from "node:crypto";
+import { legacyCompatibilityCounts } from "./change-tracking/legacy-payload.js";
+import { revisedRowsReconciliationToken } from "@orkestrator/protocol/node/revised-rows";
+import { claudeReasoningSelection } from "@orkestrator/protocol/claude-model-catalog";
+import { fileURLToPath } from "node:url";
+import { AGENT_INTERACTION_KINDS } from "@orkestrator/protocol/agent-interactions";
+import { redactArtifactGrantArgs } from "@orkestrator/protocol/transcript-artifacts";
+import {
+  parseCoordinatorDelegatedPrompt,
+  stripSystemInstructions,
+} from "@orkestrator/protocol/review-evidence-frames";
 import {
   inferredComposerSelectionToPersist,
   lastAssistantModelRef,
 } from "./native-agent-composer-selection.js";
 import { nativeAgentPlatformPolicy } from "./native-agent-platform-policy.js";
 import { heldSessionModel } from "./session-held-model.js";
-import { providerCacheKey } from "./native-agent-provider-registry.js";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
-import { sessionIncompleteTurnNotice } from "./models.js";
+import {
+  projectedRetiredDispatch,
+  retiredDispatchNotice,
+} from "./native-agent-retired-dispatch.js";
 import {
   createNativeAgentDisplayTail,
   displayTailRecoveryWindow,
@@ -151,45 +185,7 @@ import {
   valueFingerprint,
 } from "./native-agent-projection-encoding.js";
 import { unsupportedCommandCatalogueState } from "@orkestrator/protocol/agent-command-catalogue";
-import {
-  commandCatalogueKey,
-  type CommandCatalogueSnapshot,
-} from "./native-agent-command-catalogue.js";
-type BuildPipelineAgent = shared.BuildPipelineAgent;
-type PipelineSessionPhase = shared.PipelineSessionPhase;
-type TaskSnapshotImage = shared.TaskSnapshotImage;
-type AgentActivityState = shared.AgentActivityState;
-type AgentInteractionKind = shared.AgentInteractionKind;
-type AgentInteractionApplyOutcome = shared.AgentInteractionApplyOutcome;
-type AgentInteractionOrigin = shared.AgentInteractionOrigin;
-type AgentInteractionPolicy = shared.AgentInteractionPolicy;
-type AgentInteractionResolution = shared.AgentInteractionResolution;
-type AgentModel = shared.AgentModel;
-type NativeAgentCapabilities = shared.NativeAgentCapabilities;
-type NativeAgentComposerControl = shared.NativeAgentComposerControl;
-type NativeAgentComposerState = shared.NativeAgentComposerState;
-type NativeAgentControlUpdate = shared.NativeAgentControlUpdate;
-type NativeAgentDispatchOutcome = shared.NativeAgentDispatchOutcome;
-type NativeAgentForkOutcome = shared.NativeAgentForkOutcome;
-type NativeAgentMessageWindow = shared.NativeAgentMessageWindow;
-type NativeAgentReadiness = shared.NativeAgentReadiness;
-type NativeAgentResumeEntry = shared.NativeAgentResumeEntry;
-type NativeAgentSessionProjection = shared.NativeAgentSessionProjection;
-type NativeAgentSessionAction = shared.NativeAgentSessionAction;
-type NativeAgentSessionActionOutcome = shared.NativeAgentSessionActionOutcome;
-type NativeAgentSlashCommand = shared.NativeAgentSlashCommand;
-type NativeAgentToolDetails = shared.NativeAgentToolDetails;
-type JsonSchema = shared.JsonSchema;
-type Environment = shared.Environment;
-type IncompleteTurnNotice = shared.IncompleteTurnNotice;
-type PersistedNativeAgentSession = shared.PersistedNativeAgentSession;
-type PersistedNativeAgentPendingDispatch = shared.PersistedNativeAgentPendingDispatch;
-type StorageService = shared.StorageService;
-type BridgeConnection = shared.BridgeConnection;
-type NativeAgentRuntimeProvider = shared.NativeAgentRuntimeProvider;
-type ProviderInteractiveSnapshot = shared.ProviderInteractiveSnapshot;
-type ProviderSessionStateSnapshot = shared.ProviderSessionStateSnapshot;
-type ProviderTranscriptSnapshot = shared.ProviderTranscriptSnapshot;
+import { withSessionActionSlashCommands } from "@orkestrator/protocol/agent-slash-commands";
 
 interface ProjectedProgressiveTranscript {
   value: NativeAgentTranscriptView;
@@ -200,27 +196,6 @@ interface ProjectedProgressiveTranscript {
   /** Ids in `value.revisedMessages` sent because a publication reached them. */
   ledgerRevisedIds?: readonly string[];
 }
-type ProviderInteractionObservationEvent = shared.ProviderInteractionObservationEvent;
-type ProviderExecutionMode = shared.ProviderExecutionMode;
-type PromptAttachment = shared.PromptAttachment;
-type CommandInvoker = shared.CommandInvoker;
-type EnsureNativeAgentSessionInput = shared.EnsureNativeAgentSessionInput;
-type DispatchNativeAgentPromptInput = shared.DispatchNativeAgentPromptInput;
-type AdoptNativeAgentSessionInput = shared.AdoptNativeAgentSessionInput;
-type NativeAgentProjectionInput = shared.NativeAgentProjectionInput;
-type NativeAgentProjectionCacheEntry = shared.NativeAgentProjectionCacheEntry;
-type NativeAgentProjectionUpdateInput = shared.NativeAgentProjectionUpdateInput;
-type NativeAgentMessagePageInput = shared.NativeAgentMessagePageInput;
-type NativeAgentProjectionUpdate = shared.NativeAgentProjectionUpdate;
-type NativeAgentTranscriptUpdateInput = shared.NativeAgentTranscriptUpdateInput;
-type NativeAgentProgressiveInput = shared.NativeAgentProgressiveInput;
-type NativeAgentDiscoveryUpdateInput = shared.NativeAgentDiscoveryUpdateInput;
-type NativeAgentProjectionDelta = shared.NativeAgentProjectionDelta;
-type NativeAgentMessagePage = shared.NativeAgentMessagePage;
-type NativeAgentActivityTransition = shared.NativeAgentActivityTransition;
-type NativeAgentServiceOptions = shared.NativeAgentServiceOptions;
-type AgentInteractionObservation = shared.AgentInteractionObservation;
-type PromptDispatchPreparation = shared.PromptDispatchPreparation;
 
 const IMAGE_MIME_TYPES = new Map([
   [".png", "image/png"],
@@ -294,71 +269,25 @@ function visibleProjectionNotices(
   agent: BuildPipelineAgent,
   notices: readonly NativeAgentNotice[] | undefined,
   incompleteTurn: IncompleteTurnNotice | undefined,
+  retiredDispatch?: NativeAgentRetiredDispatch,
 ): NativeAgentNotice[] {
-  const visible = (notices ?? [])
-    .filter((notice) => notice.kind !== "error" && notice.kind !== "stopped")
-    .slice(0, incompleteTurn ? 511 : 512);
-  if (!incompleteTurn) return visible;
-  const label = AGENT_PLATFORM_LABELS[agent] ?? agent;
-  return [
-    ...visible,
-    {
+  const owned: NativeAgentNotice[] = [];
+  if (incompleteTurn) {
+    const label = AGENT_PLATFORM_LABELS[agent] ?? agent;
+    owned.push({
       kind: "incomplete-turn",
       message:
         incompleteTurn.kind === "failed"
           ? `The previous ${label} turn ended before completion.`
           : `${label} could not complete the previous turn after recovery.`,
-    },
-  ];
+    });
+  }
+  if (retiredDispatch) owned.push(retiredDispatchNotice(retiredDispatch));
+  const visible = (notices ?? [])
+    .filter((notice) => notice.kind !== "error" && notice.kind !== "stopped")
+    .slice(0, 512 - owned.length);
+  return [...visible, ...owned];
 }
-export type NativeAgentServiceLayerTypes = [
-  BuildPipelineAgent,
-  PipelineSessionPhase,
-  TaskSnapshotImage,
-  AgentActivityState,
-  AgentInteractionKind,
-  AgentInteractionApplyOutcome,
-  AgentInteractionOrigin,
-  AgentInteractionPolicy,
-  AgentInteractionResolution,
-  AgentModel,
-  NativeAgentCapabilities,
-  NativeAgentComposerControl,
-  NativeAgentComposerState,
-  NativeAgentControlUpdate,
-  NativeAgentDispatchOutcome,
-  NativeAgentForkOutcome,
-  NativeAgentMessageWindow,
-  NativeAgentReadiness,
-  NativeAgentResumeEntry,
-  NativeAgentSessionProjection,
-  NativeAgentSessionAction,
-  NativeAgentSessionActionOutcome,
-  NativeAgentSlashCommand,
-  NativeAgentToolDetails,
-  JsonSchema,
-  Environment,
-  IncompleteTurnNotice,
-  PersistedNativeAgentSession,
-  PersistedNativeAgentPendingDispatch,
-  StorageService,
-  BridgeConnection,
-  NativeAgentRuntimeProvider,
-  ProviderInteractiveSnapshot,
-  ProviderInteractionObservationEvent,
-  ProviderExecutionMode,
-  PromptAttachment,
-  CommandInvoker,
-  EnsureNativeAgentSessionInput,
-  DispatchNativeAgentPromptInput,
-  AdoptNativeAgentSessionInput,
-  NativeAgentProjectionInput,
-  NativeAgentProjectionCacheEntry,
-  NativeAgentActivityTransition,
-  NativeAgentServiceOptions,
-  AgentInteractionObservation,
-  PromptDispatchPreparation,
-];
 
 /**
  * Carry sparse provider turn rows across projection reads.
@@ -504,8 +433,6 @@ export function withProviderContextWindow(
       : {}),
   };
 }
-
-import { NativeAgentServiceDispatch } from "./native-agent-service-dispatch.ts";
 
 /**
  * Preserve only the opaque launch id before the full result moves behind a
@@ -701,7 +628,177 @@ type ProgressiveHydrationEntry = {
   holdPreview: boolean;
 };
 
-export abstract class NativeAgentServiceProjection extends NativeAgentServiceDispatch {
+/**
+ * What a discovery section's value means to a view, for deciding whether a
+ * change is worth announcing (see `storeProgressiveDiscovery`). Drops the
+ * runtime drift counter and orders its unknown kinds; everything else is the
+ * value itself.
+ */
+function discoveryAnnouncementKey(value: unknown): string {
+  return JSON.stringify(value, (key, inner: unknown) => {
+    if (key !== "drift" || !inner || typeof inner !== "object" || Array.isArray(inner)) {
+      return inner;
+    }
+    const {
+      unknownEvents: _count,
+      unknownKinds,
+      ...rest
+    } = inner as {
+      unknownEvents?: unknown;
+      unknownKinds?: unknown;
+    };
+    return {
+      ...rest,
+      ...(Array.isArray(unknownKinds) ? { unknownKinds: [...unknownKinds].sort() } : {}),
+    };
+  });
+}
+
+/**
+ * A model catalogue as a view shows it, independent of the order the
+ * discovery fan-out happened to answer in.
+ */
+function modelCatalogKey(models: readonly AgentModel[]): string {
+  return JSON.stringify(
+    [...models].sort((a, b) =>
+      a.platform === b.platform
+        ? a.id < b.id
+          ? -1
+          : a.id > b.id
+            ? 1
+            : 0
+        : a.platform < b.platform
+          ? -1
+          : 1,
+    ),
+  );
+}
+
+/** A projection session resolved against storage and its runtime provider. */
+export interface ResolvedProjectionSession {
+  key: string;
+  session: PersistedNativeAgentSession;
+  provider: NativeAgentRuntimeProvider;
+  transient: false;
+}
+
+/** What the transcript projection needs from the service that wires it. */
+export interface NativeAgentTranscriptProjectionHost {
+  storage: StorageService;
+  options: NativeAgentServiceOptions;
+  catalogs: NativeAgentCatalogCache;
+  /** Last provider-owned activity; read without touching the provider. */
+  observedActivity(
+    sessionKey: string,
+  ): { providerSessionId: string; contentRevision?: string } | undefined;
+  /** The bridge generation serving this environment and agent, if a provider is cached. */
+  providerGeneration(
+    input: Pick<NativeAgentProjectionInput, "environmentId" | "agent">,
+  ): string | undefined;
+  now(): number;
+  isStopped(): boolean;
+  assertProjectionInput(input: NativeAgentProjectionInput): void;
+  resolveProjectionSession(
+    input: NativeAgentProjectionInput,
+  ): Promise<ResolvedProjectionSession | null>;
+  provider(input: EnsureNativeAgentSessionInput): Promise<NativeAgentRuntimeProvider>;
+  recordAsyncQuestionAttention(
+    environmentId: string,
+    sessionKey: string,
+    itemIds: readonly string[],
+  ): Promise<void>;
+  /** Settle a parked prompt dispatch against its provider in the background. */
+  scheduleAmbiguousDispatchSettle(
+    input: NativeAgentProjectionInput,
+    key: string,
+    requestId: string,
+    provider: NativeAgentRuntimeProvider,
+  ): void;
+  /** Settle a parked steer against its provider in the background. */
+  scheduleAmbiguousSteerSettle(
+    input: NativeAgentProjectionInput,
+    key: string,
+    requestId: string,
+    provider: NativeAgentRuntimeProvider,
+  ): void;
+}
+
+/**
+ * Renderer views of provider sessions: the legacy full projection, its sync
+ * deltas and history pages, the progressive transcript/state/discovery reads,
+ * tool details and the restart display tails.
+ *
+ * Every cache here is bounded (`toolDetailCacheBytes`, `projectionHistoryBytes`,
+ * `progressiveTranscriptBytes`, the projected-message and direct-page caches)
+ * and reconstructible: providers stay authoritative, so dropping any of it
+ * costs a re-read, never user state.
+ */
+export class NativeAgentTranscriptProjection {
+  /** Bounded, reconstructible view cache; providers remain authoritative. */
+  private readonly projectionCache = new Map<string, NativeAgentProjectionCacheEntry>();
+  /** Bounded wire revisions for conditional/delta projection reads. */
+  private readonly projectionSync = new Map<string, NativeAgentSyncState>();
+  /**
+   * One revision sequence per logical native-agent session.
+   *
+   * The legacy full-projection representation and the sync-v1 live tail are
+   * cached under different keys but describe the same session and carry the
+   * same generation, and the renderer compares `revision` as a single ordering.
+   * Allocating from separate per-key counters let the sync counter run ahead,
+   * so an authoritative projection returned by a mutation could arrive with a
+   * lower revision than the client already held and be discarded as stale.
+   */
+  private readonly projectionRevisions = new Map<
+    string,
+    { generation: string; revision: number }
+  >();
+  private projectionSyncBytes = 0;
+  /** Bounded normalized transcript source for independent history pages. */
+  private readonly projectionHistory = new Map<string, NativeAgentHistoryState>();
+  private projectionHistoryBytes = 0;
+  /**
+   * When each projection key's current run of `missing` provider reads began.
+   *
+   * Dates the `connecting` overlay so the grace can expire into a reportable
+   * failure. Cleared by any read that finds the session, and by every path that
+   * drops the key's cache entry, so it stays bounded by `projectionCache`
+   * rather than growing with key churn.
+   */
+  private readonly projectionMissingSince = new Map<string, number>();
+  /** Heavy, reconstructible fields omitted from ordinary renderer snapshots. */
+  private readonly toolDetailCache = new Map<
+    string,
+    {
+      sessionKey: string;
+      details: NativeAgentToolDetails;
+      bytes: number;
+      /** Exact provider-reported image path; never supplied by the renderer. */
+      localImagePath?: string;
+      /**
+       * A provider-held body behind a summary locator, fetched on first
+       * expansion. `resolved` once `details` holds the exact body.
+       */
+      remote?: { providerSessionId: string; locator: string; resolved: boolean };
+    }
+  >();
+  /** Entries temporarily protected while an authoritative refresh recreates them. */
+  private readonly pinnedToolDetailRefs = new Set<string>();
+  private toolDetailCacheBytes = 0;
+  /** Serializes projection reads so late provider responses cannot roll state back. */
+  private readonly projectionRefreshes = new Map<
+    string,
+    Promise<NativeAgentSessionProjection | null>
+  >();
+  private readonly projectionRefreshDescriptors = new Map<
+    string,
+    { epoch: number; signature: string; environmentId: string }
+  >();
+  /** Invalidates an in-flight read when a logical tab changes provider identity. */
+  private readonly projectionEpochs = new Map<string, number>();
+  /** Session-scoped stop result retained until the next authoritative projection. */
+  private readonly stopNotices = new Map<string, string>();
+  /** One best-effort provider title push per backend-derived title. */
+  private readonly pushedSessionTitles = new Map<string, string>();
   private readonly progressiveInstanceId = randomUUID();
   private readonly progressiveTranscriptCache = new Map<string, ProgressiveTranscriptEntry>();
   private progressiveTranscriptBytes = 0;
@@ -739,44 +836,19 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     }
   >();
   /** Bounded restart-preview checkpoints; see native-agent-display-tail-scheduler.ts. */
-  private readonly displayTailScheduler = new NativeAgentDisplayTailScheduler({
-    write: (key, tail, fence) => this.storage.putNativeAgentDisplayTail(key, tail, { fence }),
-    // Optional because narrow test doubles of the storage omit them.
-    captureFence: () =>
-      typeof this.storage.captureNativeAgentDisplayTailFence === "function"
-        ? this.storage.captureNativeAgentDisplayTailFence()
-        : 0,
-    subscribeDeletions: (listener) =>
-      typeof this.storage.onNativeAgentDisplayTailDeleted === "function"
-        ? this.storage.onNativeAgentDisplayTailDeleted(listener)
-        : () => undefined,
-  });
+  private readonly displayTailScheduler: NativeAgentDisplayTailScheduler;
   private readonly progressiveHydrations = new Map<string, ProgressiveHydrationEntry>();
   private readonly progressiveHydrationTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly progressiveMetrics = new ProgressiveReadMetrics();
   /** In-flight provider reads of remote tool details, one per reference. */
   private readonly remoteToolDetailReads = new Map<string, Promise<NativeAgentToolDetails>>();
   /** Projected rows reused while their provider rows are unchanged (step 12). */
-  private readonly projectedMessages = new ProjectedMessageCache({
-    maxEntries: NATIVE_PROJECTED_MESSAGE_CACHE_MAX_ENTRIES,
-    maxBytes: NATIVE_PROJECTED_MESSAGE_CACHE_MAX_BYTES,
-    maxSessionEntries: NATIVE_PROJECTED_MESSAGE_CACHE_MAX_SESSION_ENTRIES,
-    maxSessionBytes: NATIVE_PROJECTED_MESSAGE_CACHE_MAX_SESSION_BYTES,
-    maxEntryBytes: NATIVE_PROJECTED_MESSAGE_CACHE_MAX_ENTRY_BYTES,
-    ...this.options.projectedMessageCacheLimits,
-  });
+  private readonly projectedMessages: ProjectedMessageCache;
   /** Immutable direct history pages of each session's current epoch (step 11). */
-  private readonly directHistoryPages = new DirectHistoryPageCache<{
+  private readonly directHistoryPages: DirectHistoryPageCache<{
     page: NativeAgentMessagePage;
     details: readonly ProjectionDetailRegistration[];
-  }>({
-    maxEntries: NATIVE_DIRECT_PAGE_CACHE_MAX_ENTRIES,
-    maxBytes: NATIVE_DIRECT_PAGE_CACHE_MAX_BYTES,
-    maxSessionEntries: NATIVE_DIRECT_PAGE_CACHE_MAX_SESSION_ENTRIES,
-    maxSessionBytes: NATIVE_DIRECT_PAGE_CACHE_MAX_SESSION_BYTES,
-    ttlMs: NATIVE_DIRECT_PAGE_CACHE_TTL_MS,
-    ...this.options.directHistoryPageCacheLimits,
-  });
+  }>;
   /** Per-conversation publication ledger reads, keyed by ledger revision. */
   private readonly artifactOverlays = new ArtifactOverlayIndex(
     () => this.options.artifactLedger?.() ?? null,
@@ -787,6 +859,114 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
    * is synchronous, so a single slot cannot interleave between reads.
    */
   private detailRegistrations: ProjectionDetailRegistration[] | undefined;
+
+  private readonly storage: StorageService;
+  private readonly options: NativeAgentServiceOptions;
+  private readonly catalogs: NativeAgentCatalogCache;
+
+  constructor(private readonly host: NativeAgentTranscriptProjectionHost) {
+    this.storage = host.storage;
+    this.options = host.options;
+    this.catalogs = host.catalogs;
+    this.displayTailScheduler = new NativeAgentDisplayTailScheduler({
+      write: (key, tail, fence) => this.storage.putNativeAgentDisplayTail(key, tail, { fence }),
+      // Optional because narrow test doubles of the storage omit them.
+      captureFence: () =>
+        typeof this.storage.captureNativeAgentDisplayTailFence === "function"
+          ? this.storage.captureNativeAgentDisplayTailFence()
+          : 0,
+      subscribeDeletions: (listener) =>
+        typeof this.storage.onNativeAgentDisplayTailDeleted === "function"
+          ? this.storage.onNativeAgentDisplayTailDeleted(listener)
+          : () => undefined,
+    });
+    this.projectedMessages = new ProjectedMessageCache({
+      maxEntries: NATIVE_PROJECTED_MESSAGE_CACHE_MAX_ENTRIES,
+      maxBytes: NATIVE_PROJECTED_MESSAGE_CACHE_MAX_BYTES,
+      maxSessionEntries: NATIVE_PROJECTED_MESSAGE_CACHE_MAX_SESSION_ENTRIES,
+      maxSessionBytes: NATIVE_PROJECTED_MESSAGE_CACHE_MAX_SESSION_BYTES,
+      maxEntryBytes: NATIVE_PROJECTED_MESSAGE_CACHE_MAX_ENTRY_BYTES,
+      ...this.options.projectedMessageCacheLimits,
+    });
+    this.directHistoryPages = new DirectHistoryPageCache({
+      maxEntries: NATIVE_DIRECT_PAGE_CACHE_MAX_ENTRIES,
+      maxBytes: NATIVE_DIRECT_PAGE_CACHE_MAX_BYTES,
+      maxSessionEntries: NATIVE_DIRECT_PAGE_CACHE_MAX_SESSION_ENTRIES,
+      maxSessionBytes: NATIVE_DIRECT_PAGE_CACHE_MAX_SESSION_BYTES,
+      ttlMs: NATIVE_DIRECT_PAGE_CACHE_TTL_MS,
+      ...this.options.directHistoryPageCacheLimits,
+    });
+  }
+
+  /** Keep a session's stop result until its next authoritative projection. */
+  recordStopNotice(sessionKey: string, message: string): void {
+    this.stopNotices.set(sessionKey, message);
+    while (this.stopNotices.size > 256) {
+      const oldest = this.stopNotices.keys().next().value as string | undefined;
+      if (oldest) this.stopNotices.delete(oldest);
+      else break;
+    }
+  }
+
+  /** Projection reads still in flight, for shutdown to settle. */
+  pendingRefreshes(): Promise<unknown>[] {
+    return [...this.projectionRefreshes.values()];
+  }
+
+  /**
+   * Test-only view of the caches this projection owns and of a few internal
+   * steps. Service tests reach projection state here, never through the
+   * service; production code must not call it.
+   */
+  forTesting() {
+    return {
+      projectionCache: this.projectionCache,
+      quietObservationFlag: (session: PersistedNativeAgentSession) =>
+        this.quietObservationFlag(session),
+      projectionEpochs: this.projectionEpochs,
+      projectionRefreshes: this.projectionRefreshes,
+      stopNotices: this.stopNotices,
+      progressiveTranscriptCache: this.progressiveTranscriptCache,
+      progressiveReads: this.progressiveReads,
+      progressiveDirtyFollowUps: this.progressiveDirtyFollowUps,
+      progressiveTrailing: this.progressiveTrailing,
+      progressiveHydrations: this.progressiveHydrations,
+      progressiveMetrics: this.progressiveMetrics,
+      progressiveReadWaiterCount: () => this.progressiveReadWaiterCount,
+      projectedMessages: this.projectedMessages,
+      directHistoryPages: this.directHistoryPages,
+      toolDetailCache: this.toolDetailCache,
+      toolDetailCacheBytes: () => this.toolDetailCacheBytes,
+      /** Simulate capacity eviction of every tool detail. */
+      evictToolDetails: () => {
+        this.toolDetailCache.clear();
+        this.toolDetailCacheBytes = 0;
+      },
+      invalidateProjection: (key: string) => this.invalidateProjection(key),
+      pruneProjectionEpoch: (key: string) => this.pruneProjectionEpoch(key),
+      projectionPart: (sessionKey: string, messageId: string, raw: unknown, partPath: string) =>
+        this.projectionPart(sessionKey, messageId, raw, partPath) as Record<string, unknown>,
+      transcriptDelta: (previous: NativeAgentTranscriptView, current: NativeAgentTranscriptView) =>
+        this.transcriptDelta(previous, current),
+      recoverableDispatchStatus: (createdAt: string, kind?: "prompt" | "steer") =>
+        this.recoverableDispatchStatus(createdAt, kind),
+    };
+  }
+
+  /** Drop every legacy projection cache; run after shutdown settled the reads. */
+  clear(): void {
+    this.projectionCache.clear();
+    this.projectionSync.clear();
+    this.projectionSyncBytes = 0;
+    this.projectionHistory.clear();
+    this.projectionHistoryBytes = 0;
+    this.toolDetailCache.clear();
+    this.pinnedToolDetailRefs.clear();
+    this.toolDetailCacheBytes = 0;
+    this.projectionRefreshes.clear();
+    this.projectionRefreshDescriptors.clear();
+    this.projectionEpochs.clear();
+  }
 
   /**
    * Whether a parked dispatch is still reconciling or has become a final
@@ -805,20 +985,20 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
    * between write and read) would otherwise keep the elapsed time negative for
    * as long as the skew lasts.
    */
-  protected recoverableDispatchStatus(
+  private recoverableDispatchStatus(
     createdAt: string,
     kind: "prompt" | "steer" = "prompt",
   ): "reconciling" | "action-required" {
     if (kind === "steer") return "action-required";
     const created = Date.parse(createdAt);
-    const now = this.now();
+    const now = this.host.now();
     if (!Number.isFinite(created) || created > now) return "action-required";
     return now - created >= shared.PARKED_DISPATCH_RECONCILE_GRACE_MS
       ? "action-required"
       : "reconciling";
   }
 
-  protected async settleAndClearProgressiveReads(): Promise<void> {
+  async settleAndClearProgressiveReads(): Promise<void> {
     // Stop accepting checkpoints and drain the newest pending previews within
     // a bounded deadline, concurrently with settling the reads below. A
     // skipped preview only costs restart latency; the provider stays
@@ -862,31 +1042,8 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       );
     }
   }
-  protected async recordAsyncQuestionAttention(
-    environmentId: string,
-    sessionKey: string,
-    itemIds: readonly string[],
-  ): Promise<void> {
-    const attentionKeys = itemIds.slice(-64).map((itemId) => {
-      const digest = createHash("sha256")
-        .update(sessionKey)
-        .update("\0")
-        .update(itemId)
-        .digest("hex");
-      return `codex:${digest}`;
-    });
-    if (attentionKeys.length === 0) return;
-    const attention = await this.storage.recordEnvironmentAgentAttention(
-      environmentId,
-      attentionKeys,
-      new Date(this.now()).toISOString(),
-    );
-    if (attention.recorded) {
-      this.options.onAsyncQuestionAttention?.({ environmentId, sessionKey });
-    }
-  }
 
-  protected cacheToolDetails(
+  private cacheToolDetails(
     sessionKey: string,
     messageId: string,
     partPath: string,
@@ -944,7 +1101,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
    * until the row is expanded; the reference is stable for as long as the
    * locator is, and the locator changes whenever the body does.
    */
-  protected cacheRemoteToolDetails(
+  private cacheRemoteToolDetails(
     sessionKey: string,
     messageId: string,
     partPath: string,
@@ -1020,7 +1177,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     return true;
   }
 
-  protected pruneToolDetailCache(): void {
+  private pruneToolDetailCache(): void {
     while (
       this.toolDetailCache.size >
         (this.options.toolDetailCacheMaxEntries ?? NATIVE_TOOL_DETAIL_CACHE_MAX_ENTRIES) ||
@@ -1037,7 +1194,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     }
   }
 
-  protected projectionPart(
+  private projectionPart(
     sessionKey: string,
     messageId: string,
     raw: unknown,
@@ -1246,7 +1403,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     return projected;
   }
 
-  protected projectionMessages(
+  private projectionMessages(
     sessionKey: string,
     messages: unknown[],
     limit: number,
@@ -1376,7 +1533,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     };
   }
 
-  protected boundedProjectedMessages(
+  private boundedProjectedMessages(
     messages: unknown[],
     limit: number,
     maximumBytes: number,
@@ -1472,7 +1629,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       mutableTailStart,
       complete,
       bytes,
-      updatedAt: this.now(),
+      updatedAt: this.host.now(),
     });
     this.projectionHistoryBytes += bytes;
     while (this.projectionHistoryBytes > NATIVE_HISTORY_CACHE_MAX_BYTES) {
@@ -1556,15 +1713,15 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     state.currentToken = token;
     const bytes = encodedBytesWithMessages(projection);
     if (bytes <= NATIVE_SYNC_MAX_REVISION_BYTES) {
-      state.revisions.push({ token, projection, bytes, createdAt: this.now() });
+      state.revisions.push({ token, projection, bytes, createdAt: this.host.now() });
       state.revisionBytes += bytes;
       this.projectionSyncBytes += bytes;
     }
-    const expiredBefore = this.now() - NATIVE_SYNC_REVISION_TTL_MS;
+    const expiredBefore = this.host.now() - NATIVE_SYNC_REVISION_TTL_MS;
     while (
       state.revisions.length > NATIVE_SYNC_MAX_REVISIONS ||
       state.revisionBytes > NATIVE_SYNC_MAX_REVISION_BYTES ||
-      (state.revisions[0]?.createdAt ?? this.now()) < expiredBefore
+      (state.revisions[0]?.createdAt ?? this.host.now()) < expiredBefore
     ) {
       const removed = state.revisions.shift();
       if (!removed) break;
@@ -1882,14 +2039,14 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           messages: value.messages,
           historyComplete: value.historyComplete,
           ...(messageWindow ? { messageWindow } : {}),
-          updatedAt: new Date(this.now()).toISOString(),
+          updatedAt: new Date(this.host.now()).toISOString(),
         });
       },
     });
   }
 
   /** Immediate checkpoint of a pending tail (tests and explicit flushes). */
-  protected async flushDisplayTailPersist(sessionKey: string): Promise<void> {
+  async flushDisplayTailPersist(sessionKey: string): Promise<void> {
     await this.displayTailScheduler.flush(sessionKey);
   }
 
@@ -1996,7 +2153,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         if (this.progressiveHydrationTimers.get(key) === timer) {
           this.progressiveHydrationTimers.delete(key);
         }
-        if (this.stopped || this.progressiveHydrations.get(key) !== entry) return;
+        if (this.host.isStopped() || this.progressiveHydrations.get(key) !== entry) return;
         entry.attempts += 1;
         const promise = this.fillIncompleteProgressiveSnapshot(
           provider,
@@ -2007,7 +2164,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           .catch(() => snapshot)
           .then((hydrated) => {
             if (
-              this.stopped ||
+              this.host.isStopped() ||
               this.progressiveHydrations.get(key) !== entry ||
               this.progressiveSourceTokens.get(key) !== snapshot.sourceToken
             )
@@ -2118,10 +2275,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
   ): ProjectedProgressiveTranscript {
     const previous = this.progressiveTranscriptCache.get(key);
     const overlay = this.artifactOverlay(input);
-    const sourceGeneration =
-      this.providerRegistry.connectionIdentity(
-        providerCacheKey(input.environmentId, input.agent),
-      ) ?? `in-process:${input.agent}`;
+    const sourceGeneration = this.host.providerGeneration(input) ?? `in-process:${input.agent}`;
     const identity = this.progressiveIdentity(input, providerSessionId, sourceGeneration);
     const previewHead = snapshot.messages[0];
     const displayedHead = previous?.value.messages.find(
@@ -2687,7 +2841,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     key: string,
     phases?: ProgressiveReadPhaseTimer,
   ): Promise<ProjectedProgressiveTranscript | null> {
-    const resolved = await this.resolveProjectionSession(input);
+    const resolved = await this.host.resolveProjectionSession(input);
     if (!resolved) return null;
     const previous = this.progressiveTranscriptCache.get(key);
     // A publication committed since the previous view changes rows the
@@ -2802,7 +2956,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
   async getTranscriptUpdate(
     input: NativeAgentTranscriptUpdateInput,
   ): Promise<NativeAgentTranscriptUpdate> {
-    this.assertProjectionInput(input);
+    this.host.assertProjectionInput(input);
     if (input.viewVersion !== NATIVE_AGENT_PROGRESSIVE_VIEW_VERSION) {
       throw new Error("Native agent progressive view version is unsupported");
     }
@@ -2849,9 +3003,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           identity: this.progressiveIdentity(
             input,
             persisted.providerSessionId,
-            this.providerRegistry.connectionIdentity(
-              providerCacheKey(input.environmentId, input.agent),
-            ) ?? `in-process:${input.agent}`,
+            this.host.providerGeneration(input) ?? `in-process:${input.agent}`,
           ),
           freshness: persisted.messages.length === 0 ? "empty" : "cached",
           // Tails are written from the already-stripped progressive projection.
@@ -2990,7 +3142,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
   private async readProgressiveSessionState(
     input: NativeAgentProgressiveInput,
   ): Promise<NativeAgentSessionStateView | null> {
-    const resolved = await this.resolveProjectionSession(input);
+    const resolved = await this.host.resolveProjectionSession(input);
     if (!resolved) return null;
     const advertisedCapabilities = nativeCapabilities(input.agent);
     const [snapshot, interactionSnapshot, queue, steerSupported] = await Promise.all([
@@ -3018,9 +3170,8 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     if (snapshot.status === "missing") return null;
     const commandRevision = (snapshot as ProviderSessionStateSnapshot).commandCatalogueRevision;
     if (commandRevision !== undefined) {
-      this.commandCatalogues.observeProviderRevision(
-        commandCatalogueKey(input.environmentId, input.agent, resolved.session.providerSessionId),
-        input.environmentId,
+      this.catalogs.observeCommandRevision(
+        input,
         resolved.provider,
         resolved.session.providerSessionId,
         commandRevision,
@@ -3080,10 +3231,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       storedContextUsage,
     );
     const blocked = interactionSnapshot.requests.some((request) => request.blocking !== false);
-    const providerGeneration =
-      this.providerRegistry.connectionIdentity(
-        providerCacheKey(input.environmentId, input.agent),
-      ) ?? `in-process:${input.agent}`;
+    const providerGeneration = this.host.providerGeneration(input) ?? `in-process:${input.agent}`;
     const sourceGeneration = providerGeneration;
     const sessionKey = nativeAgentSessionStorageKey(
       input.environmentId,
@@ -3091,7 +3239,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       input.logicalSessionKey,
     );
     if (resolved.session.pendingDispatch) {
-      this.scheduleAmbiguousDispatchSettle(
+      this.host.scheduleAmbiguousDispatchSettle(
         input,
         sessionKey,
         resolved.session.pendingDispatch.requestId,
@@ -3099,7 +3247,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       );
     }
     if (resolved.session.pendingSteer) {
-      this.scheduleAmbiguousSteerSettle(
+      this.host.scheduleAmbiguousSteerSettle(
         input,
         sessionKey,
         resolved.session.pendingSteer.requestId,
@@ -3135,10 +3283,16 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     }
     recordResponse(queue?.inFlight?.requestId, "dispatching");
     recordResponse(queue?.dispatchError?.messageId, "failed");
+    const retiredDispatch = projectedRetiredDispatch(
+      input.agent,
+      resolved.session,
+      this.host.now(),
+    );
     const notices = visibleProjectionNotices(
       input.agent,
       stateSnapshot.notices,
       sessionIncompleteTurnNotice(resolved.session),
+      retiredDispatch,
     );
     return {
       identity: this.progressiveIdentity(
@@ -3172,6 +3326,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         ...(stateSnapshot.turnActivity && stateSnapshot.status === "running"
           ? { activity: stateSnapshot.turnActivity }
           : {}),
+        ...this.quietObservationFlag(resolved.session),
       },
       interactions: interactionSnapshot.requests,
       // The progressive read feeds the same rendered projection as the full
@@ -3241,6 +3396,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
             },
           }
         : {}),
+      ...(retiredDispatch ? { retiredDispatch } : {}),
       ...(stateSnapshot.backgroundTasks ? { backgroundTasks: stateSnapshot.backgroundTasks } : {}),
       ...(stateSnapshot.suggestedPrompt ? { suggestedPrompt: stateSnapshot.suggestedPrompt } : {}),
       ...(stateSnapshot.completionBlockedByBackgroundTasks === undefined
@@ -3254,7 +3410,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
   async getSessionStateUpdate(
     input: NativeAgentProgressiveInput,
   ): Promise<NativeAgentSessionStateUpdate> {
-    this.assertProjectionInput(input);
+    this.host.assertProjectionInput(input);
     if (input.viewVersion !== NATIVE_AGENT_PROGRESSIVE_VIEW_VERSION) {
       throw new Error("Native agent progressive view version is unsupported");
     }
@@ -3322,7 +3478,21 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     }
   }
 
-  /** Store one discovery section; true when what a view would show changed. */
+  /**
+   * Store one discovery section. Returns `changed` when the stored section
+   * differs at all (its revision moves), and `announce` when a view would
+   * show something different enough to be told now:
+   *
+   * - A retained value that only flips between `ready` and `stale` is not
+   *   announced. A renewal that misses its 2 s deadline and then succeeds
+   *   with the same value announced twice per 30 s expiry and reset an idle
+   *   view's quiet backoff each time (0049 code item 5); the view still sees
+   *   the stored availability on its next read.
+   * - Diagnostic drift counters in the runtime section are not announced:
+   *   `unknownEvents` only ever grows while the provider streams events this
+   *   backend has no branch for, so every renewal of an idle session would
+   *   otherwise announce. The set of unknown kinds still is.
+   */
   private storeProgressiveDiscovery(
     key: string,
     entry: {
@@ -3331,7 +3501,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       expiresAt: number;
       error?: string;
     },
-  ): boolean {
+  ): { changed: boolean; announce: boolean } {
     const previous = this.progressiveDiscoveryCache.get(key);
     const semantic = JSON.stringify({
       value: entry.value,
@@ -3346,6 +3516,16 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         })
       : undefined;
     const changed = previousSemantic !== semantic;
+    const retainedValue =
+      previous !== undefined &&
+      previous.value !== undefined &&
+      entry.value !== undefined &&
+      previous.availability !== "unavailable" &&
+      entry.availability !== "unavailable";
+    const announce =
+      changed &&
+      (!retainedValue ||
+        discoveryAnnouncementKey(previous.value) !== discoveryAnnouncementKey(entry.value));
     const bytes = Buffer.byteLength(semantic);
     if (previous) this.progressiveDiscoveryBytes -= previous.bytes;
     this.progressiveDiscoveryCache.delete(key);
@@ -3365,7 +3545,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       if (removed) this.progressiveDiscoveryBytes -= removed.bytes;
       this.progressiveDiscoveryCache.delete(oldest);
     }
-    return changed;
+    return { changed, announce };
   }
 
   private scheduleProgressiveDiscovery(
@@ -3386,9 +3566,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       key.includes("\0progressive-v1\0discovery:"),
     ).length;
     const providerKey = `${input.environmentId}\0${input.agent}\0${String(
-      this.providerRegistry.connectionIdentity(
-        providerCacheKey(input.environmentId, input.agent),
-      ) ?? "in-process",
+      this.host.providerGeneration(input) ?? "in-process",
     )}`;
     if (
       activeDiscoveryJobs >= 4 ||
@@ -3398,11 +3576,11 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     const read = async (): Promise<unknown> => {
       switch (section) {
         case "models":
-          return (await this.refreshProjectionModelCatalog(input.environmentId)).filter(
+          return (await this.catalogs.refreshModels(input.environmentId)).filter(
             (model) => model.platform === input.agent,
           );
         case "commands":
-          return this.projectionSlashCommands(input, provider, providerSessionId);
+          return this.catalogs.slashCommands(input, provider, providerSessionId);
         case "mcp":
           return provider.mcpServers
             ? (await provider.mcpServers(providerSessionId)).slice(0, 512)
@@ -3422,15 +3600,20 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     const operation = this.progressiveRead(cacheKey, read);
     let settled = false;
     const deadline = setTimeout(() => {
-      if (settled || this.stopped || (this.projectionEpochs.get(sessionKey) ?? 0) !== epoch) return;
+      if (
+        settled ||
+        this.host.isStopped() ||
+        (this.projectionEpochs.get(sessionKey) ?? 0) !== epoch
+      )
+        return;
       const previous = this.progressiveDiscoveryCache.get(cacheKey);
-      const changed = this.storeProgressiveDiscovery(cacheKey, {
+      const { announce } = this.storeProgressiveDiscovery(cacheKey, {
         value: previous?.value,
         availability: previous?.value === undefined ? "unavailable" : "stale",
-        expiresAt: this.now() + 5_000,
+        expiresAt: this.host.now() + 5_000,
         error: "Discovery timed out",
       });
-      if (!changed) return;
+      if (!announce) return;
       this.storage.announceNativeAgentSessionProjection(input.environmentId, {
         agent: input.agent,
         logicalSessionKey: input.logicalSessionKey,
@@ -3440,17 +3623,17 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       .then((value) => {
         settled = true;
         clearTimeout(deadline);
-        if (this.stopped || (this.projectionEpochs.get(sessionKey) ?? 0) !== epoch) return;
-        const changed = this.storeProgressiveDiscovery(cacheKey, {
+        if (this.host.isStopped() || (this.projectionEpochs.get(sessionKey) ?? 0) !== epoch) return;
+        const { announce } = this.storeProgressiveDiscovery(cacheKey, {
           value,
           availability: "ready",
-          expiresAt: this.now() + 30_000,
+          expiresAt: this.host.now() + 30_000,
         });
         // Every section expires after 30 s and an idle view's own read renews
         // it. Announcing an unchanged renewal would wake that view (and reset
         // its quiet backoff) four times per expiry for nothing: a view reads
         // only values, and they did not change.
-        if (!changed) return;
+        if (!announce) return;
         this.storage.announceNativeAgentSessionProjection(input.environmentId, {
           agent: input.agent,
           logicalSessionKey: input.logicalSessionKey,
@@ -3459,12 +3642,12 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       .catch((error) => {
         settled = true;
         clearTimeout(deadline);
-        if (this.stopped || (this.projectionEpochs.get(sessionKey) ?? 0) !== epoch) return;
+        if (this.host.isStopped() || (this.projectionEpochs.get(sessionKey) ?? 0) !== epoch) return;
         const previous = this.progressiveDiscoveryCache.get(cacheKey);
         this.storeProgressiveDiscovery(cacheKey, {
           value: previous?.value,
           availability: previous?.value === undefined ? "unavailable" : "stale",
-          expiresAt: this.now() + 5_000,
+          expiresAt: this.host.now() + 5_000,
           error: error instanceof Error ? error.message.slice(0, 4_000) : "Discovery unavailable",
         });
       })
@@ -3481,16 +3664,13 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
   async getDiscoveryUpdate(
     input: NativeAgentDiscoveryUpdateInput,
   ): Promise<NativeAgentDiscoveryUpdate> {
-    this.assertProjectionInput(input);
+    this.host.assertProjectionInput(input);
     if (input.viewVersion !== NATIVE_AGENT_PROGRESSIVE_VIEW_VERSION) {
       throw new Error("Native agent progressive view version is unsupported");
     }
-    const resolved = await this.resolveProjectionSession(input);
+    const resolved = await this.host.resolveProjectionSession(input);
     if (!resolved) return { viewVersion: 1, status: "missing" };
-    const providerGeneration =
-      this.providerRegistry.connectionIdentity(
-        providerCacheKey(input.environmentId, input.agent),
-      ) ?? `in-process:${input.agent}`;
+    const providerGeneration = this.host.providerGeneration(input) ?? `in-process:${input.agent}`;
     const identity = this.progressiveIdentity(
       input,
       resolved.session.providerSessionId,
@@ -3500,7 +3680,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     for (const section of input.sections) {
       const key = this.progressiveKey(input, `discovery:${section}`);
       const cached = this.progressiveDiscoveryCache.get(key);
-      const expired = !cached || cached.expiresAt <= this.now();
+      const expired = !cached || cached.expiresAt <= this.host.now();
       if (expired) {
         this.scheduleProgressiveDiscovery(
           input,
@@ -3521,9 +3701,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       if (section === "commands") {
         // The richer catalogue state rides beside the generic availability so a
         // composer can tell ready-empty, unsupported and stale apart.
-        const catalogue = this.commandCatalogues.peek(
-          commandCatalogueKey(input.environmentId, input.agent, resolved.session.providerSessionId),
-        );
+        const catalogue = this.catalogs.peekCommands(input, resolved.session.providerSessionId);
         const unsupported = !nativeCapabilities(input.agent).slashCommands;
         const detail = unsupported ? unsupportedCommandCatalogueState() : catalogue?.state;
         if (catalogue && !unsupported) {
@@ -3571,7 +3749,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
   async getProjectionUpdate(
     input: NativeAgentProjectionUpdateInput,
   ): Promise<NativeAgentProjectionUpdate> {
-    this.assertProjectionInput(input);
+    this.host.assertProjectionInput(input);
     const projection = await this.refreshProjection(
       { ...input, messageLimit: NATIVE_SYNC_LIVE_MESSAGES, representation: "sync-v1" },
       true,
@@ -3664,7 +3842,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
   }
 
   async getMessagePage(input: NativeAgentMessagePageInput): Promise<NativeAgentMessagePage> {
-    this.assertProjectionInput(input);
+    this.host.assertProjectionInput(input);
     if (input.before.length > 1024) throw new Error("History cursor is too large");
     const direct = await this.directMessagePage(input);
     if (direct) return direct;
@@ -3763,7 +3941,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     }
     if ((peek as { v?: unknown } | null)?.v !== 2) return undefined;
     const startedAt = monotonicMs();
-    const resolved = await this.resolveProjectionSession(input);
+    const resolved = await this.host.resolveProjectionSession(input);
     if (!resolved) throw new Error("Native agent history is unavailable");
     const providerSessionId = resolved.session.providerSessionId;
     const cursor = decodeHistoryCursor(input.before, {
@@ -3796,7 +3974,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       providerSessionId,
       cursor.epoch,
       pageKey,
-      this.now(),
+      this.host.now(),
     );
     // Cached pages hold provider rows only; publications are placed on the
     // way out, so a ledger change never leaves a stale page behind.
@@ -3914,7 +4092,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           bytes: encodedArrayBytes(page.messages) + detailBytes + (nextCursor?.length ?? 0) + 256,
         };
       },
-      () => this.now(),
+      () => this.host.now(),
     );
     // Callers share the cached page; each gets its own message array.
     return withArtifacts(page);
@@ -3935,7 +4113,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     },
   ): Promise<NativeAgentToolDetails> {
     const remote = entry.remote!;
-    const provider = await this.provider(input);
+    const provider = await this.host.provider(input);
     const result = provider.transcriptDetail
       ? await provider.transcriptDetail(remote.providerSessionId, remote.locator)
       : undefined;
@@ -3973,7 +4151,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
   async getProjectionToolDetails(
     input: NativeAgentProjectionInput & { detailRef: string },
   ): Promise<NativeAgentToolDetails> {
-    this.assertProjectionInput(input);
+    this.host.assertProjectionInput(input);
     if (!nonBlank(input.detailRef) || input.detailRef.length > 128) {
       throw new Error("Native agent tool detail reference is invalid");
     }
@@ -4039,10 +4217,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
    * inherit the window the session already had. Clamped so a renderer cannot
    * ask the provider for an unbounded transcript.
    */
-  protected resolveMessageLimit(
-    requested: number | undefined,
-    previous: number | undefined,
-  ): number {
+  private resolveMessageLimit(requested: number | undefined, previous: number | undefined): number {
     const candidate = requested ?? previous ?? NATIVE_PROJECTION_MAX_MESSAGES;
     if (!Number.isSafeInteger(candidate) || candidate <= 0) {
       return NATIVE_PROJECTION_MAX_MESSAGES;
@@ -4050,7 +4225,23 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     return Math.min(candidate, NATIVE_PROJECTION_MAX_WINDOW_MESSAGES);
   }
 
-  protected async projectionComposer(
+  /**
+   * `turn.quietObservation`: the activity observer holds a content revision
+   * for this provider session, so every change to its idle view is announced
+   * (`onObservationInvalidation`) and the view may read less often. Absent
+   * before the first observation and for a bridge that reports none.
+   */
+  private quietObservationFlag(session: PersistedNativeAgentSession): {
+    quietObservation?: true;
+  } {
+    const observed = this.host.observedActivity(session.key);
+    return observed?.providerSessionId === session.providerSessionId &&
+      observed.contentRevision !== undefined
+      ? { quietObservation: true }
+      : {};
+  }
+
+  private async projectionComposer(
     input: NativeAgentProjectionInput,
     session: PersistedNativeAgentSession,
     providerComposer?: NativeAgentComposerState,
@@ -4066,36 +4257,41 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
   ): Promise<NativeAgentComposerState> {
     let models = providerComposer?.models ?? [];
     if (models.length === 0) {
-      const cached = this.modelCatalogCache.get(input.environmentId);
+      const cached = this.catalogs.cachedModels(input.environmentId);
       if (cached) {
         models = cached.models.filter((model) => model.platform === input.agent);
-        if (cached.expiresAt <= this.now()) {
+        if (cached.expiresAt <= this.host.now()) {
           // Model discovery can probe several runtimes and take seconds. An
           // expired entry is still perfectly adequate for rendering the
           // transcript and existing picker selection, so refresh it out of the
           // transcript-critical path. The next projection poll observes the
           // refreshed catalogue.
-          void this.refreshProjectionModelCatalog(input.environmentId)
+          void this.catalogs
+            .refreshModels(input.environmentId)
             .then((refreshed) => {
               // The same catalogue changes no view; announcing it would wake
               // every idle view of the environment once per TTL.
-              if (!this.stopped && JSON.stringify(refreshed) !== JSON.stringify(cached.models)) {
+              if (
+                !this.host.isStopped() &&
+                modelCatalogKey(refreshed) !== modelCatalogKey(cached.models)
+              ) {
                 this.storage.announceNativeAgentSessionProjection(input.environmentId);
               }
             })
             .catch(() => {
-              const retained = this.modelCatalogCache.get(input.environmentId);
-              if (retained === cached) {
-                retained.expiresAt = this.now() + NATIVE_DISCOVERY_RETRY_MS;
-              }
+              this.catalogs.retryModelsAfter(
+                input.environmentId,
+                cached,
+                NATIVE_DISCOVERY_RETRY_MS,
+              );
             });
         }
       } else {
-        const refresh = this.refreshProjectionModelCatalog(input.environmentId);
+        const refresh = this.catalogs.refreshModels(input.environmentId);
         if (discoveryInBackground) {
           void refresh
             .then(() => {
-              if (!this.stopped) {
+              if (!this.host.isStopped()) {
                 this.storage.announceNativeAgentSessionProjection(input.environmentId, {
                   agent: input.agent,
                   logicalSessionKey: input.logicalSessionKey,
@@ -4300,74 +4496,44 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     };
   }
 
-  protected refreshProjectionModelCatalog(environmentId: string): Promise<AgentModel[]> {
-    const pending = this.modelCatalogRefreshes.get(environmentId);
-    if (pending) return pending.operation;
-    const validity = { current: true };
-    const operation = (async () => {
-      const catalog = await this.invoke<AgentModel[]>("get_native_agent_model_catalog", {
-        environmentId,
-      });
-      const bounded = Array.isArray(catalog) ? catalog.slice(0, 512) : [];
-      if (!validity.current) {
-        throw new ProviderUnavailableError("Model catalog refresh was invalidated");
-      }
-      if (
-        !this.modelCatalogCache.has(environmentId) &&
-        this.modelCatalogCache.size >= NATIVE_MODEL_CATALOG_CACHE_LIMIT
-      ) {
-        const oldest = this.modelCatalogCache.keys().next().value as string | undefined;
-        if (oldest) this.modelCatalogCache.delete(oldest);
-      }
-      this.modelCatalogCache.set(environmentId, {
-        models: bounded,
-        expiresAt: this.now() + NATIVE_MODEL_CATALOG_TTL_MS,
-      });
-      return bounded;
-    })();
-    const entry = { operation, validity };
-    this.modelCatalogRefreshes.set(environmentId, entry);
-    return operation.finally(() => {
-      if (this.modelCatalogRefreshes.get(environmentId) === entry) {
-        this.modelCatalogRefreshes.delete(environmentId);
-      }
-    });
-  }
-
   /**
-   * Provider command rows plus their catalogue state, without session actions.
-   *
-   * Session actions are merged by the caller *after* runtime qualification, so
-   * an unqualified `/steer` never shadows (or deletes) a provider command.
+   * A committed stop withdraws the environment's outstanding agent requests.
+   * Parked requests die with their bridge and never survive a restart, but a
+   * failed read keeps the last projection, so the dead request stayed
+   * `pending` while stopped; the public CLI and the coordinator's
+   * `get_tab_state` read that cache. It is withdrawn the way a live snapshot
+   * withdraws one: dropped from the list, which only ever holds outstanding
+   * requests, in a new announced revision. Every key with a cached projection
+   * or a refresh in flight has its epoch bumped, so a read that saw the
+   * request before the stop cannot commit it back.
    */
-  protected async projectionCommandCatalogue(
-    input: NativeAgentProjectionInput,
-    provider: NativeAgentRuntimeProvider,
-    sessionId?: string,
-  ): Promise<CommandCatalogueSnapshot> {
-    const capabilities = nativeCapabilities(input.agent);
-    if (!capabilities.slashCommands || (!provider.slashCommands && !provider.commandCatalogue)) {
-      return { commands: [], state: unsupportedCommandCatalogueState() };
+  withdrawEnvironmentInteractions(environmentId: string): void {
+    const keys = new Set<string>();
+    for (const [key, entry] of this.projectionCache) {
+      if (entry.input.environmentId === environmentId) keys.add(key);
     }
-    return this.commandCatalogues.read(
-      commandCatalogueKey(input.environmentId, input.agent, sessionId),
-      input.environmentId,
-      provider,
-      sessionId,
-    );
+    for (const [key, descriptor] of this.projectionRefreshDescriptors) {
+      if (descriptor.environmentId === environmentId) keys.add(key);
+    }
+    for (const key of keys) {
+      const epoch = (this.projectionEpochs.get(key) ?? 0) + 1;
+      this.projectionEpochs.set(key, epoch);
+      const entry = this.projectionCache.get(key);
+      if (!entry) continue;
+      const interactions = entry.projection.interactions.filter(
+        (interaction) => interaction.state !== "pending" && interaction.state !== "answering",
+      );
+      this.commitProjection(
+        key,
+        entry.input,
+        { ...entry.projection, interactions },
+        entry.generation,
+        epoch,
+      );
+    }
   }
 
-  /** Command rows as a composer sees them: provider commands plus runtime actions. */
-  protected async projectionSlashCommands(
-    input: NativeAgentProjectionInput,
-    provider: NativeAgentRuntimeProvider,
-    sessionId?: string,
-  ): Promise<NativeAgentSlashCommand[]> {
-    const snapshot = await this.projectionCommandCatalogue(input, provider, sessionId);
-    return withSessionActionSlashCommands(snapshot.commands, nativeCapabilities(input.agent));
-  }
-
-  protected invalidateProjection(key: string): void {
+  invalidateProjection(key: string): void {
     this.stopNotices.delete(key);
     const keys = [key, `${key}\0sync-v1`];
     for (const candidate of keys) {
@@ -4440,7 +4606,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
    * bound `projectionCache` enforces and grow with key churn for the life of
    * the process.
    */
-  protected pruneProjectionEpoch(key: string): void {
+  private pruneProjectionEpoch(key: string): void {
     if (this.projectionCache.has(key)) return;
     if (this.projectionRefreshes.has(key)) return;
     const progressivePrefix = `${key}\0progressive-v1\0`;
@@ -4461,7 +4627,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     this.projectionMissingSince.delete(key);
   }
 
-  protected refreshProjection(
+  refreshProjection(
     input: NativeAgentProjectionInput,
     force: boolean,
     resolvedSession?: {
@@ -4513,7 +4679,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     });
   }
 
-  protected async refreshProjectionOnce(
+  private async refreshProjectionOnce(
     input: NativeAgentProjectionInput,
     force: boolean,
     key: string,
@@ -4534,7 +4700,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     let generation = previous?.generation ?? `unresolved:${input.agent}`;
     let transient = resolvedSession?.transient ?? false;
     try {
-      const resolved = resolvedSession ?? (await this.resolveProjectionSession(input));
+      const resolved = resolvedSession ?? (await this.host.resolveProjectionSession(input));
       if (!resolved) {
         if ((this.projectionEpochs.get(key) ?? 0) === epoch) {
           this.projectionCache.delete(key);
@@ -4556,10 +4722,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         return null;
       }
       transient = resolved.transient;
-      generation =
-        this.providerRegistry.connectionIdentity(
-          providerCacheKey(input.environmentId, input.agent),
-        ) ?? `in-process:${input.agent}`;
+      generation = this.host.providerGeneration(input) ?? `in-process:${input.agent}`;
       const advertisedCapabilities = nativeCapabilities(input.agent);
       // User-triggered supplementary metadata. A billing endpoint failure
       // must not make an otherwise healthy transcript unavailable. Merge the
@@ -4588,14 +4751,12 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       const queuePromise = advertisedCapabilities.queue
         ? this.storage.getPromptQueue(`${input.agent}\0${input.logicalSessionKey}`)
         : Promise.resolve(null);
-      const slashCommandsPromise = this.projectionCommandCatalogue(
-        input,
-        resolved.provider,
-        resolved.session.providerSessionId,
-      ).catch((): CommandCatalogueSnapshot => ({
-        commands: [],
-        state: { status: "unavailable", revision: 0, enhanced: false },
-      }));
+      const slashCommandsPromise = this.catalogs
+        .commandCatalogue(input, resolved.provider, resolved.session.providerSessionId)
+        .catch((): CommandCatalogueSnapshot => ({
+          commands: [],
+          state: { status: "unavailable", revision: 0, enhanced: false },
+        }));
       const steerSupportedPromise = advertisedCapabilities.actions?.steer
         ? (resolved.provider
             .steerSupported?.(resolved.session.providerSessionId)
@@ -4633,9 +4794,8 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           ? steerQualified
           : { ...steerQualified, interactions: { kinds: liveInteractionKinds } };
       if (snapshot.commandCatalogueRevision !== undefined) {
-        this.commandCatalogues.observeProviderRevision(
-          commandCatalogueKey(input.environmentId, input.agent, resolved.session.providerSessionId),
-          input.environmentId,
+        this.catalogs.observeCommandRevision(
+          input,
           resolved.provider,
           resolved.session.providerSessionId,
           snapshot.commandCatalogueRevision,
@@ -4662,10 +4822,10 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
          * control, so a session that really is gone has to end up reported —
          * with its detail — rather than on a spinner the user cannot leave.
          */
-        const since = this.projectionMissingSince.get(key) ?? this.now();
+        const since = this.projectionMissingSince.get(key) ?? this.host.now();
         this.projectionMissingSince.set(key, since);
         const projection: NativeAgentSessionProjection =
-          this.now() - since >= NATIVE_MISSING_SESSION_GRACE_MS
+          this.host.now() - since >= NATIVE_MISSING_SESSION_GRACE_MS
             ? this.unreachableProjection(
                 previous,
                 input,
@@ -4877,7 +5037,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           });
         });
         try {
-          await this.recordAsyncQuestionAttention(
+          await this.host.recordAsyncQuestionAttention(
             input.environmentId,
             resolved.session.key,
             attentionItemIds,
@@ -4897,7 +5057,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       // prompt landed after all. A record that outlived the backend generation
       // that created it is settled here instead of waiting for the user.
       if (!resolved.transient && resolved.session.pendingDispatch) {
-        this.scheduleAmbiguousDispatchSettle(
+        this.host.scheduleAmbiguousDispatchSettle(
           input,
           key,
           resolved.session.pendingDispatch.requestId,
@@ -4905,7 +5065,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         );
       }
       if (!resolved.transient && resolved.session.pendingSteer) {
-        this.scheduleAmbiguousSteerSettle(
+        this.host.scheduleAmbiguousSteerSettle(
           input,
           key,
           resolved.session.pendingSteer.requestId,
@@ -4948,10 +5108,16 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       }
       recordAsyncQuestionResponse(queue?.inFlight?.requestId, "dispatching");
       recordAsyncQuestionResponse(queue?.dispatchError?.messageId, "failed");
+      const retiredDispatch = projectedRetiredDispatch(
+        input.agent,
+        resolved.session,
+        this.host.now(),
+      );
       const notices = visibleProjectionNotices(
         input.agent,
         snapshot.notices,
         sessionIncompleteTurnNotice(resolved.session),
+        retiredDispatch,
       );
 
       const projection: NativeAgentSessionProjection = {
@@ -4981,6 +5147,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           ...(snapshot.turnActivity && snapshot.status === "running"
             ? { activity: snapshot.turnActivity }
             : {}),
+          ...this.quietObservationFlag(resolved.session),
         },
         messages: renderedTranscript.messages,
         interactions: interactionSnapshot.requests,
@@ -5062,6 +5229,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
               },
             }
           : {}),
+        ...(retiredDispatch ? { retiredDispatch } : {}),
         ...(snapshot.backgroundTasks ? { backgroundTasks: snapshot.backgroundTasks } : {}),
         ...(snapshot.suggestedPrompt ? { suggestedPrompt: snapshot.suggestedPrompt } : {}),
         ...(snapshot.completionBlockedByBackgroundTasks === undefined
@@ -5119,7 +5287,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
    * the best description of the conversation, and a reconnect that succeeds
    * should not have to rebuild it from nothing.
    */
-  protected unreachableProjection(
+  private unreachableProjection(
     previous: NativeAgentProjectionCacheEntry | undefined,
     input: NativeAgentProjectionInput,
     generation: string,
@@ -5161,7 +5329,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
    * re-seeded from whatever is still cached for this session, so a restart
    * cannot hand back a revision a client already holds.
    */
-  protected nextProjectionRevision(sessionKey: string, generation: string): number {
+  private nextProjectionRevision(sessionKey: string, generation: string): number {
     const record = this.projectionRevisions.get(sessionKey);
     let previous = record?.generation === generation ? record.revision : 0;
     if (record?.generation !== generation) {
@@ -5183,7 +5351,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     return revision;
   }
 
-  protected commitProjection(
+  private commitProjection(
     key: string,
     input: NativeAgentProjectionInput,
     candidate: NativeAgentSessionProjection,
@@ -5259,6 +5427,24 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       });
     }
     return projection;
+  }
+
+  /**
+   * The last projection this process built for one session, if any. Purely
+   * in-memory: never reads a provider or hydrates a transcript, so background
+   * observers may consult it freely. It can be stale or absent.
+   */
+  cachedProjectionSnapshot(
+    environmentId: string,
+    agent: BuildPipelineAgent,
+    logicalSessionKey: string,
+  ): NativeAgentSessionProjection | null {
+    const sessionKey = nativeAgentSessionStorageKey(environmentId, agent, logicalSessionKey);
+    return (
+      this.projectionCache.get(`${sessionKey}\0sync-v1`)?.projection ??
+      this.projectionCache.get(sessionKey)?.projection ??
+      null
+    );
   }
 }
 

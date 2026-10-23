@@ -1,6 +1,7 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { spawnCommand } from "./shell.js";
 import { terminateProcessTree } from "./process-tree.js";
+import { resetOpenCodeHostStartForTests } from "./opencode-host-start.js";
 import {
   ACP_LOCAL_SERVER_HEALTH_ATTEMPTS,
   BRANCH_REF_EXISTS_SENTINEL,
@@ -231,6 +232,7 @@ export const __testing = {
     localOpenCodeServerPasswords.clear();
     cancelAllOpenCodeAgentToolsConfigurations();
     resetOpenCodeAgentToolsTuning();
+    resetOpenCodeHostStartForTests();
     deletingLocalServerEnvironments.clear();
     mergingEnvironments.clear();
     setLocalServerShutdownRequested(false);

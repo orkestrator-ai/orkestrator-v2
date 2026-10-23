@@ -160,4 +160,33 @@ describe("GET /commands", () => {
     const body = await res.json();
     expect(body.error).toBe("Failed to discover slash commands");
   });
+
+  /*
+   * A backend from before the version-1 catalogue (ff4026b4e^, #827) reads this
+   * route only when `GET /session/:id/commands` answers 404, which this bridge
+   * no longer does for a known or unknown session; the remaining caller is an
+   * old backend asking with no session id. Its reader took `payload.commands`
+   * and turned each string row into `{ name: row }`, prefixing a missing `/`.
+   */
+  describe("mixed-version: old backend, current bridge", () => {
+    test("the legacy list still answers 200 as plain strings the old reader keeps", async () => {
+      mockDiscoverSlashCommands.mockImplementationOnce(async () => [
+        "/help - Show available commands",
+        "/myplugin:foo - Custom plugin command",
+      ]);
+
+      const res = await app.request("/commands");
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { commands: unknown[] };
+      // Exactly the pre-#827 shape: one key, an array of non-empty strings that
+      // already carry their slash, so the old reader re-spells nothing.
+      expect(Object.keys(body)).toEqual(["commands"]);
+      expect(Array.isArray(body.commands)).toBe(true);
+      for (const row of body.commands) {
+        expect(typeof row).toBe("string");
+        expect(String(row).length).toBeGreaterThan(0);
+        expect(String(row).startsWith("/")).toBe(true);
+      }
+    });
+  });
 });

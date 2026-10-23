@@ -209,6 +209,15 @@ backend.setPortalOriginsSource(() =>
   ].filter((origin): origin is string => Boolean(origin)),
 );
 
+// Handed to another node that becomes this node's command node: the token and
+// only the addresses that serve this backend (not other allowed origins).
+backend.setSelfAccessSource(async () => ({
+  token: (await gateway.getTokenSettings()).token,
+  origins: [gatewayInfo.browserUrl, info.browserUrl, managedWebClient?.getStatus().url].filter(
+    (origin): origin is string => Boolean(origin),
+  ),
+}));
+
 // Transcript artifacts: the executable-content origin must differ from, and
 // may be framed only by, the application's own page origins.
 backend.setTranscriptArtifactApplicationOrigins({

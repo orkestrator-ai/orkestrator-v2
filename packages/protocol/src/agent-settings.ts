@@ -10,7 +10,7 @@
  * This module exists for the same reason {@link ./startup-launch.ts} does, and
  * that module now delegates to it. Agent, mode and Claude backend already had a
  * single resolver; model and reasoning level did not, and the four places that
- * resolved them by hand disagreed. `native-agent-service-reconciliation.ts`
+ * resolved them by hand disagreed. `native-agent-launch-activity-reconciler.ts`
  * applied a repository's model to *whatever* agent launched, while
  * `build-pipeline-service-helpers.ts` applied it only when the agent was the
  * repository's own default. The same stored value meant two different things
@@ -201,7 +201,7 @@ export function resolveAgentPlatformSettings(
 
   // A model id belongs to one platform's catalogue, so it only ever travels
   // down its own column. This is the rule the old repository `defaultModel`
-  // broke: `native-agent-service-reconciliation.ts` handed it to whatever agent
+  // broke: `native-agent-launch-activity-reconciler.ts` handed it to whatever agent
   // launched, so a Claude model id could reach a Codex run.
   const model = environment?.model ?? repository?.model ?? global?.model;
 

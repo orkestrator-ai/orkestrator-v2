@@ -111,3 +111,11 @@ Aggregate result: exit 1 after 664.7 seconds logged. Codex bridge reported 2230 
 - **Unchanged whole owner:** `mise run test:logged -- --name revtok-main3-codex-owner-node -- bun test --cwd bridges/codex-bridge --preload ../../tests/setup-node.ts ./src/testing/fake-codex-app-server.test.ts --parallel=1 --only-failures` passed in 0.2 s. A root-preload diagnostic invocation also passed (0.8 s).
 - **Evidence:** `orkestrator-test-run.YKWNcv/bridges.log.gz` below the host temporary directory after aggregate completion.
 - **Assessment:** confirmed recurrence; concurrent subprocess scheduling remains a hypothesis. No implementation, assertion, timeout or skip changed.
+
+## Released Claude wakeup validation — 2026-10-23
+
+- **Original command:** `mise run test:logged -- --name repository-tests -- mise run test`; workspace/root/bridge/protocol reservations 4/1/2/1, one Codex worker, alongside isolated browser validation and other worktrees.
+- **Failure:** the version/invocation test timed out at 5002.54 ms. Codex reported 2254 passed, 38 skipped, 2 failed across 84 files (59.49 s); the other failure was the event-byte estimator's 50 ms timing assertion.
+- **Unchanged owner:** `mise run test:logged -- --name codex-process-node -- bun test --cwd bridges/codex-bridge --preload ../../tests/setup-node.ts ./src/testing/fake-codex-app-server.test.ts --parallel=1 --only-failures` passed (exit 0, 0.2 s logged).
+- **Evidence:** `orkestrator-test-run.XHMi6K/bridges.log.gz` below the host temporary directory after aggregate completion.
+- **Assessment:** confirmed recurrence; subprocess scheduling under shared-host load remains a hypothesis. No assertion, timeout or skip changed.

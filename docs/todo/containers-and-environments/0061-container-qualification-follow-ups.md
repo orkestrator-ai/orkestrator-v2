@@ -1,6 +1,6 @@
 # Container qualification follow-ups
 
-Checked against `main` at `06297124` plus the 0019 qualification branch
+Checked against `main` at `459d2944` plus the 0019 qualification branch
 (2026-10-23).
 
 The 2026-10-23 qualification pass for
@@ -109,19 +109,16 @@ evidence that found it.
 11. Check the global default budget against the daemon when it is saved (low).
    Create refuses it later and the policy view flags it, but Settings accepts a
    default the daemon cannot enforce without saying so.
-12. Refuse an unenforceable budget before a recovery-copy restore stops the
-    current runtime (low). The create-time refusal covers it, but only after
-    the current runtime has been quiesced.
 
 ### Harness
 
-13. Remove live-suite resources one at a time (low). Under load, Docker
+12. Remove live-suite resources one at a time (low). Under load, Docker
     Desktop 4.95 intermittently answered a multi-argument `docker rm -f` or
     `docker volume rm` with `404 page not found`. The lifecycle, network,
     firewall and replacement suites' `afterAll` hooks remove in one call and
     ignore errors, so they can leak silently. The two new suites remove one
     resource at a time and assert nothing is left.
-14. In-container setup outlives a killed setup terminal (low). When the
+13. In-container setup outlives a killed setup terminal (low). When the
     terminal's host process dies, `workspace-setup.sh` keeps running and holds
     `flock /tmp/orkestrator-workspace-setup.lock`. The backend reports the setup
     failed and reruns nothing (C10 holds), but if the orphan later finishes, an

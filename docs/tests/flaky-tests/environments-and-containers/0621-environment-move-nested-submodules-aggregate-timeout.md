@@ -29,3 +29,12 @@
 - **Failure:** timed out after 5000 ms (5084.32 ms).
 - **Owning-file rerun:** `mise run test:logged -- --name move-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts --parallel=1` passed in 20.1 s at load 13.
 - **Evidence:** `orkestrator-test-run.Gqog9k` below the host temporary directory. No timeout was raised and no test was skipped.
+
+## Native agent collaborator extraction — 2026-10-23
+
+- **Failure:** both `move_environment > moves a worktree with nested submodules (same disk)` (5121.23 ms) and the `(copy)` variant (5049.17 ms) hit the five-second timeout in the same run.
+- **Original command:** `mise run test:logged -- --name full-tests -- mise run test` on `todo-0010-native-agent-collaborators-3fc4749e0985` (native agent service refactor; no environment-move or Git code changed), macOS arm64, Bun 1.4.2.
+- **Suite counts:** backend 10,120 passed, 86 skipped, 3 failed across 592 files (544.12 s); web 8,818 passed; root/support, bridges and the Codex protocol lockfile passed.
+- **Owning-file rerun:** `mise run test:logged -- --name env-move-alone -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts --parallel=1 --only-failures` passed twice (35.4 s and 36.7 s logged).
+- **Evidence:** `orkestrator-test-run.EveQv4/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
+- **Changes:** recorded evidence only; no test, timeout, assertion or skip changed.

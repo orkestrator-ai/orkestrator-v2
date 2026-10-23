@@ -153,13 +153,13 @@ describe("Electron packaging configuration", () => {
     expect(desktopMain).toContain("closing?.browserPreviewManager.destroyAll()");
     expect(desktopMain).toContain("closing?.previewTransport.disposeAll()");
     // A connection switch builds previews in the new connection's partition,
-    // after use, connect and forget alike. (A window never moves to another
+    // after use, connect, forget and a command handover alike. (A window never moves to another
     // node; a realm builds its own previews when it opens.)
     expect(desktopMain).toContain("browserPreviewPartitionForWindow(slot, partitionKey)");
     expect(desktopMain).toContain(
       "rebindWindowPreviews(context, connectionManager.getConnectionId",
     );
-    expect(desktopMain.match(/followWindowConnection\((?:context|current)\);/g)).toHaveLength(3);
+    expect(desktopMain.match(/followWindowConnection\((?:context|current)\);/g)).toHaveLength(4);
     expect(desktopMain).toContain("const previews = createWindowBrowserPreviews(");
     expect(desktopMain.indexOf("registerIpc();")).toBeLessThan(
       desktopMain.indexOf("windowRequestGate.markReady()"),

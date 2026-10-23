@@ -20,7 +20,7 @@ mostly inside containers. How accounts work is in
   `signIn.kind`, `signOut`) in `packages/protocol/src/native-agent.ts`.
   `authStatus?`, `beginSignIn?` and `signOut?` are on the provider contract
   (`agent-provider-contract.ts`). They are wired through `http-bridge-catalog.ts`
-  and `native-agent-service-dispatch.ts`, and OpenCode answers through
+  and `native-agent-service.ts`, and OpenCode answers through
   `OpenCodeCapabilities.authStatus` (`opencode-capabilities.ts`).
 - Bridge routes `GET /global/auth`, `POST /global/auth/login` and
   `POST /global/auth/logout` exist on Claude, Codex, Cursor, ACP and Pi, each

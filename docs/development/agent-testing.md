@@ -700,6 +700,34 @@ records the MCP files a query was built from when the query starts, so the
 apply half still runs when the provider refuses requests (a rate limit, say).
 A full-mode pass is still needed for the tool-call checks.
 
+### Live slash commands in an inactive environment
+
+`e2e/agent-testing/slash-command-inactive.spec.ts` sends a selected project
+command, switches environments, and checks that it completes while inactive
+and runs exactly once. Meanwhile it changes the inventory, refreshes the
+catalogue and drops the event stream for 10 s. It then checks the result after a
+reload, a narrow viewport and two bridge restarts. It needs
+`ORKESTRATOR_AGENT_TEST_LIVE_SLASH=1` and the providers' credentials.
+`ORKESTRATOR_AGENT_TEST_SLASH_PROVIDERS` picks `codex` (default) and/or
+`claude`. `ORKESTRATOR_AGENT_TEST_SLASH_ENVIRONMENT` is `local` (default, a
+host worktree with the `projectResources: true` override) or `container`. The
+container variant needs a profile started with
+`--fixture-environments local,container`. It writes the command files and the
+execution marker inside the container's `/workspace` through `docker exec`,
+sets no policy override (containers load project resources by default) and
+restarts the container's bridge. Neither variant writes a user-scope command
+file.
+
+```bash
+mise run dev:test --profile qa-slash --fixture --fixture-environments local,container \
+  --credential-source codex --credential-source claude --agent-platforms codex,claude
+# In a second terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-slash ORKESTRATOR_AGENT_TEST_LIVE_SLASH=1 \
+  ORKESTRATOR_AGENT_TEST_SLASH_PROVIDERS=codex,claude ORKESTRATOR_AGENT_TEST_SLASH_ENVIRONMENT=container \
+  mise run test:logged -- --name slash-inactive -- mise run test:agent:browser -- \
+  e2e/agent-testing/slash-command-inactive.spec.ts
+```
+
 ### Live close retention
 
 `e2e/agent-testing/close-retention-live.spec.ts` checks, with real providers
@@ -738,6 +766,22 @@ engines (`bridges/cursor-bridge/src/testing/fake-engine-server.ts`,
 `bridges/acp-bridge/src/testing/fake-agent-close.ts` and
 `e2e/fixtures/close-retention-opencode.ts`). Its assertions read each engine's
 own store, so a duplicated or lost prompt fails there.
+
+The same host also carries the lifecycle cases that need a fault on the real
+stack. Its fixture page mounts the app shell's agent information button and
+toaster, and the host adds endpoints for the faults:
+
+- `/restart-bridge` stops a bridge and starts it again on the same port and
+  token. With `shed: true` for Cursor it first rewrites the state file as the
+  bridge's own budget pass would under a smaller budget, so a reload shows a
+  transcript that persistence shed.
+- `/cursor-saturate-steer` fills a held Cursor turn's steer journal straight at
+  the bridge until it refuses with `steer-capacity-exceeded`.
+- `/pi-startup-gate` holds Pi prompts at `AgentSession.prompt`, before Pi
+  accepts them.
+- `/seed-native-session` maps a tab to a provider session, as an earlier
+  backend run would have. Claude has no real bridge here: `peekBridge` answers
+  a stale Claude bridge whose close route is a 404.
 
 ### Live paused interactions
 
@@ -780,9 +824,10 @@ token. The whole run takes about 20 minutes.
 - `ORKESTRATOR_AGENT_TEST_PAUSE_WAIT_MS` shortens the wait for a shakedown.
   Only the default proves the ten-minute claim.
 - `ORKESTRATOR_AGENT_TEST_PAUSE_MODELS` takes `<platform>=<model>` pairs. It
-  defaults to `pi=openai/gpt-6-sol`, because a profile shares only Pi's
-  `auth.json` and Pi's own fallback, `gpt-4`, is refused by a ChatGPT-backed
-  OpenAI login.
+  defaults to `pi=openai/gpt-6-sol`. A profile now also receives the host's
+  saved Pi default model, but the pin keeps the run independent of whatever
+  the host saved; without either, the bridge would start on the catalogue's
+  first model (once `gpt-4`), which a ChatGPT-backed OpenAI login refuses.
 
 The approval card is answered with **Approve** alone. The spec never picks an
 optional or amendment option. Codex's "Approve with command policy" writes a
@@ -1179,7 +1224,9 @@ Two traps when scripting this path:
   requests but leaves the open event stream connected, so events still arrive
   and nothing reconnects. To drop the stream, also call `window.stop()` in the
   page while offline; the gateway client then reconnects and replays from its
-  cursor once back online.
+  cursor once back online. `watchEventStream`
+  (`e2e/agent-testing/event-stream-outage.ts`) does both and asserts the
+  reconnection.
 
 For each failure record profile and commit, automated commands, route used,
 reproduction steps, expected and actual results, severity, and evidence paths.

@@ -338,3 +338,75 @@ describe("useNativeAgentSession commands", () => {
     expect(nativeSubmissionText("  /x y  ")).toBe("/x y");
   });
 });
+
+/*
+ * Mixed-version: projections from a backend on either side of the command
+ * catalogue (ff4026b4e, #827). Before it, discovery's commands section carried
+ * display rows only (`name`, `description`, `source`, …) and no `catalogue`.
+ */
+describe("mixed-version: command fields from an older or newer backend", () => {
+  function rawDiscovery(sections: Record<string, unknown>): NativeAgentDiscoveryUpdate {
+    return {
+      viewVersion: 1,
+      status: "snapshot",
+      token: "d-raw",
+      value: { identity, sections },
+    } as unknown as NativeAgentDiscoveryUpdate;
+  }
+
+  test("an older backend's display-only rows arrive without identity or catalogue state", async () => {
+    const legacyRows = [
+      { name: "/review", description: "Review changes", source: "project" },
+      { name: "/skill:lint", source: "skill", scope: "session" },
+    ];
+    transcriptUpdates = [() => transcriptSnapshot("t-1")];
+    stateUpdates = [() => stateSnapshot("s-1")];
+    discoveryUpdates = [
+      () => rawDiscovery({ commands: { availability: "ready", revision: 1, value: legacyRows } }),
+    ];
+    const { result } = renderSession();
+    await waitFor(() =>
+      expect(result.current.projection?.slashCommands).toEqual(legacyRows as never),
+    );
+    // No catalogue state: the composer keeps the pre-contract path (no intent).
+    expect(result.current.projection?.slashCommandCatalogue).toBeUndefined();
+    expect(result.current.runtimeError).toBeNull();
+  });
+
+  test("a backend without a commands section leaves both command fields absent", async () => {
+    transcriptUpdates = [() => transcriptSnapshot("t-1")];
+    stateUpdates = [() => stateSnapshot("s-1")];
+    discoveryUpdates = [() => rawDiscovery({})];
+    const { result } = renderSession();
+    await waitFor(() => expect(getNativeAgentDiscoveryUpdateMock).toHaveBeenCalled());
+    await waitFor(() => expect(result.current.projection).toBeTruthy());
+    expect(result.current.projection?.slashCommands).toBeUndefined();
+    expect(result.current.projection?.slashCommandCatalogue).toBeUndefined();
+    expect(result.current.runtimeError).toBeNull();
+  });
+
+  test("unknown fields from a newer backend ride along without disturbing known ones", async () => {
+    const rows = [{ ...COMMANDS[0]!, futureRowField: { anything: true } }];
+    const catalogue = { ...READY, futureCatalogueField: "x" };
+    transcriptUpdates = [() => transcriptSnapshot("t-1")];
+    stateUpdates = [() => stateSnapshot("s-1")];
+    discoveryUpdates = [
+      () =>
+        rawDiscovery({
+          commands: {
+            availability: "ready",
+            revision: 1,
+            value: rows,
+            catalogue,
+            futureSectionField: 1,
+          },
+        }),
+    ];
+    const { result } = renderSession();
+    await waitFor(() =>
+      expect(result.current.projection?.slashCommandCatalogue).toEqual(catalogue),
+    );
+    expect(result.current.projection?.slashCommands).toEqual(rows as never);
+    expect(result.current.runtimeError).toBeNull();
+  });
+});

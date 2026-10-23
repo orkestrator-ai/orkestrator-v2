@@ -110,6 +110,11 @@ describe("a send that rejects after it was called", () => {
     await loadPersistedState();
     const successor = sessions.get(state.id)!;
     const successorAgent = attachFake(successor);
+    // The successor answers the read-only twin of the refusal below, so the
+    // backend can retire the parked dispatch without a retry.
+    expect(
+      await (await harness.call(`/session/${successor.id}/dispatch?requestId=unknown-1`)).json(),
+    ).toEqual({ dispatch: "lost" });
     const redelivery = await prompt(successor, "unknown-1");
     expect(redelivery.status).toBe(410);
     // The backend reads the kind, not the wording, to retire the id.

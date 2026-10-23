@@ -53,7 +53,7 @@ import type { ProvisionalFindingSink } from "./review-provisional-findings.js";
 import {
   createMcpRuntimeProbe,
   mcpRolloutLoader,
-  readContainerMcpFile,
+  mcpContainerOptions,
 } from "./commands-registry-mcp.js";
 import { McpManagementService } from "./mcp-management/service.js";
 import {
@@ -168,6 +168,9 @@ export class OrkestratorBackend {
   readonly nodeCoordination: NodeCoordination;
   /** Origins clients load this node's UI from; registered on attached leaves. */
   private portalOriginsSource: () => string[] = () => [];
+  /** How another node reaches this one, for handing it to a new command node. */
+  private selfAccessSource: () => Promise<{ token: string | null; origins: string[] }> =
+    async () => ({ token: null, origins: [] });
   private readonly projectGit: ProjectGitService;
   private readonly promptQueues: PromptQueueDrainer;
   private readonly agentMail: AgentMailService;
@@ -471,6 +474,7 @@ export class OrkestratorBackend {
       emit: (event, payload) => options.emit(event, payload),
       forceRegistration: options.commandNode === true,
       portalOrigins: () => normalizePortalOrigins(this.portalOriginsSource()),
+      selfAccess: () => this.selfAccessSource(),
       ...(options.nodeLinks?.fetchImpl ? { fetchImpl: options.nodeLinks.fetchImpl } : {}),
       ...(options.nodeLinks?.timers ? { timers: options.nodeLinks.timers } : {}),
       ...(options.nodeLinks?.heartbeatMs ? { heartbeatMs: options.nodeLinks.heartbeatMs } : {}),
@@ -553,6 +557,22 @@ export class OrkestratorBackend {
         observationSharing: process.env.ORKESTRATOR_NATIVE_OBSERVATION_SHARING !== "0",
         interactionMonitorAdoptionEnabled:
           process.env.ORKESTRATOR_AGENT_INTERACTION_MONITOR_KILL_SWITCH !== "1",
+        // A view-only invalidation for an idle session whose content changed:
+        // same channel and stamp sequence as transitions, so a client re-reads
+        // that view (or every view after a gap). Deliberately nothing else
+        // hangs off it; it is not a turn edge.
+        onObservationInvalidation: (event) => {
+          options.emit("native-agent-session-activity", {
+            environment_id: event.environmentId,
+            previous_state: event.state,
+            state: event.state,
+            reason: "content",
+            agent: event.agent,
+            logical_session_key: event.logicalSessionKey,
+            generation: event.observation.generation,
+            revision: event.observation.revision,
+          });
+        },
         onActivityTransition: (event) => {
           options.emit("native-agent-session-activity", {
             environment_id: event.environmentId,
@@ -718,7 +738,7 @@ export class OrkestratorBackend {
       storage,
       emit: options.emit,
       probe: createMcpRuntimeProbe(context),
-      readContainerFile: readContainerMcpFile,
+      ...mcpContainerOptions(context),
       loadRollout: mcpRolloutLoader(context),
     });
     // Web annotations: backend-owned threads and requests. Execution goes
@@ -1783,6 +1803,14 @@ export class OrkestratorBackend {
   /** Set once the gateway has bound: the origins clients use for this node, read on each attach. */
   setPortalOriginsSource(source: () => string[]): void {
     this.portalOriginsSource = source;
+  }
+
+  /**
+   * Set once the gateway has bound: its durable token and the origins that
+   * serve this backend, read only on a command handover.
+   */
+  setSelfAccessSource(source: () => Promise<{ token: string | null; origins: string[] }>): void {
+    this.selfAccessSource = source;
   }
 
   /** Backend-owned preview services, for gateway transport adapters. */

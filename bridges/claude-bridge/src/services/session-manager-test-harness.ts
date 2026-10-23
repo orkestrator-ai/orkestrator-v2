@@ -179,6 +179,8 @@ export const {
   setSessionPreferences,
   clearPromptSuggestion,
   getPromptDispatchState,
+  restoredDispatchClaimLost,
+  persistedDispatchClaimLost,
   getPromptDispatchRecordCountForTesting,
   seedSettledPromptDispatchForTesting,
   persistSessionMetadata,

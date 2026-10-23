@@ -18,6 +18,7 @@ import { createCommandRegistry, type CommandContext } from "./commands.js";
 import { StorageService } from "./storage.js";
 import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import type { NativeAgentProvider } from "./models.js";
+import { replacedSessionCloseIntent } from "./provider-session-ownership.js";
 
 /**
  * Tab close retains conversation history on every platform. These cover the
@@ -708,6 +709,107 @@ describe("tab close concurrency and retry", () => {
         expect(await storage.getNativeAgentSession(key)).toBeNull();
         expect((await storage.getEnvironment("e1"))?.tabTeardownIntents).toBeUndefined();
       },
+    );
+  });
+});
+
+describe("replaying the close of a session a resume replaced", () => {
+  test("a pending replaced-session close is retried until the bridge confirms it", async () => {
+    let pending = true;
+    await withTeardown(
+      () =>
+        pending
+          ? Response.json(
+              { closed: false, pending: true, error: "Session close did not complete" },
+              { status: 503 },
+            )
+          : retained(),
+      async ({ invoke, storage, calls, released, clock }) => {
+        const intent = replacedSessionCloseIntent("grok", "acp-session:replaced");
+        await storage.setTabTeardownIntent("e1", intent);
+
+        await expect(invoke("reconcile_tab_teardowns", {})).resolves.toEqual({ completed: 0 });
+        expect((await storage.getEnvironment("e1"))?.tabTeardownIntents).toHaveProperty(
+          intent.tabId,
+        );
+        expect(released).toEqual([]);
+
+        pending = false;
+        clock.now += 30_000;
+        await expect(invoke("reconcile_tab_teardowns", {})).resolves.toEqual({ completed: 1 });
+        const closePath = `/session/${encodeURIComponent("acp-session:replaced")}/close`;
+        expect(calls.map((call) => `${call.method} ${new URL(call.url).pathname}`)).toEqual([
+          `POST ${closePath}`,
+          `POST ${closePath}`,
+        ]);
+        expect(released).toEqual([["e1", "grok", "acp-session:replaced"]]);
+        expect((await storage.getEnvironment("e1"))?.tabTeardownIntents).toBeUndefined();
+      },
+    );
+  });
+
+  test("closes the replaced session once, never with DELETE, and clears the intent", async () => {
+    await withTeardown(retained, async ({ invoke, storage, calls, released }) => {
+      const intent = replacedSessionCloseIntent("pi", "/sessions/2026_abc.jsonl");
+      await storage.setTabTeardownIntent("e1", intent);
+
+      await expect(invoke("reconcile_tab_teardowns", {})).resolves.toEqual({ completed: 1 });
+      expect(calls.map((call) => call.method)).toEqual(["POST"]);
+      expect(released).toEqual([["e1", "pi", "/sessions/2026_abc.jsonl"]]);
+      expect((await storage.getEnvironment("e1"))?.tabTeardownIntents).toBeUndefined();
+    });
+  });
+
+  test("leaves a replaced session another tab resumed again to that tab", async () => {
+    await withTeardown(retained, async ({ invoke, storage, calls }) => {
+      await mapTab(storage, "codex", "tab-again", "codex-replaced");
+      await storage.setTabTeardownIntent(
+        "e1",
+        replacedSessionCloseIntent("codex", "codex-replaced"),
+      );
+
+      await expect(invoke("reconcile_tab_teardowns", {})).resolves.toEqual({ completed: 1 });
+      expect(calls).toEqual([]);
+      expect((await storage.getEnvironment("e1"))?.tabTeardownIntents).toBeUndefined();
+    });
+  });
+
+  test("closes a replaced OpenCode session through the provider", async () => {
+    await withTeardown(retained, async ({ invoke, storage, calls, providerCloses }) => {
+      await storage.setTabTeardownIntent("e1", replacedSessionCloseIntent("opencode", "ses_old"));
+
+      await expect(invoke("reconcile_tab_teardowns", {})).resolves.toEqual({ completed: 1 });
+      expect(providerCloses).toEqual([["e1", "opencode", "ses_old"]]);
+      expect(calls).toEqual([]);
+    });
+  });
+
+  test("no caller can name a replaced-session key through teardown_tab", async () => {
+    await withTeardown(retained, async ({ invoke, storage, calls }) => {
+      const { tabId } = replacedSessionCloseIntent("grok", "someone-elses-session");
+      await expect(
+        invoke("teardown_tab", {
+          environmentId: "e1",
+          tabId,
+          kind: "grok-native",
+          sessionId: "someone-elses-session",
+        }),
+      ).rejects.toThrow("tabId is reserved");
+      expect(calls).toEqual([]);
+      expect((await storage.getEnvironment("e1"))?.tabTeardownIntents).toBeUndefined();
+    });
+  });
+
+  test("one key per replaced session, carrying no session content", () => {
+    const first = replacedSessionCloseIntent("pi", "/home/me/.pi/sessions/2026_secret.jsonl", "a");
+    const again = replacedSessionCloseIntent("pi", "/home/me/.pi/sessions/2026_secret.jsonl", "b");
+    expect(again.tabId).toBe(first.tabId);
+    expect(first.tabId).not.toContain("secret");
+    expect(
+      replacedSessionCloseIntent("grok", "/home/me/.pi/sessions/2026_secret.jsonl", "a").tabId,
+    ).not.toBe(first.tabId);
+    expect(unfenceTabTeardownSessionId(first.sessionId).sessionId).toBe(
+      "/home/me/.pi/sessions/2026_secret.jsonl",
     );
   });
 });

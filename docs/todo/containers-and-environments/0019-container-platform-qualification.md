@@ -65,7 +65,7 @@ The commands that reproduce the evidence, the C01–C30 scenario matrix, the
 platform dimensions and the benchmark targets are in
 [container-qualification.md](../../development/container-qualification.md).
 Gaps this pass found but did not fix are in
-[0056-container-qualification-follow-ups.md](0056-container-qualification-follow-ups.md).
+[0061-container-qualification-follow-ups.md](0061-container-qualification-follow-ups.md).
 
 ## Results, 2026-10-23
 
@@ -199,7 +199,7 @@ a new runtime generation followed by the codeword recall:
   survived each rebuild, its turn count went from 1 to 2 after the follow-up,
   and `quick_check` was ok throughout.
 - OpenCode needed `opencode.ai` in that environment's allowlist for its
-  default providers (follow-up in 0056), and the first-prompt fix above.
+  default providers (follow-up in 0061), and the first-prompt fix above.
 - Ambiguous dispatch: inside the container, a rule dropped only prompt
   requests to the agent's bridge; a prompt was sent and the environment
   rebuilt while it was in flight. Right after and 60 s later the CLI answered
@@ -315,7 +315,44 @@ protocol groups. The workspace group failed two tests this change does not
 touch: `move_environment > moves a worktree with nested submodules (copy)`
 (five-second timeout, passed alone; flake 0621) and the Firefox executable
 document policy test, which also fails intermittently on unchanged `main`
-(new flake 0694). Every new suite skips cleanly without its opt-in variables.
+(flake 0697). Every new suite skips cleanly without its opt-in variables.
+
+### Multi Review (2026-10-23)
+
+The review returned five findings and four test-coverage gaps; a Fix session
+addressed all of them (`c2006a52b`), and they were then checked here:
+
+- The rootless flag from the topology probe was kept only at create. The
+  rebuild preflight, the recovery-copy restore and `update_environment_resources`
+  read `dockerCapacity()` alone, so a capacity probe that failed under load
+  dropped the rootless flag and let an unknown budget through. All four now
+  use `dockerAdmissionCapacity`, which carries the topology's rootless flag.
+- A recovery-copy restore refused an unenforceable budget only after it had
+  quiesced the current runtime. It now refuses first (formerly follow-up
+  item 12).
+- The stop fence bumped the epoch only for projections that listed a pending
+  request. An empty or not-yet-cached projection with a refresh in flight could
+  still commit a request read before the stop. Every key with a cached
+  projection or a refresh in flight is now fenced.
+- An on-demand pending-interaction read in flight during the stop could cache
+  the dead request again. Reads in flight are now marked withdrawn and answer
+  from the withdrawn projection; cached reads for the environment are dropped.
+- The readiness doc said nothing runs in the container before readiness; the
+  Codex account-marker write does, best-effort and with failures logged. The
+  doc now says so.
+- Coverage added: the readiness ordering for ready, failed and legacy boots
+  (`commands-environment-readiness.test.ts`), the restore preflight
+  (`recovery-copies.test.ts`), the rootless flag surviving a failed capacity
+  probe (`container-resources.test.ts`), and the stop fence across pending,
+  empty and absent projections in both representations.
+
+Nothing was rejected. The fence also re-commits a projection whose list was
+already empty, adding one revision per session per stop; that keeps the cache
+entry on the bumped epoch, so it was kept. Merging `main` (`459d2944`) moved
+this code into the collaborators of #1180: the pending-read half now lives in
+`NativeAgentInteractionTracker.withdrawEnvironment` and the projection half in
+`NativeAgentTranscriptProjection.withdrawEnvironmentInteractions`, joined by
+`NativeAgentService.withdrawEnvironmentInteractions`.
 
 ## Results, 2026-10-17
 
@@ -716,7 +753,7 @@ Desktop. What remains of those items:
 - C13 and the C21 live half for Grok. Both need a current host Grok login
   (the host's expired on 2026-10-20 and was still expired on 2026-10-23), and
   the rotation half needs a profile that can be pointed at a disposable Grok
-  copy (0056, item 7).
+  copy (0061, item 7).
 - The Claude half of C21 that a disposable Claude account would unlock: a real
   re-authentication through `markContainersForClaudeLoginRefresh` (only its
   durable `loginGeneration` half ran), and an Anthropic refresh-token
@@ -780,7 +817,7 @@ considered, the choice, why, and its pros and cons.
    carry only `pending` and `answering`, and the web tab renders every listed
    request, so a `withdrawn` entry would show a card; invalidation loses the
    transcript the coordinator reads; per-reader filters leave the projection
-   wrong. Con: stops outside `stopEnvironmentOnce` are not covered (0056, item
+   wrong. Con: stops outside `stopEnvironmentOnce` are not covered (0061, item
    2), and the withdrawal is visible only as a disappearance.
 5. **How to hold a boot before `ready`.** Options: SIGSTOP the entrypoint, or a
    derived image whose firewall wrapper waits once for a release file. Chose
@@ -824,7 +861,7 @@ considered, the choice, why, and its pros and cons.
     error while busy, keep the busy bridge and apply the key when idle, or
     leave it. Chose keep-until-idle, matching Claude and Codex account
     switching. Con: a revoked old key stays in use until the turn ends. The
-    local path still has the gap (0056, item 6).
+    local path still has the gap (0061, item 6).
 14. **Cursor allowlist.** Added the exact host `api.cursor.com`; policy 3 has no
     wildcards, and a wildcard would be broader.
 15. **Full-network fixture.** Options: a launcher flag, changing an existing
@@ -835,7 +872,7 @@ considered, the choice, why, and its pros and cons.
 16. **OpenCode egress for C13.** Options: add `opencode.ai` to OpenCode's
     required hosts, or allow it on the qualification environment only. Chose
     the environment only: the product default widens egress for every OpenCode
-    install and is a product decision (0056, item 9).
+    install and is a product decision (0061, item 9).
 17. **Ambiguous dispatch injection.** Options: pause the bridge or provider
     process, or drop only prompt requests to the bridge from inside the
     environment's container. Pausing either rejected or accepted the prompt;
@@ -885,7 +922,7 @@ considered, the choice, why, and its pros and cons.
     host; load was 18 at the start and every target was met. Con: still not an
     idle-host reference.
 25. **New work goes to a new file.** Gaps found but not fixed went into
-    [0056](0056-container-qualification-follow-ups.md), since an existing todo
+    [0061](0061-container-qualification-follow-ups.md), since an existing todo
     file never takes new items. Two flake recurrences were added to their
     existing cases (0506, 0518).
 
@@ -929,7 +966,7 @@ considered, the choice, why, and its pros and cons.
 
 ## Related
 
-- [0056-container-qualification-follow-ups.md](0056-container-qualification-follow-ups.md):
+- [0061-container-qualification-follow-ups.md](0061-container-qualification-follow-ups.md):
   gaps the 2026-10-23 pass found and did not fix.
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md):
   shared prerequisites and batching. The Docker Desktop rows of

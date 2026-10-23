@@ -26,8 +26,8 @@
  * does not return, standing in for an SDK agent that takes its time to start.
  *
  * Every SDK call on an agent is appended to `FAKE_CURSOR_LOG` as
- * `<event>:<agentId>` (`create`, `resume`, `send`, `dispose`), for ordering
- * assertions.
+ * `<event>:<agentId>` (`create`, `resume`, `send`, `steer`, `dispose`), for
+ * ordering assertions.
  *
  * Environment: the bridge's own (`PORT`, `HOSTNAME`, `CWD`,
  * `CURSOR_BRIDGE_TOKEN`, `CURSOR_BRIDGE_STATE_DIR`, `CURSOR_BRIDGE_AUTH_FILE`)
@@ -182,6 +182,12 @@ function agentHandle(agentId: string) {
         cancel: async () => {
           if (turn.status === "running") settle("cancelled");
           release();
+        },
+        // Accepted into the running turn, as the SDK's live steer is. Only a
+        // held turn is ever running long enough to be steered.
+        steer: async () => {
+          record("steer", agentId);
+          return "complete_delivered" as const;
         },
         onDidChangeStatus: () => () => undefined,
       };

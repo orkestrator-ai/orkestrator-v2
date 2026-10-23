@@ -8,8 +8,11 @@ import { act } from "@testing-library/react";
 
 import {
   MCP_MANAGEMENT_CHANGED_EVENT,
+  type McpConfigSource,
+  type McpDefaultsRefreshPreview,
   type McpDefinitionSummary,
   type McpEditableDefinition,
+  type McpEnvironmentOverlayState,
   type McpImpactPreview,
   type McpManagementSnapshot,
   type McpManagementTarget,
@@ -63,6 +66,81 @@ export function environmentTarget(environmentId: string): McpManagementTarget {
     provider: "pi",
     providerLabel: "Pi",
     context: { ...target.context, kind: "environment", environmentId },
+  };
+}
+
+/** A running container environment's Claude target (environment-private editing). */
+export const containerTarget: McpManagementTarget = {
+  ...target,
+  targetId: "mcp1~claude~env~c1~x",
+  context: {
+    kind: "environment",
+    environmentId: "c1",
+    environmentName: "env-a",
+    location: "container",
+    locationLabel: "Container of env-a",
+  },
+  defaultSourceId: "claude:env",
+  capabilities: {
+    ...capabilities,
+    authentication: {
+      ...capabilities.authentication,
+      runtimeSignIn: {
+        supported: false,
+        reason: "Sign in from a session in this container; the settings page cannot open it.",
+      },
+    },
+  },
+};
+
+export function environmentSource(overrides: Partial<McpConfigSource> = {}): McpConfigSource {
+  return {
+    sourceId: "claude:env",
+    scope: "environment-private",
+    owner: "environment-overlay",
+    format: "json",
+    label: "This environment",
+    displayPath: "/home/node/.claude.json",
+    precedence: 10,
+    state: "ok",
+    writable: true,
+    revision: "c1.rev",
+    sharedWith: [],
+    ...overrides,
+  };
+}
+
+export function overlay(
+  overrides: Partial<McpEnvironmentOverlayState> = {},
+): McpEnvironmentOverlayState {
+  return {
+    revision: 3,
+    state: "in-sync",
+    added: [],
+    replaced: [],
+    removed: [],
+    conflicts: [],
+    divergedNames: [],
+    ...overrides,
+  };
+}
+
+export function refreshPreview(
+  overrides: Partial<McpDefaultsRefreshPreview> = {},
+): McpDefaultsRefreshPreview {
+  return {
+    targetId: containerTarget.targetId,
+    sourceId: "claude:env",
+    sourceLabel: "This environment",
+    previewToken: "tok-1",
+    added: [],
+    changed: [],
+    removed: [],
+    conflicts: [],
+    diverged: [],
+    unchanged: true,
+    warnings: [],
+    ...overrides,
   };
 }
 
@@ -214,4 +292,21 @@ export function pressEnter(
   element.focus();
   fire.keyDown(element, { key: "Enter", code: "Enter" });
   fire.click(element);
+}
+
+/** Handlers for a container environment target whose snapshot is built per call. */
+export function containerHandlers(
+  build: () => Partial<McpManagementSnapshot>,
+  extra: Handlers = {},
+): Handlers {
+  return {
+    list_mcp_management_targets: () => ({
+      protocolVersion: 1,
+      backendId: "b1",
+      targets: [target, containerTarget],
+    }),
+    get_mcp_management_snapshot: () =>
+      snapshot({ target: containerTarget, definitions: [], effective: {}, ...build() }),
+    ...extra,
+  };
 }

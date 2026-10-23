@@ -212,6 +212,63 @@ describe("/event/subscribe", () => {
     });
   });
 
+  test("an observation subscriber gets content-free frames, replayed ones included", async () => {
+    const cursor = __testing.eventRingForTesting().latestRevision;
+    __testing.emitForTesting({
+      type: "message.updated",
+      sessionId: "observed-replay",
+      data: { message: { id: "m-replay", content: "secret transcript text" } },
+    });
+    const frames = await collect(
+      `?observe=1&since=${cursor}`,
+      () => {
+        __testing.emitForTesting({
+          type: "session.updated",
+          sessionId: "observed-live",
+          data: { status: "running" },
+        });
+      },
+      // The replay frame may still be in flight behind `connected`.
+      { expected: 2 },
+    );
+    expect(frames[0]).toMatchObject({ event: "connected", data: { observe: true } });
+    const replayed = frames.find((frame) => frame.data.sessionId === "observed-replay");
+    expect(replayed).toMatchObject({
+      event: "message.updated",
+      data: { sessionId: "observed-replay" },
+    });
+    expect(Object.keys(replayed!.data)).toEqual(["sessionId"]);
+    const live = frames.find((frame) => frame.data.sessionId === "observed-live");
+    expect(live).toMatchObject({ event: "session.updated", data: { sessionId: "observed-live" } });
+    expect(Object.keys(live!.data)).toEqual(["sessionId"]);
+    expect(JSON.stringify(frames)).not.toContain("secret transcript text");
+    expect(Number(live!.id)).toBeGreaterThan(Number(replayed!.id));
+  });
+
+  test("an observation subscriber is notified while replay retention has lapsed", async () => {
+    const restoreRetention = __testing.suspendReplayRetentionForTesting();
+    try {
+      const frames = await collect(
+        "?observe=1",
+        () => {
+          __testing.emitForTesting({
+            type: "session.idle",
+            sessionId: "observed-idle",
+            data: {},
+          });
+        },
+        { expected: 1 },
+      );
+      expect(
+        frames.some(
+          (frame) => frame.event === "session.idle" && frame.data.sessionId === "observed-idle",
+        ),
+      ).toBe(true);
+    } finally {
+      restoreRetention();
+    }
+  });
+
   test("session filtering replaces unrelated payloads with cursor-only frames", async () => {
     const frames = await collect(
       "?sessionId=target",

@@ -50,3 +50,13 @@ The aggregate failed this owner and its unchanged owning file passed with one wo
 - **Owning-file rerun:** `mise run test:logged -- --name merge-runtime-env-owner -- bun test --cwd bridges/codex-bridge --preload ../../tests/setup-node.ts ./src/runtime-env.test.ts --parallel=1 --only-failures` passed the entire unchanged file, exit 0, in 0.1 seconds.
 - **Evidence:** `orkestrator-test-run.0xWTT4/bridges.log.gz` below the host temporary directory; outer run `orkestrator-test-run.s48Tpm`.
 - **Assessment:** confirmed recurrence; process-start contention remains a hypothesis. No implementation, assertion, timeout or skip changed.
+
+## Native-agent collaborator follow-up main merge — 2026-10-23
+
+- Merge parents: `2bee5ac0b5fd732c13a23fdc1342b0f74b7b2a83` and `9da8131c8dd35328fadfa654379533c3cbcd6767`.
+- Command: `ORKESTRATOR_TEST_AREA_BASE=$(git merge-base HEAD MERGE_HEAD) mise run test:logged -- --name merge2-tests -- mise run test`; workspace/root/bridges/protocol reservations 4/1/2/1, with one Bun worker per bridge package and two bridge packages concurrently.
+- Exact failure: `runtime environment refresh > sources configured runtime helper and applies refreshed shell environment`, `bridges/codex-bridge/src/runtime-env.test.ts`, timed out at 15005.86 ms against the unchanged 15-second deadline.
+- The Codex package reported 2260 passed, 38 skipped and one failed across 84 files (57.44 s). All other bridge packages passed. Workspace, root/support and protocol-lockfile groups passed; the complete aggregate exited 1 after 627.0 s.
+- Complete unchanged owner: `mise run test:logged -- --name merge2-codex-runtime-env-owner -- bun test --cwd bridges/codex-bridge ./src/runtime-env.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed (exit 0, 0.1 s).
+- Evidence: `orkestrator-test-run.Dm83Kv/bridges.log.gz`; wrapper: `orkestrator-test-run.jIdcYh/merge2-tests.log.gz`, below the host temporary directory.
+- The isolated pass confirms recurrence of the registered flake. No runtime-environment implementation, deadline, assertion or skip changed. The original aggregate exit remains failed.

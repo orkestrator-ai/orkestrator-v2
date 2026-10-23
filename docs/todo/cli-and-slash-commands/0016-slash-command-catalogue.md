@@ -28,7 +28,7 @@ and need a decision. A new tab on a current bridge never sees those rows (see
   when it has a session ID, falls back to a legacy global route on 404, and
   reads the global route directly when it has no session ID. Only
   `refreshProjectionCommands` for a tab with no stored session reads without
-  one (`native-agent-service-base.ts`), and its projection is `null`, so those
+  one (`native-agent-service.ts`), and its projection is `null`, so those
   rows are cached under `global` but never shown. Codex and Cursor
   map to `/global/slash-commands`; Claude, Pi and Grok map to
   `/plugins/commands`. Legacy rows are normalised as non-enhanced rows with a
@@ -66,10 +66,10 @@ and need a decision. A new tab on a current bridge never sees those rows (see
 - The picker groups rows by `source` (`groupSlashCommandRuns` in
   `apps/web/src/lib/chat/slash-command-search.ts`, rendered by
   `SlashCommandMenu.tsx`). This is covered by component tests only.
-- The comment in `bridges/cursor-bridge/src/http.ts` still says Cursor SDK
-  1.0.31 (now 1.0.37). The OpenCode (`opencode-commands.ts`) and Claude
-  (`session-manager-commands.ts`) owner comments were re-checked against
-  1.19.0 and 0.3.296 on 2026-10-17.
+- The Cursor (`bridges/cursor-bridge/src/http.ts`, 1.0.37), OpenCode
+  (`opencode-commands.ts`, 1.19.0) and Claude (`session-manager-commands.ts`,
+  0.3.296) owner comments match the pins (re-checked 2026-10-17 and
+  2026-10-23).
 
 ## Outstanding work
 
@@ -109,9 +109,8 @@ and need a decision. A new tab on a current bridge never sees those rows (see
 5. **Further Orkestrator shortcuts** beyond `/steer` and `/compact`: clear or
    new session, model and permission changes, review. Each needs its own
    qualified semantics.
-6. **Stale pin comment.** After re-qualification in
-   [0015-slash-command-qualification.md](0015-slash-command-qualification.md), update
-   the Cursor pin fact in `bridges/cursor-bridge/src/http.ts`.
+6. **Stale pin comment.** Done 2026-10-23: the Cursor comment names 1.0.37,
+   whose declarations were re-checked.
 7. **CLI selection.** `session commands` and `session command` are tracked in
    [0017-cli-command-surface.md](0017-cli-command-surface.md).
 8. **Claude terminal-only commands before the first turn.** Done
@@ -223,9 +222,9 @@ and need a decision. A new tab on a current bridge never sees those rows (see
     (`bridges/claude-bridge/src/services/session-manager-core.ts:1576`).
   - A persisted mapping always carries `providerSessionId`
     (`apps/backend/src/core/models.ts:648`). Without one there is no
-    projection at all (`native-agent-service-dispatch.ts:1121`), so the picker
+    projection at all (`resolveProjectionSession` in `native-agent-service.ts`), so the picker
     is empty, and every projection catalogue read passes the session ID
-    (`native-agent-service-projection.ts:2824`, `:3287`, `:4344`).
+    (`NativeAgentCatalogCache.commandCatalogue` in `native-agent-catalog-cache.ts`, called from `native-agent-transcript-projection.ts`).
   - On the session route, a Claude session with no turn yet gets one
     control-only CLI probe, reported `stale` ("may be out of date"); while that read is in
     flight the picker shows `loading` (`native-agent-command-catalogue.ts:228`).
@@ -257,9 +256,13 @@ and need a decision. A new tab on a current bridge never sees those rows (see
 
 ## Needs verification
 
-- Whether old-backend/new-bridge and old/new renderer projections are tested.
-  Only the backend 404-fallback test in `http-bridge-commands.test.ts` was
-  found.
+- Old-backend/new-bridge and old/new renderer projections are now tested with
+  transport-level fakes (the `mixed-version:` blocks listed in
+  [0015-slash-command-qualification.md](0015-slash-command-qualification.md)).
+  They found that a session-route 404 on Claude does not show the 15
+  `BUILTIN_COMMANDS` rows: the old global shape (`"/name - description"`) keeps
+  only bare names, so every built-in row is dropped and the list is marked
+  truncated. A run against a real pre-#827 build is still open there.
 
 ## Related
 

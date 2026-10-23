@@ -35,7 +35,7 @@ import {
   piSavedEnabled,
 } from "./codecs.js";
 import { parseSource, type ParsedSource } from "./document.js";
-import type { McpSourceStore, SourceFileSnapshot } from "./source-store.js";
+import { contentDigest, type McpSourceStore, type SourceFileSnapshot } from "./source-store.js";
 import type { CanonicalDefinition, ContainerFileReader, NativeEntry, SourceSpec } from "./types.js";
 
 export interface LoadedSource {
@@ -163,6 +163,8 @@ async function loadContainerSource(
     state: "ok" as const,
     text,
     revision: await store.revisionOf(result.bytes),
+    // A write into the container is compared against these exact bytes.
+    contentDigest: contentDigest(result.bytes),
   };
   try {
     const parsed = parseSource(spec, text);

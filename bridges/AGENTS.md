@@ -17,6 +17,18 @@ calls them (`apps/backend/src/core/http-bridge-provider*.ts`,
   expose `GET /session/:id/activity` for exactly this: no touch, no hydration,
   no re-attach. Anything else the backend wants to poll needs the same
   treatment.
+- The activity answer may carry an opaque `contentRevision` (Claude and Codex
+  do). It must move whenever what a session view shows changes without an
+  activity change (transcript rows, background-task snapshots, async
+  questions), stay equal otherwise, and stay O(1) and no-touch. Never let
+  computing it fail the read: omit the field instead. The backend announces a
+  change on an idle session from it, and only a session that reports one may
+  back off on the client.
+- `GET /event/subscribe?observe=1` is the backend observer's stream: frames
+  carry only the event type, the cursor `id:` and `{"sessionId"}`, the
+  `connected` frame confirms `"observe": true`, and the subscriber must not
+  keep the replay ring alive. It is a wakeup hint, never a source of activity,
+  and like `/activity` it must not touch, hydrate or re-attach anything.
 - `/session/:id/activity` answers an unknown session **in band** as
   `{"activity":"missing"}` and never 404s. The backend reads a 404 there as "this
   bridge predates the route" and fails the environment; if 404 also meant "session
@@ -24,12 +36,18 @@ calls them (`apps/backend/src/core/http-bridge-provider*.ts`,
   same reason the claude bridge answers a failed existence probe `idle`, never
   `missing` — an error is not evidence of deletion.
 - `GET /session/:id/dispatch?requestId=` answers `dispatched` **only** on an
-  explicit positive from that bridge's own dispatch journal. No record, a record
-  that predates a bridge restart (the ACP journal's `ambiguous`, the codex
-  journal's `prepared`), an unreadable journal and a missing route are all
-  `unknown`. The backend clears a parked dispatch on `dispatched` alone, so
-  reporting a *lost* record as "never sent" would have it run the same turn
-  twice. Like `/activity`, it must never touch liveness, hydrate or re-attach.
+  explicit positive from that bridge's own dispatch journal. It answers `lost`
+  **only** where the prompt route would refuse the id with 410
+  `dispatch-outcome-lost`: a record an earlier process left without an outcome
+  (Claude's `restoredDispatchedRequestIds`, the ACP, Cursor and Pi journals'
+  `ambiguous`), never a local reply, and never over a `dispatched`. No record, a
+  record that may still run (the codex journal's `prepared`), an unreadable
+  journal and a missing route are all `unknown`. The backend confirms a parked
+  dispatch on `dispatched` and retires it on `lost` (cleared, never recorded as
+  run, the draft's id released); `unknown` leaves it parked. Neither `lost` nor
+  `unknown` means "never sent": reporting a lost record that way would have it
+  run the same turn twice. Like `/activity`, it must never touch liveness,
+  hydrate or re-attach.
 - Prompt dispatch and `POST /session/:id/attach` share the same client timeout,
   because they do the same work. A bridge with no attached agent process pays a
   full spawn plus `initialize` plus `session/load` on whichever request arrives
@@ -109,7 +127,9 @@ When touching any of them:
   the tab that finds no other mapping performs the provider close. A resume
   that replaces a tab's session closes the replaced one under the same lock
   and rules (`provider-session-ownership.ts`): never while another tab maps it
-  or a Multi Review owns it.
+  or a Multi Review owns it. That close is journaled as a teardown intent
+  under a reserved `resume-replaced:` key, so the reconcile sweep retries one
+  that stayed pending.
 
 ## Interaction deadlines and pauses
 

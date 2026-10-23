@@ -7,6 +7,7 @@
  * past this boundary.
  */
 import type {
+  BridgePromptDispatchStatus,
   NativeAgentContextUsage,
   NativeAgentReadiness,
   NativeAgentRuntimeSummary,
@@ -144,14 +145,23 @@ export function publicActivity(state: SessionState): JsonObject {
  *
  * `dispatched` is only ever an explicit positive from this process's own
  * journal. A record that predates a restart is persisted as `ambiguous` and
- * answers `unknown`, so a lost record can never be mistaken for a prompt that
- * was never sent — the caller would run the same turn twice.
+ * answers `lost`, exactly where the prompt route refuses the id with 410
+ * `DISPATCH_OUTCOME_LOST_KIND`: never `dispatched`, and never "not sent" —
+ * the caller would run the same turn twice. This process's own failed send
+ * (`sendFailed`, which a retry may still deliver) and a local reply are not
+ * lost. Everything else is `unknown`.
  */
 export function publicDispatch(state: SessionState, requestId: string): JsonObject {
   const entry = requestId ? state.promptJournal.get(requestId) : undefined;
   const dispatched =
     entry?.state === "accepted" || entry?.state === "completed" || entry?.state === "failed";
-  return { dispatch: dispatched ? "dispatched" : "unknown" };
+  const lost = entry?.state === "ambiguous" && entry.sendFailed !== true && !entry.local;
+  const dispatch: BridgePromptDispatchStatus = dispatched
+    ? "dispatched"
+    : lost
+      ? "lost"
+      : "unknown";
+  return { dispatch };
 }
 
 export function publicContextUsage(state: SessionState): NativeAgentContextUsage | undefined {

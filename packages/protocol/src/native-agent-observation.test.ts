@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { AGENT_PLATFORMS } from "./agent-platforms.js";
 import {
+  NATIVE_QUIET_BACKOFF_CONTENT_REVISION_PLATFORMS,
   NATIVE_QUIET_BACKOFF_QUALIFIED_PLATFORMS,
   orderNativeObservationStamp,
   parseNativeAgentActivityAnnouncement,
@@ -26,6 +27,29 @@ describe("native agent activity announcements", () => {
       logicalSessionKey: "env-env-1:tab-1",
       stamp: { generation: "observer-1", revision: 3 },
     });
+  });
+
+  test("parses a content announcement and tolerates a newer backend's reason", () => {
+    const content = {
+      environment_id: "env-1",
+      previous_state: "idle",
+      state: "idle",
+      reason: "content",
+      agent: "claude",
+      logical_session_key: "env-env-1:tab-1",
+      generation: "observer-1",
+      revision: 4,
+    };
+    expect(parseNativeAgentActivityAnnouncement(content)).toMatchObject({
+      state: "idle",
+      previousState: "idle",
+      reason: "content",
+      stamp: { generation: "observer-1", revision: 4 },
+    });
+    const future = parseNativeAgentActivityAnnouncement({ ...content, reason: "something-new" });
+    expect(future).not.toBeNull();
+    expect(future?.reason).toBeUndefined();
+    expect(parseNativeAgentActivityAnnouncement({ ...content, reason: 1 })).toBeNull();
   });
 
   test("accepts an older backend's environment-only announcement", () => {
@@ -64,11 +88,18 @@ describe("native agent activity announcements", () => {
     expect(orderNativeObservationStamp(at(5), at(1, "observer-2"))).toBe("reset");
   });
 
-  test("qualifies only known platforms for quiet backoff, never Claude or Codex", () => {
+  test("qualifies only known platforms, and Claude and Codex only through content revisions", () => {
     for (const platform of NATIVE_QUIET_BACKOFF_QUALIFIED_PLATFORMS) {
       expect(AGENT_PLATFORMS).toContain(platform);
     }
-    expect(NATIVE_QUIET_BACKOFF_QUALIFIED_PLATFORMS).not.toContain("claude");
-    expect(NATIVE_QUIET_BACKOFF_QUALIFIED_PLATFORMS).not.toContain("codex");
+    // Every content-revision platform is qualified, and the two whose idle
+    // views change without a transition are content-revision platforms.
+    for (const platform of NATIVE_QUIET_BACKOFF_CONTENT_REVISION_PLATFORMS) {
+      expect(NATIVE_QUIET_BACKOFF_QUALIFIED_PLATFORMS).toContain(platform);
+    }
+    expect([...NATIVE_QUIET_BACKOFF_CONTENT_REVISION_PLATFORMS].sort()).toEqual([
+      "claude",
+      "codex",
+    ]);
   });
 });

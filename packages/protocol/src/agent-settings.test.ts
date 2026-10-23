@@ -180,7 +180,7 @@ describe("resolveAgentPlatformSettings", () => {
 
 describe("a model never leaves its own platform's column", () => {
   test("a repository model does not reach a different agent's launch", () => {
-    // The defect this rule exists for: `native-agent-service-reconciliation.ts`
+    // The defect this rule exists for: `native-agent-launch-activity-reconciler.ts`
     // used to hand a repository's single `defaultModel` to whatever agent
     // launched, so a Claude model id could reach a Codex run.
     const repository: AgentSettingsTier = {

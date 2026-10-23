@@ -88,3 +88,11 @@
 ## Two-column report main merge — 2026-10-21
 
 ACP filesystem/terminal generalization hit its 60-second hook deadline (60,013.01 ms); its complete unchanged owner passed with the Node preload in 1.6 seconds (`merge-acp-owner`). See [0629](../aggregate-validation-runs/0629-two-column-main-merge-validation.md) for commands, worker configuration, counts and evidence. No source, assertion, timeout or skip changed.
+
+## Released Claude wakeup validation — 2026-10-23
+
+- **Original command:** `mise run test:logged -- --name repository-tests -- mise run test`; workspace/root/bridge/protocol reservations 4/1/2/1, one ACP worker, alongside isolated browser validation and other worktrees.
+- **Failure:** the same filesystem/terminal test's fixture hook timed out at 60007.83 ms. ACP reported 654 passed, 3 skipped, 1 failed across 44 files (293.14 s).
+- **Unchanged owner:** `mise run test:logged -- --name acp-generalization-node -- bun test --cwd bridges/acp-bridge --preload ../../tests/setup-node.ts ./src/acp-generalization.test.ts --parallel=1 --only-failures` passed (exit 0, 1.9 s logged).
+- **Evidence:** `orkestrator-test-run.XHMi6K/bridges.log.gz` below the host temporary directory after aggregate completion.
+- **Assessment:** confirmed intermittent fixture lifecycle timeout; shared-host contention remains a hypothesis. No assertion, timeout or skip changed.

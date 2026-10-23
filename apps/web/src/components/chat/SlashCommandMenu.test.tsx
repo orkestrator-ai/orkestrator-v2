@@ -61,6 +61,38 @@ describe("SlashCommandMenu", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  test("clicking the owning composer keeps the menu open, while another input dismisses it", () => {
+    const onClose = mock(() => {});
+    render(
+      <>
+        <div
+          role="textbox"
+          aria-label="Composer"
+          contentEditable
+          suppressContentEditableWarning
+          aria-controls="commands"
+        >
+          <span>/plan</span>
+        </div>
+        <input aria-label="Other composer" aria-controls="other-commands" />
+        <SlashCommandMenu
+          commands={[{ name: "/plan" }]}
+          selectedIndex={0}
+          onSelect={() => {}}
+          onClose={onClose}
+          listboxId="commands"
+        />
+      </>,
+    );
+    fireEvent.mouseDown(screen.getByRole("textbox", { name: "Composer" }));
+    fireEvent.mouseDown(
+      within(screen.getByRole("textbox", { name: "Composer" })).getByText("/plan"),
+    );
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.mouseDown(screen.getByRole("textbox", { name: "Other composer" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   test("stays open, and keeps focus in the composer, when the click lands inside", () => {
     const onClose = mock(() => {});
     render(
@@ -363,6 +395,43 @@ describe("SlashCommandMenu", () => {
     );
     expect(screen.getByText("Claude reads this as a command.")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Send as text" }) === null).toBe(true);
+  });
+});
+
+/** Catalogue states and rows from a backend on either side of the command catalogue (#827). */
+describe("mixed-version: SlashCommandMenu", () => {
+  afterEach(() => cleanup());
+
+  test("an older backend's id-less rows with no status list as before", () => {
+    render(
+      <SlashCommandMenu
+        commands={[{ name: "/review", description: "Review changes", source: "project" }]}
+        selectedIndex={0}
+        onSelect={() => {}}
+        onClose={() => {}}
+        query="/"
+      />,
+    );
+    expect(screen.getByRole("option", { name: /review/ })).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toBe("1 command available");
+  });
+
+  test("a status this renderer does not know shows the rows without a state line", () => {
+    render(
+      <SlashCommandMenu
+        commands={[{ id: "codex:/review", name: "/review", source: "project" }]}
+        selectedIndex={0}
+        onSelect={() => {}}
+        onClose={() => {}}
+        query="/"
+        status={{ state: "degraded" as never, providerCommandCount: 1, onRefresh: () => {} }}
+      />,
+    );
+    expect(screen.getByRole("option", { name: /review/ })).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toBe("1 command available");
+    expect(screen.queryByText(/Loading|couldn't be loaded|out of date/) === null).toBe(true);
+    // Refresh is offered only for states this renderer understands.
+    expect(screen.queryByRole("button", { name: /Refresh/ }) === null).toBe(true);
   });
 });
 

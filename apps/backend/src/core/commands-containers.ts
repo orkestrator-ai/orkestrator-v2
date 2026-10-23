@@ -118,6 +118,7 @@ import {
 } from "./portable-inputs.js";
 import { pruneEnvironmentInputRevisions, selectedInputProviders } from "./portable-input-status.js";
 import type { ContainerStorageIdentity } from "@orkestrator/protocol/container-lifecycle";
+import { imageCopiesCursorMcpConfig } from "@orkestrator/protocol/image-manifest";
 import { assertContainerNotDraining, ensureCurrentBootReady } from "./container-readiness.js";
 import { activeAgentAccountInputRoots } from "./agent-accounts-containers.js";
 
@@ -391,16 +392,22 @@ export async function createDockerContainer(
   // files of enabled providers, copied into a private per-environment
   // revision; older images keep the read-only home mounts their entrypoint
   // expects. A running legacy container keeps its mounts until it is rebuilt.
-  const stagedInputs =
-    identity.imageId &&
-    process.env.ORKESTRATOR_PORTABLE_INPUTS !== "host-mounts" &&
-    (await imageCapabilities(identity.imageId, context))?.["staged-inputs"]
-      ? await stagePortableInputs(context.storage.getDataDir(), environment.id, inputProviders, {
-          ...defaultInputSourceRoots(context.runtimeFlavor, AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV),
-          ...(await activeAgentAccountInputRoots(context)),
-          includeClaudeCredentials: allowClaudeCredentials,
-        })
+  const stagingCapabilities =
+    identity.imageId && process.env.ORKESTRATOR_PORTABLE_INPUTS !== "host-mounts"
+      ? await imageCapabilities(identity.imageId, context)
       : null;
+  // An entrypoint older than Cursor's copy would ignore `/cursor-config`, and
+  // staging it anyway would report Cursor's MCP servers as delivered.
+  const stagedProviders = imageCopiesCursorMcpConfig(stagingCapabilities)
+    ? inputProviders
+    : new Set([...inputProviders].filter((provider) => provider !== "cursor"));
+  const stagedInputs = stagingCapabilities?.["staged-inputs"]
+    ? await stagePortableInputs(context.storage.getDataDir(), environment.id, stagedProviders, {
+        ...defaultInputSourceRoots(context.runtimeFlavor, AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV),
+        ...(await activeAgentAccountInputRoots(context)),
+        includeClaudeCredentials: allowClaudeCredentials,
+      })
+    : null;
   if (anthropicApiKey && stagedInputs) {
     const keyDir = path.join(stagedInputs.directory, "claude-config");
     await mkdir(keyDir, { recursive: true, mode: 0o700 });

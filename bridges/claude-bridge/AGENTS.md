@@ -123,7 +123,7 @@ When touching the session catalogue (`session-manager-catalog.ts`):
 - **The no-control fallback costs a process.** `createProbe()` spawns a whole
   Claude CLI, so `commandInventory` caches the catalogue the way `mcpInventory`
   already did. The backend re-reads both on every session projection
-  (`native-agent-service-projection.ts`), so an uncached fallback is one spawn
+  (`native-agent-transcript-projection.ts`), so an uncached fallback is one spawn
   per turn boundary rather than a one-off.
 - **Every SDK frame has a declared fate.** `HANDLED_SDK_MESSAGE_TYPES` and
   `SYSTEM_SUBTYPE_DISPOSITIONS` (`src/types/index.ts`) are `Record`s over the

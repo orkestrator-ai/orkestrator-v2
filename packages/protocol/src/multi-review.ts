@@ -24,6 +24,8 @@ import {
   isReviewerModelSelectionFields,
   isReviewerRecordList,
   isReviewWorktreeSnapshotRecord,
+  isReviewPanelOverlap,
+  type ReviewPanelOverlapV1,
   type ReviewerModelSelection,
   type ReviewerRecord,
   type ReviewDispatchState,
@@ -440,6 +442,8 @@ export interface MultiReviewWorkflow {
   /** Step whose context-menu action produced the paused state. */
   pausedStep?: MultiReviewStepKind;
   consolidatedReport?: StructuredReviewReport;
+  /** Reviewer overlap in {@link consolidatedReport}; written and cleared with it. */
+  consolidationOverlap?: ReviewPanelOverlapV1;
   fixResult?: {
     complete: boolean;
     summary: string;
@@ -959,6 +963,7 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
       "validationStopRequested",
       "reviewSnapshotStale",
       "consolidatedReport",
+      "consolidationOverlap",
       "fixResult",
       "addressPromptPending",
       "addressSessionKey",
@@ -1057,7 +1062,9 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
     (value.restartFixAfterConsolidation !== undefined &&
       typeof value.restartFixAfterConsolidation !== "boolean") ||
     !optionalString(value.error, 4_096) ||
-    (value.consolidatedReport !== undefined && !isStructuredReviewReport(value.consolidatedReport))
+    (value.consolidatedReport !== undefined &&
+      !isStructuredReviewReport(value.consolidatedReport)) ||
+    (value.consolidationOverlap !== undefined && !isReviewPanelOverlap(value.consolidationOverlap))
   ) {
     return false;
   }

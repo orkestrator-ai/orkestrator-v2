@@ -53,3 +53,28 @@ The GNU-tool PATH `mise run test:logged -- --name merge-full -- mise run test` (
 Aggregate result: `merge2-tests` exited 1 after 1132.1 seconds logged. Backend reported 9081 passed, 41 skipped and 11 failed across 9133 tests in 485 files (1118.57 seconds). Every other workspace package passed; root/support passed 3084 tests with one skip, and protocol regeneration passed. Evidence: `orkestrator-test-run.0J1rem/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
 
 After the full aggregate ended, `mise run test:logged -- --name merge2-after-aggregate-owners -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts ./tests/recurring-baseline.test.ts --parallel=1 --only-failures` reported 56 passed, one failed and one between-test error across 57 tests (56.0 seconds logged). All five unchanged recurring-baseline tests passed; coordinator bound-discard still timed out (5279.64 ms), with late `SQLITE_IOERR_VNODE`. Evidence: `orkestrator-test-run.zR2pum/merge2-after-aggregate-owners.log.gz` below the host temporary directory. This confirms intermittence for the baseline case while leaving the coordinator observation unresolved.
+
+
+## Cross-service preview review follow-up — 2026-10-23
+
+- **Original command:** `mise run test:logged -- --name preview-review-full -- mise run test`
+  on macOS 27.0 arm64, Bun 1.4.3; workspace/root/bridges/protocol reservations
+  4/1/2/1. The workspace waited 510.3 seconds for host capacity before execution.
+- **Failure:** the same deterministic-baseline case exceeded the unchanged
+  5000 ms timeout (5464.85 ms).
+- **Suite counts:** backend 9553 passed, 61 skipped, one failed across 9615
+  tests and 542 files (359.23 seconds). Every other workspace task and the
+  root/support, bridge and protocol groups passed. Aggregate: exit 1,
+  938.4 seconds logged.
+- **Owning-file rerun:** `mise run test:logged -- --name recurring-baseline-isolated -- bun test --cwd apps/backend ./tests/recurring-baseline.test.ts --parallel=1 --only-failures`
+  also timed out (5562.65 ms): four passed, one failed, 66 assertions,
+  12.3 seconds logged.
+- **Evidence:** `orkestrator-test-run.RWMU2X/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+  and `orkestrator-test-run.X4PQFk/recurring-baseline-isolated.log.gz`, under
+  the host temporary directory; outer aggregate evidence in
+  `orkestrator-test-run.m8U5Rl/preview-review-full.log.gz`.
+- **Assessment:** unresolved in this run because the owner failed alone too;
+  the isolated result does not establish a new intermittent recurrence.
+  Existing evidence already tracks this timeout, including isolated failures.
+  Concurrent host load is plausible but unproven. This preview change does
+  not alter the baseline owner, its harness, assertion, timeout or skips.

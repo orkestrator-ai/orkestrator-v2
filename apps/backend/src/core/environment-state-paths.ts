@@ -14,6 +14,9 @@ export const ENVIRONMENT_STATE_ROOTS = [
   "acp-bridge-state",
   // Staged portable agent inputs (credentials and configuration copies).
   "portable-inputs",
+  // Durable container-private MCP overlays (mcp-management/overlay-store.ts).
+  // Private like staged inputs: entries can carry literal credentials.
+  "mcp-environment-overlays",
 ] as const;
 
 export type EnvironmentStateRoot = (typeof ENVIRONMENT_STATE_ROOTS)[number];

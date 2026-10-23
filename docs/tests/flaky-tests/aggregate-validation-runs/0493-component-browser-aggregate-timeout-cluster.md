@@ -176,3 +176,24 @@ Exact original failed cases:
 - 49) [desktop-chromium] › e2e/MachinesSettings.spec.ts:32:5 › ^Updates for Desk keeps the viewport gutter and responsive cap at 1024px
 - 50) [desktop-chromium] › e2e/TranscriptPaging.spec.ts:15:5 › native: paging before prose holds the original tool position
 - 51) [desktop-chromium] › e2e/AgentLaunchDialog.spec.ts:7:1 › selects a native branch suggestion with the keyboard and confirms
+
+
+## Session lifecycle review validation — 2026-10-23
+
+- **Aggregate:** `mise run test:logged -- --name browser-suite -- mise run test:browser`, nine component-browser workers, alongside repository and disposable-profile validation on a shared host: 485 passed, 94 skipped, 11 failed out of 590 (717.7 s logged). Public-site tests were not reached by this command.
+- **Failures:** both native branch-selection cases; the mobile paused-Claude question (a route outlived its disposed request context); both mobile pane-tree terminal variants (zero `.xterm` elements); desktop subagent/task-group usage reloads, design canvas, global settings, Monaco initialization, and native transcript paging. The other failures were interaction, navigation, or initialization timeouts, except transcript paging, whose prepend-index assertion still saw index 1. The log also contains Vite allow-list rejections naming another checkout's fixture, which is evidence of shared-port interference for this run, without establishing the cause of every failure.
+- **Evidence:** `orkestrator-test-run.fK8EeG/browser-suite.log.gz` under the host temporary directory; traces in `output/playwright/test-results/`.
+- **Owner rerun 1:** `ORKESTRATOR_E2E_PORT=19427 mise run test:logged -- --name browser-failure-owners -- bunx playwright test e2e/PaneBreakpoint.spec.ts e2e/AgentLaunchDialog.spec.ts --config=e2e/playwright.config.ts --workers=1 --output=output/agent-testing/session-lifecycle-browser-owners`: 11 passed, one skipped, two failed in 104.9 s. The complete unchanged pane owner passed. Both native branch-selection cases still received `rel` instead of `release/2.0`; they are not classified as flakes from this rerun. Evidence: `orkestrator-test-run.0Awo2q/browser-failure-owners.log.gz`.
+- **Owner rerun 2:** `ORKESTRATOR_E2E_PORT=19428 mise run test:logged -- --name browser-other-owners -- bunx playwright test e2e/ClaudeInteractions.spec.ts e2e/AgentUsage.spec.ts e2e/DesignCanvas.spec.ts e2e/GlobalSettings.spec.ts e2e/MonacoRuntime.spec.ts --config=e2e/playwright.config.ts --workers=1 --output=output/agent-testing/session-lifecycle-other-owners` passed all five complete unchanged owners (exit 0, 149.9 s).
+- The lifecycle change's controller files and wired Pi pre-acceptance Stop browser scenario passed separately. No assertion, timeout, or skip in these unrelated browser owners was changed.
+
+- **Paging owner:** `ORKESTRATOR_E2E_PORT=19429 mise run test:logged -- --name transcript-paging-owner -- bunx playwright test e2e/TranscriptPaging.spec.ts --config=e2e/playwright.config.ts --workers=1 --output=output/agent-testing/session-lifecycle-paging-owner` passed the complete unchanged owner (exit 0, 47.2 s).
+- **Public-site smoke:** `ORKESTRATOR_PUBLIC_E2E_PORT=19430 mise run test:logged -- --name public-browser -- bunx playwright test --config=e2e/public-site/playwright.config.ts --workers=1` passed (exit 0, 17.5 s).
+
+## Container qualification main-merge validation — 2026-10-23
+
+- **Merged result:** `4eb7b2c80` (parents `3be188aa8` and `459d29441`), macOS arm64, Bun 1.4.3.
+- **Aggregate command:** `mise run test:logged -- --name merge-component-browser -- mise run test:browser`, nine workers alongside repository and isolated-profile validation: 507 passed, 95 skipped, two failed in 302.6 s. Both failures were `e2e/AgentLaunchDialog.spec.ts:7`, `selects a native branch suggestion with the keyboard and confirms`, at desktop and mobile widths. The expected branch was `release/2.0`; the input remained `rel` after five seconds.
+- **Complete unchanged owner:** `ORKESTRATOR_E2E_PORT=19431 mise run test:logged -- --name merge-native-browser-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentLaunchDialog.spec.ts --workers=1 --output=output/agent-testing/merge-native-browser-owner` reported two passed and the same two failed in 22.2 s. This matches the previously recorded non-green native-dropdown cases; this rerun does not establish a flake. No source, assertion, timeout or skip changed.
+- **Evidence:** host temporary directories `orkestrator-test-run.e52ASg/merge-component-browser.log.gz` and `orkestrator-test-run.k1qDoe/merge-native-browser-owner.log.gz`; isolated traces are under `output/agent-testing/merge-native-browser-owner/`.
+- **Public-site checks:** the failed aggregate did not reach them. `mise run test:logged -- --name merge-public-browser -- bunx playwright test --config e2e/public-site/playwright.config.ts` passed separately (11.5 s).

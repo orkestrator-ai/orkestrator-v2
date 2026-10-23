@@ -3,6 +3,7 @@ import {
   REVIEW_FANOUT_MAX_REVIEWERS,
   isReviewConsolidationSession,
   isReviewFanoutState,
+  isReviewPanelOverlap,
   isReviewWorktreeSnapshotRecord,
   isReviewerModelSelection,
   isReviewerRecord,
@@ -135,6 +136,10 @@ describe("reviewer records", () => {
     expect(isReviewerRecord(reviewer({ tokenCount: 1.5 }))).toBe(false);
     expect(isReviewerRecord(reviewer({ tokenCount: Number.NaN }))).toBe(false);
     expect(isReviewerRecord(reviewer({ tokenCount: Number.MAX_SAFE_INTEGER + 1 }))).toBe(false);
+    expect(isReviewerRecord(reviewer({ cacheReadTokens: 0 }))).toBe(true);
+    expect(isReviewerRecord(reviewer({ cacheReadTokens: 8_000 }))).toBe(true);
+    expect(isReviewerRecord(reviewer({ cacheReadTokens: -1 }))).toBe(false);
+    expect(isReviewerRecord(reviewer({ cacheReadTokens: 0.5 }))).toBe(false);
     expect(isReviewerRecord(reviewer({ usageFinalizationPolls: 12 }))).toBe(true);
     expect(isReviewerRecord(reviewer({ usageFinalizationPolls: 13 }))).toBe(false);
   });
@@ -249,5 +254,60 @@ describe("settlement helpers", () => {
     const usable = reviewer({ id: "a", status: "completed", report: REPORT });
     const failed = reviewer({ id: "b", status: "failed" });
     expect(usableReviewerReports([usable, failed])).toEqual([usable]);
+  });
+});
+
+describe("panel overlap counts", () => {
+  const overlap = {
+    version: 1,
+    reviewers: 2,
+    sourceFindings: 3,
+    citedSourceFindings: 3,
+    consolidatedFindings: 2,
+    singleSourceFindings: 1,
+    positions: [
+      {
+        position: 1,
+        sourceFindings: 1,
+        citedSourceFindings: 1,
+        consolidatedFindings: 1,
+        singleSourceFindings: 0,
+        novelFindings: 1,
+      },
+      {
+        position: 3,
+        sourceFindings: 2,
+        citedSourceFindings: 2,
+        consolidatedFindings: 2,
+        singleSourceFindings: 1,
+        novelFindings: 1,
+      },
+    ],
+  };
+
+  test("accepts counts with increasing configured positions", () => {
+    expect(isReviewPanelOverlap(overlap)).toBe(true);
+  });
+
+  test("rejects unknown keys, text, negative counts and unordered positions", () => {
+    expect(isReviewPanelOverlap({ ...overlap, version: 2 })).toBe(false);
+    expect(isReviewPanelOverlap({ ...overlap, title: "a finding" })).toBe(false);
+    expect(isReviewPanelOverlap({ ...overlap, sourceFindings: -1 })).toBe(false);
+    expect(isReviewPanelOverlap({ ...overlap, reviewers: 3 })).toBe(false);
+    expect(isReviewPanelOverlap({ ...overlap, positions: [...overlap.positions].reverse() })).toBe(
+      false,
+    );
+    expect(
+      isReviewPanelOverlap({
+        ...overlap,
+        positions: [{ ...overlap.positions[0], reviewerId: "reviewer-1" }, overlap.positions[1]],
+      }),
+    ).toBe(false);
+    expect(
+      isReviewPanelOverlap({
+        ...overlap,
+        positions: [overlap.positions[0], { ...overlap.positions[1], position: 33 }],
+      }),
+    ).toBe(false);
   });
 });

@@ -129,6 +129,8 @@ const ERROR_MESSAGES: Record<NativeAgentCommandCatalogueErrorCode, string> = {
   "provider-error": "The agent could not list its commands.",
 };
 
+type CommandRefreshResult = { outcome: NativeAgentCommandRefreshOutcome; message?: string };
+
 /** Read a provider catalogue through the richest method it offers. */
 async function readProviderCatalogue(
   provider: NativeAgentRuntimeProvider,
@@ -149,6 +151,10 @@ async function readProviderCatalogue(
 export class NativeAgentCommandCatalogueCache {
   private readonly entries = new Map<string, CatalogueEntry>();
   private readonly reads = new Map<string, InFlightRead>();
+  private readonly refreshes = new Map<
+    string,
+    { tail: Promise<CommandRefreshResult>; queued?: Promise<CommandRefreshResult> }
+  >();
   private readonly revisions = new Map<string, number>();
   private bytes = 0;
   private activeReads = 0;
@@ -266,13 +272,48 @@ export class NativeAgentCommandCatalogueCache {
   /**
    * Explicit refresh: ask the provider to reload what it can, then re-read.
    * Reports what actually happened; never claims a reload that did not occur.
+   *
+   * Coalesced per key: at most one refresh runs and one waits behind it. A
+   * caller that arrives while one runs gets the waiting one, which starts
+   * after its request, so it never reads a list older than its own ask. Run
+   * side by side, each refresh's re-read invalidated the one before it, so
+   * every caller but the last reported `failed` and a late failure could
+   * overwrite the winner's `lastRefresh`.
    */
-  async refresh(
+  refresh(
     key: string,
     environmentId: string,
     provider: NativeAgentRuntimeProvider,
     sessionId: string | undefined,
-  ): Promise<{ outcome: NativeAgentCommandRefreshOutcome; message?: string }> {
+  ): Promise<CommandRefreshResult> {
+    const slot = this.refreshes.get(key);
+    if (slot?.queued) return slot.queued;
+    const prior = slot
+      ? slot.tail.then(
+          () => undefined,
+          () => undefined,
+        )
+      : Promise.resolve();
+    const run: Promise<CommandRefreshResult> = prior.then(() => {
+      const current = this.refreshes.get(key);
+      if (current?.queued === run) current.queued = undefined;
+      return this.refreshNow(key, environmentId, provider, sessionId);
+    });
+    this.refreshes.set(key, { tail: run, ...(slot ? { queued: run } : {}) });
+    void run
+      .catch(() => undefined)
+      .finally(() => {
+        if (this.refreshes.get(key)?.tail === run) this.refreshes.delete(key);
+      });
+    return run;
+  }
+
+  private async refreshNow(
+    key: string,
+    environmentId: string,
+    provider: NativeAgentRuntimeProvider,
+    sessionId: string | undefined,
+  ): Promise<CommandRefreshResult> {
     this.invalidateInFlight(key);
     let outcome: NativeAgentCommandRefreshOutcome = "reread";
     let message: string | undefined;
@@ -371,6 +412,7 @@ export class NativeAgentCommandCatalogueCache {
     this.stopped = true;
     for (const read of this.reads.values()) read.validity.current = false;
     this.reads.clear();
+    this.refreshes.clear();
     this.entries.clear();
     this.revisions.clear();
     this.bytes = 0;

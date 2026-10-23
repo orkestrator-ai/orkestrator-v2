@@ -6,12 +6,18 @@ const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 /**
  * Real-browser checks of private preview origins. The spec starts its own
  * isolated backend preview stack (`apps/backend/src/preview-browser-harness.ts`)
- * with a throwaway CA and resolves `*.preview.test` to loopback inside Chromium
- * only; no system DNS, trust store, or user data is touched.
+ * with a throwaway CA and a browser-local proxy resolving test hosts to loopback;
+ * no system DNS, trust store, or user data is touched.
  */
 export default defineConfig({
   testDir: import.meta.dirname,
   testMatch: "*.spec.ts",
+  projects: [
+    { name: "chromium", use: { browserName: "chromium" } },
+    { name: "firefox", use: { browserName: "firefox" } },
+    // Playwright WebKit is engine coverage, not qualification of shipping Safari/iOS.
+    { name: "webkit", use: { browserName: "webkit" } },
+  ],
   fullyParallel: false,
   workers: 1,
   timeout: 60_000,

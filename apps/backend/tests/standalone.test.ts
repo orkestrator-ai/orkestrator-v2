@@ -259,12 +259,16 @@ describe("standalone backend service", () => {
     expect(webResponse.headers.get("content-type")).toContain("text/html");
   });
 
-  test("agent-test startup loads the Cursor snapshot and launches Pi with only host auth", async () => {
+  test("agent-test startup loads the Cursor snapshot and launches Pi with only host auth and its default model", async () => {
     const args = ["--runtime-flavor", "agent-test", "--credential-source", "cursor,pi"];
     const isolatedHome = await createTemporaryDirectory("orkestrator-standalone-worktree-");
     const hostPi = path.join(isolatedHome, "host-pi");
     await mkdir(hostPi);
     await writeFile(path.join(hostPi, "auth.json"), "{}");
+    await writeFile(
+      path.join(hostPi, "settings.json"),
+      JSON.stringify({ defaultProvider: "openai-codex", defaultModel: "gpt-5.5" }),
+    );
     const started = await startBackend(
       args,
       {
@@ -311,6 +315,7 @@ describe("standalone backend service", () => {
             return Response.json({
               snapshotSelected: process.env.CURSOR_API_KEY === "startup-fixture-key",
               authFile: process.env.PI_BRIDGE_AUTH_FILE ?? null,
+              defaultModel: process.env.PI_BRIDGE_DEFAULT_MODEL ?? null,
               agentDir: process.env.PI_AGENT_DIR ?? null,
               codingAgentDir: process.env.PI_CODING_AGENT_DIR || null,
               home: process.env.HOME,
@@ -347,6 +352,7 @@ describe("standalone backend service", () => {
       const piEnv = await (await Bun.fetch(`http://127.0.0.1:${pi.port}/global/health`)).json();
       expect(piEnv).toMatchObject({
         authFile: path.join(hostPi, "auth.json"),
+        defaultModel: "openai-codex/gpt-5.5",
         agentDir: null,
         codingAgentDir: null,
         home: isolatedHome,

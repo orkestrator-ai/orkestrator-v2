@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import type { CommandContext } from "./commands-context.js";
 import { getClaudeOAuthAccessToken, getHostClaudeCredentials } from "./commands-files.js";
@@ -65,6 +65,13 @@ export async function applyClaudeHostCredentialEnvironment(
  * file directly rather than a copy. A copy would rotate an OAuth refresh token
  * the host's `pi` still holds.
  *
+ * The login travels with the host's saved default model, because a login can
+ * refuse models its provider lists: a ChatGPT-backed `openai-codex` login
+ * cannot run the first model Pi's catalogue offers. Only `defaultProvider` and
+ * `defaultModel` are read from the host's `settings.json`, and the bridge uses
+ * them when the profile's own settings name no default or name one unavailable
+ * from a signed-in provider.
+ *
  * Pi creates a credential file that is missing, so a host that never signed in
  * to Pi is not pointed at one. A file that appears later is used from the next
  * bridge start.
@@ -75,11 +82,48 @@ export async function applyPiHostCredentialEnvironment(
 ): Promise<void> {
   delete env.PI_AGENT_DIR;
   delete env.PI_BRIDGE_AUTH_FILE;
+  delete env.PI_BRIDGE_DEFAULT_MODEL;
   if (context.runtimeFlavor !== "agent-test" || !context.credentialSources?.has("pi")) return;
 
   const hostAgentDir = process.env[AGENT_TEST_HOST_PI_AGENT_DIR_ENV]?.trim();
   if (!hostAgentDir) return;
   const authFile = path.join(hostAgentDir, "auth.json");
   const info = await stat(authFile).catch(() => null);
-  if (info?.isFile()) env.PI_BRIDGE_AUTH_FILE = authFile;
+  if (!info?.isFile()) return;
+  env.PI_BRIDGE_AUTH_FILE = authFile;
+  const defaultModel = await readPiDefaultModel(path.join(hostAgentDir, "settings.json"));
+  if (defaultModel) env.PI_BRIDGE_DEFAULT_MODEL = defaultModel;
+}
+
+/** Far larger than any real Pi `settings.json`; a bigger file is not read. */
+const MAX_PI_SETTINGS_BYTES = 1024 * 1024;
+/** The bridge's own bound on a model id (`MAX_MODEL_ID_BYTES`). */
+const MAX_PI_MODEL_ID_BYTES = 1024;
+
+/**
+ * The `provider/modelId` a Pi `settings.json` saves as its default, or
+ * undefined when it names none.
+ *
+ * Pi starts on its saved default only when both keys are set, so one alone is
+ * not a default. A provider id never contains a slash; one that does would be
+ * split differently by the bridge, so it is not passed on.
+ */
+export async function readPiDefaultModel(settingsFile: string): Promise<string | undefined> {
+  try {
+    const info = await stat(settingsFile);
+    if (!info.isFile() || info.size > MAX_PI_SETTINGS_BYTES) return undefined;
+    // Pi strips a byte-order mark before parsing; so does this.
+    const text = (await readFile(settingsFile, "utf8")).replace(/^\uFEFF/, "");
+    const settings = JSON.parse(text) as unknown;
+    if (!settings || typeof settings !== "object") return undefined;
+    const { defaultProvider, defaultModel } = settings as Record<string, unknown>;
+    if (typeof defaultProvider !== "string" || typeof defaultModel !== "string") return undefined;
+    const provider = defaultProvider.trim();
+    const model = defaultModel.trim();
+    if (!provider || !model || provider.includes("/")) return undefined;
+    const id = `${provider}/${model}`;
+    return Buffer.byteLength(id) > MAX_PI_MODEL_ID_BYTES ? undefined : id;
+  } catch {
+    return undefined;
+  }
 }

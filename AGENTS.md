@@ -604,6 +604,18 @@ rather than a name, and "signed in" is one answer per provider.
   model picker and a Pi terminal tab. `thinking_level_changed` is echoed back
   into the composer so the picker shows the level actually in force after Pi
   clamps it.
+- A session with no explicit model starts on Pi's saved default
+  (`defaultProvider`/`defaultModel`, what `/model` writes) when a signed-in
+  provider serves it, then on `PI_BRIDGE_DEFAULT_MODEL`, then on the
+  catalogue's first model (`defaultModelIds` in `agent-session.ts`). Never fall
+  straight to the first model: a login can refuse models its provider lists,
+  and a ChatGPT-backed `openai-codex` login refuses the first one. Project
+  settings count only when the session trusts the project.
+- Tests run with `src/testing/test-isolation.ts` preloaded (`test:bridge`). It points
+  `PI_CODING_AGENT_DIR` at a temporary directory, so no test reads the
+  developer's saved default or writes `auth.json`/`models-store.json` into
+  their `~/.pi/agent`. A focused `bun test` outside `test:bridge` should add
+  `--preload ./src/testing/test-isolation.ts` or isolate its own directory.
 - `credentials.ts` reports per-provider status and deliberately implements no
   sign-in. Pi's login is an interactive multi-step prompt flow with no
   counterpart in Orkestrator's session surface, and the credential it writes is

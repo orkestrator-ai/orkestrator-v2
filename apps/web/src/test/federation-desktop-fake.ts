@@ -6,7 +6,11 @@
  * Not bundled: only tests import this.
  */
 import { mock } from "bun:test";
-import type { NodeStatus, NodeView } from "@orkestrator/protocol/command-nodes";
+import type {
+  CommandHandoverPreview,
+  NodeStatus,
+  NodeView,
+} from "@orkestrator/protocol/command-nodes";
 import type { ConnectionList, ConnectionSummary } from "@orkestrator/protocol/connections";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import {
@@ -167,6 +171,23 @@ export function installDesktopFake(options: {
       };
     });
 
+  // Making a machine the command node: the others go with it, and this node follows.
+  const handoverPreview = (targetNodeId: string): CommandHandoverPreview => ({
+    targetNodeId: targetNodeId as BackendId,
+    targetName:
+      remotes.find((connection) => connection.backendId === targetNodeId)?.name ?? targetNodeId,
+    targetRegistered: true,
+    targetNodeIds: [],
+    candidates: remotes
+      .filter((connection) => connection.backendId !== targetNodeId)
+      .map((connection) => ({
+        nodeId: connection.backendId!,
+        displayName: connection.name,
+        hasCredential: true,
+      })),
+    self: { nodeId: SELF_NODE_ID, displayName: "This computer", reachable: true },
+  });
+
   const status: NodeStatus = {
     nodeId: SELF_NODE_ID,
     mode: remotes.length > 0 ? "command" : "standalone",
@@ -201,6 +222,17 @@ export function installDesktopFake(options: {
             : [],
         })),
         pendingDetaches: [],
+      };
+    }
+    if (command === "preview_command_handover") return handoverPreview(String(args.nodeId));
+    if (command === "hand_over_command") {
+      return {
+        targetNodeId: args.nodeId,
+        transferred: 0,
+        skipped: 0,
+        needsCredential: 0,
+        selfIncluded: true,
+        detachedControllers: 0,
       };
     }
     if (command === "get_backend_profile") {
@@ -285,6 +317,21 @@ export function installDesktopFake(options: {
     updateToken: mock(async () => options.list),
     use: mock(async () => options.list),
     forget: mock(async () => options.list),
+    previewCommandHandover: mock(async (targetConnectionId: string) => ({
+      kind: "preview" as const,
+      preview: handoverPreview(
+        remotes.find((connection) => connection.id === targetConnectionId)?.backendId ??
+          targetConnectionId,
+      ),
+    })),
+    handOverCommand: mock(
+      async (_input: {
+        targetConnectionId: string;
+        nodeIds?: string[];
+        connectionIds: string[];
+        includeSelf: boolean;
+      }) => null,
+    ),
     answerSshPrompt: mock((_promptId: string, _answer: string | null) => undefined),
   };
 

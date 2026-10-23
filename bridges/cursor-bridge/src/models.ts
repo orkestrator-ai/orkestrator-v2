@@ -116,6 +116,7 @@ export async function listModels(): Promise<AgentModel[]> {
 
 /** Drop the memo so the next read re-discovers. */
 export function refreshModels(): void {
+  maxModeCatalog = new Map();
   catalogCache = null;
   catalogProbe = null;
   catalogGeneration += 1;

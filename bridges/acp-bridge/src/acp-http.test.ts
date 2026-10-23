@@ -1177,6 +1177,66 @@ describe("ACP provider commands", () => {
       ]);
     });
 
+    test("keeps compact journal outcomes after the live command is removed", async () => {
+      const bridge = await commandBridge({ commands: [compact] });
+      await waitFor(bridge.catalogue, (value) => value.status === "ready");
+      expect((await postCompact(bridge, { requestId: "compact-removed" })).status).toBe(202);
+      await bridge.idle();
+      await fs.writeFile(bridge.commandsFile, "[]");
+      expect((await bridge.prompt({ prompt: "COMMANDS_UPDATE" })).status).toBe(202);
+      await bridge.idle();
+      expect(await bridge.catalogue()).toMatchObject({ status: "ready", commands: [] });
+      const before = await bridge.blocks();
+
+      const retry = await postCompact(bridge, { requestId: "compact-removed" });
+      expect(retry.status).toBe(202);
+      expect(await retry.json()).toEqual({ accepted: true, duplicate: true });
+      expect((await postCompact(bridge, { requestId: "compact-new" })).status).toBe(422);
+      expect(await bridge.request("/dispatch?requestId=compact-new").then((r) => r.json())).toEqual(
+        { dispatch: "unknown" },
+      );
+      expect(await bridge.blocks()).toEqual(before);
+
+      // Simulate a process that accepted a compact turn but lost its outcome.
+      await stopChild(bridge.child);
+      const path = resolve(bridge.stateDirectory, "state.json");
+      const saved = JSON.parse(await fs.readFile(path, "utf8"));
+      const session = saved.sessions.find(
+        (entry: { id: string }) => entry.id === bridge.created.id,
+      );
+      session.promptJournal.push({
+        requestId: "compact-lost",
+        state: "accepted",
+        acceptedAt: Date.now(),
+      });
+      await fs.writeFile(path, JSON.stringify(saved));
+      const restarted = await spawnBridge({
+        stateDirectory: bridge.stateDirectory,
+        env: bridge.env,
+      });
+      const request = (suffix: string, init: RequestInit = {}) =>
+        nativeFetch(`${restarted.base}/session/${bridge.created.id}${suffix}`, {
+          ...init,
+          headers: restarted.headers,
+        });
+      // Attach to obtain an authoritative empty live inventory after restart.
+      expect((await request("/attach", { method: "POST" })).status).toBe(200);
+      await waitFor(
+        () => request("/commands").then((r) => r.json()) as Promise<Catalogue>,
+        (value) => value.status === "ready" && value.commands.length === 0,
+      );
+      const lost = await request("/compact", {
+        method: "POST",
+        body: JSON.stringify({ requestId: "compact-lost" }),
+      });
+      expect(lost.status).toBe(410);
+      expect(await lost.json()).toMatchObject({ kind: "dispatch-outcome-lost" });
+      expect(await request("/dispatch?requestId=compact-lost").then((r) => r.json())).toEqual({
+        dispatch: "lost",
+      });
+      expect(await bridge.blocks()).toEqual(before);
+    });
+
     test("is refused before journaling when the live inventory has no /compact", async () => {
       const bridge = await commandBridge({ commands: [review] });
       await waitFor(bridge.catalogue, (value) => value.status === "ready");

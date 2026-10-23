@@ -9,6 +9,7 @@ import {
   MAX_MODE_PRICING,
   modelSelection,
   publishedComposer,
+  refreshModels,
   selectionIsMaxMode,
   useCursorModelsForTests,
 } from "./models.js";
@@ -390,6 +391,23 @@ describe("max mode", () => {
       expect(
         publishedComposer({ ...premium, parameterValues: { context: "200k" } }),
       ).not.toHaveProperty("selectionPricing");
+    });
+  });
+
+  test("withholds cached Max pricing after refresh until the catalogue reloads", async () => {
+    await withCatalogue(async () => {
+      const models = await listModels();
+      const premium = publishedComposer({
+        ...emptyComposer(),
+        models,
+        selectedModelId: "gpt-5",
+        parameterValues: { context: "1m" },
+      });
+      expect(premium.selectionPricing).toEqual(MAX_MODE_PRICING);
+      refreshModels();
+      expect(publishedComposer(premium)).not.toHaveProperty("selectionPricing");
+      await listModels();
+      expect(publishedComposer(premium).selectionPricing).toEqual(MAX_MODE_PRICING);
     });
   });
 

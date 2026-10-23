@@ -566,12 +566,9 @@ export async function route(
       // it runs the agent's own `/compact` as a selected command: everything
       // below — the journal, the busy check, revalidation after an attach —
       // applies to it unchanged. Only an optional `requestId` is read.
-      const compact = compactCommandSelection(state);
-      if (!compact.ok) return json(response, 422, commandUnavailableResponse(compact.message));
       body = {
-        prompt: compact.command.name,
+        prompt: "/compact",
         ...(typeof body.requestId === "string" ? { requestId: body.requestId } : {}),
-        command: compact.command,
       };
     }
     const requestId = typeof body.requestId === "string" ? body.requestId.trim() : "";
@@ -587,7 +584,7 @@ export async function route(
     // here (`literalCommandSuppression`), so the text is passed unchanged.
     const commandFields = readBridgePromptCommandFields(body);
     if (!commandFields.ok) return json(response, 400, { error: commandFields.error });
-    const selectedCommand = commandFields.command;
+    let selectedCommand = commandFields.command;
     const workflowResult = parseWorkflowResultTurn(body.workflowResultTool, body.workflowResultKey);
     if (!workflowResult.ok) return json(response, 400, { error: workflowResult.error });
     if (selectedCommand && schema) {
@@ -633,6 +630,13 @@ export async function route(
         return json(response, 409, { error: "Prompt dispatch is still preparing" });
       }
       return json(response, 202, { accepted: true, duplicate: true });
+    }
+    if (action === "compact") {
+      // Existing request ids keep their journaled outcome even when the live
+      // inventory no longer offers /compact. Only new work needs a selection.
+      const compact = compactCommandSelection(state);
+      if (!compact.ok) return json(response, 422, commandUnavailableResponse(compact.message));
+      selectedCommand = compact.command;
     }
     if (state.status === "running" || state.dispatching) {
       return json(response, 409, { error: "Session is already running" });

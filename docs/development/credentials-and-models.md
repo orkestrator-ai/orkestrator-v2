@@ -406,7 +406,8 @@ refuses. When the backend names the host `auth.json`, it also reads
 `defaultProvider` and `defaultModel` from the host's `settings.json`, and
 nothing else from that file, and passes them as `PI_BRIDGE_DEFAULT_MODEL`
 (`readPiDefaultModel` in `host-agent-credentials.ts`). The bridge uses it only
-when the profile's own settings name no usable default. It is read again on
+when the profile's own settings name no default, or name one that no
+signed-in provider serves. It is read again on
 every bridge start, so a changed host default applies from the next one.
 
 Cursor's login is Orkestrator's own rather than a provider home: the stored key

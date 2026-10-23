@@ -69,7 +69,8 @@ export async function applyClaudeHostCredentialEnvironment(
  * refuse models its provider lists: a ChatGPT-backed `openai-codex` login
  * cannot run the first model Pi's catalogue offers. Only `defaultProvider` and
  * `defaultModel` are read from the host's `settings.json`, and the bridge uses
- * them only when the profile's own settings name no default.
+ * them when the profile's own settings name no default or name one unavailable
+ * from a signed-in provider.
  *
  * Pi creates a credential file that is missing, so a host that never signed in
  * to Pi is not pointed at one. A file that appears later is used from the next

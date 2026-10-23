@@ -184,6 +184,17 @@ describe("readPiDefaultModel", () => {
     expect(await readPiDefaultModel(settingsFile())).toBeUndefined();
   });
 
+  test("accepts settings at the file-size limit and rejects one byte more", async () => {
+    await saveHostDefault("openai-codex", "gpt-5.5");
+    const settings = await fs.readFile(settingsFile(), "utf8");
+    // Valid JSON at both sizes isolates the byte bound from parse/id rejection.
+    await fs.writeFile(settingsFile(), settings.padEnd(1024 * 1024, " "));
+    expect(await readPiDefaultModel(settingsFile())).toBe("openai-codex/gpt-5.5");
+
+    await fs.appendFile(settingsFile(), " ");
+    expect(await readPiDefaultModel(settingsFile())).toBeUndefined();
+  });
+
   test("names no default for a missing, malformed or non-file settings path", async () => {
     expect(await readPiDefaultModel(settingsFile())).toBeUndefined();
 

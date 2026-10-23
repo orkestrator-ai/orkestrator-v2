@@ -97,8 +97,8 @@ export function runtimeStorePaths(): { authPath?: string; modelsPath?: string } 
 }
 
 /**
- * A `provider/modelId` to start on when Pi's own settings name no default, or
- * undefined.
+ * A `provider/modelId` to try when Pi's own settings name no default or name
+ * one unavailable from a signed-in provider, or undefined.
  *
  * An agent-test profile that shares the host's `auth.json` keeps its own
  * settings, so nothing in them says which model that login can use. The

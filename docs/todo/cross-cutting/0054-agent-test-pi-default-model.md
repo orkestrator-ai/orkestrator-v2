@@ -42,21 +42,35 @@ still owed.
     catalogue opens on the preferred `openai-codex/gpt-5.5`. An explicit
     selection is kept. With no preference the first model is still the
     fallback. `resolveModel` falls back to the first preferred model offered.
-  - `bridges/pi-bridge/src/agent-session.test.ts` § "default model":
-    precedence (settings, then fallback, de-duplicated), project trust, and
-    `createSession` starting on the default instead of Spark. Mutation check:
-    removing the preference from `hydrateComposer` fails "starts a new session
-    on the default instead of the catalogue's first model".
+  - `bridges/pi-bridge/src/agent-session-default-model.test.ts`: precedence
+    (settings, then fallback, de-duplicated), fallback validation (no
+    provider, a leading or trailing slash, the `MAX_MODEL_ID_BYTES` bound),
+    project trust, and every entry point that applies the preference:
+    `createSession`, `resumeSession`, the retried hydration after an empty
+    catalogue, `applyComposerToSession` with no or a stale selection, and a
+    real SDK session built by `ensureSession`, carried through
+    `dispatchPrompt`. Mutation checks: removing the preference from
+    `hydrateComposer` fails the `createSession` test. Removing it from resume,
+    from the retried hydration, from `applyComposerToSession` or from the SDK
+    attach each fails its own test.
   - `apps/backend/src/core/host-agent-credentials.test.ts`: the variable is
     set only alongside the shared `auth.json`. It is never set in production
     or for a profile that did not authorize Pi. `readPiDefaultModel` rejects a
     lone key, a blank or non-string value, a provider containing `/`, an
-    oversized id, malformed JSON and a directory, and accepts a BOM as Pi does.
+    oversized id, malformed JSON, a directory and a settings file one byte
+    over the 1 MiB bound (accepting one exactly at it), and accepts a BOM as
+    Pi does.
   - `apps/backend/tests/standalone.test.ts` "agent-test startup loads the
     Cursor snapshot and launches Pi with only host auth and its default
     model": a real agent-test backend starts a Pi bridge stub whose
     environment carries `PI_BRIDGE_DEFAULT_MODEL=openai-codex/gpt-5.5` from
     the host `settings.json`.
+- The Pi bridge suite preloads `src/testing/test-isolation.ts` (`test:bridge`), which
+  points `PI_CODING_AGENT_DIR` at a temporary directory. Session tests no
+  longer read the developer's saved default. Tests that build a real SDK
+  runtime also stop writing `auth.json` and `models-store.json` into the
+  developer's `~/.pi/agent`; four such files (`{}`) appeared in the temporary
+  directories on the first isolated run.
 - Containers copy the host `~/.pi` subset into `PI_AGENT_DIR`, and that subset
   includes `settings.json`. A container Pi tab with no explicit model
   therefore now starts on the user's saved default too.
@@ -157,7 +171,16 @@ still owed.
 7. **The host's Pi settings were not edited** to make the live run pass. They
    are the user's, outside the profile, and changing them would change what
    the user's own `pi` runs.
-8. Assumed: Pi stores its default as two keys, `defaultProvider` and
+8. **Isolate the Pi bridge suite with a package preload** (Multi Review
+   finding). Options: (a) set `PI_CODING_AGENT_DIR` in the shared
+   `tests/setup-node.ts`; (b) isolate each test file that creates a session;
+   (c) a Pi-bridge-only preload in `test:bridge`. Choice: (c). The shared
+   preload also serves backend and desktop tests that read
+   `PI_CODING_AGENT_DIR` to locate Pi's directory, so (a) could change them.
+   (b) leaves every new file to remember it. Con: a focused `bun test` outside
+   `test:bridge` must add the preload; the two files that exercise the
+   default model isolate themselves as well.
+9. Assumed: Pi stores its default as two keys, `defaultProvider` and
    `defaultModel`, in plain JSON with an optional BOM (true of Pi 1.2.0's
    `SettingsManager`). A provider id never contains `/`.
 
@@ -181,3 +204,28 @@ still owed.
 ## Replaces
 
 - Nothing; found by the 2026-10-22 live coordinator run.
+
+## Multi Review (2026-10-23)
+
+Workflow `action-1f924c0eae2086c4caa691c5f4145ee3`, verdict "with-fixes": no
+correctness or security defect, three P2 findings and three coverage gaps. All
+six were accepted and fixed. Its automatic fix session stopped before
+finishing, having left most of the fixes staged in the worktree; they were
+reviewed, kept and completed.
+
+- P2, the fallback comments said "only when the settings name no default". The
+  code also falls back when the saved default is not served by a signed-in
+  provider. Fixed in `config.ts`, `host-agent-credentials.ts`,
+  `agent-engines.md` and `credentials-and-models.md`.
+- P2, the pause suite's comment (`paused-interactions-live.spec.ts`) still said
+  a profile does not receive the host default. Fixed.
+- P2, the session tests read the developer's real Pi settings. Fixed by the
+  package preload (decision 8) and per-file isolation in
+  `agent-session.test.ts` and `agent-session-default-model.test.ts`.
+- Gaps: preference wiring through resume, retried hydration, apply and attach
+  to prompt; fallback slash and byte-bound cases; the settings-size bound.
+  Each is covered now (see Evidence).
+- The review's own `mise run test` failed on timeouts in owners this change
+  does not touch (web long transcript, backend terminal history, desktop
+  fixture-tree digest, root Pi vendor staging, disk report). These are the
+  same kind as case 0694.

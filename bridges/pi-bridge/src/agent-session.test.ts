@@ -18,7 +18,6 @@ import {
   applyComposerToSession,
   closeSession,
   createSession,
-  defaultModelIds,
   detachSession,
   ensureSession,
   expireComposerHydrationRetryForTests,
@@ -46,11 +45,24 @@ import { clientSessionKeys, sessionCreations, sessions, type SessionState } from
 
 let sessionDirectory: string;
 let previousSessionDirectory: string | undefined;
+const isolatedPiVariables = [
+  "PI_AGENT_DIR",
+  "PI_CODING_AGENT_DIR",
+  "PI_BRIDGE_DEFAULT_MODEL",
+] as const;
+let previousPiEnvironment: Partial<Record<(typeof isolatedPiVariables)[number], string>>;
 
 beforeEach(async () => {
   sessionDirectory = await mkdtemp(join(tmpdir(), "pi-bridge-agent-session-"));
   previousSessionDirectory = process.env.PI_SESSION_DIR;
   process.env.PI_SESSION_DIR = sessionDirectory;
+  previousPiEnvironment = {};
+  for (const name of isolatedPiVariables) previousPiEnvironment[name] = process.env[name];
+  const agentDir = join(sessionDirectory, "agent");
+  await mkdir(agentDir);
+  process.env.PI_AGENT_DIR = agentDir;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  delete process.env.PI_BRIDGE_DEFAULT_MODEL;
   sessions.clear();
   clientSessionKeys.clear();
   sessionCreations.clear();
@@ -60,6 +72,10 @@ beforeEach(async () => {
 afterEach(async () => {
   if (previousSessionDirectory === undefined) delete process.env.PI_SESSION_DIR;
   else process.env.PI_SESSION_DIR = previousSessionDirectory;
+  for (const name of isolatedPiVariables) {
+    if (previousPiEnvironment[name] === undefined) delete process.env[name];
+    else process.env[name] = previousPiEnvironment[name];
+  }
   setAgentSessionTestHooks(undefined);
   // Restores the real SDK factory and drops both the catalogue memo and the
   // failed-read verdict derived from whatever fake a test installed.
@@ -1093,111 +1109,6 @@ describe("composer hydration", () => {
 
     expect(catalogReadFailed()).toBe(true);
     expect(state.composer.models.map((entry) => entry.id)).toEqual(["provider/stale"]);
-  });
-});
-
-describe("default model", () => {
-  let root: string;
-  let agentDir: string;
-  let cwd: string;
-  let previousFallback: string | undefined;
-  let previousAgentDir: string | undefined;
-
-  beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), "pi-bridge-default-model-"));
-    agentDir = join(root, "agent");
-    cwd = join(root, "workspace");
-    await mkdir(agentDir, { recursive: true });
-    await mkdir(join(cwd, ".pi"), { recursive: true });
-    previousFallback = process.env.PI_BRIDGE_DEFAULT_MODEL;
-    previousAgentDir = process.env.PI_AGENT_DIR;
-    delete process.env.PI_BRIDGE_DEFAULT_MODEL;
-  });
-
-  afterEach(async () => {
-    if (previousFallback === undefined) delete process.env.PI_BRIDGE_DEFAULT_MODEL;
-    else process.env.PI_BRIDGE_DEFAULT_MODEL = previousFallback;
-    if (previousAgentDir === undefined) delete process.env.PI_AGENT_DIR;
-    else process.env.PI_AGENT_DIR = previousAgentDir;
-    await rm(root, { recursive: true, force: true });
-  });
-
-  async function saveDefault(directory: string, provider: string, modelId: string): Promise<void> {
-    await writeFile(
-      join(directory, "settings.json"),
-      JSON.stringify({ defaultProvider: provider, defaultModel: modelId }),
-    );
-  }
-
-  test("prefers Pi's saved default, then the backend's fallback", async () => {
-    await saveDefault(agentDir, "opencode-go", "kimi-k3");
-    process.env.PI_BRIDGE_DEFAULT_MODEL = "openai-codex/gpt-5.5";
-
-    expect(defaultModelIds(newSessionState(), cwd, agentDir)).toEqual([
-      "opencode-go/kimi-k3",
-      "openai-codex/gpt-5.5",
-    ]);
-  });
-
-  test("uses the fallback alone when the settings name no default", () => {
-    process.env.PI_BRIDGE_DEFAULT_MODEL = "openai-codex/gpt-5.5";
-
-    expect(defaultModelIds(newSessionState(), cwd, agentDir)).toEqual(["openai-codex/gpt-5.5"]);
-  });
-
-  test("ignores a fallback that names no provider", () => {
-    process.env.PI_BRIDGE_DEFAULT_MODEL = "gpt-5.5";
-
-    expect(defaultModelIds(newSessionState(), cwd, agentDir)).toEqual([]);
-  });
-
-  test("names a default once when the settings and the fallback agree", async () => {
-    await saveDefault(agentDir, "openai-codex", "gpt-5.5");
-    process.env.PI_BRIDGE_DEFAULT_MODEL = "openai-codex/gpt-5.5";
-
-    expect(defaultModelIds(newSessionState(), cwd, agentDir)).toEqual(["openai-codex/gpt-5.5"]);
-  });
-
-  test("reads a project's default only when the session trusts the project", async () => {
-    await saveDefault(agentDir, "openai-codex", "gpt-5.5");
-    await saveDefault(join(cwd, ".pi"), "opencode-go", "kimi-k3");
-
-    expect(defaultModelIds(newSessionState(), cwd, agentDir)).toEqual(["openai-codex/gpt-5.5"]);
-    expect(defaultModelIds({ policy: { projectResources: true } as never }, cwd, agentDir)).toEqual(
-      ["opencode-go/kimi-k3"],
-    );
-  });
-
-  test("starts a new session on the default instead of the catalogue's first model", async () => {
-    // The 2026-10-22 failure: a ChatGPT-backed Codex login lists Spark first,
-    // and the account cannot use it.
-    process.env.PI_AGENT_DIR = agentDir;
-    process.env.PI_BRIDGE_DEFAULT_MODEL = "openai-codex/gpt-5.5";
-    installRuntimeWithModels([
-      model("openai-codex", "gpt-5.3-codex-spark"),
-      model("openai-codex", "gpt-5.5"),
-    ]);
-    installTestHooks({ hydrateComposer: undefined });
-
-    const state = await createSession("default-model", undefined);
-
-    expect(state.composer.selectedModelId).toBe("openai-codex/gpt-5.5");
-  });
-
-  test("keeps the model a caller asked for", async () => {
-    process.env.PI_AGENT_DIR = agentDir;
-    process.env.PI_BRIDGE_DEFAULT_MODEL = "openai-codex/gpt-5.5";
-    installRuntimeWithModels([
-      model("openai-codex", "gpt-5.3-codex-spark"),
-      model("openai-codex", "gpt-5.5"),
-    ]);
-    installTestHooks({ hydrateComposer: undefined });
-
-    const state = await createSession("explicit-model", {
-      modelId: "openai-codex/gpt-5.3-codex-spark",
-    });
-
-    expect(state.composer.selectedModelId).toBe("openai-codex/gpt-5.3-codex-spark");
   });
 });
 

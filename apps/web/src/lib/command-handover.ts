@@ -104,6 +104,9 @@ function machineName(connection: ConnectionSummary): string {
 
 export async function loadHandoverPlan(target: HandoverTarget): Promise<HandoverPlan> {
   const api = connectionsApi();
+  if (api && target.connectionId && (!api.previewCommandHandover || !api.handOverCommand)) {
+    return { kind: "already-command-node" };
+  }
   let preview: CommandHandoverPreview;
   if (api?.previewCommandHandover && target.connectionId) {
     const result = await api.previewCommandHandover(target.connectionId);

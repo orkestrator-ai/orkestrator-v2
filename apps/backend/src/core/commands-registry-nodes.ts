@@ -451,7 +451,11 @@ export function registerNodeCommands(register: CommandRegistrar): void {
 
   // Leaf side: an attached command node making this node the command node.
   register("accept_command_handover", async (args, context) => {
-    assertOnlyKeys(args, ["controllerId", "entries"], "arguments");
-    return nodes(context).acceptHandover(args.controllerId, parseNodeImportEntries(args.entries));
+    assertOnlyKeys(args, ["controllerId", "entries", "handoverId"], "arguments");
+    return nodes(context).acceptHandover(
+      args.controllerId,
+      parseNodeImportEntries(args.entries),
+      args.handoverId,
+    );
   });
 }

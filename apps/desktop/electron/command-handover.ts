@@ -65,6 +65,9 @@ export async function previewCommandHandover(
   deps: CommandHandoverDeps,
   targetConnectionId: string,
 ): Promise<CommandHandoverPreviewResult> {
+  const status = await deps.invokeOn<NodeStatus>(deps.currentConnectionId, "get_node_status");
+  // An independent machine with no fleet needs only a native connection switch.
+  if (status.mode === "standalone") return { kind: "already-command-node" };
   const nodeId = targetNodeId(deps, targetConnectionId);
   const source = await commandSource(deps);
   if (deps.installationIdOf(source) === nodeId) return { kind: "already-command-node" };
@@ -83,6 +86,9 @@ export async function handOverCommandNode(
   if (deps.installationIdOf(source) === nodeId) return null;
 
   const registered = await deps.invokeOn<NodeListResult>(source, "list_nodes");
+  const sourceStatus = await deps.invokeOn<NodeStatus>(source, "get_node_status");
+  if (sourceStatus.mode === "standalone" && registered.nodes.length === 0) return null;
+  let addedTarget = false;
   if (!registered.nodes.some((node) => node.nodeId === nodeId)) {
     const target = await deps.machineImportEntry(input.targetConnectionId);
     if (!target?.token) {
@@ -96,20 +102,33 @@ export async function handOverCommandNode(
       token: target.token,
       displayName: target.fallbackName,
     });
+    addedTarget = true;
   }
 
-  const entries: NodeImportEntry[] = [];
-  for (const connectionId of input.connectionIds) {
-    if (connectionId === input.targetConnectionId || connectionId === source) continue;
-    const entry = await deps.machineImportEntry(connectionId);
-    if (entry) entries.push(entry);
+  try {
+    const entries: NodeImportEntry[] = [];
+    for (const connectionId of input.connectionIds) {
+      if (connectionId === input.targetConnectionId || connectionId === source) continue;
+      const entry = await deps.machineImportEntry(connectionId);
+      if (entry) entries.push(entry);
+    }
+    return await deps.invokeOn<CommandHandoverResult>(source, "hand_over_command", {
+      nodeId,
+      includeSelf: input.includeSelf,
+      entries,
+      ...(input.nodeIds ? { nodeIds: input.nodeIds } : {}),
+    });
+  } catch (error) {
+    if (addedTarget) {
+      // A pending/committed backend handover removes the target itself. Only
+      // compensate a registration that is still owned by this source.
+      const current = await deps.invokeOn<NodeListResult>(source, "list_nodes").catch(() => null);
+      if (current?.nodes.some((node) => node.nodeId === nodeId)) {
+        await deps.invokeOn(source, "forget_node", { nodeId }).catch(() => undefined);
+      }
+    }
+    throw error;
   }
-  return deps.invokeOn<CommandHandoverResult>(source, "hand_over_command", {
-    nodeId,
-    includeSelf: input.includeSelf,
-    entries,
-    ...(input.nodeIds ? { nodeIds: input.nodeIds } : {}),
-  });
 }
 
 export function parseCommandHandoverInput(value: unknown): CommandHandoverInput {

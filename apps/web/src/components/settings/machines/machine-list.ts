@@ -286,15 +286,17 @@ export function buildMachineList(input: MachineListInput): MachineEntry[] {
     });
   }
 
-  for (const connection of saved) {
-    if (used.has(connection.id)) continue;
-    // The same machine saved more than once is listed by its first entry.
-    const hosts = connectionHosts(connection);
-    for (const other of saved) {
-      if (other !== connection && sameMachine(other, connection.backendId ?? null, hosts)) {
-        used.add(other.id);
-      }
-    }
+  for (const candidate of saved) {
+    if (used.has(candidate.id)) continue;
+    // Prefer a usable credential among duplicate device entries.
+    const hosts = connectionHosts(candidate);
+    const matching = saved.filter(
+      (other) =>
+        !used.has(other.id) &&
+        (other === candidate || sameMachine(other, candidate.backendId ?? null, hosts)),
+    );
+    const connection = matching.find((other) => !other.requiresToken) ?? candidate;
+    for (const other of matching) used.add(other.id);
     entries.push({
       key: `device:${connection.id}`,
       role: "device",

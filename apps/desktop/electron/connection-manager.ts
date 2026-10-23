@@ -1934,6 +1934,7 @@ export class ConnectionManager {
   /** The installation identity of a saved machine, or of Local; null until one is proved. */
   installationIdOf(connectionId: string): BackendId | null {
     if (connectionId === LOCAL_CONNECTION_ID) return this.localHello?.installationId ?? null;
+    if (this.statuses.get(connectionId)?.identity === "conflict") return null;
     const id = this.catalogue.backends.find(
       (entry) => entry.id === connectionId,
     )?.verifiedInstallationId;
@@ -1943,8 +1944,17 @@ export class ConnectionManager {
   /** The saved machine (or Local) whose installation identity is `nodeId`. */
   connectionIdOf(nodeId: BackendId): string | null {
     if (this.localHello?.installationId === nodeId) return LOCAL_CONNECTION_ID;
+    const matching = this.catalogue.backends.filter(
+      (entry) => this.installationIdOf(entry.id) === nodeId,
+    );
     return (
-      this.catalogue.backends.find((entry) => entry.verifiedInstallationId === nodeId)?.id ?? null
+      (
+        matching.find((entry) => this.remoteConnections.has(entry.id)) ??
+        matching.find((entry) =>
+          entry.routes.some((route) => route.encryptedToken || this.sessionTokens.has(route.id)),
+        ) ??
+        matching[0]
+      )?.id ?? null
     );
   }
 
@@ -1985,19 +1995,32 @@ export class ConnectionManager {
       };
     }
     const backend = this.catalogue.backends.find((entry) => entry.id === connectionId);
-    if (!backend) return null;
+    if (!backend || this.statuses.get(connectionId)?.identity === "conflict") return null;
     let token: string | null = null;
     for (const route of orderedRoutes(backend)) {
       token = await this.resolveToken(route, false).catch(() => null);
       if (token) break;
     }
     if (!token) return null;
-    return { ...savedMachineImportEntry({ backend, token }), importedFrom: `device:${backend.id}` };
+    const entry = savedMachineImportEntry({ backend, token });
+    // Private-key paths belong to this device, not the receiving command node.
+    entry.routes = entry.routes.map((route) => {
+      if (route.kind !== "ssh") return route;
+      const { identityFile: _identityFile, ...portable } = route;
+      return portable;
+    });
+    return { ...entry, importedFrom: `device:${backend.id}` };
   }
 
   /** Run a command on a machine this device is connected to (Local always). */
   invokeOn<T>(connectionId: string, command: string, args: Record<string, unknown>): Promise<T> {
     if (connectionId === LOCAL_CONNECTION_ID) return this.localBackend.invoke<T>(command, args);
+    if (!this.remoteConnections.has(connectionId)) {
+      const name =
+        this.catalogue.backends.find((entry) => entry.id === connectionId)?.fallbackName ??
+        "That machine";
+      return Promise.reject(new Error(`${name} is not connected. Connect to it first.`));
+    }
     return this.invokeRemote<T>(connectionId, command, args);
   }
 

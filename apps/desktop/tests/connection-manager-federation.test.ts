@@ -2,6 +2,8 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import type { BackendId } from "@orkestrator/protocol/federation";
+import { previewCommandHandover } from "../electron/command-handover";
 import { BACKEND_PROFILE_CHANGED_EVENT } from "@orkestrator/protocol/backend-profile";
 import type { StoredDesktopConnections } from "@orkestrator/protocol/connections";
 import {
@@ -972,4 +974,180 @@ test("workspace retargeting preserves machine identity and confines relay creden
   } finally {
     connections.dispose();
   }
+});
+
+describe("handover connection-manager integration", () => {
+  test("saved identity lookup prefers a credentialed alias and rejects provisional identities", async () => {
+    const store = new MemoryStore(
+      catalogue([
+        savedBackend("empty", ["https://empty.test"], {
+          verifiedInstallationId: "bk_same" as BackendId,
+          routes: [
+            {
+              id: "empty" as never,
+              kind: "https",
+              enabled: true,
+              origin: "https://empty.test",
+              encryptedToken: "",
+            },
+          ],
+        }),
+        savedBackend("ready", ["https://ready.test"], {
+          verifiedInstallationId: "bk_same" as BackendId,
+        }),
+        savedBackend("provisional", ["https://unknown.test"], {
+          verifiedInstallationId: "provisional:unknown" as BackendId,
+        }),
+      ]),
+    );
+    const connections = manager(store);
+    await connections.initialize();
+    try {
+      expect(connections.installationIdOf("ready")).toBe("bk_same" as BackendId);
+      expect(connections.installationIdOf("provisional")).toBeNull();
+      expect(connections.installationIdOf("missing")).toBeNull();
+      expect(connections.connectionIdOf("bk_same" as BackendId)).toBe("ready");
+      expect(connections.connectionIdOf("bk_missing" as BackendId)).toBeNull();
+    } finally {
+      connections.dispose();
+    }
+  });
+
+  test("a leaf's saved but non-live controller reports the connect-first error through the real manager", async () => {
+    const local = localBackend();
+    local.invoke = mock(async (command: string) =>
+      command === "get_node_status"
+        ? {
+            mode: "leaf",
+            controllers: [{ controllerId: "bk_source", displayName: "Source" }],
+            mostRecentControllerId: "bk_source",
+          }
+        : {},
+    ) as never;
+    const connections = manager(
+      new MemoryStore(
+        catalogue([
+          savedBackend("source", ["https://source.test"], {
+            verifiedInstallationId: "bk_source" as BackendId,
+          }),
+          savedBackend("target", ["https://target.test"], {
+            verifiedInstallationId: "bk_target" as BackendId,
+          }),
+        ]),
+      ),
+      { localBackend: local },
+    );
+    await connections.initialize();
+    try {
+      await expect(
+        previewCommandHandover(
+          {
+            currentConnectionId: "local",
+            invokeOn: connections.invokeOn.bind(connections),
+            installationIdOf: connections.installationIdOf.bind(connections),
+            connectionIdOf: connections.connectionIdOf.bind(connections),
+            machineImportEntry: connections.machineImportEntry.bind(connections),
+          },
+          "target",
+        ),
+      ).rejects.toThrow("Connect to it first");
+    } finally {
+      connections.dispose();
+    }
+  });
+
+  test("machine imports resolve tokens across routes and remove device-local SSH key paths", async () => {
+    const backend = savedBackend("remote", ["https://first.test"], {
+      verifiedInstallationId: "bk_remote" as BackendId,
+      localAlias: "Remote alias",
+      routes: [
+        {
+          id: "empty" as never,
+          kind: "https",
+          enabled: true,
+          origin: "https://first.test",
+          encryptedToken: "",
+        },
+        {
+          id: "ssh" as never,
+          kind: "ssh",
+          enabled: true,
+          destination: "user@remote",
+          remoteGatewayPort: 4000,
+          identityFile: "/device/private-key",
+          encryptedToken: encrypted(token),
+        },
+      ],
+      routeOrder: ["empty" as never, "ssh" as never],
+    });
+    const store = new MemoryStore(catalogue([backend]));
+    const connections = manager(store);
+    await connections.initialize();
+    try {
+      expect(await connections.machineImportEntry("remote")).toMatchObject({
+        importedFrom: "device:remote",
+        fallbackName: "Remote alias",
+        verifiedNodeId: "bk_remote",
+        enabled: true,
+        token,
+        routeOrder: ["empty", "ssh"],
+        routes: [
+          { id: "empty", kind: "https", enabled: true, origin: "https://first.test" },
+          {
+            id: "ssh",
+            kind: "ssh",
+            enabled: true,
+            destination: "user@remote",
+            remoteGatewayPort: 4000,
+          },
+        ],
+      });
+      expect((await connections.machineImportEntry("remote"))?.routes[1]).not.toHaveProperty(
+        "identityFile",
+      );
+      expect(await connections.machineImportEntry("missing")).toBeNull();
+      expect(store.saves).toBe(0);
+      expect(JSON.stringify(store.value)).not.toContain(`"token":"${token}"`);
+    } finally {
+      connections.dispose();
+    }
+  });
+
+  test("imports Local only with its verified identity, remote web address, and gateway token", async () => {
+    installGateways({ "https://local.test": { installationId: "bk_local" } });
+    const local = localBackend();
+    local.hello = async () =>
+      (
+        await fetch("https://local.test/__orkestrator/hello", {
+          headers: { authorization: `Bearer ${token}` },
+        })
+      ).json() as never;
+    local.getWebClientStatus = async () => ({
+      enabled: true,
+      running: true,
+      url: "https://local.test/path",
+      error: null,
+    });
+    const connections = manager(new MemoryStore(catalogue([])), { localBackend: local });
+    await connections.initialize();
+    try {
+      expect(connections.installationIdOf("local")).toBe("bk_local" as BackendId);
+      expect(connections.connectionIdOf("bk_local" as BackendId)).toBe("local");
+      expect(await connections.machineImportEntry("local")).toMatchObject({
+        importedFrom: "device:local",
+        verifiedNodeId: "bk_local",
+        token,
+        routes: [{ id: "web", kind: "https", enabled: true, origin: "https://local.test" }],
+      });
+      local.getWebClientStatus = async () => ({
+        enabled: true,
+        running: false,
+        url: null,
+        error: null,
+      });
+      expect(await connections.machineImportEntry("local")).toBeNull();
+    } finally {
+      connections.dispose();
+    }
+  });
 });

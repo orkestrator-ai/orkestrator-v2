@@ -15,6 +15,8 @@ import {
   type AttachControllerResult,
   type CommandHandoverPreview,
   type CommandHandoverResult,
+  type CommandHandoverReceipt,
+  type PendingCommandHandover,
   type ControllerView,
   type HandoverCandidate,
   type NodeAttachments,
@@ -50,7 +52,12 @@ import {
   LeafControllerSettings,
   type ControllerSettingsStorage,
 } from "./node-controller-settings.js";
-import { NodeLink, NODE_HELLO_TIMEOUT_MS, type NodeLinkTimers } from "./node-link.js";
+import {
+  NodeLink,
+  NodeOutcomeUnknownError,
+  NODE_HELLO_TIMEOUT_MS,
+  type NodeLinkTimers,
+} from "./node-link.js";
 import { NodeSshPrompts } from "./node-ssh-prompts.js";
 
 /**
@@ -119,6 +126,8 @@ export class NodeService {
   private readonly now: () => number;
   readonly prompts: NodeSshPrompts;
   private selfId: BackendId | null = null;
+  private handoverRunning = false;
+  private acceptingHandover = false;
   private attachments: NodeAttachments = { version: 1, controllers: [], detachedControllers: [] };
   private registry: NodeRegistry | null = null;
   private readonly links = new Map<BackendId, NodeLink>();
@@ -250,11 +259,23 @@ export class NodeService {
     return this.options.forceRegistration === true || registry.registrationEnabled;
   }
 
+  private assertHandoverEditable(registry: NodeRegistry): void {
+    if (
+      this.handoverRunning ||
+      this.acceptingHandover ||
+      registry.pendingHandover ||
+      registry.handoverReceipts?.some((entry) => !entry.completed)
+    ) {
+      throw new Error("Finish the pending command handover before editing machines.");
+    }
+  }
+
   async setRegistrationEnabled(enabled: boolean): Promise<NodeStatus> {
     if (!enabled && this.options.forceRegistration) {
       throw new Error("This node is the desktop's command node; registration stays enabled.");
     }
     await this.mutateRegistry((registry) => {
+      this.assertHandoverEditable(registry);
       if (!enabled && registry.nodes.length > 0) {
         throw new Error(
           "Forget the registered nodes before turning command-node registration off.",
@@ -621,7 +642,7 @@ export class NodeService {
       args.displayName === undefined
         ? describeFirstRoute(routes)
         : normalizeNodeDisplayName(args.displayName);
-    if (registry.nodes.length >= MAX_REGISTERED_NODES) {
+    if (registry.nodes.length + (registry.pendingHandover ? 1 : 0) >= MAX_REGISTERED_NODES) {
       throw new NodeRefusalError(NODE_REFUSAL_CODES.tooManyNodes, "Too many nodes are registered.");
     }
     const hello = await this.identify(routes, routeOrder, token);
@@ -645,6 +666,12 @@ export class NodeService {
     this.interactiveStarts.set(record.nodeId, null);
     try {
       await this.mutateRegistry((current) => {
+        // Reserve the pending target's slot in case acceptance is rejected.
+        if (current.nodes.length + (current.pendingHandover ? 1 : 0) >= MAX_REGISTERED_NODES)
+          throw new NodeRefusalError(
+            NODE_REFUSAL_CODES.tooManyNodes,
+            "Too many nodes are registered.",
+          );
         if (current.nodes.some((node) => node.nodeId === record.nodeId)) {
           throw new NodeRefusalError(
             NODE_REFUSAL_CODES.duplicateNode,
@@ -675,6 +702,7 @@ export class NodeService {
       throw new Error("Expected enabled to be a boolean.");
     }
     await this.mutateRegistry((registry) => {
+      this.assertHandoverEditable(registry);
       const node = registry.nodes.find((entry) => entry.nodeId === nodeId);
       if (!node) {
         throw new NodeRefusalError(NODE_REFUSAL_CODES.unknownNode, "That node is not registered.");
@@ -710,6 +738,7 @@ export class NodeService {
     const nodeId = args.nodeId;
     const withoutDetach = args.withoutDetach === true;
     const removed = await this.mutateRegistry((registry) => {
+      this.assertHandoverEditable(registry);
       const node = registry.nodes.find((entry) => entry.nodeId === nodeId);
       if (!node) return { next: null, result: null };
       const tombstones =
@@ -791,10 +820,24 @@ export class NodeService {
   private async adoptEntries(
     entries: NodeImportEntry[],
     source: "desktop-migration" | "handover",
+    receipt?: Omit<CommandHandoverReceipt, "imported" | "skipped" | "needsCredential">,
   ): Promise<{ imported: number; skipped: number; needsCredential: number }> {
     const selfId = await this.self();
     const once = source === "desktop-migration";
     return this.mutateRegistry((registry) => {
+      if (source === "handover") {
+        const incoming = new Set(
+          entries.map((entry) => entry.verifiedNodeId ?? `provisional:${entry.importedFrom}`),
+        );
+        incoming.delete(selfId);
+        for (const node of registry.nodes) incoming.delete(node.nodeId);
+        if (registry.nodes.length + incoming.size > MAX_REGISTERED_NODES) {
+          throw new NodeRefusalError(
+            NODE_REFUSAL_CODES.tooManyNodes,
+            "The target has no room for all of these machines.",
+          );
+        }
+      }
       let imported = 0;
       let skipped = 0;
       let needsCredential = 0;
@@ -841,6 +884,7 @@ export class NodeService {
       const registrationEnabled =
         registry.registrationEnabled || imported > 0 || source === "handover";
       changed ||=
+        receipt !== undefined ||
         imported > 0 ||
         importedSources.length !== registry.importedSources.length ||
         registrationEnabled !== registry.registrationEnabled;
@@ -849,6 +893,14 @@ export class NodeService {
           ? {
               ...registry,
               registrationEnabled,
+              ...(receipt
+                ? {
+                    handoverReceipts: [
+                      ...(registry.handoverReceipts ?? []).slice(-63),
+                      { ...receipt, imported, skipped, needsCredential },
+                    ],
+                  }
+                : {}),
               nodes,
               importedSources,
               tombstones: registry.tombstones.filter(
@@ -923,78 +975,156 @@ export class NodeService {
     includeSelf: boolean;
     entries: NodeImportEntry[];
   }): Promise<CommandHandoverResult> {
-    if (this.isLeaf()) {
-      throw new NodeRefusalError(
-        NODE_REFUSAL_CODES.nodeIsSubordinate,
-        "This node is controlled by another command node. Hand over from there.",
-      );
-    }
-    const { target } = await this.handoverTarget(input.nodeId);
-    const selfId = await this.self();
-    const registry = await this.currentRegistry();
-    const chosen =
-      input.nodeIds === undefined
-        ? null
-        : Array.isArray(input.nodeIds) && input.nodeIds.every(isBackendId)
-          ? new Set<BackendId>(input.nodeIds)
-          : (() => {
-              throw new Error("Expected nodeIds to be node identities.");
-            })();
-    const moving = registry.nodes.filter(
-      (node) =>
-        node.nodeId !== target.nodeId &&
-        (chosen === null || chosen.has(node.nodeId)) &&
-        remoteRoutes(node.routes).length > 0,
-    );
-    const entries: NodeImportEntry[] = moving.map((node) => handoverEntry(node));
-    const self = input.includeSelf ? await this.selfEntry() : null;
-    if (self) entries.push(self);
-    for (const entry of input.entries) {
-      const id = entry.verifiedNodeId;
-      if (id === target.nodeId || id === selfId) continue;
-      if (id && entries.some((existing) => existing.verifiedNodeId === id)) continue;
-      entries.push(entry);
-    }
-    if (entries.length > MAX_REGISTERED_NODES) {
-      throw new NodeRefusalError(NODE_REFUSAL_CODES.tooManyNodes, "Too many nodes to hand over.");
-    }
-    // If the new command node hands command back later, it must be able to attach here.
-    await this.allowController(target.nodeId);
-    // Forget the target first: once it commands this node it attaches here,
-    // which the two-level rule refuses while it is still in this registry.
-    // The request goes over a link of its own, so suspending this node's
-    // links when the target attaches cannot cut it off.
-    await this.mutateRegistry((current) => ({
-      next: { ...current, nodes: current.nodes.filter((node) => node.nodeId !== target.nodeId) },
-      result: undefined,
-    }));
-    let accepted: {
-      imported: number;
-      skipped: number;
-      needsCredential: number;
-      detachedControllers: number;
-    };
-    const handoverLink = this.oneShotLink(target);
+    if (this.handoverRunning)
+      throw new Error("A command handover is already in progress. Retry when it finishes.");
+    this.handoverRunning = true;
     try {
-      accepted = await handoverLink.invokeWithoutAttaching(
-        "accept_command_handover",
-        { controllerId: selfId, entries },
-        { timeoutMs: HANDOVER_TIMEOUT_MS },
+      const recovery = (await this.currentRegistry()).pendingHandover;
+      if (recovery) {
+        if (recovery.target.nodeId !== input.nodeId)
+          throw new Error("Finish the pending command handover first.");
+        return await this.completeHandover(recovery);
+      }
+      if (this.isLeaf()) {
+        throw new NodeRefusalError(
+          NODE_REFUSAL_CODES.nodeIsSubordinate,
+          "This node is controlled by another command node. Hand over from there.",
+        );
+      }
+      const { target, link } = await this.handoverTarget(input.nodeId);
+      const targetNodes = await link.invoke<NodeListResult>("list_nodes");
+      const targetIds = new Set(targetNodes.nodes.map((node) => node.nodeId));
+      const selfId = await this.self();
+      const registry = await this.currentRegistry();
+      const chosen =
+        input.nodeIds === undefined
+          ? null
+          : Array.isArray(input.nodeIds) && input.nodeIds.every(isBackendId)
+            ? new Set<BackendId>(input.nodeIds)
+            : (() => {
+                throw new Error("Expected nodeIds to be node identities.");
+              })();
+      const moving = registry.nodes.filter(
+        (node) =>
+          node.nodeId !== target.nodeId &&
+          (((chosen === null || chosen.has(node.nodeId)) && remoteRoutes(node.routes).length > 0) ||
+            targetIds.has(node.nodeId)),
       );
-    } catch (error) {
-      // Nothing changed on the target: keep commanding it.
-      await this.mutateRegistry((current) =>
-        current.nodes.some((node) => node.nodeId === target.nodeId)
-          ? { next: null, result: undefined }
-          : { next: { ...current, nodes: [...current.nodes, target] }, result: undefined },
+      const entries: NodeImportEntry[] = moving
+        .filter((node) => remoteRoutes(node.routes).length > 0)
+        .map((node) => handoverEntry(node));
+      const self = input.includeSelf ? await this.selfEntry() : null;
+      if (self) entries.push(self);
+      for (const entry of input.entries) {
+        const id = entry.verifiedNodeId;
+        if (id === target.nodeId || id === selfId) continue;
+        if (id && entries.some((existing) => existing.verifiedNodeId === id)) continue;
+        entries.push(entry);
+      }
+      const incomingIds = new Set(
+        entries.map((entry) => entry.verifiedNodeId ?? `provisional:${entry.importedFrom}`),
       );
-      throw error;
+      incomingIds.delete(target.nodeId);
+      for (const id of targetIds) incomingIds.delete(id);
+      if (
+        entries.length > MAX_REGISTERED_NODES ||
+        targetNodes.nodes.length + incomingIds.size > MAX_REGISTERED_NODES
+      ) {
+        throw new NodeRefusalError(
+          NODE_REFUSAL_CODES.tooManyNodes,
+          "The target has no room for all of these machines.",
+        );
+      }
+      const pending: PendingCommandHandover = {
+        id: crypto.randomUUID(),
+        target,
+        entries,
+        movingIds: moving.map((node) => node.nodeId),
+        selfIncluded: self !== null || targetIds.has(selfId),
+      };
+      // Retain the actual authenticated transport, including an interactive SSH lease.
+      const transport = link.retainTransport();
+      try {
+        await this.allowController(target.nodeId);
+        await this.mutateRegistry((current) => ({
+          next: {
+            ...current,
+            pendingHandover: pending,
+            nodes: current.nodes.filter((node) => node.nodeId !== target.nodeId),
+          },
+          result: undefined,
+        }));
+        return await this.completeHandover(pending, transport);
+      } finally {
+        transport.release();
+      }
+    } finally {
+      this.handoverRunning = false;
+    }
+  }
+
+  private async completeHandover(
+    pending: PendingCommandHandover,
+    transport?: ReturnType<NodeLink["retainTransport"]>,
+  ): Promise<CommandHandoverResult> {
+    const { target, entries } = pending;
+    const selfId = await this.self();
+    const handoverLink = this.oneShotLink(target);
+    const invoke = () =>
+      transport
+        ? transport.invoke<CommandHandoverReceipt>(
+            "accept_command_handover",
+            { controllerId: selfId, handoverId: pending.id, entries },
+            { timeoutMs: HANDOVER_TIMEOUT_MS },
+          )
+        : handoverLink.invokeWithoutAttaching<CommandHandoverReceipt>(
+            "accept_command_handover",
+            { controllerId: selfId, handoverId: pending.id, entries },
+            { timeoutMs: HANDOVER_TIMEOUT_MS },
+          );
+    let accepted: CommandHandoverReceipt;
+    try {
+      try {
+        accepted = await invoke();
+      } catch (error) {
+        // Only these refusals prove adoption never committed. Other failures can
+        // occur after persistence or during controller detach; keep the journal.
+        if (error instanceof NodeRefusalError && error.code === NODE_REFUSAL_CODES.tooManyNodes) {
+          await this.mutateRegistry((current) => ({
+            next: {
+              ...current,
+              pendingHandover: undefined,
+              nodes: current.nodes.some((node) => node.nodeId === target.nodeId)
+                ? current.nodes
+                : [...current.nodes, target],
+            },
+            result: undefined,
+          }));
+          throw error;
+        }
+        if (error instanceof NodeRefusalError && error.code === NODE_REFUSAL_CODES.notController) {
+          await this.mutateRegistry((current) => ({
+            next: { ...current, pendingHandover: undefined },
+            result: undefined,
+          }));
+          throw error;
+        }
+        // Same durable ID resumes partial acceptance and lost responses safely.
+        try {
+          accepted = await invoke();
+        } catch (cause) {
+          throw new NodeOutcomeUnknownError(
+            "The command handover is pending and will retry automatically. Retrying this handover is safe.",
+            { cause },
+          );
+        }
+      }
     } finally {
       handoverLink.stop();
     }
     // The machines the target took over are forgotten here and told to
     // detach, so each has one command node.
-    const movingIds = new Set(moving.map((node) => node.nodeId));
+    const movingIds = new Set(pending.movingIds);
     const detaching = await this.mutateRegistry((current) => {
       const forgotten = current.nodes.filter((node) => movingIds.has(node.nodeId));
       const attached = forgotten.filter((node) => node.attachment.status === "attached");
@@ -1002,6 +1132,7 @@ export class NodeService {
       return {
         next: {
           ...current,
+          pendingHandover: undefined,
           nodes: current.nodes.filter((node) => !movingIds.has(node.nodeId)),
           tombstones: [
             ...current.tombstones.filter((entry) => !movingIds.has(entry.nodeId)),
@@ -1023,7 +1154,7 @@ export class NodeService {
       transferred: accepted.imported,
       skipped: accepted.skipped,
       needsCredential: accepted.needsCredential,
-      selfIncluded: self !== null,
+      selfIncluded: pending.selfIncluded,
       detachedControllers: accepted.detachedControllers,
     };
   }
@@ -1037,30 +1168,76 @@ export class NodeService {
   async acceptHandover(
     controllerId: unknown,
     entries: NodeImportEntry[],
+    handoverId?: unknown,
   ): Promise<{
     imported: number;
     skipped: number;
     needsCredential: number;
     detachedControllers: number;
   }> {
+    if (this.acceptingHandover)
+      throw new Error("A command handover is already being accepted. Retry shortly.");
     if (
-      !isBackendId(controllerId) ||
-      !this.attachments.controllers.some((entry) => entry.controllerId === controllerId)
-    ) {
-      throw new NodeRefusalError(
-        NODE_REFUSAL_CODES.notController,
-        "Only a command node attached to this node can make it the command node.",
+      handoverId !== undefined &&
+      (typeof handoverId !== "string" || !/^[a-zA-Z0-9-]{1,64}$/.test(handoverId))
+    )
+      throw new Error("Invalid handover ID.");
+    this.acceptingHandover = true;
+    try {
+      const receipt = (await this.currentRegistry()).handoverReceipts?.find(
+        (entry) => entry.id === handoverId && entry.controllerId === controllerId,
       );
+      if (
+        !isBackendId(controllerId) ||
+        (!receipt &&
+          !this.attachments.controllers.some((entry) => entry.controllerId === controllerId))
+      ) {
+        throw new NodeRefusalError(
+          NODE_REFUSAL_CODES.notController,
+          "Only a command node attached to this node can make it the command node.",
+        );
+      }
+      if (receipt?.completed) return receipt;
+      const controllers =
+        receipt?.controllers ?? this.attachments.controllers.map((entry) => entry.controllerId);
+      const counts =
+        receipt ??
+        (await this.adoptEntries(
+          entries,
+          "handover",
+          typeof handoverId === "string"
+            ? {
+                id: handoverId,
+                controllerId,
+                controllers,
+                detachedControllers: controllers.length,
+              }
+            : undefined,
+        ));
+      for (const id of controllers) {
+        if (this.attachments.controllers.some((entry) => entry.controllerId === id))
+          await this.detachController(id, { byUser: true });
+      }
+      const registry = await this.currentRegistry();
+      for (const id of controllers) {
+        if (registry.nodes.some((node) => node.nodeId === id)) await this.allowController(id);
+      }
+      if (handoverId !== undefined)
+        await this.mutateRegistry((current) => ({
+          next: {
+            ...current,
+            handoverReceipts: current.handoverReceipts?.map((entry) =>
+              entry.id === handoverId && entry.controllerId === controllerId
+                ? { ...entry, completed: true }
+                : entry,
+            ),
+          },
+          result: undefined,
+        }));
+      return { ...counts, detachedControllers: controllers.length };
+    } finally {
+      this.acceptingHandover = false;
     }
-    const counts = await this.adoptEntries(entries, "handover");
-    const controllers = this.attachments.controllers.map((entry) => entry.controllerId);
-    for (const id of controllers) await this.detachController(id, { byUser: true });
-    // A controller this node now commands needs no record that it was detached here.
-    const registry = await this.currentRegistry();
-    for (const id of controllers) {
-      if (registry.nodes.some((node) => node.nodeId === id)) await this.allowController(id);
-    }
-    return { ...counts, detachedControllers: controllers.length };
   }
 
   private async handoverTarget(nodeId: unknown): Promise<{ target: NodeRecord; link: NodeLink }> {
@@ -1541,8 +1718,17 @@ export class NodeService {
   private async retryDetaches(): Promise<void> {
     if (!this.started) return;
     const registry = await this.currentRegistry();
-    if (!this.isLeaf()) {
-      for (const entry of registry.tombstones) await this.detachTombstone(entry.nodeId);
+    // Detach cleanup remains valid while leaf; it cannot attach new controllers.
+    for (const entry of registry.tombstones) await this.detachTombstone(entry.nodeId);
+    if (registry.pendingHandover && !this.handoverRunning) {
+      this.handoverRunning = true;
+      try {
+        await this.completeHandover(registry.pendingHandover);
+      } catch (error) {
+        console.warn("[nodes] Command handover recovery pending:", errorCode(error));
+      } finally {
+        this.handoverRunning = false;
+      }
     }
     if (!this.started) return;
     if (this.detachTimer) clearTimeout(this.detachTimer);
@@ -1569,7 +1755,13 @@ function handoverEntry(node: NodeRecord): NodeImportEntry {
 
 /** Routes that mean the same machine from anywhere: not loopback addresses of this one. */
 function remoteRoutes(routes: NodeRoute[]): NodeRoute[] {
-  return routes.filter((route) => route.kind !== "https" || isRemoteHttps(route.origin));
+  return routes
+    .filter((route) => route.kind !== "https" || isRemoteHttps(route.origin))
+    .map((route) => {
+      if (route.kind !== "ssh") return route;
+      const { identityFile: _identityFile, ...portable } = route;
+      return portable;
+    });
 }
 
 function originOf(value: string): string {

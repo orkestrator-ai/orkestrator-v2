@@ -308,3 +308,21 @@ test("nonempty saved nicknames take precedence for self, registered and device-o
     expect(entries.map((e) => e.name)).toEqual(Array(3).fill(nickname?.trim() || "Canonical"));
   }
 });
+
+test("device-only aliases prefer the saved connection with credentials", () => {
+  const entries = buildMachineList({
+    status,
+    nodes: nodes(),
+    workspaceNodeId: null,
+    connections: list(
+      local,
+      remote("missing", { backendId: "bk_same" as never, requiresToken: true }),
+      remote("usable", { backendId: "bk_same" as never, requiresToken: false }),
+    ),
+    selfProfile: { revision: 1, displayName: "Desk", colorToken: "violet", updatedAt: "t" },
+  });
+  const devices = entries.filter((entry) => entry.role === "device");
+  expect(devices).toHaveLength(1);
+  expect(devices[0]?.connection?.id).toBe("usable");
+  expect(devices[0]?.connection?.requiresToken).toBe(false);
+});

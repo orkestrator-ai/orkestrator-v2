@@ -230,6 +230,29 @@ registered first with the token saved on the device. Handing command back
 works the same way: the old command node clears its own record of having
 detached the target before it hands over.
 
+Before changing topology, the source checks the target's registry capacity;
+the target repeats the check atomically with adoption. A shortage rejects the
+whole handover. Machines already registered on both sides are cleaned up on
+the source even when the client selects no additional machines. Their tokens
+can fill a missing credential on the target.
+
+The source persists a pending handover with a unique ID before removing the
+target. It retains the authenticated transport until acceptance finishes,
+including an SSH tunnel opened with an interactive password or passphrase.
+The target persists adoption and an acceptance receipt together, then detaches
+its controllers. Retrying the same ID resumes unfinished detach work or returns
+the original counts. The target keeps the most recent 64 receipts. Lost
+responses do not restore the old topology: the source retries immediately and
+keeps unresolved work for its background retry loop and restart recovery.
+Edits to existing machines and overlapping handovers are refused while recovery is pending.
+Detach tombstones continue retrying even when the source becomes a leaf.
+
+SSH private-key file paths are local to the source and are omitted from
+handover entries. The target may need its own SSH configuration. Independently
+saved standalone machines with no fleet switch directly through the desktop
+connection API. Native bridges without handover capabilities also keep their
+native connection-switch flow.
+
 ## Updates from leaves
 
 Every attached command node keeps its own subscription to the leaf's event

@@ -29,7 +29,12 @@ import {
   sharedIdDataset,
   uninstallDesktopFake,
 } from "@/test/federation-desktop-fake";
-import { mockToastWarning } from "../../../../../tests/mocks/sonner";
+import { requestCommandHandover } from "@/lib/command-handover";
+import {
+  mockToastError,
+  mockToastSuccess,
+  mockToastWarning,
+} from "../../../../../tests/mocks/sonner";
 import {
   FederatedActivityList,
   MergedProjectList,
@@ -881,3 +886,108 @@ for (const mode of ["remote", "merged"] as const) {
     expect(useMachineViewStore.getState().collapsedFolderKeys).not.toContain(`${prefix}/work`);
   });
 }
+
+describe("command handover dialog edge cases", () => {
+  test("an iOS-shaped bridge switches through native use without handover methods", async () => {
+    const fake = installTwoMachines();
+    const api = window.orkestrator!.connections!;
+    delete api.previewCommandHandover;
+    delete api.handOverCommand;
+    window.__orkestratorClientPlatform = "ios-wkwebview";
+    try {
+      renderWithFederation(<FilterOnly />);
+      await waitFor(() =>
+        expect(screen.getByTestId("machines-connectivity").textContent).toBe("3/3"),
+      );
+      await act(async () => {
+        fireEvent.pointerDown(screen.getByTestId("machines-filter"), { button: 0, ctrlKey: false });
+      });
+      const row = await screen.findByTestId("command-node-row");
+      await act(async () => {
+        fireEvent.keyDown(row, { key: "ArrowRight" });
+      });
+      const switcher = await screen.findByTestId("command-node-switcher");
+      fireEvent.click(within(switcher).getByRole("menuitem", { name: /^Machine B/ }));
+      await waitFor(() => expect(fake.connections.use).toHaveBeenCalledWith(MACHINE_B.id));
+      expect(reload).not.toHaveBeenCalled();
+      expect(mockToastError).not.toHaveBeenCalled();
+    } finally {
+      delete window.__orkestratorClientPlatform;
+    }
+  });
+
+  test("auto-executes an empty selection and keeps a failed attempt available for retry", async () => {
+    const fake = installTwoMachines();
+    const original = await fake.connections.previewCommandHandover(MACHINE_B.id);
+    fake.connections.previewCommandHandover.mockResolvedValue({
+      ...original,
+      preview: { ...original.preview, candidates: [], targetNodeIds: [MACHINE_A.backendId!] },
+    });
+    fake.connections.handOverCommand.mockRejectedValueOnce(new Error("temporary failure"));
+    render(<CommandHandoverDialog />);
+    act(() => requestCommandHandover({ name: MACHINE_B.name, connectionId: MACHINE_B.id }));
+    await waitFor(() =>
+      expect(mockToastError).toHaveBeenCalledWith("Could not change the command node", {
+        description: "temporary failure",
+      }),
+    );
+    const dialog = await screen.findByTestId("command-handover-dialog");
+    const retry = within(dialog).getByRole("button", { name: "Make command node" });
+    expect(retry.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(retry);
+    await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+    expect(fake.connections.handOverCommand).toHaveBeenCalledTimes(2);
+    expect(fake.connections.handOverCommand).toHaveBeenLastCalledWith({
+      targetConnectionId: MACHINE_B.id,
+      nodeIds: [],
+      connectionIds: [],
+      includeSelf: true,
+    });
+    expect(mockToastSuccess).toHaveBeenCalled();
+  });
+
+  test("an already-command-node result only switches the native connection", async () => {
+    const fake = installTwoMachines();
+    window.orkestrator!.connections!.previewCommandHandover = async () => ({
+      kind: "already-command-node",
+    });
+    render(<CommandHandoverDialog />);
+    act(() => requestCommandHandover({ name: MACHINE_B.name, connectionId: MACHINE_B.id }));
+    await waitFor(() => expect(fake.connections.use).toHaveBeenCalledWith(MACHINE_B.id));
+    expect(fake.connections.handOverCommand).not.toHaveBeenCalled();
+    await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+  });
+
+  test("unreachable self requires an explicit choice and stays excluded", async () => {
+    const fake = installTwoMachines();
+    const original = await fake.connections.previewCommandHandover(MACHINE_B.id);
+    fake.connections.previewCommandHandover.mockResolvedValue({
+      ...original,
+      preview: {
+        ...original.preview,
+        candidates: [],
+        targetNodeIds: [MACHINE_A.backendId!],
+        self: { ...original.preview.self, reachable: false },
+      },
+    });
+    render(<CommandHandoverDialog />);
+    act(() => requestCommandHandover({ name: MACHINE_B.name, connectionId: MACHINE_B.id }));
+    const warning = await screen.findByText(/has no web address/);
+    expect(warning.textContent).toContain("cannot follow");
+    const checkbox = screen.getByRole("checkbox", {
+      name: "This computer, the current command node",
+    });
+    expect(checkbox.hasAttribute("disabled")).toBe(true);
+    expect(checkbox.getAttribute("aria-checked")).toBe("false");
+    expect(fake.connections.handOverCommand).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Make command node" }));
+    await waitFor(() =>
+      expect(fake.connections.handOverCommand).toHaveBeenCalledWith({
+        targetConnectionId: MACHINE_B.id,
+        nodeIds: [],
+        connectionIds: [],
+        includeSelf: false,
+      }),
+    );
+  });
+});

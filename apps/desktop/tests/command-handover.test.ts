@@ -3,7 +3,11 @@ import { describe, expect, mock, test } from "bun:test";
 import type { NodeImportEntry } from "@orkestrator/protocol/command-nodes";
 import type { BackendId, RouteId } from "@orkestrator/protocol/federation";
 
-import { handOverCommandNode, previewCommandHandover } from "../electron/command-handover.js";
+import {
+  handOverCommandNode,
+  previewCommandHandover,
+  type CommandHandoverDeps,
+} from "../electron/command-handover.js";
 
 const ids: Record<string, BackendId> = {
   local: "bk_mbp3" as BackendId,
@@ -47,7 +51,7 @@ function deps(options: { current: string; leafOf?: BackendId; registered?: Backe
     calls,
     deps: {
       currentConnectionId: options.current,
-      invokeOn: invokeOn as never,
+      invokeOn: invokeOn as CommandHandoverDeps["invokeOn"],
       installationIdOf: (connectionId: string) => ids[connectionId] ?? null,
       connectionIdOf: (nodeId: BackendId) =>
         Object.entries(ids).find(([, id]) => id === nodeId)?.[0] ?? null,
@@ -84,10 +88,11 @@ describe("making another machine the command node", () => {
     expect(calls.map((entry) => entry.command)).toEqual([
       "get_node_status",
       "list_nodes",
+      "get_node_status",
       "add_node",
       "hand_over_command",
     ]);
-    expect(calls[2]?.args).toMatchObject({ token: "token-mini" });
+    expect(calls[3]?.args).toMatchObject({ token: "token-mini" });
   });
 
   test("from a leaf's window, the command node controlling it hands over", async () => {
@@ -121,5 +126,92 @@ describe("making another machine the command node", () => {
       }),
     ).toBeNull();
     expect(calls.some((entry) => entry.command === "hand_over_command")).toBe(false);
+  });
+});
+
+describe("handover client failure paths", () => {
+  test("compensates a target registered by this flow after handover rejection", async () => {
+    const { deps: handover } = deps({ current: "local" });
+    const calls: string[] = [];
+    let added = false;
+    handover.invokeOn = (async (_connection: string, command: string) => {
+      calls.push(command);
+      if (command === "get_node_status") return { mode: "command", controllers: [] };
+      if (command === "list_nodes") return { nodes: added ? [{ nodeId: ids.mini }] : [] };
+      if (command === "add_node") {
+        added = true;
+        return {};
+      }
+      if (command === "hand_over_command") throw new Error("target rejected handover");
+      if (command === "forget_node") {
+        added = false;
+        return {};
+      }
+      return {};
+    }) as never;
+    await expect(
+      handOverCommandNode(handover, {
+        targetConnectionId: "mini",
+        connectionIds: [],
+        includeSelf: true,
+      }),
+    ).rejects.toThrow("target rejected");
+    expect(added).toBe(false);
+    expect(calls.at(-1)).toBe("forget_node");
+  });
+
+  test("does not compensate an ambiguous handover that already removed its target", async () => {
+    const { deps: handover } = deps({ current: "local" });
+    const calls: string[] = [];
+    handover.invokeOn = (async (_connection: string, command: string) => {
+      calls.push(command);
+      if (command === "get_node_status") return { mode: "command", controllers: [] };
+      if (command === "list_nodes") return { nodes: [] };
+      if (command === "hand_over_command") throw new Error("outcome unknown");
+      return {};
+    }) as never;
+    await expect(
+      handOverCommandNode(handover, {
+        targetConnectionId: "mini",
+        connectionIds: [],
+        includeSelf: true,
+      }),
+    ).rejects.toThrow("outcome unknown");
+    expect(calls).not.toContain("forget_node");
+  });
+
+  test("an independent standalone source switches directly with registration disabled", async () => {
+    const { deps: handover } = deps({ current: "mini" });
+    const calls: string[] = [];
+    handover.invokeOn = (async (_connection: string, command: string) => {
+      calls.push(command);
+      if (command === "get_node_status")
+        return { mode: "standalone", registrationEnabled: false, controllers: [] };
+      if (command === "list_nodes") return { nodes: [] };
+      if (command === "add_node") throw new Error("registration-disabled");
+      throw new Error(`unexpected command ${command}`);
+    }) as never;
+    expect(await previewCommandHandover(handover, "gram")).toEqual({
+      kind: "already-command-node",
+    });
+    expect(
+      await handOverCommandNode(handover, {
+        targetConnectionId: "gram",
+        connectionIds: [],
+        includeSelf: true,
+      }),
+    ).toBeNull();
+    expect(calls).not.toContain("add_node");
+  });
+
+  test("a leaf with a saved but disconnected remote controller gets a connect-first error", async () => {
+    const { deps: handover } = deps({ current: "mini", leafOf: ids.gram });
+    const invoke = handover.invokeOn;
+    handover.invokeOn = ((connection: string, command: string, args?: Record<string, unknown>) => {
+      if (connection === "gram")
+        return Promise.reject(new Error("gram is not connected. Connect to it first."));
+      return invoke(connection, command, args);
+    }) as never;
+    await expect(previewCommandHandover(handover, "mini")).rejects.toThrow("Connect to it first");
   });
 });

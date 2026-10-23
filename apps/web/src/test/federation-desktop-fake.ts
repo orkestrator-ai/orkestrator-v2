@@ -6,7 +6,11 @@
  * Not bundled: only tests import this.
  */
 import { mock } from "bun:test";
-import type { NodeStatus, NodeView } from "@orkestrator/protocol/command-nodes";
+import type {
+  CommandHandoverPreview,
+  NodeStatus,
+  NodeView,
+} from "@orkestrator/protocol/command-nodes";
 import type { ConnectionList, ConnectionSummary } from "@orkestrator/protocol/connections";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import {
@@ -168,8 +172,8 @@ export function installDesktopFake(options: {
     });
 
   // Making a machine the command node: the others go with it, and this node follows.
-  const handoverPreview = (targetNodeId: string) => ({
-    targetNodeId,
+  const handoverPreview = (targetNodeId: string): CommandHandoverPreview => ({
+    targetNodeId: targetNodeId as BackendId,
     targetName:
       remotes.find((connection) => connection.backendId === targetNodeId)?.name ?? targetNodeId,
     targetRegistered: true,

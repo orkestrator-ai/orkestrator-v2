@@ -115,6 +115,26 @@ export interface NodeDetachTombstone {
   forgottenAt: string;
 }
 
+/** Durable source recovery and target receipts; never projected to clients. */
+export interface PendingCommandHandover {
+  id: string;
+  target: NodeRecord;
+  entries: NodeImportEntry[];
+  movingIds: BackendId[];
+  selfIncluded: boolean;
+}
+
+export interface CommandHandoverReceipt {
+  completed?: boolean;
+  id: string;
+  controllerId: BackendId;
+  controllers: BackendId[];
+  imported: number;
+  skipped: number;
+  needsCredential: number;
+  detachedControllers: number;
+}
+
 export interface NodeRegistry {
   version: 1;
   revision: number;
@@ -124,6 +144,8 @@ export interface NodeRegistry {
   tombstones: NodeDetachTombstone[];
   /** Desktop catalogue entries already imported, so a forgotten node is never re-imported. */
   importedSources: string[];
+  pendingHandover?: PendingCommandHandover;
+  handoverReceipts?: CommandHandoverReceipt[];
 }
 
 /**

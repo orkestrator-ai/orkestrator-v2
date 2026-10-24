@@ -5,7 +5,11 @@ import { useConfigStore } from "../../apps/web/src/stores/configStore";
 import type { AppConfig, GlobalConfig } from "../../apps/web/src/types";
 
 function installGlobalSettingsFixture() {
-  const initialConfig = useConfigStore.getState().config;
+  const config = useConfigStore.getState().config;
+  const cursorDisabled = new URLSearchParams(window.location.search).has("cursor-disabled");
+  const initialConfig: AppConfig = cursorDisabled
+    ? { ...config, global: { ...config.global, enabledAgentPlatforms: ["claude"] } }
+    : config;
   const readConfig = (): AppConfig =>
     JSON.parse(localStorage.getItem("global-settings-config") ?? JSON.stringify(initialConfig));
   window.orkestrator = {
@@ -29,6 +33,8 @@ function installGlobalSettingsFixture() {
           return { accounts: [], active: { claude: "host", codex: "host" } } as T;
         case "get_agent_account_login":
           return { state: "idle" } as T;
+        case "cursor_sdk_login_status":
+          return { state: "idle", auth: { authenticated: false, source: "none" } } as T;
         case "get_agent_sign_in_status":
           // An expired active Claude login, read without a session.
           return {
@@ -54,7 +60,11 @@ export function GlobalSettingsFixture() {
   if (new URLSearchParams(window.location.search).has("plan-usage")) return <PlanUsageFixture />;
   return (
     <main className="p-4">
-      <GlobalSettings activeSection="claude" />
+      <GlobalSettings
+        activeSection={
+          new URLSearchParams(window.location.search).has("cursor-disabled") ? "cursor" : "claude"
+        }
+      />
     </main>
   );
 }

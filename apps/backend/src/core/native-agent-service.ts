@@ -2223,12 +2223,15 @@ export class NativeAgentService {
 
   /** Abandon an in-tab sign-in; a platform without cancel has nothing to release. */
   async cancelProjectionSignIn(input: NativeAgentProjectionInput): Promise<{ cancelled: boolean }> {
-    const provider = await this.provider(input);
-    const outcome = provider.cancelSignIn ? await provider.cancelSignIn() : { cancelled: false };
-    this.projections.invalidateProjection(
-      nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
-    );
-    return outcome;
+    this.assertProjectionInput(input);
+    try {
+      const provider = await this.observeProvider(input);
+      return provider?.cancelSignIn ? await provider.cancelSignIn() : { cancelled: false };
+    } finally {
+      this.projections.invalidateProjection(
+        nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
+      );
+    }
   }
 
   async signOutProjectionProvider(input: NativeAgentProjectionInput): Promise<void> {

@@ -149,6 +149,122 @@ describe("login cancel", () => {
     }
   });
 
+  test("cancels a login whose start response arrives after cancellation", async () => {
+    let resolveStart!: (value: unknown) => void;
+    const response = new Promise((resolve) => {
+      resolveStart = resolve;
+    });
+    const h = harness({
+      "account/login/start": () => response,
+      "account/login/cancel": () => ({ status: "canceled" }),
+      "account/read": () => ({ account: null }),
+    });
+    await h.engine.start();
+    try {
+      const starting = h.engine.beginAccountLogin("device-code");
+      await settle();
+      const cancelling = h.engine.cancelAccountLogin();
+      resolveStart({
+        loginId: "late-login",
+        verificationUrl: "https://auth.example.test/device",
+        userCode: "TEST-CODE",
+      });
+      await starting;
+      expect(await cancelling).toBe("canceled");
+      expect(h.child().requests.filter((r) => r.method === "account/login/cancel")).toEqual([
+        { method: "account/login/cancel", params: { loginId: "late-login" } },
+      ]);
+      expect(await h.engine.readAccount()).not.toHaveProperty("pendingSignIn");
+      expect(await h.engine.cancelAccountLogin()).toBe("none");
+    } finally {
+      await h.engine.stop();
+    }
+  });
+
+  test("retains the login and expiry after a rejected cancel so retry uses the same ID", async () => {
+    let attempts = 0;
+    const h = harness({
+      "account/login/start": () => ({
+        loginId: "retry-login",
+        verificationUrl: "https://auth.example.test/device",
+        userCode: "TEST-CODE",
+      }),
+      "account/login/cancel": () => {
+        if (++attempts === 1) throw new Error("cancel unavailable");
+        return { status: "canceled" };
+      },
+      "account/read": () => ({ account: null }),
+    });
+    await h.engine.start();
+    try {
+      await h.engine.beginAccountLogin("device-code");
+      const before = await h.engine.readAccount();
+      const timer = (h.engine as unknown as { pendingSignInTimer: unknown }).pendingSignInTimer;
+      await expect(h.engine.cancelAccountLogin()).rejects.toThrow("cancel unavailable");
+      expect(await h.engine.readAccount()).toEqual(before);
+      expect((h.engine as unknown as { pendingSignInTimer: unknown }).pendingSignInTimer).toBe(
+        timer,
+      );
+      expect(await h.engine.cancelAccountLogin()).toBe("canceled");
+      expect(
+        h
+          .child()
+          .requests.filter((r) => r.method === "account/login/cancel")
+          .map((r) => r.params.loginId),
+      ).toEqual(["retry-login", "retry-login"]);
+      expect(await h.engine.readAccount()).not.toHaveProperty("pendingSignIn");
+    } finally {
+      await h.engine.stop();
+    }
+  });
+
+  test.each([false, true])(
+    "an older cancellation cannot erase a newer login (reject=%s)",
+    async (reject) => {
+      let finishCancel!: () => void;
+      let login = 0;
+      const h = harness({
+        "account/login/start": () => ({
+          loginId: `login-${++login}`,
+          verificationUrl: "https://auth.example.test/device",
+          userCode: `CODE-${login}`,
+        }),
+        "account/login/cancel": () =>
+          new Promise((resolve, fail) => {
+            finishCancel = () =>
+              reject ? fail(new Error("cancel unavailable")) : resolve({ status: "canceled" });
+          }),
+        "account/read": () => ({ account: null }),
+      });
+      await h.engine.start();
+      try {
+        await h.engine.beginAccountLogin("device-code");
+        const cancelling = h.engine.cancelAccountLogin();
+        void cancelling.catch(() => undefined);
+        await settle();
+        await h.engine.beginAccountLogin("device-code");
+        finishCancel();
+        if (reject) await expect(cancelling).rejects.toThrow("cancel unavailable");
+        else expect(await cancelling).toBe("canceled");
+        expect(await h.engine.readAccount()).toMatchObject({ pendingSignIn: { code: "CODE-2" } });
+        const next = h.engine.cancelAccountLogin();
+        void next.catch(() => undefined);
+        await settle();
+        expect(
+          h
+            .child()
+            .requests.filter((r) => r.method === "account/login/cancel")
+            .at(-1)?.params,
+        ).toEqual({ loginId: "login-2" });
+        finishCancel();
+        if (reject) await expect(next).rejects.toThrow("cancel unavailable");
+        else expect(await next).toBe("canceled");
+      } finally {
+        await h.engine.stop();
+      }
+    },
+  );
+
   test("clears the pending device code and reports a login app-server already closed", async () => {
     const h = harness({
       "account/login/start": () => ({

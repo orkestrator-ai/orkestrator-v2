@@ -670,8 +670,8 @@ describe("applyActiveAgentAccountsForContainerTerminal", () => {
     expect(await fs.readFile(staged(revision, "codex-home/auth.json"), "utf8")).toBe(
       '{"OPENAI_API_KEY":"codex-2"}',
     );
-    expect(fake.markers.has("/tmp/orkestrator-codex-account")).toBe(false);
-    expect(fake.markers.has("/tmp/orkestrator-claude-account")).toBe(false);
+    expect(fake.markers.get("/tmp/orkestrator-codex-account")).toBe("terminal-handoff");
+    expect(fake.markers.get("/tmp/orkestrator-claude-account")).toBe("terminal-handoff");
 
     let stopped = 0;
     await reconcileContainerAgentAccount(
@@ -684,6 +684,50 @@ describe("applyActiveAgentAccountsForContainerTerminal", () => {
     expect(stopped).toBe(1);
     expect(fake.markers.get("/tmp/orkestrator-codex-account")).toBe(CODEX_ID);
   });
+
+  test.each(["terminal", "bridge"])(
+    "switching back after a handoff restores both logins through %s",
+    async (path) => {
+      await addAccounts({ claude: CLAUDE_ID, codex: CODEX_ID });
+      const fake = fakeRunners(null);
+      fake.markers.set("/tmp/orkestrator-codex-account", "default");
+      fake.markers.set("/tmp/orkestrator-claude-account", "default");
+      await applyActiveAgentAccountsForContainerTerminal(context, "container-1", fake.runners);
+      await addAccounts({});
+      fake.calls.length = 0;
+      if (path === "terminal") {
+        await applyActiveAgentAccountsForContainerTerminal(context, "container-1", fake.runners);
+      } else {
+        for (const platform of ["claude", "codex"] as const) {
+          await reconcileContainerAgentAccount(
+            context,
+            "container-1",
+            platform,
+            { isRunning: async () => true, stop: async () => undefined },
+            fake.runners,
+          );
+        }
+      }
+      expect(
+        fake.calls.find((call) => call.kind === "pipe" && call.command.includes(".codex/auth.json"))
+          ?.stdin,
+      ).toContain("codex-host");
+      expect(
+        fake.calls.find(
+          (call) =>
+            call.kind === "pipe" && call.command === SYNC_CONTAINER_CLAUDE_CREDENTIAL_COMMAND,
+        )?.stdin,
+      ).toContain("claude-host");
+      expect(
+        fake.calls.find((call) => call.kind === "pipe" && call.command.includes('/.claude.json"'))
+          ?.stdin,
+      ).toContain("host@example.com");
+      if (path === "bridge") {
+        expect(fake.markers.get("/tmp/orkestrator-codex-account")).toBe("default");
+        expect(fake.markers.get("/tmp/orkestrator-claude-account")).toBe("default");
+      }
+    },
+  );
 
   test("leaves the login alone while work is live, when current, or when isolated", async () => {
     await addAccounts({ codex: CODEX_ID });

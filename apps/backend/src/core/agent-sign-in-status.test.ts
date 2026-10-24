@@ -102,6 +102,40 @@ describe("settings sign-in status, read without a session", () => {
     });
   });
 
+  test.each([
+    ["ANTHROPIC_API_KEY", "API key from the environment"],
+    ["CLAUDE_CODE_OAUTH_TOKEN", "OAuth token from the environment"],
+  ])(
+    "Claude host accepts %s without leaking or inheriting it into added accounts",
+    async (key, label) => {
+      const snapshot = accounts({ claude: false, codex: false });
+      const environment = { [key]: AUTH_SECRET_CANARIES.claudeOAuthToken };
+      const status = await readAgentSignInStatus(
+        "claude",
+        deps({
+          env: environment,
+          listAccounts: async () => snapshot,
+        }),
+      );
+      expect(status).toMatchObject({ state: "signed-in", account: { label } });
+      expect(status.account).toEqual({ label });
+      expectNoCanary(status, "Claude environment sign-in status");
+      snapshot.accounts.push({
+        ...snapshot.accounts[0]!,
+        id: "added-claude",
+        isDefault: false,
+        signedIn: false,
+      });
+      snapshot.active.claude = "added-claude";
+      expect(
+        await readAgentSignInStatus(
+          "claude",
+          deps({ env: environment, listAccounts: async () => snapshot }),
+        ),
+      ).toMatchObject({ state: "signed-out" });
+    },
+  );
+
   test("Codex follows the active account, not the host login", async () => {
     const status = await readAgentSignInStatus(
       "codex",
@@ -143,6 +177,9 @@ describe("settings sign-in status, read without a session", () => {
 
   test.each([
     [{}, {}, "signed-out"],
+    [{ GROK_AUTH_METHOD_ID: "grok.com" }, {}, "signed-in"],
+    [{ GROK_AUTH_METHOD_ID: "  " }, {}, "signed-out"],
+    [{ GROK_AUTH_PROVIDER_COMMAND: "credential-helper" }, {}, "signed-in"],
     [{ XAI_API_KEY: AUTH_SECRET_CANARIES.xaiApiKey }, {}, "signed-in"],
     [{}, { [path.join(HOME, ".grok", "auth.json")]: "{}" }, "signed-in"],
     [{ GROK_HOME: "/elsewhere" }, { "/elsewhere/auth.json": "{}" }, "signed-in"],

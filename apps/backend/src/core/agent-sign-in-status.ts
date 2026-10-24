@@ -7,7 +7,8 @@
  * the same evidence the launchers hand to bridges:
  *
  * - Claude and Codex: the active account's login (`listAgentAccounts`), the
- *   one every new agent, container and terminal uses.
+ *   one every new agent, container and terminal uses. Claude also recognizes
+ *   environment credentials for the host account only.
  * - Cursor: the credential the bridge would resolve (`cursorSdkAuthStatus`).
  * - Grok: the checks its bridge makes before `authenticate`: a stored login,
  *   `XAI_API_KEY` or an auth-provider command (`acp-credentials.ts`).
@@ -24,7 +25,10 @@ import { readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import type { AgentAccountsSnapshot } from "@orkestrator/protocol/agent-accounts";
+import {
+  DEFAULT_AGENT_ACCOUNT_ID,
+  type AgentAccountsSnapshot,
+} from "@orkestrator/protocol/agent-accounts";
 import type {
   NativeAgentAuthState,
   NativeAgentAuthStatus,
@@ -110,19 +114,30 @@ export function providersFromCredentialStore(text: string | undefined): Provider
 function accountStatus(
   snapshot: AgentAccountsSnapshot,
   platform: "claude" | "codex",
+  env: NodeJS.ProcessEnv,
 ): NativeAgentAuthStatus {
   const active = snapshot.accounts.find(
     (account) => account.platform === platform && account.id === snapshot.active[platform],
   );
+  const environmentSource =
+    platform === "claude" && active?.id === DEFAULT_AGENT_ACCOUNT_ID
+      ? env.ANTHROPIC_API_KEY?.trim()
+        ? "API key from the environment"
+        : env.CLAUDE_CODE_OAUTH_TOKEN?.trim()
+          ? "OAuth token from the environment"
+          : undefined
+      : undefined;
   const state: NativeAgentAuthState = !active
     ? "unknown"
-    : active.signedIn
+    : active.signedIn || environmentSource
       ? "signed-in"
       : "signed-out";
-  const plan = active?.identity.plan;
+  const plan = environmentSource ? undefined : active?.identity.plan;
   return {
     state,
-    ...(active ? { account: { label: active.label, ...(plan ? { plan } : {}) } } : {}),
+    ...(active
+      ? { account: { label: environmentSource ?? active.label, ...(plan ? { plan } : {}) } }
+      : {}),
     signIn: SETTINGS_SIGN_IN_ROUTES[platform],
     signOut: false,
   };
@@ -133,7 +148,12 @@ async function grokSignedIn(
   home: string,
   readText: (filePath: string) => Promise<string | undefined>,
 ): Promise<boolean> {
-  if (env.XAI_API_KEY?.trim() || env.GROK_AUTH_PROVIDER_COMMAND?.trim()) return true;
+  if (
+    env.XAI_API_KEY?.trim() ||
+    env.GROK_AUTH_PROVIDER_COMMAND?.trim() ||
+    env.GROK_AUTH_METHOD_ID?.trim()
+  )
+    return true;
   const grokHome = envPath(env.GROK_HOME, home) ?? path.join(home, ".grok");
   if ((await readText(path.join(grokHome, "auth.json"))) !== undefined) return true;
   const config = (await readText(path.join(grokHome, "config.toml"))) ?? "";
@@ -162,7 +182,7 @@ export async function readAgentSignInStatus(
   switch (platform) {
     case "claude":
     case "codex":
-      return accountStatus(await deps.listAccounts(), platform);
+      return accountStatus(await deps.listAccounts(), platform, env);
     case "cursor": {
       const cursor = await deps.cursorStatus();
       const label =

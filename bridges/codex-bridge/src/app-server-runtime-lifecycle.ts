@@ -1565,10 +1565,6 @@ export class CodexRuntimeLifecycle {
     );
   }
 
-  /**
-   * Publish only app-server-observed model values. Thread settings confirm the
-   * effective model for an accepted turn; a turn-scoped reroute wins over it.
-   */
   /** Replace the thread's `auth` notice and tell every session bound to it. */
   setThreadAuthNotice(context: ThreadContext, notice: ThreadAuthNotice | undefined): void {
     if (context.authNotice === notice) return;
@@ -1582,6 +1578,10 @@ export class CodexRuntimeLifecycle {
     }
   }
 
+  /**
+   * Publish only app-server-observed model values. Thread settings confirm the
+   * effective model for an accepted turn; a turn-scoped reroute wins over it.
+   */
   applyConfirmedModel(context: ThreadContext, model: string, turnId?: string): void {
     if (!turnId) context.modelId = model;
     if (turnId) {

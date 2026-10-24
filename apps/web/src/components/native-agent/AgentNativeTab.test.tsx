@@ -1511,6 +1511,51 @@ describe("AgentNativeTab", () => {
     expect(screen.getByRole("button", { name: "Sign in to Codex" })).toBeTruthy();
   });
 
+  test.each(["javascript:alert(1)", "not a URL"])(
+    "cancels an invalid sign-in URL %s while retaining device cancellation",
+    async (url) => {
+      getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+        ...(await defaultProjection(input as never)),
+        readiness: { state: "authentication-required" as const, message: "Sign in to Codex" },
+      }));
+      getNativeAgentAuthStatusMock.mockImplementation(async () => ({
+        state: "needs-auth" as const,
+        signIn: { kind: "device-code" as const },
+      }));
+      beginNativeAgentSignInMock.mockImplementation(async () => ({ url, code: "SAFE-CODE" }));
+      render(<AgentNativeTab tabId="invalid-sign-in" data={identity("codex")} isActive />);
+      fireEvent.click(await screen.findByRole("button", { name: "Sign in to Codex" }));
+      await waitFor(() => expect(cancelNativeAgentSignInMock).toHaveBeenCalledTimes(1));
+      expect(await screen.findByText("SAFE-CODE")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Cancel sign-in" })).toBeTruthy();
+      expect(screen.queryByRole("link", { name: "Open sign-in link" })).toBeNull();
+      expect(openInBrowserMock).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "Cancel sign-in" }));
+      await waitFor(() => expect(cancelNativeAgentSignInMock).toHaveBeenCalledTimes(2));
+    },
+  );
+
+  test("a Codex auth notice offers sign-in even when readiness remains ready", async () => {
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input as never)),
+      notices: [
+        {
+          kind: "auth" as const,
+          state: "needs-auth" as const,
+          message: "Sign in to Codex again",
+          occurrenceId: "auth-1",
+        },
+      ],
+    }));
+    getNativeAgentAuthStatusMock.mockResolvedValue({
+      state: "needs-auth",
+      signIn: { kind: "browser-url" },
+    });
+    render(<AgentNativeTab tabId="notice-sign-in" data={identity("codex")} isActive />);
+    fireEvent.click(await screen.findByRole("button", { name: "Sign in to Codex" }));
+    await waitFor(() => expect(beginNativeAgentSignInMock).toHaveBeenCalledTimes(1));
+  });
+
   test("reports when the Codex sign-in link cannot be opened", async () => {
     getNativeAgentProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),

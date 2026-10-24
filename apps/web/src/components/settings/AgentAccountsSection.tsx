@@ -242,9 +242,11 @@ function AccountRow({
 export function AgentAccountsSection({
   platform,
   reloadToken = 0,
+  onAccountsChanged,
 }: {
   platform: AgentAccountPlatform;
   reloadToken?: number;
+  onAccountsChanged?: () => void;
 }) {
   const [snapshot, setSnapshot] = useState<AgentAccountsSnapshot | null>(null);
   const [login, setLogin] = useState<AgentAccountLoginProgress>({ state: "idle" });
@@ -284,9 +286,10 @@ export function AgentAccountsSection({
       if (previous === "pending" && next.state !== "pending") {
         if (next.state === "failed" && next.error) setError(next.error);
         void reload();
+        onAccountsChanged?.();
       }
     },
-    [reload],
+    [reload, onAccountsChanged],
   );
 
   // Signing the active account in again is driven from the agent's own tab; it
@@ -315,6 +318,7 @@ export function AgentAccountsSection({
       const next = await operation();
       if (!mounted.current) return;
       setSnapshot(next);
+      onAccountsChanged?.();
       if (activeChanged) setUsageReloadToken((token) => token + 1);
     } catch (cause) {
       if (mounted.current) setError(messageOf(cause));

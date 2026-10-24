@@ -46,3 +46,9 @@ test("the Claude page shows its sign-in card without a session", async ({ page }
   await expect(card.getByText("Host login · max")).toBeVisible();
   await expect(card.getByRole("button", { name: "Sign in to Claude" })).toBeVisible();
 });
+
+test("disabled Cursor retains its browser sign-in controls", async ({ page }) => {
+  await page.goto("/global-settings?cursor-disabled");
+  await expect(page.getByRole("button", { name: "Sign in with Cursor" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Cursor Agent sign-in" })).toHaveCount(0);
+});

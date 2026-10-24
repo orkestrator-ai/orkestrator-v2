@@ -599,6 +599,9 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     />
   );
 
+  const [accountStatusToken, setAccountStatusToken] = useState(0);
+  const accountsChanged = useCallback(() => setAccountStatusToken((token) => token + 1), []);
+
   const renderPlatform = (
     platform: AgentPlatform,
     extras?: React.ReactNode,
@@ -610,16 +613,19 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         <AgentSignInCard
           key={`sign-in-${platform}`}
           platform={platform}
-          reloadToken={planUsageRefreshToken}
+          reloadToken={planUsageRefreshToken + accountStatusToken}
         >
           {signInControls}
         </AgentSignInCard>
-      ) : null}
+      ) : (
+        signInControls
+      )}
       {/* Platforms with accounts show usage on each account instead. */}
       {isAgentAccountPlatform(platform) ? (
         <AgentAccountsSection
           key={`accounts-${platform}`}
           platform={platform}
+          onAccountsChanged={accountsChanged}
           reloadToken={planUsageRefreshToken}
         />
       ) : (PLAN_USAGE_PLATFORMS as readonly AgentPlatform[]).includes(platform) ? (

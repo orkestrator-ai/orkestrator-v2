@@ -822,6 +822,7 @@ export class AppServerEngine implements CodexEngine {
    */
   private activeLoginId: string | null = null;
   private loginSequence = 0;
+  private loginStart: Promise<{ result: unknown; generation: EngineGeneration }> | undefined;
   /**
    * The generation whose model has answered since its last refused turn or
    * account change. Once a forced refresh is rejected, app-server reports no
@@ -2205,7 +2206,7 @@ export class AppServerEngine implements CodexEngine {
   async beginAccountLogin(method: "browser" | "device-code" = "browser"): Promise<unknown> {
     const sequence = ++this.loginSequence;
     this.forgetSignIn();
-    const response = await this.supervisor.request(
+    const start = this.supervisor.requestWithGeneration(
       "account/login/start",
       method === "device-code"
         ? {
@@ -2217,6 +2218,13 @@ export class AppServerEngine implements CodexEngine {
             useHostedLoginSuccessPage: true,
           },
     );
+    this.loginStart = start;
+    let response: unknown;
+    try {
+      response = (await start).result;
+    } finally {
+      if (this.loginStart === start) this.loginStart = undefined;
+    }
     const raw = objectRecord(response);
     if (
       sequence === this.loginSequence &&
@@ -2258,12 +2266,44 @@ export class AppServerEngine implements CodexEngine {
    * `none` when nothing was open or app-server had already finished it.
    */
   async cancelAccountLogin(): Promise<"canceled" | "none"> {
-    const loginId = this.activeLoginId;
-    this.forgetSignIn();
-    // A start still in flight must not re-arm the login being abandoned.
-    this.loginSequence++;
+    let loginId = this.activeLoginId;
+    const start = this.loginStart;
+    let generation = this.supervisor.getGeneration();
+    // Fence the display immediately, but keep the ID and expiry until the RPC
+    // succeeds so a failed cancellation can be retried.
+    const sequence = ++this.loginSequence;
+    if (!loginId && start) {
+      const started = await start;
+      generation = started.generation;
+      if (generation !== this.supervisor.getGeneration()) return "none";
+      const raw = objectRecord(started.result);
+      if (
+        typeof raw.loginId === "string" &&
+        raw.loginId.length > 0 &&
+        raw.loginId.length <= 512 &&
+        raw.loginId !== this.completedLoginId
+      ) {
+        loginId = raw.loginId;
+        if (sequence === this.loginSequence) {
+          this.activeLoginId = loginId;
+          this.pendingSignInTimer = setTimeout(
+            () => void this.cancelAccountLogin().catch(() => undefined),
+            NATIVE_AGENT_PENDING_SIGN_IN_TTL_MS,
+          );
+          this.pendingSignInTimer.unref?.();
+        }
+      }
+    }
     if (!loginId) return "none";
-    const response = await this.supervisor.request("account/login/cancel", { loginId });
+    const response = await this.supervisor.requestOnGeneration(generation, "account/login/cancel", {
+      loginId,
+    });
+    if (
+      sequence === this.loginSequence &&
+      this.activeLoginId === loginId &&
+      generation === this.supervisor.getGeneration()
+    )
+      this.forgetSignIn();
     return objectRecord(response).status === "canceled" ? "canceled" : "none";
   }
 

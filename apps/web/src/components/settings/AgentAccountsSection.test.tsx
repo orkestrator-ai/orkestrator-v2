@@ -12,6 +12,7 @@ import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
 const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
 let snapshot: AgentAccountsSnapshot;
 let login: AgentAccountLoginProgress = { state: "idle" };
+const onAccountsChanged = mock(() => undefined);
 let startResult: AgentAccountLoginProgress = { state: "idle" };
 
 const usage: PlanUsageSnapshot = {
@@ -43,6 +44,14 @@ mock.module("@/lib/native/backend", () => ({
             isActive:
               account.platform === "codex" ? account.id === args.accountId : account.isActive,
           })),
+        };
+        return Promise.resolve(snapshot);
+      case "rename_agent_account":
+        snapshot = {
+          ...snapshot,
+          accounts: snapshot.accounts.map((a) =>
+            a.id === args.accountId ? { ...a, label: String(args.label) } : a,
+          ),
         };
         return Promise.resolve(snapshot);
       case "remove_agent_account":
@@ -88,6 +97,7 @@ const ADDED_ID = "11111111-2222-4333-8444-555555555555";
 
 beforeEach(() => {
   calls.length = 0;
+  onAccountsChanged.mockClear();
   usageResult = usage;
   login = { state: "idle" };
   snapshot = {
@@ -113,7 +123,7 @@ afterEach(() => {
 
 async function mount() {
   await act(async () => {
-    render(<AgentAccountsSection platform="codex" />);
+    render(<AgentAccountsSection platform="codex" onAccountsChanged={onAccountsChanged} />);
   });
 }
 
@@ -122,6 +132,21 @@ function accountOrder(): string[] {
 }
 
 describe("AgentAccountsSection", () => {
+  test("rename and removal notify the adjacent status reader", async () => {
+    await mount();
+    const added = await screen.findByRole("listitem", { name: "second@example.com" });
+    fireEvent.click(within(added).getByRole("button", { name: "Rename" }));
+    fireEvent.change(within(added).getByRole("textbox", { name: "Account name" }), {
+      target: { value: "Renamed account" },
+    });
+    fireEvent.click(within(added).getByRole("button", { name: "Save" }));
+    const renamed = await screen.findByRole("listitem", { name: "Renamed account" });
+    await waitFor(() => expect(onAccountsChanged).toHaveBeenCalledTimes(1));
+    fireEvent.click(within(renamed).getByRole("button", { name: "Remove" }));
+    fireEvent.click(within(renamed).getByRole("button", { name: "Confirm remove" }));
+    await waitFor(() => expect(onAccountsChanged).toHaveBeenCalledTimes(2));
+  });
+
   test("forces a Claude usage reread when the credential refresh token changes", async () => {
     const view = render(<AgentAccountsSection platform="claude" reloadToken={0} />);
     await screen.findByText("5-hour limit");
@@ -208,6 +233,7 @@ describe("AgentAccountsSection", () => {
     fireEvent.click(within(added).getByRole("button", { name: "Use" }));
 
     await waitFor(() => expect(within(added).getByText("Active")).toBeTruthy());
+    expect(onAccountsChanged).toHaveBeenCalledTimes(1);
     expect(calls.find((c) => c.command === "set_active_agent_account")?.args).toEqual({
       platform: "codex",
       accountId: ADDED_ID,
@@ -264,6 +290,7 @@ describe("AgentAccountsSection", () => {
     });
 
     await waitFor(() => expect(screen.queryByLabelText("Account sign-in") === null).toBe(true));
+    expect(onAccountsChanged).toHaveBeenCalledTimes(1);
     expect(calls.filter((c) => c.command === "list_agent_accounts").length).toBeGreaterThan(
       listsBefore,
     );
@@ -280,7 +307,7 @@ describe("AgentAccountsSection", () => {
         operationId: "reauth-one",
       };
       await act(async () => {
-        render(<AgentAccountsSection platform="claude" />);
+        render(<AgentAccountsSection platform="claude" onAccountsChanged={onAccountsChanged} />);
         await clock.advance(0);
       });
       const add = await screen.findByRole("button", { name: /Add account/ });
@@ -291,6 +318,7 @@ describe("AgentAccountsSection", () => {
         await clock.advance(2_000);
       });
       expect((add as HTMLButtonElement).disabled).toBe(false);
+      expect(onAccountsChanged).toHaveBeenCalledTimes(1);
       if (state === "failed") expect(screen.getByText("Sign-in rejected")).toBeTruthy();
     },
   );

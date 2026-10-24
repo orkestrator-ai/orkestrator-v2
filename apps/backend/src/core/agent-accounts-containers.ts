@@ -1042,6 +1042,9 @@ export async function reconcileContainerAgentAccount(
     return;
   }
   const running = bridge ? await bridge.isRunning() : false;
+  // The marker acknowledges both the files and the bridge. Invalidate it
+  // before a terminal handoff changes files, including a partial failed push.
+  if (!bridge) await writeMarker(runners, containerId, platform, "terminal-handoff");
   await pushContainerLogin(context, runners, containerId, platform, global, active);
   const revision = await runners.label(containerId, DOCKER_LABEL_INPUTS_REVISION);
   if (revision) {
@@ -1051,7 +1054,7 @@ export async function reconcileContainerAgentAccount(
   }
   // Without a bridge to replace (a terminal opening), the login is in place
   // for the CLI it runs, but any idle bridge still launched on the old one:
-  // leave the marker so the next bridge start replaces it and acknowledges.
+  // keep the marker invalid so the next bridge start replaces it and acknowledges.
   if (!bridge) return;
   if (running) await bridge.stop();
   // Publish completion only after the old bridge has relinquished its login.

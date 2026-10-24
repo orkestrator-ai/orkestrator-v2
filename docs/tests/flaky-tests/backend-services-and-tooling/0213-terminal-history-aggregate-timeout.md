@@ -73,3 +73,11 @@ The unchanged owner pass confirms intermittence. No implementation, assertion, t
 - Failure: `terminal history > normalizes lines, CRLF, Unicode, and ANSI across transport chunks and pages` at 5013.95 ms. Backend: 9909 passed, 84 skipped, 4 failed across 9997 tests in 572 files (630.59 s); the other failures were 0213, 0175 and 0165 (two cases).
 - Evidence: `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.iQtiOF/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - Isolated rerun: `mise exec -- bun test --cwd apps/backend ./src/core/terminal-history.test.ts --parallel=1` passed unchanged (25 passed) at load 11.
+
+
+## Coordinator adapter review — 2026-10-24
+
+The aggregate repeated this case during coordinator adapter validation. Exact
+commands, timing, owner rerun results and evidence are recorded in
+[0725](../aggregate-validation-runs/0725-coordinator-adapter-review-validation.md).
+The owning implementation, assertions, timeouts and skips were unchanged.

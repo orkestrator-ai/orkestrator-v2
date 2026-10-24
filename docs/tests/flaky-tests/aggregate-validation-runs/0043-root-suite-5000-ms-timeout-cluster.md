@@ -1,7 +1,7 @@
 # Root-suite 5000 ms timeout cluster (`tests/unit/electron/`, `tests/unit/test-diagnostic-bounds.test.ts`)
 
 - **ID:** 0043
-- **Status:** resolved
+- **Status:** open
 Three tests failed together in one root-suite run, and three further runs each
 failed a different subset. They are recorded as one entry because the evidence
 points at a single shared cause — starvation against a fixed 5000 ms deadline —
@@ -43,3 +43,9 @@ records for the `tmux-backend.test.ts` and `standalone.test.ts` clusters below.
   - `Electron backend command registry > reports whether the selected host GitHub CLI credential is available` (`apps/backend/tests/commands-registry-tools.test.ts:840`, 5,010.40 ms)
 
   All three owning files passed alone immediately afterwards: `bun run test:logged -- --name env-registry -- bun test ./apps/backend/tests/commands-registry-environments.test.ts --only-failures` -> exit 0 in 30.9 s; `... --name gh-cred -- bun test ./apps/backend/tests/commands-registry-github.test.ts ./apps/backend/tests/commands-registry-pr.test.ts` -> exit 0 in 10.8 s; `... --name tools-registry -- bun test ./apps/backend/tests/commands-registry-tools.test.ts` -> exit 0 in 0.5 s. The failing set is again unstable between runs and spans three files, which is the same signature as every earlier occurrence. No new evidence about the mechanism. The change under review adds a reviewer fan-out to the build pipeline, a `create_feature_build` command and create-environment dialog work; none of these three files load any of it.
+
+## Coordinator adapters main merge — 2026-10-24
+
+Original command: `ORKESTRATOR_TEST_AREA_BASE=$(git merge-base HEAD MERGE_HEAD) mise run test:logged -- --name merge-tests -- mise run test`, workspace/root/bridges/protocol reservations 4/1/2/1. Reopened for `bounded test diagnostics > never passes a DOM-producing query result directly to toBeNull`, which exceeded its current 30-second budget (30050.80 ms). `mise run test:logged -- --name merge-owner-diagnostics -- bun test ./tests/unit/test-diagnostic-bounds.test.ts --parallel=1 --only-failures` passed the complete unchanged owner (28.9 s). The older Electron failures remain historical.
+
+Full failure names, counts, evidence paths and unresolved limitations are in [0724](0724-coordinator-adapters-main-merge-validation.md). No implementation, assertion, timeout or skip changed. The original aggregate remains non-green.

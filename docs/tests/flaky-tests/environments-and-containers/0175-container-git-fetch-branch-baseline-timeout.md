@@ -92,6 +92,13 @@
 - **Assessment:** confirmed intermittent recurrence; concurrent load remains a hypothesis. No assertion, deadline or skip changed.
 
 
+## Coordinator adapter review — 2026-10-24
+
+The aggregate repeated this case during coordinator adapter validation. Exact
+commands, timing, owner rerun results and evidence are recorded in
+[0725](../aggregate-validation-runs/0725-coordinator-adapter-review-validation.md).
+The owning implementation, assertions, timeouts and skips were unchanged.
+
 ## Resolution — 2026-10-24 (worktree signal review)
 
 - **Root cause:** The case runs multiple real Git status/fetch processes and a local remote push under Bun's five-second default. Recorded aggregate runs exceeded that budget; the original `Bun.spawn` helper had no per-test cancellation or child-group teardown, allowing an abandoned status process to surface as a later `script exited 143` error. The evidence does not isolate which host workload caused the slow runs.

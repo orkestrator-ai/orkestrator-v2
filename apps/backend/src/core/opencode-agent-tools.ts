@@ -1,3 +1,5 @@
+import { readBoundedOpenCodeResponse } from "./opencode-bounded-response.js";
+import { forgetOpenCodeCoordinatorResearch } from "./opencode-coordinator-research.js";
 import { createHash } from "node:crypto";
 import { ORKESTRATOR_AGENT_MCP_SERVER_NAME, type AgentToolConnection } from "./agent-tools.js";
 import { conciseError } from "./commands-error-text.js";
@@ -87,46 +89,10 @@ export function readOpenCodeAgentToolsStatus(payload: unknown): string | null {
   return typeof status === "string" ? status : null;
 }
 
-export const MAX_OPENCODE_MCP_STATUS_BYTES = 64 * 1024;
-
-export async function readBoundedOpenCodeResponse(response: Response): Promise<unknown> {
-  if (!response.body) {
-    throw new Error("OpenCode returned an empty MCP status response");
-  }
-  const declaredLength = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_OPENCODE_MCP_STATUS_BYTES) {
-    await response.body.cancel().catch(() => undefined);
-    throw new Error("OpenCode MCP status response is too large");
-  }
-
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let bytes = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      bytes += value.byteLength;
-      if (bytes > MAX_OPENCODE_MCP_STATUS_BYTES) {
-        await reader.cancel().catch(() => undefined);
-        throw new Error("OpenCode MCP status response is too large");
-      }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-
-  const body = Buffer.concat(
-    chunks.map((chunk) => Buffer.from(chunk)),
-    bytes,
-  ).toString("utf8");
-  try {
-    return JSON.parse(body);
-  } catch {
-    throw new Error("OpenCode returned an invalid MCP status response");
-  }
-}
+export {
+  MAX_OPENCODE_MCP_STATUS_BYTES,
+  readBoundedOpenCodeResponse,
+} from "./opencode-bounded-response.js";
 
 export function openCodeAgentToolsFingerprint(
   port: number,
@@ -352,9 +318,11 @@ export class OpenCodeAgentToolsReconciler {
     this.configurations.delete(key);
     this.outcomes.delete(key);
     this.launchConnections.delete(key);
+    forgetOpenCodeCoordinatorResearch(key);
   }
 
   cancelAll(): void {
+    for (const key of this.launchConnections.keys()) forgetOpenCodeCoordinatorResearch(key);
     for (const configuration of this.configurations.values()) {
       configuration.controller.abort();
     }

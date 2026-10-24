@@ -117,6 +117,8 @@ interface RegisteredMcpTool {
 interface PiMcpRuntime {
   inventory: NativeAgentMcpServer[];
   orkestratorToolNames: Set<string>;
+  /** Registered names of the coordinator's research server tools. */
+  researchToolNames: Set<string>;
   tools: RegisteredMcpTool[];
   connections: PiMcpConnection[];
   /** The tab credential these connections were prepared with; "" for the env. */
@@ -193,6 +195,15 @@ export function isOrkestratorArtifactTool(state: SessionState, toolName: string)
     (ARTIFACT_TOOL_NAMES as readonly string[]).includes(toolName) &&
     !state.policy?.toolPolicy?.deny?.includes(toolName)
   );
+}
+
+/**
+ * A tool from one of the coordinator's research servers, by the exact name it
+ * was registered under. Those servers are remote HTTPS endpoints the launcher
+ * named; their tools read documentation and cannot reach the checkout.
+ */
+export function isResearchMcpTool(state: SessionState, toolName: string): boolean {
+  return runtimes.get(state)?.researchToolNames.has(toolName) === true;
 }
 
 export function isOrkestratorMcpTool(state: SessionState, toolName: string): boolean {
@@ -322,6 +333,7 @@ export async function preparePiMcp(
   const runtime: PiMcpRuntime = {
     inventory: [],
     orkestratorToolNames: new Set(),
+    researchToolNames: new Set(),
     tools: [],
     connections: [],
     connectionKey: mcpConnectionKey(state),
@@ -483,12 +495,13 @@ async function connectAndRegister(
     runtime.tools.push(registered);
     names.push(registered.name);
     if (server.scope === "orkestrator") runtime.orkestratorToolNames.add(registered.name);
+    if (server.scope === "research") runtime.researchToolNames.add(registered.name);
   }
   return {
     id: server.id,
     name: server.id,
     status: "connected",
-    scope: server.scope,
+    scope: publicMcpScope(server.scope),
     transport: server.transport,
     toolCount: names.length,
     tools: names,
@@ -496,12 +509,21 @@ async function connectAndRegister(
   };
 }
 
+/**
+ * The scope an inventory row reports. Research servers are configured in
+ * Orkestrator's own settings, not in a Pi file, so they are reported as
+ * Orkestrator's.
+ */
+function publicMcpScope(scope: ResolvedMcpServer["scope"]): NativeAgentMcpServer["scope"] {
+  return scope === "research" ? "orkestrator" : scope;
+}
+
 function detachedServer(server: ResolvedMcpServer): NativeAgentMcpServer {
   return {
     id: server.id,
     name: server.id,
     status: "failed",
-    scope: server.scope,
+    scope: publicMcpScope(server.scope),
     transport: server.transport,
     error: "MCP connection was detached before it completed",
     actions: [],
@@ -524,7 +546,7 @@ function recordConnectFailure(
     id: server.id,
     name: server.id,
     status: "failed",
-    scope: server.scope,
+    scope: publicMcpScope(server.scope),
     transport: server.transport,
     error: publicMcpError(error),
     actions: [],

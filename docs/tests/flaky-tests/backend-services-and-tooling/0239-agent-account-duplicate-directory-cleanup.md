@@ -49,3 +49,11 @@ No assertion, timeout, production account behavior or skip was changed.
 - **Alone:** `bun test --preload ../../tests/setup-node.ts ./src/core/agent-accounts.test.ts --parallel=1`
   in `apps/backend`: 37 passed (4.55 s) at load 36.
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.txKi1Z/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+
+## Coordinator adapter review — 2026-10-24
+
+The aggregate repeated this case during coordinator adapter validation. Exact
+commands, timing, owner rerun results and evidence are recorded in
+[0725](../aggregate-validation-runs/0725-coordinator-adapter-review-validation.md).
+The owning implementation, assertions, timeouts and skips were unchanged.

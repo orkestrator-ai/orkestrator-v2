@@ -223,6 +223,36 @@ complete unchanged owner in 19.6 s. Original group evidence is
 `orkestrator-test-run.AW4scv/root-and-agent-support-tests.log.gz` under the host
 temporary directory. No firewall implementation, assertion, timeout or skip changed.
 
+## Coordinator read-only adapters (0026) — 2026-10-24, node mbp3
+
+`mise run test:logged -- --name full-test -- mise run test` (default
+reservations) failed four firewall cases in the root group with `exitCode`
+`null` at about 5,003 ms: `firewall uses stored domains and tolerates a
+repeated GitHub bootstrap range`, `policy 2 narrows host access to named ports
+and records what it applied`, `policy 3 allows address, protocol and port
+tuples` and `policy 3 allowlist example.org,example.com chooses blocked HTTPS
+probe example.net`. Group evidence:
+`orkestrator-test-run.B9wLO2/root-and-agent-support-tests.log.gz` under the
+host temporary directory.
+
+Three isolated reruns of the complete owner
+(`mise run test:logged -- --name firewall -- bun test ./tests/unit/firewall-policy.test.ts`)
+also failed, 12 or 13 of 24 cases, all on the same five-second deadline, with
+the host's one-minute load average between 16 and 38 (other agents were
+running). The same file at the branch's base commit (`8454d18b`, fresh
+worktree, `bun install --frozen-lockfile`) failed 13 of 24 the same way at load
+13 to 25. The branch changes nothing under `docker/` or in the firewall tests,
+so this run adds no pass-alone evidence; it does strengthen host contention as
+the cause. No firewall implementation, assertion, timeout or skip changed.
+
+After rebasing onto `a5d78cfc`, the same `mise run test` run failed only
+`GitHub ranges come from a fresh backend seed, else live, else this container's
+cache` and `policy 3 allowlist example.com,example.net:443,example.org:443/tcp
+chooses blocked HTTPS probe` (root group 3381 passed, 2 failed; every other
+group passed) at a one-minute load average of 55. Evidence:
+`orkestrator-test-run.2r3jf8/root-and-agent-support-tests.log.gz`. The owner
+rerun alone at load 31–46 still timed out (`orkestrator-test-run.yb5lB7`).
+
 ## Container state observation (0020) recurrence — 2026-10-24
 
 - **Original command:** `mise run test` on `todo-0020-container-state-observation-5c2ca9cd8360` after rebasing onto `origin/main` `a5d78cfcd`, default worker plan, host load average 15–22 from other work on the node.
@@ -248,6 +278,11 @@ temporary directory. No firewall implementation, assertion, timeout or skip chan
   0 failed) once the one-minute load fell to 10. The branch changes no
   firewall test or `docker/` script.
 
+## Coordinator adapters main merge — 2026-10-24
+
+Original command: `ORKESTRATOR_TEST_AREA_BASE=$(git merge-base HEAD MERGE_HEAD) mise run test:logged -- --name merge-tests -- mise run test`, workspace/root/bridges/protocol reservations 4/1/2/1. GitHub seed/live/cache timed out at 5008.03 ms in the aggregate. `mise run test:logged -- --name merge-firewall-owner -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` also failed (21 passed, three different five-second timeouts; 52.7 s). This run adds no independent pass-alone confirmation.
+
+Full failure names, counts, evidence paths and unresolved limitations are in [0724](../aggregate-validation-runs/0724-coordinator-adapters-main-merge-validation.md). No implementation, assertion, timeout or skip changed. The original aggregate remains non-green.
 
 ## Recurrence — 2026-10-24 (worktree signal review validation)
 

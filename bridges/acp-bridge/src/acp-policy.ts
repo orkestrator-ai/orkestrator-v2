@@ -27,13 +27,17 @@ export function coordinatorProcessPolicy(): NativeAgentExecutionPolicy {
     sandbox: "provider",
     approvals: "deny",
     projectResources: false,
-    // Research mode is not honoured here: Grok's only verified switch,
-    // `--disable-web-search`, removes search and fetch together, and a
-    // coordinator never gets fetch. Search stays off until a fetch-only
-    // switch is verified on the pinned build.
+    // Research mode is not honoured here, and cannot be on the pinned build.
+    // Grok 1.0.67's hosted `web_search` brings `open_page` and
+    // `open_page_with_find`, which open any URL, and neither the agent profile
+    // nor `--disallowed-tools` removes them (read live with
+    // `scripts/coordinator-probes/grok-web-tools-probe.mjs`). Search there is
+    // fetch, and a coordinator never gets fetch, so `--disable-web-search`
+    // stays and search stays off. `GROK_WEB_FETCH=0` removes only the
+    // client-side `web_fetch`.
     capabilityPolicy: coordinatorCapabilityPolicy("off"),
     networkAccess: "restricted",
-    note: "Grok's write, search_replace, shell, subagent, web search and web fetch tools are removed. Remaining permission requests are denied; other tools that do not ask remain advisory.",
+    note: "Grok's write, search_replace, shell, subagent, web search and web fetch tools are removed. Remaining permission requests are denied; other tools that do not ask, including xAI's hosted X search tools, remain advisory.",
   };
 }
 

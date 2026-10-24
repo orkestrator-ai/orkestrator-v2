@@ -4,6 +4,26 @@ export const COORDINATOR_WORKSPACE_VERSION = 1 as const;
 export const COORDINATOR_EXECUTION_POLICY = "coordinator-read-only" as const;
 export const COORDINATOR_RUNTIME_PREFIX = "coordinator:" as const;
 
+/**
+ * Launch-time process authority: whether this host can start the coordinator's
+ * OS command sandbox, as the backend's qualification probe found it.
+ *
+ * `required` means the platform was qualified on that sandbox, so a bridge must
+ * refuse to run commands without it. `unavailable` means it was qualified
+ * without one (Claude on Windows, or Linux without bubblewrap and socat), so a
+ * bridge asks for the sandbox but runs without it, and its own command filter is
+ * the boundary. Anything else, including absent, reads as `required`: an older
+ * launcher must not turn a missing sandbox into an unsandboxed coordinator.
+ */
+export const COORDINATOR_COMMAND_SANDBOX_ENV = "ORKESTRATOR_COORDINATOR_COMMAND_SANDBOX";
+export type CoordinatorCommandSandbox = "required" | "unavailable";
+
+export function coordinatorCommandSandboxFromEnv(
+  env: NodeJS.ProcessEnv,
+): CoordinatorCommandSandbox {
+  return env[COORDINATOR_COMMAND_SANDBOX_ENV] === "unavailable" ? "unavailable" : "required";
+}
+
 export type AgentSessionOwner =
   | { kind: "environment"; projectId: string; environmentId: string }
   | { kind: "coordinator"; projectId: string; coordinatorId: string };

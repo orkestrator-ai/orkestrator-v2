@@ -97,6 +97,10 @@ export interface OpenCodeProviderDependencies {
    * `directory` this backend can read: see `opencode-command-changes.ts`.
    */
   commandChanges?: OpenCodeCommandChangeOptions;
+  /** A coordinator's research tool ids, read when permission rules are built. */
+  coordinatorResearchToolIds?: () => readonly string[];
+  ensureCoordinatorResearch?: () => Promise<void>;
+  invalidateCoordinatorResearch?: () => void;
 }
 
 export async function optionalOpenCodeSdkCall(
@@ -438,7 +442,16 @@ export function openCodeRulesBlockNetwork(
   return ["bash", "webfetch"].every((permission) => action(permission) === "deny");
 }
 
-export function openCodePermissionRules(policy: NativeAgentExecutionPolicy) {
+export function openCodePermissionRules(
+  policy: NativeAgentExecutionPolicy,
+  options: {
+    /**
+     * A coordinator's research server tools, by the exact ids OpenCode
+     * registered them under (`opencode-coordinator-research.ts`).
+     */
+    researchTools?: readonly string[];
+  } = {},
+) {
   const action =
     policy.approvals === "auto-approve"
       ? ("allow" as const)
@@ -451,6 +464,7 @@ export function openCodePermissionRules(policy: NativeAgentExecutionPolicy) {
           ...OPENCODE_READ_ONLY_PERMISSIONS,
           ...OPENCODE_COORDINATOR_TOOL_PERMISSIONS,
           ...(nativeAgentPolicyDeniesWebSearch(policy) ? [] : OPENCODE_SEARCH_PERMISSIONS),
+          ...(options.researchTools ?? []),
         ]
       : [];
   // A worker can always report back: its mail tools are allowed whatever the

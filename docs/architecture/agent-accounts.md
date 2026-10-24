@@ -260,11 +260,11 @@ auth routes (`opencode-provider-login.ts`):
 OpenCode reads a provider's credentials once per directory instance and keeps
 them until the instance is disposed: a key replaced in the store is not used by
 a running server, though a newly connected provider is listed. After every
-change, `markLocalBridgesForLoginRefresh("opencode")` flags each live local
-OpenCode server, and `localBridgeIsOnActiveAccount` has the next
-`start_local_opencode_server_cmd` replace it once idle, as for a renewed Claude
-login. A container copies `auth.json` in when it starts, so it needs a
-restart.
+change, `markLocalBridgesForLoginRefresh(context, "opencode")` flags each live
+local OpenCode server. These refresh flags live in `LocalServerRuntime`, and
+`localBridgeIsOnActiveAccount` has the next `start_local_opencode_server_cmd`
+replace it once idle, as for a renewed Claude login. A container copies
+`auth.json` in when it starts, so it needs a restart.
 
 An OpenCode model request refused with HTTP 401 (or a 403 or OpenCode's own
 auth error that says so) gets the failed provider's sign-in inside its error

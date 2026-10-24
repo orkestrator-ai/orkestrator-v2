@@ -697,8 +697,19 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["claude"] as Provid
         );
 
         await test.step("closing the design conversation keeps it resumable; Resume sends nothing", async () => {
-          const before = await projection();
-          const userTurns = (before?.messages ?? []).filter((message) => message.role === "user");
+          // A resumed Codex transcript also shows Codex's synthetic environment
+          // context as a user message (docs/todo/transcripts-and-observation/
+          // 0082-codex-resume-shows-environment-context.md); it is not a prompt.
+          const userTurnsOf = (current: Projection) =>
+            (current?.messages ?? []).filter(
+              (message) =>
+                message.role === "user" &&
+                !(
+                  typeof message.content === "string" &&
+                  message.content.trimStart().startsWith("<environment_context>")
+                ),
+            );
+          const userTurns = userTurnsOf(await projection());
           // The handoff tab keeps its display title; the design tab is the other one.
           await page
             .getByRole("button", {
@@ -715,7 +726,13 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["claude"] as Provid
             .not.toBe("");
           await page.reload({ waitUntil: "domcontentloaded" });
           await openEnvironment(target.name);
-          await page.getByRole("button", { name: "Ask agent about the selection" }).click();
+          // The handoff tab may be the active tab in the canvas's pane.
+          const askAgent = page.getByRole("button", { name: "Ask agent about the selection" });
+          await page
+            .getByRole("button", { name: /^Design \d+ Close Design \d+$/ })
+            .first()
+            .click({ timeout: 30_000 });
+          await askAgent.click({ timeout: 30_000 });
           const dialog = page.getByRole("dialog", { name: "Ask agent about this design" });
           const resume = dialog.getByRole("button", {
             name: `Resume ${spec.label} design conversation`,
@@ -739,21 +756,15 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["claude"] as Provid
             resumedTabId,
           );
           await expect
-            .poll(
-              async () =>
-                ((await projection(resumedTabId))?.messages ?? []).filter(
-                  (message) => message.role === "user",
-                ).length,
-              { timeout: 60_000, message: "the resumed tab never showed the conversation" },
-            )
+            .poll(async () => userTurnsOf(await projection(resumedTabId)).length, {
+              timeout: 60_000,
+              message: "the resumed tab never showed the conversation",
+            })
             .toBe(userTurns.length);
           // Give a stray dispatch time to appear before asserting there is none.
           await page.waitForTimeout(5_000);
           const resumed = await projection(resumedTabId);
-          expect(
-            (resumed?.messages ?? []).filter((message) => message.role === "user"),
-            "resuming sent a prompt",
-          ).toHaveLength(userTurns.length);
+          expect(userTurnsOf(resumed), "resuming sent a prompt").toHaveLength(userTurns.length);
           expect(resumed?.turn.phase).not.toBe("running");
           await page.screenshot({ path: testInfo.outputPath(`${provider}-5-resume.png`) });
         });

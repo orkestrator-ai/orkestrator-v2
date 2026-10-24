@@ -518,7 +518,7 @@ describe("DesignAgentDialog", () => {
 
     const row = screen.getByTestId("design-link-never");
     expect(row.textContent).toContain("Closed — no conversation to resume");
-    expect(within(row).queryByRole("button", { name: "Resume Unsent chat" })).toBeNull();
+    expect(within(row).queryByRole("button", { name: "Resume Unsent chat" }) === null).toBe(true);
     expect(within(row).getByRole("button", { name: "Remove link to Unsent chat" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Start a new conversation" })).toBeTruthy();
   });
@@ -531,7 +531,7 @@ describe("DesignAgentDialog", () => {
 
     const row = screen.getByTestId("design-link-kept");
     expect(row.textContent).toContain("Closed — could not check the backend");
-    expect(within(row).queryByRole("button", { name: "Resume Design chat" })).toBeNull();
+    expect(within(row).queryByRole("button", { name: "Resume Design chat" }) === null).toBe(true);
     expect(createTabMock).not.toHaveBeenCalled();
 
     backendLinks(sessions, { kept: "retained" });

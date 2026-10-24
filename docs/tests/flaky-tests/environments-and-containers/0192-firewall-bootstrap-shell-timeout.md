@@ -222,3 +222,19 @@ cache` at 5007.56 ms. The root group had 3382 passed and one failed test.
 complete unchanged owner in 19.6 s. Original group evidence is
 `orkestrator-test-run.AW4scv/root-and-agent-support-tests.log.gz` under the host
 temporary directory. No firewall implementation, assertion, timeout or skip changed.
+
+## Todo 0038 branch — 2026-10-24
+
+`mise run test` on node mbp3 timed out every shell-driven case in
+`tests/unit/firewall-policy.test.ts` (13 of 24) at the five-second deadline,
+including the cases tracked in 0632. The owner rerun
+`mise run test:logged -- --name firewall-owner -- bun test
+./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` timed out the
+same way, so this observation is not proof of a flake on its own: the host load
+average was 27–30 throughout, with two other branches' full suites running
+concurrently (verified by process working directory). Original evidence:
+`orkestrator-test-run.HJXL9J/root-and-agent-support-tests.log.gz` and
+`orkestrator-test-run.BVK8nM/firewall-owner.log.gz` under the host temporary
+directory. The branch does not touch `docker/` or the firewall test; no
+implementation, assertion, timeout or skip changed. Supports the
+host-contention hypothesis.

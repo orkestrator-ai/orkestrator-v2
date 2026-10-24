@@ -39,8 +39,9 @@ fixed; what remains is listed under [Remaining work](#remaining-work).
    resumable identity on every link naming the closing tab as it retires the
    tab's native-session mapping: Codex's thread id, read from the session
    before it is closed through an observe-only state read, and Claude's
-   session id. The link is written after the teardown lock is released. An identity that cannot be read is not recorded. While the tab is open
-   the tab id still resolves the mapping. Resume validates environment
+   session id. The link is written after the teardown lock is released. An
+   identity that cannot be read is not recorded. While the tab is open the tab
+   id still resolves the mapping. Resume validates environment
    ownership and session existence through the ordinary native resume
    (`resumeProjectionSession`). Evidence: `session-links.test.ts` ("a closing
    tab's session is recorded once, only on its own environment's links"),
@@ -96,9 +97,11 @@ fixed; what remains is listed under [Remaining work](#remaining-work).
   - Claude, staged launch (opening prompt): after close and reload the link
     read "can be resumed"; Resume opened `design-resume-…` mapped to the same
     provider session (`session-client-7aaec8e1…`), the Claude transcript still
-    held exactly one user prompt, and no turn ran.
-  - Codex, Ask agent → new conversation: the link recorded the thread id
-    (`01a16b4d-…`) at close; "Resume and add to composer" reopened the thread in
+    held exactly one user prompt, and no turn ran. (This run used the first
+    build, where the tab adopted the recorded id; the final backend resume path
+    is covered for Claude by the live spec run below.)
+  - Codex, Ask agent → new conversation, on the final resume path: the link
+    recorded the thread id (`01a16b4d-…`) at close; "Resume and add to composer" reopened the thread in
     a new tab with the context as an unsent chip; the rollout held one task.
   - The opt-in live spec `e2e/agent-testing/design-live.spec.ts` now ends with
     this close-and-resume step for each provider (result recorded under
@@ -123,23 +126,42 @@ fixed; what remains is listed under [Remaining work](#remaining-work).
 
 ### Live spec run
 
-See the handoff for this change; recorded when the run finished.
+`e2e/agent-testing/design-live.spec.ts` with the new step 5, on mbp3,
+2026-10-24, disposable profile `qa-design-live-0038` (`--credential-source
+claude --credential-source codex`): Claude passed the full cycle including
+close and resume (4.8 min run); Codex passed it on the rerun (136 s). Two
+problems the spec found were fixed before those passes:
+
+- After the handoff step the handoff tab is focused, so the canvas toolbar
+  was hidden after the reload; the step now activates the canvas tab first.
+- A resumed Codex transcript shows Codex's synthetic `<environment_context>`
+  as a user message the live tab never showed (3 user messages live, 4 after
+  resume, with one turn per prompt in the rollout: nothing was sent). Filed as
+  [0082](../transcripts-and-observation/0082-codex-resume-shows-environment-context.md);
+  the step excludes that block until it is fixed.
+
+Every earlier step (launch, stale Ask agent, approval, handoff) also passed
+for both providers, so the handoff's design context now arriving as a chip in
+the unassigned composer did not regress it.
 
 ## Remaining work
 
-1. **Two real clients pressing Resume at the same moment.** Covered
+What is left of items 1, 3 and 5, narrowed; nothing here is new scope.
+
+1. **Two real clients pressing Resume at the same moment** (the live half of
+   item 5). Covered
    deterministically by the backend lane tests and two simulated clients, but
    not run with two live browser clients against one backend. Run it with two
    pages of one `dev:test` profile (or two machines on one backend) and
    confirm both focus one `design-resume-…` tab and the provider is resumed
    once. Low risk: the backend serializes resumes per canvas.
-2. **A close replayed after a bridge restart.** Codex's thread id is read from
+2. **A close replayed after a bridge restart** (an edge of item 1). Codex's thread id is read from
    the open session at teardown. If the close is pending and only completes
    after the bridge restarted, the read fails and nothing is recorded, so that
    link reads "no conversation to resume". Decide whether to persist the
    resumable identity on the native-session record when the session is
    created, which would also cover this.
-3. **Archived state.** Blocked on native archive semantics
+3. **Archived state** (the part of item 3 with nothing to read yet). Blocked on native archive semantics
    ([0006](../agent-engines/0006-session-titles-and-history.md)); add an
    archived state to the dialog when that lands.
 
@@ -275,7 +297,9 @@ Assumptions, each checked live on 2026-10-24 unless noted:
   close and retention semantics, and
   [0006-session-titles-and-history.md](../agent-engines/0006-session-titles-and-history.md) for
   archive behaviour.
-- [0081-annotation-fence-in-session-titles.md](../agent-engines/0081-annotation-fence-in-session-titles.md).
+- [0081-annotation-fence-in-session-titles.md](../agent-engines/0081-annotation-fence-in-session-titles.md)
+  and [0082-codex-resume-shows-environment-context.md](../transcripts-and-observation/0082-codex-resume-shows-environment-context.md),
+  both found while qualifying this file.
 - [0036-design-canvas-qualification.md](0036-design-canvas-qualification.md).
 - [`design-canvas.md`](../../architecture/design-canvas.md) ("Agent context").
 

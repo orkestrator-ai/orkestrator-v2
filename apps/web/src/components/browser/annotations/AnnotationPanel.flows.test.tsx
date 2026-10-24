@@ -289,7 +289,9 @@ describe("annotation panel flows", () => {
       status: "pins-invalidated",
       documentGeneration: 5,
     });
-    await waitFor(() => expect(screen.queryByText(/too large to search in time/)).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryByText(/too large to search in time/) === null).toBe(true),
+    );
   });
 
   test("Show on page uses the desktop flow and explains each outcome", async () => {

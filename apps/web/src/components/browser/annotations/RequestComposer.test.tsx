@@ -108,7 +108,7 @@ describe("request composer", () => {
           .getAttribute("aria-checked"),
       ).toBe("true"),
     );
-    expect(composer.querySelector("[data-read-only-alternatives]")).toBeNull();
+    expect(composer.querySelector("[data-read-only-alternatives]") === null).toBe(true);
     // Nothing was sent, and no session's mode was changed to get here.
     expect(backend.calls.some((call) => call.command === "web_annotation_request_send")).toBe(
       false,

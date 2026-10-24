@@ -89,12 +89,12 @@ there first.
 The repository's
 [merge-conflict exception](../../AGENTS.md#documentation-only-merge-conflict-resolution)
 allows format-only validation when the complete original conflicted-path list
-is known, every conflict was in prose documentation not consumed by tests,
-builds, or tooling, and manual resolution changes only that prose. Confirm no
-conflict markers remain and run `mise run format:check`; do not rerun tests,
-lint, typechecking, builds, or scenario suites solely for that resolution,
-including when code, configuration, or tests auto-merge. This repository policy
-takes precedence over generic merge prompts requiring auto-merged code checks.
+is known, every conflict was in prose documentation or other non-code text not
+consumed by tests, builds, or tooling, and manual resolution changes only those
+files. Confirm no conflict markers remain and run `mise run format:check`; do
+not run tests, lint, typechecking, builds, or scenario suites for that
+resolution, including when code, configuration, or tests auto-merge. This
+repository policy takes precedence over generic merge-validation guidance.
 
 Retain the original unmerged path list before staging, tied to the merge's
 parent commit IDs, for resumed work. Resolving a source conflict to one parent's

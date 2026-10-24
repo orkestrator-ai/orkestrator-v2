@@ -356,28 +356,38 @@ describe("createResolveConflictsPrompt", () => {
     expect(result).toContain("Do NOT use --no-verify");
   });
 
-  test("always preserves mandatory repository checks ahead of validation optimizations", () => {
+  test("defers validation choices to repository instructions", () => {
     const prompt = createResolveConflictsPrompt("main");
 
     expect(prompt).toContain(
-      "Always run repository-required checks before pushing; repository instructions take precedence over targeted validation and prose-only skipping.",
+      "Choose validation from the repository's instructions (such as AGENTS.md or CLAUDE.md). Where they say how to validate merge-conflict resolutions or documentation-only changes, follow them, including when they say no tests are needed.",
     );
     expect(prompt).toContain(
-      "Run the full suite when impact cannot be scoped or repository instructions require it.",
+      "Run the full suite only when impact cannot be scoped or repository instructions require it.",
     );
+    expect(prompt).not.toContain("Always run repository-required checks");
   });
 
-  test("permits a prose-only skip only for a known wholly prose merge and repository permission", () => {
+  test("skips tests for documentation-only conflicts unless repository instructions require them", () => {
     const prompt = createResolveConflictsPrompt("main");
 
     expect(prompt).toContain(
-      "Only if the complete original conflict list is known, every original conflicted file and the whole merge delta are prose documentation not consumed by tests, builds, or tooling, and repository instructions permit skipping, may you skip tests, typechecking, or builds",
+      "Documentation-only conflicts: if the complete original conflict list contains only documentation or other non-code text not consumed by tests, builds, or tooling, and your resolution edits only those files, do not run tests, typechecking, lint, or builds unless repository instructions require them for this case.",
     );
-    expect(prompt).toContain("confirm no conflict markers remain");
-    expect(prompt).toContain("run applicable documentation checks");
+    expect(prompt).toContain("Confirm no conflict markers remain");
   });
 
-  test("retains source conflicts resolved to either parent alongside prose after staging or committing", () => {
+  test("does not require tests for cleanly auto-merged target-branch changes", () => {
+    const prompt = createResolveConflictsPrompt("main");
+
+    expect(prompt).toContain(
+      "Changes that merged cleanly from the target branch do not by themselves require tests, typechecking, or builds in this step unless repository instructions say so.",
+    );
+    expect(prompt).not.toContain("whole merge delta");
+    expect(prompt).not.toContain("Auto-merged code alongside prose-only conflicts");
+  });
+
+  test("retains source conflicts resolved to either parent after staging or committing", () => {
     const prompt = createResolveConflictsPrompt("main");
 
     expect(prompt).toContain(
@@ -390,17 +400,15 @@ describe("createResolveConflictsPrompt", () => {
       "Keep every original conflict in scope even if its resolution exactly matches either parent, including after staging or committing.",
     );
     expect(prompt).toContain(
-      "If any original conflict or any part of the whole merge delta is source, configuration, a test, or Markdown consumed by tests, builds, or tooling, run relevant validation on the merged result",
+      "Code conflicts: if any original conflict is source, configuration, a test, or text consumed by tests, builds, or tooling, or your resolution edits such a file, run the validation repository instructions require for that change",
     );
   });
 
-  test("requires validation on resume when staged or committed conflict scope is unknown", () => {
+  test("requires validation on resume when conflict scope is unknown", () => {
     const prompt = createResolveConflictsPrompt("main");
 
     expect(prompt).toContain("On resume, use the complete retained original conflict list.");
-    expect(prompt).toContain(
-      "validate the merged result even on resume after staging or committing",
-    );
+    expect(prompt).toContain("validate the resolution, even on resume after staging or committing");
     expect(prompt).toContain(
       "Once staging has begun, the remaining live unmerged paths are not a complete original list; never overwrite the retained list with them.",
     );
@@ -409,26 +417,9 @@ describe("createResolveConflictsPrompt", () => {
     );
     expect(prompt).toContain("omit conflicts resolved to one parent and include clean auto-merges");
     expect(prompt).toContain(
-      "If the original list is unavailable or incomplete, or the whole merge delta cannot be established, treat scope as unknown: do not apply the prose-only skip; run relevant validation on the merged result, or conservative full validation when impact cannot be scoped.",
+      "If the original list is unavailable or incomplete, treat scope as unknown: do not apply the documentation-only skip; validate the merged result as repository instructions require for code changes",
     );
     expect(prompt).not.toContain("recover the conflicted files from merge state");
-  });
-
-  test("validates auto-merged code even when only prose conflicts remain", () => {
-    const prompt = createResolveConflictsPrompt("main");
-
-    expect(prompt).toContain(
-      "Assess the whole merge delta from the merge parents' common ancestor to the merged result, including cleanly auto-merged changes and conflict resolutions.",
-    );
-    expect(prompt).toContain(
-      "Validation on separate branches does not establish that the combined merge is validated.",
-    );
-    expect(prompt).toContain(
-      "Auto-merged code alongside prose-only conflicts still requires relevant tests or typechecking.",
-    );
-    expect(prompt).not.toContain(
-      "auto-merged changes were already validated on their own branches",
-    );
   });
 
   test("classifies files by role including executable content under docs", () => {

@@ -3708,6 +3708,31 @@ export class NativeAgentService {
   }
 
   /**
+   * The identity a later resume of this live session must name, read before
+   * the session is closed. Codex resumes a thread, not the bridge session that
+   * served it; providers that report nothing resume by the live id itself.
+   *
+   * Observe only: never starts a bridge. `undefined` when no bridge answers
+   * or the read fails, so a caller never mistakes a guess for an identity.
+   */
+  async resumableSessionIdIfRunning(
+    environmentId: string,
+    agent: EnsureNativeAgentSessionInput["agent"],
+    providerSessionId: string,
+  ): Promise<string | undefined> {
+    const provider = await this.observeProvider({
+      environmentId,
+      agent,
+      logicalSessionKey: "tab-close",
+    }).catch(() => undefined);
+    if (!provider?.sessionStateSnapshot) return undefined;
+    const snapshot = await provider.sessionStateSnapshot(providerSessionId).catch(() => undefined);
+    if (!snapshot || snapshot.status === "missing") return undefined;
+    const resumable = snapshot.resumableSessionId?.trim();
+    return resumable || (agent === "codex" ? undefined : providerSessionId);
+  }
+
+  /**
    * Tab close through the provider, so the provider's own close runs: for
    * OpenCode that settles workflow-turn ownership, restores temporary reviewer
    * permissions and rejects pending requests before forgetting the session.

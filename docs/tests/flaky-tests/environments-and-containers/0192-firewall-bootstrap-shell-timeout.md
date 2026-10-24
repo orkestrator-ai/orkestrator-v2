@@ -223,6 +223,22 @@ complete unchanged owner in 19.6 s. Original group evidence is
 `orkestrator-test-run.AW4scv/root-and-agent-support-tests.log.gz` under the host
 temporary directory. No firewall implementation, assertion, timeout or skip changed.
 
+## Todo 0038 branch — 2026-10-24
+
+`mise run test` on node mbp3 timed out every shell-driven case in
+`tests/unit/firewall-policy.test.ts` (13 of 24) at the five-second deadline,
+including the cases tracked in 0632. The owner rerun
+`mise run test:logged -- --name firewall-owner -- bun test
+./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` timed out the
+same way, so this observation is not proof of a flake on its own: the host load
+average was 27–30 throughout, with two other branches' full suites running
+concurrently (verified by process working directory). Original evidence:
+`orkestrator-test-run.HJXL9J/root-and-agent-support-tests.log.gz` and
+`orkestrator-test-run.BVK8nM/firewall-owner.log.gz` under the host temporary
+directory. The branch does not touch `docker/` or the firewall test; no
+implementation, assertion, timeout or skip changed. Supports the
+host-contention hypothesis.
+
 ## Coordinator read-only adapters (0026) — 2026-10-24, node mbp3
 
 `mise run test:logged -- --name full-test -- mise run test` (default
@@ -299,6 +315,10 @@ Recurred in the non-iOS aggregate on node mbp3 (thirteen `container firewall pol
 ## Agent accounts main merge — 2026-10-24
 
 The broad run and complete unchanged owner both retained five-second failures. This is not newly classified as a flake. Exact commands, counts and artifacts are in [0740](../aggregate-validation-runs/0740-agent-accounts-sign-in-0003-validation.md#merge-through-main-8290f2ca9--2026-10-24). No assertion, deadline or skip changed.
+
+## Design-agent links refresh through d6ed0717d — 2026-10-24
+
+The combined merge repeated a failure in this owner during `mise run test:logged -- --name merge-tests -- mise run test` (workspace/root/bridge/protocol reservations 4/1/2/1, other worktrees active). The complete unchanged owner passed with one worker in 48.4 s: `mise run test:logged -- --name design-links-owner-firewall -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures`. See [0772](../aggregate-validation-runs/0772-design-agent-links-main-refresh-validation.md) for the exact failing cases, durations, counts, parents and artifacts. No assertion, deadline or skip changed; shared-host contention remains a hypothesis.
 
 ## Container state observation main merge — 2026-10-24
 

@@ -9,7 +9,7 @@ rather than independent defects. Every owning file passes alone, and the failing
 set is not stable between runs, which is the signature this registry already
 records for the `tmux-backend.test.ts` and `standalone.test.ts` clusters below.
 
-- **Status:** resolved — see the 2026-08-27 resolution sweep below
+- **Historical status:** resolved — see the 2026-08-27 resolution sweep below
 - **Date observed:** 2026-08-17
 - **Original command:** `bun run test:logged -- --name root-tests -- bun test ./tests --parallel=4`
 - **Worker configuration:** `--parallel=4` (which implies `--isolate`). Run concurrently with a second `bun test --test-worker` fleet from another worktree on the same host; load average during the run was 18.67 / 27.53 / 21.07.
@@ -43,6 +43,16 @@ records for the `tmux-backend.test.ts` and `standalone.test.ts` clusters below.
   - `Electron backend command registry > reports whether the selected host GitHub CLI credential is available` (`apps/backend/tests/commands-registry-tools.test.ts:840`, 5,010.40 ms)
 
   All three owning files passed alone immediately afterwards: `bun run test:logged -- --name env-registry -- bun test ./apps/backend/tests/commands-registry-environments.test.ts --only-failures` -> exit 0 in 30.9 s; `... --name gh-cred -- bun test ./apps/backend/tests/commands-registry-github.test.ts ./apps/backend/tests/commands-registry-pr.test.ts` -> exit 0 in 10.8 s; `... --name tools-registry -- bun test ./apps/backend/tests/commands-registry-tools.test.ts` -> exit 0 in 0.5 s. The failing set is again unstable between runs and spans three files, which is the same signature as every earlier occurrence. No new evidence about the mechanism. The change under review adds a reviewer fan-out to the build pipeline, a `create_feature_build` command and create-environment dialog work; none of these three files load any of it.
+
+## Diagnostic scan recurrence during design-agent links merge — 2026-10-24
+
+- **Original command:** the testing guide's GNU-tool PATH with `ORKESTRATOR_TEST_AREA_BASE=$(git merge-base HEAD MERGE_HEAD) mise run test:logged -- --name merge-tests -- mise run test`, merging `0014505caeed69395b3cc996dd541fcc6df12c23` into `ce4e1b007c4797868255438bd67d5d5168098773`.
+- **Workers:** workspace/root/bridges/protocol reservations 4/1/2/1; one root worker on a shared macOS host, with other worktrees validating concurrently.
+- **Root counts:** 3368 passed and 15 failed across 3383 tests in 162 files (1001.90 seconds).
+- **Evidence:** `orkestrator-test-run.O0jvRO/root-and-agent-support-tests.log.gz` below the host temporary directory after aggregate completion.
+- **Failure:** `bounded test diagnostics > never passes a DOM-producing query result directly to toBeNull` exceeded its current 30-second deadline (30028.53 ms).
+- **Unchanged owner:** `mise run test:logged -- --name merge-owner-diagnostic-bounds -- bun test ./tests/unit/test-diagnostic-bounds.test.ts --parallel=1 --only-failures` passed (exit 0, 17.5 seconds logged).
+- **Assessment:** reopened for this confirmed intermittent scan timeout at the current deadline. Host contention remains a hypothesis; no implementation, assertion, timeout or skip changed.
 
 ## Coordinator adapters main merge — 2026-10-24
 

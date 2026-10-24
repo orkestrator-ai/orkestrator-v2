@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { DesignSessionLink } from "@orkestrator/protocol/design-operations";
 import {
-  buildPromptWithTranscriptAnnotations,
   isTranscriptAnnotation,
   MAX_TRANSCRIPT_ANNOTATIONS,
   type TranscriptAnnotation,
@@ -180,7 +179,6 @@ describe("composer draft planning", () => {
     const plan = planDesignDraft(
       { text: "", annotations: [] },
       { annotation, requestText: "Look at this" },
-      { inlineText: false },
     );
     expect(plan).toEqual({
       ok: true,
@@ -194,7 +192,6 @@ describe("composer draft planning", () => {
     const plan = planDesignDraft(
       { text: "my unsent words", annotations: [existing] },
       { annotation, requestText: "Look at this" },
-      { inlineText: false },
     );
     expect(plan).toEqual({
       ok: true,
@@ -205,7 +202,6 @@ describe("composer draft planning", () => {
     const handoff = planDesignDraft(
       { text: "my unsent words", annotations: [] },
       { annotation, appendText: "Handoff text" },
-      { inlineText: false },
     );
     expect(handoff.ok && handoff.patch.text).toBe("my unsent words\n\nHandoff text");
   });
@@ -214,7 +210,6 @@ describe("composer draft planning", () => {
     const plan = planDesignDraft(
       { text: "", annotations: [annotation] },
       { annotation: { ...annotation, id: "a2" } },
-      { inlineText: false },
     );
     expect(plan).toEqual({ ok: true, duplicate: true, patch: {} });
   });
@@ -225,22 +220,19 @@ describe("composer draft planning", () => {
       text: `t${index}`,
       comment: "",
     }));
-    expect(
-      planDesignDraft({ text: "", annotations: full }, { annotation }, { inlineText: false }),
-    ).toEqual({
+    expect(planDesignDraft({ text: "", annotations: full }, { annotation })).toEqual({
       ok: false,
       reason: "annotation-limit",
     });
   });
 
-  test("writes the inert context block as visible text for an unassigned composer", () => {
+  test("keeps context a removable annotation for a composer whose agent is not chosen yet", () => {
+    // The unassigned composer sends annotations too, so no inert-text form remains.
     const plan = planDesignDraft(
       { text: "keep me", annotations: [] },
       { annotation, requestText: "ignored" },
-      { inlineText: true },
     );
-    const block = buildPromptWithTranscriptAnnotations("", [annotation]);
-    expect(plan).toEqual({ ok: true, duplicate: false, patch: { text: `keep me\n\n${block}` } });
+    expect(plan).toEqual({ ok: true, duplicate: false, patch: { annotations: [annotation] } });
   });
 });
 

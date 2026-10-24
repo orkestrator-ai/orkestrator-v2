@@ -45,6 +45,10 @@ import { getNativeAgentModelCatalog } from "@/lib/backend";
 import { buildInitialPromptWithAttachmentReferences } from "@/lib/initial-prompt-attachments";
 import type { NativeMessage, NativeMessagePart } from "@/lib/chat/native-message-types";
 import {
+  buildPromptWithTranscriptAnnotations,
+  sendableTranscriptAnnotations,
+} from "@/lib/chat/transcript-annotations";
+import {
   snapshotNativeAgentActivity,
   type NativeAgentActivitySnapshot,
 } from "@/lib/chat/native-agent-pinning";
@@ -767,12 +771,18 @@ export function UnassignedNativeAgentComposer({
   });
   useComposerMountFocus(inputRef);
 
+  // Annotations (a design context, a quoted excerpt) join the first prompt the
+  // same way the locked composer adds them to every later one.
+  const hasSendableAnnotations = sendableTranscriptAnnotations(draft.annotations).length > 0;
   const send = () => {
-    const prompt = buildInitialPromptWithAttachmentReferences(
-      serializeForLLM(draft.text, draft.mentions),
-      draft.attachments.map(({ name, path }) => ({ name, path })),
+    const prompt = buildPromptWithTranscriptAnnotations(
+      buildInitialPromptWithAttachmentReferences(
+        serializeForLLM(draft.text, draft.mentions),
+        draft.attachments.map(({ name, path }) => ({ name, path })),
+      ),
+      draft.annotations,
     );
-    if (!prompt || disabled) return;
+    if (!prompt.trim() || disabled) return;
     onSend(platform, prompt, {
       modelId: selectedModel?.id,
       reasoningId: selectedReasoningId,
@@ -836,6 +846,18 @@ export function UnassignedNativeAgentComposer({
               attachments: draft.attachments.filter((candidate) => candidate.id !== attachmentId),
             })
           }
+          annotations={draft.annotations}
+          onClearAnnotations={() => {
+            if (disabled) return;
+            const annotationIds = new Set(draft.annotations.map((annotation) => annotation.id));
+            updateDraft(sessionKey, {
+              annotations: [],
+              attachments: draft.attachments.filter(
+                (attachment) =>
+                  !attachment.annotationId || !annotationIds.has(attachment.annotationId),
+              ),
+            });
+          }}
           inputRef={inputRef}
           inputContainerRef={inputContainerRef}
           text={draft.text}
@@ -1008,7 +1030,10 @@ export function UnassignedNativeAgentComposer({
               ) : null}
             </>
           }
-          sendDisabled={disabled || (!draft.text.trim() && draft.attachments.length === 0)}
+          sendDisabled={
+            disabled ||
+            (!draft.text.trim() && draft.attachments.length === 0 && !hasSendableAnnotations)
+          }
           sendTitle="Start agent"
           onSend={send}
         />

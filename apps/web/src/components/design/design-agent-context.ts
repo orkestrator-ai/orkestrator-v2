@@ -5,7 +5,6 @@ import {
   type DesignSessionRole,
 } from "@orkestrator/protocol/design-operations";
 import {
-  buildPromptWithTranscriptAnnotations,
   MAX_TRANSCRIPT_ANNOTATIONS,
   normalizeTranscriptAnnotationComment,
   normalizeTranscriptAnnotationText,
@@ -366,25 +365,16 @@ function appendParagraph(existing: string, addition: string): string {
 
 /**
  * Plan how a design addition joins an existing unsent draft. Existing text
- * and annotations are always preserved; nothing is ever submitted.
- *
- * `inlineText` is for a conversation whose provider is not yet chosen: that
- * composer sends text only, so the context is written as the same inert,
- * visible block the annotation would have produced at send time.
+ * and annotations are always preserved; nothing is ever submitted. The
+ * context is always a removable `design` annotation: every native composer,
+ * including a new tab's before its agent is chosen, sends annotations.
  */
 export function planDesignDraft(
   current: { text: string; annotations: readonly TranscriptAnnotation[] },
   addition: DesignDraftAddition,
-  options: { inlineText: boolean },
 ): DesignDraftPlan {
   const hasText = current.text.trim().length > 0;
   const lead = addition.appendText ?? (hasText ? undefined : addition.requestText);
-  if (options.inlineText) {
-    const block = buildPromptWithTranscriptAnnotations("", [addition.annotation]);
-    if (current.text.includes(block)) return { ok: true, patch: {}, duplicate: true };
-    const text = appendParagraph(current.text, lead ? `${lead}\n\n${block}` : block);
-    return { ok: true, patch: { text }, duplicate: false };
-  }
   const duplicate = current.annotations.some(
     (annotation) => annotation.source === "design" && annotation.text === addition.annotation.text,
   );

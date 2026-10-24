@@ -10,3 +10,7 @@
 - **Complete unchanged owner:** the one-worker command containing six complete owner files, recorded in [0740](../aggregate-validation-runs/0740-agent-accounts-sign-in-0003-validation.md), passed all four AgentUsage cases. Combined counts: twenty passed, four skipped, two unrelated AgentLaunchDialog failures, 127.0 s.
 - **Evidence:** `orkestrator-test-run.BIyzun/merge-browser-fixed.log.gz` and `orkestrator-test-run.ngoXeT/merge-browser-owners.log.gz` below the host temporary directory.
 - **Hypothesis:** browser fixture startup or shared-host contention; no cause established. No assertion, deadline, skip or implementation changed in the owner.
+
+## Design-agent links refresh through d6ed0717d — 2026-10-24
+
+The nine-worker `mise run test:browser` run repeated failures in this owner; the complete unchanged owner passed across both viewports with one worker in 20.8 s. Command: `ORKESTRATOR_E2E_PORT=54733 mise run test:logged -- --name design-links-browser-owner-usage -- bunx playwright test --config e2e/playwright.config.ts AgentUsage.spec.ts --workers=1 --output output/playwright/design-links-owner-usage`. The aggregate had 496 passes, 89 failures and 101 skips. See [0772](../aggregate-validation-runs/0772-design-agent-links-main-refresh-validation.md) for the parents and original evidence. No assertion, deadline or skip changed.

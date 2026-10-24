@@ -905,7 +905,10 @@ test switches away while the approval is pending. On return the request must
 still be pending after a renderer reload, the turn `blocked` and the canvas
 unchanged; after approval the edit lands. Finally **Implement** starts a new conversation holding an
 unsent handoff draft that survives a switch and renderer reload, and the canvas
-links both conversations. The design MCP call count, failed calls and response bytes are
+links both conversations. Last, the design conversation's tab is closed: the
+link must record its session, and after a reload Ask agent's **Resume
+conversation** reopens it in a `design-resume-…` tab with the same user turns
+and nothing sent. The design MCP call count, failed calls and response bytes are
 attached as `design-mcp-usage`. A content-free heartbeat runs every minute for
 the whole case, including approval waits and cleanup, and is cleared in `finally`.
 

@@ -31,7 +31,7 @@ import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import { useNativeComposeStore } from "@/stores/nativeComposeStore";
+import { nativeComposeDraft, useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useNativeNoticeDismissalStore } from "@/stores/nativeNoticeDismissalStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
@@ -2192,6 +2192,66 @@ describe("AgentNativeTab", () => {
     expect(screen.getByTestId("unassigned-native-compose-bar").className).toContain("rounded-xl");
   });
 
+  test("an annotation-only first prompt starts the selected agent", async () => {
+    seedUnassignedDefaultCatalog();
+    const tabId = "tab-design-annotation-first";
+    const sessionKey = createSessionKey("env-1", tabId);
+    seedUnassignedPane(tabId);
+    useNativeComposeStore.getState().updateDraft(sessionKey, {
+      annotations: [
+        {
+          id: "design-context",
+          source: "design",
+          text: "Canvas context: inspect the heading",
+          comment: "",
+        },
+      ],
+    });
+    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    const start = await screen.findByRole("button", { name: "Start agent" });
+    expect(start.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(start);
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+    expect(dispatchNativeAgentIntentMock.mock.calls[0]?.[0].prompt).toContain(
+      "Canvas context: inspect the heading",
+    );
+  });
+
+  test("clearing first-prompt annotations preserves unrelated attachments", async () => {
+    seedUnassignedDefaultCatalog();
+    const tabId = "tab-design-annotation-clear";
+    const sessionKey = createSessionKey("env-1", tabId);
+    seedUnassignedPane(tabId);
+    const unrelated = {
+      id: "unrelated",
+      type: "file" as const,
+      name: "notes.txt",
+      path: "/workspace/notes.txt",
+    };
+    const otherAnnotation = { ...unrelated, id: "other", annotationId: "other-context" };
+    useNativeComposeStore.getState().updateDraft(sessionKey, {
+      platform: "claude",
+      annotations: [
+        { id: "design-context", source: "design", text: "Canvas context", comment: "" },
+      ],
+      attachments: [
+        unrelated,
+        otherAnnotation,
+        { ...unrelated, id: "linked", annotationId: "design-context" },
+      ],
+    });
+    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Remove design context" }));
+    expect(nativeComposeDraft(useNativeComposeStore.getState(), sessionKey).annotations).toEqual(
+      [],
+    );
+    expect(nativeComposeDraft(useNativeComposeStore.getState(), sessionKey).attachments).toEqual([
+      unrelated,
+      otherAnnotation,
+    ]);
+    expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+  });
+
   test("an ordinary unassigned local tab keeps its worktree paste destination", async () => {
     useEnvironmentStore.setState({
       environments: [
@@ -2939,6 +2999,78 @@ describe("AgentNativeTab", () => {
       expect(dispatchNativeAgentIntentMock).toHaveBeenCalledWith(
         expect.objectContaining({ agent: "codex", approvalMode: "untrusted" }),
       ),
+    );
+  });
+
+  test("shows a draft's annotations as removable chips and sends them with the first prompt", async () => {
+    getNativeAgentModelCatalogMock.mockImplementation(
+      async () =>
+        [
+          {
+            platform: "codex",
+            id: "codex-m",
+            label: "Codex M",
+            supportsSpeed: false,
+            supportsMode: true,
+          },
+        ] as never,
+    );
+    useEnvironmentStore.setState({
+      environments: [
+        {
+          id: "env-1",
+          projectId: "project-1",
+          name: "Annotations",
+          order: 0,
+          setupPhase: "ready",
+        } as never,
+      ],
+    });
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["codex"],
+      favoriteModels: [],
+    } as never);
+    const tabId = "tab-unassigned-annotations";
+    const sessionKey = createSessionKey("env-1", tabId);
+    seedUnassignedPane(tabId);
+    // What the design dialog leaves in a new conversation's draft.
+    useNativeComposeStore.getState().updateDraft(sessionKey, {
+      platform: "codex",
+      modelId: "codex-m",
+      text: "Look at this",
+      annotations: [
+        { id: "design-1", source: "design", text: "Design context\nCanvas: x", comment: "" },
+      ],
+    });
+
+    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+
+    const pill = await screen.findByTestId("compose-annotation-count");
+    expect(pill.textContent).toContain("Design context");
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalled());
+    const prompt = String(
+      (dispatchNativeAgentIntentMock.mock.calls.at(-1)?.[0] as { prompt?: string })?.prompt,
+    );
+    expect(prompt.startsWith("Look at this")).toBe(true);
+    expect(prompt).toContain("<orkestrator_transcript_annotations>");
+    expect(prompt).toContain("Design context");
+  });
+
+  test("removes a draft's annotations from the unassigned composer", async () => {
+    const tabId = "tab-unassigned-clear-annotations";
+    const sessionKey = createSessionKey("env-1", tabId);
+    seedUnassignedPane(tabId);
+    useNativeComposeStore.getState().updateDraft(sessionKey, {
+      annotations: [{ id: "design-1", source: "design", text: "Design context", comment: "" }],
+    });
+
+    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Remove design context" }));
+    expect(nativeComposeDraft(useNativeComposeStore.getState(), sessionKey).annotations).toEqual(
+      [],
     );
   });
 

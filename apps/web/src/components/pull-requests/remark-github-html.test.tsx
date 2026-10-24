@@ -60,6 +60,90 @@ describe("remarkGitHubHtml", () => {
     );
   });
 
+  test.each(["script", "style", "template"])(
+    "suppresses inline %s bodies across Markdown nodes",
+    (tag) => {
+      const body = `before <${tag}>secret **bold** *em* [link](https://hidden.example) ![image](https://hidden.example/i.png) <a href="https://hidden.example">anchor<img alt="badge"></a><b>nested</b></${tag}> after`;
+      expect(render(body)).toBe("<p>before  after</p>");
+      const html = renderToStaticMarkup(<MarkdownBody body={body} />);
+      for (const hidden of [
+        "secret",
+        "bold",
+        "em</",
+        "hidden.example",
+        "image",
+        "anchor",
+        "badge",
+        "nested",
+      ]) {
+        expect(html).not.toContain(hidden);
+      }
+    },
+  );
+
+  test("keeps hidden state across blocks and ignores mismatched closing tags", () => {
+    expect(
+      render(
+        "before <template>secret\n\n**hidden** <style>more</script>secret</style><template>nested</template>still hidden</template> after",
+      ),
+    ).toBe("<p>before </p>\n<p> after</p>");
+    expect(render('before <script>secret </style><a href="/hidden">hidden</a>')).toBe(
+      "<p>before </p>",
+    );
+    expect(render("before *<template>secret* hidden **bold**</template> after")).toBe(
+      "<p>before  after</p>",
+    );
+  });
+
+  test.each([
+    "**bold**",
+    "*em* and ~~gone~~",
+    "[name](path)",
+    "`tick` and ``ticks``",
+    "src/**/*.{ts,tsx}",
+    "a  &lt;  b &amp; c",
+    "<b>literal</b><!-- literal -->",
+  ])("preserves source punctuation in code: %s", (snippet) => {
+    const expected = snippet.replaceAll("&lt;", "<").replaceAll("&amp;", "&");
+    for (const source of [
+      `before <code>${snippet}</code> after`,
+      `<div><code>${snippet}</code></div>`,
+    ]) {
+      const html = render(source);
+      const container = document.createElement("div");
+      container.innerHTML = html;
+      expect(container.querySelector("code")?.textContent).toBe(expected);
+      expect(container.querySelector("code a, code strong, code em, code b") === null).toBe(true);
+    }
+  });
+
+  test.each([
+    "[inner](https://inner.example)",
+    "[inner][ref]",
+    "https://inner.example",
+    "**[inner](https://inner.example)**",
+  ])("keeps the outer destination when HTML anchors wrap %s", (label) => {
+    const html = render(
+      `<a href="https://outer.example">${label}</a>\n\n[ref]: https://inner.example`,
+    );
+    expect(html.match(/<a /g)).toHaveLength(1);
+    expect(html).toContain('href="https://outer.example"');
+    expect(html).toContain("inner");
+    expect(html).not.toContain('href="https://inner.example"');
+  });
+
+  test("preserves standalone uploaded images as alt text or safe source links", () => {
+    expect(
+      render(
+        '<img width="1200" alt="Screenshot &amp; details" src="https://github.com/user-attachments/assets/screenshot.png" />',
+      ),
+    ).toBe("<p>Screenshot &amp; details</p>");
+    expect(render('See <img src="/screenshot.png"> here')).toBe(
+      '<p>See <a href="/screenshot.png">/screenshot.png</a> here</p>',
+    );
+    expect(render('<img src="javascript:alert(1)">')).toBe("");
+  });
+
   test("flattens block HTML onto lines", () => {
     expect(render("<details>\n<summary>Walkthrough</summary>\n<p>Body text</p>\n</details>")).toBe(
       "<p>Walkthrough<br/>\nBody text</p>",
@@ -77,11 +161,22 @@ describe("remarkGitHubHtml", () => {
       '<p><a href="https://outer.example">outer inner</a></p>',
     );
     expect(render('<a href="https://example.com">dangling')).toBe("<p>dangling</p>");
-    expect(render('<a href="javascript:alert(1)">click</a>')).toBe('<p><a href="">click</a></p>');
+    expect(render('<a href="javascript:alert(1)">click</a>')).toBe("<p>click</p>");
   });
 });
 
 describe("tokenizeHtml", () => {
+  test.each(["constructor", "toString", "valueOf", "__proto__"])(
+    "does not decode inherited entity %s",
+    (name) => {
+      const entity = `&${name};`;
+      expect(tokenizeHtml(`<img alt="${entity}">`)).toEqual([
+        { kind: "open", name: "img", attributes: { alt: entity }, selfClosing: false },
+      ]);
+      expect(render(`<div>${entity}</div>`)).toBe(`<p>&amp;${name};</p>`);
+    },
+  );
+
   test("parses quoted, unquoted and entity-encoded attributes", () => {
     expect(tokenizeHtml(`<a href="/x?a=1&amp;b=2" data-x='y' rel=noopener />`)).toEqual([
       {
@@ -95,6 +190,38 @@ describe("tokenizeHtml", () => {
 });
 
 describe("MarkdownBody", () => {
+  test.each([
+    "javascript:alert(1)",
+    "java&#9;script:alert(1)",
+    "java&#10;script:alert(1)",
+    "java&#13;script:alert(1)",
+    "&#106;avascript&#58;alert(1)",
+    "JaVaScRiPt:alert(1)",
+    "data:text/html,unsafe",
+    "vbscript:alert(1)",
+    "java&#x7f;script:alert(1)",
+  ])("rejects unsafe HTML-derived URLs through the production pipeline: %s", (href) => {
+    const html = renderToStaticMarkup(<MarkdownBody body={`See <a href="${href}">label</a>`} />);
+    expect(html).toContain("label");
+    expect(html).not.toContain("href=");
+    expect(html).not.toContain("<a ");
+  });
+
+  test.each([
+    ["https://example.com/x?a=1&amp;b=2", "https://example.com/x?a=1&b=2"],
+    ["http://example.com", "http://example.com"],
+    ["mailto:dev@example.com", "mailto:dev@example.com"],
+    ["/docs/page", "/docs/page"],
+    ["../docs/page", "../docs/page"],
+    ["#section", "#section"],
+  ])("preserves safe HTML-derived URLs: %s", (href, expected) => {
+    const container = document.createElement("div");
+    container.innerHTML = renderToStaticMarkup(
+      <MarkdownBody body={`See <a href="${href}">label</a>`} />,
+    );
+    expect(container.querySelector("a")?.getAttribute("href")).toBe(expected);
+  });
+
   test("renders <relative-time> as a relative age with the absolute time as a tooltip", () => {
     const recent = new Date(Date.now() - 12 * 60 * 1000).toISOString();
     const html = renderToStaticMarkup(

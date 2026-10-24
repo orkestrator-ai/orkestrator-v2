@@ -15,8 +15,8 @@
  *    renders as a relative age. Its text is kept as the fallback.
  *  - `<b>`/`<strong>`, `<i>`/`<em>`, `<del>`/`<s>`, `<code>` and `<br>` map to
  *    their Markdown equivalents.
- *  - Everything else — images, `<picture>`, `<sup>`, comments, `<script>`
- *    bodies — is removed.
+ *  - Standalone images keep their alt text (or a safe source link).
+ *  - Other tags are unwrapped; comments and hidden bodies are removed.
  *
  * Inline HTML arrives from the parser one tag per `html` node, interleaved
  * with the Markdown between the tags, so tags are paired across siblings.
@@ -30,6 +30,7 @@ interface MdNode {
   value?: string;
   url?: string;
   title?: string | null;
+  position?: { start: { offset?: number }; end: { offset?: number } };
   data?: {
     hName?: string;
     hProperties?: Record<string, unknown>;
@@ -49,6 +50,7 @@ interface Frame {
   children: MdNode[];
   /** Image `alt` text seen inside a link, used when the link has no text. */
   fallbackLabel?: string;
+  literalStart?: number;
 }
 
 /** Containers whose children are block content rather than phrasing. */
@@ -96,28 +98,37 @@ const NAMED_ENTITIES: Record<string, string> = {
   nbsp: " ",
 };
 
+interface ConversionState {
+  source: string;
+  hidden: string[];
+}
+
 export function remarkGitHubHtml() {
-  return (tree: MdNode) => {
-    rewrite(tree, false);
+  return (tree: MdNode, file: { toString(): string }) => {
+    rewrite(tree, false, { source: String(file), hidden: [] });
   };
 }
 
-function rewrite(node: MdNode, insideLink: boolean): void {
+function rewrite(node: MdNode, insideLink: boolean, state: ConversionState): void {
   if (!node.children) return;
   const childInsideLink = insideLink || LINK_NODES.has(node.type);
-  for (const child of node.children) rewrite(child, childInsideLink);
-  if (!node.children.some((child) => child.type === "html")) return;
 
   if (FLOW_PARENTS.has(node.type)) {
     node.children = node.children.flatMap((child) => {
-      if (child.type !== "html") return [child];
-      const phrasing = trimBoundaryBreaks(convertPhrasing([child], false).children);
+      if (child.type !== "html") {
+        if (!child.children) return state.hidden.length ? [] : [child];
+        rewrite(child, childInsideLink, state);
+        return child.children.length ? [child] : [];
+      }
+      const phrasing = trimBoundaryBreaks(
+        convertPhrasing([child], childInsideLink, state).children,
+      );
       return hasVisibleContent(phrasing) ? [{ type: "paragraph", children: phrasing }] : [];
     });
     return;
   }
 
-  const converted = convertPhrasing(node.children, childInsideLink);
+  const converted = convertPhrasing(node.children, childInsideLink, state);
   node.children = converted.children;
   // `[<img alt="Docs">](url)`: a Markdown link around an HTML image badge.
   if (LINK_NODES.has(node.type) && !hasVisibleContent(node.children) && converted.fallbackLabel) {
@@ -130,29 +141,58 @@ function rewrite(node: MdNode, insideLink: boolean): void {
  * fallback label is the first image `alt` seen directly inside an enclosing
  * Markdown link.
  */
-function convertPhrasing(children: MdNode[], insideLink: boolean): Frame {
+function convertPhrasing(children: MdNode[], insideLink: boolean, state: ConversionState): Frame {
   const root: Frame = { name: "", build: null, children: [] };
   const stack: Frame[] = [root];
-  let hiddenDepth = 0;
   const top = () => stack[stack.length - 1]!;
   const linkOpen = () => insideLink || stack.some((frame) => frame.name === "a");
 
   for (const child of children) {
     if (child.type !== "html") {
+      if (top().name === "code") {
+        const start = child.position?.start.offset;
+        const end = child.position?.end.offset;
+        top().children.push({
+          type: "text",
+          value:
+            start !== undefined && end !== undefined
+              ? decodeEntities(state.source.slice(start, end))
+              : plainText([child]),
+        });
+        continue;
+      }
+      if (child.children) {
+        rewrite(child, linkOpen(), state);
+        if (!child.children.length) continue;
+      } else if (state.hidden.length) continue;
       top().children.push(child);
       continue;
     }
-    for (const token of tokenizeHtml(child.value ?? "")) {
-      if (token.kind === "text") {
-        if (hiddenDepth > 0) continue;
-        const value = decodeEntities(token.value).replace(/\s+/g, " ");
-        if (value) top().children.push({ type: "text", value });
+    const html = child.value ?? "";
+    for (const { token, start, end } of htmlTokens(html)) {
+      if (top().name === "code" && !(token.kind === "close" && token.name === "code")) {
+        top().children.push({ type: "text", value: decodeEntities(html.slice(start, end)) });
         continue;
       }
-
-      if (HIDDEN_CONTENT_TAGS.has(token.name)) {
-        if (token.kind === "close") hiddenDepth = Math.max(0, hiddenDepth - 1);
-        else if (!token.selfClosing) hiddenDepth++;
+      const hidden = state.hidden.at(-1);
+      if (hidden) {
+        if (token.kind === "close" && token.name === hidden) state.hidden.pop();
+        else if (
+          hidden === "template" &&
+          token.kind === "open" &&
+          HIDDEN_CONTENT_TAGS.has(token.name) &&
+          !token.selfClosing
+        )
+          state.hidden.push(token.name);
+        continue;
+      }
+      if (token.kind === "open" && HIDDEN_CONTENT_TAGS.has(token.name)) {
+        if (!token.selfClosing) state.hidden.push(token.name);
+        continue;
+      }
+      if (token.kind === "text") {
+        const value = decodeEntities(token.value).replace(/\s+/g, " ");
+        if (value) top().children.push({ type: "text", value });
         continue;
       }
 
@@ -162,6 +202,20 @@ function convertPhrasing(children: MdNode[], insideLink: boolean): Frame {
           // Tags opened inside this one and never closed are unwrapped.
           while (stack.length - 1 > index) unwrapFrame(stack.pop()!, top());
           const frame = stack.pop()!;
+          if (
+            frame.name === "code" &&
+            frame.literalStart !== undefined &&
+            child.position?.start.offset !== undefined
+          ) {
+            frame.children = [
+              {
+                type: "text",
+                value: decodeEntities(
+                  state.source.slice(frame.literalStart, child.position.start.offset + start),
+                ),
+              },
+            ];
+          }
           const built = frame.build?.(frame.children, frame);
           if (built) top().children.push(built);
         } else if (BLOCK_BOUNDARY_TAGS.has(token.name)) {
@@ -181,10 +235,26 @@ function convertPhrasing(children: MdNode[], insideLink: boolean): Frame {
       } else if (token.name === "img") {
         const link = stack.findLast((frame) => frame.name === "a") ?? (insideLink ? root : null);
         const alt = token.attributes.alt?.trim();
-        if (link && alt && !link.fallbackLabel) link.fallbackLabel = alt;
+        if (link) {
+          if (alt && !link.fallbackLabel) link.fallbackLabel = alt;
+        } else {
+          const url = safeHtmlUrl(token.attributes.src);
+          if (alt) top().children.push({ type: "text", value: alt });
+          else if (url)
+            top().children.push({
+              type: "link",
+              url,
+              children: [{ type: "text", value: url }],
+            });
+        }
       } else if (!token.selfClosing) {
         const frame = openFrame(token.name, token.attributes, linkOpen());
-        if (frame) stack.push(frame);
+        if (frame) {
+          if (frame.name === "code" && child.position?.start.offset !== undefined) {
+            frame.literalStart = child.position.start.offset + end;
+          }
+          stack.push(frame);
+        }
       }
     }
   }
@@ -199,13 +269,14 @@ function openFrame(
   insideLink: boolean,
 ): Frame | null {
   if (name === "a") {
-    const url = attributes.href?.trim();
+    const url = safeHtmlUrl(attributes.href);
     // A nested anchor, or one without a destination, keeps only its content.
     if (!url || insideLink) return null;
     return {
       name,
       children: [],
       build: (children, frame) => {
+        children = unwrapLinks(children);
         if (hasVisibleContent(children)) return { type: "link", url, title: null, children };
         if (!frame.fallbackLabel) return null;
         return {
@@ -243,7 +314,7 @@ function openFrame(
     };
   }
 
-  const type = PHRASING_TAGS[name];
+  const type = Object.hasOwn(PHRASING_TAGS, name) ? PHRASING_TAGS[name] : undefined;
   if (type) {
     return {
       name,
@@ -253,6 +324,24 @@ function openFrame(
   }
 
   return null;
+}
+
+/** HTML-derived destinations allow web/mail schemes and relative references only. */
+function safeHtmlUrl(value: string | undefined): string | undefined {
+  const url = value?.trim();
+  // Browsers ignore ASCII tabs/newlines in schemes. Reject all control bytes
+  // before scheme detection rather than letting them disguise a protocol.
+  if (!url || /[\u0000-\u0020\u007f-\u009f]/.test(url)) return undefined;
+  const scheme = /^([^/?#:]+):/.exec(url)?.[1];
+  return !scheme || /^(https?|mailto)$/i.test(scheme) ? url : undefined;
+}
+
+/** The enclosing link owns the destination, including through emphasis. */
+function unwrapLinks(nodes: MdNode[]): MdNode[] {
+  return nodes.flatMap((node) => {
+    if (LINK_NODES.has(node.type)) return unwrapLinks(node.children ?? []);
+    return node.children ? [{ ...node, children: unwrapLinks(node.children) }] : [node];
+  });
 }
 
 function unwrapFrame(frame: Frame, parent: Frame): void {
@@ -298,28 +387,38 @@ function plainText(nodes: MdNode[]): string {
 }
 
 export function tokenizeHtml(html: string): HtmlToken[] {
-  const tokens: HtmlToken[] = [];
+  return htmlTokens(html).map(({ token }) => token);
+}
+
+function htmlTokens(html: string): Array<{ token: HtmlToken; start: number; end: number }> {
+  const tokens: Array<{ token: HtmlToken; start: number; end: number }> = [];
+  const push = (token: HtmlToken, start: number, end: number) => tokens.push({ token, start, end });
   let cursor = 0;
   for (const match of html.matchAll(TOKEN_PATTERN)) {
-    if (match.index > cursor) tokens.push({ kind: "text", value: html.slice(cursor, match.index) });
+    if (match.index > cursor)
+      push({ kind: "text", value: html.slice(cursor, match.index) }, cursor, match.index);
     cursor = match.index + match[0].length;
     const tag = match[0];
     // Comments, doctypes and processing instructions carry nothing to show.
     if (tag.startsWith("<!") || tag.startsWith("<?")) continue;
     const name = /^<\/?([A-Za-z][A-Za-z0-9-]*)/.exec(tag)![1]!.toLowerCase();
     if (tag.startsWith("</")) {
-      tokens.push({ kind: "close", name });
+      push({ kind: "close", name }, match.index, cursor);
       continue;
     }
     const body = tag.slice(name.length + 1, -1);
-    tokens.push({
-      kind: "open",
-      name,
-      attributes: parseAttributes(body),
-      selfClosing: body.trimEnd().endsWith("/"),
-    });
+    push(
+      {
+        kind: "open",
+        name,
+        attributes: parseAttributes(body),
+        selfClosing: body.trimEnd().endsWith("/"),
+      },
+      match.index,
+      cursor,
+    );
   }
-  if (cursor < html.length) tokens.push({ kind: "text", value: html.slice(cursor) });
+  if (cursor < html.length) push({ kind: "text", value: html.slice(cursor) }, cursor, html.length);
   return tokens;
 }
 
@@ -327,7 +426,7 @@ function parseAttributes(source: string): Record<string, string> {
   const attributes: Record<string, string> = {};
   for (const match of source.matchAll(ATTRIBUTE_PATTERN)) {
     const name = match[1]!.toLowerCase();
-    if (name in attributes) continue;
+    if (Object.hasOwn(attributes, name)) continue;
     attributes[name] = decodeEntities(match[2] ?? match[3] ?? match[4] ?? "");
   }
   return attributes;
@@ -342,6 +441,7 @@ function decodeEntities(value: string): string {
           : Number.parseInt(body.slice(1), 10);
       return codePoint > 0 && codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : entity;
     }
-    return NAMED_ENTITIES[body.toLowerCase()] ?? entity;
+    const name = body.toLowerCase();
+    return Object.hasOwn(NAMED_ENTITIES, name) ? NAMED_ENTITIES[name]! : entity;
   });
 }

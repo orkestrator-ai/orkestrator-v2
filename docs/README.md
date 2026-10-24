@@ -41,7 +41,8 @@ deleted once their behaviour is in a living doc; git history keeps them. The
 | [transcript-artifacts-agent-guide.md](architecture/transcript-artifacts-agent-guide.md) | Agent-facing guide to the seven artifact tools, with chart and interactive examples. |
 | [rich-transcripts-user-guide.md](architecture/rich-transcripts-user-guide.md) | User guide: supported content, controls, copy/export, interactive artifacts, snapshots versus live state, platform limits. |
 | [design-canvas.md](architecture/design-canvas.md) | HTML/CSS canvas, recoverable operations, private records, history, sync, safe export, design MCP and .orkdes files. |
-| [control-mcp.md](architecture/control-mcp.md) | Control MCP operator guide. |
+| [control-mcp.md](architecture/control-mcp.md) | Control MCP operator guide: credentials and profiles, tool tiers, confirmation, authority. |
+| [control-mcp-voice.md](architecture/control-mcp-voice.md) | Control MCP for voice clients: the voice profile's tools, spoken confirmation, the attention relay, the local relay for hosted platforms, qualification. |
 | [mcp-management.md](architecture/mcp-management.md) | Per-provider MCP server management: sources, precedence, safe writes, secrets, apply states, evidence. |
 | [remote-gateway.md](architecture/remote-gateway.md) | Standalone backend, Tailscale Serve, flags, troubleshooting. |
 | [command-nodes.md](architecture/command-nodes.md) | **Target multi-machine architecture:** command nodes (registry, portal, cross-node coordinators, mail, files) and leaf nodes; control plane via the command node, agent chat, terminals and previews direct from client to leaf where reachable. |

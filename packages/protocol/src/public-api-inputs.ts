@@ -49,11 +49,9 @@ export interface PublicActionInputSchema extends PublicJsonSchema {
 }
 
 /**
- * Groups of actions a Control MCP credential can be granted. `tickets` and
- * `mail` have no public actions yet; they are listed so credentials can name
- * them before those actions exist. `host` (updating Orkestrator itself) is for
- * the operator's own clients only and must never be granted to an MCP
- * credential an agent could hold.
+ * Groups of actions a Control MCP credential can be granted. `host` (updating
+ * Orkestrator itself) is for the operator's own clients only and must never
+ * be granted to an MCP credential an agent could hold.
  */
 export const PUBLIC_CAPABILITIES = Object.freeze([
   "discovery",
@@ -166,6 +164,21 @@ const expectedRevision: PublicJsonSchema = {
   maxLength: 64,
   description: "Apply only if the stored revision still matches.",
 };
+
+const ticketId = id("Ticket ID, from ticket.list.");
+const ticketStatus: PublicJsonSchema = {
+  type: "string",
+  enum: ["backlog", "in-progress", "review", "done"],
+};
+const ticketTitle: PublicJsonSchema = {
+  type: "string",
+  minLength: 1,
+  maxLength: 500,
+  description: "Ticket title.",
+};
+function ticketText(description: string): PublicJsonSchema {
+  return { type: "string", maxLength: 100_000, description };
+}
 
 const agentSelection: Record<string, PublicJsonSchema> = {
   agent: {
@@ -912,6 +925,137 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
         ["sessionId"],
       ),
       examples: [{ sessionId: EXAMPLE_SESSION_ID }, { sessionId: EXAMPLE_SESSION_ID, limit: 10 }],
+    },
+    "attention.list": {
+      capability: "sessions.read",
+      confirmation: "never",
+      input: schema({
+        cursor: {
+          type: "string",
+          minLength: 1,
+          maxLength: 64,
+          description:
+            "cursor from the previous call: settled runs and setup changes since then. Omitted: the last hour. Pending interactions are always listed.",
+        },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          maximum: PUBLIC_API_LIMITS.attentionMaxItems,
+          description: `Most items to return (default ${PUBLIC_API_LIMITS.attentionDefaultItems}).`,
+        },
+      }),
+      examples: [{}, { limit: 5 }],
+    },
+    "ticket.list": {
+      capability: "tickets",
+      confirmation: "never",
+      input: schema(
+        {
+          projectId,
+          status: { ...ticketStatus, description: "Only tickets in this column." },
+          limit,
+          cursor,
+        },
+        ["projectId"],
+      ),
+      examples: [{ projectId: "project-1" }, { projectId: "project-1", status: "backlog" }],
+    },
+    "ticket.get": {
+      capability: "tickets",
+      confirmation: "never",
+      input: schema({ projectId, ticketId }, ["projectId", "ticketId"]),
+      examples: [{ projectId: "project-1", ticketId: "ticket-1" }],
+    },
+    "ticket.create": {
+      capability: "tickets",
+      confirmation: "never",
+      input: schema(
+        {
+          projectId,
+          title: ticketTitle,
+          description: ticketText("Ticket description."),
+          acceptanceCriteria: ticketText("Acceptance criteria."),
+          status: { ...ticketStatus, description: "Column (default backlog)." },
+        },
+        ["projectId", "title"],
+      ),
+      examples: [{ projectId: "project-1", title: "Fix the login redirect" }],
+    },
+    "ticket.update": {
+      capability: "tickets",
+      confirmation: "never",
+      input: schema(
+        {
+          projectId,
+          ticketId,
+          title: ticketTitle,
+          description: ticketText("New description."),
+          acceptanceCriteria: ticketText("New acceptance criteria."),
+          status: { ...ticketStatus, description: "Move the ticket to this column." },
+        },
+        ["projectId", "ticketId"],
+      ),
+      examples: [{ projectId: "project-1", ticketId: "ticket-1", status: "in-progress" }],
+    },
+    "ticket.comment": {
+      capability: "tickets",
+      confirmation: "never",
+      input: schema(
+        {
+          projectId,
+          ticketId,
+          text: {
+            type: "string",
+            minLength: 1,
+            maxLength: 20_000,
+            description: "Comment text.",
+          },
+        },
+        ["projectId", "ticketId", "text"],
+      ),
+      examples: [{ projectId: "project-1", ticketId: "ticket-1", text: "Reproduced on main." }],
+    },
+    "mail.mailboxes": {
+      capability: "mail",
+      confirmation: "never",
+      input: schema({
+        q: {
+          type: "string",
+          minLength: 1,
+          maxLength: 200,
+          description: "Filter by environment, tab or project name.",
+        },
+        offset: { type: "integer", minimum: 0, description: "Rows to skip (default 0)." },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          maximum: PUBLIC_API_LIMITS.pageMaxItems,
+          description: "Rows per page (default 100).",
+        },
+      }),
+      examples: [{}, { q: "auth" }],
+    },
+    "mail.send": {
+      capability: "mail",
+      confirmation: "never",
+      input: schema(
+        {
+          toEnvironmentId: {
+            ...environmentId,
+            description: "Destination environment ID, from mail.mailboxes.",
+          },
+          toTabId: id("Destination tab ID, from mail.mailboxes."),
+          subject: { type: "string", minLength: 1, maxLength: 200, description: "Subject line." },
+          body: {
+            type: "string",
+            minLength: 1,
+            maxLength: 32 * 1024,
+            description: "Message text, at most 32 KiB of UTF-8.",
+          },
+        },
+        ["toEnvironmentId", "toTabId", "body"],
+      ),
+      examples: [{ toEnvironmentId: "env-1", toTabId: "startup-agent", body: "Rebase on main." }],
     },
     "run.get": {
       capability: "discovery",

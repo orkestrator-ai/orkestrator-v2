@@ -19,6 +19,7 @@ import {
 export const runCommands: CommandSpec[] = [
   {
     path: ["run", "get"],
+    action: "run.get",
     summary: "Show an operation by ID, or by its original --request-id.",
     description:
       "Lookup by request key finds the operation even when the original response was lost. `history-expired` (exit 3) means the key's namespace was retired and its outcome is no longer retained; it is not evidence that nothing ran.",
@@ -84,6 +85,7 @@ export const runCommands: CommandSpec[] = [
   },
   {
     path: ["run", "wait"],
+    action: "run.get",
     summary: "Observe an operation until it finishes (exit 0 only on success).",
     description:
       "Exit codes: 0 succeeded, 1 failed/cancelled/interrupted, 5 --timeout passed (still running), 6 waiting for an interaction answer, 7 dispatch or outcome unknown. Ctrl+C stops observing only.",
@@ -121,6 +123,7 @@ export const runCommands: CommandSpec[] = [
   },
   {
     path: ["run", "retry"],
+    action: "run.retry",
     summary: "Retry the exact parked prompt/steer of an unknown dispatch under its original key.",
     description: "Never sends a different prompt and never mints a new key.",
     positionals: [{ name: "operation", required: true }],
@@ -146,6 +149,7 @@ export const runCommands: CommandSpec[] = [
   },
   {
     path: ["run", "discard"],
+    action: "run.discard",
     summary: "Clear the recovery state of an unknown dispatch (does NOT undo a turn that ran).",
     positionals: [{ name: "operation", required: true }],
     options: [REQUEST_ID_OPTION],
@@ -170,6 +174,7 @@ export const runCommands: CommandSpec[] = [
   },
   {
     path: ["run", "cancel"],
+    action: "run.cancel",
     summary: "Cancel a running exec operation (its exact worker and descendants).",
     positionals: [{ name: "operation", required: true }],
     options: [REQUEST_ID_OPTION],
@@ -194,6 +199,8 @@ export const runCommands: CommandSpec[] = [
   },
   {
     path: ["run", "output"],
+    action: "run.output",
+    inputFields: { tail: "tailBytes" },
     summary: "Read a bounded window of an exec operation's stdout or stderr.",
     positionals: [{ name: "operation", required: true }],
     options: [

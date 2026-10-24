@@ -86,6 +86,11 @@ export type CommandContext = {
   controlMcp?: {
     getSettings(): ControlMcpSettings;
     rotateToken(): Promise<ControlMcpSettings>;
+    createCredential(
+      input: import("./control-mcp-credentials.js").CreateControlMcpCredentialInput,
+    ): Promise<ControlMcpSettings>;
+    rotateCredential(credentialId: string): Promise<ControlMcpSettings>;
+    revokeCredential(credentialId: string): Promise<ControlMcpSettings>;
     issueCoordinatorCredential(scope: CoordinatorControlScope): CoordinatorControlConnection;
     revokeCoordinatorCredentials(coordinatorId: string, conversationId?: string): void;
   };

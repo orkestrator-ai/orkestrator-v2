@@ -392,11 +392,30 @@ describe("published MCP tool schemas are provider-portable", () => {
     },
   );
 
-  test("control tools", async () => {
+  test("control tools: the default full-profile credential", async () => {
     const descriptor = await readControlMcpDescriptor(control.getInfo()!.descriptorFile);
     const tools = await listTools(descriptor.url, descriptor.token);
+    // The original tools, the voice core, the gateway and one tool per action.
+    expect(tools.map((tool) => tool.name)).toEqual(
+      expect.arrayContaining(["list_projects", "overview", "run_action", "session_prompt"]),
+    );
+    expectPortable("orkestrator-control/full", tools);
+  });
+
+  test.each([
+    ["voice", undefined],
+    ["read-only", undefined],
+    ["custom", ["sessions.read", "interactions"]],
+  ] as const)("control tools: the %s profile", async (profile, capabilities) => {
+    const settings = await control.createCredential({
+      label: `portable ${profile}`,
+      profile,
+      ...(capabilities ? { capabilities: [...capabilities] } : {}),
+    });
+    const credential = settings.credentials.at(-1)!;
+    const tools = await listTools(control.getInfo()!.url, credential.token);
     expect(tools.length).toBeGreaterThan(0);
-    expectPortable("orkestrator-control", tools);
+    expectPortable(`orkestrator-control/${profile}`, tools);
   });
 
   test("coordinator control tools", async () => {

@@ -385,10 +385,13 @@ export class StoragePublicOperations extends StorageNodes {
     return claimed;
   }
 
-  /** Find operations by their caller request ID (optionally narrowed). */
+  /**
+   * Find one authority's operations by their caller request ID (optionally
+   * narrowed). Other authorities' records are never returned.
+   */
   async findPublicOperationsByRequest(
     requestId: string,
-    filter: { action?: PublicActionName; namespace?: string } = {},
+    filter: { authority: PublicAuthority; action?: PublicActionName; namespace?: string },
   ): Promise<{ records: PublicOperationRecord[]; expiredNamespace?: string }> {
     const index = await this.loadPublicOperationIndex();
     if (filter.namespace !== undefined) {
@@ -403,11 +406,34 @@ export class StoragePublicOperations extends StorageNodes {
     for (const namespace of namespaces) {
       for (const record of await this.loadNamespaceRecords(namespace)) {
         if (!isPublicOperationRecord(record) || record.requestId !== requestId) continue;
+        if (record.authority !== filter.authority) continue;
         if (filter.action && record.action !== filter.action) continue;
         records.push(record);
       }
     }
     return { records };
+  }
+
+  /**
+   * One authority's records last changed after `sinceMs`, newest first and
+   * at most `limit`. Reads retained namespaces only; nothing is reconciled.
+   */
+  async listPublicOperationsChangedSince(
+    authority: PublicAuthority,
+    sinceMs: number,
+    limit: number,
+  ): Promise<PublicOperationRecord[]> {
+    const index = await this.loadPublicOperationIndex();
+    const changed: PublicOperationRecord[] = [];
+    for (const entry of index.namespaces) {
+      for (const record of await this.loadNamespaceRecords(entry.id)) {
+        if (!isPublicOperationRecord(record) || record.authority !== authority) continue;
+        if (Date.parse(record.updatedAt) > sinceMs) changed.push(record);
+      }
+    }
+    return changed
+      .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
+      .slice(0, Math.max(0, limit));
   }
 
   async listActivePublicOperations(): Promise<PublicOperationRecord[]> {

@@ -745,8 +745,18 @@ test("does not publish the persistent control MCP until backend recovery complet
       url: "http://127.0.0.1:34122/mcp",
       token: "",
       error: null,
+      credentials: [],
     })),
     rotateToken: mock(async () => {
+      throw new Error("not used");
+    }),
+    createCredential: mock(async () => {
+      throw new Error("not used");
+    }),
+    rotateCredential: mock(async () => {
+      throw new Error("not used");
+    }),
+    revokeCredential: mock(async () => {
       throw new Error("not used");
     }),
     issueCoordinatorCredential: mock(() => {

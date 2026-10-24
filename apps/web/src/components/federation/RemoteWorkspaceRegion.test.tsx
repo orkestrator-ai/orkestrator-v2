@@ -17,6 +17,8 @@ import { FederationProvider } from "./FederationProvider";
 import { RemoteWorkspaceRegion } from "./RemoteWorkspaceRegion";
 
 const INITIAL_REMOTE = useRemoteWorkspaceStore.getState();
+const INITIAL_UI = useUIStore.getState();
+const INITIAL_MACHINE = useMachineViewStore.getState();
 const originalReload = window.location.reload;
 let reload = mock(() => undefined);
 
@@ -56,6 +58,8 @@ function renderRegion(anchor: HTMLElement) {
 
 beforeEach(() => {
   useRemoteWorkspaceStore.setState(INITIAL_REMOTE, true);
+  useUIStore.setState({ environmentSortMode: "project" });
+  useMachineViewStore.setState({ grouping: "machine" });
   sessionStorage.clear();
   reload = mock(() => undefined);
   window.location.reload = reload;
@@ -65,6 +69,8 @@ afterEach(() => {
   cleanup();
   uninstallDesktopFake();
   useRemoteWorkspaceStore.setState(INITIAL_REMOTE, true);
+  useUIStore.setState(INITIAL_UI, true);
+  useMachineViewStore.setState(INITIAL_MACHINE, true);
   window.location.reload = originalReload;
   document.body.innerHTML = "";
 });
@@ -706,4 +712,135 @@ test("successful renewal keeps the current frame and its grant", async () => {
   expect(frame.src).toBe(src);
   expect(fake.invoke.mock.calls.filter(([c]) => c === "open_node_workspace")).toHaveLength(1);
   expect(closedWorkspaces(fake)).toHaveLength(0);
+});
+
+test("realms receive the latest effective grouping before readiness and after a document restart", async () => {
+  const fake = install(true);
+  renderRegion(anchorElement());
+  act(() => {
+    useMachineViewStore.getState().setGrouping("repository");
+    useRemoteWorkspaceStore.getState().open("bk_a", { projectId: "project-1" });
+  });
+  await waitFor(() => expect(fake.workspaceViews.setVisible).toHaveBeenCalled());
+  act(() => useMachineViewStore.getState().setGrouping("project"));
+  expect(fake.workspaceViews.send).not.toHaveBeenCalled();
+  act(() => fake.emitViewEvent({ viewId: "view-1", type: "message", message: { type: "ready" } }));
+  expect(fake.workspaceViews.send).toHaveBeenCalledWith("view-1", {
+    type: "grouping",
+    grouping: "project",
+  });
+  fake.workspaceViews.send.mockClear();
+  act(() => fake.emitViewEvent({ viewId: "view-1", type: "crashed" }));
+  act(() => {
+    useMachineViewStore.getState().setGrouping("repository");
+    useUIStore.setState({ environmentSortMode: "activity" });
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Try again" }));
+  await waitFor(() =>
+    expect(fake.workspaceViews.setVisible).toHaveBeenLastCalledWith("view-2", true),
+  );
+  expect(fake.workspaceViews.send).not.toHaveBeenCalled();
+  act(() => fake.emitViewEvent({ viewId: "view-2", type: "message", message: { type: "ready" } }));
+  expect(fake.workspaceViews.send).toHaveBeenCalledWith("view-2", {
+    type: "grouping",
+    grouping: "activity",
+  });
+  // Project sorting restores the saved grouping and activity sorting overrides it again.
+  act(() => useUIStore.setState({ environmentSortMode: "project" }));
+  expect(fake.workspaceViews.send).toHaveBeenLastCalledWith("view-2", {
+    type: "grouping",
+    grouping: "repository",
+  });
+  act(() => useUIStore.setState({ environmentSortMode: "activity" }));
+  expect(fake.workspaceViews.send).toHaveBeenLastCalledWith("view-2", {
+    type: "grouping",
+    grouping: "activity",
+  });
+});
+
+test("ready before the sender commits still delivers the current grouping", async () => {
+  const fake = install(true);
+  let resolveOpen!: (result: { viewId: string }) => void;
+  fake.workspaceViews.open.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        resolveOpen = resolve;
+      }),
+  );
+  renderRegion(anchorElement());
+  act(() => useRemoteWorkspaceStore.getState().open("bk_a", {}));
+  await waitFor(() => expect(fake.workspaceViews.open).toHaveBeenCalled());
+  await act(async () => {
+    resolveOpen({ viewId: "view-early" });
+    await Promise.resolve();
+    fake.emitViewEvent({ viewId: "view-early", type: "message", message: { type: "ready" } });
+    expect(fake.workspaceViews.send).not.toHaveBeenCalled();
+  });
+  expect(fake.workspaceViews.send).toHaveBeenCalledWith("view-early", {
+    type: "grouping",
+    grouping: "machine",
+  });
+});
+
+test("browser grouping delivery uses the current workspace envelope and survives grant replacement", async () => {
+  install(false, (command) => {
+    if (command === "renew_node_workspace") throw new Error("workspace grant expired");
+  });
+  renderRegion(anchorElement());
+  act(() => {
+    useMachineViewStore.getState().setGrouping("repository");
+    useRemoteWorkspaceStore.getState().open("bk_a", {});
+  });
+  const frame = (await screen.findByTitle(/^Workspace on /)) as HTMLIFrameElement;
+  const post = mock(() => undefined);
+  Object.defineProperty(frame, "contentWindow", {
+    configurable: true,
+    value: { postMessage: post },
+  });
+  act(() => useUIStore.setState({ environmentSortMode: "activity" }));
+  expect(post).not.toHaveBeenCalled();
+  act(() => frameMessage(frame, "workspace-1", { type: "ready" }));
+  expect(post).toHaveBeenCalledWith(
+    frameEnvelope("workspace-1", { type: "grouping", grouping: "activity" }),
+    window.location.origin,
+  );
+  act(() => useUIStore.setState({ environmentSortMode: "project" }));
+  expect(post).toHaveBeenLastCalledWith(
+    frameEnvelope("workspace-1", { type: "grouping", grouping: "repository" }),
+    window.location.origin,
+  );
+  act(() => window.dispatchEvent(new Event("online")));
+  await waitFor(() => expect(new URL(frame.src).searchParams.get("workspace")).toBe("workspace-2"));
+  post.mockClear();
+  act(() => {
+    useMachineViewStore.getState().setGrouping("project");
+    frameMessage(frame, "workspace-1", { type: "ready" });
+  });
+  expect(post).not.toHaveBeenCalled();
+  act(() => frameMessage(frame, "workspace-2", { type: "ready" }));
+  expect(post).toHaveBeenCalledWith(
+    frameEnvelope("workspace-2", { type: "grouping", grouping: "project" }),
+    window.location.origin,
+  );
+});
+
+test("a realm's command coordinator link selects that project and Coordinator in the window", async () => {
+  install(false);
+  renderRegion(anchorElement());
+  act(() => useRemoteWorkspaceStore.getState().open("bk_a", { projectId: "leaf-project" }));
+  const frame = (await screen.findByTitle(/^Workspace on /)) as HTMLIFrameElement;
+  const commandId = portalStore.getState().selfId!;
+  act(() => {
+    useUIStore.setState({ projectBoardTab: "kanban" });
+    frameMessage(frame, "workspace-1", {
+      type: "open",
+      nodeId: commandId,
+      projectId: "command-project",
+      boardTab: "coordinator",
+      title: "app",
+    });
+  });
+  expect(useRemoteWorkspaceStore.getState().active).toBeNull();
+  expect(useUIStore.getState().selectedProjectId).toBe("command-project");
+  expect(useUIStore.getState().projectBoardTab).toBe("coordinator");
 });

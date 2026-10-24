@@ -15,6 +15,7 @@ import {
   parseRealmMessage,
   readFrameEnvelope,
   realmSearchParams,
+  type RealmGrouping,
   type RealmSelectRequest,
   type ShellToRealmMessage,
 } from "@/lib/federation/workspace-realm";
@@ -155,7 +156,9 @@ function selectRequest(request: RealmRequest | undefined): Omit<RealmSelectReque
 function useRealmRequests(nodeId: string, send: ((message: ShellToRealmMessage) => void) | null) {
   const request = useRemoteWorkspaceStore((state) => state.requests[nodeId]);
   const sidebarOpen = useUIStore((state) => state.sidebarOpen);
-  const grouping = useMachineViewStore((state) => state.grouping);
+  const storedGrouping = useMachineViewStore((state) => state.grouping);
+  const sortMode = useUIStore((state) => state.environmentSortMode);
+  const grouping: RealmGrouping = sortMode === "activity" ? "activity" : storedGrouping;
   const delivered = useRef(0);
   const ready = useRef(false);
   const selection = useRef<Omit<RealmSelectRequest, "type">>({});

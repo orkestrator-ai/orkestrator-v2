@@ -65,17 +65,19 @@ function boardTab(value: unknown): RealmBoardTab | undefined {
 }
 
 /** How the window's sidebar groups machines' projects. */
-export type RealmGrouping = "machine" | "project" | "repository";
+export type RealmGrouping = "machine" | "project" | "repository" | "activity";
 
 function isRealmGrouping(value: unknown): value is RealmGrouping {
-  return value === "machine" || value === "project" || value === "repository";
+  return (
+    value === "machine" || value === "project" || value === "repository" || value === "activity"
+  );
 }
 
 /**
  * Whether a realm's coordinator defers to the command node's. Grouped by
  * repository, the window links each repository's projects across machines,
  * so coordination for it runs on the command node where it can. Grouped by
- * machine or project the machines are not linked, and a node's own
+ * machine, project or activity the machines are not linked, and a node's own
  * coordinator opens directly.
  */
 export function realmCoordinatorDefers(grouping: RealmGrouping | null): boolean {

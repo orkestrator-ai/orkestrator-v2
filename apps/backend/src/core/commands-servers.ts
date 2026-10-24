@@ -1,3 +1,4 @@
+import { restrictCodexAuthSnapshot } from "@orkestrator/protocol/login-snapshots";
 import {
   COORDINATOR_RESEARCH_MCP_ENV,
   COORDINATOR_WEB_RESEARCH_ENV,
@@ -167,7 +168,7 @@ export const ORKESTRATOR_BRIDGE_EXECUTION_POLICY_ENV = "ORKESTRATOR_BRIDGE_EXECU
  */
 export const ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT_ENV = "ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT";
 import { realpath } from "node:fs/promises";
-import { chmod, copyFile, lstat, mkdir, rename, rm } from "node:fs/promises";
+import { chmod, lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { sanitizeCoordinatorError } from "./coordinator-service.js";
 import {
@@ -218,7 +219,12 @@ export async function prepareCoordinatorCodexHome(
   const destinationAuth = path.join(destination, "auth.json");
   const temporary = `${destinationAuth}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
   try {
-    await copyFile(sourceAuth, temporary);
+    const login = restrictCodexAuthSnapshot(await readFile(sourceAuth, "utf8"));
+    if (!("text" in login)) {
+      await rm(destinationAuth, { force: true });
+      return;
+    }
+    await writeFile(temporary, login.text, { mode: 0o600 });
     await chmod(temporary, 0o600);
     await rename(temporary, destinationAuth);
   } finally {
@@ -1267,8 +1273,8 @@ async function startLocalServerAttempt(
         coordinatorConversationId!,
         "codex-home",
       );
-      // Only the login is copied: from the active account's directory, or
-      // the host's when no account was added.
+      // Hand over access-only credentials from the active account or host.
+      // The private home must never rotate the account's refresh token.
       const account = await resolveActiveAgentAccount(context, "codex");
       if (account.home) stripInheritedAgentCredentials(env);
       // The directory outlives a launch: drop an earlier account's login.

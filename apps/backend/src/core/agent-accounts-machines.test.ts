@@ -88,3 +88,63 @@ test("asks each enabled machine and keeps going when one cannot answer", async (
   expect(result.machines[0]?.nodeId).toBe("node-self");
   expect(result.machines[1]?.snapshot).toEqual(LEAF_SNAPSHOT);
 });
+
+test("omits detaching nodes and distinguishes invalid responses from errors", async () => {
+  const asked: string[] = [];
+  const result = await listMachineAgentAccounts(
+    context({
+      nodes: {
+        selfIdentity: async () => "self",
+        isLeaf: () => false,
+        listNodes: async () => ({
+          nodes: ["detaching", "error", "invalid", "unknown"].map((nodeId) => ({
+            nodeId,
+            displayName: nodeId,
+            enabled: true,
+            detachPending: nodeId === "detaching",
+          })),
+        }),
+      } as never,
+      nodePortal: {
+        invokeOnNode: async ({ nodeId }: { nodeId: string }) => {
+          asked.push(nodeId);
+          if (nodeId === "error") throw new Error("failed".repeat(60));
+          if (nodeId === "unknown") return { outcome: "unknown" };
+          return { outcome: "ok", result: { accounts: [], active: null } };
+        },
+      } as never,
+    }),
+  );
+  expect(asked.sort()).toEqual(["error", "invalid", "unknown"]);
+  expect(result.machines.slice(1).map((row) => row.state)).toEqual([
+    "error",
+    "unavailable",
+    "unavailable",
+  ]);
+  expect(result.machines[1]?.error).toHaveLength(200);
+});
+
+for (const invalid of [
+  null,
+  {},
+  { accounts: [] },
+  { accounts: [], active: [] },
+  { accounts: [], active: { claude: "default" } },
+]) {
+  test(`a connected node's malformed snapshot is unavailable: ${JSON.stringify(invalid)}`, async () => {
+    const result = await listMachineAgentAccounts(
+      context({
+        nodes: {
+          selfIdentity: async () => "self",
+          isLeaf: () => false,
+          listNodes: async () => ({
+            nodes: [{ nodeId: "leaf", enabled: true, displayName: "Leaf" }],
+          }),
+        } as never,
+        nodePortal: { invokeOnNode: async () => ({ outcome: "ok", result: invalid }) } as never,
+      }),
+    );
+    expect(result.machines[1]).toMatchObject({ nodeId: "leaf", state: "unavailable" });
+    expect(result.machines[1]?.snapshot).toBeUndefined();
+  });
+}

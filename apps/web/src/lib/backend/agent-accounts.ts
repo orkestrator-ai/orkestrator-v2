@@ -1,5 +1,6 @@
 import { invoke } from "@/lib/native/backend";
 import type { BackendId } from "@orkestrator/protocol/federation";
+import { portalInvoke } from "@/lib/portal/portal-transport";
 import { portalStore } from "@/lib/portal/portal-store";
 import { invokeCommandNodeSetting } from "@/lib/portal/command-node-config";
 import type {
@@ -17,20 +18,21 @@ import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
  * never returns a credential.
  *
  * Every machine keeps its own accounts. `machine` names the node to ask,
- * through the command node; without it the call goes to this view's own
- * backend (the leaf, inside a leaf's workspace).
+ * through the command node. `null` selects the command node; `undefined`
+ * selects this view's backend (the leaf, inside a leaf's workspace).
  */
 export type AccountMachine = string | null | undefined;
 
-/** Ask `machine` through the command node, or this view's own backend without one. */
+/** `null` selects the command node; an omitted target selects this view's backend. */
 export function machineInvoke<T>(
   machine: AccountMachine,
   command: string,
   args: Record<string, unknown> = {},
 ): Promise<T> {
-  return machine
-    ? portalStore.invokeOnNode<T>(machine as BackendId, command, args)
-    : invoke<T>(command, args);
+  if (machine === null) return portalInvoke<T>(command, args);
+  return machine === undefined
+    ? invoke<T>(command, args)
+    : portalStore.invokeOnNode<T>(machine as BackendId, command, args);
 }
 
 export async function listAgentAccounts(machine?: AccountMachine): Promise<AgentAccountsSnapshot> {

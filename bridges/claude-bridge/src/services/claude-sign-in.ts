@@ -37,15 +37,16 @@ let authRefreshPending = false;
 /** Bumped by every invalidation so an older probe cannot repopulate the cache. */
 let authGeneration = 0;
 /**
- * A turn failed authentication and no model has answered since. The probe
+ * A turn failed authentication recently. The probe
  * cannot see an expired or revoked login, so while it still finds a
- * credential the read reports `expired` rather than `signed-in`. That never
- * locks the composer; only `needs-auth` does.
+ * credential the read reports `expired` rather than `signed-in` for one cache
+ * window. A later probe can observe a terminal re-login without requiring a
+ * successful turn first. That never locks the composer; only `needs-auth` does.
  */
-let turnAuthenticationFailed = false;
+let turnAuthenticationFailedUntil = 0;
 
 function withTurnFailure(value: NativeAgentAuthStatus): NativeAgentAuthStatus {
-  return turnAuthenticationFailed && value.state === "signed-in"
+  return Date.now() < turnAuthenticationFailedUntil && value.state === "signed-in"
     ? { ...value, state: "expired" }
     : value;
 }
@@ -56,7 +57,7 @@ export function resetClaudeSignInForTesting(): void {
   authReadGeneration = undefined;
   authRefreshPending = false;
   authGeneration += 1;
-  turnAuthenticationFailed = false;
+  turnAuthenticationFailedUntil = 0;
 }
 
 /** Claude reports an absent source as the literal string "none". */
@@ -147,7 +148,7 @@ export function readClaudeAuthStatus(): Promise<NativeAgentAuthStatus> {
  * composer before the user sends into the same failure again.
  */
 export function noteClaudeAuthenticationFailure(): void {
-  turnAuthenticationFailed = true;
+  turnAuthenticationFailedUntil = Date.now() + AUTH_CACHE_TTL_MS;
   authCache = undefined;
   // Failures share the active probe. If success already fenced it, queue one
   // replacement after its cleanup, rather than spawning concurrent CLIs.
@@ -162,7 +163,7 @@ export function noteClaudeAuthenticationWorked(): void {
   // second CLI while the obsolete probe is still running.
   authGeneration += 1;
   authRefreshPending = false;
-  turnAuthenticationFailed = false;
+  turnAuthenticationFailedUntil = 0;
   if (authCache?.value.state === "needs-auth") authCache = undefined;
 }
 

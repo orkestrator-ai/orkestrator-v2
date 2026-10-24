@@ -1478,6 +1478,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                   </div>
                 ) : null}
                 <AgentInfoAccountSection
+                  open={open}
                   environmentId={activeSession.environmentId}
                   provider={activeSession.provider}
                 />

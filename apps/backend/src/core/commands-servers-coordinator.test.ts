@@ -66,7 +66,10 @@ describe("Coordinator Codex server", () => {
     previousCodexHome = process.env.CODEX_HOME;
     const sourceHome = path.join(root, "source-codex-home");
     await fs.mkdir(sourceHome);
-    await fs.writeFile(path.join(sourceHome, "auth.json"), '{"token":"login"}\n');
+    await fs.writeFile(
+      path.join(sourceHome, "auth.json"),
+      '{"tokens":{"access_token":"login","refresh_token":"refresh-sentinel"}}\n',
+    );
     await fs.writeFile(path.join(sourceHome, "config.toml"), "developer_instructions='unsafe'\n");
     process.env.CODEX_HOME = sourceHome;
     previousClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
@@ -443,7 +446,8 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     await fs.mkdir(bridge, { recursive: true });
     await fs.writeFile(
       path.join(bridge, "index.js"),
-      `await Bun.write(process.env.CODEX_HOME + "/captured.json", JSON.stringify({ codexPath: process.env.CODEX_PATH, policy: process.env.CODEX_BRIDGE_EXECUTION_POLICY, permissionProfile: process.env.CODEX_BRIDGE_PERMISSION_PROFILE, readableRuntimeRoot: process.env.CODEX_BRIDGE_READABLE_RUNTIME_ROOT, attachmentRoot: process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT, mcpUrl: process.env.ORKESTRATOR_AGENT_MCP_URL, mcpToken: process.env.ORKESTRATOR_AGENT_MCP_TOKEN }));
+      `if (JSON.stringify(process.env).includes("refresh-sentinel")) throw new Error("Refresh token leaked to environment");
+await Bun.write(process.env.CODEX_HOME + "/captured.json", JSON.stringify({ codexPath: process.env.CODEX_PATH, policy: process.env.CODEX_BRIDGE_EXECUTION_POLICY, permissionProfile: process.env.CODEX_BRIDGE_PERMISSION_PROFILE, readableRuntimeRoot: process.env.CODEX_BRIDGE_READABLE_RUNTIME_ROOT, attachmentRoot: process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT, mcpUrl: process.env.ORKESTRATOR_AGENT_MCP_URL, mcpToken: process.env.ORKESTRATOR_AGENT_MCP_TOKEN }));
 const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch() { return Response.json({ ok: true }); } });
 const stop = () => { server.stop(true); process.exit(0); };
 process.on("SIGTERM", stop); process.on("SIGINT", stop);
@@ -504,6 +508,9 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       "codex-home",
     );
     expect(await fs.readFile(path.join(isolatedHome, "auth.json"), "utf8")).toContain("login");
+    expect(await fs.readFile(path.join(isolatedHome, "auth.json"), "utf8")).not.toContain(
+      "refresh-sentinel",
+    );
     await expect(fs.access(path.join(isolatedHome, "config.toml"))).rejects.toThrow();
     expect(JSON.parse(await fs.readFile(path.join(isolatedHome, "captured.json"), "utf8"))).toEqual(
       {
@@ -530,7 +537,10 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     const addedId = "11111111-2222-4333-8444-555555555555";
     const addedHome = path.join(storage.agentAccountsDirectory(), "codex", addedId);
     await fs.mkdir(addedHome, { recursive: true });
-    await fs.writeFile(path.join(addedHome, "auth.json"), '{"token":"replacement"}');
+    await fs.writeFile(
+      path.join(addedHome, "auth.json"),
+      '{"tokens":{"access_token":"replacement","refresh_token":"refresh-sentinel"}}',
+    );
     await storage.mutateAgentAccounts((store) => ({
       store: {
         ...store,

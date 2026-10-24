@@ -21,11 +21,15 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
 }
 
 function isSnapshot(value: unknown): value is AgentAccountsSnapshot {
+  if (!value || typeof value !== "object") return false;
+  const { accounts, active } = value as Partial<AgentAccountsSnapshot>;
   return (
-    Boolean(value) &&
-    typeof value === "object" &&
-    Array.isArray((value as AgentAccountsSnapshot).accounts) &&
-    typeof (value as AgentAccountsSnapshot).active === "object"
+    Array.isArray(accounts) &&
+    active !== null &&
+    typeof active === "object" &&
+    !Array.isArray(active) &&
+    typeof active.claude === "string" &&
+    typeof active.codex === "string"
   );
 }
 

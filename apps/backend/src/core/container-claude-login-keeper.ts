@@ -1,6 +1,7 @@
 import type { CommandContext } from "./commands-context.js";
 import { activeClaudeCredentials, syncContainerClaudeLogin } from "./agent-accounts-containers.js";
 import {
+  TOKEN_REPLACEMENT_LEAD_MS,
   readAddedClaudeCredentials,
   resolveActiveAgentAccount,
   type ResolvedAgentAccount,
@@ -44,7 +45,7 @@ export const CLAUDE_LOGIN_KEEPER_INTERVAL_MS = 5 * 60_000;
  * How long before expiry the host CLI is asked to refresh. Claude Code only
  * refreshes inside the last five minutes, so earlier would be a no-op.
  */
-export const CLAUDE_HOST_REFRESH_LEAD_MS = 4 * 60_000;
+export const CLAUDE_HOST_REFRESH_LEAD_MS = TOKEN_REPLACEMENT_LEAD_MS;
 /**
  * After a failed or ineffective host refresh, wait this long before trying
  * again, doubling each time up to the normal interval.
@@ -105,6 +106,7 @@ export class ContainerClaudeLoginKeeper {
   private handle: unknown = null;
   private running: Promise<void> | null = null;
   private refreshing: Promise<ClaudeOAuthSummary | undefined> | null = null;
+  private refreshingConsumer?: "containers" | "local";
   private stopped = true;
   /** Expiry the host refresh was last attempted for, when, and how often. */
   private refreshAttempt: { expiresAt: number; at: number; count: number } | null = null;
@@ -200,10 +202,7 @@ export class ContainerClaudeLoginKeeper {
    * afterwards; never throws.
    */
   refreshHostIfDue(): Promise<ClaudeOAuthSummary | undefined> {
-    this.refreshing ??= this.refreshHostOnce("containers").finally(() => {
-      this.refreshing = null;
-    });
-    return this.refreshing;
+    return this.refreshFor("containers");
   }
 
   /**
@@ -213,9 +212,22 @@ export class ContainerClaudeLoginKeeper {
    * not stop it. Returns the login as it is afterwards; never throws.
    */
   refreshLocalLoginIfDue(): Promise<ClaudeOAuthSummary | undefined> {
-    this.refreshing ??= this.refreshHostOnce("local").finally(() => {
-      this.refreshing = null;
-    });
+    return this.refreshFor("local");
+  }
+
+  private refreshFor(consumer: "containers" | "local"): Promise<ClaudeOAuthSummary | undefined> {
+    if (this.refreshing && this.refreshingConsumer !== consumer) {
+      // A container read can be opted out while local launches still need a
+      // login. Serialize the refresh, but re-read for each consumer's scope.
+      return this.refreshing.then(() => this.refreshFor(consumer));
+    }
+    if (!this.refreshing) {
+      this.refreshingConsumer = consumer;
+      this.refreshing = this.refreshHostOnce(consumer).finally(() => {
+        this.refreshing = null;
+        this.refreshingConsumer = undefined;
+      });
+    }
     return this.refreshing;
   }
 

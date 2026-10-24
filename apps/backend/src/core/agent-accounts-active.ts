@@ -144,7 +144,7 @@ export async function localBridgeIsOnActiveAccount(
 }
 
 /** How long before a handed-over token expires its idle bridge is replaced. */
-const TOKEN_REPLACEMENT_LEAD_MS = 5 * 60_000;
+export const TOKEN_REPLACEMENT_LEAD_MS = 5 * 60_000;
 
 /**
  * The platform's login was renewed (for OpenCode, any provider login changed).

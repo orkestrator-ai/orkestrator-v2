@@ -56,12 +56,20 @@ export function useSessionMachineName(): string | null {
 export function AgentInfoAccountSection({
   environmentId,
   provider,
+  open = true,
 }: {
   environmentId: string;
   provider: string;
+  open?: boolean;
 }) {
-  if (!isAgentAccountPlatform(provider)) return null;
-  return <AccountSection environmentId={environmentId} platform={provider} />;
+  if (!open || !isAgentAccountPlatform(provider)) return null;
+  return (
+    <AccountSection
+      key={`${environmentId}:${provider}`}
+      environmentId={environmentId}
+      platform={provider}
+    />
+  );
 }
 
 function AccountSection({
@@ -76,6 +84,7 @@ function AccountSection({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const mounted = useRef(true);
+  const readGeneration = useRef(0);
   const machineName = useSessionMachineName();
   const platformLabel = AGENT_PLATFORM_LABELS[platform];
   const reauth = useAgentAccountReauth(platform, platform === "claude");
@@ -84,22 +93,26 @@ function AccountSection({
     mounted.current = true;
     return () => {
       mounted.current = false;
+      readGeneration.current += 1;
     };
   }, []);
 
-  const load = useCallback(async () => {
-    try {
-      const [nextSession, nextSnapshot] = await Promise.all([
-        getNativeAgentSessionAccount(environmentId, platform),
-        listAgentAccounts(),
-      ]);
-      if (!mounted.current) return;
-      setSession(nextSession);
-      setSnapshot(nextSnapshot);
-      setError(null);
-    } catch (cause) {
-      if (mounted.current) setError(messageOf(cause));
-    }
+  const load = useCallback(() => {
+    const generation = ++readGeneration.current;
+    return Promise.all([
+      getNativeAgentSessionAccount(environmentId, platform),
+      listAgentAccounts(),
+    ]).then(
+      ([nextSession, nextSnapshot]) => {
+        if (!mounted.current || generation !== readGeneration.current) return;
+        setSession(nextSession);
+        setSnapshot(nextSnapshot);
+        setError(null);
+      },
+      (cause: unknown) => {
+        if (mounted.current && generation === readGeneration.current) setError(messageOf(cause));
+      },
+    );
   }, [environmentId, platform]);
 
   useEffect(() => {

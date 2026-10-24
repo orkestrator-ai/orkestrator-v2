@@ -12,11 +12,14 @@ a support deadline, or a decision.
 
 ## Current state
 
-- **Landed.** Bun 1.4.3, Electron 44.7.0, electron-builder 26.17.0, Vite 8.3.4
+- **Landed.** Bun 1.4.4, Electron 44.7.0, electron-builder 26.17.0, Vite 8.3.4
   with `@vitejs/plugin-react` 6.1.2, lucide-react 1.56, `@hono/node-server` 2,
-  happy-dom 21, `@types/node` 26 (24 in `apps/desktop`), oxlint 1.88, oxfmt
-  0.73, Playwright 1.64, Monaco 0.57, `sharp` 0.35.5 and the MCP SDK security
-  bumps. Root `overrides.dompurify` is 3.4.17.
+  happy-dom 21, `@types/node` 26 (24 in `apps/desktop`), oxlint 1.88,
+  Playwright 1.64, Monaco 0.57, `sharp` 0.35.5 and the MCP SDK security
+  bumps. Root `overrides.dompurify` is 3.4.17. Formatting moved from oxfmt to
+  `bun fmt` (which reads `.oxfmtrc.json`) and typechecking from `tsc --noEmit`
+  to `bun check`. `typescript` stays so editors run the same TypeScript
+  (7.0.2) that `bun check` matches.
 - **Held on purpose.** `marked` 17.0.6 (`apps/web`), because
   `@tiptap/markdown` 3.32.0 (still latest) depends on `marked ^17.0.1`.
   `test-fixtures/preview-vite` stays on Vite 7.3.6 as a stand-in user app.

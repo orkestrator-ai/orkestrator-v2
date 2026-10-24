@@ -1,13 +1,29 @@
 # Formatting and linting
 
-Status: Living — oxfmt/oxlint configuration, severity policy and its rationale.
+Status: Living — formatter, linter and type checker configuration and rationale.
 
 The short rules live in the root `AGENTS.md`. This guide keeps the reasons.
 
-Formatting is [oxfmt](https://oxc.rs) (`.oxfmtrc.json`), linting is
-[oxlint](https://oxc.rs) (`.oxlintrc.json`). Both are single Rust binaries and
+Formatting is [`bun fmt`](https://bun.com/docs/format), built into the pinned
+Bun runtime, and linting is [oxlint](https://oxc.rs) (`.oxlintrc.json`). Both
 run over the whole repo in well under a second, so there is no turbo task and no
 per-package config — always run them from the repo root.
+
+`bun fmt` reads `.oxfmtrc.json` and prints what oxfmt 0.72 prints, so the
+config file keeps its oxfmt name and the oxfmt package is no longer installed.
+Do not move the options into a `[fmt]` section of `bunfig.toml`: without an
+oxfmt config file or dependency, `bun fmt` formats like Prettier (80 columns by
+default) rather than like oxfmt. `bun fmt --doctor` shows which config it
+picked up.
+
+Typechecking is [`bun check`](https://bun.com/docs/runtime/check), which reports
+the same errors as `tsc` from TypeScript 7 and uses every core. Each package's
+`typecheck` script runs `bun check -p <tsconfig>` per project, and `mise run
+typecheck` runs those through turbo plus the root `tests/` and `e2e/` projects.
+`bun check` never emits, so the `typescript` dev dependency stays only so editors
+use the same TypeScript version (`bun -p process.versions.typescript`). A
+`package.json` `check` script would shadow the type checker (`bun check` runs
+the script), so packages name theirs `typecheck`.
 
 ```bash
 mise run format         # rewrite files in place
@@ -24,13 +40,13 @@ output — one push reports both.
 
 ## What is excluded, and why
 
-`bridges/codex-bridge/src/app-server/generated/**` is excluded from both tools.
-It is a lockfile: `mise run verify:codex:protocol` regenerates it and compares
-byte-for-byte, so reformatting it would fail that check against a generator this
-repo does not control. `test-fixtures/**` is excluded from linting because those
+`bridges/codex-bridge/src/app-server/generated/**` is excluded from both the
+formatter and the linter. It is a lockfile: `mise run verify:codex:protocol`
+regenerates it and compares byte-for-byte, so reformatting it would fail that
+check against a generator this repo does not control. `test-fixtures/**` is excluded from linting because those
 files deliberately contain failing and malformed code.
 
-Markdown and `docs/**` are excluded from oxfmt. The prose in this repo is
+Markdown and `docs/**` are excluded from `bun fmt`. The prose in this repo is
 hand-wrapped and several documents are read as much as they are rendered;
 reflowing them would produce churn with no reader benefit.
 

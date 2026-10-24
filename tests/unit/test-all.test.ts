@@ -248,7 +248,7 @@ describe("scripts/test-all.ts", () => {
     // Turbo folds passthrough arguments into the hash of the requested task and
     // of its `dependsOn` tasks, so `--` here would give `bun run build` and
     // `bun run test` different `@orkestrator/*#build` hashes and re-run
-    // `tsc && vite build` on every alternation between the two.
+    // `bun check && vite build` on every alternation between the two.
     const workspaceGroup = buildConcurrentGroups(10).find((group) => group.name === WORKSPACE)!;
 
     expect(workspaceGroup.args).not.toContain("--");

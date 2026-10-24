@@ -1,5 +1,5 @@
 [tools]
-bun = "1.4.3"
+bun = "1.4.4"
 
 [tasks.dev]
 description = "Start the Electron development application"
@@ -216,7 +216,7 @@ run = "bun scripts/run-logged.ts"
 
 [tasks."test:browser"]
 description = "Run the component and public-site browser suites"
-run = "bunx tsc --noEmit -p e2e/tsconfig.json && bunx playwright test --config e2e/playwright.config.ts && bunx playwright test --config e2e/public-site/playwright.config.ts"
+run = "bun check -p e2e/tsconfig.json && bunx playwright test --config e2e/playwright.config.ts && bunx playwright test --config e2e/public-site/playwright.config.ts"
 
 [tasks."test:agent:browser"]
 description = "Run browser agent tests against an already-running profile (use test:agent:browser:isolated for one-shot validation)"
@@ -294,9 +294,9 @@ run = "bun scripts/efficiency/run.ts"
 description = "Typecheck every workspace package, the root and e2e tests, and repository scripts"
 run = [
   "bunx turbo --cwd . run typecheck",
-  "bunx tsc --noEmit -p tests/tsconfig.json",
-  "bunx tsc --noEmit -p e2e/tsconfig.json",
-  "bunx tsc --noEmit -p e2e/agent-testing/tsconfig.json",
+  "bun check -p tests/tsconfig.json",
+  "bun check -p e2e/tsconfig.json",
+  "bun check -p e2e/agent-testing/tsconfig.json",
 ]
 
 [tasks."disk:report"]
@@ -306,11 +306,11 @@ run = "bun scripts/disk-report.ts"
 
 [tasks.format]
 description = "Format the repository"
-run = "bunx oxfmt ."
+run = "bun fmt ."
 
 [tasks."format:check"]
 description = "Check repository formatting"
-run = "bunx oxfmt --check ."
+run = "bun fmt --check ."
 
 [tasks.lint]
 description = "Lint the repository"

@@ -135,7 +135,7 @@ docker/         Base image, firewall, and container setup
 
 macOS or Linux. Windows is not supported: terminal sessions use Bun’s native PTY, and the backend refuses to start on `win32`.
 
-You need [mise](https://mise.jdx.dev) (pins Bun 1.4.3) and, for container environments, [Docker](https://docker.com).
+You need [mise](https://mise.jdx.dev) (pins Bun 1.4.4) and, for container environments, [Docker](https://docker.com).
 
 ```bash
 git clone https://github.com/orkestrator-ai/orkestrator-v2.git

@@ -748,7 +748,7 @@ export const MIN_AGGREGATE_TEST_WORKERS = 1 + MIN_BRIDGE_WORKERS + 1 + 1;
  * group. It is deliberately *not* passed after Turbo's `--` separator: turbo
  * folds passthrough arguments into the hash of the requested task **and its
  * dependencies**, so the workspace `build` and `test` tasks would compute different
- * `build` hashes and re-run `tsc && vite build` on every alternation.
+ * `build` hashes and re-run `bun check && vite build` on every alternation.
  *
  * turbo.json declares it under `test:workspace.passThroughEnv`, which forwards
  * it in strict env mode while keeping it out of the hash.

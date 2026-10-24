@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   oxc:
-    name: oxfmt and oxlint
+    name: bun fmt and oxlint
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

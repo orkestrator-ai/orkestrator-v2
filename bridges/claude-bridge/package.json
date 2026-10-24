@@ -8,7 +8,7 @@
     "build": "bun build src/index.ts --target=node --format=esm --external @anthropic-ai/claude-agent-sdk --outfile=dist/index.js && bun run vendor",
     "test:bridge": "bun test src --preload ../../tests/setup-node.ts --only-failures ${ORKESTRATOR_TEST_TIMINGS_DIR:+--timings=$ORKESTRATOR_TEST_TIMINGS_DIR/claude-bridge.json --update-timings} --parallel=${ORKESTRATOR_TEST_WORKERS:-1}",
     "vendor": "bun scripts/vendor.ts",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "bun check",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts"
   },

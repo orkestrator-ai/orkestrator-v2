@@ -304,13 +304,17 @@ regenerate the lockfile with the base image's own npm (`npm install
 --package-lock-only --ignore-scripts` in a container of the worker image); the
 drift test checks the manifest, lockfile, backend pin and base-image tag agree.
 
-## Formatting and Linting - oxc
+## Formatting, Linting and Typechecking
 
-Formatting is oxfmt and linting is oxlint; run them from the repo root with
+Formatting is `bun fmt` (configured by `.oxfmtrc.json`, oxfmt-compatible output),
+linting is oxlint, and typechecking is `bun check` (TypeScript 7, the same
+version as the `typescript` dev dependency). Run them from the repo root with
 `mise run format`, `mise run format:check`, `mise run lint`, `mise run lint:fix`,
-or `mise run check` (format, lint and typecheck). Markdown and `docs/**` are not
-reformatted. Rationale and exclusions are in
-[`docs/development/linting.md`](docs/development/linting.md).
+`mise run typecheck`, or `mise run check` (format, lint and typecheck). Package
+`typecheck` scripts call `bun check -p <tsconfig>`; do not add a `check` script
+to a `package.json`, because `bun check` runs that script instead of the type
+checker. Markdown and `docs/**` are not reformatted. Rationale and exclusions
+are in [`docs/development/linting.md`](docs/development/linting.md).
 
 - Only `correctness` is enabled, as errors. `no-unused-vars` and the seven
   React Compiler rules (`react/refs`, `react/set-state-in-effect`, …; listed in
@@ -949,7 +953,7 @@ views stay sandboxed.
 
 ## Docker Base Image
 
-The image is built from `oven/bun:1.4.3-debian`, pinned by its multi-architecture
+The image is built from `oven/bun:1.4.4-debian`, pinned by its multi-architecture
 index digest on both stages, matching the Bun version managed in `mise.toml`
 for development and CI. Refresh the digest deliberately (`docker buildx
 imagetools inspect oven/bun:<tag>`) for a Bun bump or a base security update;

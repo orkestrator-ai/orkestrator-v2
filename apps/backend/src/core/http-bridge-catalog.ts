@@ -87,6 +87,7 @@ export class HttpBridgeCatalogAdapter {
       this.fetchImpl,
     );
     if (response.status === 404) {
+      await response.body?.cancel().catch(() => undefined);
       this.noteOutdatedBridge();
       throw Object.assign(new Error(`${this.agent} bridge is older than the command catalogue`), {
         catalogueErrorCode: "outdated-bridge",
@@ -131,7 +132,10 @@ export class HttpBridgeCatalogAdapter {
       { method: "POST" },
       this.fetchImpl,
     );
-    if (response.status === 404) return { outcome: "reread" };
+    if (response.status === 404) {
+      await response.body?.cancel().catch(() => undefined);
+      return { outcome: "reread" };
+    }
     await assertOkWithErrorDetail(response, `${this.agent} command refresh`);
     const body = asRecord(
       await boundedJson(response, `${this.agent} command refresh`, { remaining: 64 * 1024 }),

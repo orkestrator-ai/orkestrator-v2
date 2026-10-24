@@ -1,4 +1,4 @@
-import { describe, expect, spyOn, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import { commandBindingRevision } from "@orkestrator/protocol/agent-command-catalogue";
 import { withSessionActionSlashCommands } from "@orkestrator/protocol/agent-slash-commands";
 import {
@@ -29,6 +29,47 @@ import { planCommandDispatch } from "./native-agent-command-dispatch.js";
 
 /** Command catalogue and command-selection transport for HTTP bridges. */
 describe("HTTP bridge command transport", () => {
+  for (const rejectsCancellation of [false, true]) {
+    test(`404 command bodies are cancelled even when cancellation ${rejectsCancellation ? "rejects" : "succeeds"}`, async () => {
+      const cancellations: ReturnType<typeof mock>[] = [];
+      const { provider, requests } = httpProvider(() => {
+        const cancel = mock(() => {
+          if (rejectsCancellation) return Promise.reject(new Error("cancel failed"));
+        });
+        cancellations.push(cancel);
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode("older bridge response"));
+            },
+            cancel,
+          }),
+          { status: 404 },
+        );
+      }, codexConnection);
+      const warn = spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        await expect(provider.commandCatalogue!("session-1")).rejects.toMatchObject({
+          catalogueErrorCode: "outdated-bridge",
+        });
+        await expect(provider.refreshCommands!("session-1")).resolves.toEqual({
+          outcome: "reread",
+        });
+        await expect(provider.reloadMcpConfiguration!()).resolves.toBe("unsupported");
+        expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
+          "/session/session-1/commands",
+          "/session/session-1/commands/refresh",
+          "/global/mcp/reload",
+        ]);
+        expect(cancellations).toHaveLength(3);
+        for (const cancel of cancellations) expect(cancel).toHaveBeenCalledTimes(1);
+      } finally {
+        warn.mockRestore();
+        resetOutdatedBridgeCatalogueReadCounts();
+      }
+    });
+  }
+
   test("reads an enhanced catalogue with its status, revision and identities", async () => {
     const { provider } = httpProvider((url) =>
       url.endsWith("/session/session-1/commands")

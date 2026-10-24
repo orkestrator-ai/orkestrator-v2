@@ -67,6 +67,13 @@ function inspector() {
   return within(screen.getByTestId("multi-review-inspector"));
 }
 
+/** Radix activates a tab from mousedown/focus, not from a bare click. */
+function showInspectorTab(name: "Transcript" | "Report"): void {
+  const trigger = inspector().getByRole("tab", { name });
+  fireEvent.mouseDown(trigger);
+  fireEvent.focus(trigger);
+}
+
 const STEP_OPEN_LABEL = {
   "Review package": "Open review package generation session",
   Consolidation: "Open consolidation session",
@@ -1187,6 +1194,44 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     expect(openReviewer).toHaveBeenCalledTimes(3);
   });
 
+  test("shows a node's report in a tab beside its transcript", () => {
+    const ready = readyWorkflow();
+    ready.reviewers[1] = { ...ready.reviewers[1]!, report: undefined };
+    useMultiReviewStore.getState().replaceWorkflow(ready);
+
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => ready)}
+      />,
+    );
+
+    // The transcript is shown first; the report waits behind its own tab.
+    selectFlowNode("Reviewer 1 ·");
+    expect(inspector().getByRole("tab", { name: "Transcript" }).getAttribute("aria-selected")).toBe(
+      "true",
+    );
+    expect(inspector().getByTestId("multi-review-transcript-tail")).toBeTruthy();
+    expect(screen.queryByRole("article", { name: "Reviewer report" })).toBeNull();
+
+    showInspectorTab("Report");
+    expect(screen.getByRole("article", { name: "Reviewer report" })).toBeTruthy();
+    // The transcript stays mounted, hidden, so it keeps its place.
+    expect(
+      inspector().getByTestId("multi-review-transcript-tail").closest("[data-state=inactive]"),
+    ).toBeTruthy();
+
+    // A reviewer without a report has only its transcript.
+    selectFlowNode("Reviewer 2 ·");
+    expect(inspector().getByRole("tab", { name: "Transcript" })).toBeTruthy();
+    expect(inspector().queryByRole("tab", { name: "Report" })).toBeNull();
+
+    // Each node remembers which tab was last shown.
+    selectFlowNode("Reviewer 1 ·");
+    expect(screen.getByRole("article", { name: "Reviewer report" })).toBeTruthy();
+  });
+
   test("cannot open a reviewer that never opened a provider session", () => {
     const ready = readyWorkflow();
     delete ready.reviewers[0]!.providerSessionId;
@@ -1344,6 +1389,9 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       </TerminalProvider>,
     );
 
+    selectFlowNode("Consolidation");
+    expect(screen.queryByRole("article", { name: "Consolidated Multi Review" })).toBeNull();
+    showInspectorTab("Report");
     const consolidated = screen.getByRole("article", { name: "Consolidated Multi Review" });
     expect(screen.getByRole("button", { name: "Review Scope" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Issues · 1" })).toBeTruthy();

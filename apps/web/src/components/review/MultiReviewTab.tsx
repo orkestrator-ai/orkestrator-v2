@@ -23,6 +23,7 @@ import {
 import type { MultiReviewTabData } from "@/types/paneLayout";
 import { Button } from "@/components/ui/button";
 import { ContextMenuItem } from "@/components/ui/context-menu";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { StructuredReviewReportView } from "./StructuredReviewReportView";
 import { StackedEyes } from "./MultiReviewLaunchDialog";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
@@ -342,6 +343,57 @@ interface MultiReviewFlowNodeView {
   activityAt?: number;
 }
 
+type InspectorBodyTab = "transcript" | "report";
+
+/**
+ * The inspector's lower section: the node's transcript, and the report it
+ * filed once there is one. The transcript stays mounted behind the report so
+ * returning to it keeps its scroll position and follow state.
+ */
+function InspectorTranscriptTabs({
+  transcript,
+  report,
+  tab,
+  onTabChange,
+}: {
+  transcript: ReactNode;
+  report: ReactNode;
+  tab: InspectorBodyTab;
+  onTabChange: (tab: InspectorBodyTab) => void;
+}) {
+  const active = report ? tab : "transcript";
+  return (
+    <Tabs
+      value={active}
+      onValueChange={(value) => onTabChange(value as InspectorBodyTab)}
+      className="flex min-h-0 min-w-0 flex-1 flex-col gap-2"
+    >
+      <TabsList className="h-7 rounded-md p-0.5">
+        <TabsTrigger className="h-6 px-2 text-xs" value="transcript">
+          Transcript
+        </TabsTrigger>
+        {report ? (
+          <TabsTrigger className="h-6 px-2 text-xs" value="report">
+            Report
+          </TabsTrigger>
+        ) : null}
+      </TabsList>
+      <TabsContent
+        value="transcript"
+        forceMount
+        className="flex min-h-0 min-w-0 flex-col data-[state=inactive]:hidden"
+      >
+        {transcript}
+      </TabsContent>
+      {report ? (
+        <TabsContent value="report" className="min-w-0">
+          {report}
+        </TabsContent>
+      ) : null}
+    </Tabs>
+  );
+}
+
 function StepFacts({
   model,
   runtime,
@@ -407,6 +459,8 @@ function MultiReviewOverviewTab({
   const [reviewPanelNow, setReviewPanelNow] = useState(() => Date.now());
   /** The node the user picked; null follows the running node. */
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  // Each node remembers whether its transcript or its report was last shown.
+  const [inspectorTabs, setInspectorTabs] = useState<Record<string, InspectorBodyTab>>({});
   /** The tab's root, which the graph's fullscreen covers. */
   const [tabRoot, setTabRoot] = useState<HTMLDivElement | null>(null);
   const panelId = useId();
@@ -810,6 +864,15 @@ function MultiReviewOverviewTab({
     workflow.phase !== "interactive";
   const lifecyclePending = stepLifecycleAction !== null;
 
+  const inspectorTranscriptTabs = (nodeId: string, transcript: ReactNode, report: ReactNode) => (
+    <InspectorTranscriptTabs
+      transcript={transcript}
+      report={report}
+      tab={inspectorTabs[nodeId] ?? "transcript"}
+      onTabChange={(tab) => setInspectorTabs((previous) => ({ ...previous, [nodeId]: tab }))}
+    />
+  );
+
   const stepView = ({
     key,
     kind,
@@ -828,6 +891,7 @@ function MultiReviewOverviewTab({
     showPauseAction = true,
     activityAt,
     details,
+    report,
   }: {
     key: MultiReviewStepKey;
     kind: MultiReviewStepKind;
@@ -846,6 +910,7 @@ function MultiReviewOverviewTab({
     showPauseAction?: boolean;
     activityAt?: number;
     details?: ReactNode;
+    report?: ReactNode;
   }): MultiReviewFlowNodeView => {
     const runtime = multiReviewStepRuntimeParts(
       workflow,
@@ -979,20 +1044,24 @@ function MultiReviewOverviewTab({
         <div className="flex flex-1 flex-col space-y-4">
           <StepFacts model={model} runtime={runtime} status={status} />
           {details}
-          <StepTranscriptTail
-            key={kind}
-            workflowId={workflow.id}
-            step={kind}
-            access={{
-              kind: access.kind,
-              step: access.kind === "other-step" ? access.step : undefined,
-            }}
-            live={status.state === "running"}
-            isActive={isActive}
-            assistantLabel={title}
-            containerId={containerId}
-            loadTranscript={loadStepTranscript}
-          />
+          {inspectorTranscriptTabs(
+            key,
+            <StepTranscriptTail
+              key={kind}
+              workflowId={workflow.id}
+              step={kind}
+              access={{
+                kind: access.kind,
+                step: access.kind === "other-step" ? access.step : undefined,
+              }}
+              live={status.state === "running"}
+              isActive={isActive}
+              assistantLabel={title}
+              containerId={containerId}
+              loadTranscript={loadStepTranscript}
+            />,
+            report,
+          )}
         </div>
       ),
       activityAt,
@@ -1075,8 +1144,15 @@ function MultiReviewOverviewTab({
       <p className="text-xs text-foreground/85">
         {findingCountLabel(workflow.consolidatedReport.issues.length, "issue")} ·{" "}
         {findingCountLabel(workflow.consolidatedReport.testCoverageGaps.length, "coverage gap")}.
-        The consolidated report is below.
       </p>
+    ) : null,
+    report: workflow.consolidatedReport ? (
+      <StructuredReviewReportView
+        report={workflow.consolidatedReport}
+        heading="Consolidated Multi Review"
+        collapsibleSections
+        sectionExpansionKey={`multi-review/${workflow.id}/consolidated-report-section`}
+      />
     ) : null,
   });
 
@@ -1377,17 +1453,29 @@ function MultiReviewOverviewTab({
               {note.text}
             </p>
           ) : null}
-          <ReviewerTranscriptTail
-            key={reviewer.id}
-            workflowId={workflow.id}
-            reviewerId={reviewer.id}
-            hasSession={Boolean(reviewer.providerSessionId)}
-            live={reviewer.status === "running" || reviewer.status === "pending"}
-            isActive={isActive}
-            assistantLabel={name}
-            containerId={containerId}
-            loadTranscript={loadReviewerTranscript}
-          />
+          {inspectorTranscriptTabs(
+            `reviewer:${reviewer.id}`,
+            <ReviewerTranscriptTail
+              key={reviewer.id}
+              workflowId={workflow.id}
+              reviewerId={reviewer.id}
+              hasSession={Boolean(reviewer.providerSessionId)}
+              live={reviewer.status === "running" || reviewer.status === "pending"}
+              isActive={isActive}
+              assistantLabel={name}
+              containerId={containerId}
+              loadTranscript={loadReviewerTranscript}
+            />,
+            reviewer.report ? (
+              <StructuredReviewReportView
+                report={reviewer.report}
+                heading="Reviewer report"
+                collapsibleSections
+                showRawJson={false}
+                sectionExpansionKey={`multi-review/${workflow.id}/reviewer/${reviewer.id}/report-section`}
+              />
+            ) : null,
+          )}
           {findings ? <p className="text-xs text-muted-foreground">{findings}</p> : null}
           {provisional ? (
             <p
@@ -1631,24 +1719,6 @@ function MultiReviewOverviewTab({
               <div className="col-span-full row-start-2 flex min-w-0 flex-col">{selected.body}</div>
             </section>
           </div>
-          {workflow.consolidatedReport || workflow.fixResult ? (
-            <div className="space-y-4 border-t border-divider px-4 py-4 sm:px-6">
-              {workflow.consolidatedReport && (
-                <StructuredReviewReportView
-                  report={workflow.consolidatedReport}
-                  heading="Consolidated Multi Review"
-                  collapsibleSections
-                  sectionExpansionKey={`multi-review/${workflow.id}/consolidated-report-section`}
-                />
-              )}
-              {workflow.fixResult && (
-                <section className="rounded-xl border border-emerald-500/25 bg-emerald-500/5 p-4">
-                  <h2 className="text-sm font-semibold">Fix result</h2>
-                  <p className="mt-2 text-sm text-foreground/85">{workflow.fixResult.summary}</p>
-                </section>
-              )}
-            </div>
-          ) : null}
         </div>
       </div>
 

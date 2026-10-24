@@ -52,6 +52,19 @@ const TEXT_CLASSES: Record<MachineColorToken | typeof FALLBACK_MACHINE_COLOR, st
   neutral: "text-muted-foreground",
 };
 
+// A faint wash of the colour, for a surface that belongs to the machine.
+const TINT_CLASSES: Record<MachineColorToken | typeof FALLBACK_MACHINE_COLOR, string> = {
+  violet: "bg-violet-500/10 dark:bg-violet-400/10",
+  blue: "bg-blue-500/10 dark:bg-blue-400/10",
+  teal: "bg-teal-500/10 dark:bg-teal-400/10",
+  green: "bg-emerald-500/10 dark:bg-emerald-400/10",
+  amber: "bg-amber-500/10 dark:bg-amber-400/10",
+  orange: "bg-orange-500/10 dark:bg-orange-400/10",
+  rose: "bg-rose-500/10 dark:bg-rose-400/10",
+  slate: "bg-slate-500/10 dark:bg-slate-400/10",
+  neutral: "bg-muted/40",
+};
+
 const LABELS: Record<MachineColorToken | typeof FALLBACK_MACHINE_COLOR, string> = {
   violet: "Violet",
   blue: "Blue",
@@ -74,6 +87,10 @@ export function machineOutlineClass(token: string | undefined): string {
 
 export function machineTextClass(token: string | undefined): string {
   return TEXT_CLASSES[machineColorForDisplay(token)];
+}
+
+export function machineTintClass(token: string | undefined): string {
+  return TINT_CLASSES[machineColorForDisplay(token)];
 }
 
 export function machineColorLabel(token: string | undefined): string {

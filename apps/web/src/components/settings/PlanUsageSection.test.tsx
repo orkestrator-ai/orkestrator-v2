@@ -101,32 +101,40 @@ describe("PlanUsageSection", () => {
     );
     render(<PlanUsageSection platform="claude" />);
     expect(await screen.findByText("5-hour limit")).toBeTruthy();
-    expect(getPlanUsage).toHaveBeenCalledWith("claude", { force: false });
+    expect(getPlanUsage).toHaveBeenCalledWith("claude", { force: false }, undefined);
   });
 
   test("skips the cache after a credential save bumps the reload token", async () => {
     getPlanUsage.mockResolvedValue(snapshot({ platform: "cursor" }));
     const { rerender } = render(<PlanUsageSection platform="cursor" reloadToken={0} />);
-    await waitFor(() => expect(getPlanUsage).toHaveBeenCalledWith("cursor", { force: false }));
+    await waitFor(() =>
+      expect(getPlanUsage).toHaveBeenCalledWith("cursor", { force: false }, undefined),
+    );
 
     rerender(<PlanUsageSection platform="cursor" reloadToken={1} />);
-    await waitFor(() => expect(getPlanUsage).toHaveBeenCalledWith("cursor", { force: true }));
+    await waitFor(() =>
+      expect(getPlanUsage).toHaveBeenCalledWith("cursor", { force: true }, undefined),
+    );
   });
 
   test("re-reads past the cache when the refresh control is used", async () => {
     getPlanUsage.mockResolvedValue(snapshot({ platform: "claude" }));
     render(<PlanUsageSection platform="claude" />);
-    await waitFor(() => expect(getPlanUsage).toHaveBeenCalledWith("claude", { force: false }));
+    await waitFor(() =>
+      expect(getPlanUsage).toHaveBeenCalledWith("claude", { force: false }, undefined),
+    );
 
     fireEvent.click(screen.getByLabelText("Refresh plan usage"));
-    await waitFor(() => expect(getPlanUsage).toHaveBeenCalledWith("claude", { force: true }));
+    await waitFor(() =>
+      expect(getPlanUsage).toHaveBeenCalledWith("claude", { force: true }, undefined),
+    );
   });
 
   test("surfaces a failed read and keeps the pane usable", async () => {
     getPlanUsage.mockRejectedValueOnce(new Error("Plan usage is unavailable"));
     render(<PlanUsageSection platform="opencode" />);
     expect(await screen.findByText("Plan usage is unavailable")).toBeTruthy();
-    expect(getPlanUsage).toHaveBeenCalledWith("opencode", { force: false });
+    expect(getPlanUsage).toHaveBeenCalledWith("opencode", { force: false }, undefined);
   });
 
   test("ignores a slow response once the platform has changed", async () => {
@@ -144,7 +152,9 @@ describe("PlanUsageSection", () => {
     }) as unknown as () => Promise<PlanUsageSnapshot>);
 
     const { rerender } = render(<PlanUsageSection platform="claude" />);
-    await waitFor(() => expect(getPlanUsage).toHaveBeenCalledWith("claude", { force: false }));
+    await waitFor(() =>
+      expect(getPlanUsage).toHaveBeenCalledWith("claude", { force: false }, undefined),
+    );
 
     rerender(<PlanUsageSection platform="codex" />);
     expect(await screen.findByText("Primary limit")).toBeTruthy();

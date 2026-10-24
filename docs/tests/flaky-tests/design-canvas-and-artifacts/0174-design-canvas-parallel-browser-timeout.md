@@ -216,3 +216,21 @@ The mobile canvas reached 30 seconds while clicking Switch tab.
 ## Design-agent links refresh through d6ed0717d — 2026-10-24
 
 The nine-worker `mise run test:browser` run repeated failures in this owner; the complete unchanged owner passed across both viewports with one worker in 23.0 s. Command: `ORKESTRATOR_E2E_PORT=52890 mise run test:logged -- --name design-links-browser-owner-design -- bunx playwright test --config e2e/playwright.config.ts DesignCanvas.spec.ts --workers=1 --output output/playwright/design-links-owner-design`. The aggregate had 496 passes, 89 failures and 101 skips. See [0772](../aggregate-validation-runs/0772-design-agent-links-main-refresh-validation.md) for the parents and original evidence. No assertion, deadline or skip changed.
+
+## Selected-machine settings validation — 2026-10-24
+
+`ORKESTRATOR_E2E_PORT=15374 ORKESTRATOR_PUBLIC_E2E_PORT=15375 mise run test:logged -- --name settings-browser-components -- mise run test:browser`
+used nine component workers while repository and isolated-stack validation were
+also running. The mobile owner hit the 30-second deadline at line 245: the
+replacement iframe element's display was empty rather than `inline-block`.
+The aggregate reported 584 passed, 102 skipped and six failed (546.9 s logged).
+Two failures were new settings fixtures corrected in this change; two were the
+known native branch-suggestion failures, which also remained non-green in a
+one-worker owner run, and the other was the recorded scroll-follow recurrence.
+
+The complete unchanged canvas owner passed both viewports alone in 16.5 s:
+`ORKESTRATOR_E2E_PORT=15376 mise run test:logged -- --name settings-design-canvas-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts --workers=1 --output output/playwright/settings-design-canvas-owner`.
+Evidence: host temporary directory
+`orkestrator-test-run.xfA2Oh/settings-browser-components.log.gz` and
+`output/playwright/test-results/DesignCanvas-canvas-edits--cfd2e--events-conflict-and-reload-mobile-chromium/`.
+No canvas implementation, assertion, timeout or skip changed.

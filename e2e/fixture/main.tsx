@@ -25,6 +25,7 @@ import { ReadCoordinatorFixture } from "./ReadCoordinatorFixture";
 import { CoordinatorPaneTreeFixture } from "./CoordinatorPaneTreeFixture";
 import { StreamingTranscriptFixture } from "./StreamingTranscriptFixture";
 import { FullscreenSettingsFixture } from "./FullscreenSettingsFixture";
+import { SettingsMachineFixture } from "./SettingsMachineFixture";
 import { GlobalSettingsFixture } from "./GlobalSettingsFixture";
 import { GitHubCliSetupFixture } from "./GitHubCliSetupFixture";
 import { MultiReviewFlowFixture } from "./MultiReviewFlowFixture";
@@ -1757,6 +1758,7 @@ function fixtureForPath() {
   if (window.location.pathname === "/agent-account-status") return <AgentAccountStatusFixture />;
   if (window.location.pathname === "/machines-settings") return <MachinesSettingsFixture />;
   if (window.location.pathname === "/fullscreen-settings") return <FullscreenSettingsFixture />;
+  if (window.location.pathname === "/settings-machines") return <SettingsMachineFixture />;
   if (window.location.pathname === "/global-settings") return <GlobalSettingsFixture />;
   if (window.location.pathname === "/github-cli-setup") return <GitHubCliSetupFixture />;
   if (window.location.pathname === "/design-canvas") return <DesignCanvasFixture />;

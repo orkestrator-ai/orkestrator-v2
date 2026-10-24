@@ -9,6 +9,7 @@ import type {
 
 import { Button } from "@/components/ui/button";
 import * as backend from "@/lib/backend";
+import { useAccountMachine } from "@/components/settings/account-machine";
 import { cn } from "@/lib/utils";
 
 import { mcpProblemFrom, mcpProblemText } from "./McpErrorNotice";
@@ -143,6 +144,7 @@ function OperationCard({
   operation: McpOperationSnapshot;
   applyBlockedReason?: string;
 }) {
+  const { machine } = useAccountMachine();
   const [busy, setBusy] = useState(false);
   const saved = operation.phase === "saved";
   const runtimes = operation.apply.runtimes;
@@ -217,7 +219,7 @@ function OperationCard({
               disabled={busy}
               onClick={() =>
                 void run(
-                  () => backend.applyMcpConfiguration(operation.operationId),
+                  () => backend.applyMcpConfiguration(operation.operationId, machine),
                   "Could not apply",
                 )
               }
@@ -233,7 +235,7 @@ function OperationCard({
               disabled={busy}
               onClick={() =>
                 void run(
-                  () => backend.applyMcpConfiguration(operation.operationId),
+                  () => backend.applyMcpConfiguration(operation.operationId, machine),
                   "Could not retry",
                 )
               }
@@ -248,7 +250,10 @@ function OperationCard({
               className="h-6 px-2 text-xs"
               disabled={busy}
               onClick={() =>
-                void run(() => backend.cancelMcpApply(operation.operationId), "Could not cancel")
+                void run(
+                  () => backend.cancelMcpApply(operation.operationId, machine),
+                  "Could not cancel",
+                )
               }
             >
               Cancel apply

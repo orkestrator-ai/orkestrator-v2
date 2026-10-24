@@ -198,7 +198,7 @@ describe("disk usage hook reconciliation", () => {
       await result.current.refresh();
     });
     expect(result.current.error).toBeNull();
-    expect(get).toHaveBeenLastCalledWith("e1", true);
+    expect(get).toHaveBeenLastCalledWith("e1", true, undefined);
   });
 });
 

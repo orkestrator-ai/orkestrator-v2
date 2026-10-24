@@ -212,6 +212,7 @@ describe("GlobalSettings defaults section", () => {
             actionDefaults: { review: { platform: "codex", model: "gpt-5.4" } },
           }),
         }),
+        undefined,
       ),
     );
   });

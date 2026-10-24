@@ -46,9 +46,12 @@ import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 import type { PrDetectionResult } from "./projects-environments";
 import { machineInvoke, type AccountMachine } from "./agent-accounts";
 
-/** Workspace machine settings with the command node's inherited preferences. */
-export async function getConfig(): Promise<AppConfig> {
-  return invokeGlobalConfigCommand("get_config");
+/**
+ * Workspace machine settings with the command node's inherited preferences.
+ * `machine` reads another machine's, as Settings does for the one it edits.
+ */
+export async function getConfig(machine?: AccountMachine): Promise<AppConfig> {
+  return invokeGlobalConfigCommand("get_config", undefined, machine);
 }
 
 export interface AgentModelCatalogCache {
@@ -76,8 +79,12 @@ export interface AgentModelCatalogCache {
 }
 
 /** Load the host-wide last-known-good catalogues, seeding Pi on first use. */
-export async function getAgentModelCatalogCache(): Promise<AgentModelCatalogCache> {
-  return invoke<AgentModelCatalogCache>("get_agent_model_catalog_cache");
+export async function getAgentModelCatalogCache(
+  machine?: AccountMachine,
+): Promise<AgentModelCatalogCache> {
+  return machine === undefined
+    ? invoke<AgentModelCatalogCache>("get_agent_model_catalog_cache")
+    : machineInvoke<AgentModelCatalogCache>(machine, "get_agent_model_catalog_cache");
 }
 
 /** Discover Pi models without requiring an environment or persistent bridge. */
@@ -100,16 +107,19 @@ type HostModelCatalogRefreshResult = {
 export function refreshHostAgentModelCatalog(
   agent: "opencode",
   projectId: string,
+  machine?: AccountMachine,
 ): Promise<HostModelCatalogRefreshResult>;
 export function refreshHostAgentModelCatalog(
   agent: NonOpenCodeAgent,
   projectId?: never,
+  machine?: AccountMachine,
 ): Promise<HostModelCatalogRefreshResult>;
 export async function refreshHostAgentModelCatalog(
   agent: import("@orkestrator/protocol/agent-platforms").AgentPlatform,
   projectId?: string,
+  machine?: AccountMachine,
 ): Promise<HostModelCatalogRefreshResult> {
-  return invoke("refresh_host_agent_model_catalog", {
+  return machineInvoke(machine, "refresh_host_agent_model_catalog", {
     agent,
     ...(projectId ? { projectId } : {}),
   });
@@ -167,8 +177,11 @@ export async function getGlobalConfig(): Promise<GlobalConfig> {
     : invoke<GlobalConfig>("get_global_config");
 }
 
-export async function updateGlobalConfig(global: GlobalConfig): Promise<AppConfig> {
-  return invokeGlobalConfigCommand("update_global_config", { global });
+export async function updateGlobalConfig(
+  global: GlobalConfig,
+  machine?: AccountMachine,
+): Promise<AppConfig> {
+  return invokeGlobalConfigCommand("update_global_config", { global }, machine);
 }
 
 /** Turn the startup reminder to set up the GitHub CLI off, or back on. */
@@ -178,35 +191,49 @@ export async function setGitHubCliReminderDismissed(dismissed: boolean): Promise
 
 export async function updateNotificationSoundSettings(
   settings: import("@orkestrator/protocol/notification-sounds").NotificationSoundSettings,
+  machine?: AccountMachine,
 ): Promise<AppConfig> {
-  return invokeGlobalConfigCommand("update_notification_sound_settings", { settings });
+  return invokeGlobalConfigCommand("update_notification_sound_settings", { settings }, machine);
 }
 
-export async function setGitHubToken(token: string | null): Promise<AppConfig> {
-  return invokeGlobalConfigCommand("set_github_token", { token });
+export async function setGitHubToken(
+  token: string | null,
+  machine?: AccountMachine,
+): Promise<AppConfig> {
+  return invokeGlobalConfigCommand("set_github_token", { token }, machine);
 }
 
-export async function setCursorApiKey(apiKey: string | null): Promise<AppConfig> {
-  return invokeGlobalConfigCommand("set_cursor_api_key", { apiKey });
+export async function setCursorApiKey(
+  apiKey: string | null,
+  machine?: AccountMachine,
+): Promise<AppConfig> {
+  return invokeGlobalConfigCommand("set_cursor_api_key", { apiKey }, machine);
 }
 
-export async function setAnthropicApiKey(apiKey: string | null): Promise<AppConfig> {
-  return invokeGlobalConfigCommand("set_anthropic_api_key", { apiKey });
+export async function setAnthropicApiKey(
+  apiKey: string | null,
+  machine?: AccountMachine,
+): Promise<AppConfig> {
+  return invokeGlobalConfigCommand("set_anthropic_api_key", { apiKey }, machine);
 }
 
 /** Read one platform's plan/quota windows from the backend. */
 export async function getPlanUsage(
   platform: AgentPlatform,
   options: { force?: boolean } = {},
+  machine?: AccountMachine,
 ): Promise<PlanUsageSnapshot> {
-  return invoke<PlanUsageSnapshot>("get_plan_usage", {
+  return machineInvoke<PlanUsageSnapshot>(machine, "get_plan_usage", {
     platform,
     ...(options.force ? { force: true } : {}),
   });
 }
 
-export async function setOpenCodeZenApiKey(apiKey: string | null): Promise<AppConfig> {
-  return invokeGlobalConfigCommand("set_opencode_zen_api_key", { apiKey });
+export async function setOpenCodeZenApiKey(
+  apiKey: string | null,
+  machine?: AccountMachine,
+): Promise<AppConfig> {
+  return invokeGlobalConfigCommand("set_opencode_zen_api_key", { apiKey }, machine);
 }
 
 /**
@@ -336,8 +363,8 @@ export async function updateRepositoryConfig(
   return invokeRepositoryConfigCommand("update_repository_config", { projectId, repoConfig });
 }
 
-export async function getLogDirectory(): Promise<string> {
-  return invoke<string>("get_log_directory");
+export async function getLogDirectory(machine?: AccountMachine): Promise<string> {
+  return machineInvoke<string>(machine, "get_log_directory");
 }
 
 export interface LogStorageStats {
@@ -345,12 +372,12 @@ export interface LogStorageStats {
   fileCount: number;
 }
 
-export async function getLogStorageStats(): Promise<LogStorageStats> {
-  return invoke<LogStorageStats>("get_log_storage_stats");
+export async function getLogStorageStats(machine?: AccountMachine): Promise<LogStorageStats> {
+  return machineInvoke<LogStorageStats>(machine, "get_log_storage_stats");
 }
 
-export async function cleanupLogs(): Promise<LogStorageStats> {
-  return invoke<LogStorageStats>("cleanup_logs");
+export async function cleanupLogs(machine?: AccountMachine): Promise<LogStorageStats> {
+  return machineInvoke<LogStorageStats>(machine, "cleanup_logs");
 }
 
 // --- Linear Commands ---

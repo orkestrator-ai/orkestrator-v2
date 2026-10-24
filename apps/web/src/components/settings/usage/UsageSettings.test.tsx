@@ -102,7 +102,7 @@ test("shows the recorded range, its headline and the model breakdown", async () 
   expect((await headline()).getByText(/3 sessions/)).toBeTruthy();
   expect(screen.getByRole("cell", { name: "claude-opus-5-5" })).toBeTruthy();
   // The default range is 30 days and asks for every platform.
-  expect(history).toHaveBeenCalledWith({ days: 30 });
+  expect(history).toHaveBeenCalledWith({ days: 30 }, undefined);
 });
 
 test("a model the provider never priced reads as unpriced, not free", async () => {

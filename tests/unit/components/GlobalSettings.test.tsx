@@ -457,6 +457,7 @@ describe("GlobalSettings", () => {
             }),
           }),
         }),
+        undefined,
       );
     });
   });
@@ -471,11 +472,13 @@ describe("GlobalSettings", () => {
     });
     fireEvent.blur(zenKey);
 
-    await waitFor(() => expect(mockSetOpenCodeZenApiKey).toHaveBeenCalledWith("zen-key"));
+    await waitFor(() =>
+      expect(mockSetOpenCodeZenApiKey).toHaveBeenCalledWith("zen-key", undefined),
+    );
     // The card must remount and re-read rather than keep the pre-save snapshot
     // for the rest of the backend's cache TTL.
     await waitFor(() => expect(mockGetPlanUsage).toHaveBeenCalledTimes(2));
-    expect(mockGetPlanUsage).toHaveBeenLastCalledWith("opencode", { force: true });
+    expect(mockGetPlanUsage).toHaveBeenLastCalledWith("opencode", { force: true }, undefined);
   });
 
   test.each(["claude", "codex"] as const)(
@@ -494,8 +497,8 @@ describe("GlobalSettings", () => {
         platform,
         "default",
         { force: false },
-        // The command node's own accounts: no other machine was chosen.
-        null,
+        // This window's own accounts: rendered outside Settings' machine picker.
+        undefined,
       );
     },
   );
@@ -506,7 +509,7 @@ describe("GlobalSettings", () => {
       render(<GlobalSettings activeSection={platform} />);
       const card = screen.getByRole("region", { name: "Plan usage" });
       await waitFor(() =>
-        expect(mockGetPlanUsage).toHaveBeenCalledWith(platform, { force: false }),
+        expect(mockGetPlanUsage).toHaveBeenCalledWith(platform, { force: false }, undefined),
       );
       await waitFor(() =>
         expect(
@@ -515,7 +518,7 @@ describe("GlobalSettings", () => {
       );
       fireEvent.click(within(card).getByRole("button", { name: "Refresh plan usage" }));
       await waitFor(() =>
-        expect(mockGetPlanUsage).toHaveBeenLastCalledWith(platform, { force: true }),
+        expect(mockGetPlanUsage).toHaveBeenLastCalledWith(platform, { force: true }, undefined),
       );
       expect(mockGetAgentAccountUsage).not.toHaveBeenCalled();
     },
@@ -537,6 +540,7 @@ describe("GlobalSettings", () => {
     await waitFor(() =>
       expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({ useHostClaudeCredentials: false }),
+        undefined,
       ),
     );
     view.rerender(<GlobalSettings activeSection="claude" />);
@@ -545,7 +549,7 @@ describe("GlobalSettings", () => {
       "claude",
       "default",
       { force: true },
-      null,
+      undefined,
     );
     expect(screen.queryByText("5-hour limit") === null).toBe(true);
   });
@@ -556,13 +560,15 @@ describe("GlobalSettings", () => {
     const key = screen.getByPlaceholderText("sk-ant-...");
     fireEvent.change(key, { target: { value: "test-anthropic-key" } });
     fireEvent.blur(key);
-    await waitFor(() => expect(mockSetAnthropicApiKey).toHaveBeenCalledWith("test-anthropic-key"));
+    await waitFor(() =>
+      expect(mockSetAnthropicApiKey).toHaveBeenCalledWith("test-anthropic-key", undefined),
+    );
     await waitFor(() =>
       expect(mockGetAgentAccountUsage).toHaveBeenLastCalledWith(
         "claude",
         "default",
         { force: true },
-        null,
+        undefined,
       ),
     );
   });
@@ -581,6 +587,7 @@ describe("GlobalSettings", () => {
         expect.objectContaining({
           codexMaxConcurrentThreads: 8,
         }),
+        undefined,
       );
     });
   });
@@ -659,6 +666,7 @@ describe("GlobalSettings", () => {
     await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(2));
     expect(mockUpdateGlobalConfig).toHaveBeenLastCalledWith(
       expect.objectContaining({ codexMaxConcurrentThreads: 11 }),
+      undefined,
     );
   });
 
@@ -686,6 +694,7 @@ describe("GlobalSettings", () => {
     await waitFor(() => {
       expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({ webClientEnabled: false }),
+        undefined,
       );
       expect(mockSetWebClientEnabled).toHaveBeenCalledWith(false);
     });
@@ -1204,6 +1213,7 @@ describe("GlobalSettings", () => {
           expect.objectContaining({
             openCodeModelProviders: ["opencode", "opencode-go", "openrouter"],
           }),
+          undefined,
         );
       });
     });
@@ -1218,6 +1228,7 @@ describe("GlobalSettings", () => {
       await waitFor(() => {
         expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
           expect.objectContaining({ openCodeModelProviders: ["opencode"] }),
+          undefined,
         );
       });
     });
@@ -1255,6 +1266,7 @@ describe("GlobalSettings", () => {
       await waitFor(() => {
         expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
           expect.objectContaining({ openCodeModelProviders: [] }),
+          undefined,
         );
       });
     });
@@ -1351,6 +1363,7 @@ describe("GlobalSettings", () => {
         expect.objectContaining({
           reviewInstruction: "Review origin/{{targetBranch}}...HEAD for regressions.",
         }),
+        undefined,
       );
     });
   });
@@ -1476,6 +1489,7 @@ describe("GlobalSettings", () => {
       expect.objectContaining({
         reviewInstruction: "x".repeat(REVIEW_INSTRUCTION_RECOMMENDED_LENGTH + 1),
       }),
+      undefined,
     );
 
     fireEvent.change(instruction, { target: { value: "Short review instruction." } });
@@ -1511,6 +1525,7 @@ describe("GlobalSettings", () => {
     await waitFor(() =>
       expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({ preferredEditor: "cursor" }),
+        undefined,
       ),
     );
   });
@@ -1535,6 +1550,7 @@ describe("GlobalSettings", () => {
         expect.objectContaining({
           agentSettings: expect.objectContaining({ defaultAgent: "codex" }),
         }),
+        undefined,
       ),
     );
   });
@@ -1566,6 +1582,7 @@ describe("GlobalSettings", () => {
           // is still enabled, rather than leaving a launch surface that is gone.
           agentSettings: expect.objectContaining({ defaultAgent: "codex" }),
         }),
+        undefined,
       ),
     );
   });
@@ -1610,6 +1627,7 @@ describe("GlobalSettings", () => {
             { name: "guides", url: "https://guides.example/mcp" },
           ],
         }),
+        undefined,
       ),
     );
     fireEvent.click(within(choices).getByRole("radio", { name: /Off/ }));
@@ -1623,6 +1641,7 @@ describe("GlobalSettings", () => {
             { name: "guides", url: "https://guides.example/mcp" },
           ],
         }),
+        undefined,
       ),
     );
   });
@@ -1645,6 +1664,7 @@ describe("GlobalSettings", () => {
     await waitFor(() =>
       expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({ coordinatorProviderTiers: "enforced" }),
+        undefined,
       ),
     );
   });
@@ -1687,6 +1707,7 @@ describe("GlobalSettings", () => {
     await waitFor(() =>
       expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({ coordinatorProviderTiers: "advisory" }),
+        undefined,
       ),
     );
   });
@@ -1783,6 +1804,7 @@ describe("GlobalSettings", () => {
             fontSize: 15,
           }),
         }),
+        undefined,
       ),
     );
   });
@@ -1795,7 +1817,9 @@ describe("GlobalSettings", () => {
     expect(anthropicInput.type).toBe("text");
     fireEvent.change(anthropicInput, { target: { value: "test-anthropic-key" } });
     fireEvent.blur(anthropicInput);
-    await waitFor(() => expect(mockSetAnthropicApiKey).toHaveBeenCalledWith("test-anthropic-key"));
+    await waitFor(() =>
+      expect(mockSetAnthropicApiKey).toHaveBeenCalledWith("test-anthropic-key", undefined),
+    );
 
     rerender(<GlobalSettings activeSection="cursor" />);
     const cursorInput = screen.getByLabelText("Cursor API key") as HTMLInputElement;
@@ -1804,7 +1828,9 @@ describe("GlobalSettings", () => {
     expect(cursorInput.type).toBe("text");
     fireEvent.change(cursorInput, { target: { value: "test-cursor-key" } });
     fireEvent.blur(cursorInput);
-    await waitFor(() => expect(mockSetCursorApiKey).toHaveBeenCalledWith("test-cursor-key"));
+    await waitFor(() =>
+      expect(mockSetCursorApiKey).toHaveBeenCalledWith("test-cursor-key", undefined),
+    );
 
     rerender(<GlobalSettings activeSection="general" />);
     fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
@@ -1816,7 +1842,7 @@ describe("GlobalSettings", () => {
     fireEvent.blur(githubInput);
 
     await waitFor(() => {
-      expect(mockSetGitHubToken).toHaveBeenCalledWith("test-github-token");
+      expect(mockSetGitHubToken).toHaveBeenCalledWith("test-github-token", undefined);
     });
 
     // Credentials travel through their own write commands, never the shared
@@ -1847,7 +1873,7 @@ describe("GlobalSettings", () => {
     expect(mockSetCursorApiKey).not.toHaveBeenCalled();
     fireEvent.click(await screen.findByRole("button", { name: "Clear" }));
 
-    await waitFor(() => expect(mockSetCursorApiKey).toHaveBeenCalledWith(null));
+    await waitFor(() => expect(mockSetCursorApiKey).toHaveBeenCalledWith(null, undefined));
     expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
   });
 
@@ -1873,7 +1899,7 @@ describe("GlobalSettings", () => {
     expect(mockSetAnthropicApiKey).not.toHaveBeenCalled();
     fireEvent.click(await screen.findByRole("button", { name: "Clear" }));
 
-    await waitFor(() => expect(mockSetAnthropicApiKey).toHaveBeenCalledWith(null));
+    await waitFor(() => expect(mockSetAnthropicApiKey).toHaveBeenCalledWith(null, undefined));
     expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
   });
 
@@ -1941,11 +1967,11 @@ describe("GlobalSettings", () => {
     fireEvent.blur(githubInput);
 
     await waitFor(() => {
-      expect(mockSetGitHubToken).toHaveBeenCalledWith("replacement-token");
+      expect(mockSetGitHubToken).toHaveBeenCalledWith("replacement-token", undefined);
     });
     await flushAutoSave();
     expect(mockUpdateGlobalConfig.mock.calls[0]?.[0]).not.toHaveProperty("githubToken");
-    expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledWith();
+    expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledWith(undefined);
   });
 
   test("clears a configured GitHub token through the write-only command", async () => {
@@ -1966,9 +1992,9 @@ describe("GlobalSettings", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Clear" }));
 
     await waitFor(() => {
-      expect(mockSetGitHubToken).toHaveBeenCalledWith(null);
+      expect(mockSetGitHubToken).toHaveBeenCalledWith(null, undefined);
     });
-    expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledWith();
+    expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledWith(undefined);
   });
 
   test("switches from host credentials to PAT mode without writing an empty token", async () => {
@@ -1987,10 +2013,11 @@ describe("GlobalSettings", () => {
     await waitFor(() =>
       expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({ useHostGitHubCredentials: false }),
+        undefined,
       ),
     );
     expect(mockSetGitHubToken).not.toHaveBeenCalled();
-    expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledWith();
+    expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledWith(undefined);
   });
 
   test("keeps persisted settings and the PAT edit retryable when token storage fails", async () => {
@@ -2050,10 +2077,11 @@ describe("GlobalSettings", () => {
     await waitFor(() =>
       expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({ useHostGitHubCredentials: true }),
+        undefined,
       ),
     );
     expect(mockSetGitHubToken).not.toHaveBeenCalled();
-    expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledWith();
+    expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledWith(undefined);
   });
 
   test("shows the client and backend versions on the debug tab", async () => {
@@ -2150,6 +2178,7 @@ describe("GlobalSettings", () => {
     await waitFor(() =>
       expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({ debugLogging: true, debugLogRetentionDays: 30 }),
+        undefined,
       ),
     );
 
@@ -2271,6 +2300,7 @@ describe("GlobalSettings", () => {
     await waitFor(() =>
       expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({ debugLogRetentionDays: 30 }),
+        undefined,
       ),
     );
   });
@@ -2323,6 +2353,7 @@ describe("GlobalSettings", () => {
           terminalAppearance: expect.objectContaining({ fontFamily: "JetBrains Mono" }),
           terminalScrollback: 5100,
         }),
+        undefined,
       ),
     );
   });
@@ -2381,6 +2412,7 @@ describe("GlobalSettings", () => {
             }),
           }),
         }),
+        undefined,
       ),
     );
   });
@@ -2404,6 +2436,7 @@ describe("GlobalSettings", () => {
             }),
           }),
         }),
+        undefined,
       ),
     );
   });
@@ -2428,6 +2461,7 @@ describe("GlobalSettings", () => {
           // First spelling typed wins, in first-occurrence order.
           allowedDomains: ["Example.com", "api.example.com"],
         }),
+        undefined,
       ),
     );
   });
@@ -2459,6 +2493,7 @@ describe("GlobalSettings", () => {
             platforms: { claude: { model: "default" }, codex: { mode: "terminal" } },
           },
         }),
+        undefined,
       );
     });
   });
@@ -2495,6 +2530,7 @@ describe("GlobalSettings", () => {
               }),
             }),
           }),
+          undefined,
         );
       });
       unmount();
@@ -2519,7 +2555,9 @@ describe("GlobalSettings", () => {
 
     fireEvent.change(domains, { target: { value: "example.com" } });
     fireEvent.click(screen.getByRole("button", { name: "Test DNS" }));
-    await waitFor(() => expect(mockTestDomainResolution).toHaveBeenCalledWith(["example.com"]));
+    await waitFor(() =>
+      expect(mockTestDomainResolution).toHaveBeenCalledWith(["example.com"], undefined),
+    );
 
     fireEvent.change(domains, { target: { value: "" } });
     expect(domains.value).toBe("");
@@ -2578,7 +2616,9 @@ describe("GlobalSettings", () => {
     fireEvent.change(token, { target: { value: "new-token" } });
     fireEvent.blur(token);
 
-    await waitFor(() => expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledWith());
+    await waitFor(() =>
+      expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledWith(undefined),
+    );
     await waitFor(() =>
       expect(mockToastSuccess).toHaveBeenCalledWith("Updated GitHub credentials in 1 container(s)"),
     );
@@ -2711,6 +2751,7 @@ describe("GlobalSettings", () => {
         expect.objectContaining({
           experimentalCodexRawEventLogging: false,
         }),
+        undefined,
       );
     });
   });
@@ -2854,6 +2895,7 @@ describe("GlobalSettings", () => {
     await waitFor(() =>
       expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({ envFilePatterns: [".env"] }),
+        undefined,
       ),
     );
   });

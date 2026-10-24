@@ -13,6 +13,7 @@ import {
   webAnnotationCommand,
 } from "@/lib/web-annotations/client";
 import { refreshAllWebAnnotationCapabilities } from "@/lib/web-annotations/sync";
+import { isWindowMachine, useAccountMachine } from "./account-machine";
 import { WebAnnotationDiagnostics } from "./WebAnnotationDiagnostics";
 
 const MODE_LABELS: Record<WebAnnotationRolloutMode, { title: string; detail: string }> = {
@@ -41,16 +42,17 @@ export function WebAnnotationSettings() {
   const [unsupported, setUnsupported] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { machine } = useAccountMachine();
 
   const load = useCallback(async () => {
     setError(null);
     try {
-      setSnapshot(await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.rollout, {}));
+      setSnapshot(await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.rollout, {}, machine));
     } catch (loadError) {
       if (classifyWebAnnotationError(loadError) === "unsupported") setUnsupported(true);
       else setError(describeWebAnnotationError(loadError));
     }
-  }, []);
+  }, [machine]);
   useEffect(() => {
     void load();
   }, [load]);
@@ -59,8 +61,11 @@ export function WebAnnotationSettings() {
     setSaving(true);
     setError(null);
     try {
-      setSnapshot(await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.rolloutSet, { mode }));
-      refreshAllWebAnnotationCapabilities();
+      setSnapshot(
+        await webAnnotationCommand(WEB_ANNOTATION_COMMANDS.rolloutSet, { mode }, machine),
+      );
+      // This window's annotation engines follow its own backend's rollout only.
+      if (isWindowMachine(machine)) refreshAllWebAnnotationCapabilities();
     } catch (saveError) {
       setError(describeWebAnnotationError(saveError));
     } finally {

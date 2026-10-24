@@ -3,6 +3,7 @@ import { AlertCircle, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AccountQuotaList } from "@/components/layout/AgentInfoButton.panels";
 import { getPlanUsage } from "@/lib/backend";
+import { useAccountMachine } from "./account-machine";
 import { formatRelativeTime } from "@/lib/format-relative-time";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
@@ -37,6 +38,7 @@ export function PlanUsageSection({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const requestRef = useRef(0);
+  const { machine } = useAccountMachine();
 
   const load = useCallback(
     async (force = false) => {
@@ -44,7 +46,7 @@ export function PlanUsageSection({
       setLoading(true);
       setError(null);
       try {
-        const next = await getPlanUsage(platform, { force });
+        const next = await getPlanUsage(platform, { force }, machine);
         if (requestId !== requestRef.current) return;
         setSnapshot(next);
       } catch (err) {
@@ -54,7 +56,7 @@ export function PlanUsageSection({
         if (requestId === requestRef.current) setLoading(false);
       }
     },
-    [platform],
+    [machine, platform],
   );
 
   const seenReloadTokenRef = useRef(reloadToken);

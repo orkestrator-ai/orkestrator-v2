@@ -24,6 +24,7 @@ import type {
   AgentSkillScope,
 } from "@/lib/backend";
 import { cn } from "@/lib/utils";
+import { isWindowMachine, useAccountMachine } from "./account-machine";
 
 const PROVIDERS: Array<{ id: AgentSkillProvider; label: string }> = [
   { id: "claude", label: "Claude" },
@@ -178,12 +179,29 @@ export function SkillsSettings({
   provider: controlledProvider,
   showProviderTabs = true,
   description,
-  listSkills = backend.listAgentSkills,
-  readSkill = backend.readAgentSkill,
-  canRevealInFileManager = true,
+  listSkills: listSkillsOverride,
+  readSkill: readSkillOverride,
+  canRevealInFileManager: canRevealOverride = true,
   embedded = false,
   reuseLoadedScans = false,
 }: SkillsSettingsProps = {}) {
+  // Without a loader, the skills are those of the machine Settings shows.
+  const { machine } = useAccountMachine();
+  const listSkills = useMemo(
+    () =>
+      listSkillsOverride ??
+      ((target: AgentSkillProvider) => backend.listAgentSkills(target, machine)),
+    [listSkillsOverride, machine],
+  );
+  const readSkill = useMemo(
+    () =>
+      readSkillOverride ??
+      ((target: AgentSkillProvider, filePath: string) =>
+        backend.readAgentSkill(target, filePath, machine)),
+    [readSkillOverride, machine],
+  );
+  // Another machine's skill files are not on this one, so there is nothing to reveal.
+  const canRevealInFileManager = canRevealOverride && isWindowMachine(machine);
   const [internalProvider, setInternalProvider] = useState<AgentSkillProvider>("claude");
   const provider = controlledProvider ?? internalProvider;
   const [states, setStates] = useState<Record<string, ProviderState>>({});

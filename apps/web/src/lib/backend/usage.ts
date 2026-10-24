@@ -1,6 +1,6 @@
 import type { UsageHistoryQuery, UsageHistoryReport } from "@orkestrator/protocol/usage-history";
 
-import { invoke } from "@/lib/native/backend";
+import { machineInvoke, type AccountMachine } from "./agent-accounts";
 
 export type {
   UsageDayPoint,
@@ -13,6 +13,9 @@ export type {
 } from "@orkestrator/protocol/usage-history";
 
 /** Recorded token and spend history for a range of days ending today. */
-export async function getUsageHistory(query: UsageHistoryQuery = {}): Promise<UsageHistoryReport> {
-  return invoke<UsageHistoryReport>("get_usage_history", { ...query });
+export async function getUsageHistory(
+  query: UsageHistoryQuery = {},
+  machine?: AccountMachine,
+): Promise<UsageHistoryReport> {
+  return machineInvoke<UsageHistoryReport>(machine, "get_usage_history", { ...query });
 }

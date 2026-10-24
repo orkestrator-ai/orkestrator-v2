@@ -25,6 +25,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 import * as backend from "@/lib/backend";
+import { useAccountMachine } from "@/components/settings/account-machine";
 import { cn } from "@/lib/utils";
 
 import { McpErrorNotice, mcpProblemFrom, type McpProblem } from "./McpErrorNotice";
@@ -89,6 +90,7 @@ export function McpEntryDialog({
   /** Return focus to the row action that opened the dialog. */
   onRestoreFocus?: () => void;
 }) {
+  const { machine } = useAccountMachine();
   const { entry } = action;
   const source = snapshot.sources.find((candidate) => candidate.sourceId === entry.sourceId);
   const [newName, setNewName] = useState(entry.name);
@@ -148,6 +150,7 @@ export function McpEntryDialog({
       // applying is switched off and only the save is offered.
       const result = await backend.validateMcpMutation(
         mutation(applyBlocked ? "save" : "save-and-apply", "preview"),
+        machine,
       );
       if (result.valid) setPreview(result.preview);
       else setProblem({ message: result.fieldErrors.map((error) => error.message).join(" ") });
@@ -173,7 +176,7 @@ export function McpEntryDialog({
     setBusy(true);
     setProblem(null);
     try {
-      await backend.mutateMcpDefinition(mutation(applyIntent, applyIntent));
+      await backend.mutateMcpDefinition(mutation(applyIntent, applyIntent), machine);
       toast.success(copy.done);
       onClose(true);
     } catch (error) {
@@ -198,7 +201,11 @@ export function McpEntryDialog({
     onReload?.();
     let reloaded = false;
     try {
-      const latest = await backend.getMcpDefinition(snapshot.target.targetId, entry.entryId);
+      const latest = await backend.getMcpDefinition(
+        snapshot.target.targetId,
+        entry.entryId,
+        machine,
+      );
       expectedRevision.current = latest.sourceRevision;
       reloaded = true;
     } catch (error) {

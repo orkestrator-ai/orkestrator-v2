@@ -1,9 +1,11 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import * as backend from "@/lib/backend";
 import * as notificationSounds from "@/lib/notification-sounds";
 import { useConfigStore } from "@/stores/configStore";
+import { AccountMachineProvider } from "./account-machine";
+import { MachineConfigProvider } from "./settings-config";
 import { SoundsSettings } from "./SoundsSettings";
 
 const originalConfig = structuredClone(useConfigStore.getState().config);
@@ -162,3 +164,57 @@ describe("SoundsSettings", () => {
     play.mockRestore();
   });
 });
+
+for (const machine of [null, "other"]) {
+  test(`selected ${machine ?? "command node"} sound saves and recovery do not change leaf notification preferences`, async () => {
+    window.orkestratorWorkspaceTarget = { nodeId: "leaf", nodeName: "Leaf", path: "direct" };
+    const leaf = structuredClone(originalConfig);
+    leaf.global.notificationSounds = { agentStopped: true, prMerged: true };
+    useConfigStore.setState({ config: leaf });
+    const selected = structuredClone(originalConfig);
+    selected.global.notificationSounds = { agentStopped: true, prMerged: false };
+    const read = spyOn(backend, "getConfig").mockImplementation(async (target) =>
+      target === undefined ? leaf : selected,
+    );
+    let fail!: (cause: Error) => void;
+    const update = spyOn(backend, "updateNotificationSoundSettings").mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          fail = reject;
+        }),
+    );
+    try {
+      render(
+        <AccountMachineProvider value={{ machine, name: "Selected" }}>
+          <MachineConfigProvider machine={machine}>
+            <SoundsSettings />
+          </MachineConfigProvider>
+        </AccountMachineProvider>,
+      );
+      const toggle = await screen.findByRole("switch", { name: "Agent stopped sound" });
+      expect(
+        screen
+          .getByRole("switch", { name: "Pull request merged sound" })
+          .getAttribute("data-state"),
+      ).toBe("unchecked");
+      fireEvent.click(toggle);
+      await waitFor(() =>
+        expect(update).toHaveBeenCalledWith({ agentStopped: false, prMerged: false }, machine),
+      );
+      expect(useConfigStore.getState().config.global.notificationSounds).toEqual({
+        agentStopped: true,
+        prMerged: true,
+      });
+      await act(async () => fail(new Error("write failed")));
+      await waitFor(() => expect(toggle.getAttribute("data-state")).toBe("checked"));
+      expect(read.mock.calls.filter(([target]) => target === machine).length).toBe(2);
+      expect(useConfigStore.getState().config.global.notificationSounds).toEqual({
+        agentStopped: true,
+        prMerged: true,
+      });
+    } finally {
+      cleanup();
+      delete window.orkestratorWorkspaceTarget;
+    }
+  });
+}

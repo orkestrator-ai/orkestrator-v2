@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/dialog";
 import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 import * as backend from "@/lib/backend";
+import { useAccountMachine } from "@/components/settings/account-machine";
 import { cn } from "@/lib/utils";
 
 import { McpErrorNotice, mcpProblemFrom, type McpProblem } from "./McpErrorNotice";
@@ -110,6 +111,7 @@ export function McpEnvironmentSourceControls({
   source: McpConfigSource;
   onReload: () => void;
 }) {
+  const { machine } = useAccountMachine();
   const overlay = source.overlay;
   const container = snapshot.target.context.location === "container";
   const blocked = blockedReason(snapshot);
@@ -127,12 +129,15 @@ export function McpEnvironmentSourceControls({
     setBusy(key);
     setProblem(null);
     try {
-      await backend.resolveMcpEnvironmentOverlay({
-        targetId: snapshot.target.targetId,
-        sourceId: source.sourceId,
-        expectedRevision: source.revision,
-        action,
-      });
+      await backend.resolveMcpEnvironmentOverlay(
+        {
+          targetId: snapshot.target.targetId,
+          sourceId: source.sourceId,
+          expectedRevision: source.revision,
+          action,
+        },
+        machine,
+      );
       toast.success(successText(action));
     } catch (error) {
       setProblem(problemFrom(error));
@@ -373,6 +378,7 @@ export function McpDefaultsRefreshDialog({
   // way forward is a fresh preview.
   const [failedRefresh, setFailedRefresh] = useState(false);
   const [busy, setBusy] = useState(false);
+  const { machine } = useAccountMachine();
   const targetId = snapshot.target.targetId;
   const sourceId = source.sourceId;
 
@@ -382,7 +388,7 @@ export function McpDefaultsRefreshDialog({
     setFailedRefresh(false);
     setPreview(null);
     try {
-      setPreview(await backend.previewMcpEnvironmentDefaults({ targetId, sourceId }));
+      setPreview(await backend.previewMcpEnvironmentDefaults({ targetId, sourceId }, machine));
     } catch (error) {
       setProblem(problemFrom(error));
       onReload();
@@ -403,11 +409,10 @@ export function McpDefaultsRefreshDialog({
     setBusy(true);
     setProblem(null);
     try {
-      const result = await backend.refreshMcpEnvironmentDefaults({
-        targetId,
-        sourceId,
-        previewToken: preview.previewToken,
-      });
+      const result = await backend.refreshMcpEnvironmentDefaults(
+        { targetId, sourceId, previewToken: preview.previewToken },
+        machine,
+      );
       if (result.stagedCopy === "unavailable")
         toast.warning(
           "Refreshed. The copy a rebuild starts from could not be updated, so refresh again after the next rebuild.",

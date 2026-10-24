@@ -13,6 +13,13 @@
  * is withdrawn when that generation dies. `skills/changed` only marks the
  * snapshot dirty (O(1) on the notification path); a burst of notifications
  * coalesces into at most one off-loop re-read.
+ *
+ * A child's first answer is not settled. app-server answers `skills/list`
+ * before its plugin skills have loaded and sends no `skills/changed` when they
+ * arrive (0.164.0, measured on 2026-10-24: 26 skills for the first 100-300 ms
+ * after `initialize`, then 114, with no notification). So the first answer
+ * from each generation is reported unsettled and re-read once after
+ * `coldSettleMs`; that re-read is the authoritative one.
  */
 import { isAbsolute } from "node:path";
 import type { SkillScope } from "../app-server/generated/typescript/v2/index.js";
@@ -34,6 +41,8 @@ export const SKILL_INVENTORY_LIMITS = Object.freeze({
   ttlMs: 30_000,
   /** Quiet period after `skills/changed` before the one coalesced re-read. */
   refreshDebounceMs: 250,
+  /** Wait after a child's first answer before the one re-read that settles it. */
+  coldSettleMs: 2_000,
 });
 
 export const SKILL_ID_PREFIX = "codex-skill:";
@@ -238,6 +247,8 @@ export interface SkillInventoryDeps {
   now(): number;
   ttlMs?: number;
   refreshDebounceMs?: number;
+  /** 0 trusts a child's first answer (tests that do not model plugin loading). */
+  coldSettleMs?: number;
   /** Called after every re-read, successful or not, including coalesced ones. */
   onRefreshed?: (read: SkillInventoryRead) => void;
 }
@@ -247,6 +258,11 @@ export interface SkillInventoryRead {
   snapshot: SkillSnapshot | null;
   /** True when this read is authoritative and complete for the live child. */
   fresh: boolean;
+  /**
+   * False while the live child's list may still be missing plugin skills: from
+   * its first answer until the one settling re-read.
+   */
+  settled: boolean;
   /** Bounded, content-free reason the inventory could not be refreshed. */
   error?: string;
 }
@@ -258,9 +274,14 @@ export class SkillInventory {
   private invalidationSerial = 0;
   private inflight: { forced: boolean; promise: Promise<SkillInventoryRead> } | null = null;
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The generation whose first answer has been re-read after `coldSettleMs`. */
+  private settledGeneration: EngineGeneration | null = null;
+  /** The generation that has answered at least once. */
+  private answeredGeneration: EngineGeneration | null = null;
+  private settleTimer: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
   /** Counters for tests and diagnostics; never names or paths. */
-  readonly stats = { invalidations: 0, reads: 0, scheduledRefreshes: 0 };
+  readonly stats = { invalidations: 0, reads: 0, scheduledRefreshes: 0, settlingReads: 0 };
 
   constructor(private readonly deps: SkillInventoryDeps) {}
 
@@ -303,7 +324,7 @@ export class SkillInventory {
       !this.dirty &&
       this.deps.now() - snapshot.fetchedAt < ttl
     ) {
-      return { snapshot, fresh: !snapshot.partial };
+      return { snapshot, fresh: !snapshot.partial, settled: this.isSettled(snapshot.generation) };
     }
     if (this.inflight && (this.inflight.forced || !options.forceReload)) {
       return this.inflight.promise;
@@ -341,17 +362,60 @@ export class SkillInventory {
       this.dirty = this.invalidationSerial !== serial;
       const live = this.current();
       if (!live)
-        return { snapshot: null, fresh: false, error: "Codex restarted while listing skills" };
-      return { snapshot: live, fresh: !live.partial };
+        return {
+          snapshot: null,
+          fresh: false,
+          settled: false,
+          error: "Codex restarted while listing skills",
+        };
+      this.noteAnswer(live.generation);
+      return { snapshot: live, fresh: !live.partial, settled: this.isSettled(live.generation) };
     } catch {
       this.dirty = true;
-      return { snapshot: this.current(), fresh: false, error: "Codex skills could not be listed" };
+      const retained = this.current();
+      return {
+        snapshot: retained,
+        fresh: false,
+        settled: retained ? this.isSettled(retained.generation) : false,
+        error: "Codex skills could not be listed",
+      };
     }
+  }
+
+  private isSettled(generation: EngineGeneration): boolean {
+    return this.coldSettleMs() <= 0 || this.settledGeneration === generation;
+  }
+
+  private coldSettleMs(): number {
+    return this.deps.coldSettleMs ?? SKILL_INVENTORY_LIMITS.coldSettleMs;
+  }
+
+  /**
+   * The first answer from a generation arms one settling re-read. Later
+   * answers from the same child change nothing here.
+   */
+  private noteAnswer(generation: EngineGeneration): void {
+    if (this.isSettled(generation) || this.answeredGeneration === generation || this.disposed) {
+      return;
+    }
+    this.answeredGeneration = generation;
+    if (this.settleTimer) clearTimeout(this.settleTimer);
+    this.settleTimer = setTimeout(() => {
+      this.settleTimer = null;
+      if (this.disposed || this.deps.generation() !== generation) return;
+      this.settledGeneration = generation;
+      this.dirty = true;
+      this.stats.settlingReads += 1;
+      void this.read().catch(() => undefined);
+    }, this.coldSettleMs());
+    this.settleTimer.unref?.();
   }
 
   dispose(): void {
     this.disposed = true;
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
     this.refreshTimer = null;
+    if (this.settleTimer) clearTimeout(this.settleTimer);
+    this.settleTimer = null;
   }
 }

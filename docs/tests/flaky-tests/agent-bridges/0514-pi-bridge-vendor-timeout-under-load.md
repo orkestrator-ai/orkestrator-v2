@@ -127,3 +127,14 @@ The final-source retry, `mise run test:logged -- --name final-complete-tests -- 
 - **Complete unchanged owner:** `mise run test:logged -- --name merge-pi-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed, exit 0 in 11.6 seconds.
 - **Evidence:** `orkestrator-test-run.Dq33wp/root-and-agent-support-tests.log.gz` and outer `orkestrator-test-run.G461RT/merge-complete-suite.log.gz` below the host temporary directory.
 - **Assessment:** confirmed intermittent recurrence; concurrent staging and browser load remain hypotheses. No Pi implementation, assertion, timeout or skip changed.
+
+
+## Transcript-history main merge — 2026-10-24
+
+- **Merge parents:** `27849982626a1c80af732966e55623a7c642c750` and `0014505caeed69395b3cc996dd541fcc6df12c23`.
+- **Original command:** `env -u PORT mise run test:logged -- --name merge-tests -- mise run test`, with the testing guide's GNU-tool PATH prefix and `ORKESTRATOR_TEST_AREA_BASE` set to the parents' common ancestor.
+- **Workers and host:** one root worker; other worktrees were validating concurrently on mbp3. The host load average exceeded 100 during this run.
+- **Failure:** the supported SDK runtime staging case timed out at 30023.84 ms. Root/support finished with 3,381 passed, 11 failed and one between-test error across 3,392 tests in 162 files (1,001.64 seconds executing, excluding its capacity wait).
+- **Complete unchanged owner:** the same environment with `mise run test:logged -- --name merge-0050-isolate-pi-vendor -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed (exit 0, 26.3 seconds).
+- **Evidence:** `orkestrator-test-run.PmXIK0/root-and-agent-support-tests.log` under the host temporary directory (compressed after aggregate finalization); outer run `orkestrator-test-run.xSSTYy`.
+- **Assessment:** confirmed intermittent recurrence. Concurrent host load is a possible contributor; no Pi test, assertion, deadline or skip changed.

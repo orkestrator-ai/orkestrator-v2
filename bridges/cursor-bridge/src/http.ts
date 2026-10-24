@@ -274,13 +274,6 @@ async function routeGlobal(
     json(response, 200, { ok: true });
     return true;
   }
-  // Cursor's slash commands are an editor feature with no SDK surface. Say so
-  // with an empty list rather than a 404, which the backend would read as a
-  // bridge that predates the route.
-  if (url.pathname === "/global/slash-commands" && request.method === "GET") {
-    json(response, 200, unsupportedCommandCatalogue());
-    return true;
-  }
   if (url.pathname === "/global/auth" && request.method === "GET") {
     json(response, 200, await authStatus());
     return true;

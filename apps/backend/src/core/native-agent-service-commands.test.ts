@@ -398,10 +398,20 @@ describe("NativeAgentService command intent", () => {
     });
   });
 
+  test("a refresh before the session exists reads nothing and says so", async () => {
+    const stub = providerStub("claude");
+    await withService(stub.provider, async ({ service }) => {
+      const refreshed = await service.refreshProjectionCommands(base);
+      expect(refreshed).toMatchObject({ outcome: "failed", projection: null });
+      expect(refreshed.message).toContain("not started");
+      expect(stub.commandCatalogue).not.toHaveBeenCalled();
+    });
+  });
+
   test("a new tab's catalogue comes from its own session before the first prompt, never the global list", async () => {
     // The Claude bridge answers a session that has not run a turn from a
     // zero-turn CLI probe, reported as stale. The legacy global list (the
-    // filesystem scan plus `BUILTIN_COMMANDS`) is only read without a session.
+    // filesystem scan plus `BUILTIN_COMMANDS`) is retired.
     const stub = providerStub("claude", {
       catalogue: async () => ({
         enhanced: true,

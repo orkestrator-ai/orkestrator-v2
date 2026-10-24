@@ -69,7 +69,15 @@ function fakeEngine(initial: unknown = { data: [{ cwd: "/w", skills: [skill()], 
 }
 
 function catalogue(engine: ReturnType<typeof fakeEngine>["engine"], now = () => 1_000) {
-  return new CodexCommandCatalogue({ engine, cwd, now, skillRefreshDebounceMs: 1 });
+  // The fake answers its whole list at once, so a first answer is trusted here;
+  // the settling re-read has its own tests.
+  return new CodexCommandCatalogue({
+    engine,
+    cwd,
+    now,
+    skillRefreshDebounceMs: 1,
+    skillColdSettleMs: 0,
+  });
 }
 
 async function writePrompt(origin: "project" | "user", name: string, content: string) {
@@ -143,6 +151,104 @@ describe("skill normalization", () => {
   });
 });
 
+/*
+ * app-server 0.164.0 answers the first `skills/list` after `initialize` before
+ * its plugin skills load (26 skills, then 114 a few hundred milliseconds
+ * later) and sends no `skills/changed` when they arrive. Measured live on
+ * 2026-10-24; see 0016 item 9.
+ */
+describe("a cold app-server child", () => {
+  const pluginSkill = skill({
+    name: "plugin-review",
+    path: "/plugins/cache/review/SKILL.md",
+    scope: "user",
+    pluginId: "review@curated",
+  });
+
+  async function waitFor(condition: () => boolean, timeoutMs = 2_000) {
+    const deadline = Date.now() + timeoutMs;
+    while (!condition()) {
+      if (Date.now() > deadline) throw new Error("timed out");
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  }
+
+  function coldCatalogue(engine: ReturnType<typeof fakeEngine>["engine"]) {
+    return new CodexCommandCatalogue({
+      engine,
+      cwd,
+      now: () => 1_000,
+      skillTtlMs: 60_000,
+      skillColdSettleMs: 20,
+    });
+  }
+
+  test("its first answer is stale until one settling re-read adds the plugin skills", async () => {
+    const { state, engine } = fakeEngine();
+    const commands = coldCatalogue(engine);
+    const first = await commands.list();
+    expect(first.status).toBe("stale");
+    expect(first.commands.map((row) => row.name)).toContain("$deploy");
+    expect(first.commands.map((row) => row.name)).not.toContain("$plugin-review");
+
+    // Plugin loading finishes without any notification.
+    state.response = { data: [{ cwd: "/w", skills: [skill(), pluginSkill], errors: [] }] };
+    await waitFor(() => state.calls.length === 2);
+    // The settling read is an ordinary cached read, not a disk rescan.
+    expect(state.calls[1]).toEqual({ cwd });
+    // The revision moved, so the backend re-reads on the next status poll.
+    await waitFor(() => commands.revision > first.revision);
+
+    const settled = await commands.list();
+    expect(settled.status).toBe("ready");
+    expect(settled.commands.map((row) => row.name)).toContain("$plugin-review");
+    expect(state.calls).toHaveLength(2);
+    expect(commands.skills.stats.settlingReads).toBe(1);
+    commands.dispose();
+  });
+
+  test("a restarted child settles again on its own first answer", async () => {
+    const { state, engine } = fakeEngine();
+    const commands = coldCatalogue(engine);
+    expect((await commands.list()).status).toBe("stale");
+    await waitFor(() => state.calls.length === 2);
+    expect((await commands.list()).status).toBe("ready");
+
+    state.generation = 2;
+    commands.withdrawGeneration(2);
+    expect((await commands.list()).status).toBe("stale");
+    await waitFor(() => state.calls.length === 4);
+    expect((await commands.list()).status).toBe("ready");
+    commands.dispose();
+  });
+
+  test("a child that dies before its settling re-read never marks its successor settled", async () => {
+    const { state, engine } = fakeEngine();
+    const commands = coldCatalogue(engine);
+    expect((await commands.list()).status).toBe("stale");
+    state.generation = 2;
+    commands.withdrawGeneration(2);
+    // The first child's timer fires against the second child and does nothing.
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(state.calls).toHaveLength(1);
+    expect(commands.skills.stats.settlingReads).toBe(0);
+    // The second child's first answer is cold in its own right.
+    expect((await commands.list()).status).toBe("stale");
+    await waitFor(() => state.calls.length === 3);
+    expect((await commands.list()).status).toBe("ready");
+    commands.dispose();
+  });
+
+  test("disposal cancels a pending settling re-read", async () => {
+    const { state, engine } = fakeEngine();
+    const commands = coldCatalogue(engine);
+    await commands.list();
+    commands.dispose();
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(state.calls).toHaveLength(1);
+  });
+});
+
 describe("enhanced catalogue", () => {
   test("lists built-ins, templates and skills with opaque ids and no private paths", async () => {
     await writePrompt("project", "review", "---\nargument-hint: <target>\n---\nReview $ARGUMENTS");
@@ -211,7 +317,13 @@ describe("enhanced catalogue", () => {
   test("the revision advances only when the list changes", async () => {
     const { state, engine } = fakeEngine();
     let clock = 0;
-    const commands = new CodexCommandCatalogue({ engine, cwd, now: () => clock, skillTtlMs: 10 });
+    const commands = new CodexCommandCatalogue({
+      engine,
+      cwd,
+      now: () => clock,
+      skillTtlMs: 10,
+      skillColdSettleMs: 0,
+    });
     expect((await commands.list()).revision).toBe(1);
     clock += 100;
     expect((await commands.list()).revision).toBe(1);

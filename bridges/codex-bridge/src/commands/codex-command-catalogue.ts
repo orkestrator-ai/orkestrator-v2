@@ -164,6 +164,8 @@ export interface CodexCommandCatalogueOptions {
   now: () => number;
   skillTtlMs?: number;
   skillRefreshDebounceMs?: number;
+  /** See `SkillInventoryDeps.coldSettleMs`. */
+  skillColdSettleMs?: number;
 }
 
 export class CodexCommandCatalogue {
@@ -193,9 +195,13 @@ export class CodexCommandCatalogue {
       ...(options.skillRefreshDebounceMs !== undefined
         ? { refreshDebounceMs: options.skillRefreshDebounceMs }
         : {}),
+      ...(options.skillColdSettleMs !== undefined
+        ? { coldSettleMs: options.skillColdSettleMs }
+        : {}),
       onRefreshed: (read) => {
         this.skillsDigest = commandBindingRevision([
           String(read.fresh),
+          String(read.settled),
           read.snapshot
             ? JSON.stringify([
                 read.snapshot.truncated,
@@ -251,12 +257,6 @@ export class CodexCommandCatalogue {
     return scan;
   }
 
-  /** Template-only rows for the legacy global route: never spawns a child. */
-  async listTemplateAndBuiltinRows(): Promise<NativeAgentSlashCommand[]> {
-    const templates = await this.scanTemplates();
-    return [...BUILTINS.map(builtinRow), ...templates.effective.map(templateCommandRow)];
-  }
-
   private async collect(projectResources = true): Promise<CollectedCatalogue> {
     this.deferredBumps += 1;
     let templates: TemplateScan;
@@ -291,9 +291,10 @@ export class CodexCommandCatalogue {
     }
     return {
       commands,
-      // Skills that could not be read, or a cwd app-server reported errors
-      // for, make this a partial list rather than an authoritative one.
-      status: skillRead.fresh ? "ready" : "stale",
+      // Skills that could not be read, a cwd app-server reported errors for,
+      // or a child's first answer (plugin skills may still be loading) make
+      // this a partial list rather than an authoritative one.
+      status: skillRead.fresh && skillRead.settled ? "ready" : "stale",
       truncated,
       templates,
       skills: skillRead.snapshot,

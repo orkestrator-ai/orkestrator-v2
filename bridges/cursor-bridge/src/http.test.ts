@@ -1397,19 +1397,18 @@ describe("routes the SDK has no surface for", () => {
     expect(await (await call(`/session/${state.id}/interactions`)).json()).toMatchObject({
       interactions: [],
     });
-    expect(await (await call("/global/slash-commands")).json()).toMatchObject({ commands: [] });
   });
 });
 
 describe("provider commands", () => {
   const unsupported = { catalogueVersion: 1, status: "unsupported", commands: [] };
 
-  test("legacy catalogue routes stay empty and the enhanced envelope says unsupported", async () => {
+  test("the session catalogue says unsupported and the legacy global route is retired", async () => {
     const state = await createSession();
     state.lastAccessed = 0;
     // `commands: []` is all an older backend reads; the envelope keeps a newer
     // one from mistaking "no SDK surface" for an authoritative empty list.
-    expect(await (await call("/global/slash-commands")).json()).toEqual(unsupported);
+    expect((await call("/global/slash-commands")).status).toBe(404);
     expect(await (await call(`/session/${state.id}/commands`)).json()).toEqual(unsupported);
     const refresh = await call(`/session/${state.id}/commands/refresh`, { method: "POST" });
     expect(refresh.status).toBe(200);
@@ -1560,15 +1559,6 @@ describe("mixed-version: old backend, current bridge", () => {
     expect(Object.keys(body).sort()).toEqual(["commands", ...extraKeys].sort());
   }
 
-  test("the legacy global route still answers 200 with a commands array the old reader takes", async () => {
-    // Pre-#827 this route answered `{ commands: [] }`.
-    const response = await call("/global/slash-commands");
-    expect(response.status).toBe(200);
-    const body = (await response.json()) as Record<string, unknown>;
-    expectOldReadable(body, ["catalogueVersion", "status"]);
-    expect(readAsOldBackend(body)).toEqual([]);
-  });
-
   test("a held session's catalogue answers 200, so the old reader uses it and never falls back", async () => {
     const state = await createSession();
     const response = await call(`/session/${state.id}/commands`);
@@ -1580,8 +1570,8 @@ describe("mixed-version: old backend, current bridge", () => {
 
   test("an unknown session reads as an empty list in band instead of the old 404 and fallback", async () => {
     // Pre-#827 Cursor answered 404 "Session not found" here, so the old
-    // backend fell back to `/global/slash-commands` (`{ commands: [] }`). It
-    // now stops at this 200: one request fewer, the same empty list.
+    // backend fell back to `/global/slash-commands` (`{ commands: [] }`, now
+    // retired). It stops at this 200 instead: the same empty list.
     const response = await call("/session/nope/commands");
     expect(response.status).toBe(200);
     const body = (await response.json()) as Record<string, unknown>;

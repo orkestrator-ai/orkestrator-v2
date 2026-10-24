@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { commandBindingRevision } from "@orkestrator/protocol/agent-command-catalogue";
 import { withSessionActionSlashCommands } from "@orkestrator/protocol/agent-slash-commands";
 import {
@@ -16,7 +16,11 @@ import {
   piConnection,
   type RequestRecord,
 } from "./agent-provider-test-support.js";
-import type { HttpBridgeAgent } from "./http-bridge-catalog.js";
+import {
+  outdatedBridgeCatalogueReadCounts,
+  resetOutdatedBridgeCatalogueReadCounts,
+  type HttpBridgeAgent,
+} from "./http-bridge-catalog.js";
 import {
   NativeAgentCommandCatalogueCache,
   commandCatalogueKey,
@@ -86,17 +90,43 @@ describe("HTTP bridge command transport", () => {
     expect(requests).toHaveLength(1);
   });
 
-  test("a 404 from a bridge predating the route falls back to its legacy list", async () => {
-    const { provider } = httpProvider((url) => {
-      if (url.endsWith("/session/session-1/commands")) return new Response(null, { status: 404 });
-      if (url.endsWith("/global/slash-commands")) {
+  test("a 404 from a bridge older than the contract is outdated-bridge, counted, never a global list", async () => {
+    resetOutdatedBridgeCatalogueReadCounts();
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { provider, requests } = httpProvider((url) => {
+        if (url.endsWith("/session/session-1/commands")) return new Response(null, { status: 404 });
+        // A retired legacy list the backend must never consult again.
         return Response.json({ commands: [{ name: "/legacy", source: "builtin" }] });
+      }, codexConnection);
+      for (let read = 0; read < 2; read += 1) {
+        await expect(provider.commandCatalogue!("session-1")).rejects.toMatchObject({
+          catalogueErrorCode: "outdated-bridge",
+        });
       }
-      return new Response(null, { status: 404 });
-    }, codexConnection);
-    const catalogue = await provider.commandCatalogue!("session-1");
-    expect(catalogue).toMatchObject({ enhanced: false, status: "ready" });
-    expect(catalogue.commands[0]).toMatchObject({ id: "legacy:/legacy" });
+      expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
+        "/session/session-1/commands",
+        "/session/session-1/commands",
+      ]);
+      expect(outdatedBridgeCatalogueReadCounts()).toEqual({ codex: 2 });
+      // One content-free warning per provider instance: no names, no session.
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]![0])).not.toContain("session-1");
+      expect(String(warn.mock.calls[0]![0])).not.toContain("/legacy");
+    } finally {
+      warn.mockRestore();
+      resetOutdatedBridgeCatalogueReadCounts();
+    }
+  });
+
+  test("a read without a session makes no request", async () => {
+    const { provider, requests } = httpProvider(() => Response.json({ commands: [] }));
+    await expect(provider.commandCatalogue!()).resolves.toEqual({
+      enhanced: true,
+      status: "missing",
+      commands: [],
+    });
+    expect(requests).toHaveLength(0);
   });
 
   test("a malformed list is an error, not an empty catalogue", async () => {
@@ -212,10 +242,13 @@ describe("HTTP bridge command transport", () => {
  *   `{ commands: string[] }` of `"/name - description"`, Codex
  *   `/global/slash-commands` as `{ commands: [records], cwd }`, Cursor
  *   `/global/slash-commands` as `{ commands: [] }`, Pi `/plugins/commands` as
- *   `{ commands: [{ name: "/compact", … }] }`, and nothing on the ACP bridge;
- * - an old Codex bridge answered an unknown session on the session route with
- *   a 404, which is why a 404 alone cannot tell "old bridge" from "unknown
- *   session".
+ *   `{ commands: [{ name: "/compact", … }] }`, and nothing on the ACP bridge.
+ *   The backend used to fall back to them on a session-route 404; that
+ *   fallback is retired, so the fakes below still serve them only to prove
+ *   they are never read;
+ * - an old Codex, Cursor, Pi or ACP bridge answered an unknown session on the
+ *   session route with a 404, which is why a 404 alone cannot tell "route
+ *   predates #599" from "unknown session". Both are an outdated bridge.
  *
  * Every assertion runs the real HTTP provider, the real catalogue cache, the
  * real dispatch planner and the real prompt-body builder over a fetch fake.
@@ -435,47 +468,40 @@ describe("mixed-version: new backend, old bridge", () => {
         expect(requests).toHaveLength(sentBefore);
       });
 
-      test("a session-route 404 falls back to the legacy global route per read, never stickily", async () => {
-        const { provider, requests } = oldBridgeProvider(
-          bridge,
-          bridge.legacyGlobalBody
-            ? { [bridge.legacyRoute!]: () => Response.json(bridge.legacyGlobalBody) }
-            : {},
-        );
-        const read = await readCatalogue(bridge, provider);
-        const paths = () => requests.map((request) => new URL(request.url).pathname);
+      test("a session-route 404 is outdated-bridge per read, never a global list, never sticky", async () => {
+        const warn = spyOn(console, "warn").mockImplementation(() => {});
+        try {
+          const { provider, requests } = oldBridgeProvider(
+            bridge,
+            bridge.legacyGlobalBody
+              ? { [bridge.legacyRoute!]: () => Response.json(bridge.legacyGlobalBody) }
+              : {},
+          );
+          const read = await readCatalogue(bridge, provider);
+          const paths = () => requests.map((request) => new URL(request.url).pathname);
 
-        if (!bridge.legacyRoute) {
-          // ACP: no global route either. A failure with nothing retained is
-          // `unavailable` — not `unsupported`, and never an empty ready list.
-          expect(paths()).toEqual(["/session/session-1/commands", "/plugins/commands"]);
+          expect(paths()).toEqual(["/session/session-1/commands"]);
+          // A failure with nothing retained is `unavailable`, not `unsupported`,
+          // and never an empty ready list or another route's guesses.
           expect(read.snapshot.state).toMatchObject({
             status: "unavailable",
             enhanced: false,
-            error: { code: "provider-error" },
+            error: { code: "outdated-bridge" },
           });
           expect(read.snapshot.commands).toEqual([]);
-        } else {
-          expect(paths()).toEqual(["/session/session-1/commands", bridge.legacyRoute]);
-          expect(read.snapshot.state).toMatchObject({ status: "ready", enhanced: false });
-          // A 404 is not read as "this session is missing" either.
-          expect(read.snapshot.state.error).toBeUndefined();
-          expect(read.snapshot.commands.every((command) => command.id!.startsWith("legacy:"))).toBe(
+          // Only Orkestrator's own actions remain in the picker.
+          expect(read.picker.every((command) => command.executionKind === "session-action")).toBe(
             true,
           );
-        }
-        // Only Orkestrator's own actions carry a non-legacy identity in the picker.
-        expect(
-          read.picker
-            .filter((command) => command.executionKind !== "session-action")
-            .every((command) => command.id!.startsWith("legacy:")),
-        ).toBe(true);
 
-        // The fallback is decided per read: the next read asks the session
-        // route again, so a bridge upgraded in place is picked up at once.
-        await read.cache.readForDispatch(read.key, "env-1", provider, "session-1", true);
-        expect(paths().filter((path) => path === "/session/session-1/commands")).toHaveLength(2);
-        expect(paths().filter((path) => GLOBAL_ROUTES.includes(path))).toHaveLength(2);
+          // Decided per read: the next read asks the session route again, so a
+          // bridge upgraded in place is picked up at once.
+          await read.cache.readForDispatch(read.key, "env-1", provider, "session-1", true);
+          expect(paths()).toEqual(["/session/session-1/commands", "/session/session-1/commands"]);
+          expect(paths().some((path) => GLOBAL_ROUTES.includes(path))).toBe(false);
+        } finally {
+          warn.mockRestore();
+        }
       });
 
       test("a version-1 catalogue without its optional fields is enhanced and executes as a selection", async () => {
@@ -703,47 +729,35 @@ describe("mixed-version: new backend, old bridge", () => {
     });
   }
 
-  test("old Claude global rows keep only bare names; described and guessed built-ins are dropped", async () => {
-    // Reached only when the session route 404s (a bridge older than #599) or
-    // for a sessionless read. `"/name - description"` is not a command name,
-    // so every `BUILTIN_COMMANDS` row is rejected rather than guessed.
-    const bridge = OLD_BRIDGES[0]!;
-    const { provider } = oldBridgeProvider(bridge, {
-      "/plugins/commands": () => Response.json(bridge.legacyGlobalBody),
-    });
-    const read = await readCatalogue(bridge, provider);
-    expect(read.snapshot.state).toMatchObject({
-      status: "ready",
-      enhanced: false,
-      truncated: true,
-    });
-    expect(providerRows(read)).toEqual([
-      {
-        id: "legacy:/deploy",
-        name: "/deploy",
-        executionKind: "provider-prompt",
-        bindingRevision: "legacy",
-      },
-    ]);
-  });
-
-  test("an old Codex bridge's 404 for an unknown session yields legacy rows, never a selection", async () => {
+  test("an old Codex bridge's 404 for an unknown session is outdated-bridge; typed text still goes as text", async () => {
     // Before #827 Codex answered an unknown session with 404, which the
-    // backend cannot tell from a route that predates the contract.
-    const bridge = OLD_BRIDGES[1]!;
-    const { provider, requests } = oldBridgeProvider(bridge, {
-      "/session/session-1/commands": () =>
-        Response.json({ error: "Session not found" }, { status: 404 }),
-      "/global/slash-commands": () => Response.json(bridge.legacyGlobalBody),
-    });
-    const read = await readCatalogue(bridge, provider);
-    expect(read.snapshot.state).toMatchObject({ status: "ready", enhanced: false });
-    expect(read.snapshot.commands.map((command) => command.id)).toEqual(["legacy:/prompts:review"]);
-    const sent = await dispatch(bridge, read, provider, requests, "/prompts:review x", {
-      kind: "selected",
-      commandId: "legacy:/prompts:review",
-      bindingRevision: "legacy",
-    });
-    expect(sent.body && "command" in sent.body).toBe(false);
+    // backend cannot tell from a route that predates the contract. The old
+    // fallback showed the global list for a session the bridge did not hold.
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const bridge = OLD_BRIDGES[1]!;
+      const { provider, requests } = oldBridgeProvider(bridge, {
+        "/session/session-1/commands": () =>
+          Response.json({ error: "Session not found" }, { status: 404 }),
+        "/global/slash-commands": () => Response.json(bridge.legacyGlobalBody),
+      });
+      const read = await readCatalogue(bridge, provider);
+      expect(read.snapshot.state).toMatchObject({
+        status: "unavailable",
+        error: { code: "outdated-bridge" },
+      });
+      expect(read.snapshot.commands).toEqual([]);
+      const sent = await dispatch(bridge, read, provider, requests, "/prompts:review x", {
+        kind: "typed",
+      });
+      expect(sent.plan).toMatchObject({ kind: "prompt" });
+      expect(sent.body).toMatchObject({ prompt: "/prompts:review x" });
+      expect(sent.body && "command" in sent.body).toBe(false);
+      expect(requests.some((request) => request.url.endsWith("/global/slash-commands"))).toBe(
+        false,
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

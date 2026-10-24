@@ -308,12 +308,10 @@ describe("authorized global routes", () => {
     }
   });
 
-  test("serves an empty global list: Pi's commands are per session", async () => {
-    // `/compact` is no longer advertised here: `session.prompt` does not run
-    // Pi's interactive builtins, and compaction is the backend's session action.
+  test("serves no legacy global command list: Pi's commands are per session", async () => {
+    // Retired with the backend's global fallback. It answered an empty list.
     const response = await call("/plugins/commands");
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ commands: [] });
+    expect(response.status).toBe(404);
   });
 });
 
@@ -3443,24 +3441,22 @@ function readAsOldBackend(payload: unknown): LegacySlashCommand[] {
 }
 
 /** That reader's routing: the session route first, the global list only on a 404. */
-async function oldBackendSlashCommands(sessionId?: string) {
-  let response = sessionId
-    ? await call(`/session/${encodeURIComponent(sessionId)}/commands`)
-    : undefined;
-  const fellBack = response === undefined || response.status === 404;
+async function oldBackendSlashCommands(sessionId: string) {
+  let response = await call(`/session/${encodeURIComponent(sessionId)}/commands`);
+  const fellBack = response.status === 404;
   if (fellBack) response = await call("/plugins/commands");
   // `assertOk`: anything else failed the whole list.
-  expect(response!.ok).toBe(true);
-  return { fellBack, commands: readAsOldBackend(await response!.json()) };
+  expect(response.ok).toBe(true);
+  return { fellBack, commands: readAsOldBackend(await response.json()) };
 }
 
 describe("mixed-version: old backend, current bridge", () => {
-  test("the pre-session list and an unknown session both read as empty, with no fallback", async () => {
+  test("the pre-session list is gone and an unknown session reads as empty, with no fallback", async () => {
     // Without a session the old backend went straight to `/plugins/commands`.
-    // The pre-#827 Pi answered `[/compact]` there; this one answers `[]` (the
-    // exact body is pinned under "authorized global routes"), so an old
-    // backend's pre-session picker no longer offers `/compact`.
-    expect(await oldBackendSlashCommands()).toEqual({ fellBack: true, commands: [] });
+    // The pre-#827 Pi answered `[/compact]` there and a 2.21-2.28 one `[]`;
+    // the route is retired, so that read now fails, which the old backend
+    // shows as "no commands" until the session exists.
+    expect((await call("/plugins/commands")).status).toBe(404);
 
     // The pre-#827 Pi 404'd an unknown session's `/commands`, so the old
     // backend fell back to the global list and showed `/compact`. Now the

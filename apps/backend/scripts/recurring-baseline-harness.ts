@@ -424,9 +424,7 @@ export async function runScenario(
   diffStats = new DiffStatsService({
     metrics,
     admission,
-    ...(worktreeSignals
-      ? { startContainerWatcher: (watch) => worktreeSignals.start(watch) }
-      : {}),
+    ...(worktreeSignals ? { startContainerWatcher: (watch) => worktreeSignals.start(watch) } : {}),
     remoteFreshness: (target) =>
       target.containerId
         ? containerFetches.freshness(target.containerId, target.comparisonRef)
